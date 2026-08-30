@@ -19,7 +19,7 @@
 
 中心后台所需的用户权限、工位/设备/连接器、模板草稿与发布、不可变版本、工位绑定、证据/复核和商业运维均不在基座能力边界内，应由本仓库新建。
 
-推理服务有三个耦合点，它们决定了改造范围（产品裁决见 [`solution-and-roadmap.md`](../design/solution-and-roadmap.md) §5.11 与 [ADR-0007](../adr/0007-base-is-the-trunk-not-a-dependency.md)）：
+推理服务有三个耦合点，它们决定了改造范围（产品裁决见 [`edge-autonomy.md`](../design/mechanisms/edge-autonomy.md) §5.11 与 [ADR-0007](../adr/0007-base-is-the-trunk-not-a-dependency.md)）：
 
 1. `actions.json` 和 VLM prompt 是**进程级文件配置**，不是每个请求或工位携带的模板；同一进程动态承载多个模板没有公开契约。→ 靠部署隔离解决，不改基座：推理后端定义为"承载一份模板配置的进程端点"。
 2. 基座检查器只知道动作编号序列，不知道流健康或 SOP 实例的物理边界；周期边界靠启发式推断，**返工序列会被误判为违规**（见下文实测）。→ 序列比对与周期边界在 `apps/edge-runtime/` 自己实现（声明式边界 + 有效性门 + 三值判定），基座检查器按配置关闭，不打补丁改造。
@@ -174,7 +174,7 @@ pipeline 回调只显式处理 EOS 并终止队列，没有把 source error、�
 
 ## 改造范围已裁决
 
-“裁决基座复用、配置、适配与必要补丁清单”已由 [`solution-and-roadmap.md`](../design/solution-and-roadmap.md) §5.11 与 [ADR-0007](../adr/0007-base-is-the-trunk-not-a-dependency.md) 结案：就地改造限于 pipeline 消息回调一处（纯加输出，把流健康作为合成事件送进 `_vlm_response_queue`），序列比对与周期边界在 `apps/edge-runtime/` 自己实现且 `vendor/` 不留补丁，基座 checker 与处置按既有环境变量关闭，其余原样复用或全新建设。
+“裁决基座复用、配置、适配与必要补丁清单”已由 [`edge-autonomy.md`](../design/mechanisms/edge-autonomy.md) §5.11 与 [ADR-0007](../adr/0007-base-is-the-trunk-not-a-dependency.md) 结案：就地改造限于 pipeline 消息回调一处（纯加输出，把流健康作为合成事件送进 `_vlm_response_queue`），序列比对与周期边界在 `apps/edge-runtime/` 自己实现且 `vendor/` 不留补丁，基座 checker 与处置按既有环境变量关闭，其余原样复用或全新建设。
 
 以下门槛用于判断**将来新出现**的改造候选是否越界：
 

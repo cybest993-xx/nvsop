@@ -133,7 +133,7 @@ class SkippableActionSemanticsTest(unittest.TestCase):
     example being "(10) doing action not belong to SOP".
 
     The first version therefore treats every template step as required and does
-    not emit this field at all (solution-and-roadmap.md §5.1). These assertions
+    not emit this field at all (docs/design/mechanisms/judgment-and-boundary.md §5.1). These assertions
     stay because the semantics still has to be pinned: if a later version needs a
     real optional step, the third state the base cannot express is what it will
     have to build, and a silent change here would move that ground.

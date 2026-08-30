@@ -1,24 +1,28 @@
 # Repository instructions
 
-This repository is a product monorepo for the SOP compliance system. Use the canonical terms in `CONTEXT.md`; read relevant decisions in `docs/adr/` when that directory exists.
+This repository is a product monorepo for the SOP compliance system. Use the canonical terms in `CONTEXT.md`.
 
 ## Before changing the repository
 
-- For code placement, tests, dependencies, CI, deployment assets, or `vendor/`, read [`docs/design/repository-harness.md`](docs/design/repository-harness.md). It is the normative repository harness.
-- For current product behavior, architecture, performance constraints, and safety invariants, read [`docs/design/solution-and-roadmap.md`](docs/design/solution-and-roadmap.md). It is the only current decision source.
-- For issue and planning workflows, follow `docs/agents/issue-tracker.md`, `docs/agents/triage-labels.md`, and `docs/agents/domain.md` as applicable.
+- For **code placement, authoring rules, tests, dependencies, CI, deployment assets, or `vendor/`**, read [`docs/design/repository-harness.md`](docs/design/repository-harness.md). It is the normative repository harness.
+- For **product behavior, architecture, performance budgets, or safety invariants**, read [`docs/design/solution-and-roadmap.md`](docs/design/solution-and-roadmap.md). It is the only current decision source and indexes the mechanism specs.
+- For **an issue, a ticket, or a label**, read [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md) and [`docs/agents/triage-labels.md`](docs/agents/triage-labels.md).
+- Read the ADRs in [`docs/adr/`](docs/adr/) that touch the area you are changing. Contradicting one is allowed; doing so silently is not — say which ADR and why it should reopen.
 
-## Engineering constraints
+## Invariants
 
-- Put behavior in the owning module and expose it through that module's small interface. Callers and tests cross the same seam; do not reach into another module's implementation or tables.
-- Keep the judgment core independent of camera SDKs, inference frameworks, and concrete connectors. Normalize those inputs through adapters before evaluation. It lives in `apps/edge-runtime/` and runs in the inference host's supervisor process — on the inference host, but not inside the base's process (see `docs/adr/0005-judgment-runs-inside-the-inference-host.md`). It depends only on the Python standard library, kept for testability; the hook inside `vendor/` is bound by the same rule because the base container sets its interpreter.
-- The NVIDIA base code in `vendor/sop-monitoring-blueprints/` is this system's trunk, not an external dependency. Reuse what it already implements; modify it in place only within the single patch recorded in `docs/adr/0007-base-is-the-trunk-not-a-dependency.md` (pipeline stream-health events), which only adds output. Sequence comparison and boundary solving are reimplemented in `apps/edge-runtime/` rather than patched, and the base checker and disposal are switched off through existing environment variables, so `vendor/` carries no patch for either. Keep patch logic in `apps/edge-runtime/` with only a minimal hook inside `vendor/`. Update the subtree through a dedicated change, then run the base-code contract suite and record the verified commit. Two implementations of one capability on the same path are a defect.
-- Align runtime integrations with the inference service's public HTTP/SSE contract before adding another transport, broker, or proxy. Performance-critical additions require measurements against the 500 ms end-to-end target, whose start point differs by result type (last source frame for arrival-time verdicts, the moment the closing condition holds for instance-closing verdicts); every over-budget successful result is an SLO violation, not an average to hide.
-- The inference host is autonomous: judgment, violation latching, disposal (including output-point writes), and evidence buffering keep working while the center is unreachable. Never put the center on the real-time error-proofing path, and never make the inference host depend on the center to start a stream.
-- Keep secrets, credentials, customer media, model weights, generated data, and production dumps out of Git. Tests use synthetic or explicitly sanitized fixtures.
-- Add nested `AGENTS.md` files only when a subtree has real local exceptions. They refine these rules; they do not duplicate them.
-- Delete superseded conclusions from the repository and issue tracker after merging any still-valid facts into the current decision source. Do not retain deprecated design documents or stale alternatives “for history”; Git already provides history.
+These five hold before you read anything else. Everything else lives in the harness or the decision source.
+
+- The NVIDIA base code in `vendor/sop-monitoring-blueprints/` is this system's trunk, not an external dependency. Reuse what it implements; keep our logic in `apps/edge-runtime/` behind the one recorded hook. Two implementations of one capability on the same path are a defect.
+- The inference host is autonomous: judgment, violation latching, disposal, and evidence buffering keep working while the center is unreachable. The center is a management and aggregation plane, never on the real-time error-proofing path.
+- The judgment core is a pure function over normalized observations, standard-library-only, and knows nothing of camera SDKs, inference frameworks, or connectors.
+- A module owns its behavior, tables, and migrations behind one small interface. Callers and tests cross that same seam.
+- Secrets, credentials, customer media, model weights, generated data, and production dumps stay out of Git. Fixtures are synthetic or explicitly sanitized.
+
+## Writing rules down
+
+Point at the source of truth instead of restating it. When a rule is already carried by an `import-linter` contract, a `make` target, a config file, or an ADR, cite that place — a second copy goes stale silently. Add a nested `AGENTS.md` only where a subtree has a real local exception, and delete a superseded conclusion once its surviving facts are merged into the current decision source; Git is the archive.
 
 ## Completion gate
 
-Run `make check`. During early scaffolding this checks the repository policy; as language workspaces land, extend the same target so local and blocking CI execute the same CPU-only checks. Run hardware or GPU suites only when the change or its acceptance criteria require them.
+Run `make check`. Each change that adds a workspace extends that same target in the same change, so local and blocking CI run identical CPU-only checks. Run hardware or GPU suites only when the change or its acceptance criteria require them.

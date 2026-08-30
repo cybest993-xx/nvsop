@@ -4,8 +4,10 @@
 
 当前阶段：产品与技术架构决策，尚未进入产品代码实施。
 
-- [当前产品方案、技术架构与开发路线](docs/design/solution-and-roadmap.md) — 当前决策的唯一权威来源
-- [仓库布局、模块边界、测试与 CI harness](docs/design/repository-harness.md)
+- [当前产品方案、技术架构与开发路线](docs/design/solution-and-roadmap.md) — 当前决策的唯一权威来源，并索引下列机制规格
+- [关键机制设计](docs/design/mechanisms/) — 判定与边界、推理机自治、控制面、证据与保留
+- [实测事实](docs/design/measured-facts.md) — 各项决策的事实依据
+- [仓库布局、代码写作规则、测试与 CI harness](docs/design/repository-harness.md)
 - [NVIDIA 基座能力与扩展边界](docs/research/nvidia-base-capability-boundary.md)
 - [目标硬件、设备与商业依赖验证矩阵](docs/research/target-environment-validation-matrix.md)
 

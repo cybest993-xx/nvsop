@@ -27,7 +27,10 @@ from edge_runtime.judgment.model import (
     Observation,
     Ordering,
     Outcome,
+    RunInterrupted,
     Template,
+    ValidityImpaired,
+    ValidityRestored,
     Violation,
     ViolationKey,
 )
@@ -41,8 +44,41 @@ def advance(state: JudgmentState, event: Event) -> Outcome:
     match event:
         case Observation():
             return _observe(state, event)
+        case ValidityImpaired():
+            return _impair(state, event.reason)
+        case ValidityRestored():
+            return _restore(state, event.reason)
+        case RunInterrupted():
+            return _interrupt(state, event.at)
         case _:
             assert_never(event)
+
+
+def _impair(state: JudgmentState, reason: ReasonCode) -> Outcome:
+    """Record that observation became unreliable, on the state and on the open instance."""
+    state = replace(state, active_impairments=state.active_impairments | {reason})
+    if state.instance is None:
+        return Outcome(state=state)
+    instance = state.instance
+    return Outcome(
+        state=replace(
+            state, instance=replace(instance, impairments=instance.impairments | {reason})
+        )
+    )
+
+
+def _restore(state: JudgmentState, reason: ReasonCode) -> Outcome:
+    """Clear the impairment for instances yet to open. The open one keeps its record."""
+    return Outcome(state=replace(state, active_impairments=state.active_impairments - {reason}))
+
+
+def _interrupt(state: JudgmentState, at: HostInstant) -> Outcome:
+    if state.instance is None:
+        return Outcome(state=state)
+    instance = replace(
+        state.instance, impairments=state.instance.impairments | {ReasonCode.RUN_INTERRUPTED}
+    )
+    return _close(state, instance, at, Lifecycle.CLOSED_BY_RUN_INTERRUPTION)
 
 
 def _observe(state: JudgmentState, observation: Observation) -> Outcome:
@@ -61,6 +97,7 @@ def _observe(state: JudgmentState, observation: Observation) -> Outcome:
             instance_id=state.next_instance_id,
             opened_at=observation.at,
             last_observation_at=observation.at,
+            impairments=state.active_impairments,
         )
         state = replace(state, instance=instance, next_instance_id=state.next_instance_id + 1)
 
@@ -68,12 +105,30 @@ def _observe(state: JudgmentState, observation: Observation) -> Outcome:
     index = template.index_of(observation.signal)
 
     if index is None:
-        # The signal names no step of this template: either the start signal repeating
-        # inside an open instance, which is rework rather than a new pass, or an end
-        # signal, which closes it.
         if observation.signal in template.end_signals:
             return _close(state, instance, observation.at, Lifecycle.CLOSED_BY_END_SIGNAL)
-        return Outcome(state=replace(state, instance=instance))
+        if observation.signal == template.start_signal:
+            # The start signal repeating inside an open instance is rework, not a new pass.
+            return Outcome(state=replace(state, instance=instance))
+        # A signal the template does not declare at all. Template and perception disagree,
+        # and the honest answer is that this pass cannot be concluded on — guessing would
+        # hand the process engineer violations they cannot explain.
+        instance = replace(
+            instance, impairments=instance.impairments | {ReasonCode.ACTION_ID_UNKNOWN}
+        )
+        return Outcome(
+            state=replace(state, instance=instance),
+            decisions=(
+                _decide(
+                    instance,
+                    verdict=Verdict.FAIL,
+                    reasons=(),
+                    violations=(),
+                    lifecycle=Lifecycle.STAYS_OPEN,
+                    evidence=EvidenceSpan.at(observation.at),
+                ),
+            ),
+        )
 
     return _observe_step(state, instance, observation.at, index)
 
@@ -106,8 +161,8 @@ def _observe_step(state: JudgmentState, instance: Instance, at: HostInstant, ind
     return Outcome(
         state=state,
         decisions=(
-            Decision(
-                instance_id=instance.instance_id,
+            _decide(
+                instance,
                 verdict=Verdict.FAIL,
                 reasons=_reasons(violations),
                 violations=violations,
@@ -160,8 +215,29 @@ def _close(
     lifecycle: Lifecycle,
     carried: tuple[Violation, ...] = (),
 ) -> Outcome:
-    """Conclude the instance. The set comparison is the backstop, not the first report."""
+    """Conclude the instance, after the validity gate (§5.1).
+
+    The gate comes before the set comparison rather than after it, because "steps 3, 4 and
+    5 are absent from the seen set" says nothing at all when we could not see. Running the
+    comparison and discarding its result would leave the next reader of this function one
+    edit away from using it.
+    """
     evidence = EvidenceSpan.at(at)
+    if instance.impairments:
+        return Outcome(
+            state=_settle(state),
+            decisions=(
+                _decide(
+                    instance,
+                    verdict=Verdict.INDETERMINATE,
+                    reasons=(),
+                    violations=(),
+                    lifecycle=lifecycle,
+                    evidence=evidence,
+                ),
+            ),
+        )
+
     missing = _unsettled(
         instance,
         tuple(
@@ -173,10 +249,10 @@ def _close(
     violations = carried + missing
     latched = bool(instance.settled) or bool(violations)
     return Outcome(
-        state=replace(state, instance=None),
+        state=_settle(state),
         decisions=(
-            Decision(
-                instance_id=instance.instance_id,
+            _decide(
+                instance,
                 verdict=Verdict.FAIL if latched else Verdict.PASS,
                 reasons=_closing_reasons(instance, violations),
                 violations=violations,
@@ -184,6 +260,53 @@ def _close(
                 evidence=evidence,
             ),
         ),
+    )
+
+
+def _settle(state: JudgmentState) -> JudgmentState:
+    return replace(state, instance=None)
+
+
+def _decide(
+    instance: Instance,
+    *,
+    verdict: Verdict,
+    reasons: tuple[ReasonCode, ...],
+    violations: tuple[Violation, ...],
+    lifecycle: Lifecycle,
+    evidence: EvidenceSpan,
+) -> Decision:
+    """The one place a decision is built, so the safety invariant cannot be bypassed.
+
+        if evidence is insufficient or the stream is unhealthy
+           or inference is unhealthy or time is unaligned:
+            verdict != failed
+
+    §5.2 requires that to hold in code rather than by each branch's good behavior. Here it
+    holds by construction: an impaired instance's verdict is replaced by the impairments
+    that made it unreliable, and the violations detected under those conditions are
+    dropped, because what a jumped step means is unknowable when the steps before it may
+    have happened unseen.
+
+    A violation latched *before* the impairment is untouched — the supervisor already has
+    it, and it stays a confirmed fact (§5.2). Only this decision is downgraded.
+    """
+    if instance.impairments:
+        return Decision(
+            instance_id=instance.instance_id,
+            verdict=Verdict.INDETERMINATE,
+            reasons=_sorted(set(instance.impairments)),
+            violations=(),
+            lifecycle=lifecycle,
+            evidence=evidence,
+        )
+    return Decision(
+        instance_id=instance.instance_id,
+        verdict=verdict,
+        reasons=reasons,
+        violations=violations,
+        lifecycle=lifecycle,
+        evidence=evidence,
     )
 
 

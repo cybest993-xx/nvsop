@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from edge_runtime.judgment.reasons import ReasonCode, Verdict
+from edge_runtime.judgment.reasons import INDETERMINATE_REASONS, ReasonCode, Verdict
 
 StepSignal = str
 """A step's identity, as the template declares it.
@@ -92,9 +92,52 @@ class Observation:
     source_time: float
 
 
-Event = Observation
-"""What the supervisor normalizes and sends in. Validity-fact changes, timer
-expiry and run interruption join this union with the validity gate."""
+@dataclass(frozen=True, slots=True)
+class ValidityImpaired:
+    """Observation became unreliable, and why.
+
+    Stream health is not an observation: an observation states what happened at the
+    station, this states whether we could see it at all (CONTEXT.md). It therefore never
+    enters the missing-step set comparison.
+
+    It carries no instant, unlike the other events. What the core needs is that this
+    happened and where it falls in the event sequence, which is the order the supervisor
+    calls in (§5.18); the timeline of stream health is the supervisor's own record.
+    """
+
+    reason: ReasonCode
+
+    def __post_init__(self) -> None:
+        if self.reason not in INDETERMINATE_REASONS:
+            raise ValueError(f"{self.reason.value} does not describe impaired observation")
+
+
+@dataclass(frozen=True, slots=True)
+class ValidityRestored:
+    """The named impairment no longer holds.
+
+    It stays in the open instance's record regardless: a pass that could not be observed
+    for part of its duration cannot be concluded on afterwards.
+    """
+
+    reason: ReasonCode
+
+
+@dataclass(frozen=True, slots=True)
+class RunInterrupted:
+    """A configuration switch or a process restart ended this run.
+
+    In-flight instances are concluded as indeterminate rather than carried across, so one
+    maintenance action does not manufacture a violation.
+    """
+
+    at: HostInstant
+
+
+Event = Observation | ValidityImpaired | ValidityRestored | RunInterrupted
+"""What the supervisor normalizes and sends in. The core does not know whether one
+arrived over SSE or from a connector. Timer expiry joins this union with the idle
+timeout."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +179,7 @@ class Lifecycle(Enum):
     STAYS_OPEN = "stays_open"
     CLOSED_BY_END_SIGNAL = "closed_by_end_signal"
     CLOSED_BY_COMPLETE_SET = "closed_by_complete_set"
+    CLOSED_BY_RUN_INTERRUPTION = "closed_by_run_interruption"
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +218,12 @@ class Instance:
     seen: frozenset[StepSignal] = frozenset()
     expected_index: int = 0
     """The ordered template's next expected position. Unused when unordered."""
+    impairments: frozenset[ReasonCode] = frozenset()
+    """Every impairment in force when this instance opened or arriving since.
+
+    Never cleared. This is the validity record the closing gate reads: a pass that was
+    unobservable for part of its duration cannot be concluded on once sight returns.
+    """
     settled: frozenset[ViolationKey] = frozenset()
     """Violations already reported for this instance, so one fact is reported once."""
 
@@ -184,6 +234,8 @@ class JudgmentState:
 
     template: Template
     instance: Instance | None = None
+    active_impairments: frozenset[ReasonCode] = frozenset()
+    """Impairments currently in force, which the next instance starts out carrying."""
     next_instance_id: int = 1
 
 
@@ -191,8 +243,8 @@ class JudgmentState:
 class Outcome:
     """The transition's result: `(new state, decisions, next wake-up)`.
 
-    `wake_at` stays absent until the core owns a time-driven closing condition; the
-    idle timeout and the step deadline are what will populate it (§5.18).
+    The wake-up joins it with the idle timeout, which is the first closing condition the
+    core drives by time rather than by an arriving observation.
     """
 
     state: JudgmentState

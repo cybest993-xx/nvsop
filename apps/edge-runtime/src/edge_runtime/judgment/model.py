@@ -79,6 +79,39 @@ class Template:
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeParameters:
+    """The station's resolved effective values, as data.
+
+    The center resolves the template's defaults against the station's override group and
+    sends one resolved set, so the edge makes no choice (control-plane.md §5.3). They reach
+    the core as data because it reads no configuration: changing one does not change the
+    judgment's shape, and a test constructs whichever values it needs.
+
+    Both are measured on the host's monotonic clock.
+    """
+
+    idle_timeout: float
+    """Silence after which the current instance is taken to have finished (§5.1).
+
+    Cannot be measured on chunk timestamps: what it detects is chunks ceasing to arrive,
+    and a chunk that never arrived carries no timestamp.
+    """
+
+    step_deadline: float
+    """How long the station may wait for its next step before that wait is a violation.
+
+    Per wait rather than per pass, so a station stuck on one step is reported while it is
+    stuck rather than at the end — which is what makes the number useful for pacing.
+    """
+
+    def __post_init__(self) -> None:
+        if self.idle_timeout <= 0:
+            raise ValueError(f"idle timeout must be positive, got {self.idle_timeout}")
+        if self.step_deadline <= 0:
+            raise ValueError(f"step deadline must be positive, got {self.step_deadline}")
+
+
+@dataclass(frozen=True, slots=True)
 class Observation:
     """A step signal was recognized at a point in time.
 
@@ -134,10 +167,46 @@ class RunInterrupted:
     at: HostInstant
 
 
-Event = Observation | ValidityImpaired | ValidityRestored | RunInterrupted
-"""What the supervisor normalizes and sends in. The core does not know whether one
-arrived over SSE or from a connector. Timer expiry joins this union with the idle
-timeout."""
+class HostLiveness(Enum):
+    """Whether the inference service was still running when the timer fired.
+
+    Process death cannot announce itself: the stream-health channel only delivers while the
+    process and its pipeline live (§5.11), so continued silence is the signal and the
+    supervisor reports what it found.
+    """
+
+    ALIVE = "alive"
+    DOWN = "down"
+
+
+class StreamHealth(Enum):
+    HEALTHY = "healthy"
+    LOST = "lost"
+
+
+@dataclass(frozen=True, slots=True)
+class TimerFired:
+    """The wake-up the core asked for, with what the supervisor found at that moment.
+
+    The core declares the instant and the supervisor holds the timer: the core cannot wake
+    itself, and the deadline verdict has to stay with the other three violation kinds,
+    which share this instance's state (§5.18). "Idle-timeout close" and "process-level
+    silence" are two findings at one wake-up rather than two timers, so the core branches
+    on neither — it reads the findings off this event.
+
+    The supervisor must not fire before the instant the core asked for. A monotonic timer
+    does not, and an early firing would only make the core ask again for very nearly the
+    same instant.
+    """
+
+    at: HostInstant
+    host: HostLiveness
+    stream: StreamHealth
+
+
+Event = Observation | ValidityImpaired | ValidityRestored | TimerFired | RunInterrupted
+"""What the supervisor normalizes and sends in. The core does not know whether one arrived
+over SSE, from a connector, or from a timer."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +228,15 @@ class EvidenceSpan:
         """A conclusion whose required evidence is the anchored moment itself."""
         return cls(anchor=anchor, required_from=anchor, required_to=anchor)
 
+    @classmethod
+    def spanning(cls, anchor: HostInstant, since: HostInstant) -> EvidenceSpan:
+        """A conclusion whose required evidence runs from `since` up to the anchor.
+
+        A deadline is the case: what a reviewer needs to see is the whole wait, not the
+        instant it grew too long (story 18).
+        """
+        return cls(anchor=anchor, required_from=since, required_to=anchor)
+
 
 @dataclass(frozen=True, slots=True)
 class Violation:
@@ -179,6 +257,7 @@ class Lifecycle(Enum):
     STAYS_OPEN = "stays_open"
     CLOSED_BY_END_SIGNAL = "closed_by_end_signal"
     CLOSED_BY_COMPLETE_SET = "closed_by_complete_set"
+    CLOSED_BY_IDLE_TIMEOUT = "closed_by_idle_timeout"
     CLOSED_BY_RUN_INTERRUPTION = "closed_by_run_interruption"
 
 
@@ -233,6 +312,7 @@ class JudgmentState:
     """Everything the core needs, held and persisted by the supervisor."""
 
     template: Template
+    parameters: RuntimeParameters
     instance: Instance | None = None
     active_impairments: frozenset[ReasonCode] = frozenset()
     """Impairments currently in force, which the next instance starts out carrying."""
@@ -241,11 +321,14 @@ class JudgmentState:
 
 @dataclass(frozen=True, slots=True)
 class Outcome:
-    """The transition's result: `(new state, decisions, next wake-up)`.
-
-    The wake-up joins it with the idle timeout, which is the first closing condition the
-    core drives by time rather than by an arriving observation.
-    """
+    """The transition's result: `(new state, decisions, next wake-up)`."""
 
     state: JudgmentState
     decisions: tuple[Decision, ...] = ()
+    wake_at: HostInstant | None = None
+    """When the core needs calling again, or None when no instance is in flight.
+
+    Derived from the new state, so it is set once where the transition returns rather than
+    on each branch. The supervisor sets a timer for it and reports what it finds; that
+    split keeps all four violation kinds' verdicts in the core while leaving it pure.
+    """

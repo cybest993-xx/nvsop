@@ -21,6 +21,7 @@ from edge_runtime.judgment.model import (
     Event,
     EvidenceSpan,
     HostInstant,
+    HostLiveness,
     Instance,
     JudgmentState,
     Lifecycle,
@@ -28,7 +29,10 @@ from edge_runtime.judgment.model import (
     Ordering,
     Outcome,
     RunInterrupted,
+    StepSignal,
+    StreamHealth,
     Template,
+    TimerFired,
     ValidityImpaired,
     ValidityRestored,
     Violation,
@@ -41,6 +45,11 @@ _REASON_ORDER = {code: position for position, code in enumerate(ReasonCode)}
 
 def advance(state: JudgmentState, event: Event) -> Outcome:
     """Apply one event. The only entry point; the supervisor crosses this seam."""
+    outcome = _apply(state, event)
+    return replace(outcome, wake_at=_wake_at(outcome.state))
+
+
+def _apply(state: JudgmentState, event: Event) -> Outcome:
     match event:
         case Observation():
             return _observe(state, event)
@@ -48,10 +57,110 @@ def advance(state: JudgmentState, event: Event) -> Outcome:
             return _impair(state, event.reason)
         case ValidityRestored():
             return _restore(state, event.reason)
+        case TimerFired():
+            return _wake(state, event)
         case RunInterrupted():
             return _interrupt(state, event.at)
         case _:
             assert_never(event)
+
+
+def _wake_at(state: JudgmentState) -> HostInstant | None:
+    """When the core next needs calling, or None when nothing is in flight.
+
+    Both candidates are measured from the last observation: silence long enough is what
+    ends the pass, and silence long enough is also what makes this step late. Whichever
+    comes first is what the supervisor is asked for; the deadline drops out of the running
+    once this wait has been reported, since one late wait is one fact.
+    """
+    instance = state.instance
+    if instance is None:
+        return None
+    since = instance.last_observation_at.seconds
+    idle = HostInstant(since + state.parameters.idle_timeout)
+    if _deadline_key(state, instance) in instance.settled:
+        return idle
+    return min(idle, HostInstant(since + state.parameters.step_deadline))
+
+
+def _wake(state: JudgmentState, timer: TimerFired) -> Outcome:
+    """The supervisor woke the core and reported what it found at that moment."""
+    instance = state.instance
+    if instance is None:
+        return Outcome(state=state)
+
+    found = _impairments_found(timer)
+    if found:
+        instance = replace(instance, impairments=instance.impairments | found)
+        state = replace(state, instance=instance)
+
+    waited = timer.at.seconds - instance.last_observation_at.seconds
+    if waited >= state.parameters.idle_timeout:
+        return _close(state, instance, timer.at, Lifecycle.CLOSED_BY_IDLE_TIMEOUT)
+
+    if waited < state.parameters.step_deadline:
+        return Outcome(state=state)
+    return _report_deadline(state, instance, timer.at)
+
+
+def _impairments_found(timer: TimerFired) -> frozenset[ReasonCode]:
+    """Translate the supervisor's findings into reason codes.
+
+    The findings arrive as facts and the codes are chosen here, because the core is the
+    reason codes' definer (§5.2). Both are folded into the same record, so the core has no
+    branch for "idle close" against "process gone".
+    """
+    found: set[ReasonCode] = set()
+    if timer.host is HostLiveness.DOWN:
+        found.add(ReasonCode.INFERENCE_HOST_DOWN)
+    if timer.stream is StreamHealth.LOST:
+        found.add(ReasonCode.STREAM_LOST)
+    return frozenset(found)
+
+
+def _report_deadline(state: JudgmentState, instance: Instance, at: HostInstant) -> Outcome:
+    """The station has waited too long for its next step, and is still waiting."""
+    key = _deadline_key(state, instance)
+    if key in instance.settled:
+        return Outcome(state=state)
+
+    violations = (
+        Violation(
+            reason=ReasonCode.DEADLINE_EXCEEDED,
+            steps=key[1],
+            # The whole wait, not the instant it grew too long: a reviewer has to see how
+            # long it actually waited (story 18). Margins may widen this, never shorten it.
+            evidence=EvidenceSpan.spanning(at, since=instance.last_observation_at),
+        ),
+    )
+    # Recorded as settled even when the gate below suppresses it, so a suppressed deadline
+    # does not have the core ask to be woken for the same wait again.
+    instance = replace(instance, settled=instance.settled | {key})
+    return Outcome(
+        state=replace(state, instance=instance),
+        decisions=(
+            _decide(
+                instance,
+                verdict=Verdict.FAIL,
+                reasons=(ReasonCode.DEADLINE_EXCEEDED,),
+                violations=violations,
+                lifecycle=Lifecycle.STAYS_OPEN,
+                evidence=EvidenceSpan.at(at),
+            ),
+        ),
+    )
+
+
+def _deadline_key(state: JudgmentState, instance: Instance) -> ViolationKey:
+    """Identity of the current wait, so it is reported once and re-arms when it changes."""
+    return (ReasonCode.DEADLINE_EXCEEDED, _awaited(state.template, instance))
+
+
+def _awaited(template: Template, instance: Instance) -> tuple[StepSignal, ...]:
+    """Which steps this station is currently waiting on."""
+    if template.ordering is Ordering.ORDERED:
+        return template.steps[instance.expected_index : instance.expected_index + 1]
+    return tuple(step for step in template.steps if step not in instance.seen)
 
 
 def _impair(state: JudgmentState, reason: ReasonCode) -> Outcome:

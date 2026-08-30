@@ -26,6 +26,7 @@ from edge_runtime.judgment.model import (
     Observation,
     Ordering,
     RunInterrupted,
+    RuntimeParameters,
     Template,
     ValidityImpaired,
     ValidityRestored,
@@ -55,7 +56,10 @@ def opening_state(ordering: Ordering = Ordering.UNORDERED) -> JudgmentState:
             ordering=ordering,
             start_signal=STEPS[0],
             end_signals=(END_SIGNAL,),
-        )
+        ),
+        # Long enough that no timer fires within these seconds-apart events. The
+        # time-driven conclusions have their own file; the end signal closes here.
+        parameters=RuntimeParameters(idle_timeout=300.0, step_deadline=60.0),
     )
 
 
@@ -353,6 +357,7 @@ class InstanceStateIsTheSupervisorsToHoldTest(unittest.TestCase):
     def test_a_reconstructed_in_flight_instance_continues(self) -> None:
         state = JudgmentState(
             template=Template(steps=STEPS, ordering=Ordering.ORDERED, start_signal=STEPS[0]),
+            parameters=RuntimeParameters(idle_timeout=300.0, step_deadline=60.0),
             instance=Instance(
                 instance_id=7,
                 opened_at=HostInstant(100.0),

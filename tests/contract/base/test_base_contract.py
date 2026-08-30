@@ -125,13 +125,18 @@ class ActionNumberExtractionTest(unittest.TestCase):
 
 
 class SkippableActionSemanticsTest(unittest.TestCase):
-    """§5.1 sets out to reuse `actions_can_be_skipped`; this pins what it means.
+    """Pins what `actions_can_be_skipped` means, because we deliberately avoid it.
 
     Measured semantics: a declared-skippable action is removed from the expected
     set *and* its own observations are discarded. That is "not part of the SOP",
-    not "optional step". The product needs a third state (optional, but counted
-    when performed) that the base cannot express, so the judgment core must
-    define it rather than inherit this. See docs/design/solution-and-roadmap.md §5.1.
+    not "optional step" — NVIDIA's own annotator README uses it that way, its
+    example being "(10) doing action not belong to SOP".
+
+    The first version therefore treats every template step as required and does
+    not emit this field at all (solution-and-roadmap.md §5.1). These assertions
+    stay because the semantics still has to be pinned: if a later version needs a
+    real optional step, the third state the base cannot express is what it will
+    have to build, and a silent change here would move that ground.
     """
 
     def setUp(self) -> None:
@@ -180,8 +185,8 @@ class SkippableActionSemanticsTest(unittest.TestCase):
         self.assertEqual([], response["misordered_detected"])
         self.assertFalse(
             response["cycle_completed"],
-            "the base discards a skippable action's observation entirely; an optional "
-            "step that must still be ordered has to be modelled by the judgment core",
+            "the base discards a skippable action's observation entirely, so it cannot "
+            "express an optional step that must still be ordered",
         )
 
 

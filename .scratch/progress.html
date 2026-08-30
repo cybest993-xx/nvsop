@@ -1,0 +1,502 @@
+<title>NVSOP 工程盘面</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+:root {
+  --ground: #F4F6F8;
+  --panel: #FFFFFF;
+  --panel-2: #EDF1F5;
+  --ink: #0F151C;
+  --ink-2: #48566A;
+  --ink-3: #7A8798;
+  --rule: #D6DDE5;
+  --rule-2: #E6EBF0;
+  --accent: #0B6E99;
+  --accent-soft: #E1EFF6;
+  --pass: #1B6B45;
+  --pass-soft: #DFEDE5;
+  --fail: #A62E25;
+  --fail-soft: #F6E3E1;
+  --wait: #8A5E06;
+  --wait-soft: #F7EBD4;
+  --idle: #5C6675;
+  --idle-soft: #E7EAEE;
+  --shadow: 0 1px 2px rgba(15, 21, 28, .06), 0 1px 8px rgba(15, 21, 28, .04);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #0C1116;
+    --panel: #141B23;
+    --panel-2: #1B242E;
+    --ink: #E4EAF1;
+    --ink-2: #9FAEC0;
+    --ink-3: #6F7E90;
+    --rule: #26313D;
+    --rule-2: #1E2731;
+    --accent: #52AED6;
+    --accent-soft: #12303E;
+    --pass: #6BC495;
+    --pass-soft: #122A1F;
+    --fail: #E58B80;
+    --fail-soft: #331A17;
+    --wait: #DDAE55;
+    --wait-soft: #2E2312;
+    --idle: #93A0B0;
+    --idle-soft: #1D242C;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 1px 10px rgba(0, 0, 0, .25);
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground: #0C1116;
+  --panel: #141B23;
+  --panel-2: #1B242E;
+  --ink: #E4EAF1;
+  --ink-2: #9FAEC0;
+  --ink-3: #6F7E90;
+  --rule: #26313D;
+  --rule-2: #1E2731;
+  --accent: #52AED6;
+  --accent-soft: #12303E;
+  --pass: #6BC495;
+  --pass-soft: #122A1F;
+  --fail: #E58B80;
+  --fail-soft: #331A17;
+  --wait: #DDAE55;
+  --wait-soft: #2E2312;
+  --idle: #93A0B0;
+  --idle-soft: #1D242C;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 1px 10px rgba(0, 0, 0, .25);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap { max-width: 1180px; margin: 0 auto; padding: 32px 24px 72px; }
+
+code, .mono, .num {
+  font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+h1, h2, h3, .eyebrow, .chip, .rd-val {
+  font-family: "IBM Plex Sans Condensed", "IBM Plex Sans", ui-sans-serif, sans-serif;
+}
+
+/* ---- masthead ---- */
+.mast {
+  display: flex; flex-wrap: wrap; gap: 20px;
+  align-items: flex-end; justify-content: space-between;
+  padding-bottom: 18px; border-bottom: 2px solid var(--ink);
+}
+h1 { font-size: 30px; font-weight: 700; letter-spacing: -.015em; margin: 0; line-height: 1.15; }
+.sub { color: var(--ink-2); font-size: 14px; margin: 5px 0 0; max-width: 62ch; }
+.mast-meta { display: flex; gap: 22px; flex-wrap: wrap; }
+.mm-k { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); font-family: "IBM Plex Sans Condensed", sans-serif; }
+.mm-v { font-size: 14px; font-weight: 500; }
+
+/* ---- readout strip ---- */
+.readout {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 1px; background: var(--rule); border: 1px solid var(--rule);
+  margin: 22px 0 40px; border-radius: 3px; overflow: hidden;
+}
+.rd { background: var(--panel); padding: 13px 15px 14px; }
+.rd-k { font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3); font-family: "IBM Plex Sans Condensed", sans-serif; }
+.rd-val { font-size: 25px; font-weight: 600; line-height: 1.1; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.rd-note { font-size: 11.5px; color: var(--ink-3); margin-top: 2px; }
+.rd.is-pass .rd-val { color: var(--pass); }
+.rd.is-wait .rd-val { color: var(--wait); }
+
+/* ---- layout ---- */
+.cols { display: grid; grid-template-columns: minmax(0, 1.62fr) minmax(0, 1fr); gap: 40px; align-items: start; }
+@media (max-width: 940px) { .cols { grid-template-columns: minmax(0, 1fr); gap: 34px; } }
+
+section { margin-bottom: 40px; }
+.eyebrow {
+  font-size: 11px; letter-spacing: .13em; text-transform: uppercase;
+  color: var(--ink-3); font-weight: 600;
+  display: flex; align-items: center; gap: 10px; margin-bottom: 14px;
+}
+.eyebrow::after { content: ""; flex: 1; height: 1px; background: var(--rule); }
+h2 { font-size: 19px; font-weight: 600; margin: 0 0 3px; letter-spacing: -.01em; }
+.lede { color: var(--ink-2); font-size: 13.5px; margin: 0 0 16px; }
+
+/* ---- chips ---- */
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase;
+  padding: 2.5px 7px; border-radius: 2px; white-space: nowrap;
+}
+.chip::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.c-pass { color: var(--pass); background: var(--pass-soft); }
+.c-wait { color: var(--wait); background: var(--wait-soft); }
+.c-fail { color: var(--fail); background: var(--fail-soft); }
+.c-idle { color: var(--idle); background: var(--idle-soft); }
+.c-live { color: var(--accent); background: var(--accent-soft); }
+
+/* ---- ledger ---- */
+.ledger { display: flex; flex-direction: column; gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; }
+.entry { background: var(--panel); padding: 15px 17px; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 14px; }
+.entry-n { font-family: "IBM Plex Mono", monospace; font-size: 12px; font-weight: 600; color: var(--ink-3); padding-top: 2px; }
+.entry-hd { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; margin-bottom: 5px; }
+.entry-t { font-weight: 600; font-size: 14.5px; font-family: "IBM Plex Sans Condensed", sans-serif; letter-spacing: .005em; }
+.entry-b { font-size: 13.5px; color: var(--ink-2); }
+.entry-b strong { color: var(--ink); font-weight: 500; }
+.commits { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 9px; }
+.sha {
+  font-family: "IBM Plex Mono", monospace; font-size: 11.5px; font-weight: 500;
+  background: var(--panel-2); color: var(--ink-2);
+  padding: 2px 6px; border-radius: 2px; border: 1px solid var(--rule-2);
+}
+
+/* ---- posture table ---- */
+.tbl-scroll { overflow-x: auto; border: 1px solid var(--rule); border-radius: 3px; background: var(--panel); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 480px; }
+th, td { text-align: left; padding: 9px 13px; border-bottom: 1px solid var(--rule-2); vertical-align: top; }
+thead th {
+  font-family: "IBM Plex Sans Condensed", sans-serif; font-size: 10.5px;
+  letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3);
+  background: var(--panel-2); border-bottom: 1px solid var(--rule);
+}
+tbody tr:last-child td { border-bottom: none; }
+td.n { white-space: nowrap; font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; }
+.tbl-note { font-size: 12px; color: var(--ink-3); margin-top: 8px; }
+
+/* ---- rail cards ---- */
+.card {
+  background: var(--panel); border: 1px solid var(--rule);
+  border-radius: 3px; padding: 15px 16px; box-shadow: var(--shadow);
+}
+.card + .card { margin-top: 14px; }
+.card-hd { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 7px; }
+.card-t { font-weight: 600; font-size: 14px; font-family: "IBM Plex Sans Condensed", sans-serif; }
+.card-b { font-size: 13px; color: var(--ink-2); }
+.card-b p { margin: 0 0 7px; }
+.card-b p:last-child { margin-bottom: 0; }
+.blocks {
+  font-size: 11.5px; color: var(--ink-3); margin-top: 9px;
+  padding-top: 8px; border-top: 1px dashed var(--rule);
+}
+.blocks b { color: var(--ink-2); font-weight: 600; }
+
+/* ---- findings ---- */
+.find { display: flex; flex-direction: column; gap: 12px; }
+.f {
+  background: var(--panel); border: 1px solid var(--rule); border-left: 3px solid var(--accent);
+  border-radius: 3px; padding: 13px 15px;
+}
+.f.is-open { border-left-color: var(--wait); }
+.f-t { font-weight: 600; font-size: 14px; margin-bottom: 4px; font-family: "IBM Plex Sans Condensed", sans-serif; }
+.f-b { font-size: 13px; color: var(--ink-2); }
+.f-ev { font-size: 11.5px; color: var(--ink-3); margin-top: 7px; }
+
+/* ---- phase checklist ---- */
+.items { display: flex; flex-direction: column; gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; }
+.it { background: var(--panel); display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; gap: 12px; align-items: baseline; padding: 9px 14px; font-size: 13.5px; }
+.it-n { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.it-t strong { font-weight: 600; }
+.it-why { color: var(--ink-3); font-size: 12.5px; }
+
+.foot { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--rule); font-size: 12px; color: var(--ink-3); }
+.foot code { font-size: 11.5px; }
+
+a { color: var(--accent); }
+a:focus-visible, .sha:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .readout, .ledger, .card, .f, .items, .tbl-scroll { animation: rise .34s cubic-bezier(.2, .7, .3, 1) both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+}
+</style>
+
+<div class="wrap">
+
+  <header class="mast">
+    <div>
+      <h1>NVSOP 工程盘面</h1>
+      <p class="sub">工厂 SOP 合规检测系统。当前处于阶段 0：文档决策已收敛，仓库骨架与基座契约已落地，判定核心尚未开工。</p>
+    </div>
+    <div class="mast-meta">
+      <div><div class="mm-k">HEAD</div><div class="mm-v mono">3a53743</div></div>
+      <div><div class="mm-k">基座提交</div><div class="mm-v mono">69352021</div></div>
+      <div><div class="mm-k">门禁</div><div class="mm-v"><span class="chip c-pass">全绿</span></div></div>
+    </div>
+  </header>
+
+  <div class="readout">
+    <div class="rd is-pass">
+      <div class="rd-k">本会话提交</div>
+      <div class="rd-val">7</div>
+      <div class="rd-note">块 1–3 + 路径 B 裁决</div>
+    </div>
+    <div class="rd is-pass">
+      <div class="rd-k">门禁断言</div>
+      <div class="rd-val">26</div>
+      <div class="rd-note">12 策略 + 14 契约</div>
+    </div>
+    <div class="rd">
+      <div class="rd-k">vendor 文件</div>
+      <div class="rd-val">712</div>
+      <div class="rd-note">9.5 MB，squash 接入</div>
+    </div>
+    <div class="rd is-pass">
+      <div class="rd-k">基座补丁面</div>
+      <div class="rd-val">1</div>
+      <div class="rd-note">原为 3，纯加输出</div>
+    </div>
+    <div class="rd is-wait">
+      <div class="rd-k">待裁决</div>
+      <div class="rd-val">5</div>
+      <div class="rd-note">2 项挡住实施</div>
+    </div>
+    <div class="rd is-wait">
+      <div class="rd-k">阶段 0 进度</div>
+      <div class="rd-val">2/14</div>
+      <div class="rd-note">第 3 项已无阻塞</div>
+    </div>
+  </div>
+
+  <div class="cols">
+    <main>
+
+      <section>
+        <div class="eyebrow">已提交的工作</div>
+        <h2>工作台账</h2>
+        <p class="lede">按提交顺序。每条都过了 <code>make check</code>，工作树干净。</p>
+
+        <div class="ledger">
+          <div class="entry">
+            <div class="entry-n">01</div>
+            <div>
+              <div class="entry-hd">
+                <span class="entry-t">修正基座补丁范围的表述</span>
+                <span class="chip c-pass">已提交</span>
+              </div>
+              <div class="entry-b">
+                f92dc88 的大改把姿态收窄成两处补丁 + 序列比对自己实现，但<strong>四个文件</strong>仍写着旧的三处范围，含 ADR-0007 明确否决过的「扩展 checker」。<code>AGENTS.md</code> 每次会话都加载，那行持续误导。同时把「一个能力两套实现是缺陷」限定为<strong>同一路径上</strong>——序列比对自己实现后基座那份仍在但不被调用，原措辞会把已采纳决策读成缺陷。
+              </div>
+              <div class="commits"><span class="sha">01d998d</span></div>
+            </div>
+          </div>
+
+          <div class="entry">
+            <div class="entry-n">02</div>
+            <div>
+              <div class="entry-hd">
+                <span class="entry-t">基座接入与版本台账</span>
+                <span class="chip c-pass">已提交</span>
+              </div>
+              <div class="entry-b">
+                阶段 0 第 1 项。此前 §2 全部实测结论所依据的基座代码<strong>不在仓库内</strong>，契约测试无对象可测。从 GitHub 规范 URL 拉取 <code>69352021</code>（顺带证明该提交公网可达），<code>--squash</code> 使 NVIDIA 历史不进入我们的提交图。两条策略规则改为按意图判断 <code>vendor/</code>：Markdown 链接不校验（NVIDIA 自己文档有一处失效链接），<code>.env</code> 从按文件名禁止改为<strong>按值</strong>校验——其部署模板的秘密变量是占位符，真实赋值仍拦截，私钥材料在任何位置都仍禁止。
+              </div>
+              <div class="commits"><span class="sha">605131f</span><span class="sha">0fe88be</span><span class="sha">203f566</span></div>
+            </div>
+          </div>
+
+          <div class="entry">
+            <div class="entry-n">03</div>
+            <div>
+              <div class="entry-hd">
+                <span class="entry-t">基座契约测试进门禁</span>
+                <span class="chip c-pass">已提交</span>
+              </div>
+              <div class="entry-b">
+                阶段 0 第 2 项，§5.9 第一族。纯标准库、纯 CPU，无 Docker 无 GPU。只导入执行那四个纯标准库模块，凡触及 pydantic / torch / DeepStream 的改用 <code>ast</code> 静态检查。<strong>用变异验证而非假设</strong>：破坏动作号正则、改名 chunk 键、删除 RTSP 重连配置、改动 DDM 边界公式，四项各自使套件转红，<code>vendor/</code> 事后干净。
+              </div>
+              <div class="commits"><span class="sha">05455fc</span></div>
+            </div>
+          </div>
+
+          <div class="entry">
+            <div class="entry-n">04</div>
+            <div>
+              <div class="entry-hd">
+                <span class="entry-t">判定位置裁决：supervisor 进程</span>
+                <span class="chip c-live">已裁决</span>
+              </div>
+              <div class="entry-b">
+                ADR-0005 正文原说判定在「扩展 checker」内，与 ADR-0007（不打 checker 补丁）直接矛盾，<strong>两种读法都还在仓库里活着</strong>。定为路径 B：supervisor 消费本机 SSE、在自己进程内判定，基座 checker 用既有 <code>DISABLE_SOP_CHECKER=true</code> 关掉。连带<strong>放弃补丁 ②</strong>——基座处置在独立线程内对每个 chunk 无条件触发，无违规过滤也不持有判定结果。
+              </div>
+              <div class="commits"><span class="sha">4517753</span><span class="sha">3a53743</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="eyebrow">路径 A 为何落选</div>
+        <h2>延迟实测</h2>
+        <p class="lede">判定结果两条路径都要跨 SSE 才到 supervisor（锁存、证据、上报、本地 SQLite 都在那里），故<strong>到达时刻相同</strong>，差别只是判定计算落在这一跳之前还是之后。</p>
+
+        <div class="tbl-scroll">
+          <table>
+            <thead>
+              <tr><th>量</th><th class="n">值</th><th>条件</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>process_number</code> 序列比对</td><td class="n">2.45 µs</td><td>每动作，纯 CPU</td></tr>
+              <tr><td><code>process_sop_check</code> 全路径</td><td class="n">9.70 µs</td><td>每 chunk，含 JSON 解析</td></tr>
+              <tr><td>SSE 序列化 + 解析</td><td class="n">36 µs</td><td>871 B 代表性帧</td></tr>
+              <tr><td>本机 TCP 往返</td><td class="n">283 / 389 µs</td><td>p50 / p99，裸回环</td></tr>
+              <tr><td><strong>两路径净差</strong></td><td class="n">~30 µs</td><td>判定计算本身</td></tr>
+              <tr><td><strong>占 500 ms 预算</strong></td><td class="n">0.006 %</td><td>主项是 DDM + vLLM</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="tbl-note">TCP 数字是下界——真实 uvicorn + httpx 栈更高，但它在两条路径里同时出现，约掉了。路径 A 另有两处硬伤：承载判定的循环是 <code>ds_sop_process.py:715</code> 的无超时 <code>get(block=True)</code>，空闲计时器在其中永远响不了；且补 <code>:739</code> 是控制流替换，与本仓库拒绝改 <code>missing_number_detector</code> 的理由同构。</p>
+      </section>
+
+      <section>
+        <div class="eyebrow">收敛后的姿态</div>
+        <h2>基座五种处置</h2>
+        <div class="tbl-scroll">
+          <table>
+            <thead>
+              <tr><th>姿态</th><th class="n">数量</th><th>范围</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>原样复用</td><td class="n">—</td><td>DeepStream 取流、DDM 分段、vLLM 分类、<code>/v1/*</code>、文件 API、指标；训练侧 5 个微服务；React 标注 UI 连界面</td></tr>
+              <tr><td>就地改造</td><td class="n">1 处</td><td>pipeline <code>on_message</code> 送出合成健康事件。两个触点、两个文件，均纯追加</td></tr>
+              <tr><td>自己实现</td><td class="n">1 处</td><td>序列比对 + 声明式边界 + 有效性门 + 三值判定，全在 <code>apps/edge-runtime/</code></td></tr>
+              <tr><td>配置关闭</td><td class="n">2 处</td><td>基座 checker、基座处置——均由环境变量开关，不打补丁</td></tr>
+              <tr><td>全新建设</td><td class="n">—</td><td>账户权限、设备配置、Excel→模板发布、看板、复核、证据、上报对账</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="tbl-note">合成健康事件的注入点已实测：三个候选 sink 只有 <code>_vlm_response_queue</code> 可用。<code>_boundary_queue</code> 按 <code>(frame_id, pts, score)</code> 位置解包会崩；<code>_chunk_queue</code> 会对健康事件跑一次 VLM 推理。</p>
+      </section>
+
+      <section>
+        <div class="eyebrow">阶段 0</div>
+        <h2>十四项</h2>
+        <div class="items">
+          <div class="it"><span class="it-n">01</span><span class="it-t"><strong>基座接入 + ADR</strong></span><span class="chip c-pass">完成</span></div>
+          <div class="it"><span class="it-n">02</span><span class="it-t"><strong>契约测试</strong> <span class="it-why">第一族完成；第二族随判定核心</span></span><span class="chip c-pass">部分</span></div>
+          <div class="it"><span class="it-n">03</span><span class="it-t"><strong>判定核心</strong> <span class="it-why">已无阻塞，下一件</span></span><span class="chip c-live">就绪</span></div>
+          <div class="it"><span class="it-n">04</span><span class="it-t">基座一处改造 + 最小 hook <span class="it-why">形状已定，未实施</span></span><span class="chip c-idle">未开工</span></div>
+          <div class="it"><span class="it-n">05</span><span class="it-t">中心数据模型与迁移</span><span class="chip c-idle">未开工</span></div>
+          <div class="it"><span class="it-n">06</span><span class="it-t">鉴权 + 权限 + 诊断日志 <span class="it-why">边界清楚</span></span><span class="chip c-idle">就绪</span></div>
+          <div class="it"><span class="it-n">07</span><span class="it-t">设备配置 CRUD <span class="it-why">表结构在 §七 列全</span></span><span class="chip c-idle">就绪</span></div>
+          <div class="it"><span class="it-n">08</span><span class="it-t">Excel 解析校验 <span class="it-why">缺真实工作簿才能验收</span></span><span class="chip c-wait">缺输入</span></div>
+          <div class="it"><span class="it-n">09</span><span class="it-t">视频上传 + 数据集 + 标注 UI</span><span class="chip c-idle">未开工</span></div>
+          <div class="it"><span class="it-n">10</span><span class="it-t">mediamtx 预览录像 <span class="it-why">须首验子码流 has_b_frames</span></span><span class="chip c-wait">待真机</span></div>
+          <div class="it"><span class="it-n">11</span><span class="it-t">supervisor 骨架 <span class="it-why">会撞上边缘运维缺口</span></span><span class="chip c-idle">未开工</span></div>
+          <div class="it"><span class="it-n">12</span><span class="it-t">连接器 + 海康 ISAPI <span class="it-why">须真设备，非 mock</span></span><span class="chip c-wait">待真机</span></div>
+          <div class="it"><span class="it-n">13</span><span class="it-t">前端骨架</span><span class="chip c-idle">未开工</span></div>
+          <div class="it"><span class="it-n">14</span><span class="it-t">训练微服务接入 <span class="it-why">挡在 Q35</span></span><span class="chip c-fail">阻塞</span></div>
+        </div>
+      </section>
+
+      <section>
+        <div class="eyebrow">写代码时撞出来的</div>
+        <h2>四条发现</h2>
+        <div class="find">
+          <div class="f is-open">
+            <div class="f-t">可跳过步骤不是「可选步骤」</div>
+            <div class="f-b">基座 <code>actions_can_be_skipped</code> 的实测语义是<strong>不属于 SOP</strong>：从期望集合剔除，<strong>其观测也被丢弃</strong>。§5.1 与 ADR-0006 都写「沿用基座语义表达该步可跳过」，但产品要的第三态（可选、但做了要计入顺序）基座表达不了。已固化成测试，语义待裁决。</div>
+            <div class="f-ev">证据：5 步模板声明 3 号可跳过，输入 1,2,4,5 判通过；真做了 3 号，观测被整个丢弃</div>
+          </div>
+          <div class="f">
+            <div class="f-t">我自己的台账写错了一句，被自己的测试抓出</div>
+            <div class="f-b">我从一个样本推广出「<code>agentic/</code> 是逐字节副本」并写进台账。测试一跑就红：<code>sop_step_checker_reference.py</code> 在 <code>:218</code> 落后一行——真实模块调 <code>save_checker</code>，副本换成了注释。已改为按副本记录漂移量，漂移变化即失败。</div>
+            <div class="f-ev">已修正于 05455fc</div>
+          </div>
+          <div class="f is-open">
+            <div class="f-t">补丁 ① 送不出断流事件</div>
+            <div class="f-b">原设计说把流健康「输出到 <code>chunk_metadata</code>」。但事件搭 chunk 才能出去，<strong>流断时 chunk 正好停了</strong>——最需要 <code>STREAM_LOST</code> 的场景恰恰送不出来。实际判据是 chunk 静默，由 supervisor 计时器观测；健康事件是在流恢复后解释「刚才为什么断」。</div>
+            <div class="f-ev">已按合成 chunk 方案改写 §5.11；该通道只在进程存活时可投递</div>
+          </div>
+          <div class="f">
+            <div class="f-t">两处行号与代码不符</div>
+            <div class="f-b"><code>init-rtsp-reconnect-interval</code> 在 <code>:491</code>（原写 477–494），<code>on_message</code> 在 <code>:779-784</code>（原写 780–790）。事实本身成立，已对着 subtree 校正。</div>
+            <div class="f-ev">§2.2/§2.3 全部实测结论逐字复现，含 <code>final_missing=[1,3]</code></div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <aside>
+      <section>
+        <div class="eyebrow">需要你定</div>
+        <h2>五项待裁决</h2>
+        <p class="lede">前两项挡住实施，后三项挡住阶段推进。</p>
+
+        <div class="card">
+          <div class="card-hd"><span class="card-t">可跳过步骤的三态语义</span><span class="chip c-wait">挡实施</span></div>
+          <div class="card-b">
+            <p>基座只有「必做」与「不属于 SOP」两态。产品要的「可选但计入顺序」要我们定义。</p>
+            <p>三条路：<strong>沿用两态</strong>（简单，但放弃可选步骤的顺序检查与计数）；<strong>做三态</strong>（模板 schema 加字段，双跑对比多挖一个洞）；<strong>首版不支持</strong>（等真实模板出现再加）。</p>
+          </div>
+          <div class="blocks"><b>缺的信息：</b>客户 Excel 里到底有没有可选步骤。样本包内无 Excel。</div>
+        </div>
+
+        <div class="card">
+          <div class="card-hd"><span class="card-t">流健康事件的领域词</span><span class="chip c-wait">挡实施</span></div>
+          <div class="card-b">
+            <p><code>流健康</code> 在方案里出现 10 次，<strong>CONTEXT.md 无此条目</strong>，而 <code>健康度</code> 恰被列在 <code>观测有效性</code> 的 <em>Avoid</em> 项里。</p>
+            <p>按现有定义，健康事件<strong>不是观测</strong>——观测是关于作业的客观事实，健康事件陈述的是我们的观察能力。类型上分开，它就只进有效性门；合并，它就会进 <code>monitor_observation</code>。</p>
+          </div>
+          <div class="blocks"><b>建议：</b>CONTEXT.md 加 <code>流健康事件</code> 条目，定为 <code>观测有效性</code> 的输入而非 <code>观测</code>。</div>
+        </div>
+
+        <div class="card">
+          <div class="card-hd"><span class="card-t">Q25 AI 建模板做到哪一步</span><span class="chip c-idle">阶段三</span></div>
+          <div class="card-b"><p>(a) 只生成提示词与 <code>actions.json</code>；(b) 加步骤对齐给出时间码供人工核对；(c) 再加微调数据生成。文档建议 (b)，(c) 放阶段三。</p></div>
+        </div>
+
+        <div class="card">
+          <div class="card-hd"><span class="card-t">Q29 4090 排期与访问方式</span><span class="chip c-wait">挡阶段 1</span></div>
+          <div class="card-b"><p>能直接访问，还是交付部署包 + 验证脚本由你执行？决定阶段 1 的交付方式。</p></div>
+        </div>
+
+        <div class="card">
+          <div class="card-hd"><span class="card-t">Q35 训练侧数据库合并</span><span class="chip c-fail">挡第 14 项</span></div>
+          <div class="card-b"><p>建议合并为一个 Postgres 实例、两个 schema。影响面比「仅第 14 项」略大——也牵动第 5 项 Alembic 的 schema 配置。</p></div>
+        </div>
+      </section>
+
+      <section>
+        <div class="eyebrow">已知但未补</div>
+        <h2>边缘运维缺口</h2>
+        <div class="card">
+          <div class="card-b">
+            <p>grep 确认全部无着落：推理机本地 SQLite <strong>保留多久</strong>、升级时 <strong>schema 怎么迁</strong>、50 台机 <strong>怎么批量升级</strong>、<strong>装机与退役</strong>流程。</p>
+            <p><code>升级</code> 在方案全文仅 1 处命中且是 API 前缀语境；<code>装机</code>/<code>扩容</code>/<code>50 台</code> 零命中。唯一的 <code>退役</code> 是 Q4 讲模板状态，与机器无关。</p>
+          </div>
+          <div class="blocks"><b>不挡判定核心</b>（纯函数、无状态），会在阶段 0 第 11 项 supervisor 撞上。</div>
+        </div>
+      </section>
+
+      <section>
+        <div class="eyebrow">下一件</div>
+        <h2>判定核心</h2>
+        <div class="card">
+          <div class="card-b">
+            <p>三个必须定下的缝：<strong>时钟注入</strong>（空闲时限按主机单调钟，直接调 <code>time.monotonic()</code> 会让测试要么真等要么打补丁）；<strong>两个入口</strong>（只有 <code>observe()</code> 时空闲超时永远触发不了——那正是基座 §2.3 缺陷的成因）；<strong>输入类型</strong>（路径 B 定了，形状按惯例定）。</p>
+            <p>验收测试取自 §5.9 第二族：返工 <code>1,2,3,2,4,5</code> 判通过且无 missing（最高优先级）、漏步在闭合时立即报出、顺序型跳号即报。</p>
+          </div>
+          <div class="blocks"><b>刻意留给下一项：</b>有效性门、三值、14 原因码。切分决定安全不变量能否被单独测试。</div>
+        </div>
+      </section>
+    </aside>
+  </div>
+
+  <p class="foot">
+    盘面反映 <code>3a53743</code> 时刻的仓库状态，全部数字由本会话工具实测得出。判定核心、基座补丁与中心后台<strong>均未开工</strong>——已落地的是文档决策、仓库骨架与基座契约。状态色沿用产品自身的三值语义：通过 / 不通过 / 不可判定。
+  </p>
+
+</div>

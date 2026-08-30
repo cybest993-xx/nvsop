@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   repository-policy:
-    name: Repository policy
+    name: Repository policy and base contract
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

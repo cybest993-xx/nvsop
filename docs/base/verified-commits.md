@@ -33,4 +33,4 @@ git subtree pull --prefix=vendor/sop-monitoring-blueprints \
 
 - `agentic/vss-sop-skills/vss-sop-build/references/ds-sop-building.md` 有一个指向 `../../../vss-sop-deploy/references/build_ds_sop_image.md` 的失效相对链接。仓库策略因此不校验 `vendor/` 内的 Markdown 链接。
 - `agentic/vss-sop-skills/vss-sop-build/references/deployments/{ds/ds-sop,sop}/.env` 是部署模板，秘密变量为空值或占位符（`<ngc_api_key>`、`dummy`）。仓库策略对 `vendor/` 内的 `.env` 改为按**值**校验：占位符放行，真实秘密值拦截。
-- `agentic/*/references/*_reference.py` 是推理侧模块的逐字节副本（如 `missing_number_detector_reference.py` 与 `nvds_action_detector/missing_number_detector.py` 539 行零差异）。契约测试断言真实路径，并单独断言副本仍与真实文件一致，以便 NVIDIA 让二者分叉时得到信号。
+- `agentic/*/references/*_reference.py` 是推理侧模块的副本，但**并非都逐字节相同**：`missing_number_detector_reference.py` 与真实模块 539 行零差异，而 `sop_step_checker_reference.py` 在 `:218` 落后一行——真实模块调用 `self.save_checker(...)`，副本换成了注释。契约测试断言真实路径，并把每个副本的漂移量记为期望值（`EXPECTED_DRIFT`），漂移变化即失败。基座更新改动真实模块时该断言预期会红，届时连同新的已验证提交一起更新期望值。

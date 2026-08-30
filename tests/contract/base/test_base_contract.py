@@ -1,73 +1,32 @@
 """Assertions about NVIDIA base behavior we depend on but do not change.
 
-Family one of the two suites required after every subtree update (§5.9). These
-detect a failed premise: each one pins a fact that a design decision rests on,
-so a red test here means a decision needs rereading, not that the base is wrong.
+Family one of the two suites required after every subtree update (§5.9). These detect a
+failed premise: each one pins a fact that a design decision rests on, so a red test here
+means a decision needs rereading, not that the base is wrong.
 
-Standard library only, pure CPU, no GPU or container. Modules that import
-pydantic, torch, or DeepStream are inspected as source rather than imported;
-only the four standard-library-only modules are imported and executed.
+Standard library only, pure CPU, no GPU or container. Modules that import pydantic, torch
+or DeepStream are inspected as source rather than imported; only the four
+standard-library-only modules are imported and executed. Family two, which compares our
+reimplementation against the base, is in `test_sequence_comparison_agreement.py`.
 """
 
 from __future__ import annotations
 
 import ast
-import contextlib
 import difflib
-import importlib
 import inspect
-import io
 import json
-import logging
-import os
 import re
-import sys
 import unittest
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-BASE_ROOT = REPO_ROOT / "vendor/sop-monitoring-blueprints"
-INFERENCE_ROOT = BASE_ROOT / "microservices/sop-inference-bp"
-DETECTOR = INFERENCE_ROOT / "nvds_action_detector"
-AGENTIC_REFERENCES = BASE_ROOT / "agentic/ds-sop-skills/deepstream-sop/references"
-DDM_DATASET = (
-    BASE_ROOT
-    / "microservices/sop-training-bp/microservices/evaluation-ms"
-    / "ddm/DDM-Net/datasets/ddm_dataset.py"
+from base_harness import (
+    AGENTIC_REFERENCES,
+    DDM_DATASET,
+    DETECTOR,
+    function_source,
+    import_detector,
+    read,
 )
-
-
-def read(path: Path) -> str:
-    if not path.is_file():
-        raise AssertionError(
-            f"base file is missing: {path.relative_to(REPO_ROOT)}. "
-            "Update docs/base/verified-commits.md if the base moved it."
-        )
-    return path.read_text(encoding="utf-8")
-
-
-def import_detector(module: str):
-    """Import a standard-library-only module from the base package.
-
-    The base is noisy on import: it reads `LOG_LEVEL` for its records and prints a
-    one-time banner per logger unconditionally. Both are quieted here so the gate's
-    output stays readable, rather than by patching `vendor/`.
-    """
-    if str(INFERENCE_ROOT) not in sys.path:
-        sys.path.insert(0, str(INFERENCE_ROOT))
-    os.environ.setdefault("LOG_LEVEL", "ERROR")
-    with contextlib.redirect_stdout(io.StringIO()):
-        imported = importlib.import_module(f"nvds_action_detector.{module}")
-    logging.getLogger("DS_ACTION_DETECTOR").setLevel(logging.ERROR)
-    return imported
-
-
-def function_source(path: Path, name: str) -> str:
-    tree = ast.parse(read(path))
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
-            return ast.get_source_segment(read(path), node) or ""
-    raise AssertionError(f"{path.name} no longer defines {name}()")
 
 
 class ActionNumberExtractionTest(unittest.TestCase):

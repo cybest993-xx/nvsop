@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import unittest
 
+from harness import IDLE_TIMEOUT, STEP_DEADLINE, STEPS, fire, observe, opening_state
+
 from edge_runtime.judgment import ReasonCode, Verdict
 from edge_runtime.judgment.core import advance
 from edge_runtime.judgment.model import (
@@ -22,54 +24,27 @@ from edge_runtime.judgment.model import (
     HostLiveness,
     JudgmentState,
     Lifecycle,
-    Observation,
     Ordering,
-    Outcome,
     RuntimeParameters,
     StreamHealth,
     Template,
-    TimerFired,
     ValidityImpaired,
     Violation,
 )
-
-STEPS = ("(1) step 1", "(2) step 2", "(3) step 3", "(4) step 4", "(5) step 5")
-IDLE_TIMEOUT = 300.0
-STEP_DEADLINE = 60.0
-
-
-def opening_state(ordering: Ordering = Ordering.UNORDERED) -> JudgmentState:
-    return JudgmentState(
-        template=Template(steps=STEPS, ordering=ordering, start_signal=STEPS[0]),
-        parameters=RuntimeParameters(idle_timeout=IDLE_TIMEOUT, step_deadline=STEP_DEADLINE),
-    )
-
-
-def observe(state: JudgmentState, signal: str, at: float) -> Outcome:
-    return advance(state, Observation(signal=signal, at=HostInstant(at), source_time=at))
-
-
-def fire(
-    state: JudgmentState,
-    at: float,
-    host: HostLiveness = HostLiveness.ALIVE,
-    stream: StreamHealth = StreamHealth.HEALTHY,
-) -> Outcome:
-    return advance(state, TimerFired(at=HostInstant(at), host=host, stream=stream))
 
 
 class TheCoreDeclaresWhenItNeedsWakingTest(unittest.TestCase):
     def test_the_wake_up_is_the_nearer_of_the_step_deadline_and_the_idle_timeout(
         self,
     ) -> None:
-        outcome = observe(opening_state(), STEPS[0], at=100.0)
+        outcome = observe(opening_state(Ordering.UNORDERED), STEPS[0], at=100.0)
 
         self.assertEqual(HostInstant(160.0), outcome.wake_at)
 
     def test_the_idle_timeout_is_the_wake_up_once_the_deadline_has_been_reported(
         self,
     ) -> None:
-        state = observe(opening_state(), STEPS[0], at=100.0).state
+        state = observe(opening_state(Ordering.UNORDERED), STEPS[0], at=100.0).state
 
         outcome = fire(state, at=160.0)
 
@@ -85,19 +60,19 @@ class TheCoreDeclaresWhenItNeedsWakingTest(unittest.TestCase):
         # stream's start, so a long-running stream's monotonic instant and its source time
         # diverge — and only the monotonic one can measure chunks ceasing to arrive. Were
         # the core to use `source_time`, this wake-up would land at 62.0.
-        outcome = observe(opening_state(), STEPS[0], at=900.0)
+        outcome = observe(opening_state(Ordering.UNORDERED), STEPS[0], at=900.0)
 
         self.assertEqual(HostInstant(960.0), outcome.wake_at)
 
     def test_an_observation_restarts_both_measurements(self) -> None:
-        state = observe(opening_state(), STEPS[0], at=100.0).state
+        state = observe(opening_state(Ordering.UNORDERED), STEPS[0], at=100.0).state
 
         outcome = observe(state, STEPS[1], at=140.0)
 
         self.assertEqual(HostInstant(200.0), outcome.wake_at)
 
     def test_no_wake_up_is_declared_once_the_instance_closed(self) -> None:
-        state = opening_state()
+        state = opening_state(Ordering.UNORDERED)
         for second, signal in enumerate(STEPS, start=1):
             outcome = observe(state, signal, at=float(second))
             state = outcome.state
@@ -106,7 +81,7 @@ class TheCoreDeclaresWhenItNeedsWakingTest(unittest.TestCase):
         self.assertIsNone(outcome.wake_at)
 
     def test_a_timer_firing_with_nothing_in_flight_decides_nothing(self) -> None:
-        outcome = fire(opening_state(), at=160.0)
+        outcome = fire(opening_state(Ordering.UNORDERED), at=160.0)
 
         self.assertEqual((), outcome.decisions)
         self.assertIsNone(outcome.wake_at)
@@ -120,7 +95,7 @@ class TheIdleTimeoutClosesThePassTest(unittest.TestCase):
     """
 
     def test_a_healthy_idle_close_reports_the_missing_steps(self) -> None:
-        state = opening_state()
+        state = opening_state(Ordering.UNORDERED)
         for second, signal in enumerate((STEPS[0], STEPS[1], STEPS[2]), start=1):
             state = observe(state, signal, at=float(second)).state
 
@@ -311,7 +286,7 @@ class TheGateAlsoCoversTimeDrivenVerdictsTest(unittest.TestCase):
     def test_the_timer_finding_the_stream_lost_closes_indeterminate(self) -> None:
         # The supervisor may never have sent an impairment event — the loss is what stopped
         # the chunks, and the supervisor finds it when it looks at this firing.
-        state = observe(opening_state(), STEPS[0], at=10.0).state
+        state = observe(opening_state(Ordering.UNORDERED), STEPS[0], at=10.0).state
 
         outcome = fire(state, at=310.0, stream=StreamHealth.LOST)
 
@@ -330,7 +305,7 @@ class TheGateAlsoCoversTimeDrivenVerdictsTest(unittest.TestCase):
     def test_the_timer_finding_the_process_gone_closes_indeterminate(self) -> None:
         # Process death cannot announce itself: the stream-health channel only delivers
         # while the process and its pipeline live (§5.11). Continued silence is the signal.
-        state = observe(opening_state(), STEPS[0], at=10.0).state
+        state = observe(opening_state(Ordering.UNORDERED), STEPS[0], at=10.0).state
 
         outcome = fire(state, at=310.0, host=HostLiveness.DOWN)
 

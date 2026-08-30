@@ -14,54 +14,19 @@ from __future__ import annotations
 
 import unittest
 
+from harness import EXTERNAL_END, EXTERNAL_START, STEPS, observe_each, opening_state
+
 from edge_runtime.judgment import ReasonCode, Verdict
 from edge_runtime.judgment.core import advance
 from edge_runtime.judgment.model import (
     Decision,
     EvidenceSpan,
     HostInstant,
-    JudgmentState,
     Lifecycle,
     Observation,
     Ordering,
-    RuntimeParameters,
-    Template,
     Violation,
 )
-
-STEPS = ("(1) step 1", "(2) step 2", "(3) step 3", "(4) step 4", "(5) step 5")
-
-# Long enough that neither can fire within the second-apart observations below. Time-driven
-# conclusions have their own file; these assertions are about arriving observations.
-PARAMETERS = RuntimeParameters(idle_timeout=300.0, step_deadline=60.0)
-
-
-def opening_state(
-    *,
-    steps: tuple[str, ...] = STEPS,
-    ordering: Ordering = Ordering.ORDERED,
-    start_signal: str = STEPS[0],
-    end_signals: tuple[str, ...] = (),
-) -> JudgmentState:
-    return JudgmentState(
-        template=Template(
-            steps=steps, ordering=ordering, start_signal=start_signal, end_signals=end_signals
-        ),
-        parameters=PARAMETERS,
-    )
-
-
-def run(state: JudgmentState, *steps: str) -> tuple[JudgmentState, list[Decision]]:
-    """Send one observation per step, one second apart, and collect every decision."""
-    decisions: list[Decision] = []
-    for second, signal in enumerate(steps, start=1):
-        outcome = advance(
-            state,
-            Observation(signal=signal, at=HostInstant(float(second)), source_time=float(second)),
-        )
-        state = outcome.state
-        decisions.extend(outcome.decisions)
-    return state, decisions
 
 
 class ReworkIsCompliantTest(unittest.TestCase):
@@ -77,9 +42,11 @@ class ReworkIsCompliantTest(unittest.TestCase):
     """
 
     def test_the_rework_sequence_closes_as_one_passing_instance(self) -> None:
-        state = opening_state()
+        state = opening_state(Ordering.ORDERED)
 
-        _, decisions = run(state, STEPS[0], STEPS[1], STEPS[2], STEPS[1], STEPS[3], STEPS[4])
+        _, decisions = observe_each(
+            state, STEPS[0], STEPS[1], STEPS[2], STEPS[1], STEPS[3], STEPS[4]
+        )
 
         self.assertEqual(
             [
@@ -100,9 +67,9 @@ class ReworkIsCompliantTest(unittest.TestCase):
     def test_repeating_the_start_signal_does_not_open_a_second_instance(self) -> None:
         # The instance boundary is the first satisfaction of the declared start signal.
         # Reworking step 1 is rework, not a new pass.
-        state = opening_state()
+        state = opening_state(Ordering.ORDERED)
 
-        state, decisions = run(state, STEPS[0], STEPS[1], STEPS[0], STEPS[2])
+        state, decisions = observe_each(state, STEPS[0], STEPS[1], STEPS[0], STEPS[2])
 
         self.assertEqual([], decisions)
         assert state.instance is not None
@@ -114,7 +81,7 @@ class InstanceBoundaryTest(unittest.TestCase):
     """§5.1: the boundary is declared, never inferred from the sequence's shape."""
 
     def test_an_observation_before_the_start_signal_opens_nothing(self) -> None:
-        state = opening_state(start_signal="工件到位")
+        state = opening_state(Ordering.ORDERED, start_signal=EXTERNAL_START)
 
         outcome = advance(
             state,
@@ -132,17 +99,17 @@ class InstanceBoundaryTest(unittest.TestCase):
         # The station has a connector, so the template declares a physical fact as the
         # start signal. The core takes the same path as a station with no connector: the
         # signal is an observation like any other (§5.8).
-        state = opening_state(start_signal="工件到位")
+        state = opening_state(Ordering.ORDERED, start_signal=EXTERNAL_START)
 
-        state, decisions = run(state, "工件到位", *STEPS)
+        state, decisions = observe_each(state, EXTERNAL_START, *STEPS)
 
         self.assertEqual(Lifecycle.CLOSED_BY_COMPLETE_SET, decisions[-1].lifecycle)
         self.assertEqual(Verdict.PASS, decisions[-1].verdict)
 
     def test_a_declared_end_signal_closes_the_instance(self) -> None:
-        state = opening_state(end_signals=("下料完成",))
+        state = opening_state(Ordering.ORDERED, end_signals=(EXTERNAL_END,))
 
-        state, decisions = run(state, STEPS[0], STEPS[1], STEPS[2], STEPS[3], "下料完成")
+        state, decisions = observe_each(state, STEPS[0], STEPS[1], STEPS[2], STEPS[3], EXTERNAL_END)
 
         self.assertEqual(
             Decision(
@@ -164,18 +131,18 @@ class InstanceBoundaryTest(unittest.TestCase):
 
     def test_a_complete_step_set_closes_the_instance_immediately(self) -> None:
         # The base's `cycle_completed` fast path, kept: `len(seen) == N` (§5.1).
-        state = opening_state(ordering=Ordering.UNORDERED)
+        state = opening_state(Ordering.UNORDERED)
 
-        state, decisions = run(state, STEPS[0], STEPS[2], STEPS[1], STEPS[4], STEPS[3])
+        state, decisions = observe_each(state, STEPS[0], STEPS[2], STEPS[1], STEPS[4], STEPS[3])
 
         self.assertEqual(1, len(decisions))
         self.assertEqual(Lifecycle.CLOSED_BY_COMPLETE_SET, decisions[0].lifecycle)
         self.assertIsNone(state.instance)
 
     def test_the_next_instance_opens_after_the_previous_one_closed(self) -> None:
-        state = opening_state()
+        state = opening_state(Ordering.ORDERED)
 
-        state, _ = run(state, *STEPS)
+        state, _ = observe_each(state, *STEPS)
         outcome = advance(state, Observation(signal=STEPS[0], at=HostInstant(9.0), source_time=9.0))
 
         assert outcome.state.instance is not None
@@ -189,9 +156,9 @@ class MissedStepIsReportedOnClosingTest(unittest.TestCase):
     def test_an_unordered_template_reports_missing_steps_when_the_instance_closes(
         self,
     ) -> None:
-        state = opening_state(ordering=Ordering.UNORDERED, end_signals=("下料完成",))
+        state = opening_state(Ordering.UNORDERED, end_signals=(EXTERNAL_END,))
 
-        state, decisions = run(state, STEPS[0], STEPS[2], STEPS[4], "下料完成")
+        state, decisions = observe_each(state, STEPS[0], STEPS[2], STEPS[4], EXTERNAL_END)
 
         self.assertEqual(
             (
@@ -214,9 +181,9 @@ class MissedStepIsReportedOnClosingTest(unittest.TestCase):
     def test_an_unordered_template_reports_no_violation_for_order(self) -> None:
         # An unordered template's steps may be done in any order; reporting order there
         # would be the false alarm story 11 is about.
-        state = opening_state(ordering=Ordering.UNORDERED)
+        state = opening_state(Ordering.UNORDERED)
 
-        _, decisions = run(state, STEPS[0], STEPS[4], STEPS[3], STEPS[2], STEPS[1])
+        _, decisions = observe_each(state, STEPS[0], STEPS[4], STEPS[3], STEPS[2], STEPS[1])
 
         self.assertEqual([Verdict.PASS], [decision.verdict for decision in decisions])
 
@@ -231,9 +198,9 @@ class OrderedTemplateReportsOnArrivalTest(unittest.TestCase):
     def test_skipping_a_step_reports_the_wrong_step_and_the_missed_step_at_once(
         self,
     ) -> None:
-        state = opening_state()
+        state = opening_state(Ordering.ORDERED)
 
-        state, decisions = run(state, STEPS[0], STEPS[1], STEPS[3])
+        state, decisions = observe_each(state, STEPS[0], STEPS[1], STEPS[3])
 
         anchor = EvidenceSpan.at(HostInstant(3.0))
         self.assertEqual(
@@ -258,9 +225,9 @@ class OrderedTemplateReportsOnArrivalTest(unittest.TestCase):
         )
 
     def test_a_step_arriving_after_a_later_one_is_out_of_order(self) -> None:
-        state = opening_state()
+        state = opening_state(Ordering.ORDERED)
 
-        state, decisions = run(state, STEPS[0], STEPS[1], STEPS[3], STEPS[2])
+        state, decisions = observe_each(state, STEPS[0], STEPS[1], STEPS[3], STEPS[2])
 
         self.assertEqual(
             (
@@ -275,9 +242,9 @@ class OrderedTemplateReportsOnArrivalTest(unittest.TestCase):
         self.assertEqual((ReasonCode.OUT_OF_ORDER,), decisions[-1].reasons)
 
     def test_a_step_already_reported_missing_is_not_reported_missing_again(self) -> None:
-        state = opening_state(end_signals=("下料完成",))
+        state = opening_state(Ordering.ORDERED, end_signals=(EXTERNAL_END,))
 
-        state, decisions = run(state, STEPS[0], STEPS[3], "下料完成")
+        state, decisions = observe_each(state, STEPS[0], STEPS[3], EXTERNAL_END)
 
         missed = [
             violation
@@ -295,9 +262,9 @@ class OrderedTemplateReportsOnArrivalTest(unittest.TestCase):
     def test_a_latched_violation_makes_the_closing_verdict_fail(self) -> None:
         # A violation is a confirmed fact; the operator making the step up afterwards
         # does not remove it (§5.2). The instance still closes, and it closes failing.
-        state = opening_state()
+        state = opening_state(Ordering.ORDERED)
 
-        state, decisions = run(state, STEPS[0], STEPS[1], STEPS[3], STEPS[2], STEPS[4])
+        state, decisions = observe_each(state, STEPS[0], STEPS[1], STEPS[3], STEPS[2], STEPS[4])
 
         self.assertEqual(Lifecycle.CLOSED_BY_COMPLETE_SET, decisions[-1].lifecycle)
         self.assertEqual(Verdict.FAIL, decisions[-1].verdict)
@@ -311,11 +278,11 @@ class OrderedTemplateReportsOnArrivalTest(unittest.TestCase):
 class TemplateValidationTest(unittest.TestCase):
     def test_a_template_declares_at_least_one_step(self) -> None:
         with self.assertRaises(ValueError):
-            opening_state(steps=())
+            opening_state(Ordering.ORDERED, steps=())
 
     def test_template_steps_are_distinct(self) -> None:
         with self.assertRaises(ValueError):
-            opening_state(steps=(STEPS[0], STEPS[0]))
+            opening_state(Ordering.ORDERED, steps=(STEPS[0], STEPS[0]))
 
 
 if __name__ == "__main__":

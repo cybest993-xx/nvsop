@@ -14,6 +14,15 @@ from __future__ import annotations
 
 import unittest
 
+from harness import (
+    EXTERNAL_END,
+    IDLE_TIMEOUT,
+    STEP_DEADLINE,
+    STEPS,
+    observe_each,
+    opening_state,
+)
+
 from edge_runtime.judgment import INDETERMINATE_REASONS, ReasonCode, Verdict
 from edge_runtime.judgment.core import advance
 from edge_runtime.judgment.model import (
@@ -32,9 +41,6 @@ from edge_runtime.judgment.model import (
     ValidityRestored,
 )
 
-STEPS = ("(1) step 1", "(2) step 2", "(3) step 3", "(4) step 4", "(5) step 5")
-END_SIGNAL = "下料完成"
-
 # Impairments the supervisor reports as they happen. The rest of the indeterminate codes
 # the core derives itself, from an event of their own or from a signal outside the
 # template; `test_every_indeterminate_code_has_a_producer` pins which is which.
@@ -49,33 +55,25 @@ SUPERVISOR_REPORTED = (
 )
 
 
-def opening_state(ordering: Ordering = Ordering.UNORDERED) -> JudgmentState:
-    return JudgmentState(
-        template=Template(
-            steps=STEPS,
-            ordering=ordering,
-            start_signal=STEPS[0],
-            end_signals=(END_SIGNAL,),
-        ),
-        # Long enough that no timer fires within these seconds-apart events. The
-        # time-driven conclusions have their own file; the end signal closes here.
-        parameters=RuntimeParameters(idle_timeout=300.0, step_deadline=60.0),
-    )
+def state_with_end_signal(ordering: Ordering = Ordering.UNORDERED) -> JudgmentState:
+    """The shared builder with an end signal declared, which is how these close.
+
+    Unordered by default: most assertions here are about the validity gate rather than
+    ordering, and an unordered template keeps an arrival-time violation from appearing
+    alongside the impairment under test.
+    """
+    return opening_state(ordering, end_signals=(EXTERNAL_END,))
 
 
 def observe(state: JudgmentState, *signals: str, start: int = 1) -> JudgmentState:
-    for second, signal in enumerate(signals, start=start):
-        state = advance(
-            state,
-            Observation(signal=signal, at=HostInstant(float(second)), source_time=float(second)),
-        ).state
+    state, _ = observe_each(state, *signals, start=start)
     return state
 
 
 def close(state: JudgmentState, at: float) -> tuple[Decision, ...]:
     """Send the declared end signal, which is the closing condition available here."""
     return advance(
-        state, Observation(signal=END_SIGNAL, at=HostInstant(at), source_time=at)
+        state, Observation(signal=EXTERNAL_END, at=HostInstant(at), source_time=at)
     ).decisions
 
 
@@ -88,7 +86,7 @@ class StreamLossDoesNotBecomeAMissedStepTest(unittest.TestCase):
     """
 
     def test_an_instance_impaired_by_stream_loss_closes_indeterminate(self) -> None:
-        state = observe(opening_state(), STEPS[0], STEPS[1])
+        state = observe(state_with_end_signal(), STEPS[0], STEPS[1])
         state = advance(state, ValidityImpaired(reason=ReasonCode.STREAM_LOST)).state
 
         decisions = close(state, at=9.0)
@@ -112,7 +110,7 @@ class StreamLossDoesNotBecomeAMissedStepTest(unittest.TestCase):
     ) -> None:
         # Sight returning does not make the blind interval observable in retrospect: a step
         # absent from the set may have been performed while we could not see it.
-        state = observe(opening_state(), STEPS[0])
+        state = observe(state_with_end_signal(), STEPS[0])
         state = advance(state, ValidityImpaired(reason=ReasonCode.STREAM_LOST)).state
         state = advance(state, ValidityRestored(reason=ReasonCode.STREAM_LOST)).state
         state = observe(state, STEPS[1], STEPS[2], start=3)
@@ -123,12 +121,12 @@ class StreamLossDoesNotBecomeAMissedStepTest(unittest.TestCase):
         self.assertEqual((ReasonCode.STREAM_LOST,), decisions[0].reasons)
 
     def test_a_restored_impairment_does_not_impair_the_next_instance(self) -> None:
-        state = observe(opening_state(), STEPS[0])
+        state = observe(state_with_end_signal(), STEPS[0])
         state = advance(state, ValidityImpaired(reason=ReasonCode.STREAM_LOST)).state
         state = advance(state, ValidityRestored(reason=ReasonCode.STREAM_LOST)).state
         close(state, at=9.0)
         state = advance(
-            state, Observation(signal=END_SIGNAL, at=HostInstant(9.0), source_time=9.0)
+            state, Observation(signal=EXTERNAL_END, at=HostInstant(9.0), source_time=9.0)
         ).state
 
         state = observe(state, *STEPS, start=10)
@@ -136,7 +134,9 @@ class StreamLossDoesNotBecomeAMissedStepTest(unittest.TestCase):
         self.assertEqual(frozenset(), state.active_impairments)
 
     def test_an_impairment_in_force_when_an_instance_opens_impairs_it(self) -> None:
-        state = advance(opening_state(), ValidityImpaired(reason=ReasonCode.STREAM_LOST)).state
+        state = advance(
+            state_with_end_signal(), ValidityImpaired(reason=ReasonCode.STREAM_LOST)
+        ).state
 
         state = observe(state, STEPS[0])
 
@@ -154,7 +154,7 @@ class EveryImpairmentReasonReachesADecisionTest(unittest.TestCase):
     def test_each_supervisor_reported_impairment_names_itself_at_the_close(self) -> None:
         for reason in SUPERVISOR_REPORTED:
             with self.subTest(reason=reason.value):
-                state = observe(opening_state(), STEPS[0])
+                state = observe(state_with_end_signal(), STEPS[0])
                 state = advance(state, ValidityImpaired(reason=reason)).state
 
                 decisions = close(state, at=9.0)
@@ -163,7 +163,7 @@ class EveryImpairmentReasonReachesADecisionTest(unittest.TestCase):
                 self.assertEqual((reason,), decisions[0].reasons)
 
     def test_several_impairments_are_all_named(self) -> None:
-        state = observe(opening_state(), STEPS[0])
+        state = observe(state_with_end_signal(), STEPS[0])
         for reason in (ReasonCode.STREAM_LOST, ReasonCode.CHUNK_BACKLOG_EXCEEDED):
             state = advance(state, ValidityImpaired(reason=reason)).state
 
@@ -208,7 +208,7 @@ class AnUnknownActionIsIndeterminateTest(unittest.TestCase):
     """
 
     def test_a_signal_outside_the_template_makes_the_instance_indeterminate(self) -> None:
-        state = observe(opening_state(), STEPS[0])
+        state = observe(state_with_end_signal(), STEPS[0])
 
         outcome = advance(
             state, Observation(signal="(9) 未声明动作", at=HostInstant(3.0), source_time=3.0)
@@ -227,7 +227,7 @@ class AnUnknownActionIsIndeterminateTest(unittest.TestCase):
         )
 
     def test_the_unknown_action_carries_through_to_the_close(self) -> None:
-        state = observe(opening_state(), STEPS[0])
+        state = observe(state_with_end_signal(), STEPS[0])
         state = advance(
             state, Observation(signal="(9) 未声明动作", at=HostInstant(3.0), source_time=3.0)
         ).state
@@ -239,7 +239,7 @@ class AnUnknownActionIsIndeterminateTest(unittest.TestCase):
 
     def test_an_unknown_signal_with_no_instance_in_flight_decides_nothing(self) -> None:
         outcome = advance(
-            opening_state(),
+            state_with_end_signal(),
             Observation(signal="(9) 未声明动作", at=HostInstant(1.0), source_time=1.0),
         )
 
@@ -251,7 +251,7 @@ class RunInterruptionClosesInFlightWorkTest(unittest.TestCase):
     """One maintenance action must not manufacture a violation."""
 
     def test_an_in_flight_instance_closes_indeterminate(self) -> None:
-        state = observe(opening_state(Ordering.ORDERED), STEPS[0], STEPS[1])
+        state = observe(state_with_end_signal(Ordering.ORDERED), STEPS[0], STEPS[1])
 
         outcome = advance(state, RunInterrupted(at=HostInstant(7.0)))
 
@@ -271,7 +271,7 @@ class RunInterruptionClosesInFlightWorkTest(unittest.TestCase):
         self.assertIsNone(outcome.state.instance)
 
     def test_an_interruption_with_nothing_in_flight_decides_nothing(self) -> None:
-        outcome = advance(opening_state(), RunInterrupted(at=HostInstant(7.0)))
+        outcome = advance(state_with_end_signal(), RunInterrupted(at=HostInstant(7.0)))
 
         self.assertEqual((), outcome.decisions)
 
@@ -298,7 +298,7 @@ class TheSafetyInvariantHoldsTest(unittest.TestCase):
         for reason in self.IMPAIRMENTS:
             for ordering in Ordering:
                 with self.subTest(reason=reason.value, ordering=ordering.value):
-                    state = observe(opening_state(ordering), STEPS[0])
+                    state = observe(state_with_end_signal(ordering), STEPS[0])
                     state = advance(state, ValidityImpaired(reason=reason)).state
 
                     # A jump, which would be two violations were observation reliable.
@@ -318,7 +318,7 @@ class TheSafetyInvariantHoldsTest(unittest.TestCase):
         # Story 8: "this pass's conclusion is unreliable" and "this deviation is a
         # confirmed fact" must not hide each other. The violation was confirmed while
         # observation was still good, and the close afterwards says nothing about it.
-        state = observe(opening_state(Ordering.ORDERED), STEPS[0], STEPS[1])
+        state = observe(state_with_end_signal(Ordering.ORDERED), STEPS[0], STEPS[1])
         jump = advance(state, Observation(signal=STEPS[3], at=HostInstant(3.0), source_time=3.0))
         state = advance(jump.state, ValidityImpaired(reason=ReasonCode.STREAM_LOST)).state
 
@@ -336,7 +336,7 @@ class TheSafetyInvariantHoldsTest(unittest.TestCase):
         # The gate must not swallow the ordinary case: otherwise "never report a false
         # failure" would be satisfiable by never reporting anything.
         outcome = advance(
-            opening_state(Ordering.ORDERED),
+            state_with_end_signal(Ordering.ORDERED),
             Observation(signal=STEPS[0], at=HostInstant(1.0), source_time=1.0),
         )
         for second, signal in enumerate(STEPS[1:], start=2):
@@ -361,7 +361,7 @@ class InstanceStateIsTheSupervisorsToHoldTest(unittest.TestCase):
     def test_a_reconstructed_in_flight_instance_continues(self) -> None:
         state = JudgmentState(
             template=Template(steps=STEPS, ordering=Ordering.ORDERED, start_signal=STEPS[0]),
-            parameters=RuntimeParameters(idle_timeout=300.0, step_deadline=60.0),
+            parameters=RuntimeParameters(idle_timeout=IDLE_TIMEOUT, step_deadline=STEP_DEADLINE),
             instance=Instance(
                 instance_id=7,
                 opened_at=HostInstant(100.0),

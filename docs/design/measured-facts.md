@@ -58,7 +58,9 @@ chunk4 动作(5)  cycle_completed=False  missing=[]
 
 复核 `69352021` 后修正早期"无重连"结论：RTSP pipeline 给 `nvurisrcbin` 设置了 `init-rtsp-reconnect-interval=10`（`ds_3d_action_pipeline.py:491`）。按 NVIDIA DeepStream 源码，该属性在 RTSP 源收到错误时等待后触发重连；基座没有设置用于"持续无数据"检测的 `rtsp-reconnect-interval`，也没有显式设置重连次数。
 
-关键在于 `ds_boundary_infernce` 的 `on_message` 回调（`ds_3d_action_pipeline.py:779-784`）**只处理 EOS**：source error、正在重连、重连成功、最后一帧时刻、恢复后时间轴归零全部被丢弃，从未进入 SSE。`checker_result.error_message` 也只反映 checker 自身异常。
+关键在于 pipeline 消息回调**丢弃 EOS 以外的一切**：source error、正在重连、重连成功、最后一帧时刻、恢复后时间轴归零全部被丢弃，从未进入 SSE。`checker_result.error_message` 也只反映 checker 自身异常。
+
+**E4 实施时修正回调落点**：早期结论指向 `ds_boundary_infernce` 的 `on_message`（`ds_3d_action_pipeline.py:779-784`）。该函数只被同文件 `if __name__ == "__main__":`（`:815`、`:852`）的命令行入口调用，**不在服务路径上**。服务路径是 `SOPVideoProcessor.run_pipeline` 的 `on_message`（`ds_sop_process.py:823`，由 `:848` 的 `start(on_message)` 注册），它处理 `StateTransitionMessage` 与 `EOSMessage` 两类消息——比命令行那个多一类，且 `INVALID` 状态正是 source error 的可观测形式。"只处理 EOS 后全部丢弃"这一结论对两者都成立，落点改到服务路径那一处。
 
 → 流健康的第一手信号就在推理机的 pipeline 回调里。**判定必须与它同机**，否则中心侧只能靠独立探活二次猜测——那正是"两套东西"。改造方案见 §5.7。完整证据见 [`nvidia-base-capability-boundary.md`](../research/nvidia-base-capability-boundary.md)。
 
@@ -140,3 +142,11 @@ Blueprint), place it under MODEL_ROOT_DIR, and set DDM_MODEL_PATH..."
 ## 2.12 piko `authoring_worker` 是空壳
 
 三个文件共 130 字节，`__main__.py` 导入的子模块不存在 → `ModuleNotFoundError`，README 声称的 `--check` 跑不起来。无可复用代码。
+
+## 2.13 单调钟跨进程可比，属未实测前提（E4 登记）
+
+流健康事件的 `at_monotonic` 由基座容器内的 `time.monotonic()` 打戳，由 supervisor 进程消费，两者据此做同一条时间轴上的运算（空闲时限与步骤时限也在这条轴上，§5.1）。这依赖 Linux 的 `CLOCK_MONOTONIC` 是**按启动计而非按进程计**的时钟：同一主机上的两个进程读到同一条轴。
+
+**这条尚未在目标环境实测，故登记为前提而非事实。** 它有一个已知的破坏方式：容器若启用 time namespace（`CLONE_NEWTIME`）会得到自己的单调钟偏移，两侧就不再可比。Docker 默认不启用，但这属于部署期须确认的事项，与 §5.21 的其他部署期实测项同类。破坏后的表现是时限判定的时间轴错位，而非报错，故 P4 故障注入应显式验证一次：在基座容器与 supervisor 内各读一次 `time.monotonic()`，确认差值与墙钟一致。
+
+若该前提不成立，退路是让事件只带序不带时刻——事件在 chunk N 与 N+1 之间这一信息本身不依赖跨进程时钟（§5.11），代价是闭合时的有效性判断退化到 chunk 粒度。

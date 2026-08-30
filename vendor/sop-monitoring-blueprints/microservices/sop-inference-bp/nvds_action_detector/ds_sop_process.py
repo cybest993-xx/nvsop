@@ -44,6 +44,15 @@ from .sop_step_checker import SopCheckerCache, SopCheckerRequest, SopCheckerResp
 from .utils import SafeThreadEventLoop, TimeMeasure, get_media_info_gst
 from .vlm_inference_client import VLMInferenceClient
 
+# --- SOP compliance system: recorded patch, append-only (ADR-0007) ---
+# The pipeline callback below already sees whether this stream can be observed at all and
+# discarded every such fact. This is the one hook that surfaces them, as a synthetic chunk
+# on `_vlm_response_queue`. All logic lives in `apps/edge-runtime/`; this file only imports
+# and calls it. Imported at module scope on purpose: a container where `edge_runtime` is not
+# importable must fail loudly at start-up rather than serve a stream whose health is
+# silently never reported.
+from edge_runtime.stream_health import note_pipeline_message
+
 logger = ds_logger.get_logger(__name__)
 
 
@@ -844,6 +853,16 @@ class SOPVideoProcessor:
                 tm.log_elapsed_time(
                     f"inference pipeline has finished w/ EOS queue size: {self._boundary_queue.qsize()}"
                 )
+
+            # --- SOP compliance system: recorded patch, append-only (ADR-0007) ---
+            # Last in the callback and adding no control flow: every branch above has
+            # already run, so this cannot change what the base does with the message.
+            note_pipeline_message(
+                message,
+                sink=self._vlm_response_queue,
+                stream_id=str(self.id),
+                source_anchor=self.first_timestamp,
+            )
 
         self._inference_pipeline.start(on_message)
         tm.log_elapsed_time("inference pipeline is starting in async mode")

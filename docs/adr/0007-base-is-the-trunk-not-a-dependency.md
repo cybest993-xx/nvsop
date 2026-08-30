@@ -42,11 +42,22 @@ NVIDIA 仓库的代码是本系统的躯干，不是外部依赖。姿态分三�
 | `_chunk_queue` | 不可用：`vlm_inference_request_process:1014` 要求数值 `start_time`/`end_time`，并会**对它跑一次 VLM 推理** |
 | `_vlm_response_queue` | **可用**：`:1136` 对 `response_future` 有默认值与判空；`DISABLE_SOP_CHECKER` 下它就是 `inference_last_queue` |
 
-因此补丁是**两个触点、两个文件，均为纯追加**：`ds_sop_process.py:556` 调用 `create_inference_pipeline` 时多传一个 sink（`self._vlm_response_queue` 在此处于作用域内）；`ds_3d_action_pipeline.py:779` 的 `on_message` 追加一次对我们 hook 的调用，现有 EOS 分支不动。逻辑在 `apps/edge-runtime/`，`vendor/` 内只留 import 与调用。
+因此补丁是**一个触点、一个文件，纯追加**：`SOPVideoProcessor.run_pipeline` 的 `on_message`（`ds_sop_process.py:823`）末尾追加一次对我们 hook 的调用，现有 `StateTransitionMessage` 与 `EOSMessage` 分支不动。逻辑在 `apps/edge-runtime/`，`vendor/` 内只留 import 与调用。
 
-合成事件用**显式键**（如 `stream_health`）标记，不用哨兵数值——消费者按键存在与否分支，比认魔数安全，且不与契约测试中针对 `_make_chunk_info` 的断言冲突。
+**E4 实施时的修正**（本 ADR 早期版本记为"两个触点、两个文件"）：早期版本指向 `ds_3d_action_pipeline.py:779` 的 `on_message`，并要求在 `ds_sop_process.py:556` 调用 `create_inference_pipeline` 时多传一个 sink。核实代码后两条都不成立：
+
+- `ds_3d_action_pipeline.py:779` 属于 `ds_boundary_infernce`，只被同文件 `if __name__ == "__main__":`（`:815`）下的命令行入口调用（`:852`），**不在服务路径上**。服务路径的回调是 `ds_sop_process.py:823`。
+- 该回调是 `SOPVideoProcessor` 的方法内闭包，`self._vlm_response_queue` 与 `self.first_timestamp` 在此**已在作用域内**，无需经 `create_inference_pipeline` 传入。第二个触点因此消失。
+
+修正后补丁面比早期记录更小（一处而非两处），ADR 的结论方向不变。
+
+合成事件用**显式键**（`stream_health`）标记，不用哨兵数值——消费者按键存在与否分支，比认魔数安全，且不与契约测试中针对 `_make_chunk_info` 的断言冲突。事件同时带上基座的 `first_timestamp` 作为 `source_anchor`：基座重连后会重新锚定该值（`ds_sop_process.py:874`、`:933`），而每个正常 chunk 也带同一字段，故"恢复后时间轴归零"由 supervisor 比对锚点得出，不需要单独的事件类型。它是 `time.time()` 墙钟，只可比对身份，不可用于计时。
 
 **该通道的边界**：它只在进程与 pipeline 存活时能投递，故能带序送出 source error、正在重连、重连成功、时间轴归零这类可恢复状态；进程死亡送不出任何东西，那种情形由 supervisor 的 chunk 静默计时器兜底。选它买到的是**事件序**（"该事件发生在 chunk N 与 N+1 之间"可直接用于闭合时的有效性判断），不是全覆盖。
+
+**只登记可观测的事实**（E4 实测）：服务路径回调能观测到 `PipelineState.INVALID`（source error）、`PLAYING`（正在投递）与 EOS 三类。"正在重连"**没有**对应的总线消息——基座只给源设置 `init-rtsp-reconnect-interval`，DeepStream 在元件内部重试且不广播，故不设该事实，否则是编造而非观测。重连成功由 `SOURCE_ERROR` 之后紧跟 `DELIVERING` 表达，信息等价。
+
+**EOS 那一类是尽力而为**（E4 实测，供 E5 依赖时参考）：基座的 VLM 线程结束时会往同一队列投 `None` 哨兵（`ds_sop_process.py:1175`），派发循环见哨兵即停止转发，故落在其后的流结束事件会被丢弃。这不构成损失：SSE 响应本身会结束，supervisor 直接看得到，且流终止本来就由 chunk 静默计时器负责。判定真正依赖的 `SOURCE_ERROR` 与 `DELIVERING` 产生于流中途，远早于任何哨兵，不参与这个竞争。
 
 ## Considered Options
 
@@ -58,7 +69,8 @@ NVIDIA 仓库的代码是本系统的躯干，不是外部依赖。姿态分三�
 
 ## 补丁纪律
 
-- 该处就地改造维护为可重放 diff，逻辑放 `apps/edge-runtime/`，`vendor/` 内只留最小 hook（import 并调用我们的包）。它是在回调处追加调用，不进入他人控制流，故该分工成立。
+- 该处就地改造维护为可重放 diff，逻辑放 `apps/edge-runtime/`，`vendor/` 内只留最小 hook（import 并调用我们的包）。它是在回调处追加调用，不进入他人控制流，故该分工成立。diff 存于 [`docs/base/patches/0001-stream-health-events.patch`](../base/patches/0001-stream-health-events.patch)，与工作树同步由契约测试保证。
+- **hook 在模块层 import**，不在调用点内 try/except 兜底：`edge_runtime` 不可导入的容器必须在启动时显式失败，而不是照常出流、静默不报健康。基座镜像里 `edge_runtime` 的可导入性属部署期事项（PYTHONPATH 或装包），与 E5 的容器编排一并落地。
 - `git subtree pull` 后必跑 `tests/contract/base/`：一类断言验证"我们依赖但不改的基座行为未变"，一类验证"补丁仍可干净应用且改造行为正确"，一类验证"我们自己实现的序列比对仍与基座在**合规序列**上结论一致"（不含返工与漏步时机——那正是我们故意与基座不同的地方；可跳过步骤不在对比范围内，因为首版不生成该字段）。
 - `docs/base/verified-commits.md` 记录每次更新的 NVIDIA 提交号、契约测试结果、补丁是否需要调整。不记录"当前固定在哪个提交"（因为不固定），只记录"哪些提交上验证过"。
 - `vendor/` 内那处 hook 只依赖 Python 标准库：它运行在 DeepStream 容器内，版本由基座镜像决定。判定核心同样只依赖标准库，理由见 [ADR-0005](0005-judgment-runs-inside-the-inference-host.md)。

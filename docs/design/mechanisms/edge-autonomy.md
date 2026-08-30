@@ -83,7 +83,9 @@ mediamtx（sourceOnDemand，零转码，7 天分段录像）
 
 这不违反"不许两套实现"：我们的判定路径上只有一套（我们的），基座那份被 `DISABLE_SOP_CHECKER` 关闭后连线程都不启动（`:652`），`inference_last_queue`（`:592-598`）直接返回 `_vlm_response_queue`。
 
-**合成健康事件的注入点（已实测）**：三个候选 sink 只有一个可用。`_boundary_queue` 不可用——`clip_post_process:923` 按 `(frame_id, pts, score)` 位置解包；`_chunk_queue` 不可用——`vlm_inference_request_process:1014` 要求数值 `start_time`/`end_time` 并会对它跑一次 VLM 推理；`_vlm_response_queue` 可用——`:1136` 对 `response_future` 有默认值与判空。故补丁是**两个触点、两个文件、均为纯追加**：`ds_sop_process.py:556` 传入 sink，`ds_3d_action_pipeline.py:779` 的 `on_message` 追加一次 hook 调用。合成事件用显式键（如 `stream_health`）标记，不用哨兵数值。沿用基座自己的做法——它在流结束时就造过 `chunk_idx=-1` 的合成 chunk（`:719-730`）。
+**合成健康事件的注入点（已实测）**：三个候选 sink 只有一个可用。`_boundary_queue` 不可用——`clip_post_process:923` 按 `(frame_id, pts, score)` 位置解包；`_chunk_queue` 不可用——`vlm_inference_request_process:1014` 要求数值 `start_time`/`end_time` 并会对它跑一次 VLM 推理；`_vlm_response_queue` 可用——`:1136` 对 `response_future` 有默认值与判空。故补丁是**一个触点、一个文件、纯追加**：`SOPVideoProcessor.run_pipeline` 的 `on_message`（`ds_sop_process.py:823`）末尾追加一次 hook 调用，`self._vlm_response_queue` 与 `self.first_timestamp` 在该闭包内已在作用域。合成事件用显式键（`stream_health`）标记，不用哨兵数值。沿用基座自己的做法——它在流结束时就造过 `chunk_idx=-1` 的合成 chunk（`:719-730`）。
+
+**E4 实施时的两处修正**（[ADR-0007](../../adr/0007-base-is-the-trunk-not-a-dependency.md) 记录了完整理由）：早期记为"两个触点、两个文件"，指向 `ds_3d_action_pipeline.py:779` 并要求经 `create_inference_pipeline` 传入 sink。前者是命令行入口 `ds_boundary_infernce` 的回调，不在服务路径上；后者因回调本就在 `SOPVideoProcessor` 方法内而不必要。补丁面因此比早期记录更小。其次，"正在重连"不作为独立事实登记——基座在元件内部重试且不广播总线消息，回调能观测到的只有 `INVALID`、`PLAYING`、EOS 三类；重连成功由 `SOURCE_ERROR` 后紧跟 `DELIVERING` 表达。时间轴归零也不是独立事实，而是事件所带 `source_anchor`（基座的 `first_timestamp`）的变化，由 supervisor 比对锚点得出。
 
 **该通道只在进程与 pipeline 存活时能投递。** 它带序送出可恢复状态（source error、正在重连、重连成功、时间轴归零），"该事件发生在 chunk N 与 N+1 之间"可直接用于闭合时的有效性判断。进程死亡送不出任何东西，那种情形由 supervisor 的 **chunk 静默计时器**兜底——后者也是空闲超时（§5.1）所需的同一个计时器。
 

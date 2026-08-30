@@ -27,6 +27,15 @@ git subtree pull --prefix=vendor/sop-monitoring-blueprints \
 - 补丁：尚无。唯一一处就地改造（pipeline `on_message` 送出合成健康事件）未实施。
 - 备注：该提交与 §二 全部实测结论的复核基准一致（方案文档记 `6e149568` 初测、`69352021` 复核，两者 `sop-inference-bp` 零差异）。
 
+#### E4 补丁在该提交上落地（2026-08-31）
+
+同一提交，追加记录：唯一一处就地改造已实施。
+
+- 补丁：[`patches/0001-stream-health-events.patch`](patches/0001-stream-health-events.patch)。一个文件（`nvds_action_detector/ds_sop_process.py`）、两个追加块（一处 import、一处 `run_pipeline.on_message` 末尾的调用），零删除。
+- 落点修正：[ADR-0007](../adr/0007-base-is-the-trunk-not-a-dependency.md) 早期记为"两个触点、两个文件"，实际为一处；早期指向的 `ds_3d_action_pipeline.py:779` 属命令行入口，不在服务路径上。理由与证据见该 ADR 与 [`measured-facts.md`](../design/measured-facts.md) §2.4。
+- 契约测试：`tests/contract/base/` 共 35 条通过，其中 16 条为本次新增（`test_stream_health_patch.py`：补丁纯追加、补丁与工作树同步、`vendor/` 只 import 一处我们的模块、hook 调用位于回调末尾、基座消息类型与状态名未变、`DISABLE_SOP_CHECKER` 下的队列路由与消费者集合未变）。
+- 补丁是否需要调整：不需要。
+
 ## 已知的基座既有缺陷（不修，仅登记）
 
 这些是 NVIDIA 交付物自带的问题。修它们需要超出 [ADR-0007](../adr/0007-base-is-the-trunk-not-a-dependency.md) 已登记范围的补丁，故原样保留并在此登记，避免被误认为我们引入。

@@ -11,7 +11,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from edge_runtime.judgment.reasons import INDETERMINATE_REASONS, ReasonCode, Verdict
+from edge_runtime.judgment.reasons import (
+    INDETERMINATE_REASONS,
+    VIOLATION_REASONS,
+    ReasonCode,
+    Verdict,
+)
 
 StepSignal = str
 """A step's identity, as the template declares it.
@@ -245,6 +250,15 @@ class Violation:
     reason: ReasonCode
     steps: tuple[StepSignal, ...]
     evidence: EvidenceSpan
+
+    def __post_init__(self) -> None:
+        if self.reason not in VIOLATION_REASONS:
+            raise ValueError(f"{self.reason.value} is not one of the four violation kinds")
+        if not self.steps:
+            raise ValueError(
+                f"{self.reason.value} must name the steps it is about; a violation that "
+                "names nothing tells the supervisor nothing"
+            )
 
 
 class Lifecycle(Enum):

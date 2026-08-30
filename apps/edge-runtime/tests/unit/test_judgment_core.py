@@ -105,7 +105,6 @@ class ReworkIsCompliantTest(unittest.TestCase):
         state, decisions = run(state, STEPS[0], STEPS[1], STEPS[0], STEPS[2])
 
         self.assertEqual([], decisions)
-        self.assertIsNotNone(state.instance)
         assert state.instance is not None
         self.assertEqual(1, state.instance.instance_id)
         self.assertEqual(2, state.next_instance_id)

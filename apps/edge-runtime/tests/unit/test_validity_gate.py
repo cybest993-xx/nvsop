@@ -184,8 +184,12 @@ class EveryImpairmentReasonReachesADecisionTest(unittest.TestCase):
 
     def test_every_indeterminate_code_has_a_producer(self) -> None:
         core_derived = {
+            # Produced from a signal the template does not declare, below.
             ReasonCode.ACTION_ID_UNKNOWN,
+            # Produced from its own event, in `RunInterruptionClosesInFlightWorkTest`.
             ReasonCode.RUN_INTERRUPTED,
+            # Produced from what the supervisor finds when the timer fires, so its own
+            # assertion is in `test_timing.py` with the rest of the timer's behavior.
             ReasonCode.INFERENCE_HOST_DOWN,
         }
         self.assertEqual(

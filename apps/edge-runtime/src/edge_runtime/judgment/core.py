@@ -157,10 +157,18 @@ def _deadline_key(state: JudgmentState, instance: Instance) -> ViolationKey:
 
 
 def _awaited(template: Template, instance: Instance) -> tuple[StepSignal, ...]:
-    """Which steps this station is currently waiting on."""
+    """Which steps this station is currently waiting on.
+
+    An ordered template waits for one step at a time. Once the expected position has run
+    past the last step — the operator jumped to the final step, so the steps before it were
+    already reported missing — there is no next step in order, and what remains outstanding
+    is the answer instead. That case must not fall through as nothing: a deadline naming no
+    step tells the supervisor nothing.
+    """
+    outstanding = tuple(step for step in template.steps if step not in instance.seen)
     if template.ordering is Ordering.ORDERED:
-        return template.steps[instance.expected_index : instance.expected_index + 1]
-    return tuple(step for step in template.steps if step not in instance.seen)
+        return template.steps[instance.expected_index : instance.expected_index + 1] or outstanding
+    return outstanding
 
 
 def _impair(state: JudgmentState, reason: ReasonCode) -> Outcome:

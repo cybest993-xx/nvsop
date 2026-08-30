@@ -277,6 +277,29 @@ class TheStepDeadlineIsAViolationNotAClosingConditionTest(unittest.TestCase):
             "the close names both what this pass missed and that it ran late",
         )
 
+    def test_a_deadline_past_the_last_step_names_what_is_still_outstanding(self) -> None:
+        # An ordered template where the operator went from step 1 straight to step 5. The
+        # expected position is now past the end, so there is no "next step in order" to be
+        # waiting for — but the pass is unfinished and three steps are outstanding. Naming
+        # them is the answer the supervisor can act on; an empty tuple would be a violation
+        # that says nothing.
+        state = observe(opening_state(Ordering.ORDERED), STEPS[0], at=10.0).state
+        state = observe(state, STEPS[4], at=20.0).state
+
+        violation = fire(state, at=80.0).decisions[0].violations[0]
+
+        self.assertEqual((STEPS[1], STEPS[2], STEPS[3]), violation.steps)
+
+    def test_a_violation_always_names_at_least_one_step(self) -> None:
+        # The invariant the case above would have broken, asserted where a violation is
+        # built so no future path can produce one that names nothing.
+        with self.assertRaises(ValueError):
+            Violation(
+                reason=ReasonCode.DEADLINE_EXCEEDED,
+                steps=(),
+                evidence=EvidenceSpan.at(HostInstant(1.0)),
+            )
+
 
 class TheGateAlsoCoversTimeDrivenVerdictsTest(unittest.TestCase):
     """The path §5.1 names explicitly: stream drops, chunks stop, the timer fires.

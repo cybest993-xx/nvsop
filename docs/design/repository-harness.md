@@ -133,7 +133,7 @@ Technology-neutral by intent: the reference baseline's crate layout, named clipp
 
 ### Size budgets
 
-- A change stays under 800 lines. A change to judgment, boundary-solving, or retention logic stays under 500. Past that, split it into stages that each stand on their own and land the smallest self-consistent stage first.
+- A change stays under 800 lines. A change to judgment, boundary-solving, or retention logic stays under 500. Past that, split it into stages that each stand on their own and land the smallest self-consistent stage first. The budget is per landed stage and counts implementation lines, not the tests that land with them: a stage is measured on what a reviewer must hold in their head to judge it correct, and summing the stages the rule just asked for would forbid the split it prescribes. What the sum of a feature's stages must satisfy is that each one stood on its own when it landed.
 - A module file stays under 500 lines excluding tests. Prefer a new module over growing an existing one past that.
 - Resist growth in shared ground. A new capability belongs to the module that owns it, or to a new module. `packages/contracts` and a module's `api.py` are where an unnecessary addition costs the most, because every other module pays for it.
 

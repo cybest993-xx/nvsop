@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp",
+      "protocolVersion": "auto"
+    },
+    "deepwiki": {
+      "type": "http",
+      "url": "https://mcp.deepwiki.com/mcp",
+      "protocolVersion": "auto"
+    },
+    "one_search": {
+      "type": "http",
+      "url": "http://192.129.210.50:5173/mcp",
+      "protocolVersion": "auto",
+      "headers": {
+        "Authorization": "Bearer osr_2SqXwDyR9qsZ4SRAk2rcgr-0NqaqP5Yg-TN8huGMu94"
+      }
+    }
+  }
+}

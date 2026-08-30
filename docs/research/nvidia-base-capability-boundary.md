@@ -174,7 +174,7 @@ pipeline 回调只显式处理 EOS 并终止队列，没有把 source error、�
 
 ## 改造范围已裁决
 
-“裁决基座复用、配置、适配与必要补丁清单”已由 [`solution-and-roadmap.md`](../design/solution-and-roadmap.md) §5.11 与 [ADR-0007](../adr/0007-base-is-the-trunk-not-a-dependency.md) 结案：改造限于扩展 checker、pipeline 消息回调、处置动作三处，其余原样复用或全新建设。
+“裁决基座复用、配置、适配与必要补丁清单”已由 [`solution-and-roadmap.md`](../design/solution-and-roadmap.md) §5.11 与 [ADR-0007](../adr/0007-base-is-the-trunk-not-a-dependency.md) 结案：就地改造限于 pipeline 消息回调与处置动作两处（均为纯加输出），序列比对与周期边界在 `apps/edge-runtime/` 自己实现且 `vendor/` 不留补丁，其余原样复用或全新建设。
 
 以下门槛用于判断**将来新出现**的改造候选是否越界：
 

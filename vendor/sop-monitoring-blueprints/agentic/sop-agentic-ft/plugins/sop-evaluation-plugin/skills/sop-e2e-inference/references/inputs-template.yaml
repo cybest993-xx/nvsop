@@ -1,0 +1,102 @@
+######################################################################
+# E2E Evaluation — API-driven inputs template
+# The /sop-e2e-inference skill submits this to the BP evaluation-ms HTTP
+# service. Eval-ms decides the output directory (uuid under RESULTS_ROOT),
+# runs DDM segmentation + VLM inference, and writes accuracy artifacts
+# directly. No Docker mount, no sop-inference-bp checkout.
+######################################################################
+
+# === Required ========================================================
+
+# UUID of a completed VLM training job registered with cr-training-ms.
+training_job_id: <training_job_uuid>
+
+# Validation dataset. NOT a UUID despite the name: eval-ms resolves it as a directory
+# name directly under assets/data/ (safe_dataset_path(DATASET_ROOT, val_dataset_id)),
+# so this is the folder name, e.g. "my_dataset_test".
+val_dataset_id: <val_dataset_dir_name>
+
+# DDM training job UUID — required when chunking_algorithm=ddm (default).
+# Omit (or null) when chunking_algorithm=uniform.
+ddm_training_job_id: <ddm_training_job_uuid>
+
+# Host-side absolute path that docker-compose maps to
+# /workspace/sop-eval-ms/assets/results inside the eval-ms container.
+host_results_root: /abs/path/to/results
+
+# === Eval-ms endpoint ================================================
+eval_host: localhost
+eval_port: 32090
+
+# === Chunking ========================================================
+
+# ddm     — run DDM temporal segmentation, then VLM per chunk (default)
+# uniform — skip DDM, slice video into fixed-length chunks
+chunking_algorithm: ddm
+
+# Required when chunking_algorithm=uniform. Ignored otherwise.
+chunk_length_sec:                # null | float (>0)
+stride_sec:                      # null | float (>0). Uniform only: overlapping windows,
+                                 #   one window of chunk_length_sec every stride_sec.
+                                 #   Use when actions are short relative to chunk_length_sec.
+smooth_min_seg_sec:              # float, default 2.0. With stride_sec: action segments
+                                 #   shorter than this become non-SOP. CHECK IT AGAINST
+                                 #   YOUR DATA: if real key-steps are shorter than this,
+                                 #   the filter erases them and recall collapses.
+smooth_min_vote:                 # int, default 1. With stride_sec: overlapping windows
+                                 #   that must agree before an action is accepted.
+non_sop_action:                  # int | null. 1-based index of the non-SOP action. Inferred
+                                 #   from actions.json 'actions_can_be_skipped' when present;
+                                 #   REQUIRED with stride_sec otherwise -- the run is refused
+                                 #   rather than scoring raw overlapping windows.
+max_model_len: 32768             # int | null. vLLM backend only. Context ceiling for the
+                                 #   engine, and the KV cache is sized from it. Default 32768
+                                 #   needs ~4.5 GiB and clears the ~20.4k a default request
+                                 #   uses (16184 vision tokens at total_pixels=16572416, +79
+                                 #   prompt, +4096 generated).
+                                 #   Raise it if requests are rejected for length -- e.g.
+                                 #   after raising total_pixels, since vision tokens are
+                                 #   total_pixels / (patch_size * spatial_merge_size)^2.
+                                 #   Lower it on a smaller card if the engine cannot start.
+                                 #   null restores vLLM's own derivation from the checkpoint,
+                                 #   which is what fails on a 262144-context checkpoint.
+
+# === DDM (Temporal Segmentation) =====================================
+# Only used when chunking_algorithm=ddm.
+
+# Boundary score cutoff. Lower = more boundaries (recovers missed actions
+# but may admit false positives).
+score_threshold: 0.5
+
+# Non-maximum suppression window in seconds. 0 = auto (≈0.025 × duration).
+nms_sec: 0.0
+
+ddm_batch_size: 8
+frames_per_segment_hint: 256
+
+# Optional: pin a specific DDM checkpoint. null = latest under
+# ddm_training_job_id.
+ddm_checkpoint:                  # null | absolute path
+
+# === VLM (Action Recognition) ========================================
+
+backend: vllm                    # vllm | transformers
+fps: 8
+temperature: 0.0
+top_p: 1.0
+
+# Pick a specific VLM checkpoint step. null = latest.
+checkpoint_step:                 # null | int
+
+# Per-job VLM input resolution overrides — mirrors qwen-vl-utils
+# process_vision_info knobs. See validation/request_validation.py
+# (ResolutionConfig, extra='forbid'). null = use training defaults.
+resolution_config:               # e.g. {max_frames: 40, total_pixels: 16572416}
+
+# Pin to one GPU index (CUDA_VISIBLE_DEVICES). null = all visible GPUs.
+gpu_id:                          # null | 0 | 1 | ...
+
+# === Polling ==========================================================
+
+poll_interval_sec: 20
+timeout_sec: 3600

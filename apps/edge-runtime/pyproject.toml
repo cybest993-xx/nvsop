@@ -2,9 +2,13 @@
 name = "edge-runtime"
 version = "0.1.0"
 description = "Inference-host autonomous judgment unit: judgment core, boundary solver, supervisor."
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = []
 
+# 3.11 for `typing.assert_never`, which is how the core's event dispatch is checked to be
+# exhaustive at gate time: a catch-all arm would swallow the next event kind added
+# (repository-harness.md §5). Not bound to the center's 3.12 pin — the core runs in the
+# supervisor, not the base container (ADR-0005).
 # No lockfile and no root uv workspace membership: this package has no dependencies
 # to lock. The judgment core is standard-library-only (edge-autonomy.md §5.11) and
 # therefore not bound to the center's Python 3.12 pin. The root `pyproject.toml` plus
@@ -20,7 +24,7 @@ where = ["src"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
@@ -29,6 +33,6 @@ src = ["src", "tests"]
 select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "T20", "ANN"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 strict = true
 files = ["src", "tests"]

@@ -21,7 +21,7 @@
 
 **【已定】性能优先。每个成功实时结果的端到端延迟目标为 ≤ 500 ms。** 该目标按结果类型分两个起点（§5.6）：**到达即判类**（错步、反序、超时、顺序型模板的跳号漏步）起点是形成该结果所需的最后一帧在相机侧产生；**闭合类**（实例闭合时的集合比对）起点是闭合条件成立时刻。终点同为对应状态或判定完成 Web 渲染。目标环境门禁要求测试窗口内超预算结果为零，同时报告 p50/p95/p99、最大值、超预算计数、队列深度与积压趋势；未在目标 GPU、相机、网络和浏览器上通过前，不把该目标表述为已实现能力。
 
-**【已定】优先对齐推理服务公开契约，不为传输层另造体系。** 视频帧留在推理机；DeepStream/PyServiceMaker 形成 chunk，经 VLM 与 checker 判定后由本机上报中心。REST/JSON 负责配置、查询和命令；中心向 Web 推送 SSE。关键路径不增加 Kafka、gRPC、自定义 WebSocket 或数据库轮询，除非 profiling 证明必要。
+**【已定】优先对齐推理服务公开契约，不为传输层另造体系。** 视频帧留在推理机；DeepStream/PyServiceMaker 形成 chunk，经 VLM 分类后由本机 supervisor 消费 SSE 判定，再由本机上报中心。REST/JSON 负责配置、查询和命令；中心向 Web 推送 SSE。关键路径不增加 Kafka、gRPC、自定义 WebSocket 或数据库轮询，除非 profiling 证明必要。
 
 ---
 
@@ -36,7 +36,7 @@
 | 真漏步（操作员跳过第 3 步） | `missing=[3]` |
 | 断流（第 3 步期间视频中断） | `missing=[3]` |
 
-**输出完全相同**。基座无任何通道区分二者，且 checker 请求里根本没有流健康字段 → 三值判定（通过 / 不通过 / 不可判定）必须由我们补进 checker（§5.2）。
+**输出完全相同**。基座无任何通道区分二者，且 checker 请求里根本没有流健康字段 → 三值判定（通过 / 不通过 / 不可判定）必须由我们自己实现（§5.2），并需要一条把流健康送出推理服务的通道（§5.11）。
 
 ### 2.2 基座的周期边界启发式会把合规作业误判为违规
 
@@ -73,9 +73,9 @@ chunk4 动作(5)  cycle_completed=False  missing=[]
 
 ### 2.4 流健康信号存在于 pipeline，但被丢弃
 
-复核 `69352021` 后修正早期"无重连"结论：RTSP pipeline 给 `nvurisrcbin` 设置了 `init-rtsp-reconnect-interval=10`（`ds_3d_action_pipeline.py:477-494`）。按 NVIDIA DeepStream 源码，该属性在 RTSP 源收到错误时等待后触发重连；基座没有设置用于"持续无数据"检测的 `rtsp-reconnect-interval`，也没有显式设置重连次数。
+复核 `69352021` 后修正早期"无重连"结论：RTSP pipeline 给 `nvurisrcbin` 设置了 `init-rtsp-reconnect-interval=10`（`ds_3d_action_pipeline.py:491`）。按 NVIDIA DeepStream 源码，该属性在 RTSP 源收到错误时等待后触发重连；基座没有设置用于"持续无数据"检测的 `rtsp-reconnect-interval`，也没有显式设置重连次数。
 
-关键在于 `ds_boundary_infernce` 的 `on_message` 回调（`ds_3d_action_pipeline.py:780-790`）**只处理 EOS**：source error、正在重连、重连成功、最后一帧时刻、恢复后时间轴归零全部被丢弃，从未进入 SSE。`checker_result.error_message` 也只反映 checker 自身异常。
+关键在于 `ds_boundary_infernce` 的 `on_message` 回调（`ds_3d_action_pipeline.py:779-784`）**只处理 EOS**：source error、正在重连、重连成功、最后一帧时刻、恢复后时间轴归零全部被丢弃，从未进入 SSE。`checker_result.error_message` 也只反映 checker 自身异常。
 
 → 流健康的第一手信号就在推理机的 pipeline 回调里。**判定必须与它同机**，否则中心侧只能靠独立探活二次猜测——那正是"两套东西"。改造方案见 §5.7。完整证据见 [`nvidia-base-capability-boundary.md`](../research/nvidia-base-capability-boundary.md)。
 
@@ -170,7 +170,7 @@ Blueprint), place it under MODEL_ROOT_DIR, and set DDM_MODEL_PATH..."
 | Q4 | 发布治理 | **模板草稿（可编辑）→ 模板版本（不可变）两态**；不设待审核与已退役状态；版本 + 工位绑定 + 原子切换 + 回滚（重新绑定历史版本）；**不做签名**；保留 sha256 完整性校验 |
 | Q5/Q14 | 权限 | 本地账户 + 自定义权限；角色是权限集合、用户可有多个角色；首版角色见 §5.4 |
 | Q6 | 路数 | 1~50 可配，超载由人工加硬件解决；工位与相机是两张表 |
-| Q7 | 基座接入 | `git subtree` 接入，**固定仓库不固定版本**；**基座是躯干**：两处纯加输出的就地改造 + 序列比对自己实现（§5.11），补丁维护为可重放 diff；更新后必须跑基座契约测试（§5.9） |
+| Q7 | 基座接入 | `git subtree` 接入（`--squash`），**固定仓库不固定版本**；**基座是躯干**：一处纯加输出的就地改造 + 序列比对自己实现 + 基座 checker/处置按配置关闭（§5.11），补丁维护为可重放 diff；更新后必须跑基座契约测试（§5.9） |
 | Q8 | 流健康 | **在推理机 pipeline 回调内取得第一手信号**（§2.4），不在中心做二次探活 |
 | Q9 | 处置动作 | 记录 + 前端告警 + 声光 + 暂停工位判定 + 终止实例 + **写输出点位**（物理控制，经连接器）；全部在推理机本地执行，不经中心 |
 | Q10 | 后台范围 | 实时看板、告警列表、证据回看、人工复核、设备管理、模板管理、用户与权限；统计报表与整改闭环后置，保留扩展能力 |
@@ -348,12 +348,14 @@ if 证据覆盖不足 or 流不健康 or 推理不健康 or 时间未对齐:
 每台推理机上的组件：
 
 ```
-推理服务容器（基座 + §5.11 两处改造 + 我们的判定核心）
-  DeepStream 取流 → DDM 分段(Triton) → vLLM 分类 → 判定核心（序列比对+边界+有效性+三值）
-  pipeline on_message → 流健康事件 → chunk_metadata → 判定核心
-本机 supervisor（自研）
+推理服务容器（基座 + §5.11 一处改造；基座 checker 与处置按配置关闭）
+  DeepStream 取流 → DDM 分段(Triton) → vLLM 分类 → SSE
+  pipeline on_message → 合成健康事件 → _vlm_response_queue → SSE
+本机 supervisor（自研，判定在此进程内）
   读本地配置，为每路已配置相机启动一个 /v1/chat/completions 请求并看护
+  消费 SSE → 判定核心（序列比对+边界+有效性+三值）
   违规锁存 / 处置派发（含写输出点位）/ 证据切片指令 / 上报与对账
+  chunk 静默计时器（空闲超时闭合 + 进程级失联兜底）
 mediamtx（sourceOnDemand，零转码，7 天分段录像）
 连接器运行时（轮询或推送输入点位 → 观测；执行输出点位写入）
 本地状态存储（SQLite）
@@ -447,7 +449,7 @@ mediamtx（sourceOnDemand，零转码，7 天分段录像）
 | 顺序型模板跳号即报漏步 | §5.1 | 纯 CPU |
 | 流不健康期间的实例闭合为不可判定，不为不通过 | §5.2 | 纯 CPU，注入健康事件 |
 | **我们的序列比对与基座在合规序列上结论一致** | §5.11 | 纯 CPU，双跑对比；**不含返工与漏步时机**——那正是我们故意不同之处 |
-| 两处补丁能干净应用于当前 NVIDIA 提交 | §5.11 | 打补丁 + 导入 |
+| 该处补丁能干净应用于当前 NVIDIA 提交 | §5.11 | 打补丁 + 导入 |
 | 物理执行租约过期后不再写输出点位 | §5.17 | 纯 CPU，注入过期租约 |
 
 **注意**："纯 CPU 可测"本身也是一条实测结论——基座那四个模块只依赖标准库。若 NVIDIA 给它们加了重依赖，"双跑对比"那条会先失败，这也是有效信号。判定核心只依赖标准库的规则（§5.11）保证我们这一侧持续可测。
@@ -468,7 +470,7 @@ mediamtx（sourceOnDemand，零转码，7 天分段录像）
 - G4 门禁改测「N 后端 × 1 路」，原「1 后端 × N 路」测不到真实部署形态。
 - `device_camera` → `device_inference_backend` 外键语义随之明确：指向进程端点，不指向物理机。物理机由 `device_inference_host` 表达。
 
-### 5.11 基座姿态：两处改造 + 一处自己实现
+### 5.11 基座姿态：一处改造 + 一处自己实现 + 两处配置关闭
 
 **语言前提**：NVIDIA 仓库的代码是**本系统的躯干**。文档中不称"上游"，只在描述 `git subtree pull` 的版本来源时称 **NVIDIA 仓库**。
 
@@ -477,21 +479,30 @@ mediamtx（sourceOnDemand，零转码，7 天分段录像）
 | 姿态 | 范围 |
 |---|---|
 | **原样复用** | DeepStream 取流、DDM 分段、vLLM 分类、`/v1/*` 接口、文件 API、Prometheus 指标；训练侧 5 个微服务；**React 标注 UI 连界面一起复用** |
-| **就地改造（两处，纯加输出）** | ① pipeline `on_message`：把 source error / 正在重连 / 重连成功 / 最后一帧时刻 / 时间轴归零输出到 `chunk_metadata`；② 处置：把 `playsound` + Kafka 扩成 5 种动作含写输出点位 |
+| **就地改造（一处，纯加输出）** | pipeline `on_message`：把 source error / 正在重连 / 重连成功 / 最后一帧时刻 / 时间轴归零作为**合成健康事件**送进 `_vlm_response_queue` |
 | **自己实现（一处）** | 序列比对 + 声明式边界 + 有效性门 + 三值判定，全部在 `apps/edge-runtime/`，`vendor/` 不留补丁 |
+| **配置关闭（不打补丁）** | 基座 checker（`DISABLE_SOP_CHECKER=true`）；基座处置（`ENABLE_ALERT_SOUND`/`ENABLE_MESSAGING` 保持默认 false） |
 | **全新建设** | 账户权限、工位/相机/连接器配置、Excel→模板版本发布、聚合看板、违规复核、证据生命周期、上报与对账 |
 
-两处就地改造都是在回调/派发点**追加调用**，不进入他人控制流，故"最小 hook 在 `vendor/`、逻辑在 `apps/edge-runtime/`"这一分工成立；不动 DeepStream/Triton/vLLM 的计算路径，NVIDIA 的性能改进与 CUDA 版本适配仍可 `subtree pull` 进来。
+该处就地改造是在回调点**追加调用**，不进入他人控制流，故"最小 hook 在 `vendor/`、逻辑在 `apps/edge-runtime/`"这一分工成立；不动 DeepStream/Triton/vLLM 的计算路径，NVIDIA 的性能改进与 CUDA 版本适配仍可 `subtree pull` 进来。
+
+**判定核心在 supervisor 进程内，不在基座进程内**（[ADR-0005](../adr/0005-judgment-runs-inside-the-inference-host.md)）。supervisor 消费本机 `/v1/chat/completions` 的 SSE 流，在自己的进程里调用判定核心。基座 checker 用既有环境变量关掉，不打补丁替换其调用点——那是控制流替换，且承载它的循环是 `_vlm_response_queue.get(block=True)`（`ds_sop_process.py:715`，无超时），空闲超时在其中永远触发不了。
+
+**为什么处置不再是一处改造**：基座处置在 `post_dispatch_process`（`ds_sop_process.py:800-813`），是独立线程，对每个 chunk **无条件**触发 `alert_sound` 与 `messaging_chunk`，无违规过滤、不持有判定结果。"扩成 5 种动作"要先教它认判定结果，而 supervisor 天生持有判定结果，且 §5.7 本来就把处置派发指派给 supervisor。两处响应面均由环境变量开关且默认关闭。
 
 **为什么序列比对不打补丁**：`missing_number_detector.py` 中周期边界判断（`:147-188`）与序列比对、状态更新交织在 `process_number` 同一方法内——`_complete_cycle()` 调用、`seen_in_cycle` 清空、`result` 填充全在其中。换边界来源必须整体覆写该方法，"最小 hook"对它做不到。该文件全文 539 行、只依赖标准库，自己实现比在他人状态机内解冲突更省。
 
-这不违反"不许两套实现"：我们的判定路径上只有一套（我们的），基座那份在该路径上不再被调用。
+这不违反"不许两套实现"：我们的判定路径上只有一套（我们的），基座那份被 `DISABLE_SOP_CHECKER` 关闭后连线程都不启动（`:652`），`inference_last_queue`（`:592-598`）直接返回 `_vlm_response_queue`。
 
-**代码放置**：`apps/edge-runtime/` 是独立 Python 包，在容器内安装；`vendor/` 内只留两处最小 hook。我们的代码因此可被 lint、type check 与单元测试覆盖。补丁维护为可重放 diff，`subtree pull` 后由契约测试验证仍可干净应用。
+**合成健康事件的注入点（已实测）**：三个候选 sink 只有一个可用。`_boundary_queue` 不可用——`clip_post_process:923` 按 `(frame_id, pts, score)` 位置解包；`_chunk_queue` 不可用——`vlm_inference_request_process:1014` 要求数值 `start_time`/`end_time` 并会对它跑一次 VLM 推理；`_vlm_response_queue` 可用——`:1136` 对 `response_future` 有默认值与判空。故补丁是**两个触点、两个文件、均为纯追加**：`ds_sop_process.py:556` 传入 sink，`ds_3d_action_pipeline.py:779` 的 `on_message` 追加一次 hook 调用。合成事件用显式键（如 `stream_health`）标记，不用哨兵数值。沿用基座自己的做法——它在流结束时就造过 `chunk_idx=-1` 的合成 chunk（`:719-730`）。
 
-**依赖约束（硬规则）**：判定核心只依赖 Python 标准库。原因是它运行在 DeepStream 容器的 Python 环境里（版本由基座镜像决定，§2.10），用不了我们自己的 uv 工作区；且这条规则保证判定核心可纯 CPU 测试——基座那四个模块本来就是这样。
+**该通道只在进程与 pipeline 存活时能投递。** 它带序送出可恢复状态（source error、正在重连、重连成功、时间轴归零），"该事件发生在 chunk N 与 N+1 之间"可直接用于闭合时的有效性判断。进程死亡送不出任何东西，那种情形由 supervisor 的 **chunk 静默计时器**兜底——后者也是空闲超时（§5.1）所需的同一个计时器。
 
-被否决的两种姿态：**全量只读**会让中心再建一套判定与探活，而第一手信号在推理机（§2.4），必然产生两套不一致的实现；**全量吸收**低估 GPU 基础设施维护成本，等于自建一个 DeepStream 维护团队。
+**代码放置**：`apps/edge-runtime/` 是独立 Python 包；`vendor/` 内只留一处最小 hook。我们的代码因此可被 lint、type check 与单元测试覆盖。补丁维护为可重放 diff，`subtree pull` 后由契约测试验证仍可干净应用。
+
+**依赖约束（硬规则）**：判定核心只依赖 Python 标准库。判定核心运行在 supervisor 进程里，故这条不再由运行环境强制，而是为**可测试性与可移植性**保留：成本近零，且保证判定核心可纯 CPU 测试——基座那四个模块本来就是这样。`vendor/` 内那处 hook 仍受运行环境强制，因为它确实跑在 DeepStream 容器内（§2.10）。
+
+被否决的姿态：**全量只读**会让中心再建一套判定与探活，而第一手信号在推理机（§2.4），必然产生两套不一致的实现；**全量吸收**低估 GPU 基础设施维护成本，等于自建一个 DeepStream 维护团队；**判定进基座进程**见 [ADR-0005](../adr/0005-judgment-runs-inside-the-inference-host.md) 的三条实测理由。
 
 ### 5.12 凭据在推理机本地
 
@@ -600,7 +611,7 @@ ARQ 只处理导入校验、制品生成等后台任务，不进入实时判定�
 中心机（管理面，非运行面）                推理机 A（自治判定单元）      推理机 B
 ├── Nginx 统一访问入口                   ├── 推理服务容器             ├── 推理服务容器
 │    ├── Vue3 前端                       │    DeepStream→DDM→vLLM     │
-│    ├── /api/v1 → FastAPI               │    →判定核心（我们的）      │
+│    ├── /api/v1 → FastAPI               │    →SSE→supervisor 判定     │
 │    └── 反代：标注 UI / 训练微服务       ├── supervisor（锁存/处置/    ├── supervisor
 ├── FastAPI 后台（单一入口点）            │    上报/对账/证据切片）      │
 ├── PostgreSQL（+Timescale 后置）         ├── 连接器运行时              ├── 连接器运行时
@@ -630,7 +641,7 @@ ARQ 只处理导入校验、制品生成等后台任务，不进入实时判定�
 
 `dataset` 是独立模块而非 `template` 的一部分：`CONTEXT.md` 对「训练数据集」的定义明确写了它不定义 SOP 模板，并把「SOP 模板」列为 _Avoid_ 项，合并二者会在代码层重新粘合术语层刻意拆开的概念。
 
-**推理机侧组成**（`apps/edge-runtime/`）：判定核心（纯标准库、纯函数）、边界求解、本地状态（SQLite）、supervisor（请求看护 / 锁存 / 处置派发 / 上报对账）、连接器运行时、mediamtx 看护、证据切片。`vendor/` 内只留最小 hook 调用本包（§5.11）。
+**推理机侧组成**（`apps/edge-runtime/`）：判定核心（纯标准库、纯函数）、边界求解、本地状态（SQLite）、supervisor（SSE 消费与判定调用 / 请求看护 / 锁存 / 处置派发 / 上报对账 / chunk 静默计时）、连接器运行时、mediamtx 看护、证据切片。`vendor/` 内只留一处最小 hook 调用本包（§5.11）。
 
 **依赖规则**：判定核心不依赖任何相机 SDK、推理框架或连接器实现，只消费归一化观测；中心各模块各自拥有数据表，不跨模块直接读写；前端只调后端用例，不承载判定规则。
 
@@ -691,14 +702,14 @@ ARQ 只处理导入校验、制品生成等后台任务，不进入实时判定�
 
 ## 八、开发路线
 
-与最初五阶段的**两处最大差异**：DDM 训练从阶段三提前到阶段一（没有 DDM 权重推理服务起不来，§2.7）；判定逻辑从中心移入推理机（§5.11 的判定核心），故基座改造与判定核心同属阶段 0。
+与最初五阶段的**两处最大差异**：DDM 训练从阶段三提前到阶段一（没有 DDM 权重推理服务起不来，§2.7）；判定逻辑从中心移入推理机的 supervisor 进程（§5.11、ADR-0005），故基座改造与判定核心同属阶段 0。
 
 ### 阶段 0（4090 到位前，全部用真实数据可验证）
 
 1. `git subtree` 接入 NVIDIA 仓库；根 `CONTEXT.md` + 首批 ADR（0005~0009）。
 2. **基座契约测试 + 自有回归测试**（§5.9）——§2.2 的返工用例是第一个要通过的。
 3. **判定核心**（`apps/edge-runtime/`，纯标准库纯函数）：序列比对、声明式边界、有效性门、三值判定、14 原因码、顺序型跳号即报。单元测试覆盖安全不变量。
-4. **基座两处改造 + 最小 hook**（§5.11）：pipeline `on_message` 输出流健康事件、处置扩成 5 种动作。维护为可重放补丁；纯 CPU 可验证的部分立即验证。
+4. **基座一处改造 + 最小 hook**（§5.11）：pipeline `on_message` 把流健康作为合成事件送进 `_vlm_response_queue`。维护为可重放补丁；纯 CPU 可验证的部分立即验证。基座 checker 与处置按配置关闭，不打补丁。
 5. 中心数据模型与迁移。
 6. 鉴权 + 自定义权限 + 诊断日志基线。
 7. 设备配置 CRUD（推理主机 / 工位 / 相机 / 推理后端绑定）。
@@ -715,7 +726,7 @@ ARQ 只处理导入校验、制品生成等后台任务，不进入实时判定�
 ### 阶段 1（4090 到位）
 
 15. 用本地官方数据训 DDM（单卡 resnet50，产出真实 checkpoint）。
-16. 起推理服务：真实 DDM 权重 + 公开 `Cosmos-Reason2-2B`，含两处改造与我们的判定核心，用真实视频打通 `actions.json` → DDM 分段 → VLM → 判定全链路。
+16. 起推理服务：真实 DDM 权重 + 公开 `Cosmos-Reason2-2B`，含该处改造与 supervisor 内的判定核心，用真实视频打通 `actions.json` → DDM 分段 → VLM → SSE → 判定全链路。
 17. 录制真实 chunk 流与流健康事件序列作为集成测试夹具（真实数据回放，非 mock）。
 18. GPU 门禁：按 §5.6 两类起点分别计量至 Web 渲染；同时验证**每后端常驻显存开销**（§5.10）、DDM-only / VLM-only / 全链路显存、断流重连与 OOM 故障注入、**N 后端 × 1 路**真实并发、72h 稳定性。
 19. 中心不可达演练：拔中心网线，验证判定、处置、锁存、本地排队继续；恢复后对账不重复处置、不丢证据。

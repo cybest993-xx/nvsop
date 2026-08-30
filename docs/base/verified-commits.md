@@ -24,7 +24,7 @@ git subtree pull --prefix=vendor/sop-monitoring-blueprints \
 - 提交主题：`[Feat][Eval] Add overlapping-window option to uniform chunking -- MR !93`
 - 文件数：712
 - 契约测试：第一族 7 条断言全部通过（`tests/contract/base/`）。第二族（我们自己实现的行为）随判定核心落地。
-- 补丁：尚无。两处就地改造（pipeline `on_message`、处置动作）未实施。
+- 补丁：尚无。唯一一处就地改造（pipeline `on_message` 送出合成健康事件）未实施。
 - 备注：该提交与 §二 全部实测结论的复核基准一致（方案文档记 `6e149568` 初测、`69352021` 复核，两者 `sop-inference-bp` 零差异）。
 
 ## 已知的基座既有缺陷（不修，仅登记）

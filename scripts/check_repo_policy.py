@@ -36,6 +36,19 @@ ALLOWED_APPS = {"control-api", "control-web", "edge-runtime"}
 ALLOWED_ROOT_TEST_AREAS = {"contract", "fixtures", "performance", "system"}
 MARKDOWN_LINK = re.compile(r"!?\[[^]]*]\(([^)]+)\)")
 SECRET_SUFFIXES = {".key", ".pem"}
+VENDOR_ROOT = Path("vendor")
+SECRET_VARIABLE = re.compile(
+    r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*"
+    r"(?:PASSWORD|SECRET|TOKEN|APIKEY|API_KEY|CREDENTIAL|PRIVATE_KEY))\s*=\s*(.*)$"
+)
+PLACEHOLDER_VALUE = re.compile(
+    r"^(?:|dummy|none|null|todo|changeme|placeholder|<[^>]*>|\$\{[^}]*\}|your[-_a-z0-9]*)$",
+    re.IGNORECASE,
+)
+
+
+def is_vendor(path: Path) -> bool:
+    return path.parts[:1] == (VENDOR_ROOT.name,)
 
 
 def repository_files(root: Path) -> list[Path]:
@@ -88,10 +101,18 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
         errors.append(f"undeclared production app: apps/{app}/")
 
     for path in files:
+        # `vendor/` is the NVIDIA base code and stays as delivered (ADR-0007), so its
+        # own file names are not ours to rename. The rule that matters there is that no
+        # real secret value ships, which is checked by value rather than by file name.
         if path.name == ".env" or (
             path.name.startswith(".env.") and path.name != ".env.example"
         ):
-            errors.append(f"secret-like environment file must not be committed: {path}")
+            if is_vendor(path):
+                errors.extend(check_vendor_env_values(root, path))
+            else:
+                errors.append(
+                    f"secret-like environment file must not be committed: {path}"
+                )
         if path.suffix.lower() in SECRET_SUFFIXES:
             errors.append(f"private key material must not be committed: {path}")
 
@@ -109,7 +130,9 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
             if "tests" not in path.parts:
                 errors.append(f"Python test must live in its owner's tests/ tree: {path}")
 
-    for path in sorted(p for p in files if p.suffix.lower() == ".md"):
+    for path in sorted(
+        p for p in files if p.suffix.lower() == ".md" and not is_vendor(p)
+    ):
         errors.extend(check_markdown_links(root, path))
 
     agents = root / "AGENTS.md"
@@ -125,6 +148,30 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
                     f"blocking-ci.yml is missing required gate behavior: {required_text}"
                 )
 
+    return errors
+
+
+def check_vendor_env_values(root: Path, path: Path) -> list[str]:
+    """Fail only when a vendor environment template carries a real secret value.
+
+    NVIDIA ships deployment templates whose secret variables are empty or hold
+    placeholders. Those are safe to vendor; an assigned value would not be.
+    """
+    errors: list[str] = []
+    text = (root / path).read_text(encoding="utf-8", errors="replace")
+    for number, line in enumerate(text.splitlines(), start=1):
+        if line.lstrip().startswith("#"):
+            continue
+        match = SECRET_VARIABLE.match(line)
+        if not match:
+            continue
+        name, raw_value = match.groups()
+        value = raw_value.split("#", 1)[0].strip().strip("\"'")
+        if not PLACEHOLDER_VALUE.match(value):
+            errors.append(
+                f"vendored environment file assigns a real secret value: "
+                f"{path}:{number} ({name}); vendor templates must ship placeholders"
+            )
     return errors
 
 

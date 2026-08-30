@@ -79,6 +79,46 @@ class RepositoryPolicyTest(unittest.TestCase):
         errors = self.check(str(path.relative_to(self.root)))
         self.assertIn("broken local Markdown link: docs/design/broken.md -> missing.md", errors)
 
+    def test_ignores_broken_markdown_link_inside_vendor(self) -> None:
+        # `vendor/` is the NVIDIA base code and stays as delivered (ADR-0007); its own
+        # docs carry a broken relative link we must not patch to satisfy our gate.
+        path = self.root / "vendor/sop-monitoring-blueprints/docs/guide.md"
+        path.parent.mkdir(parents=True)
+        path.write_text("[missing](../nowhere/absent.md)\n")
+        self.assertEqual([], self.check(str(path.relative_to(self.root))))
+
+    def test_accepts_vendored_environment_template_with_placeholders(self) -> None:
+        path = self.root / "vendor/sop-monitoring-blueprints/deployments/.env"
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            "# comment PASSWORD=real\n"
+            "NGC_CLI_API_KEY='<ngc_api_key>'\n"
+            "OPENAI_API_KEY=dummy\n"
+            "ADAPTOR_PASSWORD=\n"
+            "MODE=2d\n"
+        )
+        self.assertEqual([], self.check(str(path.relative_to(self.root))))
+
+    def test_rejects_vendored_environment_template_with_real_secret(self) -> None:
+        path = self.root / "vendor/sop-monitoring-blueprints/deployments/.env"
+        path.parent.mkdir(parents=True)
+        path.write_text("ADAPTOR_PASSWORD=hunter2\n")
+        errors = self.check(str(path.relative_to(self.root)))
+        self.assertTrue(
+            any("assigns a real secret value" in error for error in errors), errors
+        )
+
+    def test_rejects_private_key_material_even_inside_vendor(self) -> None:
+        path = self.root / "vendor/sop-monitoring-blueprints/tls/server.pem"
+        path.parent.mkdir(parents=True)
+        path.write_text("")
+        errors = self.check(str(path.relative_to(self.root)))
+        self.assertIn(
+            "private key material must not be committed: "
+            "vendor/sop-monitoring-blueprints/tls/server.pem",
+            errors,
+        )
+
     def test_rejects_superseded_decision_artifact(self) -> None:
         path = self.root / "docs/research/control-gateway-stack-and-media-routing.md"
         path.parent.mkdir(parents=True, exist_ok=True)

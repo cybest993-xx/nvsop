@@ -22,6 +22,11 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+      - name: Install the pinned Python toolchain runner
+        # `make check` invokes ruff and mypy through `uv tool run` at versions pinned in
+        # the Makefile, so the gate needs uv itself and nothing else. pipx ships on the
+        # runner image; the version is frozen so CI and a developer run the same tools.
+        run: pipx install uv==0.12.5
       - name: Run the local merge gate
         run: make check
 

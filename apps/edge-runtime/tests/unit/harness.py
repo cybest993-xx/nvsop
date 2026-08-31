@@ -1,9 +1,13 @@
-"""Shared construction for the judgment core's unit tests.
+"""Shared construction for the judgment core's and the supervisor's unit tests.
 
 The core is a pure function, so a test is "build a state, send events, assert on the
 output" and nothing else — no clock, no sleep, no fixture process (§5.18). What repeats
-across the three test files is only that building and sending, so it lives here once
+across the test files is only that building and sending, so it lives here once
 rather than three times with three signatures.
+
+The supervisor does read a clock, because it holds the timer the core declared. `FakeClock`
+is that clock's stand-in: a test moves it by assignment, so a timing assertion still needs
+no sleep.
 
 Not named `test_*`, so unittest discovery does not collect it; it is imported by bare name
 because the discovery start directory is on the path. That follows the precedent
@@ -95,3 +99,19 @@ def fire(
 ) -> Outcome:
     """The wake-up the core asked for, with what the supervisor found at that moment."""
     return advance(state, TimerFired(at=HostInstant(at), host=host, stream=stream))
+
+
+class FakeClock:
+    """The host's monotonic clock, moved by assignment instead of by waiting.
+
+    The supervisor reads a clock at the three points where no instant arrived with the
+    input: computing how long to wait, stamping a timer firing, and stamping a run
+    interruption. A test moves this one to the instant it wants to assert about, so no
+    assertion sleeps and none depends on how long it took to run.
+    """
+
+    def __init__(self, now: float = 0.0) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now

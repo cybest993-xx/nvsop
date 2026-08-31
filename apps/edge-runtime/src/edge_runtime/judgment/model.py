@@ -123,11 +123,16 @@ class Observation:
     `source_time` is the chunk's own timeline, relative to the stream's start. The core
     performs no arithmetic on it — it belongs to the supervisor's latency accounting,
     whose arrival-class start point is the last source frame (§5.6).
+
+    It is None for an external signal, which sits on no stream's timeline: a point-level
+    change is a host-clock fact, and its latency is accounted from the connector's declared
+    delivery delay instead (§5.8). `at` is never None, because that is the clock every
+    judgment is measured on.
     """
 
     signal: StepSignal
     at: HostInstant
-    source_time: float
+    source_time: float | None
 
 
 @dataclass(frozen=True, slots=True)

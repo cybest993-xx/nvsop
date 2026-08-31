@@ -242,8 +242,8 @@
 
 **中心轨（C）** —— 按 §5.16 纵向推进，`auth` 先行，之后逐个模块端到端：
 
-- **C1** uv workspace + 根 `pyproject.toml` + `.python-version`(3.12) + `uv.lock`；**同一变更内按 harness §5 扩 `make check`**（format/lint/type/unit + `import-linter` 契约 + 迁移所有权检查）。
-- **C2** 鉴权 + 自定义权限 + 诊断日志基线（`auth`；诊断日志按其自身标准建设，不为审计要求预留形状，Q37）。
+- **C1** uv workspace + 根 `pyproject.toml` + `.python-version`(3.12) + `uv.lock`；**同一变更内按 harness §5 扩 `make check`**（format/lint/type/unit + `import-linter` 契约 + 迁移所有权检查）。✅ 已完成（工具版本与依赖同锁于 `uv.lock`，`make check` 首个目标即 `uv sync --frozen`；3 条 import-linter 契约已逐条注入违规验证可破；迁移所有权检查器 11 条回归，首个迁移落地前返回显式成功；`apps/edge-runtime/` 刻意不入 workspace，其「只依赖标准库」由策略检查逐个 import 解析强制。附最小可运行骨架：`Settings`（秘密只经 `*_FILE` 读文件、缺失即拒启）、诊断日志基线（structlog JSON 五必填字段 + correlation id 传播）、`create_app` 挂 `/api/v1`；24 条回归。）
+- **C2** 鉴权 + 自定义权限 + 诊断日志基线（`auth`；诊断日志按其自身标准建设，不为审计要求预留形状，Q37）。**诊断日志基线已随 C1 落地**（`factory_sop/observability/`，见 §5.15），C2 只余 `auth` 本身。
 - **C3** 中心数据模型与迁移（按 §七 的表清单，单一线性 Alembic 历史，文件名前缀标注模块）。
 - **C4** 设备配置 CRUD（`device`：推理主机 / 工位 / 相机 / 推理后端绑定 / 连接器与点位）+ **工位运行参数两档切换**（跟随模板 / 工位自定义，§5.3）。
 - **C5** Excel 解析校验 + `actions.json` / `vlm_prompts.txt` 生成（`template`，严配基座正则 `^\((\d+)\).+`）。**格式是平台规定的，故解析器与合成 fixture 现在就能写**；真实客户 Excel 到位后作为回归样本补入，不作为开工前提。

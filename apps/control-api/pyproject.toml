@@ -1,0 +1,26 @@
+[project]
+name = "control-api"
+version = "0.1.0"
+description = "Center backend: management and aggregation plane for the SOP compliance system."
+requires-python = ">=3.12"
+
+# The center backend is anchored to Python 3.12 with a committed `.python-version` and
+# `uv.lock` (solution-and-roadmap.md §六). Version floors here; the exact resolution is
+# frozen in the lockfile at the repository root, and CI installs with `uv sync --frozen`.
+dependencies = [
+    "fastapi>=0.121.2",
+    "pydantic-settings>=2.12.0",
+    "structlog>=25.5.0",
+    "uvicorn>=0.38.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Formatting, lint, type and boundary configuration is the repository root's
+# `pyproject.toml`. A second copy here would drift silently: the gate runs the root
+# configuration, so only the root one is ever enforced.

@@ -13,8 +13,12 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  repository-policy:
-    name: Repository policy and base contract
+  # Family 1 (harness §7): repository policy and lockfile cleanliness. Always runs, and
+  # deliberately duplicates `make check`'s own first target: the gate below is path-filtered,
+  # and a dependency change whose lockfile was never regenerated is exactly the change that
+  # must not be able to reach main through a filtered-out path.
+  lockfile:
+    name: Lockfile cleanliness
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -23,25 +27,89 @@ jobs:
         with:
           persist-credentials: false
       - name: Install the pinned Python toolchain runner
-        # `make check` invokes ruff and mypy through `uv tool run` at versions pinned in
-        # the Makefile, so the gate needs uv itself and nothing else. pipx ships on the
-        # runner image; the version is frozen so CI and a developer run the same tools.
+        run: pipx install uv==0.12.5
+      - name: Require uv.lock to match pyproject.toml
+        # `--check` resolves without writing. `uv sync --frozen` is not a substitute: it
+        # declines to update the lockfile rather than comparing it to the manifest, so a
+        # manifest edit with a stale lockfile installs the old resolution and passes.
+        run: make lockfile
+
+  # Family 2 (harness §7): the CPU-only merge gate, invoked exactly as a developer invokes
+  # it. Path filtering is an optimization, not an exemption — when nothing relevant changed
+  # this job still runs and returns an explicit success, so a skipped job can never be the
+  # reason the required status is green.
+  merge-gate:
+    name: Repository policy, boundaries, and base contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Decide whether the gate has anything to check
+        id: relevant
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        # `make check` reads the whole tree — it validates Markdown links and the repository
+        # layout as well as code — so almost every path is relevant to it. Only the paths
+        # below are not: agent scratch space and local editor state, which no check reads.
+        # Keep this list short; a broad exclusion here is a check that stops running.
+        run: |
+          set -euo pipefail
+          if [ -z "$BASE_SHA" ] || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "No usable base commit; running the full gate."
+            exit 0
+          fi
+          changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
+            | grep -vE '^(\.scratch/|\.claude/|\.mcp\.json$)' || true)
+          if [ -n "$changed" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install the pinned Python toolchain runner
+        if: steps.relevant.outputs.run == 'true'
+        # `make check` starts by running `uv sync --frozen`, which provisions the interpreter
+        # named by `.python-version` and installs every dependency and gate tool from
+        # `uv.lock`. uv itself is all this step provides — no separate Python setup action,
+        # which would be a second place the interpreter version is chosen. Its version is
+        # frozen so CI and a developer run the same build of ruff and mypy.
         run: pipx install uv==0.12.5
       - name: Run the local merge gate
+        if: steps.relevant.outputs.run == 'true'
         run: make check
+      - name: Verify a clean worktree
+        if: steps.relevant.outputs.run == 'true'
+        # Generated output is regenerated in the same change as its source (harness §5). If
+        # the gate wrote anything — a re-resolved lockfile, a formatter fixing a file — the
+        # change is incomplete.
+        run: git diff --exit-code
+      - name: Explicit success with nothing to check
+        if: steps.relevant.outputs.run != 'true'
+        run: echo "No paths the merge gate reads were changed."
 
   required:
     name: CI required
     if: ${{ always() }}
-    needs: [repository-policy]
+    needs: [lockfile, merge-gate]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
       - name: Require successful dependencies
         env:
-          POLICY_RESULT: ${{ needs.repository-policy.result }}
+          LOCKFILE_RESULT: ${{ needs.lockfile.result }}
+          GATE_RESULT: ${{ needs.merge-gate.result }}
         run: |
-          test "$POLICY_RESULT" = success || {
-            echo "Repository policy result: $POLICY_RESULT"
-            exit 1
-          }
+          set -euo pipefail
+          status=0
+          for pair in "lockfile:$LOCKFILE_RESULT" "merge-gate:$GATE_RESULT"; do
+            name=${pair%%:*}
+            result=${pair#*:}
+            echo "$name: $result"
+            test "$result" = success || status=1
+          done
+          exit $status

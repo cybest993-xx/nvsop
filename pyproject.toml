@@ -1,0 +1,108 @@
+# Repository-wide Python workspace root. Intentionally not a package: this repository is a
+# product monorepo, not a distribution. Only real workspaces are members
+# (docs/design/repository-harness.md §2).
+#
+# `apps/edge-runtime/` is deliberately NOT a member. Its judgment core is standard-library
+# only (edge-autonomy.md §5.11); membership would give it a resolvable path to every
+# center dependency, and the rule would survive only as discipline. It is enforced instead
+# by `scripts/check_repo_policy.py`, which resolves every import under
+# `apps/edge-runtime/src/` against the standard library.
+
+[tool.uv.workspace]
+members = ["apps/control-api"]
+
+# One frozen source for dependency AND tool versions. `make check` runs the tools from
+# this environment rather than `uv tool run`, so a developer, the edge targets and CI all
+# execute the same ruff and mypy build (issue #21: 工具版本有冻结锁文件).
+[dependency-groups]
+dev = [
+    "ruff==0.16.3",
+    "mypy==1.18.2",
+    "import-linter==2.3",
+    "pytest==8.4.2",
+    # starlette 1.6's TestClient runs on httpx2; the older httpx raises a deprecation
+    # warning on import. Test-only — the application itself makes no outbound HTTP call yet.
+    "httpx2==2.12.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# First-party roots, so import sorting classifies `factory_sop` correctly when ruff runs
+# from the repository root rather than from inside the application.
+src = ["apps/control-api/src", "apps/control-api/tests", "scripts", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "T20", "ANN", "PT", "TID"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# §5.15: diagnostics are structlog JSON with five mandatory fields. A bare `logging` call
+# produces a line with none of them, and `print` bypasses log routing entirely (T20).
+"logging".msg = "use factory_sop.observability.get_logger; §5.15 requires structlog JSON"
+
+[tool.ruff.lint.per-file-ignores]
+# `scripts/` and `tests/contract/` are standard-library-only by design: the policy checks run
+# in the same gate as everything else and cannot depend on it having installed anything, and
+# the base contract suite has to stay runnable without Docker or a GPU (harness §4, §6).
+# The exceptions below follow from that, and from what these files are:
+#   PT — the pytest family argues for pytest-style bare asserts; these suites are stdlib
+#        `unittest`, so it would rewrite them into something that cannot run.
+#   T201 — a repository check's report to stderr/stdout IS its output. There is no structlog
+#        here to route it through, and §5.15's rule is about the backend's diagnostics.
+#   TID251 — `base_harness` calls `logging.getLogger(...).setLevel(ERROR)` to silence the
+#        NVIDIA base's own logger on import. That is muting someone else's diagnostics, not
+#        emitting ours.
+"scripts/**" = ["PT", "T201"]
+"tests/contract/**" = ["PT", "TID251"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+# `tests/` carries no `__init__.py`, so mypy needs the source root to derive module names
+# from the file paths instead of walking up looking for packages.
+explicit_package_bases = true
+namespace_packages = true
+
+[tool.importlinter]
+root_packages = ["factory_sop", "edge_runtime"]
+
+# Module boundaries are enforced mechanically, not by review (harness §3). Every center
+# module must be named by a contract here — `scripts/check_repo_policy.py` fails the gate
+# for one that is not, because a contract nobody wrote is a boundary nobody checks and
+# `lint-imports` only ever checks the contracts it was given.
+
+[[tool.importlinter.contracts]]
+name = "The center's shared infrastructure does not depend on what depends on it"
+type = "layers"
+# Read top-down: a layer may import a lower one, never a higher one. `settings` is at the
+# bottom because everything is configured; `observability` sits above it and below every
+# module, since every module logs — a dependency the other way would route the whole
+# backend through a package that owns no behavior (§5.15).
+layers = [
+    "factory_sop.entrypoint",
+    "factory_sop.app",
+    "factory_sop.observability",
+    "factory_sop.settings",
+]
+
+[[tool.importlinter.contracts]]
+name = "The judgment core knows nothing of storage, transport or the base pipeline"
+type = "forbidden"
+# The core is a pure function over normalized observations (harness §1, ADR-0005). Reaching
+# any of these would make it need a database, a process or the NVIDIA container to test.
+source_modules = ["edge_runtime.judgment"]
+forbidden_modules = [
+    "edge_runtime.connectors",
+    "edge_runtime.local_state",
+    "edge_runtime.supervisor",
+    "edge_runtime.stream_health",
+]
+
+[[tool.importlinter.contracts]]
+name = "The center and the inference host share no code, only wire contracts"
+type = "independence"
+# The inference host stays autonomous while the center is unreachable (harness §1), and its
+# package is standard-library-only. An import either way would put one on the other's
+# deployment and dependency path; what crosses between them is `packages/contracts`.
+modules = ["factory_sop", "edge_runtime"]
+

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import io
 import json
+from datetime import timedelta
 
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from factory_sop.app import CORRELATION_ID_HEADER, create_app
+from factory_sop.auth.model import SessionPolicy
 from factory_sop.observability import configure_logging
 from factory_sop.settings import Settings
 
@@ -19,6 +21,10 @@ def settings() -> Settings:
         database_name="factory_sop",
         database_user="factory_sop",
         database_password=SecretStr("hunter2"),
+        session_idle_timeout_minutes=720,
+        session_absolute_lifetime_minutes=43200,
+        session_cookie_transport="require_https",
+        csrf_secret=SecretStr("csrf-secret"),
     )
 
 
@@ -80,3 +86,14 @@ def test_the_settings_object_is_reachable_from_the_application() -> None:
     configured = settings()
 
     assert create_app(configured).state.settings == configured
+
+
+def test_the_session_policy_is_built_from_the_configured_minutes() -> None:
+    # `Settings` sits below the domain in the layering, so it carries the configured numbers
+    # and the composition root builds the domain type from them.
+    app = create_app(settings())
+
+    assert app.state.session_policy == SessionPolicy(
+        idle_timeout=timedelta(minutes=720),
+        absolute_lifetime=timedelta(minutes=43200),
+    )

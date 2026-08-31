@@ -18,6 +18,7 @@ from fastapi import FastAPI
 
 from factory_sop.app import create_app
 from factory_sop.observability import configure_logging, get_logger
+from factory_sop.persistence import create_database_engine, session_factory
 from factory_sop.settings import Settings
 
 
@@ -28,4 +29,10 @@ def build() -> FastAPI:
     get_logger("app").info(
         "app.started", database_host=settings.database_host, log_level=settings.log_level
     )
-    return create_app(settings)
+    app = create_app(settings)
+    # The connection pool, opened once per process. It is attached here rather than inside
+    # `create_app` so the application can be built against a test's own engine, and so the
+    # adapter tests that need no database do not open one (ADR-0002's Unit of Work draws its
+    # session from this factory).
+    app.state.session_factory = session_factory(create_database_engine(settings))
+    return app

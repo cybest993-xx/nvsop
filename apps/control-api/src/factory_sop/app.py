@@ -1,22 +1,31 @@
 """The center backend's composition root.
 
-`create_app` is where the resolved `Settings`, the diagnostic-logging middleware and the
-routers meet. It is the only place allowed to know all of them: a module's use cases take
-what they need as arguments, so they stay callable from an ARQ worker or a smoke script and
-not only from an HTTP request (§5.15).
+`create_app` is where the resolved `Settings`, the diagnostic-logging middleware, the CSRF
+check, the `problem+json` handlers and the routers meet. It is the only place allowed to know
+all of them: a module's use cases take what they need as arguments, so they stay callable from
+an ARQ worker or a smoke script and not only from an HTTP request (§5.15).
 """
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 
 from fastapi import APIRouter, FastAPI, Request, Response
+from fastapi.exceptions import RequestValidationError
 
+from factory_sop.auth.adapters import routes as auth_routes
+from factory_sop.auth.adapters.cookies import CSRF_HEADER
+from factory_sop.auth.adapters.dependencies import presented_token
+from factory_sop.auth.csrf import verify_csrf_token
+from factory_sop.auth.errors import AuthenticationRefusedError, RefusalCode
+from factory_sop.auth.model import SessionPolicy
 from factory_sop.observability import (
     correlation_scope,
     get_logger,
     new_correlation_id,
 )
+from factory_sop.problem import FieldError, problem_response
 from factory_sop.settings import Settings
 
 # The literal prefix every control-plane path sits under. Not a version axis: there will be
@@ -26,6 +35,35 @@ API_PREFIX = "/api/v1"
 # Nginx and each inference host forward this header. Carrying an inbound value rather than
 # minting a fresh one is what lets one operator action be followed across processes.
 CORRELATION_ID_HEADER = "x-correlation-id"
+
+# Methods that change something, and therefore need the CSRF token. `GET`, `HEAD` and
+# `OPTIONS` are the safe ones; `TRACE` is not in that list because nothing serves it.
+MODIFYING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+# Opening a session is the one modifying request that cannot carry a CSRF token: there is no
+# session to derive one from yet, and the credential in the body is what authorizes it. Keyed by
+# method **and** path — the session resource answers `DELETE` on this same path, and that one
+# must be checked, so a path-only exemption would silently cover the logout as well.
+CSRF_EXEMPT_REQUESTS = frozenset({("POST", f"{API_PREFIX}/auth/session")})
+
+# Which refusals are "we do not know who you are" and which are "we do, and no". A deactivated
+# account reached the second: the password was correct, so telling it apart is what lets the
+# Web shell say "账户已停用，请联系管理员" instead of "密码错误".
+_REFUSAL_STATUS = {
+    RefusalCode.CREDENTIALS_REJECTED: 401,
+    RefusalCode.AUTHENTICATION_REQUIRED: 401,
+    RefusalCode.SESSION_INVALID: 401,
+    RefusalCode.ACCOUNT_DEACTIVATED: 403,
+}
+
+# Simplified Chinese, displayed verbatim by a client that does not recognize the `error_code`
+# (Q32, §5.15's unknown-value fallback).
+_REFUSAL_TITLE = {
+    RefusalCode.CREDENTIALS_REJECTED: "登录名或密码不正确",
+    RefusalCode.AUTHENTICATION_REQUIRED: "请先登录",
+    RefusalCode.SESSION_INVALID: "会话已失效，请重新登录",
+    RefusalCode.ACCOUNT_DEACTIVATED: "账户已停用，请联系管理员",
+}
 
 _logger = get_logger("http")
 
@@ -52,7 +90,64 @@ def create_app(settings: Settings) -> FastAPI:
     """
     app = FastAPI(title="SOP compliance center backend", docs_url=f"{API_PREFIX}/docs")
     app.state.settings = settings
+    # Built here rather than by `Settings`, which sits below the domain in the layering and so
+    # carries the configured minutes rather than the type made from them.
+    app.state.session_policy = SessionPolicy(
+        idle_timeout=timedelta(minutes=settings.session_idle_timeout_minutes),
+        absolute_lifetime=timedelta(minutes=settings.session_absolute_lifetime_minutes),
+    )
     app.include_router(liveness_router, prefix=API_PREFIX)
+    app.include_router(auth_routes.router, prefix=API_PREFIX)
+
+    @app.exception_handler(AuthenticationRefusedError)
+    async def refused(request: Request, error: AuthenticationRefusedError) -> Response:
+        """Report an `auth` refusal as `problem+json` (§5.15).
+
+        Every protected route answers an anonymous caller through this one handler, so the
+        shape does not depend on which route was asked for.
+        """
+        return problem_response(
+            status=_REFUSAL_STATUS[error.code],
+            title=_REFUSAL_TITLE[error.code],
+            error_code=error.code.value,
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid(request: Request, error: RequestValidationError) -> Response:
+        """Report a rejected body as `problem+json` with `field_errors[]`.
+
+        FastAPI's own handler answers with its own JSON shape, which would make malformed input
+        the one failure a client has to parse differently from every other.
+        """
+        return problem_response(
+            status=422,
+            title="提交的内容不合要求",
+            error_code="REQUEST_INVALID",
+            field_errors=[
+                FieldError(
+                    # `loc` starts with the source (`body`, `query`); the client cares about the
+                    # field path within it.
+                    field=".".join(str(part) for part in item["loc"][1:]) or "body",
+                    message=item["msg"],
+                )
+                for item in error.errors()
+            ],
+        )
+
+    @app.exception_handler(Exception)
+    async def unhandled(request: Request, error: Exception) -> Response:
+        """Answer an unexpected failure as `problem+json`, saying nothing about its cause.
+
+        The traceback goes to the diagnostic log under the request's correlation id; the
+        response carries a stable code and no detail, because a message assembled from an
+        exception is how a table name or a connection string reaches a browser.
+        """
+        _logger.exception("http.request.failed", path=request.url.path)
+        return problem_response(
+            status=500,
+            title="服务器内部错误",
+            error_code="INTERNAL_ERROR",
+        )
 
     @app.middleware("http")
     async def bind_correlation_id(
@@ -69,5 +164,47 @@ def create_app(settings: Settings) -> FastAPI:
             )
         response.headers[CORRELATION_ID_HEADER] = correlation_id
         return response
+
+    @app.middleware("http")
+    async def check_csrf_token(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        """Require the CSRF header on every modifying request that carries a session cookie.
+
+        Middleware rather than a dependency each route declares: a route that forgot the
+        dependency would be unprotected and nothing would say so. Here, a new route is covered
+        the moment it exists, and an exemption has to be written down in
+        `CSRF_EXEMPT_REQUESTS`.
+
+        A request with no session cookie is not checked. There is nothing to protect — it is
+        anonymous, and it will be refused by `Authenticated` if the route needs an identity.
+        """
+        exempt = (request.method, request.url.path) in CSRF_EXEMPT_REQUESTS
+        if request.method not in MODIFYING_METHODS or exempt:
+            return await call_next(request)
+        token = presented_token(request)
+        if token is None:
+            return await call_next(request)
+        presented = request.headers.get(CSRF_HEADER)
+        if not verify_csrf_token(
+            presented,
+            session=token,
+            secret=settings.csrf_secret.get_secret_value(),
+        ):
+            _logger.warning(
+                "http.request.csrf_rejected",
+                method=request.method,
+                path=request.url.path,
+                # Whether the header was there at all separates "the page did not send one"
+                # from "it sent one that did not match", which are different bugs. The value
+                # itself is not logged: it is derived from the session token.
+                header_present=presented is not None,
+            )
+            return problem_response(
+                status=403,
+                title="请求校验失败，请刷新页面后重试",
+                error_code="CSRF_TOKEN_INVALID",
+            )
+        return await call_next(request)
 
     return app

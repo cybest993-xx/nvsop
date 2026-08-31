@@ -13,13 +13,20 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, ValidationError
+from pydantic import Field, SecretStr, ValidationError, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 ENVIRONMENT_PREFIX = "SOP_"
 SECRET_FILE_SUFFIX = "_FILE"  # pragma: allowlist secret
 
 LogLevel = Literal["debug", "info", "warning", "error"]
+
+# Whether the session cookie may travel without TLS. A two-value enumeration rather than a
+# boolean, so the deployment states which it is (harness §5: no bare boolean parameters) and
+# `Secure` is never off by accident. `allow_http` exists for a developer running the backend
+# directly, without Nginx in front: a browser silently discards a `Secure` cookie sent over
+# plain HTTP, and the symptom is a login that appears to succeed and then does nothing.
+CookieTransport = Literal["require_https", "allow_http"]
 
 
 class ConfigurationError(Exception):
@@ -42,6 +49,29 @@ class Settings(BaseSettings):
     database_name: str
     database_user: str
     database_password: SecretStr = Field(repr=False)
+
+    # How long a session survives, idle and in total (§六: sessions are server-side records,
+    # so both are enforced here rather than encoded in a cookie). Minutes, because that is the
+    # granularity an operator setting a shift-length timeout thinks in. `create_app` turns
+    # these into `auth`'s `SessionPolicy`: this object sits below the domain in the layering,
+    # so it carries the configured numbers rather than the domain type built from them.
+    session_idle_timeout_minutes: int = Field(gt=0)
+    session_absolute_lifetime_minutes: int = Field(gt=0)
+    session_cookie_transport: CookieTransport
+
+    # Signs the CSRF token derived from each session token (`auth/csrf.py`). A secret, so it
+    # arrives as a file path like the database password.
+    csrf_secret: SecretStr = Field(repr=False)
+
+    @model_validator(mode="after")
+    def _absolute_lifetime_outlasts_the_idle_timeout(self) -> Settings:
+        if self.session_absolute_lifetime_minutes < self.session_idle_timeout_minutes:
+            raise ValueError(
+                "session_absolute_lifetime_minutes must not be shorter than the idle timeout; "
+                "the idle timeout would then be configured but never able to fire, and the "
+                "deployment would believe an unattended browser is closed when it is not"
+            )
+        return self
 
     @classmethod
     def settings_customise_sources(

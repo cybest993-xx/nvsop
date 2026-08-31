@@ -27,6 +27,10 @@ def environment(tmp_path: Path, **overrides: str) -> dict[str, str]:
         "SOP_DATABASE_NAME": "factory_sop",
         "SOP_DATABASE_USER": "factory_sop",
         "SOP_DATABASE_PASSWORD_FILE": write_secret(tmp_path, "hunter2\n"),
+        "SOP_SESSION_IDLE_TIMEOUT_MINUTES": "720",
+        "SOP_SESSION_ABSOLUTE_LIFETIME_MINUTES": "43200",
+        "SOP_SESSION_COOKIE_TRANSPORT": "require_https",
+        "SOP_CSRF_SECRET_FILE": write_secret(tmp_path, "csrf-secret\n", name="csrf-secret"),
     }
     base.update(overrides)
     return base
@@ -42,7 +46,57 @@ def test_loads_a_complete_environment(tmp_path: Path) -> None:
         database_name="factory_sop",
         database_user="factory_sop",
         database_password=SecretStr("hunter2"),
+        session_idle_timeout_minutes=720,
+        session_absolute_lifetime_minutes=43200,
+        session_cookie_transport="require_https",
+        csrf_secret=SecretStr("csrf-secret"),
     )
+
+
+def test_the_configured_session_limits_are_loaded_as_minutes(tmp_path: Path) -> None:
+    # The two limits are deployment values, not constants: a plant running one shift wants a
+    # different idle timeout from one running three. `create_app` turns them into the
+    # `SessionPolicy` — this object stays below the domain in the layering.
+    settings = Settings.from_environment(
+        environment(
+            tmp_path,
+            SOP_SESSION_IDLE_TIMEOUT_MINUTES="30",
+            SOP_SESSION_ABSOLUTE_LIFETIME_MINUTES="480",
+        )
+    )
+
+    assert settings.session_idle_timeout_minutes == 30
+    assert settings.session_absolute_lifetime_minutes == 480
+
+
+def test_refuses_a_session_lifetime_shorter_than_its_idle_timeout(tmp_path: Path) -> None:
+    # The absolute lifetime would then be the only limit that ever fires, so the idle timeout
+    # would be configured and inert — the deployment would believe an unattended browser
+    # closes when it does not.
+    with pytest.raises(ConfigurationError, match="idle timeout"):
+        Settings.from_environment(
+            environment(
+                tmp_path,
+                SOP_SESSION_IDLE_TIMEOUT_MINUTES="480",
+                SOP_SESSION_ABSOLUTE_LIFETIME_MINUTES="60",
+            )
+        )
+
+
+def test_refuses_a_non_positive_session_timeout(tmp_path: Path) -> None:
+    with pytest.raises(ConfigurationError, match="session_idle_timeout_minutes"):
+        Settings.from_environment(environment(tmp_path, SOP_SESSION_IDLE_TIMEOUT_MINUTES="0"))
+
+
+def test_refuses_an_unknown_cookie_transport(tmp_path: Path) -> None:
+    with pytest.raises(ConfigurationError, match="session_cookie_transport"):
+        Settings.from_environment(environment(tmp_path, SOP_SESSION_COOKIE_TRANSPORT="maybe"))
+
+
+def test_keeps_the_csrf_secret_out_of_the_repr(tmp_path: Path) -> None:
+    settings = Settings.from_environment(environment(tmp_path))
+
+    assert "csrf-secret" not in repr(settings)
 
 
 def test_reads_a_secret_from_the_path_variable_and_strips_the_trailing_newline(

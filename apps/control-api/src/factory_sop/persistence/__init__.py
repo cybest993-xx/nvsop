@@ -13,6 +13,9 @@ in its own `adapters/`, above this.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
+from fastapi import Request
 from sqlalchemy import Engine, MetaData, create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -63,3 +66,26 @@ def session_factory(engine: Engine) -> sessionmaker[Session]:
     otherwise be serialized from values that are no longer known to be current.
     """
     return sessionmaker(bind=engine)
+
+
+def request_session(request: Request) -> Iterator[Session]:
+    """The request's one transaction: opened here, committed here, never by a module.
+
+    ADR-0002's Unit of Work. Every use case a request touches shares this session, so a
+    request that spans two modules commits both or neither — which is why the ADR requires the
+    mechanical boundary checks: the transaction no longer backs up the module boundary.
+
+    Rolled back if the handler raises, including on a refusal that becomes a 4xx. A refusal is
+    a request that did not happen, and the alternative — committing what ran before the
+    refusal — would leave a half-applied operation behind an error response.
+    """
+    factory: sessionmaker[Session] = request.app.state.session_factory
+    session = factory()
+    try:
+        yield session
+        session.commit()
+    except BaseException:
+        session.rollback()
+        raise
+    finally:
+        session.close()

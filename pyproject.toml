@@ -60,6 +60,13 @@ src = ["apps/control-api/src", "apps/control-api/tests", "scripts", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "T20", "ANN", "PT", "TID"]
+# User-facing text in this product is Simplified Chinese (Q32), so CJK punctuation appears in
+# every `problem+json` title and in the comments explaining them. RUF001/RUF003 flag these as
+# ASCII look-alikes, which they are not: full-width forms are the correct characters here, and
+# the half-width substitutes ruff proposes would be typographically wrong in the shipped text.
+# Listed rather than the rules disabled, so a genuine homoglyph (Cyrillic `с` for `c`) still
+# fails.
+allowed-confusables = ["，", "。", "：", "；", "！", "？", "（", "）", "、", "“", "”"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 # §5.15: diagnostics are structlog JSON with five mandatory fields. A bare `logging` call

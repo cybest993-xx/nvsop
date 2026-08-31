@@ -67,7 +67,9 @@ The center backend pins Python to 3.12 with a committed `.python-version`, one r
 
 ### Workspace manifests
 
-When the first Python workspace lands, use one root `pyproject.toml` and committed `uv.lock`. When the web workspace lands, use a root `package.json`, `pnpm-workspace.yaml`, and committed `pnpm-lock.yaml`. Pin runtimes and package-manager versions; CI installs from lockfiles without updating them. Do not add these manifests before a real workspace exists.
+The Python workspace has landed: one root `pyproject.toml` with `apps/control-api` as its only member, a committed `uv.lock`, and `.python-version` pinning 3.12. Formatting, lint, type, and `import-linter` configuration lives only in that root manifest — a second copy inside an application would never be the one the gate reads. `apps/edge-runtime/` is deliberately not a member, because membership would put every center dependency on the judgment core's import path; `scripts/check_repo_policy.py` resolves each of its imports against the standard library instead, so §1's standard-library rule is a checked fact rather than discipline.
+
+When the web workspace lands, use a root `package.json`, `pnpm-workspace.yaml`, and committed `pnpm-lock.yaml`. Pin runtimes and package-manager versions; CI installs from lockfiles without updating them. Do not add these manifests before a real workspace exists.
 
 ## 3. Module ownership and seams
 
@@ -153,7 +155,9 @@ Technology-neutral by intent: the reference baseline's crate layout, named clipp
 
 ## 6. Stable command interface
 
-`make check` is the CPU-only, infrastructure-free merge gate and must work from the repository root, without Docker. CI calls it exactly as developers do. Today it runs repository policy checks; each workspace-adding change must extend it in the same change with that workspace's formatting, lint, type, unit, contract, and build checks, plus the boundary checks (`import-linter` contracts, migration table-ownership, generated-artifact cleanliness).
+`make check` is the CPU-only, infrastructure-free merge gate and must work from the repository root, without Docker. CI calls it exactly as developers do. It runs repository policy, migration table-ownership, the base-code contract suite, the `import-linter` contracts, and each workspace's formatting, lint, type, and unit checks; each workspace-adding change must extend it in the same change with that workspace's build checks and generated-artifact cleanliness.
+
+Its first two targets are `lockfile` (`uv lock --check`, so a manifest edit whose lockfile was never regenerated fails rather than installing the old resolution) and `sync` (`uv sync --frozen --all-packages`). Every gate tool is resolved from `uv.lock` rather than installed separately, so a developer, the edge targets, and CI all execute the same build of ruff and mypy, and no run can silently upgrade a dependency. `apps/edge-runtime/` is not a workspace member and its tests run on a bare interpreter, but its tools come from that same environment.
 
 `make check-integration` is the second required target: one application plus real local infrastructure (PostgreSQL, Redis, MinIO) started as containers via testcontainers. It is separate because a developer without Docker must still be able to run `make check`, and because container startup does not belong in the fast feedback loop. Both targets feed the blocking gatherer, so merge protection strength is unchanged. SQLite and in-memory fakes are not substitutes for the integration target: transaction isolation, `JSONB`, timezone, and deferred foreign key behavior differ enough to produce false green.
 

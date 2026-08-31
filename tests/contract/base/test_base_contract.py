@@ -18,6 +18,7 @@ import inspect
 import json
 import re
 import unittest
+from typing import ClassVar
 
 from base_harness import (
     AGENTIC_REFERENCES,
@@ -92,7 +93,8 @@ class SkippableActionSemanticsTest(unittest.TestCase):
     example being "(10) doing action not belong to SOP".
 
     The first version therefore treats every template step as required and does
-    not emit this field at all (docs/design/mechanisms/judgment-and-boundary.md §5.1). These assertions
+    not emit this field at all (docs/design/mechanisms/judgment-and-boundary.md §5.1).
+    These assertions
     stay because the semantics still has to be pinned: if a later version needs a
     real optional step, the third state the base cannot express is what it will
     have to build, and a silent change here would move that ground.
@@ -287,7 +289,7 @@ class AgenticReferenceCopiesTest(unittest.TestCase):
 
     # Real module -> reference copy, with the content lines known to differ.
     # An empty tuple means the copy is currently byte-identical.
-    EXPECTED_DRIFT = {
+    EXPECTED_DRIFT: ClassVar[dict[str, tuple[str, tuple[str, ...]]]] = {
         "missing_number_detector.py": ("missing_number_detector_reference.py", ()),
         "sop_step_checker.py": (
             "sop_step_checker_reference.py",

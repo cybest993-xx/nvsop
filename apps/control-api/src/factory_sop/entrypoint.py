@@ -1,0 +1,31 @@
+"""The process entrypoint: resolve configuration, install logging, build the application.
+
+Run with `uvicorn --factory factory_sop.entrypoint:build`. This is the one place that reads
+the process environment; everything below it takes what it needs as an argument, which is
+what keeps a use case callable from an ARQ worker or a smoke script (§5.15).
+
+Deliberately thin and deliberately untested: the configuration loading, the logging shape
+and the application are each covered at their own seam, and a test for this function would
+have to mutate the process environment to reach it (harness §4).
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+from fastapi import FastAPI
+
+from factory_sop.app import create_app
+from factory_sop.observability import configure_logging, get_logger
+from factory_sop.settings import Settings
+
+
+def build() -> FastAPI:
+    """Build the application, or fail start-up loudly if the environment is unusable."""
+    settings = Settings.from_environment(os.environ)
+    configure_logging(log_level=settings.log_level, stream=sys.stdout)
+    get_logger("app").info(
+        "app.started", database_host=settings.database_host, log_level=settings.log_level
+    )
+    return create_app(settings)

@@ -78,7 +78,7 @@
 
 **不做审计事件**：不建独立审计表。变更归属由各实体的 `created_by` / `updated_by` / 发布者列承担；操作痕迹由诊断日志承担。这是明确取舍：放弃"业务事实与业务变更同事务、不可丢、append-only"的强度，换取模块与运维面更简单。若商业交付要求合规审计，需重新引入并承担相应改造。
 
-**诊断日志**：structlog JSON 输出，五个必填字段 `event` / `module` / `correlation_id` / `level` / `ts`。**`event` 是稳定 snake_case 标识符**（如 `template.version.publish.rejected`），检索靠它而非文案。禁止裸 `print` 与 `logging`，由 ruff 规则保证。不建事件名注册表。日志配置与 correlation id 传播属共享基础设施（`factory_sop/observability/`），被所有模块 import，自己不 import 任何领域模块，由 `import-linter` 保证；**它不是一个领域模块**——不拥有表，也不拥有领域行为。
+**诊断日志**：structlog JSON 输出，五个必填字段 `event` / `module` / `correlation_id` / `level` / `ts`。**`event` 是稳定 snake_case 标识符**（如 `template.version.publish.rejected`），检索靠它而非文案。禁止裸 `print` 与 `logging`，由 ruff 规则保证（根 `pyproject.toml` 的 `T20` 与 `flake8-tidy-imports.banned-api`）。不建事件名注册表。日志配置与 correlation id 传播属共享基础设施（`factory_sop/observability/`），被所有模块 import，自己不 import 任何领域模块，由 `import-linter` 保证；**它不是一个领域模块**——不拥有表，也不拥有领域行为。已随 C1 落地：`configure_logging` 的输出流是参数而非模块默认值，故测试断言真实渲染结果而不重定向进程流；`correlation_scope` 用 `ContextVar` 承载，HTTP 适配层沿用入站 `x-correlation-id` 而不另生成新值。
 
 **并发写**：模板草稿等可被多人编辑的记录带整型 `revision`，写请求携带 `If-Match`，不匹配返回 409 + `error_code=STALE_REVISION`。理由：静默丢一条步骤的后果是"已发布模板少一步"，而漏步正是本系统要检出的违规类型。
 

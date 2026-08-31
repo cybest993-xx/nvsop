@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import ast
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -16,6 +18,11 @@ REQUIRED_FILES = {
     Path("docs/design/repository-harness.md"),
     Path("docs/design/solution-and-roadmap.md"),
     Path(".github/workflows/blocking-ci.yml"),
+    # The center backend's frozen toolchain: the pin, the workspace root, and the lockfile
+    # CI installs from with `uv sync --frozen` (solution-and-roadmap.md §六).
+    Path(".python-version"),
+    Path("pyproject.toml"),
+    Path("uv.lock"),
 }
 FORBIDDEN_STALE_FILES = {
     Path("docs/research/control-gateway-stack-and-media-routing.md"),
@@ -45,6 +52,13 @@ PLACEHOLDER_VALUE = re.compile(
     r"^(?:|dummy|none|null|todo|changeme|placeholder|<[^>]*>|\$\{[^}]*\}|your[-_a-z0-9]*)$",
     re.IGNORECASE,
 )
+CENTER_PYTHON_VERSION = "3.12"
+EDGE_APP = Path("apps/edge-runtime")
+EDGE_SOURCE = EDGE_APP / "src"
+CENTER_SOURCE = Path("apps/control-api/src/factory_sop")
+# `sys.stdlib_module_names` is the interpreter's own answer, so this set needs no
+# maintenance as the standard library grows.
+STANDARD_LIBRARY = frozenset(sys.stdlib_module_names)
 
 
 def is_vendor(path: Path) -> bool:
@@ -92,11 +106,7 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
     if any(path.parts and path.parts[0] == "src" for path in files):
         errors.append("root src/ is forbidden; place production code in its owning app")
 
-    app_names = {
-        path.parts[1]
-        for path in files
-        if len(path.parts) > 2 and path.parts[0] == "apps"
-    }
+    app_names = {path.parts[1] for path in files if len(path.parts) > 2 and path.parts[0] == "apps"}
     for app in sorted(app_names - ALLOWED_APPS):
         errors.append(f"undeclared production app: apps/{app}/")
 
@@ -104,35 +114,32 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
         # `vendor/` is the NVIDIA base code and stays as delivered (ADR-0007), so its
         # own file names are not ours to rename. The rule that matters there is that no
         # real secret value ships, which is checked by value rather than by file name.
-        if path.name == ".env" or (
-            path.name.startswith(".env.") and path.name != ".env.example"
-        ):
+        if path.name == ".env" or (path.name.startswith(".env.") and path.name != ".env.example"):
             if is_vendor(path):
                 errors.extend(check_vendor_env_values(root, path))
             else:
-                errors.append(
-                    f"secret-like environment file must not be committed: {path}"
-                )
+                errors.append(f"secret-like environment file must not be committed: {path}")
         if path.suffix.lower() in SECRET_SUFFIXES:
             errors.append(f"private key material must not be committed: {path}")
 
-        if path.parts and path.parts[0] == "tests" and len(path.parts) > 1:
-            if path.parts[1] not in ALLOWED_ROOT_TEST_AREAS:
-                errors.append(
-                    f"root test has no declared cross-app owner: {path}; "
-                    "use contract/, system/, performance/, or fixtures/"
-                )
+        if (
+            path.parts
+            and path.parts[0] == "tests"
+            and len(path.parts) > 1
+            and path.parts[1] not in ALLOWED_ROOT_TEST_AREAS
+        ):
+            errors.append(
+                f"root test has no declared cross-app owner: {path}; "
+                "use contract/, system/, performance/, or fixtures/"
+            )
 
         is_python_test = path.suffix == ".py" and (
             path.name.startswith("test_") or path.name.endswith("_test.py")
         )
-        if is_python_test and path.parts[0] in {"apps", "packages"}:
-            if "tests" not in path.parts:
-                errors.append(f"Python test must live in its owner's tests/ tree: {path}")
+        if is_python_test and path.parts[0] in {"apps", "packages"} and "tests" not in path.parts:
+            errors.append(f"Python test must live in its owner's tests/ tree: {path}")
 
-    for path in sorted(
-        p for p in files if p.suffix.lower() == ".md" and not is_vendor(p)
-    ):
+    for path in sorted(p for p in files if p.suffix.lower() == ".md" and not is_vendor(p)):
         errors.extend(check_markdown_links(root, path))
 
     agents = root / "AGENTS.md"
@@ -144,11 +151,135 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
         text = workflow.read_text()
         for required_text in ("pull_request:", "make check", "CI required", "always()"):
             if required_text not in text:
-                errors.append(
-                    f"blocking-ci.yml is missing required gate behavior: {required_text}"
-                )
+                errors.append(f"blocking-ci.yml is missing required gate behavior: {required_text}")
+
+    errors.extend(check_python_pin(root))
+    errors.extend(check_edge_runtime_isolation(root, files))
+    errors.extend(check_center_modules_are_contracted(root, files))
 
     return errors
+
+
+def check_python_pin(root: Path) -> list[str]:
+    """The center backend is anchored to one interpreter version, not to a range."""
+    pin = root / ".python-version"
+    if not pin.is_file():
+        return []
+    pinned = pin.read_text(encoding="utf-8").strip()
+    if pinned != CENTER_PYTHON_VERSION:
+        return [
+            f".python-version must pin the center backend to {CENTER_PYTHON_VERSION}, not {pinned}"
+        ]
+    return []
+
+
+def check_edge_runtime_isolation(root: Path, files: list[Path]) -> list[str]:
+    """Keep the inference host's package standard-library-only, mechanically.
+
+    `edge-autonomy.md` §5.11 makes this a hard rule, and the harness keeps it for
+    testability: the judgment core has to stay runnable on a bare CPU inside the NVIDIA
+    base container, whose interpreter we do not choose. Two things could erode it
+    silently — the package joining the center's uv workspace, which would put every center
+    dependency on its import path, and a third-party import added while a developer's
+    environment happens to have that package. Both are checked here rather than left to
+    review.
+    """
+    errors: list[str] = []
+
+    workspace_members = (
+        read_toml(root / "pyproject.toml")
+        .get("tool", {})
+        .get("uv", {})
+        .get("workspace", {})
+        .get("members", [])
+    )
+    if any(str(EDGE_APP) == str(member).rstrip("/") for member in workspace_members):
+        errors.append(
+            f"{EDGE_APP} must stay out of the uv workspace; its judgment core is "
+            "standard-library-only (edge-autonomy.md §5.11)"
+        )
+
+    edge_manifest = EDGE_APP / "pyproject.toml"
+    declared = read_toml(root / edge_manifest).get("project", {}).get("dependencies", [])
+    if declared:
+        errors.append(
+            f"{edge_manifest} declares dependencies; the inference host's package is "
+            "standard-library-only (edge-autonomy.md §5.11)"
+        )
+
+    for path in sorted(files):
+        if path.suffix != ".py" or not is_under(path, EDGE_SOURCE):
+            continue
+        for name in sorted(top_level_imports(root / path)):
+            if name in STANDARD_LIBRARY or name == "edge_runtime":
+                continue
+            errors.append(
+                f"{path} imports {name}, which is not in the standard library; the "
+                "inference host's package is standard-library-only "
+                "(edge-autonomy.md §5.11)"
+            )
+    return errors
+
+
+def check_center_modules_are_contracted(root: Path, files: list[Path]) -> list[str]:
+    """Every center module must be named by an `import-linter` contract.
+
+    Module boundaries are enforced mechanically, not by review (harness §3). A module that
+    no contract names has no enforced boundary, and the omission is invisible: the gate
+    still passes, because `lint-imports` only checks the contracts it was given. This makes
+    the missing contract itself the failure, so it lands in the same change as the module.
+    """
+    modules = {
+        path.relative_to(CENTER_SOURCE).parts[0]
+        for path in files
+        if is_under(path, CENTER_SOURCE) and len(path.relative_to(CENTER_SOURCE).parts) > 1
+    }
+    if not modules:
+        return []
+
+    contracts = (
+        read_toml(root / "pyproject.toml")
+        .get("tool", {})
+        .get("importlinter", {})
+        .get("contracts", [])
+    )
+    contracted = {
+        module
+        for module in modules
+        for contract in contracts
+        if f"factory_sop.{module}" in repr(contract)
+    }
+    return [
+        f"center module {module} has no import-linter contract in pyproject.toml; "
+        "a module whose boundary is not named by a contract is unenforced"
+        for module in sorted(modules - contracted)
+    ]
+
+
+def is_under(path: Path, directory: Path) -> bool:
+    return path.parts[: len(directory.parts)] == directory.parts
+
+
+def read_toml(path: Path) -> dict[str, object]:
+    if not path.is_file():
+        return {}
+    with path.open("rb") as handle:
+        return tomllib.load(handle)
+
+
+def top_level_imports(path: Path) -> set[str]:
+    """Return the top-level package name of every absolute import in `path`.
+
+    Relative imports resolve inside the package itself and are not reported.
+    """
+    names: set[str] = set()
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names.add(node.module.split(".", 1)[0])
+    return names
 
 
 def check_vendor_env_values(root: Path, path: Path) -> list[str]:

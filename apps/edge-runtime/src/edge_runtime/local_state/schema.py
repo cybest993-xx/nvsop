@@ -7,16 +7,18 @@ not get a second database service to keep alive.
 **Migrations are append-only and run in order.** `PRAGMA user_version` records how far a
 database has been taken, so a host that has been offline for two releases catches up by
 running what it has not run yet. A landed migration is never edited: the next change adds
-one. The center's Alembic history is separate and unrelated — nothing here is shared with
-it, because this schema belongs to the edge and outlives an unreachable center.
+one. `apply_migrations` is that rule as a function and holds no knowledge of this schema;
+`migrate` is this schema going through it. The center's Alembic history is separate and
+unrelated — nothing here is shared with it, because this schema belongs to the edge and
+outlives an unreachable center.
 
-**What this ticket creates and what it deliberately does not.** The five tables below are
-the ones whose behaviour E5.2 owns: instances, decisions, latched violations, and the two
-queues. `local_config`, `local_template_version` and `local_disposal` are named in §七 and
-are *not* created here — their shapes belong to the tickets that write them (template
-landing, and #50/#51 for disposal), and freezing a table now for a writer that does not
-exist yet would fix a shape by guesswork rather than by use. Adding them is one migration
-each.
+**What this ticket delivers, and what it leaves to each table's writer.** The five tables
+below are the ones whose behaviour E5.2 owns: instances, decisions, latched violations, and
+the two queues. `local_config`, `local_template_version` and `local_disposal` are named in
+§七 and are *not* created here, because a table's shape belongs to the module that writes it
+— template landing for the first two, #50/#51 for disposal. What this ticket delivers for
+them is the mechanism rather than the shape: each is one migration appended to the list
+below, applied by `apply_migrations` to hosts whose databases already hold rows.
 
 Standard library only, like the core this state serves (edge-autonomy.md §5.11).
 """
@@ -24,6 +26,7 @@ Standard library only, like the core this state serves (edge-autonomy.md §5.11)
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Sequence
 
 _V1 = (
     # An SOP instance, in flight while `closed_at` is NULL. The row carries the core's
@@ -142,24 +145,35 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1,)
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 
 
-def migrate(connection: sqlite3.Connection) -> int:
-    """Bring one database up to the latest version, returning that version.
+def apply_migrations(connection: sqlite3.Connection, migrations: Sequence[Sequence[str]]) -> int:
+    """Run whatever of `migrations` this database has not run, returning the version reached.
 
-    Idempotent: an already-current database runs nothing. Each migration is one
-    transaction together with the version bump, so an interrupted upgrade leaves the
-    database at the last version that completed rather than half-way into the next.
+    The mechanism, with no knowledge of the schema it usually carries: a migration is a
+    sequence of statements, and `PRAGMA user_version` is how many have run. It is separate
+    from `MIGRATIONS` so that the evolution path can be driven over a list a caller owns —
+    the real list is one entry long, so running it can only ever show creation.
+
+    Idempotent: a database already at `len(migrations)` runs nothing, which is what a restart
+    does. Each migration is one transaction together with its version bump, so a failure
+    leaves the database at the last version that completed — no half-created table, and a
+    version that still asks for the migration that failed.
     """
     applied: int = connection.execute("PRAGMA user_version").fetchone()[0]
-    for version, statements in enumerate(MIGRATIONS[applied:], start=applied + 1):
+    for version, statements in enumerate(migrations[applied:], start=applied + 1):
         connection.execute("BEGIN IMMEDIATE")
         try:
             for statement in statements:
                 connection.execute(statement)
-            # PRAGMA takes no parameter binding, and `version` is this module's own loop
-            # index rather than anything a caller supplies.
+            # PRAGMA takes no parameter binding, and `version` is this loop's own index
+            # rather than anything a caller supplies.
             connection.execute(f"PRAGMA user_version = {version}")
         except Exception:
             connection.execute("ROLLBACK")
             raise
         connection.execute("COMMIT")
-    return len(MIGRATIONS)
+    return len(migrations)
+
+
+def migrate(connection: sqlite3.Connection) -> int:
+    """Bring one database up to this module's current schema, returning that version."""
+    return apply_migrations(connection, MIGRATIONS)

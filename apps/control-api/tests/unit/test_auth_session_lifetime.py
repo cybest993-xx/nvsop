@@ -29,7 +29,7 @@ def logged_in(
     now: datetime = MONDAY_MORNING,
 ) -> tuple[SessionToken, Session]:
     """Open a real session through the use case, and return its token and record."""
-    users.add(login_name=login_name, password=password, status=status)
+    users.register(login_name=login_name, password=password, status=status)
     opened = open_session(
         login_name=login_name,
         password=password,

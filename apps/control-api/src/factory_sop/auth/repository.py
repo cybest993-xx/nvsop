@@ -20,7 +20,15 @@ from factory_sop.auth.model import Session, User
 
 
 class UserRepository(Protocol):
-    """Reads of `auth_user`. Writes arrive with user administration (#23)."""
+    """`auth_user`. Administration of accounts — create, edit, deactivate — arrives with #23."""
+
+    def add(self, user: User) -> None:
+        """Insert an account.
+
+        Raises on a login name that is already taken: that is a real unique constraint rather
+        than a check the caller makes first, so two concurrent creations cannot both succeed.
+        """
+        ...
 
     def by_login_name(self, login_name: str) -> User | None:
         """Return the account whose login name is exactly `login_name`, if there is one."""

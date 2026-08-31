@@ -1,6 +1,6 @@
 .PHONY: check check-integration change-size hooks lockfile sync policy policy-test migrations \
 	contract-base boundaries secret-scan \
-	center-format center-lint center-type center-unit \
+	center-format center-lint center-type center-unit center-integration \
 	edge-format edge-lint edge-type edge-unit edge-integration
 
 # The CPU-only, Docker-free merge gate (harness §6). CI calls this exact target.
@@ -16,11 +16,9 @@ hooks:
 	git config core.hooksPath scripts/githooks
 
 # The second required target (harness §6): one application plus real PostgreSQL, Redis and
-# MinIO via testcontainers. No center module needs that infrastructure yet, so this returns
-# an explicit success rather than not existing — the documented command must run, and the
-# change that lands the first such suite replaces this body and adds the CI family.
-check-integration:
-	@echo "check-integration: no containerized integration suite exists yet; nothing to run."
+# MinIO via testcontainers. The center suite is separate because container startup does not
+# belong in the fast feedback loop, while the target remains the documented local interface.
+check-integration: sync center-integration
 
 # Harness §5's size budget, measured on what the change adds rather than remembered during
 # review. CI passes the pull request's base and head; locally the default compares the
@@ -98,6 +96,14 @@ center-type:
 
 center-unit:
 	cd $(CENTER) && PYTHONPATH=src $(PYTEST) tests/unit -q
+
+# The center backend against real PostgreSQL in a container, and the Alembic migrations that
+# build its schema — the suite applies them rather than calling `metadata.create_all`, so it
+# also proves the migrations produce the schema the mapped tables expect. SQLite is not a
+# substitute (harness §6): isolation, `JSONB`, timezone and deferred foreign key behavior
+# differ enough to produce a false green.
+center-integration:
+	cd $(CENTER) && PYTHONPATH=src $(PYTEST) tests/integration -q
 
 # apps/edge-runtime: the judgment core and the rest of the inference host's autonomous unit.
 # It is not a uv workspace member — membership would put every center dependency on its

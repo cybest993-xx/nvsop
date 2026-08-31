@@ -23,14 +23,18 @@ class FakeUsers:
 
     by_id: dict[UUID, User] = field(default_factory=dict)
 
-    def add(
+    def register(
         self,
         *,
         login_name: str,
         password: str,
         status: UserStatus = UserStatus.ACTIVE,
     ) -> User:
-        """Register an account and return it. Test set-up, not part of the protocol."""
+        """Build an account from a plaintext password, store it, and return it.
+
+        Test set-up rather than part of the protocol: the protocol's `add` takes an already
+        built `User`, and every use-case test wants "an account whose password is this".
+        """
         user = User(
             id=new_id(),
             login_name=login_name,
@@ -38,8 +42,18 @@ class FakeUsers:
             password_hash=hash_password(password),
             status=status,
         )
-        self.by_id[user.id] = user
+        self.add(user)
         return user
+
+    def add(self, user: User) -> None:
+        if any(
+            stored.login_name == user.login_name and stored.id != user.id
+            for stored in self.by_id.values()
+        ):
+            # The real adapter has a unique constraint doing this (§5.15). A fake that let a
+            # duplicate through would make a test pass against behavior PostgreSQL refuses.
+            raise ValueError(f"login name already taken: {user.login_name}")
+        self.by_id[user.id] = user
 
     def deactivate(self, user_id: UUID) -> User:
         """Deactivate an account (`CONTEXT.md`: 停用). Test set-up; #23 owns the use case."""

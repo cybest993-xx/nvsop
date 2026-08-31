@@ -12,8 +12,13 @@ dependencies = [
     # implementation by the Argon2 authors; the parameters we run it with are named
     # explicitly in `factory_sop/auth/passwords.py` rather than taken from its defaults.
     "argon2-cffi>=25.1.0",
+    "alembic>=1.19.1",
     "fastapi>=0.121.2",
+    # `psycopg[binary]` ships the libpq wheel rather than building against a system one, so
+    # the offline install (§一) needs no PostgreSQL development headers on the center machine.
+    "psycopg[binary]>=3.3.4",
     "pydantic-settings>=2.12.0",
+    "sqlalchemy>=2.0.52",
     "structlog>=25.5.0",
     "uvicorn>=0.38.0",
 ]

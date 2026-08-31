@@ -44,6 +44,9 @@ dev = [
     # Content-based secret scanning for `make secrets`; file-name rules alone let a token
     # inside a JSON manifest through (issue #67).
     "detect-secrets==1.5.0",
+    # `make check-integration` runs one application against real containerized PostgreSQL
+    # (harness §6). Test-only: nothing the deployment runs imports it.
+    "testcontainers[postgres]==4.15.0",
 ]
 
 [tool.ruff]
@@ -106,10 +109,17 @@ type = "layers"
 # outward identity mints one; they are siblings, independent of each other. `observability`
 # sits above them and below every module, since every module logs — a dependency the other way
 # would route the whole backend through a package that owns no behavior (§5.15).
+#
+# `persistence` is the same kind of thing: the one `MetaData` every module's tables register
+# on and the engine the request-scoped Unit of Work draws from (ADR-0002). It is above
+# `settings` because it is configured by it, and below the modules because each module's
+# `adapters/` declares its tables on that registry. It owns no domain behavior, which is why a
+# module appears above it and never the reverse.
 layers = [
     "factory_sop.entrypoint",
     "factory_sop.app",
     "factory_sop.auth",
+    "factory_sop.persistence",
     "factory_sop.observability",
     "factory_sop.settings : factory_sop.identifiers",
 ]

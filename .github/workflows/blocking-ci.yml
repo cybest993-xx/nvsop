@@ -102,10 +102,57 @@ jobs:
         if: steps.relevant.outputs.run != 'true'
         run: echo "No paths the merge gate reads were changed."
 
+  # Family 3 (harness §7): the center backend against real containerized infrastructure. A
+  # separate job because it needs Docker, which `make check` deliberately does not. Same
+  # explicit-success rule as above — path filtering is an optimization, not an exemption.
+  integration-gate:
+    name: Center backend against real PostgreSQL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Decide whether the suite has anything to check
+        id: relevant
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        # Narrower than the merge gate's filter: this suite reads the center backend, its
+        # migrations, the lockfile it installs from, and the target that invokes it.
+        run: |
+          set -euo pipefail
+          if [ -z "$BASE_SHA" ] || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "No usable base commit; running the suite."
+            exit 0
+          fi
+          changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
+            | grep -E '^(apps/control-api/|Makefile$|uv\.lock$|pyproject\.toml$|\.github/workflows/)' || true)
+          if [ -n "$changed" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install the pinned Python toolchain runner
+        if: steps.relevant.outputs.run == 'true'
+        run: pipx install uv==0.12.5
+      - name: Run the integration suite
+        if: steps.relevant.outputs.run == 'true'
+        # Docker is present on the GitHub-hosted runner, which is what testcontainers uses to
+        # start PostgreSQL. No service container is declared here: the suite owns the image
+        # tag and the lifecycle, so a developer runs the same database CI does.
+        run: make check-integration
+      - name: Explicit success with nothing to check
+        if: steps.relevant.outputs.run != 'true'
+        run: echo "No paths the integration suite reads were changed."
+
   required:
     name: CI required
     if: ${{ always() }}
-    needs: [lockfile, merge-gate]
+    needs: [lockfile, merge-gate, integration-gate]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
@@ -113,10 +160,12 @@ jobs:
         env:
           LOCKFILE_RESULT: ${{ needs.lockfile.result }}
           GATE_RESULT: ${{ needs.merge-gate.result }}
+          INTEGRATION_RESULT: ${{ needs.integration-gate.result }}
         run: |
           set -euo pipefail
           status=0
-          for pair in "lockfile:$LOCKFILE_RESULT" "merge-gate:$GATE_RESULT"; do
+          for pair in "lockfile:$LOCKFILE_RESULT" "merge-gate:$GATE_RESULT" \
+            "integration-gate:$INTEGRATION_RESULT"; do
             name=${pair%%:*}
             result=${pair#*:}
             echo "$name: $result"

@@ -8,7 +8,7 @@
  */
 import { computed } from 'vue'
 
-import { useSessionStore } from '@/stores/session'
+import { useSessionStore } from '@/session/store'
 
 const session = useSessionStore()
 

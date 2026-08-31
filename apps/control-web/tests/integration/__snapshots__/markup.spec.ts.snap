@@ -1,0 +1,103 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`the login page > renders the form it has been rendering 1`] = `
+"<main class="login">
+  <section class="login__panel" aria-labelledby="login-heading">
+    <h1 id="login-heading" class="login__heading">SOP 合规检测系统</h1>
+    <p class="login__hint">请使用本地账户登录</p>
+    <!-- \`alert\` so a screen reader announces the refusal without the operator having to go
+           looking for it, and the leading ✕ means the failure is not carried by colour alone
+           (Q32). -->
+    <!--v-if-->
+    <form class="el-form el-form--default el-form--label-top">
+      <div class="el-form-item asterisk-left el-form-item--label-top" role="group" aria-labelledby="el-id-0">
+        <div id="el-id-0" class="el-form-item__label">登录名</div>
+        <div class="el-form-item__content">
+          <!-- \`id\`/\`for\` is what \`ElFormItem\`'s label binds through. Focus is taken by the
+               \`onMounted\` above rather than by \`autofocus\`. -->
+          <div class="el-input">
+            <!-- input -->
+            <!-- prepend slot -->
+            <!--v-if-->
+            <div class="el-input__wrapper">
+              <!-- prefix slot -->
+              <!--v-if--><input class="el-input__inner" name="login_name" type="text" autocomplete="username" tabindex="0"><!-- suffix slot -->
+              <!--v-if-->
+            </div><!-- append slot -->
+            <!--v-if-->
+          </div>
+          <transition-group-stub name="el-zoom-in-top" appear="false" persisted="false" css="true">
+            <!--v-if-->
+          </transition-group-stub>
+        </div>
+      </div>
+      <div class="el-form-item asterisk-left el-form-item--label-top" role="group" aria-labelledby="el-id-1">
+        <div id="el-id-1" class="el-form-item__label">密码</div>
+        <div class="el-form-item__content">
+          <div class="el-input el-input--suffix">
+            <!-- input -->
+            <!-- prepend slot -->
+            <!--v-if-->
+            <div class="el-input__wrapper">
+              <!-- prefix slot -->
+              <!--v-if--><input class="el-input__inner" name="password" type="password" autocomplete="current-password" tabindex="0"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><!--v-if--><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
+            </div><!-- append slot -->
+            <!--v-if-->
+          </div>
+          <transition-group-stub name="el-zoom-in-top" appear="false" persisted="false" css="true">
+            <!--v-if-->
+          </transition-group-stub>
+        </div>
+      </div>
+      <div class="el-form-item asterisk-left el-form-item--label-top">
+        <!--v-if-->
+        <div class="el-form-item__content"><button aria-disabled="true" disabled="" type="submit" class="el-button el-button--primary is-disabled login__submit">
+            <!--v-if--><span class="">登录</span>
+          </button>
+          <transition-group-stub name="el-zoom-in-top" appear="false" persisted="false" css="true">
+            <!--v-if-->
+          </transition-group-stub>
+        </div>
+      </div>
+    </form>
+  </section>
+</main>"
+`;
+
+exports[`the protected shell > renders the navigation and the account strip it has been rendering 1`] = `
+"<div class="shell">
+  <header class="shell__header"><span class="shell__product">SOP 合规检测系统</span>
+    <div class="shell__account"><span class="shell__user">王丽</span><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
+        <!--v-if--><span class="">退出</span>
+      </button></div>
+  </header>
+  <div class="shell__body">
+    <!-- A real \`nav\` with a list, so a screen reader can enumerate the sections and a keyboard
+           can tab through only the ones that lead somewhere. -->
+    <nav class="shell__nav" aria-label="主导航">
+      <ul class="shell__nav-list">
+        <li><a aria-current="page" href="/" class="router-link-active router-link-exact-active shell__link">概览</a></li>
+        <li>
+          <!-- \`aria-disabled\` and the trailing note rather than grey text alone: colour is not
+                 the only expression of state (Q32). --><span class="shell__link shell__link--pending" aria-disabled="true" title="该功能尚未上线">工位与设备 <small class="shell__pending-note">（未上线）</small></span>
+        </li>
+        <li>
+          <!-- \`aria-disabled\` and the trailing note rather than grey text alone: colour is not
+                 the only expression of state (Q32). --><span class="shell__link shell__link--pending" aria-disabled="true" title="该功能尚未上线">SOP 模板 <small class="shell__pending-note">（未上线）</small></span>
+        </li>
+        <li>
+          <!-- \`aria-disabled\` and the trailing note rather than grey text alone: colour is not
+                 the only expression of state (Q32). --><span class="shell__link shell__link--pending" aria-disabled="true" title="该功能尚未上线">训练数据集 <small class="shell__pending-note">（未上线）</small></span>
+        </li>
+        <li>
+          <!-- \`aria-disabled\` and the trailing note rather than grey text alone: colour is not
+                 the only expression of state (Q32). --><span class="shell__link shell__link--pending" aria-disabled="true" title="该功能尚未上线">用户与权限 <small class="shell__pending-note">（未上线）</small></span>
+        </li>
+      </ul>
+    </nav>
+    <main class="shell__main">
+      <div></div>
+    </main>
+  </div>
+</div>"
+`;

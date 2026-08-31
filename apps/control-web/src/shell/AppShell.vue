@@ -10,7 +10,7 @@ import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { LOGIN_ROUTE, OVERVIEW_ROUTE } from '@/router'
-import { useSessionStore } from '@/stores/session'
+import { useSessionStore } from '@/session/store'
 
 const session = useSessionStore()
 const router = useRouter()

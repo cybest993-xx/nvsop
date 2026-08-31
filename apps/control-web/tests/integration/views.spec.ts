@@ -13,9 +13,9 @@ import { mount } from '@vue/test-utils'
 import { createRouter, createWebHistory, type Router } from 'vue-router'
 
 import { ControlPlaneError } from '@/api/controlPlane'
-import AppShell from '@/layouts/AppShell.vue'
-import LoginView from '@/views/LoginView.vue'
-import { useSessionStore } from '@/stores/session'
+import AppShell from '@/shell/AppShell.vue'
+import LoginView from '@/session/LoginView.vue'
+import { useSessionStore } from '@/session/store'
 
 const { openSession, endSession } = vi.hoisted(() => ({
   openSession: vi.fn(),

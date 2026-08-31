@@ -8,7 +8,7 @@
 
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 
-import { useSessionStore } from '@/stores/session'
+import { useSessionStore } from '@/session/store'
 
 export const LOGIN_ROUTE = 'login'
 export const OVERVIEW_ROUTE = 'overview'
@@ -17,17 +17,17 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/login',
     name: LOGIN_ROUTE,
-    component: () => import('@/views/LoginView.vue'),
+    component: () => import('@/session/LoginView.vue'),
     meta: { anonymous: true, title: '登录' },
   },
   {
     path: '/',
-    component: () => import('@/layouts/AppShell.vue'),
+    component: () => import('@/shell/AppShell.vue'),
     children: [
       {
         path: '',
         name: OVERVIEW_ROUTE,
-        component: () => import('@/views/OverviewView.vue'),
+        component: () => import('@/modules/overview/OverviewView.vue'),
         meta: { title: '概览' },
       },
     ],

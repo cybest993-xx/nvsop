@@ -1,0 +1,63 @@
+"""The seam `auth`'s use cases reach persistence through.
+
+`Protocol`s rather than base classes: the PostgreSQL adapter arrives in this module's
+`adapters/`, and the use-case tests pass in-memory stand-ins at this same seam (harness §4).
+Neither the protocols nor their callers import an adapter, which an `import-linter` contract
+holds.
+
+No method commits. One request is one transaction, opened and committed by the HTTP adapter
+layer (ADR-0002), so a repository that committed would break the property the ADR exists for:
+that a use case touching two modules cannot half-succeed.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Protocol
+from uuid import UUID
+
+from factory_sop.auth.model import Session, User
+
+
+class UserRepository(Protocol):
+    """Reads of `auth_user`. Writes arrive with user administration (#23)."""
+
+    def by_login_name(self, login_name: str) -> User | None:
+        """Return the account whose login name is exactly `login_name`, if there is one."""
+        ...
+
+    def by_identifier(self, user_id: UUID) -> User | None:
+        """Return the account `user_id` names, if it still exists."""
+        ...
+
+
+class SessionRepository(Protocol):
+    """`auth_session`: the live logins."""
+
+    def add(self, session: Session) -> None:
+        """Persist a newly opened session."""
+        ...
+
+    def by_token_fingerprint(self, token_fingerprint: str) -> Session | None:
+        """Return the session that fingerprint identifies, live or not.
+
+        Liveness is `SessionPolicy`'s decision, not a filter here: the store holds the two
+        instants, and the policy that turns them into an expiry can change between requests.
+        """
+        ...
+
+    def touch(self, session: Session, *, last_used_at: datetime) -> Session:
+        """Slide `session`'s idle window forward and return the updated record."""
+        ...
+
+    def remove(self, session: Session) -> None:
+        """Delete one session. This is what logging out is."""
+        ...
+
+    def remove_every_session_of(self, user_id: UUID) -> int:
+        """Delete all of an account's sessions, returning how many there were.
+
+        Deactivating a user must revoke every session it has (§5.15), and that happens in
+        the same transaction as the deactivation.
+        """
+        ...

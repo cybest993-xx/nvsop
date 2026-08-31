@@ -88,6 +88,10 @@ namespace_packages = true
 
 [tool.importlinter]
 root_packages = ["factory_sop", "edge_runtime"]
+# Two contracts forbid a first-party module from importing a third-party one — the rule that
+# keeps `auth`'s behavior independent of SQLAlchemy and FastAPI. Naming an external package in
+# a contract requires this.
+include_external_packages = true
 
 # Module boundaries are enforced mechanically, not by review (harness §3). Every center
 # module must be named by a contract here — `scripts/check_repo_policy.py` fails the gate
@@ -97,15 +101,39 @@ root_packages = ["factory_sop", "edge_runtime"]
 [[tool.importlinter.contracts]]
 name = "The center's shared infrastructure does not depend on what depends on it"
 type = "layers"
-# Read top-down: a layer may import a lower one, never a higher one. `settings` is at the
-# bottom because everything is configured; `observability` sits above it and below every
-# module, since every module logs — a dependency the other way would route the whole
-# backend through a package that owns no behavior (§5.15).
+# Read top-down: a layer may import a lower one, never a higher one. `settings` and
+# `identifiers` are at the bottom because everything is configured and everything that has an
+# outward identity mints one; they are siblings, independent of each other. `observability`
+# sits above them and below every module, since every module logs — a dependency the other way
+# would route the whole backend through a package that owns no behavior (§5.15).
 layers = [
     "factory_sop.entrypoint",
     "factory_sop.app",
+    "factory_sop.auth",
     "factory_sop.observability",
-    "factory_sop.settings",
+    "factory_sop.settings : factory_sop.identifiers",
+]
+
+[[tool.importlinter.contracts]]
+name = "auth's behavior does not depend on how it is stored or reached"
+type = "forbidden"
+# The module owns its behavior behind one seam (harness §1, §3): its use cases reach
+# persistence through the `Protocol`s in `repository.py`, and its HTTP surface is an adapter
+# above them. Either import reversed would put SQLAlchemy or FastAPI inside the rules about
+# who may log in, and the use-case tests could no longer pass an in-memory store at that same
+# seam (harness §4).
+source_modules = [
+    "factory_sop.auth.model",
+    "factory_sop.auth.errors",
+    "factory_sop.auth.passwords",
+    "factory_sop.auth.tokens",
+    "factory_sop.auth.repository",
+    "factory_sop.auth.usecases",
+]
+forbidden_modules = [
+    "factory_sop.auth.adapters",
+    "fastapi",
+    "sqlalchemy",
 ]
 
 [[tool.importlinter.contracts]]

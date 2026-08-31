@@ -1,6 +1,6 @@
-.PHONY: check policy policy-test contract-base edge-format edge-lint edge-type edge-unit
+.PHONY: check policy policy-test contract-base edge-format edge-lint edge-type edge-unit edge-integration
 
-check: policy-test policy contract-base edge-format edge-lint edge-type edge-unit
+check: policy-test policy contract-base edge-format edge-lint edge-type edge-unit edge-integration
 
 policy-test:
 	python3 -m unittest discover -s scripts/tests -p 'test_*.py'
@@ -35,3 +35,12 @@ edge-type:
 # process and no GPU: construct a state, send events, assert on the output.
 edge-unit:
 	cd $(EDGE) && PYTHONPATH=src python3 -m unittest discover -s tests/unit -t tests/unit -p 'test_*.py'
+
+# The local state store against real SQLite. In `make check` rather than
+# `make check-integration` because SQLite is embedded: no container, no daemon, no GPU, and
+# nothing for a developer without Docker to install. Harness §6 separates the two targets so
+# that container startup stays out of the fast loop — that reason does not reach this suite,
+# while §4's reason for it being an integration suite does: SQLite is this store's real
+# infrastructure, not a stand-in for it.
+edge-integration:
+	cd $(EDGE) && PYTHONPATH=src python3 -m unittest discover -s tests/integration -t tests/integration -p 'test_*.py'

@@ -61,6 +61,27 @@ class ReasonCode(Enum):
     OUT_OF_ORDER = ("OUT_OF_ORDER", Verdict.FAIL)
     DEADLINE_EXCEEDED = ("DEADLINE_EXCEEDED", Verdict.FAIL)
 
+    @classmethod
+    def from_wire(cls, wire: str) -> ReasonCode:
+        """The member with this wire value, for a caller decoding what was stored or sent.
+
+        `ReasonCode(wire)` is what Python's enum offers, but this class defines `__new__` to
+        carry the verdict, so that call reads as construction with a missing argument — to a
+        type checker as much as to a reader. This says which of the two it is, and resolves it
+        in one place instead of at each call site.
+
+        Raises `KeyError` for an unknown value, which is correct on the two paths that use it —
+        both read back what this same enumeration wrote (local state, and E4's health events).
+        ADR-0003's requirement that an unknown code render as the raw code plus a generic hint
+        belongs to the cross-process wire boundary, where the centre and the inference host
+        upgrade independently; that boundary must not use this.
+        """
+        return _BY_WIRE[wire]
+
+
+_BY_WIRE = {code.value: code for code in ReasonCode}
+"""Wire value to member. Built from the members, so it cannot fall behind them."""
+
 
 INDETERMINATE_REASONS = frozenset(
     code for code in ReasonCode if code.verdict is Verdict.INDETERMINATE

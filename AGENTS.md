@@ -23,6 +23,12 @@ These five hold before you read anything else. Everything else lives in the harn
 
 Point at the source of truth instead of restating it. When a rule is already carried by an `import-linter` contract, a `make` target, a config file, or an ADR, cite that place — a second copy goes stale silently. Add a nested `AGENTS.md` only where a subtree has a real local exception, and delete a superseded conclusion once its surviving facts are merged into the current decision source; Git is the archive.
 
+## Working on a change
+
+- Develop on a `dev` worktree, never on `main`. Create it outside the repository — `git worktree add ../nvsop-dev dev` — because `scripts/check_repo_policy.py` rejects an undeclared top-level directory. `main` only receives finished work.
+- Write the failing test before the implementation: invoke the `tdd` skill and follow it. Harness §4 fixes where a test lives; this fixes when it is written.
+- A session that writes code does not review or commit it. Hand both to a fresh session, because the context that produced the code has already argued itself into believing it correct.
+
 ## Completion gate
 
 Run `make check`. Each change that adds a workspace extends that same target in the same change, so local and blocking CI run identical CPU-only checks. Run hardware or GPU suites only when the change or its acceptance criteria require them.

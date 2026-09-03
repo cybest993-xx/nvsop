@@ -137,15 +137,15 @@ class MigrationOwnershipTest(unittest.TestCase):
             "def upgrade() -> None:\n"
             '    op.add_column("device_camera", sa.Column("name", sa.Text()))\n'
             '    op.create_index("ix_x", "template_version", ["id"])\n'
-            '    op.drop_constraint("ck_y", "alert_violation")\n',
+            '    op.drop_constraint("ck_y", "monitor_violation")\n',
         )
         errors = check_migrations(self.versions)
         self.assertEqual(
             [
-                "0001_auth_add_column.py migrates a table it does not own: alert_violation; "
-                "the alert_ prefix belongs to alert, not to auth",
                 "0001_auth_add_column.py migrates a table it does not own: device_camera; "
                 "the device_ prefix belongs to device, not to auth",
+                "0001_auth_add_column.py migrates a table it does not own: monitor_violation; "
+                "the monitor_ prefix belongs to monitor, not to auth",
                 "0001_auth_add_column.py migrates a table it does not own: template_version; "
                 "the template_ prefix belongs to template, not to auth",
             ],

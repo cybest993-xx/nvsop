@@ -11,6 +11,24 @@
 [tool.uv.workspace]
 members = ["apps/control-api"]
 
+# The center backend's modules: the one declaration of record (harness §3, ADR-0010). Each
+# entry is a package under `apps/control-api/src/factory_sop/` and the prefix its physical
+# tables carry. The gate scripts match this list — the ownership check carries a copy until
+# they read it from here; the roadmap's §六 and harness §3 explain it. Adding a module
+# starts here.
+[tool.nvsop]
+center_modules = [
+    "auth",
+    "dataset",
+    "device",
+    "evidence",
+    "execution",
+    "job",
+    "monitor",
+    "retention",
+    "template",
+]
+
 # One frozen source for dependency AND tool versions. `make check` runs the tools from
 # this environment rather than `uv tool run`, so a developer, the edge targets and CI all
 # execute the same ruff and mypy build (issue #21: 工具版本有冻结锁文件).

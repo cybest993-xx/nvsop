@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+
+    "strict": true,
+    "noEmit": true,
+    "composite": true,
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
+    "skipLibCheck": true
+  },
+  // `eslint.config.ts` is deliberately absent: its exported type cannot be named without a
+  // reference to a package under `.pnpm/`, so type-checking it fails as non-portable (TS2742).
+  // ESLint reads that file through `jiti` and reports its own errors in it, so it is covered.
+  "include": ["vite.config.ts"]
+}

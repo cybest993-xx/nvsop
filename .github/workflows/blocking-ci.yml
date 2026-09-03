@@ -33,6 +33,24 @@ jobs:
         # declines to update the lockfile rather than comparing it to the manifest, so a
         # manifest edit with a stale lockfile installs the old resolution and passes.
         run: make lockfile
+      - name: Set up the pinned Node runtime and package manager
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          # `.nvmrc`, the same file a developer's `nvm use` reads — one place the runtime
+          # version is chosen, as `.python-version` is for the backend. `package.json`'s
+          # `engines.node` is a floor rather than a pin and would let CI silently move to a
+          # newer Node than anyone has run locally.
+          node-version-file: .nvmrc
+      - name: Install the pinned package manager
+        # `corepack` reads `packageManager` from `package.json`, so the pnpm version comes from
+        # the same manifest a developer's shell reads and not from a second pin here.
+        run: corepack enable pnpm && corepack install
+      - name: Require pnpm-lock.yaml to match the web manifests
+        # The same rule as `uv.lock` above, for the web workspace: `--frozen-lockfile` fails on
+        # a manifest whose lockfile was never regenerated. `--lockfile-only` stops before
+        # writing any package to disk, since this job is about the lockfile and not about
+        # having an installed tree.
+        run: pnpm install --frozen-lockfile --lockfile-only
 
   # Family 2 (harness §7): the CPU-only merge gate, invoked exactly as a developer invokes
   # it. Path filtering is an optimization, not an exemption — when nothing relevant changed
@@ -80,6 +98,33 @@ jobs:
         # which would be a second place the interpreter version is chosen. Its version is
         # frozen so CI and a developer run the same build of ruff and mypy.
         run: pipx install uv==0.12.5
+      - name: Set up the pinned Node runtime
+        if: steps.relevant.outputs.run == 'true'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version-file: .nvmrc
+      - name: Install the pinned package manager
+        id: pnpm
+        if: steps.relevant.outputs.run == 'true'
+        # `corepack` reads `packageManager` from `package.json`, so pnpm's version comes from
+        # the manifest rather than from a second pin here. After the Node step, because the
+        # shim it writes belongs to that interpreter. The store path is asked of pnpm rather
+        # than hard-coded, so a release that moves it does not silently leave the next step
+        # caching an empty directory.
+        run: |
+          set -euo pipefail
+          corepack enable pnpm
+          corepack install
+          echo "store=$(pnpm store path)" >> "$GITHUB_OUTPUT"
+      - name: Restore the pnpm store
+        if: steps.relevant.outputs.run == 'true'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          # Not `setup-node`'s own `cache: pnpm`, which resolves the store path before the step
+          # above has put pnpm on PATH.
+          path: ${{ steps.pnpm.outputs.store }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-store-${{ runner.os }}-
       - name: Run the local merge gate
         if: steps.relevant.outputs.run == 'true'
         run: make check

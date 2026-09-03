@@ -1,0 +1,4 @@
+# The web workspace. One member today; each later web slice joins the same root lockfile
+# rather than bringing its own (docs/design/repository-harness.md §2).
+packages:
+  - apps/control-web

@@ -1,0 +1,46 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "preserve",
+    "types": ["vitest/globals"],
+    "paths": { "@/*": ["./src/*"] },
+
+    // The same posture as the backend's `mypy --strict`: a type hole is a defect the gate
+    // catches, not a style preference (§六).
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+
+    // `exactOptionalPropertyTypes` is deliberately absent, and this is the one strictness
+    // option this workspace does not take. It is incompatible with element-plus 2.14.5's prop
+    // descriptors: `EpProp` declares `validator` as a REQUIRED property whose type includes
+    // `undefined`, while Vue's `ExtractPropTypes` matches against `PropOptions`, where
+    // `validator` is OPTIONAL. Under this flag those two are different types, the match fails,
+    // and `ExtractPropTypes` falls through to its own fallback — handing back the descriptor
+    // object itself instead of the prop's type. Every affected prop then reports
+    // `Type 'string' is not assignable to type '{ readonly type: PropType<string>; … }'`.
+    //
+    // It is systemic, not one component: `ElSelect`'s `placeholder`, `ElMenuItem`'s `index`,
+    // `ElDatePicker`'s `type`, `ElTableColumn`'s `width` and `ElConfigProvider`'s `locale` all
+    // fail on ordinary template usage. Keeping the flag would mean an `as never`-shaped cast
+    // at each such prop in every later web slice, which trades a real type check for noise —
+    // the casts would also hide genuine mistakes at exactly the places they are written.
+    //
+    // What is given up is narrow: the distinction between an absent optional property and one
+    // explicitly set to `undefined`. Revisit when element-plus changes `EpProp` to declare
+    // `validator` optional; the probe is to set the flag and type-check.
+
+    "noEmit": true,
+    "composite": true,
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.vue", "tests/**/*.ts"]
+}

@@ -1,12 +1,14 @@
 .PHONY: check check-integration change-size hooks lockfile sync policy policy-test migrations \
 	contract-base boundaries secret-scan \
 	center-format center-lint center-type center-unit center-integration \
-	edge-format edge-lint edge-type edge-unit edge-integration
+	edge-format edge-lint edge-type edge-unit edge-integration \
+	web-install web-format web-lint web-type web-unit web-build
 
 # The CPU-only, Docker-free merge gate (harness §6). CI calls this exact target.
 check: lockfile sync hooks policy-test policy migrations contract-base boundaries secret-scan \
 	center-format center-lint center-type center-unit \
-	edge-format edge-lint edge-type edge-unit edge-integration
+	edge-format edge-lint edge-type edge-unit edge-integration \
+	web-install web-format web-lint web-type web-unit web-build
 
 # Git hooks that hold for whichever agent or person commits (harness §6): no commit on
 # main, no push to main, no edit under vendor/, no unformatted Python. Versioned under
@@ -138,3 +140,40 @@ edge-unit:
 # infrastructure, not a stand-in for it.
 edge-integration:
 	cd $(EDGE) && PYTHONPATH=src python3 -m unittest discover -s tests/integration -t tests/integration -p 'test_*.py'
+
+# apps/control-web: the operator and administrator application. In `check` rather than in a
+# target of its own, because AGENTS.md's completion gate is one target per change and
+# `check-integration` is the sole exception, earned by Docker — a developer without it must
+# still be able to run the gate. Node and pnpm are a frozen toolchain like uv's, not
+# infrastructure to bring up, so that reason does not reach here. Harness §7 still gives the
+# web its own path-filtered CI family; that is which job runs it, not whether the local target
+# does.
+WEB := apps/control-web
+
+# Frozen, like `uv sync --frozen`: it installs the resolution in `pnpm-lock.yaml` and fails
+# rather than updating it, so a manifest edit whose lockfile was never regenerated cannot pass
+# here and then resolve to something else in CI. `--prefer-offline` keeps a repeat run from
+# reaching the network when the store already has every package.
+web-install:
+	pnpm install --frozen-lockfile --prefer-offline
+
+web-format:
+	pnpm --filter control-web run format
+
+web-lint:
+	pnpm --filter control-web run lint
+
+# `vue-tsc`, not `tsc`: the types that matter here are inside `.vue` single-file components,
+# and `tsc` cannot see them. Type checking is a separate target from lint because ESLint is
+# not type-aware here and would pass a program that does not compile.
+web-type:
+	pnpm --filter control-web run typecheck
+
+web-unit:
+	pnpm --filter control-web run test
+
+# The production build is a gate, not a packaging step: `vite build` resolves every dynamic
+# `import()` the router declares and fails on one that the dev server would have tolerated,
+# so a route that only breaks when built breaks here instead of at deployment.
+web-build:
+	pnpm --filter control-web run build

@@ -54,9 +54,10 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         # `make check` reads the whole tree — it validates Markdown links and the repository
-        # layout as well as code — so almost every path is relevant to it. Only the paths
-        # below are not: agent scratch space and local editor state, which no check reads.
-        # Keep this list short; a broad exclusion here is a check that stops running.
+        # layout as well as code — so almost every path is relevant to it. Only agent
+        # scratch space and per-agent local settings are not. `.mcp.json` is relevant: the
+        # policy check reads it for a literal credential. Keep this list short; a broad
+        # exclusion here is a check that stops running.
         run: |
           set -euo pipefail
           if [ -z "$BASE_SHA" ] || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
@@ -65,7 +66,7 @@ jobs:
             exit 0
           fi
           changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
-            | grep -vE '^(\.scratch/|\.claude/|\.mcp\.json$)' || true)
+            | grep -vE '^(\.scratch/|\.claude/)' || true)
           if [ -n "$changed" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
@@ -82,6 +83,15 @@ jobs:
       - name: Run the local merge gate
         if: steps.relevant.outputs.run == 'true'
         run: make check
+      - name: Hold the change to its size budget
+        if: steps.relevant.outputs.run == 'true' && github.event_name == 'pull_request'
+        # Harness §5's budget is per landed stage, so it is measured on the pull request's
+        # own diff — a push to main has no single base to measure against. Pull requests
+        # only, therefore, while `make check` above runs on both.
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: make change-size BASE="$BASE_SHA" HEAD="$HEAD_SHA"
       - name: Verify a clean worktree
         if: steps.relevant.outputs.run == 'true'
         # Generated output is regenerated in the same change as its source (harness §5). If

@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+"""Git pre-push hook: nothing reaches `main` except through a pull request.
+
+Enabled by `make hooks` alongside `pre-commit`. Git hands this hook one line per ref being
+pushed on stdin (`<local ref> <local sha> <remote ref> <remote sha>`); a push whose remote
+ref is a protected branch is refused, whichever local branch it comes from — the
+pre-commit hook only sees a tree that is checked out on `main`, not `git push HEAD:main`.
+"""
+
+from __future__ import annotations
+
+import sys
+
+PROTECTED_REFS = {"refs/heads/main"}
+
+
+def main() -> int:
+    refused = []
+    for line in sys.stdin:
+        parts = line.split()
+        if len(parts) == 4 and parts[2] in PROTECTED_REFS:
+            refused.append(parts[2])
+    if not refused:
+        return 0
+    print(
+        f"pre-push refused: {', '.join(refused)} only receives finished work through a pull "
+        "request (AGENTS.md). Push the ticket branch and open a PR: "
+        "`git push -u origin issue-<n> && gh pr create`.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

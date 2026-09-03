@@ -56,8 +56,12 @@ def test_reads_a_secret_from_the_path_variable_and_strips_the_trailing_newline(
 def test_refuses_a_secret_passed_by_value(tmp_path: Path) -> None:
     # §六: secrets arrive as a path to a file, never as the value itself. Accepting the
     # value form would make the insecure deployment the quiet one.
+    by_value = environment(
+        tmp_path,
+        SOP_DATABASE_PASSWORD="hunter2",  # pragma: allowlist secret
+    )
     with pytest.raises(ConfigurationError, match="SOP_DATABASE_PASSWORD"):
-        Settings.from_environment(environment(tmp_path, SOP_DATABASE_PASSWORD="hunter2"))
+        Settings.from_environment(by_value)
 
 
 def test_refuses_to_start_when_a_secret_file_is_missing(tmp_path: Path) -> None:

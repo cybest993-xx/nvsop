@@ -222,6 +222,43 @@ class RepositoryPolicyTest(unittest.TestCase):
         module = self.write("apps/control-api/src/factory_sop/auth/usecases/open_session.py", "")
         self.assertEqual([], self.check(str(module)))
 
+    def test_rejects_module_file_at_the_line_budget(self) -> None:
+        self.write(
+            "pyproject.toml",
+            '[tool.uv.workspace]\nmembers = ["apps/control-api"]\n\n'
+            "[[tool.importlinter.contracts]]\n"
+            'source_modules = ["factory_sop.auth"]\n',
+        )
+        module = self.write("apps/control-api/src/factory_sop/auth/big.py", "x = 1\n" * 500)
+        self.assertIn(
+            "apps/control-api/src/factory_sop/auth/big.py is 500 lines; a module file "
+            "stays under 500 (harness §5) — split it into a new module rather than "
+            "growing this one",
+            self.check(str(module)),
+        )
+
+    def test_line_budget_ignores_tests_and_scripts(self) -> None:
+        test = self.write("apps/edge-runtime/tests/unit/test_big.py", "x = 1\n" * 900)
+        script = self.write("scripts/big.py", "x = 1\n" * 900)
+        self.assertEqual([], self.check(str(test), str(script)))
+
+    def test_rejects_literal_authorization_header_in_json(self) -> None:
+        manifest = self.write(
+            ".mcp.json",
+            '{"headers": {"Authorization": "Bearer osr_2SqXwDyR9qsZ4SRAk2rcgr"}}\n',
+        )
+        self.assertIn(
+            ".mcp.json:1 commits a literal Authorization header; reference the "
+            'credential as "${VAR}" and supply it from the environment',
+            self.check(str(manifest)),
+        )
+
+    def test_accepts_authorization_header_that_references_the_environment(self) -> None:
+        manifest = self.write(
+            ".mcp.json", '{"headers": {"Authorization": "Bearer ${ONE_SEARCH_TOKEN}"}}\n'
+        )
+        self.assertEqual([], self.check(str(manifest)))
+
 
 if __name__ == "__main__":
     unittest.main()

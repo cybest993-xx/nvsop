@@ -135,8 +135,8 @@ Technology-neutral by intent: the reference baseline's crate layout, named clipp
 
 ### Size budgets
 
-- A change stays under 800 lines. A change to judgment, boundary-solving, or retention logic stays under 500. Past that, split it into stages that each stand on their own and land the smallest self-consistent stage first. The budget is per landed stage and counts implementation lines, not the tests that land with them: a stage is measured on what a reviewer must hold in their head to judge it correct, and summing the stages the rule just asked for would forbid the split it prescribes. What the sum of a feature's stages must satisfy is that each one stood on its own when it landed.
-- A module file stays under 500 lines excluding tests. Prefer a new module over growing an existing one past that.
+- A change stays under 800 lines. A change to judgment, boundary-solving, or retention logic stays under 500. Past that, split it into stages that each stand on their own and land the smallest self-consistent stage first. The budget is per landed stage and counts implementation lines, not the tests that land with them: a stage is measured on what a reviewer must hold in their head to judge it correct, and summing the stages the rule just asked for would forbid the split it prescribes. What the sum of a feature's stages must satisfy is that each one stood on its own when it landed. `scripts/check_change_size.py` measures this on the pull request's diff in CI (`make change-size` locally); the paths it counts and the ones it holds to the tighter budget are declared there.
+- A module file stays under 500 lines excluding tests. Prefer a new module over growing an existing one past that. `scripts/check_repo_policy.py` counts production source files against this in `make check`.
 - Resist growth in shared ground. A new capability belongs to the module that owns it, or to a new module. `packages/contracts` and a module's `api.py` are where an unnecessary addition costs the most, because every other module pays for it.
 
 ### Interface shape
@@ -155,15 +155,17 @@ Technology-neutral by intent: the reference baseline's crate layout, named clipp
 
 ## 6. Stable command interface
 
-`make check` is the CPU-only, infrastructure-free merge gate and must work from the repository root, without Docker. CI calls it exactly as developers do. It runs repository policy, migration table-ownership, the base-code contract suite, the `import-linter` contracts, and each workspace's formatting, lint, type, and unit checks; each workspace-adding change must extend it in the same change with that workspace's build checks and generated-artifact cleanliness.
+`make check` is the CPU-only, infrastructure-free merge gate and must work from the repository root, without Docker. CI calls it exactly as developers do. It runs repository policy, migration table-ownership, the base-code contract suite, the `import-linter` contracts, content-based secret scanning (`detect-secrets`, with an empty baseline and inline allowlisting so a false positive is explained where it sits), and each workspace's formatting, lint, type, and unit checks; each workspace-adding change must extend it in the same change with that workspace's build checks and generated-artifact cleanliness.
 
 Its first two targets are `lockfile` (`uv lock --check`, so a manifest edit whose lockfile was never regenerated fails rather than installing the old resolution) and `sync` (`uv sync --frozen --all-packages`). Every gate tool is resolved from `uv.lock` rather than installed separately, so a developer, the edge targets, and CI all execute the same build of ruff and mypy, and no run can silently upgrade a dependency. `apps/edge-runtime/` is not a workspace member and its tests run on a bare interpreter, but its tools come from that same environment.
 
-`make check-integration` is the second required target: one application plus real local infrastructure (PostgreSQL, Redis, MinIO) started as containers via testcontainers. It is separate because a developer without Docker must still be able to run `make check`, and because container startup does not belong in the fast feedback loop. Both targets feed the blocking gatherer, so merge protection strength is unchanged. SQLite and in-memory fakes are not substitutes for the integration target: transaction isolation, `JSONB`, timezone, and deferred foreign key behavior differ enough to produce false green.
+`make check-integration` is the second required target: one application plus real local infrastructure (PostgreSQL, Redis, MinIO) started as containers via testcontainers. It is separate because a developer without Docker must still be able to run `make check`, and because container startup does not belong in the fast feedback loop. Until the first center module that needs that infrastructure lands, the target exists and returns an explicit success with nothing to run, and CI does not yet call it; the change that adds the first such suite replaces the target's body and adds the CI family in the same change, after which both targets feed the blocking gatherer and merge protection strength is unchanged. SQLite and in-memory fakes are not substitutes for the integration target: transaction isolation, `JSONB`, timezone, and deferred foreign key behavior differ enough to produce false green.
 
 Package-specific commands may exist for a tight feedback loop, but they do not replace these two targets. Automation in `scripts/` stays thin: product behavior belongs in an app or package where it can be tested through its interface.
 
 Reach for these targets rather than the tool underneath. They carry the flags, environment, and ordering that CI uses, so invoking `pytest`, `ruff`, or `vitest` directly runs a different check than the gate runs. Run the formatter after changing code without asking first. Container startup, model loading, and integration bring-up are slow by nature: wait for them instead of killing the process and reporting a failure.
+
+Four of this document's rules also run as Git hooks, versioned in `scripts/githooks/` and enabled by `make hooks` (which `make check` runs, so a fresh clone has them after its first gate run): a commit is refused on `main`, a push to `main` is refused from any branch, a staged change under `vendor/` is refused with a pointer to ADR-0007, and unformatted staged Python is refused. They sit in Git rather than in any one agent's configuration because every agent and every person commits through Git, so one implementation holds for all of them. An instruction file is advisory; a hook holds on the turn where the instruction has already scrolled out of context. Each hook is a few standard-library lines that cite the rule it enforces, which is what keeps the two in agreement.
 
 ## 7. CI gates
 
@@ -174,7 +176,7 @@ The sole branch-protection status is `CI required` from `.github/workflows/block
 As workspaces appear, split checks into reusable workflows while retaining the gatherer:
 
 1. repository policy and lockfile cleanliness — always;
-2. backend/edge format, lint, type, unit, boundary, and base-code contract checks (`make check`) — on relevant paths;
+2. backend/edge format, lint, type, unit, boundary, secret-scanning, and base-code contract checks (`make check`) — on relevant paths; plus the change-size budget (`make change-size`) on pull requests;
 3. backend integration checks against real containerized infrastructure (`make check-integration`) — on relevant paths;
 4. web format, lint, type, unit, and production build — on relevant paths;
 5. migration and cross-process contract compatibility — when schemas or contracts change;

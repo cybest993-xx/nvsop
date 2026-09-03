@@ -53,6 +53,16 @@ PLACEHOLDER_VALUE = re.compile(
     re.IGNORECASE,
 )
 CENTER_PYTHON_VERSION = "3.12"
+# Harness §5: a module file stays under this many lines, excluding tests. Counted on
+# production source trees only, because that is where a file that keeps growing hides a
+# module that should have been split.
+MODULE_FILE_LINE_LIMIT = 500
+PRODUCTION_SOURCE_ROOTS = (Path("apps"), Path("packages"))
+# A literal `Authorization` header in a checked-in JSON file (an MCP server manifest, an
+# HTTP client fixture) is a credential in Git regardless of what the file is called; only a
+# `${VAR}` reference, expanded by the reader at load time, may be committed.
+JSON_AUTHORIZATION_HEADER = re.compile(r'"Authorization"\s*:\s*"(?P<value>[^"]*)"')
+ENVIRONMENT_REFERENCE = re.compile(r"^\s*(?:Bearer\s+)?\$\{[^}]+\}\s*$")
 EDGE_APP = Path("apps/edge-runtime")
 EDGE_SOURCE = EDGE_APP / "src"
 CENTER_SOURCE = Path("apps/control-api/src/factory_sop")
@@ -121,6 +131,10 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
                 errors.append(f"secret-like environment file must not be committed: {path}")
         if path.suffix.lower() in SECRET_SUFFIXES:
             errors.append(f"private key material must not be committed: {path}")
+        if path.suffix == ".json" and not is_vendor(path):
+            errors.extend(check_json_authorization_headers(root, path))
+        if path.suffix == ".py" and is_production_source(path):
+            errors.extend(check_module_file_size(root, path))
 
         if (
             path.parts
@@ -280,6 +294,46 @@ def top_level_imports(path: Path) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             names.add(node.module.split(".", 1)[0])
     return names
+
+
+def is_production_source(path: Path) -> bool:
+    """A file under an app's or package's `src/` tree that is not itself a test."""
+    return (
+        any(is_under(path, source_root) for source_root in PRODUCTION_SOURCE_ROOTS)
+        and "src" in path.parts
+        and "tests" not in path.parts
+    )
+
+
+def check_module_file_size(root: Path, path: Path) -> list[str]:
+    """Fail when a module file has grown past harness §5's budget.
+
+    Reviewed as prose, the budget is crossed one small change at a time and nobody sees the
+    crossing. Counted here, the change that crosses it is the change that has to split the
+    module.
+    """
+    lines = (root / path).read_text(encoding="utf-8").count("\n")
+    if lines < MODULE_FILE_LINE_LIMIT:
+        return []
+    return [
+        f"{path} is {lines} lines; a module file stays under {MODULE_FILE_LINE_LIMIT} "
+        "(harness §5) — split it into a new module rather than growing this one"
+    ]
+
+
+def check_json_authorization_headers(root: Path, path: Path) -> list[str]:
+    """Fail when a JSON file carries a literal Authorization header value."""
+    errors: list[str] = []
+    text = (root / path).read_text(encoding="utf-8", errors="replace")
+    for match in JSON_AUTHORIZATION_HEADER.finditer(text):
+        if ENVIRONMENT_REFERENCE.match(match.group("value")):
+            continue
+        line = text.count("\n", 0, match.start()) + 1
+        errors.append(
+            f"{path}:{line} commits a literal Authorization header; reference the "
+            'credential as "${VAR}" and supply it from the environment'
+        )
+    return errors
 
 
 def check_vendor_env_values(root: Path, path: Path) -> list[str]:

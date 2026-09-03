@@ -83,7 +83,11 @@ class FakeSessions:
     def by_token_fingerprint(self, token_fingerprint: str) -> Session | None:
         return self.by_fingerprint.get(token_fingerprint)
 
-    def touch(self, session: Session, *, last_used_at: datetime) -> Session:
+    def touch(self, session: Session, *, last_used_at: datetime) -> Session | None:
+        if session.token_fingerprint not in self.by_fingerprint:
+            # Same contract as the real adapter: a row that is already gone reads as None, so
+            # a use-case test can drive the concurrent-revocation refusal without a database.
+            return None
         refreshed = replace(session, last_used_at=last_used_at)
         self.by_fingerprint[refreshed.token_fingerprint] = refreshed
         return refreshed

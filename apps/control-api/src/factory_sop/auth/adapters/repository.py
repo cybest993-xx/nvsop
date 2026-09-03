@@ -62,13 +62,13 @@ class PostgresSessionRepository:
         )
         return row.to_domain() if row is not None else None
 
-    def touch(self, session: Session, *, last_used_at: datetime) -> Session:
+    def touch(self, session: Session, *, last_used_at: datetime) -> Session | None:
         row = self._session.get(SessionRow, session.id)
         if row is None:
             # The row was read moments ago in this same request and is now gone: a concurrent
-            # revocation. Returning the unwritten value would let the request proceed on a
-            # session that no longer exists, so the caller is told the slide did not happen.
-            return session
+            # revocation. The None is what tells the caller, so the request is refused instead
+            # of proceeding authenticated on a session that no longer exists.
+            return None
         row.last_used_at = last_used_at
         return row.to_domain()
 

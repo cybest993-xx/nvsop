@@ -12,6 +12,7 @@ whose failure arm they can only forward.
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import assert_never
 
 
 class RefusalCode(StrEnum):
@@ -44,3 +45,30 @@ class AuthenticationRefusedError(Exception):
     def __init__(self, code: RefusalCode) -> None:
         super().__init__(code.value)
         self.code = code
+
+
+def refusal_problem(code: RefusalCode) -> tuple[int, str]:
+    """The HTTP status and the Simplified Chinese title a refusal reports as `problem+json`.
+
+    The mapping lives beside the codes it maps because a new `RefusalCode` and its wire
+    meaning are one change, not two files. The `match` plus `assert_never` makes totality a
+    type error rather than a runtime one: a code added without a mapping fails `mypy`, not
+    the first caller who hits it. The title is what a client that does not recognize the
+    `error_code` displays verbatim (§5.15's unknown-value fallback).
+
+    Which refusals are "we do not know who you are" (401) and which are "we do, and no" (403)
+    is the mapping's own decision: a deactivated account reached 403 only by presenting the
+    correct password, so telling it apart is what lets the Web shell say 账户已停用 rather
+    than 密码错误.
+    """
+    match code:
+        case RefusalCode.CREDENTIALS_REJECTED:
+            return 401, "登录名或密码不正确"
+        case RefusalCode.ACCOUNT_DEACTIVATED:
+            return 403, "账户已停用，请联系管理员"
+        case RefusalCode.AUTHENTICATION_REQUIRED:
+            return 401, "请先登录"
+        case RefusalCode.SESSION_INVALID:
+            return 401, "会话已失效，请重新登录"
+        case _:
+            assert_never(code)

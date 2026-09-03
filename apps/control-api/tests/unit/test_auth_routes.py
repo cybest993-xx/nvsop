@@ -9,6 +9,8 @@ PostgreSQL is `tests/integration/test_auth_http.py`.
 
 from __future__ import annotations
 
+import io
+import json
 from datetime import timedelta
 
 import pytest
@@ -16,10 +18,11 @@ from auth_fakes import FakeSessions, FakeUsers
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-from factory_sop.app import API_PREFIX, create_app
+from factory_sop.app import API_PREFIX, CORRELATION_ID_HEADER, create_app
 from factory_sop.auth.adapters import dependencies
 from factory_sop.auth.adapters.cookies import CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE
 from factory_sop.auth.model import UserStatus
+from factory_sop.observability import configure_logging
 from factory_sop.problem import PROBLEM_MEDIA_TYPE
 from factory_sop.settings import CookieTransport, Settings
 
@@ -84,6 +87,14 @@ class Backend:
 @pytest.fixture
 def backend() -> Backend:
     return Backend().with_account()
+
+
+@pytest.fixture
+def log() -> io.StringIO:
+    """The stream the diagnostic renderer writes into for the duration of one test."""
+    stream = io.StringIO()
+    configure_logging(log_level="info", stream=stream)
+    return stream
 
 
 def test_a_login_reports_who_the_caller_is_and_when_the_session_ends(backend: Backend) -> None:
@@ -260,6 +271,34 @@ def test_a_modifying_request_with_the_wrong_csrf_token_is_refused(backend: Backe
 
     assert response.status_code == 403
     assert response.json()["error_code"] == "CSRF_TOKEN_INVALID"
+
+
+def test_a_csrf_refusal_is_correlated_like_every_other_request(
+    backend: Backend, log: io.StringIO
+) -> None:
+    # The rejection is the one security-relevant refusal, and the correlation id is how one
+    # operator action is followed from the Web through Nginx into this process (§5.15). A
+    # request that is refused before the correlation middleware runs would be exactly the
+    # event an investigator cannot follow, so binding happens outside the CSRF check.
+    backend.log_in()
+    inbound = "op-action-7"
+
+    response = backend.client.delete(
+        SESSION_PATH, headers={CORRELATION_ID_HEADER: inbound, CSRF_HEADER: "0" * 64}
+    )
+
+    assert response.status_code == 403
+    assert response.headers[CORRELATION_ID_HEADER] == inbound
+    events = [json.loads(line) for line in log.getvalue().splitlines() if line]
+    (rejected,) = [line for line in events if line["event"] == "http.request.csrf_rejected"]
+    assert rejected["correlation_id"] == inbound
+    (completed,) = [
+        line
+        for line in events
+        if line["event"] == "http.request.completed" and line["method"] == "DELETE"
+    ]
+    assert completed["correlation_id"] == inbound
+    assert completed["status_code"] == 403
 
 
 def test_a_csrf_token_from_another_session_does_not_pass() -> None:

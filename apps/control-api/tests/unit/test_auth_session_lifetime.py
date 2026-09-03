@@ -173,6 +173,35 @@ def test_a_refused_session_is_removed_rather_than_left_to_be_retried() -> None:
     assert sessions.by_token_fingerprint(fingerprint(token)) is None
 
 
+class RevokedAfterRead(FakeSessions):
+    """A store whose row another request deleted after this request read it.
+
+    The race is real: logging out in one tab while another tab's poll is in flight. The store
+    sees the row vanish between `by_token_fingerprint` and `touch`; the use case has to refuse
+    rather than carry on authenticated on a session that no longer exists.
+    """
+
+    def touch(self, session: Session, *, last_used_at: datetime) -> Session | None:
+        self.remove(session)
+        return None
+
+
+def test_a_session_revoked_while_its_request_was_in_flight_is_refused() -> None:
+    users, sessions = FakeUsers(), RevokedAfterRead()
+    token, _ = logged_in(users, sessions)
+
+    with pytest.raises(AuthenticationRefusedError) as refusal:
+        restore_session(
+            token=token,
+            users=users,
+            sessions=sessions,
+            policy=POLICY,
+            now=MONDAY_MORNING + timedelta(hours=1),
+        )
+
+    assert refusal.value.code == RefusalCode.SESSION_INVALID
+
+
 def test_logging_out_revokes_the_session_it_was_asked_about() -> None:
     users, sessions = FakeUsers(), FakeSessions()
     token, _ = logged_in(users, sessions)

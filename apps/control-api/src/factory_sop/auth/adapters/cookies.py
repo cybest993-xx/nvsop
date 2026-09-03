@@ -30,11 +30,20 @@ CSRF_HEADER = "x-csrf-token"
 SAME_SITE: Literal["strict"] = "strict"
 
 
+def _secure(settings: Settings) -> bool:
+    """Whether the cookies may demand a secure transport.
+
+    One expression for both cookies — a pair whose attributes must agree exactly, or the
+    browser treats the cleared one as a different cookie and leaves the original in place.
+    """
+    return settings.session_cookie_transport == "require_https"
+
+
 def attach_session(
     response: Response, *, token: SessionToken, settings: Settings, max_age_seconds: int
 ) -> None:
     """Set both cookies for a session that has just been opened."""
-    secure = settings.session_cookie_transport == "require_https"
+    secure = _secure(settings)
     response.set_cookie(
         SESSION_COOKIE,
         token.value,
@@ -65,7 +74,7 @@ def attach_session(
 
 def clear_session(response: Response, *, settings: Settings) -> None:
     """Remove both cookies. Paired with revoking the session server-side, never alone."""
-    secure = settings.session_cookie_transport == "require_https"
+    secure = _secure(settings)
     for name in (SESSION_COOKIE, CSRF_COOKIE):
         # The attributes have to match the ones the cookie was set with, or the browser treats
         # this as a different cookie and leaves the original in place.

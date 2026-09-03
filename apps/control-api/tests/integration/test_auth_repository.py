@@ -131,8 +131,31 @@ def test_touching_a_session_persists_the_new_instant(session: DatabaseSession) -
     session.flush()
     session.expunge_all()
 
+    assert touched is not None
     assert touched.last_used_at == used_at
     assert sessions.by_token_fingerprint(stored.token_fingerprint) == touched
+
+
+def test_touching_a_session_whose_row_a_concurrent_revoke_removed_reports_the_loss(
+    session: DatabaseSession,
+) -> None:
+    # Logging out in one tab while another tab's request is in flight: the row this request
+    # read is gone by the time it slides. The None is what the use case refuses on — handing
+    # back the unwritten record would let the request proceed authenticated on a session that
+    # no longer exists.
+    users = PostgresUserRepository(session)
+    sessions = PostgresSessionRepository(session)
+    owner = an_account()
+    users.add(owner)
+    stored = a_session(owner)
+    sessions.add(stored)
+    session.flush()
+
+    sessions.remove(stored)
+    session.flush()
+    session.expunge_all()
+
+    assert sessions.touch(stored, last_used_at=MONDAY_MORNING + timedelta(hours=5)) is None
 
 
 def test_removing_a_session_removes_only_that_one(session: DatabaseSession) -> None:

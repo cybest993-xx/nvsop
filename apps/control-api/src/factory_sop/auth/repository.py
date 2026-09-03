@@ -54,8 +54,13 @@ class SessionRepository(Protocol):
         """
         ...
 
-    def touch(self, session: Session, *, last_used_at: datetime) -> Session:
-        """Slide `session`'s idle window forward and return the updated record."""
+    def touch(self, session: Session, *, last_used_at: datetime) -> Session | None:
+        """Slide `session`'s idle window forward and return the updated record.
+
+        `None` when the row is already gone: another request revoked it between this one's
+        read and its slide. The caller refuses rather than proceeding on a session that no
+        longer exists.
+        """
         ...
 
     def remove(self, session: Session) -> None:

@@ -18,7 +18,7 @@ from factory_sop.auth.adapters import routes as auth_routes
 from factory_sop.auth.adapters.cookies import CSRF_HEADER
 from factory_sop.auth.adapters.dependencies import presented_token
 from factory_sop.auth.csrf import verify_csrf_token
-from factory_sop.auth.errors import AuthenticationRefusedError, RefusalCode
+from factory_sop.auth.errors import AuthenticationRefusedError, refusal_problem
 from factory_sop.auth.model import SessionPolicy
 from factory_sop.observability import (
     correlation_scope,
@@ -45,25 +45,6 @@ MODIFYING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # method **and** path — the session resource answers `DELETE` on this same path, and that one
 # must be checked, so a path-only exemption would silently cover the logout as well.
 CSRF_EXEMPT_REQUESTS = frozenset({("POST", f"{API_PREFIX}/auth/session")})
-
-# Which refusals are "we do not know who you are" and which are "we do, and no". A deactivated
-# account reached the second: the password was correct, so telling it apart is what lets the
-# Web shell say "账户已停用，请联系管理员" instead of "密码错误".
-_REFUSAL_STATUS = {
-    RefusalCode.CREDENTIALS_REJECTED: 401,
-    RefusalCode.AUTHENTICATION_REQUIRED: 401,
-    RefusalCode.SESSION_INVALID: 401,
-    RefusalCode.ACCOUNT_DEACTIVATED: 403,
-}
-
-# Simplified Chinese, displayed verbatim by a client that does not recognize the `error_code`
-# (Q32, §5.15's unknown-value fallback).
-_REFUSAL_TITLE = {
-    RefusalCode.CREDENTIALS_REJECTED: "登录名或密码不正确",
-    RefusalCode.AUTHENTICATION_REQUIRED: "请先登录",
-    RefusalCode.SESSION_INVALID: "会话已失效，请重新登录",
-    RefusalCode.ACCOUNT_DEACTIVATED: "账户已停用，请联系管理员",
-}
 
 _logger = get_logger("http")
 
@@ -104,11 +85,13 @@ def create_app(settings: Settings) -> FastAPI:
         """Report an `auth` refusal as `problem+json` (§5.15).
 
         Every protected route answers an anonymous caller through this one handler, so the
-        shape does not depend on which route was asked for.
+        shape does not depend on which route was asked for. The status and title are the
+        refusal's own (`errors.refusal_problem`), so a new code cannot arrive without them.
         """
+        status, title = refusal_problem(error.code)
         return problem_response(
-            status=_REFUSAL_STATUS[error.code],
-            title=_REFUSAL_TITLE[error.code],
+            status=status,
+            title=title,
             error_code=error.code.value,
         )
 
@@ -150,22 +133,6 @@ def create_app(settings: Settings) -> FastAPI:
         )
 
     @app.middleware("http")
-    async def bind_correlation_id(
-        request: Request, call_next: Callable[[Request], Awaitable[Response]]
-    ) -> Response:
-        correlation_id = request.headers.get(CORRELATION_ID_HEADER) or new_correlation_id()
-        with correlation_scope(correlation_id):
-            response = await call_next(request)
-            _logger.info(
-                "http.request.completed",
-                method=request.method,
-                path=request.url.path,
-                status_code=response.status_code,
-            )
-        response.headers[CORRELATION_ID_HEADER] = correlation_id
-        return response
-
-    @app.middleware("http")
     async def check_csrf_token(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
@@ -178,6 +145,10 @@ def create_app(settings: Settings) -> FastAPI:
 
         A request with no session cookie is not checked. There is nothing to protect — it is
         anonymous, and it will be refused by `Authenticated` if the route needs an identity.
+
+        Registered **before** `bind_correlation_id`, because the last-registered middleware is
+        the outermost and a CSRF rejection must happen inside the correlation scope: it is the
+        one security-relevant refusal, and the id is how its investigation starts (§5.15).
         """
         exempt = (request.method, request.url.path) in CSRF_EXEMPT_REQUESTS
         if request.method not in MODIFYING_METHODS or exempt:
@@ -206,5 +177,21 @@ def create_app(settings: Settings) -> FastAPI:
                 error_code="CSRF_TOKEN_INVALID",
             )
         return await call_next(request)
+
+    @app.middleware("http")
+    async def bind_correlation_id(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        correlation_id = request.headers.get(CORRELATION_ID_HEADER) or new_correlation_id()
+        with correlation_scope(correlation_id):
+            response = await call_next(request)
+            _logger.info(
+                "http.request.completed",
+                method=request.method,
+                path=request.url.path,
+                status_code=response.status_code,
+            )
+        response.headers[CORRELATION_ID_HEADER] = correlation_id
+        return response
 
     return app

@@ -131,7 +131,13 @@ def restore_session(
         sessions.remove(session)
         _refuse_session(reason=_refusal_reason(user=user, session=session, policy=policy, now=now))
 
-    return RestoredSession(session=sessions.touch(session, last_used_at=now), user=user)
+    touched = sessions.touch(session, last_used_at=now)
+    if touched is None:
+        # The row was revoked by another request after this one read it. Same code as any
+        # other unusable session: the client discards the cookie and logs in again.
+        _refuse_session(reason="revoked_during_request")
+
+    return RestoredSession(session=touched, user=user)
 
 
 def revoke_session(*, token: SessionToken, sessions: SessionRepository) -> None:

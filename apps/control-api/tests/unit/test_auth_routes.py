@@ -105,9 +105,10 @@ def test_a_login_reports_who_the_caller_is_and_when_the_session_ends(backend: Ba
     assert body["login_name"] == "wang.li"
     assert body["display_name"] == "Wang.Li"
     assert body["user_id"] == str(next(iter(backend.users.by_id)))
-    # §5.15: UTC RFC3339 with a `Z`-equivalent offset, so the Web renders it in Asia/Shanghai
-    # without guessing which zone it was in.
-    assert body["expires_at"].endswith("+00:00") or body["expires_at"].endswith("Z")
+    # §5.15: UTC RFC3339 with the `Z` designator, so the Web renders it in Asia/Shanghai
+    # without guessing which zone it was in. The `+00:00` spelling is valid ISO 8601 but is
+    # not what the contract fixes, and a client should not need both.
+    assert body["expires_at"].endswith("Z")
 
 
 def test_the_session_cookie_is_httponly_and_the_csrf_cookie_is_not(backend: Backend) -> None:

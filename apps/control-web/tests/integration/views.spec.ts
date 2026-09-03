@@ -4,6 +4,9 @@
  * Q32's baseline is what these assert: a label bound to each input, an error that is announced,
  * state that is not carried by colour alone, and a logout that ends the session. Element Plus is
  * really installed, because the labels under test are the ones it renders.
+ *
+ * This suite realizes acceptance scenario SYS-22-07 (issue #22): §5.15's 中文桌面布局 baseline
+ * lives in the browser runtime, so its scenario is carried here rather than in `tests/system/`.
  */
 
 import ElementPlus from 'element-plus'

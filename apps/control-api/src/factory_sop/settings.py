@@ -17,7 +17,7 @@ from pydantic import Field, SecretStr, ValidationError
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 ENVIRONMENT_PREFIX = "SOP_"
-SECRET_FILE_SUFFIX = "_FILE"
+SECRET_FILE_SUFFIX = "_FILE"  # pragma: allowlist secret
 
 LogLevel = Literal["debug", "info", "warning", "error"]
 

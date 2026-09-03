@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""Git pre-commit hook: the rules every agent and developer must hit before a commit lands.
+
+Enabled by `make hooks` (`git config core.hooksPath scripts/githooks`), so it holds for any
+tool that commits through git — Claude Code, Codex, pi, or a person — with no per-agent
+configuration. Standard library only: it must run before `make sync` has ever been run.
+
+Three refusals, each carrying the rule it enforces:
+
+- no commit on `main`: `main` only receives finished work through a pull request
+  (AGENTS.md);
+- no staged change under `vendor/`: the NVIDIA base changes only through `git subtree pull`
+  (which merges and does not pass here) or the recorded patch (ADR-0007) — set
+  `NVSOP_VENDOR_PATCH=1` to commit a patch change deliberately;
+- no unformatted Python: harness §6 asks for the formatter to run after every change; the
+  gate's own ruff from `.venv` checks the staged files when that environment exists.
+
+The full gate stays `make check`; this is the subset that is cheap enough to run on every
+commit and whose violation is expensive to unwind afterwards.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+PROTECTED_BRANCHES = {"main"}
+VENDOR = "vendor"
+VENDOR_OVERRIDE = "NVSOP_VENDOR_PATCH"
+
+
+def git(*args: str) -> str:
+    return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout
+
+
+def staged_files() -> list[Path]:
+    output = git("diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z")
+    return [Path(name) for name in output.split("\0") if name]
+
+
+def refuse_protected_branch() -> list[str]:
+    branch = git("rev-parse", "--abbrev-ref", "HEAD").strip()
+    if branch not in PROTECTED_BRANCHES:
+        return []
+    return [
+        f"this tree is on `{branch}`, which only receives finished work through a pull "
+        "request. Work on a ticket branch in its own worktree: "
+        "`git worktree add ../nvsop-<n> -b issue-<n> origin/main` (AGENTS.md)."
+    ]
+
+
+def refuse_vendor_edits(staged: list[Path]) -> list[str]:
+    touched = [path for path in staged if path.parts[:1] == (VENDOR,)]
+    if not touched or os.environ.get(VENDOR_OVERRIDE) == "1":
+        return []
+    listed = ", ".join(str(path) for path in touched[:5])
+    return [
+        f"{listed} is NVIDIA base code, changed only by `git subtree pull` or the recorded "
+        "patch in docs/base/patches/ (ADR-0007). Put the behaviour in apps/edge-runtime/ "
+        f"behind the existing hook. To commit a change to the patch itself, set "
+        f"{VENDOR_OVERRIDE}=1 and regenerate the .patch file and its contract test in the "
+        "same commit."
+    ]
+
+
+def refuse_unformatted_python(root: Path, staged: list[Path]) -> list[str]:
+    ruff = root / ".venv" / "bin" / "ruff"
+    python = [path for path in staged if path.suffix == ".py" and path.parts[:1] != (VENDOR,)]
+    if not python or not ruff.is_file():
+        return []
+    result = subprocess.run(
+        [ruff, "format", "--check", "--quiet", *python], cwd=root, capture_output=True, text=True
+    )
+    if result.returncode == 0:
+        return []
+    return [
+        "staged Python is not formatted (harness §6): run `.venv/bin/ruff format` on the "
+        "files below and stage them again.\n" + result.stdout.strip()
+    ]
+
+
+def main() -> int:
+    root = Path(git("rev-parse", "--show-toplevel").strip())
+    staged = staged_files()
+    errors = (
+        refuse_protected_branch()
+        + refuse_vendor_edits(staged)
+        + refuse_unformatted_python(root, staged)
+    )
+    if not errors:
+        return 0
+    print("pre-commit refused this commit:", file=sys.stderr)
+    for error in errors:
+        print(f"- {error}", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

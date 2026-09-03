@@ -1,11 +1,34 @@
-.PHONY: check lockfile sync policy policy-test migrations contract-base boundaries \
+.PHONY: check check-integration change-size hooks lockfile sync policy policy-test migrations \
+	contract-base boundaries secret-scan \
 	center-format center-lint center-type center-unit \
 	edge-format edge-lint edge-type edge-unit edge-integration
 
 # The CPU-only, Docker-free merge gate (harness §6). CI calls this exact target.
-check: lockfile sync policy-test policy migrations contract-base boundaries \
+check: lockfile sync hooks policy-test policy migrations contract-base boundaries secret-scan \
 	center-format center-lint center-type center-unit \
 	edge-format edge-lint edge-type edge-unit edge-integration
+
+# Git hooks that hold for whichever agent or person commits (harness §6): no commit on
+# main, no push to main, no edit under vendor/, no unformatted Python. Versioned under
+# scripts/githooks/ and enabled by pointing git at that directory; part of `check` so the
+# first gate run on a fresh clone enables them, and idempotent so every later run is free.
+hooks:
+	git config core.hooksPath scripts/githooks
+
+# The second required target (harness §6): one application plus real PostgreSQL, Redis and
+# MinIO via testcontainers. No center module needs that infrastructure yet, so this returns
+# an explicit success rather than not existing — the documented command must run, and the
+# change that lands the first such suite replaces this body and adds the CI family.
+check-integration:
+	@echo "check-integration: no containerized integration suite exists yet; nothing to run."
+
+# Harness §5's size budget, measured on what the change adds rather than remembered during
+# review. CI passes the pull request's base and head; locally the default compares the
+# branch with origin/main.
+BASE ?= origin/main
+HEAD ?= HEAD
+change-size:
+	python3 scripts/check_change_size.py $(BASE) $(HEAD)
 
 # A dependency change and its lockfile update land in one commit (harness §5). `--frozen`
 # below declines to UPDATE the lockfile, which is not the same as checking it: a manifest
@@ -48,6 +71,16 @@ contract-base:
 # trees are on the path because one contract is about what must NOT cross between them.
 boundaries:
 	PYTHONPATH=apps/control-api/src:apps/edge-runtime/src $(VENV)/lint-imports
+
+# Secrets stay out of Git by content, not only by file name (AGENTS.md invariant). The
+# baseline is kept empty: a false positive is allowlisted on its own line with
+# `# pragma: allowlist secret`, where the next reader can see why it was let through.
+# `vendor/` is excluded because the policy check already reads its templates by value, and
+# `uv.lock` because package hashes are high-entropy strings by construction.
+secret-scan:
+	git ls-files -z --cached --others --exclude-standard \
+		| grep -zvE '^(vendor/|uv\.lock$$|\.secrets\.baseline$$)' \
+		| xargs -0 $(VENV)/detect-secrets-hook --baseline .secrets.baseline
 
 # apps/control-api: the center backend. Configuration, formatting, lint and type rules live
 # in the repository root's pyproject.toml, so these run from the root.

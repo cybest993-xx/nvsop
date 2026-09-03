@@ -23,11 +23,16 @@ dev = [
     # starlette 1.6's TestClient runs on httpx2; the older httpx raises a deprecation
     # warning on import. Test-only — the application itself makes no outbound HTTP call yet.
     "httpx2==2.12.0",
+    # Content-based secret scanning for `make secrets`; file-name rules alone let a token
+    # inside a JSON manifest through (issue #67).
+    "detect-secrets==1.5.0",
 ]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# Git hooks carry no extension; name them so they are held to the same rules as scripts/.
+extend-include = ["scripts/githooks/*"]
 # First-party roots, so import sorting classifies `factory_sop` correctly when ruff runs
 # from the repository root rather than from inside the application.
 src = ["apps/control-api/src", "apps/control-api/tests", "scripts", "tests"]

@@ -134,7 +134,7 @@
           → 拉取（模板/配置，推理机主动）  （视频不跨中心；中心离线现场继续判定与处置）
 ```
 
-**中心后台模块**（10 个）：
+**中心后台模块**（9 个）。**唯一的机器可读清单是根 `pyproject.toml` 的 `[tool.nvsop]` 表**：门禁脚本改为从它读之前，迁移所有权检查持有一份必须与它同步的副本；本表与 harness §3 只是它的解释，加减模块先改那里。
 
 | 模块 | 拥有 |
 |---|---|
@@ -143,17 +143,16 @@
 | `execution` | 工位物理执行权：归属、改绑握手、强制改绑的双人确认、物理执行租约与续期（§5.17） |
 | `template` | Excel 导入/校验/配置生成/版本/发布/绑定/desired-reported 对账 |
 | `dataset` | 训练数据集登记、用途检查、派生制品引用 |
-| `monitor` | 推理机上报的镜像：SOP 实例、判定、流健康；看板状态 |
-| `alert` | 违规归档、处置记录归档 |
+| `monitor` | 推理机上报的完整镜像：SOP 实例、判定、锁存违规、处置记录、流健康；看板状态（[ADR-0010](../adr/0010-alert-merges-into-monitor.md)） |
 | `evidence` | 证据引用、片段窗口与再切片请求、人工复核（§5.20） |
 | `retention` | 数据保留策略、判定类别解析、变更影响估算与引用保护（§5.19） |
 | `job` | 异步任务权威与投递（outbox；ADR-0004） |
 
-**`retention` 拥有策略、不拥有数据**：它解析"某实例属于哪个保留类别、该类别留多久、何时压缩"，删除由数据拥有者在自己的表上执行（`evidence` 删证据、`monitor` 删记录、`alert` 删处置归档、边缘运行时裁 SQLite 与录像）。它独立成模块的理由是有一条跨模块不变量需要单一所有者：**保留策略不得删除仍被开放违规、在审复核或未结案实例引用的数据**——该约束横跨 `evidence` 与 `alert`，散在各模块无人能强制。反过来让它也持有数据就会变成一个跨界读写他人表的模块，违反所有权规则。
+**`retention` 拥有策略、不拥有数据**：它解析"某实例属于哪个保留类别、该类别留多久、何时压缩"，删除由数据拥有者在自己的表上执行（`evidence` 删证据、`monitor` 删记录与处置归档、边缘运行时裁 SQLite 与录像）。它独立成模块的理由是有一条跨模块不变量需要单一所有者：**保留策略不得删除仍被开放违规、在审复核或未结案实例引用的数据**——该约束横跨 `monitor` 与 `evidence`，散在各模块无人能强制。反过来让它也持有数据就会变成一个跨界读写他人表的模块，违反所有权规则。
 
 **`execution` 与 `device` 分开的理由**：`device` 的变更驱动是"现场装了什么设备"，是可逆的配置 CRUD；`execution` 的变更驱动是"哪台机有权驱动这个工位的执行器"，是带 TTL 的跨机安全状态机，且承载全系统唯一的双人确认操作（§5.17）。把它混进 `device`，一次相机改名和一次可能同时驱动两套物理执行器的改绑会共用同一个模块接口与权限面。它有自己的不变量——**任一工位在任一时刻最多一台推理机持有未过期的物理执行权**——这条要在模块内可强制，不能靠调用方自觉。
 
-**上报接收面为什么不是一个模块**：`monitor`（上报镜像）、`alert`（违规与处置归档）、`evidence`（证据引用与复核）由同一个上报入口写入，但三者变更驱动不同：`monitor` 只随上报契约变，`alert` 随处置动作种类变，`evidence` 还有**人工复核**这个完全不同的行为主体与生命周期（证据不随录像过期删除，复核由人触发且不改写原判定）。合成一个模块会让"机器写入的镜像"与"人参与的复核流程"共用一个接口。代价是上报入口适配层要在同一请求级 UoW 内写三个模块——这是 ADR-0002 已经允许的组合，且该适配层只做分发，不含判定逻辑。
+**上报接收面是两个模块，不是一个也不是三个**：`monitor`（推理机上报的完整镜像，含违规与处置记录）与 `evidence`（证据引用与复核）由同一个上报入口写入，但变更驱动与行为主体不同：`monitor` 只随上报契约变，由机器写入；`evidence` 还有**人工复核**这个完全不同的行为主体与生命周期（证据不随录像过期删除，复核由人触发且不改写原判定）。合成一个模块会让"机器写入的镜像"与"人参与的复核流程"共用一个接口。违规与处置归档曾拟独立为 `alert` 模块，理由是"随处置动作种类变"；处置类型归推理机拥有后该理由不再成立，已并入 `monitor`（[ADR-0010](../adr/0010-alert-merges-into-monitor.md)）。上报入口适配层在同一请求级 UoW 内写两个模块——这是 ADR-0002 已经允许的组合，且该适配层只做分发，不含判定逻辑。
 
 诊断日志与 correlation id 传播不是模块，是共享基础设施（§5.15）。
 
@@ -161,7 +160,9 @@
 
 `dataset` 是独立模块而非 `template` 的一部分：`CONTEXT.md` 对「训练数据集」的定义明确写了它不定义 SOP 模板，并把「SOP 模板」列为 _Avoid_ 项，合并二者会在代码层重新粘合术语层刻意拆开的概念。
 
-**推理机侧组成**（`apps/edge-runtime/`）：判定核心（纯标准库、纯函数、无钟无 I/O，§5.18）、边界求解、本地状态（SQLite）、supervisor（SSE 消费与判定调用 / 请求看护 / 锁存 / 处置派发 / 上报对账 / 计时器持有）、连接器运行时、mediamtx 看护、证据切片、录像压缩归档任务（§5.19）。`vendor/` 内只留一处最小 hook 调用本包（§5.11）。
+**推理机侧组成**（`apps/edge-runtime/`，包清单与所有权表见 harness §2、§3）：判定核心（纯标准库、纯函数、无钟无 I/O，§5.18）、边界求解、本地状态（SQLite）、supervisor（SSE 消费与判定调用 / 请求看护 / 锁存 / 处置派发 / 上报对账 / 计时器持有 / **一反应一事务的持久化**）、连接器运行时（每个已配置连接器一个）、mediamtx 看护、证据切片、录像压缩归档任务（§5.19）。`vendor/` 内只留一处最小 hook 调用本包（§5.11）。
+
+**边缘包间依赖方向**（由 import-linter 契约兜底，harness §3）：`supervisor → local_state → judgment`；`connectors → judgment` 与 `supervisor` 的输入词汇；`stream_health` 不导入本包任何东西；运行循环是唯一的装配根，也是唯一同时认识全部包的地方。存储模块只认识领域类型，不认识编排它的人——反过来的方向（存储导入 supervisor）已实测会让"一反应一事务"退化成调用方契约。
 
 **依赖规则**：判定核心不依赖任何相机 SDK、推理框架或连接器实现，只消费归一化观测；中心各模块各自拥有数据表，不跨模块直接读写；前端只调后端用例，不承载判定规则。
 
@@ -208,8 +209,8 @@
 - **连接器域**（`device`，仅配置）：`device_connector`（类型 = `hikvision_isapi` / `board_card`、连接参数、健康状态、**该适配器的能力声明**：投递方式、最大投递延迟、是否保序、是否可能丢边沿、时间戳来源，§5.8）、`device_connector_point`（方向 in/out、点位号、语义标签如"工件到位"/"停线联锁"、外键 → connector 与 station）。模板按语义标签引用点位，不写死设备地址。**工位可以没有任何连接器。**
 - **模板域**（`template`）：`template_sop`、`template_version`（不可变，含 Excel 导入引用、actions.json、vlm_prompts、**运行参数默认值**、顺序性声明、sha256、发布者与发布时刻）、`template_draft`（可编辑，含 `revision` 乐观锁列）、`template_station_binding`（`desired_version` / `reported_version`，后者由推理机上报，§5.3）。
 - **训练数据域**（`dataset`）：`dataset_training_dataset`、`dataset_member`（**数据集内的视频**：MinIO key、来源、大小、sha256、时长、编码）、`dataset_annotation`（动作时间段标注）、`dataset_usage_check`（DDM/VLM 用途、状态、原因）、`dataset_artifact`（生成的 DDM `annotation.json` 等派生制品及摘要）。上传、标注、用途检查、转换和训练是不同状态，不合并成一个"成功"。
-- **上报镜像域**（`monitor`）：`monitor_sop_instance`（起止、闭合原因、边界信号来源、上报时刻）、`monitor_decision`（hypertable，判定结果 + 原因码 + 模板版本 + 推理机自报模型标识）、`monitor_observation`（hypertable，动作编号与外部信号同表）、`monitor_stream_health`（hypertable，含时间锚定偏移）。全部按事件 id 幂等 upsert，权威在推理机本地。
-- **违规域**：`alert_violation`（kind、锁存标志、来源推理机）、`alert_disposal`（action、执行状态、幂等键）、`evidence_evidence`（MinIO key、类型、**锚点时刻、窗口前后余量、素材代次、发起来源=自动/再切片**）、`evidence_reclip_request`（新窗口参数、目标推理机、状态、发起人、失败原因如"素材已过期"）、`evidence_review`（复核结论、复核人、指向具体哪条证据）。违规与处置的执行权威在推理机，中心表是归档与复核载体。
+- **上报镜像域**（`monitor`）：`monitor_sop_instance`（起止、闭合原因、边界信号来源、上报时刻）、`monitor_decision`（hypertable，判定结果 + 原因码 + 模板版本 + 推理机自报模型标识）、`monitor_observation`（hypertable，动作编号与外部信号同表）、`monitor_stream_health`（hypertable，含时间锚定偏移）、`monitor_violation`（kind、锁存标志、来源推理机）、`monitor_disposal`（action、执行状态、幂等键）。全部按事件 id 幂等 upsert，权威在推理机本地；违规与处置的执行权威同样在推理机，这两张表是归档载体（[ADR-0010](../adr/0010-alert-merges-into-monitor.md)）。
+- **证据与复核域**（`evidence`）：`evidence_evidence`（MinIO key、类型、**锚点时刻、窗口前后余量、素材代次、发起来源=自动/再切片**）、`evidence_reclip_request`（新窗口参数、目标推理机、状态、发起人、失败原因如"素材已过期"）、`evidence_review`（复核结论、复核人、指向具体哪条证据）。
 - **基础域**（`auth`）：`auth_user`（含停用状态）、`auth_role`、`auth_permission`、`auth_role_permission`、`auth_session`。**不设 `auth_audit_log`**（§5.15）。
 - **作业域**（`job`）：`job_application_job`（异步任务权威与 outbox；ADR-0004）。
 
@@ -217,7 +218,7 @@
 
 ### 推理机（SQLite，每机一份）
 
-`local_config`（已确认的设备配置与凭据密文）、`local_template_version`（已确认模板版本 + sha256）、`local_sop_instance`、`local_decision`、`local_violation`（锁存）、`local_disposal`（含幂等键与执行结果）、`local_report_queue`（待上报，至少一次）、`local_evidence_queue`（待上传）。
+`local_config`（已确认的设备配置与凭据密文）、`local_template_version`（已确认模板版本 + sha256）、`local_sop_instance`、`local_decision`、`local_violation`（锁存）、`local_disposal`（处置记录：幂等键、目标点位、操作人、执行结果；**它就是点位写入的去重账本**，连接器运行时与处置派发共用这一张表，不各建一份）、`local_report_queue`（待上报，至少一次）、`local_evidence_queue`（待上传）。
 
 **关键不变量**：违规一经确认即锁存，不因后续补做或处置失败而消失；锁存发生在推理机本地，不依赖中心可达。
 
@@ -237,7 +238,7 @@
 - **E2** **基座契约测试**第一族（§5.9）——我们依赖但不改的基座行为。✅ 已完成（14 条断言）
 - **E3** **判定核心**（`apps/edge-runtime/`，纯标准库纯函数，接口形状见 §5.18）：序列比对、声明式边界、有效性门、三值判定、首批 14 个原因码及其未知码兜底约定、顺序型跳号即报、证据锚点与必需跨度声明。**§2.2 的返工用例 `1,2,3,2,4,5` 是第一个要过的测试**；§5.9 第二族的自有回归断言随此项落地。**这是首个编码入口**——零依赖且风险最高。✅ 已完成（58 条自有回归 + 5 条双跑对比；`make check` 已含 format/lint/type/unit）
 - **E4** **基座一处改造 + 最小 hook**（§5.11）：pipeline `on_message` 把流健康作为合成事件送进 `_vlm_response_queue`。维护为可重放补丁；纯 CPU 可验证的部分立即验证。基座 checker 与处置按配置关闭，不打补丁。✅ 已完成（一个触点一个文件纯追加；`edge_runtime.stream_health` 持有事件契约两端，19 条自有回归 + 16 条补丁与前提契约断言。回调落点修正见 §2.4）
-- **E5** 推理机 supervisor 骨架：本地状态（SQLite）、模板拉取与本地落盘、上报队列与对账、时间锚定、计时器持有、证据切片指令。**真机验证项（断流检出与重连后重新锚定）留到阶段 1**，骨架与其单元测试不等真机。🔄 E5.1 已完成（`edge_runtime.supervisor`：归一化、单调钟到点时刻、判定输出转命令；49 条自有回归）。🔄 E5.2 已完成 `edge_runtime.local_state`：在飞与已闭合实例、判定、锁存违规、待上报与待上传两个队列，及其迁移机制；9 条集成回归跑真 SQLite。**余下**：`local_config`、`local_template_version`、`local_disposal` 随各自写入方落地（模板拉取、#50/#51），每张一次迁移——故 issue #19 的「全部自治状态」尚未达成，不随本项关闭。
+- **E5** 推理机 supervisor 骨架：本地状态（SQLite）、模板拉取与本地落盘、上报队列与对账、时间锚定、计时器持有、证据切片指令。**真机验证项（断流检出与重连后重新锚定）留到阶段 1**，骨架与其单元测试不等真机。🔄 E5.1 已完成（`edge_runtime.supervisor`：归一化、单调钟到点时刻、判定输出转命令；49 条自有回归）。🔄 E5.2 已完成 `edge_runtime.local_state`：在飞与已闭合实例、判定、锁存违规、待上报与待上传两个队列，及其迁移机制；9 条集成回归跑真 SQLite。**余下**：`local_config`、`local_template_version` 随模板拉取落地，`local_disposal` 随连接器运行时（E6 的第二片，#65 定案的 T2）落地，每张一次迁移——故 issue #19 的「全部自治状态」尚未达成，不随本项关闭。**架构审查（#65）后的返工**：E5.1 的命令层（`supervisor/commands.py`）删除，E5.2 的 `commit(supervisor, reaction)` 与 `resume_station` 收进 supervisor 后面，依赖方向改为 `supervisor → local_state`（§六「边缘包间依赖方向」）；这是 T1，必须在运行循环 #45 与处置派发 #50/#51 之前合并。
 - **E6** **连接器抽象 + 海康 ISAPI 适配器**：读写输入/输出点位、能力声明的数据结构与模板绑定时的角色校验。**能力声明的实测值填写属部署期**（§5.21）；未实测时为"未验证"，绑定校验按不足以承担该角色保守拒绝。适配器代码与校验逻辑现在就能写并单元测试。
 
 **中心轨（C）** —— 按 §5.16 纵向推进，`auth` 先行，之后逐个模块端到端：

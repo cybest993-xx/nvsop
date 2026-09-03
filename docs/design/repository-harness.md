@@ -33,17 +33,24 @@ Create directories lazily when the first real file needs them; empty scaffolding
 ├── apps/
 │   ├── control-api/                # FastAPI center backend (management and
 │   │   │                            # aggregation plane; not on the live path)
-│   │   ├── src/factory_sop/        # auth, device, template, dataset,
-│   │   │                            # monitor, alert, evidence, job
+│   │   ├── src/factory_sop/        # one package per center module; the list is
+│   │   │                            # `[tool.nvsop]` in the root pyproject.toml
 │   │   ├── migrations/             # one linear history; file prefix names the owning module
 │   │   └── tests/{unit,integration}/
 │   ├── control-web/                # Vue 3 operator/admin application
 │   │   ├── src/modules/            # feature slices matching backend language
 │   │   └── tests/{integration,e2e}/
-│   └── edge-runtime/               # inference-host autonomous judgment unit:
-│       │                            # judgment core, boundary solver, local state,
-│       │                            # supervisor, connector runtime, evidence clipping
-│       ├── src/
+│   └── edge-runtime/               # inference-host autonomous judgment unit
+│       ├── src/edge_runtime/
+│       │   ├── judgment/           # pure state-transition function; owns the reason codes
+│       │   ├── stream_health.py    # the one module the vendor/ hook may import
+│       │   ├── supervisor/         # drives the core, holds the timer, persists one
+│       │   │                        # reaction per transaction
+│       │   ├── local_state/        # SQLite authority: instances, decisions, latched
+│       │   │                        # violations, disposal records, the two queues
+│       │   ├── connectors/         # the connector seam, one runtime per configured
+│       │   │                        # connector, and its adapters
+│       │   └── (run loop)          # the composition root; lands with issue #45
 │       └── tests/{unit,integration}/
 ├── packages/
 │   └── contracts/                  # versioned wire schemas and generated clients
@@ -73,21 +80,50 @@ When the web workspace lands, use a root `package.json`, `pnpm-workspace.yaml`, 
 
 ## 3. Module ownership and seams
 
+### Center modules
+
+The machine-readable list of center modules is `[tool.nvsop]` in the root `pyproject.toml`. Until the gate scripts read that table, the migration-ownership check carries a copy of the list that must match it; this table and the roadmap's §六 explain it. Adding or removing a module starts there — a module named in prose but not in the declaration owns no tables and passes no gate.
+
 | Module | Owns | Interface examples | Adapters live outside the behavior |
 |---|---|---|---|
 | `auth` | users, roles, permissions, sessions | authorize command; open/revoke session | FastAPI auth, PostgreSQL |
-| `device` | inference hosts, inference backends, stations, cameras, connector configuration and measured capability declarations, station runtime-parameter overrides | resolve station topology; report health | Hikvision, board card, inference health |
+| `device` | inference hosts, inference backends, stations, cameras, connector configuration and measured capability declarations, station runtime-parameter overrides, delegated-command queue | resolve station topology; report health | Hikvision, board card, inference health |
 | `execution` | which host may drive a station's output points: grant, handover handshake, two-person forced rebind, physical-execution lease | request/confirm handover; renew lease | center HTTP, inference-host pull |
 | `template` | Excel validation, immutable versions, release/binding, desired-vs-reported reconciliation | import draft; release; resolve active version | workbook parser, object storage |
 | `dataset` | training videos, action time-range annotation, usage checks, derived artifacts | register video; annotate ranges; run usage check; emit artifact | presigned object storage, reused annotator UI |
-| `monitor` | reported mirror of SOP instances, decisions, and stream health; dashboard state | upsert reported decision; query dashboard | inference-host report endpoint |
-| `alert` | archived violations and disposal records | archive violation; archive disposal result | UI notification |
-| `evidence` | evidence references and human review | request clip; attach review | edge runtime, MinIO |
+| `monitor` | reported mirror of SOP instances, decisions, latched violations, disposal records and stream health; dashboard state ([ADR-0010](../adr/0010-alert-merges-into-monitor.md)) | upsert reported decision; upsert reported violation; query dashboard | inference-host report endpoint |
+| `evidence` | evidence references, re-clip requests and human review | request clip; attach review | edge runtime, MinIO |
+| `retention` | retention policy, verdict-class resolution, change-impact estimate, reference protection — policy, never data | resolve class and duration; estimate a change | scheduled sweep |
 | `job` | durable asynchronous application commands | enqueue/query application job | ARQ/Redis |
 
 `execution` is separate from `device` because their change drivers differ: `device` models what equipment exists and its use cases are reversible configuration CRUD, while `execution` is a cross-host safety state machine with a TTL and carries the system's only two-person operation. It enforces one invariant that must hold inside the module rather than in its callers: at most one inference host holds an unexpired physical-execution right for a station at any moment.
 
-`monitor`, `alert`, and `evidence` stay separate even though one report-intake adapter writes all three, because `monitor` changes with the report contract, `alert` with the set of disposal actions, and `evidence` carries human review — a different actor and a different lifetime (evidence outlives recording retention; review never rewrites the original decision). The intake adapter composes them inside one request-scoped Unit of Work and carries no judgment logic.
+`monitor` and `evidence` stay separate even though one report-intake adapter writes both, because `monitor` is written by machines and changes only with the report contract, while `evidence` carries human review — a different actor and a different lifetime (evidence outlives recording retention; review never rewrites the original decision). Archived violations and disposal records were once planned as a third module, `alert`; its stated change driver — the set of disposal actions — belongs to the inference host, so it changed with the report contract exactly as `monitor` does and has been folded in ([ADR-0010](../adr/0010-alert-merges-into-monitor.md)). The intake adapter composes the two inside one request-scoped Unit of Work and carries no judgment logic.
+
+### Edge-runtime packages
+
+The inference host's autonomous unit is one application with five packages and one composition root. Depth is the design rule: each package puts a lot of behavior behind a small interface, and a rule the package knows is enforced inside it, never handed to its caller as a contract to honor.
+
+| Package | Owns | Interface | Adapters and seams |
+|---|---|---|---|
+| `judgment` | the pure state transition, the reason codes and their verdict classes, the event and decision vocabulary | `advance(state, event) → Outcome` | none — it is data in, data out |
+| `stream_health` | both halves of the synthetic health-event wire shape | `note_pipeline_message` (producer, called by the `vendor/` hook), `decode` (consumer) | `HealthSink` (the base's queue) |
+| `supervisor` | one station's drive: normalizing arrivals into core events, holding the deadline the core declared, and **persisting the state and every effect of one reaction as one transaction** — including concluding the interrupted pass on start-up | receive / wake / interrupt / timeout | the persistence seam below it: SQLite in production, in-memory in tests |
+| `local_state` | the SQLite authority: instances, decisions, latched violations, disposal records (which are also the point-write ledger), the report and evidence queues, and their migrations | expressed only in `judgment` types: persist one reaction; resume; the two queue interfaces for the sender and the uploader | SQLite |
+| `connectors` | the connector seam and one **connector runtime per configured connector**: polling cadence from its own capability declaration, rising-edge detection, the capability gate and idempotent point writes | per runtime: poll / write / next due; per seam: `Connector`, `IsapiTransport` | Hikvision ISAPI over `urllib`; the board card is the second adapter (P12) |
+
+Dependency direction, enforced by `import-linter` contracts in the root `pyproject.toml`:
+
+```text
+supervisor  → local_state → judgment
+connectors  → judgment, supervisor's input vocabulary
+stream_health imports nothing from edge_runtime
+run loop    → everything; the only place that knows every package
+```
+
+The storage package knows domain types, never the thing that orchestrates it. The reverse direction was tried (`local_state` importing `supervisor`) and made "one reaction, one transaction" a rule the caller had to remember instead of one the module held; that is why `supervisor` owns the transaction and `local_state` only offers it.
+
+### Mechanical enforcement
 
 An inference backend is one process endpoint carrying one template configuration, not one machine; a host runs as many backends as it has distinct templates, and `device_inference_host` models the machine separately. The judgment core is not a center module: it lives in `edge-runtime`, owns no tables, and stays a pure function. `monitor` holds the center-side mirror written by idempotent upserts from each inference host, so its rows are reports rather than the authority — the authority for decisions, latched violations, and disposal execution is the inference host's local SQLite.
 
@@ -95,7 +131,7 @@ An inference backend is one process endpoint carrying one template configuration
 
 Module boundaries are enforced mechanically, not by review. Each center module is a Python package with a `usecases/` layer where authorization is enforced, and an `api.py` that exposes only the subset other modules actually call — `api.py` is the cross-module contract, not the module's full outward entry set, so a configuration module's CRUD use cases stay in `usecases/` rather than becoming pass-through re-exports. Authorization is enforced in `usecases/`, never only at the HTTP route, because jobs, report intake, and smoke scripts call the same use cases. `api.py` is the only permitted cross-module import target; `import-linter` contracts fail the gate when the judgment core imports an adapter, when a module imports past another's `api`, when a domain layer imports `adapters/*`, or when the hook inside `vendor/` imports anything other than the one designated stream-health entrypoint module in `edge-runtime`. That last contract is what keeps the patch surface at one append-only call: code under `vendor/` is outside this repository's lint and type coverage, so without a mechanical contract the hook can silently grow dependencies on arbitrary `edge-runtime` internals. Physical table names carry their owning module's prefix (`device_camera`, `template_version`, `auth_session`) so migration ownership is statically decidable. Cross-module use cases share one request-scoped Unit of Work opened and committed by the HTTP adapter layer; module facades participate but never commit. The HTTP adapter layer may compose several modules' `summary()` use cases into one aggregate response (the overview page); that composition carries no judgment logic.
 
-`packages/contracts` contains only wire contracts used across processes (the inference-host report and pull contracts, the exported `openapi.json`) and their compatibility fixtures. It must not become a shared domain-logic bucket.
+`packages/contracts` contains wire contracts used across processes (the inference-host report and pull contracts, the exported `openapi.json`), their compatibility fixtures, and **pure functions over that contract data that both processes must evaluate identically** — the binding-time fitness rule over a capability declaration (`unfit_for`) is the first such function, and it moves there when the center becomes its second real caller (C4). Such a function is standard-library-only, reads no configuration, and performs no I/O, because the inference host imports it from outside the uv workspace and `scripts/check_repo_policy.py` resolves the import. Anything with a table, a session, or a clock is domain logic and stays in its owning application; `packages/contracts` must not become a shared domain-logic bucket.
 
 ### External traffic boundary
 

@@ -17,12 +17,12 @@ import re
 import sys
 from pathlib import Path
 
-# The center backend's modules (solution-and-roadmap.md §六). A migration may only name one
-# of these, so a typo or an undeclared module fails the gate instead of silently owning a
-# table. Extend this list in the same change that adds the module.
+# The center backend's modules. The declaration of record is `[tool.nvsop]` in the root
+# pyproject.toml (harness §3); this copy is read until #65's T3 makes this script read that
+# table, and must match it until then. A migration may only name one of these, so a typo or
+# an undeclared module fails the gate instead of silently owning a table.
 CENTER_MODULES = frozenset(
     {
-        "alert",
         "auth",
         "dataset",
         "device",

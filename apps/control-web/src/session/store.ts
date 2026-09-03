@@ -23,24 +23,34 @@ export const useSessionStore = defineStore('session', () => {
    * deep link opened in a fresh tab is not bounced to the login page while the answer is still
    * in flight. */
   const settled = ref(false)
+  /** Why the last `restore` could not say who is signed in, when the reason was a fault rather
+   * than anonymity. The login page shows it as its refusal: a shell that reduced a server
+   * failure to a fresh login form would leave the only clue in the fact that signing in fails
+   * again. */
+  const fault = ref<string | null>(null)
 
   async function restore(): Promise<void> {
     try {
       current.value = await readSession()
+      fault.value = null
     } catch (error) {
-      // A 401 here is the ordinary case, not a fault: nobody is signed in. Any other failure
-      // leaves the caller anonymous too — the guard's decision is the same, and the message is
-      // shown by whatever page the guard sends them to.
       if (!(error instanceof ControlPlaneError)) {
         throw error
       }
       current.value = null
+      // A 401 here is the ordinary case, not a fault: nobody is signed in. Any other status is
+      // the backend or the network saying something broke, and the two must stay
+      // distinguishable — that is what §5.15's unknown-error fallback is for.
+      fault.value = error.status === 401 ? null : error.message
     } finally {
       settled.value = true
     }
   }
 
   async function logIn(credentials: { login_name: string; password: string }): Promise<void> {
+    // A new attempt supersedes whatever the last restore reported; the form's own refusal
+    // takes over from here.
+    fault.value = null
     current.value = await openSession(credentials)
     settled.value = true
   }
@@ -61,5 +71,5 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
-  return { current, settled, restore, logIn, logOut }
+  return { current, settled, fault, restore, logIn, logOut }
 })

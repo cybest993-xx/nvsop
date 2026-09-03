@@ -18,7 +18,10 @@ const route = useRoute()
 const loginName = ref('')
 const password = ref('')
 const submitting = ref(false)
-const refusal = ref<string | null>(null)
+// Seeded from the store's `fault`: arriving here because the last restore hit a server failure
+// shows why, rather than a fresh form that pretends the operator had merely logged out. A login
+// attempt of their own clears it, and the form's refusal takes over.
+const refusal = ref<string | null>(session.fault)
 const fieldMessages = ref<Record<string, string>>({})
 
 // Focus is taken on mount rather than declared with `autofocus`. The visible effect is the

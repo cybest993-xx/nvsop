@@ -111,12 +111,26 @@ describe('a caller whose session is restored', () => {
 })
 
 describe('an unknown path', () => {
-  it('lands on the overview rather than a dead end', async () => {
+  it('is answered by the not-found page, not a redirect to the overview', async () => {
+    // A redirect would dress a miss up as a success: the overview cannot say what went wrong
+    // because nothing went wrong with it. The miss gets its own answer — what was not found,
+    // and the way back.
     readSession.mockResolvedValue(SESSION)
     const router = createAppRouter()
 
     await router.push('/not/a/page')
 
-    expect(router.currentRoute.value.name).toBe('overview')
+    expect(router.currentRoute.value.name).toBe('not-found')
+  })
+
+  it('answers the same way when nobody is signed in', async () => {
+    // A stale bookmark outlives the session that made it. Sending it to the login first would
+    // make the operator sign in to be told the page is gone.
+    anonymous()
+    const router = createAppRouter()
+
+    await router.push('/not/a/page')
+
+    expect(router.currentRoute.value.name).toBe('not-found')
   })
 })

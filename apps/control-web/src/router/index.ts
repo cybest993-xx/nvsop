@@ -12,6 +12,7 @@ import { useSessionStore } from '@/session/store'
 
 export const LOGIN_ROUTE = 'login'
 export const OVERVIEW_ROUTE = 'overview'
+export const NOT_FOUND_ROUTE = 'not-found'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -32,9 +33,15 @@ const routes: RouteRecordRaw[] = [
       },
     ],
   },
-  // Anything else is not a page. Sent to the overview rather than to a 404 view: every path this
-  // application serves is one it generated itself, so a miss is a stale bookmark.
-  { path: '/:pathMatch(.*)*', redirect: { name: OVERVIEW_ROUTE } },
+  // Anything else is not a page, and says so rather than redirecting: a stale bookmark sent to
+  // the overview would dress the miss up as a success. Anonymous, because a bookmark outlives
+  // the session that made it, and finding that out is not worth signing in for.
+  {
+    path: '/:pathMatch(.*)*',
+    name: NOT_FOUND_ROUTE,
+    component: () => import('@/NotFoundView.vue'),
+    meta: { anonymous: true, title: '页面不存在' },
+  },
 ]
 
 export function createAppRouter() {
@@ -54,7 +61,10 @@ export function createAppRouter() {
       // the overview after signing in loses whatever they had opened.
       return { name: LOGIN_ROUTE, query: { next: to.fullPath } }
     }
-    if (session.current && anonymous) {
+    if (session.current && to.name === LOGIN_ROUTE) {
+      // Signed-in callers do not see the login form. The rule is about the login page itself,
+      // not about every anonymous route: the not-found page is anonymous too, and a signed-in
+      // operator with a stale bookmark still needs its answer.
       return { name: OVERVIEW_ROUTE }
     }
     return true

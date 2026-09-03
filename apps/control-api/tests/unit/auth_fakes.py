@@ -55,6 +55,9 @@ class FakeUsers:
             raise ValueError(f"login name already taken: {user.login_name}")
         self.by_id[user.id] = user
 
+    def has_any(self) -> bool:
+        return bool(self.by_id)
+
     def deactivate(self, user_id: UUID) -> User:
         """Deactivate an account (`CONTEXT.md`: 停用). Test set-up; #23 owns the use case."""
         deactivated = replace(self.by_id[user_id], status=UserStatus.DEACTIVATED)

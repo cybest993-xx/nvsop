@@ -125,7 +125,7 @@ class Settings(BaseSettings):
             if name in secret_fields:
                 path = environ.get(variable + SECRET_FILE_SUFFIX)
                 if path is not None:
-                    values[name] = _read_secret_file(Path(path), variable + SECRET_FILE_SUFFIX)
+                    values[name] = read_secret_file(Path(path), variable + SECRET_FILE_SUFFIX)
             elif variable in environ:
                 values[name] = environ[variable]
 
@@ -139,11 +139,15 @@ def _variable_name(field_name: str) -> str:
     return ENVIRONMENT_PREFIX + field_name.upper()
 
 
-def _read_secret_file(path: Path, variable: str) -> SecretStr:
+def read_secret_file(path: Path, variable: str) -> SecretStr:
+    """Read one secret from the file `variable` points at, applying the deployment's rule.
+
+    One trailing newline is what every way of writing such a file produces; it is not part
+    of the secret. Anything else is, so only the trailing newline is removed. An empty file
+    is refused rather than accepted as an empty secret.
+    """
     if not path.is_file():
         raise ConfigurationError(f"the file {variable} points at does not exist: {path}")
-    # One trailing newline is what every way of writing such a file produces; it is not
-    # part of the secret. Anything else is, so only the trailing newline is removed.
     secret = path.read_text(encoding="utf-8").removesuffix("\n")
     if not secret:
         raise ConfigurationError(

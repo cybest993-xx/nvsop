@@ -23,10 +23,19 @@ class UserRepository(Protocol):
     """`auth_user`. Administration of accounts — create, edit, deactivate — arrives with #23."""
 
     def add(self, user: User) -> None:
-        """Insert an account.
+        """Insert an account. Used by the bootstrap command and, from #23, the administration
+        use cases.
 
         Raises on a login name that is already taken: that is a real unique constraint rather
         than a check the caller makes first, so two concurrent creations cannot both succeed.
+        """
+        ...
+
+    def has_any(self) -> bool:
+        """Whether the store holds any account at all.
+
+        The bootstrap's precondition, not a listing: a deployment creates its first account
+        exactly once, and the question is one bit.
         """
         ...
 

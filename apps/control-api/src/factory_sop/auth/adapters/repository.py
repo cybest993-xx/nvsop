@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, delete, select
+from sqlalchemy import CursorResult, delete, exists, select
 from sqlalchemy.orm import Session as DatabaseSession
 
 from factory_sop.auth.adapters.tables import SessionRow, UserRow
@@ -26,17 +26,24 @@ class PostgresUserRepository:
         self._session = session
 
     def add(self, user: User) -> None:
-        """Insert an account. Used by the bootstrap entrypoint; #23 adds administration.
-
-        Flushed rather than left for the transaction's end, because a session inserted later
-        in the same transaction carries a foreign key to this row. SQLAlchemy orders inserts
-        across two mappers only when a `relationship` connects them, and these tables have
-        none: the domain types are plain frozen dataclasses, and adding a relationship the
-        module never reads in order to hint at flush order would put an unused mapping in the
-        adapter. Still no commit — the transaction is the HTTP layer's (ADR-0002).
+        """Insert an account. Flushed rather than left for the transaction's end, because a
+        session inserted later in the same transaction carries a foreign key to this row —
+        SQLAlchemy orders inserts across two mappers only when a `relationship` connects them,
+        and these tables have none: the domain types are plain frozen dataclasses, and adding a
+        relationship the module never reads in order to hint at flush order would put an unused
+        mapping in the adapter. Still no commit — the transaction is the HTTP layer's (ADR-0002),
+        or the bootstrap command's, which owns its own.
         """
         self._session.add(UserRow.from_domain(user))
         self._session.flush()
+
+    def has_any(self) -> bool:
+        # One existence probe rather than counting: the answer is one bit, and `EXISTS` stops at
+        # the first row.
+        return cast(
+            "bool",
+            self._session.scalar(select(exists().select_from(UserRow))),
+        )
 
     def by_login_name(self, login_name: str) -> User | None:
         row = self._session.scalar(select(UserRow).where(UserRow.login_name == login_name))

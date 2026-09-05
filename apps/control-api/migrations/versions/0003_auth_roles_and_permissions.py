@@ -147,15 +147,22 @@ def _backfill_administrator_role() -> None:
     skips forever because the guard row exists — the only repair would be SQL against production.
 
     The backfill seeds the same ordinary role `register_first_operator` creates and assigns it
-    to the deployment's first account (earliest `id`: these are UUIDv7, which sort by creation
-    time). A fresh deployment has no accounts and receives nothing here — its bootstrap creates
-    the role when it runs.
+    to the sole pre-existing account. A fresh deployment has no accounts and receives nothing
+    here — its bootstrap creates the role when it runs. More than one account is an ambiguous
+    upgrade state and fails explicitly instead of guessing which account should receive every
+    permission.
     """
-    first_account_id = (
-        op.get_bind().execute(sa.text("SELECT id FROM auth_user ORDER BY id LIMIT 1")).scalar()
+    account_ids = list(
+        op.get_bind().execute(sa.text("SELECT id FROM auth_user ORDER BY id")).scalars()
     )
-    if first_account_id is None:
+    if len(account_ids) > 1:
+        raise RuntimeError(
+            "0003 cannot infer the bootstrap administrator: auth_user contains multiple accounts; "
+            "resolve the migration manually"
+        )
+    if not account_ids:
         return
+    first_account_id = account_ids[0]
     role_id = uuid.UUID(BACKFILLED_ADMINISTRATOR_ROLE_ID)
     op.bulk_insert(
         AUTH_ROLE_TABLE,

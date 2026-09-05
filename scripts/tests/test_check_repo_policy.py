@@ -4,8 +4,10 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import check_repo_policy
 from check_repo_policy import check_repository
 
 
@@ -154,6 +156,12 @@ class RepositoryPolicyTest(unittest.TestCase):
         path.write_text(content, encoding="utf-8")
         return Path(relative)
 
+    def write_web_toolchain(self) -> None:
+        self.write(".nvmrc", "22\n")
+        self.write("pnpm-lock.yaml", "lockfileVersion: '9.0'\n")
+        self.write("pnpm-workspace.yaml", "packages: []\n")
+        self.write("package.json", '{"packageManager":"pnpm@11.0.0"}\n')
+
     def test_rejects_missing_python_pin(self) -> None:
         (self.root / ".python-version").unlink()
         del self.files[Path(".python-version")]
@@ -235,25 +243,84 @@ class RepositoryPolicyTest(unittest.TestCase):
         module = self.write("apps/control-api/src/factory_sop/auth/usecases/open_session.py", "")
         self.assertEqual([], self.check(str(module)))
 
-    def test_rejects_module_file_at_the_line_budget(self) -> None:
+    def test_rejects_production_file_at_the_hard_line_threshold(self) -> None:
         self.write(
             "pyproject.toml",
             '[tool.uv.workspace]\nmembers = ["apps/control-api"]\n\n'
             "[[tool.importlinter.contracts]]\n"
             'source_modules = ["factory_sop.auth"]\n',
         )
-        module = self.write("apps/control-api/src/factory_sop/auth/big.py", "x = 1\n" * 500)
+        module = self.write("apps/control-api/src/factory_sop/auth/big.py", "x = 1\n" * 800)
         self.assertIn(
-            "apps/control-api/src/factory_sop/auth/big.py is 500 lines; a module file "
-            "stays under 500 (harness §5) — split it into a new module rather than "
-            "growing this one",
+            "apps/control-api/src/factory_sop/auth/big.py is 800 lines; production files "
+            "at 800 lines require extraction of a cohesive private module or a documented "
+            "exception (harness §5)",
             self.check(str(module)),
         )
+
+    def test_accepts_production_file_below_the_hard_threshold(self) -> None:
+        self.write(
+            "pyproject.toml",
+            '[tool.uv.workspace]\nmembers = ["apps/control-api"]\n\n'
+            "[[tool.importlinter.contracts]]\n"
+            'source_modules = ["factory_sop.auth"]\n',
+        )
+        module = self.write("apps/control-api/src/factory_sop/auth/focused.py", "x = 1\n" * 799)
+        self.assertEqual([], self.check(str(module)))
+
+    def test_a_documented_file_exception_has_a_bounded_ceiling(self) -> None:
+        self.write(
+            "pyproject.toml",
+            '[tool.uv.workspace]\nmembers = ["apps/control-api"]\n\n'
+            "[[tool.importlinter.contracts]]\n"
+            'source_modules = ["factory_sop.auth"]\n',
+        )
+        path = Path("apps/control-api/src/factory_sop/auth/exceptional.py")
+        module = self.write(str(path), "x = 1\n" * 850)
+        with mock.patch.dict(check_repo_policy.MODULE_FILE_LINE_EXCEPTIONS, {path: 900}):
+            self.assertEqual([], self.check(str(module)))
+            (self.root / module).write_text("x = 1\n" * 900, encoding="utf-8")
+            self.assertIn("hard ceiling of 900 lines", self.check(str(module))[0])
 
     def test_line_budget_ignores_tests_and_scripts(self) -> None:
         test = self.write("apps/edge-runtime/tests/unit/test_big.py", "x = 1\n" * 900)
         script = self.write("scripts/big.py", "x = 1\n" * 900)
         self.assertEqual([], self.check(str(test), str(script)))
+
+    def test_line_budget_covers_vue_components(self) -> None:
+        # A Vue single-file component is a production file exactly as much as a Python one; the
+        # budget that failed to see one would let the crossing happen unnoticed.
+        self.write_web_toolchain()
+        self.write(
+            "pyproject.toml",
+            '[tool.uv.workspace]\nmembers = ["apps/control-api"]\n\n'
+            "[[tool.importlinter.contracts]]\n"
+            'source_modules = ["factory_sop.auth"]\n',
+        )
+        component = self.write(
+            "apps/control-web/src/modules/access/Big.vue", "<template>hi</template>\n" * 800
+        )
+        self.assertIn(
+            "apps/control-web/src/modules/access/Big.vue is 800 lines; production files "
+            "at 800 lines require extraction of a cohesive private module or a documented "
+            "exception (harness §5)",
+            self.check(str(component)),
+        )
+
+    def test_line_budget_ignores_generated_client(self) -> None:
+        # Generated output has one documented source command (harness §8); its size is the
+        # generator's business, and pinning it here would fail every regeneration.
+        self.write_web_toolchain()
+        self.write(
+            "pyproject.toml",
+            '[tool.uv.workspace]\nmembers = ["apps/control-api"]\n\n'
+            "[[tool.importlinter.contracts]]\n"
+            'source_modules = ["factory_sop.auth"]\n',
+        )
+        generated = self.write(
+            "apps/control-web/src/api/generated/types.gen.ts", "export type X = 1\n" * 900
+        )
+        self.assertEqual([], self.check(str(generated)))
 
     def test_rejects_literal_authorization_header_in_json(self) -> None:
         manifest = self.write(

@@ -75,6 +75,8 @@ class ChangeSizeBudgetTest(unittest.TestCase):
         errors = budget_violations(added)
         self.assertEqual(1, len(errors))
         self.assertIn("module auth adds 800 implementation lines; the budget is 800", errors[0])
+        self.assertIn("smallest coherent, independently verifiable stage", errors[0])
+        self.assertIn("Do not create a product module solely", errors[0])
         self.assertIn("auth/usecases/sessions.py (+500)", errors[0])
 
     def test_a_modules_adapters_are_budgeted_separately_from_its_behavior(self) -> None:

@@ -114,7 +114,7 @@ def _is_read_only_select(query: ast.expr | None) -> bool:
         sql = query.args[0].value
     else:
         return False
-    return bool(re.match(r"^\\s*SELECT\\b", sql, flags=re.IGNORECASE))
+    return bool(re.match(r"^\s*SELECT\b", sql, flags=re.IGNORECASE))
 
 
 def assigned_string(tree: ast.Module, name: str) -> str | None:

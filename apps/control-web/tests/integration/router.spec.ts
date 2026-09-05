@@ -24,6 +24,9 @@ const SESSION = {
   login_name: 'wang.li',
   display_name: '王丽',
   expires_at: '2026-09-07T13:00:00+00:00',
+  // C2.2 added this. Empty by default: an account holding nothing is what proves the anonymous and
+  // restore paths do not depend on a permission. The pruning cases below pass their own.
+  permissions: [] as string[],
 }
 
 function anonymous() {
@@ -132,5 +135,54 @@ describe('an unknown path', () => {
     await router.push('/not/a/page')
 
     expect(router.currentRoute.value.name).toBe('not-found')
+  })
+})
+
+describe('a page that names required permissions', () => {
+  it('is reachable by a caller holding one of them', async () => {
+    // Any one, not all: 用户与权限 is useful to someone who may read accounts but not roles, and the
+    // page renders each half according to what they hold.
+    readSession.mockResolvedValue({ ...SESSION, permissions: ['auth.user.view'] })
+    const router = createAppRouter()
+
+    await router.push('/access')
+    await router.isReady()
+
+    expect(router.currentRoute.value.name).toBe('access')
+  })
+
+  it('is reachable by a caller holding only the other one', async () => {
+    readSession.mockResolvedValue({ ...SESSION, permissions: ['auth.role.view'] })
+    const router = createAppRouter()
+
+    await router.push('/access')
+    await router.isReady()
+
+    expect(router.currentRoute.value.name).toBe('access')
+  })
+
+  it('sends a caller holding neither to the overview', async () => {
+    // A deep link or a stale bookmark. Answered by the guard rather than by the page rendering two
+    // empty tabs — and the backend refuses the calls behind it either way.
+    readSession.mockResolvedValue({ ...SESSION, permissions: [] })
+    const router = createAppRouter()
+
+    await router.push('/access')
+    await router.isReady()
+
+    expect(router.currentRoute.value.name).toBe('overview')
+  })
+
+  it('sends a caller holding an unrelated permission to the overview', async () => {
+    readSession.mockResolvedValue({ ...SESSION, permissions: ['auth.user.edit'] })
+    const router = createAppRouter()
+
+    await router.push('/access')
+    await router.isReady()
+
+    // `edit` does not imply `view`, in the guard as in the backend: there is no implication between
+    // members, so a caller who may change an account but was never granted the read cannot open the
+    // page. The same pair of permissions is checked the same way on both sides.
+    expect(router.currentRoute.value.name).toBe('overview')
   })
 })

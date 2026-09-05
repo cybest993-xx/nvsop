@@ -1,5 +1,88 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`the access page > renders the accounts and roles an administrator works with 1`] = `
+"<section aria-labelledby="access-heading">
+  <h1 id="access-heading" class="access__heading">用户与权限</h1>
+  <!-- \`role="alert"\` so a refusal is announced rather than only appearing; the text carries the
+         state, not the colour (Q32). -->
+  <!--v-if-->
+  <div class="el-tabs el-tabs--top">
+    <div class="el-tabs__header is-top">
+      <div class="el-tabs__nav-wrap is-top">
+        <!---->
+        <div class="el-tabs__nav-scroll">
+          <div class="el-tabs__nav is-top" style="transform: translateX(-0px);" role="tablist">
+            <div class="el-tabs__active-bar is-top" style="transition: none; width: 0px; transform: translateX(0px);"></div>
+            <div class="el-tabs__item is-top" id="tab-users" aria-controls="pane-users" role="tab" aria-selected="false" tabindex="-1">账户
+              <!---->
+            </div>
+            <div class="el-tabs__item is-top" id="tab-roles" aria-controls="pane-roles" role="tab" aria-selected="false" tabindex="-1">角色
+              <!---->
+            </div>
+          </div>
+        </div>
+      </div>
+      <!---->
+    </div>
+    <div class="el-tabs__content">
+      <div id="pane-users" class="el-tab-pane" role="tabpanel" aria-hidden="true" aria-labelledby="tab-users" style="display: none;">
+        <div class="panel">
+          <div class="panel__actions"><button aria-disabled="false" type="button" class="el-button el-button--primary">
+              <!--v-if--><span class="">新建账户</span>
+            </button></div>
+          <!--v-if-->
+          <p class="panel__loading">正在加载…</p>
+          <!--teleport start-->
+          <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+            <div class="el-overlay el-modal-dialog" style="z-index: 2001; display: none;">
+              <div role="dialog" aria-modal="true" aria-label="新建账户" aria-describedby="el-id-4" class="el-overlay-dialog"></div>
+            </div>
+          </transition-stub>
+          <!--teleport end-->
+          <!--teleport start-->
+          <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+            <div class="el-overlay el-modal-dialog" style="z-index: 2002; display: none;">
+              <div role="dialog" aria-modal="true" aria-label="修改姓名" aria-describedby="el-id-6" class="el-overlay-dialog"></div>
+            </div>
+          </transition-stub>
+          <!--teleport end-->
+          <!--teleport start-->
+          <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+            <div class="el-overlay el-modal-dialog" style="z-index: 2003; display: none;">
+              <div role="dialog" aria-modal="true" aria-label="重置密码" aria-describedby="el-id-8" class="el-overlay-dialog"></div>
+            </div>
+          </transition-stub>
+          <!--teleport end-->
+          <!--teleport start-->
+          <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+            <div class="el-overlay el-modal-dialog" style="z-index: 2004; display: none;">
+              <div role="dialog" aria-modal="true" aria-label="分配角色" aria-describedby="el-id-10" class="el-overlay-dialog"></div>
+            </div>
+          </transition-stub>
+          <!--teleport end-->
+        </div>
+      </div>
+      <div id="pane-roles" class="el-tab-pane" role="tabpanel" aria-hidden="true" aria-labelledby="tab-roles" style="display: none;">
+        <div class="panel">
+          <div class="panel__actions"><button aria-disabled="false" type="button" class="el-button el-button--primary">
+              <!--v-if--><span class=""> 新建角色 </span>
+            </button></div>
+          <!--v-if-->
+          <p class="panel__loading">正在加载…</p>
+          <!--teleport start-->
+          <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+            <div class="el-overlay el-modal-dialog" style="z-index: 2005; display: none;">
+              <div role="dialog" aria-modal="true" aria-label="新建角色" aria-describedby="el-id-12" class="el-overlay-dialog"></div>
+            </div>
+          </transition-stub>
+          <!--teleport end-->
+        </div>
+      </div>
+    </div>
+  </div>
+</section>"
+`;
+
 exports[`the login page > renders the form it has been rendering 1`] = `
 "<main class="login">
   <section class="login__panel" aria-labelledby="login-heading">
@@ -88,10 +171,6 @@ exports[`the protected shell > renders the navigation and the account strip it h
         <li>
           <!-- \`aria-disabled\` and the trailing note rather than grey text alone: colour is not
                  the only expression of state (Q32). --><span class="shell__link shell__link--pending" aria-disabled="true" title="该功能尚未上线">训练数据集 <small class="shell__pending-note">（未上线）</small></span>
-        </li>
-        <li>
-          <!-- \`aria-disabled\` and the trailing note rather than grey text alone: colour is not
-                 the only expression of state (Q32). --><span class="shell__link shell__link--pending" aria-disabled="true" title="该功能尚未上线">用户与权限 <small class="shell__pending-note">（未上线）</small></span>
         </li>
       </ul>
     </nav>

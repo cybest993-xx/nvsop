@@ -36,9 +36,12 @@ const SESSION = {
   login_name: 'wang.li',
   display_name: '王丽',
   expires_at: '2026-09-07T13:00:00+00:00',
+  // C2.2 added this. Empty here: these suites are about the login and the shell, and an account
+  // holding nothing is the case that proves neither depends on a permission.
+  permissions: [] as string[],
 }
 
-/** A router with the two named routes the views navigate between, and no guard. */
+/** A router with the named routes the views navigate between or link to, and no guard. */
 function testRouter(): Router {
   const blank = { template: '<div />' }
   return createRouter({
@@ -46,6 +49,10 @@ function testRouter(): Router {
     routes: [
       { path: '/login', name: 'login', component: blank },
       { path: '/', name: 'overview', component: blank },
+      // The shell links to it when the caller holds an `auth` view permission. Present here without
+      // the real guard: what these tests are about is which items the shell renders, and the guard
+      // has its own suite.
+      { path: '/access', name: 'access', component: blank },
     ],
   })
 }
@@ -234,12 +241,12 @@ describe('the login form', () => {
 })
 
 describe('the protected shell', () => {
-  async function mountShell() {
+  async function mountShell(permissions: string[] = []) {
     const router = testRouter()
     await router.push('/')
     await router.isReady()
     const session = useSessionStore()
-    session.current = SESSION
+    session.current = { ...SESSION, permissions }
     session.settled = true
     const wrapper = mount(AppShell, { global: { plugins: [router, ElementPlus] } })
     return { wrapper, router, session }
@@ -251,9 +258,9 @@ describe('the protected shell', () => {
     expect(wrapper.text()).toContain('王丽')
   })
 
-  it('offers the five navigation sections', async () => {
+  it('offers the five navigation sections to a caller who may see all of them', async () => {
     // §5.4 fixes them and their order.
-    const { wrapper } = await mountShell()
+    const { wrapper } = await mountShell(['auth.user.view'])
 
     const labels = wrapper.findAll('nav li').map((item) => item.text())
 
@@ -267,17 +274,39 @@ describe('the protected shell', () => {
     ])
   })
 
-  it('marks an unavailable section in words as well as in colour', async () => {
-    // Q32: state is not expressed by colour alone. Grey text on its own is exactly that.
+  it('omits a section the caller may not see rather than disabling it', async () => {
+    // §5.4: 无权查看的模块不显示该导航项，不显示为"无权限"占位. An operator with no `auth` permission
+    // does not get a 用户与权限 item at all — not a greyed one, and not one that leads to a refusal.
     const { wrapper } = await mountShell()
+
+    const labels = wrapper.findAll('nav li').map((item) => item.text())
+
+    expect(labels.some((label) => label.includes('用户与权限'))).toBe(false)
+    expect(labels).toHaveLength(4)
+  })
+
+  it('marks a section that does not exist yet in words as well as in colour', async () => {
+    // Q32: state is not expressed by colour alone. Grey text on its own is exactly that.
+    //
+    // Distinct from the case above, and the distinction is the point: "not built yet" is a fact
+    // about the product that every caller may as well know, so it is shown and marked; "you may not
+    // see this" is about the caller, and §5.4 says to show nothing at all.
+    const { wrapper } = await mountShell(['auth.user.view'])
 
     const pending = wrapper.findAll('nav [aria-disabled="true"]')
 
-    expect(pending).toHaveLength(4)
+    expect(pending).toHaveLength(3)
     expect(pending[0]!.text()).toContain('（未上线）')
   })
 
-  it('links only the sections that exist', async () => {
+  it('links the sections that exist and the caller may see', async () => {
+    const { wrapper } = await mountShell(['auth.role.view'])
+
+    // 概览 and 用户与权限.
+    expect(wrapper.findAll('nav a')).toHaveLength(2)
+  })
+
+  it('links only 概览 for a caller holding no auth permission', async () => {
     const { wrapper } = await mountShell()
 
     expect(wrapper.findAll('nav a')).toHaveLength(1)
@@ -298,6 +327,18 @@ describe('the protected shell', () => {
 
     expect(endSession).toHaveBeenCalledOnce()
     expect(session.current).toBeNull()
+  })
+
+  it('returns to the login page when the identity is taken away mid-session', async () => {
+    // Another administrator can deactivate this account while the shell is open. The store's
+    // unauthorized hook clears the identity; the shell is what must stop rendering and send the
+    // operator to the login page instead of leaving them among dead buttons.
+    endSession.mockResolvedValue(undefined)
+    const { router, session } = await mountShell(['auth.user.view'])
+
+    session.current = null
+
+    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('login'))
   })
 
   it('keeps the session visible and reports an unknown error when revocation fails', async () => {

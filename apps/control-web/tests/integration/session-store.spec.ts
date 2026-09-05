@@ -99,3 +99,117 @@ describe('restoring the session', () => {
     expect(store.fault).toBeNull()
   })
 })
+
+describe('what the caller may do', () => {
+  // `may` decides which navigation items and buttons exist. It is not a security boundary — the
+  // backend's use case checks regardless — but a screen that hides what the operator may do, or
+  // offers what it may not, misleads in both directions.
+  it('reports a permission the session carries', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          respond(200, { ...SESSION, permissions: ['auth.user.edit'] }, 'application/json'),
+        ),
+      ),
+    )
+    const store = useSessionStore()
+    await store.restore()
+
+    expect(store.may('auth.user.edit')).toBe(true)
+    expect(store.may('auth.user.delete')).toBe(false)
+  })
+
+  it('reports nothing for an anonymous caller', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(respond(401, { title: '请先登录', error_code: 'AUTHENTICATION_REQUIRED' })),
+      ),
+    )
+    const store = useSessionStore()
+    await store.restore()
+
+    expect(store.may('auth.user.view')).toBe(false)
+  })
+
+  it('reports nothing when a response predates the permission list', async () => {
+    // The wire schema marks `permissions` optional so an old client keeps parsing new responses;
+    // the reverse — this front end against a response without the field — must also stay safe.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(respond(200, SESSION, 'application/json'))),
+    )
+    const store = useSessionStore()
+    await store.restore()
+
+    expect(store.may('auth.user.view')).toBe(false)
+  })
+})
+
+describe('keeping the cached identity in step with the backend', () => {
+  it('re-reads the identity and the permissions with it', async () => {
+    // The administration screens re-read after any change that could alter what the caller may
+    // do; `refreshIdentity` is that re-read.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(respond(200, { ...SESSION, permissions: [] }, 'application/json')),
+      ),
+    )
+    const store = useSessionStore()
+    await store.restore()
+    expect(store.may('auth.user.edit')).toBe(false)
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          respond(
+            200,
+            { ...SESSION, permissions: ['auth.user.edit', 'auth.user.delete'] },
+            'application/json',
+          ),
+        ),
+      ),
+    )
+    await store.refreshIdentity()
+
+    expect(store.may('auth.user.edit')).toBe(true)
+    expect(store.may('auth.user.delete')).toBe(true)
+  })
+
+  it('clears the identity when any request is answered 401', async () => {
+    // A session revoked under the caller — deactivated by another administrator, expired
+    // mid-form — must not keep rendering buttons. The unauthorized hook fires for requests this
+    // store never made, and the cached identity goes with it.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(respond(200, { ...SESSION, permissions: [] }, 'application/json')),
+      ),
+    )
+    const store = useSessionStore()
+    await store.restore()
+    expect(store.current).not.toBeNull()
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          respond(401, { title: '会话已失效，请重新登录', error_code: 'SESSION_INVALID' }),
+        ),
+      ),
+    )
+    await expect(readUsersOnce()).rejects.toThrow()
+    await Promise.resolve()
+
+    expect(store.current).toBeNull()
+  })
+})
+
+/** One call through the generated client's path, so the 401 hook in the adapter runs. */
+async function readUsersOnce(): Promise<unknown> {
+  const { readUsers } = await import('@/api/controlPlane')
+  return readUsers()
+}

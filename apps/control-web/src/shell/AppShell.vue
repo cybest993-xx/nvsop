@@ -2,25 +2,43 @@
 /**
  * The protected layout: everything a signed-in operator sees sits inside it.
  *
- * Navigation is §5.4's five items. Four of them have no page in this slice, and are rendered as
- * unavailable rather than as links to an empty view — the shell says what exists.
+ * Navigation is §5.4's five items. Three of them have no page yet and are rendered as unavailable
+ * rather than as links to an empty view — the shell says what exists. An item whose page exists but
+ * whose permissions the caller does not hold is not rendered at all: "there but refused" would be a
+ * dead end, whereas "not yet built" is a fact about the product worth showing.
  */
 import { ElButton } from 'element-plus'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { ControlPlaneError } from '@/api/controlPlane'
-import { LOGIN_ROUTE, OVERVIEW_ROUTE } from '@/router'
+import { ACCESS_ROUTE, LOGIN_ROUTE, OVERVIEW_ROUTE } from '@/router'
 import { useSessionStore } from '@/session/store'
 
 const session = useSessionStore()
 const router = useRouter()
+
+// The identity can be taken away while this shell is mounted — another administrator deactivates
+// this account, a role edit strips the page's permissions, the session expires mid-form. The
+// unauthorized hook in the session store clears `current` the moment any request is refused;
+// watching it here is what gets the operator to the login page instead of leaving them in a
+// shell that can no longer act.
+watch(
+  () => session.current,
+  (value) => {
+    if (value === null && session.settled) {
+      void router.replace({ name: LOGIN_ROUTE })
+    }
+  },
+)
 
 interface NavigationItem {
   label: string
   route?: string
   /** Why the section cannot be opened yet, shown as its title. Absent once it has a page. */
   pending?: string
+  /** Permissions any one of which makes the item visible. Absent means everyone signed in sees it. */
+  requires?: string[]
 }
 
 // §5.4's navigation, in its fixed order.
@@ -29,8 +47,18 @@ const navigation: NavigationItem[] = [
   { label: '工位与设备', pending: '该功能尚未上线' },
   { label: 'SOP 模板', pending: '该功能尚未上线' },
   { label: '训练数据集', pending: '该功能尚未上线' },
-  { label: '用户与权限', pending: '该功能尚未上线' },
+  {
+    label: '用户与权限',
+    route: ACCESS_ROUTE,
+    requires: ['auth.user.view', 'auth.role.view'],
+  },
 ]
+
+// Any one of the permissions, matching the router guard: the page is useful to someone who may read
+// accounts but not roles, and it renders each half according to what they hold.
+const visible = computed(() =>
+  navigation.filter((item) => !item.requires || item.requires.some((name) => session.may(name))),
+)
 
 const displayName = computed(() => session.current?.display_name ?? '')
 const logoutFailure = ref<string | null>(null)
@@ -63,7 +91,7 @@ async function logOut(): Promise<void> {
            can tab through only the ones that lead somewhere. -->
       <nav class="shell__nav" aria-label="主导航">
         <ul class="shell__nav-list">
-          <li v-for="item in navigation" :key="item.label">
+          <li v-for="item in visible" :key="item.label">
             <RouterLink v-if="item.route" :to="{ name: item.route }" class="shell__link">
               {{ item.label }}
             </RouterLink>

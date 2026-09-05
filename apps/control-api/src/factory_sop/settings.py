@@ -21,12 +21,10 @@ SECRET_FILE_SUFFIX = "_FILE"  # pragma: allowlist secret
 
 LogLevel = Literal["debug", "info", "warning", "error"]
 
-# Whether the session cookie may travel without TLS. A two-value enumeration rather than a
-# boolean, so the deployment states which it is (harness §5: no bare boolean parameters) and
-# `Secure` is never off by accident. `allow_http` exists for a developer running the backend
-# directly, without Nginx in front: a browser silently discards a `Secure` cookie sent over
-# plain HTTP, and the symptom is a login that appears to succeed and then does nothing.
-CookieTransport = Literal["require_https", "allow_http"]
+# The deployment states the required transport explicitly, but there is only one valid state:
+# §六 requires Secure cookies and records no development exception. Local development must
+# terminate TLS rather than changing a production security attribute.
+CookieTransport = Literal["require_https"]
 
 
 class ConfigurationError(Exception):

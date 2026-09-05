@@ -29,6 +29,7 @@ from factory_sop.auth.adapters.dependencies import (
 from factory_sop.auth.model import SessionPolicy, User
 from factory_sop.auth.repository import SessionRepository, UserRepository
 from factory_sop.auth.usecases.sessions import open_session, revoke_session
+from factory_sop.problem import problem_openapi_response
 from factory_sop.settings import Settings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -65,7 +66,16 @@ def _view(user: User, *, expires_at: datetime) -> SessionView:
     )
 
 
-@router.post("/session", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/session",
+    status_code=status.HTTP_201_CREATED,
+    operation_id="openSession",
+    responses={
+        401: problem_openapi_response("Credentials rejected"),
+        403: problem_openapi_response("Account deactivated"),
+        422: problem_openapi_response("Request invalid"),
+    },
+)
 def open_a_session(
     credentials: Credentials,
     request: Request,
@@ -97,7 +107,11 @@ def open_a_session(
     return _view(opened.user, expires_at=policy.expires_at(opened.session))
 
 
-@router.get("/session")
+@router.get(
+    "/session",
+    operation_id="readSession",
+    responses={401: problem_openapi_response("Authentication required or session invalid")},
+)
 def read_the_session(
     caller: Authenticated,
     policy: Annotated[SessionPolicy, Depends(session_policy)],
@@ -110,7 +124,12 @@ def read_the_session(
     return _view(caller.user, expires_at=policy.expires_at(caller.session))
 
 
-@router.delete("/session", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/session",
+    status_code=status.HTTP_204_NO_CONTENT,
+    operation_id="endSession",
+    responses={403: problem_openapi_response("CSRF token invalid")},
+)
 def end_the_session(
     request: Request,
     sessions: Annotated[SessionRepository, Depends(sessions)],

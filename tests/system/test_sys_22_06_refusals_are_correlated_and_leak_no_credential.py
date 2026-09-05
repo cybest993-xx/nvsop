@@ -14,17 +14,11 @@ import io
 import json
 from typing import Any
 
-from fastapi.testclient import TestClient
-from sqlalchemy import Engine
-from sqlalchemy.orm import Session as DatabaseSession
+from conftest import BootstrapCommand
+from httpx2 import Client
 
-from factory_sop.auth.adapters.repository import PostgresUserRepository
-from factory_sop.auth.model import User, UserStatus
-from factory_sop.auth.passwords import hash_password
-from factory_sop.identifiers import new_id
-
-PASSWORD = "assembly-line-3"
-WRONG_PASSWORD = "assembly-line-4"
+PASSWORD = "assembly-line-3"  # pragma: allowlist secret
+WRONG_PASSWORD = "assembly-line-4"  # pragma: allowlist secret
 LOGIN_NAME = "wang.li"
 SESSION_PATH = "/api/v1/auth/session"
 
@@ -32,33 +26,17 @@ SESSION_PATH = "/api/v1/auth/session"
 MANDATORY_FIELDS = {"event", "module", "correlation_id", "level", "ts"}
 
 
-def an_account(engine: Engine) -> User:
-    session = DatabaseSession(engine)
-    try:
-        user = User(
-            id=new_id(),
-            login_name=LOGIN_NAME,
-            display_name="王丽",
-            password_hash=hash_password(PASSWORD),
-            status=UserStatus.ACTIVE,
-        )
-        PostgresUserRepository(session).add(user)
-        session.commit()
-        return user
-    finally:
-        session.close()
-
-
 def lines(stream: io.StringIO) -> list[dict[str, Any]]:
     return [json.loads(line) for line in stream.getvalue().splitlines() if line]
 
 
 def test_refusals_carry_the_caller_s_correlation_id_and_no_credential(
-    client: TestClient,
-    engine: Engine,
+    client: Client,
+    bootstrap: BootstrapCommand,
     log: io.StringIO,
 ) -> None:
-    an_account(engine)
+    command = bootstrap.run(login_name=LOGIN_NAME, password=PASSWORD, display_name="王丽")
+    assert command.returncode == 0, command.stderr
     login = client.post(
         SESSION_PATH,
         json={"login_name": LOGIN_NAME, "password": WRONG_PASSWORD},
@@ -89,14 +67,22 @@ def test_refusals_carry_the_caller_s_correlation_id_and_no_credential(
         and line["correlation_id"] == "op-refused-csrf"
     ]
     assert rejected
-    completed = [
+    login_completed = [
         line
         for line in events
         if line["event"] == "http.request.completed"
         and line["method"] == "POST"
         and line["correlation_id"] == "op-refused-login"
     ]
-    assert completed
+    assert login_completed
+    csrf_completed = [
+        line
+        for line in events
+        if line["event"] == "http.request.completed"
+        and line["method"] == "DELETE"
+        and line["correlation_id"] == "op-refused-csrf"
+    ]
+    assert csrf_completed
 
     for line in events:
         assert line.keys() >= MANDATORY_FIELDS

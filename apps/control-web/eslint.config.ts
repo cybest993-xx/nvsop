@@ -5,7 +5,7 @@ import accessibility from 'eslint-plugin-vuejs-accessibility'
 
 export default defineConfigWithVueTs(
   { files: ['**/*.{ts,vue}'] },
-  { ignores: ['dist/**', 'node_modules/**'] },
+  { ignores: ['dist/**', 'node_modules/**', 'src/api/generated/**'] },
   pluginVue.configs['flat/recommended'],
   vueTsConfigs.recommendedTypeChecked,
   // Q32 requires the Web to be keyboard-operable, with labelled inputs and status that is not

@@ -108,7 +108,7 @@ describe('the login form', () => {
 
     expect(openSession).toHaveBeenCalledWith({
       login_name: 'wang.li',
-      password: 'assembly-line-3',
+      password: 'assembly-line-3', // pragma: allowlist secret
     })
   })
 
@@ -300,19 +300,19 @@ describe('the protected shell', () => {
     expect(session.current).toBeNull()
   })
 
-  it('still signs the operator out locally when the call fails', async () => {
-    // On a shared terminal, a shell that still looks signed in after the operator pressed 退出 is
-    // worse than a row the idle timeout will close.
+  it('keeps the session visible and reports an unknown error when revocation fails', async () => {
+    // The HttpOnly cookie and server-side row are still live. Clearing only the Pinia cache
+    // would pretend logout succeeded, then a refresh would sign the operator straight back in.
     endSession.mockRejectedValue(
       new ControlPlaneError({ message: '请求未能完成', errorCode: 'UNKNOWN', status: 502 }),
     )
     const { wrapper, router, session } = await mountShell()
 
     await wrapper.findAll('button').at(-1)!.trigger('click')
-    // The route, not the cleared session: `logOut` clears first and the component navigates
-    // after, so waiting on the clear can arrive before the navigation has happened.
-    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('login'))
+    await vi.waitFor(() => expect(wrapper.find('[role="alert"]').exists()).toBe(true))
 
-    expect(session.current).toBeNull()
+    expect(wrapper.find('[role="alert"]').text()).toContain('请求未能完成')
+    expect(router.currentRoute.value.name).toBe('overview')
+    expect(session.current).toEqual(SESSION)
   })
 })

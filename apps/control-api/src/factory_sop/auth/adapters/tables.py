@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String, Uuid
+from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, Integer, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from factory_sop.auth.model import Session, User, UserStatus
@@ -25,6 +25,17 @@ from factory_sop.persistence import Table
 # A hex SHA-256 digest (`auth/tokens.py`). Fixed width, so a value of another shape means the
 # code writing it changed.
 TOKEN_FINGERPRINT_LENGTH = 64
+
+
+class BootstrapGuardRow(Table):
+    """The database claim that makes first-account creation single-winner."""
+
+    __tablename__ = "auth_bootstrap_guard"
+    __table_args__ = (CheckConstraint("singleton = 1", name="singleton_is_one"),)
+
+    # Every bootstrap attempts the same primary key. PostgreSQL serializes concurrent inserts;
+    # the winner creates the account in that transaction and every later attempt skips.
+    singleton: Mapped[int] = mapped_column(Integer(), primary_key=True)
 
 
 class UserRow(Table):

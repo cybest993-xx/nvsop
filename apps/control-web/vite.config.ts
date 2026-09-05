@@ -26,6 +26,6 @@ export default defineConfig({
     environment: 'jsdom',
     // Component tests import Element Plus, whose styles are side-effect imports.
     css: false,
-    include: ['tests/**/*.spec.ts'],
+    include: ['tests/integration/**/*.spec.ts'],
   },
 })

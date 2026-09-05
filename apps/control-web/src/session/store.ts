@@ -56,19 +56,11 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   async function logOut(): Promise<void> {
-    try {
-      await endSession()
-    } catch (error) {
-      // A failed revocation does not keep the operator signed in here. On a shared shop-floor
-      // terminal, a shell that still looks signed in after they pressed 退出 is worse than a row
-      // the idle timeout will close — and re-raising would leave the caller unable to navigate
-      // away, which is exactly that. A fault that is not the control plane's still surfaces.
-      if (!(error instanceof ControlPlaneError)) {
-        throw error
-      }
-    } finally {
-      current.value = null
-    }
+    // Only the backend can revoke the HttpOnly cookie's server-side session. Until it confirms
+    // that revocation, keep the cached identity: clearing it would present a false success and
+    // the next restore would sign the operator straight back in.
+    await endSession()
+    current.value = null
   }
 
   return { current, settled, fault, restore, logIn, logOut }

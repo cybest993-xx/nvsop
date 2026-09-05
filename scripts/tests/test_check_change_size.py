@@ -29,6 +29,16 @@ class ChangeSizeBudgetTest(unittest.TestCase):
         }
         self.assertEqual([], budget_violations(added))
 
+    def test_generated_client_output_does_not_consume_the_authored_budget(self) -> None:
+        # The SDK is generated from the OpenAPI source contract. Its size is not reviewer-owned
+        # implementation, but the clean-worktree gate still requires every generated file to be
+        # committed and reproducible.
+        added = {
+            Path("apps/control-web/src/api/generated/sdk.gen.ts"): 2_000,
+            Path("apps/control-api/src/factory_sop/app.py"): 799,
+        }
+        self.assertEqual([], budget_violations(added))
+
     def test_rejects_change_at_the_budget(self) -> None:
         added = {
             Path("apps/control-api/src/factory_sop/app.py"): 500,

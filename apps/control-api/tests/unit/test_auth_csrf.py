@@ -3,7 +3,7 @@ from __future__ import annotations
 from factory_sop.auth.csrf import csrf_token_for, verify_csrf_token
 from factory_sop.auth.tokens import SessionToken
 
-SECRET = "deployment-csrf-secret"
+SECRET = "deployment-csrf-secret"  # pragma: allowlist secret
 
 
 def test_the_same_session_always_derives_the_same_csrf_token() -> None:

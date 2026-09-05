@@ -17,11 +17,14 @@ MONDAY_MORNING = datetime(2026, 9, 7, 1, 0, tzinfo=UTC)
 def test_a_local_account_opens_a_session_with_its_own_password() -> None:
     users = FakeUsers()
     sessions = FakeSessions()
-    operator = users.register(login_name="wang.li", password="assembly-line-3")
+    operator = users.register(
+        login_name="wang.li",
+        password="assembly-line-3",  # pragma: allowlist secret
+    )
 
     opened = open_session(
         login_name="wang.li",
-        password="assembly-line-3",
+        password="assembly-line-3",  # pragma: allowlist secret
         users=users,
         sessions=sessions,
         policy=POLICY,
@@ -43,11 +46,11 @@ def test_the_opened_session_is_the_one_the_returned_token_finds() -> None:
     # is what was persisted. This is the join between them.
     users = FakeUsers()
     sessions = FakeSessions()
-    users.register(login_name="wang.li", password="assembly-line-3")
+    users.register(login_name="wang.li", password="assembly-line-3")  # pragma: allowlist secret
 
     opened = open_session(
         login_name="wang.li",
-        password="assembly-line-3",
+        password="assembly-line-3",  # pragma: allowlist secret
         users=users,
         sessions=sessions,
         policy=POLICY,
@@ -60,12 +63,12 @@ def test_the_opened_session_is_the_one_the_returned_token_finds() -> None:
 def test_a_wrong_password_opens_nothing() -> None:
     users = FakeUsers()
     sessions = FakeSessions()
-    users.register(login_name="wang.li", password="assembly-line-3")
+    users.register(login_name="wang.li", password="assembly-line-3")  # pragma: allowlist secret
 
     with pytest.raises(AuthenticationRefusedError) as refusal:
         open_session(
             login_name="wang.li",
-            password="assembly-line-4",
+            password="assembly-line-4",  # pragma: allowlist secret
             users=users,
             sessions=sessions,
             policy=POLICY,
@@ -84,7 +87,7 @@ def test_an_unknown_login_name_is_refused_as_the_same_rejection() -> None:
     with pytest.raises(AuthenticationRefusedError) as refusal:
         open_session(
             login_name="nobody",
-            password="assembly-line-3",
+            password="assembly-line-3",  # pragma: allowlist secret
             users=users,
             sessions=FakeSessions(),
             policy=POLICY,
@@ -102,14 +105,14 @@ def test_a_deactivated_account_cannot_open_a_session_with_the_right_password() -
     sessions = FakeSessions()
     users.register(
         login_name="wang.li",
-        password="assembly-line-3",
+        password="assembly-line-3",  # pragma: allowlist secret
         status=UserStatus.DEACTIVATED,
     )
 
     with pytest.raises(AuthenticationRefusedError) as refusal:
         open_session(
             login_name="wang.li",
-            password="assembly-line-3",
+            password="assembly-line-3",  # pragma: allowlist secret
             users=users,
             sessions=sessions,
             policy=POLICY,
@@ -125,11 +128,11 @@ def test_each_login_opens_its_own_session() -> None:
     # reach the other, so they are separate rows with separate tokens.
     users = FakeUsers()
     sessions = FakeSessions()
-    users.register(login_name="wang.li", password="assembly-line-3")
+    users.register(login_name="wang.li", password="assembly-line-3")  # pragma: allowlist secret
 
     first = open_session(
         login_name="wang.li",
-        password="assembly-line-3",
+        password="assembly-line-3",  # pragma: allowlist secret
         users=users,
         sessions=sessions,
         policy=POLICY,
@@ -137,7 +140,7 @@ def test_each_login_opens_its_own_session() -> None:
     )
     second = open_session(
         login_name="wang.li",
-        password="assembly-line-3",
+        password="assembly-line-3",  # pragma: allowlist secret
         users=users,
         sessions=sessions,
         policy=POLICY,

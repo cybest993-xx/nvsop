@@ -228,7 +228,7 @@ def test_logging_out_leaves_the_account_s_other_sessions_alone() -> None:
     token, _ = logged_in(users, sessions)
     other = open_session(
         login_name="wang.li",
-        password="assembly-line-3",
+        password="assembly-line-3",  # pragma: allowlist secret
         users=users,
         sessions=sessions,
         policy=POLICY,
@@ -247,7 +247,7 @@ def test_revoking_an_account_s_sessions_ends_all_of_them() -> None:
     _, opened = logged_in(users, sessions)
     open_session(
         login_name="wang.li",
-        password="assembly-line-3",
+        password="assembly-line-3",  # pragma: allowlist secret
         users=users,
         sessions=sessions,
         policy=POLICY,

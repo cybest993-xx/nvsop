@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ControlPlaneError, endSession, openSession, readSession } from '@/api/controlPlane'
 
-const CREDENTIALS = { login_name: 'wang.li', password: 'assembly-line-3' }
+const CREDENTIALS = { login_name: 'wang.li', password: 'assembly-line-3' } // pragma: allowlist secret
 
 function respond(
   status: number,
@@ -27,7 +27,7 @@ function stubFetch(response: Response | Error) {
   // The parameters are declared so `stub.mock.calls[0]` is typed as this pair. Without them the
   // record is an empty tuple and every read of it needs a cast, which is a cast asserting the
   // very thing the assertion below is about (TS2352).
-  const stub = vi.fn((_path: string, _options: RequestInit) =>
+  const stub = vi.fn((_request: Request) =>
     response instanceof Error ? Promise.reject(response) : Promise.resolve(response),
   )
   vi.stubGlobal('fetch', stub)
@@ -55,13 +55,13 @@ describe('a successful call', () => {
 
     await expect(openSession(CREDENTIALS)).resolves.toEqual(session)
 
-    const [path, options] = stub.mock.calls[0]!
-    // ADR-0003: the fixed literal prefix.
-    expect(path).toBe('/api/v1/auth/session')
-    expect(options.body).toBe(JSON.stringify(CREDENTIALS))
+    const [request] = stub.mock.calls[0]!
+    // ADR-0003: the generated SDK carries the fixed literal prefix.
+    expect(new URL(request.url).pathname).toBe('/api/v1/auth/session')
+    await expect(request.clone().text()).resolves.toBe(JSON.stringify(CREDENTIALS))
     // The session is a cookie, so it has to be sent; `same-origin` is what §六's single origin
     // allows.
-    expect(options.credentials).toBe('same-origin')
+    expect(request.credentials).toBe('same-origin')
   })
 
   it('carries the CSRF token from the cookie into the header on a modifying request', async () => {
@@ -69,8 +69,8 @@ describe('a successful call', () => {
 
     await endSession()
 
-    const [, options] = stub.mock.calls[0]!
-    expect((options.headers as Record<string, string>)['x-csrf-token']).toBe('derived-token')
+    const [request] = stub.mock.calls[0]!
+    expect(request.headers.get('x-csrf-token')).toBe('derived-token')
   })
 
   it('does not send a CSRF token on a read', async () => {
@@ -78,8 +78,8 @@ describe('a successful call', () => {
 
     await readSession()
 
-    const [, options] = stub.mock.calls[0]!
-    expect((options.headers as Record<string, string>)['x-csrf-token']).toBeUndefined()
+    const [request] = stub.mock.calls[0]!
+    expect(request.headers.get('x-csrf-token')).toBeNull()
   })
 })
 

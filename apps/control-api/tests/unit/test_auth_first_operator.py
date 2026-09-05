@@ -19,7 +19,7 @@ def test_a_fresh_deployment_gets_its_first_operator() -> None:
 
     created = register_first_operator(
         login_name="admin",
-        password="first-shift-key",
+        password="first-shift-key",  # pragma: allowlist secret
         display_name="管理员",
         users=users,
     )
@@ -31,7 +31,7 @@ def test_a_fresh_deployment_gets_its_first_operator() -> None:
     assert stored.display_name == "管理员"
     # The password is verifiable and never stored: what the table holds is Argon2's hash,
     # exactly what a login will be checked against.
-    assert stored.password_hash != "first-shift-key"
+    assert stored.password_hash != "first-shift-key"  # pragma: allowlist secret
 
 
 def test_a_deployment_with_an_account_skips_instead_of_creating_a_second() -> None:
@@ -41,7 +41,7 @@ def test_a_deployment_with_an_account_skips_instead_of_creating_a_second() -> No
     users = FakeUsers()
     register_first_operator(
         login_name="admin",
-        password="first-shift-key",
+        password="first-shift-key",  # pragma: allowlist secret
         display_name="管理员",
         users=users,
     )
@@ -49,7 +49,7 @@ def test_a_deployment_with_an_account_skips_instead_of_creating_a_second() -> No
 
     again = register_first_operator(
         login_name="admin",
-        password="first-shift-key",
+        password="first-shift-key",  # pragma: allowlist secret
         display_name="管理员",
         users=users,
     )

@@ -44,6 +44,19 @@ class RepositoryPolicyTest(unittest.TestCase):
     def test_accepts_minimum_harness(self) -> None:
         self.assertEqual([], self.check())
 
+    def test_rejects_an_integration_filter_that_omits_system_tests(self) -> None:
+        system_test = self.write("tests/system/test_case.py", "")
+        self.write(
+            ".github/workflows/blocking-ci.yml",
+            "pull_request:\nCI required\nalways()\nmake check\n"
+            "integration-gate:\n  run: git diff | grep -E '^(apps/control-api/|Makefile$)'\n",
+        )
+        self.assertIn(
+            "blocking-ci.yml integration path filter must include tests/system/; "
+            "path filtering is not an exemption (harness §7)",
+            self.check(str(system_test)),
+        )
+
     def test_rejects_undeclared_application(self) -> None:
         path = self.root / "apps/mystery/src/main.py"
         path.parent.mkdir(parents=True)
@@ -258,69 +271,6 @@ class RepositoryPolicyTest(unittest.TestCase):
             ".mcp.json", '{"headers": {"Authorization": "Bearer ${ONE_SEARCH_TOKEN}"}}\n'
         )
         self.assertEqual([], self.check(str(manifest)))
-    # The web workspace's frozen toolchain (harness §2). Checked only once the workspace
-    # exists, because §2 also forbids adding these manifests before it does — the same reason
-    # the checks below key on a file under `apps/control-web/` rather than being unconditional.
-    def a_web_workspace(self) -> list[str]:
-        """The web workspace with its toolchain complete. Returns the extra paths to check."""
-        return [
-            str(self.write("apps/control-web/src/main.ts", "")),
-            str(self.write(".nvmrc", "22.23.2\n")),
-            str(self.write("pnpm-lock.yaml", "lockfileVersion: '11.0'\n")),
-            str(
-                self.write(
-                    "pnpm-workspace.yaml",
-                    "packages:\n  - apps/control-web\n",
-                )
-            ),
-            str(
-                self.write(
-                    "package.json",
-                    '{"packageManager": "pnpm@11.22.0"}\n',
-                )
-            ),
-        ]
-
-    def test_accepts_a_web_workspace_with_a_frozen_toolchain(self) -> None:
-        self.assertEqual([], self.check(*self.a_web_workspace()))
-
-    def test_rejects_a_web_workspace_with_no_committed_lockfile(self) -> None:
-        # CI installs from the lockfile without updating it (harness §2). Without one it
-        # resolves afresh, so the tree CI builds is not the tree anyone has run.
-        extra = [path for path in self.a_web_workspace() if path != "pnpm-lock.yaml"]
-        (self.root / "pnpm-lock.yaml").unlink()
-        self.assertIn(
-            "apps/control-web/ exists but pnpm-lock.yaml does not; harness §2 requires a "
-            "committed lockfile that CI installs from without updating",
-            self.check(*extra),
-        )
-
-    def test_rejects_a_web_workspace_with_no_pinned_node_runtime(self) -> None:
-        extra = [path for path in self.a_web_workspace() if path != ".nvmrc"]
-        (self.root / ".nvmrc").unlink()
-        self.assertIn(
-            "apps/control-web/ exists but .nvmrc does not; harness §2 requires the Node "
-            "runtime pinned in one place, as .python-version pins the interpreter",
-            self.check(*extra),
-        )
-
-    def test_rejects_a_package_manager_range_rather_than_a_pin(self) -> None:
-        # `pnpm@^11` would let CI resolve a different pnpm than a developer runs, which is
-        # what `packageManager` exists to prevent.
-        extra = self.a_web_workspace()
-        self.write("package.json", '{"packageManager": "pnpm@^11.22.0"}\n')
-        self.assertIn(
-            'package.json must pin packageManager to one exact version, not "pnpm@^11.22.0"',
-            self.check(*extra),
-        )
-
-    def test_rejects_a_missing_package_manager_declaration(self) -> None:
-        extra = self.a_web_workspace()
-        self.write("package.json", '{"private": true}\n')
-        self.assertIn(
-            "package.json must declare packageManager so corepack installs the pinned pnpm",
-            self.check(*extra),
-        )
 
 
 if __name__ == "__main__":

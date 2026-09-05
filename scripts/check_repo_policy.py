@@ -187,6 +187,17 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
         for required_text in ("pull_request:", "make check", "CI required", "always()"):
             if required_text not in text:
                 errors.append(f"blocking-ci.yml is missing required gate behavior: {required_text}")
+        if any(is_under(path, Path("tests/system")) for path in files):
+            integration_filter = re.search(
+                r"integration-gate:.*?grep -E '([^']+)'",
+                text,
+                flags=re.DOTALL,
+            )
+            if integration_filter is None or "tests/system/" not in integration_filter.group(1):
+                errors.append(
+                    "blocking-ci.yml integration path filter must include tests/system/; "
+                    "path filtering is not an exemption (harness §7)"
+                )
 
     errors.extend(check_python_pin(root))
     errors.extend(check_web_toolchain(root, files))

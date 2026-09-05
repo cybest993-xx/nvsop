@@ -22,6 +22,7 @@ class FakeUsers:
     """A `UserRepository` over a dict."""
 
     by_id: dict[UUID, User] = field(default_factory=dict)
+    bootstrap_claimed: bool = False
 
     def register(
         self,
@@ -55,8 +56,11 @@ class FakeUsers:
             raise ValueError(f"login name already taken: {user.login_name}")
         self.by_id[user.id] = user
 
-    def has_any(self) -> bool:
-        return bool(self.by_id)
+    def claim_bootstrap(self) -> bool:
+        if self.bootstrap_claimed or self.by_id:
+            return False
+        self.bootstrap_claimed = True
+        return True
 
     def deactivate(self, user_id: UUID) -> User:
         """Deactivate an account (`CONTEXT.md`: 停用). Test set-up; #23 owns the use case."""

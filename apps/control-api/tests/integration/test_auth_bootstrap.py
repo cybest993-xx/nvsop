@@ -32,7 +32,7 @@ from factory_sop.persistence import session_factory
 from factory_sop.settings import Settings
 
 SESSION_PATH = f"{API_PREFIX}/auth/session"
-BOOTSTRAP_PASSWORD = "first-shift-key"
+BOOTSTRAP_PASSWORD = "first-shift-key"  # pragma: allowlist secret
 
 
 @pytest.fixture
@@ -73,10 +73,10 @@ def deployment_environ(engine: Engine, tmp_path: Path) -> dict[str, str]:
 def clean_slate(engine: Engine) -> Iterator[None]:
     """Start from the empty schema the migration produces, as every system test does."""
     with engine.begin() as connection:
-        connection.execute(text("TRUNCATE auth_user CASCADE"))
+        connection.execute(text("TRUNCATE auth_bootstrap_guard, auth_user CASCADE"))
     yield
     with engine.begin() as connection:
-        connection.execute(text("TRUNCATE auth_user, auth_session CASCADE"))
+        connection.execute(text("TRUNCATE auth_bootstrap_guard, auth_user, auth_session CASCADE"))
 
 
 def bootstrap_argv(tmp_path: Path) -> list[str]:

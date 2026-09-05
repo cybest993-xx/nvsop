@@ -10,6 +10,8 @@ PostgreSQL rather than in a signed cookie.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 import pytest
 from fastapi import FastAPI
@@ -28,7 +30,10 @@ from factory_sop.persistence import session_factory
 from factory_sop.settings import Settings
 
 SESSION_PATH = f"{API_PREFIX}/auth/session"
-CREDENTIALS = {"login_name": "wang.li", "password": "assembly-line-3"}
+CREDENTIALS = {  # pragma: allowlist secret
+    "login_name": "wang.li",
+    "password": "assembly-line-3",  # pragma: allowlist secret
+}
 
 
 def settings() -> Settings:
@@ -155,15 +160,73 @@ def test_using_a_session_commits_the_slid_idle_window(client: TestClient, engine
     assert after is not None
     assert after >= opened_at
 
+    # The same request that touched the session can be followed by a normal logout.
+    logout = client.delete(SESSION_PATH, headers={CSRF_HEADER: client.cookies[CSRF_COOKIE]})
+    assert logout.status_code == 204
+
 
 def test_logging_out_deletes_the_row(client: TestClient, engine: Engine) -> None:
     an_account(engine)
     client.post(SESSION_PATH, json=CREDENTIALS)
+    session_cookie = client.cookies[SESSION_COOKIE]
 
     response = client.delete(SESSION_PATH, headers={CSRF_HEADER: client.cookies[CSRF_COOKIE]})
 
     assert response.status_code == 204
     assert open_sessions(engine) == 0
+
+    # A stale tab can still present the old cookie after another tab logged out. It gets the
+    # same public refusal as any other unusable session, not a leaked ORM error.
+    client.cookies.set(SESSION_COOKIE, session_cookie)
+    stale = client.get(SESSION_PATH)
+    assert stale.status_code == 401
+    assert stale.json()["error_code"] == "SESSION_INVALID"
+
+
+def test_concurrent_restore_and_logout_are_serialized_without_a_500(
+    backend: FastAPI, client: TestClient, engine: Engine
+) -> None:
+    """Touch-before-logout and logout-before-touch are both legal serial orders.
+
+    The two requests use separate HTTP clients but the same PostgreSQL-backed application, as
+    two browser tabs would. A losing restore may be refused as `SESSION_INVALID`; it must never
+    leak SQLAlchemy's stale-write exception as a 500.
+    """
+    an_account(engine)
+    opened = client.post(SESSION_PATH, json=CREDENTIALS)
+    assert opened.status_code == 201
+    session_cookie = client.cookies[SESSION_COOKIE]
+    csrf_cookie = client.cookies[CSRF_COOKIE]
+    ready = Barrier(2)
+
+    def restore() -> tuple[int, str | None]:
+        with TestClient(backend, base_url="https://testserver") as tab:
+            tab.cookies.set(SESSION_COOKIE, session_cookie)
+            tab.cookies.set(CSRF_COOKIE, csrf_cookie)
+            ready.wait(timeout=10)
+            response = tab.get(SESSION_PATH)
+            return response.status_code, response.json().get("error_code")
+
+    def logout() -> tuple[int, str | None]:
+        with TestClient(backend, base_url="https://testserver") as tab:
+            tab.cookies.set(SESSION_COOKIE, session_cookie)
+            tab.cookies.set(CSRF_COOKIE, csrf_cookie)
+            ready.wait(timeout=10)
+            response = tab.delete(SESSION_PATH, headers={CSRF_HEADER: csrf_cookie})
+            return response.status_code, response.json().get(
+                "error_code"
+            ) if response.content else None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        restored_result, logout_result = executor.map(lambda call: call(), (restore, logout))
+
+    restored_status, restored_error = restored_result
+    logout_status, logout_error = logout_result
+    assert logout_status == 204
+    assert logout_error is None
+    assert restored_status in {200, 401}
+    if restored_status == 401:
+        assert restored_error == "SESSION_INVALID"
 
 
 def test_a_refused_csrf_check_does_not_end_the_session(client: TestClient, engine: Engine) -> None:

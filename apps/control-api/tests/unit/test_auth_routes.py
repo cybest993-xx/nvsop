@@ -27,7 +27,10 @@ from factory_sop.problem import PROBLEM_MEDIA_TYPE
 from factory_sop.settings import CookieTransport, Settings
 
 SESSION_PATH = f"{API_PREFIX}/auth/session"
-CREDENTIALS = {"login_name": "wang.li", "password": "assembly-line-3"}
+CREDENTIALS = {  # pragma: allowlist secret
+    "login_name": "wang.li",
+    "password": "assembly-line-3",  # pragma: allowlist secret
+}
 
 
 def settings(
@@ -133,19 +136,6 @@ def test_both_cookies_are_secure_and_samesite_strict_by_default(backend: Backend
         assert "samesite=strict" in header.lower()
 
 
-def test_a_deployment_without_tls_can_be_configured_to_omit_secure() -> None:
-    # A browser silently discards a `Secure` cookie sent over plain HTTP, so a developer
-    # running the backend without Nginx would see a login that succeeds and then does nothing.
-    # It is an explicit two-value setting rather than a default, so the insecure one is never
-    # what happens by accident.
-    backend = Backend(configured=settings(transport="allow_http")).with_account()
-
-    response = backend.client.post(SESSION_PATH, json=CREDENTIALS)
-
-    for header in response.headers.get_list("set-cookie"):
-        assert "secure" not in header.lower()
-
-
 def test_the_session_cookie_does_not_outlive_the_session_itself(backend: Backend) -> None:
     response = backend.client.post(SESSION_PATH, json=CREDENTIALS)
 
@@ -166,7 +156,8 @@ def test_the_cookie_does_not_carry_the_password_or_a_hash_of_it(backend: Backend
 
 def test_a_wrong_password_is_refused_as_problem_json(backend: Backend) -> None:
     response = backend.client.post(
-        SESSION_PATH, json={**CREDENTIALS, "password": "assembly-line-4"}
+        SESSION_PATH,
+        json={**CREDENTIALS, "password": "assembly-line-4"},  # pragma: allowlist secret
     )
 
     assert response.status_code == 401

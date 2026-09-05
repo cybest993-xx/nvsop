@@ -34,8 +34,8 @@ def register_first_operator(
     keep minting them for as long as the secret stayed readable. The caller learns the outcome
     from the return value and the diagnostic line, not from an exception: nothing here failed.
     """
-    if users.has_any():
-        _logger.info("auth.bootstrap.skipped")
+    if not users.claim_bootstrap():
+        _logger.info("auth.bootstrap.skipped", login_name=login_name)
         return None
 
     user = User(

@@ -8,9 +8,13 @@ account's rows.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import Engine, delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DatabaseSession
 
@@ -18,6 +22,7 @@ from factory_sop.auth.adapters.repository import (
     PostgresSessionRepository,
     PostgresUserRepository,
 )
+from factory_sop.auth.adapters.tables import UserRow
 from factory_sop.auth.model import Session, User, UserStatus
 from factory_sop.auth.passwords import hash_password
 from factory_sop.identifiers import new_id
@@ -156,6 +161,53 @@ def test_touching_a_session_whose_row_a_concurrent_revoke_removed_reports_the_lo
     session.expunge_all()
 
     assert sessions.touch(stored, last_used_at=MONDAY_MORNING + timedelta(hours=5)) is None
+
+
+def test_a_touch_and_concurrent_logout_have_one_serial_order_without_a_stale_write(
+    engine: Engine,
+) -> None:
+    # Request A slides the session, then request B starts logout before A commits. `touch` must
+    # issue its write immediately: PostgreSQL then serializes B after A instead of letting B
+    # delete first and making A's deferred ORM update explode as StaleDataError at commit.
+    owner = an_account(login_name="race.operator")
+    stored = a_session(owner, fingerprint="9" * 64)
+    setup = DatabaseSession(engine)
+    reader = DatabaseSession(engine)
+    try:
+        PostgresUserRepository(setup).add(owner)
+        PostgresSessionRepository(setup).add(stored)
+        setup.commit()
+
+        reader_sessions = PostgresSessionRepository(reader)
+        restored = reader_sessions.by_token_fingerprint(stored.token_fingerprint)
+        assert restored == stored
+        touched = reader_sessions.touch(
+            restored,
+            last_used_at=MONDAY_MORNING + timedelta(hours=5),
+        )
+        assert touched is not None
+
+        def log_out() -> None:
+            with DatabaseSession(engine) as revoker:
+                sessions = PostgresSessionRepository(revoker)
+                concurrent = sessions.by_token_fingerprint(stored.token_fingerprint)
+                assert concurrent == stored
+                sessions.remove(concurrent)
+                revoker.commit()
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            logout = executor.submit(log_out)
+            # A correct touch holds the row lock, so logout is still waiting. The broken
+            # deferred update lets logout finish here and A then fails on commit.
+            with suppress(FutureTimeoutError):
+                logout.result(timeout=0.5)
+            reader.commit()
+            logout.result(timeout=5)
+    finally:
+        setup.close()
+        reader.close()
+        with engine.begin() as connection:
+            connection.execute(delete(UserRow).where(UserRow.id == owner.id))
 
 
 def test_removing_a_session_removes_only_that_one(session: DatabaseSession) -> None:

@@ -13,9 +13,11 @@ from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import CursorResult, delete, exists, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session as DatabaseSession
+from sqlalchemy.orm.exc import StaleDataError
 
-from factory_sop.auth.adapters.tables import SessionRow, UserRow
+from factory_sop.auth.adapters.tables import BootstrapGuardRow, SessionRow, UserRow
 from factory_sop.auth.model import Session, User
 
 
@@ -37,10 +39,21 @@ class PostgresUserRepository:
         self._session.add(UserRow.from_domain(user))
         self._session.flush()
 
-    def has_any(self) -> bool:
-        # One existence probe rather than counting: the answer is one bit, and `EXISTS` stops at
-        # the first row.
-        return cast(
+    def claim_bootstrap(self) -> bool:
+        # Every process inserts the same primary key. PostgreSQL blocks concurrent attempts
+        # until the winner commits, then `ON CONFLICT` makes every loser return no row. The
+        # claim and the account share one transaction, so a failed creation releases the claim.
+        claimed = self._session.scalar(
+            insert(BootstrapGuardRow)
+            .values(singleton=1)
+            .on_conflict_do_nothing(index_elements=[BootstrapGuardRow.singleton])
+            .returning(BootstrapGuardRow.singleton)
+        )
+        if claimed is None:
+            return False
+        # Handles a database upgraded from before the guard existed, or an account created by
+        # the administration path before bootstrap ever ran. Keep the guard and skip forever.
+        return not cast(
             "bool",
             self._session.scalar(select(exists().select_from(UserRow))),
         )
@@ -77,6 +90,16 @@ class PostgresSessionRepository:
             # of proceeding authenticated on a session that no longer exists.
             return None
         row.last_used_at = last_used_at
+        try:
+            # Send the update now rather than at request commit. PostgreSQL takes the row lock
+            # here, giving touch and logout one serial order; deferring it lets logout delete
+            # first and turns this request into a StaleDataError after its handler returned.
+            self._session.flush()
+        except StaleDataError:
+            # A delete that won the race between `get` and `flush` is the same unusable session
+            # as a row absent at `get`. The request Unit of Work rolls the failed transaction
+            # back when the use case raises SESSION_INVALID.
+            return None
         return row.to_domain()
 
     def remove(self, session: Session) -> None:

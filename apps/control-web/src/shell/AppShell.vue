@@ -6,9 +6,10 @@
  * unavailable rather than as links to an empty view — the shell says what exists.
  */
 import { ElButton } from 'element-plus'
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
+import { ControlPlaneError } from '@/api/controlPlane'
 import { LOGIN_ROUTE, OVERVIEW_ROUTE } from '@/router'
 import { useSessionStore } from '@/session/store'
 
@@ -32,9 +33,17 @@ const navigation: NavigationItem[] = [
 ]
 
 const displayName = computed(() => session.current?.display_name ?? '')
+const logoutFailure = ref<string | null>(null)
 
 async function logOut(): Promise<void> {
-  await session.logOut()
+  logoutFailure.value = null
+  try {
+    await session.logOut()
+  } catch (error) {
+    logoutFailure.value =
+      error instanceof ControlPlaneError ? error.message : '请求未能完成，请稍后重试'
+    return
+  }
   await router.replace({ name: LOGIN_ROUTE })
 }
 </script>
@@ -74,6 +83,7 @@ async function logOut(): Promise<void> {
       </nav>
 
       <main class="shell__main">
+        <p v-if="logoutFailure" class="shell__error" role="alert">{{ logoutFailure }}</p>
         <RouterView />
       </main>
     </div>
@@ -159,6 +169,11 @@ async function logOut(): Promise<void> {
 .shell__main {
   flex: 1;
   padding: 1.5rem;
+}
+
+.shell__error {
+  margin: 0 0 1rem;
+  color: var(--el-color-danger);
 }
 
 .shell :focus-visible {

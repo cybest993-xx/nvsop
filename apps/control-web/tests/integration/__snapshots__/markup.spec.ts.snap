@@ -96,6 +96,7 @@ exports[`the protected shell > renders the navigation and the account strip it h
       </ul>
     </nav>
     <main class="shell__main">
+      <!--v-if-->
       <div></div>
     </main>
   </div>

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from factory_sop.problem import PROBLEM_MEDIA_TYPE, FieldError, problem_response
+from factory_sop.problem import PROBLEM_MEDIA_TYPE, ApiErrorCode, FieldError, problem_response
 
 
 def body(
@@ -20,7 +20,7 @@ def body(
     response = problem_response(
         status=status,
         title="标题",
-        error_code="SOMETHING_REFUSED",
+        error_code=ApiErrorCode.REQUEST_INVALID,
         detail=detail,
         field_errors=field_errors,
     )
@@ -31,7 +31,11 @@ def body(
 def test_the_response_is_served_as_problem_json() -> None:
     # RFC 9457's media type, not `application/json`. A client that branches on the content
     # type has to be able to tell a problem from a successful payload.
-    response = problem_response(status=403, title="没有权限", error_code="PERMISSION_DENIED")
+    response = problem_response(
+        status=403,
+        title="请求校验失败",
+        error_code=ApiErrorCode.CSRF_TOKEN_INVALID,
+    )
 
     assert response.media_type == PROBLEM_MEDIA_TYPE
     assert response.status_code == 403
@@ -45,7 +49,7 @@ def test_the_body_carries_the_stable_error_code_and_the_http_status() -> None:
         "type": "about:blank",
         "title": "标题",
         "status": 409,
-        "error_code": "SOMETHING_REFUSED",
+        "error_code": "REQUEST_INVALID",
     }
 
 

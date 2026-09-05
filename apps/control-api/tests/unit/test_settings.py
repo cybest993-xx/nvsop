@@ -88,9 +88,11 @@ def test_refuses_a_non_positive_session_timeout(tmp_path: Path) -> None:
         Settings.from_environment(environment(tmp_path, SOP_SESSION_IDLE_TIMEOUT_MINUTES="0"))
 
 
-def test_refuses_an_unknown_cookie_transport(tmp_path: Path) -> None:
+def test_refuses_any_cookie_transport_that_allows_plain_http(tmp_path: Path) -> None:
+    # §六 has no development exception: every session cookie is Secure. Local development
+    # must provide HTTPS rather than turning a production security attribute off.
     with pytest.raises(ConfigurationError, match="session_cookie_transport"):
-        Settings.from_environment(environment(tmp_path, SOP_SESSION_COOKIE_TRANSPORT="maybe"))
+        Settings.from_environment(environment(tmp_path, SOP_SESSION_COOKIE_TRANSPORT="allow_http"))
 
 
 def test_keeps_the_csrf_secret_out_of_the_repr(tmp_path: Path) -> None:
@@ -110,12 +112,10 @@ def test_reads_a_secret_from_the_path_variable_and_strips_the_trailing_newline(
 def test_refuses_a_secret_passed_by_value(tmp_path: Path) -> None:
     # §六: secrets arrive as a path to a file, never as the value itself. Accepting the
     # value form would make the insecure deployment the quiet one.
-    by_value = environment(
-        tmp_path,
-        SOP_DATABASE_PASSWORD="hunter2",  # pragma: allowlist secret
-    )
     with pytest.raises(ConfigurationError, match="SOP_DATABASE_PASSWORD"):
-        Settings.from_environment(by_value)
+        Settings.from_environment(
+            environment(tmp_path, SOP_DATABASE_PASSWORD="hunter2")  # pragma: allowlist secret
+        )
 
 
 def test_refuses_to_start_when_a_secret_file_is_missing(tmp_path: Path) -> None:

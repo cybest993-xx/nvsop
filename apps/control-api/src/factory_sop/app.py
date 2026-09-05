@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
+from typing import Any
 
 from fastapi import APIRouter, FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -25,7 +26,13 @@ from factory_sop.observability import (
     get_logger,
     new_correlation_id,
 )
-from factory_sop.problem import FieldError, problem_response
+from factory_sop.problem import (
+    PROBLEM_MEDIA_TYPE,
+    ApiErrorCode,
+    FieldError,
+    problem_openapi_response,
+    problem_response,
+)
 from factory_sop.settings import Settings
 
 # The literal prefix every control-plane path sits under. Not a version axis: there will be
@@ -51,7 +58,7 @@ _logger = get_logger("http")
 liveness_router = APIRouter()
 
 
-@liveness_router.get("/liveness")
+@liveness_router.get("/liveness", operation_id="readLiveness")
 async def liveness() -> dict[str, str]:
     """Report that the process is up. Deliberately touches no dependency.
 
@@ -69,7 +76,11 @@ def create_app(settings: Settings) -> FastAPI:
     process environment and start-up fails there, before an application exists to serve a
     request with a half-valid configuration.
     """
-    app = FastAPI(title="SOP compliance center backend", docs_url=f"{API_PREFIX}/docs")
+    app = FastAPI(
+        title="SOP compliance center backend",
+        docs_url=f"{API_PREFIX}/docs",
+        responses={500: problem_openapi_response("Internal server error")},
+    )
     app.state.settings = settings
     # Built here rather than by `Settings`, which sits below the domain in the layering and so
     # carries the configured minutes rather than the type made from them.
@@ -92,7 +103,7 @@ def create_app(settings: Settings) -> FastAPI:
         return problem_response(
             status=status,
             title=title,
-            error_code=error.code.value,
+            error_code=ApiErrorCode(error.code.value),
         )
 
     @app.exception_handler(RequestValidationError)
@@ -105,7 +116,7 @@ def create_app(settings: Settings) -> FastAPI:
         return problem_response(
             status=422,
             title="提交的内容不合要求",
-            error_code="REQUEST_INVALID",
+            error_code=ApiErrorCode.REQUEST_INVALID,
             field_errors=[
                 FieldError(
                     # `loc` starts with the source (`body`, `query`); the client cares about the
@@ -129,7 +140,7 @@ def create_app(settings: Settings) -> FastAPI:
         return problem_response(
             status=500,
             title="服务器内部错误",
-            error_code="INTERNAL_ERROR",
+            error_code=ApiErrorCode.INTERNAL_ERROR,
         )
 
     @app.middleware("http")
@@ -174,7 +185,7 @@ def create_app(settings: Settings) -> FastAPI:
             return problem_response(
                 status=403,
                 title="请求校验失败，请刷新页面后重试",
-                error_code="CSRF_TOKEN_INVALID",
+                error_code=ApiErrorCode.CSRF_TOKEN_INVALID,
             )
         return await call_next(request)
 
@@ -194,4 +205,32 @@ def create_app(settings: Settings) -> FastAPI:
         response.headers[CORRELATION_ID_HEADER] = correlation_id
         return response
 
+    default_openapi = app.openapi
+
+    def openapi() -> dict[str, Any]:
+        """Keep every documented problem response on RFC 9457's media type only."""
+        if app.openapi_schema is None:
+            schema = default_openapi()
+            for path_item in schema.get("paths", {}).values():
+                if not isinstance(path_item, dict):
+                    continue
+                for operation in path_item.values():
+                    if not isinstance(operation, dict):
+                        continue
+                    responses = operation.get("responses", {})
+                    if not isinstance(responses, dict):
+                        continue
+                    for response in responses.values():
+                        if not isinstance(response, dict):
+                            continue
+                        content = response.get("content", {})
+                        if isinstance(content, dict) and PROBLEM_MEDIA_TYPE in content:
+                            content.pop("application/json", None)
+            app.openapi_schema = schema
+        return app.openapi_schema
+
+    # FastAPI documents replacing this instance method, but its type declares the method as
+    # non-assignable. This is the one justified local type escape; keep the rest of the
+    # composition root under strict checking.
+    app.openapi = openapi  # type: ignore[method-assign]
     return app

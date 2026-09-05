@@ -10,6 +10,7 @@ from pydantic import SecretStr
 from factory_sop.app import CORRELATION_ID_HEADER, create_app
 from factory_sop.auth.model import SessionPolicy
 from factory_sop.observability import configure_logging
+from factory_sop.problem import PROBLEM_MEDIA_TYPE
 from factory_sop.settings import Settings
 
 
@@ -78,6 +79,26 @@ def test_a_request_logs_one_line_under_its_own_correlation_id() -> None:
     assert [(line["event"], line["correlation_id"]) for line in logged] == [
         ("http.request.completed", "0191bbbb")
     ]
+
+
+def test_the_openapi_contract_names_operations_and_the_problem_shape() -> None:
+    schema = create_app(settings()).openapi()
+    session = schema["paths"]["/api/v1/auth/session"]
+
+    assert {method: session[method]["operationId"] for method in ("post", "get", "delete")} == {
+        "post": "openSession",
+        "get": "readSession",
+        "delete": "endSession",
+    }
+    assert "ProblemDocument" in schema["components"]["schemas"]
+    error_code = schema["components"]["schemas"]["ProblemDocument"]["properties"]["error_code"]
+    assert error_code["$ref"] == "#/components/schemas/ApiErrorCode"
+    assert "SESSION_INVALID" in schema["components"]["schemas"]["ApiErrorCode"]["enum"]
+    for method, status in (("post", "401"), ("post", "422"), ("get", "401"), ("delete", "403")):
+        content = session[method]["responses"][status]["content"]
+        assert set(content) == {PROBLEM_MEDIA_TYPE}
+        problem = content[PROBLEM_MEDIA_TYPE]
+        assert problem["schema"]["$ref"] == "#/components/schemas/ProblemDocument"
 
 
 def test_the_settings_object_is_reachable_from_the_application() -> None:

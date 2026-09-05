@@ -28,7 +28,7 @@ from factory_sop.observability import configure_logging
 
 POLICY = SessionPolicy(idle_timeout=timedelta(hours=12), absolute_lifetime=timedelta(days=30))
 MONDAY_MORNING = datetime(2026, 9, 7, 1, 0, tzinfo=UTC)
-PASSWORD = "assembly-line-3"
+PASSWORD = "assembly-line-3"  # pragma: allowlist secret
 
 # The five §5.15 requires on every line, whatever the event.
 MANDATORY_FIELDS = {"event", "module", "correlation_id", "level", "ts"}
@@ -82,7 +82,7 @@ def test_a_refused_login_logs_the_login_name_and_never_the_password(log: io.Stri
     with pytest.raises(AuthenticationRefusedError):
         open_session(
             login_name="wang.li",
-            password="wrong-password",
+            password="wrong-password",  # pragma: allowlist secret
             users=users,
             sessions=FakeSessions(),
             policy=POLICY,

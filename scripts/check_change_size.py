@@ -3,11 +3,11 @@
 
 Usage: check_change_size.py BASE HEAD
 
-Counts the implementation lines a change adds — production source and repository
-automation, not tests, docs, lockfiles or the vendored base — and compares them with the
-budget the harness sets: 800 for a change, 500 for one that touches judgment logic. The
-budget is per landed stage, so a pull request that trips it is asked to split, not to
-argue: the reviewer is the one who has to hold the change in their head.
+Counts the implementation lines a change adds — authored production source and repository
+automation, not tests, generated clients, docs, lockfiles or the vendored base — and compares
+them with the budget the harness sets: 800 for a change, 500 for one that touches judgment
+logic. The budget is per landed stage, so a pull request that trips it is asked to split, not
+to argue: the reviewer is the one who has to hold the change in their head.
 """
 
 from __future__ import annotations
@@ -22,11 +22,14 @@ TIGHT_LINE_BUDGET = 500
 # inside the judgment package. Add retention's package here when it lands.
 TIGHT_BUDGET_PATHS = (Path("apps/edge-runtime/src/edge_runtime/judgment"),)
 IMPLEMENTATION_ROOTS = (Path("apps"), Path("packages"), Path("scripts"))
+GENERATED_OUTPUTS = (Path("apps/control-web/src/api/generated"),)
 
 
 def is_implementation(path: Path) -> bool:
-    """Production source or repository automation; never tests, docs or vendored code."""
+    """Authored production source or repository automation; never generated output or tests."""
     if "tests" in path.parts:
+        return False
+    if any(path.parts[: len(root.parts)] == root.parts for root in GENERATED_OUTPUTS):
         return False
     if path.parts[:1] == ("scripts",):
         return True

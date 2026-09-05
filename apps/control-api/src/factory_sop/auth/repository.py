@@ -31,11 +31,11 @@ class UserRepository(Protocol):
         """
         ...
 
-    def has_any(self) -> bool:
-        """Whether the store holds any account at all.
+    def claim_bootstrap(self) -> bool:
+        """Atomically claim the right to create the deployment's first account.
 
-        The bootstrap's precondition, not a listing: a deployment creates its first account
-        exactly once, and the question is one bit.
+        Exactly one concurrent bootstrap transaction receives ``True``. Once any account or
+        a successful claim exists, every later call receives ``False``.
         """
         ...
 

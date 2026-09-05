@@ -16,6 +16,13 @@ from __future__ import annotations
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 
+# The shortest password an administrator may set on an account. Length is the only rule: a
+# composition rule ("one digit, one symbol") measurably pushes operators towards `Passw0rd!` and
+# towards writing it on the terminal, which on a shop floor is the threat that actually happens.
+# Enforced in the use cases that set one, and the API contract states the same number so a form
+# can refuse it before a round trip.
+MINIMUM_PASSWORD_LENGTH = 12
+
 # RFC 9106 §4, second recommended configuration.
 _MEMORY_COST_KIB = 65536
 _TIME_COST = 3

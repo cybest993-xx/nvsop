@@ -1,4 +1,5 @@
-"""`auth`'s tables: `auth_user` and `auth_session` (§七).
+"""`auth`'s tables: `auth_user`, `auth_session`, `auth_role`, `auth_role_permission`,
+`auth_user_role` and the `auth_permission` registry (§七).
 
 The `auth_` prefix is not decoration — it is what makes migration ownership statically
 decidable, and `scripts/check_migration_ownership.py` fails a migration that touches a table
@@ -19,7 +20,8 @@ from uuid import UUID
 from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, Integer, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from factory_sop.auth.model import Session, User, UserStatus
+from factory_sop.auth.model import Role, Session, User, UserStatus
+from factory_sop.auth.permissions import Permission
 from factory_sop.persistence import Table
 
 # A hex SHA-256 digest (`auth/tokens.py`). Fixed width, so a value of another shape means the
@@ -58,6 +60,12 @@ class UserRow(Table):
             values_callable=lambda enum: [m.value for m in enum],
         )
     )
+    # Who created the account and who last changed it. Plain UUIDs rather than a self foreign
+    # key: this is attribution for the 变更归属 rule (§5.15), not integrity — the trail of what
+    # changed is the diagnostic log's (Q37), and no query needs a join to answer "who did this".
+    # Nullable because a database that predates the columns has rows with no one to name.
+    created_by: Mapped[UUID | None] = mapped_column(Uuid())
+    updated_by: Mapped[UUID | None] = mapped_column(Uuid())
 
     def to_domain(self) -> User:
         return User(
@@ -66,6 +74,8 @@ class UserRow(Table):
             display_name=self.display_name,
             password_hash=self.password_hash,
             status=self.status,
+            created_by=self.created_by,
+            updated_by=self.updated_by,
         )
 
     @classmethod
@@ -76,6 +86,8 @@ class UserRow(Table):
             display_name=user.display_name,
             password_hash=user.password_hash,
             status=user.status,
+            created_by=user.created_by,
+            updated_by=user.updated_by,
         )
 
 
@@ -118,3 +130,95 @@ class SessionRow(Table):
             created_at=session.created_at,
             last_used_at=session.last_used_at,
         )
+
+
+class PermissionRow(Table):
+    """The registry of registered permissions (§七).
+
+    One row per member of `auth/permissions.py`'s enum, seeded by the migration that introduces
+    the member: a module's own `auth`-prefixed migration inserts its codes here when the module
+    lands. `auth_role_permission` carries a foreign key to this table, so a permission no
+    module registered cannot be stored — the second gate behind `parse_permission` at the seam.
+
+    Registry rows are never removed in the run of a change that only adds permissions; taking
+    one away belongs to the removing module's own migration, and the repository reads past a
+    code its build no longer registers rather than failing every holder's request.
+    """
+
+    __tablename__ = "auth_permission"
+
+    # The `module.resource.action` value itself. 64 is comfortably above the longest plausible
+    # triple, and the string is the wire format — no mapping between table and wire to keep true.
+    code: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+
+class RoleRow(Table):
+    """A role. Its permissions are rows in `auth_role_permission`, not a column here."""
+
+    __tablename__ = "auth_role"
+
+    id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
+    # Unique, and the key a fixture or an operator's script names a role by — never the URL
+    # identity, which is the UUIDv7 above (§5.15).
+    code: Mapped[str] = mapped_column(String(64), unique=True)
+    name: Mapped[str] = mapped_column(String(128))
+    # Same attribution pair `auth_user` carries, for the same rule (§5.15).
+    created_by: Mapped[UUID | None] = mapped_column(Uuid())
+    updated_by: Mapped[UUID | None] = mapped_column(Uuid())
+
+    def to_domain(self, *, permissions: frozenset[Permission]) -> Role:
+        return Role(
+            id=self.id,
+            code=self.code,
+            name=self.name,
+            permissions=permissions,
+            created_by=self.created_by,
+            updated_by=self.updated_by,
+        )
+
+
+class RolePermissionRow(Table):
+    """One permission granted by one role.
+
+    A row per permission rather than an array column or a comma-joined string. Two reasons, and
+    both are about the queries this module actually runs: resolving a caller's permission set is
+    a join, and the last-administration guard asks "which active accounts hold this permission",
+    which is a `WHERE` on an indexed column here. Against an array or a delimited string, both
+    become a scan with parsing in the middle.
+
+    `permission` is a plain string column, not a database enum, but a foreign key to
+    `auth_permission`: this set grows by one member every time a module is added, and a database
+    enum would make each of those an `ALTER TYPE` migration in `auth` for a value `auth` does
+    not own. Membership is enforced where it is decidable — `parse_permission` on the way in,
+    the registry's key on the way down.
+    """
+
+    __tablename__ = "auth_role_permission"
+
+    role_id: Mapped[UUID] = mapped_column(
+        Uuid(), ForeignKey("auth_role.id", ondelete="CASCADE"), primary_key=True
+    )
+    # The registry's code, and the reason an unregistered permission cannot be stored.
+    permission: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("auth_permission.code", ondelete="RESTRICT"),
+        primary_key=True,
+        index=True,
+    )
+
+
+class UserRoleRow(Table):
+    """One role held by one account. The composite primary key is what makes it a set.
+
+    Both sides cascade: deleting an account or a role must not leave an assignment naming
+    something that is gone, and an assignment row carries no information of its own to preserve.
+    """
+
+    __tablename__ = "auth_user_role"
+
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid(), ForeignKey("auth_user.id", ondelete="CASCADE"), primary_key=True
+    )
+    role_id: Mapped[UUID] = mapped_column(
+        Uuid(), ForeignKey("auth_role.id", ondelete="CASCADE"), primary_key=True, index=True
+    )

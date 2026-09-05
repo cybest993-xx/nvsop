@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from uuid import UUID
 
+from factory_sop.auth.permissions import Permission
+
 
 class UserStatus(StrEnum):
     """Whether an account may still take part in a new login.
@@ -26,13 +28,48 @@ class UserStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class User:
-    """A local account. Roles and permissions attach to it in #23."""
+    """A local account. Its roles are held by `RoleRepository`, not by this type.
+
+    Deliberately not carrying a `roles` list: a `User` is read on every authenticated request,
+    and the login path needs the credential and the status without the two extra joins that
+    resolving roles costs. What a request needs the roles *for* is the permission set, and that
+    is resolved once per request into `Caller.granted` (`auth/authorization.py`).
+    """
 
     id: UUID
     login_name: str
     display_name: str
     password_hash: str
     status: UserStatus
+    # Who created the account and who last changed it (§5.15 carries 变更归属 in these columns;
+    # the *trail* of changes is the diagnostic log's job, Q37). `None` only on a row written by
+    # an older build; every path in this module sets them.
+    created_by: UUID | None = None
+    updated_by: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Role:
+    """A named set of permissions (Q5/Q14). Nothing else — no hierarchy, no inheritance.
+
+    A user may hold several, and what they may do is the union. Keeping a role a plain set is
+    what makes the screen honest: the checkboxes an administrator ticks are the permissions that
+    are enforced, with no rule in between that could grant a seventh thing they did not tick.
+
+    `permissions` holds `Permission` members rather than strings, so a value that is not
+    registered cannot be in a role at all — the parse happens at the edge, in the use case that
+    writes one, and everything below this point is a closed set.
+    """
+
+    id: UUID
+    # The stable identifier a fixture, an import or an operator's script names a role by, and
+    # what the last-administration guard reports. Unique; never the URL identity, which is the
+    # UUIDv7 above (§5.15).
+    code: str
+    name: str
+    permissions: frozenset[Permission]
+    created_by: UUID | None = None
+    updated_by: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)

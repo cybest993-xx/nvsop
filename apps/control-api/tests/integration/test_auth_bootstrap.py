@@ -71,12 +71,20 @@ def deployment_environ(engine: Engine, tmp_path: Path) -> dict[str, str]:
 
 @pytest.fixture(autouse=True)
 def clean_slate(engine: Engine) -> Iterator[None]:
-    """Start from the empty schema the migration produces, as every system test does."""
+    """Start from the empty schema the migration produces, as every system test does.
+
+    `auth_role` is truncated alongside the accounts: the bootstrap now seeds the administrator
+    role, the command commits it, and a role surviving into the next test would collide with
+    the seed's unique code. `CASCADE` carries the assignment and permission rows with it; the
+    `auth_permission` registry is migration-seeded reference data and is never truncated.
+    """
     with engine.begin() as connection:
-        connection.execute(text("TRUNCATE auth_bootstrap_guard, auth_user CASCADE"))
+        connection.execute(text("TRUNCATE auth_bootstrap_guard, auth_user, auth_role CASCADE"))
     yield
     with engine.begin() as connection:
-        connection.execute(text("TRUNCATE auth_bootstrap_guard, auth_user, auth_session CASCADE"))
+        connection.execute(
+            text("TRUNCATE auth_bootstrap_guard, auth_user, auth_role, auth_session CASCADE")
+        )
 
 
 def bootstrap_argv(tmp_path: Path) -> list[str]:

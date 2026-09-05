@@ -10,11 +10,19 @@ export type ClientOptions = {
  * The stable wire-level failure codes currently emitted by the control plane.
  */
 export type ApiErrorCode =
+  | 'ADMINISTRATION_WOULD_BE_LOST'
+  | 'LOGIN_NAME_TAKEN'
+  | 'PASSWORD_TOO_SHORT'
+  | 'PERMISSION_UNREGISTERED'
+  | 'ROLE_CODE_TAKEN'
+  | 'ROLE_NOT_FOUND'
+  | 'USER_NOT_FOUND'
   | 'ACCOUNT_DEACTIVATED'
   | 'AUTHENTICATION_REQUIRED'
   | 'CREDENTIALS_REJECTED'
   | 'CSRF_TOKEN_INVALID'
   | 'INTERNAL_ERROR'
+  | 'PERMISSION_DENIED'
   | 'REQUEST_INVALID'
   | 'SESSION_INVALID'
 
@@ -35,6 +43,20 @@ export type Credentials = {
 }
 
 /**
+ * EditedRole
+ */
+export type EditedRole = {
+  /**
+   * Name
+   */
+  name: string
+  /**
+   * Permissions
+   */
+  permissions: Array<string>
+}
+
+/**
  * FieldError
  *
  * One rejected input, named so the Web form can put the message beside it.
@@ -48,6 +70,68 @@ export type FieldError = {
    * Message
    */
   message: string
+}
+
+/**
+ * ItemPage[RoleView]
+ */
+export type ItemPageRoleView = {
+  /**
+   * Items
+   */
+  items: Array<RoleView>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
+ * ItemPage[str]
+ */
+export type ItemPageStr = {
+  /**
+   * Items
+   */
+  items: Array<string>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
+ * NewRole
+ */
+export type NewRole = {
+  /**
+   * Code
+   */
+  code: string
+  /**
+   * Name
+   */
+  name: string
+  /**
+   * Permissions
+   */
+  permissions: Array<string>
 }
 
 /**
@@ -80,13 +164,50 @@ export type ProblemDocument = {
 }
 
 /**
+ * RoleView
+ *
+ * A role and its permission set, sorted so the response is stable between requests.
+ */
+export type RoleView = {
+  /**
+   * Code
+   */
+  code: string
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Name
+   */
+  name: string
+  /**
+   * Permissions
+   */
+  permissions: Array<string>
+}
+
+/**
  * SessionView
  *
- * Who the caller is and when their session ends.
+ * Who the caller is, what they may do, and when their session ends.
  *
  * `expires_at` is here so the Web shell can warn before a session lapses rather than
  * discovering it through a failed request mid-form. It moves on every request that slides the
  * idle window, which is why it is read from the policy rather than stored.
+ *
+ * `permissions` is what the caller may do, as `module.resource.action` strings, sorted. The Web
+ * renders its navigation and its buttons from this: a screen that offers an action the backend
+ * will refuse is worse than one that does not offer it, because the operator finds out after
+ * filling the form in. It is the effective set rather than the roles behind it, because that is
+ * what the front end branches on — and it is not a secret from the caller, who could discover
+ * it by trying. Enforcement is unaffected: the use case checks, whatever the client was told.
+ *
+ * The schema marks the field optional, not because the server sometimes omits it — every path
+ * below always sets it — but because the compatibility gate (ADR-0003) rejects a new *required*
+ * field on a shared schema: a client generated from the old contract must keep parsing new
+ * responses. Marking it optional promises less than the server delivers, which is the safe
+ * direction; a default keeps the payload carrying it even if a future route forgets to.
  */
 export type SessionView = {
   /**
@@ -102,10 +223,247 @@ export type SessionView = {
    */
   login_name: string
   /**
+   * Permissions
+   */
+  permissions?: Array<string>
+  /**
    * User Id
    */
   user_id: string
 }
+
+export type ListPermissionsData = {
+  body?: never
+  path?: never
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/auth/permissions'
+}
+
+export type ListPermissionsErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Page or page size out of range
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ListPermissionsError = ListPermissionsErrors[keyof ListPermissionsErrors]
+
+export type ListPermissionsResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageStr
+}
+
+export type ListPermissionsResponse = ListPermissionsResponses[keyof ListPermissionsResponses]
+
+export type ListRolesData = {
+  body?: never
+  path?: never
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/auth/roles'
+}
+
+export type ListRolesErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ListRolesError = ListRolesErrors[keyof ListRolesErrors]
+
+export type ListRolesResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageRoleView
+}
+
+export type ListRolesResponse = ListRolesResponses[keyof ListRolesResponses]
+
+export type CreateRoleData = {
+  body: NewRole
+  path?: never
+  query?: never
+  url: '/api/v1/auth/roles'
+}
+
+export type CreateRoleErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Role code already taken
+   */
+  409: ProblemDocument
+  /**
+   * Request invalid, or a permission is not registered
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CreateRoleError = CreateRoleErrors[keyof CreateRoleErrors]
+
+export type CreateRoleResponses = {
+  /**
+   * Successful Response
+   */
+  201: RoleView
+}
+
+export type CreateRoleResponse = CreateRoleResponses[keyof CreateRoleResponses]
+
+export type DeleteRoleData = {
+  body?: never
+  path: {
+    /**
+     * Role Id
+     */
+    role_id: string
+  }
+  query?: never
+  url: '/api/v1/auth/roles/{role_id}'
+}
+
+export type DeleteRoleErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Role not found
+   */
+  404: ProblemDocument
+  /**
+   * The deletion would leave the system unadministrable
+   */
+  409: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type DeleteRoleError = DeleteRoleErrors[keyof DeleteRoleErrors]
+
+export type DeleteRoleResponses = {
+  /**
+   * Successful Response
+   */
+  204: void
+}
+
+export type DeleteRoleResponse = DeleteRoleResponses[keyof DeleteRoleResponses]
+
+export type EditRoleData = {
+  body: EditedRole
+  path: {
+    /**
+     * Role Id
+     */
+    role_id: string
+  }
+  query?: never
+  url: '/api/v1/auth/roles/{role_id}'
+}
+
+export type EditRoleErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Role not found
+   */
+  404: ProblemDocument
+  /**
+   * Role code already taken, or the edit would leave the system unadministrable
+   */
+  409: ProblemDocument
+  /**
+   * Request invalid, or a permission is not registered
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type EditRoleError = EditRoleErrors[keyof EditRoleErrors]
+
+export type EditRoleResponses = {
+  /**
+   * Successful Response
+   */
+  200: RoleView
+}
+
+export type EditRoleResponse = EditRoleResponses[keyof EditRoleResponses]
 
 export type EndSessionData = {
   body?: never

@@ -4,11 +4,19 @@
       "ApiErrorCode": {
         "description": "The stable wire-level failure codes currently emitted by the control plane.",
         "enum": [
+          "ADMINISTRATION_WOULD_BE_LOST",
+          "LOGIN_NAME_TAKEN",
+          "PASSWORD_TOO_SHORT",
+          "PERMISSION_UNREGISTERED",
+          "ROLE_CODE_TAKEN",
+          "ROLE_NOT_FOUND",
+          "USER_NOT_FOUND",
           "ACCOUNT_DEACTIVATED",
           "AUTHENTICATION_REQUIRED",
           "CREDENTIALS_REJECTED",
           "CSRF_TOKEN_INVALID",
           "INTERNAL_ERROR",
+          "PERMISSION_DENIED",
           "REQUEST_INVALID",
           "SESSION_INVALID"
         ],
@@ -38,6 +46,29 @@
         "title": "Credentials",
         "type": "object"
       },
+      "EditedRole": {
+        "properties": {
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Permissions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "permissions"
+        ],
+        "title": "EditedRole",
+        "type": "object"
+      },
       "FieldError": {
         "description": "One rejected input, named so the Web form can put the message beside it.",
         "properties": {
@@ -55,6 +86,104 @@
           "message"
         ],
         "title": "FieldError",
+        "type": "object"
+      },
+      "ItemPage_RoleView_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RoleView"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "minimum": 1.0,
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "minimum": 1.0,
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
+        "title": "ItemPage[RoleView]",
+        "type": "object"
+      },
+      "ItemPage_str_": {
+        "properties": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "minimum": 1.0,
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "minimum": 1.0,
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
+        "title": "ItemPage[str]",
+        "type": "object"
+      },
+      "NewRole": {
+        "properties": {
+          "code": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Code",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Permissions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "permissions"
+        ],
+        "title": "NewRole",
         "type": "object"
       },
       "ProblemDocument": {
@@ -111,8 +240,41 @@
         "title": "ProblemDocument",
         "type": "object"
       },
+      "RoleView": {
+        "description": "A role and its permission set, sorted so the response is stable between requests.",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Permissions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "name",
+          "permissions"
+        ],
+        "title": "RoleView",
+        "type": "object"
+      },
       "SessionView": {
-        "description": "Who the caller is and when their session ends.\n\n`expires_at` is here so the Web shell can warn before a session lapses rather than\ndiscovering it through a failed request mid-form. It moves on every request that slides the\nidle window, which is why it is read from the policy rather than stored.",
+        "description": "Who the caller is, what they may do, and when their session ends.\n\n`expires_at` is here so the Web shell can warn before a session lapses rather than\ndiscovering it through a failed request mid-form. It moves on every request that slides the\nidle window, which is why it is read from the policy rather than stored.\n\n`permissions` is what the caller may do, as `module.resource.action` strings, sorted. The Web\nrenders its navigation and its buttons from this: a screen that offers an action the backend\nwill refuse is worse than one that does not offer it, because the operator finds out after\nfilling the form in. It is the effective set rather than the roles behind it, because that is\nwhat the front end branches on — and it is not a secret from the caller, who could discover\nit by trying. Enforcement is unaffected: the use case checks, whatever the client was told.\n\nThe schema marks the field optional, not because the server sometimes omits it — every path\nbelow always sets it — but because the compatibility gate (ADR-0003) rejects a new *required*\nfield on a shared schema: a client generated from the old contract must keep parsing new\nresponses. Marking it optional promises less than the server delivers, which is the safe\ndirection; a default keeps the payload carrying it even if a future route forgets to.",
         "properties": {
           "display_name": {
             "title": "Display Name",
@@ -126,6 +288,13 @@
           "login_name": {
             "title": "Login Name",
             "type": "string"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Permissions",
+            "type": "array"
           },
           "user_id": {
             "format": "uuid",
@@ -150,6 +319,452 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/auth/permissions": {
+      "get": {
+        "description": "Every permission a role may contain, in the §5.15 list envelope.\n\nThe role screen renders its checkboxes from this rather than from a list of its own, so a\npermission the backend registers appears without a front-end change and one it does not\nregister cannot be offered.",
+        "operationId": "listPermissions",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPage_str_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Page or page size out of range"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Read The Permission Catalogue",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/roles": {
+      "get": {
+        "description": "Every role, with its permission set, in the §5.15 list envelope.",
+        "operationId": "listRoles",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPage_RoleView_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Request invalid"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Read The Roles",
+        "tags": [
+          "auth"
+        ]
+      },
+      "post": {
+        "description": "Create a role from registered permission strings.",
+        "operationId": "createRole",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewRole"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Role code already taken"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Request invalid, or a permission is not registered"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Create A Role",
+        "tags": [
+          "auth"
+        ],
+        "x-required-permission": "auth.role.edit"
+      }
+    },
+    "/api/v1/auth/roles/{role_id}": {
+      "delete": {
+        "description": "Delete a role and every assignment of it.",
+        "operationId": "deleteRole",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "role_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Role Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Role not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "The deletion would leave the system unadministrable"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Request invalid"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Delete A Role",
+        "tags": [
+          "auth"
+        ],
+        "x-required-permission": "auth.role.delete"
+      },
+      "put": {
+        "description": "Replace a role's name and permission set. `PUT`, because the set is replaced whole.",
+        "operationId": "editRole",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "role_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Role Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditedRole"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Role not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Role code already taken, or the edit would leave the system unadministrable"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Request invalid, or a permission is not registered"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Edit A Role",
+        "tags": [
+          "auth"
+        ],
+        "x-required-permission": "auth.role.edit"
+      }
+    },
     "/api/v1/auth/session": {
       "delete": {
         "description": "Log out: revoke the session server-side and clear both cookies.\n\nIt does not depend on `Authenticated`. A caller whose session has already lapsed still\nwants their cookies gone, and answering a logout with a 401 would leave the browser holding\na cookie it cannot use and no way to discard it. Idempotent for the same reason.\n\nIt **is** CSRF-protected, by the middleware that covers every modifying request: a\ncross-origin page able to force a logout is a denial of service on a shop-floor terminal.\n\nThe response is constructed here rather than taking the injected one and copying its\nheaders across. Two cookies mean two `Set-Cookie` headers, and a `dict` of the headers\nkeeps only the last of them — which cleared the session cookie and left the CSRF cookie in\nthe browser.",

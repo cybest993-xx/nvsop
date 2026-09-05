@@ -54,11 +54,25 @@ PLACEHOLDER_VALUE = re.compile(
     re.IGNORECASE,
 )
 CENTER_PYTHON_VERSION = "3.12"
-# Harness §5: a module file stays under this many lines, excluding tests. Counted on
-# production source trees only, because that is where a file that keeps growing hides a
-# module that should have been split.
-MODULE_FILE_LINE_LIMIT = 500
+# Harness §5: 500 lines is the review target; 800 is the hard threshold at which an authored
+# production file must extract a cohesive private module or carry a documented exception. This
+# is deliberately a file budget, not a total-size cap on the product module that owns the file.
+# The threshold is language-neutral, so `.vue` and `.ts` are counted beside `.py`.
+MODULE_FILE_REVIEW_TARGET = 500
+MODULE_FILE_LINE_LIMIT = 800
+# A rare cohesive file may exceed the hard threshold only through a bounded, reviewed exception.
+# Every entry added here carries a nearby comment pointing to the ADR or harness decision that
+# explains why extraction would damage ownership or invariants. The ceiling prevents an exception
+# from becoming permission for unbounded growth.
+MODULE_FILE_LINE_EXCEPTIONS: dict[Path, int] = {}
 PRODUCTION_SOURCE_ROOTS = (Path("apps"), Path("packages"))
+# Generated output has one documented source command (harness §8) and is not authored, so its
+# file sizes are the generator's business, not the budget's.
+GENERATED_SOURCE = Path("apps/control-web/src/api/generated")
+# The authored production languages this repository ships. `.vue` single-file components are
+# modules exactly as much as `.py` files; `.d.ts` declarations under `src/` are hand-written
+# here (the generated ones sit under `GENERATED_SOURCE`).
+MODULE_FILE_SUFFIXES = frozenset({".py", ".ts", ".vue"})
 # A literal `Authorization` header in a checked-in JSON file (an MCP server manifest, an
 # HTTP client fixture) is a credential in Git regardless of what the file is called; only a
 # `${VAR}` reference, expanded by the reader at load time, may be committed.
@@ -154,7 +168,11 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
             errors.append(f"private key material must not be committed: {path}")
         if path.suffix == ".json" and not is_vendor(path):
             errors.extend(check_json_authorization_headers(root, path))
-        if path.suffix == ".py" and is_production_source(path):
+        if (
+            path.suffix in MODULE_FILE_SUFFIXES
+            and is_production_source(path)
+            and not is_under(path, GENERATED_SOURCE)
+        ):
             errors.extend(check_module_file_size(root, path))
 
         if (
@@ -373,18 +391,25 @@ def is_production_source(path: Path) -> bool:
 
 
 def check_module_file_size(root: Path, path: Path) -> list[str]:
-    """Fail when a module file has grown past harness §5's budget.
+    """Fail at the hard production-file threshold from harness §5.
 
-    Reviewed as prose, the budget is crossed one small change at a time and nobody sees the
-    crossing. Counted here, the change that crosses it is the change that has to split the
-    module.
+    The lower review target is guidance, not a reason to split a cohesive file mechanically.
+    At the hard threshold the owner either extracts a focused private module or records why the
+    file must remain whole; neither choice changes the product module's behavior or table owner.
     """
     lines = (root / path).read_text(encoding="utf-8").count("\n")
-    if lines < MODULE_FILE_LINE_LIMIT:
+    ceiling = MODULE_FILE_LINE_EXCEPTIONS.get(path, MODULE_FILE_LINE_LIMIT)
+    if lines < ceiling:
         return []
+    if path in MODULE_FILE_LINE_EXCEPTIONS:
+        return [
+            f"{path} is {lines} lines and reaches its documented hard ceiling of {ceiling} "
+            "lines; extract a cohesive private module or approve a new bounded exception "
+            "(harness §5)"
+        ]
     return [
-        f"{path} is {lines} lines; a module file stays under {MODULE_FILE_LINE_LIMIT} "
-        "(harness §5) — split it into a new module rather than growing this one"
+        f"{path} is {lines} lines; production files at {MODULE_FILE_LINE_LIMIT} lines require "
+        "extraction of a cohesive private module or a documented exception (harness §5)"
     ]
 
 

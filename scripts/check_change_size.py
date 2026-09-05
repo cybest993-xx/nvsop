@@ -5,12 +5,12 @@ Usage: check_change_size.py BASE HEAD
 
 Counts the implementation lines a change adds — authored production source and repository
 automation, not tests, generated clients, docs, lockfiles or the vendored base — and holds
-each module the change touches to its own budget: 800 added implementation lines, 500 when
-the module is judgment logic. The budget is per module, not per change: one pull request may
-carry several modules' growth at once, because what a reviewer holds in their head to judge a
-change is how much each module it touches grew, not a sum across modules that share no seam.
-A module's `adapters/` subpackage is budgeted as its own module, since harness §3 keeps
-adapters outside the behavior they adapt.
+each module the change touches to its own review budget: 800 added implementation lines, 500
+when the module is judgment logic. This is a pull-request size budget, not a cap on the total
+size of a product module. The per-module adaptation lets one vertical change cross several
+independent product seams without charging a reviewer for their unrelated totals. A module's
+`adapters/` subpackage is budgeted separately because harness §3 keeps adapters outside the
+behavior they adapt.
 """
 
 from __future__ import annotations
@@ -106,9 +106,10 @@ def budget_violations(added: dict[Path, int]) -> list[str]:
         listing = ", ".join(f"{path} (+{lines})" for path, lines in largest)
         errors.append(
             f"module {module} adds {total} implementation lines; the budget is {budget} "
-            f"because {reason}. Prefer a new module over growing this one, or split this "
-            f"module's growth into a stage that stands on its own and land it first. "
-            f"Largest files: {listing}"
+            f"because {reason}. Identify the smallest coherent, independently verifiable "
+            f"stage from the actual diff, dependencies and affected call sites. Do not create "
+            f"a product module solely to move lines into another bucket; if no safe stage exists, "
+            f"record why the change needs a reviewed exception. Largest files: {listing}"
         )
     return errors
 

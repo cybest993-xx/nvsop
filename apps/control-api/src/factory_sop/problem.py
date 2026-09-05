@@ -30,11 +30,22 @@ BLANK_PROBLEM_TYPE: Literal["about:blank"] = "about:blank"
 class ApiErrorCode(StrEnum):
     """The stable wire-level failure codes currently emitted by the control plane."""
 
+    # `auth`'s administration refusals. Each names why an operation could not be carried out:
+    # the target is gone, the natural key is taken, the request names an unregistered
+    # permission, or the operation would leave the system unadministrable.
+    ADMINISTRATION_WOULD_BE_LOST = "ADMINISTRATION_WOULD_BE_LOST"
+    LOGIN_NAME_TAKEN = "LOGIN_NAME_TAKEN"
+    PASSWORD_TOO_SHORT = "PASSWORD_TOO_SHORT"  # pragma: allowlist secret
+    PERMISSION_UNREGISTERED = "PERMISSION_UNREGISTERED"
+    ROLE_CODE_TAKEN = "ROLE_CODE_TAKEN"
+    ROLE_NOT_FOUND = "ROLE_NOT_FOUND"
+    USER_NOT_FOUND = "USER_NOT_FOUND"
     ACCOUNT_DEACTIVATED = "ACCOUNT_DEACTIVATED"
     AUTHENTICATION_REQUIRED = "AUTHENTICATION_REQUIRED"
     CREDENTIALS_REJECTED = "CREDENTIALS_REJECTED"
     CSRF_TOKEN_INVALID = "CSRF_TOKEN_INVALID"
     INTERNAL_ERROR = "INTERNAL_ERROR"
+    PERMISSION_DENIED = "PERMISSION_DENIED"
     REQUEST_INVALID = "REQUEST_INVALID"
     SESSION_INVALID = "SESSION_INVALID"
 

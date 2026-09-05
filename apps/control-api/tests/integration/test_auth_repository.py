@@ -25,6 +25,7 @@ from factory_sop.auth.adapters.repository import (
 from factory_sop.auth.adapters.tables import UserRow
 from factory_sop.auth.model import Session, User, UserStatus
 from factory_sop.auth.passwords import hash_password
+from factory_sop.auth.repository import LoginNameTakenError
 from factory_sop.identifiers import new_id
 
 MONDAY_MORNING = datetime(2026, 9, 7, 1, 0, tzinfo=UTC)
@@ -87,7 +88,7 @@ def test_two_accounts_cannot_share_a_login_name(session: DatabaseSession) -> Non
     users = PostgresUserRepository(session)
     users.add(an_account())
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(LoginNameTakenError):
         users.add(an_account())
 
 

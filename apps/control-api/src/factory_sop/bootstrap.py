@@ -24,7 +24,8 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 
-from factory_sop.auth.adapters.repository import PostgresUserRepository
+from factory_sop.auth.adapters.repository import PostgresRoleRepository, PostgresUserRepository
+from factory_sop.auth.errors import AdministrationRefusedError
 from factory_sop.auth.usecases.bootstrap import register_first_operator
 from factory_sop.observability import configure_logging, get_logger
 from factory_sop.persistence import create_database_engine, session_factory
@@ -70,11 +71,19 @@ def main(*, argv: list[str] | None = None, environ: Mapping[str, str] | None = N
                 password=password.get_secret_value(),
                 display_name=arguments.display_name or arguments.login_name,
                 users=PostgresUserRepository(session),
+                roles=PostgresRoleRepository(session),
             )
             # The command's own unit of work: one commit, after the use case has said what it
             # did. A use case that raised leaves nothing behind, the same all-or-none the
-            # request layer guarantees.
+            # request layer guarantees. A skip (an account already exists) is logged by the use
+            # case and committed as the bootstrap-guard claim it made — a no-op either way.
             session.commit()
+        except AdministrationRefusedError:
+            # An expected refusal — a password below the minimum — exits non-zero rather than
+            # tracebacking, and nothing is committed. The diagnostic line is the use case's
+            # (`auth.bootstrap.refused`); logging it again here would write the refusal twice.
+            session.rollback()
+            return 1
         finally:
             session.close()
     finally:

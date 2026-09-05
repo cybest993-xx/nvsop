@@ -15,11 +15,18 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 
+from factory_sop.auth.adapters import role_administration as auth_role_administration
 from factory_sop.auth.adapters import routes as auth_routes
 from factory_sop.auth.adapters.cookies import CSRF_HEADER
 from factory_sop.auth.adapters.dependencies import presented_token
+from factory_sop.auth.authorization import AuthorizationRefusedError
 from factory_sop.auth.csrf import verify_csrf_token
-from factory_sop.auth.errors import AuthenticationRefusedError, refusal_problem
+from factory_sop.auth.errors import (
+    AdministrationRefusedError,
+    AuthenticationRefusedError,
+    administration_problem,
+    refusal_problem,
+)
 from factory_sop.auth.model import SessionPolicy
 from factory_sop.observability import (
     correlation_scope,
@@ -90,6 +97,7 @@ def create_app(settings: Settings) -> FastAPI:
     )
     app.include_router(liveness_router, prefix=API_PREFIX)
     app.include_router(auth_routes.router, prefix=API_PREFIX)
+    app.include_router(auth_role_administration.router, prefix=API_PREFIX)
 
     @app.exception_handler(AuthenticationRefusedError)
     async def refused(request: Request, error: AuthenticationRefusedError) -> Response:
@@ -104,6 +112,40 @@ def create_app(settings: Settings) -> FastAPI:
             status=status,
             title=title,
             error_code=ApiErrorCode(error.code.value),
+        )
+
+    @app.exception_handler(AuthorizationRefusedError)
+    async def denied(request: Request, error: AuthorizationRefusedError) -> Response:
+        """Report a permission denial as 403 `problem+json`.
+
+        403 and never 401: the caller is authenticated, and answering 401 would send the Web
+        shell to the login page, where signing in again would change nothing. The permission
+        that was missing is deliberately not in the response — it is in the diagnostic line
+        (`auth/authorization.py`), because naming it tells an unauthorized caller which
+        permission guards the resource.
+        """
+        return problem_response(
+            status=403,
+            title="没有执行该操作的权限",
+            error_code=ApiErrorCode(error.code.value),
+        )
+
+    @app.exception_handler(AdministrationRefusedError)
+    async def unprocessable(request: Request, error: AdministrationRefusedError) -> Response:
+        """Report an administration refusal, carrying the reason the operator needs.
+
+        `detail` comes from the use case rather than being composed here, because the useful
+        part is the specific value — which login name is taken, which permission is
+        unregistered — and only the use case that refused knows it. The status and title are
+        the code's own (`errors.administration_problem`), so a new code cannot arrive without
+        them.
+        """
+        status, title = administration_problem(error.code)
+        return problem_response(
+            status=status,
+            title=title,
+            error_code=ApiErrorCode(error.code.value),
+            detail=error.detail,
         )
 
     @app.exception_handler(RequestValidationError)

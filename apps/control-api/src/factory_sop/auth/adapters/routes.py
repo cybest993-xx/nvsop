@@ -22,12 +22,14 @@ from factory_sop.auth.adapters.cookies import attach_session, clear_session
 from factory_sop.auth.adapters.dependencies import (
     Authenticated,
     presented_token,
+    roles,
     session_policy,
     sessions,
     users,
 )
 from factory_sop.auth.model import SessionPolicy, User
-from factory_sop.auth.repository import SessionRepository, UserRepository
+from factory_sop.auth.permissions import Permission
+from factory_sop.auth.repository import RoleRepository, SessionRepository, UserRepository
 from factory_sop.auth.usecases.sessions import open_session, revoke_session
 from factory_sop.problem import problem_openapi_response
 from factory_sop.settings import Settings
@@ -44,25 +46,40 @@ class Credentials(BaseModel):
 
 
 class SessionView(BaseModel):
-    """Who the caller is and when their session ends.
+    """Who the caller is, what they may do, and when their session ends.
 
     `expires_at` is here so the Web shell can warn before a session lapses rather than
     discovering it through a failed request mid-form. It moves on every request that slides the
     idle window, which is why it is read from the policy rather than stored.
+
+    `permissions` is what the caller may do, as `module.resource.action` strings, sorted. The Web
+    renders its navigation and its buttons from this: a screen that offers an action the backend
+    will refuse is worse than one that does not offer it, because the operator finds out after
+    filling the form in. It is the effective set rather than the roles behind it, because that is
+    what the front end branches on — and it is not a secret from the caller, who could discover
+    it by trying. Enforcement is unaffected: the use case checks, whatever the client was told.
+
+    The schema marks the field optional, not because the server sometimes omits it — every path
+    below always sets it — but because the compatibility gate (ADR-0003) rejects a new *required*
+    field on a shared schema: a client generated from the old contract must keep parsing new
+    responses. Marking it optional promises less than the server delivers, which is the safe
+    direction; a default keeps the payload carrying it even if a future route forgets to.
     """
 
     user_id: UUID
     login_name: str
     display_name: str
     expires_at: datetime
+    permissions: list[str] = Field(default_factory=list)
 
 
-def _view(user: User, *, expires_at: datetime) -> SessionView:
+def _view(user: User, *, expires_at: datetime, granted: frozenset[Permission]) -> SessionView:
     return SessionView(
         user_id=user.id,
         login_name=user.login_name,
         display_name=user.display_name,
         expires_at=expires_at,
+        permissions=sorted(item.value for item in granted),
     )
 
 
@@ -82,6 +99,7 @@ def open_a_session(
     response: Response,
     users: Annotated[UserRepository, Depends(users)],
     sessions: Annotated[SessionRepository, Depends(sessions)],
+    roles: Annotated[RoleRepository, Depends(roles)],
     policy: Annotated[SessionPolicy, Depends(session_policy)],
 ) -> SessionView:
     """Log in. Refuses with `CREDENTIALS_REJECTED` or `ACCOUNT_DEACTIVATED`.
@@ -104,7 +122,14 @@ def open_a_session(
         settings=settings,
         max_age_seconds=int(policy.absolute_lifetime.total_seconds()),
     )
-    return _view(opened.user, expires_at=policy.expires_at(opened.session))
+    return _view(
+        opened.user,
+        expires_at=policy.expires_at(opened.session),
+        # Resolved on the login response too, not only on the `GET`: the shell renders its
+        # navigation from what login returned, and fetching them separately would make the first
+        # screen after signing in either wait or flicker.
+        granted=roles.permissions_of(opened.user.id),
+    )
 
 
 @router.get(
@@ -114,6 +139,7 @@ def open_a_session(
 )
 def read_the_session(
     caller: Authenticated,
+    roles: Annotated[RoleRepository, Depends(roles)],
     policy: Annotated[SessionPolicy, Depends(session_policy)],
 ) -> SessionView:
     """Report the caller's own session. What the Web shell calls to restore one on load.
@@ -121,7 +147,11 @@ def read_the_session(
     Reaching it at all slid the idle window forward, in `authenticated_caller`, so the
     `expires_at` reported here is the one that now applies.
     """
-    return _view(caller.user, expires_at=policy.expires_at(caller.session))
+    return _view(
+        caller.user,
+        expires_at=policy.expires_at(caller.session),
+        granted=roles.permissions_of(caller.user.id),
+    )
 
 
 @router.delete(

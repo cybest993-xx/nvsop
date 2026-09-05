@@ -14,7 +14,7 @@ import json
 from datetime import timedelta
 
 import pytest
-from auth_fakes import FakeSessions, FakeUsers
+from auth_fakes import FakeRoles, FakeSessions, FakeUsers
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
@@ -65,9 +65,11 @@ class Backend:
     def __init__(self, *, configured: Settings | None = None) -> None:
         self.users = FakeUsers()
         self.sessions = FakeSessions()
+        self.roles = FakeRoles(users=self.users)
         self.app = create_app(configured or settings())
         self.app.dependency_overrides[dependencies.users] = lambda: self.users
         self.app.dependency_overrides[dependencies.sessions] = lambda: self.sessions
+        self.app.dependency_overrides[dependencies.roles] = lambda: self.roles
         self.client = TestClient(self.app, base_url="https://testserver")
 
     def with_account(self, *, status: UserStatus = UserStatus.ACTIVE) -> Backend:
@@ -339,3 +341,46 @@ def test_an_unexpected_failure_is_reported_without_saying_what_broke() -> None:
     assert body["error_code"] == "INTERNAL_ERROR"
     assert "auth_user" not in str(body)
     assert "postgres.internal" not in str(body)
+
+
+def test_the_session_reports_what_the_caller_may_do(backend: Backend) -> None:
+    # C2.2 adds this field. The Web needs it to decide which navigation items and which buttons to
+    # render: a screen offering an action the backend will refuse is worse than one that does not
+    # offer it, because the operator only finds out after filling the form in.
+    #
+    # A caller's own permission set is not a secret from them — they can discover it by trying —
+    # and it is deliberately their *effective* set rather than their roles, because what the front
+    # end branches on is what they may do, not how they came to be allowed it.
+    from factory_sop.auth.permissions import Permission
+
+    role = backend.roles.grant(
+        backend.users.by_login_name("wang.li"),
+        Permission.USER_VIEW,
+        Permission.USER_EDIT,
+    )
+    assert role is not None
+    backend.log_in()
+
+    body = backend.client.get(SESSION_PATH).json()
+
+    assert body["permissions"] == ["auth.user.edit", "auth.user.view"]
+
+
+def test_a_caller_holding_nothing_reports_an_empty_permission_list(backend: Backend) -> None:
+    # An empty list, never a missing field: the front end would otherwise have to distinguish "no
+    # permissions" from "this backend does not report them".
+    backend.log_in()
+
+    assert backend.client.get(SESSION_PATH).json()["permissions"] == []
+
+
+def test_the_login_response_already_carries_the_permissions(backend: Backend) -> None:
+    # The shell renders its navigation from the login response without a second request. If only
+    # `GET` carried them, the first screen after signing in would have to either wait or flicker.
+    from factory_sop.auth.permissions import Permission
+
+    backend.roles.grant(backend.users.by_login_name("wang.li"), Permission.ROLE_VIEW)
+
+    body = backend.client.post(SESSION_PATH, json=CREDENTIALS).json()
+
+    assert body["permissions"] == ["auth.role.view"]

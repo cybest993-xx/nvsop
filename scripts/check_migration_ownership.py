@@ -67,7 +67,12 @@ def module_of(table: str) -> str | None:
 
 
 def tables_and_raw_sql(tree: ast.Module) -> tuple[set[str], bool]:
-    """Return the tables this migration modifies, and whether it runs raw SQL."""
+    """Return modified tables and whether the migration runs non-read-only raw SQL.
+
+    A data-dependent backfill may need a read-only SELECT against a table it owns. That query
+    does not change ownership; raw DDL/DML remains rejected because its target cannot be checked
+    statically.
+    """
     tables: set[str] = set()
     uses_raw_sql = False
     for node in ast.walk(tree):
@@ -75,6 +80,9 @@ def tables_and_raw_sql(tree: ast.Module) -> tuple[set[str], bool]:
             continue
         operation = node.func.attr
         if operation == "execute":
+            query = node.args[0] if node.args else None
+            if _is_read_only_select(query):
+                continue
             uses_raw_sql = True
             continue
         position_keyword = TABLE_ARGUMENT.get(operation)
@@ -89,6 +97,24 @@ def tables_and_raw_sql(tree: ast.Module) -> tuple[set[str], bool]:
         if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
             tables.add(argument.value)
     return tables, uses_raw_sql
+
+
+def _is_read_only_select(query: ast.expr | None) -> bool:
+    """Accept only a literal SELECT passed directly or through `sa.text`."""
+    if isinstance(query, ast.Constant) and isinstance(query.value, str):
+        sql = query.value
+    elif (
+        isinstance(query, ast.Call)
+        and isinstance(query.func, ast.Attribute)
+        and query.func.attr == "text"
+        and query.args
+        and isinstance(query.args[0], ast.Constant)
+        and isinstance(query.args[0].value, str)
+    ):
+        sql = query.args[0].value
+    else:
+        return False
+    return bool(re.match(r"^\s*SELECT\b", sql, flags=re.IGNORECASE))
 
 
 def assigned_string(tree: ast.Module, name: str) -> str | None:

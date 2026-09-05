@@ -167,6 +167,16 @@ class MigrationOwnershipTest(unittest.TestCase):
         )
         self.assertEqual([], check_migrations(self.versions))
 
+    def test_accepts_a_read_only_select_for_a_data_dependent_backfill(self) -> None:
+        self.write(
+            "0001_auth_backfill.py",
+            'revision = "a"\n'
+            "down_revision = None\n\n\n"
+            "def upgrade() -> None:\n"
+            '    rows = op.get_bind().execute(sa.text("SELECT id FROM auth_user"))\n',
+        )
+        self.assertEqual([], check_migrations(self.versions))
+
     def test_rejects_raw_sql_because_ownership_cannot_be_read_from_it(self) -> None:
         self.write(
             "0001_auth_raw.py",

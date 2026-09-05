@@ -3,9 +3,24 @@
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client'
 import { client } from './client.gen'
 import type {
+  CreateRoleData,
+  CreateRoleErrors,
+  CreateRoleResponses,
+  DeleteRoleData,
+  DeleteRoleErrors,
+  DeleteRoleResponses,
+  EditRoleData,
+  EditRoleErrors,
+  EditRoleResponses,
   EndSessionData,
   EndSessionErrors,
   EndSessionResponses,
+  ListPermissionsData,
+  ListPermissionsErrors,
+  ListPermissionsResponses,
+  ListRolesData,
+  ListRolesErrors,
+  ListRolesResponses,
   OpenSessionData,
   OpenSessionErrors,
   OpenSessionResponses,
@@ -34,6 +49,83 @@ export type Options<
    */
   meta?: keyof ClientMeta extends never ? Record<string, unknown> : ClientMeta
 }
+
+/**
+ * Read The Permission Catalogue
+ *
+ * Every permission a role may contain, in the §5.15 list envelope.
+ *
+ * The role screen renders its checkboxes from this rather than from a list of its own, so a
+ * permission the backend registers appears without a front-end change and one it does not
+ * register cannot be offered.
+ */
+export const listPermissions = <ThrowOnError extends boolean = false>(
+  options?: Options<ListPermissionsData, ThrowOnError>,
+): RequestResult<ListPermissionsResponses, ListPermissionsErrors, ThrowOnError> =>
+  (options?.client ?? client).get<ListPermissionsResponses, ListPermissionsErrors, ThrowOnError>({
+    url: '/api/v1/auth/permissions',
+    ...options,
+  })
+
+/**
+ * Read The Roles
+ *
+ * Every role, with its permission set, in the §5.15 list envelope.
+ */
+export const listRoles = <ThrowOnError extends boolean = false>(
+  options?: Options<ListRolesData, ThrowOnError>,
+): RequestResult<ListRolesResponses, ListRolesErrors, ThrowOnError> =>
+  (options?.client ?? client).get<ListRolesResponses, ListRolesErrors, ThrowOnError>({
+    url: '/api/v1/auth/roles',
+    ...options,
+  })
+
+/**
+ * Create A Role
+ *
+ * Create a role from registered permission strings.
+ */
+export const createRole = <ThrowOnError extends boolean = false>(
+  options: Options<CreateRoleData, ThrowOnError>,
+): RequestResult<CreateRoleResponses, CreateRoleErrors, ThrowOnError> =>
+  (options.client ?? client).post<CreateRoleResponses, CreateRoleErrors, ThrowOnError>({
+    url: '/api/v1/auth/roles',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Delete A Role
+ *
+ * Delete a role and every assignment of it.
+ */
+export const deleteRole = <ThrowOnError extends boolean = false>(
+  options: Options<DeleteRoleData, ThrowOnError>,
+): RequestResult<DeleteRoleResponses, DeleteRoleErrors, ThrowOnError> =>
+  (options.client ?? client).delete<DeleteRoleResponses, DeleteRoleErrors, ThrowOnError>({
+    url: '/api/v1/auth/roles/{role_id}',
+    ...options,
+  })
+
+/**
+ * Edit A Role
+ *
+ * Replace a role's name and permission set. `PUT`, because the set is replaced whole.
+ */
+export const editRole = <ThrowOnError extends boolean = false>(
+  options: Options<EditRoleData, ThrowOnError>,
+): RequestResult<EditRoleResponses, EditRoleErrors, ThrowOnError> =>
+  (options.client ?? client).put<EditRoleResponses, EditRoleErrors, ThrowOnError>({
+    url: '/api/v1/auth/roles/{role_id}',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
 
 /**
  * End The Session

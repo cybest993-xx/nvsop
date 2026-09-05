@@ -178,7 +178,12 @@ def deactivated_account(bootstrap: BootstrapCommand, engine: Engine) -> None:
 def _reset_database(engine: Engine) -> None:
     """Reset the scenario state outside the system boundary, before and after each case."""
     with engine.begin() as connection:
-        connection.execute(text("TRUNCATE auth_bootstrap_guard, auth_user, auth_session CASCADE"))
+        connection.execute(
+            text(
+                "TRUNCATE auth_bootstrap_guard, auth_user, auth_session, "
+                "auth_user_role, auth_role_permission, auth_role CASCADE"
+            )
+        )
 
 
 def _make_tls_certificate(directory: Path) -> tuple[Path, Path]:

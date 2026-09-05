@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 import subprocess
 import sys
@@ -66,6 +67,26 @@ ENVIRONMENT_REFERENCE = re.compile(r"^\s*(?:Bearer\s+)?\$\{[^}]+\}\s*$")
 EDGE_APP = Path("apps/edge-runtime")
 EDGE_SOURCE = EDGE_APP / "src"
 CENTER_SOURCE = Path("apps/control-api/src/factory_sop")
+WEB_APP = Path("apps/control-web")
+# What the web workspace's frozen toolchain is made of (harness §2). Each is required only
+# once `apps/control-web/` exists, because §2 equally forbids adding them before it does.
+WEB_TOOLCHAIN_FILES = {
+    Path(".nvmrc"): (
+        "harness §2 requires the Node runtime pinned in one place, as .python-version pins "
+        "the interpreter"
+    ),
+    Path("pnpm-lock.yaml"): (
+        "harness §2 requires a committed lockfile that CI installs from without updating"
+    ),
+    Path("pnpm-workspace.yaml"): (
+        "harness §2 requires one root workspace file; a member with its own lockfile resolves "
+        "separately from the rest"
+    ),
+    Path("package.json"): "harness §2 requires a root manifest that pins the package manager",
+}
+# `pnpm@11.22.0` pins; `pnpm@^11.22.0` and `pnpm@11` do not. Corepack accepts a range, and
+# with one CI resolves a different package manager than a developer runs.
+PACKAGE_MANAGER_PIN = re.compile(r"^[a-z]+@\d+\.\d+\.\d+$")
 # `sys.stdlib_module_names` is the interpreter's own answer, so this set needs no
 # maintenance as the standard library grows.
 STANDARD_LIBRARY = frozenset(sys.stdlib_module_names)
@@ -166,8 +187,20 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
         for required_text in ("pull_request:", "make check", "CI required", "always()"):
             if required_text not in text:
                 errors.append(f"blocking-ci.yml is missing required gate behavior: {required_text}")
+        if any(is_under(path, Path("tests/system")) for path in files):
+            integration_filter = re.search(
+                r"integration-gate:.*?grep -E '([^']+)'",
+                text,
+                flags=re.DOTALL,
+            )
+            if integration_filter is None or "tests/system/" not in integration_filter.group(1):
+                errors.append(
+                    "blocking-ci.yml integration path filter must include tests/system/; "
+                    "path filtering is not an exemption (harness §7)"
+                )
 
     errors.extend(check_python_pin(root))
+    errors.extend(check_web_toolchain(root, files))
     errors.extend(check_edge_runtime_isolation(root, files))
     errors.extend(check_center_modules_are_contracted(root, files))
 
@@ -185,6 +218,40 @@ def check_python_pin(root: Path) -> list[str]:
             f".python-version must pin the center backend to {CENTER_PYTHON_VERSION}, not {pinned}"
         ]
     return []
+
+
+def check_web_toolchain(root: Path, files: list[Path]) -> list[str]:
+    """The web workspace's runtime and package manager are pinned, and its lockfile committed.
+
+    Harness §2 fixes both halves of the rule: pin the runtime and the package-manager version
+    with a committed lockfile CI installs from without updating, and do not add these manifests
+    before a real workspace exists. So every check here is conditional on the workspace being
+    there — which is also what lets the same function express the second half by staying silent.
+    """
+    if not any(is_under(path, WEB_APP) for path in files):
+        return []
+
+    errors: list[str] = []
+    for required, reason in WEB_TOOLCHAIN_FILES.items():
+        if not (root / required).is_file():
+            errors.append(f"{WEB_APP}/ exists but {required} does not; {reason}")
+
+    manifest = root / "package.json"
+    if manifest.is_file():
+        try:
+            declared = json.loads(manifest.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            return [*errors, f"package.json is not valid JSON: {error}"]
+        pinned = declared.get("packageManager")
+        if pinned is None:
+            errors.append(
+                "package.json must declare packageManager so corepack installs the pinned pnpm"
+            )
+        elif not PACKAGE_MANAGER_PIN.fullmatch(str(pinned)):
+            errors.append(
+                f'package.json must pin packageManager to one exact version, not "{pinned}"'
+            )
+    return errors
 
 
 def check_edge_runtime_isolation(root: Path, files: list[Path]) -> list[str]:

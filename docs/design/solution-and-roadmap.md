@@ -244,12 +244,12 @@
 **中心轨（C）** —— 按 §5.16 纵向推进，`auth` 先行，之后逐个模块端到端：
 
 - **C1** uv workspace + 根 `pyproject.toml` + `.python-version`(3.12) + `uv.lock`；**同一变更内按 harness §5 扩 `make check`**（format/lint/type/unit + `import-linter` 契约 + 迁移所有权检查）。✅ 已完成（工具版本与依赖同锁于 `uv.lock`，`make check` 首个目标即 `uv sync --frozen`；已写 3 条 import-linter 契约（`factory_sop` 内部分层、判定核心独立、中心与推理机互不导入），但都只约束当前的骨架模块——领域模块（auth/device/template 等）尚不存在，"模块只经对方公开接口跨模块调用"这条边界契约延后到首个领域模块落地时补，不随本项关闭；迁移所有权检查器 11 条回归，首个迁移落地前返回显式成功；`apps/edge-runtime/` 刻意不入 workspace，其「只依赖标准库」由策略检查逐个 import 解析强制。附最小可运行骨架：`Settings`（秘密只经 `*_FILE` 读文件、缺失即拒启）、诊断日志基线（structlog JSON 五必填字段 + correlation id 传播）、`create_app` 挂 `/api/v1`；24 条回归。）
-- **C2** 鉴权 + 自定义权限 + 诊断日志基线（`auth`；诊断日志按其自身标准建设，不为审计要求预留形状，Q37）。**诊断日志基线已随 C1 落地**（`factory_sop/observability/`，见 §5.15），C2 只余 `auth` 本身。
+- **C2** 鉴权 + 自定义权限 + 诊断日志基线（`auth`；诊断日志按其自身标准建设，不为审计要求预留形状，Q37）。**诊断日志基线已随 C1 落地**（`factory_sop/observability/`，见 §5.15）。🔄 C2.1 已完成（`factory_sop.auth`：本地账户 Argon2 口令、服务端会话记录、空闲与绝对两档超时、首账户 bootstrap 命令 `python -m factory_sop.bootstrap`——无账户的全新部署由此可达登录；「停用即撤销全部会话」的**会话侧规则** `revoke_every_session_of` 已落地，其调用方——停用用例——随 C2.2；行为经 `repository.py` 的 `Protocol` 与存储解耦，`problem+json` 与 CSRF 双提交在 `adapters/`；含 `auth` 诊断行「五必填字段且不含任何形式凭据」的整键集回归。验收场景按 §5.15 以 SYS-22-01…07 随本切片给出，`tests/system/` 以同 ID 命名（SYS-22-07 为 web 布局基线，由 control-web 套件承载），随 `make check-integration` 的 `center-system` 运行。**pnpm workspace 提前在此落地**——本切片交付中文登录页与受保护布局，故 C7 的「pnpm workspace 在此落地」已由本项承担；`make check` 同一变更内扩出 web 的 install/format/lint/type/unit/build 六目标，锁文件与 Node 运行时之钉由 `check_repo_policy.py` 在 `apps/control-web/` 存在后强制。）**余下**：自定义权限集合与角色（C2.2）。
 - **C3** 中心数据模型与迁移（按 §七 的表清单，单一线性 Alembic 历史，文件名前缀标注模块）。
 - **C4** 设备配置 CRUD（`device`：推理主机 / 工位 / 相机 / 推理后端绑定 / 连接器与点位）+ **工位运行参数两档切换**（跟随模板 / 工位自定义，§5.3）。
 - **C5** Excel 解析校验 + `actions.json` / `vlm_prompts.txt` 生成（`template`，严配基座正则 `^\((\d+)\).+`）。**格式是平台规定的，故解析器与合成 fixture 现在就能写**；真实客户 Excel 到位后作为回归样本补入，不作为开工前提。
 - **C6** 视频逐个上传（预签名直传 MinIO）+ 数据集登记 + **原样复用基座标注 UI 并在网关补鉴权** + DDM/VLM 用途检查 + 由标注生成 DDM `annotation.json`（`dataset`）。
-- **C7** 前端骨架：布局、路由、鉴权、设备与模板管理页（pnpm workspace 在此落地）。
+- **C7** 前端骨架：布局、路由、鉴权、设备与模板管理页。**pnpm workspace 与登录页、受保护布局已随 C2.1 落地**（见上）；本项余下的是设备与模板管理页，以及 §5.4 概览页由各模块 `summary()` 组合的真实配置摘要。
 - **C8** 原样复用训练微服务接入（Nginx 反代 + 网关鉴权 + **一实例两 schema** 的数据库合并，Q35）。
 - **C9** mediamtx 预览与录像 + 浏览器直连多路视频。**海康子码流 `has_b_frames` 与大屏并发容量属部署期实测**（§5.21）；零转码与转码两条路径都要实现，按该路配置选择，不写死结论。
 

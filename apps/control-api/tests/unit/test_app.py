@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import io
 import json
+from datetime import timedelta
 
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from factory_sop.app import CORRELATION_ID_HEADER, create_app
+from factory_sop.auth.model import SessionPolicy
 from factory_sop.observability import configure_logging
+from factory_sop.problem import PROBLEM_MEDIA_TYPE
 from factory_sop.settings import Settings
 
 
@@ -19,6 +22,10 @@ def settings() -> Settings:
         database_name="factory_sop",
         database_user="factory_sop",
         database_password=SecretStr("hunter2"),
+        session_idle_timeout_minutes=720,
+        session_absolute_lifetime_minutes=43200,
+        session_cookie_transport="require_https",
+        csrf_secret=SecretStr("csrf-secret"),
     )
 
 
@@ -74,9 +81,40 @@ def test_a_request_logs_one_line_under_its_own_correlation_id() -> None:
     ]
 
 
+def test_the_openapi_contract_names_operations_and_the_problem_shape() -> None:
+    schema = create_app(settings()).openapi()
+    session = schema["paths"]["/api/v1/auth/session"]
+
+    assert {method: session[method]["operationId"] for method in ("post", "get", "delete")} == {
+        "post": "openSession",
+        "get": "readSession",
+        "delete": "endSession",
+    }
+    assert "ProblemDocument" in schema["components"]["schemas"]
+    error_code = schema["components"]["schemas"]["ProblemDocument"]["properties"]["error_code"]
+    assert error_code["$ref"] == "#/components/schemas/ApiErrorCode"
+    assert "SESSION_INVALID" in schema["components"]["schemas"]["ApiErrorCode"]["enum"]
+    for method, status in (("post", "401"), ("post", "422"), ("get", "401"), ("delete", "403")):
+        content = session[method]["responses"][status]["content"]
+        assert set(content) == {PROBLEM_MEDIA_TYPE}
+        problem = content[PROBLEM_MEDIA_TYPE]
+        assert problem["schema"]["$ref"] == "#/components/schemas/ProblemDocument"
+
+
 def test_the_settings_object_is_reachable_from_the_application() -> None:
     # The composition root holds the resolved settings, so an adapter reads them from the
     # application rather than from the process environment.
     configured = settings()
 
     assert create_app(configured).state.settings == configured
+
+
+def test_the_session_policy_is_built_from_the_configured_minutes() -> None:
+    # `Settings` sits below the domain in the layering, so it carries the configured numbers
+    # and the composition root builds the domain type from them.
+    app = create_app(settings())
+
+    assert app.state.session_policy == SessionPolicy(
+        idle_timeout=timedelta(minutes=720),
+        absolute_lifetime=timedelta(minutes=43200),
+    )

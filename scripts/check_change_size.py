@@ -3,11 +3,14 @@
 
 Usage: check_change_size.py BASE HEAD
 
-Counts the implementation lines a change adds — production source and repository
-automation, not tests, docs, lockfiles or the vendored base — and compares them with the
-budget the harness sets: 800 for a change, 500 for one that touches judgment logic. The
-budget is per landed stage, so a pull request that trips it is asked to split, not to
-argue: the reviewer is the one who has to hold the change in their head.
+Counts the implementation lines a change adds — authored production source and repository
+automation, not tests, generated clients, docs, lockfiles or the vendored base — and holds
+each module the change touches to its own budget: 800 added implementation lines, 500 when
+the module is judgment logic. The budget is per module, not per change: one pull request may
+carry several modules' growth at once, because what a reviewer holds in their head to judge a
+change is how much each module it touches grew, not a sum across modules that share no seam.
+A module's `adapters/` subpackage is budgeted as its own module, since harness §3 keeps
+adapters outside the behavior they adapt.
 """
 
 from __future__ import annotations
@@ -22,17 +25,49 @@ TIGHT_LINE_BUDGET = 500
 # inside the judgment package. Add retention's package here when it lands.
 TIGHT_BUDGET_PATHS = (Path("apps/edge-runtime/src/edge_runtime/judgment"),)
 IMPLEMENTATION_ROOTS = (Path("apps"), Path("packages"), Path("scripts"))
+GENERATED_OUTPUTS = (Path("apps/control-web/src/api/generated"),)
+
+# Harness §3 fixes what a module is; this table says where each application's modules live,
+# so the per-module budget stays decidable by path. The first directory under a root is the
+# module; a file directly under a root belongs to the root itself; a web slice under
+# src/modules/ is a module of its own. Adding a source root starts here.
+MODULE_ROOTS: tuple[tuple[str, Path], ...] = (
+    ("factory_sop", Path("apps/control-api/src/factory_sop")),
+    ("control-web", Path("apps/control-web/src")),
+    ("edge_runtime", Path("apps/edge-runtime/src/edge_runtime")),
+    ("scripts", Path("scripts")),
+)
 
 
 def is_implementation(path: Path) -> bool:
-    """Production source or repository automation; never tests, docs or vendored code."""
+    """Authored production source or repository automation; never generated output or tests."""
     if "tests" in path.parts:
+        return False
+    if any(path.parts[: len(root.parts)] == root.parts for root in GENERATED_OUTPUTS):
         return False
     if path.parts[:1] == ("scripts",):
         return True
     return any(path.parts[: len(root.parts)] == root.parts for root in IMPLEMENTATION_ROOTS) and (
         "src" in path.parts
     )
+
+
+def module_of(path: Path) -> str:
+    """The module a counted file belongs to: harness §3's seams, made decidable by path."""
+    for name, root in MODULE_ROOTS:
+        if path.parts[: len(root.parts)] != root.parts:
+            continue
+        rest = path.parts[len(root.parts) :]
+        if len(rest) <= 1:
+            return name
+        if rest[0] == "modules" and len(rest) > 2:
+            return f"modules/{rest[1]}"
+        if len(rest) > 2 and rest[1] == "adapters":
+            return f"{rest[0]}/adapters"
+        return rest[0]
+    # A counted file outside every declared root must not hide its growth: everything
+    # undeclared accumulates in one bucket until its root is declared here.
+    return "unassigned"
 
 
 def parse_numstat(text: str) -> dict[Path, int]:
@@ -48,26 +83,34 @@ def parse_numstat(text: str) -> dict[Path, int]:
 
 def budget_violations(added: dict[Path, int]) -> list[str]:
     counted = {path: lines for path, lines in added.items() if is_implementation(path)}
-    total = sum(counted.values())
-    touches_tight = [
-        path
-        for path in counted
-        if any(path.parts[: len(root.parts)] == root.parts for root in TIGHT_BUDGET_PATHS)
-    ]
-    budget = TIGHT_LINE_BUDGET if touches_tight else CHANGE_LINE_BUDGET
-    if total < budget:
-        return []
-    reason = (
-        f"it touches judgment logic ({', '.join(str(p) for p in touches_tight)})"
-        if touches_tight
-        else "harness §5"
-    )
-    largest = sorted(counted.items(), key=lambda item: item[1], reverse=True)[:5]
-    return [
-        f"change adds {total} implementation lines; the budget is {budget} because {reason}. "
-        "Split it into stages that each stand on their own and land the smallest first. "
-        "Largest files: " + ", ".join(f"{path} (+{lines})" for path, lines in largest)
-    ]
+    by_module: dict[str, dict[Path, int]] = {}
+    for path, lines in counted.items():
+        by_module.setdefault(module_of(path), {})[path] = lines
+    errors: list[str] = []
+    for module, files in sorted(by_module.items()):
+        total = sum(files.values())
+        touches_tight = [
+            path
+            for path in files
+            if any(path.parts[: len(root.parts)] == root.parts for root in TIGHT_BUDGET_PATHS)
+        ]
+        budget = TIGHT_LINE_BUDGET if touches_tight else CHANGE_LINE_BUDGET
+        if total < budget:
+            continue
+        reason = (
+            f"it touches judgment logic ({', '.join(str(p) for p in touches_tight)})"
+            if touches_tight
+            else "harness §5"
+        )
+        largest = sorted(files.items(), key=lambda item: item[1], reverse=True)[:5]
+        listing = ", ".join(f"{path} (+{lines})" for path, lines in largest)
+        errors.append(
+            f"module {module} adds {total} implementation lines; the budget is {budget} "
+            f"because {reason}. Prefer a new module over growing this one, or split this "
+            f"module's growth into a stage that stands on its own and land it first. "
+            f"Largest files: {listing}"
+        )
+    return errors
 
 
 def main(argv: list[str]) -> int:

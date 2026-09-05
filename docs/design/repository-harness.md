@@ -38,7 +38,10 @@ Create directories lazily when the first real file needs them; empty scaffolding
 │   │   ├── migrations/             # one linear history; file prefix names the owning module
 │   │   └── tests/{unit,integration}/
 │   ├── control-web/                # Vue 3 operator/admin application
-│   │   ├── src/modules/            # feature slices matching backend language
+│   │   ├── src/modules/            # feature slices, one per §5.4 navigation item
+│   │   ├── src/{session,shell}/    # identity and layout: needed by every module,
+│   │   │                            # owned by none (see below)
+│   │   ├── src/{api,router}/       # the control-plane client and the route table
 │   │   └── tests/{integration,e2e}/
 │   └── edge-runtime/               # inference-host autonomous judgment unit
 │       ├── src/edge_runtime/
@@ -76,7 +79,13 @@ The center backend pins Python to 3.12 with a committed `.python-version`, one r
 
 The Python workspace has landed: one root `pyproject.toml` with `apps/control-api` as its only member, a committed `uv.lock`, and `.python-version` pinning 3.12. Formatting, lint, type, and `import-linter` configuration lives only in that root manifest — a second copy inside an application would never be the one the gate reads. `apps/edge-runtime/` is deliberately not a member, because membership would put every center dependency on the judgment core's import path; `scripts/check_repo_policy.py` resolves each of its imports against the standard library instead, so §1's standard-library rule is a checked fact rather than discipline.
 
-When the web workspace lands, use a root `package.json`, `pnpm-workspace.yaml`, and committed `pnpm-lock.yaml`. Pin runtimes and package-manager versions; CI installs from lockfiles without updating them. Do not add these manifests before a real workspace exists.
+The web workspace has landed as well: a root `package.json` pinning the package manager through `packageManager`, `pnpm-workspace.yaml` with `apps/control-web` as its only member, a committed `pnpm-lock.yaml`, and `.nvmrc` pinning the Node runtime the way `.python-version` pins the interpreter. CI installs with `pnpm install --frozen-lockfile`, which fails on a manifest whose lockfile was never regenerated rather than resolving afresh. `scripts/check_repo_policy.py` requires all four once `apps/control-web/` exists, and requires `packageManager` to name one exact version — corepack accepts a range, and with one CI resolves a different pnpm than a developer runs.
+
+`src/modules/` holds one feature slice per navigation item, which [`control-plane.md`](mechanisms/control-plane.md) §5.4 fixes as 概览 / 工位与设备 / SOP 模板 / 训练数据集 / 用户与权限 — the front end is divided by navigation rather than by backend module, so "feature slices matching backend language" means the slice names come from the domain vocabulary, not that they mirror `factory_sop`'s packages one for one. Only `overview` exists so far; the other four arrive with their own tickets.
+
+`session/` and `shell/` sit outside `modules/` deliberately, and this is the one place the layout departs from "every directory under `src/` is a feature slice". Neither is a navigation item: `session/` is who the caller is, which every module needs and none owns, and `shell/` is the frame they all render inside. Making either a sixth slice would give it a peer's shape while every other slice imports it — the same reason `problem.py` and `observability/` sit beside the center backend's modules rather than among them. `api/` and `router/` are there on the same grounds one level down: one place parses `problem+json`, one place declares the routes.
+
+One exception to §1's strictness posture is recorded where it is taken, in `apps/control-web/tsconfig.app.json`: `exactOptionalPropertyTypes` is off, because element-plus's prop descriptors declare `validator` as a required property whose type includes `undefined` while Vue's `ExtractPropTypes` matches against an optional one. Under that flag the match fails and every affected prop reports the descriptor object instead of the prop's type, on ordinary template usage across `ElSelect`, `ElMenuItem`, `ElDatePicker`, `ElTableColumn` and `ElConfigProvider`. The alternative was a cast at each such prop in every web slice.
 
 ## 3. Module ownership and seams
 
@@ -171,7 +180,7 @@ Technology-neutral by intent: the reference baseline's crate layout, named clipp
 
 ### Size budgets
 
-- A change stays under 800 lines. A change to judgment, boundary-solving, or retention logic stays under 500. Past that, split it into stages that each stand on their own and land the smallest self-consistent stage first. The budget is per landed stage and counts implementation lines, not the tests that land with them: a stage is measured on what a reviewer must hold in their head to judge it correct, and summing the stages the rule just asked for would forbid the split it prescribes. What the sum of a feature's stages must satisfy is that each one stood on its own when it landed. `scripts/check_change_size.py` measures this on the pull request's diff in CI (`make change-size` locally); the paths it counts and the ones it holds to the tighter budget are declared there.
+- A change adds fewer than 800 implementation lines to any one module, and fewer than 500 to the judgment package. Past that, prefer a new module over growing this one, or split this module's growth into a stage that stands on its own and land the smallest first. The budget is per module, not per change: a single pull request may carry several modules' growth at once, because what a reviewer must hold in their head to judge a change is how much each module it touches grew, not a sum across modules that share no seam. A module's `adapters/` subpackage is budgeted as its own module, since §3 keeps adapters outside the behavior they adapt. The budget counts implementation lines, not the tests that land with them. `scripts/check_change_size.py` measures this on the pull request's diff in CI (`make change-size` locally); the paths it counts, the module roots it assigns files to, and the ones it holds to the tighter budget are declared there.
 - A module file stays under 500 lines excluding tests. Prefer a new module over growing an existing one past that. `scripts/check_repo_policy.py` counts production source files against this in `make check`.
 - Resist growth in shared ground. A new capability belongs to the module that owns it, or to a new module. `packages/contracts` and a module's `api.py` are where an unnecessary addition costs the most, because every other module pays for it.
 
@@ -193,9 +202,9 @@ Technology-neutral by intent: the reference baseline's crate layout, named clipp
 
 `make check` is the CPU-only, infrastructure-free merge gate and must work from the repository root, without Docker. CI calls it exactly as developers do. It runs repository policy, migration table-ownership, the base-code contract suite, the `import-linter` contracts, content-based secret scanning (`detect-secrets`, with an empty baseline and inline allowlisting so a false positive is explained where it sits), and each workspace's formatting, lint, type, and unit checks; each workspace-adding change must extend it in the same change with that workspace's build checks and generated-artifact cleanliness.
 
-Its first two targets are `lockfile` (`uv lock --check`, so a manifest edit whose lockfile was never regenerated fails rather than installing the old resolution) and `sync` (`uv sync --frozen --all-packages`). Every gate tool is resolved from `uv.lock` rather than installed separately, so a developer, the edge targets, and CI all execute the same build of ruff and mypy, and no run can silently upgrade a dependency. `apps/edge-runtime/` is not a workspace member and its tests run on a bare interpreter, but its tools come from that same environment.
+Its first two targets are `lockfile` (`uv lock --check`, so a manifest edit whose lockfile was never regenerated fails rather than installing the old resolution) and `sync` (`uv sync --frozen --all-packages`). Every gate tool is resolved from `uv.lock` rather than installed separately, so a developer, the edge targets, and CI all execute the same build of ruff and mypy, and no run can silently upgrade a dependency. `apps/edge-runtime/` is not a workspace member and its tests run on a bare interpreter, but its tools come from that same environment. The web targets follow the same shape: `web-install` is `pnpm install --frozen-lockfile`, and the checks after it run from that installed tree. `web-build` is a gate rather than a packaging step — `vite build` resolves every dynamic `import()` the router declares, so a route that only breaks when built breaks in the gate instead of at deployment.
 
-`make check-integration` is the second required target: one application plus real local infrastructure (PostgreSQL, Redis, MinIO) started as containers via testcontainers. It is separate because a developer without Docker must still be able to run `make check`, and because container startup does not belong in the fast feedback loop. Until the first center module that needs that infrastructure lands, the target exists and returns an explicit success with nothing to run, and CI does not yet call it; the change that adds the first such suite replaces the target's body and adds the CI family in the same change, after which both targets feed the blocking gatherer and merge protection strength is unchanged. SQLite and in-memory fakes are not substitutes for the integration target: transaction isolation, `JSONB`, timezone, and deferred foreign key behavior differ enough to produce false green.
+`make check-integration` is the second required target: one application plus real local infrastructure (PostgreSQL, Redis, MinIO) started as containers via testcontainers. It is separate because a developer without Docker must still be able to run `make check`, and because container startup does not belong in the fast feedback loop. Both targets feed the blocking gatherer, so merge protection strength is unchanged. SQLite and in-memory fakes are not substitutes for the integration target: transaction isolation, `JSONB`, timezone, and deferred foreign key behavior differ enough to produce false green.
 
 Package-specific commands may exist for a tight feedback loop, but they do not replace these two targets. Automation in `scripts/` stays thin: product behavior belongs in an app or package where it can be tested through its interface.
 
@@ -211,12 +220,13 @@ The sole branch-protection status is `CI required` from `.github/workflows/block
 
 As workspaces appear, split checks into reusable workflows while retaining the gatherer:
 
-1. repository policy and lockfile cleanliness — always;
-2. backend/edge format, lint, type, unit, boundary, secret-scanning, and base-code contract checks (`make check`) — on relevant paths; plus the change-size budget (`make change-size`) on pull requests;
+1. repository policy and lockfile cleanliness — always, for both `uv.lock` and `pnpm-lock.yaml`;
+2. backend/edge/web format, lint, type, unit, boundary, secret-scanning, base-code contract checks and the web production build (`make check`) — on relevant paths; plus the change-size budget (`make change-size`) on pull requests;
 3. backend integration checks against real containerized infrastructure (`make check-integration`) — on relevant paths;
-4. web format, lint, type, unit, and production build — on relevant paths;
-5. migration and cross-process contract compatibility — when schemas or contracts change;
-6. workflow changes — run every blocking family.
+4. migration and cross-process contract compatibility — when schemas or contracts change;
+5. workflow changes — run every blocking family.
+
+The web checks are inside family 2 rather than a family of their own. §6 admits exactly one target besides `make check`, and `check-integration` earns it by needing Docker — a developer without it must still be able to run the gate. Node and pnpm are a frozen toolchain like uv's, not infrastructure to bring up, so that reason does not reach the web; splitting it out would leave the local target and the blocking gate running different checks, which is the thing §6 exists to prevent.
 
 Path filtering is an optimization, not an exemption: every reusable workflow must return an explicit success when no relevant files changed. Actions are pinned to immutable commit SHAs, permissions are least-privilege, dependency installs are frozen, jobs have timeouts, and cancellation is enabled for superseded PR runs.
 
@@ -228,7 +238,13 @@ GPU, camera, connector, multi-stream, 72-hour, and 7-day suites run on labeled s
 
 `vendor/sop-monitoring-blueprints/` is the NVIDIA base code, this system's trunk. It changes only through a dedicated `git subtree pull` or a recorded replayable patch within the scope fixed by [ADR-0007](../adr/0007-base-is-the-trunk-not-a-dependency.md): one patch, which only adds output — the pipeline message callback that surfaces stream-health events as a synthetic chunk. Sequence comparison and boundary solving are reimplemented in `apps/edge-runtime/` rather than patched, because the base interleaves boundary detection with sequence comparison inside one method; the base checker and the base disposal are switched off through their existing environment variables rather than replaced. `vendor/` therefore carries no patch for either. Everything else stays as delivered; capabilities the base already provides are reused rather than rebuilt. Patch logic lives in `apps/edge-runtime/` with only a minimal hook inside `vendor/`, so the patch surface stays small and our code remains testable. The update change records the NVIDIA commit in [`docs/base/verified-commits.md`](../base/verified-commits.md) and runs all tests in `tests/contract/base/`.
 
-Generated clients, schemas, and deployment output must have one documented source command. CI regenerates and checks a clean worktree. Commit generated output only when consumers cannot generate it during install or build.
+Generated clients, schemas, and deployment output must have one documented source command. For the
+OpenAPI chain in this repository that command is `make contracts`: it exports
+`packages/contracts/openapi.json`, checks compatibility against the supplied base ref, and invokes
+the Web workspace's generator. The `openapi-*` Make targets and `generate:api` package script are
+implementation steps of that command, not alternate documented workflows. CI regenerates and
+checks the complete worktree, including untracked output. Commit generated output only when
+consumers cannot generate it during install or build.
 
 ## 9. Agent instruction hierarchy
 

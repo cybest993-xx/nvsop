@@ -44,6 +44,19 @@ class RepositoryPolicyTest(unittest.TestCase):
     def test_accepts_minimum_harness(self) -> None:
         self.assertEqual([], self.check())
 
+    def test_rejects_an_integration_filter_that_omits_system_tests(self) -> None:
+        system_test = self.write("tests/system/test_case.py", "")
+        self.write(
+            ".github/workflows/blocking-ci.yml",
+            "pull_request:\nCI required\nalways()\nmake check\n"
+            "integration-gate:\n  run: git diff | grep -E '^(apps/control-api/|Makefile$)'\n",
+        )
+        self.assertIn(
+            "blocking-ci.yml integration path filter must include tests/system/; "
+            "path filtering is not an exemption (harness §7)",
+            self.check(str(system_test)),
+        )
+
     def test_rejects_undeclared_application(self) -> None:
         path = self.root / "apps/mystery/src/main.py"
         path.parent.mkdir(parents=True)

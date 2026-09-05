@@ -11,6 +11,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import suppress
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -25,7 +26,7 @@ from factory_sop.auth.adapters.repository import (
 from factory_sop.auth.adapters.tables import UserRow
 from factory_sop.auth.model import Session, User, UserStatus
 from factory_sop.auth.passwords import hash_password
-from factory_sop.auth.repository import LoginNameTakenError
+from factory_sop.auth.repository import LoginNameTakenError, UserNotFoundError
 from factory_sop.identifiers import new_id
 
 MONDAY_MORNING = datetime(2026, 9, 7, 1, 0, tzinfo=UTC)
@@ -90,6 +91,52 @@ def test_two_accounts_cannot_share_a_login_name(session: DatabaseSession) -> Non
 
     with pytest.raises(LoginNameTakenError):
         users.add(an_account())
+
+
+def test_updating_after_an_external_delete_reports_user_not_found(engine: Engine) -> None:
+    account = an_account(login_name="vanishing.user")
+    writer = DatabaseSession(engine)
+    reader = DatabaseSession(engine)
+    try:
+        PostgresUserRepository(writer).add(account)
+        writer.commit()
+
+        users = PostgresUserRepository(reader)
+        # Populate the ORM identity map before the other transaction deletes the row. A later
+        # `Session.get` must not mistake that cached object for a successful update.
+        assert users.by_identifier(account.id) == account
+        with engine.begin() as connection:
+            connection.execute(delete(UserRow).where(UserRow.id == account.id))
+
+        with pytest.raises(UserNotFoundError):
+            users.update(replace(account, display_name="已消失"))
+    finally:
+        reader.close()
+        writer.close()
+        with engine.begin() as connection:
+            connection.execute(delete(UserRow).where(UserRow.id == account.id))
+
+
+def test_removing_after_an_external_delete_reports_user_not_found(engine: Engine) -> None:
+    account = an_account(login_name="vanishing.remove")
+    writer = DatabaseSession(engine)
+    reader = DatabaseSession(engine)
+    try:
+        PostgresUserRepository(writer).add(account)
+        writer.commit()
+
+        users = PostgresUserRepository(reader)
+        assert users.by_identifier(account.id) == account
+        with engine.begin() as connection:
+            connection.execute(delete(UserRow).where(UserRow.id == account.id))
+
+        with pytest.raises(UserNotFoundError):
+            users.remove(account.id)
+    finally:
+        reader.close()
+        writer.close()
+        with engine.begin() as connection:
+            connection.execute(delete(UserRow).where(UserRow.id == account.id))
 
 
 def test_a_session_round_trips_and_is_found_by_its_fingerprint(session: DatabaseSession) -> None:

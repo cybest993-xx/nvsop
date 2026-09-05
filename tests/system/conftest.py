@@ -176,7 +176,13 @@ def deactivated_account(bootstrap: BootstrapCommand, engine: Engine) -> None:
 
 
 def _reset_database(engine: Engine) -> None:
-    """Reset the scenario state outside the system boundary, before and after each case."""
+    """Reset the scenario state outside the system boundary, before and after each case.
+
+    `auth_role` goes with the accounts: the bootstrap seeds the administrator role and commits
+    it, and a surviving role would collide with the seed's unique code in the next scenario.
+    `CASCADE` carries the assignment and permission rows; the `auth_permission` registry is
+    migration-seeded reference data and is never touched.
+    """
     with engine.begin() as connection:
         connection.execute(
             text(

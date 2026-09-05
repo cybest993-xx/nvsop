@@ -27,6 +27,18 @@ export type ApiErrorCode =
   | 'SESSION_INVALID'
 
 /**
+ * AssignedRoles
+ *
+ * The complete set of roles the account should hold. An empty list is a valid submission.
+ */
+export type AssignedRoles = {
+  /**
+   * Role Ids
+   */
+  role_ids: Array<string>
+}
+
+/**
  * Credentials
  *
  * What the login form submits.
@@ -54,6 +66,16 @@ export type EditedRole = {
    * Permissions
    */
   permissions: Array<string>
+}
+
+/**
+ * EditedUser
+ */
+export type EditedUser = {
+  /**
+   * Display Name
+   */
+  display_name: string
 }
 
 /**
@@ -95,6 +117,28 @@ export type ItemPageRoleView = {
 }
 
 /**
+ * ItemPage[UserView]
+ */
+export type ItemPageUserView = {
+  /**
+   * Items
+   */
+  items: Array<UserView>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
  * ItemPage[str]
  */
 export type ItemPageStr = {
@@ -117,6 +161,16 @@ export type ItemPageStr = {
 }
 
 /**
+ * NewPassword
+ */
+export type NewPassword = {
+  /**
+   * Password
+   */
+  password: string
+}
+
+/**
  * NewRole
  */
 export type NewRole = {
@@ -132,6 +186,24 @@ export type NewRole = {
    * Permissions
    */
   permissions: Array<string>
+}
+
+/**
+ * NewUser
+ */
+export type NewUser = {
+  /**
+   * Display Name
+   */
+  display_name: string
+  /**
+   * Login Name
+   */
+  login_name: string
+  /**
+   * Password
+   */
+  password: string
 }
 
 /**
@@ -161,6 +233,18 @@ export type ProblemDocument = {
    * Type
    */
   type?: 'about:blank'
+}
+
+/**
+ * RequestedStatus
+ *
+ * Which of the two states the account should be in.
+ *
+ * `UserStatus` itself, so an unknown value is refused by the contract as a `field_errors[]` entry
+ * rather than reaching a branch that would have to decide what a third status means.
+ */
+export type RequestedStatus = {
+  status: UserStatus
 }
 
 /**
@@ -230,6 +314,63 @@ export type SessionView = {
    * User Id
    */
   user_id: string
+}
+
+/**
+ * StatusChanged
+ *
+ * The account's new state, and how many sessions the change closed.
+ *
+ * `revoked_sessions` is on the response so the screen can say "已停用，同时下线 3 个会话".
+ * Always present, and `0` on a reactivation — a field that appeared only sometimes would have
+ * the front end branching on its existence.
+ */
+export type StatusChanged = {
+  /**
+   * Revoked Sessions
+   */
+  revoked_sessions: number
+  user: UserView
+}
+
+/**
+ * UserStatus
+ *
+ * Whether an account may still take part in a new login.
+ *
+ * An enum rather than an `is_active` boolean: `CONTEXT.md` gives 停用 its own definition
+ * across every mutable configuration object, and the call site reads
+ * `status is UserStatus.DEACTIVATED` instead of `not user.is_active`.
+ */
+export type UserStatus = 'active' | 'deactivated'
+
+/**
+ * UserView
+ *
+ * An account as the administration screens show it.
+ *
+ * No `password_hash`. Not because it is secret from an administrator who could reset it anyway,
+ * but because a hash on the wire is a hash in a browser's cache, a proxy log and a screenshot,
+ * and nothing on the screen has a use for it.
+ */
+export type UserView = {
+  /**
+   * Display Name
+   */
+  display_name: string
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Login Name
+   */
+  login_name: string
+  /**
+   * Role Ids
+   */
+  role_ids: Array<string>
+  status: UserStatus
 }
 
 export type ListPermissionsData = {
@@ -559,6 +700,335 @@ export type OpenSessionResponses = {
 }
 
 export type OpenSessionResponse = OpenSessionResponses[keyof OpenSessionResponses]
+
+export type ListUsersData = {
+  body?: never
+  path?: never
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/auth/users'
+}
+
+export type ListUsersErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ListUsersError = ListUsersErrors[keyof ListUsersErrors]
+
+export type ListUsersResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageUserView
+}
+
+export type ListUsersResponse = ListUsersResponses[keyof ListUsersResponses]
+
+export type CreateUserData = {
+  body: NewUser
+  path?: never
+  query?: never
+  url: '/api/v1/auth/users'
+}
+
+export type CreateUserErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Login name already taken
+   */
+  409: ProblemDocument
+  /**
+   * Request invalid, or the password is too short
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CreateUserError = CreateUserErrors[keyof CreateUserErrors]
+
+export type CreateUserResponses = {
+  /**
+   * Successful Response
+   */
+  201: UserView
+}
+
+export type CreateUserResponse = CreateUserResponses[keyof CreateUserResponses]
+
+export type DeleteUserData = {
+  body?: never
+  path: {
+    /**
+     * User Id
+     */
+    user_id: string
+  }
+  query?: never
+  url: '/api/v1/auth/users/{user_id}'
+}
+
+export type DeleteUserErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Account not found
+   */
+  404: ProblemDocument
+  /**
+   * The deletion would leave the system unadministrable
+   */
+  409: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type DeleteUserError = DeleteUserErrors[keyof DeleteUserErrors]
+
+export type DeleteUserResponses = {
+  /**
+   * Successful Response
+   */
+  204: void
+}
+
+export type DeleteUserResponse = DeleteUserResponses[keyof DeleteUserResponses]
+
+export type EditUserData = {
+  body: EditedUser
+  path: {
+    /**
+     * User Id
+     */
+    user_id: string
+  }
+  query?: never
+  url: '/api/v1/auth/users/{user_id}'
+}
+
+export type EditUserErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Account not found
+   */
+  404: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type EditUserError = EditUserErrors[keyof EditUserErrors]
+
+export type EditUserResponses = {
+  /**
+   * Successful Response
+   */
+  200: UserView
+}
+
+export type EditUserResponse = EditUserResponses[keyof EditUserResponses]
+
+export type ResetUserPasswordData = {
+  body: NewPassword
+  path: {
+    /**
+     * User Id
+     */
+    user_id: string
+  }
+  query?: never
+  url: '/api/v1/auth/users/{user_id}/password'
+}
+
+export type ResetUserPasswordErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Account not found
+   */
+  404: ProblemDocument
+  /**
+   * Request invalid, or the password is too short
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ResetUserPasswordError = ResetUserPasswordErrors[keyof ResetUserPasswordErrors]
+
+export type ResetUserPasswordResponses = {
+  /**
+   * Successful Response
+   */
+  204: void
+}
+
+export type ResetUserPasswordResponse = ResetUserPasswordResponses[keyof ResetUserPasswordResponses]
+
+export type SetUserRolesData = {
+  body: AssignedRoles
+  path: {
+    /**
+     * User Id
+     */
+    user_id: string
+  }
+  query?: never
+  url: '/api/v1/auth/users/{user_id}/roles'
+}
+
+export type SetUserRolesErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Account not found
+   */
+  404: ProblemDocument
+  /**
+   * Login name taken, or the change would leave the system unadministrable
+   */
+  409: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type SetUserRolesError = SetUserRolesErrors[keyof SetUserRolesErrors]
+
+export type SetUserRolesResponses = {
+  /**
+   * Successful Response
+   */
+  200: UserView
+}
+
+export type SetUserRolesResponse = SetUserRolesResponses[keyof SetUserRolesResponses]
+
+export type SetUserStatusData = {
+  body: RequestedStatus
+  path: {
+    /**
+     * User Id
+     */
+    user_id: string
+  }
+  query?: never
+  url: '/api/v1/auth/users/{user_id}/status'
+}
+
+export type SetUserStatusErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Account not found
+   */
+  404: ProblemDocument
+  /**
+   * Login name taken, or the change would leave the system unadministrable
+   */
+  409: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type SetUserStatusError = SetUserStatusErrors[keyof SetUserStatusErrors]
+
+export type SetUserStatusResponses = {
+  /**
+   * Successful Response
+   */
+  200: StatusChanged
+}
+
+export type SetUserStatusResponse = SetUserStatusResponses[keyof SetUserStatusResponses]
 
 export type ReadLivenessData = {
   body?: never

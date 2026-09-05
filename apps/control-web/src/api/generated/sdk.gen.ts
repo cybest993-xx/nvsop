@@ -6,12 +6,21 @@ import type {
   CreateRoleData,
   CreateRoleErrors,
   CreateRoleResponses,
+  CreateUserData,
+  CreateUserErrors,
+  CreateUserResponses,
   DeleteRoleData,
   DeleteRoleErrors,
   DeleteRoleResponses,
+  DeleteUserData,
+  DeleteUserErrors,
+  DeleteUserResponses,
   EditRoleData,
   EditRoleErrors,
   EditRoleResponses,
+  EditUserData,
+  EditUserErrors,
+  EditUserResponses,
   EndSessionData,
   EndSessionErrors,
   EndSessionResponses,
@@ -21,6 +30,9 @@ import type {
   ListRolesData,
   ListRolesErrors,
   ListRolesResponses,
+  ListUsersData,
+  ListUsersErrors,
+  ListUsersResponses,
   OpenSessionData,
   OpenSessionErrors,
   OpenSessionResponses,
@@ -30,6 +42,15 @@ import type {
   ReadSessionData,
   ReadSessionErrors,
   ReadSessionResponses,
+  ResetUserPasswordData,
+  ResetUserPasswordErrors,
+  ResetUserPasswordResponses,
+  SetUserRolesData,
+  SetUserRolesErrors,
+  SetUserRolesResponses,
+  SetUserStatusData,
+  SetUserStatusErrors,
+  SetUserStatusResponses,
 } from './types.gen'
 
 export type Options<
@@ -181,6 +202,133 @@ export const openSession = <ThrowOnError extends boolean = false>(
 ): RequestResult<OpenSessionResponses, OpenSessionErrors, ThrowOnError> =>
   (options.client ?? client).post<OpenSessionResponses, OpenSessionErrors, ThrowOnError>({
     url: '/api/v1/auth/session',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read The Users
+ *
+ * Every account, deactivated ones included, in the §5.15 list envelope.
+ */
+export const listUsers = <ThrowOnError extends boolean = false>(
+  options?: Options<ListUsersData, ThrowOnError>,
+): RequestResult<ListUsersResponses, ListUsersErrors, ThrowOnError> =>
+  (options?.client ?? client).get<ListUsersResponses, ListUsersErrors, ThrowOnError>({
+    url: '/api/v1/auth/users',
+    ...options,
+  })
+
+/**
+ * Create An Account
+ *
+ * Create an active account. It can log in immediately; it holds no roles until assigned.
+ */
+export const createUser = <ThrowOnError extends boolean = false>(
+  options: Options<CreateUserData, ThrowOnError>,
+): RequestResult<CreateUserResponses, CreateUserErrors, ThrowOnError> =>
+  (options.client ?? client).post<CreateUserResponses, CreateUserErrors, ThrowOnError>({
+    url: '/api/v1/auth/users',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Delete An Account
+ *
+ * Delete an account with its sessions and assignments. `USER_DELETE`, never `USER_EDIT`.
+ */
+export const deleteUser = <ThrowOnError extends boolean = false>(
+  options: Options<DeleteUserData, ThrowOnError>,
+): RequestResult<DeleteUserResponses, DeleteUserErrors, ThrowOnError> =>
+  (options.client ?? client).delete<DeleteUserResponses, DeleteUserErrors, ThrowOnError>({
+    url: '/api/v1/auth/users/{user_id}',
+    ...options,
+  })
+
+/**
+ * Edit An Account
+ *
+ * Change the display name. `PATCH`, because the login name is deliberately not editable.
+ */
+export const editUser = <ThrowOnError extends boolean = false>(
+  options: Options<EditUserData, ThrowOnError>,
+): RequestResult<EditUserResponses, EditUserErrors, ThrowOnError> =>
+  (options.client ?? client).patch<EditUserResponses, EditUserErrors, ThrowOnError>({
+    url: '/api/v1/auth/users/{user_id}',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Reset An Account Password
+ *
+ * Set a new password without presenting the old one.
+ *
+ * 204 with no body: there is nothing to report that the administrator does not already know, and
+ * a response echoing any part of the request would put a password in a browser's cache.
+ */
+export const resetUserPassword = <ThrowOnError extends boolean = false>(
+  options: Options<ResetUserPasswordData, ThrowOnError>,
+): RequestResult<ResetUserPasswordResponses, ResetUserPasswordErrors, ThrowOnError> =>
+  (options.client ?? client).put<ResetUserPasswordResponses, ResetUserPasswordErrors, ThrowOnError>(
+    {
+      url: '/api/v1/auth/users/{user_id}/password',
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...options.headers,
+      },
+    },
+  )
+
+/**
+ * Set The Roles Of An Account
+ *
+ * Replace the account's roles with exactly the submitted set.
+ *
+ * `USER_EDIT`, not `ROLE_EDIT`: this changes an account. An administrator who may staff the shop
+ * floor's accounts should not thereby be able to redefine what a role grants.
+ *
+ * The use case validates the account before it writes anything, so an unknown `user_id` is
+ * `USER_NOT_FOUND` whether or not the submission carried roles.
+ */
+export const setUserRoles = <ThrowOnError extends boolean = false>(
+  options: Options<SetUserRolesData, ThrowOnError>,
+): RequestResult<SetUserRolesResponses, SetUserRolesErrors, ThrowOnError> =>
+  (options.client ?? client).put<SetUserRolesResponses, SetUserRolesErrors, ThrowOnError>({
+    url: '/api/v1/auth/users/{user_id}/roles',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Set An Account Status
+ *
+ * 停用 or 恢复, as one operation on one field.
+ *
+ * Both directions need `USER_EDIT`, which is what lets a single route declare a single
+ * permission: they are the reversible state of a mutable configuration object (§5.15), not two
+ * operations of different weight. Deactivating revokes every session of the account inside the
+ * same transaction as the status write (ADR-0002).
+ */
+export const setUserStatus = <ThrowOnError extends boolean = false>(
+  options: Options<SetUserStatusData, ThrowOnError>,
+): RequestResult<SetUserStatusResponses, SetUserStatusErrors, ThrowOnError> =>
+  (options.client ?? client).put<SetUserStatusResponses, SetUserStatusErrors, ThrowOnError>({
+    url: '/api/v1/auth/users/{user_id}/status',
     ...options,
     headers: {
       'Content-Type': 'application/json',

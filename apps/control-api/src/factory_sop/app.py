@@ -17,6 +17,7 @@ from fastapi.exceptions import RequestValidationError
 
 from factory_sop.auth.adapters import role_administration as auth_role_administration
 from factory_sop.auth.adapters import routes as auth_routes
+from factory_sop.auth.adapters import user_administration as auth_user_administration
 from factory_sop.auth.adapters.cookies import CSRF_HEADER
 from factory_sop.auth.adapters.dependencies import presented_token
 from factory_sop.auth.authorization import AuthorizationRefusedError
@@ -98,6 +99,7 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(liveness_router, prefix=API_PREFIX)
     app.include_router(auth_routes.router, prefix=API_PREFIX)
     app.include_router(auth_role_administration.router, prefix=API_PREFIX)
+    app.include_router(auth_user_administration.router, prefix=API_PREFIX)
 
     @app.exception_handler(AuthenticationRefusedError)
     async def refused(request: Request, error: AuthenticationRefusedError) -> Response:

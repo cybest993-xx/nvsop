@@ -23,6 +23,24 @@
         "title": "ApiErrorCode",
         "type": "string"
       },
+      "AssignedRoles": {
+        "description": "The complete set of roles the account should hold. An empty list is a valid submission.",
+        "properties": {
+          "role_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Role Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "role_ids"
+        ],
+        "title": "AssignedRoles",
+        "type": "object"
+      },
       "Credentials": {
         "description": "What the login form submits.",
         "properties": {
@@ -67,6 +85,21 @@
           "permissions"
         ],
         "title": "EditedRole",
+        "type": "object"
+      },
+      "EditedUser": {
+        "properties": {
+          "display_name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Display Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "display_name"
+        ],
+        "title": "EditedUser",
         "type": "object"
       },
       "FieldError": {
@@ -122,6 +155,40 @@
         "title": "ItemPage[RoleView]",
         "type": "object"
       },
+      "ItemPage_UserView_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/UserView"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "minimum": 1.0,
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "minimum": 1.0,
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
+        "title": "ItemPage[UserView]",
+        "type": "object"
+      },
       "ItemPage_str_": {
         "properties": {
           "items": {
@@ -156,6 +223,21 @@
         "title": "ItemPage[str]",
         "type": "object"
       },
+      "NewPassword": {
+        "properties": {
+          "password": {
+            "maxLength": 1024,
+            "minLength": 12,
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "password"
+        ],
+        "title": "NewPassword",
+        "type": "object"
+      },
       "NewRole": {
         "properties": {
           "code": {
@@ -184,6 +266,35 @@
           "permissions"
         ],
         "title": "NewRole",
+        "type": "object"
+      },
+      "NewUser": {
+        "properties": {
+          "display_name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "login_name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Login Name",
+            "type": "string"
+          },
+          "password": {
+            "maxLength": 1024,
+            "minLength": 12,
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "login_name",
+          "display_name",
+          "password"
+        ],
+        "title": "NewUser",
         "type": "object"
       },
       "ProblemDocument": {
@@ -238,6 +349,19 @@
           "error_code"
         ],
         "title": "ProblemDocument",
+        "type": "object"
+      },
+      "RequestedStatus": {
+        "description": "Which of the two states the account should be in.\n\n`UserStatus` itself, so an unknown value is refused by the contract as a `field_errors[]` entry\nrather than reaching a branch that would have to decide what a third status means.",
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/UserStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "RequestedStatus",
         "type": "object"
       },
       "RoleView": {
@@ -309,6 +433,71 @@
           "expires_at"
         ],
         "title": "SessionView",
+        "type": "object"
+      },
+      "StatusChanged": {
+        "description": "The account's new state, and how many sessions the change closed.\n\n`revoked_sessions` is on the response so the screen can say \"已停用，同时下线 3 个会话\".\nAlways present, and `0` on a reactivation — a field that appeared only sometimes would have\nthe front end branching on its existence.",
+        "properties": {
+          "revoked_sessions": {
+            "title": "Revoked Sessions",
+            "type": "integer"
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserView"
+          }
+        },
+        "required": [
+          "user",
+          "revoked_sessions"
+        ],
+        "title": "StatusChanged",
+        "type": "object"
+      },
+      "UserStatus": {
+        "description": "Whether an account may still take part in a new login.\n\nAn enum rather than an `is_active` boolean: `CONTEXT.md` gives 停用 its own definition\nacross every mutable configuration object, and the call site reads\n`status is UserStatus.DEACTIVATED` instead of `not user.is_active`.",
+        "enum": [
+          "active",
+          "deactivated"
+        ],
+        "title": "UserStatus",
+        "type": "string"
+      },
+      "UserView": {
+        "description": "An account as the administration screens show it.\n\nNo `password_hash`. Not because it is secret from an administrator who could reset it anyway,\nbut because a hash on the wire is a hash in a browser's cache, a proxy log and a screenshot,\nand nothing on the screen has a use for it.",
+        "properties": {
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "login_name": {
+            "title": "Login Name",
+            "type": "string"
+          },
+          "role_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Role Ids",
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/components/schemas/UserStatus"
+          }
+        },
+        "required": [
+          "id",
+          "login_name",
+          "display_name",
+          "status",
+          "role_ids"
+        ],
+        "title": "UserView",
         "type": "object"
       }
     }
@@ -908,6 +1097,653 @@
         "tags": [
           "auth"
         ]
+      }
+    },
+    "/api/v1/auth/users": {
+      "get": {
+        "description": "Every account, deactivated ones included, in the §5.15 list envelope.",
+        "operationId": "listUsers",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPage_UserView_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Request invalid"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Read The Users",
+        "tags": [
+          "auth"
+        ]
+      },
+      "post": {
+        "description": "Create an active account. It can log in immediately; it holds no roles until assigned.",
+        "operationId": "createUser",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewUser"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Login name already taken"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Request invalid, or the password is too short"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Create An Account",
+        "tags": [
+          "auth"
+        ],
+        "x-required-permission": "auth.user.edit"
+      }
+    },
+    "/api/v1/auth/users/{user_id}": {
+      "delete": {
+        "description": "Delete an account with its sessions and assignments. `USER_DELETE`, never `USER_EDIT`.",
+        "operationId": "deleteUser",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Account not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "The deletion would leave the system unadministrable"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Request invalid"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Delete An Account",
+        "tags": [
+          "auth"
+        ],
+        "x-required-permission": "auth.user.delete"
+      },
+      "patch": {
+        "description": "Change the display name. `PATCH`, because the login name is deliberately not editable.",
+        "operationId": "editUser",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditedUser"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Account not found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Request invalid"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Edit An Account",
+        "tags": [
+          "auth"
+        ],
+        "x-required-permission": "auth.user.edit"
+      }
+    },
+    "/api/v1/auth/users/{user_id}/password": {
+      "put": {
+        "description": "Set a new password without presenting the old one.\n\n204 with no body: there is nothing to report that the administrator does not already know, and\na response echoing any part of the request would put a password in a browser's cache.",
+        "operationId": "resetUserPassword",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewPassword"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Account not found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Request invalid, or the password is too short"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Reset An Account Password",
+        "tags": [
+          "auth"
+        ],
+        "x-required-permission": "auth.user.edit"
+      }
+    },
+    "/api/v1/auth/users/{user_id}/roles": {
+      "put": {
+        "description": "Replace the account's roles with exactly the submitted set.\n\n`USER_EDIT`, not `ROLE_EDIT`: this changes an account. An administrator who may staff the shop\nfloor's accounts should not thereby be able to redefine what a role grants.\n\nThe use case validates the account before it writes anything, so an unknown `user_id` is\n`USER_NOT_FOUND` whether or not the submission carried roles.",
+        "operationId": "setUserRoles",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignedRoles"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Account not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Login name taken, or the change would leave the system unadministrable"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Request invalid"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Set The Roles Of An Account",
+        "tags": [
+          "auth"
+        ],
+        "x-required-permission": "auth.user.edit"
+      }
+    },
+    "/api/v1/auth/users/{user_id}/status": {
+      "put": {
+        "description": "停用 or 恢复, as one operation on one field.\n\nBoth directions need `USER_EDIT`, which is what lets a single route declare a single\npermission: they are the reversible state of a mutable configuration object (§5.15), not two\noperations of different weight. Deactivating revokes every session of the account inside the\nsame transaction as the status write (ADR-0002).",
+        "operationId": "setUserStatus",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestedStatus"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusChanged"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Account not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Login name taken, or the change would leave the system unadministrable"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Request invalid"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Set An Account Status",
+        "tags": [
+          "auth"
+        ],
+        "x-required-permission": "auth.user.edit"
       }
     },
     "/api/v1/liveness": {

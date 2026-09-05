@@ -134,9 +134,9 @@ jobs:
         run: make check
       - name: Hold the change to its size budget
         if: steps.relevant.outputs.run == 'true' && github.event_name == 'pull_request'
-        # Harness §5's budget is per landed stage, so it is measured on the pull request's
-        # own diff — a push to main has no single base to measure against. Pull requests
-        # only, therefore, while `make check` above runs on both.
+        # Harness §5's budget is per module, measured across the pull request's own diff — a
+        # push to main has no single base to measure against. Pull requests only, therefore,
+        # while `make check` above runs on both.
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}

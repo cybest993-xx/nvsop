@@ -50,9 +50,7 @@ class Permission(StrEnum):
     ROLE_EDIT = "auth.role.edit"
     ROLE_DELETE = "auth.role.delete"
 
-    # Reading the inference-host topology. Backend permissions are registered by the
-    # backend-management phase together with its routes; this phase exposes host permissions
-    # only, even though the shared storage already reserves backend rows.
+    # Reading the device topology: hosts, backends, and what connection tests observed.
     INFERENCE_HOST_VIEW = "device.inference_host.view"
     # Creating and editing hosts, and the reversible 停用/恢复 of one — the same folding of
     # 停用 into `edit` the account permissions use (§5.15).
@@ -60,6 +58,10 @@ class Permission(StrEnum):
     # Deleting a host outright. Separate, because it is the irreversible operation 停用 exists
     # to avoid.
     INFERENCE_HOST_DELETE = "device.inference_host.delete"
+
+    INFERENCE_BACKEND_VIEW = "device.inference_backend.view"
+    INFERENCE_BACKEND_EDIT = "device.inference_backend.edit"
+    INFERENCE_BACKEND_DELETE = "device.inference_backend.delete"
 
 
 class UnregisteredPermissionError(Exception):

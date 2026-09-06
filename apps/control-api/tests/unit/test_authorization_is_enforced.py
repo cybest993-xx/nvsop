@@ -24,7 +24,7 @@ from dataclasses import dataclass
 
 import pytest
 from auth_fakes import FakeRoles, FakeSessions, FakeUsers
-from device_fakes import FakeInferenceBackends, FakeInferenceHosts
+from device_fakes import FakeInferenceBackends, FakeInferenceHosts, FakeProbe
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
@@ -135,6 +135,29 @@ ROUTES = [
         headers={"If-Match": "1"},
     ),
     Target("DELETE", "/inference-hosts/{host_id}", headers={"If-Match": "1"}),
+    Target(
+        "POST",
+        "/inference-backends",
+        {"host_id": "{host_id}", "base_url": "http://10.0.8.11:8001"},
+    ),
+    Target(
+        "PATCH",
+        "/inference-backends/{backend_id}",
+        {"host_id": "{host_id}", "base_url": "http://10.0.8.11:8001"},
+        headers={"If-Match": "1"},
+    ),
+    Target(
+        "PUT",
+        "/inference-backends/{backend_id}/status",
+        {"status": "deactivated"},
+        headers={"If-Match": "1"},
+    ),
+    Target(
+        "POST",
+        "/inference-backends/{backend_id}/connection-test",
+        headers={"If-Match": "1"},
+    ),
+    Target("DELETE", "/inference-backends/{backend_id}", headers={"If-Match": "1"}),
     Target("PUT", "/auth/users/{user_id}/roles", {"role_ids": []}),
     Target("DELETE", "/auth/users/{user_id}"),
     Target("POST", "/auth/roles", {"code": "fresh", "name": "新角色", "permissions": []}),
@@ -176,12 +199,15 @@ class Backend:
         self.roles.add(self.role)
 
         self.app = create_app(settings())
-        # A stored backend reference makes the host-delete target reach its history guard; the
-        # backend API itself is intentionally not served in this phase.
+        # A stored backend reference makes the host-delete target reach its history guard, and
+        # the same row makes every backend write target a real resource for this suite.
         self.hosts = FakeInferenceHosts()
         self.backends_store = FakeInferenceBackends()
         self.host = self.hosts.register(name="装配A线-推理机1")
-        self.backends_store.register(host_id=self.host.id, base_url="http://10.0.8.11:8000")
+        self.backend = self.backends_store.register(
+            host_id=self.host.id, base_url="http://10.0.8.11:8000"
+        )
+        self.probe = FakeProbe()
 
         self.app.dependency_overrides[dependencies.users] = lambda: self.users
         self.app.dependency_overrides[dependencies.sessions] = lambda: self.sessions
@@ -189,6 +215,7 @@ class Backend:
         self.app.dependency_overrides[dependencies.granted_permissions] = lambda: self.granted
         self.app.dependency_overrides[device_dependencies.hosts] = lambda: self.hosts
         self.app.dependency_overrides[device_dependencies.backends] = lambda: self.backends_store
+        self.app.dependency_overrides[device_dependencies.probe] = lambda: self.probe
         self.client = TestClient(self.app, base_url="https://testserver")
         assert (
             self.client.post(
@@ -204,6 +231,7 @@ class Backend:
             "user_id": self.subject.id,
             "role_id": self.role.id,
             "host_id": self.host.id,
+            "backend_id": self.backend.id,
         }
         path = target.template.format(**identifiers)
         body = (

@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import Protocol
 from uuid import UUID
 
-from factory_sop.device.model import InferenceHost
+from factory_sop.device.model import InferenceBackend, InferenceHost
 
 
 class InferenceHostRepository(Protocol):
@@ -61,17 +61,30 @@ class InferenceHostRepository(Protocol):
 
 
 class InferenceBackendRepository(Protocol):
-    """The shared backend-history seam needed by host deletion in phase one.
+    """`device_inference_backend`."""
 
-    Backend CRUD and connection/probe operations are deliberately absent. They land with the
-    second-phase backend API; this phase only asks whether a stored backend row still references
-    a host, so 停用 preserves history and 删除 cannot orphan it.
-    """
+    def add(self, backend: InferenceBackend) -> None:
+        """Insert a backend, refusing a duplicate host/endpoint pair or missing host."""
+        ...
+
+    def save(self, backend: InferenceBackend, *, expected_revision: int) -> None:
+        """Write a backend only if its stored revision still equals `expected_revision`."""
+        ...
+
+    def by_id(self, backend_id: UUID) -> InferenceBackend | None:
+        """Return one backend by its public UUID, if it exists."""
+        ...
+
+    def remove(self, backend_id: UUID, *, expected_revision: int) -> bool:
+        """Delete one backend only at the revision the caller read."""
+        ...
 
     def any_for_host(self, host_id: UUID) -> bool:
-        """Report whether any backend still hangs off the host.
+        """Report whether any backend still hangs off a host."""
+        ...
 
-        What `delete_host` consults before removing one; the foreign key holds the same rule
-        in the database.
-        """
+    def page_of(
+        self, *, page: int, page_size: int, host_id: UUID | None
+    ) -> tuple[list[InferenceBackend], int]:
+        """Return one newest-first page, optionally filtered to one host."""
         ...

@@ -3,6 +3,9 @@
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client'
 import { client } from './client.gen'
 import type {
+  CreateInferenceBackendData,
+  CreateInferenceBackendErrors,
+  CreateInferenceBackendResponses,
   CreateInferenceHostData,
   CreateInferenceHostErrors,
   CreateInferenceHostResponses,
@@ -12,6 +15,9 @@ import type {
   CreateUserData,
   CreateUserErrors,
   CreateUserResponses,
+  DeleteInferenceBackendData,
+  DeleteInferenceBackendErrors,
+  DeleteInferenceBackendResponses,
   DeleteInferenceHostData,
   DeleteInferenceHostErrors,
   DeleteInferenceHostResponses,
@@ -21,6 +27,9 @@ import type {
   DeleteUserData,
   DeleteUserErrors,
   DeleteUserResponses,
+  EditInferenceBackendData,
+  EditInferenceBackendErrors,
+  EditInferenceBackendResponses,
   EditInferenceHostData,
   EditInferenceHostErrors,
   EditInferenceHostResponses,
@@ -33,6 +42,9 @@ import type {
   EndSessionData,
   EndSessionErrors,
   EndSessionResponses,
+  ListInferenceBackendsData,
+  ListInferenceBackendsErrors,
+  ListInferenceBackendsResponses,
   ListInferenceHostsData,
   ListInferenceHostsErrors,
   ListInferenceHostsResponses,
@@ -48,6 +60,9 @@ import type {
   OpenSessionData,
   OpenSessionErrors,
   OpenSessionResponses,
+  ReadInferenceBackendData,
+  ReadInferenceBackendErrors,
+  ReadInferenceBackendResponses,
   ReadInferenceHostData,
   ReadInferenceHostErrors,
   ReadInferenceHostResponses,
@@ -60,6 +75,9 @@ import type {
   ResetUserPasswordData,
   ResetUserPasswordErrors,
   ResetUserPasswordResponses,
+  SetInferenceBackendStatusData,
+  SetInferenceBackendStatusErrors,
+  SetInferenceBackendStatusResponses,
   SetInferenceHostStatusData,
   SetInferenceHostStatusErrors,
   SetInferenceHostStatusResponses,
@@ -69,6 +87,9 @@ import type {
   SetUserStatusData,
   SetUserStatusErrors,
   SetUserStatusResponses,
+  TestInferenceBackendConnectionData,
+  TestInferenceBackendConnectionErrors,
+  TestInferenceBackendConnectionResponses,
 } from './types.gen'
 
 export type Options<
@@ -347,6 +368,133 @@ export const setUserStatus = <ThrowOnError extends boolean = false>(
 ): RequestResult<SetUserStatusResponses, SetUserStatusErrors, ThrowOnError> =>
   (options.client ?? client).put<SetUserStatusResponses, SetUserStatusErrors, ThrowOnError>({
     url: '/api/v1/auth/users/{user_id}/status',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * List The Backends
+ *
+ * List endpoints, optionally filtered to one host, under the common page envelope.
+ */
+export const listInferenceBackends = <ThrowOnError extends boolean = false>(
+  options?: Options<ListInferenceBackendsData, ThrowOnError>,
+): RequestResult<ListInferenceBackendsResponses, ListInferenceBackendsErrors, ThrowOnError> =>
+  (options?.client ?? client).get<
+    ListInferenceBackendsResponses,
+    ListInferenceBackendsErrors,
+    ThrowOnError
+  >({ url: '/api/v1/inference-backends', ...options })
+
+/**
+ * Create A Backend
+ *
+ * Register an endpoint on an existing active host.
+ */
+export const createInferenceBackend = <ThrowOnError extends boolean = false>(
+  options: Options<CreateInferenceBackendData, ThrowOnError>,
+): RequestResult<CreateInferenceBackendResponses, CreateInferenceBackendErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    CreateInferenceBackendResponses,
+    CreateInferenceBackendErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/inference-backends',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Delete A Backend
+ *
+ * Delete one endpoint outright; deactivation is the reversible alternative.
+ */
+export const deleteInferenceBackend = <ThrowOnError extends boolean = false>(
+  options: Options<DeleteInferenceBackendData, ThrowOnError>,
+): RequestResult<DeleteInferenceBackendResponses, DeleteInferenceBackendErrors, ThrowOnError> =>
+  (options.client ?? client).delete<
+    DeleteInferenceBackendResponses,
+    DeleteInferenceBackendErrors,
+    ThrowOnError
+  >({ url: '/api/v1/inference-backends/{backend_id}', ...options })
+
+/**
+ * Read A Backend
+ *
+ * Read one endpoint, including connection and provenance facts.
+ */
+export const readInferenceBackend = <ThrowOnError extends boolean = false>(
+  options: Options<ReadInferenceBackendData, ThrowOnError>,
+): RequestResult<ReadInferenceBackendResponses, ReadInferenceBackendErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadInferenceBackendResponses,
+    ReadInferenceBackendErrors,
+    ThrowOnError
+  >({ url: '/api/v1/inference-backends/{backend_id}', ...options })
+
+/**
+ * Edit A Backend
+ *
+ * Replace placement at the revision the caller read.
+ */
+export const editInferenceBackend = <ThrowOnError extends boolean = false>(
+  options: Options<EditInferenceBackendData, ThrowOnError>,
+): RequestResult<EditInferenceBackendResponses, EditInferenceBackendErrors, ThrowOnError> =>
+  (options.client ?? client).patch<
+    EditInferenceBackendResponses,
+    EditInferenceBackendErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/inference-backends/{backend_id}',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Test A Backend Connection
+ *
+ * Ask the endpoint once and persist the actual connection result.
+ */
+export const testInferenceBackendConnection = <ThrowOnError extends boolean = false>(
+  options: Options<TestInferenceBackendConnectionData, ThrowOnError>,
+): RequestResult<
+  TestInferenceBackendConnectionResponses,
+  TestInferenceBackendConnectionErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    TestInferenceBackendConnectionResponses,
+    TestInferenceBackendConnectionErrors,
+    ThrowOnError
+  >({ url: '/api/v1/inference-backends/{backend_id}/connection-test', ...options })
+
+/**
+ * Set The Backend Status
+ *
+ * Set the reversible active/deactivated status.
+ */
+export const setInferenceBackendStatus = <ThrowOnError extends boolean = false>(
+  options: Options<SetInferenceBackendStatusData, ThrowOnError>,
+): RequestResult<
+  SetInferenceBackendStatusResponses,
+  SetInferenceBackendStatusErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).put<
+    SetInferenceBackendStatusResponses,
+    SetInferenceBackendStatusErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/inference-backends/{backend_id}/status',
     ...options,
     headers: {
       'Content-Type': 'application/json',

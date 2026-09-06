@@ -122,9 +122,16 @@ type = "layers"
 # `settings` because it is configured by it, and below the modules because each module's
 # `adapters/` declares its tables on that registry. It owns no domain behavior, which is why a
 # module appears above it and never the reverse.
+#
+# The domain modules stack by who answers to whom. `auth` is the lowest because every other
+# module's use cases call its `authorize` (§5.15), and `auth` calls no module back. `device`
+# sits above `auth` for the same reason today: its routes resolve the caller through `auth`'s
+# adapter dependency, and its use cases will call `auth.api` when #23 wires permissions. The
+# modules that will call `device`'s topology (`template`, `monitor`) will land above it.
 layers = [
     "factory_sop.entrypoint",
     "factory_sop.app",
+    "factory_sop.device",
     "factory_sop.auth",
     "factory_sop.persistence",
     "factory_sop.observability",
@@ -137,8 +144,8 @@ type = "forbidden"
 # The module owns its behavior behind one seam (harness §1, §3): its use cases reach
 # persistence through the `Protocol`s in `repository.py`, and its HTTP surface is an adapter
 # above them. Either import reversed would put SQLAlchemy or FastAPI inside the rules about
-# who may log in, and the use-case tests could no longer pass an in-memory store at that same
-# seam (harness §4).
+# who may log in, and the use-case tests could no longer pass an in-memory store at that
+# same seam (harness §4).
 source_modules = [
     "factory_sop.auth.model",
     "factory_sop.auth.errors",
@@ -146,11 +153,49 @@ source_modules = [
     "factory_sop.auth.tokens",
     "factory_sop.auth.repository",
     "factory_sop.auth.usecases",
+    "factory_sop.auth.authorization",
+    "factory_sop.auth.permissions",
 ]
 forbidden_modules = [
     "factory_sop.auth.adapters",
     "fastapi",
     "sqlalchemy",
+]
+
+[[tool.importlinter.contracts]]
+name = "device's behavior does not depend on how it is stored, reached, or who calls it"
+type = "forbidden"
+# The same seam rule `auth`'s contract holds, plus the module boundary: `device` reaches auth
+# only through `auth.api`, the one permitted cross-module import target (harness §3). Every
+# auth submodule except `api` is forbidden — directly or through any chain — so a device use
+# case cannot slip past the seam to `auth.usecases` or an adapter. `ignore_imports` removes
+# exactly the three re-export edges `auth.api` itself owns: without that, the api's own
+# re-exports would count as a chain into the internals it publishes, which is the point of it.
+source_modules = [
+    "factory_sop.device.model",
+    "factory_sop.device.errors",
+    "factory_sop.device.repository",
+    "factory_sop.device.usecases",
+]
+forbidden_modules = [
+    "factory_sop.device.adapters",
+    "factory_sop.auth.adapters",
+    "factory_sop.auth.authorization",
+    "factory_sop.auth.csrf",
+    "factory_sop.auth.errors",
+    "factory_sop.auth.model",
+    "factory_sop.auth.passwords",
+    "factory_sop.auth.permissions",
+    "factory_sop.auth.repository",
+    "factory_sop.auth.tokens",
+    "factory_sop.auth.usecases",
+    "fastapi",
+    "sqlalchemy",
+]
+ignore_imports = [
+    "factory_sop.auth.api -> factory_sop.auth.adapters.dependencies",
+    "factory_sop.auth.api -> factory_sop.auth.authorization",
+    "factory_sop.auth.api -> factory_sop.auth.permissions",
 ]
 
 [[tool.importlinter.contracts]]

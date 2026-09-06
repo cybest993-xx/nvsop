@@ -158,8 +158,10 @@ def test_c2_2_listings_return_the_requested_page_and_total(path: str, expected: 
     assert _listing_names(response.json()["items"], path) == expected
     assert response.json()["page"] == 2
     assert response.json()["page_size"] == 2
+    # The catalog's total is the enumeration's size: each module landing registers its
+    # members, so the count follows `Permission` rather than a number frozen at C2.2.
     assert response.json()["total"] == (
-        4 if path.endswith("/users") else 3 if path.endswith("/roles") else 6
+        4 if path.endswith("/users") else 3 if path.endswith("/roles") else len(Permission)
     )
 
 

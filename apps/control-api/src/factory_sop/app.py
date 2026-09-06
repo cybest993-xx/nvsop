@@ -8,6 +8,7 @@ an ARQ worker or a smoke script and not only from an HTTP request (§5.15).
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any
@@ -29,6 +30,9 @@ from factory_sop.auth.errors import (
     refusal_problem,
 )
 from factory_sop.auth.model import SessionPolicy
+from factory_sop.device.adapters.routes_hosts import router as inference_hosts_router
+from factory_sop.device.errors import DeviceRefusedError
+from factory_sop.device.errors import refusal_problem as device_refusal_problem
 from factory_sop.observability import (
     correlation_scope,
     get_logger,
@@ -98,6 +102,9 @@ def create_app(settings: Settings) -> FastAPI:
     )
     app.include_router(liveness_router, prefix=API_PREFIX)
     app.include_router(auth_routes.router, prefix=API_PREFIX)
+    # Phase one publishes host management only. Backend rows are shared storage for topology
+    # history; backend commands, connection tests, and permissions land in phase two.
+    app.include_router(inference_hosts_router, prefix=API_PREFIX)
     app.include_router(auth_role_administration.router, prefix=API_PREFIX)
     app.include_router(auth_user_administration.router, prefix=API_PREFIX)
 
@@ -148,6 +155,21 @@ def create_app(settings: Settings) -> FastAPI:
             title=title,
             error_code=ApiErrorCode(error.code.value),
             detail=error.detail,
+        )
+
+    @app.exception_handler(DeviceRefusedError)
+    async def device_refused(request: Request, error: DeviceRefusedError) -> Response:
+        """Report a `device` refusal as `problem+json` (§5.15).
+
+        The same one handler per module as `auth`'s: the status and title are the refusal's
+        own (`device.errors.refusal_problem`), and `error_code` is the module's code spelled
+        into the shared wire enumeration.
+        """
+        status, title = device_refusal_problem(error.code)
+        return problem_response(
+            status=status,
+            title=title,
+            error_code=ApiErrorCode(error.code.value),
         )
 
     @app.exception_handler(RequestValidationError)
@@ -264,12 +286,34 @@ def create_app(settings: Settings) -> FastAPI:
                     responses = operation.get("responses", {})
                     if not isinstance(responses, dict):
                         continue
-                    for response in responses.values():
+                    for response_code, response in list(responses.items()):
                         if not isinstance(response, dict):
+                            continue
+                        if str(response_code) == "422":
+                            responses[response_code] = {
+                                "description": response.get("description", "Request invalid"),
+                                "content": {
+                                    PROBLEM_MEDIA_TYPE: {
+                                        "schema": {
+                                            "$ref": "#/components/schemas/ProblemDocument",
+                                        }
+                                    }
+                                },
+                            }
                             continue
                         content = response.get("content", {})
                         if isinstance(content, dict) and PROBLEM_MEDIA_TYPE in content:
                             content.pop("application/json", None)
+
+            # Replacing FastAPI's default response removes its references from operations. Do
+            # not retain an orphaned HTTPValidationError component in the published contract.
+            validation_ref = "#/components/schemas/HTTPValidationError"
+            if validation_ref not in json.dumps(schema):
+                components = schema.get("components")
+                if isinstance(components, dict):
+                    schemas = components.get("schemas")
+                    if isinstance(schemas, dict):
+                        schemas.pop("HTTPValidationError", None)
             app.openapi_schema = schema
         return app.openapi_schema
 

@@ -1,13 +1,13 @@
 """§5.15's acceptance scenarios, run the way a deployment runs.
 
-Each scenario is the ID + 前置 + 动作 + 可观察结果 row from issue #22's scenario table, and
-the test named for it is what keeps the pair true. These are system suites, not module
-suites: actions and observations cross the interfaces an operator actually uses (the bootstrap
-command and the HTTP API). The fixture may touch PostgreSQL only to reset the schema and arrange
-a precondition whose public operation belongs to a later slice; scenario assertions do not import
-repositories or read tables as a side channel. The container fixture mirrors the center
-integration suite's: one PostgreSQL per session, schema built by the Alembic migrations themselves,
-an empty `auth_user` for every scenario.
+Each scenario is the ID + 前置 + 动作 + 可观察结果 row from an issue's scenario table (#22,
+#24), and the test named for it is what keeps the pair true. These are system suites, not
+module suites: actions and observations cross the interfaces an operator actually uses (the
+bootstrap command and the HTTP API). The fixture may touch PostgreSQL only to reset the schema
+and arrange a precondition whose public operation belongs to a later slice; scenario assertions
+do not import repositories or read tables as a side channel. The container fixture mirrors the
+center integration suite's: one PostgreSQL per session, schema built by the Alembic migrations
+themselves, an empty `auth_user` and empty device tables for every scenario.
 """
 
 from __future__ import annotations
@@ -187,9 +187,40 @@ def _reset_database(engine: Engine) -> None:
         connection.execute(
             text(
                 "TRUNCATE auth_bootstrap_guard, auth_user, auth_session, "
-                "auth_user_role, auth_role_permission, auth_role CASCADE"
+                "auth_user_role, auth_role_permission, auth_role, "
+                "device_inference_backend, device_inference_host CASCADE"
             )
         )
+
+
+# The device administrator the scenarios log in as. First account of the deployment, so the
+# bootstrap command publishes it; the password is synthetic and marked for the scanner.
+ADMIN_CREDENTIALS = {  # pragma: allowlist secret
+    "login_name": "chen.wei",
+    "password": "assembly-line-4",  # pragma: allowlist secret
+}
+SESSION_PATH = "/api/v1/auth/session"
+
+
+def log_in(client: httpx2.Client, bootstrap: BootstrapCommand) -> None:
+    """Create the deployment's first account and open a session for it.
+
+    The scenarios share the same actor — a device administrator — so the two steps of
+    reaching an authenticated client live here rather than in each file.
+    """
+    command = bootstrap.run(
+        login_name=ADMIN_CREDENTIALS["login_name"],
+        password=ADMIN_CREDENTIALS["password"],
+        display_name="陈伟",
+    )
+    assert command.returncode == 0, command.stderr
+    opened = client.post(SESSION_PATH, json=ADMIN_CREDENTIALS)
+    assert opened.status_code == 201, opened.text
+
+
+def csrf_header(client: httpx2.Client) -> dict[str, str]:
+    """The header a logged-in page sends, read from the cookie the way the page does."""
+    return {"x-csrf-token": client.cookies["sop_csrf"]}
 
 
 def _make_tls_certificate(directory: Path) -> tuple[Path, Path]:

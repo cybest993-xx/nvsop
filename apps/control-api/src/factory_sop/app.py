@@ -31,7 +31,9 @@ from factory_sop.auth.errors import (
 )
 from factory_sop.auth.model import SessionPolicy
 from factory_sop.device.adapters.routes_backends import router as inference_backends_router
+from factory_sop.device.adapters.routes_cameras import router as cameras_router
 from factory_sop.device.adapters.routes_hosts import router as inference_hosts_router
+from factory_sop.device.adapters.routes_stations import router as stations_router
 from factory_sop.device.errors import DeviceRefusedError
 from factory_sop.device.errors import refusal_problem as device_refusal_problem
 from factory_sop.observability import (
@@ -105,6 +107,8 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(auth_routes.router, prefix=API_PREFIX)
     app.include_router(inference_hosts_router, prefix=API_PREFIX)
     app.include_router(inference_backends_router, prefix=API_PREFIX)
+    app.include_router(stations_router, prefix=API_PREFIX)
+    app.include_router(cameras_router, prefix=API_PREFIX)
     app.include_router(auth_role_administration.router, prefix=API_PREFIX)
     app.include_router(auth_user_administration.router, prefix=API_PREFIX)
 
@@ -170,6 +174,9 @@ def create_app(settings: Settings) -> FastAPI:
             status=status,
             title=title,
             error_code=ApiErrorCode(error.code.value),
+            field_errors=[
+                FieldError(field=item.field, message=item.message) for item in error.field_errors
+            ],
         )
 
     @app.exception_handler(RequestValidationError)

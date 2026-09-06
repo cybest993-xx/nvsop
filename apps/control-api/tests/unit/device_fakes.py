@@ -15,10 +15,12 @@ from uuid import UUID
 
 from factory_sop.device.errors import DeviceRefusalCode, DeviceRefusedError
 from factory_sop.device.model import (
+    Camera,
     ConnectionState,
     DeviceStatus,
     InferenceBackend,
     InferenceHost,
+    Station,
 )
 from factory_sop.device.probing import ProbeReport
 from factory_sop.identifiers import new_id
@@ -182,6 +184,155 @@ class FakeInferenceBackends:
             backend
             for backend in self.rows.values()
             if host_id is None or backend.host_id == host_id
+        ]
+        ordered = sorted(candidates, key=lambda item: (item.created_at, item.id), reverse=True)
+        start = (page - 1) * page_size
+        return ordered[start : start + page_size], len(ordered)
+
+
+@dataclass
+class FakeInferenceStations:
+    """内存中的 `StationRepository`。"""
+
+    rows: dict[UUID, Station] = field(default_factory=dict)
+
+    def register(
+        self,
+        *,
+        code: str,
+        name: str,
+        tags: tuple[str, ...] = (),
+        status: DeviceStatus = DeviceStatus.ACTIVE,
+        created_at: datetime = FAKE_NOW,
+    ) -> Station:
+        station = Station(
+            id=new_id(),
+            code=code,
+            name=name,
+            tags=tags,
+            status=status,
+            revision=1,
+            created_by=FAKE_ACTOR,
+            updated_by=FAKE_ACTOR,
+            created_at=created_at,
+            updated_at=created_at,
+        )
+        self.add(station)
+        return station
+
+    def add(self, station: Station) -> None:
+        if any(stored.code == station.code for stored in self.rows.values()):
+            raise DeviceRefusedError(DeviceRefusalCode.STATION_CODE_TAKEN)
+        self.rows[station.id] = station
+
+    def save(self, station: Station, *, expected_revision: int) -> None:
+        stored = self.rows.get(station.id)
+        if stored is None:
+            raise DeviceRefusedError(DeviceRefusalCode.STATION_NOT_FOUND)
+        if stored.revision != expected_revision:
+            raise DeviceRefusedError(DeviceRefusalCode.STALE_REVISION)
+        if any(
+            other.code == station.code and other.id != station.id for other in self.rows.values()
+        ):
+            raise DeviceRefusedError(DeviceRefusalCode.STATION_CODE_TAKEN)
+        self.rows[station.id] = station
+
+    def by_id(self, station_id: UUID) -> Station | None:
+        return self.rows.get(station_id)
+
+    def remove(self, station_id: UUID, *, expected_revision: int) -> bool:
+        stored = self.rows.get(station_id)
+        if stored is None:
+            raise DeviceRefusedError(DeviceRefusalCode.STATION_NOT_FOUND)
+        if stored.revision != expected_revision:
+            raise DeviceRefusedError(DeviceRefusalCode.STALE_REVISION)
+        del self.rows[station_id]
+        return True
+
+    def page_of(self, *, page: int, page_size: int) -> tuple[list[Station], int]:
+        ordered = sorted(
+            self.rows.values(), key=lambda item: (item.created_at, item.id), reverse=True
+        )
+        start = (page - 1) * page_size
+        return ordered[start : start + page_size], len(ordered)
+
+
+@dataclass
+class FakeCameras:
+    """相机用例接口处的内存 `CameraRepository`。"""
+
+    rows: dict[UUID, Camera] = field(default_factory=dict)
+
+    def register(
+        self,
+        *,
+        station_id: UUID,
+        host_id: UUID,
+        backend_id: UUID,
+        name: str = "相机1",
+        address: str = "10.0.8.21",
+        main_stream_path: str = "/Streaming/Channels/101",
+        sub_stream_path: str = "/Streaming/Channels/102",
+        credentials_configured: bool = False,
+        status: DeviceStatus = DeviceStatus.ACTIVE,
+        created_at: datetime = FAKE_NOW,
+    ) -> Camera:
+        camera = Camera(
+            id=new_id(),
+            name=name,
+            address=address,
+            main_stream_path=main_stream_path,
+            sub_stream_path=sub_stream_path,
+            credentials_configured=credentials_configured,
+            station_id=station_id,
+            host_id=host_id,
+            backend_id=backend_id,
+            status=status,
+            revision=1,
+            created_by=FAKE_ACTOR,
+            updated_by=FAKE_ACTOR,
+            created_at=created_at,
+            updated_at=created_at,
+        )
+        self.add(camera)
+        return camera
+
+    def add(self, camera: Camera) -> None:
+        self.rows[camera.id] = camera
+
+    def save(self, camera: Camera, *, expected_revision: int) -> None:
+        stored = self.rows.get(camera.id)
+        if stored is None:
+            raise DeviceRefusedError(DeviceRefusalCode.CAMERA_NOT_FOUND)
+        if stored.revision != expected_revision:
+            raise DeviceRefusedError(DeviceRefusalCode.STALE_REVISION)
+        self.rows[camera.id] = camera
+
+    def by_id(self, camera_id: UUID) -> Camera | None:
+        return self.rows.get(camera_id)
+
+    def remove(self, camera_id: UUID, *, expected_revision: int) -> bool:
+        stored = self.rows.get(camera_id)
+        if stored is None:
+            return False
+        if stored.revision != expected_revision:
+            raise DeviceRefusedError(DeviceRefusalCode.STALE_REVISION)
+        del self.rows[camera_id]
+        return True
+
+    def any_for_station(self, station_id: UUID) -> bool:
+        return any(camera.station_id == station_id for camera in self.rows.values())
+
+    def for_station(self, station_id: UUID) -> list[Camera]:
+        return [camera for camera in self.rows.values() if camera.station_id == station_id]
+
+    def page_of(
+        self, *, page: int, page_size: int, station_id: UUID | None
+    ) -> tuple[list[Camera], int]:
+        candidates = [
+            camera
+            for camera in self.rows.values()
+            if station_id is None or camera.station_id == station_id
         ]
         ordered = sorted(candidates, key=lambda item: (item.created_at, item.id), reverse=True)
         start = (page - 1) * page_size

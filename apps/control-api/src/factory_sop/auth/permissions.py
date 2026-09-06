@@ -63,6 +63,13 @@ class Permission(StrEnum):
     INFERENCE_BACKEND_EDIT = "device.inference_backend.edit"
     INFERENCE_BACKEND_DELETE = "device.inference_backend.delete"
 
+    STATION_VIEW = "device.station.view"
+    STATION_EDIT = "device.station.edit"
+    STATION_DELETE = "device.station.delete"
+    CAMERA_VIEW = "device.camera.view"
+    CAMERA_EDIT = "device.camera.edit"
+    CAMERA_DELETE = "device.camera.delete"
+
 
 class UnregisteredPermissionError(Exception):
     """A string that is not a member of `Permission`.

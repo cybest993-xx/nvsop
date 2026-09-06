@@ -55,11 +55,10 @@ def test_an_unregistered_permission_is_refused_rather_than_ignored() -> None:
         parse_permission("auth.user.approve")
 
 
-def test_a_well_shaped_but_unknown_module_is_refused_too() -> None:
-    # Shape is not membership: `device.camera.edit` will be a real permission when `device`
-    # exists, and until then a role naming it grants nothing.
+def test_a_well_shaped_but_unknown_resource_is_refused_too() -> None:
+    # 形状不等于注册成员：设备权限只有在其资源完成注册后才是真实权限。
     with pytest.raises(UnregisteredPermissionError):
-        parse_permission("device.camera.edit")
+        parse_permission("device.unknown.edit")
 
 
 def test_the_refusal_names_the_value_it_refused() -> None:

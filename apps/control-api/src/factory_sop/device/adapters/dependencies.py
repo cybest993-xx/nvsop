@@ -14,11 +14,18 @@ from sqlalchemy.orm import Session as DatabaseSession
 
 from factory_sop.device.adapters.probe import UrllibConnectionProbe
 from factory_sop.device.adapters.repository import (
+    PostgresCameraRepository,
     PostgresInferenceBackendRepository,
     PostgresInferenceHostRepository,
+    PostgresStationRepository,
 )
 from factory_sop.device.probing import ConnectionProbe
-from factory_sop.device.repository import InferenceBackendRepository, InferenceHostRepository
+from factory_sop.device.repository import (
+    CameraRepository,
+    InferenceBackendRepository,
+    InferenceHostRepository,
+    StationRepository,
+)
 from factory_sop.persistence import request_session
 
 
@@ -32,6 +39,20 @@ def backends(
 ) -> InferenceBackendRepository:
     """`device_inference_backend` on the request's transaction."""
     return PostgresInferenceBackendRepository(session)
+
+
+def stations(
+    session: Annotated[DatabaseSession, Depends(request_session)],
+) -> StationRepository:
+    """请求事务中的 `device_station`。"""
+    return PostgresStationRepository(session)
+
+
+def cameras(
+    session: Annotated[DatabaseSession, Depends(request_session)],
+) -> CameraRepository:
+    """请求事务中的 `device_camera`。"""
+    return PostgresCameraRepository(session)
 
 
 def probe() -> ConnectionProbe:

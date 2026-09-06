@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import Protocol
 from uuid import UUID
 
-from factory_sop.device.model import InferenceBackend, InferenceHost
+from factory_sop.device.model import Camera, InferenceBackend, InferenceHost, Station
 
 
 class InferenceHostRepository(Protocol):
@@ -87,4 +87,62 @@ class InferenceBackendRepository(Protocol):
         self, *, page: int, page_size: int, host_id: UUID | None
     ) -> tuple[list[InferenceBackend], int]:
         """Return one newest-first page, optionally filtered to one host."""
+        ...
+
+
+class StationRepository(Protocol):
+    """`device_station`，表示独立的 SOP 工作空间。"""
+
+    def add(self, station: Station) -> None:
+        """插入工位；重复的自然编码应被拒绝。"""
+        ...
+
+    def save(self, station: Station, *, expected_revision: int) -> None:
+        """仅在调用方读取的版本号上替换工位。"""
+        ...
+
+    def by_id(self, station_id: UUID) -> Station | None:
+        """按公开 UUID 返回一个工位；不存在时返回 `None`。"""
+        ...
+
+    def remove(self, station_id: UUID, *, expected_revision: int) -> bool:
+        """删除工位；仍有相机关联时应拒绝。"""
+        ...
+
+    def page_of(self, *, page: int, page_size: int) -> tuple[list[Station], int]:
+        """返回按最新优先的一页及总数。"""
+        ...
+
+
+class CameraRepository(Protocol):
+    """`device_camera`，包含其工位和推理拓扑。"""
+
+    def add(self, camera: Camera) -> None:
+        """插入相机，同时保持数据库拓扑约束。"""
+        ...
+
+    def save(self, camera: Camera, *, expected_revision: int) -> None:
+        """仅在调用方读取的版本号上替换相机。"""
+        ...
+
+    def by_id(self, camera_id: UUID) -> Camera | None:
+        """按公开 UUID 返回一个相机；不存在时返回 `None`。"""
+        ...
+
+    def remove(self, camera_id: UUID, *, expected_revision: int) -> bool:
+        """按调用方读取的版本号删除一个相机。"""
+        ...
+
+    def any_for_station(self, station_id: UUID) -> bool:
+        """报告工位是否仍有相机历史记录。"""
+        ...
+
+    def for_station(self, station_id: UUID) -> list[Camera]:
+        """返回分配给工位的全部相机，供拓扑校验使用。"""
+        ...
+
+    def page_of(
+        self, *, page: int, page_size: int, station_id: UUID | None
+    ) -> tuple[list[Camera], int]:
+        """返回按最新优先的一页，可选按工位过滤。"""
         ...

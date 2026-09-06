@@ -24,7 +24,13 @@ from dataclasses import dataclass
 
 import pytest
 from auth_fakes import FakeRoles, FakeSessions, FakeUsers
-from device_fakes import FakeInferenceBackends, FakeInferenceHosts, FakeProbe
+from device_fakes import (
+    FakeCameras,
+    FakeInferenceBackends,
+    FakeInferenceHosts,
+    FakeInferenceStations,
+    FakeProbe,
+)
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
@@ -158,6 +164,54 @@ ROUTES = [
         headers={"If-Match": "1"},
     ),
     Target("DELETE", "/inference-backends/{backend_id}", headers={"If-Match": "1"}),
+    Target("POST", "/stations", {"code": "station-2", "name": "新工位", "tags": []}),
+    Target(
+        "PATCH",
+        "/stations/{station_id}",
+        {"code": "station-1", "name": "修改工位", "tags": []},
+        headers={"If-Match": "1"},
+    ),
+    Target(
+        "PUT",
+        "/stations/{station_id}/status",
+        {"status": "deactivated"},
+        headers={"If-Match": "1"},
+    ),
+    Target("DELETE", "/stations/{station_id}", headers={"If-Match": "1"}),
+    Target(
+        "POST",
+        "/cameras",
+        {
+            "name": "新相机",
+            "address": "10.0.8.22",
+            "main_stream_path": "/Streaming/Channels/101",
+            "sub_stream_path": "/Streaming/Channels/102",
+            "station_id": "{station_id}",
+            "host_id": "{host_id}",
+            "backend_id": "{backend_id}",
+        },
+    ),
+    Target(
+        "PATCH",
+        "/cameras/{camera_id}",
+        {
+            "name": "修改相机",
+            "address": "10.0.8.23",
+            "main_stream_path": "/Streaming/Channels/101",
+            "sub_stream_path": "/Streaming/Channels/102",
+            "station_id": "{station_id}",
+            "host_id": "{host_id}",
+            "backend_id": "{backend_id}",
+        },
+        headers={"If-Match": "1"},
+    ),
+    Target(
+        "PUT",
+        "/cameras/{camera_id}/status",
+        {"status": "deactivated"},
+        headers={"If-Match": "1"},
+    ),
+    Target("DELETE", "/cameras/{camera_id}", headers={"If-Match": "1"}),
     Target("PUT", "/auth/users/{user_id}/roles", {"role_ids": []}),
     Target("DELETE", "/auth/users/{user_id}"),
     Target("POST", "/auth/roles", {"code": "fresh", "name": "新角色", "permissions": []}),
@@ -208,6 +262,12 @@ class Backend:
             host_id=self.host.id, base_url="http://10.0.8.11:8000"
         )
         self.probe = FakeProbe()
+        self.stations = FakeInferenceStations()
+        self.cameras = FakeCameras()
+        self.station = self.stations.register(code="station-1", name="工位一")
+        self.camera = self.cameras.register(
+            station_id=self.station.id, host_id=self.host.id, backend_id=self.backend.id
+        )
 
         self.app.dependency_overrides[dependencies.users] = lambda: self.users
         self.app.dependency_overrides[dependencies.sessions] = lambda: self.sessions
@@ -216,6 +276,8 @@ class Backend:
         self.app.dependency_overrides[device_dependencies.hosts] = lambda: self.hosts
         self.app.dependency_overrides[device_dependencies.backends] = lambda: self.backends_store
         self.app.dependency_overrides[device_dependencies.probe] = lambda: self.probe
+        self.app.dependency_overrides[device_dependencies.stations] = lambda: self.stations
+        self.app.dependency_overrides[device_dependencies.cameras] = lambda: self.cameras
         self.client = TestClient(self.app, base_url="https://testserver")
         assert (
             self.client.post(
@@ -232,6 +294,8 @@ class Backend:
             "role_id": self.role.id,
             "host_id": self.host.id,
             "backend_id": self.backend.id,
+            "station_id": self.station.id,
+            "camera_id": self.camera.id,
         }
         path = target.template.format(**identifiers)
         body = (

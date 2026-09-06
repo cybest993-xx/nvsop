@@ -21,7 +21,7 @@ These five hold before you read anything else. Everything else lives in the harn
 
 ## Writing rules down
 
-Point at the source of truth instead of restating it. When a rule is already carried by an `import-linter` contract, a `make` target, a config file, or an ADR, cite that place — a second copy goes stale silently. Add a nested `AGENTS.md` only where a subtree has a real local exception, and delete a superseded conclusion once its surviving facts are merged into the current decision source; Git is the archive.
+Keep each rule in one source of truth. For comment and documentation language, see [`repository-harness.md` §5](docs/design/repository-harness.md#5-code-authoring-rules); cite existing contracts, gates, config or ADRs instead of duplicating them. Add a nested `AGENTS.md` only for a real local exception; remove superseded guidance after merging its surviving facts into the current source. Git is the archive.
 
 ## Working on a change
 

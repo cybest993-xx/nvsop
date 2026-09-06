@@ -3,6 +3,9 @@
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client'
 import { client } from './client.gen'
 import type {
+  CreateCameraData,
+  CreateCameraErrors,
+  CreateCameraResponses,
   CreateInferenceBackendData,
   CreateInferenceBackendErrors,
   CreateInferenceBackendResponses,
@@ -12,9 +15,15 @@ import type {
   CreateRoleData,
   CreateRoleErrors,
   CreateRoleResponses,
+  CreateStationData,
+  CreateStationErrors,
+  CreateStationResponses,
   CreateUserData,
   CreateUserErrors,
   CreateUserResponses,
+  DeleteCameraData,
+  DeleteCameraErrors,
+  DeleteCameraResponses,
   DeleteInferenceBackendData,
   DeleteInferenceBackendErrors,
   DeleteInferenceBackendResponses,
@@ -24,9 +33,15 @@ import type {
   DeleteRoleData,
   DeleteRoleErrors,
   DeleteRoleResponses,
+  DeleteStationData,
+  DeleteStationErrors,
+  DeleteStationResponses,
   DeleteUserData,
   DeleteUserErrors,
   DeleteUserResponses,
+  EditCameraData,
+  EditCameraErrors,
+  EditCameraResponses,
   EditInferenceBackendData,
   EditInferenceBackendErrors,
   EditInferenceBackendResponses,
@@ -36,12 +51,18 @@ import type {
   EditRoleData,
   EditRoleErrors,
   EditRoleResponses,
+  EditStationData,
+  EditStationErrors,
+  EditStationResponses,
   EditUserData,
   EditUserErrors,
   EditUserResponses,
   EndSessionData,
   EndSessionErrors,
   EndSessionResponses,
+  ListCamerasData,
+  ListCamerasErrors,
+  ListCamerasResponses,
   ListInferenceBackendsData,
   ListInferenceBackendsErrors,
   ListInferenceBackendsResponses,
@@ -54,12 +75,18 @@ import type {
   ListRolesData,
   ListRolesErrors,
   ListRolesResponses,
+  ListStationsData,
+  ListStationsErrors,
+  ListStationsResponses,
   ListUsersData,
   ListUsersErrors,
   ListUsersResponses,
   OpenSessionData,
   OpenSessionErrors,
   OpenSessionResponses,
+  ReadCameraData,
+  ReadCameraErrors,
+  ReadCameraResponses,
   ReadInferenceBackendData,
   ReadInferenceBackendErrors,
   ReadInferenceBackendResponses,
@@ -72,15 +99,24 @@ import type {
   ReadSessionData,
   ReadSessionErrors,
   ReadSessionResponses,
+  ReadStationData,
+  ReadStationErrors,
+  ReadStationResponses,
   ResetUserPasswordData,
   ResetUserPasswordErrors,
   ResetUserPasswordResponses,
+  SetCameraStatusData,
+  SetCameraStatusErrors,
+  SetCameraStatusResponses,
   SetInferenceBackendStatusData,
   SetInferenceBackendStatusErrors,
   SetInferenceBackendStatusResponses,
   SetInferenceHostStatusData,
   SetInferenceHostStatusErrors,
   SetInferenceHostStatusResponses,
+  SetStationStatusData,
+  SetStationStatusErrors,
+  SetStationStatusResponses,
   SetUserRolesData,
   SetUserRolesErrors,
   SetUserRolesResponses,
@@ -376,6 +412,84 @@ export const setUserStatus = <ThrowOnError extends boolean = false>(
   })
 
 /**
+ * List The Cameras
+ */
+export const listCameras = <ThrowOnError extends boolean = false>(
+  options?: Options<ListCamerasData, ThrowOnError>,
+): RequestResult<ListCamerasResponses, ListCamerasErrors, ThrowOnError> =>
+  (options?.client ?? client).get<ListCamerasResponses, ListCamerasErrors, ThrowOnError>({
+    url: '/api/v1/cameras',
+    ...options,
+  })
+
+/**
+ * Create A Camera
+ */
+export const createCamera = <ThrowOnError extends boolean = false>(
+  options: Options<CreateCameraData, ThrowOnError>,
+): RequestResult<CreateCameraResponses, CreateCameraErrors, ThrowOnError> =>
+  (options.client ?? client).post<CreateCameraResponses, CreateCameraErrors, ThrowOnError>({
+    url: '/api/v1/cameras',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Delete A Camera
+ */
+export const deleteCamera = <ThrowOnError extends boolean = false>(
+  options: Options<DeleteCameraData, ThrowOnError>,
+): RequestResult<DeleteCameraResponses, DeleteCameraErrors, ThrowOnError> =>
+  (options.client ?? client).delete<DeleteCameraResponses, DeleteCameraErrors, ThrowOnError>({
+    url: '/api/v1/cameras/{camera_id}',
+    ...options,
+  })
+
+/**
+ * Read A Camera
+ */
+export const readCamera = <ThrowOnError extends boolean = false>(
+  options: Options<ReadCameraData, ThrowOnError>,
+): RequestResult<ReadCameraResponses, ReadCameraErrors, ThrowOnError> =>
+  (options.client ?? client).get<ReadCameraResponses, ReadCameraErrors, ThrowOnError>({
+    url: '/api/v1/cameras/{camera_id}',
+    ...options,
+  })
+
+/**
+ * Edit A Camera
+ */
+export const editCamera = <ThrowOnError extends boolean = false>(
+  options: Options<EditCameraData, ThrowOnError>,
+): RequestResult<EditCameraResponses, EditCameraErrors, ThrowOnError> =>
+  (options.client ?? client).patch<EditCameraResponses, EditCameraErrors, ThrowOnError>({
+    url: '/api/v1/cameras/{camera_id}',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Set The Camera Status
+ */
+export const setCameraStatus = <ThrowOnError extends boolean = false>(
+  options: Options<SetCameraStatusData, ThrowOnError>,
+): RequestResult<SetCameraStatusResponses, SetCameraStatusErrors, ThrowOnError> =>
+  (options.client ?? client).put<SetCameraStatusResponses, SetCameraStatusErrors, ThrowOnError>({
+    url: '/api/v1/cameras/{camera_id}/status',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
  * List The Backends
  *
  * List endpoints, optionally filtered to one host, under the common page envelope.
@@ -627,4 +741,82 @@ export const readLiveness = <ThrowOnError extends boolean = false>(
   (options?.client ?? client).get<ReadLivenessResponses, ReadLivenessErrors, ThrowOnError>({
     url: '/api/v1/liveness',
     ...options,
+  })
+
+/**
+ * List The Stations
+ */
+export const listStations = <ThrowOnError extends boolean = false>(
+  options?: Options<ListStationsData, ThrowOnError>,
+): RequestResult<ListStationsResponses, ListStationsErrors, ThrowOnError> =>
+  (options?.client ?? client).get<ListStationsResponses, ListStationsErrors, ThrowOnError>({
+    url: '/api/v1/stations',
+    ...options,
+  })
+
+/**
+ * Create A Station
+ */
+export const createStation = <ThrowOnError extends boolean = false>(
+  options: Options<CreateStationData, ThrowOnError>,
+): RequestResult<CreateStationResponses, CreateStationErrors, ThrowOnError> =>
+  (options.client ?? client).post<CreateStationResponses, CreateStationErrors, ThrowOnError>({
+    url: '/api/v1/stations',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Delete A Station
+ */
+export const deleteStation = <ThrowOnError extends boolean = false>(
+  options: Options<DeleteStationData, ThrowOnError>,
+): RequestResult<DeleteStationResponses, DeleteStationErrors, ThrowOnError> =>
+  (options.client ?? client).delete<DeleteStationResponses, DeleteStationErrors, ThrowOnError>({
+    url: '/api/v1/stations/{station_id}',
+    ...options,
+  })
+
+/**
+ * Read A Station
+ */
+export const readStation = <ThrowOnError extends boolean = false>(
+  options: Options<ReadStationData, ThrowOnError>,
+): RequestResult<ReadStationResponses, ReadStationErrors, ThrowOnError> =>
+  (options.client ?? client).get<ReadStationResponses, ReadStationErrors, ThrowOnError>({
+    url: '/api/v1/stations/{station_id}',
+    ...options,
+  })
+
+/**
+ * Edit A Station
+ */
+export const editStation = <ThrowOnError extends boolean = false>(
+  options: Options<EditStationData, ThrowOnError>,
+): RequestResult<EditStationResponses, EditStationErrors, ThrowOnError> =>
+  (options.client ?? client).patch<EditStationResponses, EditStationErrors, ThrowOnError>({
+    url: '/api/v1/stations/{station_id}',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Set The Station Status
+ */
+export const setStationStatus = <ThrowOnError extends boolean = false>(
+  options: Options<SetStationStatusData, ThrowOnError>,
+): RequestResult<SetStationStatusResponses, SetStationStatusErrors, ThrowOnError> =>
+  (options.client ?? client).put<SetStationStatusResponses, SetStationStatusErrors, ThrowOnError>({
+    url: '/api/v1/stations/{station_id}/status',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
   })

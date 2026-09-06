@@ -23,6 +23,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     Enum,
     ForeignKey,
@@ -35,10 +36,12 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from factory_sop.device.model import (
+    Camera,
     ConnectionState,
     DeviceStatus,
     InferenceBackend,
     InferenceHost,
+    Station,
 )
 from factory_sop.persistence import Table
 
@@ -122,6 +125,51 @@ class InferenceHostRow(Table):
         )
 
 
+class StationRow(Table):
+    __tablename__ = "device_station"
+    __table_args__ = (UniqueConstraint("code"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
+    code: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(128))
+    tags: Mapped[list[str]] = mapped_column(JSONB())
+    status: Mapped[DeviceStatus] = mapped_column(_status_enum(create_type=False))
+    revision: Mapped[int] = mapped_column(Integer())
+    created_by: Mapped[UUID] = mapped_column(Uuid())
+    updated_by: Mapped[UUID] = mapped_column(Uuid())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    def to_domain(self) -> Station:
+        return Station(
+            id=self.id,
+            code=self.code,
+            name=self.name,
+            tags=tuple(self.tags),
+            status=self.status,
+            revision=self.revision,
+            created_by=self.created_by,
+            updated_by=self.updated_by,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+        )
+
+    @classmethod
+    def from_domain(cls, station: Station) -> StationRow:
+        return cls(
+            id=station.id,
+            code=station.code,
+            name=station.name,
+            tags=list(station.tags),
+            status=station.status,
+            revision=station.revision,
+            created_by=station.created_by,
+            updated_by=station.updated_by,
+            created_at=station.created_at,
+            updated_at=station.updated_at,
+        )
+
+
 class InferenceBackendRow(Table):
     """One inference-service process endpoint carrying one template configuration."""
 
@@ -201,4 +249,67 @@ class InferenceBackendRow(Table):
             updated_by=backend.updated_by,
             created_at=backend.created_at,
             updated_at=backend.updated_at,
+        )
+
+
+class CameraRow(Table):
+    __tablename__ = "device_camera"
+
+    id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))
+    address: Mapped[str] = mapped_column(String(255))
+    main_stream_path: Mapped[str] = mapped_column(String(255))
+    sub_stream_path: Mapped[str] = mapped_column(String(255))
+    credentials_configured: Mapped[bool] = mapped_column(Boolean(), default=False)
+    station_id: Mapped[UUID] = mapped_column(Uuid(), ForeignKey("device_station.id"), index=True)
+    host_id: Mapped[UUID] = mapped_column(
+        Uuid(), ForeignKey("device_inference_host.id"), index=True
+    )
+    backend_id: Mapped[UUID] = mapped_column(
+        Uuid(), ForeignKey("device_inference_backend.id"), index=True
+    )
+    status: Mapped[DeviceStatus] = mapped_column(_status_enum(create_type=False))
+    revision: Mapped[int] = mapped_column(Integer())
+    created_by: Mapped[UUID] = mapped_column(Uuid())
+    updated_by: Mapped[UUID] = mapped_column(Uuid())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    def to_domain(self) -> Camera:
+        return Camera(
+            id=self.id,
+            name=self.name,
+            address=self.address,
+            main_stream_path=self.main_stream_path,
+            sub_stream_path=self.sub_stream_path,
+            credentials_configured=self.credentials_configured,
+            station_id=self.station_id,
+            host_id=self.host_id,
+            backend_id=self.backend_id,
+            status=self.status,
+            revision=self.revision,
+            created_by=self.created_by,
+            updated_by=self.updated_by,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+        )
+
+    @classmethod
+    def from_domain(cls, camera: Camera) -> CameraRow:
+        return cls(
+            id=camera.id,
+            name=camera.name,
+            address=camera.address,
+            main_stream_path=camera.main_stream_path,
+            sub_stream_path=camera.sub_stream_path,
+            credentials_configured=camera.credentials_configured,
+            station_id=camera.station_id,
+            host_id=camera.host_id,
+            backend_id=camera.backend_id,
+            status=camera.status,
+            revision=camera.revision,
+            created_by=camera.created_by,
+            updated_by=camera.updated_by,
+            created_at=camera.created_at,
+            updated_at=camera.updated_at,
         )

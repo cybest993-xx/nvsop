@@ -188,7 +188,8 @@ def _reset_database(engine: Engine) -> None:
             text(
                 "TRUNCATE auth_bootstrap_guard, auth_user, auth_session, "
                 "auth_user_role, auth_role_permission, auth_role, "
-                "device_inference_backend, device_inference_host CASCADE"
+                "device_camera, device_station, device_inference_backend, "
+                "device_inference_host CASCADE"
             )
         )
 

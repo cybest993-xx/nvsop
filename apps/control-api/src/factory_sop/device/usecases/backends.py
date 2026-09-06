@@ -1,10 +1,9 @@
-"""The inference backend's configuration use cases: create, edit, 停用, restore, delete, read.
+"""推理后端的配置用例：创建、编辑、停用、恢复、删除和读取。
 
-The topology constraint lives here as behavior, not as a caller's duty: a backend is created
-and moved only onto a host that exists and is active, the database's foreign key holds the
-existence half for whoever bypasses this layer, and the migration's trigger holds the
-active-half for them too. Each use case authorizes its caller first, with the
-`device.inference_backend.*` permission the operation is.
+拓扑约束在这里作为行为实现，而不是调用方的职责：后端只能创建在已存在且处于活动状态的推理机上，
+也只能移动到这样的推理机。外键和迁移触发器为绕过本层的调用方提供数据库兜底，包括相机引用使
+推理机或模板迁移变得不安全的情况。每个用例先授权调用方，使用操作对应的
+`device.inference_backend.*` 权限。
 """
 
 from __future__ import annotations

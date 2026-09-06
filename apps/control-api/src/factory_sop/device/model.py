@@ -126,3 +126,61 @@ class InferenceBackend:
     def __post_init__(self) -> None:
         if carries_userinfo(self.base_url):
             raise ValueError("device URLs cannot carry credentials, queries, or fragments")
+
+
+@dataclass(frozen=True, slots=True)
+class Station:
+    """最小的独立 SOP 工作空间，以唯一的操作编码标识。"""
+
+    id: UUID
+    code: str
+    name: str
+    tags: tuple[str, ...]
+    status: DeviceStatus
+    revision: int
+    created_by: UUID
+    updated_by: UUID
+    created_at: datetime
+    updated_at: datetime
+
+    def __post_init__(self) -> None:
+        if not self.code:
+            raise ValueError("station code must not be empty")
+        if not self.name:
+            raise ValueError("station name must not be empty")
+        if any(not tag for tag in self.tags):
+            raise ValueError("station tags must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class Camera:
+    """分配给一个工位及一套推理机/后端拓扑的相机视频流对。"""
+
+    id: UUID
+    name: str
+    address: str
+    main_stream_path: str
+    sub_stream_path: str
+    credentials_configured: bool
+    station_id: UUID
+    host_id: UUID
+    backend_id: UUID
+    status: DeviceStatus
+    revision: int
+    created_by: UUID
+    updated_by: UUID
+    created_at: datetime
+    updated_at: datetime
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("camera name must not be empty")
+        if not self.address:
+            raise ValueError("camera address must not be empty")
+        if not self.main_stream_path:
+            raise ValueError("main_stream_path must not be empty")
+        if not self.sub_stream_path:
+            raise ValueError("sub_stream_path must not be empty")
+        for value in (self.address, self.main_stream_path, self.sub_stream_path):
+            if carries_userinfo(value):
+                raise ValueError("camera URLs cannot carry credentials, queries, or fragments")

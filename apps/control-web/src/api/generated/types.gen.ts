@@ -23,10 +23,20 @@ export type ApiErrorCode =
   | 'CSRF_TOKEN_INVALID'
   | 'INFERENCE_BACKEND_ENDPOINT_TAKEN'
   | 'INFERENCE_BACKEND_NOT_FOUND'
+  | 'INFERENCE_BACKEND_DEACTIVATED'
+  | 'INFERENCE_BACKEND_HAS_CAMERAS'
   | 'INFERENCE_HOST_DEACTIVATED'
   | 'INFERENCE_HOST_HAS_BACKENDS'
   | 'INFERENCE_HOST_NAME_TAKEN'
   | 'INFERENCE_HOST_NOT_FOUND'
+  | 'STATION_NOT_FOUND'
+  | 'STATION_CODE_TAKEN'
+  | 'STATION_DEACTIVATED'
+  | 'STATION_HAS_CAMERAS'
+  | 'CAMERA_NOT_FOUND'
+  | 'CAMERA_HOST_BACKEND_MISMATCH'
+  | 'CAMERA_STATION_HOST_CONFLICT'
+  | 'CAMERA_STATION_TEMPLATE_CONFLICT'
   | 'INTERNAL_ERROR'
   | 'PERMISSION_DENIED'
   | 'REQUEST_INVALID'
@@ -68,6 +78,110 @@ export type BackendPlacement = {
  */
 export type BackendStatus = {
   status: DeviceStatus
+}
+
+/**
+ * CameraConfiguration
+ */
+export type CameraConfiguration = {
+  /**
+   * Address
+   */
+  address: string
+  /**
+   * Backend Id
+   */
+  backend_id: string
+  /**
+   * Host Id
+   */
+  host_id: string
+  /**
+   * Main Stream Path
+   */
+  main_stream_path: string
+  /**
+   * Name
+   */
+  name: string
+  /**
+   * Station Id
+   */
+  station_id: string
+  /**
+   * Sub Stream Path
+   */
+  sub_stream_path: string
+}
+
+/**
+ * CameraStatus
+ */
+export type CameraStatus = {
+  status: DeviceStatus
+}
+
+/**
+ * CameraView
+ */
+export type CameraView = {
+  /**
+   * Address
+   */
+  address: string
+  /**
+   * Backend Id
+   */
+  backend_id: string
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Created By
+   */
+  created_by: string
+  /**
+   * Credentials Configured
+   */
+  credentials_configured: boolean
+  /**
+   * Host Id
+   */
+  host_id: string
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Main Stream Path
+   */
+  main_stream_path: string
+  /**
+   * Name
+   */
+  name: string
+  /**
+   * Revision
+   */
+  revision: number
+  /**
+   * Station Id
+   */
+  station_id: string
+  status: DeviceStatus
+  /**
+   * Sub Stream Path
+   */
+  sub_stream_path: string
+  /**
+   * Updated At
+   */
+  updated_at: string
+  /**
+   * Updated By
+   */
+  updated_by: string
 }
 
 /**
@@ -316,6 +430,28 @@ export type InferenceHostView = {
 }
 
 /**
+ * ItemPage[CameraView]
+ */
+export type ItemPageCameraView = {
+  /**
+   * Items
+   */
+  items: Array<CameraView>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
  * ItemPage[InferenceBackendView]
  */
 export type ItemPageInferenceBackendView = {
@@ -367,6 +503,28 @@ export type ItemPageRoleView = {
    * Items
    */
   items: Array<RoleView>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
+ * ItemPage[StationView]
+ */
+export type ItemPageStationView = {
+  /**
+   * Items
+   */
+  items: Array<StationView>
   /**
    * Page
    */
@@ -582,6 +740,74 @@ export type SessionView = {
 }
 
 /**
+ * StationConfiguration
+ */
+export type StationConfiguration = {
+  /**
+   * Code
+   */
+  code: string
+  /**
+   * Name
+   */
+  name: string
+  /**
+   * Tags
+   */
+  tags?: Array<string>
+}
+
+/**
+ * StationStatus
+ */
+export type StationStatus = {
+  status: DeviceStatus
+}
+
+/**
+ * StationView
+ */
+export type StationView = {
+  /**
+   * Code
+   */
+  code: string
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Created By
+   */
+  created_by: string
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Name
+   */
+  name: string
+  /**
+   * Revision
+   */
+  revision: number
+  status: DeviceStatus
+  /**
+   * Tags
+   */
+  tags: Array<string>
+  /**
+   * Updated At
+   */
+  updated_at: string
+  /**
+   * Updated By
+   */
+  updated_by: string
+}
+
+/**
  * StatusChanged
  *
  * The account's new state, and how many sessions the change closed.
@@ -636,6 +862,34 @@ export type UserView = {
    */
   role_ids: Array<string>
   status: UserStatus
+}
+
+/**
+ * ValidationError
+ */
+export type ValidationError = {
+  /**
+   * Context
+   */
+  ctx?: {
+    [key: string]: unknown
+  }
+  /**
+   * Input
+   */
+  input?: unknown
+  /**
+   * Location
+   */
+  loc: Array<string | number>
+  /**
+   * Message
+   */
+  msg: string
+  /**
+   * Error Type
+   */
+  type: string
 }
 
 export type ListPermissionsData = {
@@ -1294,6 +1548,315 @@ export type SetUserStatusResponses = {
 }
 
 export type SetUserStatusResponse = SetUserStatusResponses[keyof SetUserStatusResponses]
+
+export type ListCamerasData = {
+  body?: never
+  path?: never
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+    /**
+     * Station Id
+     */
+    station_id?: string | null
+  }
+  url: '/api/v1/cameras'
+}
+
+export type ListCamerasErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ListCamerasError = ListCamerasErrors[keyof ListCamerasErrors]
+
+export type ListCamerasResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageCameraView
+}
+
+export type ListCamerasResponse = ListCamerasResponses[keyof ListCamerasResponses]
+
+export type CreateCameraData = {
+  body: CameraConfiguration
+  path?: never
+  query?: never
+  url: '/api/v1/cameras'
+}
+
+export type CreateCameraErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CreateCameraError = CreateCameraErrors[keyof CreateCameraErrors]
+
+export type CreateCameraResponses = {
+  /**
+   * Successful Response
+   */
+  201: CameraView
+}
+
+export type CreateCameraResponse = CreateCameraResponses[keyof CreateCameraResponses]
+
+export type DeleteCameraData = {
+  body?: never
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Camera Id
+     */
+    camera_id: string
+  }
+  query?: never
+  url: '/api/v1/cameras/{camera_id}'
+}
+
+export type DeleteCameraErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type DeleteCameraError = DeleteCameraErrors[keyof DeleteCameraErrors]
+
+export type DeleteCameraResponses = {
+  /**
+   * Successful Response
+   */
+  204: void
+}
+
+export type DeleteCameraResponse = DeleteCameraResponses[keyof DeleteCameraResponses]
+
+export type ReadCameraData = {
+  body?: never
+  path: {
+    /**
+     * Camera Id
+     */
+    camera_id: string
+  }
+  query?: never
+  url: '/api/v1/cameras/{camera_id}'
+}
+
+export type ReadCameraErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadCameraError = ReadCameraErrors[keyof ReadCameraErrors]
+
+export type ReadCameraResponses = {
+  /**
+   * Successful Response
+   */
+  200: CameraView
+}
+
+export type ReadCameraResponse = ReadCameraResponses[keyof ReadCameraResponses]
+
+export type EditCameraData = {
+  body: CameraConfiguration
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Camera Id
+     */
+    camera_id: string
+  }
+  query?: never
+  url: '/api/v1/cameras/{camera_id}'
+}
+
+export type EditCameraErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type EditCameraError = EditCameraErrors[keyof EditCameraErrors]
+
+export type EditCameraResponses = {
+  /**
+   * Successful Response
+   */
+  200: CameraView
+}
+
+export type EditCameraResponse = EditCameraResponses[keyof EditCameraResponses]
+
+export type SetCameraStatusData = {
+  body: CameraStatus
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Camera Id
+     */
+    camera_id: string
+  }
+  query?: never
+  url: '/api/v1/cameras/{camera_id}/status'
+}
+
+export type SetCameraStatusErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type SetCameraStatusError = SetCameraStatusErrors[keyof SetCameraStatusErrors]
+
+export type SetCameraStatusResponses = {
+  /**
+   * Successful Response
+   */
+  200: CameraView
+}
+
+export type SetCameraStatusResponse = SetCameraStatusResponses[keyof SetCameraStatusResponses]
 
 export type ListInferenceBackendsData = {
   body?: never
@@ -2006,3 +2569,304 @@ export type ReadLivenessResponses = {
 }
 
 export type ReadLivenessResponse = ReadLivenessResponses[keyof ReadLivenessResponses]
+
+export type ListStationsData = {
+  body?: never
+  path?: never
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/stations'
+}
+
+export type ListStationsErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ListStationsError = ListStationsErrors[keyof ListStationsErrors]
+
+export type ListStationsResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageStationView
+}
+
+export type ListStationsResponse = ListStationsResponses[keyof ListStationsResponses]
+
+export type CreateStationData = {
+  body: StationConfiguration
+  path?: never
+  query?: never
+  url: '/api/v1/stations'
+}
+
+export type CreateStationErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CreateStationError = CreateStationErrors[keyof CreateStationErrors]
+
+export type CreateStationResponses = {
+  /**
+   * Successful Response
+   */
+  201: StationView
+}
+
+export type CreateStationResponse = CreateStationResponses[keyof CreateStationResponses]
+
+export type DeleteStationData = {
+  body?: never
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Station Id
+     */
+    station_id: string
+  }
+  query?: never
+  url: '/api/v1/stations/{station_id}'
+}
+
+export type DeleteStationErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type DeleteStationError = DeleteStationErrors[keyof DeleteStationErrors]
+
+export type DeleteStationResponses = {
+  /**
+   * Successful Response
+   */
+  204: void
+}
+
+export type DeleteStationResponse = DeleteStationResponses[keyof DeleteStationResponses]
+
+export type ReadStationData = {
+  body?: never
+  path: {
+    /**
+     * Station Id
+     */
+    station_id: string
+  }
+  query?: never
+  url: '/api/v1/stations/{station_id}'
+}
+
+export type ReadStationErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadStationError = ReadStationErrors[keyof ReadStationErrors]
+
+export type ReadStationResponses = {
+  /**
+   * Successful Response
+   */
+  200: StationView
+}
+
+export type ReadStationResponse = ReadStationResponses[keyof ReadStationResponses]
+
+export type EditStationData = {
+  body: StationConfiguration
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Station Id
+     */
+    station_id: string
+  }
+  query?: never
+  url: '/api/v1/stations/{station_id}'
+}
+
+export type EditStationErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type EditStationError = EditStationErrors[keyof EditStationErrors]
+
+export type EditStationResponses = {
+  /**
+   * Successful Response
+   */
+  200: StationView
+}
+
+export type EditStationResponse = EditStationResponses[keyof EditStationResponses]
+
+export type SetStationStatusData = {
+  body: StationStatus
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Station Id
+     */
+    station_id: string
+  }
+  query?: never
+  url: '/api/v1/stations/{station_id}/status'
+}
+
+export type SetStationStatusErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type SetStationStatusError = SetStationStatusErrors[keyof SetStationStatusErrors]
+
+export type SetStationStatusResponses = {
+  /**
+   * Successful Response
+   */
+  200: StationView
+}
+
+export type SetStationStatusResponse = SetStationStatusResponses[keyof SetStationStatusResponses]

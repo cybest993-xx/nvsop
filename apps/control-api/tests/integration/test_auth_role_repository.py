@@ -91,7 +91,7 @@ def test_a_permission_outside_the_registry_is_refused_by_the_database(
     roles.add(stored)
     session.flush()
 
-    session.add(RolePermissionRow(role_id=stored.id, permission="device.camera.edit"))
+    session.add(RolePermissionRow(role_id=stored.id, permission="device.unknown.edit"))
     with pytest.raises(IntegrityError):
         session.flush()
 

@@ -18,19 +18,19 @@ from typing import NoReturn
 from uuid import UUID
 
 from factory_sop.device.errors import DeviceRefusalCode, DeviceRefusedError
-from factory_sop.device.model import DeviceStatus, InferenceBackend, InferenceHost
+from factory_sop.device.model import Camera, DeviceStatus, InferenceBackend, InferenceHost, Station
 from factory_sop.observability import get_logger
 
 _logger = get_logger("device")
 
 
 def refuse(event: str, code: DeviceRefusalCode, **context: str) -> NoReturn:
-    """Log why the operation was refused — the identifiers, never a credential — and raise."""
+    """记录操作被拒绝的原因——仅记录标识符，不记录凭据——然后抛出异常。"""
     _logger.info(event, error_code=code.value, **context)
     raise DeviceRefusedError(code)
 
 
-def set_status[ItemT: (InferenceHost, InferenceBackend)](
+def set_status[ItemT: (Camera, InferenceBackend, InferenceHost, Station)](
     item: ItemT,
     *,
     status: DeviceStatus,

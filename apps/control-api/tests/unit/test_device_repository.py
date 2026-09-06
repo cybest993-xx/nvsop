@@ -51,8 +51,44 @@ def test_the_backend_deactivation_marker_becomes_a_device_refusal() -> None:
     assert refused.value.code is DeviceRefusalCode.INFERENCE_HOST_DEACTIVATED
 
 
-def test_an_unknown_database_error_is_not_hidden_as_a_device_refusal() -> None:
-    error = database_error(sqlstate="XX000", message="unrelated database failure")
+@pytest.mark.parametrize(
+    ("message", "code", "fields"),
+    [
+        (
+            "device_camera_host_backend_mismatch",
+            DeviceRefusalCode.CAMERA_HOST_BACKEND_MISMATCH,
+            (
+                ("host_id", "必须与推理后端所属推理机一致"),
+                ("backend_id", "必须属于所选推理机"),
+            ),
+        ),
+        (
+            "device_camera_station_host_conflict",
+            DeviceRefusalCode.CAMERA_STATION_HOST_CONFLICT,
+            (("host_id", "同一工位的相机必须属于同一推理机"),),
+        ),
+        (
+            "device_camera_station_template_conflict",
+            DeviceRefusalCode.CAMERA_STATION_TEMPLATE_CONFLICT,
+            (("backend_id", "该推理后端的模板必须与工位已有相机一致"),),
+        ),
+    ],
+)
+def test_topology_trigger_refusal_names_its_affected_fields(
+    message: str, code: DeviceRefusalCode, fields: tuple[tuple[str, str], ...]
+) -> None:
+    error = database_error(sqlstate="P0001", message=message)
+
+    with pytest.raises(DeviceRefusedError) as refused:
+        repository_for(error).remove(cast(Any, "host-id"), expected_revision=1)
+
+    assert refused.value.code is code
+    assert [(item.field, item.message) for item in refused.value.field_errors] == list(fields)
+
+
+@pytest.mark.parametrize("sqlstate", ["XX000", "40P01"])
+def test_an_unknown_database_error_is_not_hidden_as_a_device_refusal(sqlstate: str) -> None:
+    error = database_error(sqlstate=sqlstate, message="unrelated database failure")
 
     with pytest.raises(DatabaseError) as raised:
         repository_for(error).remove(cast(Any, "host-id"), expected_revision=1)

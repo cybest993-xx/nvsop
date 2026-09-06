@@ -24,6 +24,7 @@ from dataclasses import dataclass
 
 import pytest
 from auth_fakes import FakeRoles, FakeSessions, FakeUsers
+from device_fakes import FakeInferenceBackends, FakeInferenceHosts
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
@@ -34,6 +35,7 @@ from factory_sop.auth.adapters.dependencies import DECLARED_PERMISSION
 from factory_sop.auth.model import Role, User, UserStatus
 from factory_sop.auth.passwords import hash_password
 from factory_sop.auth.permissions import Permission
+from factory_sop.device.adapters import dependencies as device_dependencies
 from factory_sop.identifiers import new_id
 from factory_sop.settings import Settings
 
@@ -73,11 +75,17 @@ class Outcome:
 
 @dataclass(frozen=True)
 class Target:
-    """One write route, and a body that reaches its use case rather than the validator."""
+    """One write route, and a body that reaches its use case rather than the validator.
+
+    `headers` carries route preconditions that FastAPI resolves before the handler runs —
+    the If-Match of an edit — so the refusal test proves the use case's refusal and not a
+    422 for a missing precondition.
+    """
 
     method: str
     template: str
     body: dict[str, object] | None = None
+    headers: dict[str, str] | None = None
 
 
 # Every modifying route the backend serves, other than the session ones — those are how a caller
@@ -95,6 +103,38 @@ ROUTES = [
     Target("PATCH", "/auth/users/{user_id}", {"display_name": "改名"}),
     Target("PUT", "/auth/users/{user_id}/password", {"password": PASSWORD}),
     Target("PUT", "/auth/users/{user_id}/status", {"status": "deactivated"}),
+    # `device`'s host routes. The `{host_id}` template resolves against the store the Backend
+    # registers below, so a target reaches the use case instead of dying on an unknown identifier.
+    Target(
+        "POST",
+        "/inference-hosts",
+        {
+            "name": "装配A线-推理机1",
+            "address": "10.0.8.11",
+            "mediamtx_address": None,
+            "recording_window_seconds": 7 * 24 * 3600,
+            "disk_watermark_percent": 85,
+        },
+    ),
+    Target(
+        "PATCH",
+        "/inference-hosts/{host_id}",
+        {
+            "name": "装配A线-推理机1",
+            "address": "10.0.8.12",
+            "mediamtx_address": None,
+            "recording_window_seconds": 7 * 24 * 3600,
+            "disk_watermark_percent": 85,
+        },
+        headers={"If-Match": "1"},
+    ),
+    Target(
+        "PUT",
+        "/inference-hosts/{host_id}/status",
+        {"status": "deactivated"},
+        headers={"If-Match": "1"},
+    ),
+    Target("DELETE", "/inference-hosts/{host_id}", headers={"If-Match": "1"}),
     Target("PUT", "/auth/users/{user_id}/roles", {"role_ids": []}),
     Target("DELETE", "/auth/users/{user_id}"),
     Target("POST", "/auth/roles", {"code": "fresh", "name": "新角色", "permissions": []}),
@@ -136,10 +176,19 @@ class Backend:
         self.roles.add(self.role)
 
         self.app = create_app(settings())
+        # A stored backend reference makes the host-delete target reach its history guard; the
+        # backend API itself is intentionally not served in this phase.
+        self.hosts = FakeInferenceHosts()
+        self.backends_store = FakeInferenceBackends()
+        self.host = self.hosts.register(name="装配A线-推理机1")
+        self.backends_store.register(host_id=self.host.id, base_url="http://10.0.8.11:8000")
+
         self.app.dependency_overrides[dependencies.users] = lambda: self.users
         self.app.dependency_overrides[dependencies.sessions] = lambda: self.sessions
         self.app.dependency_overrides[dependencies.roles] = lambda: self.roles
         self.app.dependency_overrides[dependencies.granted_permissions] = lambda: self.granted
+        self.app.dependency_overrides[device_dependencies.hosts] = lambda: self.hosts
+        self.app.dependency_overrides[device_dependencies.backends] = lambda: self.backends_store
         self.client = TestClient(self.app, base_url="https://testserver")
         assert (
             self.client.post(
@@ -151,12 +200,25 @@ class Backend:
 
     def send(self, target: Target, *, granted: frozenset[Permission]) -> Outcome:
         self.granted = granted
-        path = target.template.format(user_id=self.subject.id, role_id=self.role.id)
+        identifiers = {
+            "user_id": self.subject.id,
+            "role_id": self.role.id,
+            "host_id": self.host.id,
+        }
+        path = target.template.format(**identifiers)
+        body = (
+            {
+                key: (value.format(**identifiers) if isinstance(value, str) else value)
+                for key, value in target.body.items()
+            }
+            if target.body is not None
+            else None
+        )
         response = self.client.request(
             target.method,
             f"{API_PREFIX}{path}",
-            json=target.body,
-            headers={CSRF_HEADER: self.client.cookies[CSRF_COOKIE]},
+            json=body,
+            headers={CSRF_HEADER: self.client.cookies[CSRF_COOKIE], **(target.headers or {})},
         )
         error_code: str | None = None
         if response.content:

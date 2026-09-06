@@ -189,7 +189,59 @@ class MigrationOwnershipTest(unittest.TestCase):
         self.assertEqual(
             [
                 "0001_auth_raw.py uses op.execute; table ownership cannot be read from raw "
-                "SQL, so express the change with Alembic operations"
+                "SQL, so express the change with Alembic operations or declare the touched "
+                "tables in RAW_SQL_TABLES"
+            ],
+            errors,
+        )
+
+    def test_accepts_raw_sql_whose_tables_are_declared_and_owned(self) -> None:
+        # A write-time rule no declarative constraint can carry (a trigger's target) is the
+        # sanctioned escape: the declaration is verified by the same ownership rule as the
+        # `op` calls, so the gate's invariant survives without reading the SQL.
+        self.write(
+            "0001_device_trigger.py",
+            'revision = "a"\n'
+            "down_revision = None\n\n\n"
+            'RAW_SQL_TABLES = frozenset({"device_inference_backend"})\n\n\n'
+            "def upgrade() -> None:\n"
+            '    op.execute(sa.text("CREATE TRIGGER t ON device_inference_backend ..."))\n',
+        )
+        self.assertEqual([], check_migrations(self.versions))
+
+    def test_rejects_an_empty_raw_sql_table_declaration(self) -> None:
+        self.write(
+            "0001_device_trigger.py",
+            'revision = "a"\n'
+            "down_revision = None\n\n\n"
+            "RAW_SQL_TABLES = frozenset()\n\n\n"
+            "def upgrade() -> None:\n"
+            '    op.execute(sa.text("CREATE TRIGGER t ON device_inference_backend ..."))\n',
+        )
+        errors = check_migrations(self.versions)
+        self.assertEqual(
+            [
+                "0001_device_trigger.py uses op.execute; table ownership cannot be read from raw "
+                "SQL, so express the change with Alembic operations or declare the touched tables "
+                "in RAW_SQL_TABLES"
+            ],
+            errors,
+        )
+
+    def test_rejects_declared_raw_sql_on_a_table_the_migration_does_not_own(self) -> None:
+        self.write(
+            "0001_auth_trigger.py",
+            'revision = "a"\n'
+            "down_revision = None\n\n\n"
+            'RAW_SQL_TABLES = frozenset({"device_camera"})\n\n\n'
+            "def upgrade() -> None:\n"
+            '    op.execute(sa.text("CREATE TRIGGER t ON device_camera ..."))\n',
+        )
+        errors = check_migrations(self.versions)
+        self.assertEqual(
+            [
+                "0001_auth_trigger.py migrates a table it does not own: device_camera; "
+                "the device_ prefix belongs to device, not to auth"
             ],
             errors,
         )

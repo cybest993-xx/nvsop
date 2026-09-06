@@ -117,6 +117,35 @@ def _is_read_only_select(query: ast.expr | None) -> bool:
     return bool(re.match(r"^\s*SELECT\b", sql, flags=re.IGNORECASE))
 
 
+def assigned_frozenset_of_strings(tree: ast.Module, name: str) -> frozenset[str] | None:
+    """Return a non-empty literal ``frozenset`` assignment, or ``None`` if it is malformed."""
+    for node in tree.body:
+        if not isinstance(node, ast.Assign | ast.AnnAssign):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if not any(isinstance(t, ast.Name) and t.id == name for t in targets):
+            continue
+        value = node.value
+        if (
+            not isinstance(value, ast.Call)
+            or not isinstance(value.func, ast.Name)
+            or value.func.id != "frozenset"
+            or len(value.args) != 1
+            or not isinstance(value.args[0], ast.Set)
+            or not value.args[0].elts
+        ):
+            return None
+        members = [
+            element.value
+            for element in value.args[0].elts
+            if isinstance(element, ast.Constant) and isinstance(element.value, str)
+        ]
+        if len(members) != len(value.args[0].elts):
+            return None
+        return frozenset(members)
+    return None
+
+
 def assigned_string(tree: ast.Module, name: str) -> str | None:
     for node in tree.body:
         if not isinstance(node, ast.Assign | ast.AnnAssign):
@@ -165,10 +194,21 @@ def check_migrations(versions: Path) -> list[str]:
 
         tables, uses_raw_sql = tables_and_raw_sql(tree)
         if uses_raw_sql:
-            errors.append(
-                f"{path.name} uses op.execute; table ownership cannot be read from raw SQL, "
-                "so express the change with Alembic operations"
-            )
+            # The one sanctioned escape: a migration may declare the tables its raw SQL
+            # touches (a trigger's target, for instance — a write-time rule no declarative
+            # constraint can carry). The declaration is checked against the filename's module
+            # by the same ownership rule as every `op` call below, so the gate keeps its
+            # invariant; what it cannot do is read the SQL itself, which is why the
+            # declaration, not the string, is the thing verified.
+            declared = assigned_frozenset_of_strings(tree, "RAW_SQL_TABLES")
+            if declared is None:
+                errors.append(
+                    f"{path.name} uses op.execute; table ownership cannot be read from raw "
+                    "SQL, so express the change with Alembic operations or declare the "
+                    "touched tables in RAW_SQL_TABLES"
+                )
+            else:
+                tables |= declared
         for table in sorted(tables):
             owner = module_of(table)
             if owner is None:

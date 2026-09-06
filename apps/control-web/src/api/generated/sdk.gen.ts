@@ -3,18 +3,27 @@
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client'
 import { client } from './client.gen'
 import type {
+  CreateInferenceHostData,
+  CreateInferenceHostErrors,
+  CreateInferenceHostResponses,
   CreateRoleData,
   CreateRoleErrors,
   CreateRoleResponses,
   CreateUserData,
   CreateUserErrors,
   CreateUserResponses,
+  DeleteInferenceHostData,
+  DeleteInferenceHostErrors,
+  DeleteInferenceHostResponses,
   DeleteRoleData,
   DeleteRoleErrors,
   DeleteRoleResponses,
   DeleteUserData,
   DeleteUserErrors,
   DeleteUserResponses,
+  EditInferenceHostData,
+  EditInferenceHostErrors,
+  EditInferenceHostResponses,
   EditRoleData,
   EditRoleErrors,
   EditRoleResponses,
@@ -24,6 +33,9 @@ import type {
   EndSessionData,
   EndSessionErrors,
   EndSessionResponses,
+  ListInferenceHostsData,
+  ListInferenceHostsErrors,
+  ListInferenceHostsResponses,
   ListPermissionsData,
   ListPermissionsErrors,
   ListPermissionsResponses,
@@ -36,6 +48,9 @@ import type {
   OpenSessionData,
   OpenSessionErrors,
   OpenSessionResponses,
+  ReadInferenceHostData,
+  ReadInferenceHostErrors,
+  ReadInferenceHostResponses,
   ReadLivenessData,
   ReadLivenessErrors,
   ReadLivenessResponses,
@@ -45,6 +60,9 @@ import type {
   ResetUserPasswordData,
   ResetUserPasswordErrors,
   ResetUserPasswordResponses,
+  SetInferenceHostStatusData,
+  SetInferenceHostStatusErrors,
+  SetInferenceHostStatusResponses,
   SetUserRolesData,
   SetUserRolesErrors,
   SetUserRolesResponses,
@@ -329,6 +347,116 @@ export const setUserStatus = <ThrowOnError extends boolean = false>(
 ): RequestResult<SetUserStatusResponses, SetUserStatusErrors, ThrowOnError> =>
   (options.client ?? client).put<SetUserStatusResponses, SetUserStatusErrors, ThrowOnError>({
     url: '/api/v1/auth/users/{user_id}/status',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * List The Hosts
+ *
+ * One page of hosts, newest first, under §5.15's envelope.
+ */
+export const listInferenceHosts = <ThrowOnError extends boolean = false>(
+  options?: Options<ListInferenceHostsData, ThrowOnError>,
+): RequestResult<ListInferenceHostsResponses, ListInferenceHostsErrors, ThrowOnError> =>
+  (options?.client ?? client).get<
+    ListInferenceHostsResponses,
+    ListInferenceHostsErrors,
+    ThrowOnError
+  >({ url: '/api/v1/inference-hosts', ...options })
+
+/**
+ * Create A Host
+ *
+ * Register a physical inference machine.
+ */
+export const createInferenceHost = <ThrowOnError extends boolean = false>(
+  options: Options<CreateInferenceHostData, ThrowOnError>,
+): RequestResult<CreateInferenceHostResponses, CreateInferenceHostErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    CreateInferenceHostResponses,
+    CreateInferenceHostErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/inference-hosts',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Delete A Host
+ *
+ * Delete the host outright — the irreversible operation 停用 exists to avoid.
+ */
+export const deleteInferenceHost = <ThrowOnError extends boolean = false>(
+  options: Options<DeleteInferenceHostData, ThrowOnError>,
+): RequestResult<DeleteInferenceHostResponses, DeleteInferenceHostErrors, ThrowOnError> =>
+  (options.client ?? client).delete<
+    DeleteInferenceHostResponses,
+    DeleteInferenceHostErrors,
+    ThrowOnError
+  >({ url: '/api/v1/inference-hosts/{host_id}', ...options })
+
+/**
+ * Read A Host
+ *
+ * Read one host.
+ */
+export const readInferenceHost = <ThrowOnError extends boolean = false>(
+  options: Options<ReadInferenceHostData, ThrowOnError>,
+): RequestResult<ReadInferenceHostResponses, ReadInferenceHostErrors, ThrowOnError> =>
+  (options.client ?? client).get<ReadInferenceHostResponses, ReadInferenceHostErrors, ThrowOnError>(
+    { url: '/api/v1/inference-hosts/{host_id}', ...options },
+  )
+
+/**
+ * Edit A Host
+ *
+ * Replace the host's whole configuration.
+ *
+ * The request must carry `If-Match: <revision>` — the revision the caller read. A body
+ * without it cannot say what it believed it was editing, so it is refused rather than
+ * allowed to overwrite blind.
+ */
+export const editInferenceHost = <ThrowOnError extends boolean = false>(
+  options: Options<EditInferenceHostData, ThrowOnError>,
+): RequestResult<EditInferenceHostResponses, EditInferenceHostErrors, ThrowOnError> =>
+  (options.client ?? client).patch<
+    EditInferenceHostResponses,
+    EditInferenceHostErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/inference-hosts/{host_id}',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Set The Host Status
+ *
+ * 停用 or 恢复 the host — the two values of one field, on one subresource.
+ *
+ * Both directions are reversible and idempotent, which is why they share a route; which use
+ * case runs is the requested value's, and the match is exhaustive over the enum.
+ */
+export const setInferenceHostStatus = <ThrowOnError extends boolean = false>(
+  options: Options<SetInferenceHostStatusData, ThrowOnError>,
+): RequestResult<SetInferenceHostStatusResponses, SetInferenceHostStatusErrors, ThrowOnError> =>
+  (options.client ?? client).put<
+    SetInferenceHostStatusResponses,
+    SetInferenceHostStatusErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/inference-hosts/{host_id}/status',
     ...options,
     headers: {
       'Content-Type': 'application/json',

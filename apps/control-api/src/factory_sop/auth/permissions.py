@@ -28,11 +28,10 @@ ACTIONS = frozenset({"view", "edit", "delete"})
 class Permission(StrEnum):
     """Every permission the backend enforces. One closed set, checked against by role editing.
 
-    `auth`'s own are all that exist in this slice. A role naming a permission that is not a
-    member of this enum is refused when it is written, which is what stops an unregistered
-    string from becoming a permission nothing ever checks. When a module lands, it registers
-    its members here and its registry rows in `auth_permission` land with the module's own
-    `auth`-prefixed migration.
+    A role naming a permission that is not a member of this enum is refused when it is
+    written, which is what stops an unregistered string from becoming a permission nothing
+    ever checks. When a module lands, it registers its members here and its registry rows in
+    `auth_permission` land with the module's own `auth`-prefixed migration.
     """
 
     # Reading the account list, and reading one account. Not enough to change anything.
@@ -50,6 +49,17 @@ class Permission(StrEnum):
     ROLE_VIEW = "auth.role.view"
     ROLE_EDIT = "auth.role.edit"
     ROLE_DELETE = "auth.role.delete"
+
+    # Reading the inference-host topology. Backend permissions are registered by the
+    # backend-management phase together with its routes; this phase exposes host permissions
+    # only, even though the shared storage already reserves backend rows.
+    INFERENCE_HOST_VIEW = "device.inference_host.view"
+    # Creating and editing hosts, and the reversible 停用/恢复 of one — the same folding of
+    # 停用 into `edit` the account permissions use (§5.15).
+    INFERENCE_HOST_EDIT = "device.inference_host.edit"
+    # Deleting a host outright. Separate, because it is the irreversible operation 停用 exists
+    # to avoid.
+    INFERENCE_HOST_DELETE = "device.inference_host.delete"
 
 
 class UnregisteredPermissionError(Exception):

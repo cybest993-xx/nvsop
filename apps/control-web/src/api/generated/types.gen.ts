@@ -21,10 +21,15 @@ export type ApiErrorCode =
   | 'AUTHENTICATION_REQUIRED'
   | 'CREDENTIALS_REJECTED'
   | 'CSRF_TOKEN_INVALID'
+  | 'INFERENCE_HOST_DEACTIVATED'
+  | 'INFERENCE_HOST_HAS_BACKENDS'
+  | 'INFERENCE_HOST_NAME_TAKEN'
+  | 'INFERENCE_HOST_NOT_FOUND'
   | 'INTERNAL_ERROR'
   | 'PERMISSION_DENIED'
   | 'REQUEST_INVALID'
   | 'SESSION_INVALID'
+  | 'STALE_REVISION'
 
 /**
  * AssignedRoles
@@ -53,6 +58,17 @@ export type Credentials = {
    */
   password: string
 }
+
+/**
+ * DeviceStatus
+ *
+ * Whether a configurable device still takes part in new bindings and operation.
+ *
+ * An enum rather than an `is_active` boolean: `CONTEXT.md` gives 停用 its own definition
+ * across every mutable configuration object. Deactivation is reversible and never
+ * cascades — a deactivated host's backends keep their rows and their history.
+ */
+export type DeviceStatus = 'active' | 'deactivated'
 
 /**
  * EditedRole
@@ -92,6 +108,123 @@ export type FieldError = {
    * Message
    */
   message: string
+}
+
+/**
+ * HostConfiguration
+ *
+ * The host's whole editable configuration, exactly as the edit form submits it.
+ *
+ * §5.19: durations and thresholds are configured values, and 0 or negative — or a
+ * watermark of 0 or 100 — is a configuration error refused at save time. A URL with an
+ * embedded `user:password` is refused at the contract (ADR-0008), before it can be stored
+ * or echoed back.
+ */
+export type HostConfiguration = {
+  /**
+   * Address
+   */
+  address: string
+  /**
+   * Disk Watermark Percent
+   */
+  disk_watermark_percent: number
+  /**
+   * Mediamtx Address
+   */
+  mediamtx_address?: string | null
+  /**
+   * Name
+   */
+  name: string
+  /**
+   * Recording Window Seconds
+   */
+  recording_window_seconds: number
+}
+
+/**
+ * HostStatus
+ *
+ * The one field 停用 and 恢复 toggle, as the two values of one subresource.
+ */
+export type HostStatus = {
+  status: DeviceStatus
+}
+
+/**
+ * InferenceHostView
+ *
+ * One host as the API carries it. `revision` is what If-Match echoes.
+ */
+export type InferenceHostView = {
+  /**
+   * Address
+   */
+  address: string
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Created By
+   */
+  created_by: string
+  /**
+   * Disk Watermark Percent
+   */
+  disk_watermark_percent: number
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Mediamtx Address
+   */
+  mediamtx_address: string | null
+  /**
+   * Name
+   */
+  name: string
+  /**
+   * Recording Window Seconds
+   */
+  recording_window_seconds: number
+  /**
+   * Revision
+   */
+  revision: number
+  status: DeviceStatus
+  /**
+   * Updated At
+   */
+  updated_at: string
+  /**
+   * Updated By
+   */
+  updated_by: string
+}
+
+/**
+ * ItemPage[InferenceHostView]
+ */
+export type ItemPageInferenceHostView = {
+  /**
+   * Items
+   */
+  items: Array<InferenceHostView>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
 }
 
 /**
@@ -1029,6 +1162,312 @@ export type SetUserStatusResponses = {
 }
 
 export type SetUserStatusResponse = SetUserStatusResponses[keyof SetUserStatusResponses]
+
+export type ListInferenceHostsData = {
+  body?: never
+  path?: never
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/inference-hosts'
+}
+
+export type ListInferenceHostsErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ListInferenceHostsError = ListInferenceHostsErrors[keyof ListInferenceHostsErrors]
+
+export type ListInferenceHostsResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageInferenceHostView
+}
+
+export type ListInferenceHostsResponse =
+  ListInferenceHostsResponses[keyof ListInferenceHostsResponses]
+
+export type CreateInferenceHostData = {
+  body: HostConfiguration
+  path?: never
+  query?: never
+  url: '/api/v1/inference-hosts'
+}
+
+export type CreateInferenceHostErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Host name already taken
+   */
+  409: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CreateInferenceHostError = CreateInferenceHostErrors[keyof CreateInferenceHostErrors]
+
+export type CreateInferenceHostResponses = {
+  /**
+   * Successful Response
+   */
+  201: InferenceHostView
+}
+
+export type CreateInferenceHostResponse =
+  CreateInferenceHostResponses[keyof CreateInferenceHostResponses]
+
+export type DeleteInferenceHostData = {
+  body?: never
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Host Id
+     */
+    host_id: string
+  }
+  query?: never
+  url: '/api/v1/inference-hosts/{host_id}'
+}
+
+export type DeleteInferenceHostErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Host not found
+   */
+  404: ProblemDocument
+  /**
+   * Revision moved (STALE_REVISION), or the host still carries backends
+   */
+  409: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type DeleteInferenceHostError = DeleteInferenceHostErrors[keyof DeleteInferenceHostErrors]
+
+export type DeleteInferenceHostResponses = {
+  /**
+   * Successful Response
+   */
+  204: void
+}
+
+export type DeleteInferenceHostResponse =
+  DeleteInferenceHostResponses[keyof DeleteInferenceHostResponses]
+
+export type ReadInferenceHostData = {
+  body?: never
+  path: {
+    /**
+     * Host Id
+     */
+    host_id: string
+  }
+  query?: never
+  url: '/api/v1/inference-hosts/{host_id}'
+}
+
+export type ReadInferenceHostErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Host not found
+   */
+  404: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadInferenceHostError = ReadInferenceHostErrors[keyof ReadInferenceHostErrors]
+
+export type ReadInferenceHostResponses = {
+  /**
+   * Successful Response
+   */
+  200: InferenceHostView
+}
+
+export type ReadInferenceHostResponse = ReadInferenceHostResponses[keyof ReadInferenceHostResponses]
+
+export type EditInferenceHostData = {
+  body: HostConfiguration
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Host Id
+     */
+    host_id: string
+  }
+  query?: never
+  url: '/api/v1/inference-hosts/{host_id}'
+}
+
+export type EditInferenceHostErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Host not found
+   */
+  404: ProblemDocument
+  /**
+   * Revision moved (STALE_REVISION), or the name is taken
+   */
+  409: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type EditInferenceHostError = EditInferenceHostErrors[keyof EditInferenceHostErrors]
+
+export type EditInferenceHostResponses = {
+  /**
+   * Successful Response
+   */
+  200: InferenceHostView
+}
+
+export type EditInferenceHostResponse = EditInferenceHostResponses[keyof EditInferenceHostResponses]
+
+export type SetInferenceHostStatusData = {
+  body: HostStatus
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Host Id
+     */
+    host_id: string
+  }
+  query?: never
+  url: '/api/v1/inference-hosts/{host_id}/status'
+}
+
+export type SetInferenceHostStatusErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Host not found
+   */
+  404: ProblemDocument
+  /**
+   * Revision moved (STALE_REVISION)
+   */
+  409: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type SetInferenceHostStatusError =
+  SetInferenceHostStatusErrors[keyof SetInferenceHostStatusErrors]
+
+export type SetInferenceHostStatusResponses = {
+  /**
+   * Successful Response
+   */
+  200: InferenceHostView
+}
+
+export type SetInferenceHostStatusResponse =
+  SetInferenceHostStatusResponses[keyof SetInferenceHostStatusResponses]
 
 export type ReadLivenessData = {
   body?: never

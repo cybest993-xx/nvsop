@@ -196,6 +196,11 @@ The reference repository's [`AGENTS.md`](https://github.com/openai/codex/blob/f4
 - Never move behavior into `api.py`, `packages/`, `scripts/` or an adapter only to change which budget bucket counts it, and never delete useful explanation or compress ordinary formatting to reduce the line count. If no coherent stage or valid boundary exists, stop and record why an explicit size exception is safer than a false seam; changing the budget requires reopening this harness rather than silently inventing architecture.
 - Resist growth in shared ground. A new capability belongs to the module that owns it, or to a real new module under the rules above. `packages/contracts` and a module's `api.py` are where an unnecessary addition costs the most, because every other module pays for it.
 
+### Comments and documentation language
+
+- Write code comments and docstrings in concise Chinese; explain only non-obvious reasons, constraints, safety or compatibility boundaries, and keep them current.
+- Use Chinese for human-facing product and domain docs, English for agent-facing instructions, skills and operating guidance. Keep identifiers, API names, protocol fields and established terms unchanged.
+
 ### Interface shape
 
 - A parameter takes neither a bare boolean nor an ambiguous optional, because both force the call site to read `f(False)`. Use an enum, a keyword-only argument, or two named functions so the call site states its own meaning.

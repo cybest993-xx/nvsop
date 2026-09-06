@@ -30,6 +30,7 @@ from factory_sop.auth.errors import (
     refusal_problem,
 )
 from factory_sop.auth.model import SessionPolicy
+from factory_sop.device.adapters.routes_backends import router as inference_backends_router
 from factory_sop.device.adapters.routes_hosts import router as inference_hosts_router
 from factory_sop.device.errors import DeviceRefusedError
 from factory_sop.device.errors import refusal_problem as device_refusal_problem
@@ -102,9 +103,8 @@ def create_app(settings: Settings) -> FastAPI:
     )
     app.include_router(liveness_router, prefix=API_PREFIX)
     app.include_router(auth_routes.router, prefix=API_PREFIX)
-    # Phase one publishes host management only. Backend rows are shared storage for topology
-    # history; backend commands, connection tests, and permissions land in phase two.
     app.include_router(inference_hosts_router, prefix=API_PREFIX)
+    app.include_router(inference_backends_router, prefix=API_PREFIX)
     app.include_router(auth_role_administration.router, prefix=API_PREFIX)
     app.include_router(auth_user_administration.router, prefix=API_PREFIX)
 

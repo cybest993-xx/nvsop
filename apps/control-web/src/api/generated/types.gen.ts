@@ -21,6 +21,8 @@ export type ApiErrorCode =
   | 'AUTHENTICATION_REQUIRED'
   | 'CREDENTIALS_REJECTED'
   | 'CSRF_TOKEN_INVALID'
+  | 'INFERENCE_BACKEND_ENDPOINT_TAKEN'
+  | 'INFERENCE_BACKEND_NOT_FOUND'
   | 'INFERENCE_HOST_DEACTIVATED'
   | 'INFERENCE_HOST_HAS_BACKENDS'
   | 'INFERENCE_HOST_NAME_TAKEN'
@@ -41,6 +43,68 @@ export type AssignedRoles = {
    * Role Ids
    */
   role_ids: Array<string>
+}
+
+/**
+ * BackendPlacement
+ *
+ * The complete placement of one process endpoint.
+ */
+export type BackendPlacement = {
+  /**
+   * Base Url
+   */
+  base_url: string
+  /**
+   * Host Id
+   */
+  host_id: string
+}
+
+/**
+ * BackendStatus
+ *
+ * The active/deactivated value of the backend status subresource.
+ */
+export type BackendStatus = {
+  status: DeviceStatus
+}
+
+/**
+ * ConnectionState
+ *
+ * What the last real connection test observed about a backend's endpoint.
+ *
+ * Three values, because Q31 fixes exactly these: a record that has never been tested is
+ * 未验证 — not "working" — and only a test that truly reached the endpoint may say
+ * `success`. The facts belong to the placement (the host and endpoint a test observed):
+ * moving the backend, or pointing it at another endpoint, retires what was self-reported.
+ */
+export type ConnectionState = 'unverified' | 'success' | 'failure'
+
+/**
+ * ConnectionView
+ *
+ * The last real connection observation, including the endpoint's model identities.
+ */
+export type ConnectionView = {
+  /**
+   * Checked At
+   */
+  checked_at: string | null
+  /**
+   * Detail
+   */
+  detail: string | null
+  /**
+   * Self Reported At
+   */
+  self_reported_at: string | null
+  /**
+   * Self Reported Model Ids
+   */
+  self_reported_model_ids: Array<string>
+  state: ConnectionState
 }
 
 /**
@@ -153,6 +217,52 @@ export type HostStatus = {
 }
 
 /**
+ * InferenceBackendView
+ *
+ * One process endpoint and its single reserved template-binding slot.
+ */
+export type InferenceBackendView = {
+  /**
+   * Base Url
+   */
+  base_url: string
+  connection: ConnectionView
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Created By
+   */
+  created_by: string
+  /**
+   * Host Id
+   */
+  host_id: string
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Revision
+   */
+  revision: number
+  status: DeviceStatus
+  /**
+   * Template Version Id
+   */
+  template_version_id: string | null
+  /**
+   * Updated At
+   */
+  updated_at: string
+  /**
+   * Updated By
+   */
+  updated_by: string
+}
+
+/**
  * InferenceHostView
  *
  * One host as the API carries it. `revision` is what If-Match echoes.
@@ -203,6 +313,28 @@ export type InferenceHostView = {
    * Updated By
    */
   updated_by: string
+}
+
+/**
+ * ItemPage[InferenceBackendView]
+ */
+export type ItemPageInferenceBackendView = {
+  /**
+   * Items
+   */
+  items: Array<InferenceBackendView>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
 }
 
 /**
@@ -1162,6 +1294,383 @@ export type SetUserStatusResponses = {
 }
 
 export type SetUserStatusResponse = SetUserStatusResponses[keyof SetUserStatusResponses]
+
+export type ListInferenceBackendsData = {
+  body?: never
+  path?: never
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+    /**
+     * Host Id
+     */
+    host_id?: string | null
+  }
+  url: '/api/v1/inference-backends'
+}
+
+export type ListInferenceBackendsErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ListInferenceBackendsError =
+  ListInferenceBackendsErrors[keyof ListInferenceBackendsErrors]
+
+export type ListInferenceBackendsResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageInferenceBackendView
+}
+
+export type ListInferenceBackendsResponse =
+  ListInferenceBackendsResponses[keyof ListInferenceBackendsResponses]
+
+export type CreateInferenceBackendData = {
+  body: BackendPlacement
+  path?: never
+  query?: never
+  url: '/api/v1/inference-backends'
+}
+
+export type CreateInferenceBackendErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Host not found
+   */
+  404: ProblemDocument
+  /**
+   * Host deactivated, or the endpoint is taken
+   */
+  409: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CreateInferenceBackendError =
+  CreateInferenceBackendErrors[keyof CreateInferenceBackendErrors]
+
+export type CreateInferenceBackendResponses = {
+  /**
+   * Successful Response
+   */
+  201: InferenceBackendView
+}
+
+export type CreateInferenceBackendResponse =
+  CreateInferenceBackendResponses[keyof CreateInferenceBackendResponses]
+
+export type DeleteInferenceBackendData = {
+  body?: never
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Backend Id
+     */
+    backend_id: string
+  }
+  query?: never
+  url: '/api/v1/inference-backends/{backend_id}'
+}
+
+export type DeleteInferenceBackendErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Backend not found
+   */
+  404: ProblemDocument
+  /**
+   * Revision moved (STALE_REVISION)
+   */
+  409: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type DeleteInferenceBackendError =
+  DeleteInferenceBackendErrors[keyof DeleteInferenceBackendErrors]
+
+export type DeleteInferenceBackendResponses = {
+  /**
+   * Successful Response
+   */
+  204: void
+}
+
+export type DeleteInferenceBackendResponse =
+  DeleteInferenceBackendResponses[keyof DeleteInferenceBackendResponses]
+
+export type ReadInferenceBackendData = {
+  body?: never
+  path: {
+    /**
+     * Backend Id
+     */
+    backend_id: string
+  }
+  query?: never
+  url: '/api/v1/inference-backends/{backend_id}'
+}
+
+export type ReadInferenceBackendErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Backend not found
+   */
+  404: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadInferenceBackendError = ReadInferenceBackendErrors[keyof ReadInferenceBackendErrors]
+
+export type ReadInferenceBackendResponses = {
+  /**
+   * Successful Response
+   */
+  200: InferenceBackendView
+}
+
+export type ReadInferenceBackendResponse =
+  ReadInferenceBackendResponses[keyof ReadInferenceBackendResponses]
+
+export type EditInferenceBackendData = {
+  body: BackendPlacement
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Backend Id
+     */
+    backend_id: string
+  }
+  query?: never
+  url: '/api/v1/inference-backends/{backend_id}'
+}
+
+export type EditInferenceBackendErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Backend or host not found
+   */
+  404: ProblemDocument
+  /**
+   * Revision moved (STALE_REVISION), host deactivated, or endpoint taken
+   */
+  409: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type EditInferenceBackendError = EditInferenceBackendErrors[keyof EditInferenceBackendErrors]
+
+export type EditInferenceBackendResponses = {
+  /**
+   * Successful Response
+   */
+  200: InferenceBackendView
+}
+
+export type EditInferenceBackendResponse =
+  EditInferenceBackendResponses[keyof EditInferenceBackendResponses]
+
+export type TestInferenceBackendConnectionData = {
+  body?: never
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Backend Id
+     */
+    backend_id: string
+  }
+  query?: never
+  url: '/api/v1/inference-backends/{backend_id}/connection-test'
+}
+
+export type TestInferenceBackendConnectionErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Backend not found
+   */
+  404: ProblemDocument
+  /**
+   * Revision moved (STALE_REVISION)
+   */
+  409: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type TestInferenceBackendConnectionError =
+  TestInferenceBackendConnectionErrors[keyof TestInferenceBackendConnectionErrors]
+
+export type TestInferenceBackendConnectionResponses = {
+  /**
+   * Successful Response
+   */
+  200: InferenceBackendView
+}
+
+export type TestInferenceBackendConnectionResponse =
+  TestInferenceBackendConnectionResponses[keyof TestInferenceBackendConnectionResponses]
+
+export type SetInferenceBackendStatusData = {
+  body: BackendStatus
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Backend Id
+     */
+    backend_id: string
+  }
+  query?: never
+  url: '/api/v1/inference-backends/{backend_id}/status'
+}
+
+export type SetInferenceBackendStatusErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Backend not found
+   */
+  404: ProblemDocument
+  /**
+   * Revision moved (STALE_REVISION)
+   */
+  409: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type SetInferenceBackendStatusError =
+  SetInferenceBackendStatusErrors[keyof SetInferenceBackendStatusErrors]
+
+export type SetInferenceBackendStatusResponses = {
+  /**
+   * Successful Response
+   */
+  200: InferenceBackendView
+}
+
+export type SetInferenceBackendStatusResponse =
+  SetInferenceBackendStatusResponses[keyof SetInferenceBackendStatusResponses]
 
 export type ListInferenceHostsData = {
   body?: never

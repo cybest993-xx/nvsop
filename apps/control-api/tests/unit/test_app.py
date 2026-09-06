@@ -101,6 +101,37 @@ def test_the_openapi_contract_names_operations_and_the_problem_shape() -> None:
         assert problem["schema"]["$ref"] == "#/components/schemas/ProblemDocument"
 
 
+def test_every_documented_422_response_uses_only_the_problem_document() -> None:
+    app = create_app(settings())
+
+    def route_without_explicit_responses(value: int) -> dict[str, int]:
+        return {"value": value}
+
+    # FastAPI adds its default HTTPValidationError response when a route omits `responses`.
+    app.add_api_route(
+        "/api/v1/openapi-contract-probe",
+        route_without_explicit_responses,
+        methods=["GET"],
+    )
+    schema = app.openapi()
+
+    documented_422 = [
+        (method, path, operation["responses"]["422"])
+        for path, path_item in schema["paths"].items()
+        for method, operation in path_item.items()
+        if method in {"get", "post", "put", "patch", "delete"}
+        and "422" in operation.get("responses", {})
+    ]
+
+    assert documented_422
+    for method, path, response in documented_422:
+        assert set(response["content"]) == {PROBLEM_MEDIA_TYPE}, (method, path)
+        assert response["content"][PROBLEM_MEDIA_TYPE]["schema"] == {
+            "$ref": "#/components/schemas/ProblemDocument"
+        }, (method, path)
+    assert "HTTPValidationError" not in schema["components"]["schemas"]
+
+
 def test_the_settings_object_is_reachable_from_the_application() -> None:
     # The composition root holds the resolved settings, so an adapter reads them from the
     # application rather than from the process environment.

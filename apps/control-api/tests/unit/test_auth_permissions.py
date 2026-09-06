@@ -35,11 +35,13 @@ def test_every_permission_ends_in_view_edit_or_delete() -> None:
 
 
 def test_a_permission_names_the_module_that_owns_the_resource() -> None:
-    # The first segment is a backend module (§七). `auth`'s own permissions are all that exist
-    # in this slice; each later module registers its own members in this same enum, which is
-    # what keeps one closed set to check a role's contents against.
+    # The first segment is a backend module (§七). `auth`'s came first; each later module
+    # registers its own members in this same enum and extends this set in the same change
+    # (`device` did with its inference-host and backend members), which is what keeps one
+    # closed set to check a role's contents against.
+    registered_modules = {"auth", "device"}
     for permission in Permission:
-        assert permission.value.split(".")[0] == "auth", permission
+        assert permission.value.split(".")[0] in registered_modules, permission
 
 
 def test_a_registered_permission_parses_to_its_member() -> None:

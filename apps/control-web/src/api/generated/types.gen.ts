@@ -37,6 +37,12 @@ export type ApiErrorCode =
   | 'CAMERA_HOST_BACKEND_MISMATCH'
   | 'CAMERA_STATION_HOST_CONFLICT'
   | 'CAMERA_STATION_TEMPLATE_CONFLICT'
+  | 'CONNECTOR_NOT_FOUND'
+  | 'CONNECTOR_NAME_TAKEN'
+  | 'CONNECTOR_STATION_HOST_CONFLICT'
+  | 'CONNECTOR_CONFIGURATION_SECRET'
+  | 'STATION_HAS_CONNECTORS'
+  | 'INFERENCE_HOST_HAS_CONNECTORS'
   | 'INTERNAL_ERROR'
   | 'PERMISSION_DENIED'
   | 'REQUEST_INVALID'
@@ -219,6 +225,117 @@ export type ConnectionView = {
    */
   self_reported_model_ids: Array<string>
   state: ConnectionState
+}
+
+/**
+ * ConnectorConfiguration
+ *
+ * 连接器唯一允许提交的非秘密参数。
+ */
+export type ConnectorConfiguration = {
+  /**
+   * Address
+   */
+  address: string
+  /**
+   * Port
+   */
+  port?: number | null
+}
+
+/**
+ * ConnectorPlacement
+ *
+ * 连接器的完整配置和拓扑归属。
+ */
+export type ConnectorPlacement = {
+  configuration: ConnectorConfiguration
+  connector_type: ConnectorType
+  /**
+   * Host Id
+   */
+  host_id: string
+  /**
+   * Name
+   */
+  name: string
+  /**
+   * Station Id
+   */
+  station_id: string
+}
+
+/**
+ * ConnectorStatus
+ */
+export type ConnectorStatus = {
+  status: DeviceStatus
+}
+
+/**
+ * ConnectorType
+ *
+ * 中心支持的连接器配置类型。
+ */
+export type ConnectorType = 'hikvision_isapi' | 'board_card'
+
+/**
+ * ConnectorView
+ *
+ * 中心保存的连接器视图；凭据只以状态标志出现。
+ */
+export type ConnectorView = {
+  configuration: ConnectorConfiguration
+  connector_type: ConnectorType
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Created By
+   */
+  created_by: string
+  /**
+   * Credentials Configured
+   */
+  credentials_configured: boolean
+  /**
+   * Health Detail
+   */
+  health_detail: string | null
+  /**
+   * Host Id
+   */
+  host_id: string
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Name
+   */
+  name: string
+  /**
+   * Reachability
+   */
+  reachability: string
+  /**
+   * Revision
+   */
+  revision: number
+  /**
+   * Station Id
+   */
+  station_id: string
+  status: DeviceStatus
+  /**
+   * Updated At
+   */
+  updated_at: string
+  /**
+   * Updated By
+   */
+  updated_by: string
 }
 
 /**
@@ -437,6 +554,28 @@ export type ItemPageCameraView = {
    * Items
    */
   items: Array<CameraView>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
+ * ItemPage[ConnectorView]
+ */
+export type ItemPageConnectorView = {
+  /**
+   * Items
+   */
+  items: Array<ConnectorView>
   /**
    * Page
    */
@@ -1857,6 +1996,312 @@ export type SetCameraStatusResponses = {
 }
 
 export type SetCameraStatusResponse = SetCameraStatusResponses[keyof SetCameraStatusResponses]
+
+export type ListConnectorsData = {
+  body?: never
+  path?: never
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+    /**
+     * Station Id
+     */
+    station_id?: string | null
+  }
+  url: '/api/v1/connectors'
+}
+
+export type ListConnectorsErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ListConnectorsError = ListConnectorsErrors[keyof ListConnectorsErrors]
+
+export type ListConnectorsResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageConnectorView
+}
+
+export type ListConnectorsResponse = ListConnectorsResponses[keyof ListConnectorsResponses]
+
+export type CreateConnectorData = {
+  body: ConnectorPlacement
+  path?: never
+  query?: never
+  url: '/api/v1/connectors'
+}
+
+export type CreateConnectorErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CreateConnectorError = CreateConnectorErrors[keyof CreateConnectorErrors]
+
+export type CreateConnectorResponses = {
+  /**
+   * Successful Response
+   */
+  201: ConnectorView
+}
+
+export type CreateConnectorResponse = CreateConnectorResponses[keyof CreateConnectorResponses]
+
+export type DeleteConnectorData = {
+  body?: never
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Connector Id
+     */
+    connector_id: string
+  }
+  query?: never
+  url: '/api/v1/connectors/{connector_id}'
+}
+
+export type DeleteConnectorErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type DeleteConnectorError = DeleteConnectorErrors[keyof DeleteConnectorErrors]
+
+export type DeleteConnectorResponses = {
+  /**
+   * Successful Response
+   */
+  204: void
+}
+
+export type DeleteConnectorResponse = DeleteConnectorResponses[keyof DeleteConnectorResponses]
+
+export type ReadConnectorData = {
+  body?: never
+  path: {
+    /**
+     * Connector Id
+     */
+    connector_id: string
+  }
+  query?: never
+  url: '/api/v1/connectors/{connector_id}'
+}
+
+export type ReadConnectorErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadConnectorError = ReadConnectorErrors[keyof ReadConnectorErrors]
+
+export type ReadConnectorResponses = {
+  /**
+   * Successful Response
+   */
+  200: ConnectorView
+}
+
+export type ReadConnectorResponse = ReadConnectorResponses[keyof ReadConnectorResponses]
+
+export type EditConnectorData = {
+  body: ConnectorPlacement
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Connector Id
+     */
+    connector_id: string
+  }
+  query?: never
+  url: '/api/v1/connectors/{connector_id}'
+}
+
+export type EditConnectorErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type EditConnectorError = EditConnectorErrors[keyof EditConnectorErrors]
+
+export type EditConnectorResponses = {
+  /**
+   * Successful Response
+   */
+  200: ConnectorView
+}
+
+export type EditConnectorResponse = EditConnectorResponses[keyof EditConnectorResponses]
+
+export type SetConnectorStatusData = {
+  body: ConnectorStatus
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Connector Id
+     */
+    connector_id: string
+  }
+  query?: never
+  url: '/api/v1/connectors/{connector_id}/status'
+}
+
+export type SetConnectorStatusErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type SetConnectorStatusError = SetConnectorStatusErrors[keyof SetConnectorStatusErrors]
+
+export type SetConnectorStatusResponses = {
+  /**
+   * Successful Response
+   */
+  200: ConnectorView
+}
+
+export type SetConnectorStatusResponse =
+  SetConnectorStatusResponses[keyof SetConnectorStatusResponses]
 
 export type ListInferenceBackendsData = {
   body?: never

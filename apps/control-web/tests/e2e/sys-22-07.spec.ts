@@ -75,7 +75,8 @@ test('SYS-22-07 — protected layout fits the supported desktop width and names 
 
   const navigation = page.getByRole('navigation', { name: '主导航' })
   await expect(navigation).toBeVisible()
-  await expect(navigation.getByText('工位与设备')).toContainText('（未上线）')
+  await expect(navigation.getByText('工位与设备')).toHaveCount(0)
+  await expect(navigation.getByText('SOP 模板')).toContainText('（未上线）')
   await expect(page.getByRole('banner').getByText('王丽')).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,

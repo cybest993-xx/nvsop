@@ -17,6 +17,10 @@ from factory_sop.device.errors import DeviceRefusalCode, DeviceRefusedError
 from factory_sop.device.model import (
     Camera,
     ConnectionState,
+    Connector,
+    ConnectorConfiguration,
+    ConnectorReachability,
+    ConnectorType,
     DeviceStatus,
     InferenceBackend,
     InferenceHost,
@@ -333,6 +337,102 @@ class FakeCameras:
             camera
             for camera in self.rows.values()
             if station_id is None or camera.station_id == station_id
+        ]
+        ordered = sorted(candidates, key=lambda item: (item.created_at, item.id), reverse=True)
+        start = (page - 1) * page_size
+        return ordered[start : start + page_size], len(ordered)
+
+
+@dataclass
+class FakeConnectors:
+    """`device_connector` 的内存仓储适配器。"""
+
+    rows: dict[UUID, Connector] = field(default_factory=dict)
+
+    def register(
+        self,
+        *,
+        station_id: UUID,
+        host_id: UUID,
+        name: str = "一号连接器",
+        connector_type: ConnectorType = ConnectorType.HIKVISION_ISAPI,
+        configuration: dict[str, object] | None = None,
+        status: DeviceStatus = DeviceStatus.ACTIVE,
+        created_at: datetime = FAKE_NOW,
+    ) -> Connector:
+        connector = Connector(
+            id=new_id(),
+            station_id=station_id,
+            host_id=host_id,
+            name=name,
+            connector_type=connector_type,
+            configuration=ConnectorConfiguration.from_wire(
+                configuration or {"address": "10.0.8.21"}
+            ),
+            credentials_configured=False,
+            reachability=ConnectorReachability.UNVERIFIED,
+            health_detail=None,
+            status=status,
+            revision=1,
+            created_by=FAKE_ACTOR,
+            updated_by=FAKE_ACTOR,
+            created_at=created_at,
+            updated_at=created_at,
+        )
+        self.add(connector)
+        return connector
+
+    def add(self, connector: Connector) -> None:
+        if any(
+            item.station_id == connector.station_id and item.name == connector.name
+            for item in self.rows.values()
+        ):
+            raise DeviceRefusedError(DeviceRefusalCode.CONNECTOR_NAME_TAKEN)
+        self.rows[connector.id] = connector
+
+    def save(self, connector: Connector, *, expected_revision: int) -> None:
+        stored = self.rows.get(connector.id)
+        if stored is None:
+            raise DeviceRefusedError(DeviceRefusalCode.CONNECTOR_NOT_FOUND)
+        if stored.revision != expected_revision:
+            raise DeviceRefusedError(DeviceRefusalCode.STALE_REVISION)
+        if any(
+            item.id != connector.id
+            and item.station_id == connector.station_id
+            and item.name == connector.name
+            for item in self.rows.values()
+        ):
+            raise DeviceRefusedError(DeviceRefusalCode.CONNECTOR_NAME_TAKEN)
+        self.rows[connector.id] = connector
+
+    def by_id(self, connector_id: UUID) -> Connector | None:
+        return self.rows.get(connector_id)
+
+    def remove(self, connector_id: UUID, *, expected_revision: int) -> bool:
+        stored = self.rows.get(connector_id)
+        if stored is None:
+            return False
+        if stored.revision != expected_revision:
+            raise DeviceRefusedError(DeviceRefusalCode.STALE_REVISION)
+        del self.rows[connector_id]
+        return True
+
+    def any_for_station(self, station_id: UUID) -> bool:
+        return any(item.station_id == station_id for item in self.rows.values())
+
+    def any_for_host(self, host_id: UUID) -> bool:
+        return any(item.host_id == host_id for item in self.rows.values())
+
+    def for_station(self, station_id: UUID) -> list[Connector]:
+        return [item for item in self.rows.values() if item.station_id == station_id]
+
+    def page_of(
+        self, *, page: int, page_size: int, station_id: UUID | None
+    ) -> tuple[list[Connector], int]:
+        candidates = [
+            item
+            for item in self.rows.values()
+            if station_id is None or item.station_id == station_id
         ]
         ordered = sorted(candidates, key=lambda item: (item.created_at, item.id), reverse=True)
         start = (page - 1) * page_size

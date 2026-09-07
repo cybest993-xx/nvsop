@@ -31,6 +31,13 @@ class DeviceRefusalCode(StrEnum):
     CAMERA_HOST_BACKEND_MISMATCH = "CAMERA_HOST_BACKEND_MISMATCH"
     CAMERA_STATION_HOST_CONFLICT = "CAMERA_STATION_HOST_CONFLICT"
     CAMERA_STATION_TEMPLATE_CONFLICT = "CAMERA_STATION_TEMPLATE_CONFLICT"
+    CONNECTOR_NOT_FOUND = "CONNECTOR_NOT_FOUND"
+    CONNECTOR_NAME_TAKEN = "CONNECTOR_NAME_TAKEN"
+    CONNECTOR_STATION_HOST_CONFLICT = "CONNECTOR_STATION_HOST_CONFLICT"
+    # 仅错误码标识。
+    CONNECTOR_CONFIGURATION_SECRET = "CONNECTOR_CONFIGURATION_SECRET"  # pragma: allowlist secret
+    STATION_HAS_CONNECTORS = "STATION_HAS_CONNECTORS"
+    INFERENCE_HOST_HAS_CONNECTORS = "INFERENCE_HOST_HAS_CONNECTORS"
     STALE_REVISION = "STALE_REVISION"
 
 
@@ -52,6 +59,12 @@ _DEFAULT_FIELD_ERRORS: dict[DeviceRefusalCode, tuple[DeviceFieldError, ...]] = {
     ),
     DeviceRefusalCode.CAMERA_STATION_TEMPLATE_CONFLICT: (
         DeviceFieldError("backend_id", "该推理后端的模板必须与工位已有相机一致"),
+    ),
+    DeviceRefusalCode.CONNECTOR_STATION_HOST_CONFLICT: (
+        DeviceFieldError("host_id", "连接器必须使用该工位现有拓扑的推理机"),
+    ),
+    DeviceRefusalCode.CONNECTOR_CONFIGURATION_SECRET: (
+        DeviceFieldError("configuration", "中心不接收连接器凭据，请在推理机本地录入"),
     ),
 }
 
@@ -107,6 +120,18 @@ def refusal_problem(code: DeviceRefusalCode) -> tuple[int, str]:
             return 409, "同一工位的相机不能跨推理机"
         case DeviceRefusalCode.CAMERA_STATION_TEMPLATE_CONFLICT:
             return 409, "同一工位的相机不能使用不同模板"
+        case DeviceRefusalCode.CONNECTOR_NOT_FOUND:
+            return 404, "连接器不存在"
+        case DeviceRefusalCode.CONNECTOR_NAME_TAKEN:
+            return 409, "该工位已存在同名连接器"
+        case DeviceRefusalCode.CONNECTOR_STATION_HOST_CONFLICT:
+            return 409, "连接器所在推理机与工位拓扑不一致"
+        case DeviceRefusalCode.CONNECTOR_CONFIGURATION_SECRET:
+            return 422, "连接器配置不能包含凭据"
+        case DeviceRefusalCode.STATION_HAS_CONNECTORS:
+            return 409, "该工位仍有关联连接器"
+        case DeviceRefusalCode.INFERENCE_HOST_HAS_CONNECTORS:
+            return 409, "该推理机仍承载连接器"
         case DeviceRefusalCode.STALE_REVISION:
             return 409, "内容已被他人修改，请刷新后重试"
         case _:

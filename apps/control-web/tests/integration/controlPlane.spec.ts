@@ -8,7 +8,20 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { ControlPlaneError, endSession, openSession, readSession } from '@/api/controlPlane'
+import {
+  ControlPlaneError,
+  createConnector,
+  deleteConnector,
+  editConnector,
+  endSession,
+  readConnector,
+  readConnectors,
+  readInferenceHosts,
+  readSession,
+  readStations,
+  openSession,
+  setConnectorStatus,
+} from '@/api/controlPlane'
 
 const CREDENTIALS = { login_name: 'wang.li', password: 'assembly-line-3' } // pragma: allowlist secret
 
@@ -80,6 +93,78 @@ describe('a successful call', () => {
 
     const [request] = stub.mock.calls[0]!
     expect(request.headers.get('x-csrf-token')).toBeNull()
+  })
+})
+
+describe('connector calls', () => {
+  const CONNECTOR = {
+    id: 'connector-1',
+    station_id: 'station-1',
+    host_id: 'host-1',
+    name: '装配线输入',
+    connector_type: 'hikvision_isapi' as const,
+    configuration: { address: '192.168.10.21', port: 80 },
+    credentials_configured: false,
+    reachability: 'unverified',
+    health_detail: null,
+    status: 'active' as const,
+    revision: 3,
+  }
+
+  it('uses the generated list and detail endpoints', async () => {
+    const stub = stubFetch(
+      respond(200, { items: [CONNECTOR], page: 1, page_size: 50, total: 1 }, 'application/json'),
+    )
+    await readConnectors()
+    expect(new URL(stub.mock.calls[0]![0].url).pathname).toBe('/api/v1/connectors')
+
+    stub.mockResolvedValueOnce(respond(200, CONNECTOR, 'application/json'))
+    await readConnector('connector-1')
+    expect(new URL(stub.mock.calls[1]![0].url).pathname).toBe('/api/v1/connectors/connector-1')
+  })
+
+  it('uses the host and station lookup endpoints', async () => {
+    const stub = stubFetch(
+      respond(200, { items: [], page: 1, page_size: 50, total: 0 }, 'application/json'),
+    )
+    await readInferenceHosts()
+    expect(new URL(stub.mock.calls[0]![0].url).pathname).toBe('/api/v1/inference-hosts')
+
+    stub.mockResolvedValueOnce(
+      respond(200, { items: [], page: 1, page_size: 50, total: 0 }, 'application/json'),
+    )
+    await readStations()
+    expect(new URL(stub.mock.calls[1]![0].url).pathname).toBe('/api/v1/stations')
+  })
+
+  it('sends real connector writes with non-secret data and If-Match', async () => {
+    const stub = stubFetch(respond(201, CONNECTOR, 'application/json'))
+    const placement = {
+      name: '装配线输入',
+      connector_type: 'hikvision_isapi' as const,
+      configuration: { address: '192.168.10.21', port: 80 },
+      station_id: 'station-1',
+      host_id: 'host-1',
+    }
+
+    await createConnector(placement)
+    stub.mockResolvedValueOnce(respond(200, CONNECTOR, 'application/json'))
+    await editConnector('connector-1', placement, 3)
+    stub.mockResolvedValueOnce(respond(200, CONNECTOR, 'application/json'))
+    await setConnectorStatus('connector-1', 'deactivated', 3)
+    stub.mockResolvedValueOnce(respond(204, null))
+    await deleteConnector('connector-1', 3)
+
+    const [createRequest, editRequest, statusRequest, deleteRequest] = stub.mock.calls.map(
+      ([request]) => request,
+    )
+    expect(createRequest!.method).toBe('POST')
+    await expect(createRequest!.clone().json()).resolves.toEqual(placement)
+    expect(editRequest!.headers.get('If-Match')).toBe('3')
+    expect(statusRequest!.headers.get('If-Match')).toBe('3')
+    await expect(statusRequest!.clone().json()).resolves.toEqual({ status: 'deactivated' })
+    expect(deleteRequest!.method).toBe('DELETE')
+    expect(deleteRequest!.headers.get('If-Match')).toBe('3')
   })
 })
 

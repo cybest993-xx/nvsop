@@ -26,6 +26,7 @@ import pytest
 from auth_fakes import FakeRoles, FakeSessions, FakeUsers
 from device_fakes import (
     FakeCameras,
+    FakeConnectors,
     FakeInferenceBackends,
     FakeInferenceHosts,
     FakeInferenceStations,
@@ -212,6 +213,36 @@ ROUTES = [
         headers={"If-Match": "1"},
     ),
     Target("DELETE", "/cameras/{camera_id}", headers={"If-Match": "1"}),
+    Target(
+        "POST",
+        "/connectors",
+        {
+            "name": "新连接器",
+            "connector_type": "hikvision_isapi",
+            "configuration": {"address": "10.0.8.24", "port": 80},
+            "station_id": "{station_id}",
+            "host_id": "{host_id}",
+        },
+    ),
+    Target(
+        "PATCH",
+        "/connectors/{connector_id}",
+        {
+            "name": "修改连接器",
+            "connector_type": "board_card",
+            "configuration": {"address": "/dev/board0"},
+            "station_id": "{station_id}",
+            "host_id": "{host_id}",
+        },
+        headers={"If-Match": "1"},
+    ),
+    Target(
+        "PUT",
+        "/connectors/{connector_id}/status",
+        {"status": "deactivated"},
+        headers={"If-Match": "1"},
+    ),
+    Target("DELETE", "/connectors/{connector_id}", headers={"If-Match": "1"}),
     Target("PUT", "/auth/users/{user_id}/roles", {"role_ids": []}),
     Target("DELETE", "/auth/users/{user_id}"),
     Target("POST", "/auth/roles", {"code": "fresh", "name": "新角色", "permissions": []}),
@@ -264,10 +295,12 @@ class Backend:
         self.probe = FakeProbe()
         self.stations = FakeInferenceStations()
         self.cameras = FakeCameras()
+        self.connectors = FakeConnectors()
         self.station = self.stations.register(code="station-1", name="工位一")
         self.camera = self.cameras.register(
             station_id=self.station.id, host_id=self.host.id, backend_id=self.backend.id
         )
+        self.connector = self.connectors.register(station_id=self.station.id, host_id=self.host.id)
 
         self.app.dependency_overrides[dependencies.users] = lambda: self.users
         self.app.dependency_overrides[dependencies.sessions] = lambda: self.sessions
@@ -278,6 +311,7 @@ class Backend:
         self.app.dependency_overrides[device_dependencies.probe] = lambda: self.probe
         self.app.dependency_overrides[device_dependencies.stations] = lambda: self.stations
         self.app.dependency_overrides[device_dependencies.cameras] = lambda: self.cameras
+        self.app.dependency_overrides[device_dependencies.connectors] = lambda: self.connectors
         self.client = TestClient(self.app, base_url="https://testserver")
         assert (
             self.client.post(
@@ -296,6 +330,7 @@ class Backend:
             "backend_id": self.backend.id,
             "station_id": self.station.id,
             "camera_id": self.camera.id,
+            "connector_id": self.connector.id,
         }
         path = target.template.format(**identifiers)
         body = (

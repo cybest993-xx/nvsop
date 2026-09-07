@@ -15,7 +15,11 @@ from uuid import UUID
 from factory_sop.auth.api import Caller, Permission, authorize
 from factory_sop.device.errors import DeviceRefusalCode
 from factory_sop.device.model import DeviceStatus, InferenceHost
-from factory_sop.device.repository import InferenceBackendRepository, InferenceHostRepository
+from factory_sop.device.repository import (
+    ConnectorRepository,
+    InferenceBackendRepository,
+    InferenceHostRepository,
+)
 from factory_sop.device.usecases._transitions import refuse, set_status
 from factory_sop.identifiers import new_id
 from factory_sop.observability import get_logger
@@ -162,12 +166,9 @@ def delete_host(
     caller: Caller,
     hosts: InferenceHostRepository,
     backends: InferenceBackendRepository,
+    connectors: ConnectorRepository,
 ) -> None:
-    """Remove the host outright — the irreversible operation 停用 exists to avoid.
-
-    Refuses while any backend still hangs off the machine; the foreign key holds the same
-    rule as the transaction's backstop.
-    """
+    """仅在推理后端和连接器关联都移除后删除推理机。"""
     authorize(caller, Permission.INFERENCE_HOST_DELETE)
     host = _existing_host(host_id, hosts)
     _require_revision(host, expected_revision)
@@ -175,6 +176,13 @@ def delete_host(
         refuse(
             _REFUSAL_EVENT,
             DeviceRefusalCode.INFERENCE_HOST_HAS_BACKENDS,
+            host_id=str(host_id),
+            actor_id=str(caller.user.id),
+        )
+    if connectors.any_for_host(host_id):
+        refuse(
+            _REFUSAL_EVENT,
+            DeviceRefusalCode.INFERENCE_HOST_HAS_CONNECTORS,
             host_id=str(host_id),
             actor_id=str(caller.user.id),
         )

@@ -139,6 +139,42 @@ describe('an unknown path', () => {
 })
 
 describe('a page that names required permissions', () => {
+  it('reaches the device page for a connector viewer', async () => {
+    readSession.mockResolvedValue({
+      ...SESSION,
+      permissions: ['device.connector.view'],
+    })
+    const router = createAppRouter()
+
+    await router.push('/devices')
+    await router.isReady()
+
+    expect(router.currentRoute.value.name).toBe('devices')
+  })
+
+  it.each(['device.connector.edit', 'device.connector.delete'])(
+    'reaches the device page for a caller holding only %s',
+    async (permission) => {
+      readSession.mockResolvedValue({ ...SESSION, permissions: [permission] })
+      const router = createAppRouter()
+
+      await router.push('/devices')
+      await router.isReady()
+
+      expect(router.currentRoute.value.name).toBe('devices')
+    },
+  )
+
+  it('sends a caller without any connector permission away from the device page', async () => {
+    readSession.mockResolvedValue({ ...SESSION, permissions: [] })
+    const router = createAppRouter()
+
+    await router.push('/devices')
+    await router.isReady()
+
+    expect(router.currentRoute.value.name).toBe('overview')
+  })
+
   it('is reachable by a caller holding one of them', async () => {
     // Any one, not all: 用户与权限 is useful to someone who may read accounts but not roles, and the
     // page renders each half according to what they hold.

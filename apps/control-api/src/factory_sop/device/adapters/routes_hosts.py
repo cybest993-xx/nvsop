@@ -17,9 +17,13 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 from pydantic import BaseModel, Field, field_validator
 
 from factory_sop.auth.api import Authorized, Permission, needs
-from factory_sop.device.adapters.dependencies import backends, hosts
+from factory_sop.device.adapters.dependencies import backends, connectors, hosts
 from factory_sop.device.model import DeviceStatus, InferenceHost, carries_userinfo
-from factory_sop.device.repository import InferenceBackendRepository, InferenceHostRepository
+from factory_sop.device.repository import (
+    ConnectorRepository,
+    InferenceBackendRepository,
+    InferenceHostRepository,
+)
 from factory_sop.device.usecases.hosts import (
     create_host,
     deactivate_host,
@@ -273,6 +277,7 @@ def delete_a_host(
     caller: Authorized,
     hosts: Annotated[InferenceHostRepository, Depends(hosts)],
     backends: Annotated[InferenceBackendRepository, Depends(backends)],
+    connector_store: Annotated[ConnectorRepository, Depends(connectors)],
     if_match: Annotated[int, Header(alias="If-Match")],
 ) -> Response:
     """Delete the host outright — the irreversible operation 停用 exists to avoid."""
@@ -282,5 +287,6 @@ def delete_a_host(
         caller=caller,
         hosts=hosts,
         backends=backends,
+        connectors=connector_store,
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

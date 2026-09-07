@@ -38,6 +38,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 from factory_sop.device.model import (
     Camera,
     ConnectionState,
+    Connector,
+    ConnectorConfiguration,
+    ConnectorReachability,
+    ConnectorType,
     DeviceStatus,
     InferenceBackend,
     InferenceHost,
@@ -312,4 +316,82 @@ class CameraRow(Table):
             updated_by=camera.updated_by,
             created_at=camera.created_at,
             updated_at=camera.updated_at,
+        )
+
+
+class ConnectorRow(Table):
+    """`device_connector`，中心只保存非秘密配置。"""
+
+    __tablename__ = "device_connector"
+    __table_args__ = (
+        UniqueConstraint("station_id", "name", name="uq_device_connector_station_id_name"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
+    station_id: Mapped[UUID] = mapped_column(Uuid(), ForeignKey("device_station.id"), index=True)
+    host_id: Mapped[UUID] = mapped_column(
+        Uuid(), ForeignKey("device_inference_host.id"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(128))
+    connector_type: Mapped[ConnectorType] = mapped_column(
+        Enum(
+            ConnectorType,
+            name="device_connector_type",
+            values_callable=lambda enum: [member.value for member in enum],
+        )
+    )
+    configuration: Mapped[dict[str, object]] = mapped_column(JSONB())
+    credentials_configured: Mapped[bool] = mapped_column(Boolean())
+    reachability: Mapped[ConnectorReachability] = mapped_column(
+        Enum(
+            ConnectorReachability,
+            name="device_connector_reachability",
+            values_callable=lambda enum: [member.value for member in enum],
+        )
+    )
+    health_detail: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[DeviceStatus] = mapped_column(_status_enum(create_type=False))
+    revision: Mapped[int] = mapped_column(Integer())
+    created_by: Mapped[UUID] = mapped_column(Uuid())
+    updated_by: Mapped[UUID] = mapped_column(Uuid())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    def to_domain(self) -> Connector:
+        return Connector(
+            id=self.id,
+            station_id=self.station_id,
+            host_id=self.host_id,
+            name=self.name,
+            connector_type=self.connector_type,
+            configuration=ConnectorConfiguration.from_wire(self.configuration),
+            credentials_configured=self.credentials_configured,
+            reachability=self.reachability,
+            health_detail=self.health_detail,
+            status=self.status,
+            revision=self.revision,
+            created_by=self.created_by,
+            updated_by=self.updated_by,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+        )
+
+    @classmethod
+    def from_domain(cls, connector: Connector) -> ConnectorRow:
+        return cls(
+            id=connector.id,
+            station_id=connector.station_id,
+            host_id=connector.host_id,
+            name=connector.name,
+            connector_type=connector.connector_type,
+            configuration=connector.configuration.to_wire(),
+            credentials_configured=connector.credentials_configured,
+            reachability=connector.reachability,
+            health_detail=connector.health_detail,
+            status=connector.status,
+            revision=connector.revision,
+            created_by=connector.created_by,
+            updated_by=connector.updated_by,
+            created_at=connector.created_at,
+            updated_at=connector.updated_at,
         )

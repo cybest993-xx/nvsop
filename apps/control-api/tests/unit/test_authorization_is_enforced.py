@@ -30,6 +30,7 @@ from device_fakes import (
     FakeInferenceBackends,
     FakeInferenceHosts,
     FakeInferenceStations,
+    FakePoints,
     FakeProbe,
 )
 from fastapi.testclient import TestClient
@@ -43,6 +44,7 @@ from factory_sop.auth.model import Role, User, UserStatus
 from factory_sop.auth.passwords import hash_password
 from factory_sop.auth.permissions import Permission
 from factory_sop.device.adapters import dependencies as device_dependencies
+from factory_sop.device.model import PointDirection
 from factory_sop.identifiers import new_id
 from factory_sop.settings import Settings
 
@@ -242,7 +244,52 @@ ROUTES = [
         {"status": "deactivated"},
         headers={"If-Match": "1"},
     ),
+    Target(
+        "PUT",
+        "/connectors/{connector_id}/capability",
+        {"verification": "unverified"},
+        headers={"If-Match": "1"},
+    ),
     Target("DELETE", "/connectors/{connector_id}", headers={"If-Match": "1"}),
+    Target(
+        "POST",
+        "/points",
+        {
+            "station_id": "{station_id}",
+            "connector_id": "{connector_id}",
+            "direction": "input",
+            "identifier": "DI-02",
+            "semantic_label": "新点位",
+        },
+    ),
+    Target(
+        "PATCH",
+        "/points/{point_id}",
+        {
+            "station_id": "{station_id}",
+            "connector_id": "{connector_id}",
+            "direction": "input",
+            "identifier": "DI-01",
+            "semantic_label": "修改点位",
+        },
+        headers={"If-Match": "1"},
+    ),
+    Target(
+        "PUT",
+        "/points/{point_id}/status",
+        {"status": "deactivated"},
+        headers={"If-Match": "1"},
+    ),
+    Target("DELETE", "/points/{point_id}", headers={"If-Match": "1"}),
+    Target(
+        "POST",
+        "/point-binding-validations",
+        {
+            "station_id": "{station_id}",
+            "role": "start_signal",
+            "budget_seconds": 0.2,
+        },
+    ),
     Target("PUT", "/auth/users/{user_id}/roles", {"role_ids": []}),
     Target("DELETE", "/auth/users/{user_id}"),
     Target("POST", "/auth/roles", {"code": "fresh", "name": "新角色", "permissions": []}),
@@ -296,11 +343,19 @@ class Backend:
         self.stations = FakeInferenceStations()
         self.cameras = FakeCameras()
         self.connectors = FakeConnectors()
+        self.points = FakePoints()
         self.station = self.stations.register(code="station-1", name="工位一")
         self.camera = self.cameras.register(
             station_id=self.station.id, host_id=self.host.id, backend_id=self.backend.id
         )
         self.connector = self.connectors.register(station_id=self.station.id, host_id=self.host.id)
+        self.point = self.points.register(
+            station_id=self.station.id,
+            connector_id=self.connector.id,
+            direction=PointDirection.INPUT,
+            identifier="DI-01",
+            semantic_label="工件到位",
+        )
 
         self.app.dependency_overrides[dependencies.users] = lambda: self.users
         self.app.dependency_overrides[dependencies.sessions] = lambda: self.sessions
@@ -312,6 +367,7 @@ class Backend:
         self.app.dependency_overrides[device_dependencies.stations] = lambda: self.stations
         self.app.dependency_overrides[device_dependencies.cameras] = lambda: self.cameras
         self.app.dependency_overrides[device_dependencies.connectors] = lambda: self.connectors
+        self.app.dependency_overrides[device_dependencies.points] = lambda: self.points
         self.client = TestClient(self.app, base_url="https://testserver")
         assert (
             self.client.post(
@@ -331,6 +387,7 @@ class Backend:
             "station_id": self.station.id,
             "camera_id": self.camera.id,
             "connector_id": self.connector.id,
+            "point_id": self.point.id,
         }
         path = target.template.format(**identifiers)
         body = (

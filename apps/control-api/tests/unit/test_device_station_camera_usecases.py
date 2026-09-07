@@ -13,6 +13,7 @@ from device_fakes import (
     FakeInferenceBackends,
     FakeInferenceHosts,
     FakeInferenceStations,
+    FakePoints,
 )
 
 from factory_sop.auth.api import Permission
@@ -60,6 +61,7 @@ def test_station_crud_has_a_reversible_status_and_delete_keeps_camera_history_gu
     stations = FakeInferenceStations()
     cameras = FakeCameras()
     connectors = FakeConnectors()
+    points = FakePoints()
     caller = caller_holding(
         Permission.STATION_VIEW, Permission.STATION_EDIT, Permission.STATION_DELETE
     )
@@ -112,6 +114,7 @@ def test_station_crud_has_a_reversible_status_and_delete_keeps_camera_history_gu
             stations=stations,
             cameras=cameras,
             connectors=connectors,
+            points=points,
         )
     assert refused.value.code is DeviceRefusalCode.STATION_HAS_CAMERAS
 

@@ -10,52 +10,80 @@
 import { client } from '@/api/generated/client.gen'
 import {
   createConnector as generatedCreateConnector,
+  createPoint as generatedCreatePoint,
   createRole as generatedCreateRole,
   createUser as generatedCreateUser,
   deleteConnector as generatedDeleteConnector,
+  deletePoint as generatedDeletePoint,
   deleteRole as generatedDeleteRole,
   deleteUser as generatedDeleteUser,
   editConnector as generatedEditConnector,
+  editPoint as generatedEditPoint,
   editRole as generatedEditRole,
   editUser as generatedEditUser,
   endSession as generatedEndSession,
   listConnectors as generatedListConnectors,
   listInferenceHosts as generatedListInferenceHosts,
   listPermissions as generatedListPermissions,
+  listPoints as generatedListPoints,
   listRoles as generatedListRoles,
   listStations as generatedListStations,
   listUsers as generatedListUsers,
   openSession as generatedOpenSession,
   readConnector as generatedReadConnector,
+  readPoint as generatedReadPoint,
   readSession as generatedReadSession,
   resetUserPassword as generatedResetUserPassword,
   setConnectorStatus as generatedSetConnectorStatus,
+  setPointStatus as generatedSetPointStatus,
   setUserRoles as generatedSetUserRoles,
   setUserStatus as generatedSetUserStatus,
+  updateConnectorCapability as generatedUpdateConnectorCapability,
+  validatePointBinding as generatedValidatePointBinding,
+  type BindingValidationRequest,
+  type BindingValidationView,
   type ConnectorPlacement,
   type ConnectorView,
+  type CreateRoleData,
+  type CreateUserData,
   type DeviceStatus,
+  type EditRoleData,
+  type EditUserData,
   type ItemPageConnectorView,
   type ItemPageInferenceHostView,
+  type ItemPagePointView,
   type ItemPageRoleView,
   type ItemPageStationView,
   type ItemPageStr,
   type ItemPageUserView,
+  type ListPointsData,
+  type OpenSessionData,
+  type PointConfiguration,
+  type PointView,
   type ProblemDocument,
+  type ResetUserPasswordData,
   type RoleView,
   type SessionView,
+  type SetUserRolesData,
+  type UpdateConnectorCapabilityData,
   type StatusChanged,
+  type UserStatus,
   type UserView,
 } from '@/api/generated'
 
 export type {
+  BindingValidationRequest,
+  BindingValidationView,
   ConnectorPlacement,
   ConnectorView,
   DeviceStatus,
   InferenceHostView,
   ItemPageConnectorView,
   ItemPageInferenceHostView,
+  ItemPagePointView,
   ItemPageStationView,
+  PointConfiguration,
+  PointView,
   RoleView,
   SessionView,
   StationView,
@@ -172,7 +200,14 @@ function controlPlaneError(error: unknown, response: Response | undefined): Cont
       cause: error,
     })
   }
-  const problem = asProblem(error)
+  const candidate =
+    typeof error === 'object' && error !== null ? (error as Partial<ProblemDocument>) : null
+  const problem =
+    candidate !== null &&
+    typeof candidate.title === 'string' &&
+    typeof candidate.error_code === 'string'
+      ? (candidate as ProblemDocument)
+      : null
   return new ControlPlaneError({
     message: problem?.title ?? GENERIC_MESSAGE,
     errorCode: problem?.error_code ?? 'UNKNOWN',
@@ -182,21 +217,7 @@ function controlPlaneError(error: unknown, response: Response | undefined): Cont
   })
 }
 
-function asProblem(value: unknown): ProblemDocument | null {
-  if (typeof value !== 'object' || value === null) {
-    return null
-  }
-  const candidate = value as Partial<ProblemDocument>
-  if (typeof candidate.title !== 'string' || typeof candidate.error_code !== 'string') {
-    return null
-  }
-  return candidate as ProblemDocument
-}
-
-export function openSession(credentials: {
-  login_name: string
-  password: string
-}): Promise<SessionView> {
+export function openSession(credentials: OpenSessionData['body']): Promise<SessionView> {
   return execute(generatedOpenSession({ body: credentials }))
 }
 
@@ -267,6 +288,81 @@ export function deleteConnector(connectorId: string, revision: number): Promise<
   )
 }
 
+// ——— 点位与能力：点位列表、能力声明和绑定预检均走生成客户端。 ———
+
+export type PointListQuery = NonNullable<ListPointsData['query']>
+
+export type ConnectorCapability = UpdateConnectorCapabilityData['body']
+
+export function readPoints(query: PointListQuery = {}): Promise<ItemPagePointView> {
+  return execute(generatedListPoints({ query }))
+}
+
+export function readPoint(pointId: string): Promise<PointView> {
+  return execute(generatedReadPoint({ path: { point_id: pointId } }))
+}
+
+export function createPoint(submitted: PointConfiguration): Promise<PointView> {
+  return execute(generatedCreatePoint({ body: submitted }))
+}
+
+export function editPoint(
+  pointId: string,
+  submitted: PointConfiguration,
+  revision: number,
+): Promise<PointView> {
+  return execute(
+    generatedEditPoint({
+      path: { point_id: pointId },
+      headers: { 'If-Match': revision },
+      body: submitted,
+    }),
+  )
+}
+
+export function setPointStatus(
+  pointId: string,
+  status: DeviceStatus,
+  revision: number,
+): Promise<PointView> {
+  return execute(
+    generatedSetPointStatus({
+      path: { point_id: pointId },
+      headers: { 'If-Match': revision },
+      body: { status },
+    }),
+  )
+}
+
+export function deletePoint(pointId: string, revision: number): Promise<void> {
+  return execute(
+    generatedDeletePoint({
+      path: { point_id: pointId },
+      headers: { 'If-Match': revision },
+    }),
+  )
+}
+
+export function updateConnectorCapability(
+  connectorId: string,
+  capability: ConnectorCapability,
+  revision: number,
+): Promise<ConnectorView> {
+  return execute(
+    generatedUpdateConnectorCapability({
+      path: { connector_id: connectorId },
+      headers: { 'If-Match': revision },
+      body: capability,
+    }),
+  )
+}
+
+export function validatePointBinding(
+  request: BindingValidationRequest,
+): Promise<BindingValidationView> {
+  return execute(generatedValidatePointBinding({ body: request }))
+}
+
 // ——— 用户与权限 (C2.2): the administration calls, thin over the generated SDK. ———
 // Every one of these names a permission in its OpenAPI metadata; the enforcement is the use
 // case's, so this list is only what the screen may offer, never what the backend allows.
@@ -275,30 +371,29 @@ export function readUsers(): Promise<ItemPageUserView> {
   return execute(generatedListUsers())
 }
 
-export function createUser(submitted: {
-  login_name: string
-  display_name: string
-  password: string
-}): Promise<UserView> {
+export function createUser(submitted: CreateUserData['body']): Promise<UserView> {
   return execute(generatedCreateUser({ body: submitted }))
 }
 
-export function editUser(userId: string, submitted: { display_name: string }): Promise<UserView> {
+export function editUser(userId: string, submitted: EditUserData['body']): Promise<UserView> {
   return execute(generatedEditUser({ path: { user_id: userId }, body: submitted }))
 }
 
-export function resetUserPassword(userId: string, password: string): Promise<void> {
+export function resetUserPassword(
+  userId: string,
+  password: ResetUserPasswordData['body']['password'],
+): Promise<void> {
   return execute(generatedResetUserPassword({ path: { user_id: userId }, body: { password } }))
 }
 
-export function setUserStatus(
-  userId: string,
-  status: 'active' | 'deactivated',
-): Promise<StatusChanged> {
+export function setUserStatus(userId: string, status: UserStatus): Promise<StatusChanged> {
   return execute(generatedSetUserStatus({ path: { user_id: userId }, body: { status } }))
 }
 
-export function setUserRoles(userId: string, roleIds: string[]): Promise<UserView> {
+export function setUserRoles(
+  userId: string,
+  roleIds: SetUserRolesData['body']['role_ids'],
+): Promise<UserView> {
   return execute(generatedSetUserRoles({ path: { user_id: userId }, body: { role_ids: roleIds } }))
 }
 
@@ -317,18 +412,11 @@ export function readPermissionCatalogue(): Promise<ItemPageStr> {
   return execute(generatedListPermissions())
 }
 
-export function createRole(submitted: {
-  code: string
-  name: string
-  permissions: string[]
-}): Promise<RoleView> {
+export function createRole(submitted: CreateRoleData['body']): Promise<RoleView> {
   return execute(generatedCreateRole({ body: submitted }))
 }
 
-export function editRole(
-  roleId: string,
-  submitted: { name: string; permissions: string[] },
-): Promise<RoleView> {
+export function editRole(roleId: string, submitted: EditRoleData['body']): Promise<RoleView> {
   return execute(generatedEditRole({ path: { role_id: roleId }, body: submitted }))
 }
 

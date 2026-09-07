@@ -16,7 +16,7 @@ because the discovery start directory is on the path. That follows the precedent
 
 from __future__ import annotations
 
-from edge_runtime.connectors.capability import (
+from nvsop_contracts import (
     Delivery,
     EdgePreservation,
     Measured,
@@ -24,6 +24,7 @@ from edge_runtime.connectors.capability import (
     Sequencing,
     TimestampSource,
 )
+
 from edge_runtime.judgment.core import advance
 from edge_runtime.judgment.model import (
     Decision,

@@ -14,8 +14,7 @@ from __future__ import annotations
 import unittest
 
 from harness import measured_capability as measured
-
-from edge_runtime.connectors.capability import (
+from nvsop_contracts import (
     EdgePreservation,
     PointRole,
     Polled,
@@ -57,19 +56,17 @@ class AnUnverifiedDeclarationCarriesNoRoleTest(unittest.TestCase):
 
 
 class APointThatCanLoseAnEdgeIsEvidenceOfNothingTest(unittest.TestCase):
-    """A change that may vanish between samples cannot support "it did not happen".
+    """A lost input edge cannot support a boundary or step observation."""
 
-    §5.8 states this for the start and end signals. It holds for a step for a sharper
-    reason: a lost step edge is reported as `MISSED_STEP`, which is the false failing
-    verdict §5.2 forbids outright — the same "没做 vs 没看到" confusion measured in §2.1.
-    So the refusal covers every role, which is wider than §5.8's sentence and follows from
-    the invariant it serves.
-    """
-
-    def test_no_role_accepts_it(self) -> None:
+    def test_no_input_role_accepts_it(self) -> None:
         capability = measured(edges=EdgePreservation.MAY_DROP)
 
-        for role in PointRole:
+        for role in (
+            PointRole.START_SIGNAL,
+            PointRole.END_SIGNAL,
+            PointRole.ORDERED_STEP,
+            PointRole.UNORDERED_STEP,
+        ):
             with self.subTest(role=role):
                 self.assertEqual(
                     (Unfitness.MAY_DROP_EDGES,),

@@ -47,7 +47,14 @@ const navigation: NavigationItem[] = [
   {
     label: '工位与设备',
     route: DEVICES_ROUTE,
-    requires: ['device.connector.view', 'device.connector.edit', 'device.connector.delete'],
+    requires: [
+      'device.connector.view',
+      'device.connector.edit',
+      'device.connector.delete',
+      'device.point.view',
+      'device.point.edit',
+      'device.point.delete',
+    ],
   },
   { label: 'SOP 模板', pending: '该功能尚未上线' },
   { label: '训练数据集', pending: '该功能尚未上线' },

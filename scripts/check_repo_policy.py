@@ -80,6 +80,7 @@ JSON_AUTHORIZATION_HEADER = re.compile(r'"Authorization"\s*:\s*"(?P<value>[^"]*)
 ENVIRONMENT_REFERENCE = re.compile(r"^\s*(?:Bearer\s+)?\$\{[^}]+\}\s*$")
 EDGE_APP = Path("apps/edge-runtime")
 EDGE_SOURCE = EDGE_APP / "src"
+CONTRACT_SOURCE = Path("packages/contracts/src/nvsop_contracts")
 CENTER_SOURCE = Path("apps/control-api/src/factory_sop")
 WEB_APP = Path("apps/control-web")
 # What the web workspace's frozen toolchain is made of (harness §2). Each is required only
@@ -220,6 +221,7 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
     errors.extend(check_python_pin(root))
     errors.extend(check_web_toolchain(root, files))
     errors.extend(check_edge_runtime_isolation(root, files))
+    errors.extend(check_shared_contract_isolation(root, files))
     errors.extend(check_center_modules_are_contracted(root, files))
 
     return errors
@@ -310,12 +312,28 @@ def check_edge_runtime_isolation(root: Path, files: list[Path]) -> list[str]:
         if path.suffix != ".py" or not is_under(path, EDGE_SOURCE):
             continue
         for name in sorted(top_level_imports(root / path)):
-            if name in STANDARD_LIBRARY or name == "edge_runtime":
+            if name in STANDARD_LIBRARY or name in {"edge_runtime", "nvsop_contracts"}:
                 continue
             errors.append(
                 f"{path} imports {name}, which is not in the standard library; the "
                 "inference host's package is standard-library-only "
                 "(edge-autonomy.md §5.11)"
+            )
+    return errors
+
+
+def check_shared_contract_isolation(root: Path, files: list[Path]) -> list[str]:
+    """共享契约必须继续可由推理机的裸标准库进程导入。"""
+    errors: list[str] = []
+    for path in sorted(files):
+        if path.suffix != ".py" or not is_under(path, CONTRACT_SOURCE):
+            continue
+        for name in sorted(top_level_imports(root / path)):
+            if name in STANDARD_LIBRARY or name == "nvsop_contracts":
+                continue
+            errors.append(
+                f"{path} imports {name}, which is not in the standard library; shared "
+                "contracts imported by the inference host must stay standard-library-only"
             )
     return errors
 

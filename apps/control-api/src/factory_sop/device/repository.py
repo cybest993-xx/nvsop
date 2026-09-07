@@ -18,7 +18,14 @@ from __future__ import annotations
 from typing import Protocol
 from uuid import UUID
 
-from factory_sop.device.model import Camera, Connector, InferenceBackend, InferenceHost, Station
+from factory_sop.device.model import (
+    Camera,
+    Connector,
+    InferenceBackend,
+    InferenceHost,
+    Point,
+    Station,
+)
 
 
 class InferenceHostRepository(Protocol):
@@ -145,6 +152,45 @@ class CameraRepository(Protocol):
         self, *, page: int, page_size: int, station_id: UUID | None
     ) -> tuple[list[Camera], int]:
         """返回按最新优先的一页，可选按工位过滤。"""
+        ...
+
+
+class PointRepository(Protocol):
+    """`device_point`，保存授权输入/输出点位。"""
+
+    def add(self, point: Point) -> None:
+        """插入点位，同时由数据库唯一约束保护语义和物理身份。"""
+        ...
+
+    def save(self, point: Point, *, expected_revision: int) -> None:
+        """按乐观锁版本替换点位。"""
+        ...
+
+    def by_id(self, point_id: UUID) -> Point | None:
+        """按公开 UUID 读取点位。"""
+        ...
+
+    def remove(self, point_id: UUID, *, expected_revision: int) -> bool:
+        """按乐观锁版本删除点位。"""
+        ...
+
+    def any_for_station(self, station_id: UUID) -> bool:
+        """报告工位是否仍有点位。"""
+        ...
+
+    def any_for_connector(self, connector_id: UUID) -> bool:
+        """报告连接器是否仍有点位。"""
+        ...
+
+    def page_of(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        station_id: UUID | None,
+        connector_id: UUID | None,
+    ) -> tuple[list[Point], int]:
+        """按创建时间倒序列出点位，可按工位和连接器筛选。"""
         ...
 
 

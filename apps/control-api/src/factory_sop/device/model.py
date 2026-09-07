@@ -15,6 +15,8 @@ from enum import StrEnum
 from urllib.parse import urlsplit
 from uuid import UUID
 
+from nvsop_contracts import Capability
+
 
 class DeviceStatus(StrEnum):
     """Whether a configurable device still takes part in new bindings and operation.
@@ -264,6 +266,7 @@ class Connector:
     credentials_configured: bool
     reachability: ConnectorReachability
     health_detail: str | None
+    capability: Capability
     status: DeviceStatus
     revision: int
     created_by: UUID
@@ -274,3 +277,67 @@ class Connector:
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("connector name must not be empty")
+
+
+class PointDirection(StrEnum):
+    """授权点位的物理读写方向。"""
+
+    INPUT = "input"
+    OUTPUT = "output"
+
+
+@dataclass(frozen=True, slots=True)
+class Point:
+    """由工位和连接器共同定位、以语义标签供绑定引用的点位。"""
+
+    id: UUID
+    station_id: UUID
+    connector_id: UUID
+    direction: PointDirection
+    identifier: str
+    semantic_label: str
+    status: DeviceStatus
+    revision: int
+    created_by: UUID
+    updated_by: UUID
+    created_at: datetime
+    updated_at: datetime
+
+    def __post_init__(self) -> None:
+        if not self.identifier or len(self.identifier) > 128:
+            raise ValueError("point identifier must be between 1 and 128 characters")
+        if not self.semantic_label or len(self.semantic_label) > 128:
+            raise ValueError("point semantic label must be between 1 and 128 characters")
+
+
+class BindingReasonCode(StrEnum):
+    """绑定前校验返回的稳定原因码。"""
+
+    POINT_REQUIRED = "point_required"
+    POINT_NOT_FOUND = "point_not_found"
+    POINT_STATION_MISMATCH = "point_station_mismatch"
+    POINT_DEACTIVATED = "point_deactivated"
+    CONNECTOR_NOT_FOUND = "connector_not_found"
+    CONNECTOR_DEACTIVATED = "connector_deactivated"
+    WRONG_DIRECTION = "wrong_direction"
+    CAPABILITY_UNVERIFIED = "capability_unverified"
+    MAY_DROP_EDGES = "may_drop_edges"
+    NOT_SEQUENCED = "not_sequenced"
+    DELIVERY_TOO_SLOW = "delivery_too_slow"
+
+
+@dataclass(frozen=True, slots=True)
+class BindingReason:
+    """可直接展示给操作员的一项绑定拒绝。"""
+
+    code: BindingReasonCode
+    field: str
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class BindingValidation:
+    """绑定前校验的完整结果；校验本身不创建模板绑定。"""
+
+    accepted: bool
+    reasons: tuple[BindingReason, ...]

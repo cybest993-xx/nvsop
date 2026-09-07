@@ -24,10 +24,13 @@ from factory_sop.device.model import (
     DeviceStatus,
     InferenceBackend,
     InferenceHost,
+    Point,
+    PointDirection,
     Station,
 )
 from factory_sop.device.probing import ProbeReport
 from factory_sop.identifiers import new_id
+from nvsop_contracts import Capability, Unverified
 
 FAKE_ACTOR = new_id()
 FAKE_NOW = datetime(2026, 9, 5, 8, 0, tzinfo=UTC)
@@ -358,6 +361,7 @@ class FakeConnectors:
         connector_type: ConnectorType = ConnectorType.HIKVISION_ISAPI,
         configuration: dict[str, object] | None = None,
         status: DeviceStatus = DeviceStatus.ACTIVE,
+        capability: Capability | None = None,
         created_at: datetime = FAKE_NOW,
     ) -> Connector:
         connector = Connector(
@@ -372,6 +376,7 @@ class FakeConnectors:
             credentials_configured=False,
             reachability=ConnectorReachability.UNVERIFIED,
             health_detail=None,
+            capability=Unverified() if capability is None else capability,
             status=status,
             revision=1,
             created_by=FAKE_ACTOR,
@@ -437,6 +442,106 @@ class FakeConnectors:
         ordered = sorted(candidates, key=lambda item: (item.created_at, item.id), reverse=True)
         start = (page - 1) * page_size
         return ordered[start : start + page_size], len(ordered)
+
+
+@dataclass
+class FakePoints:
+    """`device_point` 的内存仓储适配器。"""
+
+    rows: dict[UUID, Point] = field(default_factory=dict)
+
+    def register(
+        self,
+        *,
+        station_id: UUID,
+        connector_id: UUID,
+        direction: PointDirection,
+        identifier: str,
+        semantic_label: str,
+        status: DeviceStatus = DeviceStatus.ACTIVE,
+        created_at: datetime = FAKE_NOW,
+    ) -> Point:
+        point = Point(
+            id=new_id(),
+            station_id=station_id,
+            connector_id=connector_id,
+            direction=direction,
+            identifier=identifier,
+            semantic_label=semantic_label,
+            status=status,
+            revision=1,
+            created_by=FAKE_ACTOR,
+            updated_by=FAKE_ACTOR,
+            created_at=created_at,
+            updated_at=created_at,
+        )
+        self.add(point)
+        return point
+
+    def add(self, point: Point) -> None:
+        self._require_unique(point)
+        self.rows[point.id] = point
+
+    def save(self, point: Point, *, expected_revision: int) -> None:
+        stored = self.rows.get(point.id)
+        if stored is None:
+            raise DeviceRefusedError(DeviceRefusalCode.POINT_NOT_FOUND)
+        if stored.revision != expected_revision:
+            raise DeviceRefusedError(DeviceRefusalCode.STALE_REVISION)
+        self._require_unique(point)
+        self.rows[point.id] = point
+
+    def by_id(self, point_id: UUID) -> Point | None:
+        return self.rows.get(point_id)
+
+    def remove(self, point_id: UUID, *, expected_revision: int) -> bool:
+        stored = self.rows.get(point_id)
+        if stored is None:
+            return False
+        if stored.revision != expected_revision:
+            raise DeviceRefusedError(DeviceRefusalCode.STALE_REVISION)
+        del self.rows[point_id]
+        return True
+
+    def any_for_station(self, station_id: UUID) -> bool:
+        return any(point.station_id == station_id for point in self.rows.values())
+
+    def any_for_connector(self, connector_id: UUID) -> bool:
+        return any(point.connector_id == connector_id for point in self.rows.values())
+
+    def page_of(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        station_id: UUID | None,
+        connector_id: UUID | None,
+    ) -> tuple[list[Point], int]:
+        candidates = [
+            point
+            for point in self.rows.values()
+            if (station_id is None or point.station_id == station_id)
+            and (connector_id is None or point.connector_id == connector_id)
+        ]
+        ordered = sorted(candidates, key=lambda item: (item.created_at, item.id), reverse=True)
+        start = (page - 1) * page_size
+        return ordered[start : start + page_size], len(ordered)
+
+    def _require_unique(self, point: Point) -> None:
+        for stored in self.rows.values():
+            if stored.id == point.id:
+                continue
+            if (stored.station_id, stored.semantic_label) == (
+                point.station_id,
+                point.semantic_label,
+            ):
+                raise DeviceRefusedError(DeviceRefusalCode.POINT_SEMANTIC_LABEL_TAKEN)
+            if (stored.connector_id, stored.direction, stored.identifier) == (
+                point.connector_id,
+                point.direction,
+                point.identifier,
+            ):
+                raise DeviceRefusedError(DeviceRefusalCode.POINT_IDENTITY_TAKEN)
 
 
 @dataclass

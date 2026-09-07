@@ -12,11 +12,17 @@ from device_fakes import (
     FakeConnectors,
     FakeInferenceHosts,
     FakeInferenceStations,
+    FakePoints,
 )
 
 from factory_sop.auth.api import Permission
 from factory_sop.device.errors import DeviceRefusalCode, DeviceRefusedError
-from factory_sop.device.model import ConnectorReachability, ConnectorType, DeviceStatus
+from factory_sop.device.model import (
+    ConnectorReachability,
+    ConnectorType,
+    DeviceStatus,
+    PointDirection,
+)
 from factory_sop.device.usecases.connectors import create_connector
 
 CALLER = caller_holding(
@@ -68,6 +74,7 @@ def test_connector_edit_status_delete_and_listing_use_the_read_revision() -> Non
     hosts = FakeInferenceHosts()
     connectors = FakeConnectors()
     cameras = FakeCameras()
+    points = FakePoints()
     station = stations.register(code="A-001", name="装配一号工位")
     host = hosts.register(name="推理机-1")
     connector = create_connector(
@@ -98,6 +105,7 @@ def test_connector_edit_status_delete_and_listing_use_the_read_revision() -> Non
         hosts=hosts,
         connectors=connectors,
         cameras=cameras,
+        points=points,
     )
     deactivated = set_connector_status(
         connector_id=edited.id,
@@ -131,6 +139,7 @@ def test_connector_edit_status_delete_and_listing_use_the_read_revision() -> Non
         expected_revision=restored.revision,
         caller=CALLER,
         connectors=connectors,
+        points=points,
     )
     assert connectors.by_id(restored.id) is None
 
@@ -279,3 +288,65 @@ def test_connector_cannot_cross_the_existing_station_host_topology() -> None:
         )
 
     assert refused.value.code is DeviceRefusalCode.CONNECTOR_STATION_HOST_CONFLICT
+
+
+def test_connector_with_points_cannot_move_station_or_be_deleted() -> None:
+    from factory_sop.device.usecases.connectors import delete_connector, edit_connector
+
+    stations = FakeInferenceStations()
+    hosts = FakeInferenceHosts()
+    connectors = FakeConnectors()
+    cameras = FakeCameras()
+    points = FakePoints()
+    station_a = stations.register(code="A-001", name="装配一号工位")
+    station_b = stations.register(code="B-001", name="装配二号工位")
+    host = hosts.register(name="推理机-1")
+    connector = create_connector(
+        station_id=station_a.id,
+        host_id=host.id,
+        name="一号连接器",
+        connector_type=ConnectorType.HIKVISION_ISAPI,
+        configuration={"address": "10.0.8.21"},
+        caller=CALLER,
+        now=FAKE_NOW,
+        stations=stations,
+        hosts=hosts,
+        connectors=connectors,
+        cameras=cameras,
+    )
+    points.register(
+        station_id=station_a.id,
+        connector_id=connector.id,
+        direction=PointDirection.INPUT,
+        identifier="DI-01",
+        semantic_label="工件到位",
+    )
+
+    with pytest.raises(DeviceRefusedError) as move_refused:
+        edit_connector(
+            connector_id=connector.id,
+            station_id=station_b.id,
+            host_id=host.id,
+            name=connector.name,
+            connector_type=connector.connector_type,
+            configuration=connector.configuration.to_wire(),
+            expected_revision=connector.revision,
+            caller=CALLER,
+            now=FAKE_NOW,
+            stations=stations,
+            hosts=hosts,
+            connectors=connectors,
+            cameras=cameras,
+            points=points,
+        )
+    with pytest.raises(DeviceRefusedError) as delete_refused:
+        delete_connector(
+            connector_id=connector.id,
+            expected_revision=connector.revision,
+            caller=CALLER,
+            connectors=connectors,
+            points=points,
+        )
+
+    assert move_refused.value.code is DeviceRefusalCode.CONNECTOR_HAS_POINTS
+    assert delete_refused.value.code is DeviceRefusalCode.CONNECTOR_HAS_POINTS

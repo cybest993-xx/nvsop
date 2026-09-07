@@ -9,9 +9,14 @@ from pydantic import BaseModel, Field, field_validator
 
 from factory_sop.auth.api import Authorized, Permission, needs
 from factory_sop.device.adapters import route_support
-from factory_sop.device.adapters.dependencies import cameras, connectors, stations
+from factory_sop.device.adapters.dependencies import cameras, connectors, points, stations
 from factory_sop.device.model import DeviceStatus, Station
-from factory_sop.device.repository import CameraRepository, ConnectorRepository, StationRepository
+from factory_sop.device.repository import (
+    CameraRepository,
+    ConnectorRepository,
+    PointRepository,
+    StationRepository,
+)
 from factory_sop.device.usecases.stations import (
     create_station,
     delete_station,
@@ -183,6 +188,7 @@ def delete_a_station(
     station_store: Annotated[StationRepository, Depends(stations)],
     camera_store: Annotated[CameraRepository, Depends(cameras)],
     connector_store: Annotated[ConnectorRepository, Depends(connectors)],
+    point_store: Annotated[PointRepository, Depends(points)],
     if_match: Annotated[int, Header(alias="If-Match")],
 ) -> Response:
     delete_station(
@@ -192,5 +198,6 @@ def delete_a_station(
         stations=station_store,
         cameras=camera_store,
         connectors=connector_store,
+        points=point_store,
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

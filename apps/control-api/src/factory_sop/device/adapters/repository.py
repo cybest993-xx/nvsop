@@ -19,10 +19,19 @@ from factory_sop.device.adapters.tables import (
     ConnectorRow,
     InferenceBackendRow,
     InferenceHostRow,
+    PointRow,
     StationRow,
 )
 from factory_sop.device.errors import DeviceRefusalCode, DeviceRefusedError
-from factory_sop.device.model import Camera, Connector, InferenceBackend, InferenceHost, Station
+from factory_sop.device.model import (
+    Camera,
+    Connector,
+    InferenceBackend,
+    InferenceHost,
+    Point,
+    Station,
+)
+from nvsop_contracts import capability_to_wire
 
 # What each unique-constraint violation means, named by the metadata convention
 # (factory_sop/persistence.py). The backend foreign key has two meanings depending on which
@@ -35,6 +44,8 @@ _CONSTRAINT_REFUSALS: dict[str, DeviceRefusalCode] = {
     "uq_device_station_code": DeviceRefusalCode.STATION_CODE_TAKEN,
     "uq_device_connector_station_id_name": DeviceRefusalCode.CONNECTOR_NAME_TAKEN,
     "ck_device_connector_configuration_safe": DeviceRefusalCode.CONNECTOR_CONFIGURATION_SECRET,
+    "uq_device_point_station_id_semantic_label": (DeviceRefusalCode.POINT_SEMANTIC_LABEL_TAKEN),
+    "uq_device_point_connector_id_direction_identifier": (DeviceRefusalCode.POINT_IDENTITY_TAKEN),
 }
 _HOST_FOREIGN_KEY = "fk_device_inference_backend_host_id_device_inference_host"
 _TRIGGERED_REFUSALS = {
@@ -48,6 +59,10 @@ _TRIGGERED_REFUSALS = {
     "device_connector_station_deactivated": DeviceRefusalCode.STATION_DEACTIVATED,
     "device_connector_host_deactivated": DeviceRefusalCode.INFERENCE_HOST_DEACTIVATED,
     "device_connector_station_host_conflict": DeviceRefusalCode.CONNECTOR_STATION_HOST_CONFLICT,
+    "device_connector_has_points": DeviceRefusalCode.CONNECTOR_HAS_POINTS,
+    "device_point_connector_station_mismatch": (DeviceRefusalCode.POINT_CONNECTOR_STATION_MISMATCH),
+    "device_point_connector_deactivated": DeviceRefusalCode.CONNECTOR_DEACTIVATED,
+    "device_point_station_deactivated": DeviceRefusalCode.STATION_DEACTIVATED,
 }
 
 
@@ -58,6 +73,8 @@ def _refuse_constraint_violation(
     foreign_key_to_station: DeviceRefusalCode | None = None,
     foreign_key_to_backend: DeviceRefusalCode | None = None,
     foreign_key_to_connector: DeviceRefusalCode | None = None,
+    point_station_refusal: DeviceRefusalCode | None = None,
+    point_connector_refusal: DeviceRefusalCode | None = None,
 ) -> NoReturn:
     """Translate a known constraint or trigger refusal, preserving unknown DB errors."""
     diagnostics = getattr(error.orig, "diag", None)
@@ -92,6 +109,14 @@ def _refuse_constraint_violation(
         if foreign_key_to_backend is None:
             raise error
         raise DeviceRefusedError(foreign_key_to_backend) from error
+    if constraint_name == "fk_device_point_station_id_device_station":
+        if point_station_refusal is None:
+            raise error
+        raise DeviceRefusedError(point_station_refusal) from error
+    if constraint_name == "fk_device_point_connector_id_device_connector":
+        if point_connector_refusal is None:
+            raise error
+        raise DeviceRefusedError(point_connector_refusal) from error
     refusal = _CONSTRAINT_REFUSALS.get(constraint_name or "")
     if refusal is None:
         raise error
@@ -358,6 +383,7 @@ class PostgresStationRepository:
                 error,
                 foreign_key_to_station=DeviceRefusalCode.STATION_HAS_CAMERAS,
                 foreign_key_to_connector=DeviceRefusalCode.STATION_HAS_CONNECTORS,
+                point_station_refusal=DeviceRefusalCode.STATION_HAS_POINTS,
             )
         if result.rowcount == 0:
             _refuse_lost_race(
@@ -483,6 +509,115 @@ class PostgresCameraRepository:
         return [row.to_domain() for row in rows], total
 
 
+class PostgresPointRepository:
+    """通过请求事务保存 device_point。"""
+
+    def __init__(self, session: DatabaseSession) -> None:
+        self._session = session
+
+    def add(self, point: Point) -> None:
+        self._session.add(PointRow.from_domain(point))
+        try:
+            self._session.flush()
+        except DatabaseError as error:
+            _refuse_constraint_violation(
+                error,
+                point_station_refusal=DeviceRefusalCode.STATION_NOT_FOUND,
+                point_connector_refusal=DeviceRefusalCode.CONNECTOR_NOT_FOUND,
+            )
+
+    def save(self, point: Point, *, expected_revision: int) -> None:
+        try:
+            result = cast(
+                "CursorResult[Any]",
+                self._session.execute(
+                    update(PointRow)
+                    .where(PointRow.id == point.id, PointRow.revision == expected_revision)
+                    .values(
+                        station_id=point.station_id,
+                        connector_id=point.connector_id,
+                        direction=point.direction,
+                        identifier=point.identifier,
+                        semantic_label=point.semantic_label,
+                        status=point.status,
+                        revision=point.revision,
+                        updated_by=point.updated_by,
+                        updated_at=point.updated_at,
+                    )
+                ),
+            )
+        except DatabaseError as error:
+            _refuse_constraint_violation(
+                error,
+                point_station_refusal=DeviceRefusalCode.STATION_NOT_FOUND,
+                point_connector_refusal=DeviceRefusalCode.CONNECTOR_NOT_FOUND,
+            )
+        if result.rowcount == 0:
+            _refuse_lost_race(
+                missing_refusal=DeviceRefusalCode.POINT_NOT_FOUND,
+                present_refusal=DeviceRefusalCode.STALE_REVISION,
+                row=self._session.scalar(
+                    select(PointRow)
+                    .where(PointRow.id == point.id)
+                    .execution_options(populate_existing=True)
+                ),
+            )
+
+    def by_id(self, point_id: UUID) -> Point | None:
+        row = self._session.get(PointRow, point_id)
+        return row.to_domain() if row is not None else None
+
+    def remove(self, point_id: UUID, *, expected_revision: int) -> bool:
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                delete(PointRow).where(
+                    PointRow.id == point_id,
+                    PointRow.revision == expected_revision,
+                )
+            ),
+        )
+        if result.rowcount == 0:
+            _refuse_lost_race(
+                missing_refusal=DeviceRefusalCode.POINT_NOT_FOUND,
+                present_refusal=DeviceRefusalCode.STALE_REVISION,
+                row=self._session.get(PointRow, point_id),
+            )
+        return True
+
+    def any_for_station(self, station_id: UUID) -> bool:
+        return bool(self._session.scalar(select(exists().where(PointRow.station_id == station_id))))
+
+    def any_for_connector(self, connector_id: UUID) -> bool:
+        return bool(
+            self._session.scalar(select(exists().where(PointRow.connector_id == connector_id)))
+        )
+
+    def page_of(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        station_id: UUID | None,
+        connector_id: UUID | None,
+    ) -> tuple[list[Point], int]:
+        count = select(func.count()).select_from(PointRow)
+        listing = select(PointRow)
+        if station_id is not None:
+            count = count.where(PointRow.station_id == station_id)
+            listing = listing.where(PointRow.station_id == station_id)
+        if connector_id is not None:
+            count = count.where(PointRow.connector_id == connector_id)
+            listing = listing.where(PointRow.connector_id == connector_id)
+        total = cast("int", self._session.scalar(count))
+        rows = self._session.scalars(
+            listing.order_by(PointRow.created_at.desc(), PointRow.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        ).all()
+        return [row.to_domain() for row in rows], total
+
+
 class PostgresConnectorRepository:
     """`device_connector` through the request's session."""
 
@@ -519,6 +654,7 @@ class PostgresConnectorRepository:
                         credentials_configured=connector.credentials_configured,
                         reachability=connector.reachability,
                         health_detail=connector.health_detail,
+                        capability=capability_to_wire(connector.capability),
                         status=connector.status,
                         revision=connector.revision,
                         updated_by=connector.updated_by,
@@ -544,15 +680,21 @@ class PostgresConnectorRepository:
         return row.to_domain() if row is not None else None
 
     def remove(self, connector_id: UUID, *, expected_revision: int) -> bool:
-        result = cast(
-            "CursorResult[Any]",
-            self._session.execute(
-                delete(ConnectorRow).where(
-                    ConnectorRow.id == connector_id,
-                    ConnectorRow.revision == expected_revision,
-                )
-            ),
-        )
+        try:
+            result = cast(
+                "CursorResult[Any]",
+                self._session.execute(
+                    delete(ConnectorRow).where(
+                        ConnectorRow.id == connector_id,
+                        ConnectorRow.revision == expected_revision,
+                    )
+                ),
+            )
+        except DatabaseError as error:
+            _refuse_constraint_violation(
+                error,
+                point_connector_refusal=DeviceRefusalCode.CONNECTOR_HAS_POINTS,
+            )
         if result.rowcount == 0:
             _refuse_lost_race(
                 missing_refusal=DeviceRefusalCode.CONNECTOR_NOT_FOUND,
@@ -598,7 +740,15 @@ def _refuse_lost_race(
     *,
     missing_refusal: DeviceRefusalCode,
     present_refusal: DeviceRefusalCode,
-    row: InferenceHostRow | InferenceBackendRow | StationRow | CameraRow | ConnectorRow | None,
+    row: (
+        InferenceHostRow
+        | InferenceBackendRow
+        | StationRow
+        | CameraRow
+        | ConnectorRow
+        | PointRow
+        | None
+    ),
 ) -> NoReturn:
     """Say which way the conditional update lost: the row moved, or the row is gone."""
     if row is None:

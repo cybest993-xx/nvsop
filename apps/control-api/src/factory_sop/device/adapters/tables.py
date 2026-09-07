@@ -45,9 +45,12 @@ from factory_sop.device.model import (
     DeviceStatus,
     InferenceBackend,
     InferenceHost,
+    Point,
+    PointDirection,
     Station,
 )
 from factory_sop.persistence import Table
+from nvsop_contracts import capability_from_wire, capability_to_wire
 
 
 # One PostgreSQL enum type, carried by both tables: 停用 means the same thing for every
@@ -350,6 +353,7 @@ class ConnectorRow(Table):
         )
     )
     health_detail: Mapped[str | None] = mapped_column(String(255))
+    capability: Mapped[dict[str, object]] = mapped_column(JSONB())
     status: Mapped[DeviceStatus] = mapped_column(_status_enum(create_type=False))
     revision: Mapped[int] = mapped_column(Integer())
     created_by: Mapped[UUID] = mapped_column(Uuid())
@@ -368,6 +372,7 @@ class ConnectorRow(Table):
             credentials_configured=self.credentials_configured,
             reachability=self.reachability,
             health_detail=self.health_detail,
+            capability=capability_from_wire(self.capability),
             status=self.status,
             revision=self.revision,
             created_by=self.created_by,
@@ -388,10 +393,84 @@ class ConnectorRow(Table):
             credentials_configured=connector.credentials_configured,
             reachability=connector.reachability,
             health_detail=connector.health_detail,
+            capability=capability_to_wire(connector.capability),
             status=connector.status,
             revision=connector.revision,
             created_by=connector.created_by,
             updated_by=connector.updated_by,
             created_at=connector.created_at,
             updated_at=connector.updated_at,
+        )
+
+
+class PointRow(Table):
+    """一个授权输入或输出点位。"""
+
+    __tablename__ = "device_point"
+    __table_args__ = (
+        UniqueConstraint(
+            "station_id",
+            "semantic_label",
+            name="uq_device_point_station_id_semantic_label",
+        ),
+        UniqueConstraint(
+            "connector_id",
+            "direction",
+            "identifier",
+            name="uq_device_point_connector_id_direction_identifier",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
+    station_id: Mapped[UUID] = mapped_column(Uuid(), ForeignKey("device_station.id"), index=True)
+    connector_id: Mapped[UUID] = mapped_column(
+        Uuid(), ForeignKey("device_connector.id"), index=True
+    )
+    direction: Mapped[PointDirection] = mapped_column(
+        Enum(
+            PointDirection,
+            name="device_point_direction",
+            values_callable=lambda enum: [member.value for member in enum],
+        )
+    )
+    identifier: Mapped[str] = mapped_column(String(128))
+    semantic_label: Mapped[str] = mapped_column(String(128))
+    status: Mapped[DeviceStatus] = mapped_column(_status_enum(create_type=False))
+    revision: Mapped[int] = mapped_column(Integer())
+    created_by: Mapped[UUID] = mapped_column(Uuid())
+    updated_by: Mapped[UUID] = mapped_column(Uuid())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    def to_domain(self) -> Point:
+        return Point(
+            id=self.id,
+            station_id=self.station_id,
+            connector_id=self.connector_id,
+            direction=self.direction,
+            identifier=self.identifier,
+            semantic_label=self.semantic_label,
+            status=self.status,
+            revision=self.revision,
+            created_by=self.created_by,
+            updated_by=self.updated_by,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+        )
+
+    @classmethod
+    def from_domain(cls, point: Point) -> PointRow:
+        return cls(
+            id=point.id,
+            station_id=point.station_id,
+            connector_id=point.connector_id,
+            direction=point.direction,
+            identifier=point.identifier,
+            semantic_label=point.semantic_label,
+            status=point.status,
+            revision=point.revision,
+            created_by=point.created_by,
+            updated_by=point.updated_by,
+            created_at=point.created_at,
+            updated_at=point.updated_at,
         )

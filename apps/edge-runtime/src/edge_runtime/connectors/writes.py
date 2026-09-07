@@ -21,7 +21,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from edge_runtime.connectors.capability import Unverified
+from nvsop_contracts import PointRole, Unfitness, unfit_for
+
 from edge_runtime.connectors.port import (
     Connector,
     OutputPoint,
@@ -33,10 +34,7 @@ from edge_runtime.connectors.port import (
 )
 
 UNVERIFIED_DETAIL = "连接器能力声明未验证。不驱动物理执行器"
-"""Why the write was refused, in the operator's language.
-
-§5.21 requires the conservative reading rather than the optimistic one: 保守拒绝。不乐观放行.
-"""
+TOO_SLOW_DETAIL = "连接器最大投递延迟超出安全输出预算。不驱动物理执行器"
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +55,9 @@ class WriteRequest:
     timeout: float
     """How long to wait for the device. Required rather than defaulted: a time literal on the
     physical-control path is what §5.19 forbids, so it arrives from configuration."""
+
+    capability_budget: float
+    """安全输出允许连接器投递消耗的时长;由已验证绑定传入,无默认值。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,14 +143,27 @@ class OutputDispatcher:
         if held is not None and not _replayable(held):
             return self._note(request, held, replayed=True)
 
-        if isinstance(self._connector.capability, Unverified):
-            # Nothing is sent and nothing is recorded: the action did not happen, so a retry
-            # once the capability has been measured must be free to proceed (§5.21).
-            return self._note(
-                request,
-                Refused(reason=WriteRefusal.CAPABILITY_UNVERIFIED, detail=UNVERIFIED_DETAIL),
-                replayed=False,
-            )
+        unfitness = unfit_for(
+            self._connector.capability,
+            role=PointRole.SAFETY_OUTPUT,
+            budget=request.capability_budget,
+        )
+        if unfitness:
+            match unfitness[0]:
+                case Unfitness.CAPABILITY_UNVERIFIED:
+                    refusal = Refused(
+                        reason=WriteRefusal.CAPABILITY_UNVERIFIED,
+                        detail=UNVERIFIED_DETAIL,
+                    )
+                case Unfitness.DELIVERY_TOO_SLOW:
+                    refusal = Refused(
+                        reason=WriteRefusal.DELIVERY_TOO_SLOW,
+                        detail=TOO_SLOW_DETAIL,
+                    )
+                case Unfitness.MAY_DROP_EDGES | Unfitness.NOT_SEQUENCED:
+                    raise AssertionError("安全输出规则不读取输入边沿或到达顺序")
+            # 没有请求发往设备,因此不占用幂等键,修正能力后仍可重试。
+            return self._note(request, refusal, replayed=False)
 
         outcome = self._connector.write(request.point, request.state, timeout=request.timeout)
         self._ledger.record(request.key, outcome)

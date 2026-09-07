@@ -20,7 +20,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
-from edge_runtime.connectors.capability import Capability
+from nvsop_contracts import Capability
+
 from edge_runtime.judgment.model import HostInstant
 from edge_runtime.supervisor.inputs import TimeAlignment
 
@@ -125,6 +126,9 @@ class WriteRefusal(Enum):
     CAPABILITY_UNVERIFIED = "capability_unverified"
     """§5.21: 未验证能力…保守拒绝. Driving an interlock through a connector nobody has
     measured is the one place optimism is least affordable."""
+
+    DELIVERY_TOO_SLOW = "delivery_too_slow"
+    """连接器的实测最大延迟超出安全输出角色的调用方预算。"""
 
     POINT_UNREACHABLE = "point_unreachable"
 

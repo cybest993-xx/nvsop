@@ -12,8 +12,8 @@ from __future__ import annotations
 import unittest
 
 from harness import measured_capability
+from nvsop_contracts import Capability, Unverified
 
-from edge_runtime.connectors.capability import Capability, Unverified
 from edge_runtime.connectors.port import (
     ConnectorHealth,
     Failed,
@@ -44,7 +44,12 @@ ACCEPTED = Written(at=HostInstant(10.0))
 
 def request(key: str = "disposal-7", *, state: PointState = PointState.ACTIVE) -> WriteRequest:
     return WriteRequest(
-        point=INTERLOCK, state=state, key=key, actor="supervisor:station-3", timeout=2.0
+        point=INTERLOCK,
+        state=state,
+        key=key,
+        actor="supervisor:station-3",
+        timeout=2.0,
+        capability_budget=0.2,
     )
 
 
@@ -185,6 +190,21 @@ class AnUnverifiedConnectorIsNotDrivenTest(unittest.TestCase):
             "nothing was attempted against the device, so a later retry — after the "
             "capability was measured — must be free to proceed",
         )
+
+
+class ASlowConnectorIsNotUsedForSafetyOutputTest(unittest.TestCase):
+    def test_the_shared_capability_rule_refuses_before_the_device_is_touched(self) -> None:
+        connector = RecordingConnector(capability=measured_capability(max_delivery_delay=0.21))
+        dispatch, _, _ = dispatcher(connector)
+
+        self.assertEqual(
+            Refused(
+                reason=WriteRefusal.DELIVERY_TOO_SLOW,
+                detail="连接器最大投递延迟超出安全输出预算。不驱动物理执行器",
+            ),
+            dispatch.write(request()),
+        )
+        self.assertEqual([], connector.writes)
 
 
 class TheAdaptersOwnRefusalIsPassedThroughTest(unittest.TestCase):

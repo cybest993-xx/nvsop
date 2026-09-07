@@ -221,6 +221,30 @@ class RepositoryPolicyTest(unittest.TestCase):
             errors,
         )
 
+    def test_accepts_the_approved_standard_library_contract_inside_edge_runtime(self) -> None:
+        contract = self.write(
+            "packages/contracts/src/nvsop_contracts/capability.py",
+            "from dataclasses import dataclass\n",
+        )
+        module = self.write(
+            "apps/edge-runtime/src/edge_runtime/connectors/port.py",
+            "from nvsop_contracts import Capability\n",
+        )
+        self.assertEqual([], self.check(str(contract), str(module)))
+
+    def test_rejects_third_party_import_inside_shared_contracts(self) -> None:
+        contract = self.write(
+            "packages/contracts/src/nvsop_contracts/capability.py",
+            "import pydantic\n",
+        )
+        errors = self.check(str(contract))
+        self.assertIn(
+            "packages/contracts/src/nvsop_contracts/capability.py imports pydantic, which is "
+            "not in the standard library; shared contracts imported by the inference host "
+            "must stay standard-library-only",
+            errors,
+        )
+
     def test_rejects_center_module_with_no_import_linter_contract(self) -> None:
         # A module that no contract names is a module whose boundary is unenforced. The
         # contract lands in the same change as the module, or the gate fails.

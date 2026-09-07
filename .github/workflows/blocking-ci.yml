@@ -186,7 +186,7 @@ jobs:
             exit 0
           fi
           changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
-            | grep -E '^(apps/control-api/|tests/system/|Makefile$|uv\.lock$|pyproject\.toml$|\.github/workflows/)' || true)
+            | grep -E '^(apps/control-api/|packages/contracts/|tests/system/|Makefile$|uv\.lock$|pyproject\.toml$|\.github/workflows/)' || true)
           if [ -n "$changed" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else

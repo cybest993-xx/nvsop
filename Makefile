@@ -1,12 +1,15 @@
 .PHONY: check check-integration change-size hooks lockfile sync policy policy-test migrations contract-base \
-	contracts openapi-export openapi-compat openapi-generate boundaries secret-scan \
-	center-format center-lint center-type center-unit center-integration center-system \
-	edge-format edge-lint edge-type edge-unit edge-integration \
+	contract-capability \
+	contracts contracts-python-check contracts-python-format contracts-python-lint \
+	contracts-python-type contracts-python-unit openapi-export openapi-compat openapi-generate \
+	boundaries secret-scan center-format center-lint center-type center-unit center-integration \
+	center-system edge-format edge-lint edge-type edge-unit edge-integration \
 	web-install web-format web-lint web-type web-unit web-e2e web-build
 
 # The CPU-only, Docker-free merge gate (harness §6). CI calls this exact target.
-check: lockfile sync hooks policy-test policy migrations contract-base boundaries secret-scan \
-	center-format center-lint center-type center-unit \
+check: lockfile sync hooks policy-test policy migrations contract-base contract-capability \
+	contracts-python-check \
+	boundaries secret-scan center-format center-lint center-type center-unit \
 	edge-format edge-lint edge-type edge-unit edge-integration \
 	contracts web-format web-lint web-type web-unit web-build
 
@@ -39,7 +42,8 @@ VENV := $(CURDIR)/.venv/bin
 RUFF := $(VENV)/ruff
 MYPY := $(VENV)/mypy
 PYTEST := $(VENV)/pytest
-OPENAPI := packages/contracts/openapi.json
+CONTRACT_PY := packages/contracts
+OPENAPI := $(CONTRACT_PY)/openapi.json
 OPENAPI_BASE_REF ?= origin/main
 
 # Canonical generated-contract command (harness §8): export from FastAPI, reject breaking
@@ -71,8 +75,29 @@ migrations:
 contract-base:
 	python3 -m unittest discover -s tests/contract/base -p 'test_*.py'
 
+contract-capability:
+	PYTHONPATH=$(CONTRACT_PY)/src:apps/edge-runtime/src:apps/control-api/src $(VENV)/python \
+		-m unittest discover -s tests/contract/capability -p 'test_*.py'
+
+contracts-python-check: contracts-python-format contracts-python-lint contracts-python-type \
+	contracts-python-unit
+
+contracts-python-format:
+	$(RUFF) format --check --target-version py311 $(CONTRACT_PY)/src $(CONTRACT_PY)/tests
+
+contracts-python-lint:
+	$(RUFF) check --target-version py311 $(CONTRACT_PY)/src $(CONTRACT_PY)/tests
+
+contracts-python-type:
+	MYPYPATH=$(CONTRACT_PY)/src $(MYPY) --python-version 3.11 --strict \
+		$(CONTRACT_PY)/src $(CONTRACT_PY)/tests
+
+contracts-python-unit:
+	PYTHONPATH=$(CONTRACT_PY)/src python3 -m unittest discover \
+		-s $(CONTRACT_PY)/tests/unit -t $(CONTRACT_PY)/tests/unit -p 'test_*.py'
+
 boundaries:
-	PYTHONPATH=apps/control-api/src:apps/edge-runtime/src $(VENV)/lint-imports
+	PYTHONPATH=apps/control-api/src:apps/edge-runtime/src:$(CONTRACT_PY)/src $(VENV)/lint-imports
 
 # `vendor/` is excluded because the policy check already reads its templates by value. The
 # two lockfiles contain package integrity hashes, and the exported OpenAPI document is generated
@@ -112,13 +137,15 @@ edge-lint:
 	cd $(EDGE) && $(RUFF) check src tests
 
 edge-type:
-	cd $(EDGE) && $(MYPY) --strict src tests
+	cd $(EDGE) && MYPYPATH=$(CURDIR)/$(CONTRACT_PY)/src $(MYPY) --strict src tests
 
 edge-unit:
-	cd $(EDGE) && PYTHONPATH=src python3 -m unittest discover -s tests/unit -t tests/unit -p 'test_*.py'
+	cd $(EDGE) && PYTHONPATH=$(CURDIR)/$(CONTRACT_PY)/src:src python3 -m unittest \
+		discover -s tests/unit -t tests/unit -p 'test_*.py'
 
 edge-integration:
-	cd $(EDGE) && PYTHONPATH=src python3 -m unittest discover -s tests/integration -t tests/integration -p 'test_*.py'
+	cd $(EDGE) && PYTHONPATH=$(CURDIR)/$(CONTRACT_PY)/src:src python3 -m unittest \
+		discover -s tests/integration -t tests/integration -p 'test_*.py'
 
 WEB := apps/control-web
 

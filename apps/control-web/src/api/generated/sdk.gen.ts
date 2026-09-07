@@ -15,6 +15,9 @@ import type {
   CreateInferenceHostData,
   CreateInferenceHostErrors,
   CreateInferenceHostResponses,
+  CreatePointData,
+  CreatePointErrors,
+  CreatePointResponses,
   CreateRoleData,
   CreateRoleErrors,
   CreateRoleResponses,
@@ -36,6 +39,9 @@ import type {
   DeleteInferenceHostData,
   DeleteInferenceHostErrors,
   DeleteInferenceHostResponses,
+  DeletePointData,
+  DeletePointErrors,
+  DeletePointResponses,
   DeleteRoleData,
   DeleteRoleErrors,
   DeleteRoleResponses,
@@ -57,6 +63,9 @@ import type {
   EditInferenceHostData,
   EditInferenceHostErrors,
   EditInferenceHostResponses,
+  EditPointData,
+  EditPointErrors,
+  EditPointResponses,
   EditRoleData,
   EditRoleErrors,
   EditRoleResponses,
@@ -84,6 +93,9 @@ import type {
   ListPermissionsData,
   ListPermissionsErrors,
   ListPermissionsResponses,
+  ListPointsData,
+  ListPointsErrors,
+  ListPointsResponses,
   ListRolesData,
   ListRolesErrors,
   ListRolesResponses,
@@ -111,6 +123,9 @@ import type {
   ReadLivenessData,
   ReadLivenessErrors,
   ReadLivenessResponses,
+  ReadPointData,
+  ReadPointErrors,
+  ReadPointResponses,
   ReadSessionData,
   ReadSessionErrors,
   ReadSessionResponses,
@@ -132,6 +147,9 @@ import type {
   SetInferenceHostStatusData,
   SetInferenceHostStatusErrors,
   SetInferenceHostStatusResponses,
+  SetPointStatusData,
+  SetPointStatusErrors,
+  SetPointStatusResponses,
   SetStationStatusData,
   SetStationStatusErrors,
   SetStationStatusResponses,
@@ -144,6 +162,12 @@ import type {
   TestInferenceBackendConnectionData,
   TestInferenceBackendConnectionErrors,
   TestInferenceBackendConnectionResponses,
+  UpdateConnectorCapabilityData,
+  UpdateConnectorCapabilityErrors,
+  UpdateConnectorCapabilityResponses,
+  ValidatePointBindingData,
+  ValidatePointBindingErrors,
+  ValidatePointBindingResponses,
 } from './types.gen'
 
 export type Options<
@@ -571,6 +595,29 @@ export const editConnector = <ThrowOnError extends boolean = false>(
   })
 
 /**
+ * Update The Connector Capability
+ */
+export const updateConnectorCapability = <ThrowOnError extends boolean = false>(
+  options: Options<UpdateConnectorCapabilityData, ThrowOnError>,
+): RequestResult<
+  UpdateConnectorCapabilityResponses,
+  UpdateConnectorCapabilityErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).put<
+    UpdateConnectorCapabilityResponses,
+    UpdateConnectorCapabilityErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/connectors/{connector_id}/capability',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
  * Set The Connector Status
  */
 export const setConnectorStatus = <ThrowOnError extends boolean = false>(
@@ -841,6 +888,105 @@ export const readLiveness = <ThrowOnError extends boolean = false>(
   (options?.client ?? client).get<ReadLivenessResponses, ReadLivenessErrors, ThrowOnError>({
     url: '/api/v1/liveness',
     ...options,
+  })
+
+/**
+ * Validate A Point Binding
+ *
+ * 只校验绑定候选，不创建或修改模板绑定。
+ */
+export const validatePointBinding = <ThrowOnError extends boolean = false>(
+  options: Options<ValidatePointBindingData, ThrowOnError>,
+): RequestResult<ValidatePointBindingResponses, ValidatePointBindingErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    ValidatePointBindingResponses,
+    ValidatePointBindingErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/point-binding-validations',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * List The Points
+ */
+export const listPoints = <ThrowOnError extends boolean = false>(
+  options?: Options<ListPointsData, ThrowOnError>,
+): RequestResult<ListPointsResponses, ListPointsErrors, ThrowOnError> =>
+  (options?.client ?? client).get<ListPointsResponses, ListPointsErrors, ThrowOnError>({
+    url: '/api/v1/points',
+    ...options,
+  })
+
+/**
+ * Create A Point
+ */
+export const createPoint = <ThrowOnError extends boolean = false>(
+  options: Options<CreatePointData, ThrowOnError>,
+): RequestResult<CreatePointResponses, CreatePointErrors, ThrowOnError> =>
+  (options.client ?? client).post<CreatePointResponses, CreatePointErrors, ThrowOnError>({
+    url: '/api/v1/points',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Delete A Point
+ */
+export const deletePoint = <ThrowOnError extends boolean = false>(
+  options: Options<DeletePointData, ThrowOnError>,
+): RequestResult<DeletePointResponses, DeletePointErrors, ThrowOnError> =>
+  (options.client ?? client).delete<DeletePointResponses, DeletePointErrors, ThrowOnError>({
+    url: '/api/v1/points/{point_id}',
+    ...options,
+  })
+
+/**
+ * Read A Point
+ */
+export const readPoint = <ThrowOnError extends boolean = false>(
+  options: Options<ReadPointData, ThrowOnError>,
+): RequestResult<ReadPointResponses, ReadPointErrors, ThrowOnError> =>
+  (options.client ?? client).get<ReadPointResponses, ReadPointErrors, ThrowOnError>({
+    url: '/api/v1/points/{point_id}',
+    ...options,
+  })
+
+/**
+ * Edit A Point
+ */
+export const editPoint = <ThrowOnError extends boolean = false>(
+  options: Options<EditPointData, ThrowOnError>,
+): RequestResult<EditPointResponses, EditPointErrors, ThrowOnError> =>
+  (options.client ?? client).patch<EditPointResponses, EditPointErrors, ThrowOnError>({
+    url: '/api/v1/points/{point_id}',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Set The Point Status
+ */
+export const setPointStatus = <ThrowOnError extends boolean = false>(
+  options: Options<SetPointStatusData, ThrowOnError>,
+): RequestResult<SetPointStatusResponses, SetPointStatusErrors, ThrowOnError> =>
+  (options.client ?? client).put<SetPointStatusResponses, SetPointStatusErrors, ThrowOnError>({
+    url: '/api/v1/points/{point_id}/status',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
   })
 
 /**

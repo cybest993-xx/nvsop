@@ -11,11 +11,12 @@ from device_fakes import (
     FakeInferenceBackends,
     FakeInferenceHosts,
     FakeInferenceStations,
+    FakePoints,
 )
 
 from factory_sop.auth.api import Permission
 from factory_sop.device.errors import DeviceRefusalCode, DeviceRefusedError
-from factory_sop.device.model import Connector, ConnectorType
+from factory_sop.device.model import Connector, ConnectorType, PointDirection
 from factory_sop.device.usecases.connectors import create_connector
 from factory_sop.device.usecases.hosts import delete_host
 from factory_sop.device.usecases.stations import delete_station
@@ -49,6 +50,14 @@ def test_parent_deletes_are_guarded_by_the_connector_repository_seam() -> None:
         connectors=connectors,
         cameras=cameras,
     )
+    points = FakePoints()
+    points.register(
+        station_id=station.id,
+        connector_id=connector.id,
+        direction=PointDirection.INPUT,
+        identifier="DI-01",
+        semantic_label="工件到位",
+    )
 
     with pytest.raises(DeviceRefusedError) as station_refused:
         delete_station(
@@ -58,6 +67,7 @@ def test_parent_deletes_are_guarded_by_the_connector_repository_seam() -> None:
             stations=stations,
             cameras=FakeCameras(),
             connectors=connectors,
+            points=points,
         )
     with pytest.raises(DeviceRefusedError) as host_refused:
         delete_host(
@@ -69,6 +79,6 @@ def test_parent_deletes_are_guarded_by_the_connector_repository_seam() -> None:
             connectors=connectors,
         )
 
-    assert station_refused.value.code is DeviceRefusalCode.STATION_HAS_CONNECTORS
+    assert station_refused.value.code is DeviceRefusalCode.STATION_HAS_POINTS
     assert host_refused.value.code is DeviceRefusalCode.INFERENCE_HOST_HAS_CONNECTORS
     assert connectors.by_id(connector.id) is not None

@@ -33,7 +33,14 @@ class DeviceRefusalCode(StrEnum):
     CAMERA_STATION_TEMPLATE_CONFLICT = "CAMERA_STATION_TEMPLATE_CONFLICT"
     CONNECTOR_NOT_FOUND = "CONNECTOR_NOT_FOUND"
     CONNECTOR_NAME_TAKEN = "CONNECTOR_NAME_TAKEN"
+    CONNECTOR_DEACTIVATED = "CONNECTOR_DEACTIVATED"
     CONNECTOR_STATION_HOST_CONFLICT = "CONNECTOR_STATION_HOST_CONFLICT"
+    CONNECTOR_HAS_POINTS = "CONNECTOR_HAS_POINTS"
+    POINT_NOT_FOUND = "POINT_NOT_FOUND"
+    POINT_SEMANTIC_LABEL_TAKEN = "POINT_SEMANTIC_LABEL_TAKEN"
+    POINT_IDENTITY_TAKEN = "POINT_IDENTITY_TAKEN"
+    POINT_CONNECTOR_STATION_MISMATCH = "POINT_CONNECTOR_STATION_MISMATCH"
+    STATION_HAS_POINTS = "STATION_HAS_POINTS"
     # 仅错误码标识。
     CONNECTOR_CONFIGURATION_SECRET = "CONNECTOR_CONFIGURATION_SECRET"  # pragma: allowlist secret
     STATION_HAS_CONNECTORS = "STATION_HAS_CONNECTORS"
@@ -65,6 +72,15 @@ _DEFAULT_FIELD_ERRORS: dict[DeviceRefusalCode, tuple[DeviceFieldError, ...]] = {
     ),
     DeviceRefusalCode.CONNECTOR_CONFIGURATION_SECRET: (
         DeviceFieldError("configuration", "中心不接收连接器凭据，请在推理机本地录入"),
+    ),
+    DeviceRefusalCode.POINT_SEMANTIC_LABEL_TAKEN: (
+        DeviceFieldError("semantic_label", "同一工位内语义标签必须唯一"),
+    ),
+    DeviceRefusalCode.POINT_IDENTITY_TAKEN: (
+        DeviceFieldError("identifier", "同一连接器、方向和编号必须唯一"),
+    ),
+    DeviceRefusalCode.POINT_CONNECTOR_STATION_MISMATCH: (
+        DeviceFieldError("connector_id", "连接器必须属于所选工位"),
     ),
 }
 
@@ -124,8 +140,22 @@ def refusal_problem(code: DeviceRefusalCode) -> tuple[int, str]:
             return 404, "连接器不存在"
         case DeviceRefusalCode.CONNECTOR_NAME_TAKEN:
             return 409, "该工位已存在同名连接器"
+        case DeviceRefusalCode.CONNECTOR_DEACTIVATED:
+            return 409, "连接器已停用，恢复后才能继续"
         case DeviceRefusalCode.CONNECTOR_STATION_HOST_CONFLICT:
             return 409, "连接器所在推理机与工位拓扑不一致"
+        case DeviceRefusalCode.CONNECTOR_HAS_POINTS:
+            return 409, "该连接器仍有关联点位"
+        case DeviceRefusalCode.POINT_NOT_FOUND:
+            return 404, "点位不存在"
+        case DeviceRefusalCode.POINT_SEMANTIC_LABEL_TAKEN:
+            return 409, "该工位已使用此点位语义标签"
+        case DeviceRefusalCode.POINT_IDENTITY_TAKEN:
+            return 409, "该连接器方向已使用此点位编号"
+        case DeviceRefusalCode.POINT_CONNECTOR_STATION_MISMATCH:
+            return 409, "点位连接器不属于所选工位"
+        case DeviceRefusalCode.STATION_HAS_POINTS:
+            return 409, "该工位仍有关联点位"
         case DeviceRefusalCode.CONNECTOR_CONFIGURATION_SECRET:
             return 422, "连接器配置不能包含凭据"
         case DeviceRefusalCode.STATION_HAS_CONNECTORS:

@@ -21,8 +21,8 @@ from __future__ import annotations
 import unittest
 
 from harness import measured_capability
+from nvsop_contracts import Capability, Unverified
 
-from edge_runtime.connectors.capability import Capability, Unverified
 from edge_runtime.connectors.hikvision import (
     CANDIDATE_PROFILE,
     Exchange,

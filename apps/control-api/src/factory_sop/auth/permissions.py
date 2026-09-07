@@ -72,6 +72,9 @@ class Permission(StrEnum):
     CONNECTOR_VIEW = "device.connector.view"
     CONNECTOR_EDIT = "device.connector.edit"
     CONNECTOR_DELETE = "device.connector.delete"
+    POINT_VIEW = "device.point.view"
+    POINT_EDIT = "device.point.edit"
+    POINT_DELETE = "device.point.delete"
 
 
 class UnregisteredPermissionError(Exception):

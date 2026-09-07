@@ -39,7 +39,14 @@ export type ApiErrorCode =
   | 'CAMERA_STATION_TEMPLATE_CONFLICT'
   | 'CONNECTOR_NOT_FOUND'
   | 'CONNECTOR_NAME_TAKEN'
+  | 'CONNECTOR_DEACTIVATED'
   | 'CONNECTOR_STATION_HOST_CONFLICT'
+  | 'CONNECTOR_HAS_POINTS'
+  | 'POINT_NOT_FOUND'
+  | 'POINT_SEMANTIC_LABEL_TAKEN'
+  | 'POINT_IDENTITY_TAKEN'
+  | 'POINT_CONNECTOR_STATION_MISMATCH'
+  | 'STATION_HAS_POINTS'
   | 'CONNECTOR_CONFIGURATION_SECRET'
   | 'STATION_HAS_CONNECTORS'
   | 'INFERENCE_HOST_HAS_CONNECTORS'
@@ -84,6 +91,78 @@ export type BackendPlacement = {
  */
 export type BackendStatus = {
   status: DeviceStatus
+}
+
+/**
+ * BindingReasonCode
+ *
+ * 绑定前校验返回的稳定原因码。
+ */
+export type BindingReasonCode =
+  | 'point_required'
+  | 'point_not_found'
+  | 'point_station_mismatch'
+  | 'point_deactivated'
+  | 'connector_not_found'
+  | 'connector_deactivated'
+  | 'wrong_direction'
+  | 'capability_unverified'
+  | 'may_drop_edges'
+  | 'not_sequenced'
+  | 'delivery_too_slow'
+
+/**
+ * BindingReasonView
+ *
+ * 一项可直接展示给操作者的绑定拒绝原因。
+ */
+export type BindingReasonView = {
+  code: BindingReasonCode
+  /**
+   * Field
+   */
+  field: string
+  /**
+   * Message
+   */
+  message: string
+}
+
+/**
+ * BindingValidationRequest
+ *
+ * 绑定预检所需的工位、点位角色和结果预算。
+ */
+export type BindingValidationRequest = {
+  /**
+   * Budget Seconds
+   */
+  budget_seconds: number
+  /**
+   * Point Id
+   */
+  point_id?: string | null
+  role: PointRole
+  /**
+   * Station Id
+   */
+  station_id: string
+}
+
+/**
+ * BindingValidationView
+ *
+ * 绑定预检结果；拒绝原因保持稳定的 code、field、message 结构。
+ */
+export type BindingValidationView = {
+  /**
+   * Accepted
+   */
+  accepted: boolean
+  /**
+   * Reasons
+   */
+  reasons: Array<BindingReasonView>
 }
 
 /**
@@ -285,6 +364,17 @@ export type ConnectorType = 'hikvision_isapi' | 'board_card'
  * 中心保存的连接器视图；凭据只以状态标志出现。
  */
 export type ConnectorView = {
+  /**
+   * Capability
+   */
+  capability?:
+    | ({
+        verification: 'unverified'
+      } & UnverifiedCapabilityDocument)
+    | ({
+        verification: 'measured'
+      } & MeasuredCapabilityDocument)
+    | null
   configuration: ConnectorConfiguration
   connector_type: ConnectorType
   /**
@@ -635,6 +725,28 @@ export type ItemPageInferenceHostView = {
 }
 
 /**
+ * ItemPage[PointView]
+ */
+export type ItemPagePointView = {
+  /**
+   * Items
+   */
+  items: Array<PointView>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
  * ItemPage[RoleView]
  */
 export type ItemPageRoleView = {
@@ -723,6 +835,42 @@ export type ItemPageStr = {
 }
 
 /**
+ * MeasuredCapabilityDocument
+ *
+ * 真实设备测得的完整五项能力声明。
+ */
+export type MeasuredCapabilityDocument = {
+  /**
+   * Delivery
+   */
+  delivery: 'pushed' | 'polled'
+  /**
+   * Edge Preservation
+   */
+  edge_preservation: 'preserved' | 'may_drop'
+  /**
+   * Max Delivery Delay Seconds
+   */
+  max_delivery_delay_seconds: number
+  /**
+   * Polling Interval Seconds
+   */
+  polling_interval_seconds: number | null
+  /**
+   * Sequencing
+   */
+  sequencing: 'sequenced' | 'unsequenced'
+  /**
+   * Timestamp Source
+   */
+  timestamp_source: 'device_clock' | 'host_receipt'
+  /**
+   * Verification
+   */
+  verification: 'measured'
+}
+
+/**
  * NewPassword
  */
 export type NewPassword = {
@@ -766,6 +914,103 @@ export type NewUser = {
    * Password
    */
   password: string
+}
+
+/**
+ * PointConfiguration
+ *
+ * 点位的完整物理位置与工位内语义。
+ */
+export type PointConfiguration = {
+  /**
+   * Connector Id
+   */
+  connector_id: string
+  direction: PointDirection
+  /**
+   * Identifier
+   */
+  identifier: string
+  /**
+   * Semantic Label
+   */
+  semantic_label: string
+  /**
+   * Station Id
+   */
+  station_id: string
+}
+
+/**
+ * PointDirection
+ *
+ * 授权点位的物理读写方向。
+ */
+export type PointDirection = 'input' | 'output'
+
+/**
+ * PointRole
+ *
+ * 模板要求点位承担的角色。
+ */
+export type PointRole =
+  'start_signal' | 'end_signal' | 'ordered_step' | 'unordered_step' | 'safety_output'
+
+/**
+ * PointStatus
+ */
+export type PointStatus = {
+  status: DeviceStatus
+}
+
+/**
+ * PointView
+ *
+ * 中心保存的点位记录。
+ */
+export type PointView = {
+  /**
+   * Connector Id
+   */
+  connector_id: string
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Created By
+   */
+  created_by: string
+  direction: PointDirection
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Identifier
+   */
+  identifier: string
+  /**
+   * Revision
+   */
+  revision: number
+  /**
+   * Semantic Label
+   */
+  semantic_label: string
+  /**
+   * Station Id
+   */
+  station_id: string
+  status: DeviceStatus
+  /**
+   * Updated At
+   */
+  updated_at: string
+  /**
+   * Updated By
+   */
+  updated_by: string
 }
 
 /**
@@ -961,6 +1206,18 @@ export type StatusChanged = {
    */
   revoked_sessions: number
   user: UserView
+}
+
+/**
+ * UnverifiedCapabilityDocument
+ *
+ * 尚未取得真实测量值的显式声明。
+ */
+export type UnverifiedCapabilityDocument = {
+  /**
+   * Verification
+   */
+  verification: 'unverified'
 }
 
 /**
@@ -2246,6 +2503,73 @@ export type EditConnectorResponses = {
 
 export type EditConnectorResponse = EditConnectorResponses[keyof EditConnectorResponses]
 
+export type UpdateConnectorCapabilityData = {
+  /**
+   * Requested
+   */
+  body:
+    | ({
+        verification: 'unverified'
+      } & UnverifiedCapabilityDocument)
+    | ({
+        verification: 'measured'
+      } & MeasuredCapabilityDocument)
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Connector Id
+     */
+    connector_id: string
+  }
+  query?: never
+  url: '/api/v1/connectors/{connector_id}/capability'
+}
+
+export type UpdateConnectorCapabilityErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type UpdateConnectorCapabilityError =
+  UpdateConnectorCapabilityErrors[keyof UpdateConnectorCapabilityErrors]
+
+export type UpdateConnectorCapabilityResponses = {
+  /**
+   * Successful Response
+   */
+  200: ConnectorView
+}
+
+export type UpdateConnectorCapabilityResponse =
+  UpdateConnectorCapabilityResponses[keyof UpdateConnectorCapabilityResponses]
+
 export type SetConnectorStatusData = {
   body: ConnectorStatus
   headers: {
@@ -3014,6 +3338,365 @@ export type ReadLivenessResponses = {
 }
 
 export type ReadLivenessResponse = ReadLivenessResponses[keyof ReadLivenessResponses]
+
+export type ValidatePointBindingData = {
+  body: BindingValidationRequest
+  path?: never
+  query?: never
+  url: '/api/v1/point-binding-validations'
+}
+
+export type ValidatePointBindingErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ValidatePointBindingError = ValidatePointBindingErrors[keyof ValidatePointBindingErrors]
+
+export type ValidatePointBindingResponses = {
+  /**
+   * Successful Response
+   */
+  200: BindingValidationView
+}
+
+export type ValidatePointBindingResponse =
+  ValidatePointBindingResponses[keyof ValidatePointBindingResponses]
+
+export type ListPointsData = {
+  body?: never
+  path?: never
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+    /**
+     * Station Id
+     */
+    station_id?: string | null
+    /**
+     * Connector Id
+     */
+    connector_id?: string | null
+  }
+  url: '/api/v1/points'
+}
+
+export type ListPointsErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ListPointsError = ListPointsErrors[keyof ListPointsErrors]
+
+export type ListPointsResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPagePointView
+}
+
+export type ListPointsResponse = ListPointsResponses[keyof ListPointsResponses]
+
+export type CreatePointData = {
+  body: PointConfiguration
+  path?: never
+  query?: never
+  url: '/api/v1/points'
+}
+
+export type CreatePointErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CreatePointError = CreatePointErrors[keyof CreatePointErrors]
+
+export type CreatePointResponses = {
+  /**
+   * Successful Response
+   */
+  201: PointView
+}
+
+export type CreatePointResponse = CreatePointResponses[keyof CreatePointResponses]
+
+export type DeletePointData = {
+  body?: never
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Point Id
+     */
+    point_id: string
+  }
+  query?: never
+  url: '/api/v1/points/{point_id}'
+}
+
+export type DeletePointErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type DeletePointError = DeletePointErrors[keyof DeletePointErrors]
+
+export type DeletePointResponses = {
+  /**
+   * Successful Response
+   */
+  204: void
+}
+
+export type DeletePointResponse = DeletePointResponses[keyof DeletePointResponses]
+
+export type ReadPointData = {
+  body?: never
+  path: {
+    /**
+     * Point Id
+     */
+    point_id: string
+  }
+  query?: never
+  url: '/api/v1/points/{point_id}'
+}
+
+export type ReadPointErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadPointError = ReadPointErrors[keyof ReadPointErrors]
+
+export type ReadPointResponses = {
+  /**
+   * Successful Response
+   */
+  200: PointView
+}
+
+export type ReadPointResponse = ReadPointResponses[keyof ReadPointResponses]
+
+export type EditPointData = {
+  body: PointConfiguration
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Point Id
+     */
+    point_id: string
+  }
+  query?: never
+  url: '/api/v1/points/{point_id}'
+}
+
+export type EditPointErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type EditPointError = EditPointErrors[keyof EditPointErrors]
+
+export type EditPointResponses = {
+  /**
+   * Successful Response
+   */
+  200: PointView
+}
+
+export type EditPointResponse = EditPointResponses[keyof EditPointResponses]
+
+export type SetPointStatusData = {
+  body: PointStatus
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Point Id
+     */
+    point_id: string
+  }
+  query?: never
+  url: '/api/v1/points/{point_id}/status'
+}
+
+export type SetPointStatusErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type SetPointStatusError = SetPointStatusErrors[keyof SetPointStatusErrors]
+
+export type SetPointStatusResponses = {
+  /**
+   * Successful Response
+   */
+  200: PointView
+}
+
+export type SetPointStatusResponse = SetPointStatusResponses[keyof SetPointStatusResponses]
 
 export type ListStationsData = {
   body?: never

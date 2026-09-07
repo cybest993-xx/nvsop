@@ -33,7 +33,14 @@
           "CAMERA_STATION_TEMPLATE_CONFLICT",
           "CONNECTOR_NOT_FOUND",
           "CONNECTOR_NAME_TAKEN",
+          "CONNECTOR_DEACTIVATED",
           "CONNECTOR_STATION_HOST_CONFLICT",
+          "CONNECTOR_HAS_POINTS",
+          "POINT_NOT_FOUND",
+          "POINT_SEMANTIC_LABEL_TAKEN",
+          "POINT_IDENTITY_TAKEN",
+          "POINT_CONNECTOR_STATION_MISMATCH",
+          "STATION_HAS_POINTS",
           "CONNECTOR_CONFIGURATION_SECRET",
           "STATION_HAS_CONNECTORS",
           "INFERENCE_HOST_HAS_CONNECTORS",
@@ -98,6 +105,107 @@
           "status"
         ],
         "title": "BackendStatus",
+        "type": "object"
+      },
+      "BindingReasonCode": {
+        "description": "绑定前校验返回的稳定原因码。",
+        "enum": [
+          "point_required",
+          "point_not_found",
+          "point_station_mismatch",
+          "point_deactivated",
+          "connector_not_found",
+          "connector_deactivated",
+          "wrong_direction",
+          "capability_unverified",
+          "may_drop_edges",
+          "not_sequenced",
+          "delivery_too_slow"
+        ],
+        "title": "BindingReasonCode",
+        "type": "string"
+      },
+      "BindingReasonView": {
+        "description": "一项可直接展示给操作者的绑定拒绝原因。",
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/BindingReasonCode"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "field",
+          "message"
+        ],
+        "title": "BindingReasonView",
+        "type": "object"
+      },
+      "BindingValidationRequest": {
+        "additionalProperties": false,
+        "description": "绑定预检所需的工位、点位角色和结果预算。",
+        "properties": {
+          "budget_seconds": {
+            "minimum": 0.0,
+            "title": "Budget Seconds",
+            "type": "number"
+          },
+          "point_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Point Id"
+          },
+          "role": {
+            "$ref": "#/components/schemas/PointRole"
+          },
+          "station_id": {
+            "format": "uuid",
+            "title": "Station Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "station_id",
+          "role",
+          "budget_seconds"
+        ],
+        "title": "BindingValidationRequest",
+        "type": "object"
+      },
+      "BindingValidationView": {
+        "description": "绑定预检结果；拒绝原因保持稳定的 code、field、message 结构。",
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "reasons": {
+            "items": {
+              "$ref": "#/components/schemas/BindingReasonView"
+            },
+            "title": "Reasons",
+            "type": "array"
+          }
+        },
+        "required": [
+          "accepted",
+          "reasons"
+        ],
+        "title": "BindingValidationView",
         "type": "object"
       },
       "CameraConfiguration": {
@@ -415,6 +523,31 @@
       "ConnectorView": {
         "description": "中心保存的连接器视图；凭据只以状态标志出现。",
         "properties": {
+          "capability": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "measured": "#/components/schemas/MeasuredCapabilityDocument",
+                    "unverified": "#/components/schemas/UnverifiedCapabilityDocument"
+                  },
+                  "propertyName": "verification"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/UnverifiedCapabilityDocument"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MeasuredCapabilityDocument"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capability"
+          },
           "configuration": {
             "$ref": "#/components/schemas/ConnectorConfiguration"
           },
@@ -951,6 +1084,40 @@
         "title": "ItemPage[InferenceHostView]",
         "type": "object"
       },
+      "ItemPage_PointView_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PointView"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "minimum": 1.0,
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "minimum": 1.0,
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
+        "title": "ItemPage[PointView]",
+        "type": "object"
+      },
       "ItemPage_RoleView_": {
         "properties": {
           "items": {
@@ -1087,6 +1254,76 @@
         "title": "ItemPage[str]",
         "type": "object"
       },
+      "MeasuredCapabilityDocument": {
+        "additionalProperties": false,
+        "description": "真实设备测得的完整五项能力声明。",
+        "properties": {
+          "delivery": {
+            "enum": [
+              "pushed",
+              "polled"
+            ],
+            "title": "Delivery",
+            "type": "string"
+          },
+          "edge_preservation": {
+            "enum": [
+              "preserved",
+              "may_drop"
+            ],
+            "title": "Edge Preservation",
+            "type": "string"
+          },
+          "max_delivery_delay_seconds": {
+            "minimum": 0.0,
+            "title": "Max Delivery Delay Seconds",
+            "type": "number"
+          },
+          "polling_interval_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Polling Interval Seconds"
+          },
+          "sequencing": {
+            "enum": [
+              "sequenced",
+              "unsequenced"
+            ],
+            "title": "Sequencing",
+            "type": "string"
+          },
+          "timestamp_source": {
+            "enum": [
+              "device_clock",
+              "host_receipt"
+            ],
+            "title": "Timestamp Source",
+            "type": "string"
+          },
+          "verification": {
+            "const": "measured",
+            "title": "Verification",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verification",
+          "delivery",
+          "polling_interval_seconds",
+          "max_delivery_delay_seconds",
+          "sequencing",
+          "edge_preservation",
+          "timestamp_source"
+        ],
+        "title": "MeasuredCapabilityDocument",
+        "type": "object"
+      },
       "NewPassword": {
         "properties": {
           "password": {
@@ -1159,6 +1396,153 @@
           "password"
         ],
         "title": "NewUser",
+        "type": "object"
+      },
+      "PointConfiguration": {
+        "additionalProperties": false,
+        "description": "点位的完整物理位置与工位内语义。",
+        "properties": {
+          "connector_id": {
+            "format": "uuid",
+            "title": "Connector Id",
+            "type": "string"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/PointDirection"
+          },
+          "identifier": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Identifier",
+            "type": "string"
+          },
+          "semantic_label": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Semantic Label",
+            "type": "string"
+          },
+          "station_id": {
+            "format": "uuid",
+            "title": "Station Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "station_id",
+          "connector_id",
+          "direction",
+          "identifier",
+          "semantic_label"
+        ],
+        "title": "PointConfiguration",
+        "type": "object"
+      },
+      "PointDirection": {
+        "description": "授权点位的物理读写方向。",
+        "enum": [
+          "input",
+          "output"
+        ],
+        "title": "PointDirection",
+        "type": "string"
+      },
+      "PointRole": {
+        "description": "模板要求点位承担的角色。",
+        "enum": [
+          "start_signal",
+          "end_signal",
+          "ordered_step",
+          "unordered_step",
+          "safety_output"
+        ],
+        "title": "PointRole",
+        "type": "string"
+      },
+      "PointStatus": {
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/DeviceStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "PointStatus",
+        "type": "object"
+      },
+      "PointView": {
+        "description": "中心保存的点位记录。",
+        "properties": {
+          "connector_id": {
+            "format": "uuid",
+            "title": "Connector Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "format": "uuid",
+            "title": "Created By",
+            "type": "string"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/PointDirection"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "identifier": {
+            "title": "Identifier",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "semantic_label": {
+            "title": "Semantic Label",
+            "type": "string"
+          },
+          "station_id": {
+            "format": "uuid",
+            "title": "Station Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeviceStatus"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "updated_by": {
+            "format": "uuid",
+            "title": "Updated By",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "station_id",
+          "connector_id",
+          "direction",
+          "identifier",
+          "semantic_label",
+          "status",
+          "revision",
+          "created_by",
+          "updated_by",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "PointView",
         "type": "object"
       },
       "ProblemDocument": {
@@ -1421,6 +1805,22 @@
           "revoked_sessions"
         ],
         "title": "StatusChanged",
+        "type": "object"
+      },
+      "UnverifiedCapabilityDocument": {
+        "additionalProperties": false,
+        "description": "尚未取得真实测量值的显式声明。",
+        "properties": {
+          "verification": {
+            "const": "unverified",
+            "title": "Verification",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verification"
+        ],
+        "title": "UnverifiedCapabilityDocument",
         "type": "object"
       },
       "UserStatus": {
@@ -3825,6 +4225,134 @@
         "x-required-permission": "device.connector.edit"
       }
     },
+    "/api/v1/connectors/{connector_id}/capability": {
+      "put": {
+        "operationId": "updateConnectorCapability",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connector_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Connector Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "title": "If-Match",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "discriminator": {
+                  "mapping": {
+                    "measured": "#/components/schemas/MeasuredCapabilityDocument",
+                    "unverified": "#/components/schemas/UnverifiedCapabilityDocument"
+                  },
+                  "propertyName": "verification"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/UnverifiedCapabilityDocument"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MeasuredCapabilityDocument"
+                  }
+                ],
+                "title": "Requested"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectorView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device record not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device configuration conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Update The Connector Capability",
+        "tags": [
+          "device"
+        ],
+        "x-required-permission": "device.connector.edit"
+      }
+    },
     "/api/v1/connectors/{connector_id}/status": {
       "put": {
         "operationId": "setConnectorStatus",
@@ -5250,6 +5778,712 @@
           }
         },
         "summary": "Liveness"
+      }
+    },
+    "/api/v1/point-binding-validations": {
+      "post": {
+        "description": "只校验绑定候选，不创建或修改模板绑定。",
+        "operationId": "validatePointBinding",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BindingValidationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BindingValidationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device record not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device configuration conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Validate A Point Binding",
+        "tags": [
+          "device"
+        ],
+        "x-required-permission": "device.point.view"
+      }
+    },
+    "/api/v1/points": {
+      "get": {
+        "operationId": "listPoints",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "station_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Station Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "connector_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connector Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPage_PointView_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "List The Points",
+        "tags": [
+          "device"
+        ],
+        "x-required-permission": "device.point.view"
+      },
+      "post": {
+        "operationId": "createPoint",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PointConfiguration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PointView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device record not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device configuration conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Create A Point",
+        "tags": [
+          "device"
+        ],
+        "x-required-permission": "device.point.edit"
+      }
+    },
+    "/api/v1/points/{point_id}": {
+      "delete": {
+        "operationId": "deletePoint",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "point_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Point Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "title": "If-Match",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device record not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device configuration conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Delete A Point",
+        "tags": [
+          "device"
+        ],
+        "x-required-permission": "device.point.delete"
+      },
+      "get": {
+        "operationId": "readPoint",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "point_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Point Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PointView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device record not found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Read A Point",
+        "tags": [
+          "device"
+        ],
+        "x-required-permission": "device.point.view"
+      },
+      "patch": {
+        "operationId": "editPoint",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "point_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Point Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "title": "If-Match",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PointConfiguration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PointView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device record not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device configuration conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Edit A Point",
+        "tags": [
+          "device"
+        ],
+        "x-required-permission": "device.point.edit"
+      }
+    },
+    "/api/v1/points/{point_id}/status": {
+      "put": {
+        "operationId": "setPointStatus",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "point_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Point Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "title": "If-Match",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PointStatus"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PointView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device record not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device configuration conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Set The Point Status",
+        "tags": [
+          "device"
+        ],
+        "x-required-permission": "device.point.edit"
       }
     },
     "/api/v1/stations": {

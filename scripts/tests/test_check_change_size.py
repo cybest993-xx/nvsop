@@ -28,6 +28,7 @@ class ChangeSizeBudgetTest(unittest.TestCase):
             Path("apps/edge-runtime/src/edge_runtime/judgment/core.py"): "judgment",
             Path("apps/edge-runtime/src/edge_runtime/supervisor/loop.py"): "supervisor",
             Path("scripts/check_repo_policy.py"): "scripts",
+            Path("packages/contracts/src/nvsop_contracts/capability.py"): "contracts",
             Path("packages/other/src/lib.py"): "unassigned",
         }
         for path, module in cases.items():

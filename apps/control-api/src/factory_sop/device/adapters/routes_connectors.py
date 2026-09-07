@@ -3,15 +3,24 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal, Self
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Query, Response, status
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictFloat,
+    StrictInt,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 
 from factory_sop.auth.api import Authorized, Permission, needs
 from factory_sop.device.adapters import route_support
-from factory_sop.device.adapters.dependencies import cameras, connectors, hosts, stations
+from factory_sop.device.adapters.dependencies import cameras, connectors, hosts, points, stations
 from factory_sop.device.model import (
     Connector,
     ConnectorType,
@@ -22,6 +31,7 @@ from factory_sop.device.repository import (
     CameraRepository,
     ConnectorRepository,
     InferenceHostRepository,
+    PointRepository,
     StationRepository,
 )
 from factory_sop.device.usecases.connectors import (
@@ -31,8 +41,10 @@ from factory_sop.device.usecases.connectors import (
     edit_connector,
     list_connectors,
     set_connector_status,
+    update_connector_capability,
 )
 from factory_sop.responses import DEFAULT_PAGE_SIZE, MAXIMUM_PAGE_SIZE, ItemPage
+from nvsop_contracts import capability_from_wire, capability_to_wire
 
 router = APIRouter(prefix="/connectors", tags=["device"], responses=route_support._UNAUTHORIZED)
 
@@ -67,6 +79,40 @@ class ConnectorStatus(BaseModel):
     status: DeviceStatus
 
 
+class UnverifiedCapabilityDocument(BaseModel):
+    """尚未取得真实测量值的显式声明。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    verification: Literal["unverified"]
+
+
+class MeasuredCapabilityDocument(BaseModel):
+    """真实设备测得的完整五项能力声明。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    verification: Literal["measured"]
+    delivery: Literal["pushed", "polled"]
+    polling_interval_seconds: StrictFloat | None
+    max_delivery_delay_seconds: StrictFloat = Field(ge=0)
+    sequencing: Literal["sequenced", "unsequenced"]
+    edge_preservation: Literal["preserved", "may_drop"]
+    timestamp_source: Literal["device_clock", "host_receipt"]
+
+    @model_validator(mode="after")
+    def _matches_shared_wire_contract(self) -> Self:
+        capability_from_wire(self.model_dump(mode="python"))
+        return self
+
+
+CapabilityDocument = Annotated[
+    UnverifiedCapabilityDocument | MeasuredCapabilityDocument,
+    Field(discriminator="verification"),
+]
+_CAPABILITY_DOCUMENT: TypeAdapter[CapabilityDocument] = TypeAdapter(CapabilityDocument)
+
+
 class ConnectorView(BaseModel):
     """中心保存的连接器视图；凭据只以状态标志出现。"""
 
@@ -81,6 +127,7 @@ class ConnectorView(BaseModel):
     credentials_configured: bool
     reachability: str
     health_detail: str | None
+    capability: CapabilityDocument | None = None
     status: DeviceStatus
     revision: int
     created_by: UUID
@@ -100,6 +147,7 @@ def _view(connector: Connector) -> ConnectorView:
         credentials_configured=connector.credentials_configured,
         reachability=connector.reachability.value,
         health_detail=connector.health_detail,
+        capability=_CAPABILITY_DOCUMENT.validate_python(capability_to_wire(connector.capability)),
         status=connector.status,
         revision=connector.revision,
         created_by=connector.created_by,
@@ -196,6 +244,7 @@ def edit_a_connector(
     host_store: Annotated[InferenceHostRepository, Depends(hosts)],
     camera_store: Annotated[CameraRepository, Depends(cameras)],
     connector_store: Annotated[ConnectorRepository, Depends(connectors)],
+    point_store: Annotated[PointRepository, Depends(points)],
     if_match: Annotated[int, Header(alias="If-Match")],
 ) -> ConnectorView:
     return _view(
@@ -212,6 +261,32 @@ def edit_a_connector(
             stations=station_store,
             hosts=host_store,
             cameras=camera_store,
+            connectors=connector_store,
+            points=point_store,
+        )
+    )
+
+
+@router.put(
+    "/{connector_id}/capability",
+    operation_id="updateConnectorCapability",
+    openapi_extra=needs(Permission.CONNECTOR_EDIT),
+    responses=route_support._ITEM_RESPONSES,
+)
+def update_the_connector_capability(
+    connector_id: UUID,
+    requested: CapabilityDocument,
+    caller: Authorized,
+    connector_store: Annotated[ConnectorRepository, Depends(connectors)],
+    if_match: Annotated[int, Header(alias="If-Match")],
+) -> ConnectorView:
+    return _view(
+        update_connector_capability(
+            connector_id=connector_id,
+            capability=capability_from_wire(requested.model_dump(mode="python")),
+            expected_revision=if_match,
+            caller=caller,
+            now=datetime.now(UTC),
             connectors=connector_store,
         )
     )
@@ -253,6 +328,7 @@ def delete_a_connector(
     connector_id: UUID,
     caller: Authorized,
     connector_store: Annotated[ConnectorRepository, Depends(connectors)],
+    point_store: Annotated[PointRepository, Depends(points)],
     if_match: Annotated[int, Header(alias="If-Match")],
 ) -> Response:
     delete_connector(
@@ -260,5 +336,6 @@ def delete_a_connector(
         expected_revision=if_match,
         caller=caller,
         connectors=connector_store,
+        points=point_store,
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -9,7 +9,10 @@
 # `apps/edge-runtime/src/` against the standard library.
 
 [tool.uv.workspace]
-members = ["apps/control-api"]
+members = ["apps/control-api", "packages/contracts"]
+
+[tool.uv.sources]
+nvsop-contracts = { workspace = true }
 
 # The center backend's modules: the one declaration of record (harness §3, ADR-0010). Each
 # entry is a package under `apps/control-api/src/factory_sop/` and the prefix its physical
@@ -56,7 +59,14 @@ target-version = "py312"
 extend-include = ["scripts/githooks/*"]
 # First-party roots, so import sorting classifies `factory_sop` correctly when ruff runs
 # from the repository root rather than from inside the application.
-src = ["apps/control-api/src", "apps/control-api/tests", "scripts", "tests"]
+src = [
+    "apps/control-api/src",
+    "apps/control-api/tests",
+    "packages/contracts/src",
+    "packages/contracts/tests",
+    "scripts",
+    "tests",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "T20", "ANN", "PT", "TID"]
@@ -87,6 +97,7 @@ allowed-confusables = ["，", "。", "：", "；", "！", "？", "（", "）", "
 #        emitting ours.
 "scripts/**" = ["PT", "T201"]
 "tests/contract/**" = ["PT", "TID251"]
+"packages/contracts/tests/**" = ["PT"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -97,7 +108,7 @@ explicit_package_bases = true
 namespace_packages = true
 
 [tool.importlinter]
-root_packages = ["factory_sop", "edge_runtime"]
+root_packages = ["factory_sop", "edge_runtime", "nvsop_contracts"]
 # Two contracts forbid a first-party module from importing a third-party one — the rule that
 # keeps `auth`'s behavior independent of SQLAlchemy and FastAPI. Naming an external package in
 # a contract requires this.
@@ -137,6 +148,12 @@ layers = [
     "factory_sop.observability",
     "factory_sop.settings : factory_sop.identifiers",
 ]
+
+[[tool.importlinter.contracts]]
+name = "Shared contracts do not depend on either application"
+type = "forbidden"
+source_modules = ["nvsop_contracts"]
+forbidden_modules = ["factory_sop", "edge_runtime"]
 
 [[tool.importlinter.contracts]]
 name = "auth's behavior does not depend on how it is stored or reached"

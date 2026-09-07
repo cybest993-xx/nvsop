@@ -18,6 +18,7 @@ from factory_sop.device.adapters.repository import (
     PostgresConnectorRepository,
     PostgresInferenceBackendRepository,
     PostgresInferenceHostRepository,
+    PostgresPointRepository,
     PostgresStationRepository,
 )
 from factory_sop.device.probing import ConnectionProbe
@@ -26,6 +27,7 @@ from factory_sop.device.repository import (
     ConnectorRepository,
     InferenceBackendRepository,
     InferenceHostRepository,
+    PointRepository,
     StationRepository,
 )
 from factory_sop.persistence import request_session
@@ -62,6 +64,13 @@ def connectors(
 ) -> ConnectorRepository:
     """请求事务中的 `device_connector`。"""
     return PostgresConnectorRepository(session)
+
+
+def points(
+    session: Annotated[DatabaseSession, Depends(request_session)],
+) -> PointRepository:
+    """请求事务中的 `device_point`。"""
+    return PostgresPointRepository(session)
 
 
 def probe() -> ConnectionProbe:

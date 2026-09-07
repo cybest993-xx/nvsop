@@ -35,6 +35,7 @@ MODULE_ROOTS: tuple[tuple[str, Path], ...] = (
     ("factory_sop", Path("apps/control-api/src/factory_sop")),
     ("control-web", Path("apps/control-web/src")),
     ("edge_runtime", Path("apps/edge-runtime/src/edge_runtime")),
+    ("contracts", Path("packages/contracts/src/nvsop_contracts")),
     ("scripts", Path("scripts")),
 )
 

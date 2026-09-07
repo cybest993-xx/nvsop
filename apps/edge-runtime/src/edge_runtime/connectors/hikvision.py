@@ -42,7 +42,8 @@ from time import monotonic
 from typing import Protocol
 from xml.etree import ElementTree
 
-from edge_runtime.connectors.capability import Capability
+from nvsop_contracts import Capability
+
 from edge_runtime.connectors.port import (
     ConnectorHealth,
     Failed,

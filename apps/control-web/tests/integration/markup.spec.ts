@@ -88,6 +88,22 @@ const DEVICE_FIXTURES = vi.hoisted(() => ({
   ],
   hosts: [{ id: 'host-1', name: '推理机 A' }],
   stations: [{ id: 'station-1', code: 'A-01', name: '一号装配工位' }],
+  points: [
+    {
+      id: 'point-1',
+      identifier: 'DI-01',
+      semantic_label: '工件到位',
+      direction: 'input' as const,
+      station_id: 'station-1',
+      connector_id: 'connector-1',
+      status: 'active' as const,
+      revision: 4,
+      created_at: '2026-09-07T04:00:00Z',
+      created_by: 'operator-1',
+      updated_at: '2026-09-07T04:00:00Z',
+      updated_by: 'operator-1',
+    },
+  ],
 }))
 
 vi.mock('@/api/controlPlane', async (importOriginal) => ({
@@ -108,6 +124,9 @@ vi.mock('@/api/controlPlane', async (importOriginal) => ({
       page_size: 50,
       total: DEVICE_FIXTURES.connectors.length,
     }),
+  ),
+  readPoints: vi.fn(() =>
+    Promise.resolve({ items: DEVICE_FIXTURES.points, page: 1, page_size: 20, total: 1 }),
   ),
   readInferenceHosts: vi.fn(() =>
     Promise.resolve({ items: DEVICE_FIXTURES.hosts, page: 1, page_size: 50, total: 1 }),
@@ -220,6 +239,25 @@ describe('the device page', () => {
       .findAll('button')
       .find((button) => button.text() === '新建连接器')!
       .trigger('click')
+    await flushPromises()
+
+    expect(normalize(wrapper.html())).toMatchSnapshot()
+  })
+
+  it('renders point management for an authorized device operator', async () => {
+    useSessionStore().current = {
+      ...SESSION,
+      permissions: [
+        'device.connector.view',
+        'device.connector.edit',
+        'device.point.view',
+        'device.point.edit',
+        'device.point.delete',
+        'device.inference_host.view',
+        'device.station.view',
+      ],
+    }
+    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
     await flushPromises()
 
     expect(normalize(wrapper.html())).toMatchSnapshot()

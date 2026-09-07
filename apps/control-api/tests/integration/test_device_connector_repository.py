@@ -23,6 +23,7 @@ from factory_sop.device.adapters.repository import (
     PostgresConnectorRepository,
     PostgresInferenceBackendRepository,
     PostgresInferenceHostRepository,
+    PostgresPointRepository,
     PostgresStationRepository,
 )
 from factory_sop.device.adapters.tables import (
@@ -55,6 +56,7 @@ from factory_sop.device.usecases.hosts import delete_host
 from factory_sop.device.usecases.stations import delete_station
 from factory_sop.identifiers import new_id
 from factory_sop.persistence import Table as DeclarativeTable
+from nvsop_contracts import Unverified
 
 NOW = datetime(2026, 9, 7, 1, 0, tzinfo=UTC)
 CONTROL_API = Path(__file__).resolve().parents[2]
@@ -147,6 +149,7 @@ def a_connector(
         credentials_configured=False,
         reachability=ConnectorReachability.UNVERIFIED,
         health_detail=None,
+        capability=Unverified(),
         status=DeviceStatus.ACTIVE,
         revision=revision,
         created_by=new_id(),
@@ -254,6 +257,7 @@ def test_connector_crud_commits_and_a_new_session_reloads_it(engine: Engine) -> 
                     stations=stations,
                     cameras=cameras,
                     connectors=connectors,
+                    points=PostgresPointRepository(writing),
                 )
             assert station_refused.value.code is DeviceRefusalCode.STATION_HAS_CONNECTORS
 
@@ -282,6 +286,7 @@ def test_connector_crud_commits_and_a_new_session_reloads_it(engine: Engine) -> 
                 hosts=hosts,
                 connectors=connectors,
                 cameras=cameras,
+                points=PostgresPointRepository(writing),
             )
             deactivated = set_connector_status(
                 connector_id=edited.id,
@@ -319,6 +324,7 @@ def test_connector_crud_commits_and_a_new_session_reloads_it(engine: Engine) -> 
                 expected_revision=restored.revision,
                 caller=actor,
                 connectors=connectors,
+                points=PostgresPointRepository(deleting),
             )
             delete_station(
                 station_id=station.id,
@@ -327,6 +333,7 @@ def test_connector_crud_commits_and_a_new_session_reloads_it(engine: Engine) -> 
                 stations=stations,
                 cameras=PostgresCameraRepository(deleting),
                 connectors=connectors,
+                points=PostgresPointRepository(deleting),
             )
             delete_host(
                 host_id=host.id,

@@ -89,7 +89,7 @@ exports[`the device page > renders connector configuration without a test or sec
     <div>
       <p class="devices__eyebrow">配置中心 / 设备</p>
       <h1 id="devices-heading" class="devices__heading">工位与设备</h1>
-      <p class="devices__intro">管理连接器的归属与非秘密连接参数。保存后状态保持未验证。</p>
+      <p class="devices__intro">管理连接器与点位的归属、语义和非秘密配置；实测能力单独登记。</p>
     </div><button aria-disabled="false" type="button" class="el-button el-button--primary">
       <!--v-if--><span class=""> 新建连接器 </span>
     </button>
@@ -164,6 +164,221 @@ exports[`the device page > renders connector configuration without a test or sec
     </div>
   </transition-stub>
   <!--teleport end-->
+  <!--v-if-->
+  <!--v-if-->
+  <!--v-if-->
+  <p role="status">当前没有点位权限；点位列表、表单和状态操作均不会请求。</p>
+  <!--v-if-->
+  <section aria-labelledby="capability-heading">
+    <h3 id="capability-heading">连接器能力声明</h3>
+    <table aria-label="连接器能力声明清单">
+      <thead>
+        <tr>
+          <th scope="col">连接器</th>
+          <th scope="col">验证状态</th>
+          <th scope="col">投递 / 周期</th>
+          <th scope="col">轮询周期</th>
+          <th scope="col">最大延迟</th>
+          <th scope="col">保序</th>
+          <th scope="col">边沿</th>
+          <th scope="col">时间戳来源</th>
+          <th scope="col">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row">装配线输入</th>
+          <td>未知能力声明（未提供）</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td><span>未知值，不能编辑</span></td>
+        </tr>
+      </tbody>
+    </table>
+    <!--v-if-->
+    <!--v-if-->
+    <!--v-if-->
+  </section>
+  <section aria-labelledby="validation-heading">
+    <h3 id="validation-heading">点位角色绑定预检</h3>
+    <p role="status">绑定预检需要点位查看权限；当前不会请求点位或连接器详情。</p>
+    <!--v-if-->
+    <!--v-if-->
+    <!--v-if-->
+  </section>
+</section>"
+`;
+
+exports[`the device page > renders point management for an authorized device operator 1`] = `
+"<section aria-labelledby="devices-heading">
+  <header class="devices__header">
+    <div>
+      <p class="devices__eyebrow">配置中心 / 设备</p>
+      <h1 id="devices-heading" class="devices__heading">工位与设备</h1>
+      <p class="devices__intro">管理连接器与点位的归属、语义和非秘密配置；实测能力单独登记。</p>
+    </div><button aria-disabled="false" type="button" class="el-button el-button--primary">
+      <!--v-if--><span class=""> 新建连接器 </span>
+    </button>
+  </header>
+  <!--v-if-->
+  <div class="devices__surface">
+    <div class="devices__surface-head">
+      <div>
+        <h2 class="devices__title">连接器</h2>
+        <p class="devices__meta">1 个配置</p>
+      </div>
+      <p class="devices__surface-note">中心不保存设备凭据</p>
+    </div>
+    <table class="devices__table">
+      <caption class="devices__caption"> 已配置的连接器，含已停用记录 </caption>
+      <thead>
+        <tr>
+          <th scope="col">名称</th>
+          <th scope="col">类型</th>
+          <th scope="col">所属工位</th>
+          <th scope="col">推理机</th>
+          <th scope="col">连接参数</th>
+          <th scope="col">凭据</th>
+          <th scope="col">连接状态</th>
+          <th scope="col">状态</th>
+          <th scope="col">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row"><button aria-disabled="false" type="button" class="el-button el-button--primary is-link devices__connector-link">
+              <!--v-if--><span class="">装配线输入</span>
+            </button></th>
+          <td>海康 ISAPI</td>
+          <td>一号装配工位</td>
+          <td>推理机 A</td>
+          <td><span>192.168.10.21</span><span> :80</span></td>
+          <td><span class="el-tag el-tag--success el-tag--light"><span class="el-tag__content">已配置</span>
+            <!--v-if--></span>
+          </td>
+          <td><span class="el-tag el-tag--warning el-tag--light"><span class="el-tag__content">未验证</span>
+            <!--v-if--></span>
+          </td>
+          <td><span class="el-tag el-tag--success el-tag--light"><span class="el-tag__content">在用</span>
+            <!--v-if--></span>
+          </td>
+          <td class="devices__row-actions"><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
+              <!--v-if--><span class="">详情</span>
+            </button><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
+              <!--v-if--><span class=""> 编辑 </span>
+            </button><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
+              <!--v-if--><span class="">停用</span>
+            </button>
+            <!--v-if-->
+          </td>
+        </tr>
+        <!--v-if-->
+      </tbody>
+    </table>
+  </div>
+  <!--teleport start-->
+  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2014; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="新建连接器" aria-describedby="el-id-41" class="el-overlay-dialog"></div>
+    </div>
+  </transition-stub>
+  <!--teleport end-->
+  <!--teleport start-->
+  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2015; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="连接器详情" aria-describedby="el-id-43" class="el-overlay-dialog"></div>
+    </div>
+  </transition-stub>
+  <!--teleport end-->
+  <!--v-if-->
+  <!--v-if--><button type="button">新建点位</button>
+  <section aria-labelledby="point-list-heading">
+    <h3 id="point-list-heading">点位清单</h3><label for="point-station-filter">工位 <input id="point-station-filter" name="point-station-filter" aria-label="按工位 ID 筛选"></label><label for="point-connector-filter">连接器 <input id="point-connector-filter" name="point-connector-filter" aria-label="按连接器 ID 筛选"></label>
+    <table aria-label="点位清单，包含停用记录">
+      <thead>
+        <tr>
+          <th scope="col">标识符</th>
+          <th scope="col">语义标签</th>
+          <th scope="col">方向</th>
+          <th scope="col">工位</th>
+          <th scope="col">连接器</th>
+          <th scope="col">状态</th>
+          <th scope="col">更新时间 / 归属</th>
+          <th scope="col">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row"><button type="button">DI-01</button></th>
+          <td>工件到位</td>
+          <td>输入</td>
+          <td>一号装配工位（A-01）</td>
+          <td>装配线输入</td>
+          <td>在用</td>
+          <td>2026/09/07 12:00 / operator-1</td>
+          <td><button type="button">详情</button><button type="button">编辑</button><button type="button">停用</button><button type="button">删除</button></td>
+        </tr>
+        <!--v-if-->
+      </tbody>
+    </table>
+    <nav aria-label="点位分页"><button type="button" aria-label="上一页" disabled=""> 上一页 </button><span aria-live="polite">第 1 / 1 页</span><button type="button" aria-label="下一页" disabled=""> 下一页 </button></nav>
+  </section>
+  <!--v-if-->
+  <section aria-labelledby="capability-heading">
+    <h3 id="capability-heading">连接器能力声明</h3>
+    <table aria-label="连接器能力声明清单">
+      <thead>
+        <tr>
+          <th scope="col">连接器</th>
+          <th scope="col">验证状态</th>
+          <th scope="col">投递 / 周期</th>
+          <th scope="col">轮询周期</th>
+          <th scope="col">最大延迟</th>
+          <th scope="col">保序</th>
+          <th scope="col">边沿</th>
+          <th scope="col">时间戳来源</th>
+          <th scope="col">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row">装配线输入</th>
+          <td>未知能力声明（未提供）</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td><span>未知值，不能编辑</span></td>
+        </tr>
+      </tbody>
+    </table>
+    <!--v-if-->
+    <!--v-if-->
+    <!--v-if-->
+  </section>
+  <section aria-labelledby="validation-heading">
+    <h3 id="validation-heading">点位角色绑定预检</h3>
+    <form class="validation-form"><label for="validation-station-id">工位 <select id="validation-station-id" name="validation-station-id" required="">
+          <option value="">请选择工位</option>
+          <option value="station-1">一号装配工位（A-01）</option>
+        </select></label><label for="validation-point-id">点位 / 动作来源（可选） <input id="validation-point-id" name="validation-point-id" placeholder="留空表示动作来源；安全输出不能留空"></label><label for="validation-role">角色 <select id="validation-role" name="validation-role" required="">
+          <option value="">请选择角色</option>
+          <option value="start_signal">开始信号</option>
+          <option value="end_signal">结束信号</option>
+          <option value="ordered_step">顺序步骤</option>
+          <option value="unordered_step">无序步骤</option>
+          <option value="safety_output">安全输出</option>
+        </select></label><label for="validation-budget-seconds">所需预算（秒） <input id="validation-budget-seconds" name="validation-budget-seconds" required="" type="number" min="0" placeholder="必填"></label><button type="submit">执行预检</button></form>
+    <!--v-if-->
+    <!--v-if-->
+    <!--v-if-->
+  </section>
 </section>"
 `;
 
@@ -173,7 +388,7 @@ exports[`the device page > renders the connector form with only non-secret field
     <div>
       <p class="devices__eyebrow">配置中心 / 设备</p>
       <h1 id="devices-heading" class="devices__heading">工位与设备</h1>
-      <p class="devices__intro">管理连接器的归属与非秘密连接参数。保存后状态保持未验证。</p>
+      <p class="devices__intro">管理连接器与点位的归属、语义和非秘密配置；实测能力单独登记。</p>
     </div><button aria-disabled="false" type="button" class="el-button el-button--primary">
       <!--v-if--><span class=""> 新建连接器 </span>
     </button>
@@ -408,6 +623,52 @@ exports[`the device page > renders the connector form with only non-secret field
     </div>
   </transition-stub>
   <!--teleport end-->
+  <!--v-if-->
+  <!--v-if-->
+  <!--v-if-->
+  <p role="status">当前没有点位权限；点位列表、表单和状态操作均不会请求。</p>
+  <!--v-if-->
+  <section aria-labelledby="capability-heading">
+    <h3 id="capability-heading">连接器能力声明</h3>
+    <table aria-label="连接器能力声明清单">
+      <thead>
+        <tr>
+          <th scope="col">连接器</th>
+          <th scope="col">验证状态</th>
+          <th scope="col">投递 / 周期</th>
+          <th scope="col">轮询周期</th>
+          <th scope="col">最大延迟</th>
+          <th scope="col">保序</th>
+          <th scope="col">边沿</th>
+          <th scope="col">时间戳来源</th>
+          <th scope="col">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row">装配线输入</th>
+          <td>未知能力声明（未提供）</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td><span>未知值，不能编辑</span></td>
+        </tr>
+      </tbody>
+    </table>
+    <!--v-if-->
+    <!--v-if-->
+    <!--v-if-->
+  </section>
+  <section aria-labelledby="validation-heading">
+    <h3 id="validation-heading">点位角色绑定预检</h3>
+    <p role="status">绑定预检需要点位查看权限；当前不会请求点位或连接器详情。</p>
+    <!--v-if-->
+    <!--v-if-->
+    <!--v-if-->
+  </section>
 </section>"
 `;
 

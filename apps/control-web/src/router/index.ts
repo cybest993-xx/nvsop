@@ -53,7 +53,14 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/modules/devices/DevicesView.vue'),
         meta: {
           title: '工位与设备',
-          requires: ['device.connector.view', 'device.connector.edit', 'device.connector.delete'],
+          requires: [
+            'device.connector.view',
+            'device.connector.edit',
+            'device.connector.delete',
+            'device.point.view',
+            'device.point.edit',
+            'device.point.delete',
+          ],
         },
       },
       {

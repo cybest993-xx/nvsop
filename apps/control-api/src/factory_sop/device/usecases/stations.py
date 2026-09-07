@@ -9,7 +9,12 @@ from uuid import UUID
 from factory_sop.auth.api import Caller, Permission, authorize
 from factory_sop.device.errors import DeviceRefusalCode
 from factory_sop.device.model import DeviceStatus, Station
-from factory_sop.device.repository import CameraRepository, ConnectorRepository, StationRepository
+from factory_sop.device.repository import (
+    CameraRepository,
+    ConnectorRepository,
+    PointRepository,
+    StationRepository,
+)
 from factory_sop.device.usecases._transitions import refuse, set_status
 from factory_sop.identifiers import new_id
 from factory_sop.observability import get_logger
@@ -114,11 +119,19 @@ def delete_station(
     stations: StationRepository,
     cameras: CameraRepository,
     connectors: ConnectorRepository,
+    points: PointRepository,
 ) -> None:
-    """仅在移除其相机和连接器关联后删除工位。"""
+    """仅在移除其点位、相机和连接器关联后删除工位。"""
     authorize(caller, Permission.STATION_DELETE)
     station = _existing_station(station_id, stations)
     _require_revision(station, expected_revision)
+    if points.any_for_station(station_id):
+        refuse(
+            _REFUSAL_EVENT,
+            DeviceRefusalCode.STATION_HAS_POINTS,
+            station_id=str(station_id),
+            actor_id=str(caller.user.id),
+        )
     if cameras.any_for_station(station_id):
         refuse(
             _REFUSAL_EVENT,

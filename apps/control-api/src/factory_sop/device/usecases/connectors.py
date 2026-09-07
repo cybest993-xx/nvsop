@@ -21,11 +21,13 @@ from factory_sop.device.repository import (
     CameraRepository,
     ConnectorRepository,
     InferenceHostRepository,
+    PointRepository,
     StationRepository,
 )
 from factory_sop.device.usecases._transitions import refuse
 from factory_sop.identifiers import new_id
 from factory_sop.observability import get_logger
+from nvsop_contracts import Capability, Unverified
 
 _logger = get_logger("device")
 _REFUSAL_EVENT = "device.connector.refused"
@@ -90,12 +92,19 @@ def edit_connector(
     hosts: InferenceHostRepository,
     connectors: ConnectorRepository,
     cameras: CameraRepository,
+    points: PointRepository,
 ) -> Connector:
-    """整体替换连接器配置；迁移拓扑时目标父对象必须活动。"""
+    """整体替换连接器配置；已有点位时不允许迁移到另一工位。"""
     authorize(caller, Permission.CONNECTOR_EDIT)
     current = _existing(connector_id, connectors)
     _require_revision(current, expected_revision)
     placement_changed = (current.station_id, current.host_id) != (station_id, host_id)
+    if current.station_id != station_id and points.any_for_connector(current.id):
+        refuse(
+            _REFUSAL_EVENT,
+            DeviceRefusalCode.CONNECTOR_HAS_POINTS,
+            connector_id=str(current.id),
+        )
     if placement_changed:
         _active_station(station_id, stations)
         _active_host(host_id, hosts)
@@ -166,11 +175,18 @@ def delete_connector(
     expected_revision: int,
     caller: Caller,
     connectors: ConnectorRepository,
+    points: PointRepository,
 ) -> None:
-    """按版本删除连接器；本阶段没有点位或委托命令子表。"""
+    """仅在点位移除后按版本删除连接器。"""
     authorize(caller, Permission.CONNECTOR_DELETE)
     connector = _existing(connector_id, connectors)
     _require_revision(connector, expected_revision)
+    if points.any_for_connector(connector_id):
+        refuse(
+            _REFUSAL_EVENT,
+            DeviceRefusalCode.CONNECTOR_HAS_POINTS,
+            connector_id=str(connector_id),
+        )
     if not connectors.remove(connector_id, expected_revision=expected_revision):
         refuse(
             _REFUSAL_EVENT, DeviceRefusalCode.CONNECTOR_NOT_FOUND, connector_id=str(connector_id)
@@ -178,6 +194,35 @@ def delete_connector(
     _logger.info(
         "device.connector.deleted", connector_id=str(connector_id), actor_id=str(caller.user.id)
     )
+
+
+def update_connector_capability(
+    *,
+    connector_id: UUID,
+    capability: Capability,
+    expected_revision: int,
+    caller: Caller,
+    now: datetime,
+    connectors: ConnectorRepository,
+) -> Connector:
+    """以连接器编辑权限记录真实测量能力，或显式重置为未验证。"""
+    authorize(caller, Permission.CONNECTOR_EDIT)
+    connector = _existing(connector_id, connectors)
+    _require_revision(connector, expected_revision)
+    updated = replace(
+        connector,
+        capability=capability,
+        revision=connector.revision + 1,
+        updated_by=caller.user.id,
+        updated_at=now,
+    )
+    connectors.save(updated, expected_revision=expected_revision)
+    _logger.info(
+        "device.connector.capability_updated",
+        connector_id=str(connector_id),
+        actor_id=str(caller.user.id),
+    )
+    return updated
 
 
 def connector_by_identifier(
@@ -227,6 +272,12 @@ def _build(
         or existing.connector_type != ConnectorType(connector_type)
         or existing.configuration != parsed
     )
+    measurement_changed = existing is None or (
+        existing.station_id != station_id
+        or existing.host_id != host_id
+        or existing.connector_type != ConnectorType(connector_type)
+        or existing.configuration != parsed
+    )
     return Connector(
         id=existing.id if existing is not None else new_id(),
         station_id=station_id,
@@ -243,6 +294,9 @@ def _build(
             else ConnectorReachability.UNVERIFIED
         ),
         health_detail=None if changed else existing.health_detail if existing is not None else None,
+        capability=(
+            Unverified() if measurement_changed or existing is None else existing.capability
+        ),
         status=existing.status if existing is not None else DeviceStatus.ACTIVE,
         revision=existing.revision + 1 if existing is not None else 1,
         created_by=existing.created_by if existing is not None else caller_id,

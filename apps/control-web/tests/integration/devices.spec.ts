@@ -286,6 +286,32 @@ describe('工位与设备中的连接器', () => {
     expect(wrapper.text()).toContain('未验证')
   })
 
+  it('renders the connector reachability reported by the control plane', async () => {
+    const reachable = { ...CONNECTOR, reachability: 'reachable' }
+    api.readConnectors.mockResolvedValue({ items: [reachable], page: 1, page_size: 50, total: 1 })
+    api.readConnector.mockResolvedValue(reachable)
+    const session = useSessionStore()
+    session.current = {
+      user_id: 'admin-reachability',
+      login_name: 'administrator',
+      display_name: '系统管理员',
+      expires_at: '2026-09-07T13:00:00Z',
+      permissions: ['device.connector.view', 'device.inference_host.view', 'device.station.view'],
+    }
+
+    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('可达')
+    expect(wrapper.text()).not.toContain('连接状态未验证')
+
+    await wrapper
+      .findAll('button')
+      .find((button) => button.text() === '详情')!
+      .trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('连接状态可达')
+  })
+
   it('edits the whole placement with the revision it read', async () => {
     api.editConnector.mockResolvedValue(CONNECTOR)
     const session = useSessionStore()

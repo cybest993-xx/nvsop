@@ -31,6 +31,8 @@ import {
 } from '@/api/controlPlane'
 import { useSessionStore } from '@/session/store'
 
+import PointManagement from './PointManagement.vue'
+
 interface ConnectorDraft {
   name: string
   connector_type: string
@@ -93,6 +95,24 @@ function connectorTypeLabel(type: string): string {
       return '板卡连接器'
     default:
       return `未知连接器类型（${type}）`
+  }
+}
+
+interface ReachabilityPresentation {
+  label: string
+  tag: 'success' | 'danger' | 'warning'
+}
+
+function reachabilityPresentation(value: string): ReachabilityPresentation {
+  switch (value) {
+    case 'reachable':
+      return { label: '可达', tag: 'success' }
+    case 'unreachable':
+      return { label: '不可达', tag: 'danger' }
+    case 'unverified':
+      return { label: '未验证', tag: 'warning' }
+    default:
+      return { label: `未知连接状态（${value}）`, tag: 'warning' }
   }
 }
 
@@ -333,7 +353,7 @@ const detailRows = computed(() => {
     ['所属推理机', hostNames.value.get(connector.host_id) ?? connector.host_id],
     ['地址', address],
     ['凭据', connector.credentials_configured ? '已配置' : '未配置'],
-    ['连接状态', '未验证'],
+    ['连接状态', reachabilityPresentation(connector.reachability).label],
     ['状态', statusPresentation(connector.status).label],
     ['修订号', String(connector.revision)],
   ].map(([label, value]) => ({ label, value }))
@@ -365,7 +385,7 @@ onMounted(load)
       <div>
         <p class="devices__eyebrow">配置中心 / 设备</p>
         <h1 id="devices-heading" class="devices__heading">工位与设备</h1>
-        <p class="devices__intro">管理连接器的归属与非秘密连接参数。保存后状态保持未验证。</p>
+        <p class="devices__intro">管理连接器与点位的归属、语义和非秘密配置；实测能力单独登记。</p>
       </div>
       <ElButton v-if="mayEditConnectors" type="primary" @click="openConnectorDialog('create')">
         新建连接器
@@ -428,7 +448,14 @@ onMounted(load)
                 {{ connector.credentials_configured ? '已配置' : '未配置' }}
               </ElTag>
             </td>
-            <td><ElTag type="warning" disable-transitions>未验证</ElTag></td>
+            <td>
+              <ElTag
+                :type="reachabilityPresentation(connector.reachability).tag"
+                disable-transitions
+              >
+                {{ reachabilityPresentation(connector.reachability).label }}
+              </ElTag>
+            </td>
             <td>
               <ElTag :type="statusPresentation(connector.status).tag" disable-transitions>
                 {{ statusPresentation(connector.status).label }}
@@ -591,6 +618,8 @@ onMounted(load)
         </template>
       </dl>
     </ElDialog>
+
+    <PointManagement :connectors="connectors" :stations="stations" @changed="load" />
   </section>
 </template>
 

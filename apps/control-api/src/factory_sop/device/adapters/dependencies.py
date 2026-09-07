@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session as DatabaseSession
 from factory_sop.device.adapters.probe import UrllibConnectionProbe
 from factory_sop.device.adapters.repository import (
     PostgresCameraRepository,
+    PostgresConnectorRepository,
     PostgresInferenceBackendRepository,
     PostgresInferenceHostRepository,
     PostgresStationRepository,
@@ -22,6 +23,7 @@ from factory_sop.device.adapters.repository import (
 from factory_sop.device.probing import ConnectionProbe
 from factory_sop.device.repository import (
     CameraRepository,
+    ConnectorRepository,
     InferenceBackendRepository,
     InferenceHostRepository,
     StationRepository,
@@ -53,6 +55,13 @@ def cameras(
 ) -> CameraRepository:
     """请求事务中的 `device_camera`。"""
     return PostgresCameraRepository(session)
+
+
+def connectors(
+    session: Annotated[DatabaseSession, Depends(request_session)],
+) -> ConnectorRepository:
+    """请求事务中的 `device_connector`。"""
+    return PostgresConnectorRepository(session)
 
 
 def probe() -> ConnectionProbe:

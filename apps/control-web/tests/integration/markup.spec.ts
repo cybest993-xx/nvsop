@@ -21,6 +21,7 @@ import { createRouter, createWebHistory, type Router } from 'vue-router'
 import { flushPromises } from '@vue/test-utils'
 
 import AccessView from '@/modules/access/AccessView.vue'
+import DevicesView from '@/modules/devices/DevicesView.vue'
 import AppShell from '@/shell/AppShell.vue'
 import LoginView from '@/session/LoginView.vue'
 import { useSessionStore } from '@/session/store'
@@ -69,6 +70,26 @@ const ACCESS_FIXTURES = vi.hoisted(() => ({
   ],
 }))
 
+const DEVICE_FIXTURES = vi.hoisted(() => ({
+  connectors: [
+    {
+      id: 'connector-1',
+      station_id: 'station-1',
+      host_id: 'host-1',
+      name: '装配线输入',
+      connector_type: 'hikvision_isapi' as const,
+      configuration: { address: '192.168.10.21', port: 80 },
+      credentials_configured: true,
+      reachability: 'unverified',
+      health_detail: null,
+      status: 'active' as const,
+      revision: 3,
+    },
+  ],
+  hosts: [{ id: 'host-1', name: '推理机 A' }],
+  stations: [{ id: 'station-1', code: 'A-01', name: '一号装配工位' }],
+}))
+
 vi.mock('@/api/controlPlane', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/controlPlane')>()),
   readUsers: vi.fn(() =>
@@ -79,6 +100,20 @@ vi.mock('@/api/controlPlane', async (importOriginal) => ({
   ),
   readPermissionCatalogue: vi.fn(() =>
     Promise.resolve({ items: ACCESS_FIXTURES.catalogue, page: 1, page_size: 50, total: 6 }),
+  ),
+  readConnectors: vi.fn(() =>
+    Promise.resolve({
+      items: DEVICE_FIXTURES.connectors,
+      page: 1,
+      page_size: 50,
+      total: DEVICE_FIXTURES.connectors.length,
+    }),
+  ),
+  readInferenceHosts: vi.fn(() =>
+    Promise.resolve({ items: DEVICE_FIXTURES.hosts, page: 1, page_size: 50, total: 1 }),
+  ),
+  readStations: vi.fn(() =>
+    Promise.resolve({ items: DEVICE_FIXTURES.stations, page: 1, page_size: 50, total: 1 }),
   ),
 }))
 
@@ -150,6 +185,41 @@ describe('the access page', () => {
     }
 
     const wrapper = mount(AccessView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(normalize(wrapper.html())).toMatchSnapshot()
+  })
+})
+
+describe('the device page', () => {
+  function mountAsDeviceAdmin() {
+    useSessionStore().current = {
+      ...SESSION,
+      permissions: [
+        'device.connector.view',
+        'device.connector.edit',
+        'device.connector.delete',
+        'device.inference_host.view',
+        'device.station.view',
+      ],
+    }
+    return mount(DevicesView, { global: { plugins: [ElementPlus] } })
+  }
+
+  it('renders connector configuration without a test or secret control', async () => {
+    const wrapper = mountAsDeviceAdmin()
+    await flushPromises()
+
+    expect(normalize(wrapper.html())).toMatchSnapshot()
+  })
+
+  it('renders the connector form with only non-secret fields', async () => {
+    const wrapper = mountAsDeviceAdmin()
+    await flushPromises()
+    await wrapper
+      .findAll('button')
+      .find((button) => button.text() === '新建连接器')!
+      .trigger('click')
     await flushPromises()
 
     expect(normalize(wrapper.html())).toMatchSnapshot()

@@ -9,22 +9,36 @@
 
 import { client } from '@/api/generated/client.gen'
 import {
+  createConnector as generatedCreateConnector,
   createRole as generatedCreateRole,
   createUser as generatedCreateUser,
+  deleteConnector as generatedDeleteConnector,
   deleteRole as generatedDeleteRole,
   deleteUser as generatedDeleteUser,
+  editConnector as generatedEditConnector,
   editRole as generatedEditRole,
   editUser as generatedEditUser,
   endSession as generatedEndSession,
+  listConnectors as generatedListConnectors,
+  listInferenceHosts as generatedListInferenceHosts,
   listPermissions as generatedListPermissions,
   listRoles as generatedListRoles,
+  listStations as generatedListStations,
   listUsers as generatedListUsers,
   openSession as generatedOpenSession,
+  readConnector as generatedReadConnector,
   readSession as generatedReadSession,
   resetUserPassword as generatedResetUserPassword,
+  setConnectorStatus as generatedSetConnectorStatus,
   setUserRoles as generatedSetUserRoles,
   setUserStatus as generatedSetUserStatus,
+  type ConnectorPlacement,
+  type ConnectorView,
+  type DeviceStatus,
+  type ItemPageConnectorView,
+  type ItemPageInferenceHostView,
   type ItemPageRoleView,
+  type ItemPageStationView,
   type ItemPageStr,
   type ItemPageUserView,
   type ProblemDocument,
@@ -34,7 +48,20 @@ import {
   type UserView,
 } from '@/api/generated'
 
-export type { RoleView, SessionView, StatusChanged, UserView } from '@/api/generated'
+export type {
+  ConnectorPlacement,
+  ConnectorView,
+  DeviceStatus,
+  InferenceHostView,
+  ItemPageConnectorView,
+  ItemPageInferenceHostView,
+  ItemPageStationView,
+  RoleView,
+  SessionView,
+  StationView,
+  StatusChanged,
+  UserView,
+} from '@/api/generated'
 
 const CSRF_COOKIE = 'sop_csrf'
 const CSRF_HEADER = 'x-csrf-token'
@@ -179,6 +206,65 @@ export function readSession(): Promise<SessionView> {
 
 export function endSession(): Promise<void> {
   return execute(generatedEndSession())
+}
+
+// ——— 工位与设备：页面只通过生成客户端访问控制面。 ———
+
+export function readConnectors(): Promise<ItemPageConnectorView> {
+  return execute(generatedListConnectors())
+}
+
+export function readConnector(connectorId: string): Promise<ConnectorView> {
+  return execute(generatedReadConnector({ path: { connector_id: connectorId } }))
+}
+
+export function readInferenceHosts(): Promise<ItemPageInferenceHostView> {
+  return execute(generatedListInferenceHosts())
+}
+
+export function readStations(): Promise<ItemPageStationView> {
+  return execute(generatedListStations())
+}
+
+export function createConnector(submitted: ConnectorPlacement): Promise<ConnectorView> {
+  return execute(generatedCreateConnector({ body: submitted }))
+}
+
+export function editConnector(
+  connectorId: string,
+  submitted: ConnectorPlacement,
+  revision: number,
+): Promise<ConnectorView> {
+  return execute(
+    generatedEditConnector({
+      path: { connector_id: connectorId },
+      headers: { 'If-Match': revision },
+      body: submitted,
+    }),
+  )
+}
+
+export function setConnectorStatus(
+  connectorId: string,
+  status: DeviceStatus,
+  revision: number,
+): Promise<ConnectorView> {
+  return execute(
+    generatedSetConnectorStatus({
+      path: { connector_id: connectorId },
+      headers: { 'If-Match': revision },
+      body: { status },
+    }),
+  )
+}
+
+export function deleteConnector(connectorId: string, revision: number): Promise<void> {
+  return execute(
+    generatedDeleteConnector({
+      path: { connector_id: connectorId },
+      headers: { 'If-Match': revision },
+    }),
+  )
 }
 
 // ——— 用户与权限 (C2.2): the administration calls, thin over the generated SDK. ———

@@ -6,6 +6,9 @@ import type {
   CreateCameraData,
   CreateCameraErrors,
   CreateCameraResponses,
+  CreateConnectorData,
+  CreateConnectorErrors,
+  CreateConnectorResponses,
   CreateInferenceBackendData,
   CreateInferenceBackendErrors,
   CreateInferenceBackendResponses,
@@ -24,6 +27,9 @@ import type {
   DeleteCameraData,
   DeleteCameraErrors,
   DeleteCameraResponses,
+  DeleteConnectorData,
+  DeleteConnectorErrors,
+  DeleteConnectorResponses,
   DeleteInferenceBackendData,
   DeleteInferenceBackendErrors,
   DeleteInferenceBackendResponses,
@@ -42,6 +48,9 @@ import type {
   EditCameraData,
   EditCameraErrors,
   EditCameraResponses,
+  EditConnectorData,
+  EditConnectorErrors,
+  EditConnectorResponses,
   EditInferenceBackendData,
   EditInferenceBackendErrors,
   EditInferenceBackendResponses,
@@ -63,6 +72,9 @@ import type {
   ListCamerasData,
   ListCamerasErrors,
   ListCamerasResponses,
+  ListConnectorsData,
+  ListConnectorsErrors,
+  ListConnectorsResponses,
   ListInferenceBackendsData,
   ListInferenceBackendsErrors,
   ListInferenceBackendsResponses,
@@ -87,6 +99,9 @@ import type {
   ReadCameraData,
   ReadCameraErrors,
   ReadCameraResponses,
+  ReadConnectorData,
+  ReadConnectorErrors,
+  ReadConnectorResponses,
   ReadInferenceBackendData,
   ReadInferenceBackendErrors,
   ReadInferenceBackendResponses,
@@ -108,6 +123,9 @@ import type {
   SetCameraStatusData,
   SetCameraStatusErrors,
   SetCameraStatusResponses,
+  SetConnectorStatusData,
+  SetConnectorStatusErrors,
+  SetConnectorStatusResponses,
   SetInferenceBackendStatusData,
   SetInferenceBackendStatusErrors,
   SetInferenceBackendStatusResponses,
@@ -482,6 +500,88 @@ export const setCameraStatus = <ThrowOnError extends boolean = false>(
 ): RequestResult<SetCameraStatusResponses, SetCameraStatusErrors, ThrowOnError> =>
   (options.client ?? client).put<SetCameraStatusResponses, SetCameraStatusErrors, ThrowOnError>({
     url: '/api/v1/cameras/{camera_id}/status',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * List The Connectors
+ */
+export const listConnectors = <ThrowOnError extends boolean = false>(
+  options?: Options<ListConnectorsData, ThrowOnError>,
+): RequestResult<ListConnectorsResponses, ListConnectorsErrors, ThrowOnError> =>
+  (options?.client ?? client).get<ListConnectorsResponses, ListConnectorsErrors, ThrowOnError>({
+    url: '/api/v1/connectors',
+    ...options,
+  })
+
+/**
+ * Create A Connector
+ */
+export const createConnector = <ThrowOnError extends boolean = false>(
+  options: Options<CreateConnectorData, ThrowOnError>,
+): RequestResult<CreateConnectorResponses, CreateConnectorErrors, ThrowOnError> =>
+  (options.client ?? client).post<CreateConnectorResponses, CreateConnectorErrors, ThrowOnError>({
+    url: '/api/v1/connectors',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Delete A Connector
+ */
+export const deleteConnector = <ThrowOnError extends boolean = false>(
+  options: Options<DeleteConnectorData, ThrowOnError>,
+): RequestResult<DeleteConnectorResponses, DeleteConnectorErrors, ThrowOnError> =>
+  (options.client ?? client).delete<DeleteConnectorResponses, DeleteConnectorErrors, ThrowOnError>({
+    url: '/api/v1/connectors/{connector_id}',
+    ...options,
+  })
+
+/**
+ * Read A Connector
+ */
+export const readConnector = <ThrowOnError extends boolean = false>(
+  options: Options<ReadConnectorData, ThrowOnError>,
+): RequestResult<ReadConnectorResponses, ReadConnectorErrors, ThrowOnError> =>
+  (options.client ?? client).get<ReadConnectorResponses, ReadConnectorErrors, ThrowOnError>({
+    url: '/api/v1/connectors/{connector_id}',
+    ...options,
+  })
+
+/**
+ * Edit A Connector
+ */
+export const editConnector = <ThrowOnError extends boolean = false>(
+  options: Options<EditConnectorData, ThrowOnError>,
+): RequestResult<EditConnectorResponses, EditConnectorErrors, ThrowOnError> =>
+  (options.client ?? client).patch<EditConnectorResponses, EditConnectorErrors, ThrowOnError>({
+    url: '/api/v1/connectors/{connector_id}',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Set The Connector Status
+ */
+export const setConnectorStatus = <ThrowOnError extends boolean = false>(
+  options: Options<SetConnectorStatusData, ThrowOnError>,
+): RequestResult<SetConnectorStatusResponses, SetConnectorStatusErrors, ThrowOnError> =>
+  (options.client ?? client).put<
+    SetConnectorStatusResponses,
+    SetConnectorStatusErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/connectors/{connector_id}/status',
     ...options,
     headers: {
       'Content-Type': 'application/json',

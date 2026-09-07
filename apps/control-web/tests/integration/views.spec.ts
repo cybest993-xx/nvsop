@@ -49,6 +49,7 @@ function testRouter(): Router {
     routes: [
       { path: '/login', name: 'login', component: blank },
       { path: '/', name: 'overview', component: blank },
+      { path: '/devices', name: 'devices', component: blank },
       // The shell links to it when the caller holds an `auth` view permission. Present here without
       // the real guard: what these tests are about is which items the shell renders, and the guard
       // has its own suite.
@@ -260,7 +261,7 @@ describe('the protected shell', () => {
 
   it('offers the five navigation sections to a caller who may see all of them', async () => {
     // §5.4 fixes them and their order.
-    const { wrapper } = await mountShell(['auth.user.view'])
+    const { wrapper } = await mountShell(['auth.user.view', 'device.connector.view'])
 
     const labels = wrapper.findAll('nav li').map((item) => item.text())
 
@@ -282,7 +283,7 @@ describe('the protected shell', () => {
     const labels = wrapper.findAll('nav li').map((item) => item.text())
 
     expect(labels.some((label) => label.includes('用户与权限'))).toBe(false)
-    expect(labels).toHaveLength(4)
+    expect(labels).toHaveLength(3)
   })
 
   it('marks a section that does not exist yet in words as well as in colour', async () => {
@@ -295,7 +296,7 @@ describe('the protected shell', () => {
 
     const pending = wrapper.findAll('nav [aria-disabled="true"]')
 
-    expect(pending).toHaveLength(3)
+    expect(pending).toHaveLength(2)
     expect(pending[0]!.text()).toContain('（未上线）')
   })
 

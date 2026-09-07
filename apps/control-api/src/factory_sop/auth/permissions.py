@@ -69,6 +69,9 @@ class Permission(StrEnum):
     CAMERA_VIEW = "device.camera.view"
     CAMERA_EDIT = "device.camera.edit"
     CAMERA_DELETE = "device.camera.delete"
+    CONNECTOR_VIEW = "device.connector.view"
+    CONNECTOR_EDIT = "device.connector.edit"
+    CONNECTOR_DELETE = "device.connector.delete"
 
 
 class UnregisteredPermissionError(Exception):

@@ -10,6 +10,7 @@ import pytest
 from auth_fakes import FakeRoles, FakeSessions, FakeUsers
 from device_fakes import (
     FakeCameras,
+    FakeConnectors,
     FakeInferenceBackends,
     FakeInferenceHosts,
     FakeInferenceStations,
@@ -86,6 +87,7 @@ class Center:
         self.backends = FakeInferenceBackends()
         self.stations = FakeInferenceStations()
         self.cameras = FakeCameras()
+        self.connectors = FakeConnectors()
         self.granted = ALL_DEVICE_PERMISSIONS
         self.app = create_app(settings())
         self.app.dependency_overrides[auth_dependencies.users] = lambda: self.users
@@ -96,6 +98,7 @@ class Center:
         self.app.dependency_overrides[device_dependencies.backends] = lambda: self.backends
         self.app.dependency_overrides[device_dependencies.stations] = lambda: self.stations
         self.app.dependency_overrides[device_dependencies.cameras] = lambda: self.cameras
+        self.app.dependency_overrides[device_dependencies.connectors] = lambda: self.connectors
         self.client = TestClient(self.app, base_url="https://testserver")
         self.users.register(login_name=CREDENTIALS["login_name"], password=CREDENTIALS["password"])
         assert self.client.post(f"{API_PREFIX}/auth/session", json=CREDENTIALS).status_code == 201

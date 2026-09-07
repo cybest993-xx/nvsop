@@ -9,6 +9,7 @@ from auth_fakes import caller_holding
 from device_fakes import (
     FAKE_NOW,
     FakeCameras,
+    FakeConnectors,
     FakeInferenceBackends,
     FakeInferenceHosts,
     FakeInferenceStations,
@@ -58,6 +59,7 @@ def test_create_station_keeps_its_unique_code_name_tags_and_attribution() -> Non
 def test_station_crud_has_a_reversible_status_and_delete_keeps_camera_history_guarded() -> None:
     stations = FakeInferenceStations()
     cameras = FakeCameras()
+    connectors = FakeConnectors()
     caller = caller_holding(
         Permission.STATION_VIEW, Permission.STATION_EDIT, Permission.STATION_DELETE
     )
@@ -109,22 +111,28 @@ def test_station_crud_has_a_reversible_status_and_delete_keeps_camera_history_gu
             caller=caller,
             stations=stations,
             cameras=cameras,
+            connectors=connectors,
         )
     assert refused.value.code is DeviceRefusalCode.STATION_HAS_CAMERAS
 
 
 def _topology() -> tuple[
-    FakeInferenceStations, FakeInferenceHosts, FakeInferenceBackends, FakeCameras
+    FakeInferenceStations,
+    FakeInferenceHosts,
+    FakeInferenceBackends,
+    FakeCameras,
+    FakeConnectors,
 ]:
     stations = FakeInferenceStations()
     hosts = FakeInferenceHosts()
     backends = FakeInferenceBackends()
     cameras = FakeCameras()
-    return stations, hosts, backends, cameras
+    connectors = FakeConnectors()
+    return stations, hosts, backends, cameras, connectors
 
 
 def test_camera_saves_both_stream_paths_offline_with_credentials_as_status_only() -> None:
-    stations, hosts, backends, cameras = _topology()
+    stations, hosts, backends, cameras, connectors = _topology()
     station = stations.register(code="A-001", name="装配一号工位")
     host = hosts.register(name="推理机-1")
     backend = backends.register(host_id=host.id, base_url="http://10.0.8.11:8000")
@@ -144,6 +152,7 @@ def test_camera_saves_both_stream_paths_offline_with_credentials_as_status_only(
         hosts=hosts,
         backends=backends,
         cameras=cameras,
+        connectors=connectors,
     )
 
     assert camera.credentials_configured is False
@@ -155,7 +164,7 @@ def test_camera_saves_both_stream_paths_offline_with_credentials_as_status_only(
 
 
 def test_camera_use_cases_authorize_each_public_operation() -> None:
-    stations, hosts, backends, cameras = _topology()
+    stations, hosts, backends, cameras, _connectors = _topology()
     station = stations.register(code="A-001", name="装配一号工位")
     host = hosts.register(name="推理机-1")
     backend = backends.register(host_id=host.id, base_url="http://10.0.8.11:8000")
@@ -175,7 +184,7 @@ def test_camera_use_cases_authorize_each_public_operation() -> None:
 
 
 def test_camera_rejects_a_host_and_backend_from_different_machines_with_field_errors() -> None:
-    stations, hosts, backends, cameras = _topology()
+    stations, hosts, backends, cameras, connectors = _topology()
     station = stations.register(code="A-001", name="装配一号工位")
     host_a = hosts.register(name="推理机-1")
     host_b = hosts.register(name="推理机-2")
@@ -196,6 +205,7 @@ def test_camera_rejects_a_host_and_backend_from_different_machines_with_field_er
             hosts=hosts,
             backends=backends,
             cameras=cameras,
+            connectors=connectors,
         )
 
     assert refused.value.code is DeviceRefusalCode.CAMERA_HOST_BACKEND_MISMATCH
@@ -203,7 +213,7 @@ def test_camera_rejects_a_host_and_backend_from_different_machines_with_field_er
 
 
 def test_cameras_of_one_station_cannot_cross_hosts_or_backend_templates() -> None:
-    stations, hosts, backends, cameras = _topology()
+    stations, hosts, backends, cameras, connectors = _topology()
     station = stations.register(code="A-001", name="装配一号工位")
     host_a = hosts.register(name="推理机-1")
     host_b = hosts.register(name="推理机-2")
@@ -233,6 +243,7 @@ def test_cameras_of_one_station_cannot_cross_hosts_or_backend_templates() -> Non
             hosts=hosts,
             backends=backends,
             cameras=cameras,
+            connectors=connectors,
         )
     assert host_refused.value.code is DeviceRefusalCode.CAMERA_STATION_HOST_CONFLICT
     assert host_refused.value.field_errors[0].field == "host_id"
@@ -252,13 +263,14 @@ def test_cameras_of_one_station_cannot_cross_hosts_or_backend_templates() -> Non
             hosts=hosts,
             backends=backends,
             cameras=cameras,
+            connectors=connectors,
         )
     assert template_refused.value.code is DeviceRefusalCode.CAMERA_STATION_TEMPLATE_CONFLICT
     assert template_refused.value.field_errors[0].field == "backend_id"
 
 
 def test_camera_deactivation_preserves_association_and_delete_is_separate() -> None:
-    stations, hosts, backends, cameras = _topology()
+    stations, hosts, backends, cameras, _connectors = _topology()
     station = stations.register(code="A-001", name="装配一号工位")
     host = hosts.register(name="推理机-1")
     backend = backends.register(host_id=host.id, base_url="http://10.0.8.11:8000")
@@ -296,7 +308,7 @@ def test_camera_deactivation_preserves_association_and_delete_is_separate() -> N
 
 
 def test_edit_camera_refuses_stale_revision_before_changing_streams() -> None:
-    stations, hosts, backends, cameras = _topology()
+    stations, hosts, backends, cameras, connectors = _topology()
     station = stations.register(code="A-001", name="装配一号工位")
     host = hosts.register(name="推理机-1")
     backend = backends.register(host_id=host.id, base_url="http://10.0.8.11:8000")
@@ -319,6 +331,7 @@ def test_edit_camera_refuses_stale_revision_before_changing_streams() -> None:
             hosts=hosts,
             backends=backends,
             cameras=cameras,
+            connectors=connectors,
         )
     assert refused.value.code is DeviceRefusalCode.STALE_REVISION
     assert cameras.by_id(camera.id) == camera

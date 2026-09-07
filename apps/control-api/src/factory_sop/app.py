@@ -32,6 +32,7 @@ from factory_sop.auth.errors import (
 from factory_sop.auth.model import SessionPolicy
 from factory_sop.device.adapters.routes_backends import router as inference_backends_router
 from factory_sop.device.adapters.routes_cameras import router as cameras_router
+from factory_sop.device.adapters.routes_connectors import router as connectors_router
 from factory_sop.device.adapters.routes_hosts import router as inference_hosts_router
 from factory_sop.device.adapters.routes_stations import router as stations_router
 from factory_sop.device.errors import DeviceRefusedError
@@ -109,6 +110,7 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(inference_backends_router, prefix=API_PREFIX)
     app.include_router(stations_router, prefix=API_PREFIX)
     app.include_router(cameras_router, prefix=API_PREFIX)
+    app.include_router(connectors_router, prefix=API_PREFIX)
     app.include_router(auth_role_administration.router, prefix=API_PREFIX)
     app.include_router(auth_user_administration.router, prefix=API_PREFIX)
 

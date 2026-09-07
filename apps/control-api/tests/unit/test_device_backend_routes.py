@@ -11,7 +11,7 @@ from uuid import UUID
 
 import pytest
 from auth_fakes import FakeRoles, FakeSessions, FakeUsers
-from device_fakes import FakeInferenceBackends, FakeInferenceHosts, FakeProbe
+from device_fakes import FakeConnectors, FakeInferenceBackends, FakeInferenceHosts, FakeProbe
 from fastapi.testclient import TestClient
 from httpx2 import Response as HttpResponse
 from pydantic import SecretStr
@@ -74,6 +74,7 @@ class Center:
         self.roles = FakeRoles(users=self.users)
         self.hosts = FakeInferenceHosts()
         self.backends = FakeInferenceBackends()
+        self.connectors = FakeConnectors()
         self.probe = FakeProbe()
         self.granted: frozenset[Permission] = frozenset()
         self.app = create_app(settings())
@@ -83,6 +84,7 @@ class Center:
         self.app.dependency_overrides[auth_dependencies.granted_permissions] = lambda: self.granted
         self.app.dependency_overrides[device_dependencies.hosts] = lambda: self.hosts
         self.app.dependency_overrides[device_dependencies.backends] = lambda: self.backends
+        self.app.dependency_overrides[device_dependencies.connectors] = lambda: self.connectors
         self.app.dependency_overrides[device_dependencies.probe] = lambda: self.probe
         self.client = TestClient(self.app, base_url="https://testserver")
 

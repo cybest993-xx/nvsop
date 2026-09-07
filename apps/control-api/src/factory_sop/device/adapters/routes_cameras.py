@@ -9,10 +9,11 @@ from pydantic import BaseModel, Field, field_validator
 
 from factory_sop.auth.api import Authorized, Permission, needs
 from factory_sop.device.adapters import route_support
-from factory_sop.device.adapters.dependencies import backends, cameras, hosts, stations
+from factory_sop.device.adapters.dependencies import backends, cameras, connectors, hosts, stations
 from factory_sop.device.model import Camera, DeviceStatus, carries_userinfo
 from factory_sop.device.repository import (
     CameraRepository,
+    ConnectorRepository,
     InferenceBackendRepository,
     InferenceHostRepository,
     StationRepository,
@@ -89,6 +90,7 @@ def create_a_camera(
     host_store: Annotated[InferenceHostRepository, Depends(hosts)],
     backend_store: Annotated[InferenceBackendRepository, Depends(backends)],
     camera_store: Annotated[CameraRepository, Depends(cameras)],
+    connector_store: Annotated[ConnectorRepository, Depends(connectors)],
 ) -> CameraView:
     return _view(
         create_camera(
@@ -99,6 +101,7 @@ def create_a_camera(
             hosts=host_store,
             backends=backend_store,
             cameras=camera_store,
+            connectors=connector_store,
         )
     )
 
@@ -158,6 +161,7 @@ def edit_a_camera(
     host_store: Annotated[InferenceHostRepository, Depends(hosts)],
     backend_store: Annotated[InferenceBackendRepository, Depends(backends)],
     camera_store: Annotated[CameraRepository, Depends(cameras)],
+    connector_store: Annotated[ConnectorRepository, Depends(connectors)],
     if_match: Annotated[int, Header(alias="If-Match")],
 ) -> CameraView:
     return _view(
@@ -171,6 +175,7 @@ def edit_a_camera(
             hosts=host_store,
             backends=backend_store,
             cameras=camera_store,
+            connectors=connector_store,
         )
     )
 

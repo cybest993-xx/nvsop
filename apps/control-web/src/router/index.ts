@@ -1,9 +1,9 @@
 /**
  * Routes, and the one guard that decides whether a caller may see them.
  *
- * Navigation is the five items §5.4 fixes. 概览 and 用户与权限 have views; the other three arrive
- * with their own tickets, and the shell shows them as not yet available rather than linking to an
- * empty page.
+ * Navigation is the five items §5.4 fixes. 概览、工位与设备 and 用户与权限 have views; the other
+ * two arrive with their own tickets, and the shell shows them as not yet available rather than
+ * linking to an empty page.
  */
 
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
@@ -26,6 +26,7 @@ declare module 'vue-router' {
 
 export const LOGIN_ROUTE = 'login'
 export const OVERVIEW_ROUTE = 'overview'
+export const DEVICES_ROUTE = 'devices'
 export const ACCESS_ROUTE = 'access'
 export const NOT_FOUND_ROUTE = 'not-found'
 
@@ -45,6 +46,15 @@ const routes: RouteRecordRaw[] = [
         name: OVERVIEW_ROUTE,
         component: () => import('@/modules/overview/OverviewView.vue'),
         meta: { title: '概览' },
+      },
+      {
+        path: 'devices',
+        name: DEVICES_ROUTE,
+        component: () => import('@/modules/devices/DevicesView.vue'),
+        meta: {
+          title: '工位与设备',
+          requires: ['device.connector.view', 'device.connector.edit', 'device.connector.delete'],
+        },
       },
       {
         path: 'access',

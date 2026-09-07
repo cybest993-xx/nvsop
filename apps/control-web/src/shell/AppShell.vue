@@ -2,7 +2,7 @@
 /**
  * The protected layout: everything a signed-in operator sees sits inside it.
  *
- * Navigation is §5.4's five items. Three of them have no page yet and are rendered as unavailable
+ * Navigation is §5.4's five items. Two of them have no page yet and are rendered as unavailable
  * rather than as links to an empty view — the shell says what exists. An item whose page exists but
  * whose permissions the caller does not hold is not rendered at all: "there but refused" would be a
  * dead end, whereas "not yet built" is a fact about the product worth showing.
@@ -12,7 +12,7 @@ import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { ControlPlaneError } from '@/api/controlPlane'
-import { ACCESS_ROUTE, LOGIN_ROUTE, OVERVIEW_ROUTE } from '@/router'
+import { ACCESS_ROUTE, DEVICES_ROUTE, LOGIN_ROUTE, OVERVIEW_ROUTE } from '@/router'
 import { useSessionStore } from '@/session/store'
 
 const session = useSessionStore()
@@ -44,7 +44,11 @@ interface NavigationItem {
 // §5.4's navigation, in its fixed order.
 const navigation: NavigationItem[] = [
   { label: '概览', route: OVERVIEW_ROUTE },
-  { label: '工位与设备', pending: '该功能尚未上线' },
+  {
+    label: '工位与设备',
+    route: DEVICES_ROUTE,
+    requires: ['device.connector.view', 'device.connector.edit', 'device.connector.delete'],
+  },
   { label: 'SOP 模板', pending: '该功能尚未上线' },
   { label: '训练数据集', pending: '该功能尚未上线' },
   {

@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 from auth_fakes import caller_holding
-from device_fakes import FAKE_NOW, FakeInferenceBackends, FakeInferenceHosts
+from device_fakes import FAKE_NOW, FakeConnectors, FakeInferenceBackends, FakeInferenceHosts
 
 from factory_sop.auth.api import Permission
 from factory_sop.device.usecases.hosts import create_host, delete_host
@@ -61,6 +61,7 @@ def test_the_host_lifecycle_logs_actor_object_and_outcome(log: io.StringIO) -> N
         caller=CALLER,
         hosts=hosts,
         backends=FakeInferenceBackends(),
+        connectors=FakeConnectors(),
     )
 
     records = lines(log)

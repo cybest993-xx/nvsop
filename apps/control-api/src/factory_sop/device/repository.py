@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import Protocol
 from uuid import UUID
 
-from factory_sop.device.model import Camera, InferenceBackend, InferenceHost, Station
+from factory_sop.device.model import Camera, Connector, InferenceBackend, InferenceHost, Station
 
 
 class InferenceHostRepository(Protocol):
@@ -145,4 +145,42 @@ class CameraRepository(Protocol):
         self, *, page: int, page_size: int, station_id: UUID | None
     ) -> tuple[list[Camera], int]:
         """返回按最新优先的一页，可选按工位过滤。"""
+        ...
+
+
+class ConnectorRepository(Protocol):
+    """`device_connector`，只保存中心允许的非秘密配置。"""
+
+    def add(self, connector: Connector) -> None:
+        """插入连接器；工位内名称必须唯一。"""
+        ...
+
+    def save(self, connector: Connector, *, expected_revision: int) -> None:
+        """按乐观锁版本替换连接器。"""
+        ...
+
+    def by_id(self, connector_id: UUID) -> Connector | None:
+        """按公开 UUID 读取连接器。"""
+        ...
+
+    def remove(self, connector_id: UUID, *, expected_revision: int) -> bool:
+        """按乐观锁版本删除连接器。"""
+        ...
+
+    def any_for_station(self, station_id: UUID) -> bool:
+        """报告工位是否仍有关联连接器，供工位删除保护使用。"""
+        ...
+
+    def any_for_host(self, host_id: UUID) -> bool:
+        """报告推理机是否仍承载连接器，供推理机删除保护使用。"""
+        ...
+
+    def for_station(self, station_id: UUID) -> list[Connector]:
+        """返回工位上的连接器，供相机和连接器拓扑校验使用。"""
+        ...
+
+    def page_of(
+        self, *, page: int, page_size: int, station_id: UUID | None
+    ) -> tuple[list[Connector], int]:
+        """按创建时间倒序列出连接器，可按工位筛选。"""
         ...

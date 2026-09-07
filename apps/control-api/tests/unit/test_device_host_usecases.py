@@ -13,7 +13,7 @@ from uuid import UUID
 
 import pytest
 from auth_fakes import caller_holding
-from device_fakes import FAKE_NOW, FakeInferenceBackends, FakeInferenceHosts
+from device_fakes import FAKE_NOW, FakeConnectors, FakeInferenceBackends, FakeInferenceHosts
 
 from factory_sop.auth.api import Permission
 from factory_sop.auth.authorization import AuthorizationRefusedError
@@ -319,6 +319,7 @@ def test_delete_refuses_a_stale_revision_before_removing_an_empty_host() -> None
             caller=CALLER,
             hosts=hosts,
             backends=FakeInferenceBackends(),
+            connectors=FakeConnectors(),
         )
 
     assert refused.value.code is DeviceRefusalCode.STALE_REVISION
@@ -351,6 +352,7 @@ def test_deleting_a_host_that_still_carries_a_backend_is_refused() -> None:
             caller=CALLER,
             hosts=hosts,
             backends=backends,
+            connectors=FakeConnectors(),
         )
 
     assert refused.value.code is DeviceRefusalCode.INFERENCE_HOST_HAS_BACKENDS
@@ -367,6 +369,7 @@ def test_deleting_an_empty_host_removes_it_and_a_missing_one_is_refused() -> Non
         caller=CALLER,
         hosts=hosts,
         backends=FakeInferenceBackends(),
+        connectors=FakeConnectors(),
     )
     assert hosts.by_id(host.id) is None
 
@@ -377,6 +380,7 @@ def test_deleting_an_empty_host_removes_it_and_a_missing_one_is_refused() -> Non
             caller=CALLER,
             hosts=hosts,
             backends=FakeInferenceBackends(),
+            connectors=FakeConnectors(),
         )
     assert refused.value.code is DeviceRefusalCode.INFERENCE_HOST_NOT_FOUND
 
@@ -412,6 +416,7 @@ def test_a_delete_race_reports_not_found_instead_of_logging_success() -> None:
             caller=CALLER,
             hosts=hosts,
             backends=FakeInferenceBackends(),
+            connectors=FakeConnectors(),
         )
 
     assert refused.value.code is DeviceRefusalCode.INFERENCE_HOST_NOT_FOUND

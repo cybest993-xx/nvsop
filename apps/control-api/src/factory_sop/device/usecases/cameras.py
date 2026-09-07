@@ -11,6 +11,7 @@ from factory_sop.device.errors import DeviceRefusalCode
 from factory_sop.device.model import Camera, DeviceStatus, InferenceBackend, InferenceHost, Station
 from factory_sop.device.repository import (
     CameraRepository,
+    ConnectorRepository,
     InferenceBackendRepository,
     InferenceHostRepository,
     StationRepository,
@@ -38,6 +39,7 @@ def create_camera(
     hosts: InferenceHostRepository,
     backends: InferenceBackendRepository,
     cameras: CameraRepository,
+    connectors: ConnectorRepository,
 ) -> Camera:
     """以离线安全的未配置凭据状态创建相机。"""
     authorize(caller, Permission.CAMERA_EDIT)
@@ -49,6 +51,7 @@ def create_camera(
         hosts=hosts,
         backends=backends,
         cameras=cameras,
+        connectors=connectors,
     )
     camera = Camera(
         id=new_id(),
@@ -96,6 +99,7 @@ def edit_camera(
     hosts: InferenceHostRepository,
     backends: InferenceBackendRepository,
     cameras: CameraRepository,
+    connectors: ConnectorRepository,
 ) -> Camera:
     """替换相机配置；只有新绑定才要求父级处于活动状态。"""
     authorize(caller, Permission.CAMERA_EDIT)
@@ -115,6 +119,7 @@ def edit_camera(
             hosts=hosts,
             backends=backends,
             cameras=cameras,
+            connectors=connectors,
             excluding_camera=camera.id,
         )
     else:
@@ -210,6 +215,7 @@ def _validate_binding(
     hosts: InferenceHostRepository,
     backends: InferenceBackendRepository,
     cameras: CameraRepository,
+    connectors: ConnectorRepository,
     excluding_camera: UUID | None = None,
 ) -> tuple[Station, InferenceHost, InferenceBackend]:
     station = _existing_station(station_id, stations)
@@ -232,6 +238,14 @@ def _validate_binding(
             host_id=str(host_id),
             backend_id=str(backend_id),
         )
+    for connector in connectors.for_station(station_id):
+        if connector.host_id != host_id:
+            refuse(
+                _REFUSAL_EVENT,
+                DeviceRefusalCode.CONNECTOR_STATION_HOST_CONFLICT,
+                station_id=str(station_id),
+                host_id=str(host_id),
+            )
     for existing in cameras.for_station(station_id):
         if existing.id == excluding_camera:
             continue

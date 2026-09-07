@@ -8,6 +8,7 @@ runs several, and cameras will hang off the backend, not the machine (§5.10).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -184,3 +185,92 @@ class Camera:
         for value in (self.address, self.main_stream_path, self.sub_stream_path):
             if carries_userinfo(value):
                 raise ValueError("camera URLs cannot carry credentials, queries, or fragments")
+
+
+class ConnectorType(StrEnum):
+    """中心支持的连接器配置类型。"""
+
+    HIKVISION_ISAPI = "hikvision_isapi"
+    BOARD_CARD = "board_card"
+
+
+class ConnectorReachability(StrEnum):
+    """连接器尚未由推理机真实验证时的显式状态。"""
+
+    UNVERIFIED = "unverified"
+    REACHABLE = "reachable"
+    UNREACHABLE = "unreachable"
+
+
+def contains_connector_credential(value: str) -> bool:
+    """拒绝地址中的凭据、查询串和片段，避免秘密进入中心。"""
+    parts = urlsplit(value)
+    return (
+        parts.username is not None
+        or parts.password is not None
+        or "?" in value
+        or "#" in value
+        or "@" in value
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectorConfiguration:
+    """连接器允许保存的非秘密参数；未知字段不属于本阶段契约。"""
+
+    address: str
+    port: int | None = None
+
+    def __post_init__(self) -> None:
+        if not self.address or len(self.address) > 255:
+            raise ValueError("connector address must be between 1 and 255 characters")
+        if contains_connector_credential(self.address):
+            raise ValueError("connector configuration cannot contain credentials")
+        if self.port is not None and not 1 <= self.port <= 65535:
+            raise ValueError("connector port must be between 1 and 65535")
+
+    @classmethod
+    def from_wire(cls, value: Mapping[str, object]) -> ConnectorConfiguration:
+        """从严格的 JSON 对象构造配置，不接受额外键或非标量值。"""
+        allowed = {"address", "port"}
+        if set(value) - allowed or "address" not in value:
+            raise ValueError("connector configuration fields are not supported")
+        address = value["address"]
+        port = value.get("port")
+        if not isinstance(address, str) or (
+            port is not None and (not isinstance(port, int) or isinstance(port, bool))
+        ):
+            raise ValueError("connector configuration has an invalid field type")
+        return cls(address=address, port=port)
+
+    def to_wire(self) -> dict[str, str | int]:
+        """返回可安全写入 JSONB 的配置对象。"""
+        result: dict[str, str | int] = {"address": self.address}
+        if self.port is not None:
+            result["port"] = self.port
+        return result
+
+
+@dataclass(frozen=True, slots=True)
+class Connector:
+    """绑定到工位和推理机的中心配置，不保存设备凭据。"""
+
+    id: UUID
+    station_id: UUID
+    host_id: UUID
+    name: str
+    connector_type: ConnectorType
+    configuration: ConnectorConfiguration
+    credentials_configured: bool
+    reachability: ConnectorReachability
+    health_detail: str | None
+    status: DeviceStatus
+    revision: int
+    created_by: UUID
+    updated_by: UUID
+    created_at: datetime
+    updated_at: datetime
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("connector name must not be empty")

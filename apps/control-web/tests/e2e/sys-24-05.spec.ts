@@ -1,5 +1,12 @@
 import { expect, test, type Page } from '@playwright/test'
 
+import type {
+  ConnectorPlacement,
+  ConnectorStatus,
+  ConnectorView,
+  PointView,
+} from '../../src/api/generated'
+
 const ADMIN_SESSION = {
   user_id: '018f0000-0000-7000-8000-00000000a501',
   login_name: 'wang.admin',
@@ -23,19 +30,37 @@ function envelope<T>(items: T[]) {
   return { items, page: 1, page_size: 50, total: items.length }
 }
 
-interface ConnectorFixture {
-  id: string
-  station_id: string
-  host_id: string
-  name: string
-  connector_type: 'hikvision_isapi'
-  configuration: { address: string; port: number }
-  credentials_configured: boolean
-  reachability: 'unverified'
-  health_detail: null
-  status: 'active' | 'deactivated'
-  revision: number
-}
+type ConnectorFixture = Pick<
+  ConnectorView,
+  | 'id'
+  | 'station_id'
+  | 'host_id'
+  | 'name'
+  | 'connector_type'
+  | 'configuration'
+  | 'credentials_configured'
+  | 'reachability'
+  | 'health_detail'
+  | 'capability'
+  | 'status'
+  | 'revision'
+>
+
+type PointFixture = Pick<
+  PointView,
+  | 'id'
+  | 'identifier'
+  | 'semantic_label'
+  | 'direction'
+  | 'station_id'
+  | 'connector_id'
+  | 'status'
+  | 'revision'
+  | 'created_at'
+  | 'created_by'
+  | 'updated_at'
+  | 'updated_by'
+>
 
 async function mockControlPlane(page: Page, sessionPayload = ADMIN_SESSION) {
   let signedIn = false
@@ -50,8 +75,23 @@ async function mockControlPlane(page: Page, sessionPayload = ADMIN_SESSION) {
     credentials_configured: false,
     reachability: 'unverified',
     health_detail: null,
-    status: 'active' as 'active' | 'deactivated',
+    status: 'active',
     revision: 1,
+    capability: { verification: 'unverified' },
+  }
+  const point: PointFixture = {
+    id: 'point-1',
+    identifier: 'DI-01',
+    semantic_label: '启动信号',
+    direction: 'input',
+    station_id: 'station-1',
+    connector_id: 'connector-1',
+    status: 'active',
+    revision: 1,
+    created_at: '2026-09-07T12:00:00Z',
+    created_by: 'system',
+    updated_at: '2026-09-07T12:00:00Z',
+    updated_by: 'system',
   }
 
   const json = (status: number, body: unknown, cookies: string[] = []) => ({
@@ -121,6 +161,22 @@ async function mockControlPlane(page: Page, sessionPayload = ADMIN_SESSION) {
     )
   })
 
+  await page.route('**/api/v1/points**', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill(json(200, envelope([point])))
+      return
+    }
+    await route.continue()
+  })
+
+  await page.route('**/api/v1/point-binding-validations', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill(json(200, { accepted: true, reasons: [] }))
+      return
+    }
+    await route.continue()
+  })
+
   await page.route('**/api/v1/connectors**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
@@ -141,10 +197,7 @@ async function mockControlPlane(page: Page, sessionPayload = ADMIN_SESSION) {
     }
 
     if (request.method() === 'POST') {
-      const submitted = request.postDataJSON() as Omit<
-        ConnectorFixture,
-        'id' | 'revision' | 'status' | 'credentials_configured' | 'reachability' | 'health_detail'
-      >
+      const submitted = request.postDataJSON() as ConnectorPlacement
       connector = {
         ...(connector ?? {}),
         ...submitted,
@@ -154,6 +207,7 @@ async function mockControlPlane(page: Page, sessionPayload = ADMIN_SESSION) {
         credentials_configured: false,
         reachability: 'unverified',
         health_detail: null,
+        capability: connector?.capability ?? { verification: 'unverified' },
       }
       await route.fulfill(json(201, connector))
       return
@@ -174,7 +228,7 @@ async function mockControlPlane(page: Page, sessionPayload = ADMIN_SESSION) {
     if (request.method() === 'PATCH') {
       connector = {
         ...connector,
-        ...(request.postDataJSON() as Partial<ConnectorFixture>),
+        ...(request.postDataJSON() as Partial<ConnectorPlacement>),
         revision: connector.revision + 1,
         reachability: 'unverified',
       }
@@ -185,7 +239,7 @@ async function mockControlPlane(page: Page, sessionPayload = ADMIN_SESSION) {
     if (request.method() === 'PUT') {
       connector = {
         ...connector,
-        ...(request.postDataJSON() as { status: 'active' | 'deactivated' }),
+        ...(request.postDataJSON() as ConnectorStatus),
         revision: connector.revision + 1,
       }
       await route.fulfill(json(200, connector))
@@ -212,7 +266,8 @@ test('SYS-24-05 — an operator manages a connector without secrets or a test ac
   await page.getByRole('button', { name: '登录' }).click()
   await page.getByRole('navigation', { name: '主导航' }).getByText('工位与设备').click()
 
-  const row = page.getByRole('row', { name: /一号连接器/ })
+  const connectorsTable = page.getByRole('table', { name: '已配置的连接器，含已停用记录' })
+  const row = connectorsTable.getByRole('row', { name: /一号连接器/ })
   await expect(row).toContainText('一号装配工位')
   await expect(row).toContainText('推理机 A')
   await expect(row).toContainText('未验证')
@@ -225,27 +280,27 @@ test('SYS-24-05 — an operator manages a connector without secrets or a test ac
   await dialog.getByLabel('端口（可选）').fill('8080')
   await expect(dialog.getByLabel('密码')).toHaveCount(0)
   await dialog.getByRole('button', { name: '创建' }).click()
-  await expect(page.getByRole('row', { name: /新连接器/ })).toBeVisible()
+  await expect(connectorsTable.getByRole('row', { name: /新连接器/ })).toBeVisible()
 
-  const createdRow = page.getByRole('row', { name: /新连接器/ })
+  const createdRow = connectorsTable.getByRole('row', { name: /新连接器/ })
   await createdRow.getByRole('button', { name: '编辑' }).click()
   const editDialog = page.getByRole('dialog', { name: '编辑连接器' })
   await editDialog.getByLabel('地址').fill('10.0.8.23')
   await editDialog.getByRole('button', { name: '保存' }).click()
-  await expect(page.getByRole('row', { name: /新连接器/ })).toContainText('10.0.8.23')
+  await expect(connectorsTable.getByRole('row', { name: /新连接器/ })).toContainText('10.0.8.23')
 
-  await page
+  await connectorsTable
     .getByRole('row', { name: /新连接器/ })
     .getByRole('button', { name: '停用' })
     .click()
-  await expect(page.getByRole('row', { name: /新连接器/ })).toContainText('已停用')
-  await page
+  await expect(connectorsTable.getByRole('row', { name: /新连接器/ })).toContainText('已停用')
+  await connectorsTable
     .getByRole('row', { name: /新连接器/ })
     .getByRole('button', { name: '恢复' })
     .click()
-  await expect(page.getByRole('row', { name: /新连接器/ })).toContainText('在用')
+  await expect(connectorsTable.getByRole('row', { name: /新连接器/ })).toContainText('在用')
 
-  await page
+  await connectorsTable
     .getByRole('row', { name: /新连接器/ })
     .getByRole('button', { name: '详情' })
     .click()
@@ -253,7 +308,7 @@ test('SYS-24-05 — an operator manages a connector without secrets or a test ac
   await expect(page.getByRole('dialog', { name: '连接器详情' })).toContainText('未验证')
   await page.keyboard.press('Escape')
 
-  await page
+  await connectorsTable
     .getByRole('row', { name: /新连接器/ })
     .getByRole('button', { name: '删除' })
     .click()

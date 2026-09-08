@@ -142,6 +142,7 @@ type = "layers"
 layers = [
     "factory_sop.entrypoint",
     "factory_sop.app",
+    "factory_sop.template",
     "factory_sop.device",
     "factory_sop.auth",
     "factory_sop.persistence",
@@ -206,6 +207,33 @@ forbidden_modules = [
     "factory_sop.auth.repository",
     "factory_sop.auth.tokens",
     "factory_sop.auth.usecases",
+    "fastapi",
+    "sqlalchemy",
+]
+ignore_imports = [
+    "factory_sop.auth.api -> factory_sop.auth.adapters.dependencies",
+    "factory_sop.auth.api -> factory_sop.auth.authorization",
+    "factory_sop.auth.api -> factory_sop.auth.permissions",
+]
+
+[[tool.importlinter.contracts]]
+name = "template's behavior does not depend on how it is stored or reached"
+type = "forbidden"
+source_modules = [
+    "factory_sop.template.model",
+    "factory_sop.template.errors",
+]
+forbidden_modules = [
+    "factory_sop.template.adapters",
+    "factory_sop.device.adapters",
+    "factory_sop.auth.adapters",
+    "factory_sop.auth.authorization",
+    "factory_sop.auth.errors",
+    "factory_sop.auth.model",
+    "factory_sop.auth.passwords",
+    "factory_sop.auth.permissions",
+    "factory_sop.auth.repository",
+    "factory_sop.auth.tokens",
     "fastapi",
     "sqlalchemy",
 ]

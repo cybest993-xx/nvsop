@@ -222,6 +222,8 @@ type = "forbidden"
 source_modules = [
     "factory_sop.template.model",
     "factory_sop.template.errors",
+    "factory_sop.template.repository",
+    "factory_sop.template.usecases",
 ]
 forbidden_modules = [
     "factory_sop.template.adapters",

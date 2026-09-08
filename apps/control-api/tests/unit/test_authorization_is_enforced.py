@@ -54,6 +54,8 @@ from factory_sop.device.model import (
 )
 from factory_sop.identifiers import new_id
 from factory_sop.settings import Settings
+from factory_sop.template.adapters import dependencies as template_dependencies
+from factory_sop.template.model import TemplateImport
 
 # A password long enough to pass `MINIMUM_PASSWORD_LENGTH`, so a refusal in these tests is always
 # the authorization one and never the password rule.
@@ -95,13 +97,15 @@ class Target:
 
     `headers` carries route preconditions that FastAPI resolves before the handler runs —
     the If-Match of an edit — so the refusal test proves the use case's refusal and not a
-    422 for a missing precondition.
+    422 for a missing precondition；`raw_body` 覆盖二进制工作簿导入路由。
     """
 
     method: str
     template: str
     body: dict[str, object] | None = None
     headers: dict[str, str] | None = None
+    query: dict[str, str] | None = None
+    raw_body: bytes | None = None
 
 
 # Every modifying route the backend serves, other than the session ones — those are how a caller
@@ -300,6 +304,29 @@ ROUTES = [
     Target("DELETE", "/points/{point_id}", headers={"If-Match": "1"}),
     Target(
         "POST",
+        "/templates/imports",
+        headers={
+            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        },
+        query={"filename": "invalid.xlsx"},
+        raw_body=b"not an xlsx",
+    ),
+    Target(
+        "PATCH",
+        "/templates/drafts/{draft_id}",
+        {
+            "steps": [{"number": 1, "name": "取料", "description": "(1)取料"}],
+            "ordering": "strict",
+            "runtime_defaults": {
+                "idle_timeout_seconds": None,
+                "step_deadline_seconds": None,
+                "disposition_policy": None,
+            },
+        },
+        headers={"If-Match": "1"},
+    ),
+    Target(
+        "POST",
         "/point-binding-validations",
         {
             "station_id": "{station_id}",
@@ -339,6 +366,19 @@ class AuthorizationPendingCommands(FakePendingCommands):
     def complete(self, completion: PendingCommandCompletion) -> PendingCommand:
         del completion
         raise AssertionError("authorization route test does not complete a command")
+
+
+class TemplateStore:
+    """授权测试只需保存一次无效导入尝试。"""
+
+    def __init__(self) -> None:
+        self.imports: list[TemplateImport] = []
+
+    def add_import(self, record: TemplateImport) -> None:
+        self.imports.append(record)
+
+    def draft_by_id(self, _draft_id: object) -> None:
+        return None
 
 
 class Backend:
@@ -381,6 +421,7 @@ class Backend:
         self.cameras = FakeCameras()
         self.connectors = FakeConnectors()
         self.points = FakePoints()
+        self.template_store = TemplateStore()
         self.station = self.stations.register(code="station-1", name="工位一")
         self.camera = self.cameras.register(
             station_id=self.station.id, host_id=self.host.id, backend_id=self.backend.id
@@ -409,6 +450,8 @@ class Backend:
             self.pending_commands
         )
         self.app.dependency_overrides[device_dependencies.points] = lambda: self.points
+        self.app.dependency_overrides[template_dependencies.stations] = lambda: self.stations
+        self.app.dependency_overrides[template_dependencies.templates] = lambda: self.template_store
         self.client = TestClient(self.app, base_url="https://testserver")
         assert (
             self.client.post(
@@ -429,6 +472,7 @@ class Backend:
             "camera_id": self.camera.id,
             "connector_id": self.connector.id,
             "point_id": self.point.id,
+            "draft_id": UUID(int=1),
         }
         path = target.template.format(**identifiers)
         body = (
@@ -439,12 +483,23 @@ class Backend:
             if target.body is not None
             else None
         )
-        response = self.client.request(
-            target.method,
-            f"{API_PREFIX}{path}",
-            json=body,
-            headers={CSRF_HEADER: self.client.cookies[CSRF_COOKIE], **(target.headers or {})},
-        )
+        headers = {CSRF_HEADER: self.client.cookies[CSRF_COOKIE], **(target.headers or {})}
+        if target.raw_body is not None:
+            response = self.client.request(
+                target.method,
+                f"{API_PREFIX}{path}",
+                content=target.raw_body,
+                params=target.query,
+                headers=headers,
+            )
+        else:
+            response = self.client.request(
+                target.method,
+                f"{API_PREFIX}{path}",
+                json=body,
+                params=target.query,
+                headers=headers,
+            )
         error_code: str | None = None
         if response.content:
             document = response.json()

@@ -594,10 +594,6 @@ exports[`the protected shell > renders the navigation and the account strip it h
         <li><a aria-current="page" href="/" class="router-link-active router-link-exact-active shell__link">概览</a></li>
         <li>
           <!-- \`aria-disabled\` and the trailing note rather than grey text alone: colour is not
-                 the only expression of state (Q32). --><span class="shell__link shell__link--pending" aria-disabled="true" title="该功能尚未上线">SOP 模板 <small class="shell__pending-note">（未上线）</small></span>
-        </li>
-        <li>
-          <!-- \`aria-disabled\` and the trailing note rather than grey text alone: colour is not
                  the only expression of state (Q32). --><span class="shell__link shell__link--pending" aria-disabled="true" title="该功能尚未上线">训练数据集 <small class="shell__pending-note">（未上线）</small></span>
         </li>
       </ul>
@@ -608,4 +604,96 @@ exports[`the protected shell > renders the navigation and the account strip it h
     </main>
   </div>
 </div>"
+`;
+
+exports[`the template page > renders the import rail, draft list and retained import history 1`] = `
+"<section aria-labelledby="templates-heading" class="template-management">
+  <header class="template-management__header">
+    <div>
+      <p class="template-management__eyebrow">配置中心 / SOP</p>
+      <h1 id="templates-heading" class="template-management__heading">SOP 模板</h1>
+      <p class="template-management__intro"> 把规范化 Excel 留作凭据，把可运行内容留在草稿；发布版本将在后续流程中产生。 </p>
+    </div>
+    <div class="template-management__import-rail"><label for="template-file" class="template-management__file-label"> 导入规范化 Excel <input id="template-file" name="template-file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></label>
+      <!--v-if--><small>失败文件也会保留，便于定位工作表、行和字段。</small>
+    </div>
+  </header>
+  <!--v-if-->
+  <!--v-if-->
+  <div class="template-management__workbench">
+    <section class="template-management__drafts" aria-labelledby="drafts-heading">
+      <div class="template-management__section-head">
+        <div>
+          <h2 id="drafts-heading">可编辑草稿</h2>
+          <p>每次导入都会生成新草稿，不覆盖已有内容。</p>
+        </div><span class="template-management__count">1 个草稿</span>
+      </div>
+      <table class="template-management__table">
+        <caption class="template-management__caption"> 尚未发布的 SOP 草稿 </caption>
+        <thead>
+          <tr>
+            <th scope="col">工位</th>
+            <th scope="col">步骤</th>
+            <th scope="col">顺序声明</th>
+            <th scope="col">修订号</th>
+            <th scope="col">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row"><span>一号装配工位</span><small>A-01</small></th>
+            <td>1 个步骤</td>
+            <td><span class="el-tag el-tag--success el-tag--light"><span class="el-tag__content">严格顺序</span>
+              <!--v-if--></span>
+            </td>
+            <td>1</td>
+            <td><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
+                <!--v-if--><span class=""> 编辑草稿 </span>
+              </button></td>
+          </tr>
+          <!--v-if-->
+        </tbody>
+      </table>
+    </section>
+    <section class="template-management__history" aria-labelledby="imports-heading">
+      <div class="template-management__section-head">
+        <div>
+          <h2 id="imports-heading">导入记录</h2>
+          <p>原始文件只留在控制面，不出现在草稿表格里。</p>
+        </div>
+      </div>
+      <table class="template-management__table template-management__table--history">
+        <caption class="template-management__caption"> 成功和失败的规范化 Excel 导入 </caption>
+        <thead>
+          <tr>
+            <th scope="col">文件</th>
+            <th scope="col">结果</th>
+            <th scope="col">错误</th>
+            <th scope="col">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">一号模板.xlsx</th>
+            <td><span class="el-tag el-tag--success el-tag--light"><span class="el-tag__content">已生成草稿</span>
+              <!--v-if--></span>
+            </td>
+            <td><span class="template-management__muted">无</span></td>
+            <td><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
+                <!--v-if--><span class=""> 下载原文件 </span>
+              </button></td>
+          </tr>
+          <!--v-if-->
+        </tbody>
+      </table>
+    </section>
+  </div>
+  <!--teleport start-->
+  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2014; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="编辑模板草稿" aria-describedby="el-id-41" class="el-overlay-dialog"></div>
+    </div>
+  </transition-stub>
+  <!--teleport end-->
+</section>"
 `;

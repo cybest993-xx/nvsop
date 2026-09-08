@@ -367,6 +367,9 @@ class FakeInferenceStations:
     def by_id(self, station_id: UUID) -> Station | None:
         return self.rows.get(station_id)
 
+    def by_code(self, code: str) -> Station | None:
+        return next((station for station in self.rows.values() if station.code == code), None)
+
     def remove(self, station_id: UUID, *, expected_revision: int) -> bool:
         stored = self.rows.get(station_id)
         if stored is None:

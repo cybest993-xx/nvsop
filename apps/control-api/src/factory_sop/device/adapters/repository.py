@@ -377,6 +377,10 @@ class PostgresStationRepository:
         row = self._session.get(StationRow, station_id)
         return row.to_domain() if row is not None else None
 
+    def by_code(self, code: str) -> Station | None:
+        row = self._session.scalar(select(StationRow).where(StationRow.code == code))
+        return row.to_domain() if row is not None else None
+
     def remove(self, station_id: UUID, *, expected_revision: int) -> bool:
         try:
             result = cast(

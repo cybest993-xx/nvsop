@@ -66,6 +66,10 @@ export type ApiErrorCode =
   | 'COMMAND_CONFIGURATION_CHANGED'
   | 'COMMAND_TARGET_NOT_FOUND'
   | 'COMMAND_TARGET_DEACTIVATED'
+  | 'TEMPLATE_IMPORT_INVALID'
+  | 'TEMPLATE_IMPORT_NOT_FOUND'
+  | 'TEMPLATE_DRAFT_NOT_FOUND'
+  | 'TEMPLATE_DRAFT_INVALID'
 
 /**
  * AssignedRoles
@@ -635,6 +639,13 @@ export type HostStatus = {
 }
 
 /**
+ * ImportStatus
+ *
+ * 一次规范化文档导入是否创建了草稿。
+ */
+export type ImportStatus = 'succeeded' | 'failed'
+
+/**
  * InferenceBackendView
  *
  * One process endpoint and its single reserved template-binding slot.
@@ -904,6 +915,50 @@ export type ItemPageStationView = {
 }
 
 /**
+ * ItemPage[TemplateDraftView]
+ */
+export type ItemPageTemplateDraftView = {
+  /**
+   * Items
+   */
+  items: Array<TemplateDraftView>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
+ * ItemPage[TemplateImportView]
+ */
+export type ItemPageTemplateImportView = {
+  /**
+   * Items
+   */
+  items: Array<TemplateImportView>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
  * ItemPage[UserView]
  */
 export type ItemPageUserView = {
@@ -1028,6 +1083,13 @@ export type NewUser = {
    */
   password: string
 }
+
+/**
+ * OrderingMode
+ *
+ * 模板是否要求动作严格按步骤顺序出现。
+ */
+export type OrderingMode = 'strict' | 'unordered'
 
 /**
  * PendingCommandStatus
@@ -1400,6 +1462,213 @@ export type StatusChanged = {
    */
   revoked_sessions: number
   user: UserView
+}
+
+/**
+ * TemplateDraftConfiguration
+ */
+export type TemplateDraftConfiguration = {
+  ordering: OrderingMode
+  runtime_defaults: TemplateRuntimeDefaultsInput
+  /**
+   * Steps
+   */
+  steps: Array<TemplateStepInput>
+}
+
+/**
+ * TemplateDraftView
+ */
+export type TemplateDraftView = {
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Created By
+   */
+  created_by: string
+  /**
+   * Id
+   */
+  id: string
+  ordering: OrderingMode
+  /**
+   * Revision
+   */
+  revision: number
+  runtime_defaults: TemplateRuntimeDefaultsView
+  /**
+   * Source Import Id
+   */
+  source_import_id: string
+  /**
+   * Station Code
+   */
+  station_code: string
+  /**
+   * Station Id
+   */
+  station_id: string
+  /**
+   * Station Name
+   */
+  station_name: string
+  /**
+   * Steps
+   */
+  steps: Array<TemplateStepView>
+  /**
+   * Template Id
+   */
+  template_id: string
+  /**
+   * Updated At
+   */
+  updated_at: string
+  /**
+   * Updated By
+   */
+  updated_by: string
+}
+
+/**
+ * TemplateFieldErrorView
+ *
+ * 导入错误保留工作表和行号，不把定位信息压平。
+ */
+export type TemplateFieldErrorView = {
+  /**
+   * Field
+   */
+  field: string
+  /**
+   * Message
+   */
+  message: string
+  /**
+   * Row
+   */
+  row: number | null
+  /**
+   * Sheet
+   */
+  sheet: string
+}
+
+/**
+ * TemplateImportResultView
+ */
+export type TemplateImportResultView = {
+  draft: TemplateDraftView | null
+  import_record: TemplateImportView
+}
+
+/**
+ * TemplateImportView
+ */
+export type TemplateImportView = {
+  /**
+   * Content Type
+   */
+  content_type: string
+  /**
+   * Errors
+   */
+  errors: Array<TemplateFieldErrorView>
+  /**
+   * Filename
+   */
+  filename: string
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Imported At
+   */
+  imported_at: string
+  /**
+   * Imported By
+   */
+  imported_by: string
+  /**
+   * Sha256
+   */
+  sha256: string
+  status: ImportStatus
+}
+
+/**
+ * TemplateRuntimeDefaultsInput
+ */
+export type TemplateRuntimeDefaultsInput = {
+  /**
+   * Disposition Policy
+   */
+  disposition_policy?: string | null
+  /**
+   * Idle Timeout Seconds
+   */
+  idle_timeout_seconds?: number | null
+  /**
+   * Step Deadline Seconds
+   */
+  step_deadline_seconds?: number | null
+}
+
+/**
+ * TemplateRuntimeDefaultsView
+ */
+export type TemplateRuntimeDefaultsView = {
+  /**
+   * Disposition Policy
+   */
+  disposition_policy: string | null
+  /**
+   * Idle Timeout Seconds
+   */
+  idle_timeout_seconds: number | null
+  /**
+   * Step Deadline Seconds
+   */
+  step_deadline_seconds: number | null
+}
+
+/**
+ * TemplateStepInput
+ */
+export type TemplateStepInput = {
+  /**
+   * Description
+   */
+  description: string
+  /**
+   * Name
+   */
+  name: string
+  /**
+   * Number
+   */
+  number: number
+}
+
+/**
+ * TemplateStepView
+ */
+export type TemplateStepView = {
+  /**
+   * Description
+   */
+  description: string
+  /**
+   * Name
+   */
+  name: string
+  /**
+   * Number
+   */
+  number: number
 }
 
 /**
@@ -4485,3 +4754,346 @@ export type SetStationStatusResponses = {
 }
 
 export type SetStationStatusResponse = SetStationStatusResponses[keyof SetStationStatusResponses]
+
+export type ListTemplateDraftsData = {
+  body?: never
+  path?: never
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/templates/drafts'
+}
+
+export type ListTemplateDraftsErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 请求无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ListTemplateDraftsError = ListTemplateDraftsErrors[keyof ListTemplateDraftsErrors]
+
+export type ListTemplateDraftsResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageTemplateDraftView
+}
+
+export type ListTemplateDraftsResponse =
+  ListTemplateDraftsResponses[keyof ListTemplateDraftsResponses]
+
+export type ReadTemplateDraftData = {
+  body?: never
+  path: {
+    /**
+     * Draft Id
+     */
+    draft_id: string
+  }
+  query?: never
+  url: '/api/v1/templates/drafts/{draft_id}'
+}
+
+export type ReadTemplateDraftErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 模板草稿不存在
+   */
+  404: ProblemDocument
+  /**
+   * 请求无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadTemplateDraftError = ReadTemplateDraftErrors[keyof ReadTemplateDraftErrors]
+
+export type ReadTemplateDraftResponses = {
+  /**
+   * Successful Response
+   */
+  200: TemplateDraftView
+}
+
+export type ReadTemplateDraftResponse = ReadTemplateDraftResponses[keyof ReadTemplateDraftResponses]
+
+export type EditTemplateDraftData = {
+  body: TemplateDraftConfiguration
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Draft Id
+     */
+    draft_id: string
+  }
+  query?: never
+  url: '/api/v1/templates/drafts/{draft_id}'
+}
+
+export type EditTemplateDraftErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 模板草稿不存在
+   */
+  404: ProblemDocument
+  /**
+   * 草稿修订号已变化（STALE_REVISION）
+   */
+  409: ProblemDocument
+  /**
+   * 请求无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type EditTemplateDraftError = EditTemplateDraftErrors[keyof EditTemplateDraftErrors]
+
+export type EditTemplateDraftResponses = {
+  /**
+   * Successful Response
+   */
+  200: TemplateDraftView
+}
+
+export type EditTemplateDraftResponse = EditTemplateDraftResponses[keyof EditTemplateDraftResponses]
+
+export type ListTemplateImportsData = {
+  body?: never
+  path?: never
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/templates/imports'
+}
+
+export type ListTemplateImportsErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 请求无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ListTemplateImportsError = ListTemplateImportsErrors[keyof ListTemplateImportsErrors]
+
+export type ListTemplateImportsResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageTemplateImportView
+}
+
+export type ListTemplateImportsResponse =
+  ListTemplateImportsResponses[keyof ListTemplateImportsResponses]
+
+export type ImportTemplateDraftData = {
+  /**
+   * Document
+   */
+  body: Blob | File
+  headers?: {
+    /**
+     * Content-Type
+     */
+    'Content-Type'?: string | null
+  }
+  path?: never
+  query: {
+    /**
+     * Filename
+     */
+    filename: string
+  }
+  url: '/api/v1/templates/imports'
+}
+
+export type ImportTemplateDraftErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 请求无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ImportTemplateDraftError = ImportTemplateDraftErrors[keyof ImportTemplateDraftErrors]
+
+export type ImportTemplateDraftResponses = {
+  /**
+   * Successful Response
+   */
+  201: TemplateImportResultView
+}
+
+export type ImportTemplateDraftResponse =
+  ImportTemplateDraftResponses[keyof ImportTemplateDraftResponses]
+
+export type ReadTemplateImportData = {
+  body?: never
+  path: {
+    /**
+     * Import Id
+     */
+    import_id: string
+  }
+  query?: never
+  url: '/api/v1/templates/imports/{import_id}'
+}
+
+export type ReadTemplateImportErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 导入记录不存在
+   */
+  404: ProblemDocument
+  /**
+   * 请求无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadTemplateImportError = ReadTemplateImportErrors[keyof ReadTemplateImportErrors]
+
+export type ReadTemplateImportResponses = {
+  /**
+   * Successful Response
+   */
+  200: TemplateImportView
+}
+
+export type ReadTemplateImportResponse =
+  ReadTemplateImportResponses[keyof ReadTemplateImportResponses]
+
+export type DownloadTemplateImportData = {
+  body?: never
+  path: {
+    /**
+     * Import Id
+     */
+    import_id: string
+  }
+  query?: never
+  url: '/api/v1/templates/imports/{import_id}/document'
+}
+
+export type DownloadTemplateImportErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 导入记录不存在
+   */
+  404: ProblemDocument
+  /**
+   * 请求无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type DownloadTemplateImportError =
+  DownloadTemplateImportErrors[keyof DownloadTemplateImportErrors]
+
+export type DownloadTemplateImportResponses = {
+  /**
+   * 保留的原始工作簿
+   */
+  200: Blob | File
+}
+
+export type DownloadTemplateImportResponse =
+  DownloadTemplateImportResponses[keyof DownloadTemplateImportResponses]

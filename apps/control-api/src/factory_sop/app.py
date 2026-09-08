@@ -30,6 +30,7 @@ from factory_sop.auth.errors import (
     refusal_problem,
 )
 from factory_sop.auth.model import SessionPolicy
+from factory_sop.device.adapters import dependencies as device_dependencies
 from factory_sop.device.adapters.routes_backends import router as inference_backends_router
 from factory_sop.device.adapters.routes_cameras import router as cameras_router
 from factory_sop.device.adapters.routes_commands import (
@@ -60,6 +61,10 @@ from factory_sop.problem import (
     problem_response,
 )
 from factory_sop.settings import Settings
+from factory_sop.template.adapters import dependencies as template_dependencies
+from factory_sop.template.adapters.routes import router as template_router
+from factory_sop.template.errors import TemplateRefusedError
+from factory_sop.template.errors import refusal_problem as template_refusal_problem
 
 # The literal prefix every control-plane path sits under. Not a version axis: there will be
 # no `/api/v2` (ADR-0003).
@@ -127,6 +132,9 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(binding_validation_router, prefix=API_PREFIX)
     app.include_router(auth_role_administration.router, prefix=API_PREFIX)
     app.include_router(auth_user_administration.router, prefix=API_PREFIX)
+    app.include_router(template_router, prefix=API_PREFIX)
+    # 组合根把跨模块的工位查询 seam 接到 `device` 的真实适配器。
+    app.dependency_overrides[template_dependencies.stations] = device_dependencies.stations
 
     @app.exception_handler(AuthenticationRefusedError)
     async def refused(request: Request, error: AuthenticationRefusedError) -> Response:
@@ -192,6 +200,27 @@ def create_app(settings: Settings) -> FastAPI:
             error_code=ApiErrorCode(error.code.value),
             field_errors=[
                 FieldError(field=item.field, message=item.message) for item in error.field_errors
+            ],
+        )
+
+    @app.exception_handler(TemplateRefusedError)
+    async def template_refused(request: Request, error: TemplateRefusedError) -> Response:
+        """以统一的 problem+json 形状返回模板导入和草稿冲突。"""
+        status, title = template_refusal_problem(error.code)
+        return problem_response(
+            status=status,
+            title=title,
+            error_code=ApiErrorCode(error.code.value),
+            field_errors=[
+                FieldError(
+                    field=(
+                        f"{item.sheet}[{item.row}].{item.field}"
+                        if item.row is not None
+                        else f"{item.sheet}.{item.field}"
+                    ),
+                    message=item.message,
+                )
+                for item in error.field_errors
             ],
         )
 

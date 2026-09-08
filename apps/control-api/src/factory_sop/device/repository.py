@@ -115,6 +115,10 @@ class StationRepository(Protocol):
         """按公开 UUID 返回一个工位；不存在时返回 `None`。"""
         ...
 
+    def by_code(self, code: str) -> Station | None:
+        """按自然编码返回一个工位，供跨模块导入匹配。"""
+        ...
+
     def remove(self, station_id: UUID, *, expected_revision: int) -> bool:
         """删除工位；仍有相机关联时应拒绝。"""
         ...

@@ -14,27 +14,34 @@ import {
   createRole as generatedCreateRole,
   createUser as generatedCreateUser,
   deleteConnector as generatedDeleteConnector,
+  downloadTemplateImport as generatedDownloadTemplateImport,
   deletePoint as generatedDeletePoint,
   deleteRole as generatedDeleteRole,
   deleteUser as generatedDeleteUser,
   editConnector as generatedEditConnector,
   editPoint as generatedEditPoint,
   editRole as generatedEditRole,
+  editTemplateDraft as generatedEditTemplateDraft,
   editUser as generatedEditUser,
   endSession as generatedEndSession,
   enqueueConnectorConnectionTest as generatedEnqueueConnectorConnectionTest,
+  importTemplateDraft as generatedImportTemplateDraft,
   listConnectors as generatedListConnectors,
   listInferenceHosts as generatedListInferenceHosts,
   listPermissions as generatedListPermissions,
   listPoints as generatedListPoints,
   listRoles as generatedListRoles,
   listStations as generatedListStations,
+  listTemplateDrafts as generatedListTemplateDrafts,
+  listTemplateImports as generatedListTemplateImports,
   listUsers as generatedListUsers,
   openSession as generatedOpenSession,
   readConnector as generatedReadConnector,
   readDeviceCommand as generatedReadDeviceCommand,
   readPoint as generatedReadPoint,
   readSession as generatedReadSession,
+  readTemplateDraft as generatedReadTemplateDraft,
+  readTemplateImport as generatedReadTemplateImport,
   resetUserPassword as generatedResetUserPassword,
   setConnectorStatus as generatedSetConnectorStatus,
   setPointStatus as generatedSetPointStatus,
@@ -49,6 +56,7 @@ import {
   type CreateRoleData,
   type CreateUserData,
   type DeviceStatus,
+  type DownloadTemplateImportResponse,
   type EditRoleData,
   type EditUserData,
   type ItemPageConnectorView,
@@ -57,7 +65,10 @@ import {
   type ItemPageRoleView,
   type ItemPageStationView,
   type ItemPageStr,
+  type ItemPageTemplateDraftView,
+  type ItemPageTemplateImportView,
   type ItemPageUserView,
+  type ImportTemplateDraftData,
   type ListPointsData,
   type OpenSessionData,
   type PendingCommandView,
@@ -70,6 +81,10 @@ import {
   type SetUserRolesData,
   type UpdateConnectorCapabilityData,
   type StatusChanged,
+  type TemplateDraftConfiguration,
+  type TemplateDraftView,
+  type TemplateImportResultView,
+  type TemplateImportView,
   type UserStatus,
   type UserView,
 } from '@/api/generated'
@@ -92,6 +107,10 @@ export type {
   SessionView,
   StationView,
   StatusChanged,
+  TemplateDraftConfiguration,
+  TemplateDraftView,
+  TemplateImportResultView,
+  TemplateImportView,
   UserView,
 } from '@/api/generated'
 
@@ -231,6 +250,59 @@ export function readSession(): Promise<SessionView> {
 
 export function endSession(): Promise<void> {
   return execute(generatedEndSession())
+}
+
+// ——— 模板草稿：原始导入、列表、读取和 If-Match 编辑均走生成客户端。 ———
+
+export type TemplateImportFile = ImportTemplateDraftData['body']
+
+export function importTemplateDraft(
+  document: TemplateImportFile,
+  filename: string,
+): Promise<TemplateImportResultView> {
+  return execute(
+    generatedImportTemplateDraft({
+      body: document,
+      query: { filename },
+      headers: {
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      },
+    }),
+  )
+}
+
+export function readTemplateDrafts(): Promise<ItemPageTemplateDraftView> {
+  return execute(generatedListTemplateDrafts())
+}
+
+export function readTemplateDraft(draftId: string): Promise<TemplateDraftView> {
+  return execute(generatedReadTemplateDraft({ path: { draft_id: draftId } }))
+}
+
+export function editTemplateDraft(
+  draftId: string,
+  submitted: TemplateDraftConfiguration,
+  revision: number,
+): Promise<TemplateDraftView> {
+  return execute(
+    generatedEditTemplateDraft({
+      path: { draft_id: draftId },
+      headers: { 'If-Match': revision },
+      body: submitted,
+    }),
+  )
+}
+
+export function downloadTemplateImport(importId: string): Promise<DownloadTemplateImportResponse> {
+  return execute(generatedDownloadTemplateImport({ path: { import_id: importId } }))
+}
+
+export function readTemplateImports(): Promise<ItemPageTemplateImportView> {
+  return execute(generatedListTemplateImports())
+}
+
+export function readTemplateImport(importId: string): Promise<TemplateImportView> {
+  return execute(generatedReadTemplateImport({ path: { import_id: importId } }))
 }
 
 // ——— 工位与设备：页面只通过生成客户端访问控制面。 ———

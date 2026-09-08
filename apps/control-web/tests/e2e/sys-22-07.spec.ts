@@ -5,6 +5,7 @@ const SESSION = {
   login_name: 'wang.li',
   display_name: '王丽',
   expires_at: '2026-09-07T13:00:00Z',
+  permissions: ['template.draft.view'],
 }
 
 test('SYS-22-07 — login is labelled, keyboard reachable, and visibly focused', async ({ page }) => {
@@ -76,7 +77,7 @@ test('SYS-22-07 — protected layout fits the supported desktop width and names 
   const navigation = page.getByRole('navigation', { name: '主导航' })
   await expect(navigation).toBeVisible()
   await expect(navigation.getByText('工位与设备')).toHaveCount(0)
-  await expect(navigation.getByText('SOP 模板')).toContainText('（未上线）')
+  await expect(navigation.getByRole('link', { name: 'SOP 模板' })).toBeVisible()
   await expect(page.getByRole('banner').getByText('王丽')).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,

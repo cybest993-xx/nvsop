@@ -57,6 +57,9 @@ import type {
   DeleteUserData,
   DeleteUserErrors,
   DeleteUserResponses,
+  DownloadTemplateImportData,
+  DownloadTemplateImportErrors,
+  DownloadTemplateImportResponses,
   EditCameraData,
   EditCameraErrors,
   EditCameraResponses,
@@ -78,6 +81,9 @@ import type {
   EditStationData,
   EditStationErrors,
   EditStationResponses,
+  EditTemplateDraftData,
+  EditTemplateDraftErrors,
+  EditTemplateDraftResponses,
   EditUserData,
   EditUserErrors,
   EditUserResponses,
@@ -87,6 +93,9 @@ import type {
   EnqueueConnectorConnectionTestData,
   EnqueueConnectorConnectionTestErrors,
   EnqueueConnectorConnectionTestResponses,
+  ImportTemplateDraftData,
+  ImportTemplateDraftErrors,
+  ImportTemplateDraftResponses,
   ListCamerasData,
   ListCamerasErrors,
   ListCamerasResponses,
@@ -111,6 +120,12 @@ import type {
   ListStationsData,
   ListStationsErrors,
   ListStationsResponses,
+  ListTemplateDraftsData,
+  ListTemplateDraftsErrors,
+  ListTemplateDraftsResponses,
+  ListTemplateImportsData,
+  ListTemplateImportsErrors,
+  ListTemplateImportsResponses,
   ListUsersData,
   ListUsersErrors,
   ListUsersResponses,
@@ -144,6 +159,12 @@ import type {
   ReadStationData,
   ReadStationErrors,
   ReadStationResponses,
+  ReadTemplateDraftData,
+  ReadTemplateDraftErrors,
+  ReadTemplateDraftResponses,
+  ReadTemplateImportData,
+  ReadTemplateImportErrors,
+  ReadTemplateImportResponses,
   ResetUserPasswordData,
   ResetUserPasswordErrors,
   ResetUserPasswordResponses,
@@ -1164,3 +1185,104 @@ export const setStationStatus = <ThrowOnError extends boolean = false>(
       ...options.headers,
     },
   })
+
+/**
+ * List The Template Drafts
+ */
+export const listTemplateDrafts = <ThrowOnError extends boolean = false>(
+  options?: Options<ListTemplateDraftsData, ThrowOnError>,
+): RequestResult<ListTemplateDraftsResponses, ListTemplateDraftsErrors, ThrowOnError> =>
+  (options?.client ?? client).get<
+    ListTemplateDraftsResponses,
+    ListTemplateDraftsErrors,
+    ThrowOnError
+  >({ url: '/api/v1/templates/drafts', ...options })
+
+/**
+ * Read A Template Draft
+ */
+export const readTemplateDraft = <ThrowOnError extends boolean = false>(
+  options: Options<ReadTemplateDraftData, ThrowOnError>,
+): RequestResult<ReadTemplateDraftResponses, ReadTemplateDraftErrors, ThrowOnError> =>
+  (options.client ?? client).get<ReadTemplateDraftResponses, ReadTemplateDraftErrors, ThrowOnError>(
+    { url: '/api/v1/templates/drafts/{draft_id}', ...options },
+  )
+
+/**
+ * Edit A Template Draft
+ */
+export const editTemplateDraft = <ThrowOnError extends boolean = false>(
+  options: Options<EditTemplateDraftData, ThrowOnError>,
+): RequestResult<EditTemplateDraftResponses, EditTemplateDraftErrors, ThrowOnError> =>
+  (options.client ?? client).patch<
+    EditTemplateDraftResponses,
+    EditTemplateDraftErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/templates/drafts/{draft_id}',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * List The Template Imports
+ */
+export const listTemplateImports = <ThrowOnError extends boolean = false>(
+  options?: Options<ListTemplateImportsData, ThrowOnError>,
+): RequestResult<ListTemplateImportsResponses, ListTemplateImportsErrors, ThrowOnError> =>
+  (options?.client ?? client).get<
+    ListTemplateImportsResponses,
+    ListTemplateImportsErrors,
+    ThrowOnError
+  >({ url: '/api/v1/templates/imports', ...options })
+
+/**
+ * Import A Template Draft
+ *
+ * 导入原始 xlsx 字节；校验失败时仍保留原文。
+ */
+export const importTemplateDraft = <ThrowOnError extends boolean = false>(
+  options: Options<ImportTemplateDraftData, ThrowOnError>,
+): RequestResult<ImportTemplateDraftResponses, ImportTemplateDraftErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    ImportTemplateDraftResponses,
+    ImportTemplateDraftErrors,
+    ThrowOnError
+  >({
+    bodySerializer: null,
+    url: '/api/v1/templates/imports',
+    ...options,
+    headers: {
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read An Import
+ */
+export const readTemplateImport = <ThrowOnError extends boolean = false>(
+  options: Options<ReadTemplateImportData, ThrowOnError>,
+): RequestResult<ReadTemplateImportResponses, ReadTemplateImportErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadTemplateImportResponses,
+    ReadTemplateImportErrors,
+    ThrowOnError
+  >({ url: '/api/v1/templates/imports/{import_id}', ...options })
+
+/**
+ * Download An Import
+ *
+ * 返回服务端保留的原始工作簿。
+ */
+export const downloadTemplateImport = <ThrowOnError extends boolean = false>(
+  options: Options<DownloadTemplateImportData, ThrowOnError>,
+): RequestResult<DownloadTemplateImportResponses, DownloadTemplateImportErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    DownloadTemplateImportResponses,
+    DownloadTemplateImportErrors,
+    ThrowOnError
+  >({ url: '/api/v1/templates/imports/{import_id}/document', ...options })

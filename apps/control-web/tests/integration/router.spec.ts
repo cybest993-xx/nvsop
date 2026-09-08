@@ -175,6 +175,29 @@ describe('a page that names required permissions', () => {
     expect(router.currentRoute.value.name).toBe('overview')
   })
 
+  it.each(['template.draft.view', 'template.draft.edit'])(
+    'reaches the template page for a caller holding only %s',
+    async (permission) => {
+      readSession.mockResolvedValue({ ...SESSION, permissions: [permission] })
+      const router = createAppRouter()
+
+      await router.push('/templates')
+      await router.isReady()
+
+      expect(router.currentRoute.value.name).toBe('templates')
+    },
+  )
+
+  it('sends a caller without a template permission away from the template page', async () => {
+    readSession.mockResolvedValue({ ...SESSION, permissions: [] })
+    const router = createAppRouter()
+
+    await router.push('/templates')
+    await router.isReady()
+
+    expect(router.currentRoute.value.name).toBe('overview')
+  })
+
   it('is reachable by a caller holding one of them', async () => {
     // Any one, not all: 用户与权限 is useful to someone who may read accounts but not roles, and the
     // page renders each half according to what they hold.

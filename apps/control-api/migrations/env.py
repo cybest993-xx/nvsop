@@ -24,6 +24,7 @@ from factory_sop.auth.adapters import tables as auth_tables  # noqa: F401
 from factory_sop.device.adapters import tables as device_tables  # noqa: F401
 from factory_sop.persistence import Table, database_url
 from factory_sop.settings import Settings
+from factory_sop.template.adapters import tables as template_tables  # noqa: F401
 
 target_metadata = Table.metadata
 

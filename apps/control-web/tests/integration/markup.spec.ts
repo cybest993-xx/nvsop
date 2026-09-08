@@ -24,6 +24,7 @@ import AccessView from '@/modules/access/AccessView.vue'
 import DevicesView from '@/modules/devices/DevicesView.vue'
 import AppShell from '@/shell/AppShell.vue'
 import LoginView from '@/session/LoginView.vue'
+import TemplateManagement from '@/modules/templates/TemplateManagement.vue'
 import { useSessionStore } from '@/session/store'
 
 // The access page loads its own data on mount. Frozen fixtures, for the same reason the
@@ -67,6 +68,43 @@ const ACCESS_FIXTURES = vi.hoisted(() => ({
     'auth.user.delete',
     'auth.user.edit',
     'auth.user.view',
+  ],
+}))
+
+const TEMPLATE_FIXTURES = vi.hoisted(() => ({
+  drafts: [
+    {
+      id: 'draft-1',
+      template_id: 'template-1',
+      source_import_id: 'import-1',
+      station_id: 'station-1',
+      station_code: 'A-01',
+      station_name: '一号装配工位',
+      steps: [{ number: 1, name: '取料', description: '(1)取料' }],
+      ordering: 'strict' as const,
+      runtime_defaults: {
+        idle_timeout_seconds: null,
+        step_deadline_seconds: null,
+        disposition_policy: null,
+      },
+      revision: 1,
+      created_by: 'operator-1',
+      updated_by: 'operator-1',
+      created_at: '2026-09-07T04:00:00Z',
+      updated_at: '2026-09-07T04:00:00Z',
+    },
+  ],
+  imports: [
+    {
+      id: 'import-1',
+      filename: '一号模板.xlsx',
+      content_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      sha256: 'a'.repeat(64),
+      status: 'succeeded' as const,
+      errors: [],
+      imported_by: 'operator-1',
+      imported_at: '2026-09-07T04:00:00Z',
+    },
   ],
 }))
 
@@ -114,6 +152,12 @@ vi.mock('@/api/controlPlane', async (importOriginal) => ({
   ),
   readStations: vi.fn(() =>
     Promise.resolve({ items: DEVICE_FIXTURES.stations, page: 1, page_size: 50, total: 1 }),
+  ),
+  readTemplateDrafts: vi.fn(() =>
+    Promise.resolve({ items: TEMPLATE_FIXTURES.drafts, page: 1, page_size: 50, total: 1 }),
+  ),
+  readTemplateImports: vi.fn(() =>
+    Promise.resolve({ items: TEMPLATE_FIXTURES.imports, page: 1, page_size: 50, total: 1 }),
   ),
 }))
 
@@ -220,6 +264,20 @@ describe('the device page', () => {
       .findAll('button')
       .find((button) => button.text() === '新建连接器')!
       .trigger('click')
+    await flushPromises()
+
+    expect(normalize(wrapper.html())).toMatchSnapshot()
+  })
+})
+
+describe('the template page', () => {
+  it('renders the import rail, draft list and retained import history', async () => {
+    useSessionStore().current = {
+      ...SESSION,
+      permissions: ['template.draft.view', 'template.draft.edit'],
+    }
+
+    const wrapper = mount(TemplateManagement, { global: { plugins: [ElementPlus] } })
     await flushPromises()
 
     expect(normalize(wrapper.html())).toMatchSnapshot()

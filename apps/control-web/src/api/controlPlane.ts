@@ -22,6 +22,7 @@ import {
   editRole as generatedEditRole,
   editUser as generatedEditUser,
   endSession as generatedEndSession,
+  enqueueConnectorConnectionTest as generatedEnqueueConnectorConnectionTest,
   listConnectors as generatedListConnectors,
   listInferenceHosts as generatedListInferenceHosts,
   listPermissions as generatedListPermissions,
@@ -31,6 +32,7 @@ import {
   listUsers as generatedListUsers,
   openSession as generatedOpenSession,
   readConnector as generatedReadConnector,
+  readDeviceCommand as generatedReadDeviceCommand,
   readPoint as generatedReadPoint,
   readSession as generatedReadSession,
   resetUserPassword as generatedResetUserPassword,
@@ -58,6 +60,7 @@ import {
   type ItemPageUserView,
   type ListPointsData,
   type OpenSessionData,
+  type PendingCommandView,
   type PointConfiguration,
   type PointView,
   type ProblemDocument,
@@ -82,6 +85,7 @@ export type {
   ItemPageInferenceHostView,
   ItemPagePointView,
   ItemPageStationView,
+  PendingCommandView,
   PointConfiguration,
   PointView,
   RoleView,
@@ -263,6 +267,24 @@ export function editConnector(
       body: submitted,
     }),
   )
+}
+
+/** 将一次连接测试写入中心持久化命令队列；调用方必须复用同一幂等键安全重试。 */
+export function enqueueConnectorConnectionTest(
+  connectorId: string,
+  idempotencyKey: string,
+): Promise<PendingCommandView> {
+  return execute(
+    generatedEnqueueConnectorConnectionTest({
+      path: { connector_id: connectorId },
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }),
+  )
+}
+
+/** 读取不含领取令牌的命令状态，供操作员等待真实结果或明确拒绝。 */
+export function readDeviceCommand(commandId: string): Promise<PendingCommandView> {
+  return execute(generatedReadDeviceCommand({ path: { command_id: commandId } }))
 }
 
 export function setConnectorStatus(

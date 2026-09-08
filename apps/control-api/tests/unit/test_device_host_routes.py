@@ -169,6 +169,33 @@ def test_a_logged_in_administrator_creates_a_host_whose_record_is_whole(center: 
     assert body["created_at"].endswith("Z")
 
 
+def test_host_credential_rotation_returns_the_secret_once_and_bumps_revision(
+    center: Center,
+) -> None:
+    created = center.send("POST", HOSTS, json=A_HOST)
+    host_id = created.json()["id"]
+
+    rotated = center.send(
+        "POST",
+        f"{HOSTS}/{host_id}/credential",
+        headers={"If-Match": "1"},
+    )
+
+    assert rotated.status_code == 200
+    body = rotated.json()
+    assert body == {"credential": body["credential"], "revision": 2}
+    assert body["credential"]
+    assert "credential" not in center.send("GET", f"{HOSTS}/{host_id}").json()
+
+    stale = center.send(
+        "POST",
+        f"{HOSTS}/{host_id}/credential",
+        headers={"If-Match": "1"},
+    )
+    assert stale.status_code == 409
+    assert stale.json()["error_code"] == "STALE_REVISION"
+
+
 def test_a_taken_host_name_refuses_with_the_shared_problem_shape(center: Center) -> None:
     assert center.send("POST", HOSTS, json=A_HOST).status_code == 201
 
@@ -327,6 +354,7 @@ def test_every_host_route_declares_the_permission_its_use_case_enforces(center: 
         "GET /inference-hosts/{host_id}": Permission.INFERENCE_HOST_VIEW,
         "PATCH /inference-hosts/{host_id}": Permission.INFERENCE_HOST_EDIT,
         "PUT /inference-hosts/{host_id}/status": Permission.INFERENCE_HOST_EDIT,
+        "POST /inference-hosts/{host_id}/credential": Permission.INFERENCE_HOST_EDIT,
         "DELETE /inference-hosts/{host_id}": Permission.INFERENCE_HOST_DELETE,
     }
     assert declared == {path: permission.value for path, permission in expected.items()}

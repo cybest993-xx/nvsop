@@ -3,6 +3,12 @@
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client'
 import { client } from './client.gen'
 import type {
+  ClaimNextDeviceCommandData,
+  ClaimNextDeviceCommandErrors,
+  ClaimNextDeviceCommandResponses,
+  CompleteDeviceCommandData,
+  CompleteDeviceCommandErrors,
+  CompleteDeviceCommandResponses,
   CreateCameraData,
   CreateCameraErrors,
   CreateCameraResponses,
@@ -78,6 +84,9 @@ import type {
   EndSessionData,
   EndSessionErrors,
   EndSessionResponses,
+  EnqueueConnectorConnectionTestData,
+  EnqueueConnectorConnectionTestErrors,
+  EnqueueConnectorConnectionTestResponses,
   ListCamerasData,
   ListCamerasErrors,
   ListCamerasResponses,
@@ -114,6 +123,9 @@ import type {
   ReadConnectorData,
   ReadConnectorErrors,
   ReadConnectorResponses,
+  ReadDeviceCommandData,
+  ReadDeviceCommandErrors,
+  ReadDeviceCommandResponses,
   ReadInferenceBackendData,
   ReadInferenceBackendErrors,
   ReadInferenceBackendResponses,
@@ -135,6 +147,9 @@ import type {
   ResetUserPasswordData,
   ResetUserPasswordErrors,
   ResetUserPasswordResponses,
+  RotateInferenceHostCredentialData,
+  RotateInferenceHostCredentialErrors,
+  RotateInferenceHostCredentialResponses,
   SetCameraStatusData,
   SetCameraStatusErrors,
   SetCameraStatusResponses,
@@ -618,6 +633,24 @@ export const updateConnectorCapability = <ThrowOnError extends boolean = false>(
   })
 
 /**
+ * Enqueue A Connector Connection Test
+ *
+ * 创建持久测试命令; 不同步访问设备, 也不接收凭据。
+ */
+export const enqueueConnectorConnectionTest = <ThrowOnError extends boolean = false>(
+  options: Options<EnqueueConnectorConnectionTestData, ThrowOnError>,
+): RequestResult<
+  EnqueueConnectorConnectionTestResponses,
+  EnqueueConnectorConnectionTestErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    EnqueueConnectorConnectionTestResponses,
+    EnqueueConnectorConnectionTestErrors,
+    ThrowOnError
+  >({ url: '/api/v1/connectors/{connector_id}/connection-test', ...options })
+
+/**
  * Set The Connector Status
  */
 export const setConnectorStatus = <ThrowOnError extends boolean = false>(
@@ -629,6 +662,53 @@ export const setConnectorStatus = <ThrowOnError extends boolean = false>(
     ThrowOnError
   >({
     url: '/api/v1/connectors/{connector_id}/status',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Claim Next Device Command
+ *
+ * 按认证主机领取一条命令; 无命令返回 204, 不会看到其他主机的队列。
+ */
+export const claimNextDeviceCommand = <ThrowOnError extends boolean = false>(
+  options: Options<ClaimNextDeviceCommandData, ThrowOnError>,
+): RequestResult<ClaimNextDeviceCommandResponses, ClaimNextDeviceCommandErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ClaimNextDeviceCommandResponses,
+    ClaimNextDeviceCommandErrors,
+    ThrowOnError
+  >({ url: '/api/v1/device-commands/next', ...options })
+
+/**
+ * Read A Device Command
+ *
+ * 读取命令状态, 供 Web 轮询直到真实结果或明确拒绝。
+ */
+export const readDeviceCommand = <ThrowOnError extends boolean = false>(
+  options: Options<ReadDeviceCommandData, ThrowOnError>,
+): RequestResult<ReadDeviceCommandResponses, ReadDeviceCommandErrors, ThrowOnError> =>
+  (options.client ?? client).get<ReadDeviceCommandResponses, ReadDeviceCommandErrors, ThrowOnError>(
+    { url: '/api/v1/device-commands/{command_id}', ...options },
+  )
+
+/**
+ * Complete A Device Command
+ *
+ * 用主机身份、领取令牌和租约回报结果; 中心与连接器更新共用请求事务。
+ */
+export const completeDeviceCommand = <ThrowOnError extends boolean = false>(
+  options: Options<CompleteDeviceCommandData, ThrowOnError>,
+): RequestResult<CompleteDeviceCommandResponses, CompleteDeviceCommandErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    CompleteDeviceCommandResponses,
+    CompleteDeviceCommandErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/device-commands/{command_id}/result',
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -848,6 +928,24 @@ export const editInferenceHost = <ThrowOnError extends boolean = false>(
       ...options.headers,
     },
   })
+
+/**
+ * Rotate A Host Credential
+ *
+ * 轮换主机控制面凭据并只返回一次明文。
+ */
+export const rotateInferenceHostCredential = <ThrowOnError extends boolean = false>(
+  options: Options<RotateInferenceHostCredentialData, ThrowOnError>,
+): RequestResult<
+  RotateInferenceHostCredentialResponses,
+  RotateInferenceHostCredentialErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    RotateInferenceHostCredentialResponses,
+    RotateInferenceHostCredentialErrors,
+    ThrowOnError
+  >({ url: '/api/v1/inference-hosts/{host_id}/credential', ...options })
 
 /**
  * Set The Host Status

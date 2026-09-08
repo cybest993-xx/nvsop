@@ -54,6 +54,9 @@ function testRouter(): Router {
       // the real guard: what these tests are about is which items the shell renders, and the guard
       // has its own suite.
       { path: '/access', name: 'access', component: blank },
+      // Deep-link return is a valid navigation even when this focused test router does not
+      // render the destination. Mirror production's catch-all so Vue Router does not warn.
+      { path: '/:pathMatch(.*)*', name: 'not-found', component: blank },
     ],
   })
 }

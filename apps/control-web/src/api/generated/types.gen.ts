@@ -26,6 +26,7 @@ export type ApiErrorCode =
   | 'INFERENCE_BACKEND_DEACTIVATED'
   | 'INFERENCE_BACKEND_HAS_CAMERAS'
   | 'INFERENCE_HOST_DEACTIVATED'
+  | 'INFERENCE_HOST_AUTHENTICATION_FAILED'
   | 'INFERENCE_HOST_HAS_BACKENDS'
   | 'INFERENCE_HOST_NAME_TAKEN'
   | 'INFERENCE_HOST_NOT_FOUND'
@@ -55,6 +56,16 @@ export type ApiErrorCode =
   | 'REQUEST_INVALID'
   | 'SESSION_INVALID'
   | 'STALE_REVISION'
+  | 'COMMAND_NOT_FOUND'
+  | 'COMMAND_HOST_MISMATCH'
+  | 'COMMAND_CLAIM_REQUIRED'
+  | 'COMMAND_CLAIM_EXPIRED'
+  | 'COMMAND_CLAIM_TOKEN_INVALID'
+  | 'COMMAND_ALREADY_COMPLETED'
+  | 'COMMAND_IDEMPOTENCY_CONFLICT'
+  | 'COMMAND_CONFIGURATION_CHANGED'
+  | 'COMMAND_TARGET_NOT_FOUND'
+  | 'COMMAND_TARGET_DEACTIVATED'
 
 /**
  * AssignedRoles
@@ -282,6 +293,85 @@ export type CameraView = {
 export type ConnectionState = 'unverified' | 'success' | 'failure'
 
 /**
+ * ConnectionTestClaimDocument
+ *
+ * 正式发布的领取响应契约，供 OpenAPI 和边缘运行时共同验证。
+ */
+export type ConnectionTestClaimDocument = {
+  /**
+   * Claim Token
+   */
+  claim_token: string
+  command: ConnectionTestCommandDocument
+  /**
+   * Lease Expires At
+   */
+  lease_expires_at: string
+}
+
+/**
+ * ConnectionTestCommandDocument
+ *
+ * 领取响应中的连接测试命令，与共享 contracts 的字段保持一致。
+ */
+export type ConnectionTestCommandDocument = {
+  /**
+   * Command Id
+   */
+  command_id: string
+  /**
+   * Command Type
+   */
+  command_type: 'test_connector_connection'
+  /**
+   * Configuration
+   */
+  configuration: {
+    [key: string]: string | number
+  }
+  /**
+   * Connector Id
+   */
+  connector_id: string
+  /**
+   * Connector Revision
+   */
+  connector_revision: number
+  /**
+   * Connector Type
+   */
+  connector_type: string
+}
+
+/**
+ * ConnectionTestOutcome
+ *
+ * 推理机真实测试的三种可观察结果。
+ */
+export type ConnectionTestOutcome = 'reachable' | 'unreachable' | 'rejected'
+
+/**
+ * ConnectionTestResultDocument
+ *
+ * 推理机回报的严格结果文档, 与共享 contracts 保持同一字段集。
+ */
+export type ConnectionTestResultDocument = {
+  /**
+   * Credentials Configured
+   */
+  credentials_configured: boolean | null
+  /**
+   * Detail
+   */
+  detail: string | null
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  outcome: ConnectionTestOutcome
+}
+
+/**
  * ConnectionView
  *
  * The last real connection observation, including the endpoint's model identities.
@@ -343,6 +433,13 @@ export type ConnectorPlacement = {
    */
   station_id: string
 }
+
+/**
+ * ConnectorReachability
+ *
+ * 连接器尚未由推理机真实验证时的显式状态。
+ */
+export type ConnectorReachability = 'unverified' | 'reachable' | 'unreachable'
 
 /**
  * ConnectorStatus
@@ -581,6 +678,22 @@ export type InferenceBackendView = {
    * Updated By
    */
   updated_by: string
+}
+
+/**
+ * InferenceHostCredentialView
+ *
+ * 推理机凭据轮换结果；明文只在本次响应出现。
+ */
+export type InferenceHostCredentialView = {
+  /**
+   * Credential
+   */
+  credential: string
+  /**
+   * Revision
+   */
+  revision: number
 }
 
 /**
@@ -914,6 +1027,87 @@ export type NewUser = {
    * Password
    */
   password: string
+}
+
+/**
+ * PendingCommandStatus
+ *
+ * 持久委托命令的生命周期状态。
+ */
+export type PendingCommandStatus = 'pending' | 'claimed' | 'succeeded' | 'failed' | 'rejected'
+
+/**
+ * PendingCommandType
+ *
+ * 推理机从中心领取的设备命令类型。
+ */
+export type PendingCommandType = 'test_connector_connection'
+
+/**
+ * PendingCommandView
+ *
+ * 操作员可见的命令状态, 不含推理机领取令牌。
+ */
+export type PendingCommandView = {
+  /**
+   * Attempt
+   */
+  attempt: number
+  /**
+   * Claimed At
+   */
+  claimed_at: string | null
+  command_type: PendingCommandType
+  /**
+   * Completed At
+   */
+  completed_at: string | null
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Created By
+   */
+  created_by: string
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  /**
+   * Host Id
+   */
+  host_id: string
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Idempotency Key
+   */
+  idempotency_key: string
+  /**
+   * Lease Expires At
+   */
+  lease_expires_at: string | null
+  result: ConnectorReachability | null
+  /**
+   * Result Detail
+   */
+  result_detail: string | null
+  status: PendingCommandStatus
+  /**
+   * Target Id
+   */
+  target_id: string
+  /**
+   * Target Revision
+   */
+  target_revision: number
+  /**
+   * Updated At
+   */
+  updated_at: string
 }
 
 /**
@@ -2570,6 +2764,64 @@ export type UpdateConnectorCapabilityResponses = {
 export type UpdateConnectorCapabilityResponse =
   UpdateConnectorCapabilityResponses[keyof UpdateConnectorCapabilityResponses]
 
+export type EnqueueConnectorConnectionTestData = {
+  body?: never
+  headers: {
+    /**
+     * Idempotency-Key
+     */
+    'Idempotency-Key': string
+  }
+  path: {
+    /**
+     * Connector Id
+     */
+    connector_id: string
+  }
+  query?: never
+  url: '/api/v1/connectors/{connector_id}/connection-test'
+}
+
+export type EnqueueConnectorConnectionTestErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type EnqueueConnectorConnectionTestError =
+  EnqueueConnectorConnectionTestErrors[keyof EnqueueConnectorConnectionTestErrors]
+
+export type EnqueueConnectorConnectionTestResponses = {
+  /**
+   * Successful Response
+   */
+  202: PendingCommandView
+}
+
+export type EnqueueConnectorConnectionTestResponse =
+  EnqueueConnectorConnectionTestResponses[keyof EnqueueConnectorConnectionTestResponses]
+
 export type SetConnectorStatusData = {
   body: ConnectorStatus
   headers: {
@@ -2626,6 +2878,183 @@ export type SetConnectorStatusResponses = {
 
 export type SetConnectorStatusResponse =
   SetConnectorStatusResponses[keyof SetConnectorStatusResponses]
+
+export type ClaimNextDeviceCommandData = {
+  body?: never
+  headers: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID': string
+    /**
+     * X-Inference-Host-Token
+     */
+    'X-Inference-Host-Token'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/device-commands/next'
+}
+
+export type ClaimNextDeviceCommandErrors = {
+  /**
+   * Inference host authentication failed
+   */
+  401: ProblemDocument
+  /**
+   * Inference host is not allowed to access this command
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ClaimNextDeviceCommandError =
+  ClaimNextDeviceCommandErrors[keyof ClaimNextDeviceCommandErrors]
+
+export type ClaimNextDeviceCommandResponses = {
+  /**
+   * Successful Response
+   */
+  200: ConnectionTestClaimDocument
+  /**
+   * No command is pending for this host
+   */
+  204: void
+}
+
+export type ClaimNextDeviceCommandResponse =
+  ClaimNextDeviceCommandResponses[keyof ClaimNextDeviceCommandResponses]
+
+export type ReadDeviceCommandData = {
+  body?: never
+  path: {
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/device-commands/{command_id}'
+}
+
+export type ReadDeviceCommandErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadDeviceCommandError = ReadDeviceCommandErrors[keyof ReadDeviceCommandErrors]
+
+export type ReadDeviceCommandResponses = {
+  /**
+   * Successful Response
+   */
+  200: PendingCommandView
+}
+
+export type ReadDeviceCommandResponse = ReadDeviceCommandResponses[keyof ReadDeviceCommandResponses]
+
+export type CompleteDeviceCommandData = {
+  body: ConnectionTestResultDocument
+  headers: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID': string
+    /**
+     * X-Command-Claim-Token
+     */
+    'X-Command-Claim-Token': string
+    /**
+     * X-Inference-Host-Token
+     */
+    'X-Inference-Host-Token'?: string | null
+  }
+  path: {
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/device-commands/{command_id}/result'
+}
+
+export type CompleteDeviceCommandErrors = {
+  /**
+   * Inference host authentication failed
+   */
+  401: ProblemDocument
+  /**
+   * Inference host is not allowed to access this command
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CompleteDeviceCommandError =
+  CompleteDeviceCommandErrors[keyof CompleteDeviceCommandErrors]
+
+export type CompleteDeviceCommandResponses = {
+  /**
+   * Successful Response
+   */
+  200: PendingCommandView
+}
+
+export type CompleteDeviceCommandResponse =
+  CompleteDeviceCommandResponses[keyof CompleteDeviceCommandResponses]
 
 export type ListInferenceBackendsData = {
   body?: never
@@ -3251,6 +3680,64 @@ export type EditInferenceHostResponses = {
 }
 
 export type EditInferenceHostResponse = EditInferenceHostResponses[keyof EditInferenceHostResponses]
+
+export type RotateInferenceHostCredentialData = {
+  body?: never
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Host Id
+     */
+    host_id: string
+  }
+  query?: never
+  url: '/api/v1/inference-hosts/{host_id}/credential'
+}
+
+export type RotateInferenceHostCredentialErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Host not found
+   */
+  404: ProblemDocument
+  /**
+   * Revision moved (STALE_REVISION)
+   */
+  409: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type RotateInferenceHostCredentialError =
+  RotateInferenceHostCredentialErrors[keyof RotateInferenceHostCredentialErrors]
+
+export type RotateInferenceHostCredentialResponses = {
+  /**
+   * Successful Response
+   */
+  200: InferenceHostCredentialView
+}
+
+export type RotateInferenceHostCredentialResponse =
+  RotateInferenceHostCredentialResponses[keyof RotateInferenceHostCredentialResponses]
 
 export type SetInferenceHostStatusData = {
   body: HostStatus

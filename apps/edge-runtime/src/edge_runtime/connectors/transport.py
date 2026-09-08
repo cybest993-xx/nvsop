@@ -80,7 +80,9 @@ class UrllibIsapiTransport:
             # The device answered. `error.reason` is its status text; the body may carry an
             # ISAPI status code, and reading it here would mean reading an error body on the
             # physical-control path for no decision that depends on it.
-            return TransportFailed(detail=f"{error.code} {error.reason}")
+            detail = f"{error.code} {error.reason}"
+            error.close()
+            return TransportFailed(detail=detail)
         except TimeoutError:
             return TransportTimedOut(after=timeout)
         except urllib.error.URLError as error:

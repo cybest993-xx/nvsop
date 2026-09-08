@@ -239,7 +239,6 @@ describe('工位与设备中的连接器', () => {
 
     expect(wrapper.find('input[name="password"]').exists()).toBe(false)
     expect(wrapper.find('input[name="username"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('测试连接')
 
     await wrapper.find('input[name="name"]').setValue('现场输入')
     await wrapper.find('input[name="address"]').setValue('10.0.0.9')

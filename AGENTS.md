@@ -27,7 +27,7 @@ Keep each rule in one source of truth. For comment and documentation language, s
 
 - One ticket, one branch, one worktree, never `main`. `git worktree add ../nvsop-19 -b issue-19 origin/main`, outside the repository because `scripts/check_repo_policy.py` counts untracked files and would reject the directory as an undeclared top level. Delete both once merged; a long-lived shared branch fuses tickets, so the next merge carries whatever else was sitting on it. `main` only receives finished work.
 - Write the failing test before the implementation: invoke the `tdd` skill and follow it. Harness §4 fixes where a test lives; this fixes when it is written.
-- A session that writes code does not review or commit it. Hand both to a fresh session, because the context that produced the code has already argued itself into believing it correct.
+- A session that writes code does not review or commit it. Hand review and commit to a fresh session; use subagents only for review, never for implementation or other tasks.
 
 ## Completion gate
 

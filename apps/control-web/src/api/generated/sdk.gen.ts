@@ -60,6 +60,9 @@ import type {
   DownloadTemplateImportData,
   DownloadTemplateImportErrors,
   DownloadTemplateImportResponses,
+  DownloadTemplateVersionArtifactData,
+  DownloadTemplateVersionArtifactErrors,
+  DownloadTemplateVersionArtifactResponses,
   EditCameraData,
   EditCameraErrors,
   EditCameraResponses,
@@ -126,12 +129,18 @@ import type {
   ListTemplateImportsData,
   ListTemplateImportsErrors,
   ListTemplateImportsResponses,
+  ListTemplateVersionsData,
+  ListTemplateVersionsErrors,
+  ListTemplateVersionsResponses,
   ListUsersData,
   ListUsersErrors,
   ListUsersResponses,
   OpenSessionData,
   OpenSessionErrors,
   OpenSessionResponses,
+  PublishTemplateVersionData,
+  PublishTemplateVersionErrors,
+  PublishTemplateVersionResponses,
   ReadCameraData,
   ReadCameraErrors,
   ReadCameraResponses,
@@ -165,6 +174,9 @@ import type {
   ReadTemplateImportData,
   ReadTemplateImportErrors,
   ReadTemplateImportResponses,
+  ReadTemplateVersionData,
+  ReadTemplateVersionErrors,
+  ReadTemplateVersionResponses,
   RegisterInferenceHostIdentityKeyData,
   RegisterInferenceHostIdentityKeyErrors,
   RegisterInferenceHostIdentityKeyResponses,
@@ -1253,6 +1265,20 @@ export const editTemplateDraft = <ThrowOnError extends boolean = false>(
   })
 
 /**
+ * Publish A Template Version
+ *
+ * 发布指定草稿修订；成功只保存中心版本，不改变工位绑定。
+ */
+export const publishTemplateVersion = <ThrowOnError extends boolean = false>(
+  options: Options<PublishTemplateVersionData, ThrowOnError>,
+): RequestResult<PublishTemplateVersionResponses, PublishTemplateVersionErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    PublishTemplateVersionResponses,
+    PublishTemplateVersionErrors,
+    ThrowOnError
+  >({ url: '/api/v1/templates/drafts/{draft_id}/publish', ...options })
+
+/**
  * List The Template Imports
  */
 export const listTemplateImports = <ThrowOnError extends boolean = false>(
@@ -1311,3 +1337,43 @@ export const downloadTemplateImport = <ThrowOnError extends boolean = false>(
     DownloadTemplateImportErrors,
     ThrowOnError
   >({ url: '/api/v1/templates/imports/{import_id}/document', ...options })
+
+/**
+ * List The Template Versions
+ */
+export const listTemplateVersions = <ThrowOnError extends boolean = false>(
+  options?: Options<ListTemplateVersionsData, ThrowOnError>,
+): RequestResult<ListTemplateVersionsResponses, ListTemplateVersionsErrors, ThrowOnError> =>
+  (options?.client ?? client).get<
+    ListTemplateVersionsResponses,
+    ListTemplateVersionsErrors,
+    ThrowOnError
+  >({ url: '/api/v1/templates/versions', ...options })
+
+/**
+ * Read A Template Version
+ */
+export const readTemplateVersion = <ThrowOnError extends boolean = false>(
+  options: Options<ReadTemplateVersionData, ThrowOnError>,
+): RequestResult<ReadTemplateVersionResponses, ReadTemplateVersionErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadTemplateVersionResponses,
+    ReadTemplateVersionErrors,
+    ThrowOnError
+  >({ url: '/api/v1/templates/versions/{version_id}', ...options })
+
+/**
+ * Download A Template Version Artifact
+ */
+export const downloadTemplateVersionArtifact = <ThrowOnError extends boolean = false>(
+  options: Options<DownloadTemplateVersionArtifactData, ThrowOnError>,
+): RequestResult<
+  DownloadTemplateVersionArtifactResponses,
+  DownloadTemplateVersionArtifactErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).get<
+    DownloadTemplateVersionArtifactResponses,
+    DownloadTemplateVersionArtifactErrors,
+    ThrowOnError
+  >({ url: '/api/v1/templates/versions/{version_id}/artifacts/{name}', ...options })

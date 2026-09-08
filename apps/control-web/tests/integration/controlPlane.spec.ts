@@ -15,6 +15,8 @@ import {
   editConnector,
   endSession,
   enqueueConnectorConnectionTest,
+  downloadTemplateVersionArtifact,
+  readTemplateVersions,
   readConnector,
   readConnectors,
   readDeviceCommand,
@@ -22,6 +24,8 @@ import {
   readSession,
   readStations,
   openSession,
+  publishTemplateVersion,
+  readTemplateVersion,
   setConnectorStatus,
 } from '@/api/controlPlane'
 
@@ -167,6 +171,56 @@ describe('connector calls', () => {
     await expect(statusRequest!.clone().json()).resolves.toEqual({ status: 'deactivated' })
     expect(deleteRequest!.method).toBe('DELETE')
     expect(deleteRequest!.headers.get('If-Match')).toBe('3')
+  })
+})
+
+describe('template version calls', () => {
+  const VERSION = {
+    id: 'version-1',
+    template_id: 'template-1',
+    source_import_id: 'import-1',
+    source_draft_id: 'draft-1',
+    source_draft_revision: 3,
+    steps: [{ number: 1, name: '取料', description: '(1)取料' }],
+    ordering: 'strict' as const,
+    start_signal: { kind: 'action' as const, action_number: 1 },
+    end_signals: [],
+    runtime_defaults: {
+      idle_timeout_seconds: 30,
+      step_deadline_seconds: 90,
+      disposition_policy: 'record',
+    },
+    artifacts: [],
+    sha256: 'a'.repeat(64),
+    published_by: 'operator-1',
+    published_at: '2026-09-08T01:00:00Z',
+  }
+
+  it('uses generated publish, history, detail and artifact endpoints', async () => {
+    const stub = stubFetch(respond(201, VERSION, 'application/json'))
+
+    await publishTemplateVersion('draft-1', 3)
+    stub.mockResolvedValueOnce(
+      respond(200, { items: [VERSION], page: 1, page_size: 50, total: 1 }, 'application/json'),
+    )
+    await readTemplateVersions()
+    stub.mockResolvedValueOnce(respond(200, VERSION, 'application/json'))
+    await readTemplateVersion('version-1')
+    stub.mockResolvedValueOnce(
+      new Response('artifact', { status: 200, headers: { 'content-type': 'application/json' } }),
+    )
+    await downloadTemplateVersionArtifact('version-1', 'actions.json')
+
+    const [publishRequest, listRequest, readRequest, artifactRequest] = stub.mock.calls.map(
+      ([request]) => request,
+    )
+    expect(new URL(publishRequest!.url).pathname).toBe('/api/v1/templates/drafts/draft-1/publish')
+    expect(publishRequest!.headers.get('If-Match')).toBe('3')
+    expect(new URL(listRequest!.url).pathname).toBe('/api/v1/templates/versions')
+    expect(new URL(readRequest!.url).pathname).toBe('/api/v1/templates/versions/version-1')
+    expect(new URL(artifactRequest!.url).pathname).toBe(
+      '/api/v1/templates/versions/version-1/artifacts/actions.json',
+    )
   })
 })
 

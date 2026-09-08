@@ -1,6 +1,28 @@
 {
   "components": {
     "schemas": {
+      "ActionSignalInput": {
+        "additionalProperties": false,
+        "description": "动作编号边界信号。",
+        "properties": {
+          "action_number": {
+            "exclusiveMinimum": 0.0,
+            "title": "Action Number",
+            "type": "integer"
+          },
+          "kind": {
+            "const": "action",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "action_number"
+        ],
+        "title": "ActionSignalInput",
+        "type": "object"
+      },
       "ApiErrorCode": {
         "description": "The stable wire-level failure codes currently emitted by the control plane.",
         "enum": [
@@ -64,7 +86,10 @@
           "TEMPLATE_IMPORT_INVALID",
           "TEMPLATE_IMPORT_NOT_FOUND",
           "TEMPLATE_DRAFT_NOT_FOUND",
-          "TEMPLATE_DRAFT_INVALID"
+          "TEMPLATE_DRAFT_INVALID",
+          "TEMPLATE_VERSION_NOT_FOUND",
+          "TEMPLATE_VERSION_INVALID",
+          "TEMPLATE_VERSION_ARTIFACT_NOT_FOUND"
         ],
         "title": "ApiErrorCode",
         "type": "string"
@@ -871,6 +896,28 @@
         "title": "EditedUser",
         "type": "object"
       },
+      "ExternalSignalInput": {
+        "additionalProperties": false,
+        "description": "外部信号语义标签边界信号。",
+        "properties": {
+          "kind": {
+            "const": "external",
+            "title": "Kind",
+            "type": "string"
+          },
+          "semantic_label": {
+            "minLength": 1,
+            "title": "Semantic Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "semantic_label"
+        ],
+        "title": "ExternalSignalInput",
+        "type": "object"
+      },
       "FieldError": {
         "description": "One rejected input, named so the Web form can put the message beside it.",
         "properties": {
@@ -1471,6 +1518,40 @@
           "total"
         ],
         "title": "ItemPage[TemplateImportView]",
+        "type": "object"
+      },
+      "ItemPage_TemplateVersionView_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TemplateVersionView"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "minimum": 1.0,
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "minimum": 1.0,
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
+        "title": "ItemPage[TemplateVersionView]",
         "type": "object"
       },
       "ItemPage_UserView_": {
@@ -2276,13 +2357,104 @@
         "title": "StatusChanged",
         "type": "object"
       },
+      "TemplateArtifactName": {
+        "description": "模板版本允许下载的确定性制品名称。",
+        "enum": [
+          "actions.json",
+          "vlm_prompts.txt",
+          "template.json",
+          "manifest.json"
+        ],
+        "title": "TemplateArtifactName",
+        "type": "string"
+      },
+      "TemplateArtifactView": {
+        "properties": {
+          "byte_length": {
+            "title": "Byte Length",
+            "type": "integer"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          },
+          "name": {
+            "$ref": "#/components/schemas/TemplateArtifactName"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "media_type",
+          "byte_length",
+          "sha256"
+        ],
+        "title": "TemplateArtifactView",
+        "type": "object"
+      },
       "TemplateDraftConfiguration": {
         "properties": {
+          "end_signals": {
+            "anyOf": [
+              {
+                "items": {
+                  "discriminator": {
+                    "mapping": {
+                      "action": "#/components/schemas/ActionSignalInput",
+                      "external": "#/components/schemas/ExternalSignalInput"
+                    },
+                    "propertyName": "kind"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ActionSignalInput"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ExternalSignalInput"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Signals"
+          },
           "ordering": {
             "$ref": "#/components/schemas/OrderingMode"
           },
           "runtime_defaults": {
             "$ref": "#/components/schemas/TemplateRuntimeDefaultsInput"
+          },
+          "start_signal": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "action": "#/components/schemas/ActionSignalInput",
+                    "external": "#/components/schemas/ExternalSignalInput"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ActionSignalInput"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ExternalSignalInput"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Signal"
           },
           "steps": {
             "items": {
@@ -2313,6 +2485,34 @@
             "title": "Created By",
             "type": "string"
           },
+          "end_signals": {
+            "anyOf": [
+              {
+                "items": {
+                  "discriminator": {
+                    "mapping": {
+                      "action": "#/components/schemas/ActionSignalInput",
+                      "external": "#/components/schemas/ExternalSignalInput"
+                    },
+                    "propertyName": "kind"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ActionSignalInput"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ExternalSignalInput"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Signals"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -2332,6 +2532,31 @@
             "format": "uuid",
             "title": "Source Import Id",
             "type": "string"
+          },
+          "start_signal": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "action": "#/components/schemas/ActionSignalInput",
+                    "external": "#/components/schemas/ExternalSignalInput"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ActionSignalInput"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ExternalSignalInput"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Signal"
           },
           "station_code": {
             "title": "Station Code",
@@ -2636,6 +2861,125 @@
           "description"
         ],
         "title": "TemplateStepView",
+        "type": "object"
+      },
+      "TemplateVersionView": {
+        "properties": {
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/TemplateArtifactView"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "end_signals": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "action": "#/components/schemas/ActionSignalInput",
+                  "external": "#/components/schemas/ExternalSignalInput"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ActionSignalInput"
+                },
+                {
+                  "$ref": "#/components/schemas/ExternalSignalInput"
+                }
+              ]
+            },
+            "title": "End Signals",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "ordering": {
+            "$ref": "#/components/schemas/OrderingMode"
+          },
+          "published_at": {
+            "format": "date-time",
+            "title": "Published At",
+            "type": "string"
+          },
+          "published_by": {
+            "format": "uuid",
+            "title": "Published By",
+            "type": "string"
+          },
+          "runtime_defaults": {
+            "$ref": "#/components/schemas/TemplateRuntimeDefaultsView"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "source_draft_id": {
+            "format": "uuid",
+            "title": "Source Draft Id",
+            "type": "string"
+          },
+          "source_draft_revision": {
+            "title": "Source Draft Revision",
+            "type": "integer"
+          },
+          "source_import_id": {
+            "format": "uuid",
+            "title": "Source Import Id",
+            "type": "string"
+          },
+          "start_signal": {
+            "discriminator": {
+              "mapping": {
+                "action": "#/components/schemas/ActionSignalInput",
+                "external": "#/components/schemas/ExternalSignalInput"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ActionSignalInput"
+              },
+              {
+                "$ref": "#/components/schemas/ExternalSignalInput"
+              }
+            ],
+            "title": "Start Signal"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/TemplateStepView"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "template_id": {
+            "format": "uuid",
+            "title": "Template Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "template_id",
+          "source_import_id",
+          "source_draft_id",
+          "source_draft_revision",
+          "steps",
+          "ordering",
+          "runtime_defaults",
+          "start_signal",
+          "end_signals",
+          "sha256",
+          "published_by",
+          "published_at",
+          "artifacts"
+        ],
+        "title": "TemplateVersionView",
         "type": "object"
       },
       "UnverifiedCapabilityDocument": {
@@ -8960,6 +9304,120 @@
         "x-required-permission": "template.draft.edit"
       }
     },
+    "/api/v1/templates/drafts/{draft_id}/publish": {
+      "post": {
+        "description": "发布指定草稿修订；成功只保存中心版本，不改变工位绑定。",
+        "operationId": "publishTemplateVersion",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Draft Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "title": "If-Match",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateVersionView"
+                }
+              }
+            },
+            "description": "已发布的模板版本"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateVersionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "模板草稿不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "草稿修订号已变化（STALE_REVISION）"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Publish A Template Version",
+        "tags": [
+          "template"
+        ],
+        "x-required-permission": "template.draft.edit"
+      }
+    },
     "/api/v1/templates/imports": {
       "get": {
         "operationId": "listTemplateImports",
@@ -9313,6 +9771,276 @@
           }
         },
         "summary": "Download An Import",
+        "tags": [
+          "template"
+        ],
+        "x-required-permission": "template.draft.view"
+      }
+    },
+    "/api/v1/templates/versions": {
+      "get": {
+        "operationId": "listTemplateVersions",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPage_TemplateVersionView_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "List The Template Versions",
+        "tags": [
+          "template"
+        ],
+        "x-required-permission": "template.draft.view"
+      }
+    },
+    "/api/v1/templates/versions/{version_id}": {
+      "get": {
+        "operationId": "readTemplateVersion",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Version Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateVersionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "模板版本不存在"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Read A Template Version",
+        "tags": [
+          "template"
+        ],
+        "x-required-permission": "template.draft.view"
+      }
+    },
+    "/api/v1/templates/versions/{version_id}/artifacts/{name}": {
+      "get": {
+        "operationId": "downloadTemplateVersionArtifact",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Version Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TemplateArtifactName"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "已保存的模板版本制品"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "模板版本或制品不存在"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Download A Template Version Artifact",
         "tags": [
           "template"
         ],

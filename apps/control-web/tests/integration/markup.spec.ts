@@ -106,6 +106,41 @@ const TEMPLATE_FIXTURES = vi.hoisted(() => ({
       imported_at: '2026-09-07T04:00:00Z',
     },
   ],
+  versions: [
+    {
+      id: 'version-1',
+      template_id: 'template-1',
+      source_import_id: 'import-1',
+      source_draft_id: 'draft-1',
+      source_draft_revision: 1,
+      steps: [{ number: 1, name: '取料', description: '(1)取料' }],
+      ordering: 'strict' as const,
+      start_signal: { kind: 'action' as const, action_number: 1 },
+      end_signals: [],
+      runtime_defaults: {
+        idle_timeout_seconds: 30,
+        step_deadline_seconds: 90,
+        disposition_policy: 'record',
+      },
+      artifacts: [
+        {
+          name: 'actions.json' as const,
+          media_type: 'application/json',
+          byte_length: 32,
+          sha256: 'b'.repeat(64),
+        },
+        {
+          name: 'vlm_prompts.txt' as const,
+          media_type: 'text/plain; charset=utf-8',
+          byte_length: 18,
+          sha256: 'c'.repeat(64),
+        },
+      ],
+      sha256: 'd'.repeat(64),
+      published_by: 'operator-1',
+      published_at: '2026-09-08T01:00:00Z',
+    },
+  ],
 }))
 
 const DEVICE_FIXTURES = vi.hoisted(() => ({
@@ -158,6 +193,9 @@ vi.mock('@/api/controlPlane', async (importOriginal) => ({
   ),
   readTemplateImports: vi.fn(() =>
     Promise.resolve({ items: TEMPLATE_FIXTURES.imports, page: 1, page_size: 50, total: 1 }),
+  ),
+  readTemplateVersions: vi.fn(() =>
+    Promise.resolve({ items: TEMPLATE_FIXTURES.versions, page: 1, page_size: 50, total: 1 }),
   ),
 }))
 

@@ -39,6 +39,9 @@ class TemplateRefusalCode(StrEnum):
     IMPORT_NOT_FOUND = "TEMPLATE_IMPORT_NOT_FOUND"
     DRAFT_NOT_FOUND = "TEMPLATE_DRAFT_NOT_FOUND"
     DRAFT_INVALID = "TEMPLATE_DRAFT_INVALID"
+    VERSION_NOT_FOUND = "TEMPLATE_VERSION_NOT_FOUND"
+    VERSION_INVALID = "TEMPLATE_VERSION_INVALID"
+    VERSION_ARTIFACT_NOT_FOUND = "TEMPLATE_VERSION_ARTIFACT_NOT_FOUND"
     STALE_REVISION = "STALE_REVISION"
 
 
@@ -67,6 +70,12 @@ def refusal_problem(code: TemplateRefusalCode) -> tuple[int, str]:
             return 404, "模板草稿不存在"
         case TemplateRefusalCode.DRAFT_INVALID:
             return 422, "模板草稿内容不符合规范"
+        case TemplateRefusalCode.VERSION_NOT_FOUND:
+            return 404, "模板版本不存在"
+        case TemplateRefusalCode.VERSION_INVALID:
+            return 422, "模板版本发布校验失败"
+        case TemplateRefusalCode.VERSION_ARTIFACT_NOT_FOUND:
+            return 404, "模板版本制品不存在"
         case TemplateRefusalCode.STALE_REVISION:
             return 409, "模板草稿已被他人修改，请刷新后重试"
         case _:

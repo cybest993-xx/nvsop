@@ -185,13 +185,24 @@ def _reset_database(engine: Engine) -> None:
     """
     with engine.begin() as connection:
         connection.execute(
-            text(
-                "TRUNCATE auth_bootstrap_guard, auth_user, auth_session, "
-                "auth_user_role, auth_role_permission, auth_role, "
-                "device_camera, device_station, device_inference_backend, "
-                "device_inference_host CASCADE"
-            )
+            text("ALTER TABLE template_version DISABLE TRIGGER template_version_immutable_truncate")
         )
+        try:
+            connection.execute(
+                text(
+                    "TRUNCATE template_version, auth_bootstrap_guard, auth_user, auth_session, "
+                    "auth_user_role, auth_role_permission, auth_role, "
+                    "device_camera, device_station, device_inference_backend, "
+                    "device_inference_host CASCADE"
+                )
+            )
+        finally:
+            connection.execute(
+                text(
+                    "ALTER TABLE template_version ENABLE TRIGGER "
+                    "template_version_immutable_truncate"
+                )
+            )
 
 
 # The device administrator the scenarios log in as. First account of the deployment, so the

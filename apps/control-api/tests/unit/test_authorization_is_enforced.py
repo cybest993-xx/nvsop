@@ -334,6 +334,11 @@ ROUTES = [
     ),
     Target(
         "POST",
+        "/templates/drafts/{draft_id}/publish",
+        headers={"If-Match": "1"},
+    ),
+    Target(
+        "POST",
         "/point-binding-validations",
         {
             "station_id": "{station_id}",
@@ -385,6 +390,13 @@ class TemplateStore:
         self.imports.append(record)
 
     def draft_by_id(self, _draft_id: object) -> None:
+        return None
+
+    def draft_for_publish(self, _draft_id: object) -> None:
+        return None
+
+    def version_by_source(self, *, draft_id: object, revision: int) -> None:
+        del draft_id, revision
         return None
 
 

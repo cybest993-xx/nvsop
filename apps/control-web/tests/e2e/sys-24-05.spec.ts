@@ -345,3 +345,44 @@ test('a known-identifier delete submits exactly once from a real browser click',
     ifMatch: '7',
   })
 })
+
+test('SYS-24-05 Stage B — an operator preflights an unbound point role', async ({ page }) => {
+  const bindingPosts: unknown[] = []
+  page.on('request', (request) => {
+    if (
+      request.method() === 'POST' &&
+      request.url().endsWith('/api/v1/point-binding-validations')
+    ) {
+      bindingPosts.push(request.postDataJSON())
+    }
+  })
+
+  await mockControlPlane(page, {
+    ...ADMIN_SESSION,
+    permissions: ['device.connector.view', 'device.point.view'],
+  })
+
+  await page.goto('/login')
+  await page.getByRole('textbox', { name: '登录名' }).fill(CREDENTIALS.login_name)
+  await page.getByLabel('密码').fill(CREDENTIALS.password)
+  await page.getByRole('button', { name: '登录' }).click()
+  await page.getByRole('navigation', { name: '主导航' }).getByText('工位与设备').click()
+
+  await expect(page.getByRole('row', { name: /DI-01/ })).toContainText('DI-01')
+  await expect(
+    page
+      .getByRole('table', { name: '已配置的连接器，含已停用记录' })
+      .getByRole('row', { name: /一号连接器/ }),
+  ).toContainText('未验证')
+  await expect(page.getByRole('button', { name: '测试连接' })).toHaveCount(0)
+
+  await page.locator('#validation-station-id').fill('station-1')
+  await page.locator('#validation-role').selectOption('ordered_step')
+  await page.locator('#validation-budget-seconds').fill('0')
+  await page.getByRole('button', { name: '执行预检' }).click()
+
+  await expect(page.getByText('可以绑定', { exact: true })).toBeVisible()
+  expect(bindingPosts).toEqual([
+    { station_id: 'station-1', point_id: null, role: 'ordered_step', budget_seconds: 0 },
+  ])
+})

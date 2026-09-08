@@ -203,6 +203,13 @@ exports[`the device page > renders connector configuration without a test or sec
     <!--v-if-->
     <!--v-if-->
   </section>
+  <section aria-labelledby="validation-heading">
+    <h3 id="validation-heading">点位角色绑定预检</h3>
+    <p role="status">绑定预检需要点位查看权限；当前不会请求点位或连接器详情。</p>
+    <!--v-if-->
+    <!--v-if-->
+    <!--v-if-->
+  </section>
 </section>"
 `;
 
@@ -482,6 +489,13 @@ exports[`the device page > renders the connector form with only non-secret field
         </tr>
       </tbody>
     </table>
+    <!--v-if-->
+    <!--v-if-->
+    <!--v-if-->
+  </section>
+  <section aria-labelledby="validation-heading">
+    <h3 id="validation-heading">点位角色绑定预检</h3>
+    <p role="status">绑定预检需要点位查看权限；当前不会请求点位或连接器详情。</p>
     <!--v-if-->
     <!--v-if-->
     <!--v-if-->

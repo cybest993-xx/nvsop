@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ConnectorView, StationView } from '@/api/controlPlane'
 import { useSessionStore } from '@/session/store'
+import BindingValidation from './BindingValidation.vue'
 import CapabilityLedger from './CapabilityLedger.vue'
 import PointRegister from './PointRegister.vue'
 const props = withDefaults(
@@ -28,5 +29,10 @@ const may = (permission: string): boolean => session.may(permission)
     :can-edit="may('device.connector.edit')"
     :connectors="props.connectors"
     @changed="emit('changed')"
+  />
+  <BindingValidation
+    :can-view="may('device.point.view')"
+    :can-view-stations="may('device.station.view')"
+    :stations="props.stations"
   />
 </template>

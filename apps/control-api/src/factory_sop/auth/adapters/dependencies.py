@@ -14,7 +14,6 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import Depends, Request
-from sqlalchemy.orm import Session as DatabaseSession
 
 from factory_sop.auth.adapters.cookies import SESSION_COOKIE
 from factory_sop.auth.adapters.repository import (
@@ -29,7 +28,7 @@ from factory_sop.auth.permissions import Permission
 from factory_sop.auth.repository import RoleRepository, SessionRepository, UserRepository
 from factory_sop.auth.tokens import SessionToken
 from factory_sop.auth.usecases.sessions import RestoredSession, restore_session
-from factory_sop.persistence import request_session
+from factory_sop.persistence import RequestSession
 
 # The OpenAPI extension member a write route carries its permission in. `x-` prefixed, as
 # OpenAPI requires of an extension, and read by the mechanical consistency check
@@ -47,7 +46,7 @@ def needs(permission: Permission) -> dict[str, str]:
     return {DECLARED_PERMISSION: permission.value}
 
 
-def users(session: Annotated[DatabaseSession, Depends(request_session)]) -> UserRepository:
+def users(session: RequestSession) -> UserRepository:
     """`auth_user` on the request's transaction.
 
     Overridden in the adapter's own tests with an in-memory stand-in at this same seam, which
@@ -56,12 +55,12 @@ def users(session: Annotated[DatabaseSession, Depends(request_session)]) -> User
     return PostgresUserRepository(session)
 
 
-def sessions(session: Annotated[DatabaseSession, Depends(request_session)]) -> SessionRepository:
+def sessions(session: RequestSession) -> SessionRepository:
     """`auth_session` on the request's transaction."""
     return PostgresSessionRepository(session)
 
 
-def roles(session: Annotated[DatabaseSession, Depends(request_session)]) -> RoleRepository:
+def roles(session: RequestSession) -> RoleRepository:
     """`auth_role`, `auth_role_permission` and `auth_user_role` on the request's transaction."""
     return PostgresRoleRepository(session)
 

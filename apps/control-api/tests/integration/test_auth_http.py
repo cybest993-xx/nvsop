@@ -13,12 +13,14 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
+import httpx2
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, event, text
 from sqlalchemy.orm import Session as DatabaseSession
+from starlette.types import Message, Receive, Scope, Send
 
 from factory_sop.app import API_PREFIX, create_app
 from factory_sop.auth.adapters.cookies import CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE
@@ -104,6 +106,64 @@ def test_a_login_commits_a_session_row(client: TestClient, engine: Engine) -> No
     # Read on a connection of its own: the request's transaction has to have committed for this
     # to see anything, which is what ADR-0002's Unit of Work is responsible for.
     assert open_sessions(engine) == 1
+
+
+def test_a_session_is_usable_when_the_login_response_starts(
+    backend: FastAPI, engine: Engine
+) -> None:
+    """在响应头发出时立即读取会话，不等待 ASGI 请求清理完成。"""
+    an_account(engine)
+    restored_statuses: list[int] = []
+
+    async def observe_response(scope: Scope, receive: Receive, send: Send) -> None:
+        async def observe_headers(message: Message) -> None:
+            if (
+                message["type"] == "http.response.start"
+                and scope.get("method") == "POST"
+                and scope["path"] == SESSION_PATH
+            ):
+                headers = httpx2.Response(
+                    message["status"],
+                    headers=message["headers"],
+                    request=httpx2.Request("POST", f"https://testserver{SESSION_PATH}"),
+                )
+                async with httpx2.AsyncClient(
+                    transport=httpx2.ASGITransport(app=backend),
+                    base_url="https://testserver",
+                    cookies=headers.cookies,
+                ) as next_request:
+                    restored = await next_request.get(SESSION_PATH)
+                    restored_statuses.append(restored.status_code)
+            await send(message)
+
+        await backend(scope, receive, observe_headers)
+
+    with TestClient(observe_response, base_url="https://testserver") as client:
+        opened = client.post(SESSION_PATH, json=CREDENTIALS)
+
+    assert (opened.status_code, restored_statuses) == (201, [200])
+
+
+def test_a_failed_commit_cannot_publish_a_successful_login(
+    backend: FastAPI, engine: Engine
+) -> None:
+    """在事务提交边界注入故障，成功响应及登录 Cookie 都必须被阻止。"""
+    an_account(engine)
+
+    def refuse_commit(session: DatabaseSession) -> None:
+        raise OSError("injected commit failure")
+
+    event.listen(backend.state.session_factory, "before_commit", refuse_commit)
+    with TestClient(
+        backend, base_url="https://testserver", raise_server_exceptions=False
+    ) as client:
+        response = client.post(SESSION_PATH, json=CREDENTIALS)
+
+    assert (response.status_code, SESSION_COOKIE in response.cookies, open_sessions(engine)) == (
+        500,
+        False,
+        0,
+    )
 
 
 def test_a_refused_login_leaves_no_session_behind(client: TestClient, engine: Engine) -> None:

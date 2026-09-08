@@ -7,11 +7,6 @@ use-case-layer decision, not a route dependency (§5.15).
 
 from __future__ import annotations
 
-from typing import Annotated
-
-from fastapi import Depends
-from sqlalchemy.orm import Session as DatabaseSession
-
 from factory_sop.device.adapters.command_repository import PostgresPendingCommandRepository
 from factory_sop.device.adapters.probe import UrllibConnectionProbe
 from factory_sop.device.adapters.repository import (
@@ -32,44 +27,44 @@ from factory_sop.device.repository import (
     PointRepository,
     StationRepository,
 )
-from factory_sop.persistence import request_session
+from factory_sop.persistence import RequestSession
 
 
-def hosts(session: Annotated[DatabaseSession, Depends(request_session)]) -> InferenceHostRepository:
+def hosts(session: RequestSession) -> InferenceHostRepository:
     """`device_inference_host` on the request's transaction."""
     return PostgresInferenceHostRepository(session)
 
 
 def backends(
-    session: Annotated[DatabaseSession, Depends(request_session)],
+    session: RequestSession,
 ) -> InferenceBackendRepository:
     """`device_inference_backend` on the request's transaction."""
     return PostgresInferenceBackendRepository(session)
 
 
 def stations(
-    session: Annotated[DatabaseSession, Depends(request_session)],
+    session: RequestSession,
 ) -> StationRepository:
     """请求事务中的 `device_station`。"""
     return PostgresStationRepository(session)
 
 
 def cameras(
-    session: Annotated[DatabaseSession, Depends(request_session)],
+    session: RequestSession,
 ) -> CameraRepository:
     """请求事务中的 `device_camera`。"""
     return PostgresCameraRepository(session)
 
 
 def connectors(
-    session: Annotated[DatabaseSession, Depends(request_session)],
+    session: RequestSession,
 ) -> ConnectorRepository:
     """请求事务中的 `device_connector`。"""
     return PostgresConnectorRepository(session)
 
 
 def points(
-    session: Annotated[DatabaseSession, Depends(request_session)],
+    session: RequestSession,
 ) -> PointRepository:
     """请求事务中的 `device_point`。"""
     return PostgresPointRepository(session)
@@ -81,7 +76,7 @@ def probe() -> ConnectionProbe:
 
 
 def pending_commands(
-    session: Annotated[DatabaseSession, Depends(request_session)],
+    session: RequestSession,
 ) -> PendingCommandRepository:
     """`device_pending_command` on the request's transaction."""
     return PostgresPendingCommandRepository(session)

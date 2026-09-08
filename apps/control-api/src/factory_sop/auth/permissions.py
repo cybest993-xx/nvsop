@@ -76,6 +76,10 @@ class Permission(StrEnum):
     POINT_EDIT = "device.point.edit"
     POINT_DELETE = "device.point.delete"
 
+    # 模板草稿的导入、读取和编辑；版本发布是后续独立的模板能力。
+    TEMPLATE_DRAFT_VIEW = "template.draft.view"
+    TEMPLATE_DRAFT_EDIT = "template.draft.edit"
+
 
 class UnregisteredPermissionError(Exception):
     """A string that is not a member of `Permission`.

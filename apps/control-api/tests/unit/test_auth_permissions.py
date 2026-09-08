@@ -39,7 +39,7 @@ def test_a_permission_names_the_module_that_owns_the_resource() -> None:
     # registers its own members in this same enum and extends this set in the same change
     # (`device` did with its inference-host and backend members), which is what keeps one
     # closed set to check a role's contents against.
-    registered_modules = {"auth", "device"}
+    registered_modules = {"auth", "device", "template"}
     for permission in Permission:
         assert permission.value.split(".")[0] in registered_modules, permission
 

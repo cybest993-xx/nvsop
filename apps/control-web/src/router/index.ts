@@ -27,6 +27,7 @@ declare module 'vue-router' {
 export const LOGIN_ROUTE = 'login'
 export const OVERVIEW_ROUTE = 'overview'
 export const DEVICES_ROUTE = 'devices'
+export const TEMPLATES_ROUTE = 'templates'
 export const ACCESS_ROUTE = 'access'
 export const NOT_FOUND_ROUTE = 'not-found'
 
@@ -61,6 +62,15 @@ const routes: RouteRecordRaw[] = [
             'device.point.edit',
             'device.point.delete',
           ],
+        },
+      },
+      {
+        path: 'templates',
+        name: TEMPLATES_ROUTE,
+        component: () => import('@/modules/templates/TemplateManagement.vue'),
+        meta: {
+          title: 'SOP 模板',
+          requires: ['template.draft.view', 'template.draft.edit'],
         },
       },
       {

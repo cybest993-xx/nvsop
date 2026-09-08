@@ -81,7 +81,7 @@ The Python workspace has landed: one root `pyproject.toml` with `apps/control-ap
 
 The web workspace has landed as well: a root `package.json` pinning the package manager through `packageManager`, `pnpm-workspace.yaml` with `apps/control-web` as its only member, a committed `pnpm-lock.yaml`, and `.nvmrc` pinning the Node runtime the way `.python-version` pins the interpreter. CI installs with `pnpm install --frozen-lockfile`, which fails on a manifest whose lockfile was never regenerated rather than resolving afresh. `scripts/check_repo_policy.py` requires all four once `apps/control-web/` exists, and requires `packageManager` to name one exact version — corepack accepts a range, and with one CI resolves a different pnpm than a developer runs.
 
-`src/modules/` holds one feature slice per navigation item, which [`control-plane.md`](mechanisms/control-plane.md) §5.4 fixes as 概览 / 工位与设备 / SOP 模板 / 训练数据集 / 用户与权限 — the front end is divided by navigation rather than by backend module, so "feature slices matching backend language" means the slice names come from the domain vocabulary, not that they mirror `factory_sop`'s packages one for one. Only `overview` exists so far; the other four arrive with their own tickets.
+`src/modules/` holds one feature slice per navigation item, which [`control-plane.md`](mechanisms/control-plane.md) §5.4 fixes as 概览 / 工位与设备 / SOP 模板 / 训练数据集 / 用户与权限 — the front end is divided by navigation rather than by backend module, so "feature slices matching backend language" means the slice names come from the domain vocabulary, not that they mirror `factory_sop`'s packages one for one. The navigation list is a product boundary, not a completion claim: each slice is delivered by its scoped implementation ticket, while the reused annotation UI remains outside this Vue slice list.
 
 `session/` and `shell/` sit outside `modules/` deliberately, and this is the one place the layout departs from "every directory under `src/` is a feature slice". Neither is a navigation item: `session/` is who the caller is, which every module needs and none owns, and `shell/` is the frame they all render inside. Making either a sixth slice would give it a peer's shape while every other slice imports it — the same reason `problem.py` and `observability/` sit beside the center backend's modules rather than among them. `api/` and `router/` are there on the same grounds one level down: one place parses `problem+json`, one place declares the routes.
 
@@ -160,19 +160,26 @@ Tests belong to the module or seam whose behavior they prove:
 - **System**: user-visible flows across applications, black-box through published interfaces.
 - **Performance/hardware**: explicit suites, never hidden in unit tests. Record hardware, model/digest, data set, p50/p95/p99, queue depth, and pass budget.
 
-Every bug fix starts with the narrowest regression test that fails for the observed behavior. Safety invariants require tests at the judgment core's interface, especially that invalid observation periods never become a false failure verdict. The rework sequence `1,2,3,2,4,5` must be judged compliant: the base heuristic reports it as two separate violations, so this is the first regression test the judgment core has to pass and the sharpest line between our behavior and the base's.
+Every bug fix starts with the narrowest regression test that fails for the observed behavior. New behavior starts with the smallest failing test before implementation, then gains the least evidence that makes its risk visible at the owning seam. Safety invariants require tests at the judgment core's interface, especially that invalid observation periods never become a false failure verdict. The rework sequence `1,2,3,2,4,5` must be judged compliant: the base heuristic reports it as two separate violations, so this is the first regression test the judgment core has to pass and the sharpest line between our behavior and the base's.
+
+The evidence level is risk-driven rather than a blanket test-type rule:
+
+- **Unit or contract evidence** is sufficient for deterministic pure behavior and fixed wire/base assumptions.
+- **Integration evidence** is required where the risk crosses an adapter or real local infrastructure: database transactions and migrations, authentication and authorization integration, queue/outbox behavior, disposal idempotence across restart, execution-right enforcement, and the supervisor's persistence of judgment effects. Use the smallest real-infrastructure or adapter-backed scenario that proves the invariant; a test fake may stand in only at the recorded seam. Pure judgment and authorization rules still use unit/contract evidence at their public interfaces; testing the pure rule does not waive testing its integration.
+- **System or browser evidence** is required when a user-visible cross-application or browser contract is the risk. Keep existing browser and UI coverage; add focused component, integration, snapshot, or end-to-end coverage when the changed behavior needs it, but do not require a snapshot for every UI change.
+
+This risk rule does not reduce the command or CI gates in §6–§7, waive existing tests, or make synthetic tests a substitute for target-hardware and field validation. For the current MVP only, full cross-module end-to-end, combined-fault, long-stability, scale-performance, and field-hardware evidence may be a later validation stage when tracked against the original acceptance criteria. Scope, exit conditions, and the need to reconfirm this phasing for later iterations are defined in [`solution-and-roadmap.md` §8](solution-and-roadmap.md#八开发路线).
 
 Fixtures must be synthetic or sanitized, minimal, deterministic, and documented with provenance. Customer video, credentials, model weights, and production exports are never fixtures.
 
 ### Test authoring
 
-- A behavior change lands with an integration test. A unit test alone does not prove that a module's observable behavior changed at its seam.
 - Assert on whole objects rather than field by field, so a field that changes unexpectedly fails the test instead of passing unread.
 - Statically defined values get no test, and deleted logic leaves no negative test behind. Both pin the implementation in place of the behavior.
 - Unit tests live in the owning app's `tests/` tree, never inline in the implementation file, and implementation code carries no test-only function.
 - Look for an existing helper or fixture before writing another one.
 - A test never mutates process environment variables; the value under test arrives through a parameter.
-- A user-visible UI change lands with snapshot coverage.
+- A user-visible UI change gets the necessary focused UI evidence for its risk; existing snapshot and browser tests remain mandatory and are not removed.
 
 ## 5. Code authoring rules
 

@@ -19,9 +19,14 @@ from factory_sop.template.errors import (
     TemplateRefusedError,
 )
 from factory_sop.template.model import (
+    KEEP_TEMPLATE_BOUNDARY,
     ImportStatus,
+    KeepTemplateBoundaryPart,
     OrderingMode,
+    PatchTemplateBoundary,
     SopTemplate,
+    TemplateBoundaryDraft,
+    TemplateBoundaryUpdate,
     TemplateDraft,
     TemplateDraftDocument,
     TemplateImport,
@@ -29,7 +34,7 @@ from factory_sop.template.model import (
     TemplateStep,
 )
 from factory_sop.template.parser import WorkbookValidationError, parse_workbook
-from factory_sop.template.repository import TemplateRepository
+from factory_sop.template.repository import TemplateDraftRepository
 
 _logger = get_logger("template")
 
@@ -51,7 +56,7 @@ def import_template_draft(
     caller: Caller,
     now: datetime,
     stations: StationCodeLookup,
-    templates: TemplateRepository,
+    templates: TemplateDraftRepository,
 ) -> TemplateImportResult:
     """授权导入工作簿，保留原文，并在成功时追加而非覆盖一个草稿。"""
     authorize(caller, Permission.TEMPLATE_DRAFT_EDIT)
@@ -150,7 +155,7 @@ def import_template_draft(
 def list_template_drafts(
     *,
     caller: Caller,
-    templates: TemplateRepository,
+    templates: TemplateDraftRepository,
     page: int,
     page_size: int,
 ) -> tuple[list[TemplateDraftDocument], int]:
@@ -162,7 +167,7 @@ def read_template_draft(
     *,
     draft_id: UUID,
     caller: Caller,
-    templates: TemplateRepository,
+    templates: TemplateDraftRepository,
 ) -> TemplateDraftDocument:
     """读取一个草稿及其工位身份。"""
     authorize(caller, Permission.TEMPLATE_DRAFT_VIEW)
@@ -181,7 +186,8 @@ def edit_template_draft(
     expected_revision: int,
     caller: Caller,
     now: datetime,
-    templates: TemplateRepository,
+    templates: TemplateDraftRepository,
+    boundary: TemplateBoundaryUpdate = KEEP_TEMPLATE_BOUNDARY,
 ) -> TemplateDraftDocument:
     """在 If-Match 对应的 revision 上替换草稿内容。"""
     authorize(caller, Permission.TEMPLATE_DRAFT_EDIT)
@@ -207,6 +213,22 @@ def edit_template_draft(
                 ),
             ),
         )
+    next_boundary = current.draft.boundary
+    if isinstance(boundary, PatchTemplateBoundary):
+        current_boundary = current.draft.boundary
+        current_start = current_boundary.start_signal if current_boundary is not None else None
+        current_end = current_boundary.end_signals if current_boundary is not None else None
+        next_start = (
+            current_start
+            if isinstance(boundary.start_signal, KeepTemplateBoundaryPart)
+            else boundary.start_signal
+        )
+        next_end = (
+            current_end
+            if isinstance(boundary.end_signals, KeepTemplateBoundaryPart)
+            else boundary.end_signals
+        )
+        next_boundary = TemplateBoundaryDraft(start_signal=next_start, end_signals=next_end)
     edited = replace(
         current.draft,
         steps=tuple(steps),
@@ -215,6 +237,7 @@ def edit_template_draft(
         revision=expected_revision + 1,
         updated_by=caller.user.id,
         updated_at=now,
+        boundary=next_boundary,
     )
     templates.save_draft(edited, expected_revision=expected_revision)
     _logger.info(
@@ -229,7 +252,7 @@ def edit_template_draft(
 def list_template_imports(
     *,
     caller: Caller,
-    templates: TemplateRepository,
+    templates: TemplateDraftRepository,
     page: int,
     page_size: int,
 ) -> tuple[list[TemplateImport], int]:
@@ -242,7 +265,7 @@ def read_template_import(
     *,
     import_id: UUID,
     caller: Caller,
-    templates: TemplateRepository,
+    templates: TemplateDraftRepository,
 ) -> TemplateImport:
     """读取一条导入记录；原始字节通过独立下载契约返回。"""
     authorize(caller, Permission.TEMPLATE_DRAFT_VIEW)

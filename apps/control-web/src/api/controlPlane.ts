@@ -15,6 +15,7 @@ import {
   createUser as generatedCreateUser,
   deleteConnector as generatedDeleteConnector,
   downloadTemplateImport as generatedDownloadTemplateImport,
+  downloadTemplateVersionArtifact as generatedDownloadTemplateVersionArtifact,
   deletePoint as generatedDeletePoint,
   deleteRole as generatedDeleteRole,
   deleteUser as generatedDeleteUser,
@@ -34,14 +35,17 @@ import {
   listStations as generatedListStations,
   listTemplateDrafts as generatedListTemplateDrafts,
   listTemplateImports as generatedListTemplateImports,
+  listTemplateVersions as generatedListTemplateVersions,
   listUsers as generatedListUsers,
   openSession as generatedOpenSession,
+  publishTemplateVersion as generatedPublishTemplateVersion,
   readConnector as generatedReadConnector,
   readDeviceCommand as generatedReadDeviceCommand,
   readPoint as generatedReadPoint,
   readSession as generatedReadSession,
   readTemplateDraft as generatedReadTemplateDraft,
   readTemplateImport as generatedReadTemplateImport,
+  readTemplateVersion as generatedReadTemplateVersion,
   resetUserPassword as generatedResetUserPassword,
   setConnectorStatus as generatedSetConnectorStatus,
   setPointStatus as generatedSetPointStatus,
@@ -57,6 +61,7 @@ import {
   type CreateUserData,
   type DeviceStatus,
   type DownloadTemplateImportResponse,
+  type DownloadTemplateVersionArtifactResponse,
   type EditRoleData,
   type EditUserData,
   type ItemPageConnectorView,
@@ -67,6 +72,7 @@ import {
   type ItemPageStr,
   type ItemPageTemplateDraftView,
   type ItemPageTemplateImportView,
+  type ItemPageTemplateVersionView,
   type ItemPageUserView,
   type ImportTemplateDraftData,
   type ListPointsData,
@@ -81,10 +87,12 @@ import {
   type SetUserRolesData,
   type UpdateConnectorCapabilityData,
   type StatusChanged,
+  type TemplateArtifactName,
   type TemplateDraftConfiguration,
   type TemplateDraftView,
   type TemplateImportResultView,
   type TemplateImportView,
+  type TemplateVersionView,
   type UserStatus,
   type UserView,
 } from '@/api/generated'
@@ -95,6 +103,7 @@ export type {
   ConnectorPlacement,
   ConnectorView,
   DeviceStatus,
+  DownloadTemplateVersionArtifactResponse,
   InferenceHostView,
   ItemPageConnectorView,
   ItemPageInferenceHostView,
@@ -107,10 +116,13 @@ export type {
   SessionView,
   StationView,
   StatusChanged,
+  TemplateArtifactName,
   TemplateDraftConfiguration,
   TemplateDraftView,
   TemplateImportResultView,
   TemplateImportView,
+  TemplateVersionView,
+  ItemPageTemplateVersionView,
   UserView,
 } from '@/api/generated'
 
@@ -295,6 +307,38 @@ export function editTemplateDraft(
 
 export function downloadTemplateImport(importId: string): Promise<DownloadTemplateImportResponse> {
   return execute(generatedDownloadTemplateImport({ path: { import_id: importId } }))
+}
+
+export function publishTemplateVersion(
+  draftId: string,
+  revision: number,
+): Promise<TemplateVersionView> {
+  return execute(
+    generatedPublishTemplateVersion({
+      path: { draft_id: draftId },
+      headers: { 'If-Match': revision },
+    }),
+  )
+}
+
+export function readTemplateVersions(): Promise<ItemPageTemplateVersionView> {
+  return execute(generatedListTemplateVersions())
+}
+
+export function readTemplateVersion(versionId: string): Promise<TemplateVersionView> {
+  return execute(generatedReadTemplateVersion({ path: { version_id: versionId } }))
+}
+
+export function downloadTemplateVersionArtifact(
+  versionId: string,
+  name: TemplateArtifactName,
+): Promise<DownloadTemplateVersionArtifactResponse> {
+  return execute(
+    generatedDownloadTemplateVersionArtifact({
+      path: { version_id: versionId, name },
+      parseAs: 'blob',
+    }),
+  )
 }
 
 export function readTemplateImports(): Promise<ItemPageTemplateImportView> {

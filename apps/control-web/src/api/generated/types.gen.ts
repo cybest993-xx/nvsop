@@ -5,6 +5,22 @@ export type ClientOptions = {
 }
 
 /**
+ * ActionSignalInput
+ *
+ * 动作编号边界信号。
+ */
+export type ActionSignalInput = {
+  /**
+   * Action Number
+   */
+  action_number: number
+  /**
+   * Kind
+   */
+  kind: 'action'
+}
+
+/**
  * ApiErrorCode
  *
  * The stable wire-level failure codes currently emitted by the control plane.
@@ -71,6 +87,9 @@ export type ApiErrorCode =
   | 'TEMPLATE_IMPORT_NOT_FOUND'
   | 'TEMPLATE_DRAFT_NOT_FOUND'
   | 'TEMPLATE_DRAFT_INVALID'
+  | 'TEMPLATE_VERSION_NOT_FOUND'
+  | 'TEMPLATE_VERSION_INVALID'
+  | 'TEMPLATE_VERSION_ARTIFACT_NOT_FOUND'
 
 /**
  * AssignedRoles
@@ -579,6 +598,22 @@ export type EditedUser = {
 }
 
 /**
+ * ExternalSignalInput
+ *
+ * 外部信号语义标签边界信号。
+ */
+export type ExternalSignalInput = {
+  /**
+   * Kind
+   */
+  kind: 'external'
+  /**
+   * Semantic Label
+   */
+  semantic_label: string
+}
+
+/**
  * FieldError
  *
  * One rejected input, named so the Web form can put the message beside it.
@@ -964,6 +999,28 @@ export type ItemPageTemplateImportView = {
    * Items
    */
   items: Array<TemplateImportView>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
+ * ItemPage[TemplateVersionView]
+ */
+export type ItemPageTemplateVersionView = {
+  /**
+   * Items
+   */
+  items: Array<TemplateVersionView>
   /**
    * Page
    */
@@ -1489,11 +1546,53 @@ export type StatusChanged = {
 }
 
 /**
+ * TemplateArtifactName
+ *
+ * 模板版本允许下载的确定性制品名称。
+ */
+export type TemplateArtifactName =
+  'actions.json' | 'vlm_prompts.txt' | 'template.json' | 'manifest.json'
+
+/**
+ * TemplateArtifactView
+ */
+export type TemplateArtifactView = {
+  /**
+   * Byte Length
+   */
+  byte_length: number
+  /**
+   * Media Type
+   */
+  media_type: string
+  name: TemplateArtifactName
+  /**
+   * Sha256
+   */
+  sha256: string
+}
+
+/**
  * TemplateDraftConfiguration
  */
 export type TemplateDraftConfiguration = {
+  /**
+   * End Signals
+   */
+  end_signals?: Array<ActionSignalInput | ExternalSignalInput> | null
   ordering: OrderingMode
   runtime_defaults: TemplateRuntimeDefaultsInput
+  /**
+   * Start Signal
+   */
+  start_signal?:
+    | ({
+        kind: 'action'
+      } & ActionSignalInput)
+    | ({
+        kind: 'external'
+      } & ExternalSignalInput)
+    | null
   /**
    * Steps
    */
@@ -1513,6 +1612,10 @@ export type TemplateDraftView = {
    */
   created_by: string
   /**
+   * End Signals
+   */
+  end_signals?: Array<ActionSignalInput | ExternalSignalInput> | null
+  /**
    * Id
    */
   id: string
@@ -1526,6 +1629,17 @@ export type TemplateDraftView = {
    * Source Import Id
    */
   source_import_id: string
+  /**
+   * Start Signal
+   */
+  start_signal?:
+    | ({
+        kind: 'action'
+      } & ActionSignalInput)
+    | ({
+        kind: 'external'
+      } & ExternalSignalInput)
+    | null
   /**
    * Station Code
    */
@@ -1693,6 +1807,68 @@ export type TemplateStepView = {
    * Number
    */
   number: number
+}
+
+/**
+ * TemplateVersionView
+ */
+export type TemplateVersionView = {
+  /**
+   * Artifacts
+   */
+  artifacts: Array<TemplateArtifactView>
+  /**
+   * End Signals
+   */
+  end_signals: Array<ActionSignalInput | ExternalSignalInput>
+  /**
+   * Id
+   */
+  id: string
+  ordering: OrderingMode
+  /**
+   * Published At
+   */
+  published_at: string
+  /**
+   * Published By
+   */
+  published_by: string
+  runtime_defaults: TemplateRuntimeDefaultsView
+  /**
+   * Sha256
+   */
+  sha256: string
+  /**
+   * Source Draft Id
+   */
+  source_draft_id: string
+  /**
+   * Source Draft Revision
+   */
+  source_draft_revision: number
+  /**
+   * Source Import Id
+   */
+  source_import_id: string
+  /**
+   * Start Signal
+   */
+  start_signal:
+    | ({
+        kind: 'action'
+      } & ActionSignalInput)
+    | ({
+        kind: 'external'
+      } & ExternalSignalInput)
+  /**
+   * Steps
+   */
+  steps: Array<TemplateStepView>
+  /**
+   * Template Id
+   */
+  template_id: string
 }
 
 /**
@@ -5014,6 +5190,68 @@ export type EditTemplateDraftResponses = {
 
 export type EditTemplateDraftResponse = EditTemplateDraftResponses[keyof EditTemplateDraftResponses]
 
+export type PublishTemplateVersionData = {
+  body?: never
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Draft Id
+     */
+    draft_id: string
+  }
+  query?: never
+  url: '/api/v1/templates/drafts/{draft_id}/publish'
+}
+
+export type PublishTemplateVersionErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 模板草稿不存在
+   */
+  404: ProblemDocument
+  /**
+   * 草稿修订号已变化（STALE_REVISION）
+   */
+  409: ProblemDocument
+  /**
+   * 请求无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type PublishTemplateVersionError =
+  PublishTemplateVersionErrors[keyof PublishTemplateVersionErrors]
+
+export type PublishTemplateVersionResponses = {
+  /**
+   * 已发布的模板版本
+   */
+  200: TemplateVersionView
+  /**
+   * Successful Response
+   */
+  201: TemplateVersionView
+}
+
+export type PublishTemplateVersionResponse =
+  PublishTemplateVersionResponses[keyof PublishTemplateVersionResponses]
+
 export type ListTemplateImportsData = {
   body?: never
   path?: never
@@ -5207,3 +5445,146 @@ export type DownloadTemplateImportResponses = {
 
 export type DownloadTemplateImportResponse =
   DownloadTemplateImportResponses[keyof DownloadTemplateImportResponses]
+
+export type ListTemplateVersionsData = {
+  body?: never
+  path?: never
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/templates/versions'
+}
+
+export type ListTemplateVersionsErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 请求无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ListTemplateVersionsError = ListTemplateVersionsErrors[keyof ListTemplateVersionsErrors]
+
+export type ListTemplateVersionsResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageTemplateVersionView
+}
+
+export type ListTemplateVersionsResponse =
+  ListTemplateVersionsResponses[keyof ListTemplateVersionsResponses]
+
+export type ReadTemplateVersionData = {
+  body?: never
+  path: {
+    /**
+     * Version Id
+     */
+    version_id: string
+  }
+  query?: never
+  url: '/api/v1/templates/versions/{version_id}'
+}
+
+export type ReadTemplateVersionErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 模板版本不存在
+   */
+  404: ProblemDocument
+  /**
+   * 请求无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadTemplateVersionError = ReadTemplateVersionErrors[keyof ReadTemplateVersionErrors]
+
+export type ReadTemplateVersionResponses = {
+  /**
+   * Successful Response
+   */
+  200: TemplateVersionView
+}
+
+export type ReadTemplateVersionResponse =
+  ReadTemplateVersionResponses[keyof ReadTemplateVersionResponses]
+
+export type DownloadTemplateVersionArtifactData = {
+  body?: never
+  path: {
+    /**
+     * Version Id
+     */
+    version_id: string
+    name: TemplateArtifactName
+  }
+  query?: never
+  url: '/api/v1/templates/versions/{version_id}/artifacts/{name}'
+}
+
+export type DownloadTemplateVersionArtifactErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 模板版本或制品不存在
+   */
+  404: ProblemDocument
+  /**
+   * 请求无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type DownloadTemplateVersionArtifactError =
+  DownloadTemplateVersionArtifactErrors[keyof DownloadTemplateVersionArtifactErrors]
+
+export type DownloadTemplateVersionArtifactResponses = {
+  /**
+   * 已保存的模板版本制品
+   */
+  200: Blob | File
+}
+
+export type DownloadTemplateVersionArtifactResponse =
+  DownloadTemplateVersionArtifactResponses[keyof DownloadTemplateVersionArtifactResponses]

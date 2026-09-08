@@ -1,51 +1,33 @@
 <script setup lang="ts">
-import {
-  ElButton,
-  ElDialog,
-  ElForm,
-  ElFormItem,
-  ElInput,
-  ElMessage,
-  ElOption,
-  ElSelect,
-  ElTag,
-} from 'element-plus'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { ElButton, ElDialog, ElFormItem, ElInput, ElMessage, ElTag } from 'element-plus'
+import { computed, onMounted, ref } from 'vue'
 
 import {
   ControlPlaneError,
   downloadTemplateImport,
-  editTemplateDraft,
+  downloadTemplateVersionArtifact,
   importTemplateDraft,
+  publishTemplateVersion,
   readTemplateDrafts,
   readTemplateImports,
+  readTemplateVersions,
   type FieldError,
-  type TemplateDraftConfiguration,
+  type TemplateArtifactName,
   type TemplateDraftView,
   type TemplateImportView,
+  type TemplateVersionView,
 } from '@/api/controlPlane'
 import { useSessionStore } from '@/session/store'
 
-interface EditorStep {
-  number: number
-  name: string
-  description: string
-}
-
-interface EditorForm {
-  id: string
-  revision: string
-  steps: EditorStep[]
-  ordering: string
-  idle_timeout_seconds: string
-  step_deadline_seconds: string
-  disposition_policy: string
-}
+import TemplateDraftEditor from './TemplateDraftEditor.vue'
+import type { DraftEditorTarget } from './TemplateDraftEditor.types'
 
 const session = useSessionStore()
 const drafts = ref<TemplateDraftView[]>([])
 const imports = ref<TemplateImportView[]>([])
+const versions = ref<TemplateVersionView[]>([])
 const loading = ref(true)
+const downloadingArtifact = ref('')
 const failure = ref('')
 const fieldErrors = ref<FieldError[]>([])
 const selectedFile = ref('')
@@ -54,21 +36,13 @@ const mayView = computed(() => session.may('template.draft.view'))
 const mayEdit = computed(() => session.may('template.draft.edit'))
 const knownDraftId = ref('')
 const knownRevision = ref('')
-
-const editDialog = ref(false)
-const editor = reactive<EditorForm>(newEditor())
-
-function newEditor(): EditorForm {
-  return {
-    id: '',
-    revision: '',
-    steps: [{ number: 1, name: '', description: '(1)' }],
-    ordering: 'strict',
-    idle_timeout_seconds: '',
-    step_deadline_seconds: '',
-    disposition_policy: '',
-  }
-}
+const editorVisible = ref(false)
+const editorTarget = ref<DraftEditorTarget | null>(null)
+const publishingDraftId = ref('')
+const publishConfirmationVisible = ref(false)
+const publishTarget = ref<TemplateDraftView | null>(null)
+const versionDetailVisible = ref(false)
+const detailVersion = ref<TemplateVersionView | null>(null)
 
 function resetFailure(): void {
   failure.value = ''
@@ -79,6 +53,11 @@ function recordFailure(error: unknown): void {
   if (error instanceof ControlPlaneError) {
     failure.value = error.detail ?? error.message
     fieldErrors.value = error.fieldErrors
+    return
+  }
+  if (error instanceof Error) {
+    failure.value = error.message
+    fieldErrors.value = []
     return
   }
   failure.value = '请求未能完成，请稍后重试'
@@ -93,9 +72,14 @@ async function load(): Promise<void> {
     return
   }
   try {
-    const [draftPage, importPage] = await Promise.all([readTemplateDrafts(), readTemplateImports()])
+    const [draftPage, importPage, versionPageResult] = await Promise.all([
+      readTemplateDrafts(),
+      readTemplateImports(),
+      readTemplateVersions(),
+    ])
     drafts.value = draftPage.items
     imports.value = importPage.items
+    versions.value = versionPageResult.items
   } catch (error) {
     recordFailure(error)
   } finally {
@@ -112,7 +96,7 @@ async function downloadImport(record: TemplateImportView): Promise<void> {
     anchor.href = url
     anchor.download = record.filename
     anchor.click()
-    URL.revokeObjectURL(url)
+    window.setTimeout(() => URL.revokeObjectURL(url), 0)
   } catch (error) {
     recordFailure(error)
   }
@@ -135,6 +119,124 @@ async function importFile(event: Event): Promise<void> {
   } finally {
     input.value = ''
   }
+}
+
+function requestPublish(draft: TemplateDraftView): void {
+  if (publishingDraftId.value !== '') {
+    return
+  }
+  resetFailure()
+  publishTarget.value = draft
+  publishConfirmationVisible.value = true
+}
+
+function cancelPublish(): void {
+  publishConfirmationVisible.value = false
+  publishTarget.value = null
+}
+
+async function confirmPublish(): Promise<void> {
+  const draft = publishTarget.value
+  if (draft === null || publishingDraftId.value !== '') {
+    return
+  }
+  publishingDraftId.value = draft.id
+  try {
+    await publishTemplateVersion(draft.id, draft.revision)
+    ElMessage.success('模板版本已发布')
+    cancelPublish()
+    await load()
+  } catch (error) {
+    if (error instanceof ControlPlaneError && error.status === 409) {
+      await handleRevisionConflict()
+    } else {
+      recordFailure(error)
+      cancelPublish()
+    }
+  } finally {
+    publishingDraftId.value = ''
+  }
+}
+
+async function handleRevisionConflict(): Promise<void> {
+  editorVisible.value = false
+  editorTarget.value = null
+  cancelPublish()
+  if (mayView.value) {
+    await load()
+    failure.value = '草稿修订已变化，列表已刷新；请重新打开并核对后重试。'
+    fieldErrors.value = []
+    return
+  }
+  resetFailure()
+  failure.value = '草稿修订已变化，请重新核对后重试。'
+}
+
+function openVersionDetail(version: TemplateVersionView): void {
+  resetFailure()
+  detailVersion.value = version
+  versionDetailVisible.value = true
+}
+
+async function downloadVersionArtifact(
+  version: TemplateVersionView,
+  name: TemplateArtifactName,
+): Promise<void> {
+  resetFailure()
+  downloadingArtifact.value = `${version.id}:${name}`
+  try {
+    const artifact = await downloadTemplateVersionArtifact(version.id, name)
+    const url = URL.createObjectURL(artifact)
+    const anchor = window.document.createElement('a')
+    anchor.href = url
+    anchor.download = `${version.id}-${name}`
+    anchor.click()
+    window.setTimeout(() => URL.revokeObjectURL(url), 0)
+  } catch (error) {
+    recordFailure(error)
+  } finally {
+    downloadingArtifact.value = ''
+  }
+}
+
+function signalLabel(signal: unknown): string {
+  if (signal === null || signal === undefined) {
+    return '未声明'
+  }
+  if (typeof signal !== 'object') {
+    return `未知边界信号（${displayUnknown(signal)}）`
+  }
+  const candidate = signal as {
+    kind?: unknown
+    action_number?: unknown
+    semantic_label?: unknown
+  }
+  if (candidate.kind === 'action') {
+    return candidate.action_number === null || candidate.action_number === undefined
+      ? '动作（未知编号）'
+      : `动作 ${displayUnknown(candidate.action_number)}`
+  }
+  if (candidate.kind === 'external') {
+    return candidate.semantic_label === null ||
+      candidate.semantic_label === undefined ||
+      (typeof candidate.semantic_label === 'string' && candidate.semantic_label.trim() === '')
+      ? '外部：未知标签'
+      : `外部：${displayUnknown(candidate.semantic_label)}`
+  }
+  return `未知边界信号（${displayUnknown(candidate.kind)}）`
+}
+
+function signalListLabel(signals: TemplateDraftView['end_signals']): string {
+  if (signals === null || signals === undefined) {
+    return '未声明'
+  }
+  return signals.length === 0 ? '无（空闲时限闭合）' : signals.map(signalLabel).join('、')
+}
+
+function displayUnknown(value: unknown): string {
+  return typeof value === 'object' && value !== null
+    ? (JSON.stringify(value) ?? '未知值')
+    : String(value)
 }
 
 function orderingLabel(ordering: string): string {
@@ -171,117 +273,48 @@ function importStatusTag(status: string): 'success' | 'danger' | 'warning' {
 }
 
 function canEditDraft(draft: TemplateDraftView): boolean {
-  return mayEdit.value && (draft.ordering === 'strict' || draft.ordering === 'unordered')
+  const signals = [draft.start_signal, ...(draft.end_signals ?? [])]
+  const hasSupportedSignals = signals.every(
+    (signal) =>
+      signal === null ||
+      signal === undefined ||
+      signal.kind === 'action' ||
+      signal.kind === 'external',
+  )
+  return (
+    mayEdit.value &&
+    (draft.ordering === 'strict' || draft.ordering === 'unordered') &&
+    hasSupportedSignals
+  )
 }
 
 function openEditor(draft: TemplateDraftView): void {
   resetFailure()
-  Object.assign(editor, {
-    id: draft.id,
-    revision: String(draft.revision),
-    steps: draft.steps.map((step) => ({ ...step })),
-    ordering: draft.ordering,
-    idle_timeout_seconds:
-      draft.runtime_defaults.idle_timeout_seconds === null
-        ? ''
-        : String(draft.runtime_defaults.idle_timeout_seconds),
-    step_deadline_seconds:
-      draft.runtime_defaults.step_deadline_seconds === null
-        ? ''
-        : String(draft.runtime_defaults.step_deadline_seconds),
-    disposition_policy: draft.runtime_defaults.disposition_policy ?? '',
-  })
-  editDialog.value = true
+  editorTarget.value = { draft, id: draft.id, revision: String(draft.revision) }
+  editorVisible.value = true
 }
 
 function openKnownEditor(): void {
   resetFailure()
-  Object.assign(editor, newEditor(), {
+  editorTarget.value = {
+    draft: null,
     id: knownDraftId.value.trim(),
     revision: knownRevision.value.trim(),
-  })
-  editDialog.value = true
+  }
+  editorVisible.value = true
 }
 
-function addStep(): void {
-  const number = editor.steps.length + 1
-  editor.steps.push({ number, name: '', description: `(${number})` })
+async function editorSaved(): Promise<void> {
+  ElMessage.success('模板草稿已保存')
+  await load()
 }
 
-function removeStep(index: number): void {
-  if (editor.steps.length <= 1) {
+async function editorFailure(error: unknown): Promise<void> {
+  if (error instanceof ControlPlaneError && error.status === 409) {
+    await handleRevisionConflict()
     return
   }
-  editor.steps.splice(index, 1)
-  editor.steps.forEach((step, position) => {
-    step.number = position + 1
-    step.description = `(${step.number})${step.name}`
-  })
-}
-
-function syncDescription(index: number): void {
-  const step = editor.steps[index]
-  if (step !== undefined) {
-    step.description = `(${step.number})${step.name}`
-  }
-}
-
-function duration(value: string, label: string): number | null {
-  const clean = value.trim()
-  if (clean === '') {
-    return null
-  }
-  const parsed = Number(clean)
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    failure.value = `${label}必须是大于 0 的数字`
-    return null
-  }
-  return parsed
-}
-
-function configurationFromEditor(): TemplateDraftConfiguration | null {
-  if (editor.ordering !== 'strict' && editor.ordering !== 'unordered') {
-    failure.value = `未知顺序声明（${editor.ordering}），不能编辑`
-    return null
-  }
-  const idle = duration(editor.idle_timeout_seconds, '空闲时限')
-  if (editor.idle_timeout_seconds.trim() !== '' && idle === null) {
-    return null
-  }
-  const deadline = duration(editor.step_deadline_seconds, '步骤时限')
-  if (editor.step_deadline_seconds.trim() !== '' && deadline === null) {
-    return null
-  }
-  return {
-    steps: editor.steps.map((step) => ({ ...step })),
-    ordering: editor.ordering,
-    runtime_defaults: {
-      idle_timeout_seconds: idle,
-      step_deadline_seconds: deadline,
-      disposition_policy: editor.disposition_policy.trim() || null,
-    },
-  }
-}
-
-async function submitEditor(): Promise<void> {
-  resetFailure()
-  const configuration = configurationFromEditor()
-  if (configuration === null) {
-    return
-  }
-  const revision = Number(editor.revision)
-  if (!editor.id.trim() || !Number.isInteger(revision) || revision < 1) {
-    failure.value = '草稿 ID 和修订号必须填写正确'
-    return
-  }
-  try {
-    await editTemplateDraft(editor.id.trim(), configuration, revision)
-    editDialog.value = false
-    ElMessage.success('模板草稿已保存')
-    await load()
-  } catch (error) {
-    recordFailure(error)
-  }
+  recordFailure(error)
 }
 
 onMounted(load)
@@ -380,13 +413,31 @@ onMounted(load)
                 </ElTag>
               </td>
               <td>{{ draft.revision }}</td>
-              <td>
-                <ElButton v-if="canEditDraft(draft)" link type="primary" @click="openEditor(draft)">
-                  编辑草稿
-                </ElButton>
-                <span v-else class="template-management__muted">
-                  {{ mayEdit ? '未知值，不能编辑' : '只读' }}
-                </span>
+              <td class="template-management__actions">
+                <template v-if="mayEdit">
+                  <ElButton
+                    v-if="canEditDraft(draft)"
+                    link
+                    type="primary"
+                    @click="openEditor(draft)"
+                  >
+                    编辑草稿
+                  </ElButton>
+                  <ElButton
+                    v-if="canEditDraft(draft)"
+                    link
+                    type="warning"
+                    :loading="publishingDraftId === draft.id"
+                    :disabled="publishingDraftId !== ''"
+                    @click="requestPublish(draft)"
+                  >
+                    发布版本
+                  </ElButton>
+                  <span v-if="!canEditDraft(draft)" class="template-management__muted">
+                    未知值，不能编辑或发布
+                  </span>
+                </template>
+                <span v-else class="template-management__muted">只读</span>
               </td>
             </tr>
             <tr v-if="drafts.length === 0">
@@ -446,89 +497,232 @@ onMounted(load)
           </tbody>
         </table>
       </section>
+
+      <section class="template-management__versions" aria-labelledby="versions-heading">
+        <div class="template-management__section-head">
+          <div>
+            <h2 id="versions-heading">已发布版本</h2>
+            <p>版本一旦发布便不可修改；运行端消费的制品和摘要留在这里。</p>
+          </div>
+          <span class="template-management__count">{{ versions.length }} 个版本</span>
+        </div>
+        <table class="template-management__table template-management__table--versions">
+          <caption class="template-management__caption">
+            不可变 SOP 版本及其可复验制品
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">版本</th>
+              <th scope="col">来源草稿</th>
+              <th scope="col">发布时间</th>
+              <th scope="col">模板语义与默认值</th>
+              <th scope="col">摘要</th>
+              <th scope="col">制品</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="version in versions" :key="version.id">
+              <th scope="row">
+                <code>{{ version.id }}</code>
+                <small>模板 {{ version.template_id }}</small>
+                <ElButton link type="primary" @click="openVersionDetail(version)">
+                  查看详情
+                </ElButton>
+              </th>
+              <td>
+                <code>{{ version.source_draft_id }}</code>
+                <small>修订 {{ version.source_draft_revision }}</small>
+                <small>来源导入记录：{{ version.source_import_id }}</small>
+              </td>
+              <td>
+                {{
+                  new Date(version.published_at).toLocaleString('zh-CN', {
+                    dateStyle: 'medium',
+                    timeStyle: 'short',
+                    timeZone: 'Asia/Shanghai',
+                  })
+                }}
+                <small>发布人：{{ version.published_by }}</small>
+              </td>
+              <td>
+                <ElTag :type="orderingTag(version.ordering)" disable-transitions>
+                  {{ orderingLabel(version.ordering) }}
+                </ElTag>
+                <small>开始：{{ signalLabel(version.start_signal) }}</small>
+                <small>结束：{{ signalListLabel(version.end_signals) }}</small>
+                <small>步骤：{{ version.steps.map((step) => step.description).join('、') }}</small>
+                <small>
+                  默认：空闲 {{ version.runtime_defaults.idle_timeout_seconds }} 秒 · 步骤
+                  {{ version.runtime_defaults.step_deadline_seconds }} 秒 ·
+                  {{ version.runtime_defaults.disposition_policy ?? '未填写处置策略' }}
+                </small>
+              </td>
+              <td>
+                <code class="template-management__digest">{{ version.sha256 }}</code>
+              </td>
+              <td>
+                <ul class="template-management__artifacts">
+                  <li v-for="artifact in version.artifacts" :key="artifact.name">
+                    <span>
+                      <strong>{{ artifact.name }}</strong>
+                      <small>{{ artifact.byte_length }} 字节 · {{ artifact.sha256 }}</small>
+                    </span>
+                    <ElButton
+                      link
+                      type="primary"
+                      :loading="downloadingArtifact === `${version.id}:${artifact.name}`"
+                      @click="downloadVersionArtifact(version, artifact.name)"
+                    >
+                      下载 {{ artifact.name }}
+                    </ElButton>
+                  </li>
+                </ul>
+              </td>
+            </tr>
+            <tr v-if="versions.length === 0">
+              <td colspan="6" class="template-management__empty">还没有已发布版本。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
     </div>
 
     <p v-else class="template-management__empty-state">当前没有模板查看权限。</p>
 
-    <ElDialog v-model="editDialog" title="编辑模板草稿" width="48rem">
-      <ElForm
-        class="template-management__edit-form"
-        label-position="top"
-        @submit.prevent="submitEditor"
-      >
-        <div class="template-management__edit-meta">
-          <ElFormItem label="草稿 ID">
-            <ElInput v-model="editor.id" name="draft-id" autocomplete="off" />
-          </ElFormItem>
-          <ElFormItem label="修订号">
-            <ElInput v-model="editor.revision" name="draft-revision" type="number" />
-          </ElFormItem>
-          <ElFormItem label="顺序声明">
-            <ElSelect v-model="editor.ordering" name="ordering" class="template-management__select">
-              <ElOption label="严格顺序" value="strict" />
-              <ElOption label="不要求顺序" value="unordered" />
-            </ElSelect>
-          </ElFormItem>
-        </div>
-
-        <fieldset class="template-management__steps">
-          <legend>步骤内容</legend>
-          <div
-            v-for="(step, index) in editor.steps"
-            :key="index"
-            class="template-management__step-row"
-          >
-            <span class="template-management__step-number">{{ step.number }}</span>
-            <ElInput
-              v-model="step.name"
-              :name="`step-name-${index}`"
-              aria-label="步骤名称"
-              placeholder="步骤名称"
-              @input="syncDescription(index)"
-            />
-            <ElInput
-              v-model="step.description"
-              :name="`step-description-${index}`"
-              aria-label="步骤描述"
-              placeholder="(步骤号)描述"
-            />
-            <ElButton
-              link
-              type="danger"
-              :disabled="editor.steps.length <= 1"
-              @click="removeStep(index)"
-            >
-              移除
-            </ElButton>
+    <ElDialog v-model="publishConfirmationVisible" title="确认发布" width="42rem">
+      <div v-if="publishTarget" class="template-management__dialog-content">
+        <p>将发布草稿修订 {{ publishTarget.revision }}，生成新的不可变模板版本。</p>
+        <dl class="template-management__details">
+          <div>
+            <dt>工位</dt>
+            <dd>{{ publishTarget.station_name }}（{{ publishTarget.station_code }}）</dd>
           </div>
-          <ElButton link type="primary" @click="addStep">添加步骤</ElButton>
-        </fieldset>
-
-        <div class="template-management__edit-meta">
-          <ElFormItem label="空闲时限（秒）">
-            <ElInput
-              v-model="editor.idle_timeout_seconds"
-              name="idle-timeout-seconds"
-              type="number"
-            />
-          </ElFormItem>
-          <ElFormItem label="步骤时限（秒）">
-            <ElInput
-              v-model="editor.step_deadline_seconds"
-              name="step-deadline-seconds"
-              type="number"
-            />
-          </ElFormItem>
-          <ElFormItem label="处置策略">
-            <ElInput v-model="editor.disposition_policy" name="disposition-policy" />
-          </ElFormItem>
-        </div>
-      </ElForm>
+          <div>
+            <dt>步骤</dt>
+            <dd>{{ publishTarget.steps.map((step) => step.description).join('、') }}</dd>
+          </div>
+          <div>
+            <dt>顺序声明</dt>
+            <dd>{{ orderingLabel(publishTarget.ordering) }}</dd>
+          </div>
+          <div>
+            <dt>开始信号</dt>
+            <dd>{{ signalLabel(publishTarget.start_signal) }}</dd>
+          </div>
+          <div>
+            <dt>结束信号</dt>
+            <dd>{{ signalListLabel(publishTarget.end_signals) }}</dd>
+          </div>
+          <div>
+            <dt>运行参数默认值</dt>
+            <dd>
+              空闲 {{ publishTarget.runtime_defaults.idle_timeout_seconds }} 秒 · 步骤
+              {{ publishTarget.runtime_defaults.step_deadline_seconds }} 秒 ·
+              {{ publishTarget.runtime_defaults.disposition_policy ?? '未填写处置策略' }}
+            </dd>
+          </div>
+        </dl>
+        <p class="template-management__dialog-note">
+          发布只表示中心后台保存了版本，不代表工位已绑定或推理机已经生效。版本发布后不可修改。
+        </p>
+      </div>
       <template #footer>
-        <ElButton @click="editDialog = false">取消</ElButton>
-        <ElButton type="primary" @click="submitEditor">保存草稿</ElButton>
+        <ElButton :disabled="publishingDraftId !== ''" @click="cancelPublish">取消</ElButton>
+        <ElButton
+          type="primary"
+          :loading="publishingDraftId !== ''"
+          :disabled="publishTarget === null"
+          @click="confirmPublish"
+        >
+          确认发布
+        </ElButton>
       </template>
     </ElDialog>
+
+    <ElDialog v-model="versionDetailVisible" title="版本详情" width="48rem">
+      <div v-if="detailVersion" class="template-management__dialog-content">
+        <p class="template-management__dialog-note">模板版本发布后不可修改。</p>
+        <dl class="template-management__details">
+          <div>
+            <dt>版本 ID</dt>
+            <dd>
+              <code>{{ detailVersion.id }}</code>
+            </dd>
+          </div>
+          <div>
+            <dt>模板 ID</dt>
+            <dd>
+              <code>{{ detailVersion.template_id }}</code>
+            </dd>
+          </div>
+          <div>
+            <dt>来源导入记录</dt>
+            <dd>
+              <code>{{ detailVersion.source_import_id }}</code>
+            </dd>
+          </div>
+          <div>
+            <dt>来源草稿</dt>
+            <dd>
+              <code>{{ detailVersion.source_draft_id }}</code
+              >（修订 {{ detailVersion.source_draft_revision }}）
+            </dd>
+          </div>
+          <div>
+            <dt>发布人</dt>
+            <dd>
+              <code>{{ detailVersion.published_by }}</code>
+            </dd>
+          </div>
+          <div>
+            <dt>发布时间（UTC）</dt>
+            <dd>{{ detailVersion.published_at }}</dd>
+          </div>
+          <div>
+            <dt>内容 sha256</dt>
+            <dd>
+              <code class="template-management__digest">{{ detailVersion.sha256 }}</code>
+            </dd>
+          </div>
+          <div>
+            <dt>顺序声明</dt>
+            <dd>{{ orderingLabel(detailVersion.ordering) }}</dd>
+          </div>
+          <div>
+            <dt>开始信号</dt>
+            <dd>{{ signalLabel(detailVersion.start_signal) }}</dd>
+          </div>
+          <div>
+            <dt>结束信号</dt>
+            <dd>{{ signalListLabel(detailVersion.end_signals) }}</dd>
+          </div>
+          <div>
+            <dt>运行参数默认值</dt>
+            <dd>
+              空闲 {{ detailVersion.runtime_defaults.idle_timeout_seconds }} 秒 · 步骤
+              {{ detailVersion.runtime_defaults.step_deadline_seconds }} 秒 ·
+              {{ detailVersion.runtime_defaults.disposition_policy ?? '未填写处置策略' }}
+            </dd>
+          </div>
+        </dl>
+        <h3>步骤</h3>
+        <ol>
+          <li v-for="step in detailVersion.steps" :key="step.number">
+            {{ step.number }}. {{ step.name }}：{{ step.description }}
+          </li>
+        </ol>
+      </div>
+      <template #footer>
+        <ElButton @click="versionDetailVisible = false">关闭</ElButton>
+      </template>
+    </ElDialog>
+
+    <TemplateDraftEditor
+      v-model="editorVisible"
+      :target="editorTarget"
+      @failure="editorFailure"
+      @saved="editorSaved"
+    />
   </section>
 </template>
 
@@ -633,6 +827,58 @@ onMounted(load)
   border-top-color: var(--template-teal);
 }
 
+.template-management__versions {
+  border-top: 3px solid var(--template-teal);
+  background: #fff;
+}
+
+.template-management__dialog-content {
+  display: grid;
+  gap: 1rem;
+  line-height: 1.55;
+}
+
+.template-management__dialog-content h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.template-management__details {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.template-management__details > div {
+  display: grid;
+  grid-template-columns: 8rem minmax(0, 1fr);
+  gap: 0.75rem;
+}
+
+.template-management__details dt {
+  color: #68717c;
+  font-weight: 600;
+}
+
+.template-management__details dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.template-management__dialog-note {
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  border-left: 3px solid var(--template-amber);
+  background: var(--template-paper);
+}
+
+.template-management__digest {
+  display: block;
+  max-width: 14rem;
+  overflow-wrap: anywhere;
+}
+
 .template-management__section-head {
   display: flex;
   align-items: baseline;
@@ -678,7 +924,8 @@ onMounted(load)
   font-weight: 600;
 }
 
-.template-management__table th[scope='row'] small {
+.template-management__table th[scope='row'] small,
+.template-management__table td small {
   display: block;
   margin-top: 0.2rem;
   color: #68717c;
@@ -707,8 +954,7 @@ onMounted(load)
   padding: 1.25rem;
 }
 
-.template-management__direct-fields,
-.template-management__edit-meta {
+.template-management__direct-fields {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1rem;
@@ -718,40 +964,6 @@ onMounted(load)
 .template-management__direct-fields {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   max-width: 38rem;
-}
-
-.template-management__steps {
-  margin: 0 0 1.25rem;
-  padding: 1rem;
-  border: 1px solid var(--template-rule);
-}
-
-.template-management__steps legend {
-  padding: 0 0.4rem;
-  font-weight: 600;
-}
-
-.template-management__step-row {
-  display: grid;
-  grid-template-columns: 2rem minmax(8rem, 1fr) minmax(12rem, 1.5fr) auto;
-  align-items: center;
-  gap: 0.65rem;
-  margin-bottom: 0.75rem;
-}
-
-.template-management__step-number {
-  display: grid;
-  place-items: center;
-  width: 1.8rem;
-  height: 1.8rem;
-  border-radius: 50%;
-  background: var(--template-amber);
-  color: var(--template-ink);
-  font-weight: 700;
-}
-
-.template-management__select {
-  width: 100%;
 }
 
 .template-management :focus-visible {
@@ -772,18 +984,8 @@ onMounted(load)
     min-width: 46rem;
   }
 
-  .template-management__direct-fields,
-  .template-management__edit-meta {
+  .template-management__direct-fields {
     grid-template-columns: 1fr;
-  }
-
-  .template-management__step-row {
-    grid-template-columns: 2rem 1fr;
-  }
-
-  .template-management__step-row .el-input:nth-child(3),
-  .template-management__step-row .el-button {
-    grid-column: 2;
   }
 }
 </style>

@@ -21,6 +21,7 @@ from factory_sop.device.model import DeviceStatus, Station
 from factory_sop.problem import PROBLEM_MEDIA_TYPE
 from factory_sop.settings import Settings
 from factory_sop.template.adapters import dependencies as template_dependencies
+from factory_sop.template.artifacts import build_template_artifacts
 from factory_sop.template.errors import (
     TemplateFieldError,
     TemplateRefusalCode,
@@ -30,11 +31,18 @@ from factory_sop.template.model import (
     ImportStatus,
     OrderingMode,
     SopTemplate,
+    TemplateArtifactName,
+    TemplateBoundaryDraft,
     TemplateDraft,
     TemplateDraftDocument,
     TemplateImport,
     TemplateRuntimeDefaults,
+    TemplateSignal,
+    TemplateSignalKind,
     TemplateStep,
+    TemplateVersion,
+    TemplateVersionArtifact,
+    TemplateVersionWriteResult,
 )
 from factory_sop.template.parser import ParsedStep, ParsedWorkbook, WorkbookValidationError
 
@@ -59,6 +67,7 @@ class FakeTemplateRepository:
     imports: dict[UUID, TemplateImport] = field(default_factory=dict)
     templates: dict[UUID, SopTemplate] = field(default_factory=dict)
     drafts: dict[UUID, TemplateDraft] = field(default_factory=dict)
+    versions: dict[UUID, TemplateVersion] = field(default_factory=dict)
 
     def add_import(self, record: TemplateImport) -> None:
         self.imports[record.id] = record
@@ -78,6 +87,9 @@ class FakeTemplateRepository:
             return None
         return TemplateDraftDocument(template=self.templates[draft.template_id], draft=draft)
 
+    def draft_for_publish(self, draft_id: UUID) -> TemplateDraftDocument | None:
+        return self.draft_by_id(draft_id)
+
     def save_draft(self, draft: TemplateDraft, *, expected_revision: int) -> None:
         stored = self.drafts.get(draft.id)
         if stored is None:
@@ -94,6 +106,45 @@ class FakeTemplateRepository:
     def page_imports(self, *, page: int, page_size: int) -> tuple[list[TemplateImport], int]:
         records = list(self.imports.values())
         return records[(page - 1) * page_size : page * page_size], len(records)
+
+    def version_by_source(self, *, draft_id: UUID, revision: int) -> TemplateVersion | None:
+        return next(
+            (
+                version
+                for version in self.versions.values()
+                if version.source_draft_id == draft_id and version.source_draft_revision == revision
+            ),
+            None,
+        )
+
+    def add_version(self, version: TemplateVersion) -> TemplateVersionWriteResult:
+        existing = self.version_by_source(
+            draft_id=version.source_draft_id,
+            revision=version.source_draft_revision,
+        )
+        if existing is not None:
+            return TemplateVersionWriteResult(version=existing, created=False)
+        self.versions[version.id] = version
+        return TemplateVersionWriteResult(version=version, created=True)
+
+    def version_by_id(self, version_id: UUID) -> TemplateVersion | None:
+        return self.versions.get(version_id)
+
+    def page_versions(self, *, page: int, page_size: int) -> tuple[list[TemplateVersion], int]:
+        versions = sorted(
+            self.versions.values(),
+            key=lambda version: (version.published_at, version.id),
+            reverse=True,
+        )
+        return versions[(page - 1) * page_size : page * page_size], len(versions)
+
+    def artifact_by_name(
+        self, *, version_id: UUID, name: TemplateArtifactName
+    ) -> TemplateVersionArtifact | None:
+        version = self.versions.get(version_id)
+        if version is None:
+            return None
+        return next((artifact for artifact in version.artifacts if artifact.name is name), None)
 
 
 @dataclass
@@ -231,6 +282,8 @@ def test_import_route_returns_a_new_draft_and_keeps_the_original_document(
                 "step_deadline_seconds": None,
                 "disposition_policy": None,
             },
+            "start_signal": None,
+            "end_signals": None,
             "revision": 1,
             "created_by": str(actor.id),
             "updated_by": str(actor.id),
@@ -244,6 +297,172 @@ def test_import_route_returns_a_new_draft_and_keeps_the_original_document(
     assert download.status_code == 200
     assert download.content == b"synthetic workbook"
     assert download.headers["content-type"] == XLSX
+
+
+def test_publish_route_returns_an_immutable_version_and_artifact_metadata() -> None:
+    center = Center()
+    center.log_in(Permission.TEMPLATE_DRAFT_EDIT, Permission.TEMPLATE_DRAFT_VIEW)
+    actor = center.users.by_login_name(CREDENTIALS["login_name"])
+    assert actor is not None
+    template_id = UUID("00000000-0000-0000-0000-000000000320")
+    draft_id = UUID("00000000-0000-0000-0000-000000000321")
+    source_import_id = UUID("00000000-0000-0000-0000-000000000322")
+    station_id = UUID("00000000-0000-0000-0000-000000000323")
+    timestamp = datetime(2026, 9, 8, 1, 0, tzinfo=UTC)
+    center.templates.templates[template_id] = SopTemplate(
+        id=template_id,
+        station_id=station_id,
+        station_code="A-001",
+        station_name="装配一号工位",
+        created_by=actor.id,
+        updated_by=actor.id,
+        created_at=timestamp,
+        updated_at=timestamp,
+    )
+    draft = TemplateDraft(
+        id=draft_id,
+        template_id=template_id,
+        source_import_id=source_import_id,
+        steps=(
+            TemplateStep(number=1, name="取料", description="(1)取料"),
+            TemplateStep(number=2, name="安装", description="(2)安装"),
+        ),
+        ordering=OrderingMode.STRICT,
+        runtime_defaults=TemplateRuntimeDefaults(
+            idle_timeout_seconds=30.0,
+            step_deadline_seconds=90.0,
+            disposition_policy="record",
+        ),
+        boundary=TemplateBoundaryDraft(
+            start_signal=TemplateSignal(TemplateSignalKind.ACTION, 1),
+            end_signals=(),
+        ),
+        revision=1,
+        created_by=actor.id,
+        updated_by=actor.id,
+        created_at=timestamp,
+        updated_at=timestamp,
+    )
+    center.templates.drafts[draft_id] = draft
+
+    response = center.send(
+        "POST",
+        f"{TEMPLATES}/drafts/{draft_id}/publish",
+        headers={"If-Match": "1"},
+    )
+
+    assert response.status_code == 201
+    version = response.json()
+    assert draft.boundary is not None
+    built = build_template_artifacts(
+        steps=draft.steps,
+        ordering=draft.ordering,
+        boundary=draft.boundary,
+        runtime_defaults=draft.runtime_defaults,
+    )
+    expected_artifacts = [
+        {
+            "name": artifact.name.value,
+            "media_type": artifact.media_type,
+            "byte_length": artifact.byte_length,
+            "sha256": artifact.sha256,
+        }
+        for artifact in built.artifacts
+    ]
+    assert version == {
+        "id": version["id"],
+        "template_id": str(template_id),
+        "source_import_id": str(source_import_id),
+        "source_draft_id": str(draft_id),
+        "source_draft_revision": 1,
+        "steps": [
+            {"number": 1, "name": "取料", "description": "(1)取料"},
+            {"number": 2, "name": "安装", "description": "(2)安装"},
+        ],
+        "ordering": "strict",
+        "start_signal": {"kind": "action", "action_number": 1},
+        "end_signals": [],
+        "runtime_defaults": {
+            "idle_timeout_seconds": 30.0,
+            "step_deadline_seconds": 90.0,
+            "disposition_policy": "record",
+        },
+        "artifacts": expected_artifacts,
+        "sha256": built.sha256,
+        "published_by": str(actor.id),
+        "published_at": version["published_at"],
+    }
+    version_id = UUID(version["id"])
+    replay = center.send(
+        "POST",
+        f"{TEMPLATES}/drafts/{draft_id}/publish",
+        headers={"If-Match": "1"},
+    )
+    assert replay.status_code == 200
+    assert replay.json() == version
+
+    detail = center.send("GET", f"{TEMPLATES}/versions/{version_id}")
+    assert detail.status_code == 200
+    assert detail.json() == version
+
+    artifact = center.send("GET", f"{TEMPLATES}/versions/{version_id}/artifacts/actions.json")
+    assert artifact.status_code == 200
+    assert artifact.headers["content-type"] == "application/json"
+    assert artifact.content == built.artifacts[0].content
+
+
+def test_publish_route_refuses_an_incomplete_boundary() -> None:
+    center = Center()
+    center.log_in(Permission.TEMPLATE_DRAFT_EDIT)
+    actor = center.users.by_login_name(CREDENTIALS["login_name"])
+    assert actor is not None
+    template_id = UUID("00000000-0000-0000-0000-000000000330")
+    draft_id = UUID("00000000-0000-0000-0000-000000000331")
+    timestamp = datetime(2026, 9, 8, 1, 0, tzinfo=UTC)
+    center.templates.templates[template_id] = SopTemplate(
+        id=template_id,
+        station_id=UUID("00000000-0000-0000-0000-000000000332"),
+        station_code="A-001",
+        station_name="装配一号工位",
+        created_by=actor.id,
+        updated_by=actor.id,
+        created_at=timestamp,
+        updated_at=timestamp,
+    )
+    center.templates.drafts[draft_id] = TemplateDraft(
+        id=draft_id,
+        template_id=template_id,
+        source_import_id=UUID("00000000-0000-0000-0000-000000000333"),
+        steps=(TemplateStep(number=1, name="取料", description="(1)取料"),),
+        ordering=OrderingMode.STRICT,
+        runtime_defaults=TemplateRuntimeDefaults(30.0, 90.0, "record"),
+        boundary=TemplateBoundaryDraft(start_signal=None, end_signals=None),
+        revision=1,
+        created_by=actor.id,
+        updated_by=actor.id,
+        created_at=timestamp,
+        updated_at=timestamp,
+    )
+
+    response = center.send(
+        "POST", f"{TEMPLATES}/drafts/{draft_id}/publish", headers={"If-Match": "1"}
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "type": "about:blank",
+        "title": "模板版本发布校验失败",
+        "status": 422,
+        "error_code": "TEMPLATE_VERSION_INVALID",
+        "field_errors": [
+            {"field": "草稿.start_signal", "message": "必须声明开始信号"},
+            {
+                "field": "草稿.end_signals",
+                "message": "必须明确声明结束信号列表，可以为空",
+            },
+        ],
+    }
+    assert center.templates.versions == {}
 
 
 def test_download_route_normalizes_a_persisted_non_xlsx_content_type() -> None:
@@ -443,6 +662,12 @@ def test_template_routes_declare_their_permission() -> None:
         "GET /templates/drafts": Permission.TEMPLATE_DRAFT_VIEW.value,
         "GET /templates/drafts/{draft_id}": Permission.TEMPLATE_DRAFT_VIEW.value,
         "PATCH /templates/drafts/{draft_id}": Permission.TEMPLATE_DRAFT_EDIT.value,
+        "POST /templates/drafts/{draft_id}/publish": Permission.TEMPLATE_DRAFT_EDIT.value,
+        "GET /templates/versions": Permission.TEMPLATE_DRAFT_VIEW.value,
+        "GET /templates/versions/{version_id}": Permission.TEMPLATE_DRAFT_VIEW.value,
+        "GET /templates/versions/{version_id}/artifacts/{name}": (
+            Permission.TEMPLATE_DRAFT_VIEW.value
+        ),
     }
 
 
@@ -461,6 +686,24 @@ def test_template_list_requires_its_view_permission_even_for_an_editor() -> None
     center.log_in(Permission.TEMPLATE_DRAFT_EDIT)
 
     response = center.send("GET", f"{TEMPLATES}/drafts")
+
+    assert response.status_code == 403
+    assert response.json()["error_code"] == "PERMISSION_DENIED"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        f"{TEMPLATES}/versions",
+        f"{TEMPLATES}/versions/{UUID(int=1)}",
+        f"{TEMPLATES}/versions/{UUID(int=1)}/artifacts/actions.json",
+    ],
+)
+def test_template_version_reads_require_view_permission_even_for_an_editor(path: str) -> None:
+    center = Center()
+    center.log_in(Permission.TEMPLATE_DRAFT_EDIT)
+
+    response = center.send("GET", path)
 
     assert response.status_code == 403
     assert response.json()["error_code"] == "PERMISSION_DENIED"

@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal, assert_never
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, Header, Query, Response, status
-from pydantic import BaseModel, Field, field_validator, model_validator
+from fastapi.responses import JSONResponse
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    StrictStr,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 from factory_sop.auth.api import Authorized, Permission, needs
 from factory_sop.device.api import StationCodeLookup
@@ -17,12 +27,20 @@ from factory_sop.template.adapters import dependencies as template_dependencies
 from factory_sop.template.adapters.dependencies import templates as template_dependency
 from factory_sop.template.model import (
     ImportStatus,
+    KeepTemplateBoundary,
+    KeepTemplateBoundaryPart,
     OrderingMode,
+    PatchTemplateBoundary,
+    TemplateArtifactName,
+    TemplateBoundaryUpdate,
     TemplateDraft,
     TemplateDraftDocument,
     TemplateImport,
     TemplateRuntimeDefaults,
+    TemplateSignal,
+    TemplateSignalKind,
     TemplateStep,
+    TemplateVersion,
 )
 from factory_sop.template.repository import TemplateRepository
 from factory_sop.template.usecases.drafts import (
@@ -32,6 +50,12 @@ from factory_sop.template.usecases.drafts import (
     list_template_imports,
     read_template_draft,
     read_template_import,
+)
+from factory_sop.template.usecases.versions import (
+    download_template_version_artifact,
+    list_template_versions,
+    publish_template_version,
+    read_template_version,
 )
 
 router = APIRouter(prefix="/templates", tags=["template"])
@@ -46,6 +70,15 @@ _BINARY_DOWNLOAD: dict[int, dict[str, object]] = {
     200: {
         "description": "保留的原始工作簿",
         "content": {_XLSX_MEDIA_TYPE: {"schema": {"type": "string", "format": "binary"}}},
+    }
+}
+_VERSION_ARTIFACT_DOWNLOAD: dict[int, dict[str, object]] = {
+    200: {
+        "description": "已保存的模板版本制品",
+        "content": {
+            "application/json": {"schema": {"type": "string", "format": "binary"}},
+            "text/plain": {"schema": {"type": "string", "format": "binary"}},
+        },
     }
 }
 
@@ -83,10 +116,43 @@ class TemplateRuntimeDefaultsInput(BaseModel):
         return value.strip() if value is not None else None
 
 
+class ActionSignalInput(BaseModel):
+    """动作编号边界信号。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["action"]
+    action_number: StrictInt = Field(gt=0)
+
+
+class ExternalSignalInput(BaseModel):
+    """外部信号语义标签边界信号。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["external"]
+    semantic_label: StrictStr = Field(min_length=1)
+
+    @field_validator("semantic_label")
+    @classmethod
+    def non_blank_label(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("外部信号语义标签不能为空")
+        return value.strip()
+
+
+TemplateSignalInput = Annotated[
+    ActionSignalInput | ExternalSignalInput,
+    Field(discriminator="kind"),
+]
+
+
 class TemplateDraftConfiguration(BaseModel):
     steps: list[TemplateStepInput] = Field(min_length=1)
     ordering: OrderingMode
     runtime_defaults: TemplateRuntimeDefaultsInput
+    start_signal: TemplateSignalInput | None = None
+    end_signals: list[TemplateSignalInput] | None = None
 
     @model_validator(mode="after")
     def has_contiguous_step_numbers(self) -> TemplateDraftConfiguration:
@@ -117,6 +183,8 @@ class TemplateDraftView(BaseModel):
     steps: list[TemplateStepView]
     ordering: OrderingMode
     runtime_defaults: TemplateRuntimeDefaultsView
+    start_signal: TemplateSignalInput | None = None
+    end_signals: list[TemplateSignalInput] | None = None
     revision: int
     created_by: UUID
     updated_by: UUID
@@ -140,6 +208,54 @@ class TemplateImportResultView(BaseModel):
     draft: TemplateDraftView | None
 
 
+class TemplateArtifactView(BaseModel):
+    name: TemplateArtifactName
+    media_type: str
+    byte_length: int
+    sha256: str
+
+
+class TemplateVersionView(BaseModel):
+    id: UUID
+    template_id: UUID
+    source_import_id: UUID
+    source_draft_id: UUID
+    source_draft_revision: int
+    steps: list[TemplateStepView]
+    ordering: OrderingMode
+    runtime_defaults: TemplateRuntimeDefaultsView
+    start_signal: TemplateSignalInput
+    end_signals: list[TemplateSignalInput]
+    sha256: str
+    published_by: UUID
+    published_at: datetime = Field(json_schema_extra={"format": "date-time"})
+    artifacts: list[TemplateArtifactView]
+
+    @field_serializer("published_at")
+    def serialize_published_at(self, value: datetime) -> str:
+        return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _signal_input(signal: TemplateSignal) -> TemplateSignalInput:
+    match signal.kind:
+        case TemplateSignalKind.ACTION:
+            assert isinstance(signal.value, int)
+            return ActionSignalInput(kind="action", action_number=signal.value)
+        case TemplateSignalKind.EXTERNAL:
+            assert isinstance(signal.value, str)
+            return ExternalSignalInput(kind="external", semantic_label=signal.value)
+        case _:
+            assert_never(signal.kind)
+
+
+def _signal_domain(signal: TemplateSignalInput) -> TemplateSignal:
+    if isinstance(signal, ActionSignalInput):
+        return TemplateSignal(TemplateSignalKind.ACTION, signal.action_number)
+    if isinstance(signal, ExternalSignalInput):
+        return TemplateSignal(TemplateSignalKind.EXTERNAL, signal.semantic_label)
+    assert_never(signal)
+
+
 def _draft_view(document: TemplateDraftDocument) -> TemplateDraftView:
     draft: TemplateDraft = document.draft
     return TemplateDraftView(
@@ -159,11 +275,57 @@ def _draft_view(document: TemplateDraftDocument) -> TemplateDraftView:
             step_deadline_seconds=draft.runtime_defaults.step_deadline_seconds,
             disposition_policy=draft.runtime_defaults.disposition_policy,
         ),
+        start_signal=(
+            _signal_input(draft.boundary.start_signal)
+            if draft.boundary is not None and draft.boundary.start_signal is not None
+            else None
+        ),
+        end_signals=(
+            None
+            if draft.boundary is None or draft.boundary.end_signals is None
+            else [_signal_input(signal) for signal in draft.boundary.end_signals]
+        ),
         revision=draft.revision,
         created_by=draft.created_by,
         updated_by=draft.updated_by,
         created_at=draft.created_at,
         updated_at=draft.updated_at,
+    )
+
+
+def _version_view(version: TemplateVersion) -> TemplateVersionView:
+    assert version.boundary.start_signal is not None
+    assert version.boundary.end_signals is not None
+    return TemplateVersionView(
+        id=version.id,
+        template_id=version.template_id,
+        source_import_id=version.source_import_id,
+        source_draft_id=version.source_draft_id,
+        source_draft_revision=version.source_draft_revision,
+        steps=[
+            TemplateStepView(number=step.number, name=step.name, description=step.description)
+            for step in version.steps
+        ],
+        ordering=version.ordering,
+        runtime_defaults=TemplateRuntimeDefaultsView(
+            idle_timeout_seconds=version.runtime_defaults.idle_timeout_seconds,
+            step_deadline_seconds=version.runtime_defaults.step_deadline_seconds,
+            disposition_policy=version.runtime_defaults.disposition_policy,
+        ),
+        start_signal=_signal_input(version.boundary.start_signal),
+        end_signals=[_signal_input(signal) for signal in version.boundary.end_signals],
+        sha256=version.sha256,
+        published_by=version.published_by,
+        published_at=version.published_at,
+        artifacts=[
+            TemplateArtifactView(
+                name=artifact.name,
+                media_type=artifact.media_type,
+                byte_length=artifact.byte_length,
+                sha256=artifact.sha256,
+            )
+            for artifact in version.artifacts
+        ],
     )
 
 
@@ -346,6 +508,27 @@ def edit_a_template_draft(
     templates: Annotated[TemplateRepository, Depends(template_dependency)],
     if_match: Annotated[int, Header(alias="If-Match")],
 ) -> TemplateDraftView:
+    fields = configuration.model_fields_set
+    boundary: TemplateBoundaryUpdate
+    if "start_signal" not in fields and "end_signals" not in fields:
+        boundary = KeepTemplateBoundary()
+    else:
+        boundary = PatchTemplateBoundary(
+            start_signal=(
+                _signal_domain(configuration.start_signal)
+                if "start_signal" in fields and configuration.start_signal is not None
+                else None
+                if "start_signal" in fields
+                else KeepTemplateBoundaryPart()
+            ),
+            end_signals=(
+                tuple(_signal_domain(signal) for signal in configuration.end_signals or ())
+                if "end_signals" in fields and configuration.end_signals is not None
+                else None
+                if "end_signals" in fields
+                else KeepTemplateBoundaryPart()
+            ),
+        )
     edited = edit_template_draft(
         draft_id=draft_id,
         steps=tuple(
@@ -362,5 +545,105 @@ def edit_a_template_draft(
         caller=caller,
         now=datetime.now(UTC),
         templates=templates,
+        boundary=boundary,
     )
     return _draft_view(edited)
+
+
+@router.post(
+    "/drafts/{draft_id}/publish",
+    status_code=status.HTTP_201_CREATED,
+    response_model=TemplateVersionView,
+    operation_id="publishTemplateVersion",
+    openapi_extra=needs(Permission.TEMPLATE_DRAFT_EDIT),
+    responses=_UNAUTHORIZED
+    | _VALIDATION
+    | {
+        200: {"description": "已发布的模板版本", "model": TemplateVersionView},
+        404: problem_openapi_response("模板草稿不存在"),
+        409: problem_openapi_response("草稿修订号已变化（STALE_REVISION）"),
+    },
+)
+def publish_a_template_version(
+    draft_id: UUID,
+    caller: Authorized,
+    templates: Annotated[TemplateRepository, Depends(template_dependency)],
+    if_match: Annotated[int, Header(alias="If-Match")],
+) -> TemplateVersionView | JSONResponse:
+    """发布指定草稿修订；成功只保存中心版本，不改变工位绑定。"""
+    result = publish_template_version(
+        draft_id=draft_id,
+        expected_revision=if_match,
+        caller=caller,
+        now=datetime.now(UTC),
+        templates=templates,
+    )
+    view = _version_view(result.version)
+    if result.created:
+        return view
+    return JSONResponse(status_code=status.HTTP_200_OK, content=view.model_dump(mode="json"))
+
+
+@router.get(
+    "/versions",
+    operation_id="listTemplateVersions",
+    openapi_extra=needs(Permission.TEMPLATE_DRAFT_VIEW),
+    responses=_UNAUTHORIZED | _VALIDATION,
+)
+def list_the_template_versions(
+    caller: Authorized,
+    templates: Annotated[TemplateRepository, Depends(template_dependency)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=MAXIMUM_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> ItemPage[TemplateVersionView]:
+    items, total = list_template_versions(
+        caller=caller, templates=templates, page=page, page_size=page_size
+    )
+    return ItemPage(
+        items=[_version_view(item) for item in items],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@router.get(
+    "/versions/{version_id}",
+    operation_id="readTemplateVersion",
+    response_model=TemplateVersionView,
+    openapi_extra=needs(Permission.TEMPLATE_DRAFT_VIEW),
+    responses=_UNAUTHORIZED | _VALIDATION | {404: problem_openapi_response("模板版本不存在")},
+)
+def read_a_template_version(
+    version_id: UUID,
+    caller: Authorized,
+    templates: Annotated[TemplateRepository, Depends(template_dependency)],
+) -> TemplateVersionView:
+    return _version_view(
+        read_template_version(version_id=version_id, caller=caller, templates=templates)
+    )
+
+
+@router.get(
+    "/versions/{version_id}/artifacts/{name}",
+    operation_id="downloadTemplateVersionArtifact",
+    response_class=Response,
+    openapi_extra=needs(Permission.TEMPLATE_DRAFT_VIEW),
+    responses=_UNAUTHORIZED
+    | _VALIDATION
+    | _VERSION_ARTIFACT_DOWNLOAD
+    | {404: problem_openapi_response("模板版本或制品不存在")},
+)
+def download_a_template_version_artifact(
+    version_id: UUID,
+    name: TemplateArtifactName,
+    caller: Authorized,
+    templates: Annotated[TemplateRepository, Depends(template_dependency)],
+) -> Response:
+    artifact = download_template_version_artifact(
+        version_id=version_id,
+        name=name,
+        caller=caller,
+        templates=templates,
+    )
+    return Response(content=artifact.content, media_type=artifact.media_type)

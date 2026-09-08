@@ -647,9 +647,13 @@ exports[`the template page > renders the import rail, draft list and retained im
               <!--v-if--></span>
             </td>
             <td>1</td>
-            <td><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
+            <td class="template-management__actions"><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
                 <!--v-if--><span class=""> 编辑草稿 </span>
-              </button></td>
+              </button><button aria-disabled="false" type="button" class="el-button el-button--warning is-link">
+                <!--v-if--><span class=""> 发布版本 </span>
+              </button>
+              <!--v-if-->
+            </td>
           </tr>
           <!--v-if-->
         </tbody>
@@ -687,11 +691,70 @@ exports[`the template page > renders the import rail, draft list and retained im
         </tbody>
       </table>
     </section>
+    <section class="template-management__versions" aria-labelledby="versions-heading">
+      <div class="template-management__section-head">
+        <div>
+          <h2 id="versions-heading">已发布版本</h2>
+          <p>版本一旦发布便不可修改；运行端消费的制品和摘要留在这里。</p>
+        </div><span class="template-management__count">1 个版本</span>
+      </div>
+      <table class="template-management__table template-management__table--versions">
+        <caption class="template-management__caption"> 不可变 SOP 版本及其可复验制品 </caption>
+        <thead>
+          <tr>
+            <th scope="col">版本</th>
+            <th scope="col">来源草稿</th>
+            <th scope="col">发布时间</th>
+            <th scope="col">模板语义与默认值</th>
+            <th scope="col">摘要</th>
+            <th scope="col">制品</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row"><code>version-1</code><small>模板 template-1</small><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
+                <!--v-if--><span class=""> 查看详情 </span>
+              </button></th>
+            <td><code>draft-1</code><small>修订 1</small><small>来源导入记录：import-1</small></td>
+            <td>2026年9月8日 09:00 <small>发布人：operator-1</small></td>
+            <td><span class="el-tag el-tag--success el-tag--light"><span class="el-tag__content">严格顺序</span>
+              <!--v-if--></span><small>开始：动作 1</small><small>结束：无（空闲时限闭合）</small><small>步骤：(1)取料</small><small> 默认：空闲 30 秒 · 步骤 90 秒 · record</small>
+            </td>
+            <td><code class="template-management__digest">dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd</code></td>
+            <td>
+              <ul class="template-management__artifacts">
+                <li><span><strong>actions.json</strong><small>32 字节 · bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb</small></span><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
+                    <!--v-if--><span class=""> 下载 actions.json</span>
+                  </button></li>
+                <li><span><strong>vlm_prompts.txt</strong><small>18 字节 · cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc</small></span><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
+                    <!--v-if--><span class=""> 下载 vlm_prompts.txt</span>
+                  </button></li>
+              </ul>
+            </td>
+          </tr>
+          <!--v-if-->
+        </tbody>
+      </table>
+    </section>
   </div>
   <!--teleport start-->
   <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
     <div class="el-overlay el-modal-dialog" style="z-index: 2014; display: none;">
-      <div role="dialog" aria-modal="true" aria-label="编辑模板草稿" aria-describedby="el-id-41" class="el-overlay-dialog"></div>
+      <div role="dialog" aria-modal="true" aria-label="确认发布" aria-describedby="el-id-41" class="el-overlay-dialog"></div>
+    </div>
+  </transition-stub>
+  <!--teleport end-->
+  <!--teleport start-->
+  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2015; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="版本详情" aria-describedby="el-id-43" class="el-overlay-dialog"></div>
+    </div>
+  </transition-stub>
+  <!--teleport end-->
+  <!--teleport start-->
+  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2016; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="编辑模板草稿" aria-describedby="el-id-45" class="el-overlay-dialog"></div>
     </div>
   </transition-stub>
   <!--teleport end-->

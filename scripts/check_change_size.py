@@ -1,37 +1,28 @@
 #!/usr/bin/env python3
-"""Fail a change that exceeds harness §5's size budget, using only the standard library.
+"""报告变更与源文件规模；行数仅供评审，规则见 harness §5。
 
-Usage: check_change_size.py BASE HEAD
+Usage: check_change_size.py BASE [HEAD]
 
-Counts the implementation lines a change adds — authored production source and repository
-automation, not tests, generated clients, docs, lockfiles or the vendored base — and holds
-each module the change touches to its own review budget: 800 added implementation lines, 500
-when the module is judgment logic. This is a pull-request size budget, not a cap on the total
-size of a product module. The per-module adaptation lets one vertical change cross several
-independent product seams without charging a reviewer for their unrelated totals. A module's
-`adapters/` subpackage is budgeted separately because harness §3 keeps adapters outside the
-behavior they adapt.
+省略 HEAD 时包含工作区与未跟踪文件；指定 HEAD 时只读取该提交。
 """
 
 from __future__ import annotations
 
 import subprocess
 import sys
+from collections import defaultdict
 from pathlib import Path
 
-CHANGE_LINE_BUDGET = 800
-TIGHT_LINE_BUDGET = 500
-# Harness §5 names judgment, boundary-solving and retention logic; boundary solving lives
-# inside the judgment package. Add retention's package here when it lands.
-TIGHT_BUDGET_PATHS = (Path("apps/edge-runtime/src/edge_runtime/judgment"),)
-IMPLEMENTATION_ROOTS = (Path("apps"), Path("packages"), Path("scripts"))
-GENERATED_OUTPUTS = (Path("apps/control-web/src/api/generated"),)
+CHANGE_REVIEW_TARGET = 800
+FILE_REVIEW_TARGET = 500
+FILE_EXTRACTION_PROMPT = 800
+JUDGMENT_REVIEW_TARGET = 500
+JUDGMENT_SOURCE = Path("apps/edge-runtime/src/edge_runtime/judgment")
+GENERATED_SOURCE = Path("apps/control-web/src/api/generated")
+SOURCE_SUFFIXES = {".py", ".ts", ".vue"}
 
-# Harness §3 fixes what a module is; this table says where each application's modules live,
-# so the per-module budget stays decidable by path. The first directory under a root is the
-# module; a file directly under a root belongs to the root itself; a web slice under
-# src/modules/ is a module of its own. Adding a source root starts here.
-MODULE_ROOTS: tuple[tuple[str, Path], ...] = (
+# 分组只帮助定位变更；私有文件与适配器仍归原业务模块。
+MODULE_ROOTS = (
     ("factory_sop", Path("apps/control-api/src/factory_sop")),
     ("control-web", Path("apps/control-web/src")),
     ("edge_runtime", Path("apps/edge-runtime/src/edge_runtime")),
@@ -40,99 +31,154 @@ MODULE_ROOTS: tuple[tuple[str, Path], ...] = (
 )
 
 
-def is_implementation(path: Path) -> bool:
-    """Authored production source or repository automation; never generated output or tests."""
-    if "tests" in path.parts:
-        return False
-    if any(path.parts[: len(root.parts)] == root.parts for root in GENERATED_OUTPUTS):
-        return False
-    if path.parts[:1] == ("scripts",):
-        return True
-    return any(path.parts[: len(root.parts)] == root.parts for root in IMPLEMENTATION_ROOTS) and (
-        "src" in path.parts
-    )
+def category_of(path: Path) -> str:
+    """把测试、生成物和其他评审材料单列，避免混入实现规模。"""
+    if path.parts[0] == "vendor":
+        return "Vendor"
+    if path.is_relative_to(GENERATED_SOURCE) or path == Path("packages/contracts/openapi.json"):
+        return "Generated"
+    if "tests" in path.parts or path.name.endswith((".spec.ts", ".test.ts")):
+        return "Tests"
+    if "migrations" in path.parts:
+        return "Migrations"
+    if path.parts[0] == "scripts" or (
+        path.parts[0] in {"apps", "packages"} and "src" in path.parts
+    ):
+        return "Implementation"
+    return "Other"
 
 
 def module_of(path: Path) -> str:
-    """The module a counted file belongs to: harness §3's seams, made decidable by path."""
+    """按现有所有者展示变更，不把目录当作预算账户。"""
     for name, root in MODULE_ROOTS:
-        if path.parts[: len(root.parts)] != root.parts:
+        if not path.is_relative_to(root):
             continue
-        rest = path.parts[len(root.parts) :]
+        rest = path.relative_to(root).parts
         if len(rest) <= 1:
             return name
         if rest[0] == "modules" and len(rest) > 2:
-            return f"modules/{rest[1]}"
-        if len(rest) > 2 and rest[1] == "adapters":
-            return f"{rest[0]}/adapters"
-        return rest[0]
-    # A counted file outside every declared root must not hide its growth: everything
-    # undeclared accumulates in one bucket until its root is declared here.
+            return f"{name}/modules/{rest[1]}"
+        return f"{name}/{rest[0]}"
     return "unassigned"
 
 
-def parse_numstat(text: str) -> dict[Path, int]:
-    """Lines added per file from `git diff --numstat`; binary files report `-` and count 0."""
-    added: dict[Path, int] = {}
-    for line in text.splitlines():
-        if not line.strip():
+def parse_numstat(text: str) -> dict[Path, tuple[int, int] | None]:
+    """解析 Git 的 NUL 分隔输出；重命名归新路径，二进制保留为未知行数。"""
+    changes: dict[Path, tuple[int, int] | None] = {}
+    records = iter(text.split("\0"))
+    for record in records:
+        if not record:
             continue
-        additions, _, name = line.split("\t", 2)
-        added[Path(name)] = 0 if additions == "-" else int(additions)
-    return added
+        added, deleted, name = record.split("\t", 2)
+        if not name:
+            next(records)
+            name = next(records)
+        changes[Path(name)] = None if added == "-" else (int(added), int(deleted))
+    return changes
 
 
-def budget_violations(added: dict[Path, int]) -> list[str]:
-    counted = {path: lines for path, lines in added.items() if is_implementation(path)}
-    by_module: dict[str, dict[Path, int]] = {}
-    for path, lines in counted.items():
-        by_module.setdefault(module_of(path), {})[path] = lines
-    errors: list[str] = []
-    for module, files in sorted(by_module.items()):
-        total = sum(files.values())
-        touches_tight = [
-            path
-            for path in files
-            if any(path.parts[: len(root.parts)] == root.parts for root in TIGHT_BUDGET_PATHS)
-        ]
-        budget = TIGHT_LINE_BUDGET if touches_tight else CHANGE_LINE_BUDGET
-        if total < budget:
-            continue
-        reason = (
-            f"it touches judgment logic ({', '.join(str(p) for p in touches_tight)})"
-            if touches_tight
-            else "harness §5"
-        )
-        largest = sorted(files.items(), key=lambda item: item[1], reverse=True)[:5]
-        listing = ", ".join(f"{path} (+{lines})" for path, lines in largest)
-        errors.append(
-            f"module {module} adds {total} implementation lines; the budget is {budget} "
-            f"because {reason}. Identify the smallest coherent, independently verifiable "
-            f"stage from the actual diff, dependencies and affected call sites. Do not create "
-            f"a product module solely to move lines into another bucket; if no safe stage exists, "
-            f"record why the change needs a reviewed exception. Largest files: {listing}"
-        )
-    return errors
+def git(root: Path, *args: str) -> str:
+    """Git 失败直接传给命令入口，不能变成空报告。"""
+    return subprocess.run(
+        ["git", *args], cwd=root, check=True, capture_output=True, text=True
+    ).stdout
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 3:
-        print("usage: check_change_size.py BASE HEAD", file=sys.stderr)
+    if len(argv) not in {2, 3}:
+        print("usage: check_change_size.py BASE [HEAD]", file=sys.stderr)
         return 2
-    base, head = argv[1], argv[2]
-    result = subprocess.run(
-        ["git", "diff", "--numstat", base, head],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    errors = budget_violations(parse_numstat(result.stdout))
-    if errors:
-        print("Change size budget failed:", file=sys.stderr)
-        for error in errors:
-            print(f"- {error}", file=sys.stderr)
+    try:
+        root = Path(git(Path.cwd(), "rev-parse", "--show-toplevel").strip())
+        worktree = len(argv) == 2
+        head = git(
+            root,
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            f"{argv[2] if not worktree else 'HEAD'}^{{commit}}",
+        ).strip()
+        base = git(root, "merge-base", argv[1], head).strip()
+        revision = [] if worktree else [head]
+        changes = parse_numstat(
+            git(root, "diff", "--numstat", "--find-renames", "-z", base, *revision, "--")
+        )
+        if worktree:
+            for name in git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0"):
+                if name:
+                    content = (root / name).read_bytes()
+                    changes[Path(name)] = (
+                        None if b"\0" in content[:8192] else (len(content.splitlines()), 0)
+                    )
+        implementation = {
+            path: counts
+            for path, counts in changes.items()
+            if counts is not None and category_of(path) == "Implementation"
+        }
+        added = sum(counts[0] for counts in implementation.values())
+        deleted = sum(counts[1] for counts in implementation.values())
+        print("Change size report (advisory)")
+        target = "worktree (staged, unstaged and untracked)" if worktree else head
+        print(f"Range: {base} -> {target}")
+        print(f"Implementation: +{added} -{deleted} ({added + deleted} changed lines)")
+        for category in ("Tests", "Generated", "Migrations", "Vendor", "Other"):
+            rows = [
+                counts
+                for path, counts in changes.items()
+                if counts is not None and category_of(path) == category
+            ]
+            if rows:
+                print(f"{category}: +{sum(row[0] for row in rows)} -{sum(row[1] for row in rows)}")
+        binary_files = sum(counts is None for counts in changes.values())
+        if binary_files:
+            print(f"Binary files: {binary_files} (no line count)")
+        by_module: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+        for path, counts in implementation.items():
+            totals = by_module[module_of(path)]
+            totals[0] += counts[0]
+            totals[1] += counts[1]
+        for module, (module_added, module_deleted) in sorted(by_module.items()):
+            print(f"  {module}: +{module_added} -{module_deleted}")
+        if added + deleted >= CHANGE_REVIEW_TARGET:
+            print("Review scope and cohesion; split only independently deliverable stages.")
+        judgment = sum(
+            sum(counts)
+            for path, counts in implementation.items()
+            if path.is_relative_to(JUDGMENT_SOURCE)
+        )
+        if judgment >= JUDGMENT_REVIEW_TARGET:
+            print(f"Judgment: {judgment} changed lines; review its invariants together.")
+        present = (
+            {str(path) for path in implementation if (root / path).is_file()}
+            if worktree
+            else set(git(root, "ls-tree", "-r", "--name-only", "-z", head).split("\0"))
+        )
+        for path in sorted(implementation):
+            if (
+                path.parts[0] in {"apps", "packages"}
+                and path.suffix in SOURCE_SUFFIXES
+                and str(path) in present
+            ):
+                content = (
+                    (root / path).read_text(encoding="utf-8")
+                    if worktree
+                    else git(root, "show", f"{head}:{path}")
+                )
+                lines = len(content.splitlines())
+                if lines >= FILE_REVIEW_TARGET:
+                    prompt = (
+                        "assess cohesive private extraction"
+                        if lines >= FILE_EXTRACTION_PROMPT
+                        else "review readability"
+                    )
+                    print(f"  {path}: {lines} physical lines; {prompt}.")
+        print(
+            "Size alone does not block delivery; record cohesion decisions in the review handoff."
+        )
+    except (subprocess.CalledProcessError, OSError, ValueError) as exc:
+        detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+        print(f"Cannot report change size: {detail}", file=sys.stderr)
         return 1
-    print("Change size budget passed.")
     return 0
 
 

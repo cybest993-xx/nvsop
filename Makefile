@@ -23,12 +23,12 @@ hooks:
 # started as containers via testcontainers. `center-system` runs §5.15's acceptance scenarios.
 check-integration: sync center-integration center-system
 
-# Harness §5's size budget. CI passes the pull request's base and head; locally the default
-# compares the branch with origin/main.
+# Harness §5 的规模提示：省略 HEAD 时统计已提交、暂存、未暂存及未跟踪文件。
+# CI 传入 BASE 与 HEAD，只读取该 PR 的固定提交。
 BASE ?= origin/main
-HEAD ?= HEAD
+HEAD ?=
 change-size:
-	python3 scripts/check_change_size.py $(BASE) $(HEAD)
+	python3 scripts/check_change_size.py "$(BASE)" $(if $(HEAD),"$(HEAD)")
 
 # A dependency change and its lockfile update land together. Frozen checks refuse stale locks.
 lockfile:

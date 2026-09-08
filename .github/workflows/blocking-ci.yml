@@ -132,11 +132,10 @@ jobs:
           # branch name happens to be checked out as origin/main.
           OPENAPI_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: make check
-      - name: Hold the change to its size budget
+      - name: Report change size for review
         if: steps.relevant.outputs.run == 'true' && github.event_name == 'pull_request'
-        # Harness §5's budget is per module, measured across the pull request's own diff — a
-        # push to main has no single base to measure against. Pull requests only, therefore,
-        # while `make check` above runs on both.
+        # Harness §5：从共同祖先计算到 PR HEAD，行数只作提示。
+        # Git 或文件读取失败仍须使本步骤失败。
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}

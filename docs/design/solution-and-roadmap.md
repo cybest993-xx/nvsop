@@ -172,7 +172,7 @@
 
 **【已定】迁移为单一线性 Alembic 历史**，单一 `versions/` 目录，文件名前缀标注所属模块（`0007_template_...`）；合并门禁检查一个迁移文件只触及其前缀模块拥有的表。
 
-**【已定】工作区与工具链**：中心后台 Python 锚定 3.12，`.python-version` 与 `uv.lock` 提交，CI `uv sync --frozen`；根一份 `pyproject.toml` + uv workspace。lint/type 用 ruff + mypy strict。**`apps/edge-runtime/` 的判定核心只依赖标准库**（§5.11 硬规则），因其运行在 DeepStream 容器的 Python 环境中，版本不由我们选择。Web 侧 pnpm workspace 在 `control-web` 落地时创建。
+**【已定】工作区与工具链**：工作区成员、运行时版本与检查命令以根清单、版本文件和 harness §2、§6 为准。**`apps/edge-runtime/` 的判定核心只依赖标准库**，运行在推理机 supervisor 进程中；该约束用于可测试性与可移植性（[ADR-0005](../adr/0005-judgment-runs-inside-the-inference-host.md)）。`vendor/` 内的最小 hook 才运行在基座容器中，其解释器由基座决定。
 
 **【已定】配置与秘密**：`pydantic-settings` 单一 `Settings`，环境变量为唯一来源，秘密经 `*_FILE` 路径变量读文件而非读值；启动强制校验无默认弱值，缺失即拒启，不降级为不加密。推理机本地凭据同规则（§5.12）。
 

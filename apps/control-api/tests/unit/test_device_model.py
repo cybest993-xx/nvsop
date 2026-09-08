@@ -12,7 +12,13 @@ from uuid import UUID
 
 import pytest
 
-from factory_sop.device.model import DeviceStatus, InferenceHost, carries_userinfo
+from factory_sop.device.model import (
+    ConnectorReachability,
+    ConnectorTestResult,
+    DeviceStatus,
+    InferenceHost,
+    carries_userinfo,
+)
 
 
 @pytest.mark.parametrize(
@@ -25,6 +31,17 @@ from factory_sop.device.model import DeviceStatus, InferenceHost, carries_userin
 )
 def test_a_url_with_a_userinfo_segment_is_reported(url: str) -> None:
     assert carries_userinfo(url)
+
+
+@pytest.mark.parametrize("credentials_configured", [False, None])
+def test_a_non_rejected_result_must_confirm_credentials(
+    credentials_configured: bool | None,
+) -> None:
+    with pytest.raises(ValueError, match="must confirm configured credentials"):
+        ConnectorTestResult(
+            reachability=ConnectorReachability.REACHABLE,
+            credentials_configured=credentials_configured,
+        )
 
 
 @pytest.mark.parametrize(

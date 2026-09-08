@@ -21,6 +21,7 @@
           "INFERENCE_BACKEND_HAS_CAMERAS",
           "INFERENCE_HOST_DEACTIVATED",
           "INFERENCE_HOST_AUTHENTICATION_FAILED",
+          "INFERENCE_HOST_CREDENTIALS_REMOVED",
           "INFERENCE_HOST_HAS_BACKENDS",
           "INFERENCE_HOST_NAME_TAKEN",
           "INFERENCE_HOST_NOT_FOUND",
@@ -380,7 +381,7 @@
         "type": "object"
       },
       "ConnectionState": {
-        "description": "What the last real connection test observed about a backend's endpoint.\n\nThree values, because Q31 fixes exactly these: a record that has never been tested is\n未验证 — not \"working\" — and only a test that truly reached the endpoint may say\n`success`. The facts belong to the placement (the host and endpoint a test observed):\nmoving the backend, or pointing it at another endpoint, retires what was self-reported.",
+        "description": "最近一次真实连接测试对后端端点的观测结果。\n\n固定为三态：从未测试是“未验证”，不是“正常”；只有真实到达端点的测试才能报告成功。事实属于\n测试时的部署位置；移动后端或改变端点后，原有自报结果失效。",
         "enum": [
           "unverified",
           "success",
@@ -824,7 +825,7 @@
         "type": "object"
       },
       "DeviceStatus": {
-        "description": "Whether a configurable device still takes part in new bindings and operation.\n\nAn enum rather than an `is_active` boolean: `CONTEXT.md` gives 停用 its own definition\nacross every mutable configuration object. Deactivation is reversible and never\ncascades — a deactivated host's backends keep their rows and their history.",
+        "description": "可配置设备是否继续参与新绑定和运行。\n\n使用枚举而不是 `is_active` 布尔值，因为所有可变配置对象共用“停用”语义。停用可恢复且不级联，\n已停用推理机的后端仍保留记录和历史。",
         "enum": [
           "active",
           "deactivated"
@@ -890,7 +891,7 @@
         "type": "object"
       },
       "HostConfiguration": {
-        "description": "The host's whole editable configuration, exactly as the edit form submits it.\n\n§5.19: durations and thresholds are configured values, and 0 or negative — or a\nwatermark of 0 or 100 — is a configuration error refused at save time. A URL with an\nembedded `user:password` is refused at the contract (ADR-0008), before it can be stored\nor echoed back.",
+        "description": "推理机的完整可编辑配置，与编辑表单提交的形状一致。\n\n§5.19 的时长和阈值必须有效；带有 `user:password` 的 URL 按 ADR-0008 在契约层拒绝，不能存储\n或回显。",
         "properties": {
           "address": {
             "maxLength": 255,
@@ -939,8 +940,24 @@
         "title": "HostConfiguration",
         "type": "object"
       },
+      "HostIdentityKeyConfiguration": {
+        "description": "推理机公钥配置；对应的私钥只留在推理机本地。",
+        "properties": {
+          "public_key": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Public Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "public_key"
+        ],
+        "title": "HostIdentityKeyConfiguration",
+        "type": "object"
+      },
       "HostStatus": {
-        "description": "The one field 停用 and 恢复 toggle, as the two values of one subresource.",
+        "description": "停用和恢复共用的状态子资源。",
         "properties": {
           "status": {
             "$ref": "#/components/schemas/DeviceStatus"
@@ -1038,7 +1055,7 @@
         "type": "object"
       },
       "InferenceHostCredentialView": {
-        "description": "推理机凭据轮换结果；明文只在本次响应出现。",
+        "description": "仅为保留旧 OpenAPI 响应形状；路径总是返回 410，处理逻辑不会构造凭据。",
         "properties": {
           "credential": {
             "title": "Credential",
@@ -1056,8 +1073,22 @@
         "title": "InferenceHostCredentialView",
         "type": "object"
       },
+      "InferenceHostIdentityKeyView": {
+        "description": "公钥登记结果；不回显任何私钥或凭据。",
+        "properties": {
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "title": "InferenceHostIdentityKeyView",
+        "type": "object"
+      },
       "InferenceHostView": {
-        "description": "One host as the API carries it. `revision` is what If-Match echoes.",
+        "description": "API 返回的一台推理机；`revision` 用于 If-Match 乐观锁。",
         "properties": {
           "address": {
             "title": "Address",
@@ -1773,6 +1804,17 @@
                 "type": "null"
               }
             ]
+          },
+          "result_credentials_configured": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Credentials Configured"
           },
           "result_detail": {
             "anyOf": [
@@ -5363,7 +5405,7 @@
     },
     "/api/v1/device-commands/next": {
       "get": {
-        "description": "按认证主机领取一条命令; 无命令返回 204, 不会看到其他主机的队列。",
+        "description": "按已验证的主机身份领取一条命令；无命令返回 204。",
         "operationId": "claimNextDeviceCommand",
         "parameters": [
           {
@@ -5374,6 +5416,60 @@
               "format": "uuid",
               "title": "X-Inference-Host-Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Timestamp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Timestamp"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Nonce",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Nonce"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Signature"
             }
           },
           {
@@ -5571,7 +5667,7 @@
     },
     "/api/v1/device-commands/{command_id}/result": {
       "post": {
-        "description": "用主机身份、领取令牌和租约回报结果; 中心与连接器更新共用请求事务。",
+        "description": "用主机签名、领取令牌和租约回报结果。",
         "operationId": "completeDeviceCommand",
         "parameters": [
           {
@@ -5603,6 +5699,60 @@
               "minLength": 1,
               "title": "X-Command-Claim-Token",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Timestamp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Timestamp"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Nonce",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Nonce"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Signature"
             }
           },
           {
@@ -6418,7 +6568,7 @@
     },
     "/api/v1/inference-hosts": {
       "get": {
-        "description": "One page of hosts, newest first, under §5.15's envelope.",
+        "description": "按最新优先返回一页推理机，并使用 §5.15 的分页外壳。",
         "operationId": "listInferenceHosts",
         "parameters": [
           {
@@ -6504,7 +6654,7 @@
         "x-required-permission": "device.inference_host.view"
       },
       "post": {
-        "description": "Register a physical inference machine.",
+        "description": "登记一台物理推理机。",
         "operationId": "createInferenceHost",
         "requestBody": {
           "content": {
@@ -6587,7 +6737,7 @@
     },
     "/api/v1/inference-hosts/{host_id}": {
       "delete": {
-        "description": "Delete the host outright — the irreversible operation 停用 exists to avoid.",
+        "description": "直接删除推理机；不可逆操作应优先使用可恢复的停用。",
         "operationId": "deleteInferenceHost",
         "parameters": [
           {
@@ -6682,7 +6832,7 @@
         "x-required-permission": "device.inference_host.delete"
       },
       "get": {
-        "description": "Read one host.",
+        "description": "读取一台推理机。",
         "operationId": "readInferenceHost",
         "parameters": [
           {
@@ -6765,7 +6915,7 @@
         "x-required-permission": "device.inference_host.view"
       },
       "patch": {
-        "description": "Replace the host's whole configuration.\n\nThe request must carry `If-Match: <revision>` — the revision the caller read. A body\nwithout it cannot say what it believed it was editing, so it is refused rather than\nallowed to overwrite blind.",
+        "description": "替换推理机的完整配置。\n\n请求必须携带调用方读取的 `If-Match: <revision>`；缺少前置版本就拒绝，不能盲写覆盖。",
         "operationId": "editInferenceHost",
         "parameters": [
           {
@@ -6879,7 +7029,8 @@
     },
     "/api/v1/inference-hosts/{host_id}/credential": {
       "post": {
-        "description": "轮换主机控制面凭据并只返回一次明文。",
+        "deprecated": true,
+        "description": "保留旧路径以避免静默改写；不再签发或存储 bearer 凭据。",
         "operationId": "rotateInferenceHostCredential",
         "parameters": [
           {
@@ -6953,6 +7104,16 @@
             },
             "description": "Revision moved (STALE_REVISION)"
           },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Host bearer credentials are no longer issued"
+          },
           "422": {
             "content": {
               "application/problem+json": {
@@ -6974,7 +7135,121 @@
             "description": "Internal server error"
           }
         },
-        "summary": "Rotate A Host Credential",
+        "summary": "Retired A Host Credential",
+        "tags": [
+          "device"
+        ],
+        "x-required-permission": "device.inference_host.edit"
+      }
+    },
+    "/api/v1/inference-hosts/{host_id}/identity-key": {
+      "post": {
+        "description": "登记主机公钥并递增配置修订号。",
+        "operationId": "registerInferenceHostIdentityKey",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "host_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Host Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "title": "If-Match",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HostIdentityKeyConfiguration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InferenceHostIdentityKeyView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Host not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Revision moved (STALE_REVISION)"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Request invalid"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Register A Host Identity Key",
         "tags": [
           "device"
         ],
@@ -6983,7 +7258,7 @@
     },
     "/api/v1/inference-hosts/{host_id}/status": {
       "put": {
-        "description": "停用 or 恢复 the host — the two values of one field, on one subresource.\n\nBoth directions are reversible and idempotent, which is why they share a route; which use\ncase runs is the requested value's, and the match is exhaustive over the enum.",
+        "description": "在一个状态子资源中停用或恢复推理机；两个方向都可恢复且幂等。",
         "operationId": "setInferenceHostStatus",
         "parameters": [
           {

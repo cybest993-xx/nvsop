@@ -9,6 +9,7 @@ import unittest
 import urllib.error
 from email.message import Message
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from random import Random
 from typing import ClassVar
 from unittest.mock import patch
 
@@ -17,13 +18,30 @@ from nvsop_contracts import (
     ConnectionTestCommand,
     ConnectionTestOutcome,
     ConnectionTestResult,
+    HostIdentityKeyPair,
+    HostIdentityRequest,
     Unverified,
     connection_test_claim_to_wire,
+    generate_host_identity_key_pair,
+    verify_host_identity_request,
 )
 
 from edge_runtime.connectors.hikvision import CANDIDATE_PROFILE
 from edge_runtime.runtime import LocalIsapiConnectorConfiguration, build_connection_test_loop
 from edge_runtime.supervisor.delegated_transport import CommandTransportError, HttpCommandTransport
+
+
+def _fixture_host_identity(seed: int) -> HostIdentityKeyPair:
+    """用固定伪随机流生成合成测试密钥, 避免测试依赖系统熵。"""
+    random = Random(seed)
+    with (
+        patch("nvsop_contracts.host_identity.secrets.randbits", side_effect=random.getrandbits),
+        patch("nvsop_contracts.host_identity.secrets.randbelow", side_effect=random.randrange),
+    ):
+        return generate_host_identity_key_pair()
+
+
+HOST_IDENTITY = _fixture_host_identity(3)
 
 
 class DeviceHandler(BaseHTTPRequestHandler):
@@ -113,7 +131,7 @@ class HttpCommandTransportTest(unittest.TestCase):
         return HttpCommandTransport(
             center_url=f"http://127.0.0.1:{self.server.server_port}",
             host_id="host-1",
-            host_token="test-host-token",  # pragma: allowlist secret
+            host_private_key=HOST_IDENTITY.private_key,
             timeout=2.0,
         )
 
@@ -136,13 +154,42 @@ class HttpCommandTransportTest(unittest.TestCase):
         get_method, get_headers, _ = CommandHandler.requests[0]
         self.assertEqual("GET", get_method)
         self.assertEqual("host-1", get_headers["x-inference-host-id"])
-        self.assertEqual("test-host-token", get_headers["x-inference-host-token"])
-        self.assertNotIn("password", get_headers)
+        get_identity = HostIdentityRequest(
+            method="GET",
+            path="/api/v1/device-commands/next",
+            host_id="host-1",
+            timestamp=int(get_headers["x-inference-host-timestamp"]),
+            nonce=get_headers["x-inference-host-nonce"],
+            body=None,
+        )
+        self.assertTrue(
+            verify_host_identity_request(
+                get_identity,
+                public_key=HOST_IDENTITY.public_key,
+                signature=get_headers["x-inference-host-signature"],
+            )
+        )
+        self.assertNotIn("x-inference-host-token", get_headers)
 
         post_method, post_headers, payload = CommandHandler.requests[1]
         self.assertEqual("POST", post_method)
         self.assertEqual("host-1", post_headers["x-inference-host-id"])
         self.assertEqual("claim-1", post_headers["x-command-claim-token"])
+        post_identity = HostIdentityRequest(
+            method="POST",
+            path="/api/v1/device-commands/command-1/result",
+            host_id="host-1",
+            timestamp=int(post_headers["x-inference-host-timestamp"]),
+            nonce=post_headers["x-inference-host-nonce"],
+            body=payload,
+        )
+        self.assertTrue(
+            verify_host_identity_request(
+                post_identity,
+                public_key=HOST_IDENTITY.public_key,
+                signature=post_headers["x-inference-host-signature"],
+            )
+        )
         self.assertIsNotNone(payload)
         assert payload is not None
         self.assertEqual("reachable", payload["outcome"])
@@ -158,16 +205,28 @@ class HttpCommandTransportTest(unittest.TestCase):
         device_thread = threading.Thread(target=device_server.serve_forever, daemon=True)
         device_thread.start()
         try:
+            CommandHandler.claim = ConnectionTestClaim(
+                command=ConnectionTestCommand(
+                    command_id="command-1",
+                    connector_id="connector-1",
+                    connector_revision=3,
+                    connector_type="hikvision_isapi",
+                    configuration={"address": "127.0.0.1", "port": device_server.server_port},
+                ),
+                claim_token="claim-1",
+                lease_expires_at="2026-09-08T08:01:00Z",
+            )
             loop = build_connection_test_loop(
                 center_url=f"http://127.0.0.1:{self.server.server_port}",
                 host_id="host-1",
-                host_token="test-host-token",  # pragma: allowlist secret
+                host_private_key=HOST_IDENTITY.private_key,
                 command_timeout=2.0,
                 command_poll_interval=0.1,
                 local_connectors=(
                     LocalIsapiConnectorConfiguration(
                         connector_id="connector-1",
                         revision=3,
+                        connector_type="hikvision_isapi",
                         credentials_configured=True,
                         base_url=f"http://127.0.0.1:{device_server.server_port}",
                         username="edge-user",

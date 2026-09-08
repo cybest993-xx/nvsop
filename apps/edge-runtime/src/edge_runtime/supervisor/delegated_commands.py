@@ -33,6 +33,8 @@ class LocalConnector:
     """推理机本地已落盘的连接器配置与真实探测接缝。"""
 
     revision: int
+    connector_type: str
+    configuration: dict[str, str | int]
     credentials_configured: bool
     probe: LocalConnectorProbe
 
@@ -69,10 +71,14 @@ class ConnectionTestExecutor:
                 detail="推理机未配置该连接器",
                 failure_code="COMMAND_TARGET_NOT_FOUND",
             )
-        if connector.revision != command.connector_revision:
+        if (
+            connector.revision != command.connector_revision
+            or connector.connector_type != command.connector_type
+            or connector.configuration != command.configuration
+        ):
             return ConnectionTestResult(
                 outcome=ConnectionTestOutcome.REJECTED,
-                detail="推理机上的连接器配置修订不一致",
+                detail="推理机上的连接器配置与中心不一致",
                 failure_code="COMMAND_CONFIGURATION_CHANGED",
             )
         if not connector.credentials_configured:

@@ -113,8 +113,17 @@ def _impairments_found(timer: TimerFired) -> frozenset[ReasonCode]:
     found: set[ReasonCode] = set()
     if timer.host is HostLiveness.DOWN:
         found.add(ReasonCode.INFERENCE_HOST_DOWN)
-    if timer.stream is StreamHealth.LOST:
-        found.add(ReasonCode.STREAM_LOST)
+    match timer.stream:
+        case StreamHealth.LOST:
+            found.add(ReasonCode.STREAM_LOST)
+        case StreamHealth.INFERENCE_TIMEOUT:
+            found.add(ReasonCode.INFERENCE_TIMEOUT)
+        case StreamHealth.CHUNK_BACKLOG_EXCEEDED:
+            found.add(ReasonCode.CHUNK_BACKLOG_EXCEEDED)
+        case StreamHealth.HEALTHY:
+            pass
+        case _:
+            assert_never(timer.stream)
     return frozenset(found)
 
 
@@ -353,6 +362,7 @@ def _close(
                     evidence=evidence,
                 ),
             ),
+            closed_instances=(instance,),
         )
 
     missing = _unsettled(
@@ -377,6 +387,7 @@ def _close(
                 evidence=evidence,
             ),
         ),
+        closed_instances=(instance,),
     )
 
 

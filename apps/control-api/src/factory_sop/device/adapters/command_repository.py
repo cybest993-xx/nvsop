@@ -30,6 +30,13 @@ class PostgresPendingCommandRepository:
         row = self._session.get(PendingCommandRow, command_id)
         return row.to_domain() if row is not None else None
 
+    def by_id_for_update(self, command_id: UUID) -> PendingCommand | None:
+        """锁定命令行，使同一租约的并发回报按一个数据库序列化。"""
+        row = self._session.scalar(
+            select(PendingCommandRow).where(PendingCommandRow.id == command_id).with_for_update()
+        )
+        return row.to_domain() if row is not None else None
+
     def by_idempotency_key(self, key: str) -> PendingCommand | None:
         row = self._session.scalar(
             select(PendingCommandRow).where(PendingCommandRow.idempotency_key == key)
@@ -64,6 +71,7 @@ class PostgresPendingCommandRepository:
             "result": row.result,
             "result_detail": row.result_detail,
             "failure_code": row.failure_code,
+            "result_credentials_configured": row.result_credentials_configured,
             "completed_at": row.completed_at,
             "created_by": row.created_by,
             "created_at": row.created_at,
@@ -95,6 +103,7 @@ class PostgresPendingCommandRepository:
         self._session.execute(
             update(PendingCommandRow)
             .where(
+                PendingCommandRow.host_id == host_id,
                 PendingCommandRow.status == PendingCommandStatus.CLAIMED,
                 PendingCommandRow.lease_expires_at.is_not(None),
                 PendingCommandRow.lease_expires_at <= claimed_at,
@@ -140,12 +149,7 @@ class PostgresPendingCommandRepository:
             PendingCommandStatus.FAILED,
             PendingCommandStatus.REJECTED,
         }:
-            if (
-                row.claim_token == completion.claim_token
-                and row.result == completion.result
-                and row.result_detail == completion.result_detail
-                and row.failure_code == completion.failure_code
-            ):
+            if _same_completion(row, completion):
                 return row.to_domain()
             raise DeviceRefusedError(DeviceRefusalCode.COMMAND_ALREADY_COMPLETED)
         if row.status is not PendingCommandStatus.CLAIMED:
@@ -171,14 +175,48 @@ class PostgresPendingCommandRepository:
                     result=completion.result,
                     result_detail=completion.result_detail,
                     failure_code=completion.failure_code,
+                    result_credentials_configured=completion.result_credentials_configured,
                     completed_at=completion.completed_at,
                     updated_at=completion.completed_at,
                 )
             ),
         )
         if changed.rowcount != 1:
+            latest = self._session.scalar(
+                select(PendingCommandRow)
+                .where(PendingCommandRow.id == completion.command_id)
+                .execution_options(populate_existing=True)
+            )
+            if latest is None:
+                raise DeviceRefusedError(DeviceRefusalCode.COMMAND_NOT_FOUND)
+            if latest.host_id != completion.host_id:
+                raise DeviceRefusedError(DeviceRefusalCode.COMMAND_HOST_MISMATCH)
+            if latest.status in {
+                PendingCommandStatus.SUCCEEDED,
+                PendingCommandStatus.FAILED,
+                PendingCommandStatus.REJECTED,
+            }:
+                if _same_completion(latest, completion):
+                    return latest.to_domain()
+                raise DeviceRefusedError(DeviceRefusalCode.COMMAND_ALREADY_COMPLETED)
+            if latest.status is not PendingCommandStatus.CLAIMED:
+                raise DeviceRefusedError(DeviceRefusalCode.COMMAND_CLAIM_REQUIRED)
+            if latest.claim_token != completion.claim_token:
+                raise DeviceRefusedError(DeviceRefusalCode.COMMAND_CLAIM_TOKEN_INVALID)
             raise DeviceRefusedError(DeviceRefusalCode.COMMAND_CLAIM_EXPIRED)
         loaded = self._session.get(PendingCommandRow, completion.command_id)
         if loaded is None:
             raise DeviceRefusedError(DeviceRefusalCode.COMMAND_NOT_FOUND)
         return loaded.to_domain()
+
+
+def _same_completion(row: PendingCommandRow, completion: PendingCommandCompletion) -> bool:
+    """比较条件更新竞态后的完整结案结果。"""
+    return (
+        row.status is completion.status
+        and row.claim_token == completion.claim_token
+        and row.result == completion.result
+        and row.result_detail == completion.result_detail
+        and row.failure_code == completion.failure_code
+        and row.result_credentials_configured == completion.result_credentials_configured
+    )

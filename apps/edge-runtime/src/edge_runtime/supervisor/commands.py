@@ -1,33 +1,26 @@
-"""What the supervisor is told to do, one command per effect the core described.
+"""supervisor 对判定结果的效果编排。
 
-The core describes and executes nothing (judgment-and-boundary.md §5.18). This module is
-the translation from a `Decision` into explicit commands, so that latching, persistence,
-disposal dispatch and evidence extraction each have a named thing to implement rather than
-a decision object every later ticket re-interprets its own way.
-
-Commands are data and this module performs none of them: #19 persists, #49 latches and
-archives the alert, #50/#51 dispatch disposal, #52 extracts and uploads the clip.
-
-Standard library only, like the core it sits behind (edge-autonomy.md §5.11).
+效果数据定义在 judgment 的数据层, 本模块只负责把一个判定扩展为证据窗口和效果序列。
+执行仍由各自的 owner 负责, 因而持久化模块不需要依赖 supervisor。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from edge_runtime.judgment.model import Decision, EvidenceSpan, HostInstant, Lifecycle, Violation
+from edge_runtime.judgment.effects import (
+    ClipEvidence,
+    CloseInstance,
+    Command,
+    LatchViolation,
+    RecordDecision,
+)
+from edge_runtime.judgment.model import Decision, EvidenceSpan, HostInstant, Lifecycle
 
 
 @dataclass(frozen=True, slots=True)
 class EvidenceMargins:
-    """How much context to keep around a conclusion's anchor, in seconds.
-
-    The station's resolved runtime parameters, arriving as data: the core reads no
-    configuration, so widening the required span to something a reviewer can read is the
-    supervisor's job (evidence-and-retention.md §5.20). No default here — the value is
-    configured per station with a global default, and a time literal in this code path is
-    exactly what §5.19 forbids.
-    """
+    """判定锚点前后的证据余量, 单位为秒。"""
 
     leading: float
     trailing: float
@@ -39,71 +32,8 @@ class EvidenceMargins:
             )
 
 
-@dataclass(frozen=True, slots=True)
-class RecordDecision:
-    """Write this decision to local state, the authority for decisions (§5.7).
-
-    First of the commands for one decision: the violation and its report event are written
-    in one transaction with the decision they belong to (#19).
-    """
-
-    decision: Decision
-
-
-@dataclass(frozen=True, slots=True)
-class LatchViolation:
-    """Latch one confirmed deviation. Never withdrawn, whatever the instance concludes.
-
-    Independent of the instance's verdict on purpose (§5.2): an instance may be
-    indeterminate while carrying a latched violation. One says this pass's conclusion is
-    unreliable, the other says this deviation is confirmed.
-    """
-
-    instance_id: int
-    violation: Violation
-
-
-@dataclass(frozen=True, slots=True)
-class ClipEvidence:
-    """Extract the video for one conclusion, already widened by the margins.
-
-    `anchor` travels with the window because it is the judgment fact — the moment the
-    conclusion is about, where the keyframe is taken and the only thing a re-clip may not
-    change (§5.20).
-    """
-
-    instance_id: int
-    anchor: HostInstant
-    start: HostInstant
-    end: HostInstant
-
-
-@dataclass(frozen=True, slots=True)
-class CloseInstance:
-    """This instance is concluded, by the named condition.
-
-    The condition is carried rather than inferred: it is what `monitor_sop_instance`
-    records as the close reason.
-    """
-
-    instance_id: int
-    lifecycle: Lifecycle
-
-
-Command = RecordDecision | LatchViolation | ClipEvidence | CloseInstance
-"""One effect the supervisor is to perform. Exhaustive: a new command kind must be handled
-by every executor rather than silently ignored by one."""
-
-
 def commands_for(decision: Decision, *, margins: EvidenceMargins) -> tuple[Command, ...]:
-    """Everything this decision asks the supervisor to do, in the order to do it.
-
-    A pass gets a clip too, because §5.19 retains pass-class evidence *by default*:
-    compliance rate needs a denominator. That default is configurable off, and the switch is
-    not here — it belongs to the retention policy the executing ticket reads. Emitting is
-    what follows the documented default; suppressing here would hardcode the non-default and
-    leave the command stream unable to express the default at all.
-    """
+    """把一个判定转换成需要执行的效果序列。"""
     commands: list[Command] = [RecordDecision(decision=decision)]
     commands.extend(
         LatchViolation(instance_id=decision.instance_id, violation=violation)
@@ -118,13 +48,7 @@ def commands_for(decision: Decision, *, margins: EvidenceMargins) -> tuple[Comma
 
 
 def _clips(decision: Decision, margins: EvidenceMargins) -> list[ClipEvidence]:
-    """One clip per distinct anchor, each covering everything required at that anchor.
-
-    The decision and the violations it carries usually anchor at the same instant, and
-    cutting the same seconds twice is waste no reviewer ever sees. Where a violation
-    anchors elsewhere — a deadline reported at close, whose anchor is when the limit was
-    crossed — it keeps its own clip, because the anchor is what makes the clip meaningful.
-    """
+    """按锚点合并必需跨度, 再加宽配置余量。"""
     required: dict[HostInstant, EvidenceSpan] = {}
     for span in (decision.evidence, *(violation.evidence for violation in decision.violations)):
         held = required.get(span.anchor)
@@ -141,9 +65,20 @@ def _clips(decision: Decision, margins: EvidenceMargins) -> list[ClipEvidence]:
 
 
 def _union(held: EvidenceSpan, arriving: EvidenceSpan) -> EvidenceSpan:
-    """The span covering both, so neither conclusion loses evidence it required."""
+    """返回覆盖两段必需跨度的最小区间。"""
     return EvidenceSpan(
         anchor=held.anchor,
         required_from=min(held.required_from, arriving.required_from),
         required_to=max(held.required_to, arriving.required_to),
     )
+
+
+__all__ = [
+    "ClipEvidence",
+    "CloseInstance",
+    "Command",
+    "EvidenceMargins",
+    "LatchViolation",
+    "RecordDecision",
+    "commands_for",
+]

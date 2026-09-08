@@ -1,20 +1,18 @@
-"""The inference host's configuration use cases: create, edit, 停用, restore, delete, read.
+"""推理机配置用例：创建、编辑、停用、恢复、删除和读取。
 
-Every instant and every caller arrives as an argument: the use cases read no clock and know
-no session, so any caller drives them exactly as the HTTP layer does. Authorization is the
-`authorize` call at the top of each one (§5.15) — a `Caller` with `device.inference_host.*`
-may proceed, anyone else is refused, whichever kind of caller the request came from.
+所有时刻和调用方都由参数传入；用例不读取时钟，也不知道会话，因此任何调用方都与 HTTP 层遵循同一规则。
+每个用例开头调用 `authorize`（§5.15），只有持有 `device.inference_host.*` 权限的调用方可以继续。
 """
 
 from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime
+from typing import NoReturn
 from uuid import UUID
 
 from factory_sop.auth.api import Caller, Permission, authorize
 from factory_sop.device.errors import DeviceRefusalCode
-from factory_sop.device.host_credentials import IssuedInferenceHostCredential
 from factory_sop.device.model import DeviceStatus, InferenceHost
 from factory_sop.device.repository import (
     ConnectorRepository,
@@ -41,11 +39,7 @@ def create_host(
     now: datetime,
     hosts: InferenceHostRepository,
 ) -> InferenceHost:
-    """Register a physical inference machine.
-
-    Refuses a taken name with `INFERENCE_HOST_NAME_TAKEN`, and anyone without
-    `INFERENCE_HOST_EDIT` before anything else.
-    """
+    """登记物理推理机；名称冲突或缺少 `INFERENCE_HOST_EDIT` 权限时拒绝。"""
     authorize(caller, Permission.INFERENCE_HOST_EDIT)
     host = InferenceHost(
         id=new_id(),
@@ -84,11 +78,9 @@ def edit_host(
     now: datetime,
     hosts: InferenceHostRepository,
 ) -> InferenceHost:
-    """Replace the host's whole editable configuration, refusing a lost revision race.
+    """替换推理机完整配置，并拒绝版本竞争丢失。
 
-    The body is the complete configuration rather than a partial patch: the caller holds the
-    record already — it read the revision it sends as `expected_revision`. 停用 status is not
-    editable here: restoring is its own use case.
+    请求体是完整配置而不是部分补丁；停用状态不在此编辑，恢复由独立用例处理。
     """
     authorize(caller, Permission.INFERENCE_HOST_EDIT)
     host = _existing_host(host_id, hosts)
@@ -110,33 +102,44 @@ def edit_host(
     return edited
 
 
-def rotate_host_credential(
+def register_host_identity_key(
     *,
     host_id: UUID,
+    public_key: str,
     expected_revision: int,
     caller: Caller,
     now: datetime,
     hosts: InferenceHostRepository,
-) -> tuple[InferenceHost, IssuedInferenceHostCredential]:
-    """轮换推理机控制面凭据，明文只返回给本次已授权的操作员。"""
+) -> InferenceHost:
+    """登记推理机公钥；私钥只由推理机本地持有。"""
     authorize(caller, Permission.INFERENCE_HOST_EDIT)
     host = _existing_host(host_id, hosts)
     _require_revision(host, expected_revision)
-    issued = IssuedInferenceHostCredential.issue()
-    rotated = replace(
+    registered = replace(
         host,
-        credential_hash=issued.fingerprint,
+        identity_public_key=public_key,
         revision=expected_revision + 1,
         updated_by=caller.user.id,
         updated_at=now,
     )
-    hosts.save(rotated, expected_revision=expected_revision)
+    hosts.save(registered, expected_revision=expected_revision)
     _logger.info(
-        "device.inference_host.credential_rotated",
-        host_id=str(host.id),
+        "device.inference_host.identity_key_registered",
+        host_id=str(host_id),
         actor_id=str(caller.user.id),
     )
-    return rotated, issued
+    return registered
+
+
+def retire_host_credential(*, host_id: UUID, caller: Caller) -> NoReturn:
+    """拒绝旧 bearer 凭据接口；中心不再签发或保存共享秘密。"""
+    authorize(caller, Permission.INFERENCE_HOST_EDIT)
+    refuse(
+        _REFUSAL_EVENT,
+        DeviceRefusalCode.INFERENCE_HOST_CREDENTIALS_REMOVED,
+        host_id=str(host_id),
+        actor_id=str(caller.user.id),
+    )
 
 
 def deactivate_host(
@@ -147,7 +150,7 @@ def deactivate_host(
     now: datetime,
     hosts: InferenceHostRepository,
 ) -> InferenceHost:
-    """Take the host out of new bindings and operation, at the revision the caller read."""
+    """按调用方读取的版本停用推理机，使其退出新绑定和运行。"""
     authorize(caller, Permission.INFERENCE_HOST_EDIT)
     host = _existing_host(host_id, hosts)
     _require_revision(host, expected_revision)
@@ -172,7 +175,7 @@ def restore_host(
     now: datetime,
     hosts: InferenceHostRepository,
 ) -> InferenceHost:
-    """Bring a deactivated host back, at the revision the caller read."""
+    """按调用方读取的版本恢复已停用推理机。"""
     authorize(caller, Permission.INFERENCE_HOST_EDIT)
     host = _existing_host(host_id, hosts)
     _require_revision(host, expected_revision)
@@ -231,7 +234,7 @@ def delete_host(
 def host_by_identifier(
     *, host_id: UUID, caller: Caller, hosts: InferenceHostRepository
 ) -> InferenceHost:
-    """Read one host. Refuses `INFERENCE_HOST_NOT_FOUND` when it is gone."""
+    """读取一台推理机；记录不存在时拒绝并返回 `INFERENCE_HOST_NOT_FOUND`。"""
     authorize(caller, Permission.INFERENCE_HOST_VIEW)
     return _existing_host(host_id, hosts)
 
@@ -239,7 +242,7 @@ def host_by_identifier(
 def list_hosts(
     *, caller: Caller, hosts: InferenceHostRepository, page: int, page_size: int
 ) -> tuple[list[InferenceHost], int]:
-    """One page of hosts, newest first, with the unpaginated total (§5.15's envelope)."""
+    """按最新优先返回一页推理机及未分页总数（§5.15）。"""
     authorize(caller, Permission.INFERENCE_HOST_VIEW)
     return hosts.page_of(page=page, page_size=page_size)
 

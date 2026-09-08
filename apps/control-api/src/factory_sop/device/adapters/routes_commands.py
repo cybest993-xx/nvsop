@@ -8,10 +8,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, Literal, Self, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Response, status
+from fastapi import APIRouter, Depends, Header, Request, Response, status
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from factory_sop.auth.api import Authorized, Permission, needs
@@ -43,6 +43,7 @@ from nvsop_contracts import (
     ConnectionTestClaim,
     ConnectionTestCommand,
     ConnectionTestOutcome,
+    HostIdentityRequest,
     connection_test_claim_from_wire,
     connection_test_claim_to_wire,
     connection_test_command_from_wire,
@@ -68,8 +69,39 @@ _EDGE_RESPONSES: ProblemResponses = {
 # 领取租约只覆盖一次有限的真实设备请求; 过期后由 PostgreSQL 适配器回收为 pending。
 COMMAND_LEASE_DURATION = timedelta(minutes=5)
 INFERENCE_HOST_ID_HEADER = "X-Inference-Host-ID"
+# 旧 bearer 头仅保留为可选兼容输入，不参与认证，也不写入中心。
 INFERENCE_HOST_TOKEN_HEADER = "X-Inference-Host-Token"
+INFERENCE_HOST_TIMESTAMP_HEADER = "X-Inference-Host-Timestamp"
+INFERENCE_HOST_NONCE_HEADER = "X-Inference-Host-Nonce"
+INFERENCE_HOST_SIGNATURE_HEADER = "X-Inference-Host-Signature"
 COMMAND_CLAIM_TOKEN_HEADER = "X-Command-Claim-Token"
+
+
+def _host_identity(
+    *,
+    host_id: UUID,
+    method: str,
+    path: str,
+    body: dict[str, object] | None,
+    timestamp: str | None,
+    nonce: str | None,
+    signature: str | None,
+) -> InferenceHostIdentity:
+    """把主机身份头转换成一次待验证的签名请求。"""
+    request: HostIdentityRequest | None = None
+    if timestamp is not None and nonce is not None:
+        try:
+            request = HostIdentityRequest(
+                method=method,
+                path=path,
+                host_id=str(host_id),
+                timestamp=int(timestamp),
+                nonce=nonce,
+                body=body,
+            )
+        except (TypeError, ValueError):
+            request = None
+    return InferenceHostIdentity(host_id=host_id, request=request, signature=signature)
 
 
 class PendingCommandView(BaseModel):
@@ -90,6 +122,7 @@ class PendingCommandView(BaseModel):
     result: ConnectorReachability | None
     result_detail: str | None
     failure_code: str | None
+    result_credentials_configured: bool | None = None
     completed_at: datetime | None
     created_by: UUID
     created_at: datetime
@@ -186,6 +219,9 @@ def _view(command: PendingCommand, *, show_result: bool) -> PendingCommandView:
         result=command.result if show_result else None,
         result_detail=command.result_detail if show_result else None,
         failure_code=command.failure_code if show_result else None,
+        result_credentials_configured=(
+            command.result_credentials_configured if show_result else None
+        ),
         completed_at=command.completed_at,
         created_by=command.created_by,
         created_at=command.created_at,
@@ -234,14 +270,33 @@ def enqueue_a_connector_connection_test(
     responses=_EDGE_RESPONSES | {204: {"description": "No command is pending for this host"}},
 )
 def claim_next_device_command(
+    request: Request,
     host_id: Annotated[UUID, Header(alias=INFERENCE_HOST_ID_HEADER)],
     host_store: Annotated[InferenceHostRepository, Depends(hosts)],
     connector_store: Annotated[ConnectorRepository, Depends(connectors)],
     command_store: Annotated[PendingCommandRepository, Depends(pending_commands)],
+    host_timestamp: Annotated[
+        str | None, Header(alias=INFERENCE_HOST_TIMESTAMP_HEADER, min_length=1, max_length=32)
+    ] = None,
+    host_nonce: Annotated[
+        str | None, Header(alias=INFERENCE_HOST_NONCE_HEADER, min_length=1, max_length=128)
+    ] = None,
+    host_signature: Annotated[
+        str | None, Header(alias=INFERENCE_HOST_SIGNATURE_HEADER, min_length=1, max_length=4096)
+    ] = None,
     host_token: Annotated[str | None, Header(alias=INFERENCE_HOST_TOKEN_HEADER)] = None,
 ) -> ConnectionTestClaimDocument | Response:
-    """按认证主机领取一条命令; 无命令返回 204, 不会看到其他主机的队列。"""
-    identity = InferenceHostIdentity(host_id=host_id, credential=host_token)
+    """按已验证的主机身份领取一条命令；无命令返回 204。"""
+    del host_token
+    identity = _host_identity(
+        host_id=host_id,
+        method=request.method,
+        path=request.url.path,
+        body=None,
+        timestamp=host_timestamp,
+        nonce=host_nonce,
+        signature=host_signature,
+    )
     now = datetime.now(UTC)
     command = claim_next_command(
         host=identity,
@@ -275,6 +330,7 @@ def claim_next_device_command(
             connectors=connector_store,
             hosts=host_store,
             commands=command_store,
+            authenticated=True,
         )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     if connector.revision != command.target_revision:
@@ -292,6 +348,7 @@ def claim_next_device_command(
             connectors=connector_store,
             hosts=host_store,
             commands=command_store,
+            authenticated=True,
         )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -337,6 +394,7 @@ def read_a_device_command(
     responses=_EDGE_RESPONSES,
 )
 def complete_a_device_command(
+    request: Request,
     command_id: UUID,
     result: ConnectionTestResultDocument,
     host_id: Annotated[UUID, Header(alias=INFERENCE_HOST_ID_HEADER)],
@@ -346,12 +404,31 @@ def complete_a_device_command(
     connector_store: Annotated[ConnectorRepository, Depends(connectors)],
     command_store: Annotated[PendingCommandRepository, Depends(pending_commands)],
     host_store: Annotated[InferenceHostRepository, Depends(hosts)],
+    host_timestamp: Annotated[
+        str | None, Header(alias=INFERENCE_HOST_TIMESTAMP_HEADER, min_length=1, max_length=32)
+    ] = None,
+    host_nonce: Annotated[
+        str | None, Header(alias=INFERENCE_HOST_NONCE_HEADER, min_length=1, max_length=128)
+    ] = None,
+    host_signature: Annotated[
+        str | None, Header(alias=INFERENCE_HOST_SIGNATURE_HEADER, min_length=1, max_length=4096)
+    ] = None,
     host_token: Annotated[str | None, Header(alias=INFERENCE_HOST_TOKEN_HEADER)] = None,
 ) -> PendingCommandView:
-    """用主机身份、领取令牌和租约回报结果; 中心与连接器更新共用请求事务。"""
+    """用主机签名、领取令牌和租约回报结果。"""
+    del host_token
+    identity = _host_identity(
+        host_id=host_id,
+        method=request.method,
+        path=request.url.path,
+        body=cast(dict[str, object], result.model_dump(mode="json")),
+        timestamp=host_timestamp,
+        nonce=host_nonce,
+        signature=host_signature,
+    )
     completed = complete_connection_test(
         command_id=command_id,
-        host=InferenceHostIdentity(host_id=host_id, credential=host_token),
+        host=identity,
         claim_token=claim_token,
         result=result.to_domain(),
         now=datetime.now(UTC),
@@ -365,6 +442,9 @@ def complete_a_device_command(
 __all__ = [
     "COMMAND_CLAIM_TOKEN_HEADER",
     "INFERENCE_HOST_ID_HEADER",
+    "INFERENCE_HOST_NONCE_HEADER",
+    "INFERENCE_HOST_SIGNATURE_HEADER",
+    "INFERENCE_HOST_TIMESTAMP_HEADER",
     "INFERENCE_HOST_TOKEN_HEADER",
     "router",
 ]

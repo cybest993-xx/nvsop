@@ -56,9 +56,8 @@ from factory_sop.persistence import Table
 from nvsop_contracts import capability_from_wire, capability_to_wire
 
 
-# One PostgreSQL enum type, carried by both tables: 停用 means the same thing for every
-# device the module owns (CONTEXT.md). The values are the enum's members, not its names,
-# so the wire spelling in §5.15's snake_case survives in the database.
+# 两张表共用一个 PostgreSQL 枚举类型；模块拥有的设备统一使用“停用”语义（CONTEXT.md）。数据库保存
+# 枚举值而不是成员名，以保留 §5.15 规定的 snake_case 线格式。
 def _status_enum(*, create_type: bool = True) -> Enum:
     return Enum(
         DeviceStatus,
@@ -69,38 +68,31 @@ def _status_enum(*, create_type: bool = True) -> Enum:
 
 
 class InferenceHostRow(Table):
-    """A physical inference machine."""
+    """物理推理机持久化行。"""
 
     __tablename__ = "device_inference_host"
 
     id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
-    # Unique, and the natural key an operator matches on — never the URL identity (§5.15).
+    # 唯一的自然键，供操作员匹配；不能代替 URL 身份（§5.15）。
     name: Mapped[str] = mapped_column(String(128), unique=True)
     address: Mapped[str] = mapped_column(String(255))
-    # Optional until preview is configured: the address becomes load-bearing with the
-    # camera-binding and preview slices, and inventing a value for it now would be fiction.
+    # 预览配置完成前允许为空；后续相机绑定和预览切片才会依赖该地址，现在不能虚构默认值。
     mediamtx_address: Mapped[str | None] = mapped_column(String(255))
-    # §5.19: the rolling recording window is per host, bounded by its disk, and a
-    # configurable duration — carried in seconds so a duration is a number, not a string
-    # each client formats differently.
+    # §5.19：滚动录制窗口按推理机配置并受磁盘约束；保存秒数，避免各客户端以不同字符串格式表达时长。
     recording_window_seconds: Mapped[int] = mapped_column(BigInteger())
-    # §5.19: past this watermark the machine is about to stop being able to record, which
-    # the edge runtime reports as an observation-validity break. A percentage of the disk.
+    # §5.19：超过该水位表示机器即将无法录制，边缘运行时据此报告观测有效性中断；单位为磁盘百分比。
     disk_watermark_percent: Mapped[int] = mapped_column(Integer())
     status: Mapped[DeviceStatus] = mapped_column(_status_enum())
-    # §5.15's optimistic-locking revision: every write moves it, and a save whose expected
-    # revision no longer matches refuses instead of overwriting.
+    # §5.15 的乐观锁版本；每次写入递增，预期版本不匹配时拒绝而不是覆盖。
     revision: Mapped[int] = mapped_column(Integer())
-    # §5.15: attribution is these columns, not an audit table. Plain UUIDs of the acting
-    # account — deliberately no foreign key to `auth_user`, so account administration can
-    # never be blocked by a device row that merely remembers who touched it.
+    # §5.15：归因使用这些列而不是审计表，保存操作账号的 UUID；不连接 `auth_user` 外键，避免账号管理
+    # 被历史设备行阻塞。
     created_by: Mapped[UUID] = mapped_column(Uuid())
     updated_by: Mapped[UUID] = mapped_column(Uuid())
-    # `timezone=True`: §5.15 fixes UTC timestamps, and a naive read-back would break every
-    # comparison the use cases make.
+    # `timezone=True`：§5.15 固定 UTC 时刻；读回无时区值会破坏用例比较。
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    credential_hash: Mapped[str] = mapped_column(String(64), server_default="")
+    identity_public_key: Mapped[str | None] = mapped_column(String(4096))
 
     def to_domain(self) -> InferenceHost:
         return InferenceHost(
@@ -116,7 +108,7 @@ class InferenceHostRow(Table):
             updated_by=self.updated_by,
             created_at=self.created_at,
             updated_at=self.updated_at,
-            credential_hash=self.credential_hash,
+            identity_public_key=self.identity_public_key,
         )
 
     @classmethod
@@ -134,8 +126,20 @@ class InferenceHostRow(Table):
             updated_by=host.updated_by,
             created_at=host.created_at,
             updated_at=host.updated_at,
-            credential_hash=host.credential_hash,
+            identity_public_key=host.identity_public_key,
         )
+
+
+class InferenceHostIdentityNonceRow(Table):
+    """主机签名请求的短期随机数，防止同一领取请求被重放。"""
+
+    __tablename__ = "device_inference_host_identity_nonce"
+
+    host_id: Mapped[UUID] = mapped_column(
+        Uuid(), ForeignKey("device_inference_host.id", ondelete="CASCADE"), primary_key=True
+    )
+    nonce: Mapped[str] = mapped_column(String(128), primary_key=True)
+    seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class StationRow(Table):
@@ -184,26 +188,24 @@ class StationRow(Table):
 
 
 class InferenceBackendRow(Table):
-    """One inference-service process endpoint carrying one template configuration."""
+    """携带一套模板配置的推理服务进程端点持久化行。"""
 
     __tablename__ = "device_inference_backend"
     __table_args__ = (
-        # One row per process endpoint: the same host cannot register one URL twice, while
-        # the same port on another machine is another endpoint (§5.10's topology). Named by
-        # the metadata convention as `uq_device_inference_backend_host_id_base_url`.
+        # 每个进程端点一行：同一推理机不能重复登记 URL，另一台机器的相同端口仍是另一端点（§5.10）。
+        # 约束名称遵循元数据约定 `uq_device_inference_backend_host_id_base_url`。
         UniqueConstraint("host_id", "base_url"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
-    # `ondelete` stays at the database's NO ACTION: a host with backends cannot be deleted,
-    # which is the database half of the topology constraint the use case refuses first.
+    # `ondelete` 保持数据库默认的 NO ACTION：有后端的推理机不能删除，用例会先以同一规则拒绝。
     host_id: Mapped[UUID] = mapped_column(
         Uuid(), ForeignKey("device_inference_host.id"), index=True
     )
     base_url: Mapped[str] = mapped_column(String(255))
-    # The one template configuration this endpoint carries — a scalar column, so "one
-    # backend, one template configuration" holds in the schema by construction. No foreign
-    # key yet: `template_version` is C5's table, and its migration adds the key.
+    # 端点携带的一套模板配置使用单值列，因此模式天然保证“一后端一套配置”。template_version 表属于
+    # C5，
+    # 当前尚未加入外键，后续迁移再补充。
     template_version_id: Mapped[UUID | None] = mapped_column(Uuid())
     status: Mapped[DeviceStatus] = mapped_column(_status_enum(create_type=False))
     connection_state: Mapped[ConnectionState] = mapped_column(
@@ -215,8 +217,7 @@ class InferenceBackendRow(Table):
     )
     connection_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     connection_detail: Mapped[str | None] = mapped_column(String(255))
-    # §5.13: the identities the endpoint self-reported, an observed fact about the machine —
-    # not a registry entry. A list under one timestamp: one probe, one report.
+    # §5.13：端点自报的身份是机器观测事实，不是注册表条目；一条时间戳下保存一次探测的一组报告。
     self_reported_model_ids: Mapped[list[str] | None] = mapped_column(JSONB())
     self_reported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revision: Mapped[int] = mapped_column(Integer())
@@ -527,6 +528,7 @@ class PendingCommandRow(Table):
     )
     result_detail: Mapped[str | None] = mapped_column(String(255))
     failure_code: Mapped[str | None] = mapped_column(String(64))
+    result_credentials_configured: Mapped[bool | None] = mapped_column(Boolean())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[UUID] = mapped_column(Uuid())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -549,6 +551,7 @@ class PendingCommandRow(Table):
             result_detail=self.result_detail,
             failure_code=self.failure_code,
             completed_at=self.completed_at,
+            result_credentials_configured=self.result_credentials_configured,
             created_by=self.created_by,
             created_at=self.created_at,
             updated_at=self.updated_at,
@@ -572,6 +575,7 @@ class PendingCommandRow(Table):
             result_detail=command.result_detail,
             failure_code=command.failure_code,
             completed_at=command.completed_at,
+            result_credentials_configured=command.result_credentials_configured,
             created_by=command.created_by,
             created_at=command.created_at,
             updated_at=command.updated_at,

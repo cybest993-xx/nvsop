@@ -52,7 +52,13 @@ def test_executor_calls_the_local_real_probe_and_preserves_its_result() -> None:
         answer=LocalProbeResult(outcome=ConnectionTestOutcome.REACHABLE),
         timeouts=[],
     )
-    local = LocalConnector(revision=3, credentials_configured=True, probe=probe)
+    local = LocalConnector(
+        revision=3,
+        connector_type="hikvision_isapi",
+        configuration={"address": "10.0.8.21", "port": 80},
+        credentials_configured=True,
+        probe=probe,
+    )
     executor = ConnectionTestExecutor(
         registry=FakeRegistry(local),
         timeout=4.0,
@@ -80,12 +86,51 @@ def test_executor_reports_missing_or_stale_local_configuration_as_rejection() ->
         timeouts=[],
     )
     stale = ConnectionTestExecutor(
-        registry=FakeRegistry(LocalConnector(revision=2, credentials_configured=True, probe=probe)),
+        registry=FakeRegistry(
+            LocalConnector(
+                revision=2,
+                connector_type="hikvision_isapi",
+                configuration={"address": "10.0.8.21", "port": 80},
+                credentials_configured=True,
+                probe=probe,
+            )
+        ),
         timeout=4.0,
     )
     assert stale.execute(command(revision=3)) == ConnectionTestResult(
         outcome=ConnectionTestOutcome.REJECTED,
-        detail="推理机上的连接器配置修订不一致",
+        detail="推理机上的连接器配置与中心不一致",
         failure_code="COMMAND_CONFIGURATION_CHANGED",
     )
     assert probe.timeouts == []
+
+
+def test_executor_rejects_same_revision_when_type_or_endpoint_changed() -> None:
+    changed_configurations: tuple[tuple[str, dict[str, str | int]], ...] = (
+        ("board_card", {"address": "10.0.8.21", "port": 80}),
+        ("hikvision_isapi", {"address": "10.0.8.22", "port": 80}),
+    )
+    for connector_type, configuration in changed_configurations:
+        probe = FakeConnector(
+            answer=LocalProbeResult(outcome=ConnectionTestOutcome.REACHABLE),
+            timeouts=[],
+        )
+        executor = ConnectionTestExecutor(
+            registry=FakeRegistry(
+                LocalConnector(
+                    revision=3,
+                    connector_type=connector_type,
+                    configuration=configuration,
+                    credentials_configured=True,
+                    probe=probe,
+                )
+            ),
+            timeout=4.0,
+        )
+
+        assert executor.execute(command()) == ConnectionTestResult(
+            outcome=ConnectionTestOutcome.REJECTED,
+            detail="推理机上的连接器配置与中心不一致",
+            failure_code="COMMAND_CONFIGURATION_CHANGED",
+        )
+        assert probe.timeouts == []

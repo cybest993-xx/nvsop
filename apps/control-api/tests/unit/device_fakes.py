@@ -11,10 +11,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from random import Random
+from unittest.mock import patch
 from uuid import UUID
 
 from factory_sop.device.errors import DeviceRefusalCode, DeviceRefusedError
-from factory_sop.device.host_credentials import fingerprint
 from factory_sop.device.model import (
     Camera,
     ConnectionState,
@@ -35,10 +36,29 @@ from factory_sop.device.model import (
 from factory_sop.device.probing import ProbeReport
 from factory_sop.device.repository import PendingCommandRepository
 from factory_sop.identifiers import new_id
-from nvsop_contracts import Capability, Unverified
+from nvsop_contracts import (
+    Capability,
+    HostIdentityKeyPair,
+    Unverified,
+    generate_host_identity_key_pair,
+)
 
 FAKE_ACTOR = new_id()
 FAKE_NOW = datetime(2026, 9, 5, 8, 0, tzinfo=UTC)
+
+
+def _fixture_host_identity(seed: int) -> HostIdentityKeyPair:
+    """用固定伪随机流生成合成测试密钥, 避免测试依赖系统熵。"""
+    random = Random(seed)
+    with (
+        patch("nvsop_contracts.host_identity.secrets.randbits", side_effect=random.getrandbits),
+        patch("nvsop_contracts.host_identity.secrets.randbelow", side_effect=random.randrange),
+    ):
+        return generate_host_identity_key_pair()
+
+
+DEFAULT_HOST_IDENTITY = _fixture_host_identity(1)
+ALTERNATE_HOST_IDENTITY = _fixture_host_identity(2)
 
 
 @dataclass
@@ -46,7 +66,8 @@ class FakeInferenceHosts:
     """An `InferenceHostRepository` over a dict."""
 
     rows: dict[UUID, InferenceHost] = field(default_factory=dict)
-    credentials: dict[UUID, str] = field(default_factory=dict)
+    private_keys: dict[UUID, str] = field(default_factory=dict)
+    identity_nonces: dict[UUID, set[str]] = field(default_factory=dict)
 
     def register(
         self,
@@ -58,9 +79,11 @@ class FakeInferenceHosts:
         disk_watermark_percent: int = 85,
         status: DeviceStatus = DeviceStatus.ACTIVE,
         created_at: datetime = FAKE_NOW,
+        identity_key_pair: HostIdentityKeyPair | None = None,
     ) -> InferenceHost:
         """Build a host for a use-case test and store it."""
-        host_credential = f"test-host-credential-{len(self.rows) + 1}"
+        if identity_key_pair is None:
+            identity_key_pair = DEFAULT_HOST_IDENTITY if not self.rows else ALTERNATE_HOST_IDENTITY
         host = InferenceHost(
             id=new_id(),
             name=name,
@@ -74,10 +97,11 @@ class FakeInferenceHosts:
             updated_by=FAKE_ACTOR,
             created_at=created_at,
             updated_at=created_at,
-            credential_hash=fingerprint(credential=host_credential),
+            identity_public_key=identity_key_pair.public_key,
         )
         self.add(host)
-        self.credentials[host.id] = host_credential
+        self.private_keys[host.id] = identity_key_pair.private_key
+        self.identity_nonces[host.id] = set()
         return host
 
     def add(self, host: InferenceHost) -> None:
@@ -98,6 +122,14 @@ class FakeInferenceHosts:
     def by_id(self, host_id: UUID) -> InferenceHost | None:
         return self.rows.get(host_id)
 
+    def consume_identity_nonce(self, *, host_id: UUID, nonce: str, seen_at: datetime) -> bool:
+        del seen_at
+        nonces = self.identity_nonces.setdefault(host_id, set())
+        if nonce in nonces:
+            return False
+        nonces.add(nonce)
+        return True
+
     def remove(self, host_id: UUID, *, expected_revision: int) -> bool:
         stored = self.rows.get(host_id)
         if stored is None:
@@ -105,11 +137,12 @@ class FakeInferenceHosts:
         if stored.revision != expected_revision:
             raise DeviceRefusedError(DeviceRefusalCode.STALE_REVISION)
         del self.rows[host_id]
-        self.credentials.pop(host_id, None)
+        self.private_keys.pop(host_id, None)
+        self.identity_nonces.pop(host_id, None)
         return True
 
-    def credential_for(self, host_id: UUID) -> str:
-        return self.credentials[host_id]
+    def private_key_for(self, host_id: UUID) -> str:
+        return self.private_keys[host_id]
 
     def page_of(self, *, page: int, page_size: int) -> tuple[list[InferenceHost], int]:
         ordered = sorted(
@@ -126,6 +159,9 @@ class FakePendingCommands(PendingCommandRepository):
     rows: dict[UUID, PendingCommand] = field(default_factory=dict)
 
     def by_id(self, command_id: UUID) -> PendingCommand | None:
+        return self.rows.get(command_id)
+
+    def by_id_for_update(self, command_id: UUID) -> PendingCommand | None:
         return self.rows.get(command_id)
 
     def by_idempotency_key(self, key: str) -> PendingCommand | None:
@@ -204,6 +240,8 @@ class FakePendingCommands(PendingCommandRepository):
                 and command.result == completion.result
                 and command.result_detail == completion.result_detail
                 and command.failure_code == completion.failure_code
+                and command.result_credentials_configured
+                == completion.result_credentials_configured
             ):
                 return command
             raise DeviceRefusedError(DeviceRefusalCode.COMMAND_ALREADY_COMPLETED)
@@ -219,6 +257,7 @@ class FakePendingCommands(PendingCommandRepository):
             result=completion.result,
             result_detail=completion.result_detail,
             failure_code=completion.failure_code,
+            result_credentials_configured=completion.result_credentials_configured,
             completed_at=completion.completed_at,
             updated_at=completion.completed_at,
         )

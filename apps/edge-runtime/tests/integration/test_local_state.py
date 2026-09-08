@@ -49,10 +49,21 @@ from edge_runtime.judgment.model import (
     Lifecycle,
 )
 from edge_runtime.judgment.reasons import ReasonCode, Verdict
-from edge_runtime.local_state import open_local_state, resume_station
+from edge_runtime.local_state import open_local_state
 from edge_runtime.local_state.schema import apply_migrations
+from edge_runtime.local_state.store import StationStore
 from edge_runtime.supervisor.inputs import StreamHealthObserved
-from edge_runtime.supervisor.station import Reaction
+from edge_runtime.supervisor.startup import resume_station
+from edge_runtime.supervisor.station import Reaction, StationSupervisor
+
+
+def commit_reaction(station: StationStore, driver: StationSupervisor, reaction: Reaction) -> None:
+    """通过持久化 seam 提交 supervisor 产生的领域状态和效果。"""
+    station.commit(
+        state=driver.state,
+        commands=reaction.commands,
+        closed_instances=reaction.closed_instances,
+    )
 
 
 class OneTransactionTest(unittest.TestCase):
@@ -69,10 +80,10 @@ class OneTransactionTest(unittest.TestCase):
         station = state.station(STATION)
         driver = supervisor(opening_state(), clock)
 
-        station.commit(driver, driver.receive(action(STEPS[0], at=ANCHOR)))
+        commit_reaction(station, driver, driver.receive(action(STEPS[0], at=ANCHOR)))
 
         reaction = driver.receive(action(STEPS[2], at=ANCHOR + 1.0))
-        station.commit(driver, reaction)
+        commit_reaction(station, driver, reaction)
 
         decision = decision_of(reaction)
         (pending,) = station.pending_reports()
@@ -109,7 +120,7 @@ class OneTransactionTest(unittest.TestCase):
 
         scrambled = Reaction(commands=tuple(reversed(reaction.commands)), wake_at=reaction.wake_at)
         with self.assertRaises(ValueError):
-            station.commit(driver, scrambled)
+            commit_reaction(station, driver, scrambled)
 
         self.assertEqual(station.pending_reports(), ())
         self.assertEqual(station.pending_evidence(), ())
@@ -149,7 +160,7 @@ class LatchSurvivesTest(unittest.TestCase):
         driver = supervisor(opening_state(), clock)
 
         for arriving in (action(STEPS[0], at=ANCHOR), action(STEPS[2], at=ANCHOR + 1.0)):
-            station.commit(driver, driver.receive(arriving))
+            commit_reaction(station, driver, driver.receive(arriving))
         confirmed = station.latched_violations(instance_id=1)
         self.assertEqual(
             {(violation.reason, violation.steps) for violation in confirmed},
@@ -162,11 +173,13 @@ class LatchSurvivesTest(unittest.TestCase):
         # Sight is lost, and then the operator goes back and does the step that was missed.
         # The pass therefore closes indeterminate — we could not see all of it — while the
         # deviations confirmed while we could see stay confirmed (§5.2).
-        station.commit(
-            driver, driver.receive(StreamHealthObserved(event=lost_stream(at=ANCHOR + 2.0)))
+        commit_reaction(
+            station,
+            driver,
+            driver.receive(StreamHealthObserved(event=lost_stream(at=ANCHOR + 2.0))),
         )
         closing = driver.receive(action(STEPS[1], at=ANCHOR + 3.0))
-        station.commit(driver, closing)
+        commit_reaction(station, driver, closing)
 
         decision = decision_of(closing)
         self.assertEqual(decision.verdict, Verdict.INDETERMINATE)
@@ -206,7 +219,8 @@ class RestartTest(unittest.TestCase):
 
             first = open_local_state(path)
             driver = supervisor(opening_state(), FakeClock())
-            first.station(STATION).commit(driver, driver.receive(action(STEPS[0], at=ANCHOR)))
+            first_station = first.station(STATION)
+            commit_reaction(first_station, driver, driver.receive(action(STEPS[0], at=ANCHOR)))
             self.assertEqual(driver.state.instance.instance_id if driver.state.instance else 0, 1)
             first.close()
 
@@ -237,7 +251,7 @@ class RestartTest(unittest.TestCase):
             )
 
             # The next pass is a new instance, not a continuation of the interrupted one.
-            station.commit(resumed, resumed.receive(action(STEPS[0], at=ANCHOR + 61.0)))
+            commit_reaction(station, resumed, resumed.receive(action(STEPS[0], at=ANCHOR + 61.0)))
             self.assertEqual(resumed.state.instance.instance_id if resumed.state.instance else 0, 2)
             second.close()
 
@@ -255,8 +269,8 @@ class QueueRetryTest(unittest.TestCase):
         self.state = open_local_state(":memory:")
         self.station = self.state.station(STATION)
         driver = supervisor(opening_state(), FakeClock())
-        self.station.commit(driver, driver.receive(action(STEPS[0], at=ANCHOR)))
-        self.station.commit(driver, driver.receive(action(STEPS[2], at=ANCHOR + 1.0)))
+        commit_reaction(self.station, driver, driver.receive(action(STEPS[0], at=ANCHOR)))
+        commit_reaction(self.station, driver, driver.receive(action(STEPS[2], at=ANCHOR + 1.0)))
 
     def test_repeated_failures_keep_both_queues_owed_and_only_count_attempts(self) -> None:
         (report,) = self.station.pending_reports()
@@ -327,10 +341,10 @@ class EvidenceWindowTest(unittest.TestCase):
         clock = FakeClock()
         station = open_local_state(":memory:").station(STATION)
         driver = supervisor(opening_state(), clock)
-        station.commit(driver, driver.receive(action(STEPS[0], at=ANCHOR)))
+        commit_reaction(station, driver, driver.receive(action(STEPS[0], at=ANCHOR)))
 
         clock.now = ANCHOR + STEP_DEADLINE + 1.0
-        station.commit(driver, driver.wake(host=HostLiveness.ALIVE))
+        commit_reaction(station, driver, driver.wake(host=HostLiveness.ALIVE))
 
         (clip,) = station.pending_evidence()
         self.assertEqual(

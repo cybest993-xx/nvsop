@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import secrets
+from collections.abc import Mapping
 from dataclasses import replace
+from time import time
 from typing import Any
 from uuid import UUID
 
@@ -30,10 +33,10 @@ from factory_sop.device.model import (
     PendingCommandType,
 )
 from factory_sop.settings import Settings
+from nvsop_contracts import HostIdentityRequest, sign_host_identity_request
 
 COMMANDS = f"{API_PREFIX}/device-commands"
 CONNECTORS = f"{API_PREFIX}/connectors"
-EDGE_TOKEN_HEADER = "X-Inference-Host-Token"
 ALL_PERMISSIONS = frozenset(
     {
         Permission.CONNECTOR_VIEW,
@@ -93,13 +96,58 @@ class Center:
         return {CSRF_HEADER: self.client.cookies[CSRF_COOKIE], **extra}
 
     def edge_headers(
-        self, host_id: UUID, host_token: str | None = None, **extra: str
+        self,
+        host_id: UUID,
+        *,
+        method: str,
+        path: str,
+        body: Mapping[str, object] | None = None,
+        private_key: str | None = None,
+        **extra: str,
     ) -> dict[str, str]:
+        timestamp = int(time())
+        request = HostIdentityRequest(
+            method=method,
+            path=path,
+            host_id=str(host_id),
+            timestamp=timestamp,
+            nonce=secrets.token_urlsafe(12),
+            body=body,
+        )
         return {
             "X-Inference-Host-ID": str(host_id),
-            EDGE_TOKEN_HEADER: host_token or self.hosts.credential_for(host_id),
+            "X-Inference-Host-Timestamp": str(timestamp),
+            "X-Inference-Host-Nonce": request.nonce,
+            "X-Inference-Host-Signature": sign_host_identity_request(
+                request,
+                private_key=private_key or self.hosts.private_key_for(host_id),
+            ),
             **extra,
         }
+
+    def edge_request(
+        self,
+        method: str,
+        path: str,
+        host_id: UUID,
+        *,
+        json: dict[str, object] | None = None,
+        private_key: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> HttpResponse:
+        return self.edge.request(
+            method,
+            path,
+            headers=self.edge_headers(
+                host_id,
+                method=method,
+                path=path,
+                body=json,
+                private_key=private_key,
+                **(headers or {}),
+            ),
+            json=json,
+        )
 
     def send_operator(
         self,
@@ -185,10 +233,10 @@ def test_only_the_target_host_can_pull_and_report_a_real_result(center: Center) 
         headers={"Idempotency-Key": "host-isolation-1"},
     ).json()
 
-    other_claim = center.edge.get(f"{COMMANDS}/next", headers=center.edge_headers(other.id))
+    other_claim = center.edge_request("GET", f"{COMMANDS}/next", other.id)
     assert other_claim.status_code == 204
 
-    claimed = center.edge.get(f"{COMMANDS}/next", headers=center.edge_headers(owner.id))
+    claimed = center.edge_request("GET", f"{COMMANDS}/next", owner.id)
     assert claimed.status_code == 200, claimed.text
     claim_body = claimed.json()
     expected_claim = ConnectionTestClaimDocument(
@@ -206,11 +254,11 @@ def test_only_the_target_host_can_pull_and_report_a_real_result(center: Center) 
     assert claim_body == expected_claim.model_dump(mode="json")
     assert "password" not in claimed.text.lower()
 
-    rejected_report = center.edge.post(
+    rejected_report = center.edge_request(
+        "POST",
         f"{COMMANDS}/{queued['id']}/result",
-        headers=center.edge_headers(
-            other.id, **{"X-Command-Claim-Token": claim_body["claim_token"]}
-        ),
+        other.id,
+        headers={"X-Command-Claim-Token": claim_body["claim_token"]},
         json={
             "outcome": "reachable",
             "detail": None,
@@ -222,12 +270,11 @@ def test_only_the_target_host_can_pull_and_report_a_real_result(center: Center) 
     assert rejected_report.json()["error_code"] == "COMMAND_HOST_MISMATCH"
     assert center.connectors.by_id(connector.id) == connector
 
-    completed = center.edge.post(
+    completed = center.edge_request(
+        "POST",
         f"{COMMANDS}/{queued['id']}/result",
-        headers=center.edge_headers(
-            owner.id,
-            **{"X-Command-Claim-Token": claim_body["claim_token"]},
-        ),
+        owner.id,
+        headers={"X-Command-Claim-Token": claim_body["claim_token"]},
         json={
             "outcome": "reachable",
             "detail": None,
@@ -241,6 +288,35 @@ def test_only_the_target_host_can_pull_and_report_a_real_result(center: Center) 
     assert updated is not None
     assert updated.reachability is ConnectorReachability.REACHABLE
     assert updated.credentials_configured is True
+
+
+def test_non_rejected_report_requires_configured_credentials(center: Center) -> None:
+    owner = center.hosts.register(name="推理机 A")
+    connector = _connector(center, owner.id)
+    queued = center.send_operator(
+        "POST",
+        f"{CONNECTORS}/{connector.id}/connection-test",
+        headers={"Idempotency-Key": "missing-credential-flag-1"},
+    ).json()
+    claim = center.edge_request("GET", f"{COMMANDS}/next", owner.id).json()
+
+    response = center.edge_request(
+        "POST",
+        f"{COMMANDS}/{queued['id']}/result",
+        owner.id,
+        headers={"X-Command-Claim-Token": claim["claim_token"]},
+        json={
+            "outcome": "reachable",
+            "detail": None,
+            "credentials_configured": None,
+            "failure_code": None,
+        },
+    )
+
+    assert response.status_code == 422
+    stored = center.commands.by_id(UUID(queued["id"]))
+    assert stored is not None
+    assert stored.status is PendingCommandStatus.CLAIMED
 
 
 def test_changed_connector_revision_is_rejected_before_command_delivery(center: Center) -> None:
@@ -258,7 +334,7 @@ def test_changed_connector_revision_is_rejected_before_command_delivery(center: 
         revision=2,
     )
 
-    claim = center.edge.get(f"{COMMANDS}/next", headers=center.edge_headers(owner.id))
+    claim = center.edge_request("GET", f"{COMMANDS}/next", owner.id)
     assert claim.status_code == 204
 
     status = center.send_operator("GET", f"{COMMANDS}/{queued['id']}")
@@ -266,6 +342,22 @@ def test_changed_connector_revision_is_rejected_before_command_delivery(center: 
     assert status.json()["status"] == "rejected"
     assert status.json()["failure_code"] == "COMMAND_CONFIGURATION_CHANGED"
     assert status.json()["result"] is None
+
+
+def test_replaying_the_same_signed_claim_request_is_refused(center: Center) -> None:
+    owner = center.hosts.register(name="推理机 A")
+    headers = center.edge_headers(
+        owner.id,
+        method="GET",
+        path=f"{COMMANDS}/next",
+    )
+
+    first = center.edge.get(f"{COMMANDS}/next", headers=headers)
+    replay = center.edge.get(f"{COMMANDS}/next", headers=headers)
+
+    assert first.status_code == 204
+    assert replay.status_code == 401
+    assert replay.json()["error_code"] == "INFERENCE_HOST_AUTHENTICATION_FAILED"
 
 
 def test_missing_host_credential_cannot_claim_a_command(center: Center) -> None:
@@ -286,6 +378,42 @@ def test_missing_host_credential_cannot_claim_a_command(center: Center) -> None:
     assert response.json()["error_code"] == "INFERENCE_HOST_AUTHENTICATION_FAILED"
 
 
+def test_a_signed_result_cannot_be_reused_for_a_different_body(center: Center) -> None:
+    owner = center.hosts.register(name="推理机 A")
+    connector = _connector(center, owner.id)
+    queued = center.send_operator(
+        "POST",
+        f"{CONNECTORS}/{connector.id}/connection-test",
+        headers={"Idempotency-Key": "signed-body-1"},
+    ).json()
+    claim = center.edge_request("GET", f"{COMMANDS}/next", owner.id).json()
+    result = {
+        "outcome": "reachable",
+        "detail": None,
+        "credentials_configured": True,
+        "failure_code": None,
+    }
+    headers = center.edge_headers(
+        owner.id,
+        method="POST",
+        path=f"{COMMANDS}/{queued['id']}/result",
+        body=result,
+        **{"X-Command-Claim-Token": claim["claim_token"]},
+    )
+
+    tampered = center.edge.post(
+        f"{COMMANDS}/{queued['id']}/result",
+        headers=headers,
+        json={**result, "outcome": "unreachable"},
+    )
+
+    assert tampered.status_code == 401
+    assert tampered.json()["error_code"] == "INFERENCE_HOST_AUTHENTICATION_FAILED"
+    stored = center.commands.by_id(UUID(queued["id"]))
+    assert stored is not None
+    assert stored.status is PendingCommandStatus.CLAIMED
+
+
 def test_missing_host_credential_cannot_report_a_command(center: Center) -> None:
     owner = center.hosts.register(name="推理机 A")
     connector = _connector(center, owner.id)
@@ -294,7 +422,7 @@ def test_missing_host_credential_cannot_report_a_command(center: Center) -> None
         f"{CONNECTORS}/{connector.id}/connection-test",
         headers={"Idempotency-Key": "missing-report-credential-1"},
     ).json()
-    claim = center.edge.get(f"{COMMANDS}/next", headers=center.edge_headers(owner.id)).json()
+    claim = center.edge_request("GET", f"{COMMANDS}/next", owner.id).json()
 
     response = center.edge.post(
         f"{COMMANDS}/{queued['id']}/result",
@@ -326,9 +454,11 @@ def test_a_host_credential_cannot_be_used_to_claim_another_host_command(
         headers={"Idempotency-Key": "credential-isolation-1"},
     )
 
-    forged = center.edge.get(
+    forged = center.edge_request(
+        "GET",
         f"{COMMANDS}/next",
-        headers=center.edge_headers(owner.id, center.hosts.credential_for(other.id)),
+        owner.id,
+        private_key=center.hosts.private_key_for(other.id),
     )
 
     assert forged.status_code == 401
@@ -346,13 +476,12 @@ def test_an_editor_without_view_cannot_read_a_completed_result_through_idempoten
         f"{CONNECTORS}/{connector.id}/connection-test",
         headers={"Idempotency-Key": key},
     ).json()
-    claim = center.edge.get(f"{COMMANDS}/next", headers=center.edge_headers(owner.id)).json()
-    completed = center.edge.post(
+    claim = center.edge_request("GET", f"{COMMANDS}/next", owner.id).json()
+    completed = center.edge_request(
+        "POST",
         f"{COMMANDS}/{queued['id']}/result",
-        headers=center.edge_headers(
-            owner.id,
-            **{"X-Command-Claim-Token": claim["claim_token"]},
-        ),
+        owner.id,
+        headers={"X-Command-Claim-Token": claim["claim_token"]},
         json={
             "outcome": "unreachable",
             "detail": "真实设备拒绝连接",
@@ -375,6 +504,7 @@ def test_an_editor_without_view_cannot_read_a_completed_result_through_idempoten
         "result": None,
         "result_detail": None,
         "failure_code": None,
+        "result_credentials_configured": None,
         "completed_at": completed.json()["completed_at"],
     }
 
@@ -408,14 +538,13 @@ def test_rejected_edge_result_is_visible_without_changing_connector_status(cente
         f"{CONNECTORS}/{connector.id}/connection-test",
         headers={"Idempotency-Key": "rejection-visible-1"},
     ).json()
-    claim = center.edge.get(f"{COMMANDS}/next", headers=center.edge_headers(owner.id)).json()
+    claim = center.edge_request("GET", f"{COMMANDS}/next", owner.id).json()
 
-    rejected = center.edge.post(
+    rejected = center.edge_request(
+        "POST",
         f"{COMMANDS}/{queued['id']}/result",
-        headers=center.edge_headers(
-            owner.id,
-            **{"X-Command-Claim-Token": claim["claim_token"]},
-        ),
+        owner.id,
+        headers={"X-Command-Claim-Token": claim["claim_token"]},
         json={
             "outcome": "rejected",
             "detail": "推理机未配置该连接器凭据",

@@ -30,6 +30,7 @@ from edge_runtime.judgment.model import (
     Event,
     HostInstant,
     HostLiveness,
+    Instance,
     JudgmentState,
     RunInterrupted,
     TimerFired,
@@ -48,6 +49,8 @@ class Reaction:
 
     commands: tuple[Command, ...]
     wake_at: HostInstant | None
+    closed_instances: tuple[Instance, ...] = ()
+    """本次反应闭合前的完整实例快照, 供本地状态在判定前建立父行。"""
 
 
 class StationSupervisor:
@@ -141,10 +144,16 @@ class StationSupervisor:
         which is how arming, rearming and cancelling are all one line.
         """
         commands: list[Command] = []
+        closed_instances: list[Instance] = []
         for event in events:
             outcome = advance(self._state, event)
             self._state = outcome.state
             self._deadline = outcome.wake_at
+            closed_instances.extend(outcome.closed_instances)
             for decision in outcome.decisions:
                 commands.extend(commands_for(decision, margins=self._margins))
-        return Reaction(commands=tuple(commands), wake_at=self._deadline)
+        return Reaction(
+            commands=tuple(commands),
+            wake_at=self._deadline,
+            closed_instances=tuple(closed_instances),
+        )

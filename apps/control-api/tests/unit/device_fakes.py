@@ -9,11 +9,12 @@ behavior the database would refuse.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from uuid import UUID
 
 from factory_sop.device.errors import DeviceRefusalCode, DeviceRefusedError
+from factory_sop.device.host_credentials import fingerprint
 from factory_sop.device.model import (
     Camera,
     ConnectionState,
@@ -24,11 +25,15 @@ from factory_sop.device.model import (
     DeviceStatus,
     InferenceBackend,
     InferenceHost,
+    PendingCommand,
+    PendingCommandCompletion,
+    PendingCommandStatus,
     Point,
     PointDirection,
     Station,
 )
 from factory_sop.device.probing import ProbeReport
+from factory_sop.device.repository import PendingCommandRepository
 from factory_sop.identifiers import new_id
 from nvsop_contracts import Capability, Unverified
 
@@ -41,6 +46,7 @@ class FakeInferenceHosts:
     """An `InferenceHostRepository` over a dict."""
 
     rows: dict[UUID, InferenceHost] = field(default_factory=dict)
+    credentials: dict[UUID, str] = field(default_factory=dict)
 
     def register(
         self,
@@ -54,6 +60,7 @@ class FakeInferenceHosts:
         created_at: datetime = FAKE_NOW,
     ) -> InferenceHost:
         """Build a host for a use-case test and store it."""
+        host_credential = f"test-host-credential-{len(self.rows) + 1}"
         host = InferenceHost(
             id=new_id(),
             name=name,
@@ -67,8 +74,10 @@ class FakeInferenceHosts:
             updated_by=FAKE_ACTOR,
             created_at=created_at,
             updated_at=created_at,
+            credential_hash=fingerprint(credential=host_credential),
         )
         self.add(host)
+        self.credentials[host.id] = host_credential
         return host
 
     def add(self, host: InferenceHost) -> None:
@@ -96,7 +105,11 @@ class FakeInferenceHosts:
         if stored.revision != expected_revision:
             raise DeviceRefusedError(DeviceRefusalCode.STALE_REVISION)
         del self.rows[host_id]
+        self.credentials.pop(host_id, None)
         return True
+
+    def credential_for(self, host_id: UUID) -> str:
+        return self.credentials[host_id]
 
     def page_of(self, *, page: int, page_size: int) -> tuple[list[InferenceHost], int]:
         ordered = sorted(
@@ -104,6 +117,113 @@ class FakeInferenceHosts:
         )
         start = (page - 1) * page_size
         return ordered[start : start + page_size], len(ordered)
+
+
+@dataclass
+class FakePendingCommands(PendingCommandRepository):
+    """命令仓储接缝的内存实现，包含租约回收和原子幂等插入。"""
+
+    rows: dict[UUID, PendingCommand] = field(default_factory=dict)
+
+    def by_id(self, command_id: UUID) -> PendingCommand | None:
+        return self.rows.get(command_id)
+
+    def by_idempotency_key(self, key: str) -> PendingCommand | None:
+        return next((item for item in self.rows.values() if item.idempotency_key == key), None)
+
+    def add(self, command: PendingCommand) -> None:
+        if self.by_idempotency_key(command.idempotency_key) is not None:
+            raise DeviceRefusedError(DeviceRefusalCode.COMMAND_IDEMPOTENCY_CONFLICT)
+        self.rows[command.id] = command
+
+    def add_or_get(self, command: PendingCommand) -> PendingCommand:
+        existing = self.by_idempotency_key(command.idempotency_key)
+        if existing is not None:
+            return existing
+        self.rows[command.id] = command
+        return command
+
+    def claim_next(
+        self,
+        *,
+        host_id: UUID,
+        claim_token: str,
+        claimed_at: datetime,
+        lease_expires_at: datetime,
+    ) -> PendingCommand | None:
+        for command in self.rows.values():
+            if (
+                command.status is PendingCommandStatus.CLAIMED
+                and command.lease_expires_at is not None
+                and command.lease_expires_at <= claimed_at
+            ):
+                self.rows[command.id] = replace(
+                    command,
+                    status=PendingCommandStatus.PENDING,
+                    claim_token=None,
+                    claimed_at=None,
+                    lease_expires_at=None,
+                    updated_at=claimed_at,
+                )
+        pending = sorted(
+            (
+                command
+                for command in self.rows.values()
+                if command.host_id == host_id and command.status is PendingCommandStatus.PENDING
+            ),
+            key=lambda item: (item.created_at, item.id),
+        )
+        if not pending:
+            return None
+        command = pending[0]
+        claimed = replace(
+            command,
+            status=PendingCommandStatus.CLAIMED,
+            attempt=command.attempt + 1,
+            claim_token=claim_token,
+            claimed_at=claimed_at,
+            lease_expires_at=lease_expires_at,
+            updated_at=claimed_at,
+        )
+        self.rows[command.id] = claimed
+        return claimed
+
+    def complete(self, completion: PendingCommandCompletion) -> PendingCommand:
+        command = self.rows.get(completion.command_id)
+        if command is None:
+            raise DeviceRefusedError(DeviceRefusalCode.COMMAND_NOT_FOUND)
+        if command.host_id != completion.host_id:
+            raise DeviceRefusedError(DeviceRefusalCode.COMMAND_HOST_MISMATCH)
+        if command.status in {
+            PendingCommandStatus.SUCCEEDED,
+            PendingCommandStatus.FAILED,
+            PendingCommandStatus.REJECTED,
+        }:
+            if (
+                command.claim_token == completion.claim_token
+                and command.result == completion.result
+                and command.result_detail == completion.result_detail
+                and command.failure_code == completion.failure_code
+            ):
+                return command
+            raise DeviceRefusedError(DeviceRefusalCode.COMMAND_ALREADY_COMPLETED)
+        if command.status is not PendingCommandStatus.CLAIMED:
+            raise DeviceRefusedError(DeviceRefusalCode.COMMAND_CLAIM_REQUIRED)
+        if command.claim_token != completion.claim_token:
+            raise DeviceRefusedError(DeviceRefusalCode.COMMAND_CLAIM_TOKEN_INVALID)
+        if command.lease_expires_at is None or completion.completed_at >= command.lease_expires_at:
+            raise DeviceRefusedError(DeviceRefusalCode.COMMAND_CLAIM_EXPIRED)
+        completed = replace(
+            command,
+            status=completion.status,
+            result=completion.result,
+            result_detail=completion.result_detail,
+            failure_code=completion.failure_code,
+            completed_at=completion.completed_at,
+            updated_at=completion.completed_at,
+        )
+        self.rows[command.id] = completed
+        return completed
 
 
 @dataclass

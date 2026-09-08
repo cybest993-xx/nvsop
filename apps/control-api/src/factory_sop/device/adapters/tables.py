@@ -45,6 +45,9 @@ from factory_sop.device.model import (
     DeviceStatus,
     InferenceBackend,
     InferenceHost,
+    PendingCommand,
+    PendingCommandStatus,
+    PendingCommandType,
     Point,
     PointDirection,
     Station,
@@ -97,6 +100,7 @@ class InferenceHostRow(Table):
     # comparison the use cases make.
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    credential_hash: Mapped[str] = mapped_column(String(64), server_default="")
 
     def to_domain(self) -> InferenceHost:
         return InferenceHost(
@@ -112,6 +116,7 @@ class InferenceHostRow(Table):
             updated_by=self.updated_by,
             created_at=self.created_at,
             updated_at=self.updated_at,
+            credential_hash=self.credential_hash,
         )
 
     @classmethod
@@ -129,6 +134,7 @@ class InferenceHostRow(Table):
             updated_by=host.updated_by,
             created_at=host.created_at,
             updated_at=host.updated_at,
+            credential_hash=host.credential_hash,
         )
 
 
@@ -473,4 +479,100 @@ class PointRow(Table):
             updated_by=point.updated_by,
             created_at=point.created_at,
             updated_at=point.updated_at,
+        )
+
+
+class PendingCommandRow(Table):
+    """中心委托给推理机的命令，不保存设备凭据。"""
+
+    __tablename__ = "device_pending_command"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_device_pending_command_idempotency_key"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
+    host_id: Mapped[UUID] = mapped_column(
+        Uuid(), ForeignKey("device_inference_host.id"), index=True
+    )
+    command_type: Mapped[PendingCommandType] = mapped_column(
+        Enum(
+            PendingCommandType,
+            name="device_pending_command_type",
+            values_callable=lambda enum: [member.value for member in enum],
+        )
+    )
+    # 目标 ID 按命令类型解释；不加外键，为后续再切片命令保留同一队列。
+    target_id: Mapped[UUID] = mapped_column(Uuid(), index=True)
+    target_revision: Mapped[int] = mapped_column(Integer())
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    status: Mapped[PendingCommandStatus] = mapped_column(
+        Enum(
+            PendingCommandStatus,
+            name="device_pending_command_status",
+            values_callable=lambda enum: [member.value for member in enum],
+        ),
+        index=True,
+    )
+    attempt: Mapped[int] = mapped_column(Integer())
+    claim_token: Mapped[str | None] = mapped_column(String(128))
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    result: Mapped[ConnectorReachability | None] = mapped_column(
+        Enum(
+            ConnectorReachability,
+            name="device_connector_reachability",
+            values_callable=lambda enum: [member.value for member in enum],
+            create_type=False,
+        )
+    )
+    result_detail: Mapped[str | None] = mapped_column(String(255))
+    failure_code: Mapped[str | None] = mapped_column(String(64))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[UUID] = mapped_column(Uuid())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    def to_domain(self) -> PendingCommand:
+        return PendingCommand(
+            id=self.id,
+            host_id=self.host_id,
+            command_type=self.command_type,
+            target_id=self.target_id,
+            target_revision=self.target_revision,
+            idempotency_key=self.idempotency_key,
+            status=self.status,
+            attempt=self.attempt,
+            claim_token=self.claim_token,
+            claimed_at=self.claimed_at,
+            lease_expires_at=self.lease_expires_at,
+            result=self.result,
+            result_detail=self.result_detail,
+            failure_code=self.failure_code,
+            completed_at=self.completed_at,
+            created_by=self.created_by,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+        )
+
+    @classmethod
+    def from_domain(cls, command: PendingCommand) -> PendingCommandRow:
+        return cls(
+            id=command.id,
+            host_id=command.host_id,
+            command_type=command.command_type,
+            target_id=command.target_id,
+            target_revision=command.target_revision,
+            idempotency_key=command.idempotency_key,
+            status=command.status,
+            attempt=command.attempt,
+            claim_token=command.claim_token,
+            claimed_at=command.claimed_at,
+            lease_expires_at=command.lease_expires_at,
+            result=command.result,
+            result_detail=command.result_detail,
+            failure_code=command.failure_code,
+            completed_at=command.completed_at,
+            created_by=command.created_by,
+            created_at=command.created_at,
+            updated_at=command.updated_at,
         )

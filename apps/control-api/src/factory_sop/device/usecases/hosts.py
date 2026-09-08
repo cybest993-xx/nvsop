@@ -14,6 +14,7 @@ from uuid import UUID
 
 from factory_sop.auth.api import Caller, Permission, authorize
 from factory_sop.device.errors import DeviceRefusalCode
+from factory_sop.device.host_credentials import IssuedInferenceHostCredential
 from factory_sop.device.model import DeviceStatus, InferenceHost
 from factory_sop.device.repository import (
     ConnectorRepository,
@@ -107,6 +108,35 @@ def edit_host(
         "device.inference_host.updated", host_id=str(host.id), actor_id=str(caller.user.id)
     )
     return edited
+
+
+def rotate_host_credential(
+    *,
+    host_id: UUID,
+    expected_revision: int,
+    caller: Caller,
+    now: datetime,
+    hosts: InferenceHostRepository,
+) -> tuple[InferenceHost, IssuedInferenceHostCredential]:
+    """轮换推理机控制面凭据，明文只返回给本次已授权的操作员。"""
+    authorize(caller, Permission.INFERENCE_HOST_EDIT)
+    host = _existing_host(host_id, hosts)
+    _require_revision(host, expected_revision)
+    issued = IssuedInferenceHostCredential.issue()
+    rotated = replace(
+        host,
+        credential_hash=issued.fingerprint,
+        revision=expected_revision + 1,
+        updated_by=caller.user.id,
+        updated_at=now,
+    )
+    hosts.save(rotated, expected_revision=expected_revision)
+    _logger.info(
+        "device.inference_host.credential_rotated",
+        host_id=str(host.id),
+        actor_id=str(caller.user.id),
+    )
+    return rotated, issued
 
 
 def deactivate_host(

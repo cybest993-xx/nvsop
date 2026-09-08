@@ -15,6 +15,7 @@ The lookup names say what they match: `by_id` is the row's UUID (§5.15's URL id
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
@@ -23,6 +24,8 @@ from factory_sop.device.model import (
     Connector,
     InferenceBackend,
     InferenceHost,
+    PendingCommand,
+    PendingCommandCompletion,
     Point,
     Station,
 )
@@ -229,4 +232,39 @@ class ConnectorRepository(Protocol):
         self, *, page: int, page_size: int, station_id: UUID | None
     ) -> tuple[list[Connector], int]:
         """按创建时间倒序列出连接器，可按工位筛选。"""
+        ...
+
+
+class PendingCommandRepository(Protocol):
+    """`device_pending_command`，保存中心委托给推理机的设备命令。"""
+
+    def by_id(self, command_id: UUID) -> PendingCommand | None:
+        """按公开命令 UUID 读取状态，供操作员查看结果。"""
+        ...
+
+    def by_idempotency_key(self, key: str) -> PendingCommand | None:
+        """按幂等键读取已有命令，重复请求不得再创建一条。"""
+        ...
+
+    def add(self, command: PendingCommand) -> None:
+        """持久化新命令；供非幂等的内部安排使用。"""
+        ...
+
+    def add_or_get(self, command: PendingCommand) -> PendingCommand:
+        """原子插入幂等命令，并返回并发竞争中的唯一已持久化命令。"""
+        ...
+
+    def claim_next(
+        self,
+        *,
+        host_id: UUID,
+        claim_token: str,
+        claimed_at: datetime,
+        lease_expires_at: datetime,
+    ) -> PendingCommand | None:
+        """原子领取该推理机的一条命令，并回收已过期的旧领取。"""
+        ...
+
+    def complete(self, completion: PendingCommandCompletion) -> PendingCommand:
+        """以完整完成上下文回报一次结果，拒绝迟到或他机回报。"""
         ...

@@ -30,6 +30,14 @@ class DeviceStatus(StrEnum):
     DEACTIVATED = "deactivated"
 
 
+@dataclass(frozen=True, slots=True)
+class InferenceHostIdentity:
+    """请求呈现的推理机标识和独立凭据，认证通过前不代表可信身份。"""
+
+    host_id: UUID
+    credential: str | None
+
+
 class ConnectionState(StrEnum):
     """What the last real connection test observed about a backend's endpoint.
 
@@ -80,8 +88,12 @@ class InferenceHost:
     updated_by: UUID
     created_at: datetime
     updated_at: datetime
+    # 中心只保存指纹；空值表示尚未为该推理机完成控制面凭据配置。
+    credential_hash: str = ""
 
     def __post_init__(self) -> None:
+        if self.credential_hash and len(self.credential_hash) != 64:
+            raise ValueError("inference host credential hash must be a SHA-256 digest")
         if self.recording_window_seconds <= 0:
             raise ValueError("recording_window_seconds must be greater than zero")
         if not 1 <= self.disk_watermark_percent <= 99:
@@ -341,3 +353,79 @@ class BindingValidation:
 
     accepted: bool
     reasons: tuple[BindingReason, ...]
+
+
+class PendingCommandType(StrEnum):
+    """推理机从中心领取的设备命令类型。"""
+
+    TEST_CONNECTOR_CONNECTION = "test_connector_connection"
+
+
+class PendingCommandStatus(StrEnum):
+    """持久委托命令的生命周期状态。"""
+
+    PENDING = "pending"
+    CLAIMED = "claimed"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    REJECTED = "rejected"
+
+
+@dataclass(frozen=True, slots=True)
+class PendingCommand:
+    """一条不含凭据的委托命令及其领取租约和真实结果。"""
+
+    id: UUID
+    host_id: UUID
+    command_type: PendingCommandType
+    target_id: UUID
+    target_revision: int
+    idempotency_key: str
+    status: PendingCommandStatus
+    attempt: int
+    claim_token: str | None
+    claimed_at: datetime | None
+    lease_expires_at: datetime | None
+    result: ConnectorReachability | None
+    result_detail: str | None
+    failure_code: str | None
+    completed_at: datetime | None
+    created_by: UUID
+    created_at: datetime
+    updated_at: datetime
+
+    def __post_init__(self) -> None:
+        if not self.idempotency_key or len(self.idempotency_key) > 128:
+            raise ValueError("command idempotency_key must be between 1 and 128 characters")
+        if self.target_revision < 1:
+            raise ValueError("command target_revision must be positive")
+        if self.attempt < 0:
+            raise ValueError("command attempt must not be negative")
+
+
+@dataclass(frozen=True, slots=True)
+class PendingCommandCompletion:
+    """一次命令完成写入的完整上下文，避免调用方拆散同一组字段。"""
+
+    command_id: UUID
+    host_id: UUID
+    claim_token: str
+    status: PendingCommandStatus
+    result: ConnectorReachability | None
+    result_detail: str | None
+    failure_code: str | None
+    completed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectorTestResult:
+    """推理机真实连接测试的可持久化结果，不携带设备凭据。"""
+
+    reachability: ConnectorReachability | None
+    detail: str | None = None
+    credentials_configured: bool | None = None
+    failure_code: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.reachability is None and not self.failure_code:
+            raise ValueError("a rejected connection test must carry a failure code")

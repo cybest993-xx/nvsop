@@ -18,6 +18,7 @@ class DeviceRefusalCode(StrEnum):
     INFERENCE_HOST_NOT_FOUND = "INFERENCE_HOST_NOT_FOUND"
     INFERENCE_HOST_NAME_TAKEN = "INFERENCE_HOST_NAME_TAKEN"
     INFERENCE_HOST_DEACTIVATED = "INFERENCE_HOST_DEACTIVATED"
+    INFERENCE_HOST_AUTHENTICATION_FAILED = "INFERENCE_HOST_AUTHENTICATION_FAILED"
     INFERENCE_HOST_HAS_BACKENDS = "INFERENCE_HOST_HAS_BACKENDS"
     INFERENCE_BACKEND_NOT_FOUND = "INFERENCE_BACKEND_NOT_FOUND"
     INFERENCE_BACKEND_DEACTIVATED = "INFERENCE_BACKEND_DEACTIVATED"
@@ -46,6 +47,16 @@ class DeviceRefusalCode(StrEnum):
     STATION_HAS_CONNECTORS = "STATION_HAS_CONNECTORS"
     INFERENCE_HOST_HAS_CONNECTORS = "INFERENCE_HOST_HAS_CONNECTORS"
     STALE_REVISION = "STALE_REVISION"
+    COMMAND_NOT_FOUND = "COMMAND_NOT_FOUND"
+    COMMAND_HOST_MISMATCH = "COMMAND_HOST_MISMATCH"
+    COMMAND_CLAIM_REQUIRED = "COMMAND_CLAIM_REQUIRED"
+    COMMAND_CLAIM_EXPIRED = "COMMAND_CLAIM_EXPIRED"
+    COMMAND_CLAIM_TOKEN_INVALID = "COMMAND_CLAIM_TOKEN_INVALID"
+    COMMAND_ALREADY_COMPLETED = "COMMAND_ALREADY_COMPLETED"
+    COMMAND_IDEMPOTENCY_CONFLICT = "COMMAND_IDEMPOTENCY_CONFLICT"
+    COMMAND_CONFIGURATION_CHANGED = "COMMAND_CONFIGURATION_CHANGED"
+    COMMAND_TARGET_NOT_FOUND = "COMMAND_TARGET_NOT_FOUND"
+    COMMAND_TARGET_DEACTIVATED = "COMMAND_TARGET_DEACTIVATED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +121,8 @@ def refusal_problem(code: DeviceRefusalCode) -> tuple[int, str]:
             return 409, "已存在同名推理机"
         case DeviceRefusalCode.INFERENCE_HOST_DEACTIVATED:
             return 409, "推理机已停用，恢复后才能继续"
+        case DeviceRefusalCode.INFERENCE_HOST_AUTHENTICATION_FAILED:
+            return 401, "推理机身份认证失败"
         case DeviceRefusalCode.INFERENCE_HOST_HAS_BACKENDS:
             return 409, "该推理机仍承载推理后端，请先删除它们"
         case DeviceRefusalCode.INFERENCE_BACKEND_NOT_FOUND:
@@ -164,5 +177,25 @@ def refusal_problem(code: DeviceRefusalCode) -> tuple[int, str]:
             return 409, "该推理机仍承载连接器"
         case DeviceRefusalCode.STALE_REVISION:
             return 409, "内容已被他人修改，请刷新后重试"
+        case DeviceRefusalCode.COMMAND_NOT_FOUND:
+            return 404, "委托命令不存在"
+        case DeviceRefusalCode.COMMAND_HOST_MISMATCH:
+            return 403, "推理机不能访问其他推理机的命令"
+        case DeviceRefusalCode.COMMAND_CLAIM_REQUIRED:
+            return 409, "委托命令尚未被该推理机领取"
+        case DeviceRefusalCode.COMMAND_CLAIM_EXPIRED:
+            return 409, "委托命令领取已过期，请重新领取"
+        case DeviceRefusalCode.COMMAND_CLAIM_TOKEN_INVALID:
+            return 409, "委托命令领取令牌无效"
+        case DeviceRefusalCode.COMMAND_ALREADY_COMPLETED:
+            return 409, "委托命令已经完成"
+        case DeviceRefusalCode.COMMAND_IDEMPOTENCY_CONFLICT:
+            return 409, "幂等键已经用于其他委托命令"
+        case DeviceRefusalCode.COMMAND_CONFIGURATION_CHANGED:
+            return 409, "连接器配置已变化，请重新测试"
+        case DeviceRefusalCode.COMMAND_TARGET_NOT_FOUND:
+            return 404, "委托命令目标不存在"
+        case DeviceRefusalCode.COMMAND_TARGET_DEACTIVATED:
+            return 409, "委托命令目标已停用"
         case _:
             assert_never(code)

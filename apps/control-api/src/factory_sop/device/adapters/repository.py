@@ -7,13 +7,20 @@ so concurrent configuration changes surface as deterministic module refusals, no
 
 from __future__ import annotations
 
-from typing import Any, NoReturn, cast
+from collections.abc import Mapping
+from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, delete, exists, func, select, update
+from sqlalchemy import CursorResult, delete, exists, func, insert, inspect, select, update
 from sqlalchemy.exc import DatabaseError
 from sqlalchemy.orm import Session as DatabaseSession
 
+from factory_sop.device.adapters.repository_support import (
+    refuse_constraint_violation as _refuse_constraint_violation,
+)
+from factory_sop.device.adapters.repository_support import (
+    refuse_lost_race as _refuse_lost_race,
+)
 from factory_sop.device.adapters.tables import (
     CameraRow,
     ConnectorRow,
@@ -22,7 +29,7 @@ from factory_sop.device.adapters.tables import (
     PointRow,
     StationRow,
 )
-from factory_sop.device.errors import DeviceRefusalCode, DeviceRefusedError
+from factory_sop.device.errors import DeviceRefusalCode
 from factory_sop.device.model import (
     Camera,
     Connector,
@@ -33,121 +40,93 @@ from factory_sop.device.model import (
 )
 from nvsop_contracts import capability_to_wire
 
-# What each unique-constraint violation means, named by the metadata convention
-# (factory_sop/persistence.py). The backend foreign key has two meanings depending on which
-# operation caused it, so its refusal is supplied by the call site.
-_CONSTRAINT_REFUSALS: dict[str, DeviceRefusalCode] = {
-    "uq_device_inference_host_name": DeviceRefusalCode.INFERENCE_HOST_NAME_TAKEN,
-    "uq_device_inference_backend_host_id_base_url": (
-        DeviceRefusalCode.INFERENCE_BACKEND_ENDPOINT_TAKEN
-    ),
-    "uq_device_station_code": DeviceRefusalCode.STATION_CODE_TAKEN,
-    "uq_device_connector_station_id_name": DeviceRefusalCode.CONNECTOR_NAME_TAKEN,
-    "ck_device_connector_configuration_safe": DeviceRefusalCode.CONNECTOR_CONFIGURATION_SECRET,
-    "uq_device_point_station_id_semantic_label": (DeviceRefusalCode.POINT_SEMANTIC_LABEL_TAKEN),
-    "uq_device_point_connector_id_direction_identifier": (DeviceRefusalCode.POINT_IDENTITY_TAKEN),
-}
-_HOST_FOREIGN_KEY = "fk_device_inference_backend_host_id_device_inference_host"
-_TRIGGERED_REFUSALS = {
-    "device_backend_host_deactivated": DeviceRefusalCode.INFERENCE_HOST_DEACTIVATED,
-    "device_camera_host_backend_mismatch": DeviceRefusalCode.CAMERA_HOST_BACKEND_MISMATCH,
-    "device_camera_host_deactivated": DeviceRefusalCode.INFERENCE_HOST_DEACTIVATED,
-    "device_camera_backend_deactivated": DeviceRefusalCode.INFERENCE_BACKEND_DEACTIVATED,
-    "device_camera_station_deactivated": DeviceRefusalCode.STATION_DEACTIVATED,
-    "device_camera_station_host_conflict": DeviceRefusalCode.CAMERA_STATION_HOST_CONFLICT,
-    "device_camera_station_template_conflict": DeviceRefusalCode.CAMERA_STATION_TEMPLATE_CONFLICT,
-    "device_connector_station_deactivated": DeviceRefusalCode.STATION_DEACTIVATED,
-    "device_connector_host_deactivated": DeviceRefusalCode.INFERENCE_HOST_DEACTIVATED,
-    "device_connector_station_host_conflict": DeviceRefusalCode.CONNECTOR_STATION_HOST_CONFLICT,
-    "device_connector_has_points": DeviceRefusalCode.CONNECTOR_HAS_POINTS,
-    "device_point_connector_station_mismatch": (DeviceRefusalCode.POINT_CONNECTOR_STATION_MISMATCH),
-    "device_point_connector_deactivated": DeviceRefusalCode.CONNECTOR_DEACTIVATED,
-    "device_point_station_deactivated": DeviceRefusalCode.STATION_DEACTIVATED,
-}
+__all__ = [
+    "PostgresCameraRepository",
+    "PostgresConnectorRepository",
+    "PostgresInferenceBackendRepository",
+    "PostgresInferenceHostRepository",
+    "PostgresPointRepository",
+    "PostgresStationRepository",
+]
 
 
-def _refuse_constraint_violation(
-    error: DatabaseError,
-    *,
-    foreign_key_to_host: DeviceRefusalCode | None = None,
-    foreign_key_to_station: DeviceRefusalCode | None = None,
-    foreign_key_to_backend: DeviceRefusalCode | None = None,
-    foreign_key_to_connector: DeviceRefusalCode | None = None,
-    point_station_refusal: DeviceRefusalCode | None = None,
-    point_connector_refusal: DeviceRefusalCode | None = None,
-) -> NoReturn:
-    """Translate a known constraint or trigger refusal, preserving unknown DB errors."""
-    diagnostics = getattr(error.orig, "diag", None)
-    constraint_name = getattr(diagnostics, "constraint_name", None)
-    sqlstate = getattr(error.orig, "sqlstate", None)
-    message = getattr(diagnostics, "message_primary", None)
-    if sqlstate == "P0001" and message in _TRIGGERED_REFUSALS:
-        raise DeviceRefusedError(_TRIGGERED_REFUSALS[message]) from error
-    if constraint_name == _HOST_FOREIGN_KEY:
-        if foreign_key_to_host is None:
-            raise error
-        raise DeviceRefusedError(foreign_key_to_host) from error
-    if constraint_name == "fk_device_camera_station_id_device_station":
-        if foreign_key_to_station is None:
-            raise error
-        raise DeviceRefusedError(foreign_key_to_station) from error
-    if constraint_name == "fk_device_connector_station_id_device_station":
-        refusal = foreign_key_to_connector or foreign_key_to_station
-        if refusal is None:
-            raise error
-        raise DeviceRefusedError(refusal) from error
-    if constraint_name == "fk_device_camera_host_id_device_inference_host":
-        if foreign_key_to_host is None:
-            raise error
-        raise DeviceRefusedError(foreign_key_to_host) from error
-    if constraint_name == "fk_device_connector_host_id_device_inference_host":
-        refusal = foreign_key_to_connector or foreign_key_to_host
-        if refusal is None:
-            raise error
-        raise DeviceRefusedError(refusal) from error
-    if constraint_name == "fk_device_camera_backend_id_device_inference_backend":
-        if foreign_key_to_backend is None:
-            raise error
-        raise DeviceRefusedError(foreign_key_to_backend) from error
-    if constraint_name == "fk_device_point_station_id_device_station":
-        if point_station_refusal is None:
-            raise error
-        raise DeviceRefusedError(point_station_refusal) from error
-    if constraint_name == "fk_device_point_connector_id_device_connector":
-        if point_connector_refusal is None:
-            raise error
-        raise DeviceRefusedError(point_connector_refusal) from error
-    refusal = _CONSTRAINT_REFUSALS.get(constraint_name or "")
-    if refusal is None:
-        raise error
-    raise DeviceRefusedError(refusal) from error
+_HOST_BASE_COLUMNS = (
+    "id",
+    "name",
+    "address",
+    "mediamtx_address",
+    "recording_window_seconds",
+    "disk_watermark_percent",
+    "status",
+    "revision",
+    "created_by",
+    "updated_by",
+    "created_at",
+    "updated_at",
+)
+
+
+def _host_values(host: InferenceHost, *, include_credential: bool) -> dict[str, object]:
+    values: dict[str, object] = {
+        "id": host.id,
+        "name": host.name,
+        "address": host.address,
+        "mediamtx_address": host.mediamtx_address,
+        "recording_window_seconds": host.recording_window_seconds,
+        "disk_watermark_percent": host.disk_watermark_percent,
+        "status": host.status,
+        "revision": host.revision,
+        "created_by": host.created_by,
+        "updated_by": host.updated_by,
+        "created_at": host.created_at,
+        "updated_at": host.updated_at,
+    }
+    if include_credential:
+        values["credential_hash"] = host.credential_hash
+    return values
+
+
+def _host_from_values(values: Mapping[str, Any]) -> InferenceHost:
+    return InferenceHost(
+        id=values["id"],
+        name=values["name"],
+        address=values["address"],
+        mediamtx_address=values["mediamtx_address"],
+        recording_window_seconds=values["recording_window_seconds"],
+        disk_watermark_percent=values["disk_watermark_percent"],
+        status=values["status"],
+        revision=values["revision"],
+        created_by=values["created_by"],
+        updated_by=values["updated_by"],
+        created_at=values["created_at"],
+        updated_at=values["updated_at"],
+        credential_hash="",
+    )
 
 
 class PostgresInferenceHostRepository:
-    """`device_inference_host` through the request's session."""
+    """通过请求级会话访问 `device_inference_host`。"""
 
     def __init__(self, session: DatabaseSession) -> None:
         self._session = session
+        self._has_credential_column: bool | None = None
 
     def add(self, host: InferenceHost) -> None:
-        self._session.add(InferenceHostRow.from_domain(host))
+        if self._supports_host_credentials():
+            self._session.add(InferenceHostRow.from_domain(host))
+        else:
+            self._session.execute(
+                insert(cast("Any", InferenceHostRow.__table__)).values(
+                    **_host_values(host, include_credential=False)
+                )
+            )
         try:
             self._session.flush()
         except DatabaseError as error:
             _refuse_constraint_violation(error)
 
     def save(self, host: InferenceHost, *, expected_revision: int) -> None:
-        values = {
-            "name": host.name,
-            "address": host.address,
-            "mediamtx_address": host.mediamtx_address,
-            "recording_window_seconds": host.recording_window_seconds,
-            "disk_watermark_percent": host.disk_watermark_percent,
-            "status": host.status,
-            "revision": host.revision,
-            "updated_by": host.updated_by,
-            "updated_at": host.updated_at,
-        }
+        values = _host_values(host, include_credential=self._supports_host_credentials())
         try:
             result = cast(
                 "CursorResult[Any]",
@@ -167,15 +146,35 @@ class PostgresInferenceHostRepository:
                 missing_refusal=DeviceRefusalCode.INFERENCE_HOST_NOT_FOUND,
                 present_refusal=DeviceRefusalCode.STALE_REVISION,
                 row=self._session.scalar(
-                    select(InferenceHostRow)
-                    .where(InferenceHostRow.id == host.id)
-                    .execution_options(populate_existing=True)
+                    select(InferenceHostRow.id).where(InferenceHostRow.id == host.id)
                 ),
             )
 
     def by_id(self, host_id: UUID) -> InferenceHost | None:
-        row = self._session.get(InferenceHostRow, host_id)
-        return row.to_domain() if row is not None else None
+        if self._supports_host_credentials():
+            row = self._session.get(InferenceHostRow, host_id)
+            return row.to_domain() if row is not None else None
+        values = self._legacy_host_by_id(host_id)
+        return _host_from_values(values) if values is not None else None
+
+    def _supports_host_credentials(self) -> bool:
+        if self._has_credential_column is None:
+            self._has_credential_column = any(
+                column["name"] == "credential_hash"
+                for column in inspect(self._session.connection()).get_columns(
+                    InferenceHostRow.__tablename__
+                )
+            )
+        return self._has_credential_column
+
+    def _legacy_host_by_id(self, host_id: UUID) -> Mapping[str, Any] | None:
+        columns = [getattr(InferenceHostRow, name) for name in _HOST_BASE_COLUMNS]
+        return cast(
+            "Mapping[str, Any] | None",
+            self._session.execute(select(*columns).where(InferenceHostRow.id == host_id))
+            .mappings()
+            .one_or_none(),
+        )
 
     def remove(self, host_id: UUID, *, expected_revision: int) -> bool:
         try:
@@ -189,8 +188,7 @@ class PostgresInferenceHostRepository:
                 ),
             )
         except DatabaseError as error:
-            # A backend row keeps the historical reference. This is the database backstop for
-            # `delete_host`, which checks the same invariant through `any_for_host` first.
+            # 删除前由用例检查关联，这里保留外键拒绝作为数据库后备保护。
             _refuse_constraint_violation(
                 error,
                 foreign_key_to_host=DeviceRefusalCode.INFERENCE_HOST_HAS_BACKENDS,
@@ -201,9 +199,7 @@ class PostgresInferenceHostRepository:
                 missing_refusal=DeviceRefusalCode.INFERENCE_HOST_NOT_FOUND,
                 present_refusal=DeviceRefusalCode.STALE_REVISION,
                 row=self._session.scalar(
-                    select(InferenceHostRow)
-                    .where(InferenceHostRow.id == host_id)
-                    .execution_options(populate_existing=True)
+                    select(InferenceHostRow.id).where(InferenceHostRow.id == host_id)
                 ),
             )
         return True
@@ -212,13 +208,27 @@ class PostgresInferenceHostRepository:
         total = cast(
             "int", self._session.scalar(select(func.count()).select_from(InferenceHostRow))
         )
-        rows = self._session.scalars(
-            select(InferenceHostRow)
-            .order_by(InferenceHostRow.created_at.desc(), InferenceHostRow.id.desc())
-            .offset((page - 1) * page_size)
-            .limit(page_size)
-        ).all()
-        return [row.to_domain() for row in rows], total
+        if self._supports_host_credentials():
+            rows = self._session.scalars(
+                select(InferenceHostRow)
+                .order_by(InferenceHostRow.created_at.desc(), InferenceHostRow.id.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            ).all()
+            return [row.to_domain() for row in rows], total
+
+        columns = [getattr(InferenceHostRow, name) for name in _HOST_BASE_COLUMNS]
+        legacy_rows = (
+            self._session.execute(
+                select(*columns)
+                .order_by(InferenceHostRow.created_at.desc(), InferenceHostRow.id.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+            .mappings()
+            .all()
+        )
+        return [_host_from_values(cast("Mapping[str, Any]", row)) for row in legacy_rows], total
 
 
 class PostgresInferenceBackendRepository:
@@ -734,23 +744,3 @@ class PostgresConnectorRepository:
             .limit(page_size)
         ).all()
         return [row.to_domain() for row in rows], total
-
-
-def _refuse_lost_race(
-    *,
-    missing_refusal: DeviceRefusalCode,
-    present_refusal: DeviceRefusalCode,
-    row: (
-        InferenceHostRow
-        | InferenceBackendRow
-        | StationRow
-        | CameraRow
-        | ConnectorRow
-        | PointRow
-        | None
-    ),
-) -> NoReturn:
-    """Say which way the conditional update lost: the row moved, or the row is gone."""
-    if row is None:
-        raise DeviceRefusedError(missing_refusal)
-    raise DeviceRefusedError(present_refusal)

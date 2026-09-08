@@ -2,12 +2,16 @@
 
 This repository is a product monorepo for the SOP compliance system. Use the canonical terms in `CONTEXT.md`.
 
-## Before changing the repository
+## Route the task
 
-- For **code placement, authoring rules, tests, dependencies, CI, deployment assets, or `vendor/`**, read [`docs/design/repository-harness.md`](docs/design/repository-harness.md). It is the normative repository harness.
-- For **product behavior, architecture, performance budgets, or safety invariants**, read [`docs/design/solution-and-roadmap.md`](docs/design/solution-and-roadmap.md). It is the only current decision source and indexes the mechanism specs.
-- For **an issue, a ticket, or a label**, read [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md) and [`docs/agents/triage-labels.md`](docs/agents/triage-labels.md).
-- Read the ADRs in [`docs/adr/`](docs/adr/) that touch the area you are changing. Contradicting one is allowed; doing so silently is not — say which ADR and why it should reopen.
+Read the matching sections and follow only the pointers relevant to the task. Verify current files and configuration before relying on a description of what exists.
+
+- **Plan or investigate**: deliver the requested findings or plan; repository edits start when requested.
+- **Change code or check scripts**: read the [harness §4–§5](docs/design/repository-harness.md#4-test-placement-and-evidence) for tests, authoring and size guidance. Locate the public entry point, affected callers and existing tests before editing.
+- **Change ownership, dependencies, CI, deployment or `vendor/`**: read the relevant [harness §1–§3](docs/design/repository-harness.md#1-architecture-rule) and [§6–§8](docs/design/repository-harness.md#6-stable-command-interface). This is the normative repository harness.
+- **Change product behavior or architecture**: use [`solution-and-roadmap.md`](docs/design/solution-and-roadmap.md) to locate the affected mechanism spec and its ADRs. It is the current decision source; name any ADR that needs reopening and explain why.
+- **Write instructions or documentation**: use [harness §5](docs/design/repository-harness.md#comments-and-documentation-language) for language and [§9](docs/design/repository-harness.md#9-agent-instruction-hierarchy) for instruction structure. Pure wording changes need document checks, not invented behavior tests.
+- **Work with an issue or label**: read [`issue-tracker.md`](docs/agents/issue-tracker.md) and [`triage-labels.md`](docs/agents/triage-labels.md).
 
 ## Invariants
 
@@ -19,16 +23,8 @@ These five hold before you read anything else. Everything else lives in the harn
 - A module owns its behavior, tables, and migrations behind one small interface. Callers and tests cross that same seam.
 - Secrets, credentials, customer media, model weights, generated data, and production dumps stay out of Git. Fixtures are synthetic or explicitly sanitized.
 
-## Writing rules down
+## Implement, verify and hand off
 
-Keep each rule in one source of truth. For comment and documentation language, see [`repository-harness.md` §5](docs/design/repository-harness.md#5-code-authoring-rules); cite existing contracts, gates, config or ADRs instead of duplicating them. Add a nested `AGENTS.md` only for a real local exception; remove superseded guidance after merging its surviving facts into the current source. Git is the archive.
+Follow the [working and review cycle](docs/design/repository-harness.md#working-and-review-cycle): isolated worktree, TDD for behavior, `make check`, one consolidated independent review, focused rechecks, and a fresh session for commit. That section defines when existing test evidence remains valid.
 
-## Working on a change
-
-- One ticket, one branch, one worktree, never `main`. `git worktree add ../nvsop-19 -b issue-19 origin/main`, outside the repository because `scripts/check_repo_policy.py` counts untracked files and would reject the directory as an undeclared top level. Delete both once merged; a long-lived shared branch fuses tickets, so the next merge carries whatever else was sitting on it. `main` only receives finished work.
-- Write the failing test before the implementation: invoke the `tdd` skill and follow it. Harness §4 fixes where a test lives; this fixes when it is written.
-- A session that writes code does not review or commit it. Hand review and commit to a fresh session; use subagents only for review, never for implementation or other tasks.
-
-## Completion gate
-
-Run `make check`. Each change that adds a workspace extends that same target in the same change, so local and blocking CI run identical CPU-only checks. Run hardware or GPU suites only when the change or its acceptance criteria require them.
+Keep the task's full acceptance criteria through every stage. Report the delivered behavior, checks and their results, and any outstanding review or validation; a partial implementation or a size report is not completion.

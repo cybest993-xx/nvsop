@@ -1,127 +1,160 @@
 from __future__ import annotations
 
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from check_change_size import budget_violations, module_of, parse_numstat
+SCRIPT = Path(__file__).resolve().parents[1] / "check_change_size.py"
 
 
-class ChangeSizeBudgetTest(unittest.TestCase):
-    def test_parses_numstat_and_treats_binary_as_zero(self) -> None:
-        text = "12\t3\tapps/control-api/src/factory_sop/app.py\n-\t-\tdocs/image.png\n"
-        self.assertEqual(
-            {Path("apps/control-api/src/factory_sop/app.py"): 12, Path("docs/image.png"): 0},
-            parse_numstat(text),
+class ChangeSizeReportTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.root = Path(self.temp_dir.name)
+        self.git("init", "--quiet", "--initial-branch=main")
+        self.git("config", "user.name", "Repository policy test")
+        self.git("config", "user.email", "policy-test@example.invalid")
+        self.git("config", "commit.gpgsign", "false")
+        self.git("config", "core.hooksPath", str(self.root / "no-hooks"))
+        self.git("commit", "--quiet", "--allow-empty", "-m", "base")
+        self.base = self.git("rev-parse", "HEAD").strip()
+
+    def git(self, *args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=self.root, check=True, capture_output=True, text=True
+        ).stdout
+
+    def report(self, *refs: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), *refs],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            check=False,
         )
 
-    def test_module_assignment_follows_harness_section_3(self) -> None:
-        cases = {
-            Path("apps/control-api/src/factory_sop/auth/usecases/sessions.py"): "auth",
-            Path("apps/control-api/src/factory_sop/auth/adapters/routes.py"): "auth/adapters",
-            Path("apps/control-api/src/factory_sop/app.py"): "factory_sop",
-            Path("apps/control-api/src/factory_sop/persistence/__init__.py"): "persistence",
-            Path("apps/control-web/src/session/store.ts"): "session",
-            Path("apps/control-web/src/modules/overview/Panel.vue"): "modules/overview",
-            Path("apps/control-web/src/main.ts"): "control-web",
-            Path("apps/edge-runtime/src/edge_runtime/judgment/core.py"): "judgment",
-            Path("apps/edge-runtime/src/edge_runtime/supervisor/loop.py"): "supervisor",
-            Path("scripts/check_repo_policy.py"): "scripts",
-            Path("packages/contracts/src/nvsop_contracts/capability.py"): "contracts",
-            Path("packages/other/src/lib.py"): "unassigned",
-        }
-        for path, module in cases.items():
-            self.assertEqual(module, module_of(path), str(path))
+    def write(self, name: str, content: str) -> Path:
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+        return path
 
-    def test_counts_only_implementation_lines(self) -> None:
-        # Tests, docs, the lockfile and the vendored base may be as large as they need
-        # to be; the budget measures what a reviewer must hold in their head.
-        added = {
-            Path("apps/control-api/src/factory_sop/app.py"): 700,
-            Path("apps/control-api/tests/unit/test_app.py"): 900,
-            Path("docs/design/repository-harness.md"): 900,
-            Path("uv.lock"): 900,
-            Path("vendor/sop-monitoring-blueprints/x.py"): 900,
-            Path("scripts/tests/test_x.py"): 900,
-        }
-        self.assertEqual([], budget_violations(added))
+    def test_reports_a_large_committed_change_without_blocking_delivery(self) -> None:
+        source = self.root / "apps/control-api/src/factory_sop/auth/sessions.py"
+        source.parent.mkdir(parents=True)
+        source.write_text("session = None\n" * 1_000)
+        self.git("add", ".")
+        self.git("commit", "--quiet", "-m", "one cohesive change")
+        source.write_text("uncommitted = True\n")
 
-    def test_generated_client_output_does_not_consume_the_authored_budget(self) -> None:
-        # The SDK is generated from the OpenAPI source contract. Its size is not reviewer-owned
-        # implementation, but the clean-worktree gate still requires every generated file to be
-        # committed and reproducible.
-        added = {
-            Path("apps/control-web/src/api/generated/sdk.gen.ts"): 2_000,
-            Path("apps/control-api/src/factory_sop/app.py"): 799,
-        }
-        self.assertEqual([], budget_violations(added))
+        result = self.report(self.base, "HEAD")
 
-    def test_budget_is_per_module_not_per_change(self) -> None:
-        # Several modules may grow in one pull request: what a reviewer holds is each
-        # module's own growth, not a sum across modules that share no seam.
-        added = {
-            Path("apps/control-api/src/factory_sop/auth/usecases/sessions.py"): 700,
-            Path("apps/control-web/src/session/store.ts"): 700,
-            Path("scripts/check_x.py"): 700,
-        }
-        self.assertEqual([], budget_violations(added))
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("Change size report (advisory)", result.stdout)
+        self.assertIn("Implementation: +1000 -0 (1000 changed lines)", result.stdout)
+        self.assertIn("auth/sessions.py: 1000 physical lines", result.stdout)
+        self.assertIn("cohesion", result.stdout)
 
-    def test_rejects_only_the_module_that_crossed_its_budget(self) -> None:
-        added = {
-            Path("apps/control-api/src/factory_sop/auth/usecases/sessions.py"): 500,
-            Path("apps/control-api/src/factory_sop/auth/errors.py"): 300,
-            Path("apps/control-web/src/session/store.ts"): 700,
-        }
-        errors = budget_violations(added)
-        self.assertEqual(1, len(errors))
-        self.assertIn("module auth adds 800 implementation lines; the budget is 800", errors[0])
-        self.assertIn("smallest coherent, independently verifiable stage", errors[0])
-        self.assertIn("Do not create a product module solely", errors[0])
-        self.assertIn("auth/usecases/sessions.py (+500)", errors[0])
+    def test_local_report_includes_the_whole_task_from_its_merge_base(self) -> None:
+        source = self.write("apps/control-api/src/factory_sop/auth/source.py", "one\ntwo\nthree\n")
+        self.git("add", ".")
+        self.git("commit", "--quiet", "-m", "shared base")
+        self.git("branch", "feature")
+        self.write("apps/control-api/src/factory_sop/device/unrelated.py", "other = 1\n" * 900)
+        self.git("add", ".")
+        self.git("commit", "--quiet", "-m", "main advances independently")
+        advanced_main = self.git("rev-parse", "HEAD").strip()
+        self.git("switch", "--quiet", "feature")
+        self.write("apps/control-api/src/factory_sop/auth/committed.py", "committed = 1\n")
+        self.git("add", ".")
+        self.git("commit", "--quiet", "-m", "first task change")
+        source.write_text("one\nfour\n")
+        self.git("add", ".")
+        source.write_text("one\nfour\nfive\n")
+        self.write("apps/control-web/src/session/new.ts", "first\nlast")
 
-    def test_a_modules_adapters_are_budgeted_separately_from_its_behavior(self) -> None:
-        # Harness §3 keeps adapters outside the behavior they adapt, so each side is held
-        # to the budget on its own instead of charging one module for both.
-        added = {
-            Path("apps/control-api/src/factory_sop/auth/usecases/sessions.py"): 750,
-            Path("apps/control-api/src/factory_sop/auth/adapters/routes.py"): 750,
-        }
-        self.assertEqual([], budget_violations(added))
+        result = self.report(advanced_main)
 
-    def test_undeclared_roots_accumulate_in_one_loud_bucket(self) -> None:
-        # A source root missing from MODULE_ROOTS must not hide its growth: everything
-        # undeclared accumulates until the root is declared.
-        added = {
-            Path("packages/other/src/lib.py"): 850,
-            Path("packages/other/src/helper.py"): 100,
-        }
-        errors = budget_violations(added)
-        self.assertEqual(1, len(errors))
-        self.assertIn("module unassigned adds 950 implementation lines", errors[0])
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("Implementation: +5 -2 (7 changed lines)", result.stdout)
+        self.assertIn("staged, unstaged and untracked", result.stdout)
+        self.assertNotIn("device", result.stdout)
 
-    def test_judgment_module_has_the_tighter_budget_and_others_keep_the_plain_one(self) -> None:
-        added = {
-            Path("apps/edge-runtime/src/edge_runtime/judgment/core.py"): 500,
-            Path("apps/edge-runtime/src/edge_runtime/supervisor/loop.py"): 800,
-        }
-        errors = budget_violations(added)
-        self.assertEqual(2, len(errors))
-        self.assertIn("module judgment adds 500 implementation lines; the budget is 500", errors[0])
-        self.assertIn("because it touches judgment logic", errors[0])
-        self.assertIn(
-            "module supervisor adds 800 implementation lines; the budget is 800", errors[1]
-        )
+        committed = self.report(advanced_main, "HEAD")
+        self.assertEqual(0, committed.returncode, committed.stderr)
+        self.assertIn("Implementation: +1 -0 (1 changed lines)", committed.stdout)
 
-    def test_web_slices_are_budgeted_one_per_slice(self) -> None:
-        added = {
-            Path("apps/control-web/src/modules/overview/Panel.vue"): 850,
-            Path("apps/control-web/src/modules/other/Panel.vue"): 850,
+    def test_separates_review_evidence_from_implementation_and_keeps_adapter_ownership(
+        self,
+    ) -> None:
+        files = {
+            "apps/control-api/src/factory_sop/auth/sessions.py": 500,
+            "apps/control-api/src/factory_sop/auth/adapters/routes.py": 12,
+            "apps/edge-runtime/src/edge_runtime/judgment/core.py": 500,
+            "apps/control-web/src/modules/devices/Devices.vue": 800,
+            "apps/control-web/src/modules/devices/Devices.spec.ts": 9,
+            "scripts/tests/test_example.py": 7,
+            "apps/control-web/src/api/generated/sdk.gen.ts": 1_000,
+            "packages/contracts/openapi.json": 1,
+            "apps/control-api/migrations/versions/0001_auth.py": 12,
+            "vendor/sop-monitoring-blueprints/source.py": 2,
+            "docs/example.md": 23,
+            "uv.lock": 1,
         }
-        errors = budget_violations(added)
-        self.assertEqual(2, len(errors))
-        self.assertIn("module modules/other adds 850", errors[0])
-        self.assertIn("module modules/overview adds 850", errors[1])
+        for name, lines in files.items():
+            self.write(name, "fixture\n" * lines)
+        self.write("docs/image.bin", "binary\0fixture")
+
+        result = self.report(self.base)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        for summary in (
+            "Implementation: +1812 -0 (1812 changed lines)",
+            "factory_sop/auth: +512 -0",
+            "Tests: +16 -0",
+            "Generated: +1001 -0",
+            "Migrations: +12 -0",
+            "Vendor: +2 -0",
+            "Other: +24 -0",
+            "Binary files: 1 (no line count)",
+            "Judgment: 500 changed lines",
+            "auth/sessions.py: 500 physical lines",
+            "Devices.vue: 800 physical lines",
+        ):
+            self.assertIn(summary, result.stdout)
+
+    def test_counts_deletions_and_follows_a_rename_without_charging_for_moved_lines(self) -> None:
+        self.git("config", "diff.renames", "false")
+        old = self.write("apps/control-api/src/factory_sop/auth/old name.py", "# reason\n\n" * 250)
+        removed = self.write("apps/control-api/src/factory_sop/auth/removed.py", "old = 1\n" * 10)
+        self.git("add", ".")
+        self.git("commit", "--quiet", "-m", "existing files")
+        base = self.git("rev-parse", "HEAD").strip()
+        new = old.with_name("新\tname.py")
+        self.git("mv", str(old), str(new))
+        removed.unlink()
+
+        result = self.report(base)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("Implementation: +0 -10 (10 changed lines)", result.stdout)
+        self.assertIn("新\tname.py: 500 physical lines", result.stdout)
+        self.assertNotIn("removed.py: 10 physical lines", result.stdout)
+
+    def test_invalid_revisions_and_usage_fail_instead_of_producing_a_success_report(self) -> None:
+        for refs, status in (
+            ((), 2),
+            (("missing-base", "HEAD"), 1),
+            ((self.base, "missing-head"), 1),
+        ):
+            with self.subTest(refs=refs):
+                result = self.report(*refs)
+                self.assertEqual(status, result.returncode)
+                self.assertTrue(result.stderr)
+                self.assertNotIn("Change size report (advisory)", result.stdout)
 
 
 if __name__ == "__main__":

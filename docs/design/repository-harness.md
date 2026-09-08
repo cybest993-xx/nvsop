@@ -2,9 +2,9 @@
 
 Status: **normative**  
 Reference baseline: [`openai/codex@f4f85add`](https://github.com/openai/codex/tree/f4f85add41288c2059dc1a4326a598f739e47fe9), inspected 2026-08-29 — repository shape and gates (§2–§4, §6–§8).  
-Second inspection: [`openai/codex@main`](https://github.com/openai/codex), read 2026-08-31 — authoring conventions (§5) and instruction-file limits (§9). Read at a different time than the baseline above; do not treat the two as one pinned observation.
+Authoring recheck: [`openai/codex@c1f1467`](https://github.com/openai/codex/tree/c1f1467f3028bd433c8f2063ecc28dd5be206df6), inspected 2026-09-09 — file and change-size guidance (§5). Instruction loading follows the official guide linked in §9.
 
-This document fixes the repository shape, authoring conventions, and verification interface before product code is added. It adopts the reference baseline's transferable patterns—not its Rust/Bazel technology choices: one root task interface, package-owned tests, scoped agent instructions, change-aware CI, one aggregate required status, and size-bounded changes.
+This document defines repository shape, authoring conventions and verification. It adopts the reference baseline's transferable patterns: one root task interface, package-owned tests, scoped agent instructions, change-aware CI, one aggregate required status, and coherent changes that can be reviewed together.
 
 Current product and architecture decisions live only in [`solution-and-roadmap.md`](solution-and-roadmap.md). Research files contain evidence that is still used by that decision source; once evidence or recommendations are superseded, merge any surviving facts and delete the stale file. Git history is the archive.
 
@@ -53,7 +53,7 @@ Create directories lazily when the first real file needs them; empty scaffolding
 │       │   │                        # violations, disposal records, the two queues
 │       │   ├── connectors/         # the connector seam, one runtime per configured
 │       │   │                        # connector, and its adapters
-│       │   └── (run loop)          # the composition root; lands with issue #45
+│       │   └── runtime.py          # the composition root
 │       └── tests/{unit,integration}/
 ├── packages/
 │   └── contracts/                  # versioned wire schemas and generated clients
@@ -77,7 +77,7 @@ The center backend pins Python to 3.12 with a committed `.python-version`, one r
 
 ### Workspace manifests
 
-The Python workspace has landed: one root `pyproject.toml` with `apps/control-api` as its only member, a committed `uv.lock`, and `.python-version` pinning 3.12. Formatting, lint, type, and `import-linter` configuration lives only in that root manifest — a second copy inside an application would never be the one the gate reads. `apps/edge-runtime/` is deliberately not a member, because membership would put every center dependency on the judgment core's import path; `scripts/check_repo_policy.py` resolves each of its imports against the standard library instead, so §1's standard-library rule is a checked fact rather than discipline.
+The root `pyproject.toml` declares the Python workspace members and all formatting, lint, type and `import-linter` configuration; read that manifest for the current membership. `uv.lock` freezes dependencies and `.python-version` pins the interpreter. `apps/edge-runtime/` deliberately remains outside the workspace: the policy checker validates its standard-library imports and the approved shared-contract seam, so §1's isolation is checked rather than assumed from an environment.
 
 The web workspace has landed as well: a root `package.json` pinning the package manager through `packageManager`, `pnpm-workspace.yaml` with `apps/control-web` as its only member, a committed `pnpm-lock.yaml`, and `.nvmrc` pinning the Node runtime the way `.python-version` pins the interpreter. CI installs with `pnpm install --frozen-lockfile`, which fails on a manifest whose lockfile was never regenerated rather than resolving afresh. `scripts/check_repo_policy.py` requires all four once `apps/control-web/` exists, and requires `packageManager` to name one exact version — corepack accepts a range, and with one CI resolves a different pnpm than a developer runs.
 
@@ -185,23 +185,27 @@ Fixtures must be synthetic or sanitized, minimal, deterministic, and documented 
 
 Technology-neutral by intent: the reference baseline's crate layout, named clippy lints, ratatui styling, and ASCII-only default are its own and are not adopted here.
 
-### Size and decomposition budgets
+### Size and decomposition guidance
 
-The reference repository's [`AGENTS.md`](https://github.com/openai/codex/blob/f4f85add41288c2059dc1a4326a598f739e47fe9/AGENTS.md#L49-L59) has two different 800-line rules: roughly 800 lines is a **source-file** threshold, while [800 changed lines](https://github.com/openai/codex/blob/f4f85add41288c2059dc1a4326a598f739e47fe9/AGENTS.md#L125-L131) is a **change-review** budget. Neither is a cap on the total size of a crate or product module. This repository keeps that distinction: product-module boundaries are decided by §1 and §3's ownership, change driver and interface rules, never by summing every file below one package.
+The official Codex [file guidance](https://github.com/openai/codex/blob/c1f1467f3028bd433c8f2063ecc28dd5be206df6/AGENTS.md#L49-L59) targets Rust modules below 500 lines excluding tests; beyond roughly 800 lines in a **file**, it prefers a new module for new functionality unless there is a strong documented reason. Its separate [change guidance](https://github.com/openai/codex/blob/c1f1467f3028bd433c8f2063ecc28dd5be206df6/AGENTS.md#L125-L131) concerns the **whole change**, with mechanical changes excepted and smaller stages to be explored. Neither sets a lifetime cap on a product module.
 
-- A production source file targets fewer than 500 lines, excluding tests and generated output. Reaching 500 is a review prompt, not a mechanical reason to split a cohesive file. At 800 lines the file may not take new non-trivial behavior: extract a focused private file or internal subpackage, or record a bounded exception in `scripts/check_repo_policy.py` with a pointer to the decision that explains why extraction would damage ownership or invariants. `make check` enforces the 800-line threshold for authored Python, TypeScript and Vue source; generated clients are excluded.
-- A pull request adds fewer than 800 implementation lines to any one module, and fewer than 500 to the judgment package. This is a review-size budget, not a lifetime module-size limit. A single vertical change may touch several modules because each owns an independent seam; a module's `adapters/` subpackage is budgeted separately for the same reason. Tests, generated output, migrations and `vendor/` do not count. `scripts/check_change_size.py` measures the complete pull-request diff in CI (`make change-size` locally).
-- If a change exceeds its review budget, identify the smallest coherent stage from the actual diff, dependencies and affected call sites. A valid stage has observable behavior, its own tests, and leaves no temporary duplicate path, incompatible migration state or caller that must know the next stage will repair it. Splitting commits inside one pull request does not reduce the measured change; independently landed stages do.
-- Splitting a large file into private files does **not** create a new product module. Keep the existing product interface and table owner, leave orchestration at the old entry point, and move related tests and module/type documentation toward the extracted behavior so its invariants remain beside it. Prefer responsibilities such as session lifecycle, event dispatch or one concrete transport implementation over layers such as models, repositories or HTTP.
-- Create a new product module only when **all** of these are true:
-  1. it owns a coherent behavior or invariant that can be named without referring to a table, route, screen, framework or file type;
-  2. it has a change driver distinct from the original module, rather than being one CRUD verb or one transport layer of the same capability;
-  3. callers and tests can cross one small interface, dependencies point toward the behavior, and the extraction introduces no cycle;
-  4. its state has one owner — including tables and migrations where applicable — or it is a pure behavior module with no state;
-  5. the original path no longer implements or calls a second copy of the extracted capability.
-- The following do not establish a product-module boundary: users versus roles, commands versus queries, HTTP versus jobs, models versus repositories, one table per package, file type, screen section, a `common`/`utils` bucket, or a production adapter plus its test fake. They may justify files or private internal packages, but not a second owner or a pass-through public interface.
-- Never move behavior into `api.py`, `packages/`, `scripts/` or an adapter only to change which budget bucket counts it, and never delete useful explanation or compress ordinary formatting to reduce the line count. If no coherent stage or valid boundary exists, stop and record why an explicit size exception is safer than a false seam; changing the budget requires reopening this harness rather than silently inventing architecture.
-- Resist growth in shared ground. A new capability belongs to the module that owns it, or to a real new module under the rules above. `packages/contracts` and a module's `api.py` are where an unnecessary addition costs the most, because every other module pays for it.
+Here, size is advisory. It never fails a gate by itself and needs no exception allowlist or separate approval. Correctness, safety, ownership, compatibility and the task's acceptance criteria remain mandatory.
+
+| Object | Measure | Action |
+|---|---|---|
+| Authored production file | Physical lines in a changed Python, TypeScript or Vue source file, including comments, docstrings and blank lines; all sections of a Vue file count together. Tests and generated files are excluded. | Below 500 is a readability target. At roughly 800, assess whether an independent responsibility belongs in a focused private file. A small fix in an existing large file does not require a surrounding refactor. |
+| Product module | Behavior, state ownership, change driver and interface from §1 and §3 | No cumulative line cap. Private files and adapters remain part of their existing owner. |
+| Pull request | Added **plus deleted** implementation lines across the complete diff; display additions and deletions separately | Around 800 prompts scope review. Complex logic deserves earlier review; the reporter flags 500 changed judgment lines. Module breakdowns locate work, not separate allowances. |
+
+`make change-size` reports the task from its merge-base with `BASE` (default `origin/main`), including committed, staged, unstaged and untracked local files. Supplying `HEAD` selects that immutable commit and excludes worktree edits, as CI does. The report separates tests, generated output, migrations, `vendor/`, other files and binary files from authored production implementation and repository scripts. Pure renames recognized by Git do not count their moved contents as new logic. A Git or read failure still fails the command.
+
+Decompose when it reduces mixed responsibilities or coupling. Keep the public interface and table owner, leave orchestration at the existing entry point, and move related tests and explanations beside the extracted behavior. If cohesion is safer, record that reason in the normal review handoff and continue. For mechanical edits or pure deletions, describe their nature rather than staging them solely to reduce the count.
+
+A separately landed stage must have observable behavior, its own evidence, and a valid intermediate state: no duplicate production path, incompatible migration or caller waiting for a later repair. Preserve every acceptance criterion across stages. Splitting commits alone does not split a pull request.
+
+Create a new product module only when all five hold: a coherent behavior or invariant; a distinct change driver; one small interface for callers and tests with no dependency cycle; one state owner (or pure behavior without state); and one implementation on the original path. Users versus roles, CRUD verbs, commands versus queries, transport layers, tables, file types, screen sections, utility buckets, or an adapter plus its fake do not by themselves establish that boundary.
+
+Keep useful explanations and normal formatting. Moving behavior into `api.py`, `packages/`, `scripts/` or adapters solely to alter counts, or adding pass-through interfaces for that purpose, violates ownership. Shared contracts and public interfaces grow only for real callers under §3.
 
 ### Comments and documentation language
 
@@ -214,7 +218,7 @@ The reference repository's [`AGENTS.md`](https://github.com/openai/codex/blob/f4
 - Where a signature cannot change and a literal must be passed, name it at the call site with a comment carrying the callee's parameter name exactly.
 - Branch on an enumeration exhaustively; a catch-all arm swallows the next value added. One exception, and it is mandatory rather than permitted: at a cross-process wire boundary a forward-compatible fallback is required, because the inference host and the center upgrade independently — an unknown reason code renders as the raw code plus a generic hint (see [ADR-0003](../adr/0003-api-v1-is-a-fixed-prefix.md)).
 - Every entry added to a module's `api.py` carries a docstring giving its role and the caller's expected use. `api.py` is the cross-module contract, so an undocumented entry there is an unbounded promise.
-- A helper with one call site stays inlined.
+- Extract a private helper when it names a complete responsibility or makes its caller easier to understand, even with one caller; keep trivial pass-through helpers inline.
 
 ### What a change carries with it
 
@@ -232,7 +236,16 @@ Its first two targets are `lockfile` (`uv lock --check`, so a manifest edit whos
 
 Package-specific commands may exist for a tight feedback loop, but they do not replace these two targets. Automation in `scripts/` stays thin: product behavior belongs in an app or package where it can be tested through its interface.
 
-Reach for these targets rather than the tool underneath. They carry the flags, environment, and ordering that CI uses, so invoking `pytest`, `ruff`, or `vitest` directly runs a different check than the gate runs. Run the formatter after changing code without asking first. Container startup, model loading, and integration bring-up are slow by nature: wait for them instead of killing the process and reporting a failure.
+Use the Make targets for gate evidence: they carry CI's flags, environment and ordering. For a narrow red/green loop, the underlying command may select a test when it preserves the target's interpreter, paths and flags; that run does not replace the required target. Run the formatter on changed code without asking first. Let container startup, model loading and integration bring-up finish before judging their result.
+
+### Working and review cycle
+
+1. **Scope.** Record the ticket or direct user request, acceptance criteria, affected entry point/callers and necessary evidence under §4. One ticket or direct task, one branch, one worktree outside the repository, never `main`. Start from `origin/main`; use a fresh branch for the next task and delete the old branch/worktree once merged. Existing approved scope and test seams remain approved; ask only about missing decisions that affect behavior or safety.
+2. **Implement.** Invoke `tdd` for behavior changes, including repository checks. Use the agreed public seam: one failing test, the minimum implementation, then the next behavior. Run the narrow affected tests during this loop. Pure wording changes use document checks; they do not enter TDD. Finish the full acceptance scope before requesting the normal review, rather than reviewing each test or private extraction separately.
+3. **Verify.** One owner runs `make check` for the completed batch, plus the applicable integration, browser, contract or hardware gates from §4 and §7. `make -k check` can collect independent failures in one run without changing success criteria. Capture commands, results, environment and the tested commit plus any uncommitted diff/untracked files in one handoff, alongside the spec and fixed review base. Missing infrastructure is an explicit validation gap, never a pass. The reviewer consumes this evidence rather than launching a duplicate full run.
+4. **Review together.** A fresh session reviews the same complete diff and affected callers against both **Standards** and **Spec**. With `code-review`, its two review subagents run in parallel and return one response retaining both axes. Collect all findings before the author starts the repair batch. Blocking findings identify an unmet requirement, violated invariant or concrete defect; size, optional cleanup and subjective smells alone are advisory. Tool-enforced checks use the existing results.
+5. **Repair and recheck.** Fix the collected defects together, then rerun the affected checks and review the fixes plus their affected callers. Evidence is reusable only while the covered code, tests, configuration, dependencies and relevant external inputs remain unchanged. Repeat a broader check or review only for invalidated evidence, expanded scope or a new concrete concern; explain the trigger. Unchanged areas do not start another full cycle. All blocking findings and required validation still need resolution.
+6. **Hand off and commit.** A session that writes code neither reviews nor commits that change. One fresh session may coordinate the consolidated review, verify its resolution and commit; subagents are for review only. Record acceptance coverage, review resolution, valid check results and any tracked deferred validation before calling implementation ready. Closing a ticket still follows the roadmap's exit conditions and the issue-tracker evidence rules.
 
 Four of this document's rules also run as Git hooks, versioned in `scripts/githooks/` and enabled by `make hooks` (which `make check` runs, so a fresh clone has them after its first gate run): a commit is refused on `main`, a push to `main` is refused from any branch, a staged change under `vendor/` is refused with a pointer to ADR-0007, and unformatted staged Python is refused. They sit in Git rather than in any one agent's configuration because every agent and every person commits through Git, so one implementation holds for all of them. An instruction file is advisory; a hook holds on the turn where the instruction has already scrolled out of context. Each hook is a few standard-library lines that cite the rule it enforces, which is what keeps the two in agreement.
 
@@ -245,7 +258,7 @@ The sole branch-protection status is `CI required` from `.github/workflows/block
 As workspaces appear, split checks into reusable workflows while retaining the gatherer:
 
 1. repository policy and lockfile cleanliness — always, for both `uv.lock` and `pnpm-lock.yaml`;
-2. backend/edge/web format, lint, type, unit, boundary, secret-scanning, base-code contract checks and the web production build (`make check`) — on relevant paths; plus the change-size budget (`make change-size`) on pull requests;
+2. backend/edge/web format, lint, type, unit, boundary, secret-scanning, base-code contract checks and the web production build (`make check`) — on relevant paths; plus the advisory size report (`make change-size`) on pull requests;
 3. backend integration checks against real containerized infrastructure (`make check-integration`) — on relevant paths;
 4. migration and cross-process contract compatibility — when schemas or contracts change;
 5. workflow changes — run every blocking family.
@@ -272,9 +285,11 @@ consumers cannot generate it during install or build.
 
 ## 9. Agent instruction hierarchy
 
-The root `AGENTS.md` is loaded on every turn, so each of its lines is paid whether or not it fires. It carries only the invariants that must hold before any file is opened, plus one pointer per branch of work; the rules themselves live here or in the decision source. Add a nested `AGENTS.md` only where a subtree has a real local exception, and keep each rule in one place rather than copying this document into an agent file.
+Keep `AGENTS.md` as the always-present entry point: the invariants needed before reading files and one conditional pointer per task branch. Name the triggering task and the relevant section. Keep the steps and their completion conditions together; move branch-specific reference behind a pointer. Add a nested `AGENTS.md` only for a real local exception. `CLAUDE.md` remains a pointer to the same root instructions.
 
-Two limits from the reference baseline bear on that directly. An agent runtime caps the instruction bytes it loads — the baseline's default is 32 KiB with later files truncated — so an instruction file that keeps growing silently stops being read in full. And that same project's own `AGENTS.md` generator specifies 200–400 words, while its hand-written file runs roughly 550 lines. Follow the specification rather than the example: material only some branches need belongs behind a pointer. Formatting and lint rules belong in the tool config and the gate, never in an instruction file, where they cost context on every turn and go stale without failing anything.
+Each rule has one authoritative home. Point to tool configuration, commands, contracts and ADRs instead of copying their current values or directory inventories. Keep instruction text in English under §5. When guidance is superseded, merge surviving facts into the current source and delete the stale guidance; Git is the archive. Use `writing-for-agents` when updating these instructions.
+
+The official [AGENTS.md guide](https://developers.openai.com/codex/guides/agents-md/) defines a default **32 KiB combined project-instruction byte budget**, configured by `project_doc_max_bytes`. That is a loading limit, not a source-file line limit or a per-document word target. Codex discovers the instruction chain at session start; start a fresh session to verify instruction changes. Keep important guidance reachable within the budget; do not turn a suggested document length into another hard size gate.
 
 ## 10. Reference-baseline patterns used
 

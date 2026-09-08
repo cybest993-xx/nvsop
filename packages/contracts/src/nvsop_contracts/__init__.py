@@ -28,6 +28,15 @@ from nvsop_contracts.commands import (
     connection_test_result_from_wire,
     connection_test_result_to_wire,
 )
+from nvsop_contracts.host_identity import (
+    HostIdentityKeyPair,
+    HostIdentityRequest,
+    generate_host_identity_key_pair,
+    sign_host_identity_request,
+    validate_host_identity_private_key,
+    validate_host_identity_public_key,
+    verify_host_identity_request,
+)
 
 __all__ = [
     "Capability",
@@ -37,6 +46,8 @@ __all__ = [
     "ConnectionTestResult",
     "Delivery",
     "EdgePreservation",
+    "HostIdentityKeyPair",
+    "HostIdentityRequest",
     "Measured",
     "PointRole",
     "Polled",
@@ -53,5 +64,10 @@ __all__ = [
     "connection_test_command_to_wire",
     "connection_test_result_from_wire",
     "connection_test_result_to_wire",
+    "generate_host_identity_key_pair",
+    "sign_host_identity_request",
     "unfit_for",
+    "validate_host_identity_private_key",
+    "validate_host_identity_public_key",
+    "verify_host_identity_request",
 ]

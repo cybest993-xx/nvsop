@@ -56,13 +56,17 @@ class DelegatedConnectionContractTest(unittest.TestCase):
                     result, connection_test_result_from_wire(connection_test_result_to_wire(result))
                 )
 
-    def test_non_rejected_result_cannot_claim_credentials_are_missing(self) -> None:
+    def test_non_rejected_result_must_confirm_configured_credentials(self) -> None:
         for outcome in (ConnectionTestOutcome.REACHABLE, ConnectionTestOutcome.UNREACHABLE):
-            with self.subTest(outcome=outcome), self.assertRaises(ValueError):
-                ConnectionTestResult(
-                    outcome=outcome,
-                    credentials_configured=False,
-                )
+            for credentials_configured in (False, None):
+                with (
+                    self.subTest(outcome=outcome, credentials_configured=credentials_configured),
+                    self.assertRaises(ValueError),
+                ):
+                    ConnectionTestResult(
+                        outcome=outcome,
+                        credentials_configured=credentials_configured,
+                    )
 
     def test_unknown_command_fields_are_rejected(self) -> None:
         document = {

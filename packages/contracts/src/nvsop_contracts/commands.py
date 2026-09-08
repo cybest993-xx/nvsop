@@ -61,9 +61,9 @@ class ConnectionTestResult:
             raise ValueError("a rejected connection test must carry a failure code")
         if (
             self.outcome is not ConnectionTestOutcome.REJECTED
-            and self.credentials_configured is False
+            and self.credentials_configured is not True
         ):
-            raise ValueError("a non-rejected connection test cannot lack configured credentials")
+            raise ValueError("a non-rejected connection test must confirm configured credentials")
 
 
 def connection_test_command_to_wire(command: ConnectionTestCommand) -> dict[str, object]:

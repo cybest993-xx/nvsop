@@ -27,6 +27,7 @@ export type ApiErrorCode =
   | 'INFERENCE_BACKEND_HAS_CAMERAS'
   | 'INFERENCE_HOST_DEACTIVATED'
   | 'INFERENCE_HOST_AUTHENTICATION_FAILED'
+  | 'INFERENCE_HOST_CREDENTIALS_REMOVED'
   | 'INFERENCE_HOST_HAS_BACKENDS'
   | 'INFERENCE_HOST_NAME_TAKEN'
   | 'INFERENCE_HOST_NOT_FOUND'
@@ -287,12 +288,10 @@ export type CameraView = {
 /**
  * ConnectionState
  *
- * What the last real connection test observed about a backend's endpoint.
+ * 最近一次真实连接测试对后端端点的观测结果。
  *
- * Three values, because Q31 fixes exactly these: a record that has never been tested is
- * 未验证 — not "working" — and only a test that truly reached the endpoint may say
- * `success`. The facts belong to the placement (the host and endpoint a test observed):
- * moving the backend, or pointing it at another endpoint, retires what was self-reported.
+ * 固定为三态：从未测试是“未验证”，不是“正常”；只有真实到达端点的测试才能报告成功。事实属于
+ * 测试时的部署位置；移动后端或改变端点后，原有自报结果失效。
  */
 export type ConnectionState = 'unverified' | 'success' | 'failure'
 
@@ -548,11 +547,10 @@ export type Credentials = {
 /**
  * DeviceStatus
  *
- * Whether a configurable device still takes part in new bindings and operation.
+ * 可配置设备是否继续参与新绑定和运行。
  *
- * An enum rather than an `is_active` boolean: `CONTEXT.md` gives 停用 its own definition
- * across every mutable configuration object. Deactivation is reversible and never
- * cascades — a deactivated host's backends keep their rows and their history.
+ * 使用枚举而不是 `is_active` 布尔值，因为所有可变配置对象共用“停用”语义。停用可恢复且不级联，
+ * 已停用推理机的后端仍保留记录和历史。
  */
 export type DeviceStatus = 'active' | 'deactivated'
 
@@ -599,12 +597,10 @@ export type FieldError = {
 /**
  * HostConfiguration
  *
- * The host's whole editable configuration, exactly as the edit form submits it.
+ * 推理机的完整可编辑配置，与编辑表单提交的形状一致。
  *
- * §5.19: durations and thresholds are configured values, and 0 or negative — or a
- * watermark of 0 or 100 — is a configuration error refused at save time. A URL with an
- * embedded `user:password` is refused at the contract (ADR-0008), before it can be stored
- * or echoed back.
+ * §5.19 的时长和阈值必须有效；带有 `user:password` 的 URL 按 ADR-0008 在契约层拒绝，不能存储
+ * 或回显。
  */
 export type HostConfiguration = {
   /**
@@ -630,9 +626,21 @@ export type HostConfiguration = {
 }
 
 /**
+ * HostIdentityKeyConfiguration
+ *
+ * 推理机公钥配置；对应的私钥只留在推理机本地。
+ */
+export type HostIdentityKeyConfiguration = {
+  /**
+   * Public Key
+   */
+  public_key: string
+}
+
+/**
  * HostStatus
  *
- * The one field 停用 and 恢复 toggle, as the two values of one subresource.
+ * 停用和恢复共用的状态子资源。
  */
 export type HostStatus = {
   status: DeviceStatus
@@ -694,7 +702,7 @@ export type InferenceBackendView = {
 /**
  * InferenceHostCredentialView
  *
- * 推理机凭据轮换结果；明文只在本次响应出现。
+ * 仅为保留旧 OpenAPI 响应形状；路径总是返回 410，处理逻辑不会构造凭据。
  */
 export type InferenceHostCredentialView = {
   /**
@@ -708,9 +716,21 @@ export type InferenceHostCredentialView = {
 }
 
 /**
+ * InferenceHostIdentityKeyView
+ *
+ * 公钥登记结果；不回显任何私钥或凭据。
+ */
+export type InferenceHostIdentityKeyView = {
+  /**
+   * Revision
+   */
+  revision: number
+}
+
+/**
  * InferenceHostView
  *
- * One host as the API carries it. `revision` is what If-Match echoes.
+ * API 返回的一台推理机；`revision` 用于 If-Match 乐观锁。
  */
 export type InferenceHostView = {
   /**
@@ -1153,6 +1173,10 @@ export type PendingCommandView = {
    */
   lease_expires_at: string | null
   result: ConnectorReachability | null
+  /**
+   * Result Credentials Configured
+   */
+  result_credentials_configured?: boolean | null
   /**
    * Result Detail
    */
@@ -3156,6 +3180,18 @@ export type ClaimNextDeviceCommandData = {
      */
     'X-Inference-Host-ID': string
     /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+    /**
      * X-Inference-Host-Token
      */
     'X-Inference-Host-Token'?: string | null
@@ -3270,6 +3306,18 @@ export type CompleteDeviceCommandData = {
      * X-Command-Claim-Token
      */
     'X-Command-Claim-Token': string
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
     /**
      * X-Inference-Host-Token
      */
@@ -3986,6 +4034,10 @@ export type RotateInferenceHostCredentialErrors = {
    */
   409: ProblemDocument
   /**
+   * Host bearer credentials are no longer issued
+   */
+  410: ProblemDocument
+  /**
    * Request invalid
    */
   422: ProblemDocument
@@ -4007,6 +4059,64 @@ export type RotateInferenceHostCredentialResponses = {
 
 export type RotateInferenceHostCredentialResponse =
   RotateInferenceHostCredentialResponses[keyof RotateInferenceHostCredentialResponses]
+
+export type RegisterInferenceHostIdentityKeyData = {
+  body: HostIdentityKeyConfiguration
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Host Id
+     */
+    host_id: string
+  }
+  query?: never
+  url: '/api/v1/inference-hosts/{host_id}/identity-key'
+}
+
+export type RegisterInferenceHostIdentityKeyErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Host not found
+   */
+  404: ProblemDocument
+  /**
+   * Revision moved (STALE_REVISION)
+   */
+  409: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type RegisterInferenceHostIdentityKeyError =
+  RegisterInferenceHostIdentityKeyErrors[keyof RegisterInferenceHostIdentityKeyErrors]
+
+export type RegisterInferenceHostIdentityKeyResponses = {
+  /**
+   * Successful Response
+   */
+  200: InferenceHostIdentityKeyView
+}
+
+export type RegisterInferenceHostIdentityKeyResponse =
+  RegisterInferenceHostIdentityKeyResponses[keyof RegisterInferenceHostIdentityKeyResponses]
 
 export type SetInferenceHostStatusData = {
   body: HostStatus

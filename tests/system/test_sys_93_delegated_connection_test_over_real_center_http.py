@@ -17,10 +17,14 @@ import sys
 import threading
 import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from itertools import count
 from pathlib import Path
+from random import Random
 from typing import Any, ClassVar, cast
+from unittest.mock import patch
 from urllib.parse import urlsplit
 
 from conftest import ADMIN_CREDENTIALS, BootstrapCommand, csrf_header, log_in
@@ -29,16 +33,31 @@ from edge_runtime.runtime import LocalIsapiConnectorConfiguration, build_connect
 from httpx2 import Client, Response
 
 from nvsop_contracts import (
+    HostIdentityKeyPair,
+    HostIdentityRequest,
     Unverified,
     capability_to_wire,
     connection_test_claim_from_wire,
     connection_test_claim_to_wire,
+    generate_host_identity_key_pair,
+    sign_host_identity_request,
 )
 
 HOSTS = "/api/v1/inference-hosts"
 STATIONS = "/api/v1/stations"
 CONNECTORS = "/api/v1/connectors"
 COMMANDS = "/api/v1/device-commands"
+_NONCES = count()
+
+
+def _fixture_host_identity(seed: int) -> HostIdentityKeyPair:
+    """用固定伪随机流生成合成测试密钥, 避免测试依赖系统熵。"""
+    random = Random(seed)
+    with (
+        patch("nvsop_contracts.host_identity.secrets.randbits", side_effect=random.getrandbits),
+        patch("nvsop_contracts.host_identity.secrets.randbelow", side_effect=random.randrange),
+    ):
+        return generate_host_identity_key_pair()
 
 
 Target = dict[str, str]
@@ -57,6 +76,7 @@ _PENDING_COMMAND_FIELDS = frozenset(
         "result",
         "result_detail",
         "failure_code",
+        "result_credentials_configured",
         "completed_at",
         "created_by",
         "created_at",
@@ -79,6 +99,26 @@ class LocalDeviceHandler(BaseHTTPRequestHandler):
         del format_string, args
 
 
+class LocalInferenceHandler(BaseHTTPRequestHandler):
+    """真实生产工位输入使用的本地 SSE 端点。"""
+
+    payload: ClassVar[bytes]
+    requests: ClassVar[int] = 0
+
+    def do_POST(self) -> None:
+        type(self).requests += 1
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(self.payload)
+        self.wfile.flush()
+
+    def log_message(self, format_string: str, *args: object) -> None:
+        del format_string, args
+
+
 @contextmanager
 def _local_device(status_code: int) -> Iterator[str]:
     """提供一个可返回真实可达或不可达状态的本地设备 socket。"""
@@ -88,6 +128,47 @@ def _local_device(status_code: int) -> Iterator[str]:
     thread.start()
     try:
         yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+@contextmanager
+def _local_inference() -> Iterator[str]:
+    def action(signal: str, source_time: float) -> bytes:
+        return (
+            b"data: "
+            + json.dumps(
+                {
+                    "choices": [
+                        {
+                            "delta": {"content": signal},
+                            "chunk_metadata": {
+                                "response": signal,
+                                "start_time": source_time,
+                                "first_timestamp": 1.0,
+                            },
+                        }
+                    ]
+                }
+            ).encode("utf-8")
+            + b"\n\n"
+        )
+
+    LocalInferenceHandler.requests = 0
+    LocalInferenceHandler.payload = b"".join(
+        (
+            action("(1) start", 1.0),
+            action("(2) done", 2.0),
+            b"data: [DONE]\n\n",
+        )
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), LocalInferenceHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -141,23 +222,45 @@ def _create_target(
     )
     assert connector.status_code == 201, connector.text
 
-    credential = client.post(
-        f"{HOSTS}/{host_id}/credential",
+    identity = _fixture_host_identity(10 + int(suffix))
+    registered = client.post(
+        f"{HOSTS}/{host_id}/identity-key",
         headers={**headers, "If-Match": "1"},
+        json={"public_key": identity.public_key},
     )
-    assert credential.status_code == 200, credential.text
+    assert registered.status_code == 200, registered.text
     return {
         "host_id": host_id,
-        "host_token": credential.json()["credential"],
+        "host_private_key": identity.private_key,
         "station_id": station_id,
         "connector_id": connector.json()["id"],
     }
 
 
-def _edge_headers(host_id: str, host_token: str, claim_token: str | None = None) -> dict[str, str]:
+def _edge_headers(
+    host_id: str,
+    host_private_key: str,
+    *,
+    method: str,
+    path: str,
+    body: dict[str, Any] | None = None,
+    claim_token: str | None = None,
+) -> dict[str, str]:
+    request = HostIdentityRequest(
+        method=method,
+        path=path,
+        host_id=host_id,
+        timestamp=int(time.time()),
+        nonce=f"sys93-nonce-{next(_NONCES)}",
+        body=body,
+    )
     headers = {
         "X-Inference-Host-ID": host_id,
-        "X-Inference-Host-Token": host_token,
+        "X-Inference-Host-Timestamp": str(request.timestamp),
+        "X-Inference-Host-Nonce": request.nonce,
+        "X-Inference-Host-Signature": sign_host_identity_request(
+            request, private_key=host_private_key
+        ),
     }
     if claim_token is not None:
         headers["X-Command-Claim-Token"] = claim_token
@@ -217,7 +320,12 @@ def _enqueue(
 def _claim(client: Client, target: Target) -> dict[str, Any]:
     response = client.get(
         f"{COMMANDS}/next",
-        headers=_edge_headers(target["host_id"], target["host_token"]),
+        headers=_edge_headers(
+            target["host_id"],
+            target["host_private_key"],
+            method="GET",
+            path=f"{COMMANDS}/next",
+        ),
     )
     assert response.status_code == 200, response.text
     assert "password" not in response.text.lower()
@@ -240,7 +348,7 @@ def test_delegated_command_is_persistent_and_host_scoped(
     assert queued["target_id"] == owner["connector_id"]
     assert queued["target_revision"] == 1
 
-    # A new browser session reads the same row from the real PostgreSQL-backed center.
+    # 新浏览器会话从真实 PostgreSQL 中心读取同一行。
     with _open_second_operator_session(client) as observer:
         persisted = observer.get(f"{COMMANDS}/{queued['id']}")
         assert persisted.status_code == 200, persisted.text
@@ -251,7 +359,12 @@ def test_delegated_command_is_persistent_and_host_scoped(
     with _open_edge_session(client) as edge:
         other_claim = edge.get(
             f"{COMMANDS}/next",
-            headers=_edge_headers(other["host_id"], other["host_token"]),
+            headers=_edge_headers(
+                other["host_id"],
+                other["host_private_key"],
+                method="GET",
+                path=f"{COMMANDS}/next",
+            ),
         )
         assert other_claim.status_code == 204
 
@@ -269,7 +382,7 @@ def test_delegated_command_is_persistent_and_host_scoped(
     assert "password" not in log.getvalue().lower()
 
 
-def test_revision_change_before_edge_claim_is_rejected_on_real_center(
+def test_connector_configuration_and_type_change_before_edge_claim_is_rejected_on_real_center(
     client: Client, bootstrap: BootstrapCommand
 ) -> None:
     log_in(client, bootstrap)
@@ -282,7 +395,7 @@ def test_revision_change_before_edge_claim_is_rejected_on_real_center(
         headers={**headers, "If-Match": "1"},
         json={
             "name": "领取前修改的连接器-9",
-            "connector_type": "hikvision_isapi",
+            "connector_type": "board_card",
             "configuration": {"address": "10.0.8.109", "port": 80},
             "station_id": target["station_id"],
             "host_id": target["host_id"],
@@ -294,7 +407,12 @@ def test_revision_change_before_edge_claim_is_rejected_on_real_center(
     with _open_edge_session(client) as edge:
         claim = edge.get(
             f"{COMMANDS}/next",
-            headers=_edge_headers(target["host_id"], target["host_token"]),
+            headers=_edge_headers(
+                target["host_id"],
+                target["host_private_key"],
+                method="GET",
+                path=f"{COMMANDS}/next",
+            ),
         )
     assert claim.status_code == 204, claim.text
 
@@ -335,7 +453,14 @@ def test_duplicate_result_is_idempotent_over_real_center_http(
         }
         completed = edge.post(
             f"{COMMANDS}/{queued['id']}/result",
-            headers=_edge_headers(target["host_id"], target["host_token"], claim["claim_token"]),
+            headers=_edge_headers(
+                target["host_id"],
+                target["host_private_key"],
+                method="POST",
+                path=f"{COMMANDS}/{queued['id']}/result",
+                body=result,
+                claim_token=claim["claim_token"],
+            ),
             json=result,
         )
         assert completed.status_code == 200, completed.text
@@ -346,7 +471,14 @@ def test_duplicate_result_is_idempotent_over_real_center_http(
 
         repeated = edge.post(
             f"{COMMANDS}/{queued['id']}/result",
-            headers=_edge_headers(target["host_id"], target["host_token"], claim["claim_token"]),
+            headers=_edge_headers(
+                target["host_id"],
+                target["host_private_key"],
+                method="POST",
+                path=f"{COMMANDS}/{queued['id']}/result",
+                body=result,
+                claim_token=claim["claim_token"],
+            ),
             json=result,
         )
         assert repeated.status_code == 200, repeated.text
@@ -356,7 +488,14 @@ def test_duplicate_result_is_idempotent_over_real_center_http(
 
         conflicting = edge.post(
             f"{COMMANDS}/{queued['id']}/result",
-            headers=_edge_headers(target["host_id"], target["host_token"], claim["claim_token"]),
+            headers=_edge_headers(
+                target["host_id"],
+                target["host_private_key"],
+                method="POST",
+                path=f"{COMMANDS}/{queued['id']}/result",
+                body={**result, "detail": "另一份不同的回报"},
+                claim_token=claim["claim_token"],
+            ),
             json={**result, "detail": "另一份不同的回报"},
         )
         assert conflicting.status_code == 409, conflicting.text
@@ -365,6 +504,56 @@ def test_duplicate_result_is_idempotent_over_real_center_http(
     connector = client.get(f"{CONNECTORS}/{target['connector_id']}")
     assert connector.status_code == 200, connector.text
     assert connector.json()["reachability"] == "reachable"
+
+
+def test_concurrent_http_results_serialize_before_connector_health_is_written(
+    client: Client, bootstrap: BootstrapCommand
+) -> None:
+    """Two real edge HTTP clients yield one winner and never commit the loser's health fact."""
+    log_in(client, bootstrap)
+    headers = csrf_header(client)
+    target = _create_target(client, headers, "7")
+    queued = _enqueue(client, headers, target["connector_id"], "sys93-concurrent-result-1")
+    claim = _claim(client, target)
+    result_path = f"{COMMANDS}/{queued['id']}/result"
+    base_url = str(client.base_url)
+
+    def report(detail: str) -> Response:
+        result = {
+            "outcome": "reachable",
+            "detail": detail,
+            "credentials_configured": True,
+            "failure_code": None,
+        }
+        with Client(base_url=base_url, verify=False, trust_env=False) as edge:
+            return edge.post(
+                result_path,
+                headers=_edge_headers(
+                    target["host_id"],
+                    target["host_private_key"],
+                    method="POST",
+                    path=f"{COMMANDS}/{queued['id']}/result",
+                    body=result,
+                    claim_token=claim["claim_token"],
+                ),
+                json=result,
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        responses = list(workers.map(report, ("并发结果-A", "并发结果-B")))
+
+    assert sorted(response.status_code for response in responses) == [200, 409]
+    completed = next(response for response in responses if response.status_code == 200)
+    conflict = next(response for response in responses if response.status_code == 409)
+    completed_document = cast(dict[str, Any], completed.json())
+    assert completed_document["status"] == "succeeded"
+    assert conflict.json()["error_code"] == "COMMAND_ALREADY_COMPLETED"
+
+    connector = client.get(f"{CONNECTORS}/{target['connector_id']}")
+    assert connector.status_code == 200, connector.text
+    connector_document = cast(dict[str, Any], connector.json())
+    assert connector_document["reachability"] == "reachable"
+    assert connector_document["health_detail"] == completed_document["result_detail"]
 
 
 def test_configuration_change_and_edge_rejection_are_visible_without_health_mutation(
@@ -393,7 +582,19 @@ def test_configuration_change_and_edge_rejection_are_visible_without_health_muta
     late = _edge_post(
         client,
         f"{COMMANDS}/{queued['id']}/result",
-        headers=_edge_headers(changed["host_id"], changed["host_token"], claim["claim_token"]),
+        headers=_edge_headers(
+            changed["host_id"],
+            changed["host_private_key"],
+            method="POST",
+            path=f"{COMMANDS}/{queued['id']}/result",
+            body={
+                "outcome": "reachable",
+                "detail": "迟到的真实结果",
+                "credentials_configured": True,
+                "failure_code": None,
+            },
+            claim_token=claim["claim_token"],
+        ),
         payload={
             "outcome": "reachable",
             "detail": "迟到的真实结果",
@@ -423,8 +624,16 @@ def test_configuration_change_and_edge_rejection_are_visible_without_health_muta
         f"{COMMANDS}/{rejected_command['id']}/result",
         headers=_edge_headers(
             rejected_target["host_id"],
-            rejected_target["host_token"],
-            rejected_claim["claim_token"],
+            rejected_target["host_private_key"],
+            method="POST",
+            path=f"{COMMANDS}/{rejected_command['id']}/result",
+            body={
+                "outcome": "rejected",
+                "detail": "推理机未配置该连接器凭据",
+                "credentials_configured": False,
+                "failure_code": "COMMAND_CREDENTIALS_NOT_CONFIGURED",
+            },
+            claim_token=rejected_claim["claim_token"],
         ),
         payload={
             "outcome": "rejected",
@@ -478,7 +687,7 @@ def test_production_runner_uses_the_real_local_connector_and_reports_both_outcom
         loop = build_connection_test_loop(
             center_url=str(client.base_url).rstrip("/"),
             host_id=reachable_target["host_id"],
-            host_token=reachable_target["host_token"],
+            host_private_key=reachable_target["host_private_key"],
             command_timeout=2.0,
             command_poll_interval=0.1,
             ssl_context=ssl._create_unverified_context(),
@@ -517,7 +726,7 @@ def test_production_runner_uses_the_real_local_connector_and_reports_both_outcom
         loop = build_connection_test_loop(
             center_url=str(client.base_url).rstrip("/"),
             host_id=unreachable_target["host_id"],
-            host_token=unreachable_target["host_token"],
+            host_private_key=unreachable_target["host_private_key"],
             command_timeout=2.0,
             command_poll_interval=0.1,
             ssl_context=ssl._create_unverified_context(),
@@ -552,7 +761,7 @@ def test_production_entrypoint_runs_the_autonomous_loop_in_a_process(
     log_in(client, bootstrap)
     headers = csrf_header(client)
 
-    with _local_device(200) as device_url:
+    with _local_device(200) as device_url, _local_inference() as inference_url:
         device_port = urlsplit(device_url).port
         assert device_port is not None
         target = _create_target(
@@ -564,8 +773,8 @@ def test_production_entrypoint_runs_the_autonomous_loop_in_a_process(
         )
         queued = _enqueue(client, headers, target["connector_id"], "sys93-entrypoint-1")
 
-        host_token_file = tmp_path / "host-token"
-        host_token_file.write_text(target["host_token"] + "\n", encoding="utf-8")
+        host_private_key_file = tmp_path / "host-private-key"
+        host_private_key_file.write_text(target["host_private_key"] + "\n", encoding="utf-8")
         username_file = tmp_path / "connector-username"
         username_file.write_text("edge-user\n", encoding="utf-8")
         password_file = tmp_path / "connector-password"
@@ -586,11 +795,28 @@ def test_production_entrypoint_runs_the_autonomous_loop_in_a_process(
                 for state, token in CANDIDATE_PROFILE.output_tokens
             ],
         }
+        local_state_path = tmp_path / "local-state.sqlite"
         config = {
             "center_url": str(client.base_url).rstrip("/"),
             "center_ca_file": str(client.nvsop_tls_certificate),
             "host_id": target["host_id"],
-            "host_token_file": str(host_token_file),
+            "host_private_key_file": str(host_private_key_file),
+            "local_state_path": str(local_state_path),
+            "stations": [
+                {
+                    "station_id": "station-entrypoint-8",
+                    "inference_url": inference_url,
+                    "request": {"stream": True, "messages": []},
+                    "template": {
+                        "steps": ["(1) start", "(2) done"],
+                        "ordering": "ordered",
+                        "start_signal": "(1) start",
+                        "end_signals": ["(2) done"],
+                    },
+                    "parameters": {"idle_timeout": 10.0, "step_deadline": 10.0},
+                    "margins": {"leading": 0.0, "trailing": 0.0},
+                }
+            ],
             "command_timeout_seconds": 2.0,
             "command_poll_interval_seconds": 0.05,
             "connectors": [
@@ -652,7 +878,9 @@ def test_production_entrypoint_runs_the_autonomous_loop_in_a_process(
             stdout, stderr = process.communicate(timeout=10)
             assert "edge-password" not in stdout
             assert "edge-password" not in stderr
-            assert process.returncode == 0
+            assert process.returncode == 0, f"stdout={stdout}\nstderr={stderr}"
+
+        assert LocalInferenceHandler.requests >= 1
 
         connector = client.get(f"{CONNECTORS}/{target['connector_id']}")
         assert connector.status_code == 200, connector.text

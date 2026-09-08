@@ -27,6 +27,7 @@ from uuid import UUID
 import pytest
 from auth_fakes import FakeRoles, FakeSessions, FakeUsers
 from device_fakes import (
+    DEFAULT_HOST_IDENTITY,
     FakeCameras,
     FakeConnectors,
     FakeInferenceBackends,
@@ -157,6 +158,12 @@ ROUTES = [
     Target(
         "POST",
         "/inference-hosts/{host_id}/credential",
+        headers={"If-Match": "1"},
+    ),
+    Target(
+        "POST",
+        "/inference-hosts/{host_id}/identity-key",
+        {"public_key": DEFAULT_HOST_IDENTITY.public_key},
         headers={"If-Match": "1"},
     ),
     Target("DELETE", "/inference-hosts/{host_id}", headers={"If-Match": "1"}),
@@ -475,11 +482,17 @@ class Backend:
             "draft_id": UUID(int=1),
         }
         path = target.template.format(**identifiers)
+
+        def format_body_value(value: object) -> object:
+            if not isinstance(value, str):
+                return value
+            try:
+                return value.format(**identifiers)
+            except KeyError:
+                return value
+
         body = (
-            {
-                key: (value.format(**identifiers) if isinstance(value, str) else value)
-                for key, value in target.body.items()
-            }
+            {key: format_body_value(value) for key, value in target.body.items()}
             if target.body is not None
             else None
         )

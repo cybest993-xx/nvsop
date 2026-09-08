@@ -1,50 +1,30 @@
-"""The store the supervisor writes through: one reaction, one transaction.
+"""supervisor 的本地状态持久化接缝: 一次反应对应一个事务。
 
-The supervisor holds the core's state and performs the commands; this is where both land so
-they survive a restart and an unreachable center (§5.7). It is the authority for decisions
-and latched violations — the center's `monitor` holds a mirror written by idempotent upsert,
-not the original.
+状态、效果和队列在此一起落盘, 即使中心不可达或进程重启也能恢复 (§5.7)。该数据库是判定和已锁定
+违规的权威, 中心只保存幂等镜像。持久化接口只接收 judgment 的领域状态、效果和闭合实例快照, 不依赖
+编排这些数据的 supervisor。
 
-**One reaction is one transaction.** `commit` takes the supervisor and the reaction it just
-returned, and writes both or neither. That is the ticket's first acceptance criterion.
-
-It takes the supervisor rather than a state for a reason found by making the mistake: with a
-`commit(state, commands)` signature, the natural call site is
-`commit(driver.state, driver.receive(x).commands)` — and Python evaluates `driver.state`
-*before* `receive` runs, so the store persists the state from before the input and writes no
-instance row at all. Nothing raises; the loss only surfaces much later, as a restart with no
-in-flight pass to conclude. Reading the state inside this method instead makes the argument
-order irrelevant, so the trap is closed rather than documented.
-
-**The remaining contract**: commit once per reaction, before the next input reaches the
-supervisor. Two consequences, and they are not equally guarded:
-
-- An instance that both opens and closes inside one reaction never appears as an open row, so
-  its opening instant is taken from the closing decision's anchor — correct exactly when the
-  two are one reaction.
-- Committing the *same* reaction twice writes a second decision and a second report event.
-  Latched violations and clips are idempotent by construction (uniqueness on the deviation,
-  upsert on the anchor), but a decision has no natural key: one instance may legitimately
-  reach two decisions at one anchor with one verdict. So this half of the contract is
-  unguarded, and a caller that wraps `commit` in a retry must not retry a transaction that
-  already committed. Making it structural needs a reaction identity the supervisor does not
-  currently produce; #46 is where the centre-side event id is composed and is where to settle
-  that if the run loop turns out to need it.
-
-**No clock.** Like the core, this module reads none: every instant it stores arrived from a
-caller holding one. A store that stamped its own rows would date them by when the write
-happened rather than when the thing happened, and after a restart the monotonic clock those
-instants live on has restarted too.
-
-Standard library only (edge-autonomy.md §5.11).
+一次反应的状态和效果必须全部写入或全部回滚。闭合实例的父行先于判定写入, 使 SQLite 外键在实例于同一
+反应内打开并闭合时仍然成立。每次反应必须在下一次输入前提交一次; 同一反应重复提交会产生重复判定和
+报告, 已提交事务不能盲目重试。模块不读取时钟, 所有时刻都由调用方传入。标准库实现, 见
+edge-autonomy.md §5.11。
 """
 
 from __future__ import annotations
 
 import sqlite3
 from collections.abc import Sequence
+from contextlib import AbstractContextManager
+from threading import RLock
 from typing import assert_never
 
+from edge_runtime.judgment.effects import (
+    ClipEvidence,
+    CloseInstance,
+    Command,
+    LatchViolation,
+    RecordDecision,
+)
 from edge_runtime.judgment.model import (
     Decision,
     HostInstant,
@@ -66,58 +46,47 @@ from edge_runtime.local_state.codec import (
 from edge_runtime.local_state.codec import violation as decode_violation
 from edge_runtime.local_state.queues import StationQueues
 from edge_runtime.local_state.schema import migrate
-from edge_runtime.supervisor.commands import (
-    ClipEvidence,
-    CloseInstance,
-    Command,
-    LatchViolation,
-    RecordDecision,
-)
-from edge_runtime.supervisor.station import Reaction, StationSupervisor
 
 
 class StationStore(StationQueues):
-    """One station's rows inside the host's database.
+    """推理机数据库中的一个工位作用域。
 
-    A station rather than a host, because a station is the unit an instance, a decision and a
-    violation belong to (CONTEXT.md), and one host runs several. Every statement is scoped by
-    the station id, so one station's reads never see another's rows.
-
-    It is a `StationQueues` because the queues are written on the judgment path and drained
-    off it: `commit` enqueues in the same transaction as the decision, while the sender and the
-    uploader read through the same handle later. One class would mix two lifetimes; two
-    unrelated classes would let a decision be written without its report event.
+    工位是实例、判定和违例所属的单元, 一台推理机可运行多个工位 (CONTEXT.md)。所有语句都带工位 ID,
+    不会读取其他工位的数据。它同时实现 `StationQueues`, 使判定和对应报告在同一事务中写入。
     """
 
-    def commit(self, supervisor: StationSupervisor, reaction: Reaction) -> None:
-        """Persist one reaction: the state the core reached and the commands it produced.
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        station_id: str,
+        lock: AbstractContextManager[object],
+    ) -> None:
+        super().__init__(connection, station_id)
+        self._lock = lock
 
-        All of it or none. A decision without its report event would be a decision the center
-        never hears about; a latched violation without its decision would be a deviation with
-        nothing explaining it.
-
-        The state is read from the supervisor here rather than passed in, so no call site can
-        hand over a state from before the reaction (see this module's docstring).
-        """
-        state = supervisor.state
-        self._connection.execute("BEGIN IMMEDIATE")
-        try:
-            if state.instance is not None:
-                self._write_instance(state.instance)
-            self._perform(reaction.commands)
-        except Exception:
-            self._connection.execute("ROLLBACK")
-            raise
-        self._connection.execute("COMMIT")
+    def commit(
+        self,
+        *,
+        state: JudgmentState,
+        commands: Sequence[Command],
+        closed_instances: Sequence[Instance] = (),
+    ) -> None:
+        """持久化一次反应, 并串行化共享 SQLite 连接上的工位线程。"""
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                if state.instance is not None:
+                    self._write_instance(state.instance)
+                for instance in closed_instances:
+                    self._write_instance(instance)
+                self._perform(commands)
+            except Exception:
+                self._connection.execute("ROLLBACK")
+                raise
+            self._connection.execute("COMMIT")
 
     def _perform(self, commands: Sequence[Command]) -> None:
-        """Each command in the order the supervisor issued it.
-
-        `commands_for` emits one decision's commands contiguously, `RecordDecision` first, and
-        the violations, clips and close that follow belong to it. That ordering is relied on
-        here to attribute a violation to the decision that reported it, so a command arriving
-        without its decision raises rather than being attributed to whichever came before.
-        """
+        """按 supervisor 发出的顺序执行命令; 违例、证据和关闭命令必须跟随对应判定。"""
         decision_id: int | None = None
         anchor: HostInstant | None = None
         for command in commands:
@@ -146,12 +115,7 @@ class StationStore(StationQueues):
                     assert_never(command)
 
     def _write_instance(self, instance: Instance) -> None:
-        """The in-flight instance as the core holds it, replacing the previous snapshot.
-
-        The whole record rather than the fields that changed: the core returns a new
-        `Instance` each transition, and writing a subset would make this row a second model of
-        the same thing, free to disagree with it.
-        """
+        """用核心当前持有的完整实例快照替换旧记录, 避免数据库形成第二套不一致模型。"""
         self._connection.execute(
             """
             INSERT INTO local_sop_instance (
@@ -199,11 +163,7 @@ class StationStore(StationQueues):
         return int(cursor.lastrowid or 0)
 
     def _latch(self, instance_id: int, decision_id: int, violation: Violation) -> None:
-        """Insert-only. One deviation in one instance is one row, re-reported or not.
-
-        `DO NOTHING` rather than an update: the row already there is the same fact, and the
-        first record of when it was confirmed is the one worth keeping (§5.2).
-        """
+        """只插入实例违例; 重复报告同一事实时保留首次确认时刻 (§5.2)。"""
         self._connection.execute(
             """
             INSERT INTO local_violation (
@@ -231,12 +191,7 @@ class StationStore(StationQueues):
         )
 
     def _enqueue_evidence(self, clip: ClipEvidence) -> None:
-        """One clip per anchor, widening the window when a second conclusion needs more.
-
-        Widening only, never shortening — the same rule the supervisor applies when it adds
-        margins (§5.20). Two conclusions in one instance anchored at one instant are one clip
-        covering both, because cutting the same seconds twice is waste no reviewer sees.
-        """
+        """每个实例锚点一条证据; 第二次判定需要更大窗口时只扩大、不缩小 (§5.20)。"""
         self._connection.execute(
             """
             INSERT INTO local_evidence_queue (
@@ -256,12 +211,7 @@ class StationStore(StationQueues):
         )
 
     def _close_instance(self, close: CloseInstance, *, at: HostInstant) -> None:
-        """Mark the instance concluded by the named condition.
-
-        The insert branch is reachable only for an instance that opened and closed inside one
-        reaction and so never appeared as an open row. Its opening instant is the closing
-        decision's anchor, which is that same instant — what "commit once per reaction" buys.
-        """
+        """按指定生命周期关闭实例; 同一反应内开闭的实例以关闭判定锚点作为开始时刻。"""
         self._connection.execute(
             """
             INSERT INTO local_sop_instance (
@@ -283,12 +233,7 @@ class StationStore(StationQueues):
         )
 
     def latched_violations(self, *, instance_id: int) -> tuple[Violation, ...]:
-        """Every deviation confirmed for this instance, in the order they were confirmed.
-
-        Independent of what the instance finally concluded: an instance may be indeterminate
-        and still carry these (§5.2). One says the pass's conclusion is unreliable, the other
-        says this deviation happened.
-        """
+        """按确认顺序返回实例已锁定的全部违例, 与实例最终生命周期无关 (§5.2)。"""
         rows = self._connection.execute(
             """
             SELECT reason, steps, evidence_anchor, evidence_from, evidence_to
@@ -301,21 +246,10 @@ class StationStore(StationQueues):
         return tuple(decode_violation(row) for row in rows)
 
     def resume(self, template: Template, parameters: RuntimeParameters) -> JudgmentState:
-        """The core's state as this station left it, for the run loop now starting.
+        """恢复工位启动时的核心状态。
 
-        The template and the resolved parameters arrive from the caller rather than from this
-        database: they are the last confirmed configuration, which the center owns and the host
-        caches (§5.3). Reconstructed here is only what this store alone knows — the instance
-        that was in flight, and how far instance numbering has gone.
-
-        `active_impairments` is deliberately not restored. Stream health and backend
-        reachability are facts about a run, and this is a new run: the supervisor learns them
-        again from the health channel it is about to consume (§5.11). Carrying them across
-        would leave a station that died while its stream was down permanently indeterminate,
-        with no event able to clear a fact nothing will re-report.
-
-        `next_instance_id` is derived rather than stored; `_next_instance_id` carries what that
-        rests on.
+        模板和参数由调用方传入, 数据库只恢复未结束实例和实例编号。运行期的流健康与后端可达性不跨进程
+        恢复, 新的 supervisor 会从健康通道重新学习 (§5.11)。实例编号由历史记录推导。
         """
         return JudgmentState(
             template=template,
@@ -349,20 +283,7 @@ class StationStore(StationQueues):
         )
 
     def _next_instance_id(self) -> int:
-        """One past the highest instance this station ever opened.
-
-        Derived rather than stored, because the core advances its counter only when it opens
-        an instance — so the highest row, plus one, is that value.
-
-        **This depends on the module's commit contract**, and is the second place that
-        contract carries weight. An instance the core opened but that was never committed
-        leaves no row, so its number is handed out again after a restart, and two different
-        passes end up sharing one identity in the center's mirror. Nothing detects it: unlike
-        an out-of-order command, a reused number raises nothing. The contract holds today
-        because the only caller commits every reaction (`resume_station`); a run loop that
-        batches reactions to save writes would break this, and would have to store the
-        counter instead of deriving it.
-        """
+        """返回本工位历史最大实例编号加一; 该推导依赖每次反应都及时提交。"""
         highest = self._connection.execute(
             "SELECT max(instance_id) FROM local_sop_instance WHERE station_id = ?",
             (self._station_id,),
@@ -371,34 +292,35 @@ class StationStore(StationQueues):
 
 
 class LocalState:
-    """The inference host's database: every station it runs, in one SQLite file."""
+    """推理机的本地数据库; 多个工位共享一个 SQLite 文件。"""
 
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        lock: AbstractContextManager[object] | None = None,
+    ) -> None:
         self._connection = connection
+        self._lock = lock or RLock()
 
     def station(self, station_id: str) -> StationStore:
-        """This station's rows. Cheap: a scope on the same connection, not a new one."""
-        return StationStore(self._connection, station_id)
+        """返回一个工位的行作用域; 所有工位共享连接和写入锁。"""
+        return StationStore(self._connection, station_id, self._lock)
 
     def close(self) -> None:
-        self._connection.close()
+        with self._lock:
+            self._connection.close()
 
 
 def open_local_state(path: str) -> LocalState:
-    """Open or create the host's local state, migrated to the current schema.
+    """打开或创建推理机本地状态, 并迁移到当前 SQLite 模式。
 
-    `:memory:` is accepted, and is what a test uses when it is not asserting about a restart.
-
-    The connection is in autocommit mode, so `commit` states its transaction explicitly and a
-    single-statement update on a queue needs no ceremony. Foreign keys are enabled per
-    connection because SQLite defaults them off, and the schema's references are what keep a
-    decision from outliving its instance.
+    连接使用自动提交, `commit` 显式声明反应事务; 启用外键以保证判定记录不会脱离实例。
     """
-    connection = sqlite3.connect(path, isolation_level=None)
+    # 工位循环在独立线程中运行; LocalState 的锁串行化共享连接上的写入。
+    connection = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
-    # Durability over speed: this database is the authority for latched violations and for
-    # what the center has not yet been told (§5.7), and it is the only copy of both.
+    # 优先保证持久性: 这里是已锁定违例和待上报判定的唯一副本 (§5.7)。
     connection.execute("PRAGMA journal_mode = WAL")
     connection.execute("PRAGMA synchronous = FULL")
     migrate(connection)

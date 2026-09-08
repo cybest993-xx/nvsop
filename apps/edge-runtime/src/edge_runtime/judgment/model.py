@@ -192,6 +192,8 @@ class HostLiveness(Enum):
 class StreamHealth(Enum):
     HEALTHY = "healthy"
     LOST = "lost"
+    INFERENCE_TIMEOUT = "inference_timeout"
+    CHUNK_BACKLOG_EXCEEDED = "chunk_backlog_exceeded"
 
 
 @dataclass(frozen=True, slots=True)
@@ -340,10 +342,13 @@ class JudgmentState:
 
 @dataclass(frozen=True, slots=True)
 class Outcome:
-    """The transition's result: `(new state, decisions, next wake-up)`."""
+    """状态迁移结果: 新状态、判定、闭合实例快照和下一次唤醒时刻。"""
 
     state: JudgmentState
     decisions: tuple[Decision, ...] = ()
+    closed_instances: tuple[Instance, ...] = ()
+    """闭合前的完整实例快照, 供持久层在判定外键之前落盘。"""
+
     wake_at: HostInstant | None = None
     """When the core needs calling again, or None when no instance is in flight.
 

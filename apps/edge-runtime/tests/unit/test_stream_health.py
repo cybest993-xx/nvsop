@@ -183,7 +183,12 @@ class WireShapeTest(unittest.TestCase):
         )
 
         assert event is not None
-        self.assertEqual(event.as_chunk(), sink.get_nowait())
+        self.assertIsNone(event.source_anchor)
+        wire = sink.get_nowait()
+        self.assertEqual(event.as_chunk(), wire)
+        decoded = decode(wire)
+        assert decoded is not None
+        self.assertIsNone(decoded.source_anchor)
 
     def test_a_message_detail_is_carried_but_bounded(self) -> None:
         # Whatever the base's message stringifies to is useful for triage and is not ours

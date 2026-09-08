@@ -1,17 +1,18 @@
-"""The PostgreSQL side of `device`'s two repository seams.
+"""device 两条仓储接缝的 PostgreSQL 适配器。
 
-No method commits. One request is one transaction, opened and committed by the HTTP adapter
-layer (ADR-0002). Conditional writes and PostgreSQL constraint violations are translated here
-so concurrent configuration changes surface as deterministic module refusals, not 500s.
+方法不提交事务；每个请求的事务由 HTTP 适配层开启和提交（ADR-0002）。条件写入和 PostgreSQL 约束错误
+在此转换为确定的模块拒绝，而不是 500，便于并发配置变更得到稳定结果。
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import CursorResult, delete, exists, func, insert, inspect, select, update
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.exc import DatabaseError
 from sqlalchemy.orm import Session as DatabaseSession
 
@@ -25,6 +26,7 @@ from factory_sop.device.adapters.tables import (
     CameraRow,
     ConnectorRow,
     InferenceBackendRow,
+    InferenceHostIdentityNonceRow,
     InferenceHostRow,
     PointRow,
     StationRow,
@@ -66,7 +68,7 @@ _HOST_BASE_COLUMNS = (
 )
 
 
-def _host_values(host: InferenceHost, *, include_credential: bool) -> dict[str, object]:
+def _host_values(host: InferenceHost, *, include_identity: bool) -> dict[str, object]:
     values: dict[str, object] = {
         "id": host.id,
         "name": host.name,
@@ -81,8 +83,8 @@ def _host_values(host: InferenceHost, *, include_credential: bool) -> dict[str, 
         "created_at": host.created_at,
         "updated_at": host.updated_at,
     }
-    if include_credential:
-        values["credential_hash"] = host.credential_hash
+    if include_identity:
+        values["identity_public_key"] = host.identity_public_key
     return values
 
 
@@ -100,7 +102,7 @@ def _host_from_values(values: Mapping[str, Any]) -> InferenceHost:
         updated_by=values["updated_by"],
         created_at=values["created_at"],
         updated_at=values["updated_at"],
-        credential_hash="",
+        identity_public_key=values.get("identity_public_key"),
     )
 
 
@@ -109,15 +111,17 @@ class PostgresInferenceHostRepository:
 
     def __init__(self, session: DatabaseSession) -> None:
         self._session = session
-        self._has_credential_column: bool | None = None
+        self._has_identity_column: bool | None = None
 
     def add(self, host: InferenceHost) -> None:
-        if self._supports_host_credentials():
+        if self._supports_host_identity():
             self._session.add(InferenceHostRow.from_domain(host))
         else:
+            if host.identity_public_key is not None:
+                raise ValueError("旧版主机表不支持公钥身份")
             self._session.execute(
                 insert(cast("Any", InferenceHostRow.__table__)).values(
-                    **_host_values(host, include_credential=False)
+                    **_host_values(host, include_identity=False)
                 )
             )
         try:
@@ -126,7 +130,7 @@ class PostgresInferenceHostRepository:
             _refuse_constraint_violation(error)
 
     def save(self, host: InferenceHost, *, expected_revision: int) -> None:
-        values = _host_values(host, include_credential=self._supports_host_credentials())
+        values = _host_values(host, include_identity=self._supports_host_identity())
         try:
             result = cast(
                 "CursorResult[Any]",
@@ -151,21 +155,21 @@ class PostgresInferenceHostRepository:
             )
 
     def by_id(self, host_id: UUID) -> InferenceHost | None:
-        if self._supports_host_credentials():
+        if self._supports_host_identity():
             row = self._session.get(InferenceHostRow, host_id)
             return row.to_domain() if row is not None else None
         values = self._legacy_host_by_id(host_id)
         return _host_from_values(values) if values is not None else None
 
-    def _supports_host_credentials(self) -> bool:
-        if self._has_credential_column is None:
-            self._has_credential_column = any(
-                column["name"] == "credential_hash"
+    def _supports_host_identity(self) -> bool:
+        if self._has_identity_column is None:
+            self._has_identity_column = any(
+                column["name"] == "identity_public_key"
                 for column in inspect(self._session.connection()).get_columns(
                     InferenceHostRow.__tablename__
                 )
             )
-        return self._has_credential_column
+        return self._has_identity_column
 
     def _legacy_host_by_id(self, host_id: UUID) -> Mapping[str, Any] | None:
         columns = [getattr(InferenceHostRow, name) for name in _HOST_BASE_COLUMNS]
@@ -175,6 +179,27 @@ class PostgresInferenceHostRepository:
             .mappings()
             .one_or_none(),
         )
+
+    def consume_identity_nonce(self, *, host_id: UUID, nonce: str, seen_at: datetime) -> bool:
+        """原子登记随机数；重复请求在事务内被拒绝。"""
+        self._session.execute(
+            delete(InferenceHostIdentityNonceRow).where(
+                InferenceHostIdentityNonceRow.host_id == host_id,
+                InferenceHostIdentityNonceRow.seen_at < seen_at - timedelta(minutes=10),
+            )
+        )
+        inserted = self._session.execute(
+            postgres_insert(InferenceHostIdentityNonceRow)
+            .values(host_id=host_id, nonce=nonce, seen_at=seen_at)
+            .on_conflict_do_nothing(
+                index_elements=[
+                    InferenceHostIdentityNonceRow.host_id,
+                    InferenceHostIdentityNonceRow.nonce,
+                ]
+            )
+            .returning(InferenceHostIdentityNonceRow.nonce)
+        ).scalar_one_or_none()
+        return inserted is not None
 
     def remove(self, host_id: UUID, *, expected_revision: int) -> bool:
         try:
@@ -208,7 +233,7 @@ class PostgresInferenceHostRepository:
         total = cast(
             "int", self._session.scalar(select(func.count()).select_from(InferenceHostRow))
         )
-        if self._supports_host_credentials():
+        if self._supports_host_identity():
             rows = self._session.scalars(
                 select(InferenceHostRow)
                 .order_by(InferenceHostRow.created_at.desc(), InferenceHostRow.id.desc())

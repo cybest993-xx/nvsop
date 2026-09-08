@@ -1,9 +1,8 @@
-"""What `device` owns in this slice: the inference host and its process endpoints.
+"""device 本阶段拥有的推理机和进程端点领域模型。
 
-Pure domain types — no SQLAlchemy, no FastAPI, no clock, no network. Every instant arrives
-from a caller holding one. The vocabulary is `CONTEXT.md`'s: the 推理机 is the physical
-machine; the 推理后端 is a process endpoint carrying one template configuration — one host
-runs several, and cameras will hang off the backend, not the machine (§5.10).
+这里只放纯领域类型，不依赖 SQLAlchemy、FastAPI、时钟或网络。所有时刻都由持有时刻的调用方传入。
+推理机是物理设备，推理后端是携带一套模板配置的进程端点；一台推理机可运行多个后端，相机绑定后端而不是
+直接绑定推理机（§5.10）。
 """
 
 from __future__ import annotations
@@ -15,15 +14,18 @@ from enum import StrEnum
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from nvsop_contracts import Capability
+from nvsop_contracts import (
+    Capability,
+    HostIdentityRequest,
+    validate_host_identity_public_key,
+)
 
 
 class DeviceStatus(StrEnum):
-    """Whether a configurable device still takes part in new bindings and operation.
+    """可配置设备是否继续参与新绑定和运行。
 
-    An enum rather than an `is_active` boolean: `CONTEXT.md` gives 停用 its own definition
-    across every mutable configuration object. Deactivation is reversible and never
-    cascades — a deactivated host's backends keep their rows and their history.
+    使用枚举而不是 `is_active` 布尔值，因为所有可变配置对象共用“停用”语义。停用可恢复且不级联，
+    已停用推理机的后端仍保留记录和历史。
     """
 
     ACTIVE = "active"
@@ -32,19 +34,18 @@ class DeviceStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class InferenceHostIdentity:
-    """请求呈现的推理机标识和独立凭据，认证通过前不代表可信身份。"""
+    """请求呈现的主机标识和一次公钥签名证明。"""
 
     host_id: UUID
-    credential: str | None
+    request: HostIdentityRequest | None = None
+    signature: str | None = None
 
 
 class ConnectionState(StrEnum):
-    """What the last real connection test observed about a backend's endpoint.
+    """最近一次真实连接测试对后端端点的观测结果。
 
-    Three values, because Q31 fixes exactly these: a record that has never been tested is
-    未验证 — not "working" — and only a test that truly reached the endpoint may say
-    `success`. The facts belong to the placement (the host and endpoint a test observed):
-    moving the backend, or pointing it at another endpoint, retires what was self-reported.
+    固定为三态：从未测试是“未验证”，不是“正常”；只有真实到达端点的测试才能报告成功。事实属于
+    测试时的部署位置；移动后端或改变端点后，原有自报结果失效。
     """
 
     UNVERIFIED = "unverified"
@@ -53,14 +54,11 @@ class ConnectionState(StrEnum):
 
 
 def carries_userinfo(url: str) -> bool:
-    """Report whether `url` is unsafe to persist as a device endpoint.
+    """判断设备端点 URL 是否不应持久化。
 
-    A device endpoint may not carry userinfo, a query, or a fragment. Userinfo embeds a
-    credential, while query and fragment components are common places for bearer tokens and
-    other credentials to hide. The literal delimiters are rejected too, so an empty ``?`` or
-    ``#`` cannot later become a secret-bearing URL through normalization. ADR-0008 and §5.12
-    keep credentials off the center: not stored, not logged, and not returned by the API — so
-    every URL this module persists passes this one check at its input contract.
+    端点不得携带 userinfo、查询串或片段。userinfo 可能嵌入口令，查询串和片段也常被用来隐藏 bearer
+    token 等凭据；即使分隔符为空也拒绝，避免规范化后变成秘密。ADR-0008 和 §5.12 要求中心不存储、
+    不记录、不返回凭据，因此本模块所有持久化 URL 都在输入处经过这一检查。
     """
     parts = urlsplit(url)
     return parts.username is not None or parts.password is not None or "?" in url or "#" in url
@@ -68,15 +66,14 @@ def carries_userinfo(url: str) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class InferenceHost:
-    """A physical inference machine: the autonomous judgment unit of its stations.
+    """物理推理机，也是其工位的自治判定单元。
 
-    The recording window and the disk watermark are per-host because the disk is the host's
-    (§5.19), and the watermark is a safety threshold the edge runtime reports against.
-    Health and clock offset are the host's to report; they arrive with the report contract.
+    录制窗口和磁盘水位按推理机配置，因为磁盘属于推理机（§5.19），边缘运行时据此报告安全阈值。
+    健康状态和时钟偏移由推理机报告，并通过报告契约进入中心。
     """
 
     id: UUID
-    # Unique, and the natural key an operator matches on — never the URL identity (§5.15).
+    # 唯一的自然键，供操作员匹配；不能代替 URL 身份（§5.15）。
     name: str
     address: str
     mediamtx_address: str | None
@@ -88,12 +85,12 @@ class InferenceHost:
     updated_by: UUID
     created_at: datetime
     updated_at: datetime
-    # 中心只保存指纹；空值表示尚未为该推理机完成控制面凭据配置。
-    credential_hash: str = ""
+    # 中心仅保存非秘密公钥；空值表示尚未配置主机控制面身份。
+    identity_public_key: str | None = None
 
     def __post_init__(self) -> None:
-        if self.credential_hash and len(self.credential_hash) != 64:
-            raise ValueError("inference host credential hash must be a SHA-256 digest")
+        if self.identity_public_key:
+            validate_host_identity_public_key(self.identity_public_key)
         if self.recording_window_seconds <= 0:
             raise ValueError("recording_window_seconds must be greater than zero")
         if not 1 <= self.disk_watermark_percent <= 99:
@@ -104,31 +101,23 @@ class InferenceHost:
 
 @dataclass(frozen=True, slots=True)
 class InferenceBackend:
-    """One inference-service process endpoint carrying one template configuration.
+    """携带一套模板配置的推理服务进程端点。
 
-    The connection fields record what the center observed by really asking the endpoint
-    (§5.13). The center is not a model registry — no model table, no binding authority,
-    nothing to distribute; `self_reported_model_ids` is an observed fact about a machine,
-    kept for judgment provenance.
+    连接字段记录中心真实访问端点得到的观测（§5.13）。中心不是模型注册表，不保存模型表、不负责绑定、
+    也不分发模型；`self_reported_model_ids` 只是推理机自报的观测事实，用于判定溯源。
     """
 
     id: UUID
-    # The one host this endpoint runs on. The foreign key is the database half of the
-    # topology constraint; the use case is the other half, and the migration's trigger is
-    # the third: a backend row may only be written while its host is active.
+    # 端点运行所在的推理机。外键、用例校验和迁移触发器共同保证拓扑约束，且仅允许写入活动推理机。
     host_id: UUID
     base_url: str
-    # The one template configuration this endpoint carries — single-valued in the schema by
-    # construction, which is the database half of "one backend, one template configuration"
-    # (§5.10). Nullable until the `template` module lands (C5): its migration adds the foreign
-    # key and the binding use case that writes it, and until then no writer exists, so the
-    # column reads back `None` on every row.
+    # 端点携带的一套模板配置。字段保持单值，数据库因此保证“一个后端、一套模板配置”（§5.10）。
+    # template 模块落地前允许为空（C5）；后续迁移和绑定用例会加入外键和写入路径。
     template_version_id: UUID | None
     status: DeviceStatus
     connection_state: ConnectionState
     connection_checked_at: datetime | None
-    # Why the last test failed, for the operator's next step. Never a credential — the
-    # endpoint URL carries none (ADR-0008: credentials live on the inference host).
+    # 最近一次测试失败的原因，供操作员处理；不是凭据，端点 URL 也不携带凭据（ADR-0008）。
     connection_detail: str | None
     self_reported_model_ids: tuple[str, ...]
     self_reported_at: datetime | None
@@ -393,6 +382,7 @@ class PendingCommand:
     created_by: UUID
     created_at: datetime
     updated_at: datetime
+    result_credentials_configured: bool | None = None
 
     def __post_init__(self) -> None:
         if not self.idempotency_key or len(self.idempotency_key) > 128:
@@ -415,6 +405,11 @@ class PendingCommandCompletion:
     result_detail: str | None
     failure_code: str | None
     completed_at: datetime
+    result_credentials_configured: bool | None = None
+
+    def __post_init__(self) -> None:
+        if self.result is not None and self.result_credentials_configured is not True:
+            raise ValueError("a non-rejected completion must confirm configured credentials")
 
 
 @dataclass(frozen=True, slots=True)
@@ -429,3 +424,5 @@ class ConnectorTestResult:
     def __post_init__(self) -> None:
         if self.reachability is None and not self.failure_code:
             raise ValueError("a rejected connection test must carry a failure code")
+        if self.reachability is not None and self.credentials_configured is not True:
+            raise ValueError("a non-rejected connection test must confirm configured credentials")

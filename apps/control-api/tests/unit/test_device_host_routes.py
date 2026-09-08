@@ -14,7 +14,12 @@ from uuid import UUID
 
 import pytest
 from auth_fakes import FakeRoles, FakeSessions, FakeUsers
-from device_fakes import FakeConnectors, FakeInferenceBackends, FakeInferenceHosts
+from device_fakes import (
+    DEFAULT_HOST_IDENTITY,
+    FakeConnectors,
+    FakeInferenceBackends,
+    FakeInferenceHosts,
+)
 from fastapi.testclient import TestClient
 from httpx2 import Response as HttpResponse
 from pydantic import SecretStr
@@ -169,31 +174,46 @@ def test_a_logged_in_administrator_creates_a_host_whose_record_is_whole(center: 
     assert body["created_at"].endswith("Z")
 
 
-def test_host_credential_rotation_returns_the_secret_once_and_bumps_revision(
-    center: Center,
-) -> None:
+def test_host_identity_registration_stores_only_the_public_key(center: Center) -> None:
     created = center.send("POST", HOSTS, json=A_HOST)
     host_id = created.json()["id"]
+    key_pair = DEFAULT_HOST_IDENTITY
 
-    rotated = center.send(
+    registered = center.send(
         "POST",
-        f"{HOSTS}/{host_id}/credential",
+        f"{HOSTS}/{host_id}/identity-key",
         headers={"If-Match": "1"},
+        json={"public_key": key_pair.public_key},
     )
 
-    assert rotated.status_code == 200
-    body = rotated.json()
-    assert body == {"credential": body["credential"], "revision": 2}
-    assert body["credential"]
-    assert "credential" not in center.send("GET", f"{HOSTS}/{host_id}").json()
+    assert registered.status_code == 200
+    assert registered.json() == {"revision": 2}
+    assert center.hosts.rows[UUID(host_id)].identity_public_key == key_pair.public_key
+    assert key_pair.private_key not in center.send("GET", f"{HOSTS}/{host_id}").text
 
     stale = center.send(
         "POST",
-        f"{HOSTS}/{host_id}/credential",
+        f"{HOSTS}/{host_id}/identity-key",
         headers={"If-Match": "1"},
+        json={"public_key": key_pair.public_key},
     )
     assert stale.status_code == 409
     assert stale.json()["error_code"] == "STALE_REVISION"
+
+
+def test_old_host_credential_route_is_retired_without_issuing_a_secret(center: Center) -> None:
+    created = center.send("POST", HOSTS, json=A_HOST)
+    host_id = created.json()["id"]
+
+    retired = center.send(
+        "POST",
+        f"{HOSTS}/{host_id}/credential",
+        headers={"If-Match": "1"},
+    )
+
+    assert retired.status_code == 410
+    assert retired.json()["error_code"] == "INFERENCE_HOST_CREDENTIALS_REMOVED"
+    assert center.hosts.rows[UUID(host_id)].identity_public_key is None
 
 
 def test_a_taken_host_name_refuses_with_the_shared_problem_shape(center: Center) -> None:
@@ -355,6 +375,7 @@ def test_every_host_route_declares_the_permission_its_use_case_enforces(center: 
         "PATCH /inference-hosts/{host_id}": Permission.INFERENCE_HOST_EDIT,
         "PUT /inference-hosts/{host_id}/status": Permission.INFERENCE_HOST_EDIT,
         "POST /inference-hosts/{host_id}/credential": Permission.INFERENCE_HOST_EDIT,
+        "POST /inference-hosts/{host_id}/identity-key": Permission.INFERENCE_HOST_EDIT,
         "DELETE /inference-hosts/{host_id}": Permission.INFERENCE_HOST_DELETE,
     }
     assert declared == {path: permission.value for path, permission in expected.items()}

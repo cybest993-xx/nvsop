@@ -165,6 +165,9 @@ import type {
   ReadTemplateImportData,
   ReadTemplateImportErrors,
   ReadTemplateImportResponses,
+  RegisterInferenceHostIdentityKeyData,
+  RegisterInferenceHostIdentityKeyErrors,
+  RegisterInferenceHostIdentityKeyResponses,
   ResetUserPasswordData,
   ResetUserPasswordErrors,
   ResetUserPasswordResponses,
@@ -693,7 +696,7 @@ export const setConnectorStatus = <ThrowOnError extends boolean = false>(
 /**
  * Claim Next Device Command
  *
- * 按认证主机领取一条命令; 无命令返回 204, 不会看到其他主机的队列。
+ * 按已验证的主机身份领取一条命令；无命令返回 204。
  */
 export const claimNextDeviceCommand = <ThrowOnError extends boolean = false>(
   options: Options<ClaimNextDeviceCommandData, ThrowOnError>,
@@ -719,7 +722,7 @@ export const readDeviceCommand = <ThrowOnError extends boolean = false>(
 /**
  * Complete A Device Command
  *
- * 用主机身份、领取令牌和租约回报结果; 中心与连接器更新共用请求事务。
+ * 用主机签名、领取令牌和租约回报结果。
  */
 export const completeDeviceCommand = <ThrowOnError extends boolean = false>(
   options: Options<CompleteDeviceCommandData, ThrowOnError>,
@@ -867,7 +870,7 @@ export const setInferenceBackendStatus = <ThrowOnError extends boolean = false>(
 /**
  * List The Hosts
  *
- * One page of hosts, newest first, under §5.15's envelope.
+ * 按最新优先返回一页推理机，并使用 §5.15 的分页外壳。
  */
 export const listInferenceHosts = <ThrowOnError extends boolean = false>(
   options?: Options<ListInferenceHostsData, ThrowOnError>,
@@ -881,7 +884,7 @@ export const listInferenceHosts = <ThrowOnError extends boolean = false>(
 /**
  * Create A Host
  *
- * Register a physical inference machine.
+ * 登记一台物理推理机。
  */
 export const createInferenceHost = <ThrowOnError extends boolean = false>(
   options: Options<CreateInferenceHostData, ThrowOnError>,
@@ -902,7 +905,7 @@ export const createInferenceHost = <ThrowOnError extends boolean = false>(
 /**
  * Delete A Host
  *
- * Delete the host outright — the irreversible operation 停用 exists to avoid.
+ * 直接删除推理机；不可逆操作应优先使用可恢复的停用。
  */
 export const deleteInferenceHost = <ThrowOnError extends boolean = false>(
   options: Options<DeleteInferenceHostData, ThrowOnError>,
@@ -916,7 +919,7 @@ export const deleteInferenceHost = <ThrowOnError extends boolean = false>(
 /**
  * Read A Host
  *
- * Read one host.
+ * 读取一台推理机。
  */
 export const readInferenceHost = <ThrowOnError extends boolean = false>(
   options: Options<ReadInferenceHostData, ThrowOnError>,
@@ -928,11 +931,9 @@ export const readInferenceHost = <ThrowOnError extends boolean = false>(
 /**
  * Edit A Host
  *
- * Replace the host's whole configuration.
+ * 替换推理机的完整配置。
  *
- * The request must carry `If-Match: <revision>` — the revision the caller read. A body
- * without it cannot say what it believed it was editing, so it is refused rather than
- * allowed to overwrite blind.
+ * 请求必须携带调用方读取的 `If-Match: <revision>`；缺少前置版本就拒绝，不能盲写覆盖。
  */
 export const editInferenceHost = <ThrowOnError extends boolean = false>(
   options: Options<EditInferenceHostData, ThrowOnError>,
@@ -951,9 +952,11 @@ export const editInferenceHost = <ThrowOnError extends boolean = false>(
   })
 
 /**
- * Rotate A Host Credential
+ * Retired A Host Credential
  *
- * 轮换主机控制面凭据并只返回一次明文。
+ * 保留旧路径以避免静默改写；不再签发或存储 bearer 凭据。
+ *
+ * @deprecated
  */
 export const rotateInferenceHostCredential = <ThrowOnError extends boolean = false>(
   options: Options<RotateInferenceHostCredentialData, ThrowOnError>,
@@ -969,12 +972,34 @@ export const rotateInferenceHostCredential = <ThrowOnError extends boolean = fal
   >({ url: '/api/v1/inference-hosts/{host_id}/credential', ...options })
 
 /**
+ * Register A Host Identity Key
+ *
+ * 登记主机公钥并递增配置修订号。
+ */
+export const registerInferenceHostIdentityKey = <ThrowOnError extends boolean = false>(
+  options: Options<RegisterInferenceHostIdentityKeyData, ThrowOnError>,
+): RequestResult<
+  RegisterInferenceHostIdentityKeyResponses,
+  RegisterInferenceHostIdentityKeyErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    RegisterInferenceHostIdentityKeyResponses,
+    RegisterInferenceHostIdentityKeyErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/inference-hosts/{host_id}/identity-key',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
  * Set The Host Status
  *
- * 停用 or 恢复 the host — the two values of one field, on one subresource.
- *
- * Both directions are reversible and idempotent, which is why they share a route; which use
- * case runs is the requested value's, and the match is exhaustive over the enum.
+ * 在一个状态子资源中停用或恢复推理机；两个方向都可恢复且幂等。
  */
 export const setInferenceHostStatus = <ThrowOnError extends boolean = false>(
   options: Options<SetInferenceHostStatusData, ThrowOnError>,

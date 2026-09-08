@@ -73,7 +73,15 @@ class DelegatedCommandRunnerTest(unittest.TestCase):
             timeouts=[],
         )
         executor = ConnectionTestExecutor(
-            registry=Registry(LocalConnector(revision=3, credentials_configured=True, probe=probe)),
+            registry=Registry(
+                LocalConnector(
+                    revision=3,
+                    connector_type="hikvision_isapi",
+                    configuration={"address": "10.0.8.21", "port": 80},
+                    credentials_configured=True,
+                    probe=probe,
+                )
+            ),
             timeout=4.0,
         )
         transport = Transport(claim())
@@ -101,6 +109,8 @@ class DelegatedCommandRunnerTest(unittest.TestCase):
             registry=Registry(
                 LocalConnector(
                     revision=3,
+                    connector_type="hikvision_isapi",
+                    configuration={"address": "10.0.8.21", "port": 80},
                     credentials_configured=True,
                     probe=FakeProbe(
                         result=LocalProbeResult(outcome=ConnectionTestOutcome.REACHABLE),

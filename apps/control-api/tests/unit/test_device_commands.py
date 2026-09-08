@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -24,13 +25,26 @@ from factory_sop.device.usecases.commands import (
     complete_connection_test,
     enqueue_connector_connection_test,
 )
+from nvsop_contracts import HostIdentityRequest, sign_host_identity_request
 
 NOW = datetime(2026, 9, 8, 8, 0, tzinfo=UTC)
 CALLER = caller_holding(Permission.CONNECTOR_EDIT)
 
 
 def host_identity(hosts: FakeInferenceHosts, host_id: UUID) -> InferenceHostIdentity:
-    return InferenceHostIdentity(host_id=host_id, credential=hosts.credential_for(host_id))
+    request = HostIdentityRequest(
+        method="GET",
+        path="/api/v1/device-commands/next",
+        host_id=str(host_id),
+        timestamp=int(NOW.timestamp()),
+        nonce=secrets.token_urlsafe(12),
+        body=None,
+    )
+    return InferenceHostIdentity(
+        host_id=host_id,
+        request=request,
+        signature=sign_host_identity_request(request, private_key=hosts.private_key_for(host_id)),
+    )
 
 
 InMemoryPendingCommands = FakePendingCommands
@@ -277,7 +291,9 @@ def test_another_host_cannot_claim_or_complete_the_command() -> None:
             command_id=claimed.id,
             host=host_identity(hosts, other.id),
             claim_token=claimed.claim_token,
-            result=ConnectorTestResult(ConnectorReachability.REACHABLE),
+            result=ConnectorTestResult(
+                ConnectorReachability.REACHABLE, credentials_configured=True
+            ),
             now=NOW + timedelta(seconds=1),
             connectors=connectors,
             hosts=hosts,
@@ -317,7 +333,9 @@ def test_a_late_result_after_the_claim_lease_expires_does_not_change_state() -> 
             command_id=claimed.id,
             host=host_identity(hosts, host.id),
             claim_token=claimed.claim_token,
-            result=ConnectorTestResult(ConnectorReachability.REACHABLE),
+            result=ConnectorTestResult(
+                ConnectorReachability.REACHABLE, credentials_configured=True
+            ),
             now=NOW + timedelta(seconds=2),
             connectors=connectors,
             hosts=hosts,
@@ -366,7 +384,7 @@ def test_a_result_for_an_old_connector_revision_is_rejected_without_overwriting_
         command_id=claimed.id,
         host=host_identity(hosts, host.id),
         claim_token=claimed.claim_token,
-        result=ConnectorTestResult(ConnectorReachability.REACHABLE),
+        result=ConnectorTestResult(ConnectorReachability.REACHABLE, credentials_configured=True),
         now=NOW + timedelta(seconds=2),
         connectors=connectors,
         hosts=hosts,
@@ -402,7 +420,7 @@ def test_repeating_the_same_result_is_idempotent_after_completion() -> None:
     )
     assert claimed is not None
     assert claimed.claim_token is not None
-    result = ConnectorTestResult(ConnectorReachability.REACHABLE)
+    result = ConnectorTestResult(ConnectorReachability.REACHABLE, credentials_configured=True)
     completed = complete_connection_test(
         command_id=claimed.id,
         host=host_identity(hosts, host.id),

@@ -30,6 +30,7 @@ from edge_runtime.judgment.model import (
     EvidenceSpan,
     HostInstant,
     HostLiveness,
+    Instance,
     Lifecycle,
     Ordering,
     Violation,
@@ -118,6 +119,14 @@ class EveryInputReachesTheCoreAndComesBackAsCommandsTest(unittest.TestCase):
                     CloseInstance(instance_id=1, lifecycle=Lifecycle.CLOSED_BY_COMPLETE_SET),
                 ),
                 wake_at=None,
+                closed_instances=(
+                    Instance(
+                        instance_id=1,
+                        opened_at=HostInstant(100.0),
+                        last_observation_at=HostInstant(104.0),
+                        seen=frozenset(STEPS),
+                    ),
+                ),
             ),
             reaction,
         )
@@ -524,6 +533,15 @@ class ARunEndingConcludesWhatWasInFlightTest(unittest.TestCase):
                     CloseInstance(instance_id=1, lifecycle=Lifecycle.CLOSED_BY_RUN_INTERRUPTION),
                 ),
                 wake_at=None,
+                closed_instances=(
+                    Instance(
+                        instance_id=1,
+                        opened_at=HostInstant(100.0),
+                        last_observation_at=HostInstant(100.0),
+                        seen=frozenset({STEPS[0]}),
+                        impairments=frozenset({ReasonCode.RUN_INTERRUPTED}),
+                    ),
+                ),
             ),
             reaction,
         )

@@ -1,4 +1,4 @@
-"""推理机边缘运行时的委托命令组成根。"""
+"""推理机边缘运行时的生产组成根。"""
 
 from __future__ import annotations
 
@@ -6,20 +6,34 @@ import json
 import os
 import signal
 import ssl
+import threading
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass
 from pathlib import Path
-from time import sleep
+from time import monotonic, sleep
 from types import FrameType
-from typing import cast
-from urllib.parse import urlsplit
 
-from nvsop_contracts import Capability, ConnectionTestOutcome, capability_from_wire
+from nvsop_contracts import ConnectionTestOutcome
 
-from edge_runtime.connectors.hikvision import IsapiConnector, IsapiProfile
-from edge_runtime.connectors.port import PointState, Reachability
+from edge_runtime.configuration import (
+    EdgeRuntimeConfiguration,
+    LocalIsapiConnectorConfiguration,
+    connector_configuration,
+    load_configuration,
+    safe_url,
+)
+from edge_runtime.connectors.hikvision import IsapiConnector
+from edge_runtime.connectors.port import Reachability
 from edge_runtime.connectors.transport import UrllibIsapiTransport
+from edge_runtime.judgment.model import HostLiveness
+from edge_runtime.local_state.store import LocalState, StationStore, open_local_state
+from edge_runtime.station_runtime import (
+    InputWaitExpired,
+    SseStationInputSource,
+    StationInputSource,
+    StationRuntimeConfiguration,
+)
+from edge_runtime.stream_health import StreamFact, StreamHealthEvent
 from edge_runtime.supervisor.delegated_commands import (
     ConnectionTestCommandRunner,
     ConnectionTestExecutor,
@@ -28,20 +42,9 @@ from edge_runtime.supervisor.delegated_commands import (
     LocalProbeResult,
 )
 from edge_runtime.supervisor.delegated_transport import CommandTransportError, HttpCommandTransport
-
-
-@dataclass(frozen=True, slots=True)
-class LocalIsapiConnectorConfiguration:
-    """推理机本地已确认的海康连接器配置; 凭据只在本机内存中流转。"""
-
-    connector_id: str
-    revision: int
-    credentials_configured: bool
-    base_url: str
-    username: str
-    password: str
-    profile: IsapiProfile
-    capability: Capability
+from edge_runtime.supervisor.inputs import StreamHealthObserved
+from edge_runtime.supervisor.startup import resume_station
+from edge_runtime.supervisor.station import Reaction, StationSupervisor
 
 
 class _IsapiConnectionTestProbe:
@@ -79,7 +82,7 @@ class ConfiguredLocalConnectorRegistry(LocalConnectorRegistry):
                 raise ValueError(f"duplicate local connector {configuration.connector_id}")
             probe = IsapiConnector(
                 transport=UrllibIsapiTransport(
-                    base_url=_safe_url(
+                    base_url=safe_url(
                         configuration.base_url,
                         "connector base_url",
                         schemes={"http", "https"},
@@ -92,6 +95,8 @@ class ConfiguredLocalConnectorRegistry(LocalConnectorRegistry):
             )
             connectors[configuration.connector_id] = LocalConnector(
                 revision=configuration.revision,
+                connector_type=configuration.connector_type,
+                configuration=connector_configuration(configuration.base_url),
                 credentials_configured=configuration.credentials_configured,
                 probe=_IsapiConnectionTestProbe(probe),
             )
@@ -130,11 +135,133 @@ class ConnectionTestCommandLoop:
             self._sleep(self._poll_interval)
 
 
+class AutonomousStation:
+    """把本地状态、恢复规则、supervisor 和实时输入组成一条自治链。"""
+
+    def __init__(
+        self, *, store: StationStore, supervisor: StationSupervisor, source: StationInputSource
+    ) -> None:
+        self._store = store
+        self._supervisor = supervisor
+        self._source = source
+
+    @property
+    def supervisor(self) -> StationSupervisor:
+        return self._supervisor
+
+    def close(self) -> None:
+        """关闭工位输入源。"""
+        self._source.close()
+
+    def _commit(self, reaction: Reaction) -> None:
+        """把本次反应的领域状态和效果提交到本地状态。"""
+        self._store.commit(
+            state=self._supervisor.state,
+            commands=reaction.commands,
+            closed_instances=reaction.closed_instances,
+        )
+
+    def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
+        """消费输入, 提交每个反应, 并在停机时结束当前实例。"""
+        try:
+            while not should_stop():
+                arriving = self._source.next_input(timeout=self._supervisor.timeout())
+                if isinstance(arriving, InputWaitExpired):
+                    reaction = self._supervisor.wake(host=HostLiveness.ALIVE)
+                elif arriving is None:
+                    if self._source.ended:
+                        ended = StreamHealthObserved(
+                            event=StreamHealthEvent(
+                                fact=StreamFact.STREAM_ENDED,
+                                at_monotonic=monotonic(),
+                            )
+                        )
+                        self._commit(self._supervisor.receive(ended))
+                        break
+                    reaction = self._supervisor.wake(host=HostLiveness.ALIVE)
+                else:
+                    reaction = self._supervisor.receive(arriving)
+                self._commit(reaction)
+            self._commit(self._supervisor.interrupt())
+        finally:
+            self.close()
+
+
+class AutonomousRuntime:
+    """同时运行委托命令与各工位实时判定循环。"""
+
+    def __init__(
+        self,
+        *,
+        command_loop: ConnectionTestCommandLoop,
+        stations: tuple[AutonomousStation, ...],
+        state: LocalState,
+    ) -> None:
+        self._command_loop = command_loop
+        self._stations = stations
+        self._state = state
+
+    @property
+    def stations(self) -> tuple[AutonomousStation, ...]:
+        return self._stations
+
+    def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
+        """让命令循环和工位循环并行运行, 任一线程出错都请求整体停机。"""
+        stopped = threading.Event()
+        errors: list[BaseException] = []
+
+        def stop_requested() -> bool:
+            return stopped.is_set() or should_stop()
+
+        def run(target: Callable[[], None]) -> None:
+            try:
+                target()
+            except BaseException as error:
+                errors.append(error)
+                stopped.set()
+
+        threads = [
+            threading.Thread(
+                target=run,
+                args=(lambda: self._command_loop.run_forever(should_stop=stop_requested),),
+                daemon=True,
+            ),
+            *[
+                threading.Thread(
+                    target=run,
+                    args=(lambda station=station: station.run_forever(should_stop=stop_requested),),
+                    daemon=True,
+                )
+                for station in self._stations
+            ],
+        ]
+        for thread in threads:
+            thread.start()
+        try:
+            while not stop_requested() and any(thread.is_alive() for thread in threads):
+                sleep(0.05)
+        finally:
+            stopped.set()
+            for station in self._stations:
+                station.close()
+            for thread in threads:
+                thread.join()
+            self._state.close()
+        if errors:
+            raise errors[0]
+
+    def close(self) -> None:
+        """关闭输入和本地状态, 供配置失败和进程退出路径共同调用。"""
+        for station in self._stations:
+            station.close()
+        self._state.close()
+
+
 def build_connection_test_runner(
     *,
     center_url: str,
     host_id: str,
-    host_token: str,
+    host_private_key: str,
     command_timeout: float,
     local_connectors: tuple[LocalIsapiConnectorConfiguration, ...],
     ssl_context: ssl.SSLContext | None = None,
@@ -144,7 +271,7 @@ def build_connection_test_runner(
         transport=HttpCommandTransport(
             center_url=center_url,
             host_id=host_id,
-            host_token=host_token,
+            host_private_key=host_private_key,
             timeout=command_timeout,
             ssl_context=ssl_context,
         ),
@@ -159,7 +286,7 @@ def build_connection_test_loop(
     *,
     center_url: str,
     host_id: str,
-    host_token: str,
+    host_private_key: str,
     command_timeout: float,
     command_poll_interval: float,
     local_connectors: tuple[LocalIsapiConnectorConfiguration, ...],
@@ -171,7 +298,7 @@ def build_connection_test_loop(
         runner=build_connection_test_runner(
             center_url=center_url,
             host_id=host_id,
-            host_token=host_token,
+            host_private_key=host_private_key,
             command_timeout=command_timeout,
             local_connectors=local_connectors,
             ssl_context=ssl_context,
@@ -181,81 +308,72 @@ def build_connection_test_loop(
     )
 
 
-_CONFIG_KEYS = frozenset(
-    {
-        "center_url",
-        "host_id",
-        "host_token_file",
-        "command_timeout_seconds",
-        "command_poll_interval_seconds",
-        "connectors",
-    }
-)
-_CONNECTOR_KEYS = frozenset(
-    {
-        "connector_id",
-        "revision",
-        "credentials_configured",
-        "base_url",
-        "username_file",
-        "password_file",
-        "profile",
-        "capability",
-    }
-)
-_PROFILE_KEYS = frozenset(
-    {
-        "input_status_path",
-        "output_trigger_path",
-        "output_body",
-        "device_info_path",
-        "input_state_element",
-        "input_tokens",
-        "output_tokens",
-    }
-)
-
-
-def build_connection_test_loop_from_file(config_path: str | Path) -> ConnectionTestCommandLoop:
+def build_connection_test_loop_from_file(
+    config_path: str | Path,
+) -> ConnectionTestCommandLoop:
     """从推理机本地配置文件装配生产命令循环。"""
-    path = Path(config_path)
-    raw: object = json.loads(path.read_text(encoding="utf-8"))
-    config = _object(raw, "command loop configuration")
-    _require_keys(config, required=_CONFIG_KEYS, optional={"center_ca_file"})
+    config = load_configuration(config_path)
+    return _build_connection_test_loop(config)
 
-    center_url = _safe_url(config["center_url"], "center_url", schemes={"https"})
-    ssl_context = _center_ssl_context(config.get("center_ca_file"))
-    host_token = _read_secret(_path(config["host_token_file"], "host_token_file"), "host token")
-    connectors_value = config["connectors"]
-    if not isinstance(connectors_value, list):
-        raise ValueError("connectors must be a JSON array")
 
-    connectors = tuple(_local_connector(item) for item in connectors_value)
+def _build_connection_test_loop(config: EdgeRuntimeConfiguration) -> ConnectionTestCommandLoop:
     return build_connection_test_loop(
-        center_url=center_url,
-        host_id=_non_empty_string(config["host_id"], "host_id"),
-        host_token=host_token,
-        command_timeout=_positive_number(
-            config["command_timeout_seconds"], "command_timeout_seconds"
-        ),
-        command_poll_interval=_positive_number(
-            config["command_poll_interval_seconds"], "command_poll_interval_seconds"
-        ),
-        local_connectors=connectors,
-        ssl_context=ssl_context,
+        center_url=config.center_url,
+        host_id=config.host_id,
+        host_private_key=config.host_private_key,
+        command_timeout=config.command_timeout,
+        command_poll_interval=config.command_poll_interval,
+        local_connectors=config.connectors,
+        ssl_context=config.ssl_context,
     )
 
 
+def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRuntime:
+    """从本地配置装配命令循环、SQLite 状态和每条实时判定流。"""
+    config = load_configuration(config_path, include_stations=True)
+    command_loop = _build_connection_test_loop(config)
+    if config.local_state_path is None:
+        raise ValueError("local_state_path is required for autonomous runtime")
+    state = open_local_state(str(config.local_state_path))
+    stations: list[AutonomousStation] = []
+    try:
+        for station_config in config.stations:
+            source = SseStationInputSource(
+                inference_url=station_config.inference_url,
+                request_body=station_config.request_body,
+                timeout=config.command_timeout,
+            )
+            station_store = state.station(station_config.station_id)
+            stations.append(
+                AutonomousStation(
+                    store=station_store,
+                    supervisor=resume_station(
+                        station_store,
+                        template=station_config.template,
+                        parameters=station_config.parameters,
+                        margins=station_config.margins,
+                    ),
+                    source=source,
+                )
+            )
+    except Exception:
+        for station in stations:
+            station.close()
+        state.close()
+        raise
+    return AutonomousRuntime(command_loop=command_loop, stations=tuple(stations), state=state)
+
+
 def main() -> int:
-    """启动推理机的委托命令循环进程。"""
+    """启动推理机的自治命令和实时判定循环。"""
     config_path = os.environ.get("NVSOP_EDGE_COMMAND_CONFIG_FILE")
     if not config_path:
         raise SystemExit("NVSOP_EDGE_COMMAND_CONFIG_FILE is required")
 
     try:
-        loop = build_connection_test_loop_from_file(config_path)
+        runtime = build_autonomous_runtime_from_file(config_path)
     except (OSError, ValueError, json.JSONDecodeError) as error:
-        raise SystemExit(f"edge command loop configuration is invalid: {error}") from None
+        raise SystemExit(f"edge runtime configuration is invalid: {error}") from None
 
     stopping = False
 
@@ -265,179 +383,21 @@ def main() -> int:
 
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGTERM, request_stop)
-    loop.run_forever(should_stop=lambda: stopping)
+    runtime.run_forever(should_stop=lambda: stopping)
     return 0
 
 
-def _local_connector(value: object) -> LocalIsapiConnectorConfiguration:
-    config = _object(value, "local connector configuration")
-    _require_keys(
-        config,
-        required={
-            "connector_id",
-            "revision",
-            "credentials_configured",
-            "base_url",
-            "profile",
-            "capability",
-        },
-        optional={"username_file", "password_file"},
-    )
-    credentials_configured = _boolean(config["credentials_configured"], "credentials_configured")
-    if credentials_configured:
-        username = _read_secret(
-            _path(config["username_file"], "username_file"), "connector username"
-        )
-        password = _read_secret(
-            _path(config["password_file"], "password_file"), "connector password"
-        )
-    else:
-        username = ""
-        password = ""
-    return LocalIsapiConnectorConfiguration(
-        connector_id=_non_empty_string(config["connector_id"], "connector_id"),
-        revision=_positive_integer(config["revision"], "revision"),
-        credentials_configured=credentials_configured,
-        base_url=_safe_url(config["base_url"], "connector base_url", schemes={"http", "https"}),
-        username=username,
-        password=password,
-        profile=_profile(config["profile"]),
-        capability=capability_from_wire(_object(config["capability"], "capability")),
-    )
-
-
-def _profile(value: object) -> IsapiProfile:
-    config = _object(value, "ISAPI profile")
-    _require_keys(config, required=_PROFILE_KEYS)
-    input_tokens: list[tuple[str, PointState]] = []
-    for item in _array(config["input_tokens"], "input_tokens"):
-        token = _object(item, "input token")
-        _require_keys(token, required={"token", "state"})
-        input_tokens.append(
-            (
-                _non_empty_string(token["token"], "input token"),
-                _point_state(token["state"], "input state"),
-            )
-        )
-    output_tokens: list[tuple[PointState, str]] = []
-    for item in _array(config["output_tokens"], "output_tokens"):
-        token = _object(item, "output token")
-        _require_keys(token, required={"state", "token"})
-        output_tokens.append(
-            (
-                _point_state(token["state"], "output state"),
-                _non_empty_string(token["token"], "output token"),
-            )
-        )
-    return IsapiProfile(
-        input_status_path=_non_empty_string(config["input_status_path"], "input_status_path"),
-        output_trigger_path=_non_empty_string(config["output_trigger_path"], "output_trigger_path"),
-        output_body=_non_empty_string(config["output_body"], "output_body"),
-        device_info_path=_non_empty_string(config["device_info_path"], "device_info_path"),
-        input_state_element=_non_empty_string(config["input_state_element"], "input_state_element"),
-        input_tokens=tuple(input_tokens),
-        output_tokens=tuple(output_tokens),
-    )
-
-
-def _safe_url(value: object, name: str, *, schemes: set[str]) -> str:
-    raw = _non_empty_string(value, name)
-    try:
-        parsed = urlsplit(raw)
-        hostname = parsed.hostname
-        port = parsed.port
-    except ValueError:
-        raise ValueError(f"{name} is invalid") from None
-    if parsed.scheme.lower() not in schemes or hostname is None:
-        raise ValueError(f"{name} must use a supported host URL")
-    if port is not None and port <= 0:
-        raise ValueError(f"{name} must use a supported host URL")
-    if parsed.username is not None or parsed.password is not None:
-        raise ValueError(f"{name} must not contain URL credentials")
-    if "?" in raw or "#" in raw:
-        raise ValueError(f"{name} must not contain a query or fragment")
-    return raw
-
-
-def _center_ssl_context(value: object) -> ssl.SSLContext | None:
-    if value is None:
-        return None
-    return ssl.create_default_context(cafile=str(_path(value, "center_ca_file")))
-
-
-def _read_secret(path: Path, name: str) -> str:
-    value = path.read_text(encoding="utf-8").strip()
-    if not value:
-        raise ValueError(f"{name} file must not be empty")
-    return value
-
-
-def _path(value: object, name: str) -> Path:
-    return Path(_non_empty_string(value, name))
-
-
-def _object(value: object, name: str) -> dict[str, object]:
-    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
-        raise ValueError(f"{name} must be a JSON object")
-    return cast(dict[str, object], value)
-
-
-def _array(value: object, name: str) -> list[object]:
-    if not isinstance(value, list):
-        raise ValueError(f"{name} must be a JSON array")
-    return cast(list[object], value)
-
-
-def _require_keys(
-    value: dict[str, object],
-    *,
-    required: set[str] | frozenset[str],
-    optional: set[str] | None = None,
-) -> None:
-    allowed = set(required) | (optional or set())
-    missing = set(required) - set(value)
-    unknown = set(value) - allowed
-    if missing:
-        raise ValueError(f"configuration is missing {sorted(missing)}")
-    if unknown:
-        raise ValueError(f"configuration has unsupported fields {sorted(unknown)}")
-
-
-def _non_empty_string(value: object, name: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"{name} must be a non-empty string")
-    return value
-
-
-def _boolean(value: object, name: str) -> bool:
-    if not isinstance(value, bool):
-        raise ValueError(f"{name} must be a boolean")
-    return value
-
-
-def _positive_integer(value: object, name: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{name} must be a positive integer")
-    return value
-
-
-def _positive_number(value: object, name: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
-        raise ValueError(f"{name} must be a positive number")
-    return float(value)
-
-
-def _point_state(value: object, name: str) -> PointState:
-    try:
-        return PointState(_non_empty_string(value, name))
-    except ValueError as error:
-        raise ValueError(f"{name} is unsupported") from error
-
-
 __all__ = [
+    "AutonomousRuntime",
+    "AutonomousStation",
     "ConfiguredLocalConnectorRegistry",
     "ConnectionTestCommandLoop",
+    "InputWaitExpired",
     "LocalIsapiConnectorConfiguration",
+    "SseStationInputSource",
+    "StationInputSource",
+    "StationRuntimeConfiguration",
+    "build_autonomous_runtime_from_file",
     "build_connection_test_loop",
     "build_connection_test_loop_from_file",
     "build_connection_test_runner",

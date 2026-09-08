@@ -7,7 +7,6 @@ from uuid import UUID
 
 from factory_sop.auth.api import Caller, Permission, authorize
 from factory_sop.device.errors import DeviceRefusalCode
-from factory_sop.device.host_credentials import matches
 from factory_sop.device.model import (
     Connector,
     ConnectorReachability,
@@ -27,9 +26,11 @@ from factory_sop.device.repository import (
 from factory_sop.device.usecases._transitions import refuse
 from factory_sop.identifiers import new_id
 from factory_sop.observability import get_logger
+from nvsop_contracts import verify_host_identity_request
 
 _logger = get_logger("device")
 _REFUSAL_EVENT = "device.pending_command.refused"
+_INFERENCE_HOST_SIGNATURE_FRESHNESS = timedelta(seconds=300)
 
 
 def enqueue_connector_connection_test(
@@ -138,7 +139,7 @@ def claim_next_command(
     commands: PendingCommandRepository,
 ) -> PendingCommand | None:
     """认证后原子领取该推理机的下一条命令。"""
-    authenticate_command_host(host=host, hosts=hosts)
+    authenticate_command_host(host=host, now=now, hosts=hosts)
     if lease_duration <= timedelta(0):
         raise ValueError("command lease duration must be positive")
     token = str(new_id())
@@ -159,13 +160,40 @@ def claim_next_command(
 
 
 def authenticate_command_host(
-    *, host: InferenceHostIdentity, hosts: InferenceHostRepository
+    *, host: InferenceHostIdentity, now: datetime, hosts: InferenceHostRepository
 ) -> None:
-    """用每台推理机独立凭据认证命令接口，失败时不暴露主机是否存在。"""
+    """用登记的非秘密公钥验证主机请求，失败时不暴露主机是否存在。"""
     stored = hosts.by_id(host.host_id)
-    if stored is None or not matches(
-        credential=host.credential,
-        stored_fingerprint=stored.credential_hash,
+    request = host.request
+    fresh = (
+        request is not None
+        and request.host_id == str(host.host_id)
+        and abs(int(now.timestamp()) - request.timestamp)
+        <= _INFERENCE_HOST_SIGNATURE_FRESHNESS.total_seconds()
+    )
+    public_key = stored.identity_public_key if stored is not None else None
+    authenticated = bool(
+        public_key
+        and fresh
+        and request is not None
+        and verify_host_identity_request(
+            request,
+            public_key=public_key,
+            signature=host.signature or "",
+        )
+    )
+    if not authenticated:
+        refuse(
+            _REFUSAL_EVENT,
+            DeviceRefusalCode.INFERENCE_HOST_AUTHENTICATION_FAILED,
+            host_id=str(host.host_id),
+        )
+    assert stored is not None
+    assert request is not None
+    if not hosts.consume_identity_nonce(
+        host_id=host.host_id,
+        nonce=request.nonce,
+        seen_at=now,
     ):
         refuse(
             _REFUSAL_EVENT,
@@ -201,15 +229,17 @@ def complete_connection_test(
     connectors: ConnectorRepository,
     hosts: InferenceHostRepository,
     commands: PendingCommandRepository,
+    authenticated: bool = False,
 ) -> PendingCommand:
     """认证领取主机后记录连接器的真实测试结果。
 
     命令只允许写回创建时的连接器修订；配置变化、目标停用或目标消失均留下可见的拒绝
     结案，不会把迟到结果写进新配置。
     """
-    authenticate_command_host(host=host, hosts=hosts)
+    if not authenticated:
+        authenticate_command_host(host=host, now=now, hosts=hosts)
     host_id = host.host_id
-    command = _existing_command(command_id, commands)
+    command = _existing_command_for_update(command_id, commands)
     if command.host_id != host_id:
         refuse(
             _REFUSAL_EVENT,
@@ -257,6 +287,7 @@ def complete_connection_test(
             command,
             code=result.failure_code or "COMMAND_RESULT_INVALID",
             detail=result.detail,
+            credentials_configured=result.credentials_configured,
             now=now,
             host_id=host_id,
             commands=commands,
@@ -267,6 +298,7 @@ def complete_connection_test(
         return _reject(
             command,
             code=DeviceRefusalCode.COMMAND_TARGET_NOT_FOUND,
+            credentials_configured=result.credentials_configured,
             now=now,
             host_id=host_id,
             commands=commands,
@@ -275,6 +307,7 @@ def complete_connection_test(
         return _reject(
             command,
             code=DeviceRefusalCode.COMMAND_TARGET_DEACTIVATED,
+            credentials_configured=result.credentials_configured,
             now=now,
             host_id=host_id,
             commands=commands,
@@ -283,6 +316,7 @@ def complete_connection_test(
         return _reject(
             command,
             code=DeviceRefusalCode.COMMAND_CONFIGURATION_CHANGED,
+            credentials_configured=result.credentials_configured,
             now=now,
             host_id=host_id,
             commands=commands,
@@ -327,6 +361,7 @@ def complete_connection_test(
             result_detail=result.detail,
             failure_code=None,
             completed_at=now,
+            result_credentials_configured=result.credentials_configured,
         )
     )
     _logger.info(
@@ -343,6 +378,7 @@ def _reject(
     *,
     code: DeviceRefusalCode | str,
     detail: str | None = None,
+    credentials_configured: bool | None = None,
     now: datetime,
     host_id: UUID,
     commands: PendingCommandRepository,
@@ -359,6 +395,7 @@ def _reject(
             result_detail=detail,
             failure_code=failure_code,
             completed_at=now,
+            result_credentials_configured=credentials_configured,
         )
     )
     _logger.info(
@@ -376,11 +413,21 @@ def _same_result(command: PendingCommand, result: ConnectorTestResult) -> bool:
         command.result == result.reachability
         and command.result_detail == result.detail
         and command.failure_code == result.failure_code
+        and command.result_credentials_configured == result.credentials_configured
     )
 
 
 def _existing_command(command_id: UUID, commands: PendingCommandRepository) -> PendingCommand:
     command = commands.by_id(command_id)
+    if command is None:
+        refuse(_REFUSAL_EVENT, DeviceRefusalCode.COMMAND_NOT_FOUND, command_id=str(command_id))
+    return command
+
+
+def _existing_command_for_update(
+    command_id: UUID, commands: PendingCommandRepository
+) -> PendingCommand:
+    command = commands.by_id_for_update(command_id)
     if command is None:
         refuse(_REFUSAL_EVENT, DeviceRefusalCode.COMMAND_NOT_FOUND, command_id=str(command_id))
     return command

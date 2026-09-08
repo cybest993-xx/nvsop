@@ -14,8 +14,9 @@ in its own `adapters/`, above this.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import Annotated
 
-from fastapi import Request
+from fastapi import Depends, Request
 from sqlalchemy import Engine, MetaData, create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -89,3 +90,7 @@ def request_session(request: Request) -> Iterator[Session]:
         raise
     finally:
         session.close()
+
+
+# ADR-0002：所有适配器共享此依赖，提交失败必须发生在成功响应与 Cookie 发出前。
+RequestSession = Annotated[Session, Depends(request_session, scope="function")]

@@ -6,8 +6,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0017"
-down_revision: str | None = "0016"
+revision: str = "0018"
+down_revision: str | None = "0017"
 
 RAW_SQL_TABLES = frozenset({"template_version"})
 

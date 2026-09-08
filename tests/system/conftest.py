@@ -370,6 +370,7 @@ def client(
             verify=False,
             trust_env=False,
         ) as opened:
+            opened.nvsop_tls_certificate = certificate  # type: ignore[attr-defined]
             yield opened
     finally:
         if process is not None:

@@ -12,6 +12,7 @@ from typing import Annotated
 from fastapi import Depends
 from sqlalchemy.orm import Session as DatabaseSession
 
+from factory_sop.device.adapters.command_repository import PostgresPendingCommandRepository
 from factory_sop.device.adapters.probe import UrllibConnectionProbe
 from factory_sop.device.adapters.repository import (
     PostgresCameraRepository,
@@ -27,6 +28,7 @@ from factory_sop.device.repository import (
     ConnectorRepository,
     InferenceBackendRepository,
     InferenceHostRepository,
+    PendingCommandRepository,
     PointRepository,
     StationRepository,
 )
@@ -76,3 +78,10 @@ def points(
 def probe() -> ConnectionProbe:
     """The real network probe. Route tests replace it with a scripted stand-in."""
     return UrllibConnectionProbe()
+
+
+def pending_commands(
+    session: Annotated[DatabaseSession, Depends(request_session)],
+) -> PendingCommandRepository:
+    """`device_pending_command` on the request's transaction."""
+    return PostgresPendingCommandRepository(session)

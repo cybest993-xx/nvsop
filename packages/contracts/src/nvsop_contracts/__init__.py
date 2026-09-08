@@ -16,9 +16,25 @@ from nvsop_contracts.capability import (
     capability_to_wire,
     unfit_for,
 )
+from nvsop_contracts.commands import (
+    ConnectionTestClaim,
+    ConnectionTestCommand,
+    ConnectionTestOutcome,
+    ConnectionTestResult,
+    connection_test_claim_from_wire,
+    connection_test_claim_to_wire,
+    connection_test_command_from_wire,
+    connection_test_command_to_wire,
+    connection_test_result_from_wire,
+    connection_test_result_to_wire,
+)
 
 __all__ = [
     "Capability",
+    "ConnectionTestClaim",
+    "ConnectionTestCommand",
+    "ConnectionTestOutcome",
+    "ConnectionTestResult",
     "Delivery",
     "EdgePreservation",
     "Measured",
@@ -31,5 +47,11 @@ __all__ = [
     "Unverified",
     "capability_from_wire",
     "capability_to_wire",
+    "connection_test_claim_from_wire",
+    "connection_test_claim_to_wire",
+    "connection_test_command_from_wire",
+    "connection_test_command_to_wire",
+    "connection_test_result_from_wire",
+    "connection_test_result_to_wire",
     "unfit_for",
 ]

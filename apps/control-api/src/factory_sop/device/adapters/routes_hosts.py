@@ -32,6 +32,7 @@ from factory_sop.device.usecases.hosts import (
     host_by_identifier,
     list_hosts,
     restore_host,
+    rotate_host_credential,
 )
 from factory_sop.problem import problem_openapi_response
 from factory_sop.responses import DEFAULT_PAGE_SIZE, MAXIMUM_PAGE_SIZE, ItemPage
@@ -78,6 +79,13 @@ class HostStatus(BaseModel):
     """The one field 停用 and 恢复 toggle, as the two values of one subresource."""
 
     status: DeviceStatus
+
+
+class InferenceHostCredentialView(BaseModel):
+    """推理机凭据轮换结果；明文只在本次响应出现。"""
+
+    credential: str
+    revision: int
 
 
 class InferenceHostView(BaseModel):
@@ -213,6 +221,34 @@ def edit_a_host(
         hosts=hosts,
     )
     return _view(edited)
+
+
+@router.post(
+    "/{host_id}/credential",
+    operation_id="rotateInferenceHostCredential",
+    openapi_extra=needs(Permission.INFERENCE_HOST_EDIT),
+    responses=_UNAUTHORIZED
+    | _VALIDATION
+    | {
+        404: problem_openapi_response("Host not found"),
+        409: problem_openapi_response("Revision moved (STALE_REVISION)"),
+    },
+)
+def rotate_a_host_credential(
+    host_id: UUID,
+    caller: Authorized,
+    hosts: Annotated[InferenceHostRepository, Depends(hosts)],
+    if_match: Annotated[int, Header(alias="If-Match")],
+) -> InferenceHostCredentialView:
+    """轮换主机控制面凭据并只返回一次明文。"""
+    rotated, issued = rotate_host_credential(
+        host_id=host_id,
+        expected_revision=if_match,
+        caller=caller,
+        now=datetime.now(UTC),
+        hosts=hosts,
+    )
+    return InferenceHostCredentialView(credential=issued.value, revision=rotated.revision)
 
 
 @router.put(

@@ -255,7 +255,7 @@ async function mockControlPlane(page: Page, sessionPayload = ADMIN_SESSION) {
   return { deleteRequests }
 }
 
-test('SYS-24-05 — an operator manages a connector without secrets or a test action', async ({
+test('SYS-24-05 — an operator manages a connector without secrets and sees the test action', async ({
   page,
 }) => {
   await mockControlPlane(page)
@@ -271,7 +271,7 @@ test('SYS-24-05 — an operator manages a connector without secrets or a test ac
   await expect(row).toContainText('一号装配工位')
   await expect(row).toContainText('推理机 A')
   await expect(row).toContainText('未验证')
-  await expect(page.getByRole('button', { name: '测试连接' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '测试连接' })).toBeVisible()
 
   await page.getByRole('button', { name: '新建连接器' }).click()
   const dialog = page.getByRole('dialog', { name: '新建连接器' })

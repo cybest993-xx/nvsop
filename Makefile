@@ -126,7 +126,7 @@ center-integration:
 	cd $(CENTER) && PYTHONPATH=src $(PYTEST) tests/integration -q
 
 center-system:
-	PYTHONPATH=$(CENTER)/src $(PYTEST) tests/system -q
+	PYTHONPATH=$(CENTER)/src:$(EDGE)/src:$(CONTRACT_PY)/src $(PYTEST) tests/system -q
 
 EDGE := apps/edge-runtime
 

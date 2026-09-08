@@ -20,6 +20,7 @@
           "INFERENCE_BACKEND_DEACTIVATED",
           "INFERENCE_BACKEND_HAS_CAMERAS",
           "INFERENCE_HOST_DEACTIVATED",
+          "INFERENCE_HOST_AUTHENTICATION_FAILED",
           "INFERENCE_HOST_HAS_BACKENDS",
           "INFERENCE_HOST_NAME_TAKEN",
           "INFERENCE_HOST_NOT_FOUND",
@@ -48,7 +49,17 @@
           "PERMISSION_DENIED",
           "REQUEST_INVALID",
           "SESSION_INVALID",
-          "STALE_REVISION"
+          "STALE_REVISION",
+          "COMMAND_NOT_FOUND",
+          "COMMAND_HOST_MISMATCH",
+          "COMMAND_CLAIM_REQUIRED",
+          "COMMAND_CLAIM_EXPIRED",
+          "COMMAND_CLAIM_TOKEN_INVALID",
+          "COMMAND_ALREADY_COMPLETED",
+          "COMMAND_IDEMPOTENCY_CONFLICT",
+          "COMMAND_CONFIGURATION_CHANGED",
+          "COMMAND_TARGET_NOT_FOUND",
+          "COMMAND_TARGET_DEACTIVATED"
         ],
         "title": "ApiErrorCode",
         "type": "string"
@@ -374,6 +385,141 @@
         "title": "ConnectionState",
         "type": "string"
       },
+      "ConnectionTestClaimDocument": {
+        "additionalProperties": false,
+        "description": "正式发布的领取响应契约，供 OpenAPI 和边缘运行时共同验证。",
+        "properties": {
+          "claim_token": {
+            "title": "Claim Token",
+            "type": "string"
+          },
+          "command": {
+            "$ref": "#/components/schemas/ConnectionTestCommandDocument"
+          },
+          "lease_expires_at": {
+            "title": "Lease Expires At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command",
+          "claim_token",
+          "lease_expires_at"
+        ],
+        "title": "ConnectionTestClaimDocument",
+        "type": "object"
+      },
+      "ConnectionTestCommandDocument": {
+        "additionalProperties": false,
+        "description": "领取响应中的连接测试命令，与共享 contracts 的字段保持一致。",
+        "properties": {
+          "command_id": {
+            "title": "Command Id",
+            "type": "string"
+          },
+          "command_type": {
+            "const": "test_connector_connection",
+            "title": "Command Type",
+            "type": "string"
+          },
+          "configuration": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Configuration",
+            "type": "object"
+          },
+          "connector_id": {
+            "title": "Connector Id",
+            "type": "string"
+          },
+          "connector_revision": {
+            "title": "Connector Revision",
+            "type": "integer"
+          },
+          "connector_type": {
+            "title": "Connector Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command_type",
+          "command_id",
+          "connector_id",
+          "connector_revision",
+          "connector_type",
+          "configuration"
+        ],
+        "title": "ConnectionTestCommandDocument",
+        "type": "object"
+      },
+      "ConnectionTestOutcome": {
+        "description": "推理机真实测试的三种可观察结果。",
+        "enum": [
+          "reachable",
+          "unreachable",
+          "rejected"
+        ],
+        "title": "ConnectionTestOutcome",
+        "type": "string"
+      },
+      "ConnectionTestResultDocument": {
+        "additionalProperties": false,
+        "description": "推理机回报的严格结果文档, 与共享 contracts 保持同一字段集。",
+        "properties": {
+          "credentials_configured": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credentials Configured"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/ConnectionTestOutcome"
+          }
+        },
+        "required": [
+          "outcome",
+          "detail",
+          "credentials_configured",
+          "failure_code"
+        ],
+        "title": "ConnectionTestResultDocument",
+        "type": "object"
+      },
       "ConnectionView": {
         "description": "The last real connection observation, including the endpoint's model identities.",
         "properties": {
@@ -498,6 +644,16 @@
         ],
         "title": "ConnectorPlacement",
         "type": "object"
+      },
+      "ConnectorReachability": {
+        "description": "连接器尚未由推理机真实验证时的显式状态。",
+        "enum": [
+          "unverified",
+          "reachable",
+          "unreachable"
+        ],
+        "title": "ConnectorReachability",
+        "type": "string"
       },
       "ConnectorStatus": {
         "properties": {
@@ -866,6 +1022,25 @@
           "updated_at"
         ],
         "title": "InferenceBackendView",
+        "type": "object"
+      },
+      "InferenceHostCredentialView": {
+        "description": "推理机凭据轮换结果；明文只在本次响应出现。",
+        "properties": {
+          "credential": {
+            "title": "Credential",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "credential",
+          "revision"
+        ],
+        "title": "InferenceHostCredentialView",
         "type": "object"
       },
       "InferenceHostView": {
@@ -1396,6 +1571,168 @@
           "password"
         ],
         "title": "NewUser",
+        "type": "object"
+      },
+      "PendingCommandStatus": {
+        "description": "持久委托命令的生命周期状态。",
+        "enum": [
+          "pending",
+          "claimed",
+          "succeeded",
+          "failed",
+          "rejected"
+        ],
+        "title": "PendingCommandStatus",
+        "type": "string"
+      },
+      "PendingCommandType": {
+        "description": "推理机从中心领取的设备命令类型。",
+        "enum": [
+          "test_connector_connection"
+        ],
+        "title": "PendingCommandType",
+        "type": "string"
+      },
+      "PendingCommandView": {
+        "description": "操作员可见的命令状态, 不含推理机领取令牌。",
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "claimed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimed At"
+          },
+          "command_type": {
+            "$ref": "#/components/schemas/PendingCommandType"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "format": "uuid",
+            "title": "Created By",
+            "type": "string"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "host_id": {
+            "format": "uuid",
+            "title": "Host Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "lease_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lease Expires At"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConnectorReachability"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Detail"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PendingCommandStatus"
+          },
+          "target_id": {
+            "format": "uuid",
+            "title": "Target Id",
+            "type": "string"
+          },
+          "target_revision": {
+            "title": "Target Revision",
+            "type": "integer"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "host_id",
+          "command_type",
+          "target_id",
+          "target_revision",
+          "idempotency_key",
+          "status",
+          "attempt",
+          "claimed_at",
+          "lease_expires_at",
+          "result",
+          "result_detail",
+          "failure_code",
+          "completed_at",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "PendingCommandView",
         "type": "object"
       },
       "PointConfiguration": {
@@ -4353,6 +4690,112 @@
         "x-required-permission": "device.connector.edit"
       }
     },
+    "/api/v1/connectors/{connector_id}/connection-test": {
+      "post": {
+        "description": "创建持久测试命令; 不同步访问设备, 也不接收凭据。",
+        "operationId": "enqueueConnectorConnectionTest",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connector_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Connector Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingCommandView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device record not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device configuration conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Enqueue A Connector Connection Test",
+        "tags": [
+          "device"
+        ],
+        "x-required-permission": "device.connector.edit"
+      }
+    },
     "/api/v1/connectors/{connector_id}/status": {
       "put": {
         "operationId": "setConnectorStatus",
@@ -4464,6 +4907,355 @@
           "device"
         ],
         "x-required-permission": "device.connector.edit"
+      }
+    },
+    "/api/v1/device-commands/next": {
+      "get": {
+        "description": "按认证主机领取一条命令; 无命令返回 204, 不会看到其他主机的队列。",
+        "operationId": "claimNextDeviceCommand",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Inference-Host-ID",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "X-Inference-Host-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionTestClaimDocument"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "204": {
+            "description": "No command is pending for this host"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Inference host authentication failed"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Inference host is not allowed to access this command"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device record not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device configuration conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Claim Next Device Command",
+        "tags": [
+          "device"
+        ]
+      }
+    },
+    "/api/v1/device-commands/{command_id}": {
+      "get": {
+        "description": "读取命令状态, 供 Web 轮询直到真实结果或明确拒绝。",
+        "operationId": "readDeviceCommand",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Command Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingCommandView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device record not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device configuration conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Read A Device Command",
+        "tags": [
+          "device"
+        ],
+        "x-required-permission": "device.connector.view"
+      }
+    },
+    "/api/v1/device-commands/{command_id}/result": {
+      "post": {
+        "description": "用主机身份、领取令牌和租约回报结果; 中心与连接器更新共用请求事务。",
+        "operationId": "completeDeviceCommand",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Command Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-ID",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "X-Inference-Host-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Command-Claim-Token",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "X-Command-Claim-Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectionTestResultDocument"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingCommandView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Inference host authentication failed"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Inference host is not allowed to access this command"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device record not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device configuration conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Complete A Device Command",
+        "tags": [
+          "device"
+        ]
       }
     },
     "/api/v1/inference-backends": {
@@ -5627,6 +6419,110 @@
           }
         },
         "summary": "Edit A Host",
+        "tags": [
+          "device"
+        ],
+        "x-required-permission": "device.inference_host.edit"
+      }
+    },
+    "/api/v1/inference-hosts/{host_id}/credential": {
+      "post": {
+        "description": "轮换主机控制面凭据并只返回一次明文。",
+        "operationId": "rotateInferenceHostCredential",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "host_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Host Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "title": "If-Match",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InferenceHostCredentialView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Host not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Revision moved (STALE_REVISION)"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Request invalid"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Rotate A Host Credential",
         "tags": [
           "device"
         ],

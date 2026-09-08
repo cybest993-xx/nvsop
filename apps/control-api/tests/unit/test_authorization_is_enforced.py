@@ -21,6 +21,8 @@ Two properties together are what make it a gate rather than a sample:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+from uuid import UUID
 
 import pytest
 from auth_fakes import FakeRoles, FakeSessions, FakeUsers
@@ -30,6 +32,7 @@ from device_fakes import (
     FakeInferenceBackends,
     FakeInferenceHosts,
     FakeInferenceStations,
+    FakePendingCommands,
     FakePoints,
     FakeProbe,
 )
@@ -44,7 +47,11 @@ from factory_sop.auth.model import Role, User, UserStatus
 from factory_sop.auth.passwords import hash_password
 from factory_sop.auth.permissions import Permission
 from factory_sop.device.adapters import dependencies as device_dependencies
-from factory_sop.device.model import PointDirection
+from factory_sop.device.model import (
+    PendingCommand,
+    PendingCommandCompletion,
+    PointDirection,
+)
 from factory_sop.identifiers import new_id
 from factory_sop.settings import Settings
 
@@ -143,6 +150,11 @@ ROUTES = [
         {"status": "deactivated"},
         headers={"If-Match": "1"},
     ),
+    Target(
+        "POST",
+        "/inference-hosts/{host_id}/credential",
+        headers={"If-Match": "1"},
+    ),
     Target("DELETE", "/inference-hosts/{host_id}", headers={"If-Match": "1"}),
     Target(
         "POST",
@@ -227,6 +239,11 @@ ROUTES = [
         },
     ),
     Target(
+        "POST",
+        "/connectors/{connector_id}/connection-test",
+        headers={"Idempotency-Key": "authorization-command-check"},
+    ),
+    Target(
         "PATCH",
         "/connectors/{connector_id}",
         {
@@ -301,7 +318,27 @@ ROUTES = [
 EXEMPT = {
     ("POST", f"{API_PREFIX}/auth/session"),
     ("DELETE", f"{API_PREFIX}/auth/session"),
+    ("POST", f"{API_PREFIX}/device-commands/{{command_id}}/result"),
 }
+
+
+class AuthorizationPendingCommands(FakePendingCommands):
+    """只为授权机械测试保存入队结果, 不模拟推理机领取或硬件。"""
+
+    def claim_next(
+        self,
+        *,
+        host_id: UUID,
+        claim_token: str,
+        claimed_at: datetime,
+        lease_expires_at: datetime,
+    ) -> PendingCommand | None:
+        del host_id, claim_token, claimed_at, lease_expires_at
+        return None
+
+    def complete(self, completion: PendingCommandCompletion) -> PendingCommand:
+        del completion
+        raise AssertionError("authorization route test does not complete a command")
 
 
 class Backend:
@@ -349,6 +386,7 @@ class Backend:
             station_id=self.station.id, host_id=self.host.id, backend_id=self.backend.id
         )
         self.connector = self.connectors.register(station_id=self.station.id, host_id=self.host.id)
+        self.pending_commands = AuthorizationPendingCommands()
         self.point = self.points.register(
             station_id=self.station.id,
             connector_id=self.connector.id,
@@ -367,6 +405,9 @@ class Backend:
         self.app.dependency_overrides[device_dependencies.stations] = lambda: self.stations
         self.app.dependency_overrides[device_dependencies.cameras] = lambda: self.cameras
         self.app.dependency_overrides[device_dependencies.connectors] = lambda: self.connectors
+        self.app.dependency_overrides[device_dependencies.pending_commands] = lambda: (
+            self.pending_commands
+        )
         self.app.dependency_overrides[device_dependencies.points] = lambda: self.points
         self.client = TestClient(self.app, base_url="https://testserver")
         assert (

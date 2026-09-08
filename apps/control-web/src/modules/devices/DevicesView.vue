@@ -10,7 +10,7 @@ import {
   ElSelect,
   ElTag,
 } from 'element-plus'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 
 import {
   ControlPlaneError,
@@ -24,13 +24,18 @@ import {
   setConnectorStatus,
   type ConnectorPlacement,
   type ConnectorView,
-  type DeviceStatus,
   type InferenceHostView,
   type StationView,
   type FieldError,
 } from '@/api/controlPlane'
 import { useSessionStore } from '@/session/store'
 
+import {
+  connectorTypeLabel,
+  reachabilityPresentation,
+  statusPresentation,
+} from './devicesPresentation'
+import ConnectionTestControl from './ConnectionTestControl.vue'
 import PointManagement from './PointManagement.vue'
 
 interface ConnectorDraft {
@@ -87,60 +92,6 @@ const knownTargetFields = [
   { key: 'revision' as const, label: '已知修订号' },
 ]
 
-function connectorTypeLabel(type: string): string {
-  switch (type) {
-    case 'hikvision_isapi':
-      return '海康 ISAPI'
-    case 'board_card':
-      return '板卡连接器'
-    default:
-      return `未知连接器类型（${type}）`
-  }
-}
-
-interface ReachabilityPresentation {
-  label: string
-  tag: 'success' | 'danger' | 'warning'
-}
-
-function reachabilityPresentation(value: string): ReachabilityPresentation {
-  switch (value) {
-    case 'reachable':
-      return { label: '可达', tag: 'success' }
-    case 'unreachable':
-      return { label: '不可达', tag: 'danger' }
-    case 'unverified':
-      return { label: '未验证', tag: 'warning' }
-    default:
-      return { label: `未知连接状态（${value}）`, tag: 'warning' }
-  }
-}
-
-interface StatusPresentation {
-  label: string
-  tag: 'success' | 'info' | 'warning'
-  action: { next: DeviceStatus; label: string; successMessage: string } | null
-}
-
-function statusPresentation(status: string): StatusPresentation {
-  switch (status) {
-    case 'active':
-      return {
-        label: '在用',
-        tag: 'success',
-        action: { next: 'deactivated', label: '停用', successMessage: '连接器已停用' },
-      }
-    case 'deactivated':
-      return {
-        label: '已停用',
-        tag: 'info',
-        action: { next: 'active', label: '恢复', successMessage: '连接器已恢复' },
-      }
-    default:
-      return { label: `未知状态（${status}）`, tag: 'warning', action: null }
-  }
-}
-
 function resetFailure(): void {
   failure.value = ''
   fieldErrors.value = []
@@ -159,8 +110,14 @@ function recordFailure(error: unknown): void {
   fieldErrors.value = error.fieldErrors
 }
 
-async function load(): Promise<void> {
-  loading.value = true
+interface LoadOptions {
+  showLoading: boolean
+}
+
+async function load({ showLoading }: LoadOptions = { showLoading: true }): Promise<void> {
+  if (showLoading) {
+    loading.value = true
+  }
   failure.value = ''
   try {
     const [connectorPage, hostPage, stationPage] = await Promise.all([
@@ -174,8 +131,14 @@ async function load(): Promise<void> {
   } catch (error) {
     recordFailure(error)
   } finally {
-    loading.value = false
+    if (showLoading) {
+      loading.value = false
+    }
   }
+}
+
+function refreshAfterConnectionTest(): void {
+  void load({ showLoading: false })
 }
 
 async function attempt(operation: () => Promise<unknown>): Promise<boolean> {
@@ -191,14 +154,12 @@ async function attempt(operation: () => Promise<unknown>): Promise<boolean> {
 
 type ConnectorDialogMode = 'create' | 'edit' | 'known-edit'
 
-function assertNever(value: never): never {
-  throw new Error(`未处理的连接器对话框模式: ${String(value)}`)
-}
-
 const connectorDialog = ref(false)
 const connectorDialogMode = ref<ConnectorDialogMode>('create')
 const editingConnector = ref<ConnectorView | null>(null)
 const knownTargetDraft = reactive({ connectorId: '', revision: '' })
+const knownConnectionTarget = reactive({ connectorId: '' })
+const knownConnectionTest = ref<{ startTest: () => Promise<void> } | null>(null)
 const draft = ref<ConnectorDraft>(newDraft())
 
 function newDraft(connector?: ConnectorView): ConnectorDraft {
@@ -290,7 +251,7 @@ async function submitConnector(): Promise<void> {
       break
     }
     default:
-      return assertNever(connectorDialogMode.value)
+      throw new Error(`未处理的连接器对话框模式: ${String(connectorDialogMode.value)}`)
   }
   if (!ok) {
     return
@@ -299,6 +260,16 @@ async function submitConnector(): Promise<void> {
   connectorDialog.value = false
   ElMessage.success(wasCreate ? '连接器已创建' : '连接器已保存')
   await load()
+}
+
+async function submitKnownConnectionTest(): Promise<void> {
+  resetFailure()
+  if (!knownConnectionTarget.connectorId.trim()) {
+    failure.value = '请输入连接器 ID'
+    return
+  }
+  await nextTick()
+  await knownConnectionTest.value?.startTest()
 }
 
 async function submitKnownDelete(): Promise<void> {
@@ -488,6 +459,13 @@ onMounted(load)
               >
                 删除
               </ElButton>
+              <ConnectionTestControl
+                v-if="mayEditConnectors"
+                :connector-id="connector.id"
+                :connector-name="connector.name"
+                :may-view="mayViewConnectors"
+                @completed="refreshAfterConnectionTest"
+              />
             </td>
           </tr>
           <tr v-if="connectors.length === 0">
@@ -513,6 +491,32 @@ onMounted(load)
         >
           按标识编辑
         </ElButton>
+        <ElForm
+          v-if="mayEditConnectors"
+          inline
+          aria-label="按标识测试连接"
+          @submit.prevent="submitKnownConnectionTest"
+        >
+          <ElFormItem label="连接器 ID">
+            <ElInput
+              id="known-test-connector-id"
+              v-model="knownConnectionTarget.connectorId"
+              name="known-test-connector-id"
+              autocomplete="off"
+            />
+          </ElFormItem>
+          <ElButton type="primary" native-type="submit">测试连接</ElButton>
+        </ElForm>
+        <ConnectionTestControl
+          v-if="mayEditConnectors && knownConnectionTarget.connectorId.trim()"
+          :key="knownConnectionTarget.connectorId.trim()"
+          ref="knownConnectionTest"
+          :connector-id="knownConnectionTarget.connectorId.trim()"
+          :connector-name="knownConnectionTarget.connectorId.trim()"
+          :may-view="mayViewConnectors"
+          :show-button="false"
+          @completed="refreshAfterConnectionTest"
+        />
         <ElForm v-if="mayDeleteConnectors" inline @submit.prevent="submitKnownDelete">
           <ElFormItem v-for="field in knownTargetFields" :key="field.key" :label="field.label">
             <ElInput

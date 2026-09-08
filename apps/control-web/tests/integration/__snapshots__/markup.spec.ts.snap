@@ -83,7 +83,7 @@ exports[`the access page > renders the accounts and roles an administrator works
 </section>"
 `;
 
-exports[`the device page > renders connector configuration without a test or secret control 1`] = `
+exports[`the device page > renders connector configuration with a delegated test control 1`] = `
 "<section aria-labelledby="devices-heading">
   <header class="devices__header">
     <div>
@@ -144,7 +144,13 @@ exports[`the device page > renders connector configuration without a test or sec
               <!--v-if--><span class="">停用</span>
             </button><button aria-disabled="false" type="button" class="el-button el-button--danger is-link">
               <!--v-if--><span class=""> 删除 </span>
-            </button></td>
+            </button>
+            <div class="connection-test"><button aria-disabled="false" type="button" class="el-button el-button--primary is-plain" aria-label="测试连接：装配线输入">
+                <!--v-if--><span class="">测试连接</span>
+              </button>
+              <!--v-if-->
+            </div>
+          </td>
         </tr>
         <!--v-if-->
       </tbody>
@@ -274,7 +280,13 @@ exports[`the device page > renders the connector form with only non-secret field
               <!--v-if--><span class="">停用</span>
             </button><button aria-disabled="false" type="button" class="el-button el-button--danger is-link">
               <!--v-if--><span class=""> 删除 </span>
-            </button></td>
+            </button>
+            <div class="connection-test"><button aria-disabled="false" type="button" class="el-button el-button--primary is-plain" aria-label="测试连接：装配线输入">
+                <!--v-if--><span class="">测试连接</span>
+              </button>
+              <!--v-if-->
+            </div>
+          </td>
         </tr>
         <!--v-if-->
       </tbody>

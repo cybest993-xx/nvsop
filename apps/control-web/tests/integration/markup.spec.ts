@@ -206,7 +206,7 @@ describe('the device page', () => {
     return mount(DevicesView, { global: { plugins: [ElementPlus] } })
   }
 
-  it('renders connector configuration without a test or secret control', async () => {
+  it('renders connector configuration with a delegated test control', async () => {
     const wrapper = mountAsDeviceAdmin()
     await flushPromises()
 

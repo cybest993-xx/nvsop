@@ -14,8 +14,10 @@ import {
   deleteConnector,
   editConnector,
   endSession,
+  enqueueConnectorConnectionTest,
   readConnector,
   readConnectors,
+  readDeviceCommand,
   readInferenceHosts,
   readSession,
   readStations,
@@ -165,6 +167,45 @@ describe('connector calls', () => {
     await expect(statusRequest!.clone().json()).resolves.toEqual({ status: 'deactivated' })
     expect(deleteRequest!.method).toBe('DELETE')
     expect(deleteRequest!.headers.get('If-Match')).toBe('3')
+  })
+})
+
+describe('delegated connection-test calls', () => {
+  const COMMAND = {
+    id: 'command-1',
+    host_id: 'host-1',
+    command_type: 'test_connector_connection',
+    target_id: 'connector-1',
+    target_revision: 3,
+    idempotency_key: 'retry-key',
+    status: 'pending',
+    attempt: 0,
+    claimed_at: null,
+    lease_expires_at: null,
+    result: null,
+    result_detail: null,
+    failure_code: null,
+    completed_at: null,
+    created_by: 'operator-1',
+    created_at: '2026-09-08T08:00:00Z',
+    updated_at: '2026-09-08T08:00:00Z',
+  }
+
+  it('uses the generated enqueue and read endpoints with the idempotency key', async () => {
+    const stub = stubFetch(respond(202, COMMAND, 'application/json'))
+
+    await enqueueConnectorConnectionTest('connector-1', 'retry-key')
+    stub.mockResolvedValueOnce(respond(200, COMMAND, 'application/json'))
+    await readDeviceCommand('command-1')
+
+    const [enqueueRequest, readRequest] = stub.mock.calls.map(([request]) => request)
+    expect(new URL(enqueueRequest!.url).pathname).toBe(
+      '/api/v1/connectors/connector-1/connection-test',
+    )
+    expect(enqueueRequest!.headers.get('Idempotency-Key')).toBe('retry-key')
+    expect(enqueueRequest!.method).toBe('POST')
+    expect(new URL(readRequest!.url).pathname).toBe('/api/v1/device-commands/command-1')
+    expect(readRequest!.method).toBe('GET')
   })
 })
 

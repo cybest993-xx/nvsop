@@ -340,7 +340,8 @@ def set_the_host_status(
     | {
         404: problem_openapi_response("Host not found"),
         409: problem_openapi_response(
-            "Revision moved (STALE_REVISION), or the host still carries backends"
+            "Revision moved (STALE_REVISION), or the host still carries backends, connectors, "
+            "pending commands, or template history"
         ),
     },
 )

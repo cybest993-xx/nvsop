@@ -167,14 +167,16 @@ def restore_backend(
     expected_revision: int,
     caller: Caller,
     now: datetime,
+    hosts: InferenceHostRepository,
     backends: InferenceBackendRepository,
 ) -> InferenceBackend:
-    """Bring a deactivated backend back at the revision the caller read."""
+    """Bring a deactivated backend back only while its host is active."""
     authorize(caller, Permission.INFERENCE_BACKEND_EDIT)
     backend = _existing_backend(backend_id, backends)
     _require_revision(backend, expected_revision)
     if backend.status is DeviceStatus.ACTIVE:
         return backend
+    _active_host(backend.host_id, hosts)
     return set_status(
         backend,
         status=DeviceStatus.ACTIVE,

@@ -15,6 +15,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, create_engine, delete, inspect, text
 from sqlalchemy.orm import Session as DatabaseSession
+from template_fixtures import TemplateFixture, add_template_version, remove_template_versions
 
 from factory_sop.auth.api import Caller, Permission
 from factory_sop.auth.model import User, UserStatus
@@ -514,12 +515,124 @@ def test_device_migration_0009_rollback_reupgrade_restores_prior_topology_behavi
     camera = a_camera(station.id, host.id, backend.id)
 
     command.upgrade(configuration, "0009")
-    with DatabaseSession(migration_database) as writing:
-        PostgresStationRepository(writing).add(station)
-        PostgresInferenceHostRepository(writing).add(host)
-        PostgresInferenceBackendRepository(writing).add(backend)
-        PostgresCameraRepository(writing).add(camera)
-        writing.commit()
+    # 0009 predates the runtime-parameter and host-identity columns. Write the historical
+    # shape explicitly instead of asking today's ORM rows to target an older schema.
+    with migration_database.begin() as writing:
+        writing.execute(
+            text(
+                """
+                INSERT INTO device_station
+                    (id, code, name, tags, status, revision, created_by, updated_by,
+                     created_at, updated_at)
+                VALUES
+                    (:id, :code, :name, CAST(:tags AS jsonb), :status, :revision,
+                     :created_by, :updated_by, :created_at, :updated_at)
+                """
+            ),
+            {
+                "id": station.id,
+                "code": station.code,
+                "name": station.name,
+                "tags": "[]",
+                "status": station.status.value,
+                "revision": station.revision,
+                "created_by": station.created_by,
+                "updated_by": station.updated_by,
+                "created_at": station.created_at,
+                "updated_at": station.updated_at,
+            },
+        )
+        writing.execute(
+            text(
+                """
+                INSERT INTO device_inference_host
+                    (id, name, address, mediamtx_address, recording_window_seconds,
+                     disk_watermark_percent, status, revision, created_by, updated_by,
+                     created_at, updated_at)
+                VALUES
+                    (:id, :name, :address, :mediamtx_address, :recording_window_seconds,
+                     :disk_watermark_percent, :status, :revision, :created_by, :updated_by,
+                     :created_at, :updated_at)
+                """
+            ),
+            {
+                "id": host.id,
+                "name": host.name,
+                "address": host.address,
+                "mediamtx_address": host.mediamtx_address,
+                "recording_window_seconds": host.recording_window_seconds,
+                "disk_watermark_percent": host.disk_watermark_percent,
+                "status": host.status.value,
+                "revision": host.revision,
+                "created_by": host.created_by,
+                "updated_by": host.updated_by,
+                "created_at": host.created_at,
+                "updated_at": host.updated_at,
+            },
+        )
+        writing.execute(
+            text(
+                """
+                INSERT INTO device_inference_backend
+                    (id, host_id, base_url, template_version_id, status, connection_state,
+                     connection_checked_at, connection_detail, self_reported_model_ids,
+                     self_reported_at, revision, created_by, updated_by, created_at, updated_at)
+                VALUES
+                    (:id, :host_id, :base_url, :template_version_id, :status,
+                     :connection_state, :connection_checked_at, :connection_detail,
+                     CAST(:self_reported_model_ids AS jsonb), :self_reported_at, :revision,
+                     :created_by, :updated_by, :created_at, :updated_at)
+                """
+            ),
+            {
+                "id": backend.id,
+                "host_id": backend.host_id,
+                "base_url": backend.base_url,
+                "template_version_id": backend.template_version_id,
+                "status": backend.status.value,
+                "connection_state": backend.connection_state.value,
+                "connection_checked_at": backend.connection_checked_at,
+                "connection_detail": backend.connection_detail,
+                "self_reported_model_ids": "[]",
+                "self_reported_at": backend.self_reported_at,
+                "revision": backend.revision,
+                "created_by": backend.created_by,
+                "updated_by": backend.updated_by,
+                "created_at": backend.created_at,
+                "updated_at": backend.updated_at,
+            },
+        )
+        writing.execute(
+            text(
+                """
+                INSERT INTO device_camera
+                    (id, name, address, main_stream_path, sub_stream_path,
+                     credentials_configured, station_id, host_id, backend_id, status,
+                     revision, created_by, updated_by, created_at, updated_at)
+                VALUES
+                    (:id, :name, :address, :main_stream_path, :sub_stream_path,
+                     :credentials_configured, :station_id, :host_id, :backend_id, :status,
+                     :revision, :created_by, :updated_by, :created_at, :updated_at)
+                """
+            ),
+            {
+                "id": camera.id,
+                "name": camera.name,
+                "address": camera.address,
+                "main_stream_path": camera.main_stream_path,
+                "sub_stream_path": camera.sub_stream_path,
+                "credentials_configured": camera.credentials_configured,
+                "station_id": camera.station_id,
+                "host_id": camera.host_id,
+                "backend_id": camera.backend_id,
+                "status": camera.status.value,
+                "revision": camera.revision,
+                "created_by": camera.created_by,
+                "updated_by": camera.updated_by,
+                "created_at": camera.created_at,
+                "updated_at": camera.updated_at,
+            },
+        )
 
     command.downgrade(configuration, "0008")
     with migration_database.connect() as connection:
@@ -578,6 +691,9 @@ def test_device_migration_0009_rollback_reupgrade_restores_prior_topology_behavi
             ("device_connector", "device_connector_topology_must_be_consistent"),
         } <= triggers
 
+    # The historical round-trip is complete at 0009. Upgrade to head before using today's
+    # repositories, whose rows include columns introduced after that migration.
+    command.upgrade(configuration, "head")
     with DatabaseSession(migration_database) as restored:
         stations = PostgresStationRepository(restored)
         hosts = PostgresInferenceHostRepository(restored)
@@ -754,10 +870,12 @@ def test_backend_mutation_and_camera_change_follow_the_existing_lock_order(
     station_b = a_station(code="A-006")
     host_a = a_host(name="推理机-7")
     host_b = a_host(name="推理机-8")
+    new_template_id = new_id()
     backend_a = a_backend(host_a.id)
     backend_b = a_backend(host_b.id)
     camera_a = a_camera(station_a.id, host_a.id, backend_a.id)
     camera_b = a_camera(station_b.id, host_b.id, backend_b.id)
+    template_fixtures: list[TemplateFixture] = []
     setup = DatabaseSession(engine)
     station_gate = DatabaseSession(engine)
     gate_pid: int | None = None
@@ -776,6 +894,14 @@ def test_backend_mutation_and_camera_change_follow_the_existing_lock_order(
         stations.add(station_b)
         hosts.add(host_a)
         hosts.add(host_b)
+        template_fixtures.append(
+            add_template_version(
+                setup,
+                station_id=station_b.id,
+                now=NOW,
+                version_id=new_template_id,
+            )
+        )
         backends.add(backend_a)
         backends.add(backend_b)
         cameras.add(camera_a)
@@ -822,7 +948,7 @@ def test_backend_mutation_and_camera_change_follow_the_existing_lock_order(
                 pids["backend"] = local.scalar(text("SELECT pg_backend_pid()"))
                 backend_pid_ready.set()
                 PostgresInferenceBackendRepository(local).save(
-                    replace(backend_b, template_version_id=new_id(), revision=2),
+                    replace(backend_b, template_version_id=new_template_id, revision=2),
                     expected_revision=backend_b.revision,
                 )
                 local.commit()
@@ -870,6 +996,7 @@ def test_backend_mutation_and_camera_change_follow_the_existing_lock_order(
             connection.execute(
                 delete(InferenceHostRow).where(InferenceHostRow.id.in_([host_a.id, host_b.id]))
             )
+            remove_template_versions(connection, tuple(template_fixtures))
             connection.execute(
                 delete(StationRow).where(StationRow.id.in_([station_a.id, station_b.id]))
             )

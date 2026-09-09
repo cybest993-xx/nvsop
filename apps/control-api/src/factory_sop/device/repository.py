@@ -68,7 +68,23 @@ class InferenceBackendRepository(Protocol):
         ...
 
     def by_id(self, backend_id: UUID) -> InferenceBackend | None:
-        """按公开 UUID 返回推理后端；不存在时返回 `None`。"""
+        """按公开 UUID 返回推理后端；不存在时返回 `None`."""
+        ...
+
+    def lock_template_binding_topology(self, backend_ids: tuple[UUID, ...]) -> None:
+        """按 backend→host→station→camera 顺序锁定绑定所需的当前拓扑。"""
+        ...
+
+    def assign_template_version(
+        self,
+        *,
+        backend_ids: tuple[UUID, ...],
+        template_version_id: UUID,
+        actor_id: UUID,
+        now: datetime,
+        expected_revisions: dict[UUID, int],
+    ) -> tuple[InferenceBackend, ...]:
+        """在一个数据库语句中为参与后端切换模板，避免中间半套拓扑。"""
         ...
 
     def remove(self, backend_id: UUID, *, expected_revision: int) -> bool:
@@ -129,6 +145,10 @@ class CameraRepository(Protocol):
         """按公开 UUID 返回一个相机；不存在时返回 `None`。"""
         ...
 
+    def lock_topology(self, camera_id: UUID) -> Camera | None:
+        """按 backend→host→station→camera 顺序锁定并刷新一个相机拓扑。"""
+        ...
+
     def remove(self, camera_id: UUID, *, expected_revision: int) -> bool:
         """按调用方读取的版本号删除一个相机。"""
         ...
@@ -139,6 +159,10 @@ class CameraRepository(Protocol):
 
     def for_station(self, station_id: UUID) -> list[Camera]:
         """返回分配给工位的全部相机，供拓扑校验使用。"""
+        ...
+
+    def any_for_backend_outside_station(self, backend_id: UUID, station_id: UUID) -> bool:
+        """报告推理后端是否还被其他工位的相机引用。"""
         ...
 
     def page_of(
@@ -161,6 +185,10 @@ class PointRepository(Protocol):
 
     def by_id(self, point_id: UUID) -> Point | None:
         """按公开 UUID 读取点位。"""
+        ...
+
+    def for_station(self, station_id: UUID) -> list[Point]:
+        """返回工位全部点位，供模板边界按语义标签解析。"""
         ...
 
     def remove(self, point_id: UUID, *, expected_revision: int) -> bool:

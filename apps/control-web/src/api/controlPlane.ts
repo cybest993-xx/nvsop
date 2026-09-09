@@ -9,6 +9,7 @@
 
 import { client } from '@/api/generated/client.gen'
 import {
+  bindTemplateVersion as generatedBindTemplateVersion,
   createConnector as generatedCreateConnector,
   createPoint as generatedCreatePoint,
   createRole as generatedCreateRole,
@@ -43,6 +44,7 @@ import {
   readDeviceCommand as generatedReadDeviceCommand,
   readPoint as generatedReadPoint,
   readSession as generatedReadSession,
+  readStationTemplateConfiguration as generatedReadStationTemplateConfiguration,
   readTemplateDraft as generatedReadTemplateDraft,
   readTemplateImport as generatedReadTemplateImport,
   readTemplateVersion as generatedReadTemplateVersion,
@@ -52,9 +54,15 @@ import {
   setUserRoles as generatedSetUserRoles,
   setUserStatus as generatedSetUserStatus,
   updateConnectorCapability as generatedUpdateConnectorCapability,
+  updateStationRuntimeParameters as generatedUpdateStationRuntimeParameters,
   validatePointBinding as generatedValidatePointBinding,
+  validateTemplateBinding as generatedValidateTemplateBinding,
   type BindingValidationRequest,
   type BindingValidationView,
+  type RuntimeParametersUpdateInput,
+  type StationTemplateConfigurationView,
+  type TemplateBindingInput,
+  type TemplateBindingPreviewView,
   type ConnectorPlacement,
   type ConnectorView,
   type CreateRoleData,
@@ -98,6 +106,7 @@ import {
 } from '@/api/generated'
 
 export type {
+  BackendConfigurationStatusView,
   BindingValidationRequest,
   BindingValidationView,
   ConnectorPlacement,
@@ -113,10 +122,17 @@ export type {
   PointConfiguration,
   PointView,
   RoleView,
+  RuntimeParameterMode,
+  RuntimeParametersInput,
+  RuntimeParametersUpdateInput,
+  RuntimeParametersView,
   SessionView,
+  StationTemplateConfigurationView,
   StationView,
   StatusChanged,
   TemplateArtifactName,
+  TemplateBindingInput,
+  TemplateBindingPreviewView,
   TemplateDraftConfiguration,
   TemplateDraftView,
   TemplateImportResultView,
@@ -365,6 +381,44 @@ export function readInferenceHosts(): Promise<ItemPageInferenceHostView> {
 
 export function readStations(): Promise<ItemPageStationView> {
   return execute(generatedListStations())
+}
+
+export function validateTemplateBinding(
+  request: TemplateBindingInput,
+): Promise<TemplateBindingPreviewView> {
+  return execute(generatedValidateTemplateBinding({ body: request }))
+}
+
+export function bindTemplateVersion(
+  request: TemplateBindingInput,
+  stationRevision: number,
+): Promise<StationTemplateConfigurationView> {
+  return execute(
+    generatedBindTemplateVersion({
+      headers: { 'If-Match': stationRevision },
+      body: request,
+    }),
+  )
+}
+
+export function readStationTemplateConfiguration(
+  stationId: string,
+): Promise<StationTemplateConfigurationView> {
+  return execute(generatedReadStationTemplateConfiguration({ path: { station_id: stationId } }))
+}
+
+export function updateStationRuntimeParameters(
+  stationId: string,
+  request: RuntimeParametersUpdateInput,
+  stationRevision: number,
+): Promise<StationTemplateConfigurationView> {
+  return execute(
+    generatedUpdateStationRuntimeParameters({
+      path: { station_id: stationId },
+      headers: { 'If-Match': stationRevision },
+      body: request,
+    }),
+  )
 }
 
 export function createConnector(submitted: ConnectorPlacement): Promise<ConnectorView> {

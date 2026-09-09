@@ -649,9 +649,9 @@ def test_template_routes_declare_their_permission() -> None:
     declared = {
         f"{method.upper()} {path.removeprefix(API_PREFIX)}": operation["x-required-permission"]
         for path, item in schema["paths"].items()
-        if "/templates" in path
+        if "/templates" in path and path != f"{TEMPLATES}/configuration-reports"
         for method, operation in item.items()
-        if method in {"get", "post", "patch"}
+        if method in {"get", "post", "patch", "put"}
     }
 
     assert declared == {
@@ -668,6 +668,10 @@ def test_template_routes_declare_their_permission() -> None:
         "GET /templates/versions/{version_id}/artifacts/{name}": (
             Permission.TEMPLATE_DRAFT_VIEW.value
         ),
+        "POST /templates/bindings/validate": Permission.STATION_VIEW.value,
+        "POST /templates/bindings": Permission.STATION_EDIT.value,
+        "GET /templates/stations/{station_id}/configuration": Permission.STATION_VIEW.value,
+        "PUT /templates/stations/{station_id}/runtime-parameters": Permission.STATION_EDIT.value,
     }
 
 

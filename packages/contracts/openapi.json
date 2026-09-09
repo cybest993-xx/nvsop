@@ -45,6 +45,7 @@
           "INFERENCE_HOST_AUTHENTICATION_FAILED",
           "INFERENCE_HOST_CREDENTIALS_REMOVED",
           "INFERENCE_HOST_HAS_BACKENDS",
+          "INFERENCE_HOST_HAS_PENDING_COMMANDS",
           "INFERENCE_HOST_NAME_TAKEN",
           "INFERENCE_HOST_NOT_FOUND",
           "STATION_NOT_FOUND",
@@ -68,6 +69,11 @@
           "CONNECTOR_CONFIGURATION_SECRET",
           "STATION_HAS_CONNECTORS",
           "INFERENCE_HOST_HAS_CONNECTORS",
+          "INFERENCE_HOST_HAS_CONFIGURATION_REPORT",
+          "INFERENCE_BACKEND_HAS_CONFIGURATION_REPORT",
+          "STATION_HAS_TEMPLATES",
+          "STATION_HAS_TEMPLATE_BINDING",
+          "STATION_HAS_CONFIGURATION_REPORT",
           "INTERNAL_ERROR",
           "PERMISSION_DENIED",
           "REQUEST_INVALID",
@@ -89,7 +95,14 @@
           "TEMPLATE_DRAFT_INVALID",
           "TEMPLATE_VERSION_NOT_FOUND",
           "TEMPLATE_VERSION_INVALID",
-          "TEMPLATE_VERSION_ARTIFACT_NOT_FOUND"
+          "TEMPLATE_VERSION_ARTIFACT_NOT_FOUND",
+          "TEMPLATE_VERSION_STATION_MISMATCH",
+          "TEMPLATE_BINDING_INVALID",
+          "TEMPLATE_BINDING_NOT_FOUND",
+          "TEMPLATE_BINDING_STATION_TAKEN",
+          "TEMPLATE_REPORT_HOST_NOT_ALLOWED",
+          "TEMPLATE_REPORT_STATION_UNBOUND",
+          "TEMPLATE_REPORT_CONFLICT"
         ],
         "title": "ApiErrorCode",
         "type": "string"
@@ -110,6 +123,124 @@
           "role_ids"
         ],
         "title": "AssignedRoles",
+        "type": "object"
+      },
+      "BackendConfigurationStatusView": {
+        "properties": {
+          "backend_id": {
+            "format": "uuid",
+            "title": "Backend Id",
+            "type": "string"
+          },
+          "host_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host Id"
+          },
+          "rejection_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rejection At"
+          },
+          "rejection_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rejection Code"
+          },
+          "rejection_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rejection Detail"
+          },
+          "reported_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reported At"
+          },
+          "reported_config_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reported Config Revision"
+          },
+          "reported_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reported Sha256"
+          },
+          "reported_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reported Version Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TemplateBindingStatus"
+          }
+        },
+        "required": [
+          "backend_id",
+          "host_id",
+          "status",
+          "reported_version_id",
+          "reported_sha256",
+          "reported_config_revision",
+          "reported_at",
+          "rejection_code",
+          "rejection_detail",
+          "rejection_at"
+        ],
+        "title": "BackendConfigurationStatusView",
         "type": "object"
       },
       "BackendPlacement": {
@@ -187,6 +318,29 @@
           "message"
         ],
         "title": "BindingReasonView",
+        "type": "object"
+      },
+      "BindingValidationIssueView": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "field",
+          "message"
+        ],
+        "title": "BindingValidationIssueView",
         "type": "object"
       },
       "BindingValidationRequest": {
@@ -849,6 +1003,65 @@
         "title": "Credentials",
         "type": "object"
       },
+      "DesiredTemplateBindingView": {
+        "properties": {
+          "config_revision": {
+            "title": "Config Revision",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "format": "uuid",
+            "title": "Created By",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "updated_by": {
+            "format": "uuid",
+            "title": "Updated By",
+            "type": "string"
+          },
+          "version_id": {
+            "format": "uuid",
+            "title": "Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "version_id",
+          "sha256",
+          "config_revision",
+          "revision",
+          "created_by",
+          "updated_by",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "DesiredTemplateBindingView",
+        "type": "object"
+      },
       "DeviceStatus": {
         "description": "可配置设备是否继续参与新绑定和运行。\n\n使用枚举而不是 `is_active` 布尔值，因为所有可变配置对象共用“停用”语义。停用可恢复且不级联，\n已停用推理机的后端仍保留记录和历史。",
         "enum": [
@@ -906,6 +1119,7 @@
             "type": "string"
           },
           "semantic_label": {
+            "maxLength": 128,
             "minLength": 1,
             "title": "Semantic Label",
             "type": "string"
@@ -2195,6 +2409,105 @@
         "title": "RoleView",
         "type": "object"
       },
+      "RuntimeParameterMode": {
+        "description": "工位运行参数的整组来源。",
+        "enum": [
+          "follow_template",
+          "custom"
+        ],
+        "title": "RuntimeParameterMode",
+        "type": "string"
+      },
+      "RuntimeParametersInput": {
+        "additionalProperties": false,
+        "description": "一整组工位运行参数；禁止逐字段补丁和未知字段。",
+        "properties": {
+          "disposition_policy": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Disposition Policy",
+            "type": "string"
+          },
+          "idle_timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "gt": 0,
+            "title": "Idle Timeout Seconds"
+          },
+          "step_deadline_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "gt": 0,
+            "title": "Step Deadline Seconds"
+          }
+        },
+        "required": [
+          "idle_timeout_seconds",
+          "step_deadline_seconds",
+          "disposition_policy"
+        ],
+        "title": "RuntimeParametersInput",
+        "type": "object"
+      },
+      "RuntimeParametersUpdateInput": {
+        "additionalProperties": false,
+        "description": "运行参数切换必须明确提交模式和完整覆盖组。",
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/RuntimeParameterMode"
+          },
+          "parameters": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeParametersInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "RuntimeParametersUpdateInput",
+        "type": "object"
+      },
+      "RuntimeParametersView": {
+        "properties": {
+          "disposition_policy": {
+            "title": "Disposition Policy",
+            "type": "string"
+          },
+          "idle_timeout_seconds": {
+            "title": "Idle Timeout Seconds",
+            "type": "number"
+          },
+          "step_deadline_seconds": {
+            "title": "Step Deadline Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "idle_timeout_seconds",
+          "step_deadline_seconds",
+          "disposition_policy"
+        ],
+        "title": "RuntimeParametersView",
+        "type": "object"
+      },
       "SessionView": {
         "description": "Who the caller is, what they may do, and when their session ends.\n\n`expires_at` is here so the Web shell can warn before a session lapses rather than\ndiscovering it through a failed request mid-form. It moves on every request that slides the\nidle window, which is why it is read from the policy rather than stored.\n\n`permissions` is what the caller may do, as `module.resource.action` strings, sorted. The Web\nrenders its navigation and its buttons from this: a screen that offers an action the backend\nwill refuse is worse than one that does not offer it, because the operator finds out after\nfilling the form in. It is the effective set rather than the roles behind it, because that is\nwhat the front end branches on — and it is not a secret from the caller, who could discover\nit by trying. Enforcement is unaffected: the use case checks, whatever the client was told.\n\nThe schema marks the field optional, not because the server sometimes omits it — every path\nbelow always sets it — but because the compatibility gate (ADR-0003) rejects a new *required*\nfield on a shared schema: a client generated from the old contract must keep parsing new\nresponses. Marking it optional promises less than the server delivers, which is the safe\ndirection; a default keeps the payload carrying it even if a future route forgets to.",
         "properties": {
@@ -2272,6 +2585,121 @@
           "status"
         ],
         "title": "StationStatus",
+        "type": "object"
+      },
+      "StationTemplateConfigurationView": {
+        "properties": {
+          "backends": {
+            "items": {
+              "$ref": "#/components/schemas/BackendConfigurationStatusView"
+            },
+            "title": "Backends",
+            "type": "array"
+          },
+          "desired": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DesiredTemplateBindingView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "effective_runtime_parameters": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeParametersView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runtime_overrides": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeParametersView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runtime_parameter_mode": {
+            "$ref": "#/components/schemas/RuntimeParameterMode"
+          },
+          "runtime_parameters_revision": {
+            "title": "Runtime Parameters Revision",
+            "type": "integer"
+          },
+          "station_id": {
+            "format": "uuid",
+            "title": "Station Id",
+            "type": "string"
+          },
+          "station_revision": {
+            "title": "Station Revision",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TemplateBindingStatus"
+          },
+          "status_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Detail"
+          },
+          "template_defaults": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeParametersView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "topology_issues": {
+            "items": {
+              "$ref": "#/components/schemas/BindingValidationIssueView"
+            },
+            "title": "Topology Issues",
+            "type": "array"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TemplateVersionView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "station_id",
+          "station_revision",
+          "runtime_parameters_revision",
+          "runtime_parameter_mode",
+          "template_defaults",
+          "runtime_overrides",
+          "effective_runtime_parameters",
+          "desired",
+          "version",
+          "status",
+          "status_detail",
+          "topology_issues",
+          "backends"
+        ],
+        "title": "StationTemplateConfigurationView",
         "type": "object"
       },
       "StationView": {
@@ -2393,6 +2821,222 @@
           "sha256"
         ],
         "title": "TemplateArtifactView",
+        "type": "object"
+      },
+      "TemplateBindingInput": {
+        "additionalProperties": false,
+        "description": "正式绑定请求；省略运行参数字段表示保留工位当前整组来源。",
+        "properties": {
+          "runtime_parameter_mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeParameterMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runtime_parameters": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeParametersInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "station_id": {
+            "format": "uuid",
+            "title": "Station Id",
+            "type": "string"
+          },
+          "version_id": {
+            "format": "uuid",
+            "title": "Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "station_id",
+          "version_id"
+        ],
+        "title": "TemplateBindingInput",
+        "type": "object"
+      },
+      "TemplateBindingPreviewView": {
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "current_defaults": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeParametersView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "current_mode": {
+            "$ref": "#/components/schemas/RuntimeParameterMode"
+          },
+          "current_overrides": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeParametersView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reasons": {
+            "items": {
+              "$ref": "#/components/schemas/BindingValidationIssueView"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "requested_mode": {
+            "$ref": "#/components/schemas/RuntimeParameterMode"
+          },
+          "requested_overrides": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeParametersView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "station_revision": {
+            "title": "Station Revision",
+            "type": "integer"
+          },
+          "version": {
+            "$ref": "#/components/schemas/TemplateVersionView"
+          }
+        },
+        "required": [
+          "version",
+          "station_revision",
+          "current_mode",
+          "current_defaults",
+          "current_overrides",
+          "requested_mode",
+          "requested_overrides",
+          "accepted",
+          "reasons"
+        ],
+        "title": "TemplateBindingPreviewView",
+        "type": "object"
+      },
+      "TemplateBindingStatus": {
+        "description": "中心对工位期望配置和现场确认事实的解释。",
+        "enum": [
+          "unbound",
+          "not_confirmed",
+          "waiting",
+          "confirmed",
+          "digest_mismatch",
+          "rejected",
+          "topology_invalid"
+        ],
+        "title": "TemplateBindingStatus",
+        "type": "string"
+      },
+      "TemplateConfigurationReportInput": {
+        "additionalProperties": false,
+        "description": "推理机已应用配置的最小事实；请求体也参与主机签名。",
+        "properties": {
+          "backend_id": {
+            "format": "uuid",
+            "title": "Backend Id",
+            "type": "string"
+          },
+          "config_revision": {
+            "exclusiveMinimum": 0.0,
+            "title": "Config Revision",
+            "type": "integer"
+          },
+          "sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Sha256",
+            "type": "string"
+          },
+          "station_id": {
+            "format": "uuid",
+            "title": "Station Id",
+            "type": "string"
+          },
+          "version_id": {
+            "format": "uuid",
+            "title": "Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "station_id",
+          "backend_id",
+          "version_id",
+          "sha256",
+          "config_revision"
+        ],
+        "title": "TemplateConfigurationReportInput",
+        "type": "object"
+      },
+      "TemplateConfigurationReportView": {
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "rejection_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rejection Code"
+          },
+          "rejection_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rejection Detail"
+          },
+          "report": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BackendConfigurationStatusView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "accepted",
+          "report",
+          "rejection_code",
+          "rejection_detail"
+        ],
+        "title": "TemplateConfigurationReportView",
         "type": "object"
       },
       "TemplateDraftConfiguration": {
@@ -6467,7 +7111,7 @@
                 }
               }
             },
-            "description": "Revision moved (STALE_REVISION)"
+            "description": "Revision moved (STALE_REVISION), or the backend still carries cameras or template configuration reports"
           },
           "422": {
             "content": {
@@ -7146,7 +7790,7 @@
                 }
               }
             },
-            "description": "Revision moved (STALE_REVISION), or the host still carries backends"
+            "description": "Revision moved (STALE_REVISION), or the host still carries backends, connectors, pending commands, or template history"
           },
           "422": {
             "content": {
@@ -9022,6 +9666,338 @@
         "x-required-permission": "device.station.edit"
       }
     },
+    "/api/v1/templates/bindings": {
+      "post": {
+        "operationId": "bindTemplateVersion",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "title": "If-Match",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateBindingInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StationTemplateConfigurationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "模板版本或工位不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "工位配置已变化或共享设备拓扑冲突"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "模板版本、边界或设备拓扑不符合要求"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Bind A Template Version",
+        "tags": [
+          "template"
+        ],
+        "x-required-permission": "device.station.edit"
+      }
+    },
+    "/api/v1/templates/bindings/validate": {
+      "post": {
+        "operationId": "validateTemplateBinding",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateBindingInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateBindingPreviewView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "模板版本或工位不存在"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Validate A Template Binding",
+        "tags": [
+          "template"
+        ],
+        "x-required-permission": "device.station.view"
+      }
+    },
+    "/api/v1/templates/configuration-reports": {
+      "post": {
+        "operationId": "reportTemplateConfiguration",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Inference-Host-ID",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "X-Inference-Host-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Timestamp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Timestamp"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Nonce",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Nonce"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Signature"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateConfigurationReportInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateConfigurationReportView"
+                }
+              }
+            },
+            "description": "主机确认或可持久化的拒绝事实"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "推理机身份认证失败"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "推理机不拥有该工位后端"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "工位尚未绑定或现场事实发生冲突"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "上报内容无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Report A Template Configuration",
+        "tags": [
+          "template"
+        ]
+      }
+    },
     "/api/v1/templates/drafts": {
       "get": {
         "operationId": "listTemplateDrafts",
@@ -9775,6 +10751,203 @@
           "template"
         ],
         "x-required-permission": "template.draft.view"
+      }
+    },
+    "/api/v1/templates/stations/{station_id}/configuration": {
+      "get": {
+        "operationId": "readStationTemplateConfiguration",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "station_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Station Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StationTemplateConfigurationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "工位不存在"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Read A Station Template Configuration",
+        "tags": [
+          "template"
+        ],
+        "x-required-permission": "device.station.view"
+      }
+    },
+    "/api/v1/templates/stations/{station_id}/runtime-parameters": {
+      "put": {
+        "operationId": "updateStationRuntimeParameters",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "station_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Station Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "title": "If-Match",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuntimeParametersUpdateInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StationTemplateConfigurationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "工位不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "工位配置已变化"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Update A Station Runtime Parameters",
+        "tags": [
+          "template"
+        ],
+        "x-required-permission": "device.station.edit"
       }
     },
     "/api/v1/templates/versions": {

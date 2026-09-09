@@ -11,7 +11,19 @@ from datetime import datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, delete, exists, func, insert, inspect, select, update
+from sqlalchemy import (
+    CursorResult,
+    and_,
+    case,
+    delete,
+    exists,
+    func,
+    insert,
+    inspect,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.exc import DatabaseError
 from sqlalchemy.orm import Session as DatabaseSession
@@ -31,7 +43,7 @@ from factory_sop.device.adapters.tables import (
     PointRow,
     StationRow,
 )
-from factory_sop.device.errors import DeviceRefusalCode
+from factory_sop.device.errors import DeviceRefusalCode, DeviceRefusedError
 from factory_sop.device.model import (
     Camera,
     Connector,
@@ -218,6 +230,8 @@ class PostgresInferenceHostRepository:
                 error,
                 foreign_key_to_host=DeviceRefusalCode.INFERENCE_HOST_HAS_BACKENDS,
                 foreign_key_to_connector=DeviceRefusalCode.INFERENCE_HOST_HAS_CONNECTORS,
+                host_report_refusal=DeviceRefusalCode.INFERENCE_HOST_HAS_CONFIGURATION_REPORT,
+                pending_command_refusal=DeviceRefusalCode.INFERENCE_HOST_HAS_PENDING_COMMANDS,
             )
         if result.rowcount == 0:
             _refuse_lost_race(
@@ -312,6 +326,105 @@ class PostgresInferenceBackendRepository:
         row = self._session.get(InferenceBackendRow, backend_id)
         return row.to_domain() if row is not None else None
 
+    def assign_template_version(
+        self,
+        *,
+        backend_ids: tuple[UUID, ...],
+        template_version_id: UUID,
+        actor_id: UUID,
+        now: datetime,
+        expected_revisions: dict[UUID, int],
+    ) -> tuple[InferenceBackend, ...]:
+        """在一个条件 UPDATE 中更新参与后端的单一模板配置槽位。"""
+        if set(backend_ids) != set(expected_revisions):
+            raise ValueError("backend revisions must cover exactly the participating backends")
+        if not backend_ids:
+            return ()
+        self.lock_template_binding_topology(backend_ids)
+        conditions = tuple(
+            and_(InferenceBackendRow.id == backend_id, InferenceBackendRow.revision == revision)
+            for backend_id, revision in expected_revisions.items()
+        )
+        revision_case = case(
+            {backend_id: expected_revisions[backend_id] + 1 for backend_id in backend_ids},
+            value=InferenceBackendRow.id,
+        )
+        try:
+            result = cast(
+                "CursorResult[Any]",
+                self._session.execute(
+                    update(InferenceBackendRow)
+                    .where(or_(*conditions))
+                    .values(
+                        template_version_id=template_version_id,
+                        revision=revision_case,
+                        updated_by=actor_id,
+                        updated_at=now,
+                    )
+                ),
+            )
+        except DatabaseError as error:
+            _refuse_constraint_violation(error)
+        if result.rowcount != len(backend_ids):
+            missing = next(
+                (
+                    backend_id
+                    for backend_id in backend_ids
+                    if self._session.get(InferenceBackendRow, backend_id) is None
+                ),
+                None,
+            )
+            if missing is not None:
+                raise DeviceRefusedError(DeviceRefusalCode.INFERENCE_BACKEND_NOT_FOUND)
+            raise DeviceRefusedError(DeviceRefusalCode.STALE_REVISION)
+        rows = self._session.scalars(
+            select(InferenceBackendRow).where(InferenceBackendRow.id.in_(backend_ids))
+        ).all()
+        by_id = {row.id: row.to_domain() for row in rows}
+        try:
+            return tuple(by_id[backend_id] for backend_id in backend_ids)
+        except KeyError as error:
+            raise RuntimeError("updated inference backend disappeared") from error
+
+    def lock_template_binding_topology(self, backend_ids: tuple[UUID, ...]) -> None:
+        """以 backend→host→station→camera 顺序锁住批量模板切换的拓扑。"""
+        ordered_backend_ids = tuple(sorted(set(backend_ids), key=str))
+        host_ids: list[UUID] = []
+        for backend_id in ordered_backend_ids:
+            host_id = self._session.execute(
+                select(InferenceBackendRow.host_id)
+                .where(InferenceBackendRow.id == backend_id)
+                .with_for_update()
+            ).scalar_one_or_none()
+            if host_id is not None and host_id not in host_ids:
+                host_ids.append(host_id)
+
+        for host_id in sorted(host_ids, key=str):
+            self._session.execute(
+                select(InferenceHostRow.id).where(InferenceHostRow.id == host_id).with_for_update()
+            ).scalar_one_or_none()
+
+        station_ids = self._session.scalars(
+            select(CameraRow.station_id)
+            .where(CameraRow.backend_id.in_(ordered_backend_ids))
+            .distinct()
+            .order_by(CameraRow.station_id)
+        ).all()
+        for station_id in station_ids:
+            self._session.execute(
+                select(StationRow.id).where(StationRow.id == station_id).with_for_update()
+            ).scalar_one_or_none()
+
+        camera_ids = self._session.scalars(
+            select(CameraRow.id)
+            .where(CameraRow.backend_id.in_(ordered_backend_ids))
+            .order_by(CameraRow.id)
+        ).all()
+        for camera_id in camera_ids:
+            self._session.execute(
+                select(CameraRow.id).where(CameraRow.id == camera_id).with_for_update()
+            ).scalar_one_or_none()
+
     def remove(self, backend_id: UUID, *, expected_revision: int) -> bool:
         try:
             result = cast(
@@ -327,6 +440,7 @@ class PostgresInferenceBackendRepository:
             _refuse_constraint_violation(
                 error,
                 foreign_key_to_backend=DeviceRefusalCode.INFERENCE_BACKEND_HAS_CAMERAS,
+                backend_report_refusal=DeviceRefusalCode.INFERENCE_BACKEND_HAS_CONFIGURATION_REPORT,
             )
         if result.rowcount == 0:
             _refuse_lost_race(
@@ -383,6 +497,13 @@ class PostgresStationRepository:
                         name=station.name,
                         tags=list(station.tags),
                         status=station.status,
+                        runtime_parameter_mode=station.runtime_parameter_mode,
+                        runtime_parameter_overrides=(
+                            None
+                            if station.runtime_parameter_overrides is None
+                            else station.runtime_parameter_overrides.to_wire()
+                        ),
+                        runtime_parameters_revision=station.runtime_parameters_revision,
                         revision=station.revision,
                         updated_by=station.updated_by,
                         updated_at=station.updated_at,
@@ -423,6 +544,9 @@ class PostgresStationRepository:
                 foreign_key_to_station=DeviceRefusalCode.STATION_HAS_CAMERAS,
                 foreign_key_to_connector=DeviceRefusalCode.STATION_HAS_CONNECTORS,
                 point_station_refusal=DeviceRefusalCode.STATION_HAS_POINTS,
+                station_template_refusal=DeviceRefusalCode.STATION_HAS_TEMPLATES,
+                station_binding_refusal=DeviceRefusalCode.STATION_HAS_TEMPLATE_BINDING,
+                station_report_refusal=DeviceRefusalCode.STATION_HAS_CONFIGURATION_REPORT,
             )
         if result.rowcount == 0:
             _refuse_lost_race(
@@ -458,6 +582,35 @@ class PostgresCameraRepository:
                 foreign_key_to_station=DeviceRefusalCode.STATION_NOT_FOUND,
                 foreign_key_to_backend=DeviceRefusalCode.INFERENCE_BACKEND_NOT_FOUND,
             )
+
+    def lock_topology(self, camera_id: UUID) -> Camera | None:
+        """按 backend→host→station→camera 顺序锁定并刷新相机。"""
+        placement = self._session.execute(
+            select(CameraRow.backend_id, CameraRow.host_id, CameraRow.station_id).where(
+                CameraRow.id == camera_id
+            )
+        ).one_or_none()
+        if placement is None:
+            return None
+        backend_id, host_id, station_id = placement
+        self._session.execute(
+            select(InferenceBackendRow.id)
+            .where(InferenceBackendRow.id == backend_id)
+            .with_for_update()
+        ).scalar_one_or_none()
+        self._session.execute(
+            select(InferenceHostRow.id).where(InferenceHostRow.id == host_id).with_for_update()
+        ).scalar_one_or_none()
+        self._session.execute(
+            select(StationRow.id).where(StationRow.id == station_id).with_for_update()
+        ).scalar_one_or_none()
+        row = self._session.scalar(
+            select(CameraRow)
+            .where(CameraRow.id == camera_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return row.to_domain() if row is not None else None
 
     def save(self, camera: Camera, *, expected_revision: int) -> None:
         try:
@@ -501,6 +654,7 @@ class PostgresCameraRepository:
         return row.to_domain() if row is not None else None
 
     def remove(self, camera_id: UUID, *, expected_revision: int) -> bool:
+        self.lock_topology(camera_id)
         result = cast(
             "CursorResult[Any]",
             self._session.execute(
@@ -530,6 +684,18 @@ class PostgresCameraRepository:
             .order_by(CameraRow.created_at, CameraRow.id)
         ).all()
         return [row.to_domain() for row in rows]
+
+    def any_for_backend_outside_station(self, backend_id: UUID, station_id: UUID) -> bool:
+        return bool(
+            self._session.scalar(
+                select(
+                    exists().where(
+                        CameraRow.backend_id == backend_id,
+                        CameraRow.station_id != station_id,
+                    )
+                )
+            )
+        )
 
     def page_of(
         self, *, page: int, page_size: int, station_id: UUID | None
@@ -605,6 +771,14 @@ class PostgresPointRepository:
     def by_id(self, point_id: UUID) -> Point | None:
         row = self._session.get(PointRow, point_id)
         return row.to_domain() if row is not None else None
+
+    def for_station(self, station_id: UUID) -> list[Point]:
+        rows = self._session.scalars(
+            select(PointRow)
+            .where(PointRow.station_id == station_id)
+            .order_by(PointRow.created_at, PointRow.id)
+        ).all()
+        return [row.to_domain() for row in rows]
 
     def remove(self, point_id: UUID, *, expected_revision: int) -> bool:
         result = cast(

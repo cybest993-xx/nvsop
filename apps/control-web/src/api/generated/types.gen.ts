@@ -45,6 +45,7 @@ export type ApiErrorCode =
   | 'INFERENCE_HOST_AUTHENTICATION_FAILED'
   | 'INFERENCE_HOST_CREDENTIALS_REMOVED'
   | 'INFERENCE_HOST_HAS_BACKENDS'
+  | 'INFERENCE_HOST_HAS_PENDING_COMMANDS'
   | 'INFERENCE_HOST_NAME_TAKEN'
   | 'INFERENCE_HOST_NOT_FOUND'
   | 'STATION_NOT_FOUND'
@@ -68,6 +69,11 @@ export type ApiErrorCode =
   | 'CONNECTOR_CONFIGURATION_SECRET'
   | 'STATION_HAS_CONNECTORS'
   | 'INFERENCE_HOST_HAS_CONNECTORS'
+  | 'INFERENCE_HOST_HAS_CONFIGURATION_REPORT'
+  | 'INFERENCE_BACKEND_HAS_CONFIGURATION_REPORT'
+  | 'STATION_HAS_TEMPLATES'
+  | 'STATION_HAS_TEMPLATE_BINDING'
+  | 'STATION_HAS_CONFIGURATION_REPORT'
   | 'INTERNAL_ERROR'
   | 'PERMISSION_DENIED'
   | 'REQUEST_INVALID'
@@ -90,6 +96,13 @@ export type ApiErrorCode =
   | 'TEMPLATE_VERSION_NOT_FOUND'
   | 'TEMPLATE_VERSION_INVALID'
   | 'TEMPLATE_VERSION_ARTIFACT_NOT_FOUND'
+  | 'TEMPLATE_VERSION_STATION_MISMATCH'
+  | 'TEMPLATE_BINDING_INVALID'
+  | 'TEMPLATE_BINDING_NOT_FOUND'
+  | 'TEMPLATE_BINDING_STATION_TAKEN'
+  | 'TEMPLATE_REPORT_HOST_NOT_ALLOWED'
+  | 'TEMPLATE_REPORT_STATION_UNBOUND'
+  | 'TEMPLATE_REPORT_CONFLICT'
 
 /**
  * AssignedRoles
@@ -101,6 +114,49 @@ export type AssignedRoles = {
    * Role Ids
    */
   role_ids: Array<string>
+}
+
+/**
+ * BackendConfigurationStatusView
+ */
+export type BackendConfigurationStatusView = {
+  /**
+   * Backend Id
+   */
+  backend_id: string
+  /**
+   * Host Id
+   */
+  host_id: string | null
+  /**
+   * Rejection At
+   */
+  rejection_at: string | null
+  /**
+   * Rejection Code
+   */
+  rejection_code: string | null
+  /**
+   * Rejection Detail
+   */
+  rejection_detail: string | null
+  /**
+   * Reported At
+   */
+  reported_at: string | null
+  /**
+   * Reported Config Revision
+   */
+  reported_config_revision: number | null
+  /**
+   * Reported Sha256
+   */
+  reported_sha256: string | null
+  /**
+   * Reported Version Id
+   */
+  reported_version_id: string | null
+  status: TemplateBindingStatus
 }
 
 /**
@@ -153,6 +209,24 @@ export type BindingReasonCode =
  */
 export type BindingReasonView = {
   code: BindingReasonCode
+  /**
+   * Field
+   */
+  field: string
+  /**
+   * Message
+   */
+  message: string
+}
+
+/**
+ * BindingValidationIssueView
+ */
+export type BindingValidationIssueView = {
+  /**
+   * Code
+   */
+  code: string
   /**
    * Field
    */
@@ -561,6 +635,48 @@ export type Credentials = {
    * Password
    */
   password: string
+}
+
+/**
+ * DesiredTemplateBindingView
+ */
+export type DesiredTemplateBindingView = {
+  /**
+   * Config Revision
+   */
+  config_revision: number
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Created By
+   */
+  created_by: string
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Revision
+   */
+  revision: number
+  /**
+   * Sha256
+   */
+  sha256: string
+  /**
+   * Updated At
+   */
+  updated_at: string
+  /**
+   * Updated By
+   */
+  updated_by: string
+  /**
+   * Version Id
+   */
+  version_id: string
 }
 
 /**
@@ -1416,6 +1532,61 @@ export type RoleView = {
 }
 
 /**
+ * RuntimeParameterMode
+ *
+ * 工位运行参数的整组来源。
+ */
+export type RuntimeParameterMode = 'follow_template' | 'custom'
+
+/**
+ * RuntimeParametersInput
+ *
+ * 一整组工位运行参数；禁止逐字段补丁和未知字段。
+ */
+export type RuntimeParametersInput = {
+  /**
+   * Disposition Policy
+   */
+  disposition_policy: string
+  /**
+   * Idle Timeout Seconds
+   */
+  idle_timeout_seconds: number | number
+  /**
+   * Step Deadline Seconds
+   */
+  step_deadline_seconds: number | number
+}
+
+/**
+ * RuntimeParametersUpdateInput
+ *
+ * 运行参数切换必须明确提交模式和完整覆盖组。
+ */
+export type RuntimeParametersUpdateInput = {
+  mode: RuntimeParameterMode
+  parameters?: RuntimeParametersInput | null
+}
+
+/**
+ * RuntimeParametersView
+ */
+export type RuntimeParametersView = {
+  /**
+   * Disposition Policy
+   */
+  disposition_policy: string
+  /**
+   * Idle Timeout Seconds
+   */
+  idle_timeout_seconds: number
+  /**
+   * Step Deadline Seconds
+   */
+  step_deadline_seconds: number
+}
+
+/**
  * SessionView
  *
  * Who the caller is, what they may do, and when their session ends.
@@ -1483,6 +1654,43 @@ export type StationConfiguration = {
  */
 export type StationStatus = {
   status: DeviceStatus
+}
+
+/**
+ * StationTemplateConfigurationView
+ */
+export type StationTemplateConfigurationView = {
+  /**
+   * Backends
+   */
+  backends: Array<BackendConfigurationStatusView>
+  desired: DesiredTemplateBindingView | null
+  effective_runtime_parameters: RuntimeParametersView | null
+  runtime_overrides: RuntimeParametersView | null
+  runtime_parameter_mode: RuntimeParameterMode
+  /**
+   * Runtime Parameters Revision
+   */
+  runtime_parameters_revision: number
+  /**
+   * Station Id
+   */
+  station_id: string
+  /**
+   * Station Revision
+   */
+  station_revision: number
+  status: TemplateBindingStatus
+  /**
+   * Status Detail
+   */
+  status_detail: string | null
+  template_defaults: RuntimeParametersView | null
+  /**
+   * Topology Issues
+   */
+  topology_issues: Array<BindingValidationIssueView>
+  version: TemplateVersionView | null
 }
 
 /**
@@ -1570,6 +1778,109 @@ export type TemplateArtifactView = {
    * Sha256
    */
   sha256: string
+}
+
+/**
+ * TemplateBindingInput
+ *
+ * 正式绑定请求；省略运行参数字段表示保留工位当前整组来源。
+ */
+export type TemplateBindingInput = {
+  runtime_parameter_mode?: RuntimeParameterMode | null
+  runtime_parameters?: RuntimeParametersInput | null
+  /**
+   * Station Id
+   */
+  station_id: string
+  /**
+   * Version Id
+   */
+  version_id: string
+}
+
+/**
+ * TemplateBindingPreviewView
+ */
+export type TemplateBindingPreviewView = {
+  /**
+   * Accepted
+   */
+  accepted: boolean
+  current_defaults: RuntimeParametersView | null
+  current_mode: RuntimeParameterMode
+  current_overrides: RuntimeParametersView | null
+  /**
+   * Reasons
+   */
+  reasons: Array<BindingValidationIssueView>
+  requested_mode: RuntimeParameterMode
+  requested_overrides: RuntimeParametersView | null
+  /**
+   * Station Revision
+   */
+  station_revision: number
+  version: TemplateVersionView
+}
+
+/**
+ * TemplateBindingStatus
+ *
+ * 中心对工位期望配置和现场确认事实的解释。
+ */
+export type TemplateBindingStatus =
+  | 'unbound'
+  | 'not_confirmed'
+  | 'waiting'
+  | 'confirmed'
+  | 'digest_mismatch'
+  | 'rejected'
+  | 'topology_invalid'
+
+/**
+ * TemplateConfigurationReportInput
+ *
+ * 推理机已应用配置的最小事实；请求体也参与主机签名。
+ */
+export type TemplateConfigurationReportInput = {
+  /**
+   * Backend Id
+   */
+  backend_id: string
+  /**
+   * Config Revision
+   */
+  config_revision: number
+  /**
+   * Sha256
+   */
+  sha256: string
+  /**
+   * Station Id
+   */
+  station_id: string
+  /**
+   * Version Id
+   */
+  version_id: string
+}
+
+/**
+ * TemplateConfigurationReportView
+ */
+export type TemplateConfigurationReportView = {
+  /**
+   * Accepted
+   */
+  accepted: boolean
+  /**
+   * Rejection Code
+   */
+  rejection_code: string | null
+  /**
+   * Rejection Detail
+   */
+  rejection_detail: string | null
+  report: BackendConfigurationStatusView | null
 }
 
 /**
@@ -3680,7 +3991,7 @@ export type DeleteInferenceBackendErrors = {
    */
   404: ProblemDocument
   /**
-   * Revision moved (STALE_REVISION)
+   * Revision moved (STALE_REVISION), or the backend still carries cameras or template configuration reports
    */
   409: ProblemDocument
   /**
@@ -4047,7 +4358,7 @@ export type DeleteInferenceHostErrors = {
    */
   404: ProblemDocument
   /**
-   * Revision moved (STALE_REVISION), or the host still carries backends
+   * Revision moved (STALE_REVISION), or the host still carries backends, connectors, pending commands, or template history
    */
   409: ProblemDocument
   /**
@@ -5041,6 +5352,162 @@ export type SetStationStatusResponses = {
 
 export type SetStationStatusResponse = SetStationStatusResponses[keyof SetStationStatusResponses]
 
+export type BindTemplateVersionData = {
+  body: TemplateBindingInput
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/templates/bindings'
+}
+
+export type BindTemplateVersionErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 模板版本或工位不存在
+   */
+  404: ProblemDocument
+  /**
+   * 工位配置已变化或共享设备拓扑冲突
+   */
+  409: ProblemDocument
+  /**
+   * 模板版本、边界或设备拓扑不符合要求
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type BindTemplateVersionError = BindTemplateVersionErrors[keyof BindTemplateVersionErrors]
+
+export type BindTemplateVersionResponses = {
+  /**
+   * Successful Response
+   */
+  200: StationTemplateConfigurationView
+}
+
+export type BindTemplateVersionResponse =
+  BindTemplateVersionResponses[keyof BindTemplateVersionResponses]
+
+export type ValidateTemplateBindingData = {
+  body: TemplateBindingInput
+  path?: never
+  query?: never
+  url: '/api/v1/templates/bindings/validate'
+}
+
+export type ValidateTemplateBindingErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 模板版本或工位不存在
+   */
+  404: ProblemDocument
+  /**
+   * 请求无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ValidateTemplateBindingError =
+  ValidateTemplateBindingErrors[keyof ValidateTemplateBindingErrors]
+
+export type ValidateTemplateBindingResponses = {
+  /**
+   * Successful Response
+   */
+  200: TemplateBindingPreviewView
+}
+
+export type ValidateTemplateBindingResponse =
+  ValidateTemplateBindingResponses[keyof ValidateTemplateBindingResponses]
+
+export type ReportTemplateConfigurationData = {
+  body: TemplateConfigurationReportInput
+  headers: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID': string
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/templates/configuration-reports'
+}
+
+export type ReportTemplateConfigurationErrors = {
+  /**
+   * 推理机身份认证失败
+   */
+  401: ProblemDocument
+  /**
+   * 推理机不拥有该工位后端
+   */
+  403: ProblemDocument
+  /**
+   * 工位尚未绑定或现场事实发生冲突
+   */
+  409: ProblemDocument
+  /**
+   * 上报内容无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReportTemplateConfigurationError =
+  ReportTemplateConfigurationErrors[keyof ReportTemplateConfigurationErrors]
+
+export type ReportTemplateConfigurationResponses = {
+  /**
+   * 主机确认或可持久化的拒绝事实
+   */
+  200: TemplateConfigurationReportView
+}
+
+export type ReportTemplateConfigurationResponse =
+  ReportTemplateConfigurationResponses[keyof ReportTemplateConfigurationResponses]
+
 export type ListTemplateDraftsData = {
   body?: never
   path?: never
@@ -5445,6 +5912,112 @@ export type DownloadTemplateImportResponses = {
 
 export type DownloadTemplateImportResponse =
   DownloadTemplateImportResponses[keyof DownloadTemplateImportResponses]
+
+export type ReadStationTemplateConfigurationData = {
+  body?: never
+  path: {
+    /**
+     * Station Id
+     */
+    station_id: string
+  }
+  query?: never
+  url: '/api/v1/templates/stations/{station_id}/configuration'
+}
+
+export type ReadStationTemplateConfigurationErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 工位不存在
+   */
+  404: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadStationTemplateConfigurationError =
+  ReadStationTemplateConfigurationErrors[keyof ReadStationTemplateConfigurationErrors]
+
+export type ReadStationTemplateConfigurationResponses = {
+  /**
+   * Successful Response
+   */
+  200: StationTemplateConfigurationView
+}
+
+export type ReadStationTemplateConfigurationResponse =
+  ReadStationTemplateConfigurationResponses[keyof ReadStationTemplateConfigurationResponses]
+
+export type UpdateStationRuntimeParametersData = {
+  body: RuntimeParametersUpdateInput
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Station Id
+     */
+    station_id: string
+  }
+  query?: never
+  url: '/api/v1/templates/stations/{station_id}/runtime-parameters'
+}
+
+export type UpdateStationRuntimeParametersErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 工位不存在
+   */
+  404: ProblemDocument
+  /**
+   * 工位配置已变化
+   */
+  409: ProblemDocument
+  /**
+   * 请求无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type UpdateStationRuntimeParametersError =
+  UpdateStationRuntimeParametersErrors[keyof UpdateStationRuntimeParametersErrors]
+
+export type UpdateStationRuntimeParametersResponses = {
+  /**
+   * Successful Response
+   */
+  200: StationTemplateConfigurationView
+}
+
+export type UpdateStationRuntimeParametersResponse =
+  UpdateStationRuntimeParametersResponses[keyof UpdateStationRuntimeParametersResponses]
 
 export type ListTemplateVersionsData = {
   body?: never

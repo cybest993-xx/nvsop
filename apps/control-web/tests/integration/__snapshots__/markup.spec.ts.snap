@@ -170,6 +170,26 @@ exports[`the device page > renders connector configuration with a delegated test
     </div>
   </transition-stub>
   <!--teleport end-->
+  <section class="station-template" aria-labelledby="station-template-heading">
+    <header class="station-template__header">
+      <div>
+        <p class="station-template__eyebrow">工位交付 / 对账</p>
+        <h2 id="station-template-heading" class="station-template__heading">工位模板与运行参数</h2>
+        <p class="station-template__intro"> 中心只记录期望版本；reported 是推理机签名上报的现场事实，二者不混为一次成功。 </p>
+      </div>
+    </header>
+    <!--v-if-->
+    <div class="station-template__surface">
+      <p class="station-template__loading">正在读取工位模板配置…</p>
+    </div>
+    <!--teleport start-->
+    <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+      <div class="el-overlay el-modal-dialog" style="z-index: 2008; display: none;">
+        <div role="dialog" aria-modal="true" aria-label="工位模板与运行参数" aria-describedby="el-id-18" class="el-overlay-dialog"></div>
+      </div>
+    </transition-stub>
+    <!--teleport end-->
+  </section>
   <!--v-if-->
   <!--v-if-->
   <!--v-if-->
@@ -294,18 +314,18 @@ exports[`the device page > renders the connector form with only non-secret field
   </div>
   <!--teleport start-->
   <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
-    <div class="el-overlay el-modal-dialog" style="z-index: 2010;">
-      <div role="dialog" aria-modal="true" aria-label="新建连接器" aria-describedby="el-id-18" class="el-overlay-dialog">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2012;">
+      <div role="dialog" aria-modal="true" aria-label="新建连接器" aria-describedby="el-id-20" class="el-overlay-dialog">
         <div class="el-dialog" style="--el-dialog-width: 38rem;" tabindex="-1">
           <header class="el-dialog__header show-close"><span role="heading" aria-level="2" class="el-dialog__title">新建连接器</span><button aria-label="Close this dialog" class="el-dialog__headerbtn" type="button"><i class="el-icon el-dialog__close"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
                   <path fill="currentColor" d="M764.288 214.592 512 466.88 259.712 214.592a31.936 31.936 0 0 0-45.12 45.12L466.752 512 214.528 764.224a31.936 31.936 0 1 0 45.12 45.184L512 557.184l252.288 252.288a31.936 31.936 0 0 0 45.12-45.12L557.12 512.064l252.288-252.352a31.936 31.936 0 1 0-45.12-45.184z"></path>
                 </svg></i></button></header>
-          <div id="el-id-18" class="el-dialog__body">
+          <div id="el-id-20" class="el-dialog__body">
             <p class="devices__form-note">这里只保存地址和端口等非秘密参数；凭据由推理机本地配置。</p>
             <form class="el-form el-form--default el-form--label-top">
               <!--v-if-->
               <div class="devices__form-grid">
-                <div class="el-form-item asterisk-left el-form-item--label-top"><label id="el-id-21" for="connector-name" class="el-form-item__label">名称</label>
+                <div class="el-form-item asterisk-left el-form-item--label-top"><label id="el-id-25" for="connector-name" class="el-form-item__label">名称</label>
                   <div class="el-form-item__content">
                     <div class="el-input">
                       <!-- input -->
@@ -324,14 +344,14 @@ exports[`the device page > renders the connector form with only non-secret field
                     </transition-group-stub>
                   </div>
                 </div>
-                <div class="el-form-item asterisk-left el-form-item--label-top"><label id="el-id-22" for="el-id-37" class="el-form-item__label">类型</label>
+                <div class="el-form-item asterisk-left el-form-item--label-top"><label id="el-id-26" for="el-id-41" class="el-form-item__label">类型</label>
                   <div class="el-form-item__content">
                     <div class="el-select devices__select">
                       <div class="el-select__wrapper el-tooltip__trigger el-tooltip__trigger" tabindex="-1">
                         <!--v-if-->
                         <div class="el-select__selection">
                           <!--v-if-->
-                          <div class="el-select__selected-item el-select__input-wrapper is-hidden"><input type="text" class="el-select__input" autocomplete="off" style="min-width: 11px;" tabindex="0" role="combobox" readonly="" spellcheck="false" aria-activedescendant="" aria-controls="el-id-23" aria-expanded="false" aria-label="连接器类型" aria-autocomplete="none" aria-haspopup="listbox" value="" id="el-id-37">
+                          <div class="el-select__selected-item el-select__input-wrapper is-hidden"><input type="text" class="el-select__input" autocomplete="off" style="min-width: 11px;" tabindex="0" role="combobox" readonly="" spellcheck="false" aria-activedescendant="" aria-controls="el-id-27" aria-expanded="false" aria-label="连接器类型" aria-autocomplete="none" aria-haspopup="listbox" value="" id="el-id-41">
                             <!--v-if-->
                           </div>
                           <div class="el-select__selected-item el-select__placeholder"><span>海康 ISAPI</span></div>
@@ -352,7 +372,7 @@ exports[`the device page > renders the connector form with only non-secret field
                     </transition-group-stub>
                   </div>
                 </div>
-                <div class="el-form-item asterisk-left el-form-item--label-top"><label id="el-id-27" for="connector-address" class="el-form-item__label">地址</label>
+                <div class="el-form-item asterisk-left el-form-item--label-top"><label id="el-id-31" for="connector-address" class="el-form-item__label">地址</label>
                   <div class="el-form-item__content">
                     <div class="el-input">
                       <!-- input -->
@@ -371,7 +391,7 @@ exports[`the device page > renders the connector form with only non-secret field
                     </transition-group-stub>
                   </div>
                 </div>
-                <div class="el-form-item asterisk-left el-form-item--label-top"><label id="el-id-28" for="connector-port" class="el-form-item__label">端口（可选）</label>
+                <div class="el-form-item asterisk-left el-form-item--label-top"><label id="el-id-32" for="connector-port" class="el-form-item__label">端口（可选）</label>
                   <div class="el-form-item__content">
                     <div class="el-input">
                       <!-- input -->
@@ -390,14 +410,14 @@ exports[`the device page > renders the connector form with only non-secret field
                     </transition-group-stub>
                   </div>
                 </div>
-                <div class="el-form-item asterisk-left el-form-item--label-top"><label id="el-id-29" for="el-id-38" class="el-form-item__label">所属工位</label>
+                <div class="el-form-item asterisk-left el-form-item--label-top"><label id="el-id-33" for="el-id-42" class="el-form-item__label">所属工位</label>
                   <div class="el-form-item__content">
                     <div class="el-select devices__select">
                       <div class="el-select__wrapper el-tooltip__trigger el-tooltip__trigger" tabindex="-1">
                         <!--v-if-->
                         <div class="el-select__selection">
                           <!--v-if-->
-                          <div class="el-select__selected-item el-select__input-wrapper is-hidden"><input type="text" class="el-select__input" autocomplete="off" style="min-width: 11px;" tabindex="0" role="combobox" readonly="" spellcheck="false" aria-activedescendant="" aria-controls="el-id-30" aria-expanded="false" aria-label="所属工位" aria-autocomplete="none" aria-haspopup="listbox" value="" id="el-id-38">
+                          <div class="el-select__selected-item el-select__input-wrapper is-hidden"><input type="text" class="el-select__input" autocomplete="off" style="min-width: 11px;" tabindex="0" role="combobox" readonly="" spellcheck="false" aria-activedescendant="" aria-controls="el-id-34" aria-expanded="false" aria-label="所属工位" aria-autocomplete="none" aria-haspopup="listbox" value="" id="el-id-42">
                             <!--v-if-->
                           </div>
                           <div class="el-select__selected-item el-select__placeholder"><span>一号装配工位（A-01）</span></div>
@@ -418,14 +438,14 @@ exports[`the device page > renders the connector form with only non-secret field
                     </transition-group-stub>
                   </div>
                 </div>
-                <div class="el-form-item asterisk-left el-form-item--label-top"><label id="el-id-33" for="el-id-39" class="el-form-item__label">所属推理机</label>
+                <div class="el-form-item asterisk-left el-form-item--label-top"><label id="el-id-37" for="el-id-43" class="el-form-item__label">所属推理机</label>
                   <div class="el-form-item__content">
                     <div class="el-select devices__select">
                       <div class="el-select__wrapper el-tooltip__trigger el-tooltip__trigger" tabindex="-1">
                         <!--v-if-->
                         <div class="el-select__selection">
                           <!--v-if-->
-                          <div class="el-select__selected-item el-select__input-wrapper is-hidden"><input type="text" class="el-select__input" autocomplete="off" style="min-width: 11px;" tabindex="0" role="combobox" readonly="" spellcheck="false" aria-activedescendant="" aria-controls="el-id-34" aria-expanded="false" aria-label="所属推理机" aria-autocomplete="none" aria-haspopup="listbox" value="" id="el-id-39">
+                          <div class="el-select__selected-item el-select__input-wrapper is-hidden"><input type="text" class="el-select__input" autocomplete="off" style="min-width: 11px;" tabindex="0" role="combobox" readonly="" spellcheck="false" aria-activedescendant="" aria-controls="el-id-38" aria-expanded="false" aria-label="所属推理机" aria-autocomplete="none" aria-haspopup="listbox" value="" id="el-id-43">
                             <!--v-if-->
                           </div>
                           <div class="el-select__selected-item el-select__placeholder"><span>推理机 A</span></div>
@@ -461,11 +481,31 @@ exports[`the device page > renders the connector form with only non-secret field
   <!--teleport end-->
   <!--teleport start-->
   <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
-    <div class="el-overlay el-modal-dialog" style="z-index: 2009; display: none;">
-      <div role="dialog" aria-modal="true" aria-label="连接器详情" aria-describedby="el-id-20" class="el-overlay-dialog"></div>
+    <div class="el-overlay el-modal-dialog" style="z-index: 2010; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="连接器详情" aria-describedby="el-id-22" class="el-overlay-dialog"></div>
     </div>
   </transition-stub>
   <!--teleport end-->
+  <section class="station-template" aria-labelledby="station-template-heading">
+    <header class="station-template__header">
+      <div>
+        <p class="station-template__eyebrow">工位交付 / 对账</p>
+        <h2 id="station-template-heading" class="station-template__heading">工位模板与运行参数</h2>
+        <p class="station-template__intro"> 中心只记录期望版本；reported 是推理机签名上报的现场事实，二者不混为一次成功。 </p>
+      </div>
+    </header>
+    <!--v-if-->
+    <div class="station-template__surface">
+      <p class="station-template__loading">正在读取工位模板配置…</p>
+    </div>
+    <!--teleport start-->
+    <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+      <div class="el-overlay el-modal-dialog" style="z-index: 2011; display: none;">
+        <div role="dialog" aria-modal="true" aria-label="工位模板与运行参数" aria-describedby="el-id-24" class="el-overlay-dialog"></div>
+      </div>
+    </transition-stub>
+    <!--teleport end-->
+  </section>
   <!--v-if-->
   <!--v-if-->
   <!--v-if-->
@@ -739,22 +779,22 @@ exports[`the template page > renders the import rail, draft list and retained im
   </div>
   <!--teleport start-->
   <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
-    <div class="el-overlay el-modal-dialog" style="z-index: 2014; display: none;">
-      <div role="dialog" aria-modal="true" aria-label="确认发布" aria-describedby="el-id-41" class="el-overlay-dialog"></div>
-    </div>
-  </transition-stub>
-  <!--teleport end-->
-  <!--teleport start-->
-  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
-    <div class="el-overlay el-modal-dialog" style="z-index: 2015; display: none;">
-      <div role="dialog" aria-modal="true" aria-label="版本详情" aria-describedby="el-id-43" class="el-overlay-dialog"></div>
-    </div>
-  </transition-stub>
-  <!--teleport end-->
-  <!--teleport start-->
-  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
     <div class="el-overlay el-modal-dialog" style="z-index: 2016; display: none;">
-      <div role="dialog" aria-modal="true" aria-label="编辑模板草稿" aria-describedby="el-id-45" class="el-overlay-dialog"></div>
+      <div role="dialog" aria-modal="true" aria-label="确认发布" aria-describedby="el-id-45" class="el-overlay-dialog"></div>
+    </div>
+  </transition-stub>
+  <!--teleport end-->
+  <!--teleport start-->
+  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2017; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="版本详情" aria-describedby="el-id-47" class="el-overlay-dialog"></div>
+    </div>
+  </transition-stub>
+  <!--teleport end-->
+  <!--teleport start-->
+  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2018; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="编辑模板草稿" aria-describedby="el-id-49" class="el-overlay-dialog"></div>
     </div>
   </transition-stub>
   <!--teleport end-->

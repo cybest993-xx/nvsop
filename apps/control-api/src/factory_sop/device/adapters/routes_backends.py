@@ -240,6 +240,7 @@ def set_the_backend_status(
     backend_id: UUID,
     requested: BackendStatus,
     caller: Authorized,
+    host_store: Annotated[InferenceHostRepository, Depends(hosts)],
     backends: Annotated[InferenceBackendRepository, Depends(backends)],
     if_match: Annotated[int, Header(alias="If-Match")],
 ) -> InferenceBackendView:
@@ -259,6 +260,7 @@ def set_the_backend_status(
                 expected_revision=if_match,
                 caller=caller,
                 now=datetime.now(UTC),
+                hosts=host_store,
                 backends=backends,
             )
     return _view(backend)
@@ -303,7 +305,10 @@ def test_a_backend_connection(
     | _VALIDATION
     | {
         404: problem_openapi_response("Backend not found"),
-        409: problem_openapi_response("Revision moved (STALE_REVISION)"),
+        409: problem_openapi_response(
+            "Revision moved (STALE_REVISION), or the backend still carries cameras or "
+            "template configuration reports"
+        ),
     },
 )
 def delete_a_backend(

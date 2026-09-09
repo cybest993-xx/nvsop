@@ -133,8 +133,12 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(auth_role_administration.router, prefix=API_PREFIX)
     app.include_router(auth_user_administration.router, prefix=API_PREFIX)
     app.include_router(template_router, prefix=API_PREFIX)
-    # 组合根把跨模块的工位查询 seam 接到 `device` 的真实适配器。
+    # 组合根把跨模块的工位、拓扑和主机认证 seam 接到 `device` 的真实适配器。
     app.dependency_overrides[template_dependencies.stations] = device_dependencies.stations
+    app.dependency_overrides[template_dependencies.binding_gateway] = (
+        device_dependencies.template_binding
+    )
+    app.dependency_overrides[template_dependencies.host_gateway] = device_dependencies.host_gateway
 
     @app.exception_handler(AuthenticationRefusedError)
     async def refused(request: Request, error: AuthenticationRefusedError) -> Response:

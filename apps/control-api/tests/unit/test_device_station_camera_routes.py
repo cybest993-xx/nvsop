@@ -77,6 +77,33 @@ class TriggeredCameraWrite(FakeCameras):
         raise DeviceRefusedError(DeviceRefusalCode.CAMERA_HOST_BACKEND_MISMATCH)
 
 
+class RefusingStations(FakeInferenceStations):
+    def __init__(self, refusal: DeviceRefusalCode) -> None:
+        super().__init__()
+        self.refusal = refusal
+
+    def remove(self, station_id: UUID, *, expected_revision: int) -> bool:
+        raise DeviceRefusedError(self.refusal)
+
+
+class RefusingInferenceBackends(FakeInferenceBackends):
+    def __init__(self, refusal: DeviceRefusalCode) -> None:
+        super().__init__()
+        self.refusal = refusal
+
+    def remove(self, backend_id: UUID, *, expected_revision: int) -> bool:
+        raise DeviceRefusedError(self.refusal)
+
+
+class RefusingInferenceHosts(FakeInferenceHosts):
+    def __init__(self, refusal: DeviceRefusalCode) -> None:
+        super().__init__()
+        self.refusal = refusal
+
+    def remove(self, host_id: UUID, *, expected_revision: int) -> bool:
+        raise DeviceRefusedError(self.refusal)
+
+
 class Center:
     """已登录的应用；每个仓储都在其公开接口处被替换。"""
 
@@ -152,6 +179,38 @@ class Center:
 @pytest.fixture
 def center() -> Center:
     return Center()
+
+
+@pytest.mark.parametrize(
+    ("resource", "refusal"),
+    [
+        ("station", DeviceRefusalCode.STATION_HAS_TEMPLATE_BINDING),
+        ("backend", DeviceRefusalCode.INFERENCE_BACKEND_HAS_CONFIGURATION_REPORT),
+        ("host", DeviceRefusalCode.INFERENCE_HOST_HAS_CONFIGURATION_REPORT),
+    ],
+)
+def test_template_history_delete_refusals_are_stable_problem_responses(
+    center: Center, resource: str, refusal: DeviceRefusalCode
+) -> None:
+    if resource == "station":
+        center.stations = RefusingStations(refusal)
+        station_id = center.stations.register(code="history-station", name="历史工位").id
+        path = f"{STATIONS}/{station_id}"
+    elif resource == "backend":
+        center.backends = RefusingInferenceBackends(refusal)
+        host = center.hosts.register(name="历史后端主机")
+        backend_id = center.backends.register(host_id=host.id, base_url="http://10.0.8.90:8000").id
+        path = f"{API_PREFIX}/inference-backends/{backend_id}"
+    else:
+        center.hosts = RefusingInferenceHosts(refusal)
+        host_id = center.hosts.register(name="历史报告主机").id
+        path = f"{API_PREFIX}/inference-hosts/{host_id}"
+
+    response = center.send("DELETE", path, headers={"If-Match": "1"})
+
+    assert response.status_code == 409
+    assert response.headers["content-type"] == PROBLEM_MEDIA_TYPE
+    assert response.json()["error_code"] == refusal.value
 
 
 def _normalize_dto(body: dict[str, Any]) -> dict[str, Any]:
@@ -350,7 +409,7 @@ def test_camera_routes_declare_permissions_and_if_match(center: Center) -> None:
     declared = {
         f"{method.upper()} {path.removeprefix(API_PREFIX)}": operation["x-required-permission"]
         for path, item in schema["paths"].items()
-        if "/stations" in path or "/cameras" in path
+        if path.startswith(f"{API_PREFIX}/stations") or path.startswith(f"{API_PREFIX}/cameras")
         for method, operation in item.items()
         if method in {"post", "patch", "put", "delete"}
     }
@@ -382,7 +441,7 @@ def test_station_and_camera_read_routes_declare_view_permissions(center: Center)
     assert {
         (method.upper(), path): operation["x-required-permission"]
         for path, item in schema["paths"].items()
-        if "/stations" in path or "/cameras" in path
+        if path.startswith(f"{API_PREFIX}/stations") or path.startswith(f"{API_PREFIX}/cameras")
         for method, operation in item.items()
         if method in {"get"}
     } == {

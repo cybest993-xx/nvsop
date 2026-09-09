@@ -48,6 +48,7 @@ from factory_sop.auth.model import Role, User, UserStatus
 from factory_sop.auth.passwords import hash_password
 from factory_sop.auth.permissions import Permission
 from factory_sop.device.adapters import dependencies as device_dependencies
+from factory_sop.device.errors import DeviceRefusalCode, DeviceRefusedError
 from factory_sop.device.model import (
     PendingCommand,
     PendingCommandCompletion,
@@ -339,6 +340,31 @@ ROUTES = [
     ),
     Target(
         "POST",
+        "/templates/bindings/validate",
+        {
+            "station_id": "{station_id}",
+            "version_id": "00000000-0000-0000-0000-000000000001",
+            "runtime_parameter_mode": "follow_template",
+        },
+    ),
+    Target(
+        "POST",
+        "/templates/bindings",
+        {
+            "station_id": "{station_id}",
+            "version_id": "00000000-0000-0000-0000-000000000001",
+            "runtime_parameter_mode": "follow_template",
+        },
+        headers={"If-Match": "1"},
+    ),
+    Target(
+        "PUT",
+        "/templates/stations/{station_id}/runtime-parameters",
+        {"mode": "follow_template"},
+        headers={"If-Match": "1"},
+    ),
+    Target(
+        "POST",
         "/point-binding-validations",
         {
             "station_id": "{station_id}",
@@ -358,6 +384,8 @@ EXEMPT = {
     ("POST", f"{API_PREFIX}/auth/session"),
     ("DELETE", f"{API_PREFIX}/auth/session"),
     ("POST", f"{API_PREFIX}/device-commands/{{command_id}}/result"),
+    # 主机配置上报用公钥签名认证，不接受浏览器会话或人类权限。
+    ("POST", f"{API_PREFIX}/templates/configuration-reports"),
 }
 
 
@@ -395,9 +423,25 @@ class TemplateStore:
     def draft_for_publish(self, _draft_id: object) -> None:
         return None
 
+    def version_by_id(self, _version_id: object) -> None:
+        return None
+
+    def template_by_id(self, _template_id: object) -> None:
+        return None
+
+    def binding_by_station(self, _station_id: object) -> None:
+        return None
+
     def version_by_source(self, *, draft_id: object, revision: int) -> None:
         del draft_id, revision
         return None
+
+
+class BindingGateway:
+    """让授权测试在通过权限后得到稳定的资源拒绝，而不是触碰数据库。"""
+
+    def read_station_runtime_parameters(self, *_args: object, **_kwargs: object) -> None:
+        raise DeviceRefusedError(DeviceRefusalCode.STATION_NOT_FOUND)
 
 
 class Backend:
@@ -471,6 +515,9 @@ class Backend:
         self.app.dependency_overrides[device_dependencies.points] = lambda: self.points
         self.app.dependency_overrides[template_dependencies.stations] = lambda: self.stations
         self.app.dependency_overrides[template_dependencies.templates] = lambda: self.template_store
+        # 绑定/参数路由在权限机械测试中只需解析依赖；未知版本/资源会在 handler 内
+        # 给出非 403 结果，避免把数据库装配错误误判为授权通过。
+        self.app.dependency_overrides[template_dependencies.binding_gateway] = BindingGateway
         self.client = TestClient(self.app, base_url="https://testserver")
         assert (
             self.client.post(

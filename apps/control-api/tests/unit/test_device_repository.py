@@ -2,24 +2,30 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from types import SimpleNamespace
-from typing import Any, NoReturn, cast
+from typing import Any, NoReturn, Protocol, cast
+from uuid import UUID
 
 import pytest
 from sqlalchemy.exc import DatabaseError
 from sqlalchemy.orm import Session as DatabaseSession
 
-from factory_sop.device.adapters.repository import PostgresInferenceHostRepository
+from factory_sop.device.adapters.repository import (
+    PostgresInferenceBackendRepository,
+    PostgresInferenceHostRepository,
+    PostgresStationRepository,
+)
 from factory_sop.device.errors import DeviceRefusalCode, DeviceRefusedError
 
 
 class DriverError(Exception):
     """The subset of a DBAPI exception the PostgreSQL adapter reads."""
 
-    def __init__(self, *, sqlstate: str, message: str) -> None:
+    def __init__(self, *, sqlstate: str, message: str, constraint_name: str | None = None) -> None:
         super().__init__(message)
         self.sqlstate = sqlstate
-        self.diag = SimpleNamespace(message_primary=message, constraint_name=None)
+        self.diag = SimpleNamespace(message_primary=message, constraint_name=constraint_name)
 
 
 class FailingSession:
@@ -32,14 +38,32 @@ class FailingSession:
         raise self.error
 
 
-def database_error(*, sqlstate: str, message: str) -> DatabaseError:
+def database_error(
+    *, sqlstate: str, message: str, constraint_name: str | None = None
+) -> DatabaseError:
     return DatabaseError(
-        "DELETE FROM device_inference_host", {}, DriverError(sqlstate=sqlstate, message=message)
+        "DELETE FROM device_inference_host",
+        {},
+        DriverError(
+            sqlstate=sqlstate,
+            message=message,
+            constraint_name=constraint_name,
+        ),
     )
 
 
-def repository_for(error: DatabaseError) -> PostgresInferenceHostRepository:
-    return PostgresInferenceHostRepository(cast(DatabaseSession, FailingSession(error)))
+class RemovableRepository(Protocol):
+    def remove(self, resource_id: UUID, *, expected_revision: int) -> bool: ...
+
+
+RepositoryFactory = Callable[[DatabaseSession], RemovableRepository]
+
+
+def repository_for(
+    error: DatabaseError,
+    repository_type: RepositoryFactory = PostgresInferenceHostRepository,
+) -> RemovableRepository:
+    return repository_type(cast(DatabaseSession, FailingSession(error)))
 
 
 def test_the_backend_deactivation_marker_becomes_a_device_refusal() -> None:
@@ -84,6 +108,56 @@ def test_topology_trigger_refusal_names_its_affected_fields(
 
     assert refused.value.code is code
     assert [(item.field, item.message) for item in refused.value.field_errors] == list(fields)
+
+
+@pytest.mark.parametrize(
+    ("repository_type", "constraint_name", "code"),
+    [
+        (
+            PostgresStationRepository,
+            "fk_template_sop_template_station_id_device_station",
+            DeviceRefusalCode.STATION_HAS_TEMPLATES,
+        ),
+        (
+            PostgresStationRepository,
+            "fk_template_station_binding_station_id_device_station",
+            DeviceRefusalCode.STATION_HAS_TEMPLATE_BINDING,
+        ),
+        (
+            PostgresStationRepository,
+            "fk_template_configuration_report_station_id_device_station",
+            DeviceRefusalCode.STATION_HAS_CONFIGURATION_REPORT,
+        ),
+        (
+            PostgresInferenceBackendRepository,
+            "fk_template_configuration_report_backend_id_device_infe_c4c5",
+            DeviceRefusalCode.INFERENCE_BACKEND_HAS_CONFIGURATION_REPORT,
+        ),
+        (
+            PostgresInferenceHostRepository,
+            "fk_template_configuration_report_host_id_device_inference_host",
+            DeviceRefusalCode.INFERENCE_HOST_HAS_CONFIGURATION_REPORT,
+        ),
+        (
+            PostgresInferenceHostRepository,
+            "fk_device_pending_command_host_id_device_inference_host",
+            DeviceRefusalCode.INFERENCE_HOST_HAS_PENDING_COMMANDS,
+        ),
+    ],
+)
+def test_template_history_foreign_keys_become_stable_delete_refusals(
+    repository_type: RepositoryFactory, constraint_name: str, code: DeviceRefusalCode
+) -> None:
+    error = database_error(
+        sqlstate="23503",
+        message="violates a template history foreign key",
+        constraint_name=constraint_name,
+    )
+
+    with pytest.raises(DeviceRefusedError) as refused:
+        repository_for(error, repository_type).remove(cast(Any, "parent-id"), expected_revision=1)
+
+    assert refused.value.code is code
 
 
 @pytest.mark.parametrize("sqlstate", ["XX000", "40P01"])

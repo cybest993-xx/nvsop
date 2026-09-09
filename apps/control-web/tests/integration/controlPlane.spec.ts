@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   ControlPlaneError,
+  bindTemplateVersion,
   createConnector,
   deleteConnector,
   editConnector,
@@ -22,8 +23,11 @@ import {
   readDeviceCommand,
   readInferenceHosts,
   readSession,
+  readStationTemplateConfiguration,
   readStations,
   openSession,
+  updateStationRuntimeParameters,
+  validateTemplateBinding,
   publishTemplateVersion,
   readTemplateVersion,
   setConnectorStatus,
@@ -260,6 +264,75 @@ describe('delegated connection-test calls', () => {
     expect(enqueueRequest!.method).toBe('POST')
     expect(new URL(readRequest!.url).pathname).toBe('/api/v1/device-commands/command-1')
     expect(readRequest!.method).toBe('GET')
+  })
+})
+
+describe('station template configuration calls', () => {
+  const binding = {
+    station_id: 'station-1',
+    version_id: 'version-1',
+    runtime_parameter_mode: 'custom' as const,
+    runtime_parameters: {
+      idle_timeout_seconds: 45,
+      step_deadline_seconds: 120,
+      disposition_policy: 'record',
+    },
+  }
+  const configuration = {
+    station_id: 'station-1',
+    station_revision: 8,
+    runtime_parameters_revision: 2,
+    runtime_parameter_mode: 'custom' as const,
+    template_defaults: {
+      idle_timeout_seconds: 30,
+      step_deadline_seconds: 90,
+      disposition_policy: 'record',
+    },
+    runtime_overrides: binding.runtime_parameters,
+    effective_runtime_parameters: binding.runtime_parameters,
+    desired: null,
+    version: null,
+    status: 'unbound' as const,
+    status_detail: null,
+    topology_issues: [],
+    backends: [],
+  }
+
+  it('uses the generated binding and runtime configuration endpoints', async () => {
+    const stub = stubFetch(respond(200, { ...configuration, accepted: true }, 'application/json'))
+
+    await validateTemplateBinding(binding)
+    stub.mockResolvedValueOnce(respond(200, configuration, 'application/json'))
+    await bindTemplateVersion(binding, 8)
+    stub.mockResolvedValueOnce(respond(200, configuration, 'application/json'))
+    await readStationTemplateConfiguration('station-1')
+    stub.mockResolvedValueOnce(respond(200, configuration, 'application/json'))
+    await updateStationRuntimeParameters(
+      'station-1',
+      { mode: 'custom', parameters: binding.runtime_parameters },
+      8,
+    )
+
+    const [previewRequest, bindRequest, readRequest, runtimeRequest] = stub.mock.calls.map(
+      ([request]) => request,
+    )
+    expect(previewRequest!.method).toBe('POST')
+    expect(new URL(previewRequest!.url).pathname).toBe('/api/v1/templates/bindings/validate')
+    await expect(previewRequest!.clone().json()).resolves.toEqual(binding)
+    expect(new URL(bindRequest!.url).pathname).toBe('/api/v1/templates/bindings')
+    expect(bindRequest!.headers.get('If-Match')).toBe('8')
+    await expect(bindRequest!.clone().json()).resolves.toEqual(binding)
+    expect(new URL(readRequest!.url).pathname).toBe(
+      '/api/v1/templates/stations/station-1/configuration',
+    )
+    expect(new URL(runtimeRequest!.url).pathname).toBe(
+      '/api/v1/templates/stations/station-1/runtime-parameters',
+    )
+    expect(runtimeRequest!.headers.get('If-Match')).toBe('8')
+    await expect(runtimeRequest!.clone().json()).resolves.toEqual({
+      mode: 'custom',
+      parameters: binding.runtime_parameters,
+    })
   })
 })
 

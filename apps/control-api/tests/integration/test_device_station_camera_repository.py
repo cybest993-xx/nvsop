@@ -11,6 +11,7 @@ from uuid import UUID
 import pytest
 from sqlalchemy import Engine, delete, text
 from sqlalchemy.orm import Session as DatabaseSession
+from template_fixtures import TemplateFixture, add_template_version, remove_template_versions
 
 from factory_sop.auth.api import Caller, Permission
 from factory_sop.auth.model import User, UserStatus
@@ -135,8 +136,10 @@ def a_camera(station: Station, host: InferenceHost, backend: InferenceBackend) -
 def test_device_dtos_survive_save_commit_and_new_session_reload(engine: Engine) -> None:
     station = a_station()
     host = a_host()
-    backend = a_backend(host.id, template_version_id=new_id())
+    initial_template_id = new_id()
+    backend = a_backend(host.id, template_version_id=initial_template_id)
     camera = replace(a_camera(station, host, backend), credentials_configured=True)
+    template_fixtures: list[TemplateFixture] = []
     setup = DatabaseSession(engine)
     try:
         stations = PostgresStationRepository(setup)
@@ -145,12 +148,29 @@ def test_device_dtos_survive_save_commit_and_new_session_reload(engine: Engine) 
         cameras = PostgresCameraRepository(setup)
         stations.add(station)
         hosts.add(host)
+        template_fixtures.append(
+            add_template_version(
+                setup,
+                station_id=station.id,
+                now=NOW,
+                version_id=initial_template_id,
+            )
+        )
         backends.add(backend)
         cameras.add(camera)
         setup.commit()
 
         saved_station = replace(station, tags=("质量", "二线"), revision=2)
-        saved_backend = replace(backend, template_version_id=new_id(), revision=2)
+        saved_template_id = new_id()
+        template_fixtures.append(
+            add_template_version(
+                setup,
+                station_id=station.id,
+                now=NOW,
+                version_id=saved_template_id,
+            )
+        )
+        saved_backend = replace(backend, template_version_id=saved_template_id, revision=2)
         saved_camera = replace(
             camera,
             main_stream_path="/Streaming/Channels/201",
@@ -177,6 +197,7 @@ def test_device_dtos_survive_save_commit_and_new_session_reload(engine: Engine) 
             PostgresInferenceHostRepository(cleanup).remove(
                 host.id, expected_revision=host.revision
             )
+            remove_template_versions(cleanup, tuple(template_fixtures))
             PostgresStationRepository(cleanup).remove(station.id, expected_revision=2)
             cleanup.commit()
         finally:
@@ -191,6 +212,47 @@ def test_station_code_is_a_real_unique_constraint(session: DatabaseSession) -> N
         stations.add(a_station())
 
     assert refused.value.code is DeviceRefusalCode.STATION_CODE_TAKEN
+
+
+def test_assign_template_version_updates_all_active_backends_for_one_station(
+    session: DatabaseSession,
+) -> None:
+    station = a_station()
+    host = a_host()
+    stations = PostgresStationRepository(session)
+    hosts = PostgresInferenceHostRepository(session)
+    stations.add(station)
+    old_fixture = add_template_version(session, station_id=station.id, now=NOW)
+    new_fixture = add_template_version(session, station_id=station.id, now=NOW)
+    backend_a = a_backend(host.id, template_version_id=old_fixture.version_id)
+    backend_b = a_backend(host.id, port=8001, template_version_id=old_fixture.version_id)
+    backends = PostgresInferenceBackendRepository(session)
+    cameras = PostgresCameraRepository(session)
+    hosts.add(host)
+    backends.add(backend_a)
+    backends.add(backend_b)
+    cameras.add(a_camera(station, host, backend_a))
+    cameras.add(a_camera(station, host, backend_b))
+    session.flush()
+
+    updated = backends.assign_template_version(
+        backend_ids=(backend_a.id, backend_b.id),
+        template_version_id=new_fixture.version_id,
+        actor_id=backend_a.updated_by,
+        now=NOW,
+        expected_revisions={backend_a.id: backend_a.revision, backend_b.id: backend_b.revision},
+    )
+    session.flush()
+
+    assert {backend.template_version_id for backend in updated} == {new_fixture.version_id}
+    assert {backend.revision for backend in updated} == {backend_a.revision + 1}
+    reloaded_a = backends.by_id(backend_a.id)
+    reloaded_b = backends.by_id(backend_b.id)
+    assert reloaded_a is not None
+    assert reloaded_b is not None
+    assert {reloaded_a.template_version_id, reloaded_b.template_version_id} == {
+        new_fixture.version_id
+    }
 
 
 def test_database_rejects_a_camera_whose_host_differs_from_its_backend(
@@ -227,12 +289,15 @@ def test_database_rejects_cross_host_and_cross_template_cameras_for_one_station(
     host_a = a_host()
     host_b = a_host(name="推理机-2")
     template_a = new_id()
+    template_c = new_id()
     backend_a = a_backend(host_a.id, port=8000, template_version_id=template_a)
     backend_b = a_backend(host_b.id, port=8000, template_version_id=template_a)
-    backend_c = a_backend(host_a.id, port=8001, template_version_id=new_id())
+    backend_c = a_backend(host_a.id, port=8001, template_version_id=template_c)
     stations.add(station)
     hosts.add(host_a)
     hosts.add(host_b)
+    add_template_version(session, station_id=station.id, now=NOW, version_id=template_a)
+    add_template_version(session, station_id=station.id, now=NOW, version_id=template_c)
     backends.add(backend_a)
     backends.add(backend_b)
     backends.add(backend_c)
@@ -302,10 +367,12 @@ def test_parent_backend_host_change_is_rejected_while_a_camera_references_it(
     station = a_station()
     host_a = a_host()
     host_b = a_host(name="推理机-2")
-    backend = a_backend(host_a.id, template_version_id=new_id())
+    template_id = new_id()
+    backend = a_backend(host_a.id, template_version_id=template_id)
     stations.add(station)
     hosts.add(host_a)
     hosts.add(host_b)
+    add_template_version(session, station_id=station.id, now=NOW, version_id=template_id)
     backends.add(backend)
     cameras.add(a_camera(station, host_a, backend))
     session.flush()
@@ -341,7 +408,9 @@ def test_referenced_backend_allows_null_to_template_when_the_station_stays_consi
     cameras.add(a_camera(station, host, backend))
     session.flush()
 
-    updated = replace(backend, template_version_id=new_id(), revision=2)
+    template_id = new_id()
+    add_template_version(session, station_id=station.id, now=NOW, version_id=template_id)
+    updated = replace(backend, template_version_id=template_id, revision=2)
     backends.save(updated, expected_revision=backend.revision)
     session.flush()
 
@@ -356,14 +425,17 @@ def test_referenced_backend_allows_a_consistent_template_change(session: Databas
     station = a_station()
     host = a_host()
     old_template = new_id()
+    new_template = new_id()
     backend = a_backend(host.id, template_version_id=old_template)
     stations.add(station)
     hosts.add(host)
+    add_template_version(session, station_id=station.id, now=NOW, version_id=old_template)
+    add_template_version(session, station_id=station.id, now=NOW, version_id=new_template)
     backends.add(backend)
     cameras.add(a_camera(station, host, backend))
     session.flush()
 
-    updated = replace(backend, template_version_id=new_id(), revision=2)
+    updated = replace(backend, template_version_id=new_template, revision=2)
     backends.save(updated, expected_revision=backend.revision)
     session.flush()
 
@@ -380,10 +452,13 @@ def test_referenced_backend_rejects_a_template_change_that_breaks_station_consis
     station = a_station()
     host = a_host()
     old_template = new_id()
+    new_template = new_id()
     backend = a_backend(host.id, template_version_id=old_template)
     other_backend = a_backend(host.id, port=8001, template_version_id=old_template)
     stations.add(station)
     hosts.add(host)
+    add_template_version(session, station_id=station.id, now=NOW, version_id=old_template)
+    add_template_version(session, station_id=station.id, now=NOW, version_id=new_template)
     backends.add(backend)
     backends.add(other_backend)
     cameras.add(a_camera(station, host, backend))
@@ -394,7 +469,7 @@ def test_referenced_backend_rejects_a_template_change_that_breaks_station_consis
     try:
         with pytest.raises(DeviceRefusedError) as refused:
             backends.save(
-                replace(backend, template_version_id=new_id(), revision=2),
+                replace(backend, template_version_id=new_template, revision=2),
                 expected_revision=backend.revision,
             )
     finally:
@@ -462,14 +537,16 @@ def test_concurrent_camera_creations_for_one_station_preserve_host_and_template_
     host_a = a_host()
     host_b = a_host(name="推理机-2") if conflict_kind == "host" else host_a
     shared_template = new_id()
+    other_template = shared_template if conflict_kind == "host" else new_id()
     backend_a = a_backend(host_a.id, template_version_id=shared_template)
     backend_b = a_backend(
         host_b.id,
         port=8000 if conflict_kind == "host" else 8001,
-        template_version_id=shared_template if conflict_kind == "host" else new_id(),
+        template_version_id=other_template,
     )
     camera_a = a_camera(station, host_a, backend_a)
     camera_b = a_camera(station, host_b, backend_b)
+    template_fixtures: list[TemplateFixture] = []
     setup = DatabaseSession(engine)
     try:
         stations = PostgresStationRepository(setup)
@@ -479,6 +556,23 @@ def test_concurrent_camera_creations_for_one_station_preserve_host_and_template_
         hosts.add(host_a)
         if host_b.id != host_a.id:
             hosts.add(host_b)
+        template_fixtures.append(
+            add_template_version(
+                setup,
+                station_id=station.id,
+                now=NOW,
+                version_id=shared_template,
+            )
+        )
+        if other_template != shared_template:
+            template_fixtures.append(
+                add_template_version(
+                    setup,
+                    station_id=station.id,
+                    now=NOW,
+                    version_id=other_template,
+                )
+            )
         backends.add(backend_a)
         backends.add(backend_b)
         setup.commit()
@@ -552,6 +646,7 @@ def test_concurrent_camera_creations_for_one_station_preserve_host_and_template_
             connection.execute(
                 delete(InferenceHostRow).where(InferenceHostRow.id.in_({host_a.id, host_b.id}))
             )
+            remove_template_versions(connection, tuple(template_fixtures))
             connection.execute(delete(StationRow).where(StationRow.id == station.id))
 
 
@@ -559,10 +654,13 @@ def test_concurrent_template_updates_for_one_station_cannot_write_skew(engine: E
     station = a_station()
     host = a_host()
     old_template = new_id()
+    new_template_a = new_id()
+    new_template_b = new_id()
     backend_a = a_backend(host.id, template_version_id=old_template)
     backend_b = a_backend(host.id, port=8001, template_version_id=old_template)
     camera_a = a_camera(station, host, backend_a)
     camera_b = a_camera(station, host, backend_b)
+    template_fixtures: list[TemplateFixture] = []
     setup = DatabaseSession(engine)
     station_lock = DatabaseSession(engine)
     first_pid_ready = threading.Event()
@@ -577,6 +675,15 @@ def test_concurrent_template_updates_for_one_station_cannot_write_skew(engine: E
         cameras = PostgresCameraRepository(setup)
         stations.add(station)
         hosts.add(host)
+        for template_id in (old_template, new_template_a, new_template_b):
+            template_fixtures.append(
+                add_template_version(
+                    setup,
+                    station_id=station.id,
+                    now=NOW,
+                    version_id=template_id,
+                )
+            )
         backends.add(backend_a)
         backends.add(backend_b)
         cameras.add(camera_a)
@@ -613,10 +720,12 @@ def test_concurrent_template_updates_for_one_station_cannot_write_skew(engine: E
                 local.close()
 
         first = threading.Thread(
-            target=update_template, args=("first", backend_a, new_id(), first_pid_ready)
+            target=update_template,
+            args=("first", backend_a, new_template_a, first_pid_ready),
         )
         second = threading.Thread(
-            target=update_template, args=("second", backend_b, new_id(), second_pid_ready)
+            target=update_template,
+            args=("second", backend_b, new_template_b, second_pid_ready),
         )
         first.start()
         second.start()
@@ -670,6 +779,7 @@ def test_concurrent_template_updates_for_one_station_cannot_write_skew(engine: E
                 )
             )
             connection.execute(delete(InferenceHostRow).where(InferenceHostRow.id == host.id))
+            remove_template_versions(connection, tuple(template_fixtures))
             connection.execute(delete(StationRow).where(StationRow.id == station.id))
 
 
@@ -679,8 +789,10 @@ def test_camera_creation_and_backend_relocation_serialize_at_the_backend_row(
     station = a_station()
     host_a = a_host()
     host_b = a_host(name="推理机-2")
-    backend = a_backend(host_a.id, template_version_id=new_id())
+    template_id = new_id()
+    backend = a_backend(host_a.id, template_version_id=template_id)
     camera = a_camera(station, host_a, backend)
+    template_fixtures: list[TemplateFixture] = []
     setup = DatabaseSession(engine)
     release_camera = threading.Event()
     camera_flushed = threading.Event()
@@ -695,6 +807,14 @@ def test_camera_creation_and_backend_relocation_serialize_at_the_backend_row(
         stations.add(station)
         hosts.add(host_a)
         hosts.add(host_b)
+        template_fixtures.append(
+            add_template_version(
+                setup,
+                station_id=station.id,
+                now=NOW,
+                version_id=template_id,
+            )
+        )
         backends.add(backend)
         setup.commit()
 
@@ -775,6 +895,7 @@ def test_camera_creation_and_backend_relocation_serialize_at_the_backend_row(
             connection.execute(
                 delete(InferenceHostRow).where(InferenceHostRow.id.in_([host_a.id, host_b.id]))
             )
+            remove_template_versions(connection, tuple(template_fixtures))
             connection.execute(delete(StationRow).where(StationRow.id == station.id))
 
 

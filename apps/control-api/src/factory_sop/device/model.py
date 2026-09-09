@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -30,6 +31,82 @@ class DeviceStatus(StrEnum):
 
     ACTIVE = "active"
     DEACTIVATED = "deactivated"
+
+
+class RuntimeParameterMode(StrEnum):
+    """工位运行参数的整组来源。"""
+
+    FOLLOW_TEMPLATE = "follow_template"
+    CUSTOM = "custom"
+
+
+# 兼容更明确的调用方命名；实际枚举只有一个，避免两套模式含义漂移。
+StationRuntimeParameterMode = RuntimeParameterMode
+
+
+@dataclass(frozen=True, slots=True)
+class StationRuntimeParameters:
+    """工位可独立调整的一整组运行参数。"""
+
+    idle_timeout_seconds: float
+    step_deadline_seconds: float
+    disposition_policy: str
+
+    def __post_init__(self) -> None:
+        for field, value in (
+            ("idle_timeout_seconds", self.idle_timeout_seconds),
+            ("step_deadline_seconds", self.step_deadline_seconds),
+        ):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{field} 必须是数字")
+            if not math.isfinite(float(value)) or value <= 0:
+                raise ValueError(f"{field} 必须是有限且大于零的数字")
+        if not isinstance(self.disposition_policy, str) or not self.disposition_policy.strip():
+            raise ValueError("disposition_policy 不能为空")
+
+    def to_wire(self) -> dict[str, object]:
+        """转换为完整 JSON 对象；不产生逐项合并结果。"""
+        return {
+            "idle_timeout_seconds": float(self.idle_timeout_seconds),
+            "step_deadline_seconds": float(self.step_deadline_seconds),
+            "disposition_policy": self.disposition_policy,
+        }
+
+    @classmethod
+    def from_wire(cls, value: Mapping[str, object]) -> StationRuntimeParameters:
+        """从完整 JSON 对象读取自定义运行参数。"""
+        required = {"idle_timeout_seconds", "step_deadline_seconds", "disposition_policy"}
+        if set(value) != required:
+            raise ValueError("工位自定义运行参数必须是完整的一组")
+        idle = value["idle_timeout_seconds"]
+        deadline = value["step_deadline_seconds"]
+        policy = value["disposition_policy"]
+        if (
+            isinstance(idle, bool)
+            or not isinstance(idle, (int, float))
+            or isinstance(deadline, bool)
+            or not isinstance(deadline, (int, float))
+            or not isinstance(policy, str)
+        ):
+            raise ValueError("工位自定义运行参数字段类型无效")
+        return cls(
+            idle_timeout_seconds=float(idle),
+            step_deadline_seconds=float(deadline),
+            disposition_policy=policy.strip(),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class StationRuntimeConfiguration:
+    """中心解析后的工位运行参数，不把默认值与覆盖组混成一组。"""
+
+    station_id: UUID
+    station_revision: int
+    runtime_parameters_revision: int
+    mode: RuntimeParameterMode
+    defaults: StationRuntimeParameters | None
+    overrides: StationRuntimeParameters | None
+    effective: StationRuntimeParameters | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +223,10 @@ class Station:
     updated_by: UUID
     created_at: datetime
     updated_at: datetime
+    # 运行参数只能整组跟随模板或整组自定义；默认值不复制到这里。
+    runtime_parameter_mode: RuntimeParameterMode = RuntimeParameterMode.FOLLOW_TEMPLATE
+    runtime_parameter_overrides: StationRuntimeParameters | None = None
+    runtime_parameters_revision: int = 1
 
     def __post_init__(self) -> None:
         if not self.code:
@@ -154,6 +235,24 @@ class Station:
             raise ValueError("station name must not be empty")
         if any(not tag for tag in self.tags):
             raise ValueError("station tags must not be empty")
+        if self.runtime_parameters_revision < 1:
+            raise ValueError("runtime_parameters_revision must be positive")
+        if self.runtime_parameter_mode is RuntimeParameterMode.FOLLOW_TEMPLATE:
+            if self.runtime_parameter_overrides is not None:
+                raise ValueError("跟随模板时不能保存工位覆盖组")
+        elif self.runtime_parameter_mode is RuntimeParameterMode.CUSTOM:
+            if self.runtime_parameter_overrides is None:
+                raise ValueError("工位自定义时必须保存完整覆盖组")
+        else:
+            raise ValueError("工位运行参数模式无效")
+
+    def runtime_parameters_for(
+        self, defaults: StationRuntimeParameters | None
+    ) -> StationRuntimeParameters | None:
+        """解析一组生效值；跟随模板时整组使用默认值。"""
+        if self.runtime_parameter_mode is RuntimeParameterMode.CUSTOM:
+            return self.runtime_parameter_overrides
+        return defaults
 
 
 @dataclass(frozen=True, slots=True)

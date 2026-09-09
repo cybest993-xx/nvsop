@@ -16,6 +16,11 @@ const api = vi.hoisted(() => ({
   editConnector: vi.fn(),
   setConnectorStatus: vi.fn(),
   deleteConnector: vi.fn(),
+  readStationTemplateConfiguration: vi.fn(),
+  readTemplateVersions: vi.fn(),
+  validateTemplateBinding: vi.fn(),
+  bindTemplateVersion: vi.fn(),
+  updateStationRuntimeParameters: vi.fn(),
 }))
 
 vi.mock('@/api/controlPlane', async (importOriginal) => ({
@@ -37,6 +42,30 @@ const CONNECTOR = {
   revision: 3,
 }
 
+const STATION_CONFIGURATION = {
+  station_id: 'station-1',
+  station_revision: 4,
+  runtime_parameters_revision: 1,
+  runtime_parameter_mode: 'follow_template' as const,
+  template_defaults: {
+    idle_timeout_seconds: 30,
+    step_deadline_seconds: 90,
+    disposition_policy: 'record',
+  },
+  runtime_overrides: null,
+  effective_runtime_parameters: {
+    idle_timeout_seconds: 30,
+    step_deadline_seconds: 90,
+    disposition_policy: 'record',
+  },
+  desired: null,
+  version: null,
+  status: 'unbound' as const,
+  status_detail: null,
+  topology_issues: [],
+  backends: [],
+}
+
 beforeEach(() => {
   setActivePinia(createPinia())
   vi.clearAllMocks()
@@ -53,6 +82,21 @@ beforeEach(() => {
     page_size: 50,
     total: 1,
   })
+  api.readStationTemplateConfiguration.mockResolvedValue(STATION_CONFIGURATION)
+  api.readTemplateVersions.mockResolvedValue({ items: [], page: 1, page_size: 50, total: 0 })
+  api.validateTemplateBinding.mockResolvedValue({
+    ...STATION_CONFIGURATION,
+    version: null,
+    current_mode: 'follow_template',
+    current_defaults: STATION_CONFIGURATION.template_defaults,
+    current_overrides: null,
+    requested_mode: 'follow_template',
+    requested_overrides: null,
+    accepted: true,
+    reasons: [],
+  })
+  api.bindTemplateVersion.mockResolvedValue(STATION_CONFIGURATION)
+  api.updateStationRuntimeParameters.mockResolvedValue(STATION_CONFIGURATION)
 })
 
 describe('工位与设备中的连接器', () => {
@@ -476,5 +520,189 @@ describe('工位与设备中的连接器', () => {
     expect(labels).not.toContain('停用')
     expect(labels).not.toContain('恢复')
     expect(row.text()).toContain('状态未知，不能切换')
+  })
+
+  it('shows desired and reported template facts without collapsing them into one status', async () => {
+    api.readStationTemplateConfiguration.mockResolvedValue({
+      ...STATION_CONFIGURATION,
+      desired: {
+        id: 'binding-1',
+        version_id: 'version-1',
+        sha256: 'a'.repeat(64),
+        config_revision: 2,
+        revision: 1,
+        created_by: 'operator-1',
+        updated_by: 'operator-1',
+        created_at: '2026-09-08T01:00:00Z',
+        updated_at: '2026-09-08T01:00:00Z',
+      },
+      status: 'waiting',
+      status_detail: '等待推理机应用期望配置',
+      backends: [
+        {
+          backend_id: 'backend-1',
+          host_id: 'host-1',
+          status: 'waiting',
+          reported_version_id: 'old-version',
+          reported_sha256: 'b'.repeat(64),
+          reported_config_revision: 1,
+          reported_at: '2026-09-08T01:02:00Z',
+          rejection_code: 'future_rejection_code',
+          rejection_detail: '现场报告无法确认',
+          rejection_at: null,
+        },
+      ],
+    })
+    const session = useSessionStore()
+    session.current = {
+      user_id: 'station-viewer',
+      login_name: 'station.viewer',
+      display_name: '工位查看者',
+      expires_at: '2026-09-07T13:00:00Z',
+      permissions: ['device.station.view'],
+    }
+
+    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('等待推理机应用')
+    expect(wrapper.text()).toContain('version-1')
+    expect(wrapper.text()).toContain('old-vers')
+    expect(wrapper.text()).toContain('修订 1')
+    expect(wrapper.text()).toContain('等待推理机应用期望配置')
+    expect(wrapper.text()).toContain('拒绝原因：future_rejection_code')
+    expect(wrapper.text()).toContain('请核对版本、摘要和配置修订')
+  })
+
+  it('prechecks and binds a known version without requiring template version view permission', async () => {
+    api.validateTemplateBinding.mockResolvedValue({
+      version: { id: 'version-1', sha256: 'a'.repeat(64) },
+      station_revision: 4,
+      current_mode: 'follow_template',
+      current_defaults: STATION_CONFIGURATION.template_defaults,
+      current_overrides: null,
+      requested_mode: 'follow_template',
+      requested_overrides: null,
+      accepted: true,
+      reasons: [],
+    })
+    api.bindTemplateVersion.mockResolvedValue({
+      ...STATION_CONFIGURATION,
+      desired: { version_id: 'version-1', sha256: 'a'.repeat(64), config_revision: 2 },
+      status: 'waiting',
+    })
+    const session = useSessionStore()
+    session.current = {
+      user_id: 'station-editor',
+      login_name: 'station.editor',
+      display_name: '工位编辑者',
+      expires_at: '2026-09-07T13:00:00Z',
+      permissions: ['device.station.view', 'device.station.edit'],
+    }
+
+    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    await wrapper
+      .findAll('button')
+      .find((button) => button.text() === '绑定 / 编辑')!
+      .trigger('click')
+    await flushPromises()
+    await wrapper.find('input[name="known-template-version-id-dialog"]').setValue('version-1')
+    await wrapper
+      .findAll('button')
+      .find((button) => button.text() === '预检绑定')!
+      .trigger('click')
+    await flushPromises()
+
+    expect(api.validateTemplateBinding).toHaveBeenCalledWith({
+      station_id: 'station-1',
+      version_id: 'version-1',
+      runtime_parameter_mode: 'follow_template',
+      runtime_parameters: null,
+    })
+    await wrapper
+      .findAll('button')
+      .find((button) => button.text() === '正式绑定')!
+      .trigger('click')
+    await flushPromises()
+
+    expect(api.bindTemplateVersion).toHaveBeenCalledWith(
+      {
+        station_id: 'station-1',
+        version_id: 'version-1',
+        runtime_parameter_mode: 'follow_template',
+        runtime_parameters: null,
+      },
+      4,
+    )
+  })
+
+  it('preserves unknown runtime parameters in the known-ID edit flow', async () => {
+    api.validateTemplateBinding.mockResolvedValue({
+      version: { id: 'version-1', sha256: 'a'.repeat(64) },
+      station_revision: 7,
+      current_mode: 'custom',
+      current_defaults: STATION_CONFIGURATION.template_defaults,
+      current_overrides: {
+        idle_timeout_seconds: 12,
+        step_deadline_seconds: 44,
+        disposition_policy: 'hold',
+      },
+      requested_mode: 'custom',
+      requested_overrides: {
+        idle_timeout_seconds: 12,
+        step_deadline_seconds: 44,
+        disposition_policy: 'hold',
+      },
+      accepted: true,
+      reasons: [],
+    })
+    api.bindTemplateVersion.mockResolvedValue(STATION_CONFIGURATION)
+    const session = useSessionStore()
+    session.current = {
+      user_id: 'station-editor-only',
+      login_name: 'station.editor.only',
+      display_name: '仅编辑人员',
+      expires_at: '2026-09-07T13:00:00Z',
+      permissions: ['device.station.edit'],
+    }
+
+    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(api.readStations).not.toHaveBeenCalled()
+    await wrapper.find('input[name="known-station-id"]').setValue('station-1')
+    await wrapper.find('input[name="known-station-revision"]').setValue('7')
+    await wrapper.find('input[name="known-template-version-id"]').setValue('version-1')
+    await wrapper
+      .findAll('button')
+      .find((button) => button.text() === '打开配置')!
+      .trigger('click')
+    await wrapper
+      .findAll('button')
+      .find((button) => button.text() === '预检绑定')!
+      .trigger('click')
+    await flushPromises()
+
+    expect(api.validateTemplateBinding).toHaveBeenCalledWith({
+      station_id: 'station-1',
+      version_id: 'version-1',
+      runtime_parameter_mode: null,
+      runtime_parameters: null,
+    })
+    await wrapper
+      .findAll('button')
+      .find((button) => button.text() === '正式绑定')!
+      .trigger('click')
+    await flushPromises()
+
+    expect(api.bindTemplateVersion).toHaveBeenCalledWith(
+      {
+        station_id: 'station-1',
+        version_id: 'version-1',
+        runtime_parameter_mode: null,
+        runtime_parameters: null,
+      },
+      7,
+    )
   })
 })

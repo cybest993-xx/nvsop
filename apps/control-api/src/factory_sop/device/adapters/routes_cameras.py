@@ -190,7 +190,11 @@ def set_the_camera_status(
     camera_id: UUID,
     requested: CameraStatus,
     caller: Authorized,
+    station_store: Annotated[StationRepository, Depends(stations)],
+    host_store: Annotated[InferenceHostRepository, Depends(hosts)],
+    backend_store: Annotated[InferenceBackendRepository, Depends(backends)],
     camera_store: Annotated[CameraRepository, Depends(cameras)],
+    connector_store: Annotated[ConnectorRepository, Depends(connectors)],
     if_match: Annotated[int, Header(alias="If-Match")],
 ) -> CameraView:
     camera = set_camera_status(
@@ -199,7 +203,11 @@ def set_the_camera_status(
         expected_revision=if_match,
         caller=caller,
         now=datetime.now(UTC),
+        stations=station_store,
+        hosts=host_store,
+        backends=backend_store,
         cameras=camera_store,
+        connectors=connector_store,
     )
     return _view(camera)
 

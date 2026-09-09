@@ -18,6 +18,7 @@ from sqlalchemy import event
 from sqlalchemy.engine import ExceptionContext
 from sqlalchemy.exc import DatabaseError
 from sqlalchemy.orm import Session as DatabaseSession
+from template_fixtures import add_template_version
 
 from factory_sop.device.adapters.repository import (
     PostgresInferenceBackendRepository,
@@ -333,7 +334,8 @@ def test_a_deactivated_host_s_backends_keep_their_template_binding(
     host = a_host()
     hosts.add(host)
     binding = a_backend(host.id)
-    with_binding = replace(binding, template_version_id=new_id())
+    fixture = add_template_version(session, now=MONDAY_MORNING)
+    with_binding = replace(binding, template_version_id=fixture.version_id)
     backends.add(with_binding)
     hosts.save(
         replace(host, status=DeviceStatus.DEACTIVATED, revision=host.revision + 1),

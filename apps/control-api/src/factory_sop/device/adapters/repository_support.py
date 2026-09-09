@@ -48,6 +48,12 @@ def refuse_constraint_violation(
     foreign_key_to_connector: DeviceRefusalCode | None = None,
     point_station_refusal: DeviceRefusalCode | None = None,
     point_connector_refusal: DeviceRefusalCode | None = None,
+    station_template_refusal: DeviceRefusalCode | None = None,
+    station_binding_refusal: DeviceRefusalCode | None = None,
+    station_report_refusal: DeviceRefusalCode | None = None,
+    backend_report_refusal: DeviceRefusalCode | None = None,
+    host_report_refusal: DeviceRefusalCode | None = None,
+    pending_command_refusal: DeviceRefusalCode | None = None,
 ) -> NoReturn:
     """将数据库约束或触发器拒绝转换为 device 错误。"""
     diagnostics = getattr(error.orig, "diag", None)
@@ -56,6 +62,33 @@ def refuse_constraint_violation(
     message = getattr(diagnostics, "message_primary", None)
     if sqlstate == "P0001" and message in _TRIGGERED_REFUSALS:
         raise DeviceRefusedError(_TRIGGERED_REFUSALS[message]) from error
+    if constraint_name == "fk_template_sop_template_station_id_device_station":
+        if station_template_refusal is None:
+            raise error
+        raise DeviceRefusedError(station_template_refusal) from error
+    if constraint_name == "fk_template_station_binding_station_id_device_station":
+        if station_binding_refusal is None:
+            raise error
+        raise DeviceRefusedError(station_binding_refusal) from error
+    if constraint_name == "fk_template_configuration_report_station_id_device_station":
+        if station_report_refusal is None:
+            raise error
+        raise DeviceRefusedError(station_report_refusal) from error
+    if constraint_name in {
+        "fk_template_configuration_report_backend_id_device_inference_backend",
+        "fk_template_configuration_report_backend_id_device_infe_c4c5",
+    }:
+        if backend_report_refusal is None:
+            raise error
+        raise DeviceRefusedError(backend_report_refusal) from error
+    if constraint_name == "fk_template_configuration_report_host_id_device_inference_host":
+        if host_report_refusal is None:
+            raise error
+        raise DeviceRefusedError(host_report_refusal) from error
+    if constraint_name == "fk_device_pending_command_host_id_device_inference_host":
+        if pending_command_refusal is None:
+            raise error
+        raise DeviceRefusedError(pending_command_refusal) from error
     if constraint_name == _HOST_FOREIGN_KEY:
         if foreign_key_to_host is None:
             raise error

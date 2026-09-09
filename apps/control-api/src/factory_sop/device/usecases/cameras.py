@@ -7,7 +7,7 @@ from datetime import datetime
 from uuid import UUID
 
 from factory_sop.auth.api import Caller, Permission, authorize
-from factory_sop.device.errors import DeviceRefusalCode
+from factory_sop.device.errors import DeviceRefusalCode, DeviceRefusedError
 from factory_sop.device.model import Camera, DeviceStatus, InferenceBackend, InferenceHost, Station
 from factory_sop.device.repository import (
     CameraRepository,
@@ -52,6 +52,8 @@ def create_camera(
         backends=backends,
         cameras=cameras,
         connectors=connectors,
+        actor_id=caller.user.id,
+        now=now,
     )
     camera = Camera(
         id=new_id(),
@@ -101,31 +103,23 @@ def edit_camera(
     cameras: CameraRepository,
     connectors: ConnectorRepository,
 ) -> Camera:
-    """替换相机配置；只有新绑定才要求父级处于活动状态。"""
+    """替换相机配置，并始终重新验证其工位/推理机/后端拓扑。"""
     authorize(caller, Permission.CAMERA_EDIT)
     camera = _existing_camera(camera_id, cameras)
     _require_revision(camera, expected_revision)
-    binding_changed = (station_id, host_id, backend_id) != (
-        camera.station_id,
-        camera.host_id,
-        camera.backend_id,
+    station, host, backend = _validate_binding(
+        station_id=station_id,
+        host_id=host_id,
+        backend_id=backend_id,
+        stations=stations,
+        hosts=hosts,
+        backends=backends,
+        cameras=cameras,
+        connectors=connectors,
+        excluding_camera=camera.id,
+        actor_id=caller.user.id,
+        now=now,
     )
-    if binding_changed:
-        station, host, backend = _validate_binding(
-            station_id=station_id,
-            host_id=host_id,
-            backend_id=backend_id,
-            stations=stations,
-            hosts=hosts,
-            backends=backends,
-            cameras=cameras,
-            connectors=connectors,
-            excluding_camera=camera.id,
-        )
-    else:
-        station = _existing_station(station_id, stations)
-        host = _existing_host(host_id, hosts)
-        backend = _existing_backend(backend_id, backends)
     edited = replace(
         camera,
         name=name,
@@ -151,11 +145,19 @@ def set_camera_status(
     expected_revision: int,
     caller: Caller,
     now: datetime,
+    stations: StationRepository,
+    hosts: InferenceHostRepository,
+    backends: InferenceBackendRepository,
     cameras: CameraRepository,
+    connectors: ConnectorRepository,
 ) -> Camera:
     """通过统一的授权用例接口应用可逆的相机状态。"""
     authorize(caller, Permission.CAMERA_EDIT)
     camera = _existing_camera(camera_id, cameras)
+    locked_camera = cameras.lock_topology(camera_id)
+    if locked_camera is None:
+        raise DeviceRefusedError(DeviceRefusalCode.CAMERA_NOT_FOUND)
+    camera = locked_camera
     _require_revision(camera, expected_revision)
     if camera.status is requested_status:
         return camera
@@ -163,6 +165,19 @@ def set_camera_status(
         case DeviceStatus.DEACTIVATED:
             event = "device.camera.deactivated"
         case DeviceStatus.ACTIVE:
+            _validate_binding(
+                station_id=camera.station_id,
+                host_id=camera.host_id,
+                backend_id=camera.backend_id,
+                stations=stations,
+                hosts=hosts,
+                backends=backends,
+                cameras=cameras,
+                connectors=connectors,
+                excluding_camera=camera.id,
+                actor_id=caller.user.id,
+                now=now,
+            )
             event = "device.camera.restored"
     return set_status(
         camera,
@@ -181,6 +196,10 @@ def delete_camera(
     """直接删除一个相机；停用是可逆的替代操作。"""
     authorize(caller, Permission.CAMERA_DELETE)
     camera = _existing_camera(camera_id, cameras)
+    locked_camera = cameras.lock_topology(camera_id)
+    if locked_camera is None:
+        raise DeviceRefusedError(DeviceRefusalCode.CAMERA_NOT_FOUND)
+    camera = locked_camera
     _require_revision(camera, expected_revision)
     if not cameras.remove(camera_id, expected_revision=expected_revision):
         refuse(
@@ -217,6 +236,8 @@ def _validate_binding(
     cameras: CameraRepository,
     connectors: ConnectorRepository,
     excluding_camera: UUID | None = None,
+    actor_id: UUID | None = None,
+    now: datetime | None = None,
 ) -> tuple[Station, InferenceHost, InferenceBackend]:
     station = _existing_station(station_id, stations)
     host = _existing_host(host_id, hosts)
@@ -246,6 +267,7 @@ def _validate_binding(
                 station_id=str(station_id),
                 host_id=str(host_id),
             )
+    existing_templates: set[UUID | None] = set()
     for existing in cameras.for_station(station_id):
         if existing.id == excluding_camera:
             continue
@@ -257,9 +279,30 @@ def _validate_binding(
                 host_id=str(host_id),
             )
         existing_backend = backends.by_id(existing.backend_id)
-        if existing_backend is not None and (
-            existing_backend.template_version_id != backend.template_version_id
-        ):
+        if existing_backend is not None:
+            existing_templates.add(existing_backend.template_version_id)
+    if len(existing_templates) > 1:
+        refuse(
+            _REFUSAL_EVENT,
+            DeviceRefusalCode.CAMERA_STATION_TEMPLATE_CONFLICT,
+            station_id=str(station_id),
+            backend_id=str(backend_id),
+        )
+    existing_template = next(iter(existing_templates), None)
+    if existing_templates and backend.template_version_id != existing_template:
+        if backend.template_version_id is None and existing_template is not None:
+            # 空闲后端接入已绑定工位时继承其单一模板槽位；这不是连接测试，也不访问后端。
+            if actor_id is None or now is None:
+                raise ValueError("camera template inheritance requires actor and timestamp")
+            assigned = backends.assign_template_version(
+                backend_ids=(backend.id,),
+                template_version_id=existing_template,
+                actor_id=actor_id,
+                now=now,
+                expected_revisions={backend.id: backend.revision},
+            )
+            backend = assigned[0]
+        else:
             refuse(
                 _REFUSAL_EVENT,
                 DeviceRefusalCode.CAMERA_STATION_TEMPLATE_CONFLICT,

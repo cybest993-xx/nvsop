@@ -17,6 +17,12 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from factory_sop.auth.api import Authorized, Permission, needs
 from factory_sop.device.adapters import route_support
 from factory_sop.device.adapters.dependencies import connectors, hosts, pending_commands
+from factory_sop.device.api import (
+    INFERENCE_HOST_ID_HEADER,
+    INFERENCE_HOST_NONCE_HEADER,
+    INFERENCE_HOST_SIGNATURE_HEADER,
+    INFERENCE_HOST_TIMESTAMP_HEADER,
+)
 from factory_sop.device.errors import DeviceRefusalCode
 from factory_sop.device.model import (
     ConnectorReachability,
@@ -68,12 +74,8 @@ _EDGE_RESPONSES: ProblemResponses = {
 
 # 领取租约只覆盖一次有限的真实设备请求; 过期后由 PostgreSQL 适配器回收为 pending。
 COMMAND_LEASE_DURATION = timedelta(minutes=5)
-INFERENCE_HOST_ID_HEADER = "X-Inference-Host-ID"
 # 旧 bearer 头仅保留为可选兼容输入，不参与认证，也不写入中心。
 INFERENCE_HOST_TOKEN_HEADER = "X-Inference-Host-Token"
-INFERENCE_HOST_TIMESTAMP_HEADER = "X-Inference-Host-Timestamp"
-INFERENCE_HOST_NONCE_HEADER = "X-Inference-Host-Nonce"
-INFERENCE_HOST_SIGNATURE_HEADER = "X-Inference-Host-Signature"
 COMMAND_CLAIM_TOKEN_HEADER = "X-Command-Claim-Token"
 
 

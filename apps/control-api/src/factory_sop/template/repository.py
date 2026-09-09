@@ -8,9 +8,11 @@ from uuid import UUID
 from factory_sop.template.model import (
     SopTemplate,
     TemplateArtifactName,
+    TemplateConfigurationReport,
     TemplateDraft,
     TemplateDraftDocument,
     TemplateImport,
+    TemplateStationBinding,
     TemplateVersion,
     TemplateVersionArtifact,
     TemplateVersionWriteResult,
@@ -91,10 +93,55 @@ class TemplateVersionRepository(Protocol):
         ...
 
 
+class TemplateBindingRepository(Protocol):
+    """模板期望绑定和现场配置确认用例所跨的最小 seam。"""
+
+    def template_by_id(self, template_id: UUID) -> SopTemplate | None:
+        """按公开 UUID 返回模板身份，供版本与工位归属校验使用。"""
+        ...
+
+    def version_by_id(self, version_id: UUID) -> TemplateVersion | None:
+        """按公开 UUID 返回不可变模板版本，供绑定和上报校验使用。"""
+        ...
+
+    def binding_by_station(self, station_id: UUID) -> TemplateStationBinding | None:
+        """按工位读取唯一的期望模板绑定。"""
+        ...
+
+    def save_binding(
+        self,
+        binding: TemplateStationBinding,
+        *,
+        expected_revision: int | None = None,
+    ) -> None:
+        """首次插入或按绑定 revision 条件更新；不提交事务。"""
+        ...
+
+    def report_by_backend(
+        self, station_id: UUID, backend_id: UUID
+    ) -> TemplateConfigurationReport | None:
+        """按工位和推理后端读取最近配置确认。"""
+        ...
+
+    def reports_for_station(self, station_id: UUID) -> list[TemplateConfigurationReport]:
+        """返回工位下所有推理后端的最近配置确认。"""
+        ...
+
+    def save_report(
+        self,
+        report: TemplateConfigurationReport,
+        *,
+        expected: TemplateConfigurationReport | None = None,
+    ) -> None:
+        """按读取快照条件写入确认；竞争时拒绝覆盖，不提交事务。"""
+        ...
+
+
 class TemplateRepository(
     TemplateDraftRepository,
     TemplateVersionPublishRepository,
     TemplateVersionRepository,
+    TemplateBindingRepository,
     Protocol,
 ):
-    """`template_sop`、`template_draft` 和 `template_version` 的组合仓储。"""
+    """`template_*` 的组合仓储；所有写入都留给请求级事务提交。"""

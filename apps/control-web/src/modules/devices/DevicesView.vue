@@ -37,6 +37,7 @@ import {
 } from './devicesPresentation'
 import ConnectionTestControl from './ConnectionTestControl.vue'
 import PointManagement from './PointManagement.vue'
+import StationTemplateConfiguration from './StationTemplateConfiguration.vue'
 
 interface ConnectorDraft {
   name: string
@@ -623,6 +624,7 @@ onMounted(load)
       </dl>
     </ElDialog>
 
+    <StationTemplateConfiguration :stations="stations" />
     <PointManagement :connectors="connectors" :stations="stations" @changed="load" />
   </section>
 </template>

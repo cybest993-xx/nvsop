@@ -331,6 +331,43 @@ class FakeInferenceBackends:
     def by_id(self, backend_id: UUID) -> InferenceBackend | None:
         return self.rows.get(backend_id)
 
+    def lock_template_binding_topology(self, backend_ids: tuple[UUID, ...]) -> None:
+        del backend_ids
+
+    def assign_template_version(
+        self,
+        *,
+        backend_ids: tuple[UUID, ...],
+        template_version_id: UUID,
+        actor_id: UUID,
+        now: datetime,
+        expected_revisions: dict[UUID, int],
+    ) -> tuple[InferenceBackend, ...]:
+        if set(backend_ids) != set(expected_revisions):
+            raise ValueError("backend revisions must cover participating backends")
+        current: list[InferenceBackend] = []
+        for backend_id in backend_ids:
+            backend = self.rows.get(backend_id)
+            if backend is None:
+                raise DeviceRefusedError(DeviceRefusalCode.INFERENCE_BACKEND_NOT_FOUND)
+            expected = expected_revisions[backend_id]
+            if backend.revision != expected:
+                raise DeviceRefusedError(DeviceRefusalCode.STALE_REVISION)
+            current.append(backend)
+        updated = tuple(
+            replace(
+                backend,
+                template_version_id=template_version_id,
+                revision=expected_revisions[backend.id] + 1,
+                updated_by=actor_id,
+                updated_at=now,
+            )
+            for backend in current
+        )
+        for backend in updated:
+            self.rows[backend.id] = backend
+        return updated
+
     def remove(self, backend_id: UUID, *, expected_revision: int) -> bool:
         stored = self.rows.get(backend_id)
         if stored is None:
@@ -480,6 +517,9 @@ class FakeCameras:
     def by_id(self, camera_id: UUID) -> Camera | None:
         return self.rows.get(camera_id)
 
+    def lock_topology(self, camera_id: UUID) -> Camera | None:
+        return self.rows.get(camera_id)
+
     def remove(self, camera_id: UUID, *, expected_revision: int) -> bool:
         stored = self.rows.get(camera_id)
         if stored is None:
@@ -494,6 +534,12 @@ class FakeCameras:
 
     def for_station(self, station_id: UUID) -> list[Camera]:
         return [camera for camera in self.rows.values() if camera.station_id == station_id]
+
+    def any_for_backend_outside_station(self, backend_id: UUID, station_id: UUID) -> bool:
+        return any(
+            camera.backend_id == backend_id and camera.station_id != station_id
+            for camera in self.rows.values()
+        )
 
     def page_of(
         self, *, page: int, page_size: int, station_id: UUID | None
@@ -655,6 +701,9 @@ class FakePoints:
 
     def by_id(self, point_id: UUID) -> Point | None:
         return self.rows.get(point_id)
+
+    def for_station(self, station_id: UUID) -> list[Point]:
+        return [point for point in self.rows.values() if point.station_id == station_id]
 
     def remove(self, point_id: UUID, *, expected_revision: int) -> bool:
         stored = self.rows.get(point_id)

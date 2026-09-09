@@ -400,10 +400,35 @@ def test_the_deactivation_lifecycle_of_a_backend_is_reversible_and_idempotent() 
         expected_revision=deactivated.revision,
         caller=CALLER,
         now=EVEN_LATER,
+        hosts=hosts,
         backends=backends,
     )
     assert restored.status is DeviceStatus.ACTIVE
     assert backends.rows[backend.id].revision == 3
+
+
+def test_restoring_a_backend_refuses_when_its_host_is_deactivated() -> None:
+    hosts = FakeInferenceHosts()
+    backends = FakeInferenceBackends()
+    host = hosts.register(name="装配A线-推理机1", status=DeviceStatus.DEACTIVATED)
+    backend = backends.register(
+        host_id=host.id,
+        base_url="http://10.0.8.11:8000",
+        status=DeviceStatus.DEACTIVATED,
+    )
+
+    with pytest.raises(DeviceRefusedError) as refused:
+        restore_backend(
+            backend_id=backend.id,
+            expected_revision=backend.revision,
+            caller=CALLER,
+            now=LATER,
+            hosts=hosts,
+            backends=backends,
+        )
+
+    assert refused.value.code is DeviceRefusalCode.INFERENCE_HOST_DEACTIVATED
+    assert backends.rows[backend.id] == backend
 
 
 def test_deleting_a_backend_removes_it_and_a_missing_one_is_refused() -> None:

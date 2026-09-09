@@ -21,6 +21,7 @@ class DeviceRefusalCode(StrEnum):
     INFERENCE_HOST_AUTHENTICATION_FAILED = "INFERENCE_HOST_AUTHENTICATION_FAILED"
     INFERENCE_HOST_CREDENTIALS_REMOVED = "INFERENCE_HOST_CREDENTIALS_REMOVED"
     INFERENCE_HOST_HAS_BACKENDS = "INFERENCE_HOST_HAS_BACKENDS"
+    INFERENCE_HOST_HAS_PENDING_COMMANDS = "INFERENCE_HOST_HAS_PENDING_COMMANDS"
     INFERENCE_BACKEND_NOT_FOUND = "INFERENCE_BACKEND_NOT_FOUND"
     INFERENCE_BACKEND_DEACTIVATED = "INFERENCE_BACKEND_DEACTIVATED"
     INFERENCE_BACKEND_ENDPOINT_TAKEN = "INFERENCE_BACKEND_ENDPOINT_TAKEN"
@@ -47,6 +48,11 @@ class DeviceRefusalCode(StrEnum):
     CONNECTOR_CONFIGURATION_SECRET = "CONNECTOR_CONFIGURATION_SECRET"  # pragma: allowlist secret
     STATION_HAS_CONNECTORS = "STATION_HAS_CONNECTORS"
     INFERENCE_HOST_HAS_CONNECTORS = "INFERENCE_HOST_HAS_CONNECTORS"
+    INFERENCE_HOST_HAS_CONFIGURATION_REPORT = "INFERENCE_HOST_HAS_CONFIGURATION_REPORT"
+    INFERENCE_BACKEND_HAS_CONFIGURATION_REPORT = "INFERENCE_BACKEND_HAS_CONFIGURATION_REPORT"
+    STATION_HAS_TEMPLATES = "STATION_HAS_TEMPLATES"
+    STATION_HAS_TEMPLATE_BINDING = "STATION_HAS_TEMPLATE_BINDING"
+    STATION_HAS_CONFIGURATION_REPORT = "STATION_HAS_CONFIGURATION_REPORT"
     STALE_REVISION = "STALE_REVISION"
     COMMAND_NOT_FOUND = "COMMAND_NOT_FOUND"
     COMMAND_HOST_MISMATCH = "COMMAND_HOST_MISMATCH"
@@ -58,6 +64,8 @@ class DeviceRefusalCode(StrEnum):
     COMMAND_CONFIGURATION_CHANGED = "COMMAND_CONFIGURATION_CHANGED"
     COMMAND_TARGET_NOT_FOUND = "COMMAND_TARGET_NOT_FOUND"
     COMMAND_TARGET_DEACTIVATED = "COMMAND_TARGET_DEACTIVATED"
+    STATION_RUNTIME_PARAMETERS_INVALID = "STATION_RUNTIME_PARAMETERS_INVALID"
+    TEMPLATE_BINDING_INVALID = "TEMPLATE_BINDING_INVALID"
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +102,9 @@ _DEFAULT_FIELD_ERRORS: dict[DeviceRefusalCode, tuple[DeviceFieldError, ...]] = {
     DeviceRefusalCode.POINT_CONNECTOR_STATION_MISMATCH: (
         DeviceFieldError("connector_id", "连接器必须属于所选工位"),
     ),
+    DeviceRefusalCode.STATION_RUNTIME_PARAMETERS_INVALID: (
+        DeviceFieldError("runtime_parameters", "必须完整提供三项有限正数和非空处置策略"),
+    ),
 }
 
 
@@ -128,6 +139,8 @@ def refusal_problem(code: DeviceRefusalCode) -> tuple[int, str]:
             return 410, "推理机 bearer 凭据接口已停用"
         case DeviceRefusalCode.INFERENCE_HOST_HAS_BACKENDS:
             return 409, "该推理机仍承载推理后端，请先删除它们"
+        case DeviceRefusalCode.INFERENCE_HOST_HAS_PENDING_COMMANDS:
+            return 409, "该推理机仍有待处理设备命令"
         case DeviceRefusalCode.INFERENCE_BACKEND_NOT_FOUND:
             return 404, "推理后端不存在"
         case DeviceRefusalCode.INFERENCE_BACKEND_DEACTIVATED:
@@ -178,6 +191,16 @@ def refusal_problem(code: DeviceRefusalCode) -> tuple[int, str]:
             return 409, "该工位仍有关联连接器"
         case DeviceRefusalCode.INFERENCE_HOST_HAS_CONNECTORS:
             return 409, "该推理机仍承载连接器"
+        case DeviceRefusalCode.INFERENCE_HOST_HAS_CONFIGURATION_REPORT:
+            return 409, "该推理机仍有模板配置报告"
+        case DeviceRefusalCode.INFERENCE_BACKEND_HAS_CONFIGURATION_REPORT:
+            return 409, "该推理后端仍有模板配置报告"
+        case DeviceRefusalCode.STATION_HAS_TEMPLATES:
+            return 409, "该工位仍有模板记录"
+        case DeviceRefusalCode.STATION_HAS_TEMPLATE_BINDING:
+            return 409, "该工位仍有模板绑定"
+        case DeviceRefusalCode.STATION_HAS_CONFIGURATION_REPORT:
+            return 409, "该工位仍有模板配置报告"
         case DeviceRefusalCode.STALE_REVISION:
             return 409, "内容已被他人修改，请刷新后重试"
         case DeviceRefusalCode.COMMAND_NOT_FOUND:
@@ -200,5 +223,9 @@ def refusal_problem(code: DeviceRefusalCode) -> tuple[int, str]:
             return 404, "委托命令目标不存在"
         case DeviceRefusalCode.COMMAND_TARGET_DEACTIVATED:
             return 409, "委托命令目标已停用"
+        case DeviceRefusalCode.STATION_RUNTIME_PARAMETERS_INVALID:
+            return 422, "工位运行参数必须是完整且有效的一组"
+        case DeviceRefusalCode.TEMPLATE_BINDING_INVALID:
+            return 422, "模板绑定的设备拓扑或边界不符合要求"
         case _:
             assert_never(code)

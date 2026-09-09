@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from uuid import UUID
 
 import pytest
@@ -182,7 +183,11 @@ def test_camera_use_cases_authorize_each_public_operation() -> None:
             expected_revision=camera.revision,
             caller=caller_holding(Permission.CAMERA_VIEW),
             now=FAKE_NOW,
+            stations=stations,
+            hosts=hosts,
+            backends=backends,
             cameras=cameras,
+            connectors=FakeConnectors(),
         )
 
 
@@ -288,7 +293,11 @@ def test_camera_deactivation_preserves_association_and_delete_is_separate() -> N
         expected_revision=camera.revision,
         caller=caller,
         now=FAKE_NOW,
+        stations=stations,
+        hosts=hosts,
+        backends=backends,
         cameras=cameras,
+        connectors=_connectors,
     )
     assert deactivated.status is DeviceStatus.DEACTIVATED
     assert camera_by_identifier(camera_id=camera.id, caller=caller, cameras=cameras) == deactivated
@@ -298,7 +307,11 @@ def test_camera_deactivation_preserves_association_and_delete_is_separate() -> N
         expected_revision=deactivated.revision,
         caller=caller,
         now=FAKE_NOW,
+        stations=stations,
+        hosts=hosts,
+        backends=backends,
         cameras=cameras,
+        connectors=_connectors,
     )
     assert restored.status is DeviceStatus.ACTIVE
     delete_camera(
@@ -337,4 +350,110 @@ def test_edit_camera_refuses_stale_revision_before_changing_streams() -> None:
             connectors=connectors,
         )
     assert refused.value.code is DeviceRefusalCode.STALE_REVISION
+    assert cameras.by_id(camera.id) == camera
+
+
+def test_restoring_a_camera_revalidates_a_deactivated_station() -> None:
+    stations, hosts, backends, cameras, connectors = _topology()
+    station = stations.register(code="A-001", name="装配一号工位", status=DeviceStatus.DEACTIVATED)
+    host = hosts.register(name="推理机-1")
+    backend = backends.register(host_id=host.id, base_url="http://10.0.8.11:8000")
+    camera = cameras.register(
+        station_id=station.id,
+        host_id=host.id,
+        backend_id=backend.id,
+        status=DeviceStatus.DEACTIVATED,
+    )
+
+    with pytest.raises(DeviceRefusedError) as refused:
+        set_camera_status(
+            camera_id=camera.id,
+            requested_status=DeviceStatus.ACTIVE,
+            expected_revision=camera.revision,
+            caller=caller_holding(Permission.CAMERA_EDIT),
+            now=FAKE_NOW,
+            stations=stations,
+            hosts=hosts,
+            backends=backends,
+            cameras=cameras,
+            connectors=connectors,
+        )
+
+    assert refused.value.code is DeviceRefusalCode.STATION_DEACTIVATED
+    assert cameras.by_id(camera.id) == camera
+
+
+def test_restoring_a_camera_revalidates_a_deactivated_host_and_backend() -> None:
+    stations, hosts, backends, cameras, connectors = _topology()
+    station = stations.register(code="A-001", name="装配一号工位")
+    host = hosts.register(name="推理机-1", status=DeviceStatus.DEACTIVATED)
+    backend = backends.register(host_id=host.id, base_url="http://10.0.8.11:8000")
+    camera = cameras.register(
+        station_id=station.id,
+        host_id=host.id,
+        backend_id=backend.id,
+        status=DeviceStatus.DEACTIVATED,
+    )
+
+    with pytest.raises(DeviceRefusedError) as host_refused:
+        set_camera_status(
+            camera_id=camera.id,
+            requested_status=DeviceStatus.ACTIVE,
+            expected_revision=camera.revision,
+            caller=caller_holding(Permission.CAMERA_EDIT),
+            now=FAKE_NOW,
+            stations=stations,
+            hosts=hosts,
+            backends=backends,
+            cameras=cameras,
+            connectors=connectors,
+        )
+    assert host_refused.value.code is DeviceRefusalCode.INFERENCE_HOST_DEACTIVATED
+
+    hosts.rows[host.id] = replace(host, status=DeviceStatus.ACTIVE)
+    backends.rows[backend.id] = replace(backend, status=DeviceStatus.DEACTIVATED)
+    with pytest.raises(DeviceRefusedError) as backend_refused:
+        set_camera_status(
+            camera_id=camera.id,
+            requested_status=DeviceStatus.ACTIVE,
+            expected_revision=camera.revision,
+            caller=caller_holding(Permission.CAMERA_EDIT),
+            now=FAKE_NOW,
+            stations=stations,
+            hosts=hosts,
+            backends=backends,
+            cameras=cameras,
+            connectors=connectors,
+        )
+    assert backend_refused.value.code is DeviceRefusalCode.INFERENCE_BACKEND_DEACTIVATED
+
+
+def test_editing_a_camera_without_changing_binding_still_revalidates_parents() -> None:
+    stations, hosts, backends, cameras, connectors = _topology()
+    station = stations.register(code="A-001", name="装配一号工位", status=DeviceStatus.DEACTIVATED)
+    host = hosts.register(name="推理机-1")
+    backend = backends.register(host_id=host.id, base_url="http://10.0.8.11:8000")
+    camera = cameras.register(station_id=station.id, host_id=host.id, backend_id=backend.id)
+
+    with pytest.raises(DeviceRefusedError) as refused:
+        edit_camera(
+            camera_id=camera.id,
+            name=camera.name,
+            address=camera.address,
+            main_stream_path=camera.main_stream_path,
+            sub_stream_path="/Streaming/Channels/202",
+            station_id=station.id,
+            host_id=host.id,
+            backend_id=backend.id,
+            expected_revision=camera.revision,
+            caller=caller_holding(Permission.CAMERA_EDIT),
+            now=FAKE_NOW,
+            stations=stations,
+            hosts=hosts,
+            backends=backends,
+            cameras=cameras,
+            connectors=connectors,
+        )
+
+    assert refused.value.code is DeviceRefusalCode.STATION_DEACTIVATED
     assert cameras.by_id(camera.id) == camera

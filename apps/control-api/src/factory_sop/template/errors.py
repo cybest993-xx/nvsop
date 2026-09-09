@@ -42,6 +42,13 @@ class TemplateRefusalCode(StrEnum):
     VERSION_NOT_FOUND = "TEMPLATE_VERSION_NOT_FOUND"
     VERSION_INVALID = "TEMPLATE_VERSION_INVALID"
     VERSION_ARTIFACT_NOT_FOUND = "TEMPLATE_VERSION_ARTIFACT_NOT_FOUND"
+    VERSION_STATION_MISMATCH = "TEMPLATE_VERSION_STATION_MISMATCH"
+    BINDING_INVALID = "TEMPLATE_BINDING_INVALID"
+    BINDING_NOT_FOUND = "TEMPLATE_BINDING_NOT_FOUND"
+    BINDING_STATION_TAKEN = "TEMPLATE_BINDING_STATION_TAKEN"
+    REPORT_HOST_NOT_ALLOWED = "TEMPLATE_REPORT_HOST_NOT_ALLOWED"
+    REPORT_STATION_UNBOUND = "TEMPLATE_REPORT_STATION_UNBOUND"
+    REPORT_CONFLICT = "TEMPLATE_REPORT_CONFLICT"
     STALE_REVISION = "STALE_REVISION"
 
 
@@ -76,6 +83,20 @@ def refusal_problem(code: TemplateRefusalCode) -> tuple[int, str]:
             return 422, "模板版本发布校验失败"
         case TemplateRefusalCode.VERSION_ARTIFACT_NOT_FOUND:
             return 404, "模板版本制品不存在"
+        case TemplateRefusalCode.VERSION_STATION_MISMATCH:
+            return 409, "模板版本不属于目标工位"
+        case TemplateRefusalCode.BINDING_INVALID:
+            return 422, "模板绑定前置条件不满足"
+        case TemplateRefusalCode.BINDING_NOT_FOUND:
+            return 404, "模板工位绑定不存在"
+        case TemplateRefusalCode.BINDING_STATION_TAKEN:
+            return 409, "该工位已有模板绑定"
+        case TemplateRefusalCode.REPORT_HOST_NOT_ALLOWED:
+            return 403, "推理机不拥有该工位后端"
+        case TemplateRefusalCode.REPORT_STATION_UNBOUND:
+            return 409, "工位尚未绑定模板版本"
+        case TemplateRefusalCode.REPORT_CONFLICT:
+            return 409, "配置确认与较新的现场事实冲突"
         case TemplateRefusalCode.STALE_REVISION:
             return 409, "模板草稿已被他人修改，请刷新后重试"
         case _:

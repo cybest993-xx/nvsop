@@ -17,6 +17,7 @@ from factory_sop.device.adapters.repository import (
     PostgresPointRepository,
     PostgresStationRepository,
 )
+from factory_sop.device.api import DeviceHostGateway, DeviceTemplateBindingGateway
 from factory_sop.device.probing import ConnectionProbe
 from factory_sop.device.repository import (
     CameraRepository,
@@ -27,6 +28,7 @@ from factory_sop.device.repository import (
     PointRepository,
     StationRepository,
 )
+from factory_sop.device.usecases.template_binding import RepositoryDeviceTemplateBindingGateway
 from factory_sop.persistence import RequestSession
 
 
@@ -80,3 +82,27 @@ def pending_commands(
 ) -> PendingCommandRepository:
     """`device_pending_command` on the request's transaction."""
     return PostgresPendingCommandRepository(session)
+
+
+def template_binding(session: RequestSession) -> DeviceTemplateBindingGateway:
+    """模板模块使用的设备拓扑与工位运行参数 seam。"""
+    return RepositoryDeviceTemplateBindingGateway(
+        stations=PostgresStationRepository(session),
+        hosts=PostgresInferenceHostRepository(session),
+        backends=PostgresInferenceBackendRepository(session),
+        cameras=PostgresCameraRepository(session),
+        connectors=PostgresConnectorRepository(session),
+        points=PostgresPointRepository(session),
+    )
+
+
+def host_gateway(session: RequestSession) -> DeviceHostGateway:
+    """模板上报使用的主机认证与归属 seam。"""
+    return RepositoryDeviceTemplateBindingGateway(
+        stations=PostgresStationRepository(session),
+        hosts=PostgresInferenceHostRepository(session),
+        backends=PostgresInferenceBackendRepository(session),
+        cameras=PostgresCameraRepository(session),
+        connectors=PostgresConnectorRepository(session),
+        points=PostgresPointRepository(session),
+    )

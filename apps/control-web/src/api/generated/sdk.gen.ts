@@ -3,6 +3,9 @@
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client'
 import { client } from './client.gen'
 import type {
+  BindTemplateVersionData,
+  BindTemplateVersionErrors,
+  BindTemplateVersionResponses,
   ClaimNextDeviceCommandData,
   ClaimNextDeviceCommandErrors,
   ClaimNextDeviceCommandResponses,
@@ -168,6 +171,9 @@ import type {
   ReadStationData,
   ReadStationErrors,
   ReadStationResponses,
+  ReadStationTemplateConfigurationData,
+  ReadStationTemplateConfigurationErrors,
+  ReadStationTemplateConfigurationResponses,
   ReadTemplateDraftData,
   ReadTemplateDraftErrors,
   ReadTemplateDraftResponses,
@@ -180,6 +186,9 @@ import type {
   RegisterInferenceHostIdentityKeyData,
   RegisterInferenceHostIdentityKeyErrors,
   RegisterInferenceHostIdentityKeyResponses,
+  ReportTemplateConfigurationData,
+  ReportTemplateConfigurationErrors,
+  ReportTemplateConfigurationResponses,
   ResetUserPasswordData,
   ResetUserPasswordErrors,
   ResetUserPasswordResponses,
@@ -216,9 +225,15 @@ import type {
   UpdateConnectorCapabilityData,
   UpdateConnectorCapabilityErrors,
   UpdateConnectorCapabilityResponses,
+  UpdateStationRuntimeParametersData,
+  UpdateStationRuntimeParametersErrors,
+  UpdateStationRuntimeParametersResponses,
   ValidatePointBindingData,
   ValidatePointBindingErrors,
   ValidatePointBindingResponses,
+  ValidateTemplateBindingData,
+  ValidateTemplateBindingErrors,
+  ValidateTemplateBindingResponses,
 } from './types.gen'
 
 export type Options<
@@ -1224,6 +1239,67 @@ export const setStationStatus = <ThrowOnError extends boolean = false>(
   })
 
 /**
+ * Bind A Template Version
+ */
+export const bindTemplateVersion = <ThrowOnError extends boolean = false>(
+  options: Options<BindTemplateVersionData, ThrowOnError>,
+): RequestResult<BindTemplateVersionResponses, BindTemplateVersionErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    BindTemplateVersionResponses,
+    BindTemplateVersionErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/templates/bindings',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Validate A Template Binding
+ */
+export const validateTemplateBinding = <ThrowOnError extends boolean = false>(
+  options: Options<ValidateTemplateBindingData, ThrowOnError>,
+): RequestResult<ValidateTemplateBindingResponses, ValidateTemplateBindingErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    ValidateTemplateBindingResponses,
+    ValidateTemplateBindingErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/templates/bindings/validate',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Report A Template Configuration
+ */
+export const reportTemplateConfiguration = <ThrowOnError extends boolean = false>(
+  options: Options<ReportTemplateConfigurationData, ThrowOnError>,
+): RequestResult<
+  ReportTemplateConfigurationResponses,
+  ReportTemplateConfigurationErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    ReportTemplateConfigurationResponses,
+    ReportTemplateConfigurationErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/templates/configuration-reports',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
  * List The Template Drafts
  */
 export const listTemplateDrafts = <ThrowOnError extends boolean = false>(
@@ -1337,6 +1413,45 @@ export const downloadTemplateImport = <ThrowOnError extends boolean = false>(
     DownloadTemplateImportErrors,
     ThrowOnError
   >({ url: '/api/v1/templates/imports/{import_id}/document', ...options })
+
+/**
+ * Read A Station Template Configuration
+ */
+export const readStationTemplateConfiguration = <ThrowOnError extends boolean = false>(
+  options: Options<ReadStationTemplateConfigurationData, ThrowOnError>,
+): RequestResult<
+  ReadStationTemplateConfigurationResponses,
+  ReadStationTemplateConfigurationErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).get<
+    ReadStationTemplateConfigurationResponses,
+    ReadStationTemplateConfigurationErrors,
+    ThrowOnError
+  >({ url: '/api/v1/templates/stations/{station_id}/configuration', ...options })
+
+/**
+ * Update A Station Runtime Parameters
+ */
+export const updateStationRuntimeParameters = <ThrowOnError extends boolean = false>(
+  options: Options<UpdateStationRuntimeParametersData, ThrowOnError>,
+): RequestResult<
+  UpdateStationRuntimeParametersResponses,
+  UpdateStationRuntimeParametersErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).put<
+    UpdateStationRuntimeParametersResponses,
+    UpdateStationRuntimeParametersErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/templates/stations/{station_id}/runtime-parameters',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
 
 /**
  * List The Template Versions

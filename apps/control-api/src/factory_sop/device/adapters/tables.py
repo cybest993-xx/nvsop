@@ -9,11 +9,10 @@ them, for the same reason `auth`'s are: the domain types are frozen dataclasses 
 persistence machinery, which is what lets the use cases be tested without a database. The
 translation is in this file, in one place per table.
 
-There is no column for the template a backend carries yet: the `template` module and its
-tables do not exist (C5), and a nullable foreign key to a table nobody can create would be
-schema fiction. The binding arrives with template's own migration as a single-valued
-column — the shape that makes "one backend, one template configuration" impossible to
-violate at the database, which is what §5.10 asks for.
+A backend carries one nullable foreign key to `template_version`. The nullable value keeps
+legacy and not-yet-bound backends valid; the device-owned follow-up migration adds the FK only
+after the template module's immutable version table exists. A backend still has exactly one
+slot, so there is no second device-side template configuration.
 """
 
 from __future__ import annotations
@@ -50,7 +49,9 @@ from factory_sop.device.model import (
     PendingCommandType,
     Point,
     PointDirection,
+    RuntimeParameterMode,
     Station,
+    StationRuntimeParameters,
 )
 from factory_sop.persistence import Table
 from nvsop_contracts import capability_from_wire, capability_to_wire
@@ -62,6 +63,15 @@ def _status_enum(*, create_type: bool = True) -> Enum:
     return Enum(
         DeviceStatus,
         name="device_status",
+        create_type=create_type,
+        values_callable=lambda enum: [member.value for member in enum],
+    )
+
+
+def _runtime_mode_enum(*, create_type: bool = True) -> Enum:
+    return Enum(
+        RuntimeParameterMode,
+        name="device_runtime_parameter_mode",
         create_type=create_type,
         values_callable=lambda enum: [member.value for member in enum],
     )
@@ -156,6 +166,11 @@ class StationRow(Table):
     updated_by: Mapped[UUID] = mapped_column(Uuid())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    runtime_parameter_mode: Mapped[RuntimeParameterMode] = mapped_column(_runtime_mode_enum())
+    runtime_parameter_overrides: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB(), nullable=True
+    )
+    runtime_parameters_revision: Mapped[int] = mapped_column(Integer())
 
     def to_domain(self) -> Station:
         return Station(
@@ -169,6 +184,13 @@ class StationRow(Table):
             updated_by=self.updated_by,
             created_at=self.created_at,
             updated_at=self.updated_at,
+            runtime_parameter_mode=self.runtime_parameter_mode,
+            runtime_parameter_overrides=(
+                None
+                if self.runtime_parameter_overrides is None
+                else StationRuntimeParameters.from_wire(self.runtime_parameter_overrides)
+            ),
+            runtime_parameters_revision=self.runtime_parameters_revision,
         )
 
     @classmethod
@@ -184,6 +206,13 @@ class StationRow(Table):
             updated_by=station.updated_by,
             created_at=station.created_at,
             updated_at=station.updated_at,
+            runtime_parameter_mode=station.runtime_parameter_mode,
+            runtime_parameter_overrides=(
+                None
+                if station.runtime_parameter_overrides is None
+                else station.runtime_parameter_overrides.to_wire()
+            ),
+            runtime_parameters_revision=station.runtime_parameters_revision,
         )
 
 
@@ -203,10 +232,11 @@ class InferenceBackendRow(Table):
         Uuid(), ForeignKey("device_inference_host.id"), index=True
     )
     base_url: Mapped[str] = mapped_column(String(255))
-    # 端点携带的一套模板配置使用单值列，因此模式天然保证“一后端一套配置”。template_version 表属于
-    # C5，
-    # 当前尚未加入外键，后续迁移再补充。
-    template_version_id: Mapped[UUID | None] = mapped_column(Uuid())
+    # 端点携带的一套模板配置使用单值列，因此模式天然保证“一后端一套配置”。历史未绑定后端为 NULL，
+    # 非空值由 device-owned migration 外键约束到 immutable template_version。
+    template_version_id: Mapped[UUID | None] = mapped_column(
+        Uuid(), ForeignKey("template_version.id"), nullable=True
+    )
     status: Mapped[DeviceStatus] = mapped_column(_status_enum(create_type=False))
     connection_state: Mapped[ConnectionState] = mapped_column(
         Enum(

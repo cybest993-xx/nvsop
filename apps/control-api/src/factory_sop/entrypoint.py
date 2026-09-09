@@ -17,6 +17,7 @@ import sys
 from fastapi import FastAPI
 
 from factory_sop.app import create_app
+from factory_sop.job.adapters.dispatcher import ArqJobDispatcher
 from factory_sop.observability import configure_logging, get_logger
 from factory_sop.persistence import create_database_engine, session_factory
 from factory_sop.settings import Settings
@@ -34,5 +35,10 @@ def build() -> FastAPI:
     # `create_app` so the application can be built against a test's own engine, and so the
     # adapter tests that need no database do not open one (ADR-0002's Unit of Work draws its
     # session from this factory).
-    app.state.session_factory = session_factory(create_database_engine(settings))
+    factory = session_factory(create_database_engine(settings))
+    app.state.session_factory = factory
+    app.state.job_dispatcher = ArqJobDispatcher.from_settings(
+        settings,
+        session_factory=factory,
+    )
     return app

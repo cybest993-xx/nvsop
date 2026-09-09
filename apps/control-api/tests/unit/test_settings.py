@@ -88,6 +88,30 @@ def test_refuses_a_non_positive_session_timeout(tmp_path: Path) -> None:
         Settings.from_environment(environment(tmp_path, SOP_SESSION_IDLE_TIMEOUT_MINUTES="0"))
 
 
+def test_refuses_a_public_minio_endpoint_without_the_rest_of_minio_config(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ConfigurationError, match="must be configured together"):
+        Settings.from_environment(
+            environment(tmp_path, SOP_MINIO_PUBLIC_ENDPOINT="https://minio.example.test")
+        )
+
+
+def test_accepts_minio_config_without_a_public_endpoint(tmp_path: Path) -> None:
+    settings = Settings.from_environment(
+        environment(
+            tmp_path,
+            SOP_MINIO_ENDPOINT="http://minio.internal:9000",
+            SOP_MINIO_BUCKET="training",
+            SOP_MINIO_ACCESS_KEY_FILE=write_secret(tmp_path, "access", name="minio-access"),
+            SOP_MINIO_SECRET_KEY_FILE=write_secret(tmp_path, "secret", name="minio-secret"),
+        )
+    )
+
+    assert settings.minio_public_endpoint is None
+    assert settings.minio_bucket == "training"
+
+
 def test_refuses_any_cookie_transport_that_allows_plain_http(tmp_path: Path) -> None:
     # §六 has no development exception: every session cookie is Secure. Local development
     # must provide HTTPS rather than turning a production security attribute off.

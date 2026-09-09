@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import Field, SecretStr, ValidationError, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
@@ -61,14 +61,43 @@ class Settings(BaseSettings):
     # arrives as a file path like the database password.
     csrf_secret: SecretStr = Field(repr=False)
 
+    # 数据集基础设施对早于此模块的配置切片可选；一旦提供任一 MinIO 值，就必须完整配置
+    # 凭据和目标，部分配置的对象存储绝不能静默退回本地上传。
+    minio_endpoint: str | None = None
+    minio_public_endpoint: str | None = None
+    minio_bucket: str | None = None
+    minio_access_key: SecretStr | None = Field(default=None, repr=False)
+    minio_secret_key: SecretStr | None = Field(default=None, repr=False)
+    redis_url: SecretStr | None = Field(default=None, repr=False)
+    dataset_upload_ttl_seconds: int = Field(default=900, gt=0, le=86400)
+    dataset_max_upload_bytes: int = Field(default=8 * 1024**3, gt=0)
+    dataset_supported_codecs: str = "h264,h265"
+    media_probe_binary: str = "ffprobe"
+    media_probe_timeout_seconds: int = Field(default=60, gt=0, le=3600)
+
     @model_validator(mode="after")
-    def _absolute_lifetime_outlasts_the_idle_timeout(self) -> Settings:
+    def _validate_deployment_values(self) -> Settings:
         if self.session_absolute_lifetime_minutes < self.session_idle_timeout_minutes:
             raise ValueError(
                 "session_absolute_lifetime_minutes must not be shorter than the idle timeout; "
                 "the idle timeout would then be configured but never able to fire, and the "
                 "deployment would believe an unattended browser is closed when it is not"
             )
+        minio_values = (
+            self.minio_endpoint,
+            self.minio_bucket,
+            self.minio_access_key,
+            self.minio_secret_key,
+        )
+        if any(
+            value is not None for value in (*minio_values, self.minio_public_endpoint)
+        ) and not all(value is not None for value in minio_values):
+            raise ValueError(
+                "minio_endpoint, minio_bucket, minio_access_key and minio_secret_key "
+                "must be configured together"
+            )
+        if not self.dataset_supported_codecs.strip():
+            raise ValueError("dataset_supported_codecs must not be empty")
         return self
 
     @classmethod
@@ -96,7 +125,9 @@ class Settings(BaseSettings):
         Pass `os.environ` at the process entrypoint; pass a literal mapping in a test.
         """
         secret_fields = {
-            name for name, field in cls.model_fields.items() if field.annotation is SecretStr
+            name
+            for name, field in cls.model_fields.items()
+            if field.annotation is SecretStr or SecretStr in get_args(field.annotation)
         }
         accepted = {
             _variable_name(name) + (SECRET_FILE_SUFFIX if name in secret_fields else "")

@@ -22,7 +22,9 @@ from enum import StrEnum
 # §5.15's granularity, as a set so the shape can be asserted mechanically rather than by
 # reading the members. 发布 is folded into `edit` on purpose (Q18) — a fourth verb here would
 # be a decision to reread that, not a new member.
-ACTIONS = frozenset({"view", "edit", "delete"})
+# `dataset.dataset.import` 是控制面规格明确登记的唯一专门动作；其他未登记的 import
+# 仍然会被 `parse_permission` 拒绝。
+ACTIONS = frozenset({"view", "edit", "delete", "import"})
 
 
 class Permission(StrEnum):
@@ -79,6 +81,11 @@ class Permission(StrEnum):
     # 模板草稿的导入、读取和编辑；版本发布是后续独立的模板能力。
     TEMPLATE_DRAFT_VIEW = "template.draft.view"
     TEMPLATE_DRAFT_EDIT = "template.draft.edit"
+
+    # 训练数据集的读取与逐视频导入。导入是本票已明确登记的专门动作，不扩展为通用
+    # `edit`，其他未登记的 `*.import` 仍然无效。
+    DATASET_VIEW = "dataset.dataset.view"
+    DATASET_IMPORT = "dataset.dataset.import"
 
 
 class UnregisteredPermissionError(Exception):

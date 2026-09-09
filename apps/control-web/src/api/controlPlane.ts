@@ -1,10 +1,9 @@
 /**
- * Application-facing adapter over the generated OpenAPI SDK.
+ * 面向应用的生成 OpenAPI SDK 适配器。
  *
- * Endpoint paths, methods, request bodies, response bodies, and error shapes come from
- * `src/api/generated/`. This file contains only browser policy the OpenAPI document cannot:
- * same-origin cookies, the CSRF double-submit header, and the operator-facing unknown-error
- * fallback required by §5.15.
+ * 路径、方法、请求体、响应体和错误形状都来自 `src/api/generated/`。本文件只承载
+ * OpenAPI 文档无法表达的浏览器策略：同源 Cookie、CSRF 双提交请求头，以及 §5.15 要求的
+ * 面向操作员的未知错误降级。
  */
 
 import { client } from '@/api/generated/client.gen'
@@ -13,6 +12,7 @@ import {
   createConnector as generatedCreateConnector,
   createPoint as generatedCreatePoint,
   createRole as generatedCreateRole,
+  createTrainingDataset as generatedCreateTrainingDataset,
   createUser as generatedCreateUser,
   deleteConnector as generatedDeleteConnector,
   downloadTemplateImport as generatedDownloadTemplateImport,
@@ -26,9 +26,11 @@ import {
   editTemplateDraft as generatedEditTemplateDraft,
   editUser as generatedEditUser,
   endSession as generatedEndSession,
+  confirmVideoUpload as generatedConfirmVideoUpload,
   enqueueConnectorConnectionTest as generatedEnqueueConnectorConnectionTest,
   importTemplateDraft as generatedImportTemplateDraft,
   listConnectors as generatedListConnectors,
+  listDatasetMembers as generatedListDatasetMembers,
   listInferenceHosts as generatedListInferenceHosts,
   listPermissions as generatedListPermissions,
   listPoints as generatedListPoints,
@@ -37,18 +39,24 @@ import {
   listTemplateDrafts as generatedListTemplateDrafts,
   listTemplateImports as generatedListTemplateImports,
   listTemplateVersions as generatedListTemplateVersions,
+  listTrainingDatasets as generatedListTrainingDatasets,
   listUsers as generatedListUsers,
   openSession as generatedOpenSession,
   publishTemplateVersion as generatedPublishTemplateVersion,
   readConnector as generatedReadConnector,
+  readDatasetMember as generatedReadDatasetMember,
   readDeviceCommand as generatedReadDeviceCommand,
+  readJob as generatedReadJob,
   readPoint as generatedReadPoint,
   readSession as generatedReadSession,
   readStationTemplateConfiguration as generatedReadStationTemplateConfiguration,
+  readTrainingDataset as generatedReadTrainingDataset,
   readTemplateDraft as generatedReadTemplateDraft,
   readTemplateImport as generatedReadTemplateImport,
   readTemplateVersion as generatedReadTemplateVersion,
+  requestVideoUpload as generatedRequestVideoUpload,
   resetUserPassword as generatedResetUserPassword,
+  retryVideoUpload as generatedRetryVideoUpload,
   setConnectorStatus as generatedSetConnectorStatus,
   setPointStatus as generatedSetPointStatus,
   setUserRoles as generatedSetUserRoles,
@@ -63,16 +71,23 @@ import {
   type StationTemplateConfigurationView,
   type TemplateBindingInput,
   type TemplateBindingPreviewView,
+  type ConfirmationView,
   type ConnectorPlacement,
   type ConnectorView,
   type CreateRoleData,
+  type CreateTrainingDatasetData,
   type CreateUserData,
+  type DatasetMemberView,
+  type DatasetView,
   type DeviceStatus,
   type DownloadTemplateImportResponse,
   type DownloadTemplateVersionArtifactResponse,
   type EditRoleData,
   type EditUserData,
+  type FactorySopJobAdaptersRoutesJobView,
   type ItemPageConnectorView,
+  type ItemPageDatasetMemberView,
+  type ItemPageDatasetView,
   type ItemPageInferenceHostView,
   type ItemPagePointView,
   type ItemPageRoleView,
@@ -89,6 +104,9 @@ import {
   type PointConfiguration,
   type PointView,
   type ProblemDocument,
+  type RequestVideoUploadData,
+  type RetryMode,
+  type RetryView,
   type ResetUserPasswordData,
   type RoleView,
   type SessionView,
@@ -101,6 +119,8 @@ import {
   type TemplateImportResultView,
   type TemplateImportView,
   type TemplateVersionView,
+  type UploadInstructionsView,
+  type UploadRequestView,
   type UserStatus,
   type UserView,
 } from '@/api/generated'
@@ -109,18 +129,25 @@ export type {
   BackendConfigurationStatusView,
   BindingValidationRequest,
   BindingValidationView,
+  ConfirmationView,
   ConnectorPlacement,
   ConnectorView,
+  DatasetMemberView,
+  DatasetView,
   DeviceStatus,
   DownloadTemplateVersionArtifactResponse,
   InferenceHostView,
   ItemPageConnectorView,
+  ItemPageDatasetMemberView,
+  ItemPageDatasetView,
   ItemPageInferenceHostView,
   ItemPagePointView,
   ItemPageStationView,
   PendingCommandView,
   PointConfiguration,
   PointView,
+  RetryMode,
+  RetryView,
   RoleView,
   RuntimeParameterMode,
   RuntimeParametersInput,
@@ -139,6 +166,8 @@ export type {
   TemplateImportView,
   TemplateVersionView,
   ItemPageTemplateVersionView,
+  UploadInstructionsView,
+  UploadRequestView,
   UserView,
 } from '@/api/generated'
 
@@ -147,7 +176,7 @@ const CSRF_HEADER = 'x-csrf-token'
 const MODIFYING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 const GENERIC_MESSAGE = '请求未能完成，请稍后重试'
 
-/** One rejected input, named so a form can put the message beside the right control. */
+/** 一项被拒绝的输入，便于表单把消息放到对应控件旁。 */
 export interface FieldError {
   field: string
   message: string
@@ -157,10 +186,9 @@ export class ControlPlaneError extends Error {
   readonly errorCode: string
   readonly status: number
   readonly fieldErrors: FieldError[]
-  /** The backend's specific reason, when it composed one — which login name is taken, which
-   * permission would leave the system unadministrable. `message` is the displayable title;
-   * `detail` is the sentence under it. Either may be absent, and a screen shows
-   * `detail ?? message`. */
+  /** 后端组合出的具体原因，例如登录名已占用或权限会导致系统失去管理员。
+   * `message` 是可展示的标题，`detail` 是标题下的说明；任一项可能缺失，页面显示
+   * `detail ?? message`。 */
   readonly detail: string | null
 
   constructor(options: {
@@ -181,10 +209,8 @@ export class ControlPlaneError extends Error {
 }
 
 /**
- * One hook the session store registers: invoked whenever the backend answers 401, so an identity
- * revoked under the caller (deactivated by another administrator, expired mid-form) clears the
- * cached session everywhere at once instead of every screen learning about 401s on its own.
- * Registered by the store rather than importing it here, which would be a circular import.
+ * 由会话 store 注册的钩子：后端返回 401 时调用，统一清除已被撤销的身份缓存，避免每个
+ * 页面各自处理。由 store 注册而不是在此处直接导入，以免形成循环依赖。
  */
 let unauthorizedHandler: (() => void) | null = null
 
@@ -221,9 +247,7 @@ async function execute<T>(request: Promise<GeneratedResult<T>>): Promise<T> {
   const result = await request
   if (result.error !== undefined) {
     const error = controlPlaneError(result.error, result.response)
-    // A 401 after sign-in means the identity was taken away under the caller, not that a form
-    // was filled in wrong: the hook lets the session store clear it centrally, whatever screen
-    // the call came from.
+    // 登录后收到 401 表示身份已被撤销，而不是表单填写错误；钩子会让会话 store 统一清除身份。
     if (error.status === 401) {
       unauthorizedHandler?.()
     }
@@ -278,6 +302,96 @@ export function readSession(): Promise<SessionView> {
 
 export function endSession(): Promise<void> {
   return execute(generatedEndSession())
+}
+
+export type TrainingDataset = DatasetView
+export type TrainingDatasetMember = DatasetMemberView
+export type TrainingDatasetPage = ItemPageDatasetView
+export type TrainingDatasetMemberPage = ItemPageDatasetMemberView
+export type DatasetUploadInstructions = UploadInstructionsView
+export type DatasetUploadRequest = UploadRequestView
+export type DatasetConfirmation = ConfirmationView
+export type DatasetRetry = RetryView
+export type DatasetJob = FactorySopJobAdaptersRoutesJobView
+export type DatasetCreateInput = CreateTrainingDatasetData['body']
+export type DatasetUploadInput = RequestVideoUploadData['body']
+
+export function readTrainingDatasets(page = 1, pageSize = 50): Promise<TrainingDatasetPage> {
+  return execute(generatedListTrainingDatasets({ query: { page, page_size: pageSize } }))
+}
+
+export function createTrainingDataset(name: DatasetCreateInput['name']): Promise<TrainingDataset> {
+  return execute(generatedCreateTrainingDataset({ body: { name } }))
+}
+
+export function readTrainingDataset(datasetId: string): Promise<TrainingDataset> {
+  return execute(generatedReadTrainingDataset({ path: { dataset_id: datasetId } }))
+}
+
+export function readDatasetMembers(
+  datasetId: string,
+  page = 1,
+  pageSize = 50,
+): Promise<TrainingDatasetMemberPage> {
+  return execute(
+    generatedListDatasetMembers({
+      path: { dataset_id: datasetId },
+      query: { page, page_size: pageSize },
+    }),
+  )
+}
+
+export function readDatasetMember(
+  datasetId: string,
+  memberId: string,
+): Promise<TrainingDatasetMember> {
+  return execute(
+    generatedReadDatasetMember({ path: { dataset_id: datasetId, member_id: memberId } }),
+  )
+}
+
+export function requestVideoUpload(
+  datasetId: string,
+  submitted: DatasetUploadInput,
+  idempotencyKey?: string,
+): Promise<DatasetUploadRequest> {
+  return execute(
+    generatedRequestVideoUpload({
+      path: { dataset_id: datasetId },
+      body: submitted,
+      headers: idempotencyKey === undefined ? undefined : { 'Idempotency-Key': idempotencyKey },
+    }),
+  )
+}
+
+export function confirmVideoUpload(
+  datasetId: string,
+  memberId: string,
+  attemptId: string,
+): Promise<DatasetConfirmation> {
+  return execute(
+    generatedConfirmVideoUpload({
+      path: { dataset_id: datasetId, member_id: memberId },
+      body: { attempt_id: attemptId },
+    }),
+  )
+}
+
+export function retryVideoUpload(
+  datasetId: string,
+  memberId: string,
+  mode: RetryMode,
+): Promise<DatasetRetry> {
+  return execute(
+    generatedRetryVideoUpload({
+      path: { dataset_id: datasetId, member_id: memberId },
+      body: { mode },
+    }),
+  )
+}
+
+export function readJob(jobId: string): Promise<DatasetJob> {
+  return execute(generatedReadJob({ path: { job_id: jobId } }))
 }
 
 // ——— 模板草稿：原始导入、列表、读取和 If-Match 编辑均走生成客户端。 ———
@@ -555,9 +669,9 @@ export function validatePointBinding(
   return execute(generatedValidatePointBinding({ body: request }))
 }
 
-// ——— 用户与权限 (C2.2): the administration calls, thin over the generated SDK. ———
-// Every one of these names a permission in its OpenAPI metadata; the enforcement is the use
-// case's, so this list is only what the screen may offer, never what the backend allows.
+// ——— 用户与权限（C2.2）：管理操作仅薄封装生成 SDK。 ———
+// 每项操作都在 OpenAPI 元数据中声明权限；真正的强制检查位于用例，因此这里的列表只决定
+// 页面可以提供什么，不决定后端允许什么。
 
 export function readUsers(): Promise<ItemPageUserView> {
   return execute(generatedListUsers())
@@ -597,9 +711,8 @@ export function readRoles(): Promise<ItemPageRoleView> {
   return execute(generatedListRoles())
 }
 
-/** The permissions a role may contain. Rendered as the role form's checkboxes, so a permission
- * the backend does not register cannot be offered and one it adds appears without a change
- * here. */
+/** 角色可以包含的权限。渲染为角色表单的复选框，后端未注册的权限不会被提供，新增权限也会
+ * 自动出现，无需修改页面。 */
 export function readPermissionCatalogue(): Promise<ItemPageStr> {
   return execute(generatedListPermissions())
 }

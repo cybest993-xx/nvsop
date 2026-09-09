@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Depends, Request
 from sqlalchemy import Engine, MetaData, create_engine
@@ -88,6 +89,13 @@ def request_session(request: Request) -> Iterator[Session]:
     except BaseException:
         session.rollback()
         raise
+    else:
+        dispatcher = getattr(request.app.state, "job_dispatcher", None)
+        job_ids = session.info.pop("job_dispatch_ids", set())
+        if dispatcher is not None and isinstance(job_ids, set):
+            for job_id in job_ids:
+                if isinstance(job_id, UUID):
+                    dispatcher.dispatch(job_id)
     finally:
         session.close()
 

@@ -29,6 +29,7 @@ def export_openapi(destination: Path) -> None:
             session_absolute_lifetime_minutes=43200,
             session_cookie_transport="require_https",
             csrf_secret=SecretStr("not-used"),
+            redis_url=SecretStr("redis://redis.invalid:6379/0"),
         )
     )
     destination.parent.mkdir(parents=True, exist_ok=True)

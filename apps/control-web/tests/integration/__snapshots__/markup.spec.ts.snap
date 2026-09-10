@@ -632,10 +632,6 @@ exports[`the protected shell > renders the navigation and the account strip it h
     <nav class="shell__nav" aria-label="主导航">
       <ul class="shell__nav-list">
         <li><a aria-current="page" href="/" class="router-link-active router-link-exact-active shell__link">概览</a></li>
-        <li>
-          <!-- \`aria-disabled\` and the trailing note rather than grey text alone: colour is not
-                 the only expression of state (Q32). --><span class="shell__link shell__link--pending" aria-disabled="true" title="该功能尚未上线">训练数据集 <small class="shell__pending-note">（未上线）</small></span>
-        </li>
       </ul>
     </nav>
     <main class="shell__main">

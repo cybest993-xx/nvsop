@@ -198,6 +198,29 @@ describe('a page that names required permissions', () => {
     expect(router.currentRoute.value.name).toBe('overview')
   })
 
+  it.each(['dataset.dataset.view', 'dataset.dataset.import'])(
+    'reaches the training-dataset page for a caller holding only %s',
+    async (permission) => {
+      readSession.mockResolvedValue({ ...SESSION, permissions: [permission] })
+      const router = createAppRouter()
+
+      await router.push('/training-datasets')
+      await router.isReady()
+
+      expect(router.currentRoute.value.name).toBe('datasets')
+    },
+  )
+
+  it('sends a caller without a dataset permission away from the training-dataset page', async () => {
+    readSession.mockResolvedValue({ ...SESSION, permissions: [] })
+    const router = createAppRouter()
+
+    await router.push('/training-datasets')
+    await router.isReady()
+
+    expect(router.currentRoute.value.name).toBe('overview')
+  })
+
   it('is reachable by a caller holding one of them', async () => {
     // Any one, not all: 用户与权限 is useful to someone who may read accounts but not roles, and the
     // page renders each half according to what they hold.

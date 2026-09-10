@@ -26,6 +26,7 @@ def settings() -> Settings:
         session_absolute_lifetime_minutes=43200,
         session_cookie_transport="require_https",
         csrf_secret=SecretStr("csrf-secret"),
+        redis_url=SecretStr("redis://127.0.0.1:1/0"),
     )
 
 
@@ -94,6 +95,8 @@ def test_the_openapi_contract_names_operations_and_the_problem_shape() -> None:
     error_code = schema["components"]["schemas"]["ProblemDocument"]["properties"]["error_code"]
     assert error_code["$ref"] == "#/components/schemas/ApiErrorCode"
     assert "SESSION_INVALID" in schema["components"]["schemas"]["ApiErrorCode"]["enum"]
+    job = schema["paths"]["/api/v1/jobs/{job_id}"]["get"]
+    assert job["x-required-permissions"] == ["dataset.dataset.view", "dataset.dataset.import"]
     for method, status in (("post", "401"), ("post", "422"), ("get", "401"), ("delete", "403")):
         content = session[method]["responses"][status]["content"]
         assert set(content) == {PROBLEM_MEDIA_TYPE}

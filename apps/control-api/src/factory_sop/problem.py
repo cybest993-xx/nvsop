@@ -111,6 +111,31 @@ class ApiErrorCode(StrEnum):
     TEMPLATE_REPORT_HOST_NOT_ALLOWED = "TEMPLATE_REPORT_HOST_NOT_ALLOWED"
     TEMPLATE_REPORT_STATION_UNBOUND = "TEMPLATE_REPORT_STATION_UNBOUND"
     TEMPLATE_REPORT_CONFLICT = "TEMPLATE_REPORT_CONFLICT"
+    DATASET_NOT_FOUND = "DATASET_NOT_FOUND"
+    MEMBER_NOT_FOUND = "MEMBER_NOT_FOUND"
+    ATTEMPT_NOT_FOUND = "ATTEMPT_NOT_FOUND"
+    DATASET_NAME_INVALID = "DATASET_NAME_INVALID"
+    FILENAME_INVALID = "FILENAME_INVALID"
+    SOURCE_INVALID = "SOURCE_INVALID"
+    SIZE_INVALID = "SIZE_INVALID"
+    SIZE_EXCEEDED = "SIZE_EXCEEDED"
+    SHA256_INVALID = "SHA256_INVALID"
+    ARCHIVE_REJECTED = "ARCHIVE_REJECTED"
+    IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
+    RESOURCE_MISMATCH = "RESOURCE_MISMATCH"
+    STATE_CONFLICT = "STATE_CONFLICT"
+    STORAGE_UNAVAILABLE = "STORAGE_UNAVAILABLE"
+    OBJECT_NOT_FOUND = "OBJECT_NOT_FOUND"
+    EMPTY_OBJECT = "EMPTY_OBJECT"
+    SIZE_MISMATCH = "SIZE_MISMATCH"
+    SHA256_MISMATCH = "SHA256_MISMATCH"
+    ARCHIVE_CONTENT_REJECTED = "ARCHIVE_CONTENT_REJECTED"
+    INVALID_MEDIA = "INVALID_MEDIA"
+    UNSUPPORTED_CODEC = "UNSUPPORTED_CODEC"
+    MEDIA_PROBE_UNAVAILABLE = "MEDIA_PROBE_UNAVAILABLE"
+    VALIDATION_STALE = "VALIDATION_STALE"
+    JOB_NOT_FOUND = "JOB_NOT_FOUND"
+    JOB_RESOURCE_NOT_FOUND = "JOB_RESOURCE_NOT_FOUND"
 
 
 class FieldError(BaseModel):
@@ -128,6 +153,7 @@ class ProblemDocument(BaseModel):
     status: int
     error_code: ApiErrorCode
     detail: str | None = None
+    recovery_action: str | None = None
     field_errors: list[FieldError] | None = None
 
 
@@ -153,6 +179,7 @@ def problem_response(
     title: str,
     error_code: ApiErrorCode,
     detail: str | None = None,
+    recovery_action: str | None = None,
     field_errors: list[FieldError] | None = None,
 ) -> JSONResponse:
     """Build the response for a refusal.
@@ -166,6 +193,7 @@ def problem_response(
         status=status,
         error_code=error_code,
         detail=detail,
+        recovery_action=recovery_action,
         field_errors=field_errors or None,
     )
     # Absent members are omitted rather than sent as null: RFC 9457 makes them optional, and a

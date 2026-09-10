@@ -103,6 +103,31 @@ export type ApiErrorCode =
   | 'TEMPLATE_REPORT_HOST_NOT_ALLOWED'
   | 'TEMPLATE_REPORT_STATION_UNBOUND'
   | 'TEMPLATE_REPORT_CONFLICT'
+  | 'DATASET_NOT_FOUND'
+  | 'MEMBER_NOT_FOUND'
+  | 'ATTEMPT_NOT_FOUND'
+  | 'DATASET_NAME_INVALID'
+  | 'FILENAME_INVALID'
+  | 'SOURCE_INVALID'
+  | 'SIZE_INVALID'
+  | 'SIZE_EXCEEDED'
+  | 'SHA256_INVALID'
+  | 'ARCHIVE_REJECTED'
+  | 'IDEMPOTENCY_CONFLICT'
+  | 'RESOURCE_MISMATCH'
+  | 'STATE_CONFLICT'
+  | 'STORAGE_UNAVAILABLE'
+  | 'OBJECT_NOT_FOUND'
+  | 'EMPTY_OBJECT'
+  | 'SIZE_MISMATCH'
+  | 'SHA256_MISMATCH'
+  | 'ARCHIVE_CONTENT_REJECTED'
+  | 'INVALID_MEDIA'
+  | 'UNSUPPORTED_CODEC'
+  | 'MEDIA_PROBE_UNAVAILABLE'
+  | 'VALIDATION_STALE'
+  | 'JOB_NOT_FOUND'
+  | 'JOB_RESOURCE_NOT_FOUND'
 
 /**
  * AssignedRoles
@@ -379,6 +404,26 @@ export type CameraView = {
 }
 
 /**
+ * ConfirmVideoUploadInput
+ *
+ * 确认某个上传尝试已由客户端直传完成。
+ */
+export type ConfirmVideoUploadInput = {
+  /**
+   * Attempt Id
+   */
+  attempt_id: string
+}
+
+/**
+ * ConfirmationView
+ */
+export type ConfirmationView = {
+  job: FactorySopDatasetAdaptersRoutesJobView | null
+  member: DatasetMemberView
+}
+
+/**
  * ConnectionState
  *
  * 最近一次真实连接测试对后端端点的观测结果。
@@ -622,6 +667,18 @@ export type ConnectorView = {
 }
 
 /**
+ * CreateDatasetInput
+ *
+ * 创建训练数据集的输入。
+ */
+export type CreateDatasetInput = {
+  /**
+   * Name
+   */
+  name: string
+}
+
+/**
  * Credentials
  *
  * What the login form submits.
@@ -635,6 +692,126 @@ export type Credentials = {
    * Password
    */
   password: string
+}
+
+/**
+ * DatasetMemberView
+ */
+export type DatasetMemberView = {
+  /**
+   * Actual Sha256
+   */
+  actual_sha256: string | null
+  /**
+   * Actual Size
+   */
+  actual_size: number | null
+  /**
+   * Codec
+   */
+  codec: string | null
+  /**
+   * Container
+   */
+  container: string | null
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Created By
+   */
+  created_by: string
+  /**
+   * Current Attempt Id
+   */
+  current_attempt_id: string
+  /**
+   * Dataset Id
+   */
+  dataset_id: string
+  /**
+   * Declared Sha256
+   */
+  declared_sha256: string
+  /**
+   * Declared Size
+   */
+  declared_size: number
+  /**
+   * Duration Seconds
+   */
+  duration_seconds: number | null
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  /**
+   * Failure Detail
+   */
+  failure_detail: string | null
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Original Filename
+   */
+  original_filename: string
+  /**
+   * Recovery Action
+   */
+  recovery_action: string | null
+  /**
+   * Source
+   */
+  source: string
+  /**
+   * Status
+   */
+  status: string
+  /**
+   * Updated At
+   */
+  updated_at: string
+  /**
+   * Updated By
+   */
+  updated_by: string
+  /**
+   * Validation Job Id
+   */
+  validation_job_id: string | null
+}
+
+/**
+ * DatasetView
+ */
+export type DatasetView = {
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Created By
+   */
+  created_by: string
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Name
+   */
+  name: string
+  /**
+   * Updated At
+   */
+  updated_at: string
+  /**
+   * Updated By
+   */
+  updated_by: string
 }
 
 /**
@@ -961,6 +1138,50 @@ export type ItemPageConnectorView = {
    * Items
    */
   items: Array<ConnectorView>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
+ * ItemPage[DatasetMemberView]
+ */
+export type ItemPageDatasetMemberView = {
+  /**
+   * Items
+   */
+  items: Array<DatasetMemberView>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
+ * ItemPage[DatasetView]
+ */
+export type ItemPageDatasetView = {
+  /**
+   * Items
+   */
+  items: Array<DatasetView>
   /**
    * Page
    */
@@ -1482,6 +1703,10 @@ export type ProblemDocument = {
    */
   field_errors?: Array<FieldError> | null
   /**
+   * Recovery Action
+   */
+  recovery_action?: string | null
+  /**
    * Status
    */
   status: number
@@ -1496,6 +1721,30 @@ export type ProblemDocument = {
 }
 
 /**
+ * RequestVideoUploadInput
+ *
+ * 申请直传时提交的声明；不接受对象 URL 或客户端媒体事实。
+ */
+export type RequestVideoUploadInput = {
+  /**
+   * Declared Sha256
+   */
+  declared_sha256: string
+  /**
+   * Declared Size
+   */
+  declared_size: number
+  /**
+   * Original Filename
+   */
+  original_filename: string
+  /**
+   * Source
+   */
+  source: string
+}
+
+/**
  * RequestedStatus
  *
  * Which of the two states the account should be in.
@@ -1505,6 +1754,32 @@ export type ProblemDocument = {
  */
 export type RequestedStatus = {
   status: UserStatus
+}
+
+/**
+ * RetryMode
+ *
+ * 失败后的恢复动作，直接表达调用者下一步该做什么。
+ */
+export type RetryMode = 'retry_upload' | 'retry_validation'
+
+/**
+ * RetryVideoUploadInput
+ *
+ * 选择重新上传或对固定内容重新校验。
+ */
+export type RetryVideoUploadInput = {
+  mode: RetryMode
+}
+
+/**
+ * RetryView
+ */
+export type RetryView = {
+  attempt: UploadAttemptView
+  job: FactorySopDatasetAdaptersRoutesJobView | null
+  member: DatasetMemberView
+  upload: UploadInstructionsView | null
 }
 
 /**
@@ -2195,6 +2470,89 @@ export type UnverifiedCapabilityDocument = {
 }
 
 /**
+ * UploadAttemptView
+ */
+export type UploadAttemptView = {
+  /**
+   * Declared Sha256
+   */
+  declared_sha256: string
+  /**
+   * Declared Size
+   */
+  declared_size: number
+  /**
+   * Expires At
+   */
+  expires_at: string
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Member Id
+   */
+  member_id: string
+  /**
+   * Object Version Id
+   */
+  object_version_id: string | null
+  /**
+   * Status
+   */
+  status: string
+}
+
+/**
+ * UploadInstructionsView
+ *
+ * 仅随申请直传响应返回的短期签名说明。
+ */
+export type UploadInstructionsView = {
+  /**
+   * Expires At
+   */
+  expires_at: string
+  /**
+   * Fields
+   */
+  fields: {
+    [key: string]: string
+  }
+  /**
+   * Headers
+   */
+  headers: {
+    [key: string]: string
+  }
+  /**
+   * Max Bytes
+   */
+  max_bytes: number
+  /**
+   * Method
+   */
+  method: string
+  /**
+   * Object Key
+   */
+  object_key: string
+  /**
+   * Url
+   */
+  url: string
+}
+
+/**
+ * UploadRequestView
+ */
+export type UploadRequestView = {
+  attempt: UploadAttemptView
+  member: DatasetMemberView
+  upload: UploadInstructionsView | null
+}
+
+/**
  * UserStatus
  *
  * Whether an account may still take part in a new login.
@@ -2260,6 +2618,84 @@ export type ValidationError = {
    * Error Type
    */
   type: string
+}
+
+/**
+ * JobView
+ */
+export type FactorySopDatasetAdaptersRoutesJobView = {
+  /**
+   * Attempt Id
+   */
+  attempt_id: string
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Job Type
+   */
+  job_type: string
+  /**
+   * Member Id
+   */
+  member_id: string
+  /**
+   * Status
+   */
+  status: string
+  /**
+   * Updated At
+   */
+  updated_at: string
+}
+
+/**
+ * JobView
+ *
+ * 任务状态；未知状态保留原始字符串。
+ */
+export type FactorySopJobAdaptersRoutesJobView = {
+  /**
+   * Attempt Id
+   */
+  attempt_id: string
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Job Type
+   */
+  job_type: string
+  /**
+   * Member Id
+   */
+  member_id: string
+  /**
+   * Status
+   */
+  status: string
+  /**
+   * Updated At
+   */
+  updated_at: string
 }
 
 export type ListPermissionsData = {
@@ -4663,6 +5099,52 @@ export type SetInferenceHostStatusResponses = {
 export type SetInferenceHostStatusResponse =
   SetInferenceHostStatusResponses[keyof SetInferenceHostStatusResponses]
 
+export type ReadJobData = {
+  body?: never
+  path: {
+    /**
+     * Job Id
+     */
+    job_id: string
+  }
+  query?: never
+  url: '/api/v1/jobs/{job_id}'
+}
+
+export type ReadJobErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 异步任务不存在
+   */
+  404: ProblemDocument
+  /**
+   * 任务编号无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadJobError = ReadJobErrors[keyof ReadJobErrors]
+
+export type ReadJobResponses = {
+  /**
+   * Successful Response
+   */
+  200: FactorySopJobAdaptersRoutesJobView
+}
+
+export type ReadJobResponse = ReadJobResponses[keyof ReadJobResponses]
+
 export type ReadLivenessData = {
   body?: never
   path?: never
@@ -6161,3 +6643,482 @@ export type DownloadTemplateVersionArtifactResponses = {
 
 export type DownloadTemplateVersionArtifactResponse =
   DownloadTemplateVersionArtifactResponses[keyof DownloadTemplateVersionArtifactResponses]
+
+export type ListTrainingDatasetsData = {
+  body?: never
+  path?: never
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/training-datasets'
+}
+
+export type ListTrainingDatasetsErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 对象存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ListTrainingDatasetsError = ListTrainingDatasetsErrors[keyof ListTrainingDatasetsErrors]
+
+export type ListTrainingDatasetsResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageDatasetView
+}
+
+export type ListTrainingDatasetsResponse =
+  ListTrainingDatasetsResponses[keyof ListTrainingDatasetsResponses]
+
+export type CreateTrainingDatasetData = {
+  body: CreateDatasetInput
+  path?: never
+  query?: never
+  url: '/api/v1/training-datasets'
+}
+
+export type CreateTrainingDatasetErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 对象存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type CreateTrainingDatasetError =
+  CreateTrainingDatasetErrors[keyof CreateTrainingDatasetErrors]
+
+export type CreateTrainingDatasetResponses = {
+  /**
+   * Successful Response
+   */
+  201: DatasetView
+}
+
+export type CreateTrainingDatasetResponse =
+  CreateTrainingDatasetResponses[keyof CreateTrainingDatasetResponses]
+
+export type ReadTrainingDatasetData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}'
+}
+
+export type ReadTrainingDatasetErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 对象存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ReadTrainingDatasetError = ReadTrainingDatasetErrors[keyof ReadTrainingDatasetErrors]
+
+export type ReadTrainingDatasetResponses = {
+  /**
+   * Successful Response
+   */
+  200: DatasetView
+}
+
+export type ReadTrainingDatasetResponse =
+  ReadTrainingDatasetResponses[keyof ReadTrainingDatasetResponses]
+
+export type ListDatasetMembersData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/training-datasets/{dataset_id}/members'
+}
+
+export type ListDatasetMembersErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 对象存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ListDatasetMembersError = ListDatasetMembersErrors[keyof ListDatasetMembersErrors]
+
+export type ListDatasetMembersResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageDatasetMemberView
+}
+
+export type ListDatasetMembersResponse =
+  ListDatasetMembersResponses[keyof ListDatasetMembersResponses]
+
+export type RequestVideoUploadData = {
+  body: RequestVideoUploadInput
+  headers?: {
+    /**
+     * Idempotency-Key
+     */
+    'Idempotency-Key'?: string | null
+  }
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/members'
+}
+
+export type RequestVideoUploadErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 对象存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type RequestVideoUploadError = RequestVideoUploadErrors[keyof RequestVideoUploadErrors]
+
+export type RequestVideoUploadResponses = {
+  /**
+   * Successful Response
+   */
+  201: UploadRequestView
+}
+
+export type RequestVideoUploadResponse =
+  RequestVideoUploadResponses[keyof RequestVideoUploadResponses]
+
+export type ReadDatasetMemberData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Member Id
+     */
+    member_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/members/{member_id}'
+}
+
+export type ReadDatasetMemberErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 对象存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ReadDatasetMemberError = ReadDatasetMemberErrors[keyof ReadDatasetMemberErrors]
+
+export type ReadDatasetMemberResponses = {
+  /**
+   * Successful Response
+   */
+  200: DatasetMemberView
+}
+
+export type ReadDatasetMemberResponse = ReadDatasetMemberResponses[keyof ReadDatasetMemberResponses]
+
+export type ConfirmVideoUploadData = {
+  body: ConfirmVideoUploadInput
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Member Id
+     */
+    member_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/members/{member_id}/confirm'
+}
+
+export type ConfirmVideoUploadErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 对象存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ConfirmVideoUploadError = ConfirmVideoUploadErrors[keyof ConfirmVideoUploadErrors]
+
+export type ConfirmVideoUploadResponses = {
+  /**
+   * Successful Response
+   */
+  200: ConfirmationView
+  /**
+   * 校验任务已接受
+   */
+  202: ConfirmationView
+}
+
+export type ConfirmVideoUploadResponse =
+  ConfirmVideoUploadResponses[keyof ConfirmVideoUploadResponses]
+
+export type RetryVideoUploadData = {
+  body: RetryVideoUploadInput
+  headers?: {
+    /**
+     * Idempotency-Key
+     */
+    'Idempotency-Key'?: string | null
+  }
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Member Id
+     */
+    member_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/members/{member_id}/retry'
+}
+
+export type RetryVideoUploadErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 对象存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type RetryVideoUploadError = RetryVideoUploadErrors[keyof RetryVideoUploadErrors]
+
+export type RetryVideoUploadResponses = {
+  /**
+   * Successful Response
+   */
+  200: RetryView
+  /**
+   * 校验任务已接受
+   */
+  202: RetryView
+}
+
+export type RetryVideoUploadResponse = RetryVideoUploadResponses[keyof RetryVideoUploadResponses]

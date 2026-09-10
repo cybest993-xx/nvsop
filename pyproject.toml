@@ -246,6 +246,66 @@ ignore_imports = [
 ]
 
 [[tool.importlinter.contracts]]
+name = "dataset's behavior does not depend on how it is stored or reached"
+type = "forbidden"
+source_modules = [
+    "factory_sop.dataset.model",
+    "factory_sop.dataset.errors",
+    "factory_sop.dataset.repository",
+    "factory_sop.dataset.storage",
+    "factory_sop.dataset.media",
+    "factory_sop.dataset.usecases",
+]
+forbidden_modules = [
+    "factory_sop.dataset.adapters",
+    "factory_sop.auth.adapters",
+    "factory_sop.auth.authorization",
+    "factory_sop.auth.errors",
+    "factory_sop.auth.model",
+    "factory_sop.auth.passwords",
+    "factory_sop.auth.permissions",
+    "factory_sop.auth.repository",
+    "factory_sop.auth.tokens",
+    "factory_sop.auth.usecases",
+    "factory_sop.job.adapters",
+    "fastapi",
+    "sqlalchemy",
+]
+ignore_imports = [
+    "factory_sop.auth.api -> factory_sop.auth.adapters.dependencies",
+    "factory_sop.auth.api -> factory_sop.auth.authorization",
+    "factory_sop.auth.api -> factory_sop.auth.permissions",
+]
+
+[[tool.importlinter.contracts]]
+name = "job's behavior does not depend on how it is stored or reached"
+type = "forbidden"
+source_modules = [
+    "factory_sop.job.api",
+    "factory_sop.job.errors",
+    "factory_sop.job.usecases",
+]
+forbidden_modules = [
+    "factory_sop.job.adapters",
+    "factory_sop.auth.adapters",
+    "factory_sop.auth.authorization",
+    "factory_sop.auth.errors",
+    "factory_sop.auth.model",
+    "factory_sop.auth.passwords",
+    "factory_sop.auth.permissions",
+    "factory_sop.auth.repository",
+    "factory_sop.auth.tokens",
+    "factory_sop.auth.usecases",
+    "fastapi",
+    "sqlalchemy",
+]
+ignore_imports = [
+    "factory_sop.auth.api -> factory_sop.auth.adapters.dependencies",
+    "factory_sop.auth.api -> factory_sop.auth.authorization",
+    "factory_sop.auth.api -> factory_sop.auth.permissions",
+]
+
+[[tool.importlinter.contracts]]
 name = "The judgment core knows nothing of storage, transport or the base pipeline"
 type = "forbidden"
 # The core is a pure function over normalized observations (harness §1, ADR-0005). Reaching
@@ -265,4 +325,16 @@ type = "independence"
 # package is standard-library-only. An import either way would put one on the other's
 # deployment and dependency path; what crosses between them is `packages/contracts`.
 modules = ["factory_sop", "edge_runtime"]
+
+[[tool.importlinter.contracts]]
+name = "dataset adapters do not depend on job adapters"
+type = "forbidden"
+source_modules = ["factory_sop.dataset.adapters"]
+forbidden_modules = ["factory_sop.job.adapters"]
+
+[[tool.importlinter.contracts]]
+name = "job adapters do not depend on dataset adapters"
+type = "forbidden"
+source_modules = ["factory_sop.job.adapters"]
+forbidden_modules = ["factory_sop.dataset.adapters"]
 

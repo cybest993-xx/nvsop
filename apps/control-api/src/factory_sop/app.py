@@ -30,6 +30,10 @@ from factory_sop.auth.errors import (
     refusal_problem,
 )
 from factory_sop.auth.model import SessionPolicy
+from factory_sop.dataset.adapters import dependencies as dataset_dependencies
+from factory_sop.dataset.adapters.routes import router as dataset_router
+from factory_sop.dataset.errors import DatasetRefusedError
+from factory_sop.dataset.errors import refusal_problem as dataset_refusal_problem
 from factory_sop.device.adapters import dependencies as device_dependencies
 from factory_sop.device.adapters.routes_backends import router as inference_backends_router
 from factory_sop.device.adapters.routes_cameras import router as cameras_router
@@ -48,6 +52,11 @@ from factory_sop.device.adapters.routes_points import (
 from factory_sop.device.adapters.routes_stations import router as stations_router
 from factory_sop.device.errors import DeviceRefusedError
 from factory_sop.device.errors import refusal_problem as device_refusal_problem
+from factory_sop.job.adapters import dependencies as job_dependencies
+from factory_sop.job.adapters.dispatcher import ArqJobDispatcher
+from factory_sop.job.adapters.routes import router as job_router
+from factory_sop.job.errors import JobRefusedError
+from factory_sop.job.errors import refusal_problem as job_refusal_problem
 from factory_sop.observability import (
     correlation_scope,
     get_logger,
@@ -113,6 +122,7 @@ def create_app(settings: Settings) -> FastAPI:
         responses={500: problem_openapi_response("Internal server error")},
     )
     app.state.settings = settings
+    app.state.job_dispatcher = ArqJobDispatcher.from_settings(settings)
     # Built here rather than by `Settings`, which sits below the domain in the layering and so
     # carries the configured minutes rather than the type made from them.
     app.state.session_policy = SessionPolicy(
@@ -133,12 +143,18 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(auth_role_administration.router, prefix=API_PREFIX)
     app.include_router(auth_user_administration.router, prefix=API_PREFIX)
     app.include_router(template_router, prefix=API_PREFIX)
-    # 组合根把跨模块的工位、拓扑和主机认证 seam 接到 `device` 的真实适配器。
+    app.include_router(dataset_router, prefix=API_PREFIX)
+    app.include_router(job_router, prefix=API_PREFIX)
+    # 组合根把跨模块查询和任务依赖接到各自模块的真实适配器。
     app.dependency_overrides[template_dependencies.stations] = device_dependencies.stations
     app.dependency_overrides[template_dependencies.binding_gateway] = (
         device_dependencies.template_binding
     )
     app.dependency_overrides[template_dependencies.host_gateway] = device_dependencies.host_gateway
+    app.dependency_overrides[job_dependencies.dataset_resource] = (
+        dataset_dependencies.dataset_resource
+    )
+    app.dependency_overrides[dataset_dependencies.jobs] = job_dependencies.validation_jobs
 
     @app.exception_handler(AuthenticationRefusedError)
     async def refused(request: Request, error: AuthenticationRefusedError) -> Response:
@@ -226,6 +242,29 @@ def create_app(settings: Settings) -> FastAPI:
                 )
                 for item in error.field_errors
             ],
+        )
+
+    @app.exception_handler(DatasetRefusedError)
+    async def dataset_refused(request: Request, error: DatasetRefusedError) -> Response:
+        """以统一问题文档返回数据集输入、状态和对象校验失败。"""
+        status_code, title = dataset_refusal_problem(error.code)
+        return problem_response(
+            status=status_code,
+            title=title,
+            error_code=ApiErrorCode(error.code.value),
+            detail=error.detail,
+            recovery_action=error.recovery_action,
+        )
+
+    @app.exception_handler(JobRefusedError)
+    async def job_refused(request: Request, error: JobRefusedError) -> Response:
+        """以统一问题文档返回任务不存在或任务资源失效。"""
+        status_code, title = job_refusal_problem(error.code)
+        return problem_response(
+            status=status_code,
+            title=title,
+            error_code=ApiErrorCode(error.code.value),
+            detail=error.detail,
         )
 
     @app.exception_handler(RequestValidationError)

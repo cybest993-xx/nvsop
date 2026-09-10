@@ -51,6 +51,7 @@ function testRouter(): Router {
       { path: '/', name: 'overview', component: blank },
       { path: '/devices', name: 'devices', component: blank },
       { path: '/templates', name: 'templates', component: blank },
+      { path: '/training-datasets', name: 'datasets', component: blank },
       // The shell links to it when the caller holds an `auth` view permission. Present here without
       // the real guard: what these tests are about is which items the shell renders, and the guard
       // has its own suite.
@@ -267,6 +268,7 @@ describe('the protected shell', () => {
     // §5.4 fixes them and their order.
     const { wrapper } = await mountShell([
       'auth.user.view',
+      'dataset.dataset.view',
       'device.connector.view',
       'template.draft.view',
     ])
@@ -291,21 +293,16 @@ describe('the protected shell', () => {
     const labels = wrapper.findAll('nav li').map((item) => item.text())
 
     expect(labels.some((label) => label.includes('用户与权限'))).toBe(false)
-    expect(labels).toHaveLength(2)
+    expect(labels).toHaveLength(1)
   })
 
-  it('marks a section that does not exist yet in words as well as in colour', async () => {
-    // Q32: state is not expressed by colour alone. Grey text on its own is exactly that.
-    //
-    // Distinct from the case above, and the distinction is the point: "not built yet" is a fact
-    // about the product that every caller may as well know, so it is shown and marked; "you may not
-    // see this" is about the caller, and §5.4 says to show nothing at all.
-    const { wrapper } = await mountShell(['auth.user.view'])
+  it('shows the training-data section only when the caller holds a dataset permission', async () => {
+    const { wrapper } = await mountShell(['dataset.dataset.view'])
 
-    const pending = wrapper.findAll('nav [aria-disabled="true"]')
+    const trainingLink = wrapper.findAll('nav a').find((link) => link.text() === '训练数据集')
 
-    expect(pending).toHaveLength(1)
-    expect(pending[0]!.text()).toContain('（未上线）')
+    expect(trainingLink).toBeDefined()
+    expect(wrapper.findAll('nav [aria-disabled="true"]')).toHaveLength(0)
   })
 
   it('links the sections that exist and the caller may see', async () => {

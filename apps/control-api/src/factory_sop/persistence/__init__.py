@@ -13,8 +13,8 @@ in its own `adapters/`, above this.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from typing import Annotated
+from collections.abc import Callable, Iterator
+from typing import Annotated, cast
 
 from fastapi import Depends, Request
 from sqlalchemy import Engine, MetaData, create_engine
@@ -39,6 +39,15 @@ class Table(DeclarativeBase):
     """The declarative base every mapped table derives from."""
 
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
+
+
+_AFTER_COMMIT_ACTIONS = "after_commit_actions"
+
+
+def register_after_commit(session: Session, action: Callable[[], None]) -> None:
+    """登记一次提交成功后执行的通用动作。"""
+    actions = session.info.setdefault(_AFTER_COMMIT_ACTIONS, [])
+    cast(list[Callable[[], None]], actions).append(action)
 
 
 def database_url(settings: Settings) -> str:
@@ -88,6 +97,13 @@ def request_session(request: Request) -> Iterator[Session]:
     except BaseException:
         session.rollback()
         raise
+    else:
+        actions = cast(
+            list[Callable[[], None]],
+            session.info.pop(_AFTER_COMMIT_ACTIONS, []),
+        )
+        for action in actions:
+            action()
     finally:
         session.close()
 

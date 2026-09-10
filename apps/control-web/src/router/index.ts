@@ -1,9 +1,8 @@
 /**
  * Routes, and the one guard that decides whether a caller may see them.
  *
- * Navigation is the five items §5.4 fixes. 概览、工位与设备 and 用户与权限 have views; the other
- * two arrive with their own tickets, and the shell shows them as not yet available rather than
- * linking to an empty page.
+ * Navigation is the five items §5.4 fixes. Each delivered page declares the permissions that make
+ * it reachable; the guard keeps a deep link from rendering a page the caller cannot use.
  */
 
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
@@ -28,6 +27,7 @@ export const LOGIN_ROUTE = 'login'
 export const OVERVIEW_ROUTE = 'overview'
 export const DEVICES_ROUTE = 'devices'
 export const TEMPLATES_ROUTE = 'templates'
+export const DATASETS_ROUTE = 'datasets'
 export const ACCESS_ROUTE = 'access'
 export const NOT_FOUND_ROUTE = 'not-found'
 
@@ -73,6 +73,15 @@ const routes: RouteRecordRaw[] = [
         meta: {
           title: 'SOP 模板',
           requires: ['template.draft.view', 'template.draft.edit'],
+        },
+      },
+      {
+        path: 'training-datasets',
+        name: DATASETS_ROUTE,
+        component: () => import('@/modules/datasets/TrainingDatasetsView.vue'),
+        meta: {
+          title: '训练数据集',
+          requires: ['dataset.dataset.view', 'dataset.dataset.import'],
         },
       },
       {

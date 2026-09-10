@@ -12,6 +12,9 @@ import type {
   CompleteDeviceCommandData,
   CompleteDeviceCommandErrors,
   CompleteDeviceCommandResponses,
+  ConfirmVideoUploadData,
+  ConfirmVideoUploadErrors,
+  ConfirmVideoUploadResponses,
   CreateCameraData,
   CreateCameraErrors,
   CreateCameraResponses,
@@ -33,6 +36,9 @@ import type {
   CreateStationData,
   CreateStationErrors,
   CreateStationResponses,
+  CreateTrainingDatasetData,
+  CreateTrainingDatasetErrors,
+  CreateTrainingDatasetResponses,
   CreateUserData,
   CreateUserErrors,
   CreateUserResponses,
@@ -108,6 +114,9 @@ import type {
   ListConnectorsData,
   ListConnectorsErrors,
   ListConnectorsResponses,
+  ListDatasetMembersData,
+  ListDatasetMembersErrors,
+  ListDatasetMembersResponses,
   ListInferenceBackendsData,
   ListInferenceBackendsErrors,
   ListInferenceBackendsResponses,
@@ -135,6 +144,9 @@ import type {
   ListTemplateVersionsData,
   ListTemplateVersionsErrors,
   ListTemplateVersionsResponses,
+  ListTrainingDatasetsData,
+  ListTrainingDatasetsErrors,
+  ListTrainingDatasetsResponses,
   ListUsersData,
   ListUsersErrors,
   ListUsersResponses,
@@ -150,6 +162,9 @@ import type {
   ReadConnectorData,
   ReadConnectorErrors,
   ReadConnectorResponses,
+  ReadDatasetMemberData,
+  ReadDatasetMemberErrors,
+  ReadDatasetMemberResponses,
   ReadDeviceCommandData,
   ReadDeviceCommandErrors,
   ReadDeviceCommandResponses,
@@ -159,6 +174,9 @@ import type {
   ReadInferenceHostData,
   ReadInferenceHostErrors,
   ReadInferenceHostResponses,
+  ReadJobData,
+  ReadJobErrors,
+  ReadJobResponses,
   ReadLivenessData,
   ReadLivenessErrors,
   ReadLivenessResponses,
@@ -183,15 +201,24 @@ import type {
   ReadTemplateVersionData,
   ReadTemplateVersionErrors,
   ReadTemplateVersionResponses,
+  ReadTrainingDatasetData,
+  ReadTrainingDatasetErrors,
+  ReadTrainingDatasetResponses,
   RegisterInferenceHostIdentityKeyData,
   RegisterInferenceHostIdentityKeyErrors,
   RegisterInferenceHostIdentityKeyResponses,
   ReportTemplateConfigurationData,
   ReportTemplateConfigurationErrors,
   ReportTemplateConfigurationResponses,
+  RequestVideoUploadData,
+  RequestVideoUploadErrors,
+  RequestVideoUploadResponses,
   ResetUserPasswordData,
   ResetUserPasswordErrors,
   ResetUserPasswordResponses,
+  RetryVideoUploadData,
+  RetryVideoUploadErrors,
+  RetryVideoUploadResponses,
   RotateInferenceHostCredentialData,
   RotateInferenceHostCredentialErrors,
   RotateInferenceHostCredentialResponses,
@@ -1045,6 +1072,19 @@ export const setInferenceHostStatus = <ThrowOnError extends boolean = false>(
   })
 
 /**
+ * Read A Job
+ *
+ * 读取不含上传凭据的任务状态。
+ */
+export const readJob = <ThrowOnError extends boolean = false>(
+  options: Options<ReadJobData, ThrowOnError>,
+): RequestResult<ReadJobResponses, ReadJobErrors, ThrowOnError> =>
+  (options.client ?? client).get<ReadJobResponses, ReadJobErrors, ThrowOnError>({
+    url: '/api/v1/jobs/{job_id}',
+    ...options,
+  })
+
+/**
  * Liveness
  *
  * Report that the process is up. Deliberately touches no dependency.
@@ -1492,3 +1532,123 @@ export const downloadTemplateVersionArtifact = <ThrowOnError extends boolean = f
     DownloadTemplateVersionArtifactErrors,
     ThrowOnError
   >({ url: '/api/v1/templates/versions/{version_id}/artifacts/{name}', ...options })
+
+/**
+ * List The Training Datasets
+ */
+export const listTrainingDatasets = <ThrowOnError extends boolean = false>(
+  options?: Options<ListTrainingDatasetsData, ThrowOnError>,
+): RequestResult<ListTrainingDatasetsResponses, ListTrainingDatasetsErrors, ThrowOnError> =>
+  (options?.client ?? client).get<
+    ListTrainingDatasetsResponses,
+    ListTrainingDatasetsErrors,
+    ThrowOnError
+  >({ url: '/api/v1/training-datasets', ...options })
+
+/**
+ * Create A Training Dataset
+ *
+ * 创建训练数据集分组。
+ */
+export const createTrainingDataset = <ThrowOnError extends boolean = false>(
+  options: Options<CreateTrainingDatasetData, ThrowOnError>,
+): RequestResult<CreateTrainingDatasetResponses, CreateTrainingDatasetErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    CreateTrainingDatasetResponses,
+    CreateTrainingDatasetErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read A Training Dataset
+ */
+export const readTrainingDataset = <ThrowOnError extends boolean = false>(
+  options: Options<ReadTrainingDatasetData, ThrowOnError>,
+): RequestResult<ReadTrainingDatasetResponses, ReadTrainingDatasetErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadTrainingDatasetResponses,
+    ReadTrainingDatasetErrors,
+    ThrowOnError
+  >({ url: '/api/v1/training-datasets/{dataset_id}', ...options })
+
+/**
+ * List The Dataset Members
+ */
+export const listDatasetMembers = <ThrowOnError extends boolean = false>(
+  options: Options<ListDatasetMembersData, ThrowOnError>,
+): RequestResult<ListDatasetMembersResponses, ListDatasetMembersErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ListDatasetMembersResponses,
+    ListDatasetMembersErrors,
+    ThrowOnError
+  >({ url: '/api/v1/training-datasets/{dataset_id}/members', ...options })
+
+/**
+ * Request A Video Upload
+ */
+export const requestVideoUpload = <ThrowOnError extends boolean = false>(
+  options: Options<RequestVideoUploadData, ThrowOnError>,
+): RequestResult<RequestVideoUploadResponses, RequestVideoUploadErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    RequestVideoUploadResponses,
+    RequestVideoUploadErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/members',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read A Dataset Member
+ */
+export const readDatasetMember = <ThrowOnError extends boolean = false>(
+  options: Options<ReadDatasetMemberData, ThrowOnError>,
+): RequestResult<ReadDatasetMemberResponses, ReadDatasetMemberErrors, ThrowOnError> =>
+  (options.client ?? client).get<ReadDatasetMemberResponses, ReadDatasetMemberErrors, ThrowOnError>(
+    { url: '/api/v1/training-datasets/{dataset_id}/members/{member_id}', ...options },
+  )
+
+/**
+ * Confirm A Video Upload
+ */
+export const confirmVideoUpload = <ThrowOnError extends boolean = false>(
+  options: Options<ConfirmVideoUploadData, ThrowOnError>,
+): RequestResult<ConfirmVideoUploadResponses, ConfirmVideoUploadErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    ConfirmVideoUploadResponses,
+    ConfirmVideoUploadErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/members/{member_id}/confirm',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Retry A Video Upload
+ */
+export const retryVideoUpload = <ThrowOnError extends boolean = false>(
+  options: Options<RetryVideoUploadData, ThrowOnError>,
+): RequestResult<RetryVideoUploadResponses, RetryVideoUploadErrors, ThrowOnError> =>
+  (options.client ?? client).post<RetryVideoUploadResponses, RetryVideoUploadErrors, ThrowOnError>({
+    url: '/api/v1/training-datasets/{dataset_id}/members/{member_id}/retry',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })

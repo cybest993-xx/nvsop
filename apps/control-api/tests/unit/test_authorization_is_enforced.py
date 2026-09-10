@@ -39,6 +39,15 @@ from device_fakes import (
 )
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
+from test_dataset_usecases import (
+    FakeDatasets as DatasetFakeDatasets,
+)
+from test_dataset_usecases import (
+    FakeJobs as DatasetFakeJobs,
+)
+from test_dataset_usecases import (
+    FakeStorage as DatasetFakeStorage,
+)
 
 from factory_sop.app import API_PREFIX, MODIFYING_METHODS, create_app
 from factory_sop.auth.adapters import dependencies
@@ -47,6 +56,15 @@ from factory_sop.auth.adapters.dependencies import DECLARED_PERMISSION
 from factory_sop.auth.model import Role, User, UserStatus
 from factory_sop.auth.passwords import hash_password
 from factory_sop.auth.permissions import Permission
+from factory_sop.dataset.adapters import dependencies as dataset_dependencies
+from factory_sop.dataset.model import (
+    AttemptStatus,
+    DatasetMember,
+    MemberStatus,
+    RetryMode,
+    TrainingDataset,
+    UploadAttempt,
+)
 from factory_sop.device.adapters import dependencies as device_dependencies
 from factory_sop.device.errors import DeviceRefusalCode, DeviceRefusedError
 from factory_sop.device.model import (
@@ -62,6 +80,9 @@ from factory_sop.template.model import TemplateImport
 # A password long enough to pass `MINIMUM_PASSWORD_LENGTH`, so a refusal in these tests is always
 # the authorization one and never the password rule.
 PASSWORD = "assembly-line-3"  # pragma: allowlist secret
+DATASET_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f101")
+DATASET_MEMBER_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f102")
+DATASET_ATTEMPT_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f103")
 
 
 def settings() -> Settings:
@@ -76,6 +97,7 @@ def settings() -> Settings:
         session_absolute_lifetime_minutes=43200,
         session_cookie_transport="require_https",
         csrf_secret=SecretStr("csrf-secret"),
+        redis_url=SecretStr("redis://127.0.0.1:1/0"),
     )
 
 
@@ -377,6 +399,27 @@ ROUTES = [
     Target("POST", "/auth/roles", {"code": "fresh", "name": "新角色", "permissions": []}),
     Target("PUT", "/auth/roles/{role_id}", {"name": "改名", "permissions": []}),
     Target("DELETE", "/auth/roles/{role_id}"),
+    Target("POST", "/training-datasets", {"name": "新的训练集"}),
+    Target(
+        "POST",
+        "/training-datasets/{dataset_id}/members",
+        {
+            "original_filename": "sample.mp4",
+            "source": "授权测试",
+            "declared_size": 1,
+            "declared_sha256": "a" * 64,
+        },
+    ),
+    Target(
+        "POST",
+        "/training-datasets/{dataset_id}/members/{member_id}/confirm",
+        {"attempt_id": "{attempt_id}"},
+    ),
+    Target(
+        "POST",
+        "/training-datasets/{dataset_id}/members/{member_id}/retry",
+        {"mode": RetryMode.UPLOAD.value},
+    ),
 ]
 
 # The session resource: no permission, by design, and therefore not part of the check above.
@@ -498,6 +541,62 @@ class Backend:
             identifier="DI-01",
             semantic_label="工件到位",
         )
+        self.dataset_store = DatasetFakeDatasets()
+        self.dataset_store.add_dataset(
+            TrainingDataset(
+                id=DATASET_ID,
+                name="授权测试训练集",
+                created_by=self.actor.id,
+                updated_by=self.actor.id,
+                created_at=datetime(2026, 9, 9),
+                updated_at=datetime(2026, 9, 9),
+            )
+        )
+        self.dataset_store.add_member(
+            DatasetMember(
+                id=DATASET_MEMBER_ID,
+                dataset_id=DATASET_ID,
+                original_filename="failed.mp4",
+                source="授权测试",
+                declared_size=1,
+                declared_sha256="a" * 64,
+                current_attempt_id=DATASET_ATTEMPT_ID,
+                status=MemberStatus.FAILED,
+                actual_size=1,
+                actual_sha256="b" * 64,
+                duration_seconds=None,
+                codec=None,
+                container=None,
+                object_key=None,
+                object_version_id=None,
+                validation_job_id=None,
+                failure_code="SHA256_MISMATCH",
+                failure_detail="授权测试失败",
+                recovery_action=RetryMode.UPLOAD.value,
+                created_by=self.actor.id,
+                updated_by=self.actor.id,
+                created_at=datetime(2026, 9, 9),
+                updated_at=datetime(2026, 9, 9),
+            )
+        )
+        self.dataset_store.add_attempt(
+            UploadAttempt(
+                id=DATASET_ATTEMPT_ID,
+                dataset_id=DATASET_ID,
+                member_id=DATASET_MEMBER_ID,
+                idempotency_key=None,
+                object_key="training-datasets/test/member/attempt/video",
+                declared_size=1,
+                declared_sha256="a" * 64,
+                expires_at=datetime(2026, 9, 9),
+                status=AttemptStatus.FAILED,
+                created_at=datetime(2026, 9, 9),
+                validation_job_id=None,
+                object_version_id=None,
+            )
+        )
+        self.dataset_storage = DatasetFakeStorage()
+        self.dataset_jobs = DatasetFakeJobs()
 
         self.app.dependency_overrides[dependencies.users] = lambda: self.users
         self.app.dependency_overrides[dependencies.sessions] = lambda: self.sessions
@@ -518,6 +617,9 @@ class Backend:
         # 绑定/参数路由在权限机械测试中只需解析依赖；未知版本/资源会在 handler 内
         # 给出非 403 结果，避免把数据库装配错误误判为授权通过。
         self.app.dependency_overrides[template_dependencies.binding_gateway] = BindingGateway
+        self.app.dependency_overrides[dataset_dependencies.datasets] = lambda: self.dataset_store
+        self.app.dependency_overrides[dataset_dependencies.storage] = lambda: self.dataset_storage
+        self.app.dependency_overrides[dataset_dependencies.jobs] = lambda: self.dataset_jobs
         self.client = TestClient(self.app, base_url="https://testserver")
         assert (
             self.client.post(
@@ -539,6 +641,9 @@ class Backend:
             "connector_id": self.connector.id,
             "point_id": self.point.id,
             "draft_id": UUID(int=1),
+            "dataset_id": DATASET_ID,
+            "member_id": DATASET_MEMBER_ID,
+            "attempt_id": DATASET_ATTEMPT_ID,
         }
         path = target.template.format(**identifiers)
 

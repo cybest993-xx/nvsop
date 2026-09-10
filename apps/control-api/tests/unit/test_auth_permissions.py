@@ -39,17 +39,19 @@ def test_a_permission_names_the_module_that_owns_the_resource() -> None:
     # registers its own members in this same enum and extends this set in the same change
     # (`device` did with its inference-host and backend members), which is what keeps one
     # closed set to check a role's contents against.
-    registered_modules = {"auth", "device", "template"}
+    registered_modules = {"auth", "device", "template", "dataset"}
     for permission in Permission:
         assert permission.value.split(".")[0] in registered_modules, permission
 
 
 def test_a_registered_permission_parses_to_its_member() -> None:
     assert parse_permission("auth.user.edit") is Permission.USER_EDIT
+    assert parse_permission("dataset.dataset.import") is Permission.DATASET_IMPORT
 
 
 def test_an_unregistered_permission_is_refused_rather_than_ignored() -> None:
-    # What a bare string would let through. A role stored with `auth.user.approve` in it would
+    # The dataset import action is a deliberate registered exception; another arbitrary action
+    # must still be rejected. A role stored with `auth.user.approve` in it would
     # otherwise be a role granting a permission nothing checks, and no layer would say so.
     with pytest.raises(UnregisteredPermissionError):
         parse_permission("auth.user.approve")

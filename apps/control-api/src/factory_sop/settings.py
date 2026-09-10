@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, ValidationError, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
@@ -25,6 +26,18 @@ LogLevel = Literal["debug", "info", "warning", "error"]
 # §六 requires Secure cookies and records no development exception. Local development must
 # terminate TLS rather than changing a production security attribute.
 CookieTransport = Literal["require_https"]
+_REQUIRED_RUNTIME_SETTINGS = (
+    "minio_endpoint",
+    "minio_bucket",
+    "minio_access_key",
+    "minio_secret_key",
+    "redis_url",
+    "dataset_upload_ttl_seconds",
+    "dataset_max_upload_bytes",
+    "dataset_supported_codecs",
+    "media_probe_binary",
+    "media_probe_timeout_seconds",
+)
 
 
 class ConfigurationError(Exception):
@@ -61,14 +74,43 @@ class Settings(BaseSettings):
     # arrives as a file path like the database password.
     csrf_secret: SecretStr = Field(repr=False)
 
+    # 直接构造 Settings 仍服务于不需要基础设施的 adapter 测试；from_environment 会要求
+    # 生产运行所需的完整数据集、对象存储和任务队列配置。
+    minio_endpoint: str | None = None
+    minio_public_endpoint: str | None = None
+    minio_bucket: str | None = None
+    minio_access_key: SecretStr | None = Field(default=None, repr=False)
+    minio_secret_key: SecretStr | None = Field(default=None, repr=False)
+    redis_url: SecretStr | None = Field(default=None, repr=False)
+    dataset_upload_ttl_seconds: int = Field(default=900, gt=0, le=86400)
+    dataset_max_upload_bytes: int = Field(default=8 * 1024**3, gt=0)
+    dataset_supported_codecs: str = "h264,h265"
+    media_probe_binary: str = "ffprobe"
+    media_probe_timeout_seconds: int = Field(default=60, gt=0, le=3600)
+
     @model_validator(mode="after")
-    def _absolute_lifetime_outlasts_the_idle_timeout(self) -> Settings:
+    def _validate_deployment_values(self) -> Settings:
         if self.session_absolute_lifetime_minutes < self.session_idle_timeout_minutes:
             raise ValueError(
                 "session_absolute_lifetime_minutes must not be shorter than the idle timeout; "
                 "the idle timeout would then be configured but never able to fire, and the "
                 "deployment would believe an unattended browser is closed when it is not"
             )
+        minio_values = (
+            self.minio_endpoint,
+            self.minio_bucket,
+            self.minio_access_key,
+            self.minio_secret_key,
+        )
+        if any(
+            value is not None for value in (*minio_values, self.minio_public_endpoint)
+        ) and not all(value is not None for value in minio_values):
+            raise ValueError(
+                "minio_endpoint, minio_bucket, minio_access_key and minio_secret_key "
+                "must be configured together"
+            )
+        if not self.dataset_supported_codecs.strip():
+            raise ValueError("dataset_supported_codecs must not be empty")
         return self
 
     @classmethod
@@ -96,7 +138,9 @@ class Settings(BaseSettings):
         Pass `os.environ` at the process entrypoint; pass a literal mapping in a test.
         """
         secret_fields = {
-            name for name, field in cls.model_fields.items() if field.annotation is SecretStr
+            name
+            for name, field in cls.model_fields.items()
+            if field.annotation is SecretStr or SecretStr in get_args(field.annotation)
         }
         accepted = {
             _variable_name(name) + (SECRET_FILE_SUFFIX if name in secret_fields else "")
@@ -128,9 +172,73 @@ class Settings(BaseSettings):
                 values[name] = environ[variable]
 
         try:
-            return cls.model_validate(values)
+            settings = cls.model_validate(values)
         except ValidationError as error:
             raise ConfigurationError(str(error)) from error
+        _require_runtime_infrastructure(settings)
+        missing = [
+            _variable_name(name) for name in _REQUIRED_RUNTIME_SETTINGS if name not in values
+        ]
+        if missing:
+            raise ConfigurationError("部署缺少必需配置：" + ", ".join(missing))
+        return settings
+
+
+def _require_runtime_infrastructure(settings: Settings) -> None:
+    """拒绝缺失对象存储或任务队列的可运行配置。"""
+    if any(
+        value is None
+        for value in (
+            settings.minio_endpoint,
+            settings.minio_bucket,
+            settings.minio_access_key,
+            settings.minio_secret_key,
+        )
+    ):
+        raise ConfigurationError("部署必须完整配置 MinIO 对象存储")
+    if settings.minio_bucket is None or not settings.minio_bucket.strip():
+        raise ConfigurationError("MinIO bucket 不能为空")
+    if not any(item.strip() for item in settings.dataset_supported_codecs.split(",")):
+        raise ConfigurationError("dataset_supported_codecs 不能为空")
+    if settings.redis_url is None:
+        raise ConfigurationError("部署必须配置 Redis 任务队列")
+    redis_url = urlsplit(settings.redis_url.get_secret_value())
+    try:
+        port = redis_url.port
+    except ValueError as error:
+        raise ConfigurationError("redis_url 端口无效") from error
+    if port is not None and not 1 <= port <= 65535:
+        raise ConfigurationError("redis_url 端口无效")
+    if redis_url.scheme not in {"redis", "rediss"} or not redis_url.hostname:
+        raise ConfigurationError("redis_url 必须使用带主机的 redis(s) 地址")
+    try:
+        database = int(redis_url.path.strip("/") or "0")
+    except ValueError as error:
+        raise ConfigurationError("redis_url 数据库编号无效") from error
+    if database < 0:
+        raise ConfigurationError("redis_url 数据库编号无效")
+    for label, endpoint in (
+        ("minio_endpoint", settings.minio_endpoint),
+        ("minio_public_endpoint", settings.minio_public_endpoint),
+    ):
+        if endpoint is None:
+            continue
+        parsed = urlsplit(endpoint)
+        try:
+            port = parsed.port
+        except ValueError as error:
+            raise ConfigurationError(f"{label} 端口无效") from error
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.path
+            not in {
+                "",
+                "/",
+            }
+            or (port is not None and not 1 <= port <= 65535)
+        ):
+            raise ConfigurationError(f"{label} 必须是带主机的 HTTP(S) 地址")
 
 
 def _variable_name(field_name: str) -> str:

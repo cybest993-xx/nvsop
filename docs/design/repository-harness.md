@@ -185,6 +185,45 @@ Fixtures must be synthetic or sanitized, minimal, deterministic, and documented 
 
 Technology-neutral by intent: the reference baseline's crate layout, named clippy lints, ratatui styling, and ASCII-only default are its own and are not adopted here.
 
+### Implementation checklist
+
+Before editing, record these four items once per task in `.tmp/task-handoff.md`; update them when scope changes:
+
+- Entry: the entry point and affected callers.
+- Reuse: existing implementations to call, or where you searched if none applies.
+- Allowed writes: the data fields and state this operation may change.
+- Preserve: the data fields and state this operation must retain.
+
+Proceed within the already authorized scope and apply these rules:
+
+1. **Search before adding logic.** Before adding validation, conversion or
+   logging logic, inspect existing implementations and their callers. Reuse
+   an implementation when its meaning matches the required behavior.
+
+2. **Keep the business flow visible.** Extract a private function in the
+   owning module when it names a complete responsibility or makes its caller
+   easier to understand, even with one caller. Give cohesive validation or
+   conversion blocks meaningful names; keep trivial pass-through code inline.
+   Function length alone does not require extraction.
+
+3. **Share identical business rules.** Revalidation calls the same rule
+   implementation. Keep validation and authorization at their required
+   boundaries; share only checks with the same meaning.
+
+4. **Limit data changes.** Check assignments, object reconstruction and
+   collection transformations against Allowed writes and Preserve.
+   Regenerate another field only when the task requires that relationship.
+   For example, renaming a step preserves its description unless regenerating
+   the description is explicitly required.
+
+In that same handoff, cite the reused implementations, explain each new
+helper's responsibility in one sentence, and identify the write locations
+and how other data is preserved. Use file and function references.
+
+Use this checklist in the existing consolidated review. Inspect the actual
+diff and affected callers to verify the claims. Keep all acceptance criteria
+through implementation; complete each behavior in turn until the task is done.
+
 ### Size and decomposition guidance
 
 The official Codex [file guidance](https://github.com/openai/codex/blob/c1f1467f3028bd433c8f2063ecc28dd5be206df6/AGENTS.md#L49-L59) targets Rust modules below 500 lines excluding tests; beyond roughly 800 lines in a **file**, it prefers a new module for new functionality unless there is a strong documented reason. Its separate [change guidance](https://github.com/openai/codex/blob/c1f1467f3028bd433c8f2063ecc28dd5be206df6/AGENTS.md#L125-L131) concerns the **whole change**, with mechanical changes excepted and smaller stages to be explored. Neither sets a lifetime cap on a product module.
@@ -218,7 +257,6 @@ Keep useful explanations and normal formatting. Moving behavior into `api.py`, `
 - Where a signature cannot change and a literal must be passed, name it at the call site with a comment carrying the callee's parameter name exactly.
 - Branch on an enumeration exhaustively; a catch-all arm swallows the next value added. One exception, and it is mandatory rather than permitted: at a cross-process wire boundary a forward-compatible fallback is required, because the inference host and the center upgrade independently — an unknown reason code renders as the raw code plus a generic hint (see [ADR-0003](../adr/0003-api-v1-is-a-fixed-prefix.md)).
 - Every entry added to a module's `api.py` carries a docstring giving its role and the caller's expected use. `api.py` is the cross-module contract, so an undocumented entry there is an unbounded promise.
-- Extract a private helper when it names a complete responsibility or makes its caller easier to understand, even with one caller; keep trivial pass-through helpers inline.
 
 ### What a change carries with it
 
@@ -228,24 +266,43 @@ Keep useful explanations and normal formatting. Moving behavior into `api.py`, `
 
 ## 6. Stable command interface
 
-`make check` is the CPU-only, infrastructure-free merge gate and must work from the repository root, without Docker. CI calls it exactly as developers do. It runs repository policy, migration table-ownership, the base-code contract suite, the `import-linter` contracts, content-based secret scanning (`detect-secrets`, with an empty baseline and inline allowlisting so a false positive is explained where it sits), and each workspace's formatting, lint, type, and unit checks; each workspace-adding change must extend it in the same change with that workspace's build checks and generated-artifact cleanliness.
+`make check` is the CPU-only, infrastructure-free code gate and must work from the repository root, without Docker. CI calls it exactly as developers do for changes outside the documentation allowlist in §7. It runs repository policy, migration table-ownership, the base-code contract suite, the `import-linter` contracts, content-based secret scanning (`detect-secrets`, with an empty baseline and inline allowlisting so a false positive is explained where it sits), and each workspace's formatting, lint, type, and unit checks; each workspace-adding change must extend it in the same change with that workspace's build checks and generated-artifact cleanliness.
+
+`make check-docs` is the documentation gate: repository policy (including local Markdown links), content-based secret scanning, and `git diff --check`. It uses the same frozen Python environment and lockfile check as `make check`. Locally, `BASE` defaults to `origin/main` and an omitted `HEAD` checks through the working tree; CI supplies the actual base and candidate commits. Pure wording changes use this target without running code, integration or browser suites.
 
 Its first two targets are `lockfile` (`uv lock --check`, so a manifest edit whose lockfile was never regenerated fails rather than installing the old resolution) and `sync` (`uv sync --frozen --all-packages`). Every gate tool is resolved from `uv.lock` rather than installed separately, so a developer, the edge targets, and CI all execute the same build of ruff and mypy, and no run can silently upgrade a dependency. `apps/edge-runtime/` is not a workspace member and its tests run on a bare interpreter, but its tools come from that same environment. The web targets follow the same shape: `web-install` is `pnpm install --frozen-lockfile`, and the checks after it run from that installed tree. `web-build` is a gate rather than a packaging step — `vite build` resolves every dynamic `import()` the router declares, so a route that only breaks when built breaks in the gate instead of at deployment.
 
-`make check-integration` is the second required target: one application plus real local infrastructure (PostgreSQL, Redis, MinIO) started as containers via testcontainers. It is separate because a developer without Docker must still be able to run `make check`, and because container startup does not belong in the fast feedback loop. Both targets feed the blocking gatherer, so merge protection strength is unchanged. SQLite and in-memory fakes are not substitutes for the integration target: transaction isolation, `JSONB`, timezone, and deferred foreign key behavior differ enough to produce false green.
+`make check-integration` verifies one application plus real local infrastructure (PostgreSQL, Redis, MinIO) started as containers via testcontainers. It is separate because a developer without Docker must still be able to run `make check`, and because container startup does not belong in the fast feedback loop. Applicable integration and browser checks feed the same blocking gatherer under §7. SQLite and in-memory fakes are not substitutes for the integration target: transaction isolation, `JSONB`, timezone, and deferred foreign key behavior differ enough to produce false green.
 
-Package-specific commands may exist for a tight feedback loop, but they do not replace these two targets. Automation in `scripts/` stays thin: product behavior belongs in an app or package where it can be tested through its interface.
+Package-specific commands provide affected local evidence; final CI still runs the applicable complete gates under §7. Automation in `scripts/` stays thin: product behavior belongs in an app or package where it can be tested through its interface.
 
-Use the Make targets for gate evidence: they carry CI's flags, environment and ordering. For a narrow red/green loop, the underlying command may select a test when it preserves the target's interpreter, paths and flags; that run does not replace the required target. Run the formatter on changed code without asking first. Let container startup, model loading and integration bring-up finish before judging their result.
+Use the affected Make targets for local evidence: they carry CI's flags, environment and ordering. For a narrow red/green loop, the underlying command may select a test when it preserves the target's interpreter, paths and flags. Run the formatter on changed code without asking first. Let container startup, model loading and integration bring-up finish before judging their result.
 
 ### Working and review cycle
 
-1. **Scope.** Record the ticket or direct user request, acceptance criteria, affected entry point/callers and necessary evidence under §4. One ticket or direct task, one branch, one worktree outside the repository, never `main`. Start from `origin/main`; use a fresh branch for the next task and delete the old branch/worktree once merged. Existing approved scope and test seams remain approved; ask only about missing decisions that affect behavior or safety.
-2. **Implement.** Invoke `tdd` for behavior changes, including repository checks. Use the agreed public seam: one failing test, the minimum implementation, then the next behavior. Run the narrow affected tests during this loop. Pure wording changes use document checks; they do not enter TDD. Finish the full acceptance scope before requesting the normal review, rather than reviewing each test or private extraction separately.
-3. **Verify.** One owner runs `make check` for the completed batch, plus the applicable integration, browser, contract or hardware gates from §4 and §7. `make -k check` can collect independent failures in one run without changing success criteria. Capture commands, results, environment and the tested commit plus any uncommitted diff/untracked files in one handoff, alongside the spec and fixed review base. Missing infrastructure is an explicit validation gap, never a pass. The reviewer consumes this evidence rather than launching a duplicate full run.
-4. **Review together.** A fresh session reviews the same complete diff and affected callers against both **Standards** and **Spec**. With `code-review`, its two review subagents run in parallel and return one response retaining both axes. Collect all findings before the author starts the repair batch. Blocking findings identify an unmet requirement, violated invariant or concrete defect; size, optional cleanup and subjective smells alone are advisory. Tool-enforced checks use the existing results.
-5. **Repair and recheck.** Fix the collected defects together, then rerun the affected checks and review the fixes plus their affected callers. Evidence is reusable only while the covered code, tests, configuration, dependencies and relevant external inputs remain unchanged. Repeat a broader check or review only for invalidated evidence, expanded scope or a new concrete concern; explain the trigger. Unchanged areas do not start another full cycle. All blocking findings and required validation still need resolution.
-6. **Hand off and commit.** A session that writes code neither reviews nor commits that change. One fresh session may coordinate the consolidated review, verify its resolution and commit; subagents are for review only. Record acceptance coverage, review resolution, valid check results and any tracked deferred validation before calling implementation ready. Closing a ticket still follows the roadmap's exit conditions and the issue-tracker evidence rules.
+Required: preserve authorization, data integrity, architecture invariants, necessary verification and resolution of blocking findings. Default: one isolated task worktree, one main session responsible for completion and one consolidated independent review. Escalate checks when the actual change invalidates evidence or leaves its impact uncertain; size and optional cleanup remain advisory.
+
+1. **Scope and resume.** Start each new task from `origin/main` on its own branch and worktree outside the repository, never `main`. Continue that task, repair review findings and change windows in the same worktree. Keep one ignored `.tmp/task-handoff.md` with the request, complete acceptance criteria, §5 checklist, fixed comparison base, candidate commit and any uncommitted/untracked changes, reviewed commit, findings and resolution, valid checks with commands/environment/covered inputs, and next action. Update this record when its contents change. Existing authorized scope and test seams remain approved; ask only about missing decisions that affect behavior or safety. Delete the task branch/worktree after merging; use a new one for the next task.
+2. **Implement and save progress.** Invoke `tdd` for behavior changes, including repository checks. At the agreed public seam, use one failing test, the minimum implementation, then the next behavior. Pure wording changes use `make check-docs`. Run affected local checks and save stage commits on the task branch when useful. A commit records progress; mark it pending acceptance while review, required validation or acceptance scope remains incomplete.
+3. **Verify the slice.** Finish the complete acceptance scope before the normal review. Run the affected Make targets and the necessary evidence from §4; CI runs the applicable complete gates in §7. Record results and validation gaps in the same handoff. When an environment is unavailable, continue other work and retain stage commits, but keep merge readiness pending. The reviewer consumes valid evidence instead of duplicating full runs.
+4. **Review together.** One independent reviewer checks the complete diff and affected callers for requirements, correctness and code quality, reporting **Spec** and **Standards** together. Use a subagent or another reviewer; the main session can implement, self-review, coordinate independent review, repair, recheck and commit. Collect all findings before starting the repair batch. If the reviewer edits code, another reviewer checks only those edits and affected callers; the existing full review remains valid for unchanged areas.
+5. **Repair and recheck.** Fix the collected blockers together. Review the changes since the last reviewed version plus affected callers, and run the affected checks. Reuse valid findings and evidence under the rules below. Expand a check or review only when evidence is invalidated, scope grows or a concrete new concern requires it; record the trigger.
+6. **Finish by task state.** Merge and issue closure require the full acceptance scope, resolved blocking findings and the final candidate's applicable CI success. Record acceptance coverage, review resolution and valid evidence before declaring readiness; tracked deferred validation must satisfy the roadmap's exit conditions and issue-tracker evidence rules. Push, merge and publication follow the user's existing authorization. Session identity does not change these conditions.
+
+### Evidence reuse and blockers
+
+Evidence remains valid while its covered code, tests, configuration, dependencies and relevant external inputs remain unchanged. The handoff records which version and inputs each result covers; a new window reads it, verifies the current version and differences, and continues the recorded next action.
+
+| Situation | Action |
+|---|---|
+| Window changes; code and relevant inputs are unchanged | Reuse recorded evidence and continue. |
+| Local repair after review | Review the increment and affected callers; rerun affected checks. |
+| Commit message changes; code content is identical | Reuse the code review and unaffected local evidence. |
+| Interface, dependency, migration or shared behavior changes | Expand to affected modules; run complete checks if the impact cannot be bounded. |
+| Required validation environment is unavailable | Record the gap, continue other work and save progress; keep merge readiness pending. |
+| Naming, size or optional cleanup suggestion | Record advice; block only on a concrete defect, violated invariant or unmet necessary requirement. |
+
+Local checks and CI may reuse still-valid results and caches. The final commit must nevertheless have its own successful applicable CI status; a previous commit's green status does not satisfy that requirement. Failed required checks and unresolved blocking findings remain blockers.
 
 Four of this document's rules also run as Git hooks, versioned in `scripts/githooks/` and enabled by `make hooks` (which `make check` runs, so a fresh clone has them after its first gate run): a commit is refused on `main`, a push to `main` is refused from any branch, a staged change under `vendor/` is refused with a pointer to ADR-0007, and unformatted staged Python is refused. They sit in Git rather than in any one agent's configuration because every agent and every person commits through Git, so one implementation holds for all of them. An instruction file is advisory; a hook holds on the turn where the instruction has already scrolled out of context. Each hook is a few standard-library lines that cite the rule it enforces, which is what keeps the two in agreement.
 
@@ -253,19 +310,19 @@ Four of this document's rules also run as Git hooks, versioned in `scripts/githo
 
 ### Blocking pull-request gate
 
-The sole branch-protection status is `CI required` from `.github/workflows/blocking-ci.yml`. The gatherer runs with `always()` and fails if any required dependency fails or is cancelled. This prevents a skipped downstream job from appearing green.
+The sole branch-protection status is `CI required` from `.github/workflows/blocking-ci.yml`. Its `always()` gatherer requires explicit success from scope selection, both lockfile checks and every gate job. Failed, cancelled or skipped dependencies fail aggregation. A selector error cannot become a successful no-change result.
 
-As workspaces appear, split checks into reusable workflows while retaining the gatherer:
+`scripts/ci_scope.py BASE HEAD` emits `docs_only` and `force_all` booleans for the commits CI will compare. It reads NUL-delimited Git paths with rename detection disabled, so moving code into a Markdown file still selects code checks. The workflow checks the candidate tree and uses this scope:
 
-1. repository policy and lockfile cleanliness — always, for both `uv.lock` and `pnpm-lock.yaml`;
-2. backend/edge/web format, lint, type, unit, boundary, secret-scanning, base-code contract checks and the web production build (`make check`) — on relevant paths; plus the advisory size report (`make change-size`) on pull requests;
-3. backend integration checks against real containerized infrastructure (`make check-integration`) — on relevant paths;
-4. migration and cross-process contract compatibility — when schemas or contracts change;
-5. workflow changes — run every blocking family.
+| Changed paths | Applicable complete gates |
+|---|---|
+| Only root `AGENTS.md`, `CLAUDE.md`, `CONTEXT.md`, `README.md`, or Markdown files beneath `docs/` | `make check-docs`; integration and browser jobs return explicit no-change success. |
+| Any other path, including mixed documentation and code | `make check`, including migration/contract compatibility and the Web build; existing integration and browser path filters still apply. |
+| `.github/`, root `Makefile`, the selector itself, or an unusable comparison baseline | All blocking families: `make check`, `make check-integration` and `make web-e2e`. |
 
-The web checks are inside family 2 rather than a family of their own. §6 admits exactly one target besides `make check`, and `check-integration` earns it by needing Docker — a developer without it must still be able to run the gate. Node and pnpm are a frozen toolchain like uv's, not infrastructure to bring up, so that reason does not reach the web; splitting it out would leave the local target and the blocking gate running different checks, which is the thing §6 exists to prevent.
+Lockfile checks always run for both `uv.lock` and `pnpm-lock.yaml`. Code pull requests retain the advisory `make change-size` report. Applicable code gates verify generated-artifact cleanliness, backend integration keeps its real infrastructure and system-test coverage, and browser checks keep Chrome and Edge evidence. The documentation lane reuses frozen tools, policy/link checks and secret scanning from §6.
 
-Path filtering is an optimization, not an exemption: every reusable workflow must return an explicit success when no relevant files changed. Actions are pinned to immutable commit SHAs, permissions are least-privilege, dependency installs are frozen, jobs have timeouts, and cancellation is enabled for superseded PR runs.
+Path filtering is an optimization, not an exemption: an inapplicable gate returns explicit success, while a failed selector or check remains a failure. Actions are pinned to immutable commit SHAs, permissions are least-privilege, dependency installs are frozen, jobs have timeouts, and cancellation is enabled for superseded PR runs.
 
 ### Non-blocking and release gates
 
@@ -289,7 +346,7 @@ Keep `AGENTS.md` as the always-present entry point: the invariants needed before
 
 Each rule has one authoritative home. Point to tool configuration, commands, contracts and ADRs instead of copying their current values or directory inventories. Keep instruction text in English under §5. When guidance is superseded, merge surviving facts into the current source and delete the stale guidance; Git is the archive. Use `writing-for-agents` when updating these instructions.
 
-The official [AGENTS.md guide](https://developers.openai.com/codex/guides/agents-md/) defines a default **32 KiB combined project-instruction byte budget**, configured by `project_doc_max_bytes`. That is a loading limit, not a source-file line limit or a per-document word target. Codex discovers the instruction chain at session start; start a fresh session to verify instruction changes. Keep important guidance reachable within the budget; do not turn a suggested document length into another hard size gate.
+The official [AGENTS.md guide](https://developers.openai.com/codex/guides/agents-md/) defines a default **32 KiB combined project-instruction byte budget**, configured by `project_doc_max_bytes`. That is a loading limit, not a source-file line limit or a per-document word target. Codex discovers the instruction chain at session start; explicitly read changed instructions before continuing. Keep important guidance reachable within the budget; do not turn a suggested document length into another hard size gate.
 
 ## 10. Reference-baseline patterns used
 

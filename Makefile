@@ -1,4 +1,4 @@
-.PHONY: check check-integration change-size hooks lockfile sync policy policy-test migrations contract-base \
+.PHONY: check check-docs check-integration change-size hooks lockfile sync policy policy-test migrations contract-base \
 	contract-capability \
 	contracts contracts-python-check contracts-python-format contracts-python-lint \
 	contracts-python-type contracts-python-unit openapi-export openapi-compat openapi-generate \
@@ -12,6 +12,11 @@ check: lockfile sync hooks policy-test policy migrations contract-base contract-
 	boundaries secret-scan center-format center-lint center-type center-unit \
 	edge-format edge-lint edge-type edge-unit edge-integration \
 	contracts web-format web-lint web-type web-unit web-build
+
+# 文档快线复用冻结工具、仓库政策（含 Markdown 链接）与敏感信息扫描。
+# 本地省略 HEAD 时检查从 BASE 到工作区的差异；CI 传入实际比较提交。
+check-docs: lockfile sync hooks policy secret-scan
+	git diff --check "$(BASE)" $(if $(HEAD),"$(HEAD)") --
 
 # Git hooks that hold for whichever agent or person commits (harness §6): no commit on
 # main, no push to main, no edit under vendor/, no unformatted Python. Versioned under

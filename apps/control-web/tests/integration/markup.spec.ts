@@ -188,6 +188,8 @@ vi.mock('@/api/controlPlane', async (importOriginal) => ({
   readStations: vi.fn(() =>
     Promise.resolve({ items: DEVICE_FIXTURES.stations, page: 1, page_size: 50, total: 1 }),
   ),
+  // 固定工位模板的加载状态，避免连接器快照随真实网络请求的完成时机变化。
+  readStationTemplateConfiguration: vi.fn(() => new Promise(() => {})),
   readTemplateDrafts: vi.fn(() =>
     Promise.resolve({ items: TEMPLATE_FIXTURES.drafts, page: 1, page_size: 50, total: 1 }),
   ),

@@ -64,6 +64,12 @@ def test_nginx_template_parses_when_nginx_is_available() -> None:
         for line in source.splitlines()
         if not line.lstrip().startswith(("ssl_certificate ", "ssl_certificate_key "))
     )
+    # 语法检查不依赖 Compose DNS；真实服务名由部署网络解析。
+    syntax_source = (
+        syntax_source.replace("control-api:8000", "127.0.0.1:8000")
+        .replace("annotation-backend:8100", "127.0.0.1:8100")
+        .replace("annotation-frontend:80", "127.0.0.1:80")
+    )
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         snippet = root / "annotation.conf"

@@ -11,11 +11,16 @@ import { useSessionStore } from '@/session/store'
 const api = vi.hoisted(() => ({
   readTrainingDatasets: vi.fn(),
   readDatasetMembers: vi.fn(),
+  listDatasetActionListVersions: vi.fn(),
+  registerDatasetActionList: vi.fn(),
   createTrainingDataset: vi.fn(),
   requestVideoUpload: vi.fn(),
   confirmVideoUpload: vi.fn(),
   retryVideoUpload: vi.fn(),
   readJob: vi.fn(),
+  createAnnotationContext: vi.fn(),
+  readAnnotationContext: vi.fn(),
+  listAnnotations: vi.fn(),
 }))
 const upload = vi.hoisted(() => vi.fn())
 
@@ -104,6 +109,32 @@ const MEMBER_FAILED_VALIDATION = {
   validation_job_id: 'job-1',
 }
 
+const ANNOTATION_CONTEXT = {
+  context_token: 'signed-context',
+  dataset_id: DATASET.id,
+  member_id: 'member-1',
+  action_list_revision: 1,
+  annotation_revision: 0,
+  source_object_version_id: 'object-version-1',
+  source_sha256: 'a'.repeat(64),
+  derived_video_size: 11,
+  derived_video_sha256: 'b'.repeat(64),
+  derived_video_duration_seconds: 2.5,
+  preparation_job_id: 'preparation-job-1',
+  preparation_status: 'succeeded',
+  preparation_failure_code: null,
+  preparation_failure_detail: null,
+  original_filename: 'line-1.mp4',
+  source: 'camera-A12',
+  duration_seconds: 2.5,
+  actions: ['(1) 取料'],
+  video_url: '/annotation/media/videos/signed-context/download',
+  initial_timestamps: [],
+  two_operator_mode: false,
+  expires_at: '2026-09-08T09:00:00Z',
+  latest_submission: null,
+}
+
 const MEMBER_FAILED_UPLOAD = {
   ...MEMBER_REGISTERED,
   status: 'failed',
@@ -159,6 +190,17 @@ beforeEach(() => {
     total: 1,
   })
   api.createTrainingDataset.mockResolvedValue(DATASET)
+  api.listDatasetActionListVersions.mockResolvedValue({ items: [] })
+  api.registerDatasetActionList.mockResolvedValue({
+    dataset_id: DATASET.id,
+    revision: 1,
+    actions: ['(1) 取料'],
+    created_by: 'operator-1',
+    created_at: '2026-09-08T01:00:00Z',
+  })
+  api.createAnnotationContext.mockResolvedValue(ANNOTATION_CONTEXT)
+  api.readAnnotationContext.mockResolvedValue(ANNOTATION_CONTEXT)
+  api.listAnnotations.mockResolvedValue({ items: [] })
   api.readJob.mockResolvedValue({
     id: 'job-1',
     job_type: 'dataset_validation',
@@ -225,6 +267,48 @@ describe('训练数据集工作台', () => {
     expect(api.readDatasetMembers).toHaveBeenLastCalledWith(DATASET.id, 2, 50)
     expect(wrapper.text()).toContain('line-2.mp4')
 
+    wrapper.unmount()
+  })
+
+  it('opens the independent annotation UI after a registered member is prepared', async () => {
+    grant('dataset.dataset.view', 'dataset.dataset.edit')
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+
+    const enterAnnotation = wrapper.findAll('button').find((button) => button.text() === '进入标注')
+    expect(enterAnnotation).toBeDefined()
+    await enterAnnotation!.trigger('click')
+    await flushPromises()
+
+    expect(api.createAnnotationContext).toHaveBeenCalledWith(DATASET.id, MEMBER_REGISTERED.id)
+    expect(wrapper.find('h2#annotation-editor-heading').text()).toBe('动作标注')
+    expect(wrapper.find('a.datasets__annotation-launch-link').attributes('href')).toBe(
+      '/annotation/?context=signed-context',
+    )
+    expect(wrapper.text()).toContain('独立的 NVIDIA React 界面')
+
+    wrapper.unmount()
+  })
+
+  it('allows an editor to append an action-list revision without changing old entries', async () => {
+    grant('dataset.dataset.view', 'dataset.dataset.edit')
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+
+    expect(wrapper.find('form[aria-label="登记动作列表"]').exists()).toBe(true)
+    await wrapper.find('textarea[name="dataset-action-list"]').setValue('(1) 取料\n(2) 安装')
+    await wrapper.find('form[aria-label="登记动作列表"]').trigger('submit')
+    await flushPromises()
+
+    expect(api.registerDatasetActionList).toHaveBeenCalledWith(DATASET.id, ['(1) 取料', '(2) 安装'])
+    expect(wrapper.text()).toContain('版本 1')
+    expect(wrapper.text()).toContain('(1) 取料')
+
+    await wrapper.find('.datasets__action-list button').trigger('click')
+    await flushPromises()
+    expect(api.listDatasetActionListVersions).toHaveBeenCalledWith(DATASET.id)
     wrapper.unmount()
   })
 

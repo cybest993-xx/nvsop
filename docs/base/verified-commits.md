@@ -36,6 +36,12 @@ git subtree pull --prefix=vendor/sop-monitoring-blueprints \
 - 契约测试：`tests/contract/base/` 共 35 条通过，其中 16 条为本次新增（`test_stream_health_patch.py`：补丁纯追加、补丁与工作树同步、`vendor/` 只 import 一处我们的模块、hook 调用位于回调末尾、基座消息类型与状态名未变、`DISABLE_SOP_CHECKER` 下的队列路由与消费者集合未变）。
 - 补丁是否需要调整：不需要。
 
+#### 标注接入补丁在该提交上落地（2026-09-09）
+
+- 补丁：[`patches/0002-annotation-upload-target-and-accessibility.patch`](patches/0002-annotation-upload-target-and-accessibility.patch)。改动训练标注基座的显式目标上传、独立上下文入口、异步结果轮询、控件可访问性和标注服务端口边界；不复制时间轴或切片逻辑。
+- 契约测试：`tests/contract/base/` 的 `test_annotation_patch.py` 验证补丁从当前 vendor 树可逆向干净应用、只触及登记的五个文件、上传请求在一次调用内固定目标、上下文入口存在、标注服务不发布端口，以及控件标签关联未丢失。
+- 补丁是否需要调整：不需要。训练基座的产品接入仍须在上游提交变化后重新运行该族测试。
+
 ## 已知的基座既有缺陷（不修，仅登记）
 
 这些是 NVIDIA 交付物自带的问题。修它们需要超出 [ADR-0007](../adr/0007-base-is-the-trunk-not-a-dependency.md) 已登记范围的补丁，故原样保留并在此登记，避免被误认为我们引入。

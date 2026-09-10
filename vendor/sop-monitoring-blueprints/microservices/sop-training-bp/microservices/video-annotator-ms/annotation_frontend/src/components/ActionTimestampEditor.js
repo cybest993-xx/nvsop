@@ -21,6 +21,34 @@ import 'rc-slider/assets/index.css';
 
 // Use nginx proxy path to avoid CORS issues
 const API_BASE_URL = '/api/annotation';
+const CSRF_COOKIE = 'sop_csrf';
+const CSRF_HEADER = 'x-csrf-token';
+const SPLIT_POLL_INTERVAL_MS = 1000;
+const SPLIT_POLL_LIMIT = 300;
+
+function csrfHeaders() {
+  const entry = document.cookie
+    .split('; ')
+    .find((value) => value.startsWith(`${CSRF_COOKIE}=`));
+  if (!entry) return {};
+  return { [CSRF_HEADER]: decodeURIComponent(entry.slice(CSRF_COOKIE.length + 1)) };
+}
+
+async function waitForSplitResult(pollUrl) {
+  for (let attempt = 0; attempt < SPLIT_POLL_LIMIT; attempt += 1) {
+    const response = await fetch(pollUrl, { credentials: 'same-origin', cache: 'no-store' });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.detail || result.message || `请求失败（HTTP ${response.status}）`);
+    }
+    if (result.status === 'succeeded') return result;
+    if (result.status === 'failed') {
+      throw new Error(result.failure_detail || result.failure_code || '标注切片失败');
+    }
+    await new Promise((resolve) => setTimeout(resolve, SPLIT_POLL_INTERVAL_MS));
+  }
+  throw new Error('标注切片超时');
+}
 
 const ActionTimestampEditor = ({ actions = [], uploadedVideoId, videoUrl, initialTimestamps, onTimestampsSubmitted, twoOperatorMode = false }) => {
   // State for dynamic timestamp blocks
@@ -450,8 +478,10 @@ const ActionTimestampEditor = ({ actions = [], uploadedVideoId, videoUrl, initia
       const response = await fetch(`${API_BASE_URL}/api/v1/videos/${videoId}/split`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          ...csrfHeaders(),
         },
+        credentials: 'same-origin',
         body: JSON.stringify(requestBody)
       });
 
@@ -471,6 +501,10 @@ const ActionTimestampEditor = ({ actions = [], uploadedVideoId, videoUrl, initia
         const errorMessage = result.detail || result.message || `HTTP error! status: ${response.status}`;
         console.error('Backend error response:', result);
         throw new Error(errorMessage);
+      }
+
+      if (result.status === 'accepted' && result.poll_url) {
+        result = await waitForSplitResult(result.poll_url);
       }
 
       console.log('Timestamp submission successful, response:', result);
@@ -554,8 +588,9 @@ const ActionTimestampEditor = ({ actions = [], uploadedVideoId, videoUrl, initia
     <div className="action-timestamp-editor">
       {/* FPS control */}
       <Form.Group className="mb-3">
-        <Form.Label>Video Frame Rate (fps)</Form.Label>
+        <Form.Label htmlFor="annotation-fps">Video Frame Rate (fps)</Form.Label>
         <Form.Control
+          id="annotation-fps"
           type="number"
           min="1"
           max="120"
@@ -767,8 +802,9 @@ const ActionTimestampEditor = ({ actions = [], uploadedVideoId, videoUrl, initia
                   <Col lg={6}>
                     <h5 className="mb-3">Action Selection</h5>
                     <Form.Group className="mb-3">
-                      <Form.Label>Choose Action</Form.Label>
+                      <Form.Label htmlFor={`annotation-action-${index}`}>Choose Action</Form.Label>
                       <Form.Select
+                        id={`annotation-action-${index}`}
                         value={block.actionIndex}
                         onChange={(e) => handleActionChange(index, e.target.value)}
                       >
@@ -792,6 +828,10 @@ const ActionTimestampEditor = ({ actions = [], uploadedVideoId, videoUrl, initia
                         <div style={{ padding: '10px 20px', marginTop: '15px' }}>
                           <Slider
                             range
+                            ariaLabelForHandle={[
+                              `事件 ${index + 1} 开始时间`,
+                              `事件 ${index + 1} 结束时间`,
+                            ]}
                             min={0}
                             max={videoDuration || 100}
                             step={frameTimeStep}
@@ -829,8 +869,9 @@ const ActionTimestampEditor = ({ actions = [], uploadedVideoId, videoUrl, initia
                         <Row className="mt-3">
                           <Col xs={6}>
                             <Form.Group>
-                              <Form.Label className="small text-success">Start Time (s)</Form.Label>
+                              <Form.Label htmlFor={`annotation-start-${index}`} className="small text-success">Start Time (s)</Form.Label>
                               <Form.Control
+                                id={`annotation-start-${index}`}
                                 type="number"
                                 min="0"
                                 max={(block.endTime || 0) - 0.1}
@@ -843,8 +884,9 @@ const ActionTimestampEditor = ({ actions = [], uploadedVideoId, videoUrl, initia
                           </Col>
                           <Col xs={6}>
                             <Form.Group>
-                              <Form.Label className="small text-danger">End Time (s)</Form.Label>
+                              <Form.Label htmlFor={`annotation-end-${index}`} className="small text-danger">End Time (s)</Form.Label>
                               <Form.Control
+                                id={`annotation-end-${index}`}
                                 type="number"
                                 min={(block.startTime || 0) + 0.1}
                                 max={videoDuration || 100}
@@ -862,6 +904,7 @@ const ActionTimestampEditor = ({ actions = [], uploadedVideoId, videoUrl, initia
                       <Form.Group>
                         <Form.Label>Completion Time (seconds)</Form.Label>
                       <Form.Control
+                        aria-label={`事件 ${index + 1} 完成时间`}
                         type="range"
                         min="0"
                         max={videoDuration || 100}
@@ -878,6 +921,7 @@ const ActionTimestampEditor = ({ actions = [], uploadedVideoId, videoUrl, initia
                       </div>
                     <Form.Group className="mt-3">
                       <Form.Control
+                        aria-label={`事件 ${index + 1} 完成时间（秒）`}
                         type="number"
                         min="0"
                         max={videoDuration || 100}

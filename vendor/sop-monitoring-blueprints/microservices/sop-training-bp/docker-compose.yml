@@ -151,8 +151,6 @@ services:
       context: ./microservices/video-annotator-ms/annotation_backend
       dockerfile: Dockerfile
     container_name: sop-annotation-backend
-    ports:
-      - "${ANNOTATION_BACKEND_PORT:-8100}:${ANNOTATION_BACKEND_PORT:-8100}"
     environment:
       - SERVICE_PORT=${ANNOTATION_BACKEND_PORT:-8100}
       - POSTGRES_USER=${POSTGRES_USER}
@@ -175,8 +173,6 @@ services:
       context: ./microservices/video-annotator-ms/annotation_frontend
       dockerfile: Dockerfile
     container_name: sop-annotation-frontend
-    ports:
-      - "${FRONTEND_PORT:-80}:${FRONTEND_PORT:-80}"
     networks:
       - sop-network
     env_file:

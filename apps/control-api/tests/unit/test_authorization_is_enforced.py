@@ -402,6 +402,30 @@ ROUTES = [
     Target("POST", "/training-datasets", {"name": "新的训练集"}),
     Target(
         "POST",
+        "/training-datasets/{dataset_id}/action-list",
+        {"actions": ["(1) 取料"]},
+    ),
+    Target(
+        "POST",
+        "/training-datasets/{dataset_id}/members/{member_id}/annotation-context",
+        {},
+    ),
+    Target(
+        "POST",
+        "/training-datasets/{dataset_id}/members/{member_id}/annotations",
+        {
+            "context_token": "invalid-context",
+            "mode": "single_operator",
+            "segments": [{"start": 0.0, "end": 0.5, "action_index": 0}],
+        },
+        headers={"Idempotency-Key": "authorization-annotation", "If-Match": "0"},
+    ),
+    Target(
+        "POST",
+        "/training-datasets/{dataset_id}/members/{member_id}/annotations/{submission_id}/retry",
+    ),
+    Target(
+        "POST",
         "/training-datasets/{dataset_id}/members",
         {
             "original_filename": "sample.mp4",
@@ -488,7 +512,7 @@ class BindingGateway:
 
 
 class Backend:
-    """An application over in-memory stores, with the caller's permissions under test control."""
+    """使用内存适配器构造可控权限的应用。"""
 
     def __init__(self) -> None:
         self.users = FakeUsers()
@@ -620,6 +644,9 @@ class Backend:
         self.app.dependency_overrides[dataset_dependencies.datasets] = lambda: self.dataset_store
         self.app.dependency_overrides[dataset_dependencies.storage] = lambda: self.dataset_storage
         self.app.dependency_overrides[dataset_dependencies.jobs] = lambda: self.dataset_jobs
+        self.app.dependency_overrides[dataset_dependencies.annotation_jobs] = lambda: (
+            self.dataset_jobs
+        )
         self.client = TestClient(self.app, base_url="https://testserver")
         assert (
             self.client.post(
@@ -644,6 +671,7 @@ class Backend:
             "dataset_id": DATASET_ID,
             "member_id": DATASET_MEMBER_ID,
             "attempt_id": DATASET_ATTEMPT_ID,
+            "submission_id": DATASET_ATTEMPT_ID,
         }
         path = target.template.format(**identifiers)
 
@@ -691,18 +719,20 @@ def backend() -> Backend:
     return Backend()
 
 
-def declarations(backend: Backend) -> dict[tuple[str, str], str | None]:
+def declarations(backend: Backend) -> dict[tuple[str, str], str | list[str] | None]:
     """Every modifying operation the application serves, and the permission it declares.
 
     Read out of the generated OpenAPI document rather than off `app.routes`: the declaration exists
     to appear in that document, so this asserts on what an integrator actually receives.
     """
     document = backend.app.openapi()
-    found: dict[tuple[str, str], str | None] = {}
+    found: dict[tuple[str, str], str | list[str] | None] = {}
     for path, operations in document["paths"].items():
         for method, operation in operations.items():
             if method.upper() in MODIFYING_METHODS:
-                found[(method.upper(), path)] = operation.get(DECLARED_PERMISSION)
+                declared = operation.get(DECLARED_PERMISSION)
+                assert declared is None or isinstance(declared, (str, list))
+                found[(method.upper(), path)] = declared
     return found
 
 
@@ -726,16 +756,19 @@ def test_every_write_route_declares_the_permission_it_needs(backend: Backend) ->
         if (method, path) in EXEMPT:
             continue
         assert declared is not None, f"{method} {path} declares no permission"
-        assert declared in registered, (
+        values = [declared] if isinstance(declared, str) else declared
+        assert values
+        assert set(values) <= registered, (
             f"{method} {path} declares {declared}, which is not registered"
         )
 
 
-def declared_permission_of(backend: Backend, target: Target) -> Permission:
-    """The permission the route advertises for this method and path."""
+def declared_permission_of(backend: Backend, target: Target) -> frozenset[Permission]:
+    """The permissions the route advertises for this method and path."""
     declared = declarations(backend).get((target.method, f"{API_PREFIX}{target.template}"))
     assert declared is not None, f"no declaration for {target.method} {target.template}"
-    return Permission(declared)
+    values = [declared] if isinstance(declared, str) else declared
+    return frozenset(Permission(value) for value in values)
 
 
 @pytest.mark.parametrize("target", ROUTES, ids=lambda target: f"{target.method} {target.template}")
@@ -746,7 +779,7 @@ def test_the_use_case_refuses_a_caller_without_the_declared_permission(
     # Everything *except* the declared one. A caller with no permissions at all would be refused by
     # a use case checking some other permission too, and the test would pass without proving that
     # the route's declaration is the one being enforced.
-    others = frozenset(Permission) - {declared}
+    others = frozenset(Permission) - declared
 
     response = backend.send(target, granted=others)
 
@@ -760,6 +793,6 @@ def test_the_declared_permission_is_sufficient(backend: Backend, target: Target)
     # this, a route that refused every caller for an unrelated reason would satisfy the test above.
     declared = declared_permission_of(backend, target)
 
-    response = backend.send(target, granted=frozenset({declared}))
+    response = backend.send(target, granted=declared)
 
     assert response.status_code != 403, response.body

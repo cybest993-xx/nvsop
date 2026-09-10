@@ -13,7 +13,7 @@ from arq.connections import RedisSettings
 from sqlalchemy.orm import Session, sessionmaker
 
 from factory_sop.job.adapters.repository import PostgresJobRepository
-from factory_sop.job.api import JobDispatcher
+from factory_sop.job.api import JobDispatcher, JobType
 from factory_sop.observability import get_logger
 from factory_sop.settings import ConfigurationError, Settings
 
@@ -95,15 +95,28 @@ class ArqJobDispatcher:
             executor.submit(lambda: asyncio.run(self.dispatch_async(job_id))).result()
 
     async def _dispatch(self, job_id: UUID) -> None:
+        function = self._worker_function(job_id)
         pool = await create_pool(self._settings)
         try:
-            await pool.enqueue_job(
-                "validate_dataset_job",
-                str(job_id),
-                _job_id=str(job_id),
-            )
+            await pool.enqueue_job(function, str(job_id), _job_id=str(job_id))
         finally:
             await pool.close()
+
+    def _worker_function(self, job_id: UUID) -> str:
+        """根据 PostgreSQL 任务类型选择唯一的 worker 入口。"""
+        if self._session_factory is None:
+            raise RuntimeError("任务 dispatcher 未配置数据库 session factory")
+        with self._session_factory() as session:
+            job = PostgresJobRepository(session).by_id(job_id)
+        if job is None:
+            raise ValueError(f"任务不存在：{job_id}")
+        if job.job_type is JobType.DATASET_ANNOTATION_PREPARATION:
+            return "prepare_annotation_context_job"
+        if job.job_type is JobType.DATASET_ANNOTATION:
+            return "annotate_dataset_job"
+        if job.job_type is JobType.DATASET_VALIDATION:
+            return "validate_dataset_job"
+        raise ValueError(f"未知任务类型：{job.job_type}")
 
     def _record_success(self, job_id: UUID) -> None:
         if self._session_factory is None:

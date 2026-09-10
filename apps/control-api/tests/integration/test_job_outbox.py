@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID, uuid4
 
+import pytest
 from _integration_support import (
     MinioServer,
     RedisServer,
@@ -17,10 +18,12 @@ from _integration_support import (
     settings_for,
     upload_presigned,
 )
+from arq.connections import RedisSettings
 from fastapi.testclient import TestClient
 from redis import Redis
 from sqlalchemy import Engine, text
 
+import factory_sop.job.adapters.dispatcher as dispatcher_module
 from factory_sop.app import API_PREFIX
 from factory_sop.job.adapters.dispatcher import ArqJobDispatcher
 from factory_sop.job.adapters.repository import PostgresJobRepository
@@ -29,6 +32,144 @@ from factory_sop.job.api import ApplicationJob, JobStatus, JobType
 from factory_sop.persistence import session_factory
 
 DATASETS = f"{API_PREFIX}/training-datasets"
+
+
+def test_dispatcher_routes_annotation_preparation_jobs_to_preparation_worker(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_ANNOTATION_PREPARATION,
+        status=JobStatus.PENDING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=datetime(2026, 9, 9, 1, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 9, 9, 1, 0, tzinfo=UTC),
+        failure_code=None,
+    )
+    with session_factory(engine).begin() as session:
+        PostgresJobRepository(session).add(job)
+
+    calls: dict[str, Any] = {}
+
+    class FakePool:
+        async def enqueue_job(self, function: str, *args: str, **kwargs: str) -> None:
+            calls.update(function=function, args=args, kwargs=kwargs)
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_create_pool(_: RedisSettings) -> FakePool:
+        return FakePool()
+
+    monkeypatch.setattr(dispatcher_module, "create_pool", fake_create_pool)
+    try:
+        dispatcher = ArqJobDispatcher(
+            RedisSettings(),
+            session_factory=session_factory(engine),
+        )
+        asyncio.run(dispatcher.dispatch_async(job.id))
+        assert calls == {
+            "function": "prepare_annotation_context_job",
+            "args": (str(job.id),),
+            "kwargs": {"_job_id": str(job.id)},
+        }
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM job_application_job WHERE id = :job_id"),
+                {"job_id": job.id},
+            )
+
+
+def test_dispatcher_routes_annotation_jobs_to_annotation_worker(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_ANNOTATION,
+        status=JobStatus.PENDING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=datetime(2026, 9, 9, 1, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 9, 9, 1, 0, tzinfo=UTC),
+        failure_code=None,
+    )
+    with session_factory(engine).begin() as session:
+        PostgresJobRepository(session).add(job)
+
+    calls: dict[str, Any] = {}
+
+    class FakePool:
+        async def enqueue_job(self, function: str, *args: str, **kwargs: str) -> None:
+            calls.update(function=function, args=args, kwargs=kwargs)
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_create_pool(_: RedisSettings) -> FakePool:
+        return FakePool()
+
+    monkeypatch.setattr(dispatcher_module, "create_pool", fake_create_pool)
+    try:
+        dispatcher = ArqJobDispatcher(
+            RedisSettings(),
+            session_factory=session_factory(engine),
+        )
+        asyncio.run(dispatcher.dispatch_async(job.id))
+        assert calls == {
+            "function": "annotate_dataset_job",
+            "args": (str(job.id),),
+            "kwargs": {"_job_id": str(job.id)},
+        }
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM job_application_job WHERE id = :job_id"),
+                {"job_id": job.id},
+            )
+
+
+def test_annotation_job_replay_does_not_reset_a_failed_execution(
+    engine: Engine,
+) -> None:
+    now = datetime(2026, 9, 9, 1, 0, tzinfo=UTC)
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_ANNOTATION,
+        status=JobStatus.FAILED,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=now,
+        updated_at=now,
+        failure_code="ANNOTATION_EXECUTION_FAILED",
+    )
+    with session_factory(engine).begin() as session:
+        repository = PostgresJobRepository(session)
+        repository.add(job)
+        replay = repository.get_or_create_annotation(
+            member_id=job.member_id,
+            attempt_id=job.attempt_id,
+            now=now + timedelta(seconds=1),
+        )
+
+    assert replay == job
+    try:
+        facts = row(
+            engine,
+            "SELECT status, failure_code, outbox_status "
+            "FROM job_application_job WHERE id = :job_id",
+            job_id=job.id,
+        )
+        assert facts == ("failed", "ANNOTATION_EXECUTION_FAILED", "pending")
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM job_application_job WHERE id = :job_id"),
+                {"job_id": job.id},
+            )
 
 
 def _create_dataset(client: TestClient) -> UUID:

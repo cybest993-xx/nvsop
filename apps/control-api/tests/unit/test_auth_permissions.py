@@ -46,6 +46,7 @@ def test_a_permission_names_the_module_that_owns_the_resource() -> None:
 
 def test_a_registered_permission_parses_to_its_member() -> None:
     assert parse_permission("auth.user.edit") is Permission.USER_EDIT
+    assert parse_permission("dataset.dataset.edit") is Permission.DATASET_EDIT
     assert parse_permission("dataset.dataset.import") is Permission.DATASET_IMPORT
 
 

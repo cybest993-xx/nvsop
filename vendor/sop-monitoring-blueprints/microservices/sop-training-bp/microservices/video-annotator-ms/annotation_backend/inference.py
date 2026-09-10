@@ -40,6 +40,7 @@ from fastapi import (
     Path,
     Request,
     Response,
+    Query,
     UploadFile,
 )
 from fastapi.responses import FileResponse, JSONResponse
@@ -203,16 +204,22 @@ async def set_two_operator_mode(
 
 
 @app.post("/api/v1/upload")
-async def upload_video(file: UploadFile = File(...)) -> VideoUploadResponse:
+async def upload_video(
+    file: UploadFile = File(...),
+    target_data_id: Optional[str] = Query(default=None, description="显式目标数据集 ID"),
+) -> VideoUploadResponse:
     """Upload video file"""
 
     global current_data_id
 
-    if not current_data_id:
+    selected_data_id = target_data_id or current_data_id
+    if not selected_data_id:
         raise HTTPException(
             status_code=400,
             detail="Data ID is not set. Please upload actions.json first.",
         )
+    if not await postgres_db.get_data(selected_data_id, Dataset):
+        raise HTTPException(status_code=404, detail="Target dataset not found")
 
     file_data = file.file.read()
 
@@ -226,7 +233,7 @@ async def upload_video(file: UploadFile = File(...)) -> VideoUploadResponse:
 
     try:
         # Ensure video directory exists
-        videos_dir = os.path.join(const.VIDEO_ROOT, current_data_id)
+        videos_dir = os.path.join(const.VIDEO_ROOT, selected_data_id)
 
         # Ensure the filename always ends with .mp4 for consistency
         if not safe_basename.lower().endswith(const.DEFAULT_VIDEO_EXTENSION):
@@ -238,7 +245,7 @@ async def upload_video(file: UploadFile = File(...)) -> VideoUploadResponse:
         # Check if video with same original filename already exists in this dataset
         # We need to list all videos in this dataset and check their names
         # The names in DB are stored as "{uuid}_{original_name}"
-        existing_videos = await postgres_db.list_data(Video, condition={"dataset_id": current_data_id})
+        existing_videos = await postgres_db.list_data(Video, condition={"dataset_id": selected_data_id})
 
         video_id = None
         final_file_name = None
@@ -327,7 +334,7 @@ async def upload_video(file: UploadFile = File(...)) -> VideoUploadResponse:
             await postgres_db.insert_data(
                 Video,
                 id=video_id,
-                dataset_id=current_data_id,
+                dataset_id=selected_data_id,
                 name=final_file_name,
                 mime_type=const.MIME_TYPE,
                 file_size=final_file_size,

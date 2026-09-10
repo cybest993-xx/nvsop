@@ -68,7 +68,7 @@
 | Q24 | 相机 | **海康威视网络摄像机**，RTSP 主码流 `101` / 子码流 `102` |
 | Q26 | 微调策略 | **先训练 DDM，VLM 使用公开权重**；首切片只导入、校验训练数据并生成 DDM 标注，不编排训练 |
 | Q27 | 多机部署形态 | 每台一份 Compose；中心生成**不含秘密**的配置骨架供下载，凭据在推理机本地录入（§5.12） |
-| Q28 | 预览并发与大屏 | 视频不经中心入口或中继；浏览器直连推理机 mediamtx；首版内网依赖可信工厂网络/VLAN 与端口访问控制，不引入逐观看者 JWT |
+| Q28 | 预览并发与大屏 | 运行态/预览视频不经中心入口或中继；浏览器直连推理机 mediamtx。标注产生的派生媒体按 ADR-0011 走中心授权后的 Nginx 媒体入口；首版内网依赖可信工厂网络/VLAN 与端口访问控制，不引入逐观看者 JWT |
 | Q30 | 工位组织 | 首版以唯一编码、名称和可选标签组织，不预设车间/产线层级 |
 | Q31 | 设备验证 | 配置可离线保存并显示"未验证"；显式"测试连接"只调用真实设备，不以失败阻止保存 |
 | Q32 | 首切片 Web | 简体中文桌面 Web；Chrome/Edge 当前稳定版；支持 1366×768～1920×1080；满足键盘、标签、错误提示和非纯颜色表达等基础可访问性 |
@@ -208,7 +208,7 @@
 - **保留策略域**（`retention`）：`retention_policy`（全局默认与工位覆盖组：三个判定类别各自的证据保留时长、记录明细保留时长、压缩起始年龄、聚合归档年龄；覆盖为整组替换）、`retention_sweep`（每次回收任务的执行记录：范围、删除计数、跳过计数与跳过原因、起止时刻），使"上次删了什么、为什么跳过"可查。录像滚动窗口不在此表——它按推理机配置，属 `device_inference_host`（§5.19）。
 - **连接器域**（`device`，仅配置）：`device_connector`（类型 = `hikvision_isapi` / `board_card`、连接参数、健康状态、**该适配器的能力声明**：投递方式、最大投递延迟、是否保序、是否可能丢边沿、时间戳来源，§5.8）、`device_connector_point`（方向 in/out、点位号、语义标签如"工件到位"/"停线联锁"、外键 → connector 与 station）。模板按语义标签引用点位，不写死设备地址。**工位可以没有任何连接器。**
 - **模板域**（`template`）：`template_sop`、`template_version`（不可变，含 Excel 导入引用、actions.json、vlm_prompts、**运行参数默认值**、顺序性声明、sha256、发布者与发布时刻）、`template_draft`（可编辑，含 `revision` 乐观锁列）、`template_station_binding`（`desired_version` / `reported_version`，后者由推理机上报，§5.3）。
-- **训练数据域**（`dataset`）：`dataset_training_dataset`、`dataset_member`（**数据集内的视频**：MinIO key、来源、大小、sha256、时长、编码）、`dataset_annotation`（动作时间段标注）、`dataset_usage_check`（DDM/VLM 用途、状态、原因）、`dataset_artifact`（生成的 DDM `annotation.json` 等派生制品及摘要）。上传、标注、用途检查、转换和训练是不同状态，不合并成一个"成功"。
+- **训练数据域**（`dataset`）：`dataset_training_dataset`、`dataset_member`（**数据集内的视频**：MinIO key、来源、大小、sha256、时长、编码）、`dataset_action_list_revision`、`dataset_annotation_context`、`dataset_annotation_submission`、`dataset_annotation_execution`（动作时间段标注及其不可变执行候选）、`dataset_usage_check`（DDM/VLM 用途、状态、原因）、`dataset_artifact`（生成的 DDM `annotation.json` 等派生制品及摘要）。上传、标注、用途检查、转换和训练是不同状态，不合并成一个"成功"。
 - **上报镜像域**（`monitor`）：`monitor_sop_instance`（起止、闭合原因、边界信号来源、上报时刻）、`monitor_decision`（hypertable，判定结果 + 原因码 + 模板版本 + 推理机自报模型标识）、`monitor_observation`（hypertable，动作编号与外部信号同表）、`monitor_stream_health`（hypertable，含时间锚定偏移）、`monitor_violation`（kind、锁存标志、来源推理机）、`monitor_disposal`（action、执行状态、幂等键）。全部按事件 id 幂等 upsert，权威在推理机本地；违规与处置的执行权威同样在推理机，这两张表是归档载体（[ADR-0010](../adr/0010-alert-merges-into-monitor.md)）。
 - **证据与复核域**（`evidence`）：`evidence_evidence`（MinIO key、类型、**锚点时刻、窗口前后余量、素材代次、发起来源=自动/再切片**）、`evidence_reclip_request`（新窗口参数、目标推理机、状态、发起人、失败原因如"素材已过期"）、`evidence_review`（复核结论、复核人、指向具体哪条证据）。
 - **基础域**（`auth`）：`auth_user`（含停用状态）、`auth_role`、`auth_permission`、`auth_role_permission`、`auth_session`。**不设 `auth_audit_log`**（§5.15）。

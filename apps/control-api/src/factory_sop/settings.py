@@ -87,6 +87,10 @@ class Settings(BaseSettings):
     dataset_supported_codecs: str = "h264,h265"
     media_probe_binary: str = "ffprobe"
     media_probe_timeout_seconds: int = Field(default=60, gt=0, le=3600)
+    annotation_backend_url: str | None = None
+    annotation_media_origin: str | None = None
+    annotation_http_timeout_seconds: int = Field(default=120, gt=0, le=3600)
+    annotation_context_ttl_seconds: int = Field(default=3600, gt=0, le=86400)
 
     @model_validator(mode="after")
     def _validate_deployment_values(self) -> Settings:
@@ -111,6 +115,49 @@ class Settings(BaseSettings):
             )
         if not self.dataset_supported_codecs.strip():
             raise ValueError("dataset_supported_codecs must not be empty")
+        if (self.annotation_backend_url is None) != (self.annotation_media_origin is None):
+            raise ValueError(
+                "annotation_backend_url and annotation_media_origin must be configured together"
+            )
+        if self.annotation_backend_url is not None:
+            backend_url = urlsplit(self.annotation_backend_url)
+            try:
+                backend_port = backend_url.port
+            except ValueError as error:
+                raise ValueError("annotation_backend_url has an invalid port") from error
+            if (
+                backend_url.scheme not in {"http", "https"}
+                or not backend_url.hostname
+                or backend_url.username is not None
+                or backend_url.password is not None
+                or backend_url.query
+                or backend_url.fragment
+                or (backend_port is not None and not 1 <= backend_port <= 65535)
+            ):
+                raise ValueError(
+                    "annotation_backend_url must be an HTTP(S) URL without userinfo, "
+                    "query, or fragment"
+                )
+        if self.annotation_media_origin is not None:
+            media_origin = urlsplit(self.annotation_media_origin)
+            try:
+                media_port = media_origin.port
+            except ValueError as error:
+                raise ValueError("annotation_media_origin has an invalid port") from error
+            if (
+                media_origin.scheme != "https"
+                or not media_origin.hostname
+                or media_origin.username is not None
+                or media_origin.password is not None
+                or media_origin.query
+                or media_origin.fragment
+                or media_origin.path not in {"", "/"}
+                or (media_port is not None and not 1 <= media_port <= 65535)
+            ):
+                raise ValueError(
+                    "annotation_media_origin must be an HTTPS origin without userinfo, "
+                    "path, query, or fragment"
+                )
         return self
 
     @classmethod

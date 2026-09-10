@@ -26,6 +26,7 @@ from alembic import command
 from alembic.config import Config
 from docker import DockerClient  # type: ignore[import-untyped]
 from minio import Minio
+from minio.versioningconfig import VersioningConfig
 from redis import Redis
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -119,6 +120,7 @@ def minio_server() -> Iterator[MinioServer]:
         client = Minio(endpoint.removeprefix("http://"), access_key, secret_key, secure=False)
         _wait_for_minio(client)
         client.make_bucket(bucket)
+        client.set_bucket_versioning(bucket, VersioningConfig("Enabled"))
         yield MinioServer(
             endpoint=endpoint,
             bucket=bucket,

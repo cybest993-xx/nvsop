@@ -873,7 +873,7 @@ def _validate_upload_declaration(
     if (
         not original_filename
         or len(original_filename) > _MAX_FILENAME_LENGTH
-        or "\x00" in original_filename
+        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in original_filename)
     ):
         _refuse(
             DatasetRefusalCode.FILENAME_INVALID,

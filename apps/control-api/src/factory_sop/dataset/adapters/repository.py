@@ -11,11 +11,23 @@ from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.orm import Session as DatabaseSession
 
 from factory_sop.dataset.adapters.tables import (
+    ActionListRevisionRow,
+    AnnotationContextRow,
+    AnnotationExecutionRow,
+    AnnotationSubmissionRow,
     DatasetMemberRow,
     TrainingDatasetRow,
     UploadAttemptRow,
 )
-from factory_sop.dataset.model import DatasetMember, TrainingDataset, UploadAttempt
+from factory_sop.dataset.model import (
+    ActionListRevision,
+    AnnotationContext,
+    AnnotationExecution,
+    AnnotationSubmission,
+    DatasetMember,
+    TrainingDataset,
+    UploadAttempt,
+)
 
 
 class PostgresDatasetRepository:
@@ -48,6 +60,15 @@ class PostgresDatasetRepository:
 
     def member_by_id(self, member_id: UUID) -> DatasetMember | None:
         row = self._session.get(DatasetMemberRow, member_id)
+        return row.to_domain() if row is not None else None
+
+    def lock_annotation_member(self, member_id: UUID) -> DatasetMember | None:
+        row = self._session.scalars(
+            select(DatasetMemberRow)
+            .where(DatasetMemberRow.id == member_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).first()
         return row.to_domain() if row is not None else None
 
     def page_members(
@@ -129,6 +150,162 @@ class PostgresDatasetRepository:
                 validation_job_id=attempt.validation_job_id,
                 object_version_id=attempt.object_version_id,
             )
+        )
+
+    def add_action_list(self, value: ActionListRevision) -> None:
+        self._session.add(ActionListRevisionRow.from_domain(value))
+        self._session.flush()
+
+    def latest_action_list(self, dataset_id: UUID) -> ActionListRevision | None:
+        row = self._session.scalars(
+            select(ActionListRevisionRow)
+            .where(ActionListRevisionRow.dataset_id == dataset_id)
+            .order_by(ActionListRevisionRow.revision.desc())
+            .limit(1)
+        ).first()
+        return row.to_domain() if row is not None else None
+
+    def action_list_by_revision(
+        self, *, dataset_id: UUID, revision: int
+    ) -> ActionListRevision | None:
+        row = self._session.get(ActionListRevisionRow, (dataset_id, revision))
+        return row.to_domain() if row is not None else None
+
+    def add_annotation_context(self, value: AnnotationContext) -> None:
+        self._session.add(AnnotationContextRow.from_domain(value))
+        self._session.flush()
+
+    def annotation_context_by_id(self, context_id: UUID) -> AnnotationContext | None:
+        row = self._session.get(AnnotationContextRow, context_id)
+        return row.to_domain() if row is not None else None
+
+    def save_annotation_context(self, value: AnnotationContext) -> None:
+        self._session.execute(
+            update(AnnotationContextRow)
+            .where(AnnotationContextRow.id == value.id)
+            .values(
+                upstream_data_id=value.upstream_data_id,
+                upstream_video_id=value.upstream_video_id,
+                upstream_video_size=value.upstream_video_size,
+                upstream_video_sha256=value.upstream_video_sha256,
+                upstream_video_duration_seconds=value.upstream_video_duration_seconds,
+                preparation_job_id=value.preparation_job_id,
+                preparation_status=value.preparation_status,
+                preparation_failure_code=value.preparation_failure_code,
+                preparation_failure_detail=value.preparation_failure_detail,
+            )
+        )
+
+    def annotation_submission_by_idempotency(
+        self, *, dataset_id: UUID, idempotency_key: str
+    ) -> AnnotationSubmission | None:
+        row = self._session.scalar(
+            select(AnnotationSubmissionRow).where(
+                AnnotationSubmissionRow.dataset_id == dataset_id,
+                AnnotationSubmissionRow.idempotency_key == idempotency_key,
+            )
+        )
+        return row.to_domain() if row is not None else None
+
+    def annotation_submission_by_id(self, submission_id: UUID) -> AnnotationSubmission | None:
+        row = self._session.get(AnnotationSubmissionRow, submission_id)
+        return row.to_domain() if row is not None else None
+
+    def list_annotation_submissions(
+        self, *, dataset_id: UUID, member_id: UUID
+    ) -> Sequence[AnnotationSubmission]:
+        rows = self._session.scalars(
+            select(AnnotationSubmissionRow)
+            .where(
+                AnnotationSubmissionRow.dataset_id == dataset_id,
+                AnnotationSubmissionRow.member_id == member_id,
+            )
+            .order_by(AnnotationSubmissionRow.created_at.asc(), AnnotationSubmissionRow.id.asc())
+        ).all()
+        return [row.to_domain() for row in rows]
+
+    def add_annotation_submission(self, value: AnnotationSubmission) -> None:
+        self._session.add(AnnotationSubmissionRow.from_domain(value))
+        self._session.flush()
+
+    def annotation_execution_by_id(self, execution_id: UUID) -> AnnotationExecution | None:
+        row = self._session.get(AnnotationExecutionRow, execution_id)
+        return row.to_domain() if row is not None else None
+
+    def latest_annotation_execution(self, submission_id: UUID) -> AnnotationExecution | None:
+        row = self._session.scalars(
+            select(AnnotationExecutionRow)
+            .where(AnnotationExecutionRow.submission_id == submission_id)
+            .order_by(AnnotationExecutionRow.generation.desc())
+            .limit(1)
+        ).first()
+        return row.to_domain() if row is not None else None
+
+    def list_annotation_executions(self, submission_id: UUID) -> Sequence[AnnotationExecution]:
+        rows = self._session.scalars(
+            select(AnnotationExecutionRow)
+            .where(AnnotationExecutionRow.submission_id == submission_id)
+            .order_by(AnnotationExecutionRow.generation.asc())
+        ).all()
+        return [row.to_domain() for row in rows]
+
+    def add_annotation_execution(self, value: AnnotationExecution) -> None:
+        self._session.add(AnnotationExecutionRow.from_domain(value))
+        self._session.flush()
+
+    def save_annotation_execution(
+        self, value: AnnotationExecution, *, expected_updated_at: datetime
+    ) -> bool:
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(AnnotationExecutionRow)
+                .where(
+                    AnnotationExecutionRow.id == value.id,
+                    AnnotationExecutionRow.updated_at == expected_updated_at,
+                )
+                .values(
+                    job_id=value.job_id,
+                    status=value.status,
+                    clips=list(value.clips),
+                    failure_code=value.failure_code,
+                    failure_detail=value.failure_detail,
+                    updated_at=value.updated_at,
+                    upstream_data_id=value.upstream_data_id,
+                    upstream_video_id=value.upstream_video_id,
+                    derived_video_size=value.derived_video_size,
+                    derived_video_sha256=value.derived_video_sha256,
+                    derived_video_duration_seconds=value.derived_video_duration_seconds,
+                )
+            ),
+        )
+        return result.rowcount == 1
+
+    def annotation_context_preparation_exists(self, member_id: UUID, context_id: UUID) -> bool:
+        return (
+            self._session.scalar(
+                select(AnnotationContextRow.id).where(
+                    AnnotationContextRow.id == context_id,
+                    AnnotationContextRow.member_id == member_id,
+                )
+            )
+            is not None
+        )
+
+    def annotation_execution_exists(self, member_id: UUID, execution_id: UUID) -> bool:
+        return (
+            self._session.scalar(
+                select(AnnotationSubmissionRow.id)
+                .join(
+                    AnnotationExecutionRow,
+                    AnnotationExecutionRow.submission_id == AnnotationSubmissionRow.id,
+                )
+                .where(
+                    AnnotationExecutionRow.id == execution_id,
+                    AnnotationSubmissionRow.member_id == member_id,
+                )
+            )
+            is not None
         )
 
 

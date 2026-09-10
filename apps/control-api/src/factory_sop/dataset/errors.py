@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import assert_never
 
@@ -32,6 +33,25 @@ class DatasetRefusalCode(StrEnum):
     UNSUPPORTED_CODEC = "UNSUPPORTED_CODEC"
     MEDIA_PROBE_UNAVAILABLE = "MEDIA_PROBE_UNAVAILABLE"
     VALIDATION_STALE = "VALIDATION_STALE"
+    ACTION_LIST_INVALID = "ACTION_LIST_INVALID"
+    ACTION_LIST_NOT_FOUND = "ACTION_LIST_NOT_FOUND"
+    ANNOTATION_MEMBER_NOT_REGISTERED = "ANNOTATION_MEMBER_NOT_REGISTERED"
+    ANNOTATION_CONTEXT_INVALID = "ANNOTATION_CONTEXT_INVALID"
+    ANNOTATION_NOT_FOUND = "ANNOTATION_NOT_FOUND"
+    ANNOTATION_IDEMPOTENCY_CONFLICT = "ANNOTATION_IDEMPOTENCY_CONFLICT"
+    ANNOTATION_STATE_CONFLICT = "ANNOTATION_STATE_CONFLICT"
+    STALE_REVISION = "STALE_REVISION"
+    ANNOTATION_BACKEND_UNAVAILABLE = "ANNOTATION_BACKEND_UNAVAILABLE"
+    ANNOTATION_EXECUTION_FAILED = "ANNOTATION_EXECUTION_FAILED"
+    ANNOTATION_OPERATION_NOT_ALLOWED = "ANNOTATION_OPERATION_NOT_ALLOWED"
+
+
+@dataclass(frozen=True, slots=True)
+class DatasetFieldError:
+    """数据集拒绝涉及的一个输入字段。"""
+
+    field: str
+    message: str
 
 
 class DatasetRefusedError(Exception):
@@ -43,11 +63,13 @@ class DatasetRefusedError(Exception):
         *,
         detail: str | None = None,
         recovery_action: str | None = None,
+        field_errors: tuple[DatasetFieldError, ...] = (),
     ) -> None:
         super().__init__(detail or code.value)
         self.code = code
         self.detail = detail or code.value
         self.recovery_action = recovery_action
+        self.field_errors = field_errors
 
 
 def refusal_problem(code: DatasetRefusalCode) -> tuple[int, str]:
@@ -86,5 +108,27 @@ def refusal_problem(code: DatasetRefusalCode) -> tuple[int, str]:
             return 422, "视频校验失败"
         case DatasetRefusalCode.VALIDATION_STALE:
             return 409, "上传尝试已不是当前尝试"
+        case DatasetRefusalCode.ACTION_LIST_INVALID:
+            return 422, "动作清单不符合要求"
+        case DatasetRefusalCode.ACTION_LIST_NOT_FOUND:
+            return 404, "动作清单修订不存在"
+        case DatasetRefusalCode.ANNOTATION_MEMBER_NOT_REGISTERED:
+            return 409, "视频尚未完成校验，不能标注"
+        case DatasetRefusalCode.ANNOTATION_CONTEXT_INVALID:
+            return 404, "标注上下文无效或已过期"
+        case DatasetRefusalCode.ANNOTATION_NOT_FOUND:
+            return 404, "标注提交不存在"
+        case DatasetRefusalCode.ANNOTATION_IDEMPOTENCY_CONFLICT:
+            return 409, "标注幂等键对应的内容不同"
+        case DatasetRefusalCode.ANNOTATION_STATE_CONFLICT:
+            return 409, "标注当前状态不允许该操作"
+        case DatasetRefusalCode.STALE_REVISION:
+            return 409, "标注修订号已变化（STALE_REVISION）"
+        case DatasetRefusalCode.ANNOTATION_BACKEND_UNAVAILABLE:
+            return 503, "标注服务暂时不可用"
+        case DatasetRefusalCode.ANNOTATION_EXECUTION_FAILED:
+            return 422, "标注切片执行失败"
+        case DatasetRefusalCode.ANNOTATION_OPERATION_NOT_ALLOWED:
+            return 403, "标注操作未开放"
         case _:
             assert_never(code)

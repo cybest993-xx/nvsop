@@ -13,7 +13,6 @@ import contextlib
 import importlib
 import io
 import logging
-import os
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -42,14 +41,13 @@ def read(path: Path) -> str:
 def import_detector(module: str) -> ModuleType:
     """Import a standard-library-only module from the base package.
 
-    The base is noisy on import: it reads `LOG_LEVEL` for its records and prints a one-time
-    banner per logger unconditionally. Both are quieted here so the gate's output stays
-    readable, rather than by patching `vendor/`.
+    The base is noisy on import: it writes a one-time banner and configures its logger. Both are
+    silenced here by redirecting the import streams and lowering the logger after import, rather
+    than by changing the test process environment.
     """
     if str(INFERENCE_ROOT) not in sys.path:
         sys.path.insert(0, str(INFERENCE_ROOT))
-    os.environ.setdefault("LOG_LEVEL", "ERROR")
-    with contextlib.redirect_stdout(io.StringIO()):
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         imported = importlib.import_module(f"nvds_action_detector.{module}")
     logging.getLogger("DS_ACTION_DETECTOR").setLevel(logging.ERROR)
     return imported

@@ -25,6 +25,8 @@ These five hold before you read anything else. Everything else lives in the harn
 
 ## Implement, verify and hand off
 
+Keep the primary branch named `main`.
+
 Follow the [working and review cycle](docs/design/repository-harness.md#working-and-review-cycle): isolated worktree, TDD for behavior, `make check`, one consolidated independent review, focused rechecks, and a fresh session for commit. That section defines when existing test evidence remains valid.
 
 Keep the task's full acceptance criteria through every stage. Report the delivered behavior, checks and their results, and any outstanding review or validation; a partial implementation or a size report is not completion.

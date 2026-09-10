@@ -158,7 +158,7 @@ def _run_worker(engine: Engine, settings: Settings, job_id: UUID) -> None:
     asyncio.run(validate_dataset_job(context, str(job_id)))
 
 
-def _run_arq_worker(engine: Engine, settings: Settings) -> int:
+async def _run_arq_worker(engine: Engine, settings: Settings) -> int:
     dispatcher = ArqJobDispatcher.from_settings(
         settings,
         session_factory=session_factory(engine),
@@ -176,7 +176,10 @@ def _run_arq_worker(engine: Engine, settings: Settings) -> int:
         max_jobs=1,
         max_burst_jobs=1,
     )
-    return asyncio.run(worker.run_check(max_burst_jobs=1))
+    try:
+        return await worker.run_check(max_burst_jobs=1)
+    finally:
+        await worker.close()
 
 
 def _minio_client(server: MinioServer) -> Minio:
@@ -442,7 +445,7 @@ def test_real_arq_worker_consumes_validation_job_from_redis(
             job_id = _confirm_upload(client, dataset_id, requested)
             _assert_job_was_enqueued(redis_client, job_id)
 
-            assert _run_arq_worker(engine, settings) == 1
+            assert asyncio.run(_run_arq_worker(engine, settings)) == 1
             member = _persisted_member(engine, UUID(requested["member"]["id"]))
             assert member.status == MemberStatus.REGISTERED
             assert member.actual_sha256 == hashlib.sha256(real_video_bytes).hexdigest()

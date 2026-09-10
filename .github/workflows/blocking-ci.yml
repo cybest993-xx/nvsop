@@ -194,6 +194,13 @@ jobs:
       - name: Install the pinned Python toolchain runner
         if: steps.relevant.outputs.run == 'true'
         run: pipx install uv==0.12.5
+      - name: Install media test tools
+        if: steps.relevant.outputs.run == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ffmpeg=7:6.1.1-3ubuntu5
+          command -v ffmpeg
+          command -v ffprobe
       - name: Run the integration suite
         if: steps.relevant.outputs.run == 'true'
         # Docker is present on the GitHub-hosted runner, which is what testcontainers uses to

@@ -13,10 +13,38 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  # Family 1 (harness §7): repository policy and lockfile cleanliness. Always runs, and
-  # deliberately duplicates `make check`'s own first target: the gate below is path-filtered,
-  # and a dependency change whose lockfile was never regenerated is exactly the change that
-  # must not be able to reach main through a filtered-out path.
+  scope:
+    name: Change scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+      force_all: ${{ steps.scope.outputs.force_all }}
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Select applicable gates
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          # 与后续作业验证的候选树一致；PR 使用 GitHub 的合并提交。
+          HEAD_SHA: ${{ github.sha }}
+        run: python3 scripts/ci_scope.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+      - name: Validate scope outputs
+        env:
+          DOCS_ONLY: ${{ steps.scope.outputs.docs_only }}
+          FORCE_ALL: ${{ steps.scope.outputs.force_all }}
+        run: |
+          set -euo pipefail
+          case "$DOCS_ONLY:$FORCE_ALL" in
+            true:false|false:true|false:false) ;;
+            *) echo "Invalid CI scope outputs." >&2; exit 1 ;;
+          esac
+
+  # 两份锁文件始终检查，文档快线也不能绕过冻结依赖约束。
   lockfile:
     name: Lockfile cleanliness
     runs-on: ubuntu-24.04
@@ -52,12 +80,10 @@ jobs:
         # having an installed tree.
         run: pnpm install --frozen-lockfile --lockfile-only
 
-  # Family 2 (harness §7): the CPU-only merge gate, invoked exactly as a developer invokes
-  # it. Path filtering is an optimization, not an exemption — when nothing relevant changed
-  # this job still runs and returns an explicit success, so a skipped job can never be the
-  # reason the required status is green.
+  # 文档与代码使用各自的完整 Make 门禁，共享政策和敏感信息检查。
   merge-gate:
-    name: Repository policy, boundaries, and base contract
+    name: Repository checks
+    needs: scope
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -66,32 +92,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: Decide whether the gate has anything to check
-        id: relevant
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        # `make check` reads the whole tree — it validates Markdown links and the repository
-        # layout as well as code — so almost every path is relevant to it. Only agent scratch
-        # space and per-agent local settings are not. `.mcp.json` is relevant: the policy check
-        # reads it for a literal credential. Keep this list short; a broad exclusion here is a
-        # check that stops running.
-        run: |
-          set -euo pipefail
-          if [ -z "$BASE_SHA" ] || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "No usable base commit; running the full gate."
-            exit 0
-          fi
-          changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
-            | grep -vE '^(\.scratch/|\.claude/)' || true)
-          if [ -n "$changed" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          fi
       - name: Install the pinned Python toolchain runner
-        if: steps.relevant.outputs.run == 'true'
         # `make check` starts by running `uv sync --frozen`, which provisions the interpreter
         # named by `.python-version` and installs every dependency and gate tool from
         # `uv.lock`. uv itself is all this step provides — no separate Python setup action,
@@ -99,13 +100,13 @@ jobs:
         # frozen so CI and a developer run the same build of ruff and mypy.
         run: pipx install uv==0.12.5
       - name: Set up the pinned Node runtime
-        if: steps.relevant.outputs.run == 'true'
+        if: needs.scope.outputs.docs_only == 'false'
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version-file: .nvmrc
       - name: Install the pinned package manager
         id: pnpm
-        if: steps.relevant.outputs.run == 'true'
+        if: needs.scope.outputs.docs_only == 'false'
         # `corepack` reads `packageManager` from `package.json`, so pnpm's version comes from
         # the manifest rather than from a second pin here. After the Node step, because the
         # shim it writes belongs to that interpreter. The store path is asked of pnpm rather
@@ -117,7 +118,7 @@ jobs:
           corepack install
           echo "store=$(pnpm store path)" >> "$GITHUB_OUTPUT"
       - name: Restore the pnpm store
-        if: steps.relevant.outputs.run == 'true'
+        if: needs.scope.outputs.docs_only == 'false'
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           # Not `setup-node`'s own `cache: pnpm`, which resolves the store path before the step
@@ -125,15 +126,21 @@ jobs:
           path: ${{ steps.pnpm.outputs.store }}
           key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: pnpm-store-${{ runner.os }}-
+      - name: Run the documentation gate
+        if: needs.scope.outputs.docs_only == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: make check-docs BASE="$BASE_SHA" HEAD="$HEAD_SHA"
       - name: Run the local merge gate
-        if: steps.relevant.outputs.run == 'true'
+        if: needs.scope.outputs.docs_only == 'false'
         env:
           # The OpenAPI compatibility check must compare with the actual PR base, not whatever
           # branch name happens to be checked out as origin/main.
           OPENAPI_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: make check
       - name: Report change size for review
-        if: steps.relevant.outputs.run == 'true' && github.event_name == 'pull_request'
+        if: needs.scope.outputs.docs_only == 'false' && github.event_name == 'pull_request'
         # Harness §5：从共同祖先计算到 PR HEAD，行数只作提示。
         # Git 或文件读取失败仍须使本步骤失败。
         env:
@@ -141,7 +148,6 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: make change-size BASE="$BASE_SHA" HEAD="$HEAD_SHA"
       - name: Verify a clean worktree
-        if: steps.relevant.outputs.run == 'true'
         # Generated output is regenerated in the same change as its source (harness §5). If
         # the gate wrote anything — a re-resolved lockfile, a formatter fixing a file, or a new
         # generated file not present in the change — the change is incomplete. `git diff` alone
@@ -153,15 +159,13 @@ jobs:
             git status --short --untracked-files=all
             exit 1
           fi
-      - name: Explicit success with nothing to check
-        if: steps.relevant.outputs.run != 'true'
-        run: echo "No paths the merge gate reads were changed."
 
   # Family 3 (harness §7): the center backend against real containerized infrastructure. A
   # separate job because it needs Docker, which `make check` deliberately does not. Same
   # explicit-success rule as above — path filtering is an optimization, not an exemption.
   integration-gate:
     name: Center backend against real PostgreSQL
+    needs: scope
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -173,22 +177,28 @@ jobs:
       - name: Decide whether the suite has anything to check
         id: relevant
         env:
+          DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}
+          FORCE_ALL: ${{ needs.scope.outputs.force_all }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_SHA: ${{ github.sha }}
         # Narrower than the merge gate's filter: this suite reads the center backend, its
         # migrations, the lockfile it installs from, and the target that invokes it.
         run: |
           set -euo pipefail
-          if [ -z "$BASE_SHA" ] || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+          if [ "$FORCE_ALL" = true ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "No usable base commit; running the suite."
             exit 0
           fi
-          changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
-            | grep -E '^(apps/control-api/|packages/contracts/|tests/system/|Makefile$|uv\.lock$|pyproject\.toml$|\.github/workflows/)' || true)
-          if [ -n "$changed" ]; then
+          if [ "$DOCS_ONLY" = true ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff --name-only --no-renames -z "$BASE_SHA" "$HEAD_SHA" -- > "$RUNNER_TEMP/ci-paths"
+          if grep -E '^(apps/control-api/|packages/contracts/|tests/system/|Makefile$|uv\.lock$|pyproject\.toml$|\.github/workflows/)' -zq "$RUNNER_TEMP/ci-paths"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
+            result=$?
+            test "$result" -eq 1
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Install the pinned Python toolchain runner
@@ -201,7 +211,7 @@ jobs:
         # tag and the lifecycle, so a developer runs the same database CI does.
         run: make check-integration
       - name: Explicit success with nothing to check
-        if: steps.relevant.outputs.run != 'true'
+        if: steps.relevant.outputs.run == 'false'
         run: echo "No paths the integration suite reads were changed."
 
   # Family 4 (harness §7): SYS-22-07 in the two branded browser families the product supports.
@@ -209,6 +219,7 @@ jobs:
   # the supported viewport endpoints in stable Chrome and Edge.
   browser-gate:
     name: Chrome and Edge system evidence
+    needs: scope
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -220,19 +231,26 @@ jobs:
       - name: Decide whether the browser suite has anything to check
         id: relevant
         env:
+          DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}
+          FORCE_ALL: ${{ needs.scope.outputs.force_all }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if [ -z "$BASE_SHA" ] || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+          if [ "$FORCE_ALL" = true ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
-            | grep -E '^(apps/control-web/|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|Makefile$|\.github/workflows/)' || true)
-          if [ -n "$changed" ]; then
+          if [ "$DOCS_ONLY" = true ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff --name-only --no-renames -z "$BASE_SHA" "$HEAD_SHA" -- > "$RUNNER_TEMP/ci-paths"
+          if grep -E '^(apps/control-web/|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|Makefile$|\.github/workflows/)' -zq "$RUNNER_TEMP/ci-paths"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
+            result=$?
+            test "$result" -eq 1
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Set up the pinned Node runtime
@@ -256,18 +274,19 @@ jobs:
           PLAYWRIGHT_BRANDED: "1"
         run: make web-e2e
       - name: Explicit success with nothing to check
-        if: steps.relevant.outputs.run != 'true'
+        if: steps.relevant.outputs.run == 'false'
         run: echo "No paths the browser suite reads were changed."
 
   required:
     name: CI required
     if: ${{ always() }}
-    needs: [lockfile, merge-gate, integration-gate, browser-gate]
+    needs: [scope, lockfile, merge-gate, integration-gate, browser-gate]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
       - name: Require successful dependencies
         env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
           LOCKFILE_RESULT: ${{ needs.lockfile.result }}
           GATE_RESULT: ${{ needs.merge-gate.result }}
           INTEGRATION_RESULT: ${{ needs.integration-gate.result }}
@@ -275,7 +294,7 @@ jobs:
         run: |
           set -euo pipefail
           status=0
-          for pair in "lockfile:$LOCKFILE_RESULT" "merge-gate:$GATE_RESULT" \
+          for pair in "scope:$SCOPE_RESULT" "lockfile:$LOCKFILE_RESULT" "merge-gate:$GATE_RESULT" \
             "integration-gate:$INTEGRATION_RESULT" "browser-gate:$BROWSER_RESULT"; do
             name=${pair%%:*}
             result=${pair#*:}

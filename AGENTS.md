@@ -27,6 +27,6 @@ These five hold before you read anything else. Everything else lives in the harn
 
 Keep the primary branch named `main`.
 
-Follow the [working and review cycle](docs/design/repository-harness.md#working-and-review-cycle): isolated worktree, TDD for behavior, `make check`, one consolidated independent review, focused rechecks, and a fresh session for commit. That section defines when existing test evidence remains valid.
+Follow the [working and review cycle](docs/design/repository-harness.md#working-and-review-cycle): reuse the task's isolated worktree, use TDD for behavior and affected local checks, coordinate one consolidated independent review, and finish in the same main session. Stage commits save progress; acceptance requires resolved blockers and the final candidate's applicable CI. Keep scope, valid evidence and the next action in the ignored `.tmp/task-handoff.md`.
 
 Keep the task's full acceptance criteria through every stage. Report the delivered behavior, checks and their results, and any outstanding review or validation; a partial implementation or a size report is not completion.

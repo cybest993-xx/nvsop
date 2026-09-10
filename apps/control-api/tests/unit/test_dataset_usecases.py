@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import io
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import BinaryIO
@@ -28,7 +27,6 @@ from factory_sop.dataset.model import (
 from factory_sop.dataset.storage import ObjectStorage
 from factory_sop.dataset.usecases import (
     ValidationResult,
-    _looks_like_archive,
     begin_video_validation,
     confirm_video_upload,
     request_video_upload,
@@ -420,6 +418,38 @@ def test_confirming_one_attempt_twice_returns_one_validation_job() -> None:
     assert datasets.members[created.member.id].status == MemberStatus.PENDING_VALIDATION
 
 
+def _prepared_validation(content: bytes) -> tuple[FakeDatasets, FakeStorage, ApplicationJob]:
+    datasets = dataset_store()
+    storage = FakeStorage()
+    created = request_video_upload(
+        dataset_id=DATASET_ID,
+        original_filename="sample.mp4",
+        source="产线相机",
+        declared_size=len(content),
+        declared_sha256=sha256(content).hexdigest(),
+        idempotency_key="archive-validation",
+        caller=caller_with_import(),
+        now=NOW,
+        datasets=datasets,
+        storage=storage,
+        max_upload_bytes=1024,
+        upload_ttl_seconds=900,
+    )
+    storage.objects[created.attempt.object_key] = content
+    jobs = FakeJobs()
+    confirmation = confirm_video_upload(
+        dataset_id=DATASET_ID,
+        member_id=created.member.id,
+        attempt_id=created.attempt.id,
+        caller=caller_with_import(),
+        now=NOW,
+        datasets=datasets,
+        jobs=jobs,
+    )
+    assert confirmation.job is not None
+    return datasets, storage, confirmation.job
+
+
 @pytest.mark.parametrize(
     "signature",
     [
@@ -433,12 +463,32 @@ def test_confirming_one_attempt_twice_returns_one_validation_job() -> None:
         b"!<arch>\n",
     ],
 )
-def test_common_archive_signatures_are_rejected_before_media_probe(signature: bytes) -> None:
-    assert _looks_like_archive(io.BytesIO(signature + b"synthetic content"))
+def test_archive_content_is_rejected_before_media_probe(signature: bytes) -> None:
+    content = signature + b"synthetic content"
+    datasets, storage, job = _prepared_validation(content)
+    target = begin_video_validation(job=job, datasets=datasets, now=NOW)
+    assert target is not None
 
+    result = validate_video_upload(
+        job=job,
+        datasets=datasets,
+        storage=storage,
+        probe=UnavailableProbe(),
+        supported_codecs=frozenset({"h264"}),
+        now=NOW,
+        target=target,
+    )
 
-def test_non_archive_content_does_not_match_archive_signatures() -> None:
-    assert not _looks_like_archive(io.BytesIO(b"synthetic video bytes"))
+    assert result == ValidationResult(
+        status=MemberStatus.FAILED,
+        actual_size=len(content),
+        actual_sha256=sha256(content).hexdigest(),
+        duration_seconds=None,
+        codec=None,
+        failure_code="ARCHIVE_CONTENT_REJECTED",
+        failure_detail="压缩包或伪装成视频的压缩包不允许导入",
+        recovery_action=RetryMode.UPLOAD,
+    )
 
 
 def test_validation_uses_object_facts_and_media_probe_to_register_video() -> None:
@@ -499,6 +549,34 @@ def test_validation_uses_object_facts_and_media_probe_to_register_video() -> Non
         recovery_action=None,
     )
     assert created.attempt.object_key not in storage.objects
+
+
+def test_ffprobe_hevc_matches_the_h265_deployment_name() -> None:
+    content = b"hevc video bytes"
+    datasets, storage, job = _prepared_validation(content)
+    target = begin_video_validation(job=job, datasets=datasets, now=NOW)
+    assert target is not None
+
+    result = validate_video_upload(
+        job=job,
+        datasets=datasets,
+        storage=storage,
+        probe=FakeProbe(MediaMetadata(duration_seconds=12.5, codec="hevc", container="mp4")),
+        supported_codecs=frozenset({"h265"}),
+        now=NOW,
+        target=target,
+    )
+
+    assert result == ValidationResult(
+        status=MemberStatus.REGISTERED,
+        actual_size=len(content),
+        actual_sha256=sha256(content).hexdigest(),
+        duration_seconds=12.5,
+        codec="hevc",
+        failure_code=None,
+        failure_detail=None,
+        recovery_action=None,
+    )
 
 
 def test_finalized_object_content_mismatch_is_not_registered() -> None:
@@ -687,6 +765,66 @@ def test_validation_persists_digest_failure_with_upload_recovery() -> None:
         failure_detail="对象内容摘要与登记声明不一致",
         recovery_action=RetryMode.UPLOAD,
     )
+
+
+def test_failed_upload_retry_key_renews_the_same_attempt() -> None:
+    datasets = dataset_store()
+    storage = FakeStorage()
+    created = request_video_upload(
+        dataset_id=DATASET_ID,
+        original_filename="sample.mp4",
+        source="产线相机",
+        declared_size=12,
+        declared_sha256="a" * 64,
+        idempotency_key=None,
+        caller=caller_with_import(),
+        now=NOW,
+        datasets=datasets,
+        storage=storage,
+        max_upload_bytes=1024,
+        upload_ttl_seconds=900,
+    )
+    failed = replace(
+        created.member,
+        status=MemberStatus.FAILED,
+        failure_code="OBJECT_NOT_FOUND",
+        recovery_action=RetryMode.UPLOAD.value,
+        updated_at=NOW + timedelta(seconds=1),
+    )
+    assert datasets.save_member(failed, expected_attempt_id=created.attempt.id)
+
+    retry = retry_video_upload(
+        dataset_id=DATASET_ID,
+        member_id=created.member.id,
+        mode=RetryMode.UPLOAD,
+        idempotency_key="retry-upload-1",
+        caller=caller_with_import(),
+        now=NOW + timedelta(seconds=2),
+        datasets=datasets,
+        storage=storage,
+        jobs=FakeJobs(),
+        max_upload_bytes=1024,
+        upload_ttl_seconds=900,
+    )
+
+    assert retry.attempt.idempotency_key == "retry-upload-1"
+    assert retry.upload is not None
+    renewed = request_video_upload(
+        dataset_id=DATASET_ID,
+        original_filename="sample.mp4",
+        source="产线相机",
+        declared_size=12,
+        declared_sha256="a" * 64,
+        idempotency_key="retry-upload-1",
+        caller=caller_with_import(),
+        now=NOW + timedelta(seconds=3),
+        datasets=datasets,
+        storage=storage,
+        max_upload_bytes=1024,
+        upload_ttl_seconds=900,
+    )
+    assert renewed.attempt.id == retry.attempt.id
+    assert renewed.member.id == created.member.id
 
 
 def test_media_probe_failure_can_retry_validation_without_new_upload() -> None:

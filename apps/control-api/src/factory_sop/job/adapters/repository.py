@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any, cast
@@ -14,13 +15,21 @@ from sqlalchemy.orm import Session as DatabaseSession
 from factory_sop.identifiers import new_id
 from factory_sop.job.adapters.tables import ApplicationJobRow
 from factory_sop.job.api import ApplicationJob, JobStatus, JobType
+from factory_sop.persistence import register_after_commit
 
 
 class PostgresJobRepository:
     """通过请求/worker 事务访问 `job_application_job`，不自行提交。"""
 
-    def __init__(self, session: DatabaseSession) -> None:
+    def __init__(
+        self,
+        session: DatabaseSession,
+        *,
+        dispatch: Callable[[UUID], None] | None = None,
+    ) -> None:
         self._session = session
+        self._dispatch = dispatch
+        self._dispatch_ids: set[UUID] = set()
 
     def by_id(self, job_id: UUID) -> ApplicationJob | None:
         row = self._session.get(ApplicationJobRow, job_id)
@@ -84,10 +93,12 @@ class PostgresJobRepository:
         return candidate
 
     def _remember_for_dispatch(self, job_id: UUID) -> None:
-        """把需要提交后投递的任务记录在当前 SQLAlchemy 会话中。"""
-        pending = self._session.info.setdefault("job_dispatch_ids", set())
-        if isinstance(pending, set):
-            pending.add(job_id)
+        """把需要提交后投递的任务登记到通用提交后动作中。"""
+        dispatch = self._dispatch
+        if dispatch is None or job_id in self._dispatch_ids:
+            return
+        self._dispatch_ids.add(job_id)
+        register_after_commit(self._session, lambda: dispatch(job_id))
 
     def recover_stale_running(self, *, now: datetime, stale_after_seconds: int) -> int:
         """恢复过期执行租约，并保留已有的投递诊断。"""
@@ -203,8 +214,12 @@ class PostgresJobRepository:
 class PostgresValidationJobQueue:
     """`dataset` 使用的校验任务创建 seam。"""
 
-    def __init__(self, session: DatabaseSession) -> None:
-        self._repository = PostgresJobRepository(session)
+    def __init__(
+        self,
+        session: DatabaseSession,
+        dispatch: Callable[[UUID], None] | None = None,
+    ) -> None:
+        self._repository = PostgresJobRepository(session, dispatch=dispatch)
 
     def get_or_create_validation(
         self, *, member_id: UUID, attempt_id: UUID, now: datetime

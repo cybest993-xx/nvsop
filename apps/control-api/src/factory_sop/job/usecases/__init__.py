@@ -17,8 +17,9 @@ def read_job(
     jobs: JobRepository,
     resource_exists: Callable[[UUID, UUID], bool],
 ) -> ApplicationJob:
-    """读取一个任务，并确认任务的资源仍属于本次可查询的模块资源。"""
-    authorize(caller, Permission.DATASET_VIEW)
+    """读取一个任务，并确认任务资源属于可查询的数据集视频。"""
+    if not (caller.holds(Permission.DATASET_VIEW) or caller.holds(Permission.DATASET_IMPORT)):
+        authorize(caller, Permission.DATASET_VIEW)
     job = jobs.by_id(job_id)
     if job is None:
         raise JobRefusedError(JobRefusalCode.JOB_NOT_FOUND, "异步任务不存在")

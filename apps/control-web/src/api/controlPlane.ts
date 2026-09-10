@@ -381,11 +381,13 @@ export function retryVideoUpload(
   datasetId: string,
   memberId: string,
   mode: RetryMode,
+  idempotencyKey?: string,
 ): Promise<DatasetRetry> {
   return execute(
     generatedRetryVideoUpload({
       path: { dataset_id: datasetId, member_id: memberId },
       body: { mode },
+      headers: idempotencyKey === undefined ? undefined : { 'Idempotency-Key': idempotencyKey },
     }),
   )
 }

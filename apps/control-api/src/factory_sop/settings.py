@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal, get_args
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, ValidationError, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
@@ -25,6 +26,18 @@ LogLevel = Literal["debug", "info", "warning", "error"]
 # §六 requires Secure cookies and records no development exception. Local development must
 # terminate TLS rather than changing a production security attribute.
 CookieTransport = Literal["require_https"]
+_REQUIRED_RUNTIME_SETTINGS = (
+    "minio_endpoint",
+    "minio_bucket",
+    "minio_access_key",
+    "minio_secret_key",
+    "redis_url",
+    "dataset_upload_ttl_seconds",
+    "dataset_max_upload_bytes",
+    "dataset_supported_codecs",
+    "media_probe_binary",
+    "media_probe_timeout_seconds",
+)
 
 
 class ConfigurationError(Exception):
@@ -61,8 +74,8 @@ class Settings(BaseSettings):
     # arrives as a file path like the database password.
     csrf_secret: SecretStr = Field(repr=False)
 
-    # 数据集基础设施对早于此模块的配置切片可选；一旦提供任一 MinIO 值，就必须完整配置
-    # 凭据和目标，部分配置的对象存储绝不能静默退回本地上传。
+    # 直接构造 Settings 仍服务于不需要基础设施的 adapter 测试；from_environment 会要求
+    # 生产运行所需的完整数据集、对象存储和任务队列配置。
     minio_endpoint: str | None = None
     minio_public_endpoint: str | None = None
     minio_bucket: str | None = None
@@ -159,9 +172,73 @@ class Settings(BaseSettings):
                 values[name] = environ[variable]
 
         try:
-            return cls.model_validate(values)
+            settings = cls.model_validate(values)
         except ValidationError as error:
             raise ConfigurationError(str(error)) from error
+        _require_runtime_infrastructure(settings)
+        missing = [
+            _variable_name(name) for name in _REQUIRED_RUNTIME_SETTINGS if name not in values
+        ]
+        if missing:
+            raise ConfigurationError("部署缺少必需配置：" + ", ".join(missing))
+        return settings
+
+
+def _require_runtime_infrastructure(settings: Settings) -> None:
+    """拒绝缺失对象存储或任务队列的可运行配置。"""
+    if any(
+        value is None
+        for value in (
+            settings.minio_endpoint,
+            settings.minio_bucket,
+            settings.minio_access_key,
+            settings.minio_secret_key,
+        )
+    ):
+        raise ConfigurationError("部署必须完整配置 MinIO 对象存储")
+    if settings.minio_bucket is None or not settings.minio_bucket.strip():
+        raise ConfigurationError("MinIO bucket 不能为空")
+    if not any(item.strip() for item in settings.dataset_supported_codecs.split(",")):
+        raise ConfigurationError("dataset_supported_codecs 不能为空")
+    if settings.redis_url is None:
+        raise ConfigurationError("部署必须配置 Redis 任务队列")
+    redis_url = urlsplit(settings.redis_url.get_secret_value())
+    try:
+        port = redis_url.port
+    except ValueError as error:
+        raise ConfigurationError("redis_url 端口无效") from error
+    if port is not None and not 1 <= port <= 65535:
+        raise ConfigurationError("redis_url 端口无效")
+    if redis_url.scheme not in {"redis", "rediss"} or not redis_url.hostname:
+        raise ConfigurationError("redis_url 必须使用带主机的 redis(s) 地址")
+    try:
+        database = int(redis_url.path.strip("/") or "0")
+    except ValueError as error:
+        raise ConfigurationError("redis_url 数据库编号无效") from error
+    if database < 0:
+        raise ConfigurationError("redis_url 数据库编号无效")
+    for label, endpoint in (
+        ("minio_endpoint", settings.minio_endpoint),
+        ("minio_public_endpoint", settings.minio_public_endpoint),
+    ):
+        if endpoint is None:
+            continue
+        parsed = urlsplit(endpoint)
+        try:
+            port = parsed.port
+        except ValueError as error:
+            raise ConfigurationError(f"{label} 端口无效") from error
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.path
+            not in {
+                "",
+                "/",
+            }
+            or (port is not None and not 1 <= port <= 65535)
+        ):
+            raise ConfigurationError(f"{label} 必须是带主机的 HTTP(S) 地址")
 
 
 def _variable_name(field_name: str) -> str:

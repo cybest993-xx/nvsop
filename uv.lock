@@ -394,6 +394,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "sqlalchemy" },
     { name = "structlog" },
+    { name = "urllib3" },
     { name = "uvicorn" },
 ]
 
@@ -409,6 +410,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.12.0" },
     { name = "sqlalchemy", specifier = ">=2.0.52" },
     { name = "structlog", specifier = ">=25.5.0" },
+    { name = "urllib3", specifier = ">=2.5.0" },
     { name = "uvicorn", specifier = ">=0.38.0" },
 ]
 

@@ -25,6 +25,7 @@ from pydantic import SecretStr
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(_REPOSITORY_ROOT))
 
+import scripts.import_training_dataset as dataset_script
 from scripts.import_training_dataset import (
     CSRF_COOKIE,
     CSRF_HEADER,
@@ -32,7 +33,6 @@ from scripts.import_training_dataset import (
     DatasetImportError,
     HttpResponse,
     HttpTransport,
-    _require_successful_job,
     import_training_dataset,
 )
 from test_dataset_usecases import FakeDatasets, FakeJobs, FakeStorage
@@ -250,6 +250,7 @@ def _settings() -> Settings:
         session_absolute_lifetime_minutes=43200,
         session_cookie_transport="require_https",
         csrf_secret=SecretStr(CSRF_SECRET),
+        redis_url=SecretStr("redis://127.0.0.1:1/0"),
     )
 
 
@@ -320,14 +321,121 @@ def test_control_plane_polls_known_states_and_preserves_unknown_state() -> None:
     assert unknown_transport.reads == 1
 
 
-def test_import_rejects_failed_or_unknown_validation_job() -> None:
-    jobs: tuple[dict[str, object], ...] = (
+@dataclass
+class StubImportClient:
+    """为脚本公开导入用例提供一个只返回固定任务状态的客户端。"""
+
+    job: dict[str, object]
+
+    def create_dataset(self, *, name: str) -> dict[str, object]:
+        return {"id": "dataset-1", "name": name}
+
+    def request_video_upload(
+        self,
+        *,
+        dataset_id: str,
+        declaration: dict[str, object],
+        idempotency_key: str,
+    ) -> dict[str, object]:
+        del dataset_id, declaration, idempotency_key
+        return {
+            "member": {"id": "member-1"},
+            "attempt": {"id": "attempt-1"},
+            "upload": {"method": "PUT", "url": "https://storage.example/video", "fields": {}},
+        }
+
+    def upload_file(self, *, instructions: dict[str, object], path: Path) -> HttpResponse:
+        del instructions, path
+        return HttpResponse(status=204, headers={}, body=b"", cookies={})
+
+    def confirm_video_upload(
+        self,
+        *,
+        dataset_id: str,
+        member_id: str,
+        attempt_id: str,
+    ) -> dict[str, object]:
+        del dataset_id, member_id, attempt_id
+        return {"job": self.job}
+
+    def wait_for_job(
+        self,
+        *,
+        job_id: str,
+        poll_interval_seconds: float,
+        poll_timeout_seconds: float,
+    ) -> dict[str, object]:
+        del job_id, poll_interval_seconds, poll_timeout_seconds
+        return self.job
+
+
+@pytest.mark.parametrize(
+    "job",
+    [
         {"id": "job-1", "status": "failed", "failure_code": "SHA256_MISMATCH"},
         {"id": "job-2", "status": "future_state"},
+    ],
+)
+def test_import_rejects_non_successful_validation_job(
+    job: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    video = tmp_path / "line-1.mp4"
+    video.write_bytes(b"synthetic video")
+
+    with pytest.raises(DatasetImportError, match="视频校验未成功"):
+        import_training_dataset(
+            cast(ControlPlaneClient, StubImportClient(job)),
+            dataset_name="脚本导入",
+            source="camera-A12",
+            videos=(video,),
+        )
+
+
+def test_cli_does_not_report_success_while_validation_is_still_running(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    video = tmp_path / "line-1.mp4"
+    video.write_bytes(b"synthetic video")
+
+    exit_code = dataset_script.main(
+        [
+            "--base-url",
+            "https://center.example",
+            "--dataset-name",
+            "脚本导入",
+            "--source",
+            "camera-A12",
+            "--session-cookie",
+            "cookie",
+            "--csrf-token",
+            "csrf",
+            "--job-poll-timeout",
+            "0",
+            str(video),
+        ],
+        client=cast(
+            ControlPlaneClient,
+            StubImportClient({"id": "job-1", "status": "pending"}),
+        ),
     )
-    for job in jobs:
-        with pytest.raises(DatasetImportError, match="视频校验未成功"):
-            _require_successful_job(job)
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {
+        "dataset_id": "dataset-1",
+        "videos": [
+            {
+                "filename": "line-1.mp4",
+                "member_id": "member-1",
+                "attempt_id": "attempt-1",
+                "job_id": "job-1",
+                "job_status": "pending",
+            }
+        ],
+    }
+    assert "导入未完成" in captured.err
 
 
 def test_script_uses_formal_api_for_each_video_and_never_sends_media_to_fastapi(
@@ -421,6 +529,25 @@ def test_script_uses_formal_api_for_each_video_and_never_sends_media_to_fastapi(
         first.read_bytes(),
         second.read_bytes(),
     ]
+
+
+def test_script_can_poll_with_dataset_import_permission_only(tmp_path: Path) -> None:
+    backend = ScriptBackend.build(frozenset({Permission.DATASET_IMPORT}))
+    try:
+        video = tmp_path / "import-only.mp4"
+        video.write_bytes(b"video for import-only caller")
+
+        result = import_training_dataset(
+            _client(backend.transport),
+            dataset_name="仅导入权限训练集",
+            source="camera-A12",
+            videos=(video,),
+            poll_timeout_seconds=0,
+        )
+
+        assert result.videos[0].job["status"] == "pending"
+    finally:
+        backend.client.close()
 
 
 def test_script_is_refused_by_the_real_route_without_dataset_import_permission(

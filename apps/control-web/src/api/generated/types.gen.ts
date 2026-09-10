@@ -7057,6 +7057,12 @@ export type ConfirmVideoUploadResponse =
 
 export type RetryVideoUploadData = {
   body: RetryVideoUploadInput
+  headers?: {
+    /**
+     * Idempotency-Key
+     */
+    'Idempotency-Key'?: string | null
+  }
   path: {
     /**
      * Dataset Id

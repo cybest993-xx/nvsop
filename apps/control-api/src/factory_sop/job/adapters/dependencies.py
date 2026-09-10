@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Annotated, cast
 
-from fastapi import Request
+from fastapi import Depends, Request
 
 from factory_sop.dataset.api import DatasetResourceLookup
 from factory_sop.job.adapters.dispatcher import ArqJobDispatcher
@@ -23,13 +23,16 @@ def job_repository(session: RequestSession) -> JobRepository:
     return PostgresJobRepository(session)
 
 
-def validation_jobs(session: RequestSession) -> ValidationJobQueue:
+def validation_jobs(
+    session: RequestSession,
+    job_dispatcher: Annotated[JobDispatcher, Depends(dispatcher)],
+) -> ValidationJobQueue:
     """请求事务中的 dataset 校验任务创建 seam。"""
-    return PostgresValidationJobQueue(session)
+    return PostgresValidationJobQueue(session, job_dispatcher.dispatch)
 
 
 def dispatcher(request: Request) -> JobDispatcher:
-    """提交后的 Redis/ARQ 投递器；没有 Redis 时保留 PostgreSQL outbox。"""
+    """提供提交后的 Redis/ARQ 投递器。"""
     configured = getattr(request.app.state, "job_dispatcher", None)
     if configured is not None:
         return cast(JobDispatcher, configured)

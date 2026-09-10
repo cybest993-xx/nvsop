@@ -18,7 +18,7 @@ from factory_sop.dataset.media import MediaProbe
 from factory_sop.dataset.model import ObjectStat, UploadInstructions
 from factory_sop.dataset.repository import DatasetRepository
 from factory_sop.dataset.storage import ObjectStorage
-from factory_sop.job.api import JobDispatcher, ValidationJobQueue
+from factory_sop.job.api import ValidationJobQueue
 from factory_sop.persistence import RequestSession
 from factory_sop.settings import Settings
 
@@ -112,11 +112,6 @@ def media_probe(request: Request) -> MediaProbe:
 def jobs() -> ValidationJobQueue:
     """由组合根接入 job 模块的校验任务创建 seam。"""
     raise RuntimeError("dataset job dependency was not wired")
-
-
-def job_dispatcher() -> JobDispatcher:
-    """由组合根接入 job 模块的提交后投递 seam。"""
-    raise RuntimeError("dataset dispatcher dependency was not wired")
 
 
 class _PostgresDatasetValidationRuntime:

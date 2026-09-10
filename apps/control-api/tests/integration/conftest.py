@@ -43,13 +43,13 @@ REDIS_IMAGE = "redis:7.4-alpine"
 
 
 def _require_docker() -> None:
-    """没有 Docker daemon 时让真实基础设施测试按现有集成层整体跳过。"""
+    """没有 Docker daemon 时让真实基础设施测试明确失败。"""
     docker_client: DockerClient | None = None
     try:
         docker_client = DockerClient.from_env()
         docker_client.ping()
     except Exception as error:
-        pytest.skip(f"Docker daemon 不可用：{type(error).__name__}")
+        pytest.fail(f"Docker daemon 不可用：{type(error).__name__}")
     finally:
         if docker_client is not None:
             docker_client.close()
@@ -63,7 +63,7 @@ def _wait_for_minio(client: Minio) -> None:
             return
         except Exception as error:
             if time.monotonic() >= deadline:
-                pytest.skip(f"MinIO 服务不可用：{type(error).__name__}")
+                pytest.fail(f"MinIO 服务不可用：{type(error).__name__}")
             time.sleep(0.25)
 
 
@@ -75,7 +75,7 @@ def _wait_for_redis(client: Redis) -> None:
             return
         except Exception as error:
             if time.monotonic() >= deadline:
-                pytest.skip(f"Redis 服务不可用：{type(error).__name__}")
+                pytest.fail(f"Redis 服务不可用：{type(error).__name__}")
             time.sleep(0.25)
 
 
@@ -113,7 +113,7 @@ def minio_server() -> Iterator[MinioServer]:
     try:
         container.start()
     except Exception as error:
-        pytest.skip(f"MinIO 镜像不可用：{type(error).__name__}")
+        pytest.fail(f"MinIO 镜像不可用：{type(error).__name__}")
     try:
         endpoint = f"http://{container.get_container_host_ip()}:{container.get_exposed_port(9000)}"
         client = Minio(endpoint.removeprefix("http://"), access_key, secret_key, secure=False)
@@ -141,7 +141,7 @@ def redis_server() -> Iterator[RedisServer]:
     try:
         container.start()
     except Exception as error:
-        pytest.skip(f"Redis 镜像不可用：{type(error).__name__}")
+        pytest.fail(f"Redis 镜像不可用：{type(error).__name__}")
     try:
         host = container.get_container_host_ip()
         port = int(container.get_exposed_port(6379))
@@ -176,7 +176,7 @@ def real_video_bytes(tmp_path: Path) -> bytes:
     """用真实 ffmpeg 生成临时 H.264/MP4，不把媒体样本写入仓库。"""
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None or shutil.which("ffprobe") is None:
-        pytest.skip("真实媒体集成测试需要 ffmpeg 和 ffprobe")
+        pytest.fail("真实媒体集成测试需要 ffmpeg 和 ffprobe")
     output = tmp_path / "synthetic.mp4"
     try:
         completed = subprocess.run(
@@ -206,9 +206,9 @@ def real_video_bytes(tmp_path: Path) -> bytes:
             timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired):
-        pytest.skip("ffmpeg 无法生成真实媒体集成视频")
+        pytest.fail("ffmpeg 无法生成真实媒体集成视频")
     if completed.returncode != 0 or not output.is_file():
-        pytest.skip("当前 ffmpeg 不提供 libx264 编码器")
+        pytest.fail("当前 ffmpeg 不提供 libx264 编码器")
     return output.read_bytes()
 
 

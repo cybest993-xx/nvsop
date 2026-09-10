@@ -89,8 +89,7 @@ def settings_for(
                 "minio_secret_key": SecretStr(minio.secret_key),
             }
         )
-    if redis_url is not None:
-        values["redis_url"] = SecretStr(redis_url)
+    values["redis_url"] = SecretStr(redis_url or "redis://127.0.0.1:1/0")
     return Settings.model_validate(values)
 
 

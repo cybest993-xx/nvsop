@@ -5,8 +5,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0020"
-down_revision: str | None = "0019"
+revision: str = "0023"
+down_revision: str | None = "0022"
 
 
 def upgrade() -> None:

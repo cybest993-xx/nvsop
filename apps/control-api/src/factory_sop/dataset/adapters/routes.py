@@ -494,12 +494,14 @@ def retry_a_video_upload(
     datasets: Annotated[DatasetRepository, Depends(dependencies.datasets)],
     storage: Annotated[ObjectStorage, Depends(dependencies.storage)],
     jobs: Annotated[ValidationJobQueue, Depends(dependencies.jobs)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> RetryView | JSONResponse:
     settings = request.app.state.settings
     result = retry_video_upload(
         dataset_id=dataset_id,
         member_id=member_id,
         mode=submitted.mode,
+        idempotency_key=idempotency_key,
         caller=caller,
         now=datetime.now(UTC),
         datasets=datasets,

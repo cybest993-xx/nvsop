@@ -72,6 +72,7 @@ _ARCHIVE_SIGNATURES = (
 _MAX_FILENAME_LENGTH = 255
 _MAX_SOURCE_LENGTH = 255
 _MAX_IDEMPOTENCY_LENGTH = 255
+_CODEC_ALIASES = {"h265": "hevc"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -401,6 +402,7 @@ def retry_video_upload(
     dataset_id: UUID,
     member_id: UUID,
     mode: RetryMode,
+    idempotency_key: str | None = None,
     caller: Caller,
     now: datetime,
     datasets: DatasetRepository,
@@ -445,6 +447,7 @@ def retry_video_upload(
 
     if mode is not RetryMode.UPLOAD:
         _refuse(DatasetRefusalCode.STATE_CONFLICT, "未知恢复动作")
+    _validate_idempotency_key(idempotency_key)
     new_attempt_id = new_id()
     expires_at = now + timedelta(seconds=upload_ttl_seconds)
     object_key = _object_key(dataset_id=dataset_id, member_id=member.id, attempt_id=new_attempt_id)
@@ -459,7 +462,7 @@ def retry_video_upload(
         id=new_attempt_id,
         dataset_id=dataset_id,
         member_id=member.id,
-        idempotency_key=None,
+        idempotency_key=idempotency_key,
         object_key=object_key,
         declared_size=member.declared_size,
         declared_sha256=member.declared_sha256,
@@ -673,7 +676,9 @@ def validate_video_upload(
                     actual_size=stat.size,
                     actual_sha256=actual_sha256,
                 )
-            if metadata.codec.casefold() not in {item.casefold() for item in supported_codecs}:
+            if _canonical_codec(metadata.codec) not in {
+                _canonical_codec(item) for item in supported_codecs
+            }:
                 return _fail_validation(
                     member=validating,
                     attempt=attempt,
@@ -892,12 +897,16 @@ def _validate_upload_declaration(
             "压缩包不允许导入，请逐个选择视频文件",
             recovery_action=RetryMode.UPLOAD.value,
         )
+    _validate_idempotency_key(idempotency_key)
+    if upload_ttl_seconds <= 0:
+        _refuse(DatasetRefusalCode.STATE_CONFLICT, "上传授权有效期配置无效")
+
+
+def _validate_idempotency_key(idempotency_key: str | None) -> None:
     if idempotency_key is not None and (
         not idempotency_key.strip() or len(idempotency_key) > _MAX_IDEMPOTENCY_LENGTH
     ):
         _refuse(DatasetRefusalCode.IDEMPOTENCY_CONFLICT, "幂等键不能为空且不能超过 255 个字符")
-    if upload_ttl_seconds <= 0:
-        _refuse(DatasetRefusalCode.STATE_CONFLICT, "上传授权有效期配置无效")
 
 
 def _create_upload(
@@ -958,6 +967,12 @@ def _looks_like_archive(stream: BinaryIO) -> bool:
     return header.startswith(_ARCHIVE_SIGNATURES) or (
         len(header) >= 265 and header[257:262] == b"ustar"
     )
+
+
+def _canonical_codec(codec: str) -> str:
+    """统一配置名与 ffprobe 返回的编码名。"""
+    normalized = codec.strip().casefold()
+    return _CODEC_ALIASES.get(normalized, normalized)
 
 
 def _valid_media_metadata(metadata: MediaMetadata) -> bool:

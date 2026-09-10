@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from factory_sop.job.adapters.repository import PostgresJobRepository
 from factory_sop.job.api import JobDispatcher
 from factory_sop.observability import get_logger
-from factory_sop.settings import Settings
+from factory_sop.settings import ConfigurationError, Settings
 
 _logger = get_logger("job")
 
@@ -39,18 +39,23 @@ class ArqJobDispatcher:
         *,
         session_factory: sessionmaker[Session] | None = None,
     ) -> JobDispatcher:
-        """从 Redis URL 构造投递器；未配置时只保留待补投 outbox。"""
+        """从已校验的 Redis URL 构造投递器。"""
         if settings.redis_url is None:
-            return OutboxOnlyDispatcher()
+            raise ConfigurationError("部署必须配置 Redis 任务队列")
         try:
             parsed = urlsplit(settings.redis_url.get_secret_value())
             if parsed.scheme not in {"redis", "rediss"} or not parsed.hostname:
                 raise ValueError("Redis URL 必须使用 redis(s) scheme")
+            port = parsed.port
+            if port is not None and not 1 <= port <= 65535:
+                raise ValueError("Redis port must be between 1 and 65535")
             database = int(parsed.path.strip("/") or "0")
+            if database < 0:
+                raise ValueError("Redis database must not be negative")
             return cls(
                 RedisSettings(
                     host=parsed.hostname,
-                    port=parsed.port or 6379,
+                    port=port or 6379,
                     database=database,
                     username=parsed.username,
                     password=parsed.password,
@@ -58,8 +63,8 @@ class ArqJobDispatcher:
                 ),
                 session_factory=session_factory,
             )
-        except (TypeError, ValueError):
-            return OutboxOnlyDispatcher()
+        except (TypeError, ValueError) as error:
+            raise ConfigurationError("redis_url 无效") from error
 
     @property
     def redis_settings(self) -> RedisSettings:
@@ -119,10 +124,3 @@ class ArqJobDispatcher:
                 now=datetime.now(UTC),
             )
             session.commit()
-
-
-class OutboxOnlyDispatcher:
-    """Redis 未配置或 URL 无效时的安全降级：不丢弃已提交任务，不伪造执行。"""
-
-    def dispatch(self, job_id: UUID) -> None:
-        _logger.warning("job.dispatch.deferred", job_id=str(job_id))

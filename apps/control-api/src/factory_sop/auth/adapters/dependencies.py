@@ -34,6 +34,7 @@ from factory_sop.persistence import RequestSession
 # OpenAPI requires of an extension, and read by the mechanical consistency check
 # (`tests/unit/test_authorization_is_enforced.py`).
 DECLARED_PERMISSION = "x-required-permission"
+DECLARED_PERMISSIONS = "x-required-permissions"
 
 
 def needs(permission: Permission) -> dict[str, str]:
@@ -44,6 +45,13 @@ def needs(permission: Permission) -> dict[str, str]:
     enforcement itself is the use case's (§5.15); this only documents it.
     """
     return {DECLARED_PERMISSION: permission.value}
+
+
+def needs_any(*permissions: Permission) -> dict[str, list[str]]:
+    """返回允许任一权限的 OpenAPI 声明。"""
+    if not permissions:
+        raise ValueError("至少需要一个权限")
+    return {DECLARED_PERMISSIONS: [permission.value for permission in permissions]}
 
 
 def users(session: RequestSession) -> UserRepository:

@@ -31,6 +31,18 @@ def environment(tmp_path: Path, **overrides: str) -> dict[str, str]:
         "SOP_SESSION_ABSOLUTE_LIFETIME_MINUTES": "43200",
         "SOP_SESSION_COOKIE_TRANSPORT": "require_https",
         "SOP_CSRF_SECRET_FILE": write_secret(tmp_path, "csrf-secret\n", name="csrf-secret"),
+        "SOP_MINIO_ENDPOINT": "http://minio.internal:9000",
+        "SOP_MINIO_BUCKET": "training",
+        "SOP_MINIO_ACCESS_KEY_FILE": write_secret(tmp_path, "minio-access\n", name="minio-access"),
+        "SOP_MINIO_SECRET_KEY_FILE": write_secret(tmp_path, "minio-secret\n", name="minio-secret"),
+        "SOP_REDIS_URL_FILE": write_secret(
+            tmp_path, "redis://redis.internal:6379/0\n", name="redis-url"
+        ),
+        "SOP_DATASET_UPLOAD_TTL_SECONDS": "900",
+        "SOP_DATASET_MAX_UPLOAD_BYTES": str(8 * 1024**3),
+        "SOP_DATASET_SUPPORTED_CODECS": "h264,h265",
+        "SOP_MEDIA_PROBE_BINARY": "ffprobe",
+        "SOP_MEDIA_PROBE_TIMEOUT_SECONDS": "60",
     }
     base.update(overrides)
     return base
@@ -50,6 +62,11 @@ def test_loads_a_complete_environment(tmp_path: Path) -> None:
         session_absolute_lifetime_minutes=43200,
         session_cookie_transport="require_https",
         csrf_secret=SecretStr("csrf-secret"),
+        minio_endpoint="http://minio.internal:9000",
+        minio_bucket="training",
+        minio_access_key=SecretStr("minio-access"),
+        minio_secret_key=SecretStr("minio-secret"),
+        redis_url=SecretStr("redis://redis.internal:6379/0"),
     )
 
 
@@ -91,9 +108,84 @@ def test_refuses_a_non_positive_session_timeout(tmp_path: Path) -> None:
 def test_refuses_a_public_minio_endpoint_without_the_rest_of_minio_config(
     tmp_path: Path,
 ) -> None:
+    values = environment(tmp_path)
+    for variable in (
+        "SOP_MINIO_ENDPOINT",
+        "SOP_MINIO_BUCKET",
+        "SOP_MINIO_ACCESS_KEY_FILE",
+        "SOP_MINIO_SECRET_KEY_FILE",
+    ):
+        del values[variable]
+    values["SOP_MINIO_PUBLIC_ENDPOINT"] = "https://minio.example.test"
     with pytest.raises(ConfigurationError, match="must be configured together"):
+        Settings.from_environment(values)
+
+
+def test_refuses_a_deployment_without_dataset_runtime_configuration(tmp_path: Path) -> None:
+    values = environment(tmp_path)
+    del values["SOP_DATASET_UPLOAD_TTL_SECONDS"]
+    with pytest.raises(ConfigurationError, match="SOP_DATASET_UPLOAD_TTL_SECONDS"):
+        Settings.from_environment(values)
+
+
+def test_refuses_a_deployment_without_minio(tmp_path: Path) -> None:
+    values = environment(tmp_path)
+    for variable in (
+        "SOP_MINIO_ENDPOINT",
+        "SOP_MINIO_BUCKET",
+        "SOP_MINIO_ACCESS_KEY_FILE",
+        "SOP_MINIO_SECRET_KEY_FILE",
+    ):
+        del values[variable]
+    with pytest.raises(ConfigurationError, match="MinIO"):
+        Settings.from_environment(values)
+
+
+def test_refuses_a_deployment_without_redis(tmp_path: Path) -> None:
+    values = environment(tmp_path)
+    del values["SOP_REDIS_URL_FILE"]
+    with pytest.raises(ConfigurationError, match="Redis"):
+        Settings.from_environment(values)
+
+
+def test_refuses_an_invalid_redis_url(tmp_path: Path) -> None:
+    with pytest.raises(ConfigurationError, match="redis_url"):
         Settings.from_environment(
-            environment(tmp_path, SOP_MINIO_PUBLIC_ENDPOINT="https://minio.example.test")
+            environment(
+                tmp_path,
+                SOP_REDIS_URL_FILE=write_secret(
+                    tmp_path, "http://redis.internal\n", name="invalid-redis-url"
+                ),
+            )
+        )
+
+
+def test_refuses_an_invalid_minio_port(tmp_path: Path) -> None:
+    with pytest.raises(ConfigurationError, match="minio_endpoint"):
+        Settings.from_environment(
+            environment(tmp_path, SOP_MINIO_ENDPOINT="http://minio.internal:99999")
+        )
+
+
+def test_refuses_an_empty_minio_bucket(tmp_path: Path) -> None:
+    with pytest.raises(ConfigurationError, match="bucket"):
+        Settings.from_environment(environment(tmp_path, SOP_MINIO_BUCKET="  "))
+
+
+def test_refuses_an_empty_codec_list(tmp_path: Path) -> None:
+    with pytest.raises(ConfigurationError, match="dataset_supported_codecs"):
+        Settings.from_environment(environment(tmp_path, SOP_DATASET_SUPPORTED_CODECS=",, "))
+
+
+def test_refuses_a_negative_redis_database(tmp_path: Path) -> None:
+    with pytest.raises(ConfigurationError, match="redis_url"):
+        Settings.from_environment(
+            environment(
+                tmp_path,
+                SOP_REDIS_URL_FILE=write_secret(
+                    tmp_path, "redis://redis.internal/-1\n", name="negative-redis-db"
+                ),
+            )
         )
 
 

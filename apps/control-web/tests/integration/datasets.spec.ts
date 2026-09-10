@@ -308,6 +308,36 @@ describe('训练数据集工作台', () => {
     wrapper.unmount()
   })
 
+  it('leaves a failed upload request retryable', async () => {
+    grant('dataset.dataset.view', 'dataset.dataset.import')
+    api.readDatasetMembers.mockResolvedValue({ items: [], page: 1, page_size: 50, total: 0 })
+    api.requestVideoUpload.mockRejectedValueOnce(new Error('申请直传失败')).mockResolvedValueOnce({
+      member: { ...MEMBER_PENDING, status: 'pending_upload' },
+      attempt: ATTEMPT,
+      upload: UPLOAD,
+    })
+    api.confirmVideoUpload.mockResolvedValue({ member: MEMBER_PENDING, job: null })
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+    await wrapper.find('input[name="video-source"]').setValue('camera-A12')
+    await chooseFile(wrapper, new File(['video bytes'], 'line-1.mp4', { type: 'video/mp4' }))
+    await wrapper.find('form[aria-label="上传训练视频"]').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('申请直传失败')
+    expect(
+      wrapper.find('form[aria-label="上传训练视频"] button').attributes('disabled'),
+    ).toBeUndefined()
+
+    await wrapper.find('form[aria-label="上传训练视频"]').trigger('submit')
+    await flushPromises()
+
+    expect(api.requestVideoUpload).toHaveBeenCalledTimes(2)
+    expect(api.confirmVideoUpload).toHaveBeenCalledWith(DATASET.id, 'member-1', ATTEMPT.id)
+    wrapper.unmount()
+  })
+
   it('reuses the same upload attempt after a direct transfer failure', async () => {
     grant('dataset.dataset.view', 'dataset.dataset.import')
     api.readDatasetMembers.mockResolvedValue({ items: [], page: 1, page_size: 50, total: 0 })
@@ -432,7 +462,12 @@ describe('训练数据集工作台', () => {
       .trigger('click')
     await flushPromises()
 
-    expect(api.retryVideoUpload).toHaveBeenCalledWith(DATASET.id, 'member-1', 'retry_upload')
+    expect(api.retryVideoUpload).toHaveBeenCalledWith(
+      DATASET.id,
+      'member-1',
+      'retry_upload',
+      'idempotency-1',
+    )
     expect(wrapper.text()).toContain('开始重新上传')
 
     await chooseFile(wrapper, new File(['video bytes'], 'line-1.mp4', { type: 'video/mp4' }))
@@ -473,6 +508,61 @@ describe('训练数据集工作台', () => {
       await flushPromises()
       expect(api.readDatasetMembers).toHaveBeenCalledTimes(3)
       expect(wrapper.text()).toContain('已登记')
+
+      const jobReads = api.readJob.mock.calls.length
+      await vi.advanceTimersByTimeAsync(4000)
+      await flushPromises()
+      expect(api.readJob).toHaveBeenCalledTimes(jobReads)
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('polls the submitted job with import permission without reading dataset members', async () => {
+    grant('dataset.dataset.import')
+    api.requestVideoUpload.mockResolvedValue({
+      member: { ...MEMBER_PENDING, status: 'pending_upload' },
+      attempt: ATTEMPT,
+      upload: UPLOAD,
+    })
+    api.confirmVideoUpload.mockResolvedValue({
+      member: MEMBER_PENDING,
+      job: {
+        id: 'job-1',
+        status: 'pending',
+        failure_code: null,
+      },
+    })
+    api.readJob.mockResolvedValueOnce({
+      id: 'job-1',
+      job_type: 'dataset_validation',
+      status: 'failed',
+      member_id: 'member-1',
+      attempt_id: 'attempt-1',
+      failure_code: 'MEDIA_PROBE_UNAVAILABLE',
+      created_at: '2026-09-08T01:00:00Z',
+      updated_at: '2026-09-08T01:01:00Z',
+    })
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+
+    try {
+      const { wrapper } = await mountDatasets()
+      await flushPromises()
+      await wrapper.find('input[name="known-dataset-id"]').setValue(DATASET.id)
+      await wrapper.find('input[name="video-source"]').setValue('camera-A12')
+      await chooseFile(wrapper, new File(['video bytes'], 'line-1.mp4', { type: 'video/mp4' }))
+      await wrapper.find('form[aria-label="上传训练视频"]').trigger('submit')
+      await flushPromises()
+      expect(api.readTrainingDatasets).not.toHaveBeenCalled()
+      expect(api.readDatasetMembers).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(2000)
+      await flushPromises()
+
+      expect(api.readJob).toHaveBeenCalledWith('job-1')
+      expect(api.readDatasetMembers).not.toHaveBeenCalled()
+      expect(wrapper.text()).toContain('任务失败')
+      expect(wrapper.text()).toContain('MEDIA_PROBE_UNAVAILABLE')
 
       const jobReads = api.readJob.mock.calls.length
       await vi.advanceTimersByTimeAsync(4000)

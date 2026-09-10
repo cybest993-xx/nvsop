@@ -9,6 +9,7 @@ from urllib.parse import quote, urlsplit
 from minio import Minio
 from minio.datatypes import PostPolicy
 from minio.error import S3Error
+from urllib3.exceptions import HTTPError as Urllib3Error
 
 from factory_sop.dataset.model import ObjectStat, UploadInstructions
 from factory_sop.dataset.storage import ObjectNotFoundError, ObjectStorageUnavailableError
@@ -87,7 +88,7 @@ class MinioObjectStorage:
         )
         try:
             form = dict(self._signer.presigned_post_policy(policy))
-        except (S3Error, OSError, ValueError) as error:
+        except (S3Error, Urllib3Error, OSError, ValueError) as error:
             raise ObjectStorageUnavailableError("无法生成 MinIO 上传说明") from error
         url = form.pop("url", None) or self._upload_url
         if not isinstance(url, str) or not url:
@@ -112,7 +113,7 @@ class MinioObjectStorage:
             if error.code in {"NoSuchKey", "NoSuchObject", "NoSuchBucket", "NotFound"}:
                 raise ObjectNotFoundError(object_key) from error
             raise ObjectStorageUnavailableError("无法读取 MinIO 对象") from error
-        except OSError as error:
+        except (Urllib3Error, OSError) as error:
             raise ObjectStorageUnavailableError("无法连接 MinIO") from error
         version_id = getattr(found, "version_id", None)
         if found.size is None:
@@ -130,7 +131,7 @@ class MinioObjectStorage:
             if error.code in {"NoSuchKey", "NoSuchObject", "NoSuchBucket", "NotFound"}:
                 raise ObjectNotFoundError(object_key) from error
             raise ObjectStorageUnavailableError("无法读取 MinIO 对象") from error
-        except OSError as error:
+        except (Urllib3Error, OSError) as error:
             raise ObjectStorageUnavailableError("无法连接 MinIO") from error
         finally:
             if response is not None:
@@ -155,7 +156,7 @@ class MinioObjectStorage:
                 content_type="application/octet-stream",
             )
             return self.stat(object_key=object_key)
-        except (S3Error, OSError, ValueError) as error:
+        except (S3Error, Urllib3Error, OSError, ValueError) as error:
             raise ObjectStorageUnavailableError("无法保存 MinIO 定稿对象") from error
 
     def delete(self, *, object_key: str) -> None:
@@ -166,7 +167,7 @@ class MinioObjectStorage:
             if error.code in {"NoSuchKey", "NoSuchObject", "NotFound"}:
                 return
             raise ObjectStorageUnavailableError("无法删除 MinIO 临时对象") from error
-        except OSError as error:
+        except (Urllib3Error, OSError) as error:
             raise ObjectStorageUnavailableError("无法连接 MinIO") from error
 
 

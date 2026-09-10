@@ -58,6 +58,7 @@ def client(engine: Engine) -> Iterator[tuple[TestClient, DatabaseSession]]:
         session_absolute_lifetime_minutes=43200,
         session_cookie_transport="require_https",
         csrf_secret=SecretStr("csrf-secret"),
+        redis_url=SecretStr("redis://127.0.0.1:1/0"),
     )
     app = create_app(settings)
     app.dependency_overrides[dependencies.users] = lambda: PostgresUserRepository(session)

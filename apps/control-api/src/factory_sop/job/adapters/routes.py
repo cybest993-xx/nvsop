@@ -9,7 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, field_serializer
 
-from factory_sop.auth.api import Authorized, Permission, needs
+from factory_sop.auth.api import Authorized, Permission, needs_any
 from factory_sop.dataset.api import DatasetResourceLookup
 from factory_sop.job.adapters.dependencies import dataset_resource, job_repository
 from factory_sop.job.api import ApplicationJob, JobRepository
@@ -59,7 +59,7 @@ def _view(job: ApplicationJob) -> JobView:
     "/{job_id}",
     response_model=JobView,
     operation_id="readJob",
-    openapi_extra=needs(Permission.DATASET_VIEW),
+    openapi_extra=needs_any(Permission.DATASET_VIEW, Permission.DATASET_IMPORT),
     responses=ProblemResponses,
 )
 def read_a_job(

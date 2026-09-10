@@ -155,7 +155,6 @@ def create_app(settings: Settings) -> FastAPI:
         dataset_dependencies.dataset_resource
     )
     app.dependency_overrides[dataset_dependencies.jobs] = job_dependencies.validation_jobs
-    app.dependency_overrides[dataset_dependencies.job_dispatcher] = job_dependencies.dispatcher
 
     @app.exception_handler(AuthenticationRefusedError)
     async def refused(request: Request, error: AuthenticationRefusedError) -> Response:

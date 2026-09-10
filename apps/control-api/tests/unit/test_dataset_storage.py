@@ -7,6 +7,8 @@ from typing import cast
 import pytest
 from minio import Minio
 from minio.datatypes import PostPolicy
+from urllib3.connectionpool import ConnectionPool
+from urllib3.exceptions import ReadTimeoutError
 
 from factory_sop.dataset.adapters.storage import MinioObjectStorage
 from factory_sop.dataset.storage import ObjectStorageUnavailableError
@@ -19,6 +21,28 @@ class RecordingSigner:
     def presigned_post_policy(self, policy: PostPolicy) -> dict[str, str]:
         self.policy = policy
         return {"policy": "signed-policy"}
+
+
+class TimeoutSigner:
+    def presigned_post_policy(self, policy: PostPolicy) -> dict[str, str]:
+        del policy
+        raise ReadTimeoutError(cast(ConnectionPool, object()), None, "timed out")
+
+
+def test_post_policy_network_timeout_becomes_a_recoverable_storage_error() -> None:
+    storage = MinioObjectStorage(
+        client=cast(Minio, object()),
+        bucket="training",
+        signer=cast(Minio, TimeoutSigner()),
+    )
+
+    with pytest.raises(ObjectStorageUnavailableError, match="上传说明"):
+        storage.create_upload(
+            object_key="training-datasets/dataset/member/attempt/video",
+            declared_size=123,
+            max_bytes=1024,
+            expires_at=datetime.now(UTC) + timedelta(minutes=15),
+        )
 
 
 def test_post_policy_allows_multipart_envelope_without_loosening_declared_size() -> None:

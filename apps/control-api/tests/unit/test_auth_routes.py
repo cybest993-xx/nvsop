@@ -50,6 +50,7 @@ def settings(
         session_absolute_lifetime_minutes=absolute_minutes,
         session_cookie_transport=transport,
         csrf_secret=SecretStr("csrf-secret"),
+        redis_url=SecretStr("redis://127.0.0.1:1/0"),
     )
 
 

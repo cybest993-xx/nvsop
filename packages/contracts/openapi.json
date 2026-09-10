@@ -9167,7 +9167,10 @@
         "tags": [
           "job"
         ],
-        "x-required-permission": "dataset.dataset.view"
+        "x-required-permissions": [
+          "dataset.dataset.view",
+          "dataset.dataset.import"
+        ]
       }
     },
     "/api/v1/liveness": {
@@ -12879,6 +12882,22 @@
               "format": "uuid",
               "title": "Member Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
             }
           }
         ],

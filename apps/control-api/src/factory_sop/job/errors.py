@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import NoReturn
+from typing import assert_never
 
 
 class JobRefusalCode(StrEnum):
@@ -28,8 +28,4 @@ def refusal_problem(code: JobRefusalCode) -> tuple[int, str]:
         case JobRefusalCode.JOB_NOT_FOUND | JobRefusalCode.JOB_RESOURCE_NOT_FOUND:
             return 404, "异步任务不存在"
         case _:
-            return _unexpected(code)
-
-
-def _unexpected(code: JobRefusalCode) -> NoReturn:
-    raise AssertionError(f"未处理的 job 错误码：{code}")
+            assert_never(code)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import assert_never
 
 
 class DatasetRefusalCode(StrEnum):
@@ -86,4 +87,4 @@ def refusal_problem(code: DatasetRefusalCode) -> tuple[int, str]:
         case DatasetRefusalCode.VALIDATION_STALE:
             return 409, "上传尝试已不是当前尝试"
         case _:
-            raise AssertionError(f"未处理的 dataset 错误码：{code}")
+            assert_never(code)

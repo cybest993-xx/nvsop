@@ -26,6 +26,7 @@ const DATASET_VIEW_PERMISSION = 'dataset.dataset.view'
 const DATASET_IMPORT_PERMISSION = 'dataset.dataset.import'
 const DATASET_PAGE_SIZE = 50
 const MEMBER_PAGE_SIZE = 50
+const PENDING_JOB_STATUSES = ['pending', 'enqueued', 'running']
 const PENDING_UPLOAD_STORAGE_KEY = 'sop.pending-training-upload'
 
 interface PendingUploadRecord {
@@ -95,8 +96,10 @@ const activeMemberId = ref('')
 const activeAttemptId = ref('')
 const pendingUpload = ref<PendingUploadRecord | null>(readPendingUpload())
 const activeIdempotencyKey = ref('')
+const uploadNeedsRenewal = ref(false)
 const activeJobId = ref('')
 const jobStatuses = ref<Record<string, string>>({})
+const jobFailures = ref<Record<string, string | null>>({})
 const pollingTimer = ref<number | null>(null)
 
 interface FailureNotice {
@@ -122,9 +125,16 @@ const activeMember = computed(
     members.value.find((member) => member.id === activeMemberId.value) ??
     (uploadRequest.value?.member.id === activeMemberId.value ? uploadRequest.value.member : null),
 )
-const hasPendingMembers = computed(() =>
-  members.value.some((member) => ['pending_validation', 'validating'].includes(member.status)),
-)
+const hasPendingMembers = computed(() => {
+  if (mayView.value) {
+    return members.value.some((member) =>
+      ['pending_validation', 'validating'].includes(member.status),
+    )
+  }
+  if (!mayImport.value || !activeJobId.value) return false
+  const status = jobStatuses.value[activeJobId.value]
+  return status === undefined || PENDING_JOB_STATUSES.includes(status)
+})
 const datasetPageCount = computed(() =>
   Math.max(1, Math.ceil(datasetTotal.value / DATASET_PAGE_SIZE)),
 )
@@ -136,8 +146,9 @@ function resetFailure(): void {
 }
 
 function markUploadFailed(): void {
-  if (transferPhase.value === 'uploading') {
+  if (transferPhase.value === 'requesting' || transferPhase.value === 'uploading') {
     transferPhase.value = 'failed'
+    uploadNeedsRenewal.value = activeIdempotencyKey.value !== ''
   }
 }
 
@@ -333,6 +344,7 @@ function chooseDataset(): void {
   activeMemberId.value = ''
   activeAttemptId.value = ''
   activeIdempotencyKey.value = ''
+  uploadNeedsRenewal.value = false
   uploadRequest.value = null
   transferProgress.value = null
   transferPhase.value = 'idle'
@@ -517,6 +529,7 @@ async function requestAndUpload(): Promise<void> {
     const idempotencyKey =
       resumableIdempotencyKey(datasetId, file, sourceValue, declaredSha256) ?? newIdempotencyKey()
     activeIdempotencyKey.value = idempotencyKey
+    uploadNeedsRenewal.value = false
     const result = await requestVideoUpload(
       datasetId,
       {
@@ -548,6 +561,7 @@ async function confirmCurrentUpload(): Promise<void> {
   if (result.job !== null) {
     activeJobId.value = result.job.id
     jobStatuses.value = { ...jobStatuses.value, [result.job.id]: result.job.status }
+    jobFailures.value = { ...jobFailures.value, [result.job.id]: result.job.failure_code }
     transferPhase.value = 'validating'
   } else {
     transferPhase.value = 'idle'
@@ -570,9 +584,14 @@ async function retryMember(member: TrainingDatasetMember): Promise<void> {
   resetFailure()
   try {
     const mode = member.recovery_action === 'retry_validation' ? 'retry_validation' : 'retry_upload'
-    const result = await retryVideoUpload(datasetId, member.id, mode)
-    applyRetry(result)
+    const idempotencyKey = mode === 'retry_upload' ? newIdempotencyKey() : undefined
+    const result =
+      idempotencyKey === undefined
+        ? await retryVideoUpload(datasetId, member.id, mode)
+        : await retryVideoUpload(datasetId, member.id, mode, idempotencyKey)
+    applyRetry(result, idempotencyKey)
     if (mode === 'retry_upload') {
+      if (idempotencyKey !== undefined) rememberPendingUpload(datasetId, idempotencyKey, result)
       selectedFile.value = null
       transferProgress.value = null
       transferPhase.value = 'awaiting_file'
@@ -584,15 +603,17 @@ async function retryMember(member: TrainingDatasetMember): Promise<void> {
   }
 }
 
-function applyRetry(result: DatasetRetry): void {
+function applyRetry(result: DatasetRetry, idempotencyKey?: string): void {
   const member = memberWithJob(result.member, result.job)
   applyMember(member)
   clearPendingUpload()
-  activeIdempotencyKey.value = ''
+  activeIdempotencyKey.value = idempotencyKey ?? ''
+  uploadNeedsRenewal.value = false
   activeAttemptId.value = result.attempt.id
   activeJobId.value = result.job?.id ?? member.validation_job_id ?? ''
   if (result.job !== null) {
     jobStatuses.value = { ...jobStatuses.value, [result.job.id]: result.job.status }
+    jobFailures.value = { ...jobFailures.value, [result.job.id]: result.job.failure_code }
   }
   uploadRequest.value =
     result.upload === null
@@ -617,7 +638,7 @@ async function uploadRetriedFile(): Promise<void> {
   }
   resetFailure()
   try {
-    if (activeIdempotencyKey.value === '') {
+    if (activeIdempotencyKey.value === '' || !uploadNeedsRenewal.value) {
       await transferAndConfirm(file, request)
       return
     }
@@ -632,6 +653,7 @@ async function uploadRetriedFile(): Promise<void> {
       activeIdempotencyKey.value,
     )
     rememberUpload(renewed)
+    uploadNeedsRenewal.value = false
     await transferAndConfirm(file, renewed)
   } catch (error) {
     markUploadFailed()
@@ -642,7 +664,8 @@ async function uploadRetriedFile(): Promise<void> {
 function submitUpload(): void {
   if (
     (transferPhase.value === 'failed' || transferPhase.value === 'awaiting_file') &&
-    uploadRequest.value?.upload !== null
+    uploadRequest.value !== null &&
+    uploadRequest.value.upload !== null
   ) {
     void uploadRetriedFile()
     return
@@ -662,7 +685,7 @@ function clearPolling(): void {
 }
 
 function syncPolling(): void {
-  if (!mayView.value || !hasPendingMembers.value || !selectedDatasetId.value) {
+  if ((!mayView.value && !mayImport.value) || !hasPendingMembers.value || !activeDatasetId()) {
     clearPolling()
     return
   }
@@ -673,7 +696,7 @@ function syncPolling(): void {
 }
 
 async function refreshPendingMembers(): Promise<void> {
-  if (!selectedDatasetId.value || !mayView.value) return
+  if ((!mayView.value && !mayImport.value) || !activeDatasetId()) return
   try {
     const jobIds = Array.from(
       new Set(
@@ -690,6 +713,17 @@ async function refreshPendingMembers(): Promise<void> {
         ...jobStatuses.value,
         ...Object.fromEntries(jobs.map(({ jobId, job }) => [jobId, job.status])),
       }
+      jobFailures.value = {
+        ...jobFailures.value,
+        ...Object.fromEntries(jobs.map(({ jobId, job }) => [jobId, job.failure_code])),
+      }
+    }
+    if (!mayView.value) {
+      const activeJob = jobs.find(({ jobId }) => jobId === activeJobId.value)?.job
+      if (activeJob?.status === 'succeeded') transferPhase.value = 'idle'
+      if (activeJob?.status === 'failed') transferPhase.value = 'failed'
+      syncPolling()
+      return
     }
     const page =
       memberPageNumber.value === 1
@@ -1066,10 +1100,14 @@ onUnmounted(clearPolling)
       <h2>本次加入结果</h2>
       <p>
         已创建视频身份 <code>{{ activeMember.id }}</code
-        >，中心状态：{{ statusLabel(activeMember.status) }}。
+        >，上传记录状态：{{ statusLabel(activeMember.status) }}。
       </p>
       <p v-if="activeJobId">
-        校验任务：{{ activeJobId }}（页面无查看权限，不会读取其他数据集列表）。
+        校验任务：{{ activeJobId }} ·
+        {{ jobStatusLabel(jobStatuses[activeJobId]) }}（页面无查看权限，不会读取其他数据集列表）。
+      </p>
+      <p v-if="activeJobId && jobFailures[activeJobId]" class="datasets__failure-code">
+        校验失败码：{{ jobFailures[activeJobId] }}
       </p>
     </section>
 

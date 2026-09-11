@@ -9,6 +9,7 @@
 import { client } from '@/api/generated/client.gen'
 import {
   bindTemplateVersion as generatedBindTemplateVersion,
+  createAnnotationContext as generatedCreateAnnotationContext,
   createConnector as generatedCreateConnector,
   createPoint as generatedCreatePoint,
   createRole as generatedCreateRole,
@@ -29,6 +30,8 @@ import {
   confirmVideoUpload as generatedConfirmVideoUpload,
   enqueueConnectorConnectionTest as generatedEnqueueConnectorConnectionTest,
   importTemplateDraft as generatedImportTemplateDraft,
+  listAnnotations as generatedListAnnotations,
+  listDatasetActionListVersions as generatedListDatasetActionListVersions,
   listConnectors as generatedListConnectors,
   listDatasetMembers as generatedListDatasetMembers,
   listInferenceHosts as generatedListInferenceHosts,
@@ -43,6 +46,8 @@ import {
   listUsers as generatedListUsers,
   openSession as generatedOpenSession,
   publishTemplateVersion as generatedPublishTemplateVersion,
+  readAnnotation as generatedReadAnnotation,
+  readAnnotationContext as generatedReadAnnotationContext,
   readConnector as generatedReadConnector,
   readDatasetMember as generatedReadDatasetMember,
   readDeviceCommand as generatedReadDeviceCommand,
@@ -54,17 +59,31 @@ import {
   readTemplateDraft as generatedReadTemplateDraft,
   readTemplateImport as generatedReadTemplateImport,
   readTemplateVersion as generatedReadTemplateVersion,
+  registerDatasetActionList as generatedRegisterDatasetActionList,
   requestVideoUpload as generatedRequestVideoUpload,
   resetUserPassword as generatedResetUserPassword,
+  retryAnnotation as generatedRetryAnnotation,
   retryVideoUpload as generatedRetryVideoUpload,
   setConnectorStatus as generatedSetConnectorStatus,
   setPointStatus as generatedSetPointStatus,
   setUserRoles as generatedSetUserRoles,
   setUserStatus as generatedSetUserStatus,
+  submitAnnotation as generatedSubmitAnnotation,
   updateConnectorCapability as generatedUpdateConnectorCapability,
   updateStationRuntimeParameters as generatedUpdateStationRuntimeParameters,
   validatePointBinding as generatedValidatePointBinding,
   validateTemplateBinding as generatedValidateTemplateBinding,
+  type ActionListHistoryView,
+  type ActionListInput,
+  type ActionListView,
+  type AnnotationAcceptedView,
+  type AnnotationContextInput,
+  type AnnotationContextView,
+  type AnnotationHistoryView,
+  type AnnotationMode,
+  type AnnotationSegmentInput as GeneratedAnnotationSegmentInput,
+  type AnnotationSubmissionInput,
+  type AnnotationSubmissionView,
   type BindingValidationRequest,
   type BindingValidationView,
   type RuntimeParametersUpdateInput,
@@ -126,6 +145,16 @@ import {
 } from '@/api/generated'
 
 export type {
+  ActionListHistoryView,
+  ActionListInput,
+  ActionListView,
+  AnnotationAcceptedView,
+  AnnotationContextInput,
+  AnnotationContextView,
+  AnnotationHistoryView,
+  AnnotationMode,
+  AnnotationSubmissionInput,
+  AnnotationSubmissionView,
   BackendConfigurationStatusView,
   BindingValidationRequest,
   BindingValidationView,
@@ -170,6 +199,8 @@ export type {
   UploadRequestView,
   UserView,
 } from '@/api/generated'
+
+export type AnnotationSegmentInput = GeneratedAnnotationSegmentInput
 
 const CSRF_COOKIE = 'sop_csrf'
 const CSRF_HEADER = 'x-csrf-token'
@@ -220,6 +251,9 @@ export function setUnauthorizedHandler(handler: (() => void) | null): void {
 
 client.setConfig({ baseUrl: window.location.origin, credentials: 'same-origin' })
 client.interceptors.request.use((request) => {
+  if (request.method === 'GET' || request.method === 'HEAD') {
+    return new Request(request, { cache: 'no-store' })
+  }
   if (!MODIFYING_METHODS.has(request.method)) {
     return request
   }
@@ -394,6 +428,90 @@ export function retryVideoUpload(
 
 export function readJob(jobId: string): Promise<DatasetJob> {
   return execute(generatedReadJob({ path: { job_id: jobId } }))
+}
+
+export type DatasetAnnotationMode = AnnotationMode
+export type DatasetActionList = ActionListView
+export type DatasetActionListHistory = ActionListHistoryView
+export type DatasetActionListInput = ActionListInput
+
+export function registerDatasetActionList(
+  datasetId: string,
+  actions: string[],
+): Promise<DatasetActionList> {
+  return execute(
+    generatedRegisterDatasetActionList({ path: { dataset_id: datasetId }, body: { actions } }),
+  )
+}
+
+export function listDatasetActionListVersions(
+  datasetId: string,
+): Promise<DatasetActionListHistory> {
+  return execute(generatedListDatasetActionListVersions({ path: { dataset_id: datasetId } }))
+}
+
+export function createAnnotationContext(
+  datasetId: string,
+  memberId: string,
+  submitted: AnnotationContextInput = {},
+): Promise<AnnotationContextView> {
+  return execute(
+    generatedCreateAnnotationContext({
+      path: { dataset_id: datasetId, member_id: memberId },
+      body: submitted,
+    }),
+  )
+}
+
+export function readAnnotationContext(contextToken: string): Promise<AnnotationContextView> {
+  return execute(generatedReadAnnotationContext({ path: { context_token: contextToken } }))
+}
+
+export function submitAnnotation(
+  datasetId: string,
+  memberId: string,
+  submitted: AnnotationSubmissionInput,
+  idempotencyKey: string,
+  annotationRevision: number,
+): Promise<AnnotationAcceptedView> {
+  return execute(
+    generatedSubmitAnnotation({
+      path: { dataset_id: datasetId, member_id: memberId },
+      headers: { 'Idempotency-Key': idempotencyKey, 'If-Match': annotationRevision },
+      body: submitted,
+    }),
+  )
+}
+
+export function listAnnotations(
+  datasetId: string,
+  memberId: string,
+): Promise<AnnotationHistoryView> {
+  return execute(generatedListAnnotations({ path: { dataset_id: datasetId, member_id: memberId } }))
+}
+
+export function readAnnotation(
+  datasetId: string,
+  memberId: string,
+  submissionId: string,
+): Promise<AnnotationSubmissionView> {
+  return execute(
+    generatedReadAnnotation({
+      path: { dataset_id: datasetId, member_id: memberId, submission_id: submissionId },
+    }),
+  )
+}
+
+export function retryAnnotation(
+  datasetId: string,
+  memberId: string,
+  submissionId: string,
+): Promise<AnnotationAcceptedView> {
+  return execute(
+    generatedRetryAnnotation({
+      path: { dataset_id: datasetId, member_id: memberId, submission_id: submissionId },
+    }),
+  )
 }
 
 // ——— 模板草稿：原始导入、列表、读取和 If-Match 编辑均走生成客户端。 ———

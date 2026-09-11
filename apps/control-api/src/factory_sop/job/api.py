@@ -13,6 +13,8 @@ class JobType(StrEnum):
     """可持久化应用任务的类型。"""
 
     DATASET_VALIDATION = "dataset_validation"
+    DATASET_ANNOTATION = "dataset_annotation"
+    DATASET_ANNOTATION_PREPARATION = "dataset_annotation_preparation"
 
 
 class JobStatus(StrEnum):
@@ -28,7 +30,7 @@ class JobStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ApplicationJob:
-    """一次持久化的训练视频校验任务；不携带上传凭据。"""
+    """一次持久化的训练数据异步任务；不携带上传凭据。"""
 
     id: UUID
     job_type: JobType
@@ -50,6 +52,22 @@ class ValidationJobQueue(Protocol):
         ...
 
 
+class AnnotationJobQueue(Protocol):
+    """`dataset` 创建标注切片任务时使用的幂等接口。"""
+
+    def get_or_create_annotation(
+        self, *, member_id: UUID, attempt_id: UUID, now: datetime
+    ) -> ApplicationJob:
+        """为同一候选执行代次返回已有任务或创建一条新任务；不提交事务。"""
+        ...
+
+    def get_or_create_annotation_preparation(
+        self, *, member_id: UUID, attempt_id: UUID, now: datetime
+    ) -> ApplicationJob:
+        """为同一标注上下文返回已有准备任务或创建一条新任务；不提交事务。"""
+        ...
+
+
 class JobRepository(Protocol):
     """任务状态与 outbox 的持久化 seam。"""
 
@@ -58,7 +76,7 @@ class JobRepository(Protocol):
         ...
 
     def by_attempt(self, attempt_id: UUID) -> ApplicationJob | None:
-        """读取某次视频尝试的校验任务。"""
+        """按业务目标身份读取任务；校验任务使用视频尝试身份。"""
         ...
 
     def add(self, job: ApplicationJob) -> None:

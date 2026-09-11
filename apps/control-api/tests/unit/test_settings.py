@@ -189,6 +189,58 @@ def test_refuses_a_negative_redis_database(tmp_path: Path) -> None:
         )
 
 
+def test_accepts_annotation_backend_with_a_same_host_https_media_origin(tmp_path: Path) -> None:
+    settings = Settings.from_environment(
+        environment(
+            tmp_path,
+            SOP_ANNOTATION_BACKEND_URL="http://annotation-backend.internal:8000",
+            SOP_ANNOTATION_MEDIA_ORIGIN="https://sop.example.internal:8444",
+        )
+    )
+
+    assert settings.annotation_backend_url == "http://annotation-backend.internal:8000"
+    assert settings.annotation_media_origin == "https://sop.example.internal:8444"
+
+
+@pytest.mark.parametrize(
+    "backend_url",
+    [
+        "ftp://annotation-backend.internal:8000",
+        "http://user:password@annotation-backend.internal:8000",  # pragma: allowlist secret
+        "http://annotation-backend.internal:8000?tenant=one",
+    ],
+)
+def test_refuses_an_unsafe_annotation_backend_url(tmp_path: Path, backend_url: str) -> None:
+    with pytest.raises(ConfigurationError, match="annotation_backend_url"):
+        Settings.from_environment(
+            environment(
+                tmp_path,
+                SOP_ANNOTATION_BACKEND_URL=backend_url,
+                SOP_ANNOTATION_MEDIA_ORIGIN="https://sop.example.internal:8444",
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://sop.example.internal:8444",
+        "https://sop.example.internal/annotation",
+        "https://sop.example.internal:8444?resource=video",
+        "https://sop.example.internal:99999",
+    ],
+)
+def test_refuses_an_unsafe_annotation_media_origin(tmp_path: Path, origin: str) -> None:
+    with pytest.raises(ConfigurationError, match="annotation_media_origin"):
+        Settings.from_environment(
+            environment(
+                tmp_path,
+                SOP_ANNOTATION_BACKEND_URL="http://annotation-backend.internal:8000",
+                SOP_ANNOTATION_MEDIA_ORIGIN=origin,
+            )
+        )
+
+
 def test_accepts_minio_config_without_a_public_endpoint(tmp_path: Path) -> None:
     settings = Settings.from_environment(
         environment(

@@ -120,11 +120,21 @@ class MinioObjectStorage:
             raise ObjectStorageUnavailableError("MinIO 未返回对象大小")
         return ObjectStat(size=int(found.size), version_id=version_id or None)
 
-    def download_to(self, *, object_key: str, destination: BinaryIO) -> None:
-        """流式下载对象并在完成后释放 HTTP 连接。"""
+    def download_to(
+        self,
+        *,
+        object_key: str,
+        destination: BinaryIO,
+        version_id: str | None = None,
+    ) -> None:
+        """流式下载指定对象代次并在完成后释放 HTTP 连接。"""
         response: Any = None
         try:
-            response = self._client.get_object(self._bucket, object_key)
+            response = self._client.get_object(
+                self._bucket,
+                object_key,
+                version_id=version_id,
+            )
             for chunk in response.stream(1024 * 1024):
                 destination.write(chunk)
         except S3Error as error:

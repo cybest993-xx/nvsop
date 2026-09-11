@@ -37,14 +37,12 @@ DECLARED_PERMISSION = "x-required-permission"
 DECLARED_PERMISSIONS = "x-required-permissions"
 
 
-def needs(permission: Permission) -> dict[str, str]:
-    """The `openapi_extra` for a route that requires `permission` — metadata, never enforcement.
-
-    A helper rather than a literal dict at each route, so the member name is written once and a
-    route cannot declare it under a misspelled key that the check would read as absent. The
-    enforcement itself is the use case's (§5.15); this only documents it.
-    """
-    return {DECLARED_PERMISSION: permission.value}
+def needs(*permissions: Permission) -> dict[str, str | list[str]]:
+    """生成路由权限元数据；实际授权仍由用例层执行。"""
+    if not permissions:
+        raise ValueError("至少声明一项权限")
+    values = [permission.value for permission in permissions]
+    return {DECLARED_PERMISSION: values[0] if len(values) == 1 else values}
 
 
 def needs_any(*permissions: Permission) -> dict[str, list[str]]:

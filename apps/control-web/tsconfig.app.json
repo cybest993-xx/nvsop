@@ -5,7 +5,7 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "preserve",
-    "types": ["vitest/globals"],
+    "types": ["vitest/globals", "node"],
     "paths": { "@/*": ["./src/*"] },
 
     // The same posture as the backend's `mypy --strict`: a type hole is a defect the gate

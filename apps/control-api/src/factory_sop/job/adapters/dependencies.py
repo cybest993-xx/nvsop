@@ -8,8 +8,12 @@ from fastapi import Depends, Request
 
 from factory_sop.dataset.api import DatasetResourceLookup
 from factory_sop.job.adapters.dispatcher import ArqJobDispatcher
-from factory_sop.job.adapters.repository import PostgresJobRepository, PostgresValidationJobQueue
-from factory_sop.job.api import JobDispatcher, JobRepository, ValidationJobQueue
+from factory_sop.job.adapters.repository import (
+    PostgresAnnotationJobQueue,
+    PostgresJobRepository,
+    PostgresValidationJobQueue,
+)
+from factory_sop.job.api import AnnotationJobQueue, JobDispatcher, JobRepository, ValidationJobQueue
 from factory_sop.persistence import RequestSession
 
 
@@ -29,6 +33,14 @@ def validation_jobs(
 ) -> ValidationJobQueue:
     """请求事务中的 dataset 校验任务创建 seam。"""
     return PostgresValidationJobQueue(session, job_dispatcher.dispatch)
+
+
+def annotation_jobs(
+    session: RequestSession,
+    job_dispatcher: Annotated[JobDispatcher, Depends(dispatcher)],
+) -> AnnotationJobQueue:
+    """请求事务中的 dataset 标注任务创建 seam。"""
+    return PostgresAnnotationJobQueue(session, job_dispatcher.dispatch)
 
 
 def dispatcher(request: Request) -> JobDispatcher:

@@ -34,8 +34,14 @@ class ObjectStorage(Protocol):
         """读取对象是否存在及实际大小。"""
         ...
 
-    def download_to(self, *, object_key: str, destination: BinaryIO) -> None:
-        """把一个已分配对象流式写入临时文件，不把整段视频放进请求内存。"""
+    def download_to(
+        self,
+        *,
+        object_key: str,
+        destination: BinaryIO,
+        version_id: str | None = None,
+    ) -> None:
+        """把指定对象代次流式写入临时文件，不把整段视频放进请求内存。"""
         ...
 
     def finalize_upload(

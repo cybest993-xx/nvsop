@@ -31,6 +31,21 @@ from factory_sop.auth.errors import (
 )
 from factory_sop.auth.model import SessionPolicy
 from factory_sop.dataset.adapters import dependencies as dataset_dependencies
+from factory_sop.dataset.adapters.annotation_routes import (
+    compatibility_router as annotation_compatibility_router,
+)
+from factory_sop.dataset.adapters.annotation_routes import (
+    context_router as annotation_context_router,
+)
+from factory_sop.dataset.adapters.annotation_routes import (
+    gateway_router as annotation_gateway_router,
+)
+from factory_sop.dataset.adapters.annotation_routes import (
+    media_router as annotation_media_router,
+)
+from factory_sop.dataset.adapters.annotation_routes import (
+    router as annotation_router,
+)
 from factory_sop.dataset.adapters.routes import router as dataset_router
 from factory_sop.dataset.errors import DatasetRefusedError
 from factory_sop.dataset.errors import refusal_problem as dataset_refusal_problem
@@ -144,6 +159,12 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(auth_user_administration.router, prefix=API_PREFIX)
     app.include_router(template_router, prefix=API_PREFIX)
     app.include_router(dataset_router, prefix=API_PREFIX)
+    app.include_router(annotation_router, prefix=API_PREFIX)
+    app.include_router(annotation_context_router, prefix=API_PREFIX)
+    app.include_router(annotation_gateway_router, prefix=API_PREFIX)
+    app.include_router(annotation_media_router, prefix=API_PREFIX)
+    # 兼容基座 React 控件既有 `/api/annotation` 前缀；该路径不进入公开控制面契约。
+    app.include_router(annotation_compatibility_router)
     app.include_router(job_router, prefix=API_PREFIX)
     # 组合根把跨模块查询和任务依赖接到各自模块的真实适配器。
     app.dependency_overrides[template_dependencies.stations] = device_dependencies.stations
@@ -155,6 +176,9 @@ def create_app(settings: Settings) -> FastAPI:
         dataset_dependencies.dataset_resource
     )
     app.dependency_overrides[dataset_dependencies.jobs] = job_dependencies.validation_jobs
+    app.dependency_overrides[dataset_dependencies.annotation_jobs] = (
+        job_dependencies.annotation_jobs
+    )
 
     @app.exception_handler(AuthenticationRefusedError)
     async def refused(request: Request, error: AuthenticationRefusedError) -> Response:
@@ -254,6 +278,9 @@ def create_app(settings: Settings) -> FastAPI:
             error_code=ApiErrorCode(error.code.value),
             detail=error.detail,
             recovery_action=error.recovery_action,
+            field_errors=[
+                FieldError(field=item.field, message=item.message) for item in error.field_errors
+            ],
         )
 
     @app.exception_handler(JobRefusedError)

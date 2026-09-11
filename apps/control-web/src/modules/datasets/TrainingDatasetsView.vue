@@ -5,13 +5,22 @@ import { useRoute } from 'vue-router'
 
 import {
   ControlPlaneError,
+  createAnnotationContext,
   confirmVideoUpload,
   createTrainingDataset,
+  listAnnotations,
+  listDatasetActionListVersions,
+  readAnnotationContext,
   readDatasetMembers,
   readJob,
   readTrainingDatasets,
+  registerDatasetActionList,
   requestVideoUpload,
   retryVideoUpload,
+  type AnnotationContextView,
+  type DatasetActionListHistory,
+  type AnnotationHistoryView,
+  type AnnotationSubmissionView,
   type DatasetRetry,
   type DatasetUploadRequest,
   type FieldError,
@@ -23,10 +32,13 @@ import { useSessionStore } from '@/session/store'
 import { ObjectUploadError, uploadVideoObject } from './upload'
 
 const DATASET_VIEW_PERMISSION = 'dataset.dataset.view'
+const DATASET_EDIT_PERMISSION = 'dataset.dataset.edit'
 const DATASET_IMPORT_PERMISSION = 'dataset.dataset.import'
 const DATASET_PAGE_SIZE = 50
 const MEMBER_PAGE_SIZE = 50
 const PENDING_JOB_STATUSES = ['pending', 'enqueued', 'running']
+const ANNOTATION_PREPARATION_POLL_MS = 1000
+const ANNOTATION_PREPARATION_MAX_POLLS = 300
 const PENDING_UPLOAD_STORAGE_KEY = 'sop.pending-training-upload'
 
 interface PendingUploadRecord {
@@ -72,7 +84,9 @@ function readPendingUpload(): PendingUploadRecord | null {
 const session = useSessionStore()
 const route = useRoute()
 const mayView = computed(() => session.may(DATASET_VIEW_PERMISSION))
+const mayEdit = computed(() => session.may(DATASET_EDIT_PERMISSION))
 const mayImport = computed(() => session.may(DATASET_IMPORT_PERMISSION))
+const mayAnnotate = computed(() => mayView.value && mayEdit.value)
 
 const datasets = ref<TrainingDataset[]>([])
 const datasetPageNumber = ref(1)
@@ -101,6 +115,15 @@ const activeJobId = ref('')
 const jobStatuses = ref<Record<string, string>>({})
 const jobFailures = ref<Record<string, string | null>>({})
 const pollingTimer = ref<number | null>(null)
+const annotationMemberId = ref('')
+const annotationContext = ref<AnnotationContextView | null>(null)
+const loadingAnnotationContext = ref(false)
+const annotationHistoryMemberId = ref('')
+const annotationHistory = ref<AnnotationHistoryView | null>(null)
+const loadingAnnotationHistory = ref(false)
+const actionListInput = ref('')
+const actionListHistory = ref<DatasetActionListHistory | null>(null)
+const loadingActionListHistory = ref(false)
 
 interface FailureNotice {
   message: string
@@ -354,7 +377,48 @@ function chooseDataset(): void {
 
 function selectDataset(datasetId: string): void {
   selectedDatasetId.value = datasetId
+  actionListHistory.value = null
+  actionListInput.value = ''
   chooseDataset()
+}
+
+async function readActionListHistory(): Promise<void> {
+  if (!mayView.value || !selectedDatasetId.value) return
+  resetFailure()
+  loadingActionListHistory.value = true
+  try {
+    actionListHistory.value = await listDatasetActionListVersions(selectedDatasetId.value)
+  } catch (error) {
+    recordFailure(error)
+  } finally {
+    loadingActionListHistory.value = false
+  }
+}
+
+async function saveActionList(): Promise<void> {
+  if (!mayEdit.value || !selectedDatasetId.value) return
+  resetFailure()
+  const actions = actionListInput.value
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+  if (actions.length === 0) {
+    failure.value = {
+      message: '请输入至少一条动作描述',
+      code: 'ACTION_LIST_INVALID',
+      recovery: null,
+    }
+    return
+  }
+  try {
+    const revision = await registerDatasetActionList(selectedDatasetId.value, actions)
+    actionListInput.value = ''
+    actionListHistory.value = {
+      items: [...(actionListHistory.value?.items ?? []), revision],
+    }
+  } catch (error) {
+    recordFailure(error)
+  }
 }
 
 async function createDataset(): Promise<void> {
@@ -601,6 +665,115 @@ async function retryMember(member: TrainingDatasetMember): Promise<void> {
   } catch (error) {
     recordFailure(error)
   }
+}
+
+function annotationStatusLabel(status: string): string {
+  switch (status) {
+    case 'pending':
+      return '等待切片'
+    case 'running':
+      return '切片中'
+    case 'succeeded':
+      return '已完成'
+    case 'failed':
+      return '失败'
+    default:
+      return `未知状态（${status}）`
+  }
+}
+
+function annotationStatusTag(status: string): 'success' | 'warning' | 'danger' | 'info' {
+  switch (status) {
+    case 'succeeded':
+      return 'success'
+    case 'failed':
+      return 'danger'
+    case 'pending':
+    case 'running':
+      return 'warning'
+    default:
+      return 'info'
+  }
+}
+
+async function enterAnnotation(member: TrainingDatasetMember): Promise<void> {
+  if (!mayAnnotate.value || member.status !== 'registered') return
+  resetFailure()
+  annotationHistoryMemberId.value = ''
+  annotationHistory.value = null
+  annotationMemberId.value = member.id
+  annotationContext.value = null
+  loadingAnnotationContext.value = true
+  try {
+    const created = await createAnnotationContext(selectedDatasetId.value, member.id)
+    annotationContext.value = await waitForAnnotationContext(created)
+  } catch (error) {
+    annotationMemberId.value = ''
+    recordFailure(error)
+  } finally {
+    loadingAnnotationContext.value = false
+  }
+}
+
+async function waitForAnnotationContext(
+  created: AnnotationContextView,
+): Promise<AnnotationContextView> {
+  if (created.preparation_status === 'succeeded') return created
+  if (created.preparation_status === 'failed') {
+    throw new Error(created.preparation_failure_detail ?? '标注媒体准备失败')
+  }
+  if (!['pending', 'running'].includes(created.preparation_status)) {
+    throw new Error(`未知标注准备状态（${created.preparation_status}）`)
+  }
+  for (let poll = 0; poll < ANNOTATION_PREPARATION_MAX_POLLS; poll += 1) {
+    await new Promise<void>((resolve) => window.setTimeout(resolve, ANNOTATION_PREPARATION_POLL_MS))
+    const current = await readAnnotationContext(created.context_token)
+    if (current.preparation_status === 'succeeded') return current
+    if (current.preparation_status === 'failed') {
+      throw new Error(current.preparation_failure_detail ?? '标注媒体准备失败')
+    }
+    if (!['pending', 'running'].includes(current.preparation_status)) {
+      throw new Error(`未知标注准备状态（${current.preparation_status}）`)
+    }
+  }
+  throw new Error('标注媒体准备超时，请稍后重新进入')
+}
+
+function leaveAnnotation(): void {
+  annotationMemberId.value = ''
+  annotationContext.value = null
+}
+
+function annotationLaunchUrl(contextToken: string): string {
+  return `/annotation/?context=${encodeURIComponent(contextToken)}`
+}
+
+async function readAnnotationHistory(member: TrainingDatasetMember): Promise<void> {
+  if (!mayView.value || member.status !== 'registered') return
+  resetFailure()
+  loadingAnnotationHistory.value = true
+  annotationHistoryMemberId.value = member.id
+  annotationHistory.value = null
+  try {
+    annotationHistory.value = await listAnnotations(selectedDatasetId.value, member.id)
+  } catch (error) {
+    annotationHistoryMemberId.value = ''
+    recordFailure(error)
+  } finally {
+    loadingAnnotationHistory.value = false
+  }
+}
+
+function annotationClipUrl(
+  submission: AnnotationSubmissionView,
+  executionId: string,
+  clipIndex: number,
+): string {
+  return `/api/annotation/api/v1/annotation-submissions/${submission.id}/executions/${executionId}/clips/${clipIndex}/download`
+}
+
+function annotationArchiveUrl(submission: AnnotationSubmissionView, executionId: string): string {
+  return `/api/annotation/api/v1/annotation-submissions/${submission.id}/executions/${executionId}/download-all`
 }
 
 function applyRetry(result: DatasetRetry, idempotencyKey?: string): void {
@@ -900,6 +1073,53 @@ onUnmounted(clearPolling)
       </form>
     </div>
 
+    <section
+      v-if="mayView && selectedDatasetId && mayEdit"
+      class="datasets__action-list"
+      aria-labelledby="action-list-heading"
+    >
+      <div class="datasets__section-head">
+        <div>
+          <h2 id="action-list-heading">动作列表</h2>
+          <p>每次登记追加一个版本；旧版本只读，不会重新解释已经保存的标注。</p>
+        </div>
+        <ElButton
+          link
+          type="primary"
+          :disabled="loadingActionListHistory"
+          @click="readActionListHistory"
+        >
+          {{ loadingActionListHistory ? '正在读取…' : '读取版本历史' }}
+        </ElButton>
+      </div>
+      <form
+        aria-label="登记动作列表"
+        class="datasets__action-list-form"
+        @submit.prevent="saveActionList"
+      >
+        <label for="dataset-action-list">
+          动作描述（每行一条，例如 (1) 取料）
+          <textarea
+            id="dataset-action-list"
+            v-model="actionListInput"
+            name="dataset-action-list"
+            rows="4"
+            autocomplete="off"
+          />
+        </label>
+        <ElButton type="primary" native-type="submit">登记新版本</ElButton>
+      </form>
+      <ol v-if="actionListHistory" class="datasets__action-list-history">
+        <li v-for="revision in actionListHistory.items" :key="revision.revision">
+          <strong>版本 {{ revision.revision }}</strong>
+          <span>{{ revision.actions.join('、') }}</span>
+        </li>
+        <li v-if="actionListHistory.items.length === 0" class="datasets__muted">
+          尚未登记动作列表。
+        </li>
+      </ol>
+    </section>
+
     <section v-if="mayView" class="datasets__catalog" aria-labelledby="catalog-heading">
       <div class="datasets__section-head">
         <div>
@@ -999,6 +1219,7 @@ onUnmounted(clearPolling)
             <th scope="col">声明 / 实际大小</th>
             <th scope="col">声明 / 实际 sha256</th>
             <th scope="col">实际媒体</th>
+            <th scope="col">动作标注</th>
             <th scope="col">恢复</th>
           </tr>
         </thead>
@@ -1041,6 +1262,29 @@ onUnmounted(clearPolling)
             </td>
             <td>
               <ElButton
+                v-if="mayAnnotate && member.status === 'registered'"
+                link
+                type="primary"
+                :disabled="loadingAnnotationContext"
+                @click="enterAnnotation(member)"
+              >
+                进入标注
+              </ElButton>
+              <ElButton
+                v-if="mayView && member.status === 'registered'"
+                link
+                type="success"
+                :disabled="loadingAnnotationHistory"
+                @click="readAnnotationHistory(member)"
+              >
+                查看记录
+              </ElButton>
+              <span v-if="member.status !== 'registered'" class="datasets__muted"
+                >校验完成后可用</span
+              >
+            </td>
+            <td>
+              <ElButton
                 v-if="mayImport && member.recovery_action === 'retry_upload'"
                 link
                 type="warning"
@@ -1063,7 +1307,7 @@ onUnmounted(clearPolling)
             </td>
           </tr>
           <tr v-if="members.length === 0">
-            <td colspan="6" class="datasets__empty">这个数据集还没有视频成员。</td>
+            <td colspan="7" class="datasets__empty">这个数据集还没有视频成员。</td>
           </tr>
         </tbody>
       </table>
@@ -1090,6 +1334,103 @@ onUnmounted(clearPolling)
           下一页
         </ElButton>
       </nav>
+
+      <section
+        v-if="annotationMemberId"
+        class="datasets__annotation-editor"
+        aria-labelledby="annotation-editor-heading"
+      >
+        <div class="datasets__section-head">
+          <div>
+            <h2 id="annotation-editor-heading">动作标注</h2>
+            <p>
+              目标视频：<code>{{ annotationMemberId }}</code
+              >；进入标注不会重新上传视频。
+            </p>
+          </div>
+          <ElButton link type="info" @click="leaveAnnotation">关闭标注</ElButton>
+        </div>
+        <p v-if="loadingAnnotationContext" class="datasets__loading">
+          正在准备视频、读取动作列表和历史时间段…
+        </p>
+        <div v-else-if="annotationContext" class="datasets__annotation-launch">
+          <p>视频已准备完成，标注控件在独立的 NVIDIA React 界面中打开。</p>
+          <a
+            class="datasets__annotation-launch-link"
+            :href="annotationLaunchUrl(annotationContext.context_token)"
+          >
+            进入 NVIDIA React 标注界面
+          </a>
+        </div>
+      </section>
+
+      <section
+        v-if="annotationHistoryMemberId"
+        class="datasets__annotation-history"
+        aria-labelledby="annotation-history-heading"
+      >
+        <div class="datasets__section-head">
+          <div>
+            <h2 id="annotation-history-heading">已保存动作标注</h2>
+            <p>原始时间段、动作列表修订、源对象摘要和切片执行状态均来自中心记录。</p>
+          </div>
+          <span v-if="loadingAnnotationHistory" class="datasets__muted">正在读取…</span>
+        </div>
+        <p v-if="annotationHistory && annotationHistory.items.length === 0" class="datasets__empty">
+          这个视频尚未标注。
+        </p>
+        <article
+          v-for="submission in annotationHistory?.items ?? []"
+          :key="submission.id"
+          class="datasets__annotation-record"
+        >
+          <h3>提交 {{ submission.id }}</h3>
+          <p>
+            标注者：{{ submission.created_by }} · {{ formatTime(submission.created_at) }} ·
+            动作列表修订：{{ submission.action_list_revision }} · 模式：{{ submission.mode }}
+          </p>
+          <p>
+            源对象代次：<code>{{ submission.source_object_version_id }}</code> · sha256：<code>{{
+              submission.source_sha256
+            }}</code>
+          </p>
+          <ol>
+            <li v-for="(segment, index) in submission.segments" :key="`${submission.id}-${index}`">
+              {{ segment.action_description || `动作 ${segment.action_index + 1}` }}：
+              {{ segment.start.toFixed(2) }}s – {{ segment.end.toFixed(2) }}s
+            </li>
+          </ol>
+          <div v-for="execution in submission.executions" :key="execution.id">
+            <p>
+              执行第 {{ execution.generation }} 次：
+              <ElTag :type="annotationStatusTag(execution.status)" disable-transitions>
+                {{ annotationStatusLabel(execution.status) }}
+              </ElTag>
+              <span v-if="execution.failure_detail">{{ execution.failure_detail }}</span>
+            </p>
+            <template v-if="execution.status === 'succeeded'">
+              <a
+                :href="annotationArchiveUrl(submission, execution.id)"
+                target="_blank"
+                rel="noreferrer"
+              >
+                下载全部切片
+              </a>
+              <ul>
+                <li v-for="(_clip, index) in execution.clips" :key="`${execution.id}-${index}`">
+                  <a
+                    :href="annotationClipUrl(submission, execution.id, index)"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    打开第 {{ index + 1 }} 个切片
+                  </a>
+                </li>
+              </ul>
+            </template>
+          </div>
+        </article>
+      </section>
     </section>
 
     <section
@@ -1187,6 +1528,7 @@ onUnmounted(clearPolling)
 }
 
 .datasets__card,
+.datasets__action-list,
 .datasets__catalog,
 .datasets__members,
 .datasets__import-only {
@@ -1198,6 +1540,45 @@ onUnmounted(clearPolling)
   display: grid;
   gap: 0.6rem;
   padding: 1rem 1.15rem;
+}
+
+.datasets__action-list {
+  margin-bottom: 1.5rem;
+  border-top: 3px solid var(--dataset-amber);
+}
+
+.datasets__action-list-form {
+  display: grid;
+  gap: 0.6rem;
+  padding: 1rem 1.15rem;
+}
+
+.datasets__action-list-form label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 600;
+}
+
+.datasets__action-list-form textarea {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid #bfc6cd;
+  border-radius: 4px;
+  font: inherit;
+  resize: vertical;
+}
+
+.datasets__action-list-history {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0 1.15rem 1rem 2.5rem;
+}
+
+.datasets__action-list-history li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
 .datasets__card:nth-child(2),
@@ -1332,7 +1713,48 @@ onUnmounted(clearPolling)
 }
 
 .datasets__table--members th:nth-child(5) {
-  width: 14%;
+  width: 12%;
+}
+
+.datasets__table--members th:nth-child(6) {
+  width: 13%;
+}
+
+.datasets__table--members th:nth-child(7) {
+  width: 10%;
+}
+
+.datasets__annotation-editor,
+.datasets__annotation-history {
+  margin: 1rem 1.15rem;
+  border: 1px solid var(--dataset-rule);
+  border-top: 3px solid var(--dataset-teal);
+  background: #fff;
+}
+
+.datasets__annotation-history {
+  border-top-color: var(--dataset-amber);
+}
+
+.datasets__annotation-record {
+  padding: 1rem 1.15rem;
+  border-top: 1px solid var(--dataset-rule);
+}
+
+.datasets__annotation-record h3 {
+  margin: 0 0 0.4rem;
+  font-size: 0.95rem;
+}
+
+.datasets__annotation-record p {
+  margin: 0.35rem 0;
+  color: #68717c;
+  line-height: 1.45;
+}
+
+.datasets__annotation-record ol,
+.datasets__annotation-record ul {
+  margin: 0.6rem 0;
 }
 
 .datasets__caption {

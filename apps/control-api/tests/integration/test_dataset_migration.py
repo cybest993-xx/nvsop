@@ -1,4 +1,4 @@
-"""用真实 PostgreSQL 走过 0023 → 0024 的训练数据集迁移。"""
+"""用真实 PostgreSQL 走过 0023 → 0026 的训练数据集和标注迁移。"""
 
 from __future__ import annotations
 
@@ -49,6 +49,11 @@ def _tables(database: Engine) -> set[str]:
         )
 
 
+def _permission_codes(database: Engine) -> set[str]:
+    with database.connect() as connection:
+        return set(connection.execute(text("SELECT code FROM auth_permission")).scalars().all())
+
+
 def _columns(database: Engine, table: str) -> set[str]:
     with database.connect() as connection:
         return set(
@@ -79,9 +84,15 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
     )
     command.upgrade(configuration, "head")
 
-    assert {"dataset_training_dataset", "dataset_member", "dataset_upload_attempt"} <= _tables(
-        database_at_0023
-    )
+    assert {
+        "dataset_training_dataset",
+        "dataset_member",
+        "dataset_upload_attempt",
+        "dataset_action_list_revision",
+        "dataset_annotation_context",
+        "dataset_annotation_submission",
+        "dataset_annotation_execution",
+    } <= _tables(database_at_0023)
     assert {
         "id",
         "dataset_id",
@@ -112,12 +123,44 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
         "validation_job_id",
         "object_version_id",
     } <= _columns(database_at_0023, "dataset_upload_attempt")
+    assert {
+        "annotation_revision",
+        "upstream_data_id",
+        "upstream_video_id",
+        "upstream_video_size",
+        "upstream_video_sha256",
+        "upstream_video_duration_seconds",
+        "preparation_job_id",
+        "preparation_status",
+        "preparation_failure_code",
+        "preparation_failure_detail",
+    } <= _columns(database_at_0023, "dataset_annotation_context")
+    assert {"revision"} <= _columns(database_at_0023, "dataset_annotation_submission")
+    assert {
+        "upstream_data_id",
+        "upstream_video_id",
+        "derived_video_size",
+        "derived_video_sha256",
+        "derived_video_duration_seconds",
+    } <= _columns(database_at_0023, "dataset_annotation_execution")
 
     with database_at_0023.connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0024"
+    assert version == "0026"
+    assert "dataset.dataset.edit" in _permission_codes(database_at_0023)
 
+    command.downgrade(configuration, "0025")
+    assert "dataset.dataset.edit" not in _permission_codes(database_at_0023)
+    command.downgrade(configuration, "0024")
+    assert not {
+        "dataset_action_list_revision",
+        "dataset_annotation_context",
+        "dataset_annotation_submission",
+        "dataset_annotation_execution",
+    } & _tables(database_at_0023)
     command.downgrade(configuration, "0023")
     assert not {"dataset_training_dataset", "dataset_member", "dataset_upload_attempt"} & _tables(
         database_at_0023
     )
+    command.downgrade(configuration, "0022")
+    assert "job_application_job" not in _tables(database_at_0023)

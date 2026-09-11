@@ -1,0 +1,351 @@
+diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/docker-compose.yml b/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/docker-compose.yml
+index 652176a..9fee22d 100644
+--- a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/docker-compose.yml
++++ b/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/docker-compose.yml
+@@ -151,8 +151,6 @@ services:
+       context: ./microservices/video-annotator-ms/annotation_backend
+       dockerfile: Dockerfile
+     container_name: sop-annotation-backend
+-    ports:
+-      - "${ANNOTATION_BACKEND_PORT:-8100}:${ANNOTATION_BACKEND_PORT:-8100}"
+     environment:
+       - SERVICE_PORT=${ANNOTATION_BACKEND_PORT:-8100}
+       - POSTGRES_USER=${POSTGRES_USER}
+@@ -175,8 +173,6 @@ services:
+       context: ./microservices/video-annotator-ms/annotation_frontend
+       dockerfile: Dockerfile
+     container_name: sop-annotation-frontend
+-    ports:
+-      - "${FRONTEND_PORT:-80}:${FRONTEND_PORT:-80}"
+     networks:
+       - sop-network
+     env_file:
+diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/video-annotator-ms/annotation_backend/inference.py b/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/video-annotator-ms/annotation_backend/inference.py
+index f2eccda..8fb2ebe 100644
+--- a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/video-annotator-ms/annotation_backend/inference.py
++++ b/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/video-annotator-ms/annotation_backend/inference.py
+@@ -40,6 +40,7 @@ from fastapi import (
+     Path,
+     Request,
+     Response,
++    Query,
+     UploadFile,
+ )
+ from fastapi.responses import FileResponse, JSONResponse
+@@ -203,16 +204,22 @@ async def set_two_operator_mode(
+ 
+ 
+ @app.post("/api/v1/upload")
+-async def upload_video(file: UploadFile = File(...)) -> VideoUploadResponse:
++async def upload_video(
++    file: UploadFile = File(...),
++    target_data_id: Optional[str] = Query(default=None, description="显式目标数据集 ID"),
++) -> VideoUploadResponse:
+     """Upload video file"""
+ 
+     global current_data_id
+ 
+-    if not current_data_id:
++    selected_data_id = target_data_id or current_data_id
++    if not selected_data_id:
+         raise HTTPException(
+             status_code=400,
+             detail="Data ID is not set. Please upload actions.json first.",
+         )
++    if not await postgres_db.get_data(selected_data_id, Dataset):
++        raise HTTPException(status_code=404, detail="Target dataset not found")
+ 
+     file_data = file.file.read()
+ 
+@@ -226,7 +233,7 @@ async def upload_video(file: UploadFile = File(...)) -> VideoUploadResponse:
+ 
+     try:
+         # Ensure video directory exists
+-        videos_dir = os.path.join(const.VIDEO_ROOT, current_data_id)
++        videos_dir = os.path.join(const.VIDEO_ROOT, selected_data_id)
+ 
+         # Ensure the filename always ends with .mp4 for consistency
+         if not safe_basename.lower().endswith(const.DEFAULT_VIDEO_EXTENSION):
+@@ -238,7 +245,7 @@ async def upload_video(file: UploadFile = File(...)) -> VideoUploadResponse:
+         # Check if video with same original filename already exists in this dataset
+         # We need to list all videos in this dataset and check their names
+         # The names in DB are stored as "{uuid}_{original_name}"
+-        existing_videos = await postgres_db.list_data(Video, condition={"dataset_id": current_data_id})
++        existing_videos = await postgres_db.list_data(Video, condition={"dataset_id": selected_data_id})
+ 
+         video_id = None
+         final_file_name = None
+@@ -327,7 +334,7 @@ async def upload_video(file: UploadFile = File(...)) -> VideoUploadResponse:
+             await postgres_db.insert_data(
+                 Video,
+                 id=video_id,
+-                dataset_id=current_data_id,
++                dataset_id=selected_data_id,
+                 name=final_file_name,
+                 mime_type=const.MIME_TYPE,
+                 file_size=final_file_size,
+diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/video-annotator-ms/annotation_frontend/src/App.js b/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/video-annotator-ms/annotation_frontend/src/App.js
+index 7fc55eb..bcb2a3e 100644
+--- a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/video-annotator-ms/annotation_frontend/src/App.js
++++ b/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/video-annotator-ms/annotation_frontend/src/App.js
+@@ -14,6 +14,7 @@
+ // limitations under the License.
+ 
+ import React, { useState, useEffect } from 'react';
++import PropTypes from 'prop-types';
+ import { Container, Row, Col, Alert, Card, Form, Button } from 'react-bootstrap';
+ import VideoUploader from './components/VideoUploader';
+ import ActionTimestampEditor from './components/ActionTimestampEditor';
+@@ -30,6 +31,97 @@ const API_BASE_URL = '/api/annotation';
+ const AUGMENTATION_API_BASE_URL = '/api/augmentation';
+ 
+ function App() {
++  const contextToken = new URLSearchParams(window.location.search).get('context');
++  return contextToken ? (
++    <ContextAnnotationApp contextToken={contextToken} />
++  ) : (
++    <LegacyAnnotationApp />
++  );
++}
++
++function ContextAnnotationApp({ contextToken }) {
++  const [context, setContext] = useState(null);
++  const [error, setError] = useState('');
++
++  useEffect(() => {
++    let cancelled = false;
++
++    const loadContext = async () => {
++      try {
++        for (let attempt = 0; attempt < 300; attempt += 1) {
++          const response = await fetch(
++            `/api/v1/annotation-contexts/${encodeURIComponent(contextToken)}`,
++            { credentials: 'same-origin', cache: 'no-store' },
++          );
++          const result = await response.json();
++          if (!response.ok) {
++            throw new Error(result.detail || result.title || `请求失败（HTTP ${response.status}）`);
++          }
++          if (result.preparation_status === 'succeeded') {
++            if (!cancelled) setContext(result);
++            return;
++          }
++          if (result.preparation_status === 'failed') {
++            throw new Error(result.preparation_failure_detail || '标注媒体准备失败');
++          }
++          if (!['pending', 'running'].includes(result.preparation_status)) {
++            throw new Error(`未知标注准备状态（${result.preparation_status}）`);
++          }
++          await new Promise((resolve) => setTimeout(resolve, 1000));
++        }
++        throw new Error('标注媒体准备超时');
++      } catch (loadError) {
++        if (!cancelled) setError(loadError.message || '无法加载标注上下文');
++      }
++    };
++
++    void loadContext();
++    return () => {
++      cancelled = true;
++    };
++  }, [contextToken]);
++
++  if (error) {
++    return (
++      <Container className="py-4">
++        <Alert variant="danger">{error}</Alert>
++        <a href="/training-datasets">返回训练数据集</a>
++      </Container>
++    );
++  }
++
++  if (!context) {
++    return <Container className="py-4">正在准备标注媒体……</Container>;
++  }
++
++  const initialTimestamps = (context.initial_timestamps || []).map((timestamp) => ({
++    startTime: timestamp.start,
++    endTime: timestamp.end,
++    actionIndex: timestamp.action_index,
++  }));
++
++  return (
++    <Container className="py-4">
++      <div className="d-flex justify-content-between align-items-center mb-3">
++        <h1>动作标注</h1>
++        <a href="/training-datasets">返回训练数据集</a>
++      </div>
++      <ActionTimestampEditor
++        actions={context.actions}
++        uploadedVideoId={context.context_token}
++        videoUrl={context.video_url}
++        initialTimestamps={initialTimestamps}
++        twoOperatorMode={context.two_operator_mode}
++      />
++    </Container>
++  );
++}
++
++ContextAnnotationApp.propTypes = {
++  contextToken: PropTypes.string.isRequired,
++};
++
++function LegacyAnnotationApp() {
+   // Workflow state management
+   const [workflowState, setWorkflowState] = useState('INITIAL'); // INITIAL, ACTIONS_LOADED, VIDEO_LOADED, TIMESTAMPS_SET
+ 
+diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/video-annotator-ms/annotation_frontend/src/components/ActionTimestampEditor.js b/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/video-annotator-ms/annotation_frontend/src/components/ActionTimestampEditor.js
+index 794a193..5822b51 100644
+--- a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/video-annotator-ms/annotation_frontend/src/components/ActionTimestampEditor.js
++++ b/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/video-annotator-ms/annotation_frontend/src/components/ActionTimestampEditor.js
+@@ -21,6 +21,34 @@ import 'rc-slider/assets/index.css';
+ 
+ // Use nginx proxy path to avoid CORS issues
+ const API_BASE_URL = '/api/annotation';
++const CSRF_COOKIE = 'sop_csrf';
++const CSRF_HEADER = 'x-csrf-token';
++const SPLIT_POLL_INTERVAL_MS = 1000;
++const SPLIT_POLL_LIMIT = 300;
++
++function csrfHeaders() {
++  const entry = document.cookie
++    .split('; ')
++    .find((value) => value.startsWith(`${CSRF_COOKIE}=`));
++  if (!entry) return {};
++  return { [CSRF_HEADER]: decodeURIComponent(entry.slice(CSRF_COOKIE.length + 1)) };
++}
++
++async function waitForSplitResult(pollUrl) {
++  for (let attempt = 0; attempt < SPLIT_POLL_LIMIT; attempt += 1) {
++    const response = await fetch(pollUrl, { credentials: 'same-origin', cache: 'no-store' });
++    const result = await response.json();
++    if (!response.ok) {
++      throw new Error(result.detail || result.message || `请求失败（HTTP ${response.status}）`);
++    }
++    if (result.status === 'succeeded') return result;
++    if (result.status === 'failed') {
++      throw new Error(result.failure_detail || result.failure_code || '标注切片失败');
++    }
++    await new Promise((resolve) => setTimeout(resolve, SPLIT_POLL_INTERVAL_MS));
++  }
++  throw new Error('标注切片超时');
++}
+ 
+ const ActionTimestampEditor = ({ actions = [], uploadedVideoId, videoUrl, initialTimestamps, onTimestampsSubmitted, twoOperatorMode = false }) => {
+   // State for dynamic timestamp blocks
+@@ -450,8 +478,10 @@ const ActionTimestampEditor = ({ actions = [], uploadedVideoId, videoUrl, initia
+       const response = await fetch(`${API_BASE_URL}/api/v1/videos/${videoId}/split`, {
+         method: 'POST',
+         headers: {
+-          'Content-Type': 'application/json'
++          'Content-Type': 'application/json',
++          ...csrfHeaders(),
+         },
++        credentials: 'same-origin',
+         body: JSON.stringify(requestBody)
+       });
+ 
+@@ -473,6 +503,10 @@ const ActionTimestampEditor = ({ actions = [], uploadedVideoId, videoUrl, initia
+         throw new Error(errorMessage);
+       }
+ 
++      if (result.status === 'accepted' && result.poll_url) {
++        result = await waitForSplitResult(result.poll_url);
++      }
++
+       console.log('Timestamp submission successful, response:', result);
+       setMessage(`Timestamps submitted and ${result.clips ? result.clips.length : 0} clips created successfully!`);
+       if (onTimestampsSubmitted) {
+@@ -554,8 +588,9 @@ const ActionTimestampEditor = ({ actions = [], uploadedVideoId, videoUrl, initia
+     <div className="action-timestamp-editor">
+       {/* FPS control */}
+       <Form.Group className="mb-3">
+-        <Form.Label>Video Frame Rate (fps)</Form.Label>
++        <Form.Label htmlFor="annotation-fps">Video Frame Rate (fps)</Form.Label>
+         <Form.Control
++          id="annotation-fps"
+           type="number"
+           min="1"
+           max="120"
+@@ -767,8 +802,9 @@ const ActionTimestampEditor = ({ actions = [], uploadedVideoId, videoUrl, initia
+                   <Col lg={6}>
+                     <h5 className="mb-3">Action Selection</h5>
+                     <Form.Group className="mb-3">
+-                      <Form.Label>Choose Action</Form.Label>
++                      <Form.Label htmlFor={`annotation-action-${index}`}>Choose Action</Form.Label>
+                       <Form.Select
++                        id={`annotation-action-${index}`}
+                         value={block.actionIndex}
+                         onChange={(e) => handleActionChange(index, e.target.value)}
+                       >
+@@ -792,6 +828,10 @@ const ActionTimestampEditor = ({ actions = [], uploadedVideoId, videoUrl, initia
+                         <div style={{ padding: '10px 20px', marginTop: '15px' }}>
+                           <Slider
+                             range
++                            ariaLabelForHandle={[
++                              `事件 ${index + 1} 开始时间`,
++                              `事件 ${index + 1} 结束时间`,
++                            ]}
+                             min={0}
+                             max={videoDuration || 100}
+                             step={frameTimeStep}
+@@ -829,8 +869,9 @@ const ActionTimestampEditor = ({ actions = [], uploadedVideoId, videoUrl, initia
+                         <Row className="mt-3">
+                           <Col xs={6}>
+                             <Form.Group>
+-                              <Form.Label className="small text-success">Start Time (s)</Form.Label>
++                              <Form.Label htmlFor={`annotation-start-${index}`} className="small text-success">Start Time (s)</Form.Label>
+                               <Form.Control
++                                id={`annotation-start-${index}`}
+                                 type="number"
+                                 min="0"
+                                 max={(block.endTime || 0) - 0.1}
+@@ -843,8 +884,9 @@ const ActionTimestampEditor = ({ actions = [], uploadedVideoId, videoUrl, initia
+                           </Col>
+                           <Col xs={6}>
+                             <Form.Group>
+-                              <Form.Label className="small text-danger">End Time (s)</Form.Label>
++                              <Form.Label htmlFor={`annotation-end-${index}`} className="small text-danger">End Time (s)</Form.Label>
+                               <Form.Control
++                                id={`annotation-end-${index}`}
+                                 type="number"
+                                 min={(block.startTime || 0) + 0.1}
+                                 max={videoDuration || 100}
+@@ -862,6 +904,7 @@ const ActionTimestampEditor = ({ actions = [], uploadedVideoId, videoUrl, initia
+                       <Form.Group>
+                         <Form.Label>Completion Time (seconds)</Form.Label>
+                       <Form.Control
++                        aria-label={`事件 ${index + 1} 完成时间`}
+                         type="range"
+                         min="0"
+                         max={videoDuration || 100}
+@@ -878,6 +921,7 @@ const ActionTimestampEditor = ({ actions = [], uploadedVideoId, videoUrl, initia
+                       </div>
+                     <Form.Group className="mt-3">
+                       <Form.Control
++                        aria-label={`事件 ${index + 1} 完成时间（秒）`}
+                         type="number"
+                         min="0"
+                         max={videoDuration || 100}
+diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/video-annotator-ms/docker-compose.yml b/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/video-annotator-ms/docker-compose.yml
+index b768e41..7ca0665 100644
+--- a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/video-annotator-ms/docker-compose.yml
++++ b/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/video-annotator-ms/docker-compose.yml
+@@ -23,8 +23,6 @@ services:
+       context: ./annotation_backend
+       dockerfile: Dockerfile
+     container_name: sop-annotation-backend
+-    ports:
+-      - "${ANNOTATION_BACKEND_PORT:-8100}:${ANNOTATION_BACKEND_PORT:-8100}"
+     volumes:
+       - ${VIDEO_ROOT:-data}:/app/assets/videos
+       - ${LOG_ROOT:-logs}:/app/assets/logs
+@@ -40,8 +38,6 @@ services:
+       context: ./annotation_frontend
+       dockerfile: Dockerfile
+     container_name: sop-annotation-frontend
+-    ports:
+-      - "${FRONTEND_PORT:-80}:${FRONTEND_PORT:-80}"
+     env_file:
+       - .env
+     networks:

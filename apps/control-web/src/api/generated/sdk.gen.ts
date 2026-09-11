@@ -15,6 +15,9 @@ import type {
   ConfirmVideoUploadData,
   ConfirmVideoUploadErrors,
   ConfirmVideoUploadResponses,
+  CreateAnnotationContextData,
+  CreateAnnotationContextErrors,
+  CreateAnnotationContextResponses,
   CreateCameraData,
   CreateCameraErrors,
   CreateCameraResponses,
@@ -108,12 +111,18 @@ import type {
   ImportTemplateDraftData,
   ImportTemplateDraftErrors,
   ImportTemplateDraftResponses,
+  ListAnnotationsData,
+  ListAnnotationsErrors,
+  ListAnnotationsResponses,
   ListCamerasData,
   ListCamerasErrors,
   ListCamerasResponses,
   ListConnectorsData,
   ListConnectorsErrors,
   ListConnectorsResponses,
+  ListDatasetActionListVersionsData,
+  ListDatasetActionListVersionsErrors,
+  ListDatasetActionListVersionsResponses,
   ListDatasetMembersData,
   ListDatasetMembersErrors,
   ListDatasetMembersResponses,
@@ -156,12 +165,21 @@ import type {
   PublishTemplateVersionData,
   PublishTemplateVersionErrors,
   PublishTemplateVersionResponses,
+  ReadAnnotationContextData,
+  ReadAnnotationContextErrors,
+  ReadAnnotationContextResponses,
+  ReadAnnotationData,
+  ReadAnnotationErrors,
+  ReadAnnotationResponses,
   ReadCameraData,
   ReadCameraErrors,
   ReadCameraResponses,
   ReadConnectorData,
   ReadConnectorErrors,
   ReadConnectorResponses,
+  ReadDatasetActionListData,
+  ReadDatasetActionListErrors,
+  ReadDatasetActionListResponses,
   ReadDatasetMemberData,
   ReadDatasetMemberErrors,
   ReadDatasetMemberResponses,
@@ -204,6 +222,9 @@ import type {
   ReadTrainingDatasetData,
   ReadTrainingDatasetErrors,
   ReadTrainingDatasetResponses,
+  RegisterDatasetActionListData,
+  RegisterDatasetActionListErrors,
+  RegisterDatasetActionListResponses,
   RegisterInferenceHostIdentityKeyData,
   RegisterInferenceHostIdentityKeyErrors,
   RegisterInferenceHostIdentityKeyResponses,
@@ -216,6 +237,9 @@ import type {
   ResetUserPasswordData,
   ResetUserPasswordErrors,
   ResetUserPasswordResponses,
+  RetryAnnotationData,
+  RetryAnnotationErrors,
+  RetryAnnotationResponses,
   RetryVideoUploadData,
   RetryVideoUploadErrors,
   RetryVideoUploadResponses,
@@ -246,6 +270,9 @@ import type {
   SetUserStatusData,
   SetUserStatusErrors,
   SetUserStatusResponses,
+  SubmitAnnotationData,
+  SubmitAnnotationErrors,
+  SubmitAnnotationResponses,
   TestInferenceBackendConnectionData,
   TestInferenceBackendConnectionErrors,
   TestInferenceBackendConnectionResponses,
@@ -280,6 +307,18 @@ export type Options<
    */
   meta?: keyof ClientMeta extends never ? Record<string, unknown> : ClientMeta
 }
+
+/**
+ * Read A Context
+ */
+export const readAnnotationContext = <ThrowOnError extends boolean = false>(
+  options: Options<ReadAnnotationContextData, ThrowOnError>,
+): RequestResult<ReadAnnotationContextResponses, ReadAnnotationContextErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadAnnotationContextResponses,
+    ReadAnnotationContextErrors,
+    ThrowOnError
+  >({ url: '/api/v1/annotation-contexts/{context_token}', ...options })
 
 /**
  * Read The Permission Catalogue
@@ -1579,6 +1618,57 @@ export const readTrainingDataset = <ThrowOnError extends boolean = false>(
   >({ url: '/api/v1/training-datasets/{dataset_id}', ...options })
 
 /**
+ * Read A Dataset Action List
+ */
+export const readDatasetActionList = <ThrowOnError extends boolean = false>(
+  options: Options<ReadDatasetActionListData, ThrowOnError>,
+): RequestResult<ReadDatasetActionListResponses, ReadDatasetActionListErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadDatasetActionListResponses,
+    ReadDatasetActionListErrors,
+    ThrowOnError
+  >({ url: '/api/v1/training-datasets/{dataset_id}/action-list', ...options })
+
+/**
+ * Register A Dataset Action List
+ */
+export const registerDatasetActionList = <ThrowOnError extends boolean = false>(
+  options: Options<RegisterDatasetActionListData, ThrowOnError>,
+): RequestResult<
+  RegisterDatasetActionListResponses,
+  RegisterDatasetActionListErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    RegisterDatasetActionListResponses,
+    RegisterDatasetActionListErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/action-list',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * List Dataset Action List Versions
+ */
+export const listDatasetActionListVersions = <ThrowOnError extends boolean = false>(
+  options: Options<ListDatasetActionListVersionsData, ThrowOnError>,
+): RequestResult<
+  ListDatasetActionListVersionsResponses,
+  ListDatasetActionListVersionsErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).get<
+    ListDatasetActionListVersionsResponses,
+    ListDatasetActionListVersionsErrors,
+    ThrowOnError
+  >({ url: '/api/v1/training-datasets/{dataset_id}/action-list/versions', ...options })
+
+/**
  * List The Dataset Members
  */
 export const listDatasetMembers = <ThrowOnError extends boolean = false>(
@@ -1618,6 +1708,73 @@ export const readDatasetMember = <ThrowOnError extends boolean = false>(
   (options.client ?? client).get<ReadDatasetMemberResponses, ReadDatasetMemberErrors, ThrowOnError>(
     { url: '/api/v1/training-datasets/{dataset_id}/members/{member_id}', ...options },
   )
+
+/**
+ * Create A Context
+ */
+export const createAnnotationContext = <ThrowOnError extends boolean = false>(
+  options: Options<CreateAnnotationContextData, ThrowOnError>,
+): RequestResult<CreateAnnotationContextResponses, CreateAnnotationContextErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    CreateAnnotationContextResponses,
+    CreateAnnotationContextErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/members/{member_id}/annotation-context',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * List The Annotations
+ */
+export const listAnnotations = <ThrowOnError extends boolean = false>(
+  options: Options<ListAnnotationsData, ThrowOnError>,
+): RequestResult<ListAnnotationsResponses, ListAnnotationsErrors, ThrowOnError> =>
+  (options.client ?? client).get<ListAnnotationsResponses, ListAnnotationsErrors, ThrowOnError>({
+    url: '/api/v1/training-datasets/{dataset_id}/members/{member_id}/annotations',
+    ...options,
+  })
+
+/**
+ * Submit An Annotation
+ */
+export const submitAnnotation = <ThrowOnError extends boolean = false>(
+  options: Options<SubmitAnnotationData, ThrowOnError>,
+): RequestResult<SubmitAnnotationResponses, SubmitAnnotationErrors, ThrowOnError> =>
+  (options.client ?? client).post<SubmitAnnotationResponses, SubmitAnnotationErrors, ThrowOnError>({
+    url: '/api/v1/training-datasets/{dataset_id}/members/{member_id}/annotations',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read An Annotation
+ */
+export const readAnnotation = <ThrowOnError extends boolean = false>(
+  options: Options<ReadAnnotationData, ThrowOnError>,
+): RequestResult<ReadAnnotationResponses, ReadAnnotationErrors, ThrowOnError> =>
+  (options.client ?? client).get<ReadAnnotationResponses, ReadAnnotationErrors, ThrowOnError>({
+    url: '/api/v1/training-datasets/{dataset_id}/members/{member_id}/annotations/{submission_id}',
+    ...options,
+  })
+
+/**
+ * Retry An Annotation
+ */
+export const retryAnnotation = <ThrowOnError extends boolean = false>(
+  options: Options<RetryAnnotationData, ThrowOnError>,
+): RequestResult<RetryAnnotationResponses, RetryAnnotationErrors, ThrowOnError> =>
+  (options.client ?? client).post<RetryAnnotationResponses, RetryAnnotationErrors, ThrowOnError>({
+    url: '/api/v1/training-datasets/{dataset_id}/members/{member_id}/annotations/{submission_id}/retry',
+    ...options,
+  })
 
 /**
  * Confirm A Video Upload

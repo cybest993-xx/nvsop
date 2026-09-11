@@ -13,9 +13,13 @@ import pytest
 from factory_sop.auth.authorization import AuthorizationRefusedError, Caller
 from factory_sop.auth.model import User, UserStatus
 from factory_sop.auth.permissions import Permission
-from factory_sop.dataset.errors import DatasetRefusedError
+from factory_sop.dataset.errors import DatasetRefusalCode, DatasetRefusedError
 from factory_sop.dataset.media import MediaMetadata, MediaProbeUnavailableError
 from factory_sop.dataset.model import (
+    ActionListRevision,
+    AnnotationContext,
+    AnnotationExecution,
+    AnnotationSubmission,
     DatasetMember,
     MemberStatus,
     ObjectStat,
@@ -62,8 +66,14 @@ class UnreachableStorage:
         del object_key
         raise AssertionError("未授权请求不应读取对象")
 
-    def download_to(self, *, object_key: str, destination: BinaryIO) -> None:
-        del object_key, destination
+    def download_to(
+        self,
+        *,
+        object_key: str,
+        destination: BinaryIO,
+        version_id: str | None = None,
+    ) -> None:
+        del object_key, destination, version_id
         raise AssertionError("未授权请求不应下载对象")
 
     def delete(self, *, object_key: str) -> None:
@@ -107,6 +117,10 @@ class FakeDatasets:
     datasets: dict[UUID, TrainingDataset] = field(default_factory=dict)
     members: dict[UUID, DatasetMember] = field(default_factory=dict)
     attempts: dict[UUID, UploadAttempt] = field(default_factory=dict)
+    action_lists: dict[tuple[UUID, int], ActionListRevision] = field(default_factory=dict)
+    contexts: dict[UUID, AnnotationContext] = field(default_factory=dict)
+    submissions: dict[UUID, AnnotationSubmission] = field(default_factory=dict)
+    executions: dict[UUID, AnnotationExecution] = field(default_factory=dict)
 
     def dataset_by_id(self, dataset_id: UUID) -> TrainingDataset | None:
         return self.datasets.get(dataset_id)
@@ -121,6 +135,9 @@ class FakeDatasets:
         self.attempts[attempt.id] = attempt
 
     def member_by_id(self, member_id: UUID) -> DatasetMember | None:
+        return self.members.get(member_id)
+
+    def lock_annotation_member(self, member_id: UUID) -> DatasetMember | None:
         return self.members.get(member_id)
 
     def attempt_by_id(self, attempt_id: UUID) -> UploadAttempt | None:
@@ -169,6 +186,91 @@ class FakeDatasets:
     def save_attempt(self, attempt: UploadAttempt) -> None:
         self.attempts[attempt.id] = attempt
 
+    def latest_action_list(self, dataset_id: UUID) -> ActionListRevision | None:
+        values = [value for (owner, _), value in self.action_lists.items() if owner == dataset_id]
+        return max(values, key=lambda value: value.revision, default=None)
+
+    def action_list_by_revision(
+        self, *, dataset_id: UUID, revision: int
+    ) -> ActionListRevision | None:
+        return self.action_lists.get((dataset_id, revision))
+
+    def add_action_list(self, value: ActionListRevision) -> None:
+        self.action_lists[(value.dataset_id, value.revision)] = value
+
+    def add_annotation_context(self, value: AnnotationContext) -> None:
+        self.contexts[value.id] = value
+
+    def annotation_context_by_id(self, context_id: UUID) -> AnnotationContext | None:
+        return self.contexts.get(context_id)
+
+    def save_annotation_context(self, value: AnnotationContext) -> None:
+        self.contexts[value.id] = value
+
+    def annotation_submission_by_idempotency(
+        self, *, dataset_id: UUID, idempotency_key: str
+    ) -> AnnotationSubmission | None:
+        return next(
+            (
+                value
+                for value in self.submissions.values()
+                if value.dataset_id == dataset_id and value.idempotency_key == idempotency_key
+            ),
+            None,
+        )
+
+    def annotation_submission_by_id(self, submission_id: UUID) -> AnnotationSubmission | None:
+        return self.submissions.get(submission_id)
+
+    def latest_annotation_submission(self, context_id: UUID) -> AnnotationSubmission | None:
+        values = [value for value in self.submissions.values() if value.context_id == context_id]
+        return max(values, key=lambda value: value.created_at, default=None)
+
+    def list_annotation_submissions(
+        self, *, dataset_id: UUID, member_id: UUID
+    ) -> list[AnnotationSubmission]:
+        return [
+            value
+            for value in self.submissions.values()
+            if value.dataset_id == dataset_id and value.member_id == member_id
+        ]
+
+    def add_annotation_submission(self, value: AnnotationSubmission) -> None:
+        self.submissions[value.id] = value
+
+    def annotation_execution_by_id(self, execution_id: UUID) -> AnnotationExecution | None:
+        return self.executions.get(execution_id)
+
+    def latest_annotation_execution(self, submission_id: UUID) -> AnnotationExecution | None:
+        values = [
+            value for value in self.executions.values() if value.submission_id == submission_id
+        ]
+        return max(values, key=lambda value: value.generation, default=None)
+
+    def list_annotation_executions(self, submission_id: UUID) -> list[AnnotationExecution]:
+        return [value for value in self.executions.values() if value.submission_id == submission_id]
+
+    def add_annotation_execution(self, value: AnnotationExecution) -> None:
+        self.executions[value.id] = value
+
+    def save_annotation_execution(
+        self,
+        value: AnnotationExecution,
+        *,
+        expected_updated_at: datetime,
+    ) -> bool:
+        current = self.executions.get(value.id)
+        if current is None or current.updated_at != expected_updated_at:
+            return False
+        self.executions[value.id] = value
+        return True
+
+    def annotation_context_preparation_exists(self, _member_id: UUID, _context_id: UUID) -> bool:
+        return False
+
+    def annotation_execution_exists(self, _member_id: UUID, _execution_id: UUID) -> bool:
+        return False
+
 
 @dataclass
 class FakeStorage(ObjectStorage):
@@ -199,7 +301,14 @@ class FakeStorage(ObjectStorage):
         content = self.objects[object_key]
         return ObjectStat(size=len(content), version_id="version-1")
 
-    def download_to(self, *, object_key: str, destination: BinaryIO) -> None:
+    def download_to(
+        self,
+        *,
+        object_key: str,
+        destination: BinaryIO,
+        version_id: str | None = None,
+    ) -> None:
+        del version_id
         destination.write(self.objects[object_key])
 
     def finalize_upload(self, *, object_key: str, source: BinaryIO, size: int) -> ObjectStat:
@@ -259,6 +368,59 @@ class FakeJobs:
         self.jobs[job.id] = job
         return job
 
+    def get_or_create_annotation(
+        self, *, member_id: UUID, attempt_id: UUID, now: datetime
+    ) -> ApplicationJob:
+        return self._get_or_create_annotation_job(
+            member_id=member_id,
+            attempt_id=attempt_id,
+            now=now,
+            job_type=JobType.DATASET_ANNOTATION,
+        )
+
+    def get_or_create_annotation_preparation(
+        self, *, member_id: UUID, attempt_id: UUID, now: datetime
+    ) -> ApplicationJob:
+        return self._get_or_create_annotation_job(
+            member_id=member_id,
+            attempt_id=attempt_id,
+            now=now,
+            job_type=JobType.DATASET_ANNOTATION_PREPARATION,
+        )
+
+    def _get_or_create_annotation_job(
+        self,
+        *,
+        member_id: UUID,
+        attempt_id: UUID,
+        now: datetime,
+        job_type: JobType,
+    ) -> ApplicationJob:
+        current = next(
+            (
+                job
+                for job in self.jobs.values()
+                if job.member_id == member_id
+                and job.attempt_id == attempt_id
+                and job.job_type is job_type
+            ),
+            None,
+        )
+        if current is not None:
+            return current
+        job = ApplicationJob(
+            id=UUID(f"019937d8-0d10-7b31-8d2d-{len(self.jobs) + 20:012d}"),
+            job_type=job_type,
+            status=JobStatus.PENDING,
+            member_id=member_id,
+            attempt_id=attempt_id,
+            created_at=now,
+            updated_at=now,
+            failure_code=None,
+        )
+        self.jobs[job.id] = job
+        return job
+
 
 def caller_with_import() -> Caller:
     return Caller(
@@ -288,7 +450,25 @@ def dataset_store() -> FakeDatasets:
     return store
 
 
-def test_request_upload_rejects_an_archive_before_object_storage() -> None:
+def test_request_upload_rejects_header_control_chars_in_filename() -> None:
+    with pytest.raises(DatasetRefusedError) as refused:
+        request_video_upload(
+            dataset_id=DATASET_ID,
+            original_filename='unsafe"\r\nX-Injected: yes.mp4',
+            source="产线相机",
+            declared_size=12,
+            declared_sha256="a" * 64,
+            idempotency_key="header-injection",
+            caller=caller_with_import(),
+            now=NOW,
+            datasets=dataset_store(),
+            storage=FakeStorage(),
+            max_upload_bytes=1024,
+            upload_ttl_seconds=900,
+        )
+
+    assert refused.value.code is DatasetRefusalCode.FILENAME_INVALID
+
     datasets = dataset_store()
     storage = FakeStorage()
 

@@ -82,9 +82,9 @@ class Permission(StrEnum):
     TEMPLATE_DRAFT_VIEW = "template.draft.view"
     TEMPLATE_DRAFT_EDIT = "template.draft.edit"
 
-    # 训练数据集的读取与逐视频导入。导入是本票已明确登记的专门动作，不扩展为通用
-    # `edit`，其他未登记的 `*.import` 仍然无效。
+    # 训练数据集的读取、标注编辑与逐视频导入。导入不隐式授予查看或编辑。
     DATASET_VIEW = "dataset.dataset.view"
+    DATASET_EDIT = "dataset.dataset.edit"
     DATASET_IMPORT = "dataset.dataset.import"
 
 

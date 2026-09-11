@@ -5,6 +5,54 @@ export type ClientOptions = {
 }
 
 /**
+ * ActionListHistoryView
+ */
+export type ActionListHistoryView = {
+  /**
+   * Items
+   */
+  items: Array<ActionListView>
+}
+
+/**
+ * ActionListInput
+ *
+ * 新增动作清单修订。
+ */
+export type ActionListInput = {
+  /**
+   * Actions
+   */
+  actions: Array<string>
+}
+
+/**
+ * ActionListView
+ */
+export type ActionListView = {
+  /**
+   * Actions
+   */
+  actions: Array<string>
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Created By
+   */
+  created_by: string
+  /**
+   * Dataset Id
+   */
+  dataset_id: string
+  /**
+   * Revision
+   */
+  revision: number
+}
+
+/**
  * ActionSignalInput
  *
  * 动作编号边界信号。
@@ -18,6 +66,334 @@ export type ActionSignalInput = {
    * Kind
    */
   kind: 'action'
+}
+
+/**
+ * AnnotationAcceptedView
+ */
+export type AnnotationAcceptedView = {
+  execution: AnnotationExecutionView
+  job: AnnotationJobView
+  submission: AnnotationSubmissionView
+}
+
+/**
+ * AnnotationContextInput
+ *
+ * 选择动作清单修订；省略则使用最新修订。
+ */
+export type AnnotationContextInput = {
+  /**
+   * Action List Revision
+   */
+  action_list_revision?: number | null
+}
+
+/**
+ * AnnotationContextView
+ */
+export type AnnotationContextView = {
+  /**
+   * Action List Revision
+   */
+  action_list_revision: number
+  /**
+   * Actions
+   */
+  actions: Array<string>
+  /**
+   * Annotation Revision
+   */
+  annotation_revision: number
+  /**
+   * Context Token
+   */
+  context_token: string
+  /**
+   * Dataset Id
+   */
+  dataset_id: string
+  /**
+   * Derived Video Duration Seconds
+   */
+  derived_video_duration_seconds: number | null
+  /**
+   * Derived Video Sha256
+   */
+  derived_video_sha256: string | null
+  /**
+   * Derived Video Size
+   */
+  derived_video_size: number | null
+  /**
+   * Duration Seconds
+   */
+  duration_seconds: number | null
+  /**
+   * Expires At
+   */
+  expires_at: string
+  /**
+   * Initial Timestamps
+   */
+  initial_timestamps: Array<AnnotationSegmentInput>
+  latest_submission: AnnotationSubmissionView | null
+  /**
+   * Member Id
+   */
+  member_id: string
+  /**
+   * Original Filename
+   */
+  original_filename: string
+  /**
+   * Preparation Failure Code
+   */
+  preparation_failure_code: string | null
+  /**
+   * Preparation Failure Detail
+   */
+  preparation_failure_detail: string | null
+  /**
+   * Preparation Job Id
+   */
+  preparation_job_id: string | null
+  /**
+   * Preparation Status
+   */
+  preparation_status: string
+  /**
+   * Source
+   */
+  source: string
+  /**
+   * Source Object Version Id
+   */
+  source_object_version_id: string
+  /**
+   * Source Sha256
+   */
+  source_sha256: string
+  /**
+   * Two Operator Mode
+   */
+  two_operator_mode: boolean
+  /**
+   * Video Url
+   */
+  video_url: string
+}
+
+/**
+ * AnnotationExecutionView
+ */
+export type AnnotationExecutionView = {
+  /**
+   * Clips
+   */
+  clips: Array<{
+    [key: string]: unknown
+  }>
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  /**
+   * Failure Detail
+   */
+  failure_detail: string | null
+  /**
+   * Generation
+   */
+  generation: number
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Job Id
+   */
+  job_id: string | null
+  /**
+   * Status
+   */
+  status: string
+  /**
+   * Submission Id
+   */
+  submission_id: string
+  /**
+   * Updated At
+   */
+  updated_at: string
+}
+
+/**
+ * AnnotationHistoryView
+ */
+export type AnnotationHistoryView = {
+  /**
+   * Items
+   */
+  items: Array<AnnotationSubmissionView>
+}
+
+/**
+ * AnnotationJobView
+ */
+export type AnnotationJobView = {
+  /**
+   * Attempt Id
+   */
+  attempt_id: string
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Job Type
+   */
+  job_type: string
+  /**
+   * Member Id
+   */
+  member_id: string
+  /**
+   * Status
+   */
+  status: string
+  /**
+   * Updated At
+   */
+  updated_at: string
+}
+
+/**
+ * AnnotationMode
+ *
+ * 标注界面允许的时间段关系。
+ */
+export type AnnotationMode = 'single_operator' | 'two_operator'
+
+/**
+ * AnnotationSegmentInput
+ *
+ * 控制面提交的动作时间段。
+ */
+export type AnnotationSegmentInput = {
+  /**
+   * Action Description
+   */
+  action_description?: string
+  /**
+   * Action Index
+   */
+  action_index: number
+  /**
+   * End
+   */
+  end: number
+  /**
+   * Start
+   */
+  start: number
+}
+
+/**
+ * AnnotationSubmissionInput
+ *
+ * 控制面提交的完整标注内容。
+ */
+export type AnnotationSubmissionInput = {
+  /**
+   * Context Token
+   */
+  context_token: string
+  mode: AnnotationMode
+  /**
+   * Segments
+   */
+  segments: Array<AnnotationSegmentInput>
+}
+
+/**
+ * AnnotationSubmissionView
+ */
+export type AnnotationSubmissionView = {
+  /**
+   * Action List Revision
+   */
+  action_list_revision: number
+  /**
+   * Context Id
+   */
+  context_id: string
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Created By
+   */
+  created_by: string
+  /**
+   * Dataset Id
+   */
+  dataset_id: string
+  /**
+   * Executions
+   */
+  executions: Array<AnnotationExecutionView>
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Idempotency Key
+   */
+  idempotency_key: string
+  /**
+   * Member Id
+   */
+  member_id: string
+  /**
+   * Mode
+   */
+  mode: string
+  /**
+   * Raw Segments
+   */
+  raw_segments: Array<{
+    [key: string]: unknown
+  }>
+  /**
+   * Revision
+   */
+  revision: number
+  /**
+   * Segments
+   */
+  segments: Array<AnnotationSegmentInput>
+  /**
+   * Source Object Version Id
+   */
+  source_object_version_id: string
+  /**
+   * Source Sha256
+   */
+  source_sha256: string
 }
 
 /**
@@ -126,6 +502,16 @@ export type ApiErrorCode =
   | 'UNSUPPORTED_CODEC'
   | 'MEDIA_PROBE_UNAVAILABLE'
   | 'VALIDATION_STALE'
+  | 'ACTION_LIST_INVALID'
+  | 'ACTION_LIST_NOT_FOUND'
+  | 'ANNOTATION_MEMBER_NOT_REGISTERED'
+  | 'ANNOTATION_CONTEXT_INVALID'
+  | 'ANNOTATION_NOT_FOUND'
+  | 'ANNOTATION_IDEMPOTENCY_CONFLICT'
+  | 'ANNOTATION_STATE_CONFLICT'
+  | 'ANNOTATION_BACKEND_UNAVAILABLE'
+  | 'ANNOTATION_EXECUTION_FAILED'
+  | 'ANNOTATION_OPERATION_NOT_ALLOWED'
   | 'JOB_NOT_FOUND'
   | 'JOB_RESOURCE_NOT_FOUND'
 
@@ -2697,6 +3083,62 @@ export type FactorySopJobAdaptersRoutesJobView = {
    */
   updated_at: string
 }
+
+export type ReadAnnotationContextData = {
+  body?: never
+  path: {
+    /**
+     * Context Token
+     */
+    context_token: string
+  }
+  query?: never
+  url: '/api/v1/annotation-contexts/{context_token}'
+}
+
+export type ReadAnnotationContextErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或标注提交不存在
+   */
+  404: ProblemDocument
+  /**
+   * 标注当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 标注输入无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 标注基座或对象存储暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ReadAnnotationContextError =
+  ReadAnnotationContextErrors[keyof ReadAnnotationContextErrors]
+
+export type ReadAnnotationContextResponses = {
+  /**
+   * Successful Response
+   */
+  200: AnnotationContextView
+}
+
+export type ReadAnnotationContextResponse =
+  ReadAnnotationContextResponses[keyof ReadAnnotationContextResponses]
 
 export type ListPermissionsData = {
   body?: never
@@ -6809,6 +7251,174 @@ export type ReadTrainingDatasetResponses = {
 export type ReadTrainingDatasetResponse =
   ReadTrainingDatasetResponses[keyof ReadTrainingDatasetResponses]
 
+export type ReadDatasetActionListData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/action-list'
+}
+
+export type ReadDatasetActionListErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或标注提交不存在
+   */
+  404: ProblemDocument
+  /**
+   * 标注当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 标注输入无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 标注基座或对象存储暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ReadDatasetActionListError =
+  ReadDatasetActionListErrors[keyof ReadDatasetActionListErrors]
+
+export type ReadDatasetActionListResponses = {
+  /**
+   * Successful Response
+   */
+  200: ActionListView
+}
+
+export type ReadDatasetActionListResponse =
+  ReadDatasetActionListResponses[keyof ReadDatasetActionListResponses]
+
+export type RegisterDatasetActionListData = {
+  body: ActionListInput
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/action-list'
+}
+
+export type RegisterDatasetActionListErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或标注提交不存在
+   */
+  404: ProblemDocument
+  /**
+   * 标注当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 标注输入无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 标注基座或对象存储暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type RegisterDatasetActionListError =
+  RegisterDatasetActionListErrors[keyof RegisterDatasetActionListErrors]
+
+export type RegisterDatasetActionListResponses = {
+  /**
+   * Successful Response
+   */
+  201: ActionListView
+}
+
+export type RegisterDatasetActionListResponse =
+  RegisterDatasetActionListResponses[keyof RegisterDatasetActionListResponses]
+
+export type ListDatasetActionListVersionsData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/action-list/versions'
+}
+
+export type ListDatasetActionListVersionsErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或标注提交不存在
+   */
+  404: ProblemDocument
+  /**
+   * 标注当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 标注输入无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 标注基座或对象存储暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ListDatasetActionListVersionsError =
+  ListDatasetActionListVersionsErrors[keyof ListDatasetActionListVersionsErrors]
+
+export type ListDatasetActionListVersionsResponses = {
+  /**
+   * Successful Response
+   */
+  200: ActionListHistoryView
+}
+
+export type ListDatasetActionListVersionsResponse =
+  ListDatasetActionListVersionsResponses[keyof ListDatasetActionListVersionsResponses]
+
 export type ListDatasetMembersData = {
   body?: never
   path: {
@@ -6991,6 +7601,316 @@ export type ReadDatasetMemberResponses = {
 }
 
 export type ReadDatasetMemberResponse = ReadDatasetMemberResponses[keyof ReadDatasetMemberResponses]
+
+export type CreateAnnotationContextData = {
+  body: AnnotationContextInput
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Member Id
+     */
+    member_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/members/{member_id}/annotation-context'
+}
+
+export type CreateAnnotationContextErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或标注提交不存在
+   */
+  404: ProblemDocument
+  /**
+   * 标注当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 标注输入无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 标注基座或对象存储暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type CreateAnnotationContextError =
+  CreateAnnotationContextErrors[keyof CreateAnnotationContextErrors]
+
+export type CreateAnnotationContextResponses = {
+  /**
+   * Successful Response
+   */
+  201: AnnotationContextView
+}
+
+export type CreateAnnotationContextResponse =
+  CreateAnnotationContextResponses[keyof CreateAnnotationContextResponses]
+
+export type ListAnnotationsData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Member Id
+     */
+    member_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/members/{member_id}/annotations'
+}
+
+export type ListAnnotationsErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或标注提交不存在
+   */
+  404: ProblemDocument
+  /**
+   * 标注当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 标注输入无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 标注基座或对象存储暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ListAnnotationsError = ListAnnotationsErrors[keyof ListAnnotationsErrors]
+
+export type ListAnnotationsResponses = {
+  /**
+   * Successful Response
+   */
+  200: AnnotationHistoryView
+}
+
+export type ListAnnotationsResponse = ListAnnotationsResponses[keyof ListAnnotationsResponses]
+
+export type SubmitAnnotationData = {
+  body: AnnotationSubmissionInput
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+    /**
+     * Idempotency-Key
+     */
+    'Idempotency-Key'?: string | null
+  }
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Member Id
+     */
+    member_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/members/{member_id}/annotations'
+}
+
+export type SubmitAnnotationErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或标注提交不存在
+   */
+  404: ProblemDocument
+  /**
+   * 标注当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 标注输入无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 标注基座或对象存储暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type SubmitAnnotationError = SubmitAnnotationErrors[keyof SubmitAnnotationErrors]
+
+export type SubmitAnnotationResponses = {
+  /**
+   * Successful Response
+   */
+  202: AnnotationAcceptedView
+}
+
+export type SubmitAnnotationResponse = SubmitAnnotationResponses[keyof SubmitAnnotationResponses]
+
+export type ReadAnnotationData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Member Id
+     */
+    member_id: string
+    /**
+     * Submission Id
+     */
+    submission_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/members/{member_id}/annotations/{submission_id}'
+}
+
+export type ReadAnnotationErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或标注提交不存在
+   */
+  404: ProblemDocument
+  /**
+   * 标注当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 标注输入无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 标注基座或对象存储暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ReadAnnotationError = ReadAnnotationErrors[keyof ReadAnnotationErrors]
+
+export type ReadAnnotationResponses = {
+  /**
+   * Successful Response
+   */
+  200: AnnotationSubmissionView
+}
+
+export type ReadAnnotationResponse = ReadAnnotationResponses[keyof ReadAnnotationResponses]
+
+export type RetryAnnotationData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Member Id
+     */
+    member_id: string
+    /**
+     * Submission Id
+     */
+    submission_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/members/{member_id}/annotations/{submission_id}/retry'
+}
+
+export type RetryAnnotationErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或标注提交不存在
+   */
+  404: ProblemDocument
+  /**
+   * 标注当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 标注输入无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 标注基座或对象存储暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type RetryAnnotationError = RetryAnnotationErrors[keyof RetryAnnotationErrors]
+
+export type RetryAnnotationResponses = {
+  /**
+   * Successful Response
+   */
+  202: AnnotationAcceptedView
+}
+
+export type RetryAnnotationResponse = RetryAnnotationResponses[keyof RetryAnnotationResponses]
 
 export type ConfirmVideoUploadData = {
   body: ConfirmVideoUploadInput

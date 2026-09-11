@@ -41,6 +41,15 @@ class PostgresJobRepository:
         )
         return row.to_domain() if row is not None else None
 
+    def _by_attempt_type(self, *, attempt_id: UUID, job_type: JobType) -> ApplicationJob | None:
+        row = self._session.scalar(
+            select(ApplicationJobRow).where(
+                ApplicationJobRow.attempt_id == attempt_id,
+                ApplicationJobRow.job_type == job_type.value,
+            )
+        )
+        return row.to_domain() if row is not None else None
+
     def add(self, job: ApplicationJob) -> None:
         self._session.add(ApplicationJobRow.from_domain(job))
         self._session.flush()
@@ -85,6 +94,91 @@ class PostgresJobRepository:
                 self.add(candidate)
         except IntegrityError:
             existing = self.by_attempt(attempt_id)
+            if existing is None:
+                raise
+            self._remember_for_dispatch(existing.id)
+            return existing
+        self._remember_for_dispatch(candidate.id)
+        return candidate
+
+    def get_or_create_annotation(
+        self, *, member_id: UUID, attempt_id: UUID, now: datetime
+    ) -> ApplicationJob:
+        """为一个标注执行代次创建幂等任务。"""
+        existing = self._by_attempt_type(
+            attempt_id=attempt_id,
+            job_type=JobType.DATASET_ANNOTATION,
+        )
+        if existing is not None:
+            # 标注显式 retry 会创建新代次；幂等重放不能把已失败的同一代次伪装成待执行。
+            self._remember_for_dispatch(existing.id)
+            return existing
+        candidate = ApplicationJob(
+            id=new_id(),
+            job_type=JobType.DATASET_ANNOTATION,
+            status=JobStatus.PENDING,
+            member_id=member_id,
+            attempt_id=attempt_id,
+            created_at=now,
+            updated_at=now,
+            failure_code=None,
+        )
+        try:
+            with self._session.begin_nested():
+                self.add(candidate)
+        except IntegrityError:
+            existing = self._by_attempt_type(
+                attempt_id=attempt_id,
+                job_type=JobType.DATASET_ANNOTATION,
+            )
+            if existing is None:
+                raise
+            self._remember_for_dispatch(existing.id)
+            return existing
+        self._remember_for_dispatch(candidate.id)
+        return candidate
+
+    def get_or_create_annotation_preparation(
+        self, *, member_id: UUID, attempt_id: UUID, now: datetime
+    ) -> ApplicationJob:
+        """为标注上下文准备基座副本创建幂等任务。"""
+        job_type = JobType.DATASET_ANNOTATION_PREPARATION
+        existing = self._by_attempt_type(attempt_id=attempt_id, job_type=job_type)
+        if existing is not None:
+            if existing.status == JobStatus.FAILED:
+                self._session.execute(
+                    update(ApplicationJobRow)
+                    .where(ApplicationJobRow.id == existing.id)
+                    .values(
+                        status=JobStatus.PENDING,
+                        failure_code=None,
+                        updated_at=now,
+                        outbox_status="pending",
+                    )
+                )
+                existing = replace(
+                    existing,
+                    status=JobStatus.PENDING,
+                    updated_at=now,
+                    failure_code=None,
+                )
+            self._remember_for_dispatch(existing.id)
+            return existing
+        candidate = ApplicationJob(
+            id=new_id(),
+            job_type=job_type,
+            status=JobStatus.PENDING,
+            member_id=member_id,
+            attempt_id=attempt_id,
+            created_at=now,
+            updated_at=now,
+            failure_code=None,
+        )
+        try:
+            with self._session.begin_nested():
+                self.add(candidate)
+        except IntegrityError:
+            existing = self._by_attempt_type(attempt_id=attempt_id, job_type=job_type)
             if existing is None:
                 raise
             self._remember_for_dispatch(existing.id)
@@ -209,6 +303,35 @@ class PostgresJobRepository:
             .limit(limit)
         ).all()
         return [row.to_domain() for row in rows]
+
+
+class PostgresAnnotationJobQueue:
+    """`dataset` 使用的标注任务创建 seam。"""
+
+    def __init__(
+        self,
+        session: DatabaseSession,
+        dispatch: Callable[[UUID], None] | None = None,
+    ) -> None:
+        self._repository = PostgresJobRepository(session, dispatch=dispatch)
+
+    def get_or_create_annotation(
+        self, *, member_id: UUID, attempt_id: UUID, now: datetime
+    ) -> ApplicationJob:
+        return self._repository.get_or_create_annotation(
+            member_id=member_id,
+            attempt_id=attempt_id,
+            now=now,
+        )
+
+    def get_or_create_annotation_preparation(
+        self, *, member_id: UUID, attempt_id: UUID, now: datetime
+    ) -> ApplicationJob:
+        return self._repository.get_or_create_annotation_preparation(
+            member_id=member_id,
+            attempt_id=attempt_id,
+            now=now,
+        )
 
 
 class PostgresValidationJobQueue:

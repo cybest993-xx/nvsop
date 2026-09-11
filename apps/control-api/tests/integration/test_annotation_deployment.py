@@ -69,6 +69,8 @@ def test_nginx_template_parses_when_nginx_is_available() -> None:
         syntax_source.replace("control-api:8000", "127.0.0.1:8000")
         .replace("annotation-backend:8100", "127.0.0.1:8100")
         .replace("annotation-frontend:80", "127.0.0.1:80")
+        .replace("listen 443 ssl;", "listen 443;")
+        .replace("listen 8444 ssl;", "listen 8444;")
     )
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)

@@ -77,7 +77,9 @@ def test_nginx_template_parses_when_nginx_is_available() -> None:
         snippet = root / "annotation.conf"
         snippet.write_text(syntax_source + "\n")
         configuration = root / "nginx.conf"
-        configuration.write_text(f"events {{}}\nhttp {{ include {snippet}; }}\n")
+        configuration.write_text(
+            f"pid {root / 'nginx.pid'};\nevents {{}}\nhttp {{ include {snippet}; }}\n"
+        )
         result = subprocess.run(
             [nginx, "-t", "-q", "-c", str(configuration), "-p", str(root)],
             capture_output=True,

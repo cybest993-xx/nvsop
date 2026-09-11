@@ -152,6 +152,20 @@ Module boundaries are enforced mechanically, not by review. Each center module i
 
 ## 4. Test placement and evidence
 
+Prioritize completed product behavior with evidence proportionate to the actual change. This section owns test selection, additions, evidence reuse and review policy; §6–§7 define commands and CI gates.
+
+Before implementation, state the risk, the plan to reuse or add tests, and the verification commands in no more than three lines. Classify the changed behavior and its failure paths, not the filename or owning module. Then continue within the authorized scope without pausing for procedural confirmation.
+
+### Risk and test additions
+
+- **Low risk**: documentation, copy, pure styling and cleanup with no behavior change default to no new automated tests. Run applicable documentation, static, existing-test or UI checks.
+- **Ordinary bounded functionality**: reuse existing tests first. Sufficient existing evidence permits zero additions; a real gap normally needs 1–3 independent scenarios. This is a budget, not a quota. Count independent scenarios, not test functions; grouping or parameterization does not shrink the count. Before exceeding the budget, explain the specific independent risk covered by each extra scenario.
+- **Confirmed defects or new/changed critical safety invariants**: use minimal TDD at the owning public seam. First make the narrowest case fail for the observed defect or threatened invariant, implement the minimum change, then run that case to green. Prefer extending an existing case; a new test file is not required. These steps do not depend on a `tdd` skill; ordinary behavior changes follow the reuse policy above.
+
+Each new scenario must answer: **What specific error does it prevent, and why would existing tests miss it?** Add tests to close that gap, never to match function counts, field counts, coverage numbers or formal completeness. Test public behavior, not static values, private implementation details or the absence of deleted symbols. Keep fixture, mock and test-framework work within the current task's demonstrated needs; hypothetical scenarios outside its scope do not justify expansion.
+
+### Placement and required evidence
+
 Tests belong to the module or seam whose behavior they prove:
 
 - **Unit**: deterministic module behavior, under the owning app's `tests/unit/`; Vue component tests may be colocated as `*.spec.ts` when the component is the sole owner.
@@ -160,26 +174,43 @@ Tests belong to the module or seam whose behavior they prove:
 - **System**: user-visible flows across applications, black-box through published interfaces.
 - **Performance/hardware**: explicit suites, never hidden in unit tests. Record hardware, model/digest, data set, p50/p95/p99, queue depth, and pass budget.
 
-Every bug fix starts with the narrowest regression test that fails for the observed behavior. New behavior starts with the smallest failing test before implementation, then gains the least evidence that makes its risk visible at the owning seam. Safety invariants require tests at the judgment core's interface, especially that invalid observation periods never become a false failure verdict. The rework sequence `1,2,3,2,4,5` must be judged compliant: the base heuristic reports it as two separate violations, so this is the first regression test the judgment core has to pass and the sharpest line between our behavior and the base's.
+Affected critical risks require valid evidence at the appropriate level: judgment safety and violation latching, authentication and authorization, data isolation, database transactions and migrations, report/queue and disposal idempotence, physical execution rights and evidence protection. The ordinary test budget cannot omit this evidence. Judgment safety requires tests at the core's public interface: invalid observation periods must never become a false failure verdict, and the rework sequence `1,2,3,2,4,5` must remain compliant.
 
 The evidence level is risk-driven rather than a blanket test-type rule:
 
 - **Unit or contract evidence** is sufficient for deterministic pure behavior and fixed wire/base assumptions.
-- **Integration evidence** is required where the risk crosses an adapter or real local infrastructure: database transactions and migrations, authentication and authorization integration, queue/outbox behavior, disposal idempotence across restart, execution-right enforcement, and the supervisor's persistence of judgment effects. Use the smallest real-infrastructure or adapter-backed scenario that proves the invariant; a test fake may stand in only at the recorded seam. Pure judgment and authorization rules still use unit/contract evidence at their public interfaces; testing the pure rule does not waive testing its integration.
+- **Integration evidence** is required where the risk crosses an adapter or real local infrastructure: database transactions and migrations, authentication and authorization integration, data isolation, queue/outbox behavior, disposal idempotence across restart, execution-right uniqueness and lease expiry, evidence protection, and the supervisor's persistence of judgment effects. Use the smallest real-infrastructure or adapter-backed scenario that proves the invariant; a test fake may stand in only at the recorded seam. Pure judgment and authorization rules still use unit/contract evidence at their public interfaces; testing the pure rule does not waive testing its integration.
 - **System or browser evidence** is required when a user-visible cross-application or browser contract is the risk. Keep existing browser and UI coverage; add focused component, integration, snapshot, or end-to-end coverage when the changed behavior needs it, but do not require a snapshot for every UI change.
 
-This risk rule does not reduce the command or CI gates in §6–§7, waive existing tests, or make synthetic tests a substitute for target-hardware and field validation. For the current MVP only, full cross-module end-to-end, combined-fault, long-stability, scale-performance, and field-hardware evidence may be a later validation stage when tracked against the original acceptance criteria. Scope, exit conditions, and the need to reconfirm this phasing for later iterations are defined in [`solution-and-roadmap.md` §8](solution-and-roadmap.md#八开发路线).
+Keep existing tests and the applicable command, CI and release gates in §6–§7; do not change or bypass gates to fit a test budget. Synthetic tests cannot substitute for target-hardware and field validation. For the current MVP only, full cross-module end-to-end, combined-fault, long-stability, scale-performance, and field-hardware evidence may be a later validation stage when tracked against the original acceptance criteria. Scope, exit conditions, and the need to reconfirm this phasing for later iterations are defined in [`solution-and-roadmap.md` §8](solution-and-roadmap.md#八开发路线).
 
 Fixtures must be synthetic or sanitized, minimal, deterministic, and documented with provenance. Customer video, credentials, model weights, and production exports are never fixtures.
 
 ### Test authoring
 
 - Assert on whole objects rather than field by field, so a field that changes unexpectedly fails the test instead of passing unread.
-- Statically defined values get no test, and deleted logic leaves no negative test behind. Both pin the implementation in place of the behavior.
 - Unit tests live in the owning app's `tests/` tree, never inline in the implementation file, and implementation code carries no test-only function.
 - Look for an existing helper or fixture before writing another one.
 - A test never mutates process environment variables; the value under test arrives through a parameter.
-- A user-visible UI change gets the necessary focused UI evidence for its risk; existing snapshot and browser tests remain mandatory and are not removed.
+
+### Evidence reuse and blockers
+
+During development, run only affected checks using §6's commands. Evidence remains valid while its covered code, tests, configuration, dependencies and relevant external inputs remain unchanged. Record the version and inputs in `.tmp/task-handoff.md`; a new window verifies the current differences and continues from that evidence.
+
+Default to one consolidated independent review of the complete diff and affected callers, reporting **Spec** and **Standards** together. Use a subagent or another reviewer. The reviewer consumes valid evidence rather than repeating full runs. After repairs, review only the increment and affected callers, and rerun affected checks. If the reviewer edits code, another reviewer checks those edits and affected callers; the full review remains valid elsewhere.
+
+| Situation | Action |
+|---|---|
+| Window or commit message changes; covered content and relevant inputs are unchanged | Reuse recorded review and check evidence. |
+| Local repair after review | Review the increment and affected callers; rerun affected checks. |
+| Interface, dependency, migration or shared behavior changes | Expand to affected modules; run complete checks only if the impact cannot be bounded. Record the concrete trigger for expansion. |
+| Required validation environment is unavailable | Record the gap, continue other work and save progress; keep merge readiness pending. |
+| Missing-test finding | Block only when it identifies a concrete failure path, a critical risk lacking valid evidence or an unmet acceptance criterion. Broader possible coverage alone is advice. |
+| Naming, size or optional cleanup suggestion | Record advice; block only on a concrete defect, violated invariant or unmet necessary requirement. |
+
+Reuse valid local results and CI caches, but the final candidate commit must have its own successful applicable CI status under §7; a previous commit's green status does not satisfy it. Failed required checks and unresolved blocking findings remain blockers.
+
+Once acceptance behavior is complete, critical-risk evidence is sufficient and relevant checks pass, stop adding tests and optional refactors and proceed to review and final acceptance. A concrete blocker reopens only the affected work. Stopping additions never turns unfinished necessary validation into a pass.
 
 ## 5. Code authoring rules
 
@@ -268,41 +299,26 @@ Keep useful explanations and normal formatting. Moving behavior into `api.py`, `
 
 `make check` is the CPU-only, infrastructure-free code gate and must work from the repository root, without Docker. CI calls it exactly as developers do for changes outside the documentation allowlist in §7. It runs repository policy, migration table-ownership, the base-code contract suite, the `import-linter` contracts, content-based secret scanning (`detect-secrets`, with an empty baseline and inline allowlisting so a false positive is explained where it sits), and each workspace's formatting, lint, type, and unit checks; each workspace-adding change must extend it in the same change with that workspace's build checks and generated-artifact cleanliness.
 
-`make check-docs` is the documentation gate: repository policy (including local Markdown links), content-based secret scanning, and `git diff --check`. It uses the same frozen Python environment and lockfile check as `make check`. Locally, `BASE` defaults to `origin/main` and an omitted `HEAD` checks through the working tree; CI supplies the actual base and candidate commits. Pure wording changes use this target without running code, integration or browser suites.
+`make check-docs` is the documentation gate: repository policy (including local Markdown links), content-based secret scanning, and `git diff --check`. It uses the same frozen Python environment and lockfile check as `make check`. Locally, `BASE` defaults to `origin/main` and an omitted `HEAD` checks through the working tree; CI supplies the actual base and candidate commits. Select it under the test policy in §4.
 
 Its first two targets are `lockfile` (`uv lock --check`, so a manifest edit whose lockfile was never regenerated fails rather than installing the old resolution) and `sync` (`uv sync --frozen --all-packages`). Every gate tool is resolved from `uv.lock` rather than installed separately, so a developer, the edge targets, and CI all execute the same build of ruff and mypy, and no run can silently upgrade a dependency. `apps/edge-runtime/` is not a workspace member and its tests run on a bare interpreter, but its tools come from that same environment. The web targets follow the same shape: `web-install` is `pnpm install --frozen-lockfile`, and the checks after it run from that installed tree. `web-build` is a gate rather than a packaging step — `vite build` resolves every dynamic `import()` the router declares, so a route that only breaks when built breaks in the gate instead of at deployment.
 
 `make check-integration` verifies one application plus real local infrastructure (PostgreSQL, Redis, MinIO) started as containers via testcontainers. It is separate because a developer without Docker must still be able to run `make check`, and because container startup does not belong in the fast feedback loop. Applicable integration and browser checks feed the same blocking gatherer under §7. SQLite and in-memory fakes are not substitutes for the integration target: transaction isolation, `JSONB`, timezone, and deferred foreign key behavior differ enough to produce false green.
 
-Package-specific commands provide affected local evidence; final CI still runs the applicable complete gates under §7. Automation in `scripts/` stays thin: product behavior belongs in an app or package where it can be tested through its interface.
+Package-specific commands support the local evidence selected under §4; CI gate selection is defined in §7. Automation in `scripts/` stays thin: product behavior belongs in an app or package where it can be tested through its interface.
 
-Use the affected Make targets for local evidence: they carry CI's flags, environment and ordering. For a narrow red/green loop, the underlying command may select a test when it preserves the target's interpreter, paths and flags. Run the formatter on changed code without asking first. Let container startup, model loading and integration bring-up finish before judging their result.
+For checks selected under §4, use the affected Make targets: they carry CI's flags, environment and ordering. For a narrow red/green loop, the underlying command may select a test when it preserves the target's interpreter, paths and flags. Run the formatter on changed code without asking first. Let container startup, model loading and integration bring-up finish before judging their result.
 
 ### Working and review cycle
 
-Required: preserve authorization, data integrity, architecture invariants, necessary verification and resolution of blocking findings. Default: one isolated task worktree, one main session responsible for completion and one consolidated independent review. Escalate checks when the actual change invalidates evidence or leaves its impact uncertain; size and optional cleanup remain advisory.
+Required: preserve authorization, data integrity, architecture invariants, necessary verification and resolution of blocking findings. Default: one isolated task worktree and one main session responsible for completion. Apply [§4](#4-test-placement-and-evidence) for testing, evidence reuse, review and stopping decisions.
 
 1. **Scope and resume.** Start each new task from `origin/main` on its own branch and worktree outside the repository, never `main`. Continue that task, repair review findings and change windows in the same worktree. Keep one ignored `.tmp/task-handoff.md` with the request, complete acceptance criteria, §5 checklist, fixed comparison base, candidate commit and any uncommitted/untracked changes, reviewed commit, findings and resolution, valid checks with commands/environment/covered inputs, and next action. Update this record when its contents change. Existing authorized scope and test seams remain approved; ask only about missing decisions that affect behavior or safety. Delete the task branch/worktree after merging; use a new one for the next task.
-2. **Implement and save progress.** Invoke `tdd` for behavior changes, including repository checks. At the agreed public seam, use one failing test, the minimum implementation, then the next behavior. Pure wording changes use `make check-docs`. Run affected local checks and save stage commits on the task branch when useful. A commit records progress; mark it pending acceptance while review, required validation or acceptance scope remains incomplete.
-3. **Verify the slice.** Finish the complete acceptance scope before the normal review. Run the affected Make targets and the necessary evidence from §4; CI runs the applicable complete gates in §7. Record results and validation gaps in the same handoff. When an environment is unavailable, continue other work and retain stage commits, but keep merge readiness pending. The reviewer consumes valid evidence instead of duplicating full runs.
-4. **Review together.** One independent reviewer checks the complete diff and affected callers for requirements, correctness and code quality, reporting **Spec** and **Standards** together. Use a subagent or another reviewer; the main session can implement, self-review, coordinate independent review, repair, recheck and commit. Collect all findings before starting the repair batch. If the reviewer edits code, another reviewer checks only those edits and affected callers; the existing full review remains valid for unchanged areas.
-5. **Repair and recheck.** Fix the collected blockers together. Review the changes since the last reviewed version plus affected callers, and run the affected checks. Reuse valid findings and evidence under the rules below. Expand a check or review only when evidence is invalidated, scope grows or a concrete new concern requires it; record the trigger.
-6. **Finish by task state.** Merge and issue closure require the full acceptance scope, resolved blocking findings and the final candidate's applicable CI success. Record acceptance coverage, review resolution and valid evidence before declaring readiness; tracked deferred validation must satisfy the roadmap's exit conditions and issue-tracker evidence rules. Push, merge and publication follow the user's existing authorization. Session identity does not change these conditions.
-
-### Evidence reuse and blockers
-
-Evidence remains valid while its covered code, tests, configuration, dependencies and relevant external inputs remain unchanged. The handoff records which version and inputs each result covers; a new window reads it, verifies the current version and differences, and continues the recorded next action.
-
-| Situation | Action |
-|---|---|
-| Window changes; code and relevant inputs are unchanged | Reuse recorded evidence and continue. |
-| Local repair after review | Review the increment and affected callers; rerun affected checks. |
-| Commit message changes; code content is identical | Reuse the code review and unaffected local evidence. |
-| Interface, dependency, migration or shared behavior changes | Expand to affected modules; run complete checks if the impact cannot be bounded. |
-| Required validation environment is unavailable | Record the gap, continue other work and save progress; keep merge readiness pending. |
-| Naming, size or optional cleanup suggestion | Record advice; block only on a concrete defect, violated invariant or unmet necessary requirement. |
-
-Local checks and CI may reuse still-valid results and caches. The final commit must nevertheless have its own successful applicable CI status; a previous commit's green status does not satisfy that requirement. Failed required checks and unresolved blocking findings remain blockers.
+2. **Implement and save progress.** Implement the accepted behavior using [§4](#4-test-placement-and-evidence) to choose test reuse, additions and any minimal TDD. Save stage commits on the task branch when useful. A commit records progress; mark it pending acceptance while review, required validation or acceptance scope remains incomplete.
+3. **Verify the slice.** Complete the acceptance scope and verification required by §4 before the normal review. Record results and validation gaps in the same handoff.
+4. **Review together.** Coordinate the [§4 independent review](#evidence-reuse-and-blockers) in the main session, which can implement, self-review, repair, recheck and commit. Collect all findings before starting the repair batch.
+5. **Repair and recheck.** Fix the collected blockers together. Apply [§4](#evidence-reuse-and-blockers) to review and checks of repairs, and record any trigger that expands scope.
+6. **Finish by task state.** Merge and issue closure require the full acceptance scope and the review and CI evidence defined in §4 and §7. Record acceptance coverage, review resolution and valid evidence before declaring readiness; tracked deferred validation must satisfy the roadmap's exit conditions and issue-tracker evidence rules. Push, merge and publication follow the user's existing authorization. Session identity does not change these conditions.
 
 Four of this document's rules also run as Git hooks, versioned in `scripts/githooks/` and enabled by `make hooks` (which `make check` runs, so a fresh clone has them after its first gate run): a commit is refused on `main`, a push to `main` is refused from any branch, a staged change under `vendor/` is refused with a pointer to ADR-0007, and unformatted staged Python is refused. They sit in Git rather than in any one agent's configuration because every agent and every person commits through Git, so one implementation holds for all of them. An instruction file is advisory; a hook holds on the turn where the instruction has already scrolled out of context. Each hook is a few standard-library lines that cite the rule it enforces, which is what keeps the two in agreement.
 

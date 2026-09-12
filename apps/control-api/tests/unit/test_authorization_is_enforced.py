@@ -444,6 +444,27 @@ ROUTES = [
         "/training-datasets/{dataset_id}/members/{member_id}/retry",
         {"mode": RetryMode.UPLOAD.value},
     ),
+    Target(
+        "POST",
+        "/training-datasets/{dataset_id}/vlm-candidates",
+        {
+            "kind": "gqa",
+            "action_list_revision": 1,
+            "records": [],
+            "media": [],
+        },
+        headers={"If-Match": "0"},
+    ),
+    Target(
+        "POST",
+        "/training-datasets/{dataset_id}/usage-checks",
+        {"kind": "ddm"},
+    ),
+    Target(
+        "POST",
+        "/training-datasets/{dataset_id}/artifacts",
+        {"check_id": "{attempt_id}"},
+    ),
 ]
 
 # The session resource: no permission, by design, and therefore not part of the check above.
@@ -647,6 +668,7 @@ class Backend:
         self.app.dependency_overrides[dataset_dependencies.annotation_jobs] = lambda: (
             self.dataset_jobs
         )
+        self.app.dependency_overrides[dataset_dependencies.usage_jobs] = lambda: self.dataset_jobs
         self.client = TestClient(self.app, base_url="https://testserver")
         assert (
             self.client.post(

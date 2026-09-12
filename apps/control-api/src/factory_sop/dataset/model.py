@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -61,6 +62,131 @@ class AnnotationPreparationStatus(StrEnum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+
+
+class VlmCandidateKind(StrEnum):
+    """基座支持的 VLM 输入产物类别。"""
+
+    GQA = "gqa"
+    BCQ = "bcq"
+    MCQ = "mcq"
+    GOLDEN_GQA = "golden_gqa"
+
+
+class UsageKind(StrEnum):
+    """训练数据用途。"""
+
+    DDM = "ddm"
+    VLM = "vlm"
+
+
+class UsageCheckStatus(StrEnum):
+    """用途检查的持久化状态。"""
+
+    UNCHECKED = "unchecked"
+    PENDING = "pending"
+    RUNNING = "running"
+    PASSED = "passed"
+    FAILED = "failed"
+
+
+class ArtifactStatus(StrEnum):
+    """派生制品的持久化状态。"""
+
+    NOT_GENERATED = "not_generated"
+    PENDING = "pending"
+    RUNNING = "running"
+    AVAILABLE = "available"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class DdmVideoInput:
+    """一次 DDM 检查冻结的一段完整源视频和动作时间段。"""
+
+    member_id: UUID
+    object_version_id: str
+    source_sha256: str
+    duration_seconds: float
+    action_list_revision: int
+    annotation_revision: int
+    mode: AnnotationMode
+    actions: tuple[str, ...]
+    segments: tuple[Mapping[str, Any], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class VlmMediaReference:
+    """VLM 候选中由服务端绑定的媒体身份。"""
+
+    key: str
+    member_id: UUID
+    source_object_version_id: str
+    source_sha256: str
+    annotation_submission_id: UUID | None = None
+    annotation_execution_id: UUID | None = None
+    clip_index: int | None = None
+    action_indices: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class VlmCandidate:
+    """一份不可变的 VLM 输入修订。"""
+
+    id: UUID
+    dataset_id: UUID
+    revision: int
+    kind: VlmCandidateKind
+    action_list_revision: int
+    records: tuple[Mapping[str, Any], ...]
+    media: tuple[VlmMediaReference, ...]
+    created_by: UUID
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class UsageCheck:
+    """一次冻结输入的用途检查及其可追溯结果。"""
+
+    id: UUID
+    dataset_id: UUID
+    kind: UsageKind
+    status: UsageCheckStatus
+    input_digest: str
+    input_snapshot: Mapping[str, Any]
+    summary: Mapping[str, int]
+    issues: tuple[Mapping[str, Any], ...]
+    base_commit: str
+    contract_version: str
+    candidate_id: UUID | None
+    job_id: UUID | None
+    created_by: UUID
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class DatasetArtifact:
+    """不可覆盖的 DDM annotation 制品及其清单摘要。"""
+
+    id: UUID
+    dataset_id: UUID
+    usage_check_id: UUID
+    kind: UsageKind
+    status: ArtifactStatus
+    input_digest: str
+    object_key: str | None
+    artifact_sha256: str | None
+    artifact_size: int | None
+    manifest: Mapping[str, Any]
+    failure_code: str | None
+    failure_detail: str | None
+    job_id: UUID | None
+    created_by: UUID
+    created_at: datetime
+    updated_at: datetime
+    retryable: bool = False
+    recovery_action: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

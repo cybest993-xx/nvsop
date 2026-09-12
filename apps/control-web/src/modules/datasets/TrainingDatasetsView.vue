@@ -7,22 +7,33 @@ import {
   ControlPlaneError,
   createAnnotationContext,
   confirmVideoUpload,
+  downloadDatasetArtifact,
   createTrainingDataset,
   listAnnotations,
   listDatasetActionListVersions,
+  listDatasetArtifacts,
+  listDatasetUsageChecks,
+  listVlmCandidates,
   readAnnotationContext,
   readDatasetMembers,
   readJob,
   readTrainingDatasets,
   registerDatasetActionList,
+  registerVlmCandidate,
+  requestDatasetArtifact,
+  requestDatasetUsageCheck,
   requestVideoUpload,
   retryVideoUpload,
   type AnnotationContextView,
+  type DatasetArtifact,
   type DatasetActionListHistory,
+  type DatasetUsageCheck,
+  type DatasetVlmCandidate,
   type AnnotationHistoryView,
   type AnnotationSubmissionView,
   type DatasetRetry,
   type DatasetUploadRequest,
+  type RegisterVlmCandidateInput,
   type FieldError,
   type TrainingDataset,
   type TrainingDatasetMember,
@@ -124,6 +135,18 @@ const loadingAnnotationHistory = ref(false)
 const actionListInput = ref('')
 const actionListHistory = ref<DatasetActionListHistory | null>(null)
 const loadingActionListHistory = ref(false)
+const usageChecks = ref<DatasetUsageCheck[]>([])
+const candidates = ref<DatasetVlmCandidate[]>([])
+const artifacts = ref<DatasetArtifact[]>([])
+const loadingUsage = ref(false)
+const candidateKind = ref<RegisterVlmCandidateInput['kind']>('gqa')
+const candidateActionListRevision = ref(1)
+const candidateRecordsInput = ref('[]')
+const candidateMediaInput = ref('[]')
+const selectedCandidateId = ref('')
+const loadingCandidate = ref(false)
+const runningUsageKind = ref<'ddm' | 'vlm' | null>(null)
+const generatingArtifact = ref(false)
 
 interface FailureNotice {
   message: string
@@ -158,6 +181,12 @@ const hasPendingMembers = computed(() => {
   const status = jobStatuses.value[activeJobId.value]
   return status === undefined || PENDING_JOB_STATUSES.includes(status)
 })
+const hasPendingUsage = computed(
+  () =>
+    usageChecks.value.some((check) => ['pending', 'running'].includes(check.status)) ||
+    artifacts.value.some((artifact) => ['pending', 'running'].includes(artifact.status)),
+)
+const hasPendingWork = computed(() => hasPendingMembers.value || hasPendingUsage.value)
 const datasetPageCount = computed(() =>
   Math.max(1, Math.ceil(datasetTotal.value / DATASET_PAGE_SIZE)),
 )
@@ -250,6 +279,94 @@ function jobStatusLabel(status: string | undefined): string {
   }
 }
 
+function usageStatusLabel(status: string): string {
+  switch (status) {
+    case 'pending':
+      return '待检查'
+    case 'running':
+      return '检查中'
+    case 'passed':
+      return '通过'
+    case 'failed':
+      return '未通过'
+    default:
+      return `未知用途状态（${status}）`
+  }
+}
+
+function usageKindLabel(kind: string): string {
+  switch (kind) {
+    case 'ddm':
+      return 'DDM'
+    case 'vlm':
+      return 'VLM'
+    default:
+      return `未知用途（${kind}）`
+  }
+}
+
+function usageScopeLabel(check: DatasetUsageCheck): string {
+  const summary = check.summary
+  if (check.kind === 'ddm') {
+    return `视频 ${summary.video_count ?? 0}，动作条目 ${summary.segment_count ?? 0}`
+  }
+  if (check.kind === 'vlm') {
+    return `记录 ${summary.record_count ?? 0}，媒体 ${summary.media_count ?? 0}`
+  }
+  return '未知用途，无法解析检查范围'
+}
+
+function snapshotRevision(value: unknown): string {
+  return typeof value === 'number' && Number.isInteger(value) ? String(value) : '—'
+}
+
+function usageRevisionLabel(check: DatasetUsageCheck): string {
+  const snapshot = check.input_snapshot
+  if (check.kind === 'vlm') {
+    return `候选修订 ${snapshotRevision(snapshot.revision)}，动作列表修订 ${snapshotRevision(snapshot.action_list_revision)}`
+  }
+  if (check.kind !== 'ddm') return '未知用途，无法解析输入修订'
+  const videos = Array.isArray(snapshot.videos) ? snapshot.videos : []
+  const revisions = videos
+    .filter(
+      (video): video is Record<string, unknown> => typeof video === 'object' && video !== null,
+    )
+    .map(
+      (video) =>
+        `${snapshotRevision(video.action_list_revision)}/${snapshotRevision(video.annotation_revision)}`,
+    )
+  return revisions.length === 0 ? '无视频修订' : `动作列表/标注修订 ${revisions.join('、')}`
+}
+
+function usageStatusTag(status: string): 'success' | 'warning' | 'danger' | 'info' {
+  switch (status) {
+    case 'passed':
+      return 'success'
+    case 'failed':
+      return 'danger'
+    case 'pending':
+    case 'running':
+      return 'warning'
+    default:
+      return 'info'
+  }
+}
+
+function artifactStatusLabel(status: string): string {
+  switch (status) {
+    case 'pending':
+      return '待生成'
+    case 'running':
+      return '生成中'
+    case 'available':
+      return '可下载'
+    case 'failed':
+      return '生成失败'
+    default:
+      return `未知制品状态（${status}）`
+  }
+}
+
 function recoveryLabel(action: string | null): string {
   switch (action) {
     case 'retry_upload':
@@ -258,6 +375,39 @@ function recoveryLabel(action: string | null): string {
       return '重新校验'
     default:
       return action === null ? '' : `未知恢复动作（${action}）`
+  }
+}
+
+function usageRecoveryLabel(action: string | null): string {
+  switch (action) {
+    case 'retry_usage_check':
+      return '可重试用途检查'
+    case 'fix_input':
+      return '请修正输入后重新检查'
+    default:
+      return action === null ? '请联系维护者' : `未知恢复动作（${action}）`
+  }
+}
+
+function artifactRecoveryLabel(code: string | null, action: string | null): string {
+  switch (action) {
+    case 'retry_artifact_cleanup':
+      return '可重试候选清理'
+    case 'retry_artifact':
+      return '可重试制品生成'
+    case 'fix_input':
+      return '请修正输入后重新检查'
+  }
+  switch (code) {
+    case 'STORAGE_UNAVAILABLE':
+    case 'ARTIFACT_GENERATION_FAILED':
+    case 'ARTIFACT_DATABASE_FAILURE':
+    case 'ARTIFACT_INTEGRITY_FAILURE':
+      return '可重试制品生成'
+    case 'USAGE_INPUT_CHANGED':
+      return '请重新检查后再生成'
+    default:
+      return code === null ? '恢复动作未知，请联系维护者' : `恢复动作未知（${code}），请联系维护者`
   }
 }
 
@@ -322,6 +472,7 @@ async function loadDatasets(pageNumber = 1): Promise<void> {
     if (selectedDatasetId.value && selectedDatasetId.value !== previousSelectedId) {
       memberPageNumber.value = 1
       await loadMembers(1)
+      await loadUsageData()
     }
   } catch (error) {
     recordFailure(error)
@@ -373,13 +524,172 @@ function chooseDataset(): void {
   transferPhase.value = 'idle'
   memberPageNumber.value = 1
   void loadMembers(1)
+  void loadUsageData()
 }
 
 function selectDataset(datasetId: string): void {
   selectedDatasetId.value = datasetId
   actionListHistory.value = null
   actionListInput.value = ''
+  usageChecks.value = []
+  candidates.value = []
+  artifacts.value = []
   chooseDataset()
+}
+
+interface ItemPage<T> {
+  items: T[]
+  page: number
+  page_size: number
+  total: number
+}
+
+async function loadAllPages<T>(
+  loadPage: (page: number, pageSize: number) => Promise<ItemPage<T>>,
+): Promise<T[]> {
+  const first = await loadPage(1, 50)
+  const pageCount = Math.max(1, Math.ceil(first.total / first.page_size))
+  if (pageCount === 1) return first.items
+  const rest = await Promise.all(
+    Array.from({ length: pageCount - 1 }, (_, index) => loadPage(index + 2, first.page_size)),
+  )
+  return [first, ...rest].flatMap((page) => page.items)
+}
+
+async function loadUsageData(): Promise<void> {
+  if (!mayView.value || !selectedDatasetId.value) {
+    usageChecks.value = []
+    candidates.value = []
+    artifacts.value = []
+    return
+  }
+  loadingUsage.value = true
+  try {
+    const [checks, candidateValues, artifactValues] = await Promise.all([
+      loadAllPages((page, pageSize) =>
+        listDatasetUsageChecks(selectedDatasetId.value, page, pageSize),
+      ),
+      loadAllPages((page, pageSize) => listVlmCandidates(selectedDatasetId.value, page, pageSize)),
+      loadAllPages((page, pageSize) =>
+        listDatasetArtifacts(selectedDatasetId.value, page, pageSize),
+      ),
+    ])
+    usageChecks.value = checks
+    candidates.value = candidateValues
+    artifacts.value = artifactValues
+    selectedCandidateId.value = candidateValues.at(-1)?.id ?? ''
+    candidateActionListRevision.value = candidateValues.at(-1)?.action_list_revision ?? 1
+  } catch (error) {
+    recordFailure(error)
+  } finally {
+    loadingUsage.value = false
+    syncPolling()
+  }
+}
+
+async function runUsageCheck(kind: 'ddm' | 'vlm'): Promise<void> {
+  if (!mayEdit.value || !selectedDatasetId.value) return
+  if (kind === 'vlm' && !selectedCandidateId.value) {
+    failure.value = {
+      message: '请先登记并选择一份 VLM 候选',
+      code: 'VLM_CANDIDATE_REQUIRED',
+      recovery: null,
+    }
+    return
+  }
+  resetFailure()
+  runningUsageKind.value = kind
+  try {
+    const accepted = await requestDatasetUsageCheck(selectedDatasetId.value, {
+      kind,
+      candidate_id: kind === 'vlm' ? selectedCandidateId.value : null,
+    })
+    usageChecks.value = [accepted.check, ...usageChecks.value]
+    ElMessage.success(`${kind === 'ddm' ? 'DDM' : 'VLM'} 用途检查已提交`)
+  } catch (error) {
+    recordFailure(error)
+  } finally {
+    runningUsageKind.value = null
+    syncPolling()
+  }
+}
+
+function parseJsonArray(value: string, field: string): unknown[] | null {
+  try {
+    const parsed: unknown = JSON.parse(value)
+    if (!Array.isArray(parsed)) throw new Error(`${field} 必须是 JSON 数组`)
+    return parsed
+  } catch (error) {
+    failure.value = {
+      message: error instanceof Error ? error.message : `${field} 不是有效 JSON 数组`,
+      code: 'VLM_CANDIDATE_INVALID',
+      recovery: null,
+    }
+    return null
+  }
+}
+
+async function saveVlmCandidate(): Promise<void> {
+  if (!mayEdit.value || !selectedDatasetId.value) return
+  resetFailure()
+  const records = parseJsonArray(candidateRecordsInput.value, 'records')
+  const media = parseJsonArray(candidateMediaInput.value, 'media')
+  if (records === null || media === null) return
+  loadingCandidate.value = true
+  try {
+    const latestRevision = candidates.value.at(-1)?.revision ?? 0
+    const submitted: RegisterVlmCandidateInput = {
+      kind: candidateKind.value,
+      action_list_revision: candidateActionListRevision.value,
+      records: records as RegisterVlmCandidateInput['records'],
+      media: media as RegisterVlmCandidateInput['media'],
+    }
+    const candidate = await registerVlmCandidate(selectedDatasetId.value, submitted, latestRevision)
+    candidates.value = [...candidates.value, candidate]
+    selectedCandidateId.value = candidate.id
+    candidateRecordsInput.value = '[]'
+    candidateMediaInput.value = '[]'
+    ElMessage.success(`VLM 候选已登记为修订 ${candidate.revision}`)
+  } catch (error) {
+    recordFailure(error)
+  } finally {
+    loadingCandidate.value = false
+  }
+}
+
+async function generateArtifact(check: DatasetUsageCheck): Promise<void> {
+  if (!mayEdit.value || check.kind !== 'ddm' || check.status !== 'passed' || !check.is_current)
+    return
+  resetFailure()
+  generatingArtifact.value = true
+  try {
+    const accepted = await requestDatasetArtifact(selectedDatasetId.value, { check_id: check.id })
+    artifacts.value = [
+      accepted.artifact,
+      ...artifacts.value.filter((item) => item.id !== accepted.artifact.id),
+    ]
+    ElMessage.success('DDM annotation 制品生成已提交')
+  } catch (error) {
+    recordFailure(error)
+  } finally {
+    generatingArtifact.value = false
+    syncPolling()
+  }
+}
+
+async function downloadArtifact(artifact: DatasetArtifact): Promise<void> {
+  if (artifact.status !== 'available') return
+  try {
+    const blob = await downloadDatasetArtifact(selectedDatasetId.value, artifact.id)
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `annotation-${artifact.id}.json`
+    link.click()
+    URL.revokeObjectURL(url)
+  } catch (error) {
+    recordFailure(error)
+  }
 }
 
 async function readActionListHistory(): Promise<void> {
@@ -858,7 +1168,7 @@ function clearPolling(): void {
 }
 
 function syncPolling(): void {
-  if ((!mayView.value && !mayImport.value) || !hasPendingMembers.value || !activeDatasetId()) {
+  if ((!mayView.value && !mayImport.value) || !hasPendingWork.value || !activeDatasetId()) {
     clearPolling()
     return
   }
@@ -909,6 +1219,7 @@ async function refreshPendingMembers(): Promise<void> {
     members.value = page.items
     memberPageNumber.value = page.page
     memberTotal.value = page.total
+    if (hasPendingUsage.value) await loadUsageData()
     const active = activeMember.value
     if (active?.validation_job_id) activeJobId.value = active.validation_job_id
     syncPolling()
@@ -1118,6 +1429,223 @@ onUnmounted(clearPolling)
           尚未登记动作列表。
         </li>
       </ol>
+    </section>
+
+    <section
+      v-if="mayView && selectedDatasetId"
+      class="datasets__usage"
+      aria-labelledby="usage-heading"
+    >
+      <div class="datasets__section-head">
+        <div>
+          <h2 id="usage-heading">用途检查与制品</h2>
+          <p>
+            DDM 检查动作时间段和完整源视频；VLM
+            检查候选结构与显式媒体绑定。通过只表示输入可用于后续微调，不表示训练或模型效果成功；检查不会启动训练。
+          </p>
+        </div>
+        <span v-if="loadingUsage" class="datasets__muted">正在读取用途记录…</span>
+      </div>
+      <div class="datasets__usage-status" aria-label="各用途检查状态">
+        <span
+          >DDM：{{
+            usageChecks.some((check) => check.kind === 'ddm') ? '已有记录' : '未检查'
+          }}</span
+        >
+        <span
+          >VLM：{{
+            usageChecks.some((check) => check.kind === 'vlm') ? '已有记录' : '未检查'
+          }}</span
+        >
+      </div>
+      <div v-if="mayEdit" class="datasets__usage-actions">
+        <ElButton
+          type="primary"
+          :disabled="runningUsageKind !== null"
+          @click="runUsageCheck('ddm')"
+        >
+          {{ runningUsageKind === 'ddm' ? '正在检查 DDM…' : '检查 DDM 数据' }}
+        </ElButton>
+        <ElButton
+          type="primary"
+          plain
+          :disabled="runningUsageKind !== null || selectedCandidateId === ''"
+          @click="runUsageCheck('vlm')"
+        >
+          {{ runningUsageKind === 'vlm' ? '正在检查 VLM…' : '检查所选 VLM 候选' }}
+        </ElButton>
+      </div>
+      <form
+        v-if="mayEdit"
+        class="datasets__candidate-form"
+        aria-label="登记 VLM 候选"
+        @submit.prevent="saveVlmCandidate"
+      >
+        <h3>登记 VLM 候选修订</h3>
+        <label for="vlm-candidate-kind">
+          候选类型
+          <select id="vlm-candidate-kind" v-model="candidateKind" name="vlm-candidate-kind">
+            <option value="gqa">GQA</option>
+            <option value="bcq">BCQ</option>
+            <option value="mcq">MCQ</option>
+            <option value="golden_gqa">Golden GQA</option>
+          </select>
+        </label>
+        <label for="vlm-action-list-revision">
+          动作列表修订
+          <input
+            id="vlm-action-list-revision"
+            v-model.number="candidateActionListRevision"
+            name="vlm-action-list-revision"
+            type="number"
+            min="1"
+          />
+        </label>
+        <label for="vlm-records">
+          records（JSON 数组）
+          <textarea
+            id="vlm-records"
+            v-model="candidateRecordsInput"
+            name="vlm-records"
+            rows="4"
+            spellcheck="false"
+          />
+        </label>
+        <label for="vlm-media">
+          media（JSON 数组，必须含已确认对象代次和摘要）
+          <textarea
+            id="vlm-media"
+            v-model="candidateMediaInput"
+            name="vlm-media"
+            rows="4"
+            spellcheck="false"
+          />
+        </label>
+        <ElButton type="primary" native-type="submit" :disabled="loadingCandidate">
+          {{ loadingCandidate ? '正在登记…' : '登记候选修订' }}
+        </ElButton>
+      </form>
+      <div v-if="candidates.length" class="datasets__candidate-list">
+        <label for="vlm-candidate-select">
+          检查候选
+          <select id="vlm-candidate-select" v-model="selectedCandidateId">
+            <option v-for="candidate in candidates" :key="candidate.id" :value="candidate.id">
+              修订 {{ candidate.revision }} · {{ candidate.kind }}
+            </option>
+          </select>
+        </label>
+      </div>
+      <table v-if="usageChecks.length" class="datasets__table datasets__usage-table">
+        <caption class="datasets__caption">
+          数据集用途检查历史
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">用途 / 状态</th>
+            <th scope="col">输入摘要</th>
+            <th scope="col">结果与原因</th>
+            <th scope="col">制品</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="check in usageChecks" :key="check.id">
+            <th scope="row">
+              {{ usageKindLabel(check.kind) }}
+              <ElTag :type="usageStatusTag(check.status)" disable-transitions>
+                {{ usageStatusLabel(check.status) }}
+              </ElTag>
+              <small>任务：{{ check.job_id ?? '—' }}</small>
+              <small>检查时间：{{ formatTime(check.created_at) }}</small>
+              <ElTag v-if="!check.is_current" type="warning" disable-transitions>
+                输入已变化，需重新检查
+              </ElTag>
+            </th>
+            <td>
+              <code class="datasets__digest">{{ check.input_digest }}</code>
+              <small>检查范围：{{ usageScopeLabel(check) }}</small>
+              <small>输入修订：{{ usageRevisionLabel(check) }}</small>
+              <small>基座：{{ check.base_commit }}</small>
+              <small>契约：{{ check.contract_version }}</small>
+            </td>
+            <td>
+              <small v-if="check.issues.length === 0" class="datasets__muted">没有失败原因。</small>
+              <ul v-else class="datasets__issue-list">
+                <li
+                  v-for="issue in check.issues"
+                  :key="`${check.id}-${issue.code}-${issue.location}`"
+                >
+                  {{ issue.code }}：{{ issue.detail }}（{{ issue.location }}）
+                  <small>
+                    {{ issue.retryable ? '可重试' : '需修正输入' }}；
+                    {{ usageRecoveryLabel(issue.recovery_action) }}
+                  </small>
+                </li>
+              </ul>
+            </td>
+            <td>
+              <template v-for="artifact in artifacts" :key="artifact.id">
+                <template v-if="artifact.usage_check_id === check.id">
+                  <ElTag
+                    :type="artifact.status === 'available' ? 'success' : 'info'"
+                    disable-transitions
+                  >
+                    {{ artifactStatusLabel(artifact.status) }}
+                  </ElTag>
+                  <ElButton
+                    v-if="artifact.status === 'available'"
+                    link
+                    type="primary"
+                    @click="downloadArtifact(artifact)"
+                  >
+                    下载 annotation.json
+                  </ElButton>
+                  <small v-if="artifact.status === 'available'" class="datasets__issue-detail">
+                    字节校验：SHA-256 {{ artifact.artifact_sha256 ?? '—' }}；大小
+                    {{ formatBytes(artifact.artifact_size) }}
+                  </small>
+                  <small v-if="artifact.status === 'failed'" class="datasets__issue-detail">
+                    {{ artifact.failure_code ?? 'ARTIFACT_GENERATION_FAILED' }}：
+                    {{ artifact.failure_detail ?? '请稍后重试或重新生成。' }}；
+                    {{ artifactRecoveryLabel(artifact.failure_code, artifact.recovery_action) }}
+                  </small>
+                </template>
+              </template>
+              <ElButton
+                v-if="
+                  mayEdit && check.kind === 'ddm' && check.status === 'passed' && check.is_current
+                "
+                link
+                type="warning"
+                :disabled="generatingArtifact"
+                @click="generateArtifact(check)"
+              >
+                生成 DDM 制品
+              </ElButton>
+              <span
+                v-if="
+                  !artifacts.some((artifact) => artifact.usage_check_id === check.id) &&
+                  check.kind === 'ddm'
+                "
+                class="datasets__muted"
+              >
+                尚未生成
+              </span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-else-if="!loadingUsage" class="datasets__usage-empty" aria-label="用途检查状态">
+        <span
+          >DDM：{{
+            usageChecks.some((check) => check.kind === 'ddm') ? '已有历史记录' : '未检查'
+          }}</span
+        >
+        <span
+          >VLM：{{
+            usageChecks.some((check) => check.kind === 'vlm') ? '已有历史记录' : '未检查'
+          }}</span
+        >
+      </div>
     </section>
 
     <section v-if="mayView" class="datasets__catalog" aria-labelledby="catalog-heading">
@@ -1529,6 +2057,7 @@ onUnmounted(clearPolling)
 
 .datasets__card,
 .datasets__action-list,
+.datasets__usage,
 .datasets__catalog,
 .datasets__members,
 .datasets__import-only {
@@ -1582,7 +2111,8 @@ onUnmounted(clearPolling)
 }
 
 .datasets__card:nth-child(2),
-.datasets__members {
+.datasets__members,
+.datasets__usage {
   border-top-color: var(--dataset-teal);
 }
 
@@ -1660,7 +2190,8 @@ onUnmounted(clearPolling)
 }
 
 .datasets__catalog,
-.datasets__members {
+.datasets__members,
+.datasets__usage {
   margin-bottom: 1.5rem;
 }
 
@@ -1722,6 +2253,80 @@ onUnmounted(clearPolling)
 
 .datasets__table--members th:nth-child(7) {
   width: 10%;
+}
+
+.datasets__usage-actions,
+.datasets__candidate-form,
+.datasets__candidate-list {
+  display: grid;
+  gap: 0.6rem;
+  margin: 1rem 1.15rem;
+}
+
+.datasets__candidate-form {
+  grid-template-columns: minmax(8rem, 12rem) minmax(8rem, 12rem) 1fr;
+  align-items: end;
+  padding: 1rem;
+  border: 1px solid var(--dataset-rule);
+  background: #fff;
+}
+
+.datasets__candidate-form h3 {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.datasets__candidate-form label,
+.datasets__candidate-list label {
+  display: grid;
+  gap: 0.3rem;
+  font-weight: 600;
+}
+
+.datasets__candidate-form input,
+.datasets__candidate-form select,
+.datasets__candidate-list select {
+  min-height: 2.25rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #bfc6cd;
+  border-radius: 4px;
+  background: #fff;
+  font: inherit;
+}
+
+.datasets__candidate-form textarea {
+  width: 100%;
+  min-height: 6rem;
+  padding: 0.5rem;
+  border: 1px solid #bfc6cd;
+  border-radius: 4px;
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  resize: vertical;
+}
+
+.datasets__candidate-form label:nth-of-type(3),
+.datasets__candidate-form label:nth-of-type(4) {
+  grid-column: 1 / -1;
+}
+
+.datasets__usage-table {
+  margin-bottom: 1rem;
+}
+
+.datasets__usage-table th,
+.datasets__usage-table td {
+  font-size: 0.9rem;
+}
+
+.datasets__issue-list {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.datasets__usage-actions {
+  grid-template-columns: repeat(2, max-content);
 }
 
 .datasets__annotation-editor,
@@ -1811,6 +2416,11 @@ onUnmounted(clearPolling)
 
 @media (max-width: 1100px) {
   .datasets__actions {
+    grid-template-columns: 1fr;
+  }
+
+  .datasets__candidate-form,
+  .datasets__usage-actions {
     grid-template-columns: 1fr;
   }
 

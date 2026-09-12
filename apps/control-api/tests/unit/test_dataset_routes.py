@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
+from typing import cast
 from uuid import UUID
 
 import pytest
@@ -20,13 +22,31 @@ from factory_sop.auth.model import Session, User, UserStatus
 from factory_sop.auth.permissions import Permission
 from factory_sop.auth.usecases.sessions import RestoredSession
 from factory_sop.dataset.adapters import dependencies as dataset_dependencies
+from factory_sop.dataset.adapters.routes import (
+    ArtifactAcceptedView,
+    UsageCheckAcceptedView,
+    UsageCheckView,
+    UsageJobView,
+    VlmCandidateView,
+)
 from factory_sop.dataset.model import (
+    ActionListRevision,
+    AnnotationExecution,
+    AnnotationExecutionStatus,
+    AnnotationMode,
+    AnnotationSegment,
+    AnnotationSubmission,
     AttemptStatus,
     DatasetMember,
     MemberStatus,
     TrainingDataset,
     UploadAttempt,
 )
+from factory_sop.dataset.repository import UsageDatasetRepository
+from factory_sop.dataset.usage import UsageValidationResult
+from factory_sop.dataset.usecases.usage import begin_usage_check, complete_usage_check
+from factory_sop.job.adapters import dependencies as job_dependencies
+from factory_sop.job.adapters.routes import JobView as GenericJobView
 from factory_sop.settings import Settings
 
 NOW = datetime(2026, 9, 9, 1, 0, tzinfo=UTC)
@@ -34,6 +54,8 @@ ACTOR_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f201")
 DATASET_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f202")
 MEMBER_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f203")
 ATTEMPT_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f204")
+CONTEXT_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f207")
+SUBMISSION_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f208")
 
 
 def settings() -> Settings:
@@ -137,7 +159,71 @@ class Backend:
         self.app.dependency_overrides[dataset_dependencies.datasets] = lambda: self.datasets
         self.app.dependency_overrides[dataset_dependencies.storage] = lambda: self.storage
         self.app.dependency_overrides[dataset_dependencies.jobs] = lambda: self.jobs
+        self.app.dependency_overrides[dataset_dependencies.usage_jobs] = lambda: self.jobs
+        self.app.dependency_overrides[job_dependencies.job_repository] = lambda: self.jobs
         self.client = TestClient(self.app, base_url="https://testserver")
+
+
+def seed_registered_annotation(backend: Backend) -> None:
+    member = backend.datasets.members[MEMBER_ID]
+    backend.datasets.members[MEMBER_ID] = replace(
+        member,
+        status=MemberStatus.REGISTERED,
+        actual_size=1,
+        actual_sha256="a" * 64,
+        duration_seconds=2.0,
+        object_key=backend.datasets.attempts[ATTEMPT_ID].object_key,
+        object_version_id="version-1",
+    )
+    backend.datasets.attempts[ATTEMPT_ID] = replace(
+        backend.datasets.attempts[ATTEMPT_ID],
+        status=AttemptStatus.REGISTERED,
+        object_version_id="version-1",
+    )
+    backend.datasets.add_action_list(
+        ActionListRevision(
+            dataset_id=DATASET_ID,
+            revision=1,
+            actions=("(1) 取料", "(2) 安装"),
+            created_by=ACTOR_ID,
+            created_at=NOW,
+        )
+    )
+    submission = AnnotationSubmission(
+        id=SUBMISSION_ID,
+        dataset_id=DATASET_ID,
+        member_id=MEMBER_ID,
+        context_id=CONTEXT_ID,
+        revision=1,
+        action_list_revision=1,
+        source_object_version_id="version-1",
+        source_sha256="a" * 64,
+        idempotency_key="route-annotation",
+        request_digest="b" * 64,
+        mode=AnnotationMode.SINGLE_OPERATOR,
+        segments=(
+            AnnotationSegment(0.0, 1.0, 0, "(1) 取料"),
+            AnnotationSegment(1.0, 2.0, 1, "(2) 安装"),
+        ),
+        raw_segments=(),
+        created_by=ACTOR_ID,
+        created_at=NOW,
+    )
+    backend.datasets.add_annotation_submission(submission)
+    backend.datasets.add_annotation_execution(
+        AnnotationExecution(
+            id=UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f30d"),
+            submission_id=submission.id,
+            generation=1,
+            job_id=None,
+            status=AnnotationExecutionStatus.SUCCEEDED,
+            clips=({"id": "clip-1"},),
+            failure_code=None,
+            failure_detail=None,
+            created_at=NOW,
+            updated_at=NOW,
+        )
+    )
 
 
 @pytest.fixture
@@ -148,6 +234,11 @@ def import_backend() -> Backend:
 @pytest.fixture
 def view_backend() -> Backend:
     return Backend(frozenset({Permission.DATASET_VIEW}))
+
+
+@pytest.fixture
+def editor_backend() -> Backend:
+    return Backend(frozenset({Permission.DATASET_EDIT, Permission.DATASET_VIEW}))
 
 
 def test_create_and_list_dataset_use_the_same_control_plane_seam(
@@ -260,6 +351,169 @@ def test_confirming_the_same_attempt_returns_the_same_validation_job(
     assert len(import_backend.jobs.jobs) == 1
 
 
+def test_usage_checks_and_artifacts_use_the_published_http_contract(
+    editor_backend: Backend,
+) -> None:
+    seed_registered_annotation(editor_backend)
+    requested = editor_backend.client.post(
+        f"{API_PREFIX}/training-datasets/{DATASET_ID}/usage-checks",
+        json={"kind": "ddm"},
+    )
+
+    assert requested.status_code == 202
+    requested_body = requested.json()
+    assert requested_body == UsageCheckAcceptedView.model_validate(requested_body).model_dump(
+        mode="json"
+    )
+    check = requested_body["check"]
+    job = requested_body["job"]
+    assert set(check) == {
+        "id",
+        "dataset_id",
+        "kind",
+        "status",
+        "is_current",
+        "input_digest",
+        "input_snapshot",
+        "summary",
+        "issues",
+        "base_commit",
+        "contract_version",
+        "candidate_id",
+        "job_id",
+        "created_by",
+        "created_at",
+        "updated_at",
+    }
+    assert set(job) == {
+        "id",
+        "job_type",
+        "status",
+        "dataset_id",
+        "attempt_id",
+        "failure_code",
+        "created_at",
+        "updated_at",
+    }
+
+    assert check["is_current"] is True
+    assert check == UsageCheckView.model_validate(check).model_dump(mode="json")
+    assert job == UsageJobView.model_validate(job).model_dump(mode="json")
+    usage_job = editor_backend.jobs.jobs[UUID(job["id"])]
+    target = begin_usage_check(
+        job=usage_job,
+        datasets=cast(UsageDatasetRepository, editor_backend.datasets),
+        now=NOW,
+    )
+    assert target is not None
+    complete_usage_check(
+        target=target,
+        validation=UsageValidationResult(
+            passed=True,
+            issues=(),
+            input_snapshot=dict(target.check.input_snapshot),
+            input_digest=target.check.input_digest,
+            summary=dict(target.check.summary),
+        ),
+        now=NOW,
+        datasets=cast(UsageDatasetRepository, editor_backend.datasets),
+    )
+    artifact = editor_backend.client.post(
+        f"{API_PREFIX}/training-datasets/{DATASET_ID}/artifacts",
+        json={"check_id": check["id"]},
+    )
+
+    assert artifact.status_code == 202
+    artifact_body = artifact.json()
+    normalized_artifact = ArtifactAcceptedView.model_validate(artifact_body).model_dump(mode="json")
+    assert artifact_body == normalized_artifact
+    assert artifact_body["artifact"]["input_digest"] == check["input_digest"]
+    generic_job = editor_backend.client.get(f"{API_PREFIX}/jobs/{artifact.json()['job']['id']}")
+    assert generic_job.status_code == 200
+    generic_job_body = generic_job.json()
+    assert generic_job_body == GenericJobView.model_validate(generic_job_body).model_dump(
+        mode="json"
+    )
+
+
+def test_import_only_caller_cannot_read_a_usage_job(editor_backend: Backend) -> None:
+    seed_registered_annotation(editor_backend)
+    requested = editor_backend.client.post(
+        f"{API_PREFIX}/training-datasets/{DATASET_ID}/usage-checks",
+        json={"kind": "ddm"},
+    )
+    assert requested.status_code == 202
+    job_id = requested.json()["job"]["id"]
+    editor_backend.app.dependency_overrides[auth_dependencies.granted_permissions] = lambda: (
+        frozenset({Permission.DATASET_IMPORT})
+    )
+
+    response = editor_backend.client.get(f"{API_PREFIX}/jobs/{job_id}")
+
+    assert response.status_code == 403
+    assert response.json()["error_code"] == "PERMISSION_DENIED"
+
+
+def test_read_only_caller_cannot_start_a_usage_check(view_backend: Backend) -> None:
+    seed_registered_annotation(view_backend)
+
+    response = view_backend.client.post(
+        f"{API_PREFIX}/training-datasets/{DATASET_ID}/usage-checks",
+        json={"kind": "ddm"},
+    )
+
+    assert response.status_code == 403
+    assert view_backend.datasets.usage_checks == {}
+    assert view_backend.jobs.jobs == {}
+
+
+def test_vlm_candidate_route_freezes_explicit_media_and_requires_revision(
+    editor_backend: Backend,
+) -> None:
+    seed_registered_annotation(editor_backend)
+    candidate = editor_backend.client.post(
+        f"{API_PREFIX}/training-datasets/{DATASET_ID}/vlm-candidates",
+        headers={"If-Match": "0"},
+        json={
+            "kind": "gqa",
+            "action_list_revision": 1,
+            "records": [
+                {
+                    "conversations": [
+                        {"from": "human", "value": "描述视频"},
+                        {"from": "gpt", "value": "(1) 取料"},
+                    ],
+                    "video": "line-a.mp4",
+                    "action_indices": [1],
+                }
+            ],
+            "media": [
+                {
+                    "key": "line-a.mp4",
+                    "member_id": str(MEMBER_ID),
+                    "source_object_version_id": "version-1",
+                    "source_sha256": "a" * 64,
+                }
+            ],
+        },
+    )
+
+    assert candidate.status_code == 201
+    candidate_body = candidate.json()
+    assert candidate_body == VlmCandidateView.model_validate(candidate_body).model_dump(mode="json")
+    candidate_id = candidate_body["id"]
+    checked = editor_backend.client.post(
+        f"{API_PREFIX}/training-datasets/{DATASET_ID}/usage-checks",
+        json={"kind": "vlm", "candidate_id": candidate_id},
+    )
+    assert checked.status_code == 202
+    checked_body = checked.json()
+    assert checked_body == UsageCheckAcceptedView.model_validate(checked_body).model_dump(
+        mode="json"
+    )
+    assert checked_body["check"]["candidate_id"] == candidate_id
+
+
 def test_async_dataset_routes_document_their_accepted_job_response(
     import_backend: Backend,
 ) -> None:
@@ -280,3 +534,10 @@ def test_async_dataset_routes_document_their_accepted_job_response(
     assert retry_responses["202"]["content"]["application/json"]["schema"]["$ref"].endswith(
         "/RetryView"
     )
+    download = schema["paths"][
+        f"{API_PREFIX}/training-datasets/{{dataset_id}}/artifacts/{{artifact_id}}/download"
+    ]["get"]
+    assert download["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "type": "string",
+        "format": "binary",
+    }

@@ -121,23 +121,35 @@ def caller() -> Caller:
     )
 
 
-def build_app(engine: Engine, settings: Settings) -> FastAPI:
+def build_app(
+    engine: Engine,
+    settings: Settings,
+    *,
+    permissions: frozenset[Permission] | None = None,
+) -> FastAPI:
     """装配生产 app，仅把认证 caller 固定到测试 actor。"""
     app = create_app(settings)
     factory = session_factory(engine)
     app.state.session_factory = factory
     app.state.job_dispatcher = ArqJobDispatcher.from_settings(settings, session_factory=factory)
     app.dependency_overrides[auth_dependencies.authenticated_caller] = restored_session
-    app.dependency_overrides[auth_dependencies.granted_permissions] = lambda: frozenset(
-        {Permission.DATASET_IMPORT, Permission.DATASET_VIEW}
+    app.dependency_overrides[auth_dependencies.granted_permissions] = lambda: (
+        permissions or frozenset({Permission.DATASET_IMPORT, Permission.DATASET_VIEW})
     )
     return app
 
 
 @contextmanager
-def client_for(engine: Engine, settings: Settings) -> Iterator[TestClient]:
+def client_for(
+    engine: Engine,
+    settings: Settings,
+    *,
+    permissions: frozenset[Permission] | None = None,
+) -> Iterator[TestClient]:
     """以真实 FastAPI 路由、请求事务和 PostgreSQL session 运行测试。"""
-    with TestClient(build_app(engine, settings), base_url="https://testserver") as client:
+    with TestClient(
+        build_app(engine, settings, permissions=permissions), base_url="https://testserver"
+    ) as client:
         yield client
 
 
@@ -159,7 +171,7 @@ def cleanup_dataset(engine: Engine, dataset_id: UUID) -> None:
         connection.execute(
             text(
                 "DELETE FROM job_application_job "
-                "WHERE member_id IN "
+                "WHERE dataset_id = :dataset_id OR member_id IN "
                 "(SELECT id FROM dataset_member WHERE dataset_id = :dataset_id)"
             ),
             {"dataset_id": dataset_id},

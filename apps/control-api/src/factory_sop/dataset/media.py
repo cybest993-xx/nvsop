@@ -16,11 +16,13 @@ class InvalidMediaError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class MediaMetadata:
-    """真实媒体探测出的容器、视频编码和有限正时长。"""
+    """真实媒体探测出的容器、编码、时长和可选帧采样事实。"""
 
     duration_seconds: float
     codec: str
     container: str
+    fps: float | None = None
+    frame_count: int | None = None
 
 
 class MediaProbe(Protocol):

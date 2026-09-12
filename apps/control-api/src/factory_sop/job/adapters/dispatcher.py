@@ -116,6 +116,10 @@ class ArqJobDispatcher:
             return "annotate_dataset_job"
         if job.job_type is JobType.DATASET_VALIDATION:
             return "validate_dataset_job"
+        if job.job_type is JobType.DATASET_USAGE_CHECK:
+            return "check_dataset_usage_job"
+        if job.job_type is JobType.DATASET_ARTIFACT:
+            return "generate_dataset_artifact_job"
         raise ValueError(f"未知任务类型：{job.job_type}")
 
     def _record_success(self, job_id: UUID) -> None:

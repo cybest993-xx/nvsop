@@ -179,6 +179,7 @@ def create_app(settings: Settings) -> FastAPI:
     app.dependency_overrides[dataset_dependencies.annotation_jobs] = (
         job_dependencies.annotation_jobs
     )
+    app.dependency_overrides[dataset_dependencies.usage_jobs] = job_dependencies.usage_jobs
 
     @app.exception_handler(AuthenticationRefusedError)
     async def refused(request: Request, error: AuthenticationRefusedError) -> Response:

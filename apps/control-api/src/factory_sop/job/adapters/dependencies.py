@@ -11,9 +11,16 @@ from factory_sop.job.adapters.dispatcher import ArqJobDispatcher
 from factory_sop.job.adapters.repository import (
     PostgresAnnotationJobQueue,
     PostgresJobRepository,
+    PostgresUsageJobQueue,
     PostgresValidationJobQueue,
 )
-from factory_sop.job.api import AnnotationJobQueue, JobDispatcher, JobRepository, ValidationJobQueue
+from factory_sop.job.api import (
+    AnnotationJobQueue,
+    JobDispatcher,
+    JobRepository,
+    UsageJobQueue,
+    ValidationJobQueue,
+)
 from factory_sop.persistence import RequestSession
 
 
@@ -25,6 +32,14 @@ def dataset_resource() -> DatasetResourceLookup:
 def job_repository(session: RequestSession) -> JobRepository:
     """请求事务中的持久化应用任务。"""
     return PostgresJobRepository(session)
+
+
+def usage_jobs(
+    session: RequestSession,
+    job_dispatcher: Annotated[JobDispatcher, Depends(dispatcher)],
+) -> UsageJobQueue:
+    """请求事务中的用途检查和制品任务创建 seam。"""
+    return PostgresUsageJobQueue(session, job_dispatcher.dispatch)
 
 
 def validation_jobs(

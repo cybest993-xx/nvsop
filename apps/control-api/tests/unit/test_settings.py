@@ -43,6 +43,7 @@ def environment(tmp_path: Path, **overrides: str) -> dict[str, str]:
         "SOP_DATASET_SUPPORTED_CODECS": "h264,h265",
         "SOP_MEDIA_PROBE_BINARY": "ffprobe",
         "SOP_MEDIA_PROBE_TIMEOUT_SECONDS": "60",
+        "SOP_ANNOTATION_DATA_ROOT": str(tmp_path / "annotation-data"),
     }
     base.update(overrides)
     return base
@@ -67,6 +68,7 @@ def test_loads_a_complete_environment(tmp_path: Path) -> None:
         minio_access_key=SecretStr("minio-access"),
         minio_secret_key=SecretStr("minio-secret"),
         redis_url=SecretStr("redis://redis.internal:6379/0"),
+        annotation_data_root=str(tmp_path / "annotation-data"),
     )
 
 

@@ -12,9 +12,13 @@ from factory_sop.dataset.model import (
     AnnotationContext,
     AnnotationExecution,
     AnnotationSubmission,
+    DatasetArtifact,
     DatasetMember,
     TrainingDataset,
     UploadAttempt,
+    UsageCheck,
+    UsageKind,
+    VlmCandidate,
 )
 
 
@@ -153,4 +157,76 @@ class DatasetRepository(Protocol):
 
     def annotation_execution_exists(self, member_id: UUID, execution_id: UUID) -> bool:
         """确认标注执行代次属于视频成员。"""
+        ...
+
+
+class UsageDatasetRepository(DatasetRepository, Protocol):
+    """用途检查额外依赖的仓储方法，不改变既有上传/标注测试 seam。"""
+
+    def list_members(self, *, dataset_id: UUID) -> Sequence[DatasetMember]:
+        """返回用途检查需要冻结的全部视频成员。"""
+        ...
+
+    def latest_annotation_submission(self, *, member_id: UUID) -> AnnotationSubmission | None:
+        """读取某视频最新一份已保存标注。"""
+        ...
+
+    def add_vlm_candidate(self, value: VlmCandidate) -> None:
+        """追加一份不可变 VLM 候选修订。"""
+        ...
+
+    def vlm_candidate_by_id(self, candidate_id: UUID) -> VlmCandidate | None:
+        """按身份读取 VLM 候选。"""
+        ...
+
+    def latest_vlm_candidate(self, dataset_id: UUID) -> VlmCandidate | None:
+        """读取数据集当前 VLM 候选修订。"""
+        ...
+
+    def list_vlm_candidates(self, dataset_id: UUID) -> Sequence[VlmCandidate]:
+        """读取 VLM 候选历史。"""
+        ...
+
+    def add_usage_check(self, value: UsageCheck) -> None:
+        """追加一条用途检查。"""
+        ...
+
+    def usage_check_by_id(self, check_id: UUID) -> UsageCheck | None:
+        """按身份读取用途检查。"""
+        ...
+
+    def list_usage_checks(self, dataset_id: UUID) -> Sequence[UsageCheck]:
+        """读取用途检查历史。"""
+        ...
+
+    def latest_usage_check(self, *, dataset_id: UUID, kind: UsageKind) -> UsageCheck | None:
+        """读取一种用途最近一次检查。"""
+        ...
+
+    def save_usage_check(self, value: UsageCheck, *, expected_updated_at: datetime) -> bool:
+        """按执行租约写回用途检查。"""
+        ...
+
+    def add_artifact(self, value: DatasetArtifact) -> None:
+        """追加制品记录。"""
+        ...
+
+    def artifact_by_id(self, artifact_id: UUID) -> DatasetArtifact | None:
+        """按身份读取制品。"""
+        ...
+
+    def artifact_by_input(self, *, dataset_id: UUID, input_digest: str) -> DatasetArtifact | None:
+        """按数据集和冻结输入摘要复用已成功制品。"""
+        ...
+
+    def list_artifacts(self, dataset_id: UUID) -> Sequence[DatasetArtifact]:
+        """读取数据集制品历史。"""
+        ...
+
+    def list_artifact_cleanup_candidates(self, *, limit: int) -> Sequence[DatasetArtifact]:
+        """读取持久化记录了未发布候选键、等待对象清理的制品。"""
+        ...
+
+    def save_artifact(self, value: DatasetArtifact, *, expected_updated_at: datetime) -> bool:
+        """按执行租约写回制品。"""
         ...

@@ -1,8 +1,9 @@
-"""用真实 PostgreSQL 走过 0023 → 0026 的训练数据集和标注迁移。"""
+"""用真实 PostgreSQL 走过 0023 → 0028 的训练数据集用途迁移。"""
 
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,6 +11,20 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, create_engine, text
+from sqlalchemy.orm import Session
+
+from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
+from factory_sop.dataset.model import (
+    ArtifactStatus,
+    DatasetArtifact,
+    TrainingDataset,
+    UsageCheck,
+    UsageCheckStatus,
+    UsageKind,
+    VlmCandidate,
+    VlmCandidateKind,
+    VlmMediaReference,
+)
 
 CONTROL_API = Path(__file__).resolve().parents[2]
 
@@ -69,6 +84,85 @@ def _columns(database: Engine, table: str) -> set[str]:
         )
 
 
+def test_usage_records_round_trip_through_real_postgres(session: Session) -> None:
+    now = datetime(2026, 9, 12, tzinfo=UTC)
+    actor_id, dataset_id = uuid4(), uuid4()
+    candidate_id, check_id, artifact_id = uuid4(), uuid4(), uuid4()
+    repository = PostgresDatasetRepository(session)
+    repository.add_dataset(
+        TrainingDataset(
+            id=dataset_id,
+            name="用途检查持久化集",
+            created_by=actor_id,
+            updated_by=actor_id,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    candidate = VlmCandidate(
+        id=candidate_id,
+        dataset_id=dataset_id,
+        revision=1,
+        kind=VlmCandidateKind.GQA,
+        action_list_revision=1,
+        records=({"conversations": []},),
+        media=(
+            VlmMediaReference(
+                key="video.mp4",
+                member_id=uuid4(),
+                source_object_version_id="version-1",
+                source_sha256="a" * 64,
+                action_indices=(1, 2),
+            ),
+        ),
+        created_by=actor_id,
+        created_at=now,
+    )
+    repository.add_vlm_candidate(candidate)
+    check = UsageCheck(
+        id=check_id,
+        dataset_id=dataset_id,
+        kind=UsageKind.VLM,
+        status=UsageCheckStatus.FAILED,
+        input_digest="b" * 64,
+        input_snapshot={"candidate_id": str(candidate_id)},
+        summary={"record_count": 1},
+        issues=({"code": "bad"},),
+        base_commit="base-commit",
+        contract_version="vlm-v1",
+        candidate_id=candidate_id,
+        job_id=None,
+        created_by=actor_id,
+        created_at=now,
+        updated_at=now,
+    )
+    repository.add_usage_check(check)
+    artifact = DatasetArtifact(
+        id=artifact_id,
+        dataset_id=dataset_id,
+        usage_check_id=check_id,
+        kind=UsageKind.DDM,
+        status=ArtifactStatus.FAILED,
+        input_digest="c" * 64,
+        object_key=None,
+        artifact_sha256=None,
+        artifact_size=None,
+        manifest={"artifact_format_version": 1},
+        failure_code="ARTIFACT_GENERATION_FAILED",
+        failure_detail="synthetic",
+        job_id=None,
+        created_by=actor_id,
+        created_at=now,
+        updated_at=now,
+    )
+    repository.add_artifact(artifact)
+    session.flush()
+
+    assert repository.vlm_candidate_by_id(candidate_id) == candidate
+    assert repository.usage_check_by_id(check_id) == check
+    assert repository.artifact_by_id(artifact_id) == artifact
+
+
 def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
     database_at_0023: Engine,
 ) -> None:
@@ -92,6 +186,9 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
         "dataset_annotation_context",
         "dataset_annotation_submission",
         "dataset_annotation_execution",
+        "dataset_vlm_candidate",
+        "dataset_usage_check",
+        "dataset_artifact",
     } <= _tables(database_at_0023)
     assert {
         "id",
@@ -143,10 +240,47 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
         "derived_video_sha256",
         "derived_video_duration_seconds",
     } <= _columns(database_at_0023, "dataset_annotation_execution")
+    assert {
+        "id",
+        "dataset_id",
+        "revision",
+        "kind",
+        "action_list_revision",
+        "records",
+        "media",
+    } <= _columns(database_at_0023, "dataset_vlm_candidate")
+    assert {
+        "id",
+        "dataset_id",
+        "kind",
+        "status",
+        "input_digest",
+        "input_snapshot",
+        "summary",
+        "issues",
+        "base_commit",
+        "contract_version",
+        "candidate_id",
+        "job_id",
+    } <= _columns(database_at_0023, "dataset_usage_check")
+    assert {
+        "id",
+        "dataset_id",
+        "usage_check_id",
+        "kind",
+        "status",
+        "input_digest",
+        "object_key",
+        "artifact_sha256",
+        "artifact_size",
+        "manifest",
+        "job_id",
+    } <= _columns(database_at_0023, "dataset_artifact")
+    assert {"dataset_id"} <= _columns(database_at_0023, "job_application_job")
 
     with database_at_0023.connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0026"
+    assert version == "0028"
     assert "dataset.dataset.edit" in _permission_codes(database_at_0023)
 
     command.downgrade(configuration, "0025")

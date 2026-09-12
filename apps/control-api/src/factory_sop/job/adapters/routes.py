@@ -31,6 +31,7 @@ class JobView(BaseModel):
     id: UUID
     job_type: str
     status: str
+    dataset_id: UUID | None = None
     member_id: UUID
     attempt_id: UUID
     failure_code: str | None
@@ -47,6 +48,7 @@ def _view(job: ApplicationJob) -> JobView:
         id=job.id,
         job_type=job.job_type.value,
         status=job.status,
+        dataset_id=job.dataset_id,
         member_id=job.member_id,
         attempt_id=job.attempt_id,
         failure_code=job.failure_code,
@@ -74,5 +76,6 @@ def read_a_job(
         caller=caller,
         jobs=jobs,
         resource_exists=resources.resource_exists,
+        dataset_resource_exists=resources.dataset_resource_exists,
     )
     return _view(result)

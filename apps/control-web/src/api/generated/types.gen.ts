@@ -512,8 +512,114 @@ export type ApiErrorCode =
   | 'ANNOTATION_BACKEND_UNAVAILABLE'
   | 'ANNOTATION_EXECUTION_FAILED'
   | 'ANNOTATION_OPERATION_NOT_ALLOWED'
+  | 'VLM_CANDIDATE_NOT_FOUND'
+  | 'VLM_CANDIDATE_INVALID'
+  | 'USAGE_CHECK_NOT_FOUND'
+  | 'USAGE_STATE_CONFLICT'
+  | 'ARTIFACT_NOT_FOUND'
+  | 'ARTIFACT_UNAVAILABLE'
   | 'JOB_NOT_FOUND'
   | 'JOB_RESOURCE_NOT_FOUND'
+
+/**
+ * ArtifactAcceptedView
+ */
+export type ArtifactAcceptedView = {
+  artifact: ArtifactView
+  job: UsageJobView
+}
+
+/**
+ * ArtifactInput
+ *
+ * 请求从通过的 DDM 检查生成制品。
+ */
+export type ArtifactInput = {
+  /**
+   * Check Id
+   */
+  check_id: string
+}
+
+/**
+ * ArtifactView
+ */
+export type ArtifactView = {
+  /**
+   * Artifact Sha256
+   */
+  artifact_sha256: string | null
+  /**
+   * Artifact Size
+   */
+  artifact_size: number | null
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Created By
+   */
+  created_by: string
+  /**
+   * Dataset Id
+   */
+  dataset_id: string
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  /**
+   * Failure Detail
+   */
+  failure_detail: string | null
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Input Digest
+   */
+  input_digest: string
+  /**
+   * Job Id
+   */
+  job_id: string | null
+  /**
+   * Kind
+   */
+  kind: string
+  /**
+   * Manifest
+   */
+  manifest: {
+    [key: string]: unknown
+  }
+  /**
+   * Object Key
+   */
+  object_key: string | null
+  /**
+   * Recovery Action
+   */
+  recovery_action: string | null
+  /**
+   * Retryable
+   */
+  retryable: boolean
+  /**
+   * Status
+   */
+  status: string
+  /**
+   * Updated At
+   */
+  updated_at: string
+  /**
+   * Usage Check Id
+   */
+  usage_check_id: string
+}
 
 /**
  * AssignedRoles
@@ -1495,6 +1601,28 @@ export type InferenceHostView = {
 }
 
 /**
+ * ItemPage[ArtifactView]
+ */
+export type ItemPageArtifactView = {
+  /**
+   * Items
+   */
+  items: Array<ArtifactView>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
  * ItemPage[CameraView]
  */
 export type ItemPageCameraView = {
@@ -1759,6 +1887,28 @@ export type ItemPageTemplateVersionView = {
 }
 
 /**
+ * ItemPage[UsageCheckView]
+ */
+export type ItemPageUsageCheckView = {
+  /**
+   * Items
+   */
+  items: Array<UsageCheckView>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
  * ItemPage[UserView]
  */
 export type ItemPageUserView = {
@@ -1766,6 +1916,28 @@ export type ItemPageUserView = {
    * Items
    */
   items: Array<UserView>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
+ * ItemPage[VlmCandidateView]
+ */
+export type ItemPageVlmCandidateView = {
+  /**
+   * Items
+   */
+  items: Array<VlmCandidateView>
   /**
    * Page
    */
@@ -2104,6 +2276,29 @@ export type ProblemDocument = {
    * Type
    */
   type?: 'about:blank'
+}
+
+/**
+ * RegisterVlmCandidateInput
+ *
+ * 登记一份不可变 VLM 候选修订。
+ */
+export type RegisterVlmCandidateInput = {
+  /**
+   * Action List Revision
+   */
+  action_list_revision: number
+  kind: VlmCandidateKind
+  /**
+   * Media
+   */
+  media: Array<VlmMediaInput>
+  /**
+   * Records
+   */
+  records: Array<{
+    [key: string]: unknown
+  }>
 }
 
 /**
@@ -2939,6 +3134,172 @@ export type UploadRequestView = {
 }
 
 /**
+ * UsageCheckAcceptedView
+ */
+export type UsageCheckAcceptedView = {
+  check: UsageCheckView
+  job: UsageJobView
+}
+
+/**
+ * UsageCheckInput
+ *
+ * 请求一次冻结输入的异步用途检查。
+ */
+export type UsageCheckInput = {
+  /**
+   * Candidate Id
+   */
+  candidate_id?: string | null
+  kind: UsageKind
+}
+
+/**
+ * UsageCheckView
+ */
+export type UsageCheckView = {
+  /**
+   * Base Commit
+   */
+  base_commit: string
+  /**
+   * Candidate Id
+   */
+  candidate_id: string | null
+  /**
+   * Contract Version
+   */
+  contract_version: string
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Created By
+   */
+  created_by: string
+  /**
+   * Dataset Id
+   */
+  dataset_id: string
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Input Digest
+   */
+  input_digest: string
+  /**
+   * Input Snapshot
+   */
+  input_snapshot: {
+    [key: string]: unknown
+  }
+  /**
+   * Is Current
+   */
+  is_current: boolean
+  /**
+   * Issues
+   */
+  issues: Array<UsageIssueView>
+  /**
+   * Job Id
+   */
+  job_id: string | null
+  /**
+   * Kind
+   */
+  kind: string
+  /**
+   * Status
+   */
+  status: string
+  /**
+   * Summary
+   */
+  summary: {
+    [key: string]: number
+  }
+  /**
+   * Updated At
+   */
+  updated_at: string
+}
+
+/**
+ * UsageIssueView
+ */
+export type UsageIssueView = {
+  /**
+   * Code
+   */
+  code: string
+  /**
+   * Detail
+   */
+  detail: string
+  /**
+   * Location
+   */
+  location: string
+  /**
+   * Recovery Action
+   */
+  recovery_action: string | null
+  /**
+   * Retryable
+   */
+  retryable: boolean
+}
+
+/**
+ * UsageJobView
+ */
+export type UsageJobView = {
+  /**
+   * Attempt Id
+   */
+  attempt_id: string
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Dataset Id
+   */
+  dataset_id: string | null
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Job Type
+   */
+  job_type: string
+  /**
+   * Status
+   */
+  status: string
+  /**
+   * Updated At
+   */
+  updated_at: string
+}
+
+/**
+ * UsageKind
+ *
+ * 训练数据用途。
+ */
+export type UsageKind = 'ddm' | 'vlm'
+
+/**
  * UserStatus
  *
  * Whether an account may still take part in a new login.
@@ -3007,6 +3368,135 @@ export type ValidationError = {
 }
 
 /**
+ * VlmCandidateKind
+ *
+ * 基座支持的 VLM 输入产物类别。
+ */
+export type VlmCandidateKind = 'gqa' | 'bcq' | 'mcq' | 'golden_gqa'
+
+/**
+ * VlmCandidateView
+ */
+export type VlmCandidateView = {
+  /**
+   * Action List Revision
+   */
+  action_list_revision: number
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Created By
+   */
+  created_by: string
+  /**
+   * Dataset Id
+   */
+  dataset_id: string
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Kind
+   */
+  kind: string
+  /**
+   * Media
+   */
+  media: Array<VlmMediaView>
+  /**
+   * Records
+   */
+  records: Array<{
+    [key: string]: unknown
+  }>
+  /**
+   * Revision
+   */
+  revision: number
+}
+
+/**
+ * VlmMediaInput
+ *
+ * VLM 记录使用的显式媒体绑定。
+ */
+export type VlmMediaInput = {
+  /**
+   * Action Indices
+   */
+  action_indices?: Array<number> | null
+  /**
+   * Annotation Execution Id
+   */
+  annotation_execution_id?: string | null
+  /**
+   * Annotation Submission Id
+   */
+  annotation_submission_id?: string | null
+  /**
+   * Clip Index
+   */
+  clip_index?: number | null
+  /**
+   * Key
+   */
+  key: string
+  /**
+   * Member Id
+   */
+  member_id: string
+  /**
+   * Source Object Version Id
+   */
+  source_object_version_id: string
+  /**
+   * Source Sha256
+   */
+  source_sha256: string
+}
+
+/**
+ * VlmMediaView
+ */
+export type VlmMediaView = {
+  /**
+   * Action Indices
+   */
+  action_indices: Array<number>
+  /**
+   * Annotation Execution Id
+   */
+  annotation_execution_id: string | null
+  /**
+   * Annotation Submission Id
+   */
+  annotation_submission_id: string | null
+  /**
+   * Clip Index
+   */
+  clip_index: number | null
+  /**
+   * Key
+   */
+  key: string
+  /**
+   * Member Id
+   */
+  member_id: string
+  /**
+   * Source Object Version Id
+   */
+  source_object_version_id: string
+  /**
+   * Source Sha256
+   */
+  source_sha256: string
+}
+
+/**
  * JobView
  */
 export type FactorySopDatasetAdaptersRoutesJobView = {
@@ -3058,6 +3548,10 @@ export type FactorySopJobAdaptersRoutesJobView = {
    * Created At
    */
   created_at: string
+  /**
+   * Dataset Id
+   */
+  dataset_id?: string | null
   /**
    * Failure Code
    */
@@ -7419,6 +7913,245 @@ export type ListDatasetActionListVersionsResponses = {
 export type ListDatasetActionListVersionsResponse =
   ListDatasetActionListVersionsResponses[keyof ListDatasetActionListVersionsResponses]
 
+export type ListDatasetArtifactsData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/training-datasets/{dataset_id}/artifacts'
+}
+
+export type ListDatasetArtifactsErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 对象存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ListDatasetArtifactsError = ListDatasetArtifactsErrors[keyof ListDatasetArtifactsErrors]
+
+export type ListDatasetArtifactsResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageArtifactView
+}
+
+export type ListDatasetArtifactsResponse =
+  ListDatasetArtifactsResponses[keyof ListDatasetArtifactsResponses]
+
+export type RequestDatasetArtifactData = {
+  body: ArtifactInput
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/artifacts'
+}
+
+export type RequestDatasetArtifactErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 对象存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type RequestDatasetArtifactError =
+  RequestDatasetArtifactErrors[keyof RequestDatasetArtifactErrors]
+
+export type RequestDatasetArtifactResponses = {
+  /**
+   * Successful Response
+   */
+  202: ArtifactAcceptedView
+}
+
+export type RequestDatasetArtifactResponse =
+  RequestDatasetArtifactResponses[keyof RequestDatasetArtifactResponses]
+
+export type ReadDatasetArtifactData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Artifact Id
+     */
+    artifact_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/artifacts/{artifact_id}'
+}
+
+export type ReadDatasetArtifactErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 对象存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ReadDatasetArtifactError = ReadDatasetArtifactErrors[keyof ReadDatasetArtifactErrors]
+
+export type ReadDatasetArtifactResponses = {
+  /**
+   * Successful Response
+   */
+  200: ArtifactView
+}
+
+export type ReadDatasetArtifactResponse =
+  ReadDatasetArtifactResponses[keyof ReadDatasetArtifactResponses]
+
+export type DownloadDatasetArtifactData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Artifact Id
+     */
+    artifact_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/artifacts/{artifact_id}/download'
+}
+
+export type DownloadDatasetArtifactErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 对象存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type DownloadDatasetArtifactError =
+  DownloadDatasetArtifactErrors[keyof DownloadDatasetArtifactErrors]
+
+export type DownloadDatasetArtifactResponses = {
+  /**
+   * DDM annotation JSON 制品
+   */
+  200: Blob | File
+}
+
+export type DownloadDatasetArtifactResponse =
+  DownloadDatasetArtifactResponses[keyof DownloadDatasetArtifactResponses]
+
 export type ListDatasetMembersData = {
   body?: never
   path: {
@@ -8042,3 +8775,366 @@ export type RetryVideoUploadResponses = {
 }
 
 export type RetryVideoUploadResponse = RetryVideoUploadResponses[keyof RetryVideoUploadResponses]
+
+export type ListDatasetUsageChecksData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/training-datasets/{dataset_id}/usage-checks'
+}
+
+export type ListDatasetUsageChecksErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 对象存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ListDatasetUsageChecksError =
+  ListDatasetUsageChecksErrors[keyof ListDatasetUsageChecksErrors]
+
+export type ListDatasetUsageChecksResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageUsageCheckView
+}
+
+export type ListDatasetUsageChecksResponse =
+  ListDatasetUsageChecksResponses[keyof ListDatasetUsageChecksResponses]
+
+export type RequestDatasetUsageCheckData = {
+  body: UsageCheckInput
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/usage-checks'
+}
+
+export type RequestDatasetUsageCheckErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 对象存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type RequestDatasetUsageCheckError =
+  RequestDatasetUsageCheckErrors[keyof RequestDatasetUsageCheckErrors]
+
+export type RequestDatasetUsageCheckResponses = {
+  /**
+   * Successful Response
+   */
+  202: UsageCheckAcceptedView
+}
+
+export type RequestDatasetUsageCheckResponse =
+  RequestDatasetUsageCheckResponses[keyof RequestDatasetUsageCheckResponses]
+
+export type ReadDatasetUsageCheckData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Check Id
+     */
+    check_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/usage-checks/{check_id}'
+}
+
+export type ReadDatasetUsageCheckErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 对象存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ReadDatasetUsageCheckError =
+  ReadDatasetUsageCheckErrors[keyof ReadDatasetUsageCheckErrors]
+
+export type ReadDatasetUsageCheckResponses = {
+  /**
+   * Successful Response
+   */
+  200: UsageCheckView
+}
+
+export type ReadDatasetUsageCheckResponse =
+  ReadDatasetUsageCheckResponses[keyof ReadDatasetUsageCheckResponses]
+
+export type ListVlmCandidatesData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/training-datasets/{dataset_id}/vlm-candidates'
+}
+
+export type ListVlmCandidatesErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 对象存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ListVlmCandidatesError = ListVlmCandidatesErrors[keyof ListVlmCandidatesErrors]
+
+export type ListVlmCandidatesResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageVlmCandidateView
+}
+
+export type ListVlmCandidatesResponse = ListVlmCandidatesResponses[keyof ListVlmCandidatesResponses]
+
+export type RegisterVlmCandidateData = {
+  body: RegisterVlmCandidateInput
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/vlm-candidates'
+}
+
+export type RegisterVlmCandidateErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 对象存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type RegisterVlmCandidateError = RegisterVlmCandidateErrors[keyof RegisterVlmCandidateErrors]
+
+export type RegisterVlmCandidateResponses = {
+  /**
+   * Successful Response
+   */
+  201: VlmCandidateView
+}
+
+export type RegisterVlmCandidateResponse =
+  RegisterVlmCandidateResponses[keyof RegisterVlmCandidateResponses]
+
+export type ReadVlmCandidateData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Candidate Id
+     */
+    candidate_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/vlm-candidates/{candidate_id}'
+}
+
+export type ReadVlmCandidateErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 对象存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ReadVlmCandidateError = ReadVlmCandidateErrors[keyof ReadVlmCandidateErrors]
+
+export type ReadVlmCandidateResponses = {
+  /**
+   * Successful Response
+   */
+  200: VlmCandidateView
+}
+
+export type ReadVlmCandidateResponse = ReadVlmCandidateResponses[keyof ReadVlmCandidateResponses]

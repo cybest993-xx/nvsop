@@ -44,6 +44,13 @@ class DatasetRefusalCode(StrEnum):
     ANNOTATION_BACKEND_UNAVAILABLE = "ANNOTATION_BACKEND_UNAVAILABLE"
     ANNOTATION_EXECUTION_FAILED = "ANNOTATION_EXECUTION_FAILED"
     ANNOTATION_OPERATION_NOT_ALLOWED = "ANNOTATION_OPERATION_NOT_ALLOWED"
+    VLM_CANDIDATE_NOT_FOUND = "VLM_CANDIDATE_NOT_FOUND"
+    VLM_CANDIDATE_INVALID = "VLM_CANDIDATE_INVALID"
+    USAGE_CHECK_NOT_FOUND = "USAGE_CHECK_NOT_FOUND"
+    USAGE_STATE_CONFLICT = "USAGE_STATE_CONFLICT"
+    ARTIFACT_NOT_FOUND = "ARTIFACT_NOT_FOUND"
+    ARTIFACT_UNAVAILABLE = "ARTIFACT_UNAVAILABLE"
+    ARTIFACT_INTEGRITY_FAILURE = "ARTIFACT_INTEGRITY_FAILURE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +101,11 @@ def refusal_problem(code: DatasetRefusalCode) -> tuple[int, str]:
             return 409, "视频当前状态不允许该操作"
         case DatasetRefusalCode.RESOURCE_MISMATCH:
             return 404, "请求的资源归属不匹配"
-        case DatasetRefusalCode.STORAGE_UNAVAILABLE | DatasetRefusalCode.MEDIA_PROBE_UNAVAILABLE:
+        case (
+            DatasetRefusalCode.STORAGE_UNAVAILABLE
+            | DatasetRefusalCode.MEDIA_PROBE_UNAVAILABLE
+            | DatasetRefusalCode.ARTIFACT_INTEGRITY_FAILURE
+        ):
             return 503, "基础设施暂时不可用"
         case (
             DatasetRefusalCode.OBJECT_NOT_FOUND
@@ -130,5 +141,15 @@ def refusal_problem(code: DatasetRefusalCode) -> tuple[int, str]:
             return 422, "标注切片执行失败"
         case DatasetRefusalCode.ANNOTATION_OPERATION_NOT_ALLOWED:
             return 403, "标注操作未开放"
+        case (
+            DatasetRefusalCode.VLM_CANDIDATE_NOT_FOUND
+            | DatasetRefusalCode.USAGE_CHECK_NOT_FOUND
+            | DatasetRefusalCode.ARTIFACT_NOT_FOUND
+        ):
+            return 404, "训练数据用途记录不存在"
+        case DatasetRefusalCode.VLM_CANDIDATE_INVALID:
+            return 422, "VLM 候选输入不符合要求"
+        case DatasetRefusalCode.USAGE_STATE_CONFLICT | DatasetRefusalCode.ARTIFACT_UNAVAILABLE:
+            return 409, "训练数据用途当前状态不允许该操作"
         case _:
             assert_never(code)

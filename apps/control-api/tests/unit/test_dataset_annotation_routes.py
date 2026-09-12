@@ -171,6 +171,7 @@ def settings() -> Settings:
         csrf_secret=SecretStr("annotation-context-secret"),
         annotation_backend_url="http://annotation-backend.test",
         annotation_media_origin="https://annotation-media.test:8444",
+        annotation_data_root="/tmp/nvsop-annotation-data",
     )
 
 

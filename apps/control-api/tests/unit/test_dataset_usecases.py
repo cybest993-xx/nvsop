@@ -20,6 +20,7 @@ from factory_sop.dataset.model import (
     AnnotationContext,
     AnnotationExecution,
     AnnotationSubmission,
+    DatasetArtifact,
     DatasetMember,
     MemberStatus,
     ObjectStat,
@@ -27,6 +28,8 @@ from factory_sop.dataset.model import (
     TrainingDataset,
     UploadAttempt,
     UploadInstructions,
+    UsageCheck,
+    VlmCandidate,
 )
 from factory_sop.dataset.storage import ObjectStorage
 from factory_sop.dataset.usecases import (
@@ -121,6 +124,9 @@ class FakeDatasets:
     contexts: dict[UUID, AnnotationContext] = field(default_factory=dict)
     submissions: dict[UUID, AnnotationSubmission] = field(default_factory=dict)
     executions: dict[UUID, AnnotationExecution] = field(default_factory=dict)
+    vlm_candidates: dict[UUID, VlmCandidate] = field(default_factory=dict)
+    usage_checks: dict[UUID, UsageCheck] = field(default_factory=dict)
+    artifacts: dict[UUID, DatasetArtifact] = field(default_factory=dict)
 
     def dataset_by_id(self, dataset_id: UUID) -> TrainingDataset | None:
         return self.datasets.get(dataset_id)
@@ -147,6 +153,9 @@ class FakeDatasets:
         rows = list(self.datasets.values())
         start = (page - 1) * page_size
         return rows[start : start + page_size], len(rows)
+
+    def list_members(self, *, dataset_id: UUID) -> list[DatasetMember]:
+        return [member for member in self.members.values() if member.dataset_id == dataset_id]
 
     def page_members(
         self, *, dataset_id: UUID, page: int, page_size: int
@@ -222,8 +231,15 @@ class FakeDatasets:
     def annotation_submission_by_id(self, submission_id: UUID) -> AnnotationSubmission | None:
         return self.submissions.get(submission_id)
 
-    def latest_annotation_submission(self, context_id: UUID) -> AnnotationSubmission | None:
-        values = [value for value in self.submissions.values() if value.context_id == context_id]
+    def latest_annotation_submission(
+        self, context_id: UUID | None = None, *, member_id: UUID | None = None
+    ) -> AnnotationSubmission | None:
+        values = [
+            value
+            for value in self.submissions.values()
+            if (member_id is not None and value.member_id == member_id)
+            or (context_id is not None and value.context_id == context_id)
+        ]
         return max(values, key=lambda value: value.created_at, default=None)
 
     def list_annotation_submissions(
@@ -252,6 +268,61 @@ class FakeDatasets:
 
     def add_annotation_execution(self, value: AnnotationExecution) -> None:
         self.executions[value.id] = value
+
+    def add_vlm_candidate(self, value: VlmCandidate) -> None:
+        self.vlm_candidates[value.id] = value
+
+    def vlm_candidate_by_id(self, candidate_id: UUID) -> VlmCandidate | None:
+        return self.vlm_candidates.get(candidate_id)
+
+    def latest_vlm_candidate(self, dataset_id: UUID) -> VlmCandidate | None:
+        values = [item for item in self.vlm_candidates.values() if item.dataset_id == dataset_id]
+        return max(values, key=lambda item: item.revision) if values else None
+
+    def list_vlm_candidates(self, dataset_id: UUID) -> list[VlmCandidate]:
+        return [item for item in self.vlm_candidates.values() if item.dataset_id == dataset_id]
+
+    def add_usage_check(self, value: UsageCheck) -> None:
+        self.usage_checks[value.id] = value
+
+    def usage_check_by_id(self, check_id: UUID) -> UsageCheck | None:
+        return self.usage_checks.get(check_id)
+
+    def list_usage_checks(self, dataset_id: UUID) -> list[UsageCheck]:
+        return [item for item in self.usage_checks.values() if item.dataset_id == dataset_id]
+
+    def save_usage_check(self, value: UsageCheck, *, expected_updated_at: datetime) -> bool:
+        stored = self.usage_checks.get(value.id)
+        if stored is None or stored.updated_at != expected_updated_at:
+            return False
+        self.usage_checks[value.id] = value
+        return True
+
+    def add_artifact(self, value: DatasetArtifact) -> None:
+        self.artifacts[value.id] = value
+
+    def artifact_by_id(self, artifact_id: UUID) -> DatasetArtifact | None:
+        return self.artifacts.get(artifact_id)
+
+    def artifact_by_input(self, *, dataset_id: UUID, input_digest: str) -> DatasetArtifact | None:
+        return next(
+            (
+                item
+                for item in self.artifacts.values()
+                if item.dataset_id == dataset_id and item.input_digest == input_digest
+            ),
+            None,
+        )
+
+    def list_artifacts(self, dataset_id: UUID) -> list[DatasetArtifact]:
+        return [item for item in self.artifacts.values() if item.dataset_id == dataset_id]
+
+    def save_artifact(self, value: DatasetArtifact, *, expected_updated_at: datetime) -> bool:
+        stored = self.artifacts.get(value.id)
+        if stored is None or stored.updated_at != expected_updated_at:
+            return False
+        self.artifacts[value.id] = value
+        return True
 
     def save_annotation_execution(
         self,
@@ -342,6 +413,9 @@ class UnavailableProbe:
 class FakeJobs:
     jobs: dict[UUID, ApplicationJob] = field(default_factory=dict)
 
+    def by_id(self, job_id: UUID) -> ApplicationJob | None:
+        return self.jobs.get(job_id)
+
     def get_or_create_validation(
         self, *, member_id: UUID, attempt_id: UUID, now: datetime
     ) -> ApplicationJob:
@@ -387,6 +461,58 @@ class FakeJobs:
             now=now,
             job_type=JobType.DATASET_ANNOTATION_PREPARATION,
         )
+
+    def get_or_create_usage_check(
+        self, *, dataset_id: UUID, check_id: UUID, now: datetime
+    ) -> ApplicationJob:
+        return self._get_or_create_dataset_job(
+            dataset_id=dataset_id,
+            resource_id=check_id,
+            now=now,
+            job_type=JobType.DATASET_USAGE_CHECK,
+        )
+
+    def get_or_create_artifact(
+        self, *, dataset_id: UUID, artifact_id: UUID, now: datetime
+    ) -> ApplicationJob:
+        return self._get_or_create_dataset_job(
+            dataset_id=dataset_id,
+            resource_id=artifact_id,
+            now=now,
+            job_type=JobType.DATASET_ARTIFACT,
+        )
+
+    def _get_or_create_dataset_job(
+        self,
+        *,
+        dataset_id: UUID,
+        resource_id: UUID,
+        now: datetime,
+        job_type: JobType,
+    ) -> ApplicationJob:
+        current = next(
+            (
+                job
+                for job in self.jobs.values()
+                if job.job_type is job_type and job.attempt_id == resource_id
+            ),
+            None,
+        )
+        if current is not None:
+            return current
+        job = ApplicationJob(
+            id=UUID(f"019937d8-0d10-7b31-8d2d-{len(self.jobs) + 30:012d}"),
+            job_type=job_type,
+            status=JobStatus.PENDING,
+            member_id=dataset_id,
+            attempt_id=resource_id,
+            created_at=now,
+            updated_at=now,
+            failure_code=None,
+            dataset_id=dataset_id,
+        )
+        self.jobs[job.id] = job
+        return job
 
     def _get_or_create_annotation_job(
         self,

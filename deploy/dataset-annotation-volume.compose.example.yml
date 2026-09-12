@@ -1,0 +1,24 @@
+# 数据集用途检查/制品 worker 必须看到标注基座已经成功写出的数据卷。
+# 宿主机路径只在部署配置中提供，浏览器和 HTTP 请求不能提交该路径。
+x-annotation-backend-volume: &annotation-backend-volume
+  "${NVSOP_ANNOTATION_DATA_HOST:?设置标注基座数据卷宿主机路径}:/app/assets/videos:rw"
+x-annotation-worker-volume: &annotation-worker-volume
+  "${NVSOP_ANNOTATION_DATA_HOST:?设置标注基座数据卷宿主机路径}:/var/lib/nvsop/annotation-data:ro"
+x-annotation-data-environment: &annotation-data-environment
+  SOP_ANNOTATION_DATA_ROOT: /var/lib/nvsop/annotation-data
+
+services:
+  # 与 NVIDIA annotation_backend 使用同一宿主目录；基座负责写出成功执行文件。
+  annotation-backend:
+    volumes:
+      - *annotation-backend-volume
+
+  control-api:
+    environment: *annotation-data-environment
+
+  # API 不读取基座卷；用途/制品任务执行端只读挂载同一内容。
+  control-api-worker:
+    volumes:
+      - *annotation-worker-volume
+    environment: *annotation-data-environment
+    command: python -m factory_sop.worker_entrypoint

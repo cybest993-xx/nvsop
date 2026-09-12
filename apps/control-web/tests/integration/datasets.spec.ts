@@ -12,8 +12,15 @@ const api = vi.hoisted(() => ({
   readTrainingDatasets: vi.fn(),
   readDatasetMembers: vi.fn(),
   listDatasetActionListVersions: vi.fn(),
+  listDatasetArtifacts: vi.fn(),
+  listDatasetUsageChecks: vi.fn(),
+  listVlmCandidates: vi.fn(),
   registerDatasetActionList: vi.fn(),
+  registerVlmCandidate: vi.fn(),
   createTrainingDataset: vi.fn(),
+  requestDatasetArtifact: vi.fn(),
+  requestDatasetUsageCheck: vi.fn(),
+  downloadDatasetArtifact: vi.fn(),
   requestVideoUpload: vi.fn(),
   confirmVideoUpload: vi.fn(),
   retryVideoUpload: vi.fn(),
@@ -135,6 +142,45 @@ const ANNOTATION_CONTEXT = {
   latest_submission: null,
 }
 
+const USAGE_CHECK = {
+  id: 'usage-check-1',
+  dataset_id: DATASET.id,
+  kind: 'ddm',
+  status: 'passed',
+  input_digest: 'c'.repeat(64),
+  input_snapshot: { videos: [] },
+  summary: { video_count: 1, segment_count: 2 },
+  issues: [],
+  base_commit: 'base-commit',
+  contract_version: 'ddm-v1',
+  candidate_id: null,
+  job_id: 'usage-job-1',
+  created_by: 'operator-1',
+  created_at: '2026-09-08T01:00:00Z',
+  updated_at: '2026-09-08T01:01:00Z',
+}
+
+const USAGE_ARTIFACT = {
+  id: 'artifact-1',
+  dataset_id: DATASET.id,
+  usage_check_id: USAGE_CHECK.id,
+  kind: 'ddm',
+  status: 'available',
+  input_digest: USAGE_CHECK.input_digest,
+  object_key: 'training-datasets/artifact-1/annotation.json',
+  artifact_sha256: 'd'.repeat(64),
+  artifact_size: 128,
+  manifest: { artifact_format_version: 1 },
+  failure_code: null,
+  failure_detail: null,
+  retryable: false,
+  recovery_action: null,
+  job_id: 'artifact-job-1',
+  created_by: 'operator-1',
+  created_at: '2026-09-08T01:00:00Z',
+  updated_at: '2026-09-08T01:01:00Z',
+}
+
 const MEMBER_FAILED_UPLOAD = {
   ...MEMBER_REGISTERED,
   status: 'failed',
@@ -191,6 +237,9 @@ beforeEach(() => {
   })
   api.createTrainingDataset.mockResolvedValue(DATASET)
   api.listDatasetActionListVersions.mockResolvedValue({ items: [] })
+  api.listDatasetUsageChecks.mockResolvedValue({ items: [], page: 1, page_size: 50, total: 0 })
+  api.listVlmCandidates.mockResolvedValue({ items: [], page: 1, page_size: 50, total: 0 })
+  api.listDatasetArtifacts.mockResolvedValue({ items: [], page: 1, page_size: 50, total: 0 })
   api.registerDatasetActionList.mockResolvedValue({
     dataset_id: DATASET.id,
     revision: 1,
@@ -238,6 +287,87 @@ describe('训练数据集工作台', () => {
     expect(wrapper.find('form[aria-label="创建训练数据集"]').exists()).toBe(false)
     expect(wrapper.find('form[aria-label="上传训练视频"]').exists()).toBe(false)
 
+    wrapper.unmount()
+  })
+
+  it('shows independent usage checks and starts DDM work through the generated client adapter', async () => {
+    grant('dataset.dataset.view', 'dataset.dataset.edit')
+    api.listDatasetUsageChecks.mockResolvedValue({
+      items: [{ ...USAGE_CHECK, is_current: true }],
+      page: 1,
+      page_size: 50,
+      total: 1,
+    })
+    api.listDatasetArtifacts.mockResolvedValue({
+      items: [USAGE_ARTIFACT],
+      page: 1,
+      page_size: 50,
+      total: 1,
+    })
+    api.requestDatasetUsageCheck.mockResolvedValue({
+      check: { ...USAGE_CHECK, id: 'usage-check-2', status: 'pending' },
+      job: {
+        id: 'usage-job-2',
+        job_type: 'dataset_usage_check',
+        status: 'pending',
+        dataset_id: DATASET.id,
+        attempt_id: 'usage-check-2',
+        failure_code: null,
+        created_at: USAGE_CHECK.created_at,
+        updated_at: USAGE_CHECK.updated_at,
+      },
+    })
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('用途检查与制品')
+    expect(wrapper.text()).toContain('DDM')
+    expect(wrapper.text()).toContain('可下载')
+    expect(wrapper.text()).toContain('检查时间：')
+    expect(wrapper.text()).toContain(`SHA-256 ${USAGE_ARTIFACT.artifact_sha256}`)
+    const runDdm = wrapper.findAll('button').find((button) => button.text() === '检查 DDM 数据')
+    expect(runDdm).toBeDefined()
+    await runDdm!.trigger('click')
+    await flushPromises()
+
+    expect(api.requestDatasetUsageCheck).toHaveBeenCalledWith(DATASET.id, {
+      kind: 'ddm',
+      candidate_id: null,
+    })
+    expect(api.requestDatasetArtifact).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('shows an artifact failure code and recovery detail instead of a blank result', async () => {
+    grant('dataset.dataset.view', 'dataset.dataset.edit')
+    api.listDatasetUsageChecks.mockResolvedValue({
+      items: [{ ...USAGE_CHECK, is_current: true }],
+      page: 1,
+      page_size: 50,
+      total: 1,
+    })
+    api.listDatasetArtifacts.mockResolvedValue({
+      items: [
+        {
+          ...USAGE_ARTIFACT,
+          status: 'failed',
+          failure_code: 'STORAGE_UNAVAILABLE',
+          failure_detail: '对象存储暂时不可用，请稍后重试',
+        },
+      ],
+      page: 1,
+      page_size: 50,
+      total: 1,
+    })
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('生成失败')
+    expect(wrapper.text()).toContain('STORAGE_UNAVAILABLE')
+    expect(wrapper.text()).toContain('对象存储暂时不可用，请稍后重试')
+    expect(wrapper.text()).toContain('可重试制品生成')
     wrapper.unmount()
   })
 

@@ -26,7 +26,7 @@ class FfprobeMediaProbe:
             "-protocol_whitelist",
             "file,crypto,data",
             "-show_entries",
-            "format=format_name,duration:stream=codec_type,codec_name,duration",
+            "format=format_name,duration:stream=codec_type,codec_name,duration,avg_frame_rate,nb_frames",
             "-of",
             "json",
             path,
@@ -73,11 +73,41 @@ class FfprobeMediaProbe:
             raise InvalidMediaError("媒体时长无效")
         if not isinstance(container, str) or not container.strip():
             raise InvalidMediaError("媒体容器无效")
+        fps = _frame_rate(video.get("avg_frame_rate"))
+        frame_count = _positive_int(video.get("nb_frames"))
         return MediaMetadata(
             duration_seconds=duration,
             codec=video["codec_name"],
             container=container.split(",", 1)[0],
+            fps=fps,
+            frame_count=frame_count,
         )
+
+
+def _frame_rate(value: object) -> float | None:
+    if isinstance(value, str) and "/" in value:
+        numerator, denominator = value.split("/", 1)
+        try:
+            numerator_value = float(numerator)
+            denominator_value = float(denominator)
+        except ValueError:
+            return None
+        if denominator_value == 0:
+            return None
+        value = numerator_value / denominator_value
+    result = _number(value)
+    return result if result is not None and math.isfinite(result) and result > 0 else None
+
+
+def _positive_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str) and value.isdigit():
+        parsed = int(value)
+        return parsed if parsed > 0 else None
+    return None
 
 
 def _number(value: object) -> float | None:

@@ -15,13 +15,13 @@ from __future__ import annotations
 
 import unittest
 
-from harness import EXTERNAL_END, EXTERNAL_START, FakeClock, opening_state
+from harness import EXTERNAL_END, EXTERNAL_START, FakeClock, MemoryReactionStore, opening_state
 
 from edge_runtime.connectors.port import InputPoint, PointState, Reading, ReadResult, Unreachable
 from edge_runtime.connectors.watch import ConnectorPoller, PointWatch
+from edge_runtime.judgment.evidence import EvidenceMargins
 from edge_runtime.judgment.model import HostInstant, Ordering
 from edge_runtime.judgment.reasons import ReasonCode
-from edge_runtime.supervisor.commands import EvidenceMargins
 from edge_runtime.supervisor.inputs import (
     ActionRecognized,
     ExternalSignal,
@@ -278,6 +278,7 @@ class AConnectorSignalRunsTheSameJudgmentCodeAnActionNumberDoesTest(unittest.Tes
 
     def _supervisor(self) -> StationSupervisor:
         return StationSupervisor(
+            store=MemoryReactionStore(),
             state=opening_state(Ordering.ORDERED, start_signal=EXTERNAL_START),
             margins=EvidenceMargins(leading=0.0, trailing=0.0),
             clock=FakeClock(10.0),

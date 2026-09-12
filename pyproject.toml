@@ -319,6 +319,26 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
+name = "A station's supervisor owns persistence over judgment data"
+type = "layers"
+layers = [
+    "edge_runtime.supervisor",
+    "edge_runtime.local_state",
+    "edge_runtime.judgment",
+]
+
+[[tool.importlinter.contracts]]
+name = "Local state does not depend on runtime composition or input adapters"
+type = "forbidden"
+source_modules = ["edge_runtime.local_state"]
+forbidden_modules = [
+    "edge_runtime.runtime",
+    "edge_runtime.station_runtime",
+    "edge_runtime.connectors",
+    "edge_runtime.stream_health",
+]
+
+[[tool.importlinter.contracts]]
 name = "The center and the inference host share no code, only wire contracts"
 type = "independence"
 # The inference host stays autonomous while the center is unreachable (harness §1), and its

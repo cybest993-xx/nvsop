@@ -1,17 +1,11 @@
-"""Shared construction for the local state store's integration tests.
+"""本地状态集成测试的共同构造: 真实 supervisor 驱动真实 SQLite 迁移与反应事务。
 
-These tests cross the store's real seam: a real SQLite file or in-memory database, the
-real migration, and a real `StationSupervisor` producing the commands. Nothing here fakes
-a command tuple by hand — what the store has to persist is whatever the supervisor
-actually emits, and a hand-built tuple would let the two drift apart silently.
-
-The station id repeats in every call, so it lives here as one constant. The clock is the
-supervisor's own `FakeClock` need: the store persists instants, so a test that asserts on
-a stored instant must control the clock that produced it.
+工位 ID 与可移动时钟在此共享, 测试不在运行循环侧再次提交。
 """
 
 from __future__ import annotations
 
+from edge_runtime.judgment.evidence import EvidenceMargins
 from edge_runtime.judgment.model import (
     Decision,
     HostInstant,
@@ -20,8 +14,8 @@ from edge_runtime.judgment.model import (
     RuntimeParameters,
     Template,
 )
+from edge_runtime.local_state.store import StationStore
 from edge_runtime.stream_health import StreamFact, StreamHealthEvent
-from edge_runtime.supervisor.commands import EvidenceMargins, RecordDecision
 from edge_runtime.supervisor.inputs import ActionRecognized
 from edge_runtime.supervisor.station import Reaction, StationSupervisor
 
@@ -70,9 +64,9 @@ def opening_state(
     )
 
 
-def supervisor(state: JudgmentState, clock: FakeClock) -> StationSupervisor:
-    """The real supervisor over that state, so the commands under test are the real ones."""
-    return StationSupervisor(state=state, margins=MARGINS, clock=clock)
+def supervisor(state: JudgmentState, clock: FakeClock, store: StationStore) -> StationSupervisor:
+    """真实 supervisor 在 receive/wake/interrupt 内提交完整反应。"""
+    return StationSupervisor(state=state, store=store, margins=MARGINS, clock=clock)
 
 
 def action(signal: str, at: float) -> ActionRecognized:
@@ -108,9 +102,7 @@ def decision_of(reaction: Reaction) -> Decision:
     Unpacking rather than taking the first: a test that means to assert about one decision
     would otherwise pass quietly when a change makes the reaction carry two.
     """
-    (decision,) = [
-        command.decision for command in reaction.commands if isinstance(command, RecordDecision)
-    ]
+    (decision,) = reaction.decisions
     return decision
 
 

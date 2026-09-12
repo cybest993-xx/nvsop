@@ -1,9 +1,7 @@
 """The two things this host still owes the center: a report, and a clip.
 
-Separate from the store's write path because the callers and their lifetimes differ. The run
-loop writes through `commit` on the judgment path, where latency is budgeted (§5.6); these
-are drained by the sender (#46) and the evidence uploader (#52), which retry on their own
-schedule and must never block a judgment.
+写入与消费的调用方、生命周期不同: supervisor 在判定路径一次提交 (§5.6),
+发送方 (#46) 和证据上传方 (#52) 独立重试消费, 不得阻塞判定。
 
 **At-least-once, and what that forbids.** A row leaves a queue only when the far side has
 confirmed it. Every failure path here may cost an attempt and nothing more: there is no
@@ -50,9 +48,7 @@ class PendingReport:
 class PendingEvidence:
     """One clip that exists nowhere but this host.
 
-    The window is already widened by the station's margins — the supervisor did that when it
-    turned the decision into a command (§5.20) — so an uploader takes these instants as they
-    stand rather than re-deriving them.
+    窗口已由 supervisor 按工位余量加宽 (§5.20), 上传方直接使用, 不再次推导。
     """
 
     queue_id: int

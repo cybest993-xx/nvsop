@@ -16,20 +16,15 @@ import sqlite3
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from threading import RLock
-from typing import assert_never
+from typing import Protocol
 
-from edge_runtime.judgment.effects import (
-    ClipEvidence,
-    CloseInstance,
-    Command,
-    LatchViolation,
-    RecordDecision,
-)
+from edge_runtime.judgment.evidence import EvidenceClip
 from edge_runtime.judgment.model import (
     Decision,
     HostInstant,
     Instance,
     JudgmentState,
+    Lifecycle,
     RuntimeParameters,
     Template,
     Violation,
@@ -46,6 +41,19 @@ from edge_runtime.local_state.codec import (
 from edge_runtime.local_state.codec import violation as decode_violation
 from edge_runtime.local_state.queues import StationQueues
 from edge_runtime.local_state.schema import migrate
+
+
+class ReactionStore(Protocol):
+    """supervisor 提交一次完整反应的接缝; 实现必须全部提交或全部回滚。"""
+
+    def commit(
+        self,
+        *,
+        state: JudgmentState,
+        decisions: Sequence[Decision],
+        evidence: Sequence[EvidenceClip],
+        closed_instances: Sequence[Instance],
+    ) -> None: ...
 
 
 class StationStore(StationQueues):
@@ -68,8 +76,9 @@ class StationStore(StationQueues):
         self,
         *,
         state: JudgmentState,
-        commands: Sequence[Command],
-        closed_instances: Sequence[Instance] = (),
+        decisions: Sequence[Decision],
+        evidence: Sequence[EvidenceClip],
+        closed_instances: Sequence[Instance],
     ) -> None:
         """持久化一次反应, 并串行化共享 SQLite 连接上的工位线程。"""
         with self._lock:
@@ -79,40 +88,20 @@ class StationStore(StationQueues):
                     self._write_instance(state.instance)
                 for instance in closed_instances:
                     self._write_instance(instance)
-                self._perform(commands)
-            except Exception:
-                self._connection.execute("ROLLBACK")
-                raise
-            self._connection.execute("COMMIT")
-
-    def _perform(self, commands: Sequence[Command]) -> None:
-        """按 supervisor 发出的顺序执行命令; 违例、证据和关闭命令必须跟随对应判定。"""
-        decision_id: int | None = None
-        anchor: HostInstant | None = None
-        for command in commands:
-            match command:
-                case RecordDecision():
-                    decision_id = self._write_decision(command.decision)
-                    anchor = command.decision.evidence.anchor
+                for decision in decisions:
+                    decision_id = self._write_decision(decision)
                     self._enqueue_report(decision_id)
-                case LatchViolation():
-                    if decision_id is None:
-                        raise ValueError(
-                            "a violation to latch arrived before the decision that reported "
-                            "it; commands must reach the store in the order they were issued"
-                        )
-                    self._latch(command.instance_id, decision_id, command.violation)
-                case ClipEvidence():
-                    self._enqueue_evidence(command)
-                case CloseInstance():
-                    if anchor is None:
-                        raise ValueError(
-                            "an instance to close arrived before the decision that closed it; "
-                            "commands must reach the store in the order they were issued"
-                        )
-                    self._close_instance(command, at=anchor)
-                case _:
-                    assert_never(command)
+                    for violation in decision.violations:
+                        self._latch(decision.instance_id, decision_id, violation)
+                    if decision.lifecycle is not Lifecycle.STAYS_OPEN:
+                        self._close_instance(decision)
+                for clip in evidence:
+                    self._enqueue_evidence(clip)
+                self._connection.execute("COMMIT")
+            except Exception:
+                if self._connection.in_transaction:
+                    self._connection.execute("ROLLBACK")
+                raise
 
     def _write_instance(self, instance: Instance) -> None:
         """用核心当前持有的完整实例快照替换旧记录, 避免数据库形成第二套不一致模型。"""
@@ -190,7 +179,7 @@ class StationStore(StationQueues):
             (self._station_id, decision_id),
         )
 
-    def _enqueue_evidence(self, clip: ClipEvidence) -> None:
+    def _enqueue_evidence(self, clip: EvidenceClip) -> None:
         """每个实例锚点一条证据; 第二次判定需要更大窗口时只扩大、不缩小 (§5.20)。"""
         self._connection.execute(
             """
@@ -210,8 +199,9 @@ class StationStore(StationQueues):
             ),
         )
 
-    def _close_instance(self, close: CloseInstance, *, at: HostInstant) -> None:
-        """按指定生命周期关闭实例; 同一反应内开闭的实例以关闭判定锚点作为开始时刻。"""
+    def _close_instance(self, decision: Decision) -> None:
+        """按判定的生命周期关闭实例, 不要求调用方额外发送关闭命令。"""
+        at = decision.evidence.anchor
         self._connection.execute(
             """
             INSERT INTO local_sop_instance (
@@ -224,11 +214,11 @@ class StationStore(StationQueues):
             """,
             (
                 self._station_id,
-                close.instance_id,
+                decision.instance_id,
                 at.seconds,
                 at.seconds,
                 at.seconds,
-                close.lifecycle.value,
+                decision.lifecycle.value,
             ),
         )
 

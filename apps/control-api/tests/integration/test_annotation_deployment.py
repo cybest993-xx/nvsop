@@ -13,6 +13,7 @@ CONFIG = REPO_ROOT / "docs/deployment/nginx-annotation.conf.example"
 TRAINING_COMPOSE = (
     REPO_ROOT / "vendor/sop-monitoring-blueprints/microservices/sop-training-bp/docker-compose.yml"
 )
+DATASET_VOLUME_COMPOSE = REPO_ROOT / "deploy/dataset-annotation-volume.compose.example.yml"
 
 
 def test_control_requests_use_center_session_auth_without_auth_loop() -> None:
@@ -43,6 +44,22 @@ def test_control_requests_use_center_session_auth_without_auth_loop() -> None:
     assert "location = /api/v1/annotation/media/authorize {\n        return 404;" in source
     assert "location = /api/v1/annotation/media/gateway-authorize {\n        return 404;" in source
     assert "location = /api/v1/liveness" in source
+
+
+def test_dataset_annotation_volume_wires_writer_and_read_only_worker() -> None:
+    source = DATASET_VOLUME_COMPOSE.read_text()
+    assert "annotation-backend:" in source
+    assert (
+        "${NVSOP_ANNOTATION_DATA_HOST:?设置标注基座数据卷宿主机路径}:/app/assets/videos:rw"
+        in source
+    )
+    assert "control-api-worker:" in source
+    assert (
+        "${NVSOP_ANNOTATION_DATA_HOST:?设置标注基座数据卷宿主机路径}:/var/lib/nvsop/annotation-data:ro"
+        in source
+    )
+    assert "SOP_ANNOTATION_DATA_ROOT: /var/lib/nvsop/annotation-data" in source
+    assert "control-api:\n    volumes:" not in source
 
 
 def test_annotation_services_are_internal_only() -> None:

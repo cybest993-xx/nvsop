@@ -89,6 +89,7 @@ class Settings(BaseSettings):
     media_probe_timeout_seconds: int = Field(default=60, gt=0, le=3600)
     annotation_backend_url: str | None = None
     annotation_media_origin: str | None = None
+    annotation_data_root: str | None = None
     annotation_http_timeout_seconds: int = Field(default=120, gt=0, le=3600)
     annotation_context_ttl_seconds: int = Field(default=3600, gt=0, le=86400)
 
@@ -119,6 +120,13 @@ class Settings(BaseSettings):
             raise ValueError(
                 "annotation_backend_url and annotation_media_origin must be configured together"
             )
+        if self.annotation_data_root is not None:
+            if not self.annotation_data_root.strip():
+                raise ValueError("annotation_data_root must not be empty")
+            if not Path(self.annotation_data_root).is_absolute():
+                raise ValueError("annotation_data_root must be an absolute path")
+        if self.annotation_backend_url is not None and self.annotation_data_root is None:
+            raise ValueError("annotation_data_root must be configured with annotation_backend_url")
         if self.annotation_backend_url is not None:
             backend_url = urlsplit(self.annotation_backend_url)
             try:

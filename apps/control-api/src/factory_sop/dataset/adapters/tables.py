@@ -8,6 +8,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -28,9 +29,17 @@ from factory_sop.dataset.model import (
     AnnotationPreparationStatus,
     AnnotationSegment,
     AnnotationSubmission,
+    ArtifactStatus,
+    DatasetArtifact,
     DatasetMember,
     TrainingDataset,
     UploadAttempt,
+    UsageCheck,
+    UsageCheckStatus,
+    UsageKind,
+    VlmCandidate,
+    VlmCandidateKind,
+    VlmMediaReference,
 )
 from factory_sop.persistence import Table
 
@@ -469,4 +478,232 @@ class AnnotationExecutionRow(Table):
             derived_video_size=value.derived_video_size,
             derived_video_sha256=value.derived_video_sha256,
             derived_video_duration_seconds=value.derived_video_duration_seconds,
+        )
+
+
+class VlmCandidateRow(Table):
+    """VLM 候选的不可变修订行。"""
+
+    __tablename__ = "dataset_vlm_candidate"
+    __table_args__ = (UniqueConstraint("dataset_id", "revision"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
+    dataset_id: Mapped[UUID] = mapped_column(
+        Uuid(), ForeignKey("dataset_training_dataset.id", ondelete="CASCADE"), index=True
+    )
+    revision: Mapped[int] = mapped_column(Integer())
+    kind: Mapped[str] = mapped_column(String(32))
+    action_list_revision: Mapped[int] = mapped_column(Integer())
+    records: Mapped[list[dict[str, Any]]] = mapped_column(JSONB())
+    media: Mapped[list[dict[str, Any]]] = mapped_column(JSONB())
+    created_by: Mapped[UUID] = mapped_column(Uuid())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    def to_domain(self) -> VlmCandidate:
+        return VlmCandidate(
+            id=self.id,
+            dataset_id=self.dataset_id,
+            revision=self.revision,
+            kind=VlmCandidateKind(self.kind),
+            action_list_revision=self.action_list_revision,
+            records=tuple(self.records),
+            media=tuple(
+                VlmMediaReference(
+                    key=str(item["key"]),
+                    member_id=UUID(str(item["member_id"])),
+                    source_object_version_id=str(item["source_object_version_id"]),
+                    source_sha256=str(item["source_sha256"]),
+                    annotation_submission_id=(
+                        UUID(str(item["annotation_submission_id"]))
+                        if item.get("annotation_submission_id")
+                        else None
+                    ),
+                    annotation_execution_id=(
+                        UUID(str(item["annotation_execution_id"]))
+                        if item.get("annotation_execution_id")
+                        else None
+                    ),
+                    clip_index=(
+                        int(item["clip_index"]) if item.get("clip_index") is not None else None
+                    ),
+                    action_indices=tuple(
+                        int(action_index) for action_index in (item.get("action_indices") or ())
+                    ),
+                )
+                for item in self.media
+            ),
+            created_by=self.created_by,
+            created_at=self.created_at,
+        )
+
+    @classmethod
+    def from_domain(cls, value: VlmCandidate) -> VlmCandidateRow:
+        return cls(
+            id=value.id,
+            dataset_id=value.dataset_id,
+            revision=value.revision,
+            kind=value.kind.value,
+            action_list_revision=value.action_list_revision,
+            records=[dict(item) for item in value.records],
+            media=[
+                {
+                    "key": item.key,
+                    "member_id": str(item.member_id),
+                    "source_object_version_id": item.source_object_version_id,
+                    "source_sha256": item.source_sha256,
+                    "annotation_submission_id": (
+                        str(item.annotation_submission_id)
+                        if item.annotation_submission_id is not None
+                        else None
+                    ),
+                    "annotation_execution_id": (
+                        str(item.annotation_execution_id)
+                        if item.annotation_execution_id is not None
+                        else None
+                    ),
+                    "clip_index": item.clip_index,
+                    "action_indices": list(item.action_indices),
+                }
+                for item in value.media
+            ],
+            created_by=value.created_by,
+            created_at=value.created_at,
+        )
+
+
+class UsageCheckRow(Table):
+    """用途检查的冻结输入和结果行。"""
+
+    __tablename__ = "dataset_usage_check"
+
+    id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
+    dataset_id: Mapped[UUID] = mapped_column(
+        Uuid(), ForeignKey("dataset_training_dataset.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16), index=True)
+    status: Mapped[str] = mapped_column(String(32))
+    input_digest: Mapped[str] = mapped_column(String(64), index=True)
+    input_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB())
+    summary: Mapped[dict[str, Any]] = mapped_column(JSONB())
+    issues: Mapped[list[dict[str, str]]] = mapped_column(JSONB())
+    base_commit: Mapped[str] = mapped_column(String(128))
+    contract_version: Mapped[str] = mapped_column(String(64))
+    candidate_id: Mapped[UUID | None] = mapped_column(Uuid())
+    job_id: Mapped[UUID | None] = mapped_column(Uuid(), unique=True)
+    created_by: Mapped[UUID] = mapped_column(Uuid())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    def to_domain(self) -> UsageCheck:
+        return UsageCheck(
+            id=self.id,
+            dataset_id=self.dataset_id,
+            kind=UsageKind(self.kind),
+            status=UsageCheckStatus(self.status),
+            input_digest=self.input_digest,
+            input_snapshot=dict(self.input_snapshot),
+            summary={str(key): int(value) for key, value in self.summary.items()},
+            issues=tuple(dict(item) for item in self.issues),
+            base_commit=self.base_commit,
+            contract_version=self.contract_version,
+            candidate_id=self.candidate_id,
+            job_id=self.job_id,
+            created_by=self.created_by,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+        )
+
+    @classmethod
+    def from_domain(cls, value: UsageCheck) -> UsageCheckRow:
+        return cls(
+            id=value.id,
+            dataset_id=value.dataset_id,
+            kind=value.kind.value,
+            status=value.status.value,
+            input_digest=value.input_digest,
+            input_snapshot=dict(value.input_snapshot),
+            summary=dict(value.summary),
+            issues=[dict(item) for item in value.issues],
+            base_commit=value.base_commit,
+            contract_version=value.contract_version,
+            candidate_id=value.candidate_id,
+            job_id=value.job_id,
+            created_by=value.created_by,
+            created_at=value.created_at,
+            updated_at=value.updated_at,
+        )
+
+
+class DatasetArtifactRow(Table):
+    """不可覆盖派生制品的索引行。"""
+
+    __tablename__ = "dataset_artifact"
+    __table_args__ = (UniqueConstraint("dataset_id", "input_digest"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
+    dataset_id: Mapped[UUID] = mapped_column(
+        Uuid(), ForeignKey("dataset_training_dataset.id", ondelete="CASCADE"), index=True
+    )
+    usage_check_id: Mapped[UUID] = mapped_column(
+        Uuid(), ForeignKey("dataset_usage_check.id", ondelete="RESTRICT"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(32))
+    input_digest: Mapped[str] = mapped_column(String(64), index=True)
+    object_key: Mapped[str | None] = mapped_column(String(512), unique=True)
+    artifact_sha256: Mapped[str | None] = mapped_column(String(64))
+    artifact_size: Mapped[int | None] = mapped_column(BigInteger())
+    manifest: Mapped[dict[str, Any]] = mapped_column(JSONB())
+    failure_code: Mapped[str | None] = mapped_column(String(64))
+    failure_detail: Mapped[str | None] = mapped_column(String(1024))
+    retryable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    recovery_action: Mapped[str | None] = mapped_column(String(64))
+    job_id: Mapped[UUID | None] = mapped_column(Uuid(), unique=True)
+    created_by: Mapped[UUID] = mapped_column(Uuid())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    def to_domain(self) -> DatasetArtifact:
+        return DatasetArtifact(
+            id=self.id,
+            dataset_id=self.dataset_id,
+            usage_check_id=self.usage_check_id,
+            kind=UsageKind(self.kind),
+            status=ArtifactStatus(self.status),
+            input_digest=self.input_digest,
+            object_key=self.object_key,
+            artifact_sha256=self.artifact_sha256,
+            artifact_size=self.artifact_size,
+            manifest=dict(self.manifest),
+            failure_code=self.failure_code,
+            failure_detail=self.failure_detail,
+            retryable=self.retryable,
+            recovery_action=self.recovery_action,
+            job_id=self.job_id,
+            created_by=self.created_by,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+        )
+
+    @classmethod
+    def from_domain(cls, value: DatasetArtifact) -> DatasetArtifactRow:
+        return cls(
+            id=value.id,
+            dataset_id=value.dataset_id,
+            usage_check_id=value.usage_check_id,
+            kind=value.kind.value,
+            status=value.status.value,
+            input_digest=value.input_digest,
+            object_key=value.object_key,
+            artifact_sha256=value.artifact_sha256,
+            artifact_size=value.artifact_size,
+            manifest=dict(value.manifest),
+            failure_code=value.failure_code,
+            failure_detail=value.failure_detail,
+            retryable=value.retryable,
+            recovery_action=value.recovery_action,
+            job_id=value.job_id,
+            created_by=value.created_by,
+            created_at=value.created_at,
+            updated_at=value.updated_at,
         )

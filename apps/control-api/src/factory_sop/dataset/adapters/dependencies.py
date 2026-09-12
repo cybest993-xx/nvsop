@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated, BinaryIO, cast
 from uuid import UUID
 
@@ -11,20 +12,24 @@ from fastapi import Depends, Request
 from sqlalchemy.orm import Session as DatabaseSession
 
 from factory_sop.dataset.adapters.annotation import HttpAnnotationBackend
+from factory_sop.dataset.adapters.annotation_volume import LocalAnnotationDataVolume
+from factory_sop.dataset.adapters.ddm import NvidiaDdmAnnotationGenerator, NvidiaDdmReader
 from factory_sop.dataset.adapters.media import FfprobeMediaProbe
 from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
 from factory_sop.dataset.adapters.storage import MinioObjectStorage
+from factory_sop.dataset.adapters.vlm import NvidiaVlmReader
 from factory_sop.dataset.annotation import AnnotationBackend
 from factory_sop.dataset.api import (
     DatasetAnnotationRuntime,
     DatasetResourceLookup,
+    DatasetUsageRuntime,
     DatasetValidationRuntime,
 )
 from factory_sop.dataset.media import MediaProbe
 from factory_sop.dataset.model import ObjectStat, UploadInstructions
-from factory_sop.dataset.repository import DatasetRepository
+from factory_sop.dataset.repository import DatasetRepository, UsageDatasetRepository
 from factory_sop.dataset.storage import ObjectStorage
-from factory_sop.job.api import AnnotationJobQueue, ValidationJobQueue
+from factory_sop.job.api import AnnotationJobQueue, UsageJobQueue, ValidationJobQueue
 from factory_sop.persistence import RequestSession
 from factory_sop.settings import Settings
 
@@ -37,7 +42,7 @@ def datasets(session: RequestSession) -> DatasetRepository:
 class _DatasetResourceLookup:
     """用数据集仓储确认任务资源仍然有效。"""
 
-    def __init__(self, datasets: DatasetRepository) -> None:
+    def __init__(self, datasets: UsageDatasetRepository) -> None:
         self._datasets = datasets
 
     def resource_exists(self, member_id: UUID, attempt_id: UUID) -> bool:
@@ -50,9 +55,19 @@ class _DatasetResourceLookup:
             member_id, attempt_id
         ) or self._datasets.annotation_execution_exists(member_id, attempt_id)
 
+    def dataset_resource_exists(self, dataset_id: UUID, resource_id: UUID) -> bool:
+        """确认用途检查或制品属于数据集。"""
+        for value in (
+            self._datasets.usage_check_by_id(resource_id),
+            self._datasets.artifact_by_id(resource_id),
+        ):
+            if value is not None and value.dataset_id == dataset_id:
+                return True
+        return False
+
 
 def dataset_resource(
-    datasets: Annotated[DatasetRepository, Depends(datasets)],
+    datasets: Annotated[UsageDatasetRepository, Depends(datasets)],
 ) -> DatasetResourceLookup:
     """提供 job 查询任务资源归属所需的最小数据集契约。"""
     return _DatasetResourceLookup(datasets)
@@ -139,6 +154,51 @@ def annotation_jobs() -> AnnotationJobQueue:
     raise RuntimeError("dataset annotation job dependency was not wired")
 
 
+def usage_jobs() -> UsageJobQueue:
+    """由组合根接入 job 模块的用途任务创建 seam。"""
+    raise RuntimeError("dataset usage job dependency was not wired")
+
+
+class _PostgresDatasetUsageRuntime:
+    """为用途 worker 创建真实 PostgreSQL 和 MinIO 资源。"""
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
+    def repository(self, session: object) -> UsageDatasetRepository:
+        """把 worker 短事务绑定到真实用途仓储。"""
+        return PostgresDatasetRepository(cast(DatabaseSession, session))
+
+    def storage(self) -> ObjectStorage:
+        """创建真实 MinIO 对象存储客户端。"""
+        return MinioObjectStorage.from_settings(self._settings)
+
+    def ddm_generator(self) -> NvidiaDdmAnnotationGenerator:
+        """创建复用 NVIDIA DDM 聚合函数的适配器。"""
+        return NvidiaDdmAnnotationGenerator()
+
+    def ddm_reader(self) -> NvidiaDdmReader:
+        """创建调用 NVIDIA DDM 训练读取器的适配器。"""
+        return NvidiaDdmReader()
+
+    def vlm_reader(self) -> NvidiaVlmReader:
+        """创建调用 NVIDIA VLM 训练读取器的适配器。"""
+        return NvidiaVlmReader()
+
+    def media_probe(self) -> MediaProbe:
+        """创建用途检查使用的真实 ffprobe 探测器。"""
+        return FfprobeMediaProbe(
+            binary=self._settings.media_probe_binary,
+            timeout_seconds=self._settings.media_probe_timeout_seconds,
+        )
+
+    def annotation_volume(self) -> LocalAnnotationDataVolume:
+        """创建标注基座成功输出的只读数据卷。"""
+        if self._settings.annotation_data_root is None:
+            raise RuntimeError("标注基座只读数据卷尚未配置")
+        return LocalAnnotationDataVolume(Path(self._settings.annotation_data_root))
+
+
 class _PostgresDatasetValidationRuntime:
     """为 worker 创建真实 PostgreSQL、MinIO 和 ffprobe 资源。"""
 
@@ -198,6 +258,11 @@ class _PostgresDatasetAnnotationRuntime:
 def annotation_runtime(settings: Settings) -> DatasetAnnotationRuntime:
     """构造标注 worker 使用的真实运行时。"""
     return _PostgresDatasetAnnotationRuntime(settings)
+
+
+def usage_runtime(settings: Settings) -> DatasetUsageRuntime:
+    """构造用途 worker 使用的真实运行时。"""
+    return _PostgresDatasetUsageRuntime(settings)
 
 
 def validation_runtime(settings: Settings) -> DatasetValidationRuntime:

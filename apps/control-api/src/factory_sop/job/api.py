@@ -15,6 +15,8 @@ class JobType(StrEnum):
     DATASET_VALIDATION = "dataset_validation"
     DATASET_ANNOTATION = "dataset_annotation"
     DATASET_ANNOTATION_PREPARATION = "dataset_annotation_preparation"
+    DATASET_USAGE_CHECK = "dataset_usage_check"
+    DATASET_ARTIFACT = "dataset_artifact"
 
 
 class JobStatus(StrEnum):
@@ -40,6 +42,7 @@ class ApplicationJob:
     created_at: datetime
     updated_at: datetime
     failure_code: str | None
+    dataset_id: UUID | None = None
 
 
 class ValidationJobQueue(Protocol):
@@ -65,6 +68,22 @@ class AnnotationJobQueue(Protocol):
         self, *, member_id: UUID, attempt_id: UUID, now: datetime
     ) -> ApplicationJob:
         """为同一标注上下文返回已有准备任务或创建一条新任务；不提交事务。"""
+        ...
+
+
+class UsageJobQueue(Protocol):
+    """`dataset` 创建用途检查和制品任务时使用的幂等接口。"""
+
+    def get_or_create_usage_check(
+        self, *, dataset_id: UUID, check_id: UUID, now: datetime
+    ) -> ApplicationJob:
+        """为一份用途检查创建或复用异步任务。"""
+        ...
+
+    def get_or_create_artifact(
+        self, *, dataset_id: UUID, artifact_id: UUID, now: datetime
+    ) -> ApplicationJob:
+        """为一份派生制品创建或复用异步任务。"""
         ...
 
 

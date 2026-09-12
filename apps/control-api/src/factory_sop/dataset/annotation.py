@@ -25,6 +25,37 @@ class AnnotationBackendExecutionError(Exception):
     """基座已接受请求但切片执行失败。"""
 
 
+class AnnotationDataVolumeUnavailableError(Exception):
+    """基座标注数据卷不可读取或映射不安全。"""
+
+
+class AnnotationDataVolumeInputError(AnnotationDataVolumeUnavailableError):
+    """成功执行身份、映射或只读文件不存在，需修正输入或部署映射。"""
+
+
+class AnnotationDataVolumeReadError(AnnotationDataVolumeUnavailableError):
+    """只读数据卷暂时无法读取，重试可能恢复。"""
+
+
+class AnnotationDataVolume(Protocol):
+    """只读读取标注基座已经成功写出的数据。"""
+
+    def read_annotation(self, *, data_id: str, video_id: str) -> bytes:
+        """读取指定成功执行对应的视频标注 JSON。"""
+        ...
+
+    def read_video(
+        self,
+        *,
+        data_id: str,
+        video_id: str,
+        filename: str | None,
+        destination: BinaryIO,
+    ) -> None:
+        """读取完整视频或指定成功执行切片到临时文件。"""
+        ...
+
+
 class AnnotationBackend(Protocol):
     """复用的标注基座所需的窄适配器 seam。"""
 

@@ -132,6 +132,106 @@ def test_dispatcher_routes_annotation_jobs_to_annotation_worker(
             )
 
 
+@pytest.mark.parametrize(
+    ("job_type", "function"),
+    [
+        (JobType.DATASET_USAGE_CHECK, "check_dataset_usage_job"),
+        (JobType.DATASET_ARTIFACT, "generate_dataset_artifact_job"),
+    ],
+)
+def test_dispatcher_routes_dataset_jobs_to_their_worker(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    job_type: JobType,
+    function: str,
+) -> None:
+    dataset_id = uuid4()
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=job_type,
+        status=JobStatus.PENDING,
+        member_id=dataset_id,
+        attempt_id=uuid4(),
+        created_at=datetime(2026, 9, 9, 1, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 9, 9, 1, 0, tzinfo=UTC),
+        failure_code=None,
+        dataset_id=dataset_id,
+    )
+    with session_factory(engine).begin() as session:
+        PostgresJobRepository(session).add(job)
+
+    calls: dict[str, Any] = {}
+
+    class FakePool:
+        async def enqueue_job(self, function_name: str, *args: str, **kwargs: str) -> None:
+            calls.update(function=function_name, args=args, kwargs=kwargs)
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_create_pool(_: RedisSettings) -> FakePool:
+        return FakePool()
+
+    monkeypatch.setattr(dispatcher_module, "create_pool", fake_create_pool)
+    try:
+        dispatcher = ArqJobDispatcher(
+            RedisSettings(),
+            session_factory=session_factory(engine),
+        )
+        asyncio.run(dispatcher.dispatch_async(job.id))
+        assert calls == {
+            "function": function,
+            "args": (str(job.id),),
+            "kwargs": {"_job_id": str(job.id)},
+        }
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM job_application_job WHERE id = :job_id"),
+                {"job_id": job.id},
+            )
+
+
+def test_failed_dataset_usage_job_is_reopened_for_explicit_retry(engine: Engine) -> None:
+    now = datetime(2026, 9, 9, 1, 0, tzinfo=UTC)
+    dataset_id, resource_id, job_id = uuid4(), uuid4(), uuid4()
+    failed = ApplicationJob(
+        id=job_id,
+        job_type=JobType.DATASET_USAGE_CHECK,
+        status=JobStatus.FAILED,
+        member_id=dataset_id,
+        attempt_id=resource_id,
+        created_at=now,
+        updated_at=now,
+        failure_code="USAGE_CHECK_EXECUTION_FAILED",
+        dataset_id=dataset_id,
+    )
+    try:
+        with session_factory(engine).begin() as session:
+            repository = PostgresJobRepository(session)
+            repository.add(failed)
+            replay = repository.get_or_create_usage_check(
+                dataset_id=dataset_id,
+                check_id=resource_id,
+                now=now + timedelta(seconds=1),
+            )
+
+        assert replay.status is JobStatus.PENDING
+        assert replay.failure_code is None
+        assert row(
+            engine,
+            "SELECT status, failure_code, outbox_status FROM job_application_job "
+            "WHERE id = :job_id",
+            job_id=job_id,
+        ) == ("pending", None, "pending")
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM job_application_job WHERE id = :job_id"),
+                {"job_id": job_id},
+            )
+
+
 def test_annotation_job_replay_does_not_reset_a_failed_execution(
     engine: Engine,
 ) -> None:

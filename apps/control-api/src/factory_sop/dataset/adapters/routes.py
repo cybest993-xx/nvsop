@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated, Any
+from hashlib import sha256
+from tempfile import NamedTemporaryFile
+from typing import Annotated, Any, BinaryIO, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Query, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -21,8 +23,13 @@ from pydantic import (
 from factory_sop.auth.api import Authorized, Permission, needs
 from factory_sop.dataset import model
 from factory_sop.dataset.adapters import dependencies
-from factory_sop.dataset.repository import DatasetRepository
-from factory_sop.dataset.storage import ObjectStorage
+from factory_sop.dataset.errors import DatasetRefusalCode, DatasetRefusedError
+from factory_sop.dataset.repository import DatasetRepository, UsageDatasetRepository
+from factory_sop.dataset.storage import (
+    ObjectNotFoundError,
+    ObjectStorage,
+    ObjectStorageUnavailableError,
+)
 from factory_sop.dataset.usecases import (
     confirm_video_upload,
     create_training_dataset,
@@ -33,7 +40,20 @@ from factory_sop.dataset.usecases import (
     request_video_upload,
     retry_video_upload,
 )
-from factory_sop.job.api import ApplicationJob, ValidationJobQueue
+from factory_sop.dataset.usecases.usage import (
+    list_artifacts,
+    list_usage_checks,
+    list_vlm_candidates,
+    read_artifact,
+    read_usage_check,
+    read_vlm_candidate,
+    register_vlm_candidate,
+    request_artifact,
+    request_usage_check,
+    usage_check_is_current,
+)
+from factory_sop.job.api import ApplicationJob, UsageJobQueue, ValidationJobQueue
+from factory_sop.persistence import RequestSession
 from factory_sop.problem import problem_openapi_response
 from factory_sop.responses import DEFAULT_PAGE_SIZE, MAXIMUM_PAGE_SIZE, ItemPage
 
@@ -92,6 +112,49 @@ class RetryVideoUploadInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: model.RetryMode
+
+
+class VlmMediaInput(BaseModel):
+    """VLM 记录使用的显式媒体绑定。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: StrictStr = Field(min_length=1, max_length=512)
+    member_id: UUID
+    source_object_version_id: StrictStr = Field(min_length=1, max_length=255)
+    source_sha256: StrictStr = Field(min_length=64, max_length=64)
+    annotation_submission_id: UUID | None = None
+    annotation_execution_id: UUID | None = None
+    clip_index: StrictInt | None = Field(default=None, ge=0)
+    action_indices: list[StrictInt] | None = None
+
+
+class RegisterVlmCandidateInput(BaseModel):
+    """登记一份不可变 VLM 候选修订。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: model.VlmCandidateKind
+    action_list_revision: StrictInt = Field(ge=1)
+    records: list[dict[str, Any]]
+    media: list[VlmMediaInput]
+
+
+class UsageCheckInput(BaseModel):
+    """请求一次冻结输入的异步用途检查。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: model.UsageKind
+    candidate_id: UUID | None = None
+
+
+class ArtifactInput(BaseModel):
+    """请求从通过的 DDM 检查生成制品。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    check_id: UUID
 
 
 class DatasetView(BaseModel):
@@ -198,6 +261,126 @@ class RetryView(BaseModel):
     job: JobView | None
 
 
+class VlmMediaView(BaseModel):
+    key: str
+    member_id: UUID
+    source_object_version_id: str
+    source_sha256: str
+    annotation_submission_id: UUID | None
+    annotation_execution_id: UUID | None
+    clip_index: int | None
+    action_indices: list[int]
+
+
+class VlmCandidateView(BaseModel):
+    id: UUID
+    dataset_id: UUID
+    revision: int
+    kind: str
+    action_list_revision: int
+    records: list[dict[str, Any]]
+    media: list[VlmMediaView]
+    created_by: UUID
+    created_at: datetime
+
+    @field_serializer("created_at")
+    def serialize_created_at(self, value: datetime) -> str:
+        return _utc(value)
+
+
+class UsageJobView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    job_type: str
+    status: str
+    dataset_id: UUID | None
+    attempt_id: UUID
+    failure_code: str | None
+    created_at: datetime
+    updated_at: datetime
+
+    @field_serializer("created_at", "updated_at")
+    def serialize_datetime(self, value: datetime) -> str:
+        return _utc(value)
+
+
+class UsageIssueView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+    detail: str
+    location: str
+    retryable: bool
+    recovery_action: str | None
+
+
+class UsageCheckView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    dataset_id: UUID
+    kind: str
+    status: str
+    is_current: bool
+    input_digest: str
+    input_snapshot: dict[str, Any]
+    summary: dict[str, int]
+    issues: list[UsageIssueView]
+    base_commit: str
+    contract_version: str
+    candidate_id: UUID | None
+    job_id: UUID | None
+    created_by: UUID
+    created_at: datetime
+    updated_at: datetime
+
+    @field_serializer("created_at", "updated_at")
+    def serialize_datetime(self, value: datetime) -> str:
+        return _utc(value)
+
+
+class UsageCheckAcceptedView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    check: UsageCheckView
+    job: UsageJobView
+
+
+class ArtifactView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    dataset_id: UUID
+    usage_check_id: UUID
+    kind: str
+    status: str
+    input_digest: str
+    object_key: str | None
+    artifact_sha256: str | None
+    artifact_size: int | None
+    manifest: dict[str, Any]
+    failure_code: str | None
+    failure_detail: str | None
+    retryable: bool
+    recovery_action: str | None
+    job_id: UUID | None
+    created_by: UUID
+    created_at: datetime
+    updated_at: datetime
+
+    @field_serializer("created_at", "updated_at")
+    def serialize_datetime(self, value: datetime) -> str:
+        return _utc(value)
+
+
+class ArtifactAcceptedView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact: ArtifactView
+    job: UsageJobView
+
+
 AcceptedConfirmationResponse: dict[str, Any] = {
     "description": "校验任务已接受",
     "model": ConfirmationView,
@@ -281,6 +464,104 @@ def _job_view(value: ApplicationJob | None) -> JobView | None:
         member_id=value.member_id,
         attempt_id=value.attempt_id,
         failure_code=value.failure_code,
+        created_at=value.created_at,
+        updated_at=value.updated_at,
+    )
+
+
+def _usage_job_view(value: ApplicationJob) -> UsageJobView:
+    return UsageJobView(
+        id=value.id,
+        job_type=value.job_type.value,
+        status=value.status,
+        dataset_id=value.dataset_id,
+        attempt_id=value.attempt_id,
+        failure_code=value.failure_code,
+        created_at=value.created_at,
+        updated_at=value.updated_at,
+    )
+
+
+def _vlm_candidate_view(value: model.VlmCandidate) -> VlmCandidateView:
+    return VlmCandidateView(
+        id=value.id,
+        dataset_id=value.dataset_id,
+        revision=value.revision,
+        kind=value.kind.value,
+        action_list_revision=value.action_list_revision,
+        records=[dict(item) for item in value.records],
+        media=[
+            VlmMediaView(
+                key=item.key,
+                member_id=item.member_id,
+                source_object_version_id=item.source_object_version_id,
+                source_sha256=item.source_sha256,
+                annotation_submission_id=item.annotation_submission_id,
+                annotation_execution_id=item.annotation_execution_id,
+                clip_index=item.clip_index,
+                action_indices=list(item.action_indices),
+            )
+            for item in value.media
+        ],
+        created_by=value.created_by,
+        created_at=value.created_at,
+    )
+
+
+def _usage_check_view(
+    value: model.UsageCheck, *, datasets: UsageDatasetRepository
+) -> UsageCheckView:
+    return UsageCheckView(
+        id=value.id,
+        dataset_id=value.dataset_id,
+        kind=value.kind.value,
+        status=value.status.value,
+        input_digest=value.input_digest,
+        input_snapshot=dict(value.input_snapshot),
+        summary=dict(value.summary),
+        issues=[
+            UsageIssueView(
+                code=str(item.get("code", "USAGE_INPUT_INVALID")),
+                detail=str(item.get("detail", "用途输入无效")),
+                location=str(item.get("location", "input")),
+                retryable=item.get("retryable") is True,
+                recovery_action=(
+                    item.get("recovery_action")
+                    if isinstance(item.get("recovery_action"), str)
+                    else ("retry_usage_check" if item.get("retryable") is True else "fix_input")
+                ),
+            )
+            for item in value.issues
+        ],
+        is_current=usage_check_is_current(check=value, datasets=datasets),
+        base_commit=value.base_commit,
+        contract_version=value.contract_version,
+        candidate_id=value.candidate_id,
+        job_id=value.job_id,
+        created_by=value.created_by,
+        created_at=value.created_at,
+        updated_at=value.updated_at,
+    )
+
+
+def _artifact_view(value: model.DatasetArtifact) -> ArtifactView:
+    return ArtifactView(
+        id=value.id,
+        dataset_id=value.dataset_id,
+        usage_check_id=value.usage_check_id,
+        kind=value.kind.value,
+        status=value.status.value,
+        input_digest=value.input_digest,
+        object_key=(value.object_key if value.status is model.ArtifactStatus.AVAILABLE else None),
+        artifact_sha256=value.artifact_sha256,
+        artifact_size=value.artifact_size,
+        manifest=dict(value.manifest),
+        failure_code=value.failure_code,
+        failure_detail=value.failure_detail,
+        retryable=value.retryable,
+        recovery_action=value.recovery_action,
+        job_id=value.job_id,
+        created_by=value.created_by,
         created_at=value.created_at,
         updated_at=value.updated_at,
     )
@@ -522,3 +803,311 @@ def retry_a_video_upload(
             content=view.model_dump(mode="json"),
         )
     return view
+
+
+@router.post(
+    "/{dataset_id}/vlm-candidates",
+    response_model=VlmCandidateView,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="registerVlmCandidate",
+    openapi_extra=needs(Permission.DATASET_EDIT),
+    responses=ProblemResponses,
+)
+def register_a_vlm_candidate(
+    dataset_id: UUID,
+    submitted: RegisterVlmCandidateInput,
+    caller: Authorized,
+    datasets: Annotated[UsageDatasetRepository, Depends(dependencies.datasets)],
+    if_match: Annotated[int, Header(alias="If-Match")],
+) -> VlmCandidateView:
+    value = register_vlm_candidate(
+        dataset_id=dataset_id,
+        kind=submitted.kind,
+        action_list_revision=submitted.action_list_revision,
+        records=submitted.records,
+        media=tuple(
+            model.VlmMediaReference(
+                **{
+                    **item.model_dump(mode="python"),
+                    "action_indices": tuple(item.action_indices or ()),
+                }
+            )
+            for item in submitted.media
+        ),
+        expected_revision=if_match,
+        caller=caller,
+        now=datetime.now(UTC),
+        datasets=datasets,
+    )
+    return _vlm_candidate_view(value)
+
+
+@router.get(
+    "/{dataset_id}/vlm-candidates",
+    response_model=ItemPage[VlmCandidateView],
+    operation_id="listVlmCandidates",
+    openapi_extra=needs(Permission.DATASET_VIEW),
+    responses=ProblemResponses,
+)
+def list_the_vlm_candidates(
+    dataset_id: UUID,
+    caller: Authorized,
+    datasets: Annotated[UsageDatasetRepository, Depends(dependencies.datasets)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=MAXIMUM_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> ItemPage[VlmCandidateView]:
+    values = list(list_vlm_candidates(dataset_id=dataset_id, caller=caller, datasets=datasets))
+    return ItemPage(
+        items=[
+            _vlm_candidate_view(value)
+            for value in values[(page - 1) * page_size : page * page_size]
+        ],
+        page=page,
+        page_size=page_size,
+        total=len(values),
+    )
+
+
+@router.get(
+    "/{dataset_id}/vlm-candidates/{candidate_id}",
+    response_model=VlmCandidateView,
+    operation_id="readVlmCandidate",
+    openapi_extra=needs(Permission.DATASET_VIEW),
+    responses=ProblemResponses,
+)
+def read_a_vlm_candidate(
+    dataset_id: UUID,
+    candidate_id: UUID,
+    caller: Authorized,
+    datasets: Annotated[UsageDatasetRepository, Depends(dependencies.datasets)],
+) -> VlmCandidateView:
+    return _vlm_candidate_view(
+        read_vlm_candidate(
+            dataset_id=dataset_id,
+            candidate_id=candidate_id,
+            caller=caller,
+            datasets=datasets,
+        )
+    )
+
+
+@router.post(
+    "/{dataset_id}/usage-checks",
+    response_model=UsageCheckAcceptedView,
+    status_code=status.HTTP_202_ACCEPTED,
+    operation_id="requestDatasetUsageCheck",
+    openapi_extra=needs(Permission.DATASET_EDIT),
+    responses=ProblemResponses,
+)
+def request_a_usage_check(
+    dataset_id: UUID,
+    submitted: UsageCheckInput,
+    caller: Authorized,
+    datasets: Annotated[UsageDatasetRepository, Depends(dependencies.datasets)],
+    jobs: Annotated[UsageJobQueue, Depends(dependencies.usage_jobs)],
+) -> UsageCheckAcceptedView:
+    result = request_usage_check(
+        dataset_id=dataset_id,
+        kind=submitted.kind,
+        candidate_id=submitted.candidate_id,
+        caller=caller,
+        now=datetime.now(UTC),
+        datasets=datasets,
+        jobs=jobs,
+    )
+    return UsageCheckAcceptedView(
+        check=_usage_check_view(result.check, datasets=datasets),
+        job=_usage_job_view(result.job),
+    )
+
+
+@router.get(
+    "/{dataset_id}/usage-checks",
+    response_model=ItemPage[UsageCheckView],
+    operation_id="listDatasetUsageChecks",
+    openapi_extra=needs(Permission.DATASET_VIEW),
+    responses=ProblemResponses,
+)
+def list_the_usage_checks(
+    dataset_id: UUID,
+    caller: Authorized,
+    datasets: Annotated[UsageDatasetRepository, Depends(dependencies.datasets)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=MAXIMUM_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> ItemPage[UsageCheckView]:
+    values = list(list_usage_checks(dataset_id=dataset_id, caller=caller, datasets=datasets))
+    return ItemPage(
+        items=[
+            _usage_check_view(value, datasets=datasets)
+            for value in values[(page - 1) * page_size : page * page_size]
+        ],
+        page=page,
+        page_size=page_size,
+        total=len(values),
+    )
+
+
+@router.get(
+    "/{dataset_id}/usage-checks/{check_id}",
+    response_model=UsageCheckView,
+    operation_id="readDatasetUsageCheck",
+    openapi_extra=needs(Permission.DATASET_VIEW),
+    responses=ProblemResponses,
+)
+def read_a_usage_check(
+    dataset_id: UUID,
+    check_id: UUID,
+    caller: Authorized,
+    datasets: Annotated[UsageDatasetRepository, Depends(dependencies.datasets)],
+) -> UsageCheckView:
+    return _usage_check_view(
+        read_usage_check(
+            dataset_id=dataset_id,
+            check_id=check_id,
+            caller=caller,
+            datasets=datasets,
+        ),
+        datasets=datasets,
+    )
+
+
+@router.post(
+    "/{dataset_id}/artifacts",
+    response_model=ArtifactAcceptedView,
+    status_code=status.HTTP_202_ACCEPTED,
+    operation_id="requestDatasetArtifact",
+    openapi_extra=needs(Permission.DATASET_EDIT),
+    responses=ProblemResponses,
+)
+def request_a_dataset_artifact(
+    dataset_id: UUID,
+    submitted: ArtifactInput,
+    caller: Authorized,
+    datasets: Annotated[UsageDatasetRepository, Depends(dependencies.datasets)],
+    jobs: Annotated[UsageJobQueue, Depends(dependencies.usage_jobs)],
+) -> ArtifactAcceptedView:
+    result = request_artifact(
+        dataset_id=dataset_id,
+        check_id=submitted.check_id,
+        caller=caller,
+        now=datetime.now(UTC),
+        datasets=datasets,
+        jobs=jobs,
+    )
+    return ArtifactAcceptedView(
+        artifact=_artifact_view(result.artifact),
+        job=_usage_job_view(result.job),
+    )
+
+
+@router.get(
+    "/{dataset_id}/artifacts",
+    response_model=ItemPage[ArtifactView],
+    operation_id="listDatasetArtifacts",
+    openapi_extra=needs(Permission.DATASET_VIEW),
+    responses=ProblemResponses,
+)
+def list_the_dataset_artifacts(
+    dataset_id: UUID,
+    caller: Authorized,
+    datasets: Annotated[UsageDatasetRepository, Depends(dependencies.datasets)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=MAXIMUM_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> ItemPage[ArtifactView]:
+    values = list(list_artifacts(dataset_id=dataset_id, caller=caller, datasets=datasets))
+    return ItemPage(
+        items=[
+            _artifact_view(value) for value in values[(page - 1) * page_size : page * page_size]
+        ],
+        page=page,
+        page_size=page_size,
+        total=len(values),
+    )
+
+
+@router.get(
+    "/{dataset_id}/artifacts/{artifact_id}",
+    response_model=ArtifactView,
+    operation_id="readDatasetArtifact",
+    openapi_extra=needs(Permission.DATASET_VIEW),
+    responses=ProblemResponses,
+)
+def read_a_dataset_artifact(
+    dataset_id: UUID,
+    artifact_id: UUID,
+    caller: Authorized,
+    datasets: Annotated[UsageDatasetRepository, Depends(dependencies.datasets)],
+) -> ArtifactView:
+    return _artifact_view(
+        read_artifact(
+            dataset_id=dataset_id,
+            artifact_id=artifact_id,
+            caller=caller,
+            datasets=datasets,
+        )
+    )
+
+
+@router.get(
+    "/{dataset_id}/artifacts/{artifact_id}/download",
+    operation_id="downloadDatasetArtifact",
+    response_class=Response,
+    openapi_extra=needs(Permission.DATASET_VIEW),
+    responses={
+        **ProblemResponses,
+        200: {
+            "description": "DDM annotation JSON 制品",
+            "content": {"application/json": {"schema": {"type": "string", "format": "binary"}}},
+        },
+    },
+)
+def download_a_dataset_artifact(
+    dataset_id: UUID,
+    artifact_id: UUID,
+    caller: Authorized,
+    session: RequestSession,
+    datasets: Annotated[UsageDatasetRepository, Depends(dependencies.datasets)],
+    storage: Annotated[ObjectStorage, Depends(dependencies.storage)],
+) -> Response:
+    artifact = read_artifact(
+        dataset_id=dataset_id,
+        artifact_id=artifact_id,
+        caller=caller,
+        datasets=datasets,
+    )
+    if artifact.status is not model.ArtifactStatus.AVAILABLE or artifact.object_key is None:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.ARTIFACT_UNAVAILABLE,
+            detail="制品尚未生成完成",
+        )
+    object_key = artifact.object_key
+    expected_size = artifact.artifact_size
+    expected_sha256 = artifact.artifact_sha256
+    artifact_id = artifact.id
+    # 读取制品元数据的只读事务在下载外部对象前回滚结束，响应只返回已核验的字节。
+    session.rollback()
+    try:
+        with NamedTemporaryFile() as temporary:
+            storage.download_to(object_key=object_key, destination=cast(BinaryIO, temporary))
+            temporary.seek(0)
+            content = temporary.read()
+    except ObjectNotFoundError as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.ARTIFACT_UNAVAILABLE,
+            detail="制品对象不存在",
+        ) from error
+    except ObjectStorageUnavailableError as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.STORAGE_UNAVAILABLE,
+            detail="制品对象暂时不可读取",
+        ) from error
+    if expected_size != len(content) or expected_sha256 != sha256(content).hexdigest():
+        raise DatasetRefusedError(
+            DatasetRefusalCode.ARTIFACT_UNAVAILABLE,
+            detail="制品对象摘要与登记事实不一致",
+        )
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="annotation-{artifact_id}.json"'},
+    )

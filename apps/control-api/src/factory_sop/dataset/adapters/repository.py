@@ -8,6 +8,7 @@ from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import CursorResult, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DatabaseSession
 
 from factory_sop.dataset.adapters.tables import (
@@ -15,18 +16,25 @@ from factory_sop.dataset.adapters.tables import (
     AnnotationContextRow,
     AnnotationExecutionRow,
     AnnotationSubmissionRow,
+    DatasetArtifactRow,
     DatasetMemberRow,
     TrainingDatasetRow,
     UploadAttemptRow,
+    UsageCheckRow,
+    VlmCandidateRow,
 )
 from factory_sop.dataset.model import (
     ActionListRevision,
     AnnotationContext,
     AnnotationExecution,
     AnnotationSubmission,
+    DatasetArtifact,
     DatasetMember,
     TrainingDataset,
     UploadAttempt,
+    UsageCheck,
+    UsageKind,
+    VlmCandidate,
 )
 
 
@@ -88,6 +96,14 @@ class PostgresDatasetRepository:
             .limit(page_size)
         ).all()
         return [row.to_domain() for row in rows], total
+
+    def list_members(self, *, dataset_id: UUID) -> Sequence[DatasetMember]:
+        rows = self._session.scalars(
+            select(DatasetMemberRow)
+            .where(DatasetMemberRow.dataset_id == dataset_id)
+            .order_by(DatasetMemberRow.id)
+        ).all()
+        return [row.to_domain() for row in rows]
 
     def add_attempt(self, attempt: UploadAttempt) -> None:
         self._session.add(UploadAttemptRow.from_domain(attempt))
@@ -224,6 +240,15 @@ class PostgresDatasetRepository:
         ).all()
         return [row.to_domain() for row in rows]
 
+    def latest_annotation_submission(self, *, member_id: UUID) -> AnnotationSubmission | None:
+        row = self._session.scalars(
+            select(AnnotationSubmissionRow)
+            .where(AnnotationSubmissionRow.member_id == member_id)
+            .order_by(AnnotationSubmissionRow.revision.desc())
+            .limit(1)
+        ).first()
+        return row.to_domain() if row is not None else None
+
     def add_annotation_submission(self, value: AnnotationSubmission) -> None:
         self._session.add(AnnotationSubmissionRow.from_domain(value))
         self._session.flush()
@@ -307,6 +332,173 @@ class PostgresDatasetRepository:
             )
             is not None
         )
+
+    def add_vlm_candidate(self, value: VlmCandidate) -> None:
+        try:
+            with self._session.begin_nested():
+                self._session.add(VlmCandidateRow.from_domain(value))
+                self._session.flush()
+        except IntegrityError:
+            if (
+                self._session.scalar(
+                    select(VlmCandidateRow.id).where(
+                        VlmCandidateRow.dataset_id == value.dataset_id,
+                        VlmCandidateRow.revision == value.revision,
+                    )
+                )
+                is None
+            ):
+                raise
+
+    def vlm_candidate_by_id(self, candidate_id: UUID) -> VlmCandidate | None:
+        row = self._session.get(VlmCandidateRow, candidate_id)
+        return row.to_domain() if row is not None else None
+
+    def latest_vlm_candidate(self, dataset_id: UUID) -> VlmCandidate | None:
+        row = self._session.scalars(
+            select(VlmCandidateRow)
+            .where(VlmCandidateRow.dataset_id == dataset_id)
+            .order_by(VlmCandidateRow.revision.desc())
+            .limit(1)
+        ).first()
+        return row.to_domain() if row is not None else None
+
+    def list_vlm_candidates(self, dataset_id: UUID) -> Sequence[VlmCandidate]:
+        rows = self._session.scalars(
+            select(VlmCandidateRow)
+            .where(VlmCandidateRow.dataset_id == dataset_id)
+            .order_by(VlmCandidateRow.revision.asc())
+        ).all()
+        return [row.to_domain() for row in rows]
+
+    def add_usage_check(self, value: UsageCheck) -> None:
+        self._session.add(UsageCheckRow.from_domain(value))
+        self._session.flush()
+
+    def usage_check_by_id(self, check_id: UUID) -> UsageCheck | None:
+        row = self._session.get(UsageCheckRow, check_id)
+        return row.to_domain() if row is not None else None
+
+    def latest_usage_check(self, *, dataset_id: UUID, kind: UsageKind) -> UsageCheck | None:
+        row = self._session.scalars(
+            select(UsageCheckRow)
+            .where(UsageCheckRow.dataset_id == dataset_id, UsageCheckRow.kind == kind.value)
+            .order_by(UsageCheckRow.created_at.desc(), UsageCheckRow.id.desc())
+            .limit(1)
+        ).first()
+        return row.to_domain() if row is not None else None
+
+    def list_usage_checks(self, dataset_id: UUID) -> Sequence[UsageCheck]:
+        rows = self._session.scalars(
+            select(UsageCheckRow)
+            .where(UsageCheckRow.dataset_id == dataset_id)
+            .order_by(UsageCheckRow.created_at.desc(), UsageCheckRow.id.desc())
+        ).all()
+        return [row.to_domain() for row in rows]
+
+    def save_usage_check(self, value: UsageCheck, *, expected_updated_at: datetime) -> bool:
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(UsageCheckRow)
+                .where(
+                    UsageCheckRow.id == value.id,
+                    UsageCheckRow.updated_at == expected_updated_at,
+                )
+                .values(
+                    status=value.status.value,
+                    input_digest=value.input_digest,
+                    input_snapshot=dict(value.input_snapshot),
+                    summary=dict(value.summary),
+                    issues=[dict(item) for item in value.issues],
+                    base_commit=value.base_commit,
+                    contract_version=value.contract_version,
+                    candidate_id=value.candidate_id,
+                    job_id=value.job_id,
+                    updated_at=value.updated_at,
+                )
+            ),
+        )
+        return result.rowcount == 1
+
+    def add_artifact(self, value: DatasetArtifact) -> None:
+        try:
+            with self._session.begin_nested():
+                self._session.add(DatasetArtifactRow.from_domain(value))
+                self._session.flush()
+        except IntegrityError:
+            if (
+                self.artifact_by_input(
+                    dataset_id=value.dataset_id,
+                    input_digest=value.input_digest,
+                )
+                is None
+            ):
+                raise
+
+    def artifact_by_id(self, artifact_id: UUID) -> DatasetArtifact | None:
+        row = self._session.get(DatasetArtifactRow, artifact_id)
+        return row.to_domain() if row is not None else None
+
+    def artifact_by_input(self, *, dataset_id: UUID, input_digest: str) -> DatasetArtifact | None:
+        row = self._session.scalar(
+            select(DatasetArtifactRow).where(
+                DatasetArtifactRow.dataset_id == dataset_id,
+                DatasetArtifactRow.input_digest == input_digest,
+            )
+        )
+        return row.to_domain() if row is not None else None
+
+    def list_artifacts(self, dataset_id: UUID) -> Sequence[DatasetArtifact]:
+        rows = self._session.scalars(
+            select(DatasetArtifactRow)
+            .where(DatasetArtifactRow.dataset_id == dataset_id)
+            .order_by(DatasetArtifactRow.created_at.desc(), DatasetArtifactRow.id.desc())
+        ).all()
+        return [row.to_domain() for row in rows]
+
+    def list_artifact_cleanup_candidates(self, *, limit: int) -> Sequence[DatasetArtifact]:
+        rows = self._session.scalars(
+            select(DatasetArtifactRow).order_by(
+                DatasetArtifactRow.updated_at.asc(), DatasetArtifactRow.id.asc()
+            )
+        ).all()
+        values = []
+        for row in rows:
+            raw_keys = (
+                row.manifest.get("orphan_candidate_keys")
+                if isinstance(row.manifest, dict)
+                else None
+            )
+            if isinstance(raw_keys, list) and any(isinstance(key, str) and key for key in raw_keys):
+                values.append(row.to_domain())
+        return values[:limit]
+
+    def save_artifact(self, value: DatasetArtifact, *, expected_updated_at: datetime) -> bool:
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(DatasetArtifactRow)
+                .where(
+                    DatasetArtifactRow.id == value.id,
+                    DatasetArtifactRow.updated_at == expected_updated_at,
+                )
+                .values(
+                    status=value.status.value,
+                    object_key=value.object_key,
+                    artifact_sha256=value.artifact_sha256,
+                    artifact_size=value.artifact_size,
+                    manifest=dict(value.manifest),
+                    failure_code=value.failure_code,
+                    failure_detail=value.failure_detail,
+                    retryable=value.retryable,
+                    recovery_action=value.recovery_action,
+                    job_id=value.job_id,
+                    updated_at=value.updated_at,
+                )
+            ),
+        )
+        return result.rowcount == 1
 
 
 def _member_values(member: DatasetMember) -> dict[str, object]:

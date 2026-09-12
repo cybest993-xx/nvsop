@@ -10,6 +10,7 @@ import { client } from '@/api/generated/client.gen'
 import {
   bindTemplateVersion as generatedBindTemplateVersion,
   createAnnotationContext as generatedCreateAnnotationContext,
+  downloadDatasetArtifact as generatedDownloadDatasetArtifact,
   createConnector as generatedCreateConnector,
   createPoint as generatedCreatePoint,
   createRole as generatedCreateRole,
@@ -32,6 +33,9 @@ import {
   importTemplateDraft as generatedImportTemplateDraft,
   listAnnotations as generatedListAnnotations,
   listDatasetActionListVersions as generatedListDatasetActionListVersions,
+  listDatasetArtifacts as generatedListDatasetArtifacts,
+  listDatasetUsageChecks as generatedListDatasetUsageChecks,
+  listVlmCandidates as generatedListVlmCandidates,
   listConnectors as generatedListConnectors,
   listDatasetMembers as generatedListDatasetMembers,
   listInferenceHosts as generatedListInferenceHosts,
@@ -56,10 +60,16 @@ import {
   readSession as generatedReadSession,
   readStationTemplateConfiguration as generatedReadStationTemplateConfiguration,
   readTrainingDataset as generatedReadTrainingDataset,
+  readDatasetArtifact as generatedReadDatasetArtifact,
+  readDatasetUsageCheck as generatedReadDatasetUsageCheck,
   readTemplateDraft as generatedReadTemplateDraft,
+  readVlmCandidate as generatedReadVlmCandidate,
   readTemplateImport as generatedReadTemplateImport,
   readTemplateVersion as generatedReadTemplateVersion,
   registerDatasetActionList as generatedRegisterDatasetActionList,
+  registerVlmCandidate as generatedRegisterVlmCandidate,
+  requestDatasetArtifact as generatedRequestDatasetArtifact,
+  requestDatasetUsageCheck as generatedRequestDatasetUsageCheck,
   requestVideoUpload as generatedRequestVideoUpload,
   resetUserPassword as generatedResetUserPassword,
   retryAnnotation as generatedRetryAnnotation,
@@ -75,6 +85,9 @@ import {
   validateTemplateBinding as generatedValidateTemplateBinding,
   type ActionListHistoryView,
   type ActionListInput,
+  type ArtifactAcceptedView,
+  type ArtifactInput,
+  type ArtifactView,
   type ActionListView,
   type AnnotationAcceptedView,
   type AnnotationContextInput,
@@ -104,11 +117,14 @@ import {
   type EditRoleData,
   type EditUserData,
   type FactorySopJobAdaptersRoutesJobView,
+  type ItemPageArtifactView,
   type ItemPageConnectorView,
   type ItemPageDatasetMemberView,
   type ItemPageDatasetView,
   type ItemPageInferenceHostView,
   type ItemPagePointView,
+  type ItemPageUsageCheckView,
+  type ItemPageVlmCandidateView,
   type ItemPageRoleView,
   type ItemPageStationView,
   type ItemPageStr,
@@ -123,6 +139,7 @@ import {
   type PointConfiguration,
   type PointView,
   type ProblemDocument,
+  type RegisterVlmCandidateInput,
   type RequestVideoUploadData,
   type RetryMode,
   type RetryView,
@@ -140,6 +157,10 @@ import {
   type TemplateVersionView,
   type UploadInstructionsView,
   type UploadRequestView,
+  type UsageCheckAcceptedView,
+  type UsageCheckInput,
+  type UsageCheckView,
+  type VlmCandidateView,
   type UserStatus,
   type UserView,
 } from '@/api/generated'
@@ -148,6 +169,9 @@ export type {
   ActionListHistoryView,
   ActionListInput,
   ActionListView,
+  ArtifactAcceptedView,
+  ArtifactInput,
+  ArtifactView,
   AnnotationAcceptedView,
   AnnotationContextInput,
   AnnotationContextView,
@@ -175,6 +199,7 @@ export type {
   PendingCommandView,
   PointConfiguration,
   PointView,
+  RegisterVlmCandidateInput,
   RetryMode,
   RetryView,
   RoleView,
@@ -197,6 +222,10 @@ export type {
   ItemPageTemplateVersionView,
   UploadInstructionsView,
   UploadRequestView,
+  UsageCheckAcceptedView,
+  UsageCheckInput,
+  UsageCheckView,
+  VlmCandidateView,
   UserView,
 } from '@/api/generated'
 
@@ -511,6 +540,117 @@ export function retryAnnotation(
     generatedRetryAnnotation({
       path: { dataset_id: datasetId, member_id: memberId, submission_id: submissionId },
     }),
+  )
+}
+
+export type DatasetVlmCandidate = VlmCandidateView
+export type DatasetUsageCheck = UsageCheckView
+export type DatasetArtifact = ArtifactView
+
+export function registerVlmCandidate(
+  datasetId: string,
+  submitted: RegisterVlmCandidateInput,
+  revision: number,
+): Promise<DatasetVlmCandidate> {
+  return execute(
+    generatedRegisterVlmCandidate({
+      path: { dataset_id: datasetId },
+      headers: { 'If-Match': revision },
+      body: submitted,
+    }),
+  )
+}
+
+export function listVlmCandidates(
+  datasetId: string,
+  page = 1,
+  pageSize = 50,
+): Promise<ItemPageVlmCandidateView> {
+  return execute(
+    generatedListVlmCandidates({
+      path: { dataset_id: datasetId },
+      query: { page, page_size: pageSize },
+    }),
+  )
+}
+
+export function readVlmCandidate(
+  datasetId: string,
+  candidateId: string,
+): Promise<DatasetVlmCandidate> {
+  return execute(
+    generatedReadVlmCandidate({ path: { dataset_id: datasetId, candidate_id: candidateId } }),
+  )
+}
+
+export function requestDatasetUsageCheck(
+  datasetId: string,
+  submitted: UsageCheckInput,
+): Promise<UsageCheckAcceptedView> {
+  return execute(
+    generatedRequestDatasetUsageCheck({ path: { dataset_id: datasetId }, body: submitted }),
+  )
+}
+
+export function listDatasetUsageChecks(
+  datasetId: string,
+  page = 1,
+  pageSize = 50,
+): Promise<ItemPageUsageCheckView> {
+  return execute(
+    generatedListDatasetUsageChecks({
+      path: { dataset_id: datasetId },
+      query: { page, page_size: pageSize },
+    }),
+  )
+}
+
+export function readDatasetUsageCheck(
+  datasetId: string,
+  checkId: string,
+): Promise<DatasetUsageCheck> {
+  return execute(
+    generatedReadDatasetUsageCheck({ path: { dataset_id: datasetId, check_id: checkId } }),
+  )
+}
+
+export function requestDatasetArtifact(
+  datasetId: string,
+  submitted: ArtifactInput,
+): Promise<ArtifactAcceptedView> {
+  return execute(
+    generatedRequestDatasetArtifact({ path: { dataset_id: datasetId }, body: submitted }),
+  )
+}
+
+export function listDatasetArtifacts(
+  datasetId: string,
+  page = 1,
+  pageSize = 50,
+): Promise<ItemPageArtifactView> {
+  return execute(
+    generatedListDatasetArtifacts({
+      path: { dataset_id: datasetId },
+      query: { page, page_size: pageSize },
+    }),
+  )
+}
+
+export function readDatasetArtifact(
+  datasetId: string,
+  artifactId: string,
+): Promise<DatasetArtifact> {
+  return execute(
+    generatedReadDatasetArtifact({ path: { dataset_id: datasetId, artifact_id: artifactId } }),
+  )
+}
+
+export function downloadDatasetArtifact(datasetId: string, artifactId: string): Promise<Blob> {
+  return execute(
+    generatedDownloadDatasetArtifact({
+      path: { dataset_id: datasetId, artifact_id: artifactId },
+      parseAs: 'blob',
+    }) as Promise<GeneratedResult<Blob>>,
   )
 }
 

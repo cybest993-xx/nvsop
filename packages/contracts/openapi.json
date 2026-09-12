@@ -766,11 +766,204 @@
           "ANNOTATION_BACKEND_UNAVAILABLE",
           "ANNOTATION_EXECUTION_FAILED",
           "ANNOTATION_OPERATION_NOT_ALLOWED",
+          "VLM_CANDIDATE_NOT_FOUND",
+          "VLM_CANDIDATE_INVALID",
+          "USAGE_CHECK_NOT_FOUND",
+          "USAGE_STATE_CONFLICT",
+          "ARTIFACT_NOT_FOUND",
+          "ARTIFACT_UNAVAILABLE",
           "JOB_NOT_FOUND",
           "JOB_RESOURCE_NOT_FOUND"
         ],
         "title": "ApiErrorCode",
         "type": "string"
+      },
+      "ArtifactAcceptedView": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact": {
+            "$ref": "#/components/schemas/ArtifactView"
+          },
+          "job": {
+            "$ref": "#/components/schemas/UsageJobView"
+          }
+        },
+        "required": [
+          "artifact",
+          "job"
+        ],
+        "title": "ArtifactAcceptedView",
+        "type": "object"
+      },
+      "ArtifactInput": {
+        "additionalProperties": false,
+        "description": "请求从通过的 DDM 检查生成制品。",
+        "properties": {
+          "check_id": {
+            "format": "uuid",
+            "title": "Check Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "check_id"
+        ],
+        "title": "ArtifactInput",
+        "type": "object"
+      },
+      "ArtifactView": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Sha256"
+          },
+          "artifact_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Size"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "format": "uuid",
+            "title": "Created By",
+            "type": "string"
+          },
+          "dataset_id": {
+            "format": "uuid",
+            "title": "Dataset Id",
+            "type": "string"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "failure_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Detail"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "input_digest": {
+            "title": "Input Digest",
+            "type": "string"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "manifest": {
+            "additionalProperties": true,
+            "title": "Manifest",
+            "type": "object"
+          },
+          "object_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object Key"
+          },
+          "recovery_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery Action"
+          },
+          "retryable": {
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "usage_check_id": {
+            "format": "uuid",
+            "title": "Usage Check Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "dataset_id",
+          "usage_check_id",
+          "kind",
+          "status",
+          "input_digest",
+          "object_key",
+          "artifact_sha256",
+          "artifact_size",
+          "manifest",
+          "failure_code",
+          "failure_detail",
+          "retryable",
+          "recovery_action",
+          "job_id",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ArtifactView",
+        "type": "object"
       },
       "AssignedRoles": {
         "description": "The complete set of roles the account should hold. An empty list is a valid submission.",
@@ -2372,6 +2565,40 @@
         "title": "InferenceHostView",
         "type": "object"
       },
+      "ItemPage_ArtifactView_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ArtifactView"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "minimum": 1.0,
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "minimum": 1.0,
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
+        "title": "ItemPage[ArtifactView]",
+        "type": "object"
+      },
       "ItemPage_CameraView_": {
         "properties": {
           "items": {
@@ -2780,6 +3007,40 @@
         "title": "ItemPage[TemplateVersionView]",
         "type": "object"
       },
+      "ItemPage_UsageCheckView_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/UsageCheckView"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "minimum": 1.0,
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "minimum": 1.0,
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
+        "title": "ItemPage[UsageCheckView]",
+        "type": "object"
+      },
       "ItemPage_UserView_": {
         "properties": {
           "items": {
@@ -2812,6 +3073,40 @@
           "total"
         ],
         "title": "ItemPage[UserView]",
+        "type": "object"
+      },
+      "ItemPage_VlmCandidateView_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/VlmCandidateView"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "minimum": 1.0,
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "minimum": 1.0,
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
+        "title": "ItemPage[VlmCandidateView]",
         "type": "object"
       },
       "ItemPage_str_": {
@@ -3384,6 +3679,43 @@
           "error_code"
         ],
         "title": "ProblemDocument",
+        "type": "object"
+      },
+      "RegisterVlmCandidateInput": {
+        "additionalProperties": false,
+        "description": "登记一份不可变 VLM 候选修订。",
+        "properties": {
+          "action_list_revision": {
+            "minimum": 1.0,
+            "title": "Action List Revision",
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/VlmCandidateKind"
+          },
+          "media": {
+            "items": {
+              "$ref": "#/components/schemas/VlmMediaInput"
+            },
+            "title": "Media",
+            "type": "array"
+          },
+          "records": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Records",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "action_list_revision",
+          "records",
+          "media"
+        ],
+        "title": "RegisterVlmCandidateInput",
         "type": "object"
       },
       "RequestVideoUploadInput": {
@@ -4892,6 +5224,280 @@
         "title": "UploadRequestView",
         "type": "object"
       },
+      "UsageCheckAcceptedView": {
+        "additionalProperties": false,
+        "properties": {
+          "check": {
+            "$ref": "#/components/schemas/UsageCheckView"
+          },
+          "job": {
+            "$ref": "#/components/schemas/UsageJobView"
+          }
+        },
+        "required": [
+          "check",
+          "job"
+        ],
+        "title": "UsageCheckAcceptedView",
+        "type": "object"
+      },
+      "UsageCheckInput": {
+        "additionalProperties": false,
+        "description": "请求一次冻结输入的异步用途检查。",
+        "properties": {
+          "candidate_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Id"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/UsageKind"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "UsageCheckInput",
+        "type": "object"
+      },
+      "UsageCheckView": {
+        "additionalProperties": false,
+        "properties": {
+          "base_commit": {
+            "title": "Base Commit",
+            "type": "string"
+          },
+          "candidate_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Id"
+          },
+          "contract_version": {
+            "title": "Contract Version",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "format": "uuid",
+            "title": "Created By",
+            "type": "string"
+          },
+          "dataset_id": {
+            "format": "uuid",
+            "title": "Dataset Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "input_digest": {
+            "title": "Input Digest",
+            "type": "string"
+          },
+          "input_snapshot": {
+            "additionalProperties": true,
+            "title": "Input Snapshot",
+            "type": "object"
+          },
+          "is_current": {
+            "title": "Is Current",
+            "type": "boolean"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/UsageIssueView"
+            },
+            "title": "Issues",
+            "type": "array"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Summary",
+            "type": "object"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "dataset_id",
+          "kind",
+          "status",
+          "is_current",
+          "input_digest",
+          "input_snapshot",
+          "summary",
+          "issues",
+          "base_commit",
+          "contract_version",
+          "candidate_id",
+          "job_id",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "UsageCheckView",
+        "type": "object"
+      },
+      "UsageIssueView": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "location": {
+            "title": "Location",
+            "type": "string"
+          },
+          "recovery_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery Action"
+          },
+          "retryable": {
+            "title": "Retryable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "code",
+          "detail",
+          "location",
+          "retryable",
+          "recovery_action"
+        ],
+        "title": "UsageIssueView",
+        "type": "object"
+      },
+      "UsageJobView": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt_id": {
+            "format": "uuid",
+            "title": "Attempt Id",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "dataset_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Id"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "job_type": {
+            "title": "Job Type",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "job_type",
+          "status",
+          "dataset_id",
+          "attempt_id",
+          "failure_code",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "UsageJobView",
+        "type": "object"
+      },
+      "UsageKind": {
+        "description": "训练数据用途。",
+        "enum": [
+          "ddm",
+          "vlm"
+        ],
+        "title": "UsageKind",
+        "type": "string"
+      },
       "UserStatus": {
         "description": "Whether an account may still take part in a new login.\n\nAn enum rather than an `is_active` boolean: `CONTEXT.md` gives 停用 its own definition\nacross every mutable configuration object, and the call site reads\n`status is UserStatus.DEACTIVATED` instead of `not user.is_active`.",
         "enum": [
@@ -4979,6 +5585,242 @@
         "title": "ValidationError",
         "type": "object"
       },
+      "VlmCandidateKind": {
+        "description": "基座支持的 VLM 输入产物类别。",
+        "enum": [
+          "gqa",
+          "bcq",
+          "mcq",
+          "golden_gqa"
+        ],
+        "title": "VlmCandidateKind",
+        "type": "string"
+      },
+      "VlmCandidateView": {
+        "properties": {
+          "action_list_revision": {
+            "title": "Action List Revision",
+            "type": "integer"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "format": "uuid",
+            "title": "Created By",
+            "type": "string"
+          },
+          "dataset_id": {
+            "format": "uuid",
+            "title": "Dataset Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "media": {
+            "items": {
+              "$ref": "#/components/schemas/VlmMediaView"
+            },
+            "title": "Media",
+            "type": "array"
+          },
+          "records": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Records",
+            "type": "array"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "dataset_id",
+          "revision",
+          "kind",
+          "action_list_revision",
+          "records",
+          "media",
+          "created_by",
+          "created_at"
+        ],
+        "title": "VlmCandidateView",
+        "type": "object"
+      },
+      "VlmMediaInput": {
+        "additionalProperties": false,
+        "description": "VLM 记录使用的显式媒体绑定。",
+        "properties": {
+          "action_indices": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Indices"
+          },
+          "annotation_execution_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Annotation Execution Id"
+          },
+          "annotation_submission_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Annotation Submission Id"
+          },
+          "clip_index": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clip Index"
+          },
+          "key": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Key",
+            "type": "string"
+          },
+          "member_id": {
+            "format": "uuid",
+            "title": "Member Id",
+            "type": "string"
+          },
+          "source_object_version_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Source Object Version Id",
+            "type": "string"
+          },
+          "source_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Source Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "member_id",
+          "source_object_version_id",
+          "source_sha256"
+        ],
+        "title": "VlmMediaInput",
+        "type": "object"
+      },
+      "VlmMediaView": {
+        "properties": {
+          "action_indices": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Action Indices",
+            "type": "array"
+          },
+          "annotation_execution_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Annotation Execution Id"
+          },
+          "annotation_submission_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Annotation Submission Id"
+          },
+          "clip_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clip Index"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "member_id": {
+            "format": "uuid",
+            "title": "Member Id",
+            "type": "string"
+          },
+          "source_object_version_id": {
+            "title": "Source Object Version Id",
+            "type": "string"
+          },
+          "source_sha256": {
+            "title": "Source Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "member_id",
+          "source_object_version_id",
+          "source_sha256",
+          "annotation_submission_id",
+          "annotation_execution_id",
+          "clip_index",
+          "action_indices"
+        ],
+        "title": "VlmMediaView",
+        "type": "object"
+      },
       "factory_sop__dataset__adapters__routes__JobView": {
         "properties": {
           "attempt_id": {
@@ -5048,6 +5890,18 @@
           "created_at": {
             "title": "Created At",
             "type": "string"
+          },
+          "dataset_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Id"
           },
           "failure_code": {
             "anyOf": [
@@ -13420,6 +14274,474 @@
         "x-required-permission": "dataset.dataset.view"
       }
     },
+    "/api/v1/training-datasets/{dataset_id}/artifacts": {
+      "get": {
+        "operationId": "listDatasetArtifacts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPage_ArtifactView_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "对象存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "List The Dataset Artifacts",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.view"
+      },
+      "post": {
+        "operationId": "requestDatasetArtifact",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArtifactInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactAcceptedView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "对象存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "Request A Dataset Artifact",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.edit"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/artifacts/{artifact_id}": {
+      "get": {
+        "operationId": "readDatasetArtifact",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "对象存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "Read A Dataset Artifact",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.view"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/artifacts/{artifact_id}/download": {
+      "get": {
+        "operationId": "downloadDatasetArtifact",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "DDM annotation JSON 制品"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "对象存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "Download A Dataset Artifact",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.view"
+      }
+    },
     "/api/v1/training-datasets/{dataset_id}/members": {
       "get": {
         "operationId": "listDatasetMembers",
@@ -14707,6 +16029,721 @@
           "dataset"
         ],
         "x-required-permission": "dataset.dataset.import"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/usage-checks": {
+      "get": {
+        "operationId": "listDatasetUsageChecks",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPage_UsageCheckView_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "对象存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "List The Usage Checks",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.view"
+      },
+      "post": {
+        "operationId": "requestDatasetUsageCheck",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageCheckInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageCheckAcceptedView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "对象存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "Request A Usage Check",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.edit"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/usage-checks/{check_id}": {
+      "get": {
+        "operationId": "readDatasetUsageCheck",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "check_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Check Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageCheckView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "对象存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "Read A Usage Check",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.view"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/vlm-candidates": {
+      "get": {
+        "operationId": "listVlmCandidates",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPage_VlmCandidateView_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "对象存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "List The Vlm Candidates",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.view"
+      },
+      "post": {
+        "operationId": "registerVlmCandidate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "title": "If-Match",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterVlmCandidateInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VlmCandidateView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "对象存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "Register A Vlm Candidate",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.edit"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/vlm-candidates/{candidate_id}": {
+      "get": {
+        "operationId": "readVlmCandidate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "candidate_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VlmCandidateView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "对象存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "Read A Vlm Candidate",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.view"
       }
     }
   }

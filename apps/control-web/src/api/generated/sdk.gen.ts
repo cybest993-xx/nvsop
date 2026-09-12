@@ -69,6 +69,9 @@ import type {
   DeleteUserData,
   DeleteUserErrors,
   DeleteUserResponses,
+  DownloadDatasetArtifactData,
+  DownloadDatasetArtifactErrors,
+  DownloadDatasetArtifactResponses,
   DownloadTemplateImportData,
   DownloadTemplateImportErrors,
   DownloadTemplateImportResponses,
@@ -123,9 +126,15 @@ import type {
   ListDatasetActionListVersionsData,
   ListDatasetActionListVersionsErrors,
   ListDatasetActionListVersionsResponses,
+  ListDatasetArtifactsData,
+  ListDatasetArtifactsErrors,
+  ListDatasetArtifactsResponses,
   ListDatasetMembersData,
   ListDatasetMembersErrors,
   ListDatasetMembersResponses,
+  ListDatasetUsageChecksData,
+  ListDatasetUsageChecksErrors,
+  ListDatasetUsageChecksResponses,
   ListInferenceBackendsData,
   ListInferenceBackendsErrors,
   ListInferenceBackendsResponses,
@@ -159,6 +168,9 @@ import type {
   ListUsersData,
   ListUsersErrors,
   ListUsersResponses,
+  ListVlmCandidatesData,
+  ListVlmCandidatesErrors,
+  ListVlmCandidatesResponses,
   OpenSessionData,
   OpenSessionErrors,
   OpenSessionResponses,
@@ -180,9 +192,15 @@ import type {
   ReadDatasetActionListData,
   ReadDatasetActionListErrors,
   ReadDatasetActionListResponses,
+  ReadDatasetArtifactData,
+  ReadDatasetArtifactErrors,
+  ReadDatasetArtifactResponses,
   ReadDatasetMemberData,
   ReadDatasetMemberErrors,
   ReadDatasetMemberResponses,
+  ReadDatasetUsageCheckData,
+  ReadDatasetUsageCheckErrors,
+  ReadDatasetUsageCheckResponses,
   ReadDeviceCommandData,
   ReadDeviceCommandErrors,
   ReadDeviceCommandResponses,
@@ -222,15 +240,27 @@ import type {
   ReadTrainingDatasetData,
   ReadTrainingDatasetErrors,
   ReadTrainingDatasetResponses,
+  ReadVlmCandidateData,
+  ReadVlmCandidateErrors,
+  ReadVlmCandidateResponses,
   RegisterDatasetActionListData,
   RegisterDatasetActionListErrors,
   RegisterDatasetActionListResponses,
   RegisterInferenceHostIdentityKeyData,
   RegisterInferenceHostIdentityKeyErrors,
   RegisterInferenceHostIdentityKeyResponses,
+  RegisterVlmCandidateData,
+  RegisterVlmCandidateErrors,
+  RegisterVlmCandidateResponses,
   ReportTemplateConfigurationData,
   ReportTemplateConfigurationErrors,
   ReportTemplateConfigurationResponses,
+  RequestDatasetArtifactData,
+  RequestDatasetArtifactErrors,
+  RequestDatasetArtifactResponses,
+  RequestDatasetUsageCheckData,
+  RequestDatasetUsageCheckErrors,
+  RequestDatasetUsageCheckResponses,
   RequestVideoUploadData,
   RequestVideoUploadErrors,
   RequestVideoUploadResponses,
@@ -1669,6 +1699,61 @@ export const listDatasetActionListVersions = <ThrowOnError extends boolean = fal
   >({ url: '/api/v1/training-datasets/{dataset_id}/action-list/versions', ...options })
 
 /**
+ * List The Dataset Artifacts
+ */
+export const listDatasetArtifacts = <ThrowOnError extends boolean = false>(
+  options: Options<ListDatasetArtifactsData, ThrowOnError>,
+): RequestResult<ListDatasetArtifactsResponses, ListDatasetArtifactsErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ListDatasetArtifactsResponses,
+    ListDatasetArtifactsErrors,
+    ThrowOnError
+  >({ url: '/api/v1/training-datasets/{dataset_id}/artifacts', ...options })
+
+/**
+ * Request A Dataset Artifact
+ */
+export const requestDatasetArtifact = <ThrowOnError extends boolean = false>(
+  options: Options<RequestDatasetArtifactData, ThrowOnError>,
+): RequestResult<RequestDatasetArtifactResponses, RequestDatasetArtifactErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    RequestDatasetArtifactResponses,
+    RequestDatasetArtifactErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/artifacts',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read A Dataset Artifact
+ */
+export const readDatasetArtifact = <ThrowOnError extends boolean = false>(
+  options: Options<ReadDatasetArtifactData, ThrowOnError>,
+): RequestResult<ReadDatasetArtifactResponses, ReadDatasetArtifactErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadDatasetArtifactResponses,
+    ReadDatasetArtifactErrors,
+    ThrowOnError
+  >({ url: '/api/v1/training-datasets/{dataset_id}/artifacts/{artifact_id}', ...options })
+
+/**
+ * Download A Dataset Artifact
+ */
+export const downloadDatasetArtifact = <ThrowOnError extends boolean = false>(
+  options: Options<DownloadDatasetArtifactData, ThrowOnError>,
+): RequestResult<DownloadDatasetArtifactResponses, DownloadDatasetArtifactErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    DownloadDatasetArtifactResponses,
+    DownloadDatasetArtifactErrors,
+    ThrowOnError
+  >({ url: '/api/v1/training-datasets/{dataset_id}/artifacts/{artifact_id}/download', ...options })
+
+/**
  * List The Dataset Members
  */
 export const listDatasetMembers = <ThrowOnError extends boolean = false>(
@@ -1808,4 +1893,87 @@ export const retryVideoUpload = <ThrowOnError extends boolean = false>(
       'Content-Type': 'application/json',
       ...options.headers,
     },
+  })
+
+/**
+ * List The Usage Checks
+ */
+export const listDatasetUsageChecks = <ThrowOnError extends boolean = false>(
+  options: Options<ListDatasetUsageChecksData, ThrowOnError>,
+): RequestResult<ListDatasetUsageChecksResponses, ListDatasetUsageChecksErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ListDatasetUsageChecksResponses,
+    ListDatasetUsageChecksErrors,
+    ThrowOnError
+  >({ url: '/api/v1/training-datasets/{dataset_id}/usage-checks', ...options })
+
+/**
+ * Request A Usage Check
+ */
+export const requestDatasetUsageCheck = <ThrowOnError extends boolean = false>(
+  options: Options<RequestDatasetUsageCheckData, ThrowOnError>,
+): RequestResult<RequestDatasetUsageCheckResponses, RequestDatasetUsageCheckErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    RequestDatasetUsageCheckResponses,
+    RequestDatasetUsageCheckErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/usage-checks',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read A Usage Check
+ */
+export const readDatasetUsageCheck = <ThrowOnError extends boolean = false>(
+  options: Options<ReadDatasetUsageCheckData, ThrowOnError>,
+): RequestResult<ReadDatasetUsageCheckResponses, ReadDatasetUsageCheckErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadDatasetUsageCheckResponses,
+    ReadDatasetUsageCheckErrors,
+    ThrowOnError
+  >({ url: '/api/v1/training-datasets/{dataset_id}/usage-checks/{check_id}', ...options })
+
+/**
+ * List The Vlm Candidates
+ */
+export const listVlmCandidates = <ThrowOnError extends boolean = false>(
+  options: Options<ListVlmCandidatesData, ThrowOnError>,
+): RequestResult<ListVlmCandidatesResponses, ListVlmCandidatesErrors, ThrowOnError> =>
+  (options.client ?? client).get<ListVlmCandidatesResponses, ListVlmCandidatesErrors, ThrowOnError>(
+    { url: '/api/v1/training-datasets/{dataset_id}/vlm-candidates', ...options },
+  )
+
+/**
+ * Register A Vlm Candidate
+ */
+export const registerVlmCandidate = <ThrowOnError extends boolean = false>(
+  options: Options<RegisterVlmCandidateData, ThrowOnError>,
+): RequestResult<RegisterVlmCandidateResponses, RegisterVlmCandidateErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    RegisterVlmCandidateResponses,
+    RegisterVlmCandidateErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/vlm-candidates',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read A Vlm Candidate
+ */
+export const readVlmCandidate = <ThrowOnError extends boolean = false>(
+  options: Options<ReadVlmCandidateData, ThrowOnError>,
+): RequestResult<ReadVlmCandidateResponses, ReadVlmCandidateErrors, ThrowOnError> =>
+  (options.client ?? client).get<ReadVlmCandidateResponses, ReadVlmCandidateErrors, ThrowOnError>({
+    url: '/api/v1/training-datasets/{dataset_id}/vlm-candidates/{candidate_id}',
+    ...options,
   })

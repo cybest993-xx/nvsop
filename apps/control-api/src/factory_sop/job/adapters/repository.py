@@ -186,6 +186,80 @@ class PostgresJobRepository:
         self._remember_for_dispatch(candidate.id)
         return candidate
 
+    def get_or_create_usage_check(
+        self, *, dataset_id: UUID, check_id: UUID, now: datetime
+    ) -> ApplicationJob:
+        """为用途检查创建幂等任务。"""
+        return self._get_or_create_dataset_task(
+            dataset_id=dataset_id,
+            resource_id=check_id,
+            job_type=JobType.DATASET_USAGE_CHECK,
+            now=now,
+        )
+
+    def get_or_create_artifact(
+        self, *, dataset_id: UUID, artifact_id: UUID, now: datetime
+    ) -> ApplicationJob:
+        """为派生制品创建幂等任务。"""
+        return self._get_or_create_dataset_task(
+            dataset_id=dataset_id,
+            resource_id=artifact_id,
+            job_type=JobType.DATASET_ARTIFACT,
+            now=now,
+        )
+
+    def _get_or_create_dataset_task(
+        self,
+        *,
+        dataset_id: UUID,
+        resource_id: UUID,
+        job_type: JobType,
+        now: datetime,
+    ) -> ApplicationJob:
+        existing = self._by_attempt_type(attempt_id=resource_id, job_type=job_type)
+        if existing is not None:
+            if existing.status == JobStatus.FAILED:
+                self._session.execute(
+                    update(ApplicationJobRow)
+                    .where(ApplicationJobRow.id == existing.id)
+                    .values(
+                        status=JobStatus.PENDING.value,
+                        failure_code=None,
+                        updated_at=now,
+                        outbox_status="pending",
+                    )
+                )
+                existing = replace(
+                    existing,
+                    status=JobStatus.PENDING,
+                    failure_code=None,
+                    updated_at=now,
+                )
+            self._remember_for_dispatch(existing.id)
+            return existing
+        candidate = ApplicationJob(
+            id=new_id(),
+            job_type=job_type,
+            status=JobStatus.PENDING,
+            member_id=dataset_id,
+            attempt_id=resource_id,
+            dataset_id=dataset_id,
+            created_at=now,
+            updated_at=now,
+            failure_code=None,
+        )
+        try:
+            with self._session.begin_nested():
+                self.add(candidate)
+        except IntegrityError:
+            existing = self._by_attempt_type(attempt_id=resource_id, job_type=job_type)
+            if existing is None:
+                raise
+            self._remember_for_dispatch(existing.id)
+            return existing
+        self._remember_for_dispatch(candidate.id)
+        return candidate
+
     def _remember_for_dispatch(self, job_id: UUID) -> None:
         """把需要提交后投递的任务登记到通用提交后动作中。"""
         dispatch = self._dispatch
@@ -330,6 +404,35 @@ class PostgresAnnotationJobQueue:
         return self._repository.get_or_create_annotation_preparation(
             member_id=member_id,
             attempt_id=attempt_id,
+            now=now,
+        )
+
+
+class PostgresUsageJobQueue:
+    """`dataset` 使用的用途检查和制品任务创建 seam。"""
+
+    def __init__(
+        self,
+        session: DatabaseSession,
+        dispatch: Callable[[UUID], None] | None = None,
+    ) -> None:
+        self._repository = PostgresJobRepository(session, dispatch=dispatch)
+
+    def get_or_create_usage_check(
+        self, *, dataset_id: UUID, check_id: UUID, now: datetime
+    ) -> ApplicationJob:
+        return self._repository.get_or_create_usage_check(
+            dataset_id=dataset_id,
+            check_id=check_id,
+            now=now,
+        )
+
+    def get_or_create_artifact(
+        self, *, dataset_id: UUID, artifact_id: UUID, now: datetime
+    ) -> ApplicationJob:
+        return self._repository.get_or_create_artifact(
+            dataset_id=dataset_id,
+            artifact_id=artifact_id,
             now=now,
         )
 

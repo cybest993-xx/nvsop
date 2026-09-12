@@ -23,9 +23,9 @@ from edge_runtime.configuration_values import (
     _require_keys,
     safe_url,
 )
+from edge_runtime.judgment.evidence import EvidenceMargins
 from edge_runtime.judgment.model import HostInstant, Ordering, RuntimeParameters, Template
 from edge_runtime.stream_health import StreamFact, StreamHealthEvent, decode
-from edge_runtime.supervisor.commands import EvidenceMargins
 from edge_runtime.supervisor.inputs import ActionRecognized, StreamHealthObserved, SupervisorInput
 
 

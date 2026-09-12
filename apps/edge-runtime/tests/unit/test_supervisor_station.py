@@ -1,14 +1,7 @@
-"""The supervisor driving the core: normalized input in, commands and a timer out.
+"""supervisor 的公开驱动接口: 输入到达后提交完整反应, 并返回判定和计时器。
 
-This is the seam the inference host's run loop crosses. Everything the core declared has to
-become something the supervisor holds or performs — the timer it asked for, and the commands
-the decision described (§5.18).
-
-The timer is the substance of these assertions. It is measured on the host's monotonic clock
-because that is the only clock that can measure chunks *ceasing to arrive* (§5.1), and it
-must not fire twice for one wait: the ticket's own acceptance criterion is that cancelling or
-rearming produces no duplicate judgment. `FakeClock` moves by assignment, so nothing here
-sleeps.
+持久化替身只记录接缝数据; SQLite 原子性由集成测试证明。可移动时钟验证取消、
+重排和重复唤醒不会重复判定, 不使用 sleep。
 """
 
 from __future__ import annotations
@@ -21,10 +14,12 @@ from harness import (
     STEP_DEADLINE,
     STEPS,
     FakeClock,
+    MemoryReactionStore,
     opening_state,
 )
 
 from edge_runtime.judgment import ReasonCode, Verdict
+from edge_runtime.judgment.evidence import EvidenceMargins
 from edge_runtime.judgment.model import (
     Decision,
     EvidenceSpan,
@@ -36,13 +31,6 @@ from edge_runtime.judgment.model import (
     Violation,
 )
 from edge_runtime.stream_health import StreamFact, StreamHealthEvent
-from edge_runtime.supervisor.commands import (
-    ClipEvidence,
-    CloseInstance,
-    EvidenceMargins,
-    LatchViolation,
-    RecordDecision,
-)
 from edge_runtime.supervisor.inputs import (
     ActionRecognized,
     ExternalSignal,
@@ -65,6 +53,7 @@ def station(
     moving = clock if clock is not None else FakeClock()
     return (
         StationSupervisor(
+            store=MemoryReactionStore(),
             state=opening_state(ordering, end_signals=end_signals),
             margins=MARGINS,
             clock=moving,
@@ -77,20 +66,20 @@ def action(signal: str, at: float, *, anchor: float = ANCHOR) -> ActionRecognize
     return ActionRecognized(signal=signal, at=HostInstant(at), source_time=at, source_anchor=anchor)
 
 
-class EveryInputReachesTheCoreAndComesBackAsCommandsTest(unittest.TestCase):
-    def test_an_action_that_decides_nothing_yields_no_command(self) -> None:
+class EveryInputReachesTheCoreAndCommitsDecisionsTest(unittest.TestCase):
+    def test_an_action_that_decides_nothing_yields_no_decision(self) -> None:
         supervisor, _ = station()
 
         reaction = supervisor.receive(action(STEPS[0], at=100.0))
 
         self.assertEqual(
-            Reaction(commands=(), wake_at=HostInstant(160.0)),
+            Reaction(decisions=(), wake_at=HostInstant(160.0)),
             reaction,
             "one step of five decides nothing yet, but the pass is now in flight and the "
             "core wants waking at the nearer of the two limits",
         )
 
-    def test_a_complete_pass_comes_back_as_the_whole_command_sequence(self) -> None:
+    def test_a_complete_pass_returns_the_decision_and_closed_instance(self) -> None:
         supervisor, _ = station()
         for second, signal in enumerate(STEPS[:-1], start=100):
             supervisor.receive(action(signal, at=float(second)))
@@ -99,24 +88,15 @@ class EveryInputReachesTheCoreAndComesBackAsCommandsTest(unittest.TestCase):
 
         self.assertEqual(
             Reaction(
-                commands=(
-                    RecordDecision(
-                        decision=Decision(
-                            instance_id=1,
-                            verdict=Verdict.PASS,
-                            reasons=(),
-                            violations=(),
-                            lifecycle=Lifecycle.CLOSED_BY_COMPLETE_SET,
-                            evidence=EvidenceSpan.at(HostInstant(104.0)),
-                        )
-                    ),
-                    ClipEvidence(
+                decisions=(
+                    Decision(
                         instance_id=1,
-                        anchor=HostInstant(104.0),
-                        start=HostInstant(99.0),
-                        end=HostInstant(109.0),
+                        verdict=Verdict.PASS,
+                        reasons=(),
+                        violations=(),
+                        lifecycle=Lifecycle.CLOSED_BY_COMPLETE_SET,
+                        evidence=EvidenceSpan.at(HostInstant(104.0)),
                     ),
-                    CloseInstance(instance_id=1, lifecycle=Lifecycle.CLOSED_BY_COMPLETE_SET),
                 ),
                 wake_at=None,
                 closed_instances=(
@@ -131,7 +111,7 @@ class EveryInputReachesTheCoreAndComesBackAsCommandsTest(unittest.TestCase):
             reaction,
         )
 
-    def test_a_violation_comes_back_as_a_latch_command(self) -> None:
+    def test_a_violation_is_carried_by_its_decision(self) -> None:
         supervisor, _ = station(Ordering.ORDERED)
         supervisor.receive(action(STEPS[0], at=100.0))
 
@@ -139,29 +119,23 @@ class EveryInputReachesTheCoreAndComesBackAsCommandsTest(unittest.TestCase):
 
         self.assertEqual(
             (
-                LatchViolation(
-                    instance_id=1,
-                    violation=Violation(
-                        reason=ReasonCode.WRONG_STEP,
-                        steps=(STEPS[2],),
-                        evidence=EvidenceSpan.at(HostInstant(101.0)),
-                    ),
+                Violation(
+                    reason=ReasonCode.WRONG_STEP,
+                    steps=(STEPS[2],),
+                    evidence=EvidenceSpan.at(HostInstant(101.0)),
                 ),
-                LatchViolation(
-                    instance_id=1,
-                    violation=Violation(
-                        reason=ReasonCode.MISSED_STEP,
-                        steps=(STEPS[1],),
-                        evidence=EvidenceSpan.at(HostInstant(101.0)),
-                    ),
+                Violation(
+                    reason=ReasonCode.MISSED_STEP,
+                    steps=(STEPS[1],),
+                    evidence=EvidenceSpan.at(HostInstant(101.0)),
                 ),
             ),
-            tuple(c for c in reaction.commands if isinstance(c, LatchViolation)),
+            tuple(v for d in reaction.decisions for v in d.violations),
             "the jumped step is reported on arrival, not at close: that is what makes "
             "error-proofing real-time for the most common violation kind (§5.1)",
         )
 
-    def test_one_input_producing_several_decisions_yields_all_of_their_commands(
+    def test_multiple_normalized_events_return_the_closing_decision(
         self,
     ) -> None:
         supervisor, _ = station(end_signals=(EXTERNAL_END,))
@@ -177,30 +151,21 @@ class EveryInputReachesTheCoreAndComesBackAsCommandsTest(unittest.TestCase):
 
         self.assertEqual(
             (
-                RecordDecision(
-                    decision=Decision(
-                        instance_id=1,
-                        verdict=Verdict.INDETERMINATE,
-                        reasons=(ReasonCode.IO_TIME_UNALIGNED,),
-                        violations=(),
-                        lifecycle=Lifecycle.CLOSED_BY_END_SIGNAL,
-                        evidence=EvidenceSpan.at(HostInstant(120.0)),
-                    )
-                ),
-                ClipEvidence(
+                Decision(
                     instance_id=1,
-                    anchor=HostInstant(120.0),
-                    start=HostInstant(115.0),
-                    end=HostInstant(125.0),
+                    verdict=Verdict.INDETERMINATE,
+                    reasons=(ReasonCode.IO_TIME_UNALIGNED,),
+                    violations=(),
+                    lifecycle=Lifecycle.CLOSED_BY_END_SIGNAL,
+                    evidence=EvidenceSpan.at(HostInstant(120.0)),
                 ),
-                CloseInstance(instance_id=1, lifecycle=Lifecycle.CLOSED_BY_END_SIGNAL),
             ),
-            reaction.commands,
+            reaction.decisions,
             "§5.8: the end signal could not be placed on the video timeline, so this pass "
             "closes indeterminate rather than running the set comparison on it",
         )
 
-    def test_a_health_event_alone_produces_no_command(self) -> None:
+    def test_a_health_event_alone_produces_no_decision(self) -> None:
         supervisor, _ = station()
         supervisor.receive(action(STEPS[0], at=100.0))
 
@@ -213,17 +178,22 @@ class EveryInputReachesTheCoreAndComesBackAsCommandsTest(unittest.TestCase):
         )
 
         self.assertEqual(
-            Reaction(commands=(), wake_at=HostInstant(160.0)),
+            Reaction(decisions=(), wake_at=HostInstant(160.0)),
             reaction,
             "losing sight is not a conclusion. It goes on the instance's record and is "
             "read when something does conclude (§5.1)",
         )
 
-    def test_the_state_it_carries_is_what_the_next_ticket_persists(self) -> None:
-        supervisor, _ = station()
-
+    def test_the_returned_state_is_already_committed_once(self) -> None:
+        store = MemoryReactionStore()
+        supervisor = StationSupervisor(
+            state=opening_state(Ordering.UNORDERED),
+            store=store,
+            margins=MARGINS,
+            clock=FakeClock(),
+        )
         supervisor.receive(action(STEPS[0], at=100.0))
-
+        self.assertEqual(store.reactions, [(supervisor.state, (), (), ())])
         instance = supervisor.state.instance
         assert instance is not None
         self.assertEqual(1, instance.instance_id)
@@ -295,7 +265,7 @@ class RearmingProducesNoDuplicateJudgmentTest(unittest.TestCase):
         clock.now = 159.0
         reaction = supervisor.wake(host=HostLiveness.ALIVE)
 
-        self.assertEqual(Reaction(commands=(), wake_at=HostInstant(160.0)), reaction)
+        self.assertEqual(Reaction(decisions=(), wake_at=HostInstant(160.0)), reaction)
 
     def test_the_instant_a_superseded_timer_named_decides_nothing(self) -> None:
         supervisor, clock = station()
@@ -306,7 +276,7 @@ class RearmingProducesNoDuplicateJudgmentTest(unittest.TestCase):
         reaction = supervisor.wake(host=HostLiveness.ALIVE)
 
         self.assertEqual(
-            Reaction(commands=(), wake_at=HostInstant(200.0)),
+            Reaction(decisions=(), wake_at=HostInstant(200.0)),
             reaction,
             "160.0 was the deadline for a wait that a new observation ended. Deciding on "
             "it would report a step as late while the operator was doing the next one",
@@ -323,10 +293,10 @@ class RearmingProducesNoDuplicateJudgmentTest(unittest.TestCase):
 
         self.assertEqual(
             (ReasonCode.DEADLINE_EXCEEDED,),
-            tuple(c.decision.reasons[0] for c in first.commands if isinstance(c, RecordDecision)),
+            tuple(d.reasons[0] for d in first.decisions),
         )
         self.assertEqual(
-            Reaction(commands=(), wake_at=HostInstant(400.0)),
+            Reaction(decisions=(), wake_at=HostInstant(400.0)),
             second,
             "the same wait is one fact. Having reported it, the next thing that can happen "
             "by time alone is the idle close",
@@ -338,7 +308,7 @@ class RearmingProducesNoDuplicateJudgmentTest(unittest.TestCase):
         clock.now = 500.0
 
         self.assertEqual(
-            Reaction(commands=(), wake_at=None), supervisor.wake(host=HostLiveness.ALIVE)
+            Reaction(decisions=(), wake_at=None), supervisor.wake(host=HostLiveness.ALIVE)
         )
 
 
@@ -358,37 +328,27 @@ class WhatTheSupervisorFoundAtTheFiringTest(unittest.TestCase):
 
         self.assertEqual(
             (
-                RecordDecision(
-                    decision=Decision(
-                        instance_id=1,
-                        verdict=Verdict.FAIL,
-                        reasons=(ReasonCode.DEADLINE_EXCEEDED,),
-                        violations=(
-                            Violation(
-                                reason=ReasonCode.DEADLINE_EXCEEDED,
-                                # Every step still outstanding: an unordered template waits
-                                # on all of them at once, so the late wait is about the set
-                                # rather than about one next step.
-                                steps=STEPS[1:],
-                                evidence=EvidenceSpan.spanning(
-                                    HostInstant(175.0), since=HostInstant(100.0)
-                                ),
+                Decision(
+                    instance_id=1,
+                    verdict=Verdict.FAIL,
+                    reasons=(ReasonCode.DEADLINE_EXCEEDED,),
+                    violations=(
+                        Violation(
+                            reason=ReasonCode.DEADLINE_EXCEEDED,
+                            # Every step still outstanding: an unordered template waits
+                            # on all of them at once, so the late wait is about the set
+                            # rather than about one next step.
+                            steps=STEPS[1:],
+                            evidence=EvidenceSpan.spanning(
+                                HostInstant(175.0), since=HostInstant(100.0)
                             ),
                         ),
-                        lifecycle=Lifecycle.STAYS_OPEN,
-                        evidence=EvidenceSpan.at(HostInstant(175.0)),
-                    )
-                ),
-                ClipEvidence(
-                    instance_id=1,
-                    anchor=HostInstant(175.0),
-                    # The whole wait, widened by the margin — not the instant the limit was
-                    # crossed. A reviewer has to see how long it actually waited (story 18).
-                    start=HostInstant(95.0),
-                    end=HostInstant(180.0),
+                    ),
+                    lifecycle=Lifecycle.STAYS_OPEN,
+                    evidence=EvidenceSpan.at(HostInstant(175.0)),
                 ),
             ),
-            tuple(c for c in reaction.commands if isinstance(c, RecordDecision | ClipEvidence)),
+            reaction.decisions,
             "175.0 rather than 160.0: a busy loop may reach the firing late, and the "
             "silence really did last that long",
         )
@@ -402,18 +362,16 @@ class WhatTheSupervisorFoundAtTheFiringTest(unittest.TestCase):
 
         self.assertEqual(
             (
-                RecordDecision(
-                    decision=Decision(
-                        instance_id=1,
-                        verdict=Verdict.INDETERMINATE,
-                        reasons=(ReasonCode.INFERENCE_HOST_DOWN,),
-                        violations=(),
-                        lifecycle=Lifecycle.CLOSED_BY_IDLE_TIMEOUT,
-                        evidence=EvidenceSpan.at(HostInstant(400.0)),
-                    )
+                Decision(
+                    instance_id=1,
+                    verdict=Verdict.INDETERMINATE,
+                    reasons=(ReasonCode.INFERENCE_HOST_DOWN,),
+                    violations=(),
+                    lifecycle=Lifecycle.CLOSED_BY_IDLE_TIMEOUT,
+                    evidence=EvidenceSpan.at(HostInstant(400.0)),
                 ),
             ),
-            tuple(c for c in reaction.commands if isinstance(c, RecordDecision)),
+            reaction.decisions,
             "process death cannot announce itself, so continued silence is the signal "
             "(§5.11). The four steps not seen are not reported as missed",
         )
@@ -434,18 +392,16 @@ class WhatTheSupervisorFoundAtTheFiringTest(unittest.TestCase):
 
         self.assertEqual(
             (
-                RecordDecision(
-                    decision=Decision(
-                        instance_id=1,
-                        verdict=Verdict.INDETERMINATE,
-                        reasons=(ReasonCode.STREAM_LOST,),
-                        violations=(),
-                        lifecycle=Lifecycle.CLOSED_BY_IDLE_TIMEOUT,
-                        evidence=EvidenceSpan.at(HostInstant(400.0)),
-                    )
+                Decision(
+                    instance_id=1,
+                    verdict=Verdict.INDETERMINATE,
+                    reasons=(ReasonCode.STREAM_LOST,),
+                    violations=(),
+                    lifecycle=Lifecycle.CLOSED_BY_IDLE_TIMEOUT,
+                    evidence=EvidenceSpan.at(HostInstant(400.0)),
                 ),
             ),
-            tuple(c for c in reaction.commands if isinstance(c, RecordDecision)),
+            reaction.decisions,
             "§2.1, the measurement this whole design defends: the stream cut out, so the "
             "steps were not observed. That is not the operator failing to do them",
         )
@@ -463,7 +419,7 @@ class WhatTheSupervisorFoundAtTheFiringTest(unittest.TestCase):
         clock.now = 100.0 + IDLE_TIMEOUT
         reaction = supervisor.wake(host=HostLiveness.ALIVE)
 
-        decisions = [c.decision for c in reaction.commands if isinstance(c, RecordDecision)]
+        decisions = list(reaction.decisions)
         self.assertEqual(
             [Verdict.INDETERMINATE],
             [decision.verdict for decision in decisions],
@@ -491,11 +447,7 @@ class WhatTheSupervisorFoundAtTheFiringTest(unittest.TestCase):
 
         self.assertEqual(
             [(Verdict.INDETERMINATE, (ReasonCode.STREAM_LOST,))],
-            [
-                (c.decision.verdict, c.decision.reasons)
-                for c in reaction.commands
-                if isinstance(c, RecordDecision)
-            ],
+            [(d.verdict, d.reasons) for d in reaction.decisions],
             "the impairment was in force before this pass existed, so the pass carries it "
             "from the moment it opens: an instance that began blind was never observable",
         )
@@ -513,24 +465,15 @@ class ARunEndingConcludesWhatWasInFlightTest(unittest.TestCase):
 
         self.assertEqual(
             Reaction(
-                commands=(
-                    RecordDecision(
-                        decision=Decision(
-                            instance_id=1,
-                            verdict=Verdict.INDETERMINATE,
-                            reasons=(ReasonCode.RUN_INTERRUPTED,),
-                            violations=(),
-                            lifecycle=Lifecycle.CLOSED_BY_RUN_INTERRUPTION,
-                            evidence=EvidenceSpan.at(HostInstant(250.0)),
-                        )
-                    ),
-                    ClipEvidence(
+                decisions=(
+                    Decision(
                         instance_id=1,
-                        anchor=HostInstant(250.0),
-                        start=HostInstant(245.0),
-                        end=HostInstant(255.0),
+                        verdict=Verdict.INDETERMINATE,
+                        reasons=(ReasonCode.RUN_INTERRUPTED,),
+                        violations=(),
+                        lifecycle=Lifecycle.CLOSED_BY_RUN_INTERRUPTION,
+                        evidence=EvidenceSpan.at(HostInstant(250.0)),
                     ),
-                    CloseInstance(instance_id=1, lifecycle=Lifecycle.CLOSED_BY_RUN_INTERRUPTION),
                 ),
                 wake_at=None,
                 closed_instances=(
@@ -551,7 +494,7 @@ class ARunEndingConcludesWhatWasInFlightTest(unittest.TestCase):
 
         clock.now = 250.0
 
-        self.assertEqual(Reaction(commands=(), wake_at=None), supervisor.interrupt())
+        self.assertEqual(Reaction(decisions=(), wake_at=None), supervisor.interrupt())
 
 
 class OnlyTheMonotonicClockIsReadAndOnlyWhereNoInstantArrivedTest(unittest.TestCase):

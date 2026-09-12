@@ -26,7 +26,7 @@ from edge_runtime.connectors.hikvision import IsapiConnector
 from edge_runtime.connectors.port import Reachability
 from edge_runtime.connectors.transport import UrllibIsapiTransport
 from edge_runtime.judgment.model import HostLiveness
-from edge_runtime.local_state.store import LocalState, StationStore, open_local_state
+from edge_runtime.local_state.store import LocalState, open_local_state
 from edge_runtime.station_runtime import (
     InputWaitExpired,
     SseStationInputSource,
@@ -44,7 +44,7 @@ from edge_runtime.supervisor.delegated_commands import (
 from edge_runtime.supervisor.delegated_transport import CommandTransportError, HttpCommandTransport
 from edge_runtime.supervisor.inputs import StreamHealthObserved
 from edge_runtime.supervisor.startup import resume_station
-from edge_runtime.supervisor.station import Reaction, StationSupervisor
+from edge_runtime.supervisor.station import StationSupervisor
 
 
 class _IsapiConnectionTestProbe:
@@ -138,10 +138,7 @@ class ConnectionTestCommandLoop:
 class AutonomousStation:
     """把本地状态、恢复规则、supervisor 和实时输入组成一条自治链。"""
 
-    def __init__(
-        self, *, store: StationStore, supervisor: StationSupervisor, source: StationInputSource
-    ) -> None:
-        self._store = store
+    def __init__(self, *, supervisor: StationSupervisor, source: StationInputSource) -> None:
         self._supervisor = supervisor
         self._source = source
 
@@ -153,21 +150,13 @@ class AutonomousStation:
         """关闭工位输入源。"""
         self._source.close()
 
-    def _commit(self, reaction: Reaction) -> None:
-        """把本次反应的领域状态和效果提交到本地状态。"""
-        self._store.commit(
-            state=self._supervisor.state,
-            commands=reaction.commands,
-            closed_instances=reaction.closed_instances,
-        )
-
     def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
-        """消费输入, 提交每个反应, 并在停机时结束当前实例。"""
+        """消费输入并在停机时结束当前实例; 持久化由 supervisor 负责。"""
         try:
             while not should_stop():
                 arriving = self._source.next_input(timeout=self._supervisor.timeout())
                 if isinstance(arriving, InputWaitExpired):
-                    reaction = self._supervisor.wake(host=HostLiveness.ALIVE)
+                    self._supervisor.wake(host=HostLiveness.ALIVE)
                 elif arriving is None:
                     if self._source.ended:
                         ended = StreamHealthObserved(
@@ -176,13 +165,12 @@ class AutonomousStation:
                                 at_monotonic=monotonic(),
                             )
                         )
-                        self._commit(self._supervisor.receive(ended))
+                        self._supervisor.receive(ended)
                         break
-                    reaction = self._supervisor.wake(host=HostLiveness.ALIVE)
+                    self._supervisor.wake(host=HostLiveness.ALIVE)
                 else:
-                    reaction = self._supervisor.receive(arriving)
-                self._commit(reaction)
-            self._commit(self._supervisor.interrupt())
+                    self._supervisor.receive(arriving)
+            self._supervisor.interrupt()
         finally:
             self.close()
 
@@ -346,7 +334,6 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
             station_store = state.station(station_config.station_id)
             stations.append(
                 AutonomousStation(
-                    store=station_store,
                     supervisor=resume_station(
                         station_store,
                         template=station_config.template,

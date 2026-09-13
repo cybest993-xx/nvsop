@@ -33,6 +33,15 @@ Create a GitHub issue.
 
 Run `gh issue view <number> --comments`.
 
+## Delivery phases and status evidence
+
+The current delivery map is issue [#1](https://github.com/cybest993-xx/nvsop/issues/1). Scope, acceptance split, and exit conditions are authoritative in [`solution-and-roadmap.md` §八–九](../design/solution-and-roadmap.md); test evidence is defined in the [harness §4](../design/repository-harness.md#4-test-placement-and-evidence). Do not maintain a second scope list in documentation or reopen superseded/cancelled implementation tickets as part of this synchronization.
+
+- Keep separate implementation and validation progress sections on the map, with links to the owning issues rather than duplicated acceptance checklists.
+- Before moving acceptance to a later phase, create and link an open validation issue. Preserve the original acceptance wording, source issue/criterion, required environment, and evidence location. This includes deferred full cross-module system/browser E2E, not just hardware suites.
+- Update the implementation body's acceptance section to distinguish software-owned criteria from the precisely linked deferred criteria; a generic footer does not override a contradictory checkbox. Add native dependencies from validation to the software it needs, not the reverse. Unresolved decisions and architectural prerequisites get explicit owners and block only the affected work.
+- Read Git history, CI evidence, and live issue state before recording progress or closing an issue under the roadmap's exit rules. Record what ran, where its evidence lives, and what remains unverified; do not infer completion from a local branch or prose. A documentation synchronization never checks off implementation or validation work.
+
 ## Wayfinding operations
 
 Used by `/wayfinder`. The **map** is a single issue with **child** issues as tickets.

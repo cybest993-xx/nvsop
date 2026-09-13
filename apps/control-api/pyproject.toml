@@ -1,0 +1,42 @@
+[project]
+name = "control-api"
+version = "0.1.0"
+description = "Center backend: management and aggregation plane for the SOP compliance system."
+requires-python = ">=3.12"
+
+# The center backend is anchored to Python 3.12 with a committed `.python-version` and
+# `uv.lock` (solution-and-roadmap.md §六). Version floors here; the exact resolution is
+# frozen in the lockfile at the repository root, and CI installs with `uv sync --frozen`.
+dependencies = [
+    "nvsop-contracts",
+    # Argon2id for passwords (§六). `argon2-cffi` is the reference binding to the C
+    # implementation by the Argon2 authors; the parameters we run it with are named
+    # explicitly in `factory_sop/auth/passwords.py` rather than taken from its defaults.
+    "argon2-cffi>=25.1.0",
+    "alembic>=1.19.1",
+    # MinIO's SDK supplies native S3 presigning; the application never implements a signing
+    # algorithm or relays the video body through FastAPI.
+    "minio>=7.2.15",
+    "urllib3>=2.5.0",
+    # ARQ uses Redis as transport while PostgreSQL remains the job authority (ADR-0004).
+    "arq>=0.26.3",
+    "fastapi>=0.121.2",
+    # `psycopg[binary]` ships the libpq wheel rather than building against a system one, so
+    # the offline install (§一) needs no PostgreSQL development headers on the center machine.
+    "psycopg[binary]>=3.3.4",
+    "pydantic-settings>=2.12.0",
+    "sqlalchemy>=2.0.52",
+    "structlog>=25.5.0",
+    "uvicorn>=0.38.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Formatting, lint, type and boundary configuration is the repository root's
+# `pyproject.toml`. A second copy here would drift silently: the gate runs the root
+# configuration, so only the root one is ever enforced.

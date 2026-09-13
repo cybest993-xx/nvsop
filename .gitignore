@@ -12,11 +12,15 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .venv/
+# Editable-install metadata written by `uv sync` into each workspace member.
+*.egg-info/
 
 # Node / Vue
 node_modules/
 dist/
 coverage/
+playwright-report/
+test-results/
 
 # Editors and operating systems
 .idea/

@@ -1,0 +1,87 @@
+# Issue #34 的无 GPU MediaMTX 1.21.0 冒烟环境。
+# digest 固定可复现的 amd64 本地/CI 示例镜像。
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1.21.0@sha256:095da39dd94defa496d592e8b7a968bfd171491ea325d5176c6d32929ba4f1f9
+    command: ["/config/mediamtx.yml"]
+    ports:
+      - "127.0.0.1:8554:8554/tcp"
+      - "127.0.0.1:8889:8889/tcp"
+      - "127.0.0.1:8189:8189/udp"
+      - "127.0.0.1:9996:9996/tcp"
+    volumes:
+      - ./mediamtx.yml:/config/mediamtx.yml:ro
+      - media-recordings:/recordings
+    healthcheck:
+      test: ["CMD", "/mediamtx", "--version"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  synthetic-rtsp:
+    image: jrottenberg/ffmpeg:6.1-ubuntu@sha256:1275eb6dbd392e5bf1711d8ce9af7f2a5d7e7b198cad632764682e450a9eeeb7
+    depends_on:
+      mediamtx:
+        condition: service_healthy
+    command:
+      - -hide_banner
+      - -loglevel
+      - error
+      - -re
+      - -f
+      - lavfi
+      - -i
+      - testsrc2=size=640x360:rate=15
+      - -c:v
+      - libx264
+      - -preset
+      - ultrafast
+      - -tune
+      - zerolatency
+      - -g
+      - "30"
+      - -pix_fmt
+      - yuv420p
+      - -f
+      - rtsp
+      - -rtsp_transport
+      - tcp
+      - rtsp://mediamtx:8554/synthetic
+
+  cpu-transcoder:
+    image: jrottenberg/ffmpeg:6.1-ubuntu@sha256:1275eb6dbd392e5bf1711d8ce9af7f2a5d7e7b198cad632764682e450a9eeeb7
+    depends_on:
+      mediamtx:
+        condition: service_healthy
+      synthetic-rtsp:
+        condition: service_started
+    restart: unless-stopped
+    command:
+      - -hide_banner
+      - -loglevel
+      - error
+      - -rtsp_transport
+      - tcp
+      - -i
+      - rtsp://mediamtx:8554/synthetic
+      - -map
+      - 0:v:0
+      - -an
+      - -c:v
+      - libx264
+      - -preset
+      - veryfast
+      - -tune
+      - zerolatency
+      - -g
+      - "30"
+      - -threads
+      - "2"
+      - -f
+      - rtsp
+      - -rtsp_transport
+      - tcp
+      - rtsp://mediamtx:8554/cpu-transcoded
+
+volumes:
+  media-recordings:

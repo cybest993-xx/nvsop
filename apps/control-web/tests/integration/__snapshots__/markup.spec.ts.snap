@@ -1,0 +1,800 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`the access page > renders the accounts and roles an administrator works with 1`] = `
+"<section aria-labelledby="access-heading">
+  <h1 id="access-heading" class="access__heading">用户与权限</h1>
+  <!-- \`role="alert"\` so a refusal is announced rather than only appearing; the text carries the
+         state, not the colour (Q32). -->
+  <!--v-if-->
+  <div class="el-tabs el-tabs--top">
+    <div class="el-tabs__header is-top">
+      <div class="el-tabs__nav-wrap is-top">
+        <!---->
+        <div class="el-tabs__nav-scroll">
+          <div class="el-tabs__nav is-top" style="transform: translateX(-0px);" role="tablist">
+            <div class="el-tabs__active-bar is-top" style="transition: none; width: 0px; transform: translateX(0px);"></div>
+            <div class="el-tabs__item is-top" id="tab-users" aria-controls="pane-users" role="tab" aria-selected="false" tabindex="-1">账户
+              <!---->
+            </div>
+            <div class="el-tabs__item is-top" id="tab-roles" aria-controls="pane-roles" role="tab" aria-selected="false" tabindex="-1">角色
+              <!---->
+            </div>
+          </div>
+        </div>
+      </div>
+      <!---->
+    </div>
+    <div class="el-tabs__content">
+      <div id="pane-users" class="el-tab-pane" role="tabpanel" aria-hidden="true" aria-labelledby="tab-users" style="display: none;">
+        <div class="panel">
+          <div class="panel__actions"><button aria-disabled="false" type="button" class="el-button el-button--primary">
+              <!--v-if--><span class="">新建账户</span>
+            </button></div>
+          <!--v-if-->
+          <p class="panel__loading">正在加载…</p>
+          <!--teleport start-->
+          <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+            <div class="el-overlay el-modal-dialog" style="z-index: 2001; display: none;">
+              <div role="dialog" aria-modal="true" aria-label="新建账户" aria-describedby="el-id-4" class="el-overlay-dialog"></div>
+            </div>
+          </transition-stub>
+          <!--teleport end-->
+          <!--teleport start-->
+          <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+            <div class="el-overlay el-modal-dialog" style="z-index: 2002; display: none;">
+              <div role="dialog" aria-modal="true" aria-label="修改姓名" aria-describedby="el-id-6" class="el-overlay-dialog"></div>
+            </div>
+          </transition-stub>
+          <!--teleport end-->
+          <!--teleport start-->
+          <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+            <div class="el-overlay el-modal-dialog" style="z-index: 2003; display: none;">
+              <div role="dialog" aria-modal="true" aria-label="重置密码" aria-describedby="el-id-8" class="el-overlay-dialog"></div>
+            </div>
+          </transition-stub>
+          <!--teleport end-->
+          <!--teleport start-->
+          <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+            <div class="el-overlay el-modal-dialog" style="z-index: 2004; display: none;">
+              <div role="dialog" aria-modal="true" aria-label="分配角色" aria-describedby="el-id-10" class="el-overlay-dialog"></div>
+            </div>
+          </transition-stub>
+          <!--teleport end-->
+        </div>
+      </div>
+      <div id="pane-roles" class="el-tab-pane" role="tabpanel" aria-hidden="true" aria-labelledby="tab-roles" style="display: none;">
+        <div class="panel">
+          <div class="panel__actions"><button aria-disabled="false" type="button" class="el-button el-button--primary">
+              <!--v-if--><span class=""> 新建角色 </span>
+            </button></div>
+          <!--v-if-->
+          <p class="panel__loading">正在加载…</p>
+          <!--teleport start-->
+          <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+            <div class="el-overlay el-modal-dialog" style="z-index: 2005; display: none;">
+              <div role="dialog" aria-modal="true" aria-label="新建角色" aria-describedby="el-id-12" class="el-overlay-dialog"></div>
+            </div>
+          </transition-stub>
+          <!--teleport end-->
+        </div>
+      </div>
+    </div>
+  </div>
+</section>"
+`;
+
+exports[`the device page > renders connector configuration with a delegated test control 1`] = `
+"<section aria-labelledby="devices-heading">
+  <header class="devices__header">
+    <div>
+      <p class="devices__eyebrow">配置中心 / 设备</p>
+      <h1 id="devices-heading" class="devices__heading">工位与设备</h1>
+      <p class="devices__intro">管理连接器与点位的归属、语义和非秘密配置；实测能力单独登记。</p>
+    </div><button aria-disabled="false" type="button" class="el-button el-button--primary">
+      <!--v-if--><span class=""> 新建连接器 </span>
+    </button>
+  </header>
+  <!--v-if-->
+  <div class="devices__surface">
+    <div class="devices__surface-head">
+      <div>
+        <h2 class="devices__title">连接器</h2>
+        <p class="devices__meta">1 个配置</p>
+      </div>
+      <p class="devices__surface-note">中心不保存设备凭据</p>
+    </div>
+    <table class="devices__table">
+      <caption class="devices__caption"> 已配置的连接器，含已停用记录 </caption>
+      <thead>
+        <tr>
+          <th scope="col">名称</th>
+          <th scope="col">类型</th>
+          <th scope="col">所属工位</th>
+          <th scope="col">推理机</th>
+          <th scope="col">连接参数</th>
+          <th scope="col">凭据</th>
+          <th scope="col">连接状态</th>
+          <th scope="col">状态</th>
+          <th scope="col">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row"><button aria-disabled="false" type="button" class="el-button el-button--primary is-link devices__connector-link">
+              <!--v-if--><span class="">装配线输入</span>
+            </button></th>
+          <td>海康 ISAPI</td>
+          <td>一号装配工位</td>
+          <td>推理机 A</td>
+          <td><span>192.168.10.21</span><span> :80</span></td>
+          <td><span class="el-tag el-tag--success el-tag--light"><span class="el-tag__content">已配置</span>
+            <!--v-if--></span>
+          </td>
+          <td><span class="el-tag el-tag--warning el-tag--light"><span class="el-tag__content">未验证</span>
+            <!--v-if--></span>
+          </td>
+          <td><span class="el-tag el-tag--success el-tag--light"><span class="el-tag__content">在用</span>
+            <!--v-if--></span>
+          </td>
+          <td class="devices__row-actions"><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
+              <!--v-if--><span class="">详情</span>
+            </button><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
+              <!--v-if--><span class=""> 编辑 </span>
+            </button><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
+              <!--v-if--><span class="">停用</span>
+            </button><button aria-disabled="false" type="button" class="el-button el-button--danger is-link">
+              <!--v-if--><span class=""> 删除 </span>
+            </button>
+            <div class="connection-test"><button aria-disabled="false" type="button" class="el-button el-button--primary is-plain" aria-label="测试连接：装配线输入">
+                <!--v-if--><span class="">测试连接</span>
+              </button>
+              <!--v-if-->
+            </div>
+          </td>
+        </tr>
+        <!--v-if-->
+      </tbody>
+    </table>
+  </div>
+  <!--teleport start-->
+  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2006; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="新建连接器" aria-describedby="el-id-14" class="el-overlay-dialog"></div>
+    </div>
+  </transition-stub>
+  <!--teleport end-->
+  <!--teleport start-->
+  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2007; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="连接器详情" aria-describedby="el-id-16" class="el-overlay-dialog"></div>
+    </div>
+  </transition-stub>
+  <!--teleport end-->
+  <!--v-if-->
+  <section class="station-template" aria-labelledby="station-template-heading">
+    <header class="station-template__header">
+      <div>
+        <p class="station-template__eyebrow">工位交付 / 对账</p>
+        <h2 id="station-template-heading" class="station-template__heading">工位模板与运行参数</h2>
+        <p class="station-template__intro"> 中心只记录期望版本；reported 是推理机签名上报的现场事实，二者不混为一次成功。 </p>
+      </div>
+    </header>
+    <!--v-if-->
+    <div class="station-template__surface">
+      <p class="station-template__loading">正在读取工位模板配置…</p>
+    </div>
+    <!--teleport start-->
+    <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+      <div class="el-overlay el-modal-dialog" style="z-index: 2008; display: none;">
+        <div role="dialog" aria-modal="true" aria-label="工位模板与运行参数" aria-describedby="el-id-18" class="el-overlay-dialog"></div>
+      </div>
+    </transition-stub>
+    <!--teleport end-->
+  </section>
+  <!--v-if-->
+  <!--v-if-->
+  <!--v-if-->
+  <p role="status">当前没有点位权限；点位列表、表单和状态操作均不会请求。</p>
+  <!--v-if-->
+  <section aria-labelledby="capability-heading">
+    <h3 id="capability-heading">连接器能力声明</h3>
+    <table aria-label="连接器能力声明清单">
+      <thead>
+        <tr>
+          <th scope="col">连接器</th>
+          <th scope="col">验证状态</th>
+          <th scope="col">投递 / 周期</th>
+          <th scope="col">轮询周期</th>
+          <th scope="col">最大延迟</th>
+          <th scope="col">保序</th>
+          <th scope="col">边沿</th>
+          <th scope="col">时间戳来源</th>
+          <th scope="col">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row">装配线输入</th>
+          <td>未知能力声明（未提供）</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td><span>未知值，不能编辑</span></td>
+        </tr>
+      </tbody>
+    </table>
+    <!--v-if-->
+    <!--v-if-->
+    <!--v-if-->
+  </section>
+  <section aria-labelledby="validation-heading">
+    <h3 id="validation-heading">点位角色绑定预检</h3>
+    <p role="status">绑定预检需要点位查看权限；当前不会请求点位或连接器详情。</p>
+    <!--v-if-->
+    <!--v-if-->
+    <!--v-if-->
+  </section>
+</section>"
+`;
+
+exports[`the device page > renders the connector form with only non-secret fields 1`] = `
+"<section aria-labelledby="devices-heading">
+  <header class="devices__header">
+    <div>
+      <p class="devices__eyebrow">配置中心 / 设备</p>
+      <h1 id="devices-heading" class="devices__heading">工位与设备</h1>
+      <p class="devices__intro">管理连接器与点位的归属、语义和非秘密配置；实测能力单独登记。</p>
+    </div><button aria-disabled="false" type="button" class="el-button el-button--primary">
+      <!--v-if--><span class=""> 新建连接器 </span>
+    </button>
+  </header>
+  <!--v-if-->
+  <div class="devices__surface">
+    <div class="devices__surface-head">
+      <div>
+        <h2 class="devices__title">连接器</h2>
+        <p class="devices__meta">1 个配置</p>
+      </div>
+      <p class="devices__surface-note">中心不保存设备凭据</p>
+    </div>
+    <table class="devices__table">
+      <caption class="devices__caption"> 已配置的连接器，含已停用记录 </caption>
+      <thead>
+        <tr>
+          <th scope="col">名称</th>
+          <th scope="col">类型</th>
+          <th scope="col">所属工位</th>
+          <th scope="col">推理机</th>
+          <th scope="col">连接参数</th>
+          <th scope="col">凭据</th>
+          <th scope="col">连接状态</th>
+          <th scope="col">状态</th>
+          <th scope="col">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row"><button aria-disabled="false" type="button" class="el-button el-button--primary is-link devices__connector-link">
+              <!--v-if--><span class="">装配线输入</span>
+            </button></th>
+          <td>海康 ISAPI</td>
+          <td>一号装配工位</td>
+          <td>推理机 A</td>
+          <td><span>192.168.10.21</span><span> :80</span></td>
+          <td><span class="el-tag el-tag--success el-tag--light"><span class="el-tag__content">已配置</span>
+            <!--v-if--></span>
+          </td>
+          <td><span class="el-tag el-tag--warning el-tag--light"><span class="el-tag__content">未验证</span>
+            <!--v-if--></span>
+          </td>
+          <td><span class="el-tag el-tag--success el-tag--light"><span class="el-tag__content">在用</span>
+            <!--v-if--></span>
+          </td>
+          <td class="devices__row-actions"><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
+              <!--v-if--><span class="">详情</span>
+            </button><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
+              <!--v-if--><span class=""> 编辑 </span>
+            </button><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
+              <!--v-if--><span class="">停用</span>
+            </button><button aria-disabled="false" type="button" class="el-button el-button--danger is-link">
+              <!--v-if--><span class=""> 删除 </span>
+            </button>
+            <div class="connection-test"><button aria-disabled="false" type="button" class="el-button el-button--primary is-plain" aria-label="测试连接：装配线输入">
+                <!--v-if--><span class="">测试连接</span>
+              </button>
+              <!--v-if-->
+            </div>
+          </td>
+        </tr>
+        <!--v-if-->
+      </tbody>
+    </table>
+  </div>
+  <!--teleport start-->
+  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2012;">
+      <div role="dialog" aria-modal="true" aria-label="新建连接器" aria-describedby="el-id-20" class="el-overlay-dialog">
+        <div class="el-dialog" style="--el-dialog-width: 38rem;" tabindex="-1">
+          <header class="el-dialog__header show-close"><span role="heading" aria-level="2" class="el-dialog__title">新建连接器</span><button aria-label="Close this dialog" class="el-dialog__headerbtn" type="button"><i class="el-icon el-dialog__close"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+                  <path fill="currentColor" d="M764.288 214.592 512 466.88 259.712 214.592a31.936 31.936 0 0 0-45.12 45.12L466.752 512 214.528 764.224a31.936 31.936 0 1 0 45.12 45.184L512 557.184l252.288 252.288a31.936 31.936 0 0 0 45.12-45.12L557.12 512.064l252.288-252.352a31.936 31.936 0 1 0-45.12-45.184z"></path>
+                </svg></i></button></header>
+          <div id="el-id-20" class="el-dialog__body">
+            <p class="devices__form-note">这里只保存地址和端口等非秘密参数；凭据由推理机本地配置。</p>
+            <form class="el-form el-form--default el-form--label-top">
+              <!--v-if-->
+              <div class="devices__form-grid">
+                <div class="el-form-item asterisk-left el-form-item--label-top"><label id="el-id-25" for="connector-name" class="el-form-item__label">名称</label>
+                  <div class="el-form-item__content">
+                    <div class="el-input">
+                      <!-- input -->
+                      <!-- prepend slot -->
+                      <!--v-if-->
+                      <div class="el-input__wrapper" tabindex="-1">
+                        <!-- prefix slot -->
+                        <!--v-if--><input class="el-input__inner" name="name" type="text" autocomplete="off" tabindex="0" id="connector-name"><!-- suffix slot -->
+                        <!--v-if-->
+                      </div><!-- append slot -->
+                      <!--v-if-->
+                    </div>
+                    <!--v-if-->
+                    <transition-group-stub name="el-zoom-in-top" appear="false" persisted="false" css="true">
+                      <!--v-if-->
+                    </transition-group-stub>
+                  </div>
+                </div>
+                <div class="el-form-item asterisk-left el-form-item--label-top"><label id="el-id-26" for="el-id-41" class="el-form-item__label">类型</label>
+                  <div class="el-form-item__content">
+                    <div class="el-select devices__select">
+                      <div class="el-select__wrapper el-tooltip__trigger el-tooltip__trigger" tabindex="-1">
+                        <!--v-if-->
+                        <div class="el-select__selection">
+                          <!--v-if-->
+                          <div class="el-select__selected-item el-select__input-wrapper is-hidden"><input type="text" class="el-select__input" autocomplete="off" style="min-width: 11px;" tabindex="0" role="combobox" readonly="" spellcheck="false" aria-activedescendant="" aria-controls="el-id-27" aria-expanded="false" aria-label="连接器类型" aria-autocomplete="none" aria-haspopup="listbox" value="" id="el-id-41">
+                            <!--v-if-->
+                          </div>
+                          <div class="el-select__selected-item el-select__placeholder"><span>海康 ISAPI</span></div>
+                        </div>
+                        <div class="el-select__suffix"><i class="el-icon el-select__caret el-select__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+                              <path fill="currentColor" d="M831.872 340.864 512 652.672 192.128 340.864a30.59 30.59 0 0 0-42.752 0 29.12 29.12 0 0 0 0 41.6L489.664 714.24a32 32 0 0 0 44.672 0l340.288-331.712a29.12 29.12 0 0 0 0-41.728 30.59 30.59 0 0 0-42.752 0z"></path>
+                            </svg></i>
+                          <!--v-if-->
+                          <!--v-if-->
+                        </div>
+                      </div>
+                      <!--teleport start-->
+                      <!--teleport end-->
+                    </div>
+                    <!--v-if-->
+                    <transition-group-stub name="el-zoom-in-top" appear="false" persisted="false" css="true">
+                      <!--v-if-->
+                    </transition-group-stub>
+                  </div>
+                </div>
+                <div class="el-form-item asterisk-left el-form-item--label-top"><label id="el-id-31" for="connector-address" class="el-form-item__label">地址</label>
+                  <div class="el-form-item__content">
+                    <div class="el-input">
+                      <!-- input -->
+                      <!-- prepend slot -->
+                      <!--v-if-->
+                      <div class="el-input__wrapper" tabindex="-1">
+                        <!-- prefix slot -->
+                        <!--v-if--><input class="el-input__inner" name="address" type="text" autocomplete="off" tabindex="0" id="connector-address"><!-- suffix slot -->
+                        <!--v-if-->
+                      </div><!-- append slot -->
+                      <!--v-if-->
+                    </div>
+                    <!--v-if-->
+                    <transition-group-stub name="el-zoom-in-top" appear="false" persisted="false" css="true">
+                      <!--v-if-->
+                    </transition-group-stub>
+                  </div>
+                </div>
+                <div class="el-form-item asterisk-left el-form-item--label-top"><label id="el-id-32" for="connector-port" class="el-form-item__label">端口（可选）</label>
+                  <div class="el-form-item__content">
+                    <div class="el-input">
+                      <!-- input -->
+                      <!-- prepend slot -->
+                      <!--v-if-->
+                      <div class="el-input__wrapper" tabindex="-1">
+                        <!-- prefix slot -->
+                        <!--v-if--><input class="el-input__inner" name="port" type="number" autocomplete="off" tabindex="0" inputmode="numeric" id="connector-port"><!-- suffix slot -->
+                        <!--v-if-->
+                      </div><!-- append slot -->
+                      <!--v-if-->
+                    </div>
+                    <!--v-if-->
+                    <transition-group-stub name="el-zoom-in-top" appear="false" persisted="false" css="true">
+                      <!--v-if-->
+                    </transition-group-stub>
+                  </div>
+                </div>
+                <div class="el-form-item asterisk-left el-form-item--label-top"><label id="el-id-33" for="el-id-42" class="el-form-item__label">所属工位</label>
+                  <div class="el-form-item__content">
+                    <div class="el-select devices__select">
+                      <div class="el-select__wrapper el-tooltip__trigger el-tooltip__trigger" tabindex="-1">
+                        <!--v-if-->
+                        <div class="el-select__selection">
+                          <!--v-if-->
+                          <div class="el-select__selected-item el-select__input-wrapper is-hidden"><input type="text" class="el-select__input" autocomplete="off" style="min-width: 11px;" tabindex="0" role="combobox" readonly="" spellcheck="false" aria-activedescendant="" aria-controls="el-id-34" aria-expanded="false" aria-label="所属工位" aria-autocomplete="none" aria-haspopup="listbox" value="" id="el-id-42">
+                            <!--v-if-->
+                          </div>
+                          <div class="el-select__selected-item el-select__placeholder"><span>一号装配工位（A-01）</span></div>
+                        </div>
+                        <div class="el-select__suffix"><i class="el-icon el-select__caret el-select__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+                              <path fill="currentColor" d="M831.872 340.864 512 652.672 192.128 340.864a30.59 30.59 0 0 0-42.752 0 29.12 29.12 0 0 0 0 41.6L489.664 714.24a32 32 0 0 0 44.672 0l340.288-331.712a29.12 29.12 0 0 0 0-41.728 30.59 30.59 0 0 0-42.752 0z"></path>
+                            </svg></i>
+                          <!--v-if-->
+                          <!--v-if-->
+                        </div>
+                      </div>
+                      <!--teleport start-->
+                      <!--teleport end-->
+                    </div>
+                    <!--v-if-->
+                    <transition-group-stub name="el-zoom-in-top" appear="false" persisted="false" css="true">
+                      <!--v-if-->
+                    </transition-group-stub>
+                  </div>
+                </div>
+                <div class="el-form-item asterisk-left el-form-item--label-top"><label id="el-id-37" for="el-id-43" class="el-form-item__label">所属推理机</label>
+                  <div class="el-form-item__content">
+                    <div class="el-select devices__select">
+                      <div class="el-select__wrapper el-tooltip__trigger el-tooltip__trigger" tabindex="-1">
+                        <!--v-if-->
+                        <div class="el-select__selection">
+                          <!--v-if-->
+                          <div class="el-select__selected-item el-select__input-wrapper is-hidden"><input type="text" class="el-select__input" autocomplete="off" style="min-width: 11px;" tabindex="0" role="combobox" readonly="" spellcheck="false" aria-activedescendant="" aria-controls="el-id-38" aria-expanded="false" aria-label="所属推理机" aria-autocomplete="none" aria-haspopup="listbox" value="" id="el-id-43">
+                            <!--v-if-->
+                          </div>
+                          <div class="el-select__selected-item el-select__placeholder"><span>推理机 A</span></div>
+                        </div>
+                        <div class="el-select__suffix"><i class="el-icon el-select__caret el-select__icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+                              <path fill="currentColor" d="M831.872 340.864 512 652.672 192.128 340.864a30.59 30.59 0 0 0-42.752 0 29.12 29.12 0 0 0 0 41.6L489.664 714.24a32 32 0 0 0 44.672 0l340.288-331.712a29.12 29.12 0 0 0 0-41.728 30.59 30.59 0 0 0-42.752 0z"></path>
+                            </svg></i>
+                          <!--v-if-->
+                          <!--v-if-->
+                        </div>
+                      </div>
+                      <!--teleport start-->
+                      <!--teleport end-->
+                    </div>
+                    <!--v-if-->
+                    <transition-group-stub name="el-zoom-in-top" appear="false" persisted="false" css="true">
+                      <!--v-if-->
+                    </transition-group-stub>
+                  </div>
+                </div>
+              </div>
+            </form>
+          </div>
+          <footer class="el-dialog__footer"><button aria-disabled="false" type="button" class="el-button">
+              <!--v-if--><span class="">取消</span>
+            </button><button aria-disabled="false" type="button" class="el-button el-button--primary">
+              <!--v-if--><span class="">创建</span>
+            </button></footer>
+        </div>
+      </div>
+    </div>
+  </transition-stub>
+  <!--teleport end-->
+  <!--teleport start-->
+  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2010; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="连接器详情" aria-describedby="el-id-22" class="el-overlay-dialog"></div>
+    </div>
+  </transition-stub>
+  <!--teleport end-->
+  <!--v-if-->
+  <section class="station-template" aria-labelledby="station-template-heading">
+    <header class="station-template__header">
+      <div>
+        <p class="station-template__eyebrow">工位交付 / 对账</p>
+        <h2 id="station-template-heading" class="station-template__heading">工位模板与运行参数</h2>
+        <p class="station-template__intro"> 中心只记录期望版本；reported 是推理机签名上报的现场事实，二者不混为一次成功。 </p>
+      </div>
+    </header>
+    <!--v-if-->
+    <div class="station-template__surface">
+      <p class="station-template__loading">正在读取工位模板配置…</p>
+    </div>
+    <!--teleport start-->
+    <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+      <div class="el-overlay el-modal-dialog" style="z-index: 2011; display: none;">
+        <div role="dialog" aria-modal="true" aria-label="工位模板与运行参数" aria-describedby="el-id-24" class="el-overlay-dialog"></div>
+      </div>
+    </transition-stub>
+    <!--teleport end-->
+  </section>
+  <!--v-if-->
+  <!--v-if-->
+  <!--v-if-->
+  <p role="status">当前没有点位权限；点位列表、表单和状态操作均不会请求。</p>
+  <!--v-if-->
+  <section aria-labelledby="capability-heading">
+    <h3 id="capability-heading">连接器能力声明</h3>
+    <table aria-label="连接器能力声明清单">
+      <thead>
+        <tr>
+          <th scope="col">连接器</th>
+          <th scope="col">验证状态</th>
+          <th scope="col">投递 / 周期</th>
+          <th scope="col">轮询周期</th>
+          <th scope="col">最大延迟</th>
+          <th scope="col">保序</th>
+          <th scope="col">边沿</th>
+          <th scope="col">时间戳来源</th>
+          <th scope="col">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row">装配线输入</th>
+          <td>未知能力声明（未提供）</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td>未提供</td>
+          <td><span>未知值，不能编辑</span></td>
+        </tr>
+      </tbody>
+    </table>
+    <!--v-if-->
+    <!--v-if-->
+    <!--v-if-->
+  </section>
+  <section aria-labelledby="validation-heading">
+    <h3 id="validation-heading">点位角色绑定预检</h3>
+    <p role="status">绑定预检需要点位查看权限；当前不会请求点位或连接器详情。</p>
+    <!--v-if-->
+    <!--v-if-->
+    <!--v-if-->
+  </section>
+</section>"
+`;
+
+exports[`the login page > renders the form it has been rendering 1`] = `
+"<main class="login">
+  <section class="login__panel" aria-labelledby="login-heading">
+    <h1 id="login-heading" class="login__heading">SOP 合规检测系统</h1>
+    <p class="login__hint">请使用本地账户登录</p>
+    <!-- \`alert\` so a screen reader announces the refusal without the operator having to go
+           looking for it, and the leading ✕ means the failure is not carried by colour alone
+           (Q32). -->
+    <!--v-if-->
+    <form class="el-form el-form--default el-form--label-top">
+      <div class="el-form-item asterisk-left el-form-item--label-top" role="group" aria-labelledby="el-id-0">
+        <div id="el-id-0" class="el-form-item__label">登录名</div>
+        <div class="el-form-item__content">
+          <!-- \`id\`/\`for\` is what \`ElFormItem\`'s label binds through. Focus is taken by the
+               \`onMounted\` above rather than by \`autofocus\`. -->
+          <div class="el-input">
+            <!-- input -->
+            <!-- prepend slot -->
+            <!--v-if-->
+            <div class="el-input__wrapper">
+              <!-- prefix slot -->
+              <!--v-if--><input class="el-input__inner" name="login_name" type="text" autocomplete="username" tabindex="0"><!-- suffix slot -->
+              <!--v-if-->
+            </div><!-- append slot -->
+            <!--v-if-->
+          </div>
+          <transition-group-stub name="el-zoom-in-top" appear="false" persisted="false" css="true">
+            <!--v-if-->
+          </transition-group-stub>
+        </div>
+      </div>
+      <div class="el-form-item asterisk-left el-form-item--label-top" role="group" aria-labelledby="el-id-1">
+        <div id="el-id-1" class="el-form-item__label">密码</div>
+        <div class="el-form-item__content">
+          <div class="el-input el-input--suffix">
+            <!-- input -->
+            <!-- prepend slot -->
+            <!--v-if-->
+            <div class="el-input__wrapper">
+              <!-- prefix slot -->
+              <!--v-if--><input class="el-input__inner" name="password" type="password" autocomplete="current-password" tabindex="0"><!-- suffix slot --><span class="el-input__suffix"><span class="el-input__suffix-inner"><!--v-if--><!--v-if--><!--v-if--><!--v-if--><!--v-if--></span></span>
+            </div><!-- append slot -->
+            <!--v-if-->
+          </div>
+          <transition-group-stub name="el-zoom-in-top" appear="false" persisted="false" css="true">
+            <!--v-if-->
+          </transition-group-stub>
+        </div>
+      </div>
+      <div class="el-form-item asterisk-left el-form-item--label-top">
+        <!--v-if-->
+        <div class="el-form-item__content"><button aria-disabled="true" disabled="" type="submit" class="el-button el-button--primary is-disabled login__submit">
+            <!--v-if--><span class="">登录</span>
+          </button>
+          <transition-group-stub name="el-zoom-in-top" appear="false" persisted="false" css="true">
+            <!--v-if-->
+          </transition-group-stub>
+        </div>
+      </div>
+    </form>
+  </section>
+</main>"
+`;
+
+exports[`the protected shell > renders the navigation and the account strip it has been rendering 1`] = `
+"<div class="shell">
+  <header class="shell__header"><span class="shell__product">SOP 合规检测系统</span>
+    <div class="shell__account"><span class="shell__user">王丽</span><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
+        <!--v-if--><span class="">退出</span>
+      </button></div>
+  </header>
+  <div class="shell__body">
+    <!-- A real \`nav\` with a list, so a screen reader can enumerate the sections and a keyboard
+           can tab through only the ones that lead somewhere. -->
+    <nav class="shell__nav" aria-label="主导航">
+      <ul class="shell__nav-list">
+        <li><a aria-current="page" href="/" class="router-link-active router-link-exact-active shell__link">概览</a></li>
+      </ul>
+    </nav>
+    <main class="shell__main">
+      <!--v-if-->
+      <div></div>
+    </main>
+  </div>
+</div>"
+`;
+
+exports[`the template page > renders the import rail, draft list and retained import history 1`] = `
+"<section aria-labelledby="templates-heading" class="template-management">
+  <header class="template-management__header">
+    <div>
+      <p class="template-management__eyebrow">配置中心 / SOP</p>
+      <h1 id="templates-heading" class="template-management__heading">SOP 模板</h1>
+      <p class="template-management__intro"> 把规范化 Excel 留作凭据，把可运行内容留在草稿；发布版本将在后续流程中产生。 </p>
+    </div>
+    <div class="template-management__import-rail"><label for="template-file" class="template-management__file-label"> 导入规范化 Excel <input id="template-file" name="template-file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></label>
+      <!--v-if--><small>失败文件也会保留，便于定位工作表、行和字段。</small>
+    </div>
+  </header>
+  <!--v-if-->
+  <!--v-if-->
+  <div class="template-management__workbench">
+    <section class="template-management__drafts" aria-labelledby="drafts-heading">
+      <div class="template-management__section-head">
+        <div>
+          <h2 id="drafts-heading">可编辑草稿</h2>
+          <p>每次导入都会生成新草稿，不覆盖已有内容。</p>
+        </div><span class="template-management__count">1 个草稿</span>
+      </div>
+      <table class="template-management__table">
+        <caption class="template-management__caption"> 尚未发布的 SOP 草稿 </caption>
+        <thead>
+          <tr>
+            <th scope="col">工位</th>
+            <th scope="col">步骤</th>
+            <th scope="col">顺序声明</th>
+            <th scope="col">修订号</th>
+            <th scope="col">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row"><span>一号装配工位</span><small>A-01</small></th>
+            <td>1 个步骤</td>
+            <td><span class="el-tag el-tag--success el-tag--light"><span class="el-tag__content">严格顺序</span>
+              <!--v-if--></span>
+            </td>
+            <td>1</td>
+            <td class="template-management__actions"><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
+                <!--v-if--><span class=""> 编辑草稿 </span>
+              </button><button aria-disabled="false" type="button" class="el-button el-button--warning is-link">
+                <!--v-if--><span class=""> 发布版本 </span>
+              </button>
+              <!--v-if-->
+            </td>
+          </tr>
+          <!--v-if-->
+        </tbody>
+      </table>
+    </section>
+    <section class="template-management__history" aria-labelledby="imports-heading">
+      <div class="template-management__section-head">
+        <div>
+          <h2 id="imports-heading">导入记录</h2>
+          <p>原始文件只留在控制面，不出现在草稿表格里。</p>
+        </div>
+      </div>
+      <table class="template-management__table template-management__table--history">
+        <caption class="template-management__caption"> 成功和失败的规范化 Excel 导入 </caption>
+        <thead>
+          <tr>
+            <th scope="col">文件</th>
+            <th scope="col">结果</th>
+            <th scope="col">错误</th>
+            <th scope="col">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">一号模板.xlsx</th>
+            <td><span class="el-tag el-tag--success el-tag--light"><span class="el-tag__content">已生成草稿</span>
+              <!--v-if--></span>
+            </td>
+            <td><span class="template-management__muted">无</span></td>
+            <td><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
+                <!--v-if--><span class=""> 下载原文件 </span>
+              </button></td>
+          </tr>
+          <!--v-if-->
+        </tbody>
+      </table>
+    </section>
+    <section class="template-management__versions" aria-labelledby="versions-heading">
+      <div class="template-management__section-head">
+        <div>
+          <h2 id="versions-heading">已发布版本</h2>
+          <p>版本一旦发布便不可修改；运行端消费的制品和摘要留在这里。</p>
+        </div><span class="template-management__count">1 个版本</span>
+      </div>
+      <table class="template-management__table template-management__table--versions">
+        <caption class="template-management__caption"> 不可变 SOP 版本及其可复验制品 </caption>
+        <thead>
+          <tr>
+            <th scope="col">版本</th>
+            <th scope="col">来源草稿</th>
+            <th scope="col">发布时间</th>
+            <th scope="col">模板语义与默认值</th>
+            <th scope="col">摘要</th>
+            <th scope="col">制品</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row"><code>version-1</code><small>模板 template-1</small><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
+                <!--v-if--><span class=""> 查看详情 </span>
+              </button></th>
+            <td><code>draft-1</code><small>修订 1</small><small>来源导入记录：import-1</small></td>
+            <td>2026年9月8日 09:00 <small>发布人：operator-1</small></td>
+            <td><span class="el-tag el-tag--success el-tag--light"><span class="el-tag__content">严格顺序</span>
+              <!--v-if--></span><small>开始：动作 1</small><small>结束：无（空闲时限闭合）</small><small>步骤：(1)取料</small><small> 默认：空闲 30 秒 · 步骤 90 秒 · record</small>
+            </td>
+            <td><code class="template-management__digest">dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd</code></td>
+            <td>
+              <ul class="template-management__artifacts">
+                <li><span><strong>actions.json</strong><small>32 字节 · bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb</small></span><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
+                    <!--v-if--><span class=""> 下载 actions.json</span>
+                  </button></li>
+                <li><span><strong>vlm_prompts.txt</strong><small>18 字节 · cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc</small></span><button aria-disabled="false" type="button" class="el-button el-button--primary is-link">
+                    <!--v-if--><span class=""> 下载 vlm_prompts.txt</span>
+                  </button></li>
+              </ul>
+            </td>
+          </tr>
+          <!--v-if-->
+        </tbody>
+      </table>
+    </section>
+  </div>
+  <!--teleport start-->
+  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2016; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="确认发布" aria-describedby="el-id-45" class="el-overlay-dialog"></div>
+    </div>
+  </transition-stub>
+  <!--teleport end-->
+  <!--teleport start-->
+  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2017; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="版本详情" aria-describedby="el-id-47" class="el-overlay-dialog"></div>
+    </div>
+  </transition-stub>
+  <!--teleport end-->
+  <!--teleport start-->
+  <transition-stub name="dialog-fade" appear="false" persisted="true" css="true">
+    <div class="el-overlay el-modal-dialog" style="z-index: 2018; display: none;">
+      <div role="dialog" aria-modal="true" aria-label="编辑模板草稿" aria-describedby="el-id-49" class="el-overlay-dialog"></div>
+    </div>
+  </transition-stub>
+  <!--teleport end-->
+</section>"
+`;

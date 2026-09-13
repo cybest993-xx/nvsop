@@ -55,6 +55,8 @@ class StreamFact(Enum):
     SOURCE_ERROR = "source_error"
     DELIVERING = "delivering"
     STREAM_ENDED = "stream_ended"
+    INFERENCE_TIMEOUT = "inference_timeout"
+    CHUNK_BACKLOG_EXCEEDED = "chunk_backlog_exceeded"
     """Best-effort, unlike the other two.
 
     The base's VLM thread puts its own `None` sentinel on the same queue when it finishes
@@ -178,7 +180,7 @@ def note_pipeline_message(
     event = StreamHealthEvent(
         fact=fact,
         at_monotonic=clock(),
-        source_anchor=source_anchor,
+        source_anchor=source_anchor if source_anchor > 0 else None,
         stream_id=stream_id,
         detail=_detail(message),
     )
@@ -243,10 +245,11 @@ def decode(chunk: Mapping[str, Any]) -> StreamHealthEvent | None:
     payload = chunk[STREAM_HEALTH_KEY]
     if not isinstance(payload, Mapping):
         return StreamHealthEvent(fact=StreamFact.SOURCE_ERROR, at_monotonic=None)
+    source_anchor = _number(payload.get("source_anchor"))
     return StreamHealthEvent(
         fact=_decode_fact(payload.get("fact")),
         at_monotonic=_number(payload.get("at_monotonic")),
-        source_anchor=_number(payload.get("source_anchor")),
+        source_anchor=source_anchor if source_anchor is not None and source_anchor > 0 else None,
         stream_id=str(payload.get("stream_id", "")),
         detail=str(payload.get("detail", ""))[:DETAIL_LIMIT],
     )

@@ -1,0 +1,41 @@
+{
+  "name": "control-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "format": "prettier --check src tests *.ts *.json",
+    "format:write": "prettier --write src tests *.ts *.json",
+    "lint": "eslint src tests",
+    "typecheck": "vue-tsc --build --force",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "generate:api": "openapi-ts",
+    "dev": "vite --host 127.0.0.1 --port 4173",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "element-plus": "2.14.5",
+    "pinia": "4.0.3",
+    "vue": "3.5.42",
+    "vue-router": "5.3.0"
+  },
+  "devDependencies": {
+    "@hey-api/openapi-ts": "0.99.0",
+    "@playwright/test": "1.61.0",
+    "@types/node": "22.20.1",
+    "@vitejs/plugin-vue": "6.0.8",
+    "@vue/eslint-config-prettier": "10.2.0",
+    "@vue/eslint-config-typescript": "14.9.0",
+    "@vue/test-utils": "2.5.0",
+    "eslint": "9.39.4",
+    "eslint-plugin-vue": "10.10.0",
+    "eslint-plugin-vuejs-accessibility": "2.6.0",
+    "jiti": "2.7.0",
+    "jsdom": "30.0.1",
+    "prettier": "3.9.6",
+    "typescript": "5.9.3",
+    "vite": "8.2.2",
+    "vitest": "4.1.11",
+    "vue-tsc": "3.3.11"
+  }
+}

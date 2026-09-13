@@ -15,7 +15,7 @@
       "url": "http://192.129.210.50:5173/mcp",
       "protocolVersion": "auto",
       "headers": {
-        "Authorization": "Bearer osr_2SqXwDyR9qsZ4SRAk2rcgr-0NqaqP5Yg-TN8huGMu94"
+        "Authorization": "Bearer ${ONE_SEARCH_TOKEN}"
       }
     }
   }

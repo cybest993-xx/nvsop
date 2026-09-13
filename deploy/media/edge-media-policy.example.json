@@ -1,0 +1,17 @@
+{
+  "media": {
+    "media_config_path": "/etc/nvsop/mediamtx.yml",
+    "recording_directory": "/var/lib/nvsop/recordings",
+    "mediamtx_binary": "/usr/local/bin/mediamtx",
+    "ffmpeg_binary": "/usr/bin/ffmpeg",
+    "rtsp_bind_address": ":8554",
+    "webrtc_bind_address": ":8889",
+    "webrtc_udp_bind_address": ":8189",
+    "playback_bind_address": ":9996",
+    "allow_origins": ["https://control.example.test"],
+    "record_segment_duration_seconds": 60,
+    "preview_release_delay_seconds": 5,
+    "startup_timeout_seconds": 10,
+    "transcode_threads": 2
+  }
+}

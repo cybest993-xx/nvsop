@@ -33,7 +33,7 @@ from edge_runtime.judgment.model import (
     ValidityRestored,
 )
 from edge_runtime.judgment.reasons import INDETERMINATE_REASONS, ReasonCode
-from edge_runtime.stream_health import StreamHealthEvent
+from edge_runtime.stream_health import StreamFact, StreamHealthEvent
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,20 +217,44 @@ class Normalizer:
         return (ReasonCode.TIMESTAMP_DISCONTINUITY,)
 
     def _health(self, event: StreamHealthEvent) -> tuple[Event, ...]:
-        """The stream's state, and the event only when that state actually changed.
-
-        Reported on the transition rather than on every arrival, so a source erroring
-        repeatedly is one impairment rather than one per message. `impairs_observation`
-        already reads an unknown fact conservatively, which is why there is no branch on
-        whether this build knows the fact.
-        """
-        arriving = StreamHealth.LOST if event.impairs_observation else StreamHealth.HEALTHY
+        """更新流健康状态, 并只在状态变化时产生有效性事件。"""
+        arriving = _stream_health(event)
         if arriving is self._stream:
             return ()
+        previous = self._stream
         self._stream = arriving
-        if arriving is StreamHealth.LOST:
-            return (ValidityImpaired(reason=ReasonCode.STREAM_LOST),)
-        return (ValidityRestored(reason=ReasonCode.STREAM_LOST),)
+        events: list[Event] = []
+        if previous is not StreamHealth.HEALTHY:
+            events.append(ValidityRestored(reason=_stream_reason(previous)))
+        if arriving is not StreamHealth.HEALTHY:
+            events.append(ValidityImpaired(reason=_stream_reason(arriving)))
+        return tuple(events)
+
+
+def _stream_health(event: StreamHealthEvent) -> StreamHealth:
+    """把流事件映射为核心使用的健康状态, 未知事实按失联处理。"""
+    if not event.impairs_observation:
+        return StreamHealth.HEALTHY
+    if event.fact is StreamFact.INFERENCE_TIMEOUT:
+        return StreamHealth.INFERENCE_TIMEOUT
+    if event.fact is StreamFact.CHUNK_BACKLOG_EXCEEDED:
+        return StreamHealth.CHUNK_BACKLOG_EXCEEDED
+    return StreamHealth.LOST
+
+
+def _stream_reason(health: StreamHealth) -> ReasonCode:
+    """返回当前流状态对应的不可判定原因。"""
+    match health:
+        case StreamHealth.LOST:
+            return ReasonCode.STREAM_LOST
+        case StreamHealth.INFERENCE_TIMEOUT:
+            return ReasonCode.INFERENCE_TIMEOUT
+        case StreamHealth.CHUNK_BACKLOG_EXCEEDED:
+            return ReasonCode.CHUNK_BACKLOG_EXCEEDED
+        case StreamHealth.HEALTHY:
+            raise ValueError("healthy stream has no impairment reason")
+        case _:
+            assert_never(health)
 
 
 def _misalignment(alignment: TimeAlignment) -> tuple[ReasonCode, ...]:

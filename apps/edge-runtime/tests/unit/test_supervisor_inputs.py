@@ -130,6 +130,22 @@ class StreamHealthBecomesTheValidityRecordTest(unittest.TestCase):
         self.assertEqual((ValidityImpaired(reason=ReasonCode.STREAM_LOST),), events)
         self.assertEqual(StreamHealth.LOST, normalizer.stream_health)
 
+    def test_inference_timeout_preserves_its_specific_reason_until_recovery(self) -> None:
+        normalizer = Normalizer()
+
+        impaired = normalizer.events_for(health(StreamFact.INFERENCE_TIMEOUT))
+        restored = normalizer.events_for(health(StreamFact.DELIVERING))
+
+        self.assertEqual(
+            (ValidityImpaired(reason=ReasonCode.INFERENCE_TIMEOUT),),
+            impaired,
+        )
+        self.assertEqual(
+            (ValidityRestored(reason=ReasonCode.INFERENCE_TIMEOUT),),
+            restored,
+        )
+        self.assertEqual(StreamHealth.HEALTHY, normalizer.stream_health)
+
     def test_delivering_after_an_error_restores_observation(self) -> None:
         normalizer = Normalizer()
         normalizer.events_for(health(StreamFact.SOURCE_ERROR))

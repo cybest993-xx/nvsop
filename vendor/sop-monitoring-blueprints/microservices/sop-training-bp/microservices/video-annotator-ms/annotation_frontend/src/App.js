@@ -14,6 +14,7 @@
 // limitations under the License.
 
 import React, { useState, useEffect } from 'react';
+import PropTypes from 'prop-types';
 import { Container, Row, Col, Alert, Card, Form, Button } from 'react-bootstrap';
 import VideoUploader from './components/VideoUploader';
 import ActionTimestampEditor from './components/ActionTimestampEditor';
@@ -30,6 +31,97 @@ const API_BASE_URL = '/api/annotation';
 const AUGMENTATION_API_BASE_URL = '/api/augmentation';
 
 function App() {
+  const contextToken = new URLSearchParams(window.location.search).get('context');
+  return contextToken ? (
+    <ContextAnnotationApp contextToken={contextToken} />
+  ) : (
+    <LegacyAnnotationApp />
+  );
+}
+
+function ContextAnnotationApp({ contextToken }) {
+  const [context, setContext] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadContext = async () => {
+      try {
+        for (let attempt = 0; attempt < 300; attempt += 1) {
+          const response = await fetch(
+            `/api/v1/annotation-contexts/${encodeURIComponent(contextToken)}`,
+            { credentials: 'same-origin', cache: 'no-store' },
+          );
+          const result = await response.json();
+          if (!response.ok) {
+            throw new Error(result.detail || result.title || `请求失败（HTTP ${response.status}）`);
+          }
+          if (result.preparation_status === 'succeeded') {
+            if (!cancelled) setContext(result);
+            return;
+          }
+          if (result.preparation_status === 'failed') {
+            throw new Error(result.preparation_failure_detail || '标注媒体准备失败');
+          }
+          if (!['pending', 'running'].includes(result.preparation_status)) {
+            throw new Error(`未知标注准备状态（${result.preparation_status}）`);
+          }
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+        throw new Error('标注媒体准备超时');
+      } catch (loadError) {
+        if (!cancelled) setError(loadError.message || '无法加载标注上下文');
+      }
+    };
+
+    void loadContext();
+    return () => {
+      cancelled = true;
+    };
+  }, [contextToken]);
+
+  if (error) {
+    return (
+      <Container className="py-4">
+        <Alert variant="danger">{error}</Alert>
+        <a href="/training-datasets">返回训练数据集</a>
+      </Container>
+    );
+  }
+
+  if (!context) {
+    return <Container className="py-4">正在准备标注媒体……</Container>;
+  }
+
+  const initialTimestamps = (context.initial_timestamps || []).map((timestamp) => ({
+    startTime: timestamp.start,
+    endTime: timestamp.end,
+    actionIndex: timestamp.action_index,
+  }));
+
+  return (
+    <Container className="py-4">
+      <div className="d-flex justify-content-between align-items-center mb-3">
+        <h1>动作标注</h1>
+        <a href="/training-datasets">返回训练数据集</a>
+      </div>
+      <ActionTimestampEditor
+        actions={context.actions}
+        uploadedVideoId={context.context_token}
+        videoUrl={context.video_url}
+        initialTimestamps={initialTimestamps}
+        twoOperatorMode={context.two_operator_mode}
+      />
+    </Container>
+  );
+}
+
+ContextAnnotationApp.propTypes = {
+  contextToken: PropTypes.string.isRequired,
+};
+
+function LegacyAnnotationApp() {
   // Workflow state management
   const [workflowState, setWorkflowState] = useState('INITIAL'); // INITIAL, ACTIONS_LOADED, VIDEO_LOADED, TIMESTAMPS_SET
 

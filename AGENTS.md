@@ -1,13 +1,17 @@
 # Repository instructions
 
-This repository is a product monorepo for the SOP compliance system. Use the canonical terms in `CONTEXT.md`.
+This repository is a product monorepo for the SOP compliance system. Use `CONTEXT.md` when naming or changing domain concepts; it is a glossary, not a mandatory prelude to unrelated tooling or styling work.
 
-## Before changing the repository
+## Route the task
 
-- For **code placement, authoring rules, tests, dependencies, CI, deployment assets, or `vendor/`**, read [`docs/design/repository-harness.md`](docs/design/repository-harness.md). It is the normative repository harness.
-- For **product behavior, architecture, performance budgets, or safety invariants**, read [`docs/design/solution-and-roadmap.md`](docs/design/solution-and-roadmap.md). It is the only current decision source and indexes the mechanism specs.
-- For **an issue, a ticket, or a label**, read [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md) and [`docs/agents/triage-labels.md`](docs/agents/triage-labels.md).
-- Read the ADRs in [`docs/adr/`](docs/adr/) that touch the area you are changing. Contradicting one is allowed; doing so silently is not — say which ADR and why it should reopen.
+Read the matching subsections, not entire reference documents by default. Expand when affected callers, dependencies or conflicting evidence require it; scoped reading does not waive applicable rules. Verify current files and configuration before relying on descriptions or old session notes.
+
+- **Plan or investigate**: deliver the requested findings or plan; repository edits start when requested.
+- **Change code or check scripts**: start with the [test policy](docs/design/repository-harness.md#risk-and-test-additions) and [implementation checklist](docs/design/repository-harness.md#implementation-checklist). Locate the public entry point, affected callers and existing tests; follow the relevant evidence and authoring subsections for the change.
+- **Change ownership, dependencies, CI, deployment or `vendor/`**: read the relevant [harness §1–§3](docs/design/repository-harness.md#1-architecture-rule) and [§6–§8](docs/design/repository-harness.md#6-stable-command-interface). This is the normative repository harness.
+- **Change product behavior or architecture**: search [`solution-and-roadmap.md`](docs/design/solution-and-roadmap.md) for the affected mechanism, then read its spec and relevant ADRs. It is the current decision source; name any ADR that needs reopening and explain why.
+- **Write instructions or documentation**: use [§4](docs/design/repository-harness.md#4-test-placement-and-evidence) for verification, [§5](docs/design/repository-harness.md#comments-and-documentation-language) for language and [§9](docs/design/repository-harness.md#9-agent-instruction-hierarchy) for instruction structure and loading checks.
+- **Work with an issue or label**: read [`issue-tracker.md`](docs/agents/issue-tracker.md) and [`triage-labels.md`](docs/agents/triage-labels.md).
 
 ## Invariants
 
@@ -19,16 +23,14 @@ These five hold before you read anything else. Everything else lives in the harn
 - A module owns its behavior, tables, and migrations behind one small interface. Callers and tests cross that same seam.
 - Secrets, credentials, customer media, model weights, generated data, and production dumps stay out of Git. Fixtures are synthetic or explicitly sanitized.
 
-## Writing rules down
+## Implement, verify and stop
 
-Point at the source of truth instead of restating it. When a rule is already carried by an `import-linter` contract, a `make` target, a config file, or an ADR, cite that place — a second copy goes stale silently. Add a nested `AGENTS.md` only where a subtree has a real local exception, and delete a superseded conclusion once its surviving facts are merged into the current decision source; Git is the archive.
+Use an `agent/<agent-id>/<task-slug>` branch in its own worktree for task edits. Treat `main` and `dev` as shared refs; do not make direct task commits on either. Before creating or changing branches, worktrees or refs, read the [local branch workflow](docs/design/local-branch-workflow.md) and enable its versioned hooks with `make hooks`. Apply the [working cycle](docs/design/repository-harness.md#working-and-review-cycle) to select workspace isolation and persistent handoff; neither is mandatory ceremony for every bounded single-session change.
 
-## Working on a change
+State risk, test reuse or additions, and intended checks in at most three lines, then proceed within the authorized scope. Existing evidence may justify zero new tests; follow §4 rather than a universal TDD workflow.
 
-- Develop on a `dev` worktree, never on `main`. Create it outside the repository — `git worktree add ../nvsop-dev dev` — because `scripts/check_repo_policy.py` rejects an undeclared top-level directory. `main` only receives finished work.
-- Write the failing test before the implementation: invoke the `tdd` skill and follow it. Harness §4 fixes where a test lives; this fixes when it is written.
-- A session that writes code does not review or commit it. Hand both to a fresh session, because the context that produced the code has already argued itself into believing it correct.
+During iteration, run the smallest affected Make targets with their prerequisites. `make check` is the final CPU-only code gate, not the default inner loop; documentation-only changes use `make check-docs`. Required CI, integration, browser and release evidence remain unchanged.
 
-## Completion gate
+Self-review the complete diff and affected callers. Use the [risk-triggered review policy](docs/design/repository-harness.md#evidence-reuse-and-blockers) for independent review; changes to these instructions or repository policy do not exempt themselves. One responsible main session owns completion.
 
-Run `make check`. Each change that adds a workspace extends that same target in the same change, so local and blocking CI run identical CPU-only checks. Run hardware or GPU suites only when the change or its acceptance criteria require them.
+Keep every acceptance criterion through implementation. Once behavior and required evidence are complete, stop adding optional tests, refactors or cleanup. Report delivered behavior, actual checks and results, and any remaining review or validation gap; committed or pushed does not mean merge-ready. Merge and publication require the user's authorization.

@@ -1,53 +1,41 @@
-"""One station's supervisor: it drives the core, holds the timer, and issues the commands.
+"""驱动一个工位的核心, 持有计时器, 并在返回前原子提交一次反应。
 
-The core is pure and cannot wake itself, so this is the half that touches the world. It does
-three things and no more (§5.18):
-
-- normalizes what arrives into core events, so the core never learns a source;
-- holds the deadline the core declared, on the host's monotonic clock;
-- turns each decision into commands.
-
-It performs none of those commands. Persistence (#19), disposal (#50, #51), evidence
-extraction (#52) and reporting (#46) each take them from here.
-
-**How the timer cannot fire twice for one wait.** This holds a deadline, not a scheduled
-callback, and a firing is honoured only once the clock has reached that deadline. So
-"cancelling" is assigning None and "rearming" is assigning a new instant — there is no
-callback left armed to race with, and a wake-up naming a superseded instant decides nothing.
-The run loop is free to wake early, late, or spuriously.
-
-Standard library only, like the core it drives (edge-autonomy.md §5.11).
+一次输入可产生多个核心事件, 但状态、判定、锁存及两个队列的效果只提交一次。
+计时器只持有到点时刻, 不注册回调; 过早或重复唤醒不会重复判定。
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass
 from time import monotonic
 
 from edge_runtime.judgment.core import advance
+from edge_runtime.judgment.evidence import EvidenceMargins
 from edge_runtime.judgment.model import (
+    Decision,
     Event,
     HostInstant,
     HostLiveness,
+    Instance,
     JudgmentState,
     RunInterrupted,
     TimerFired,
 )
-from edge_runtime.supervisor.commands import Command, EvidenceMargins, commands_for
+from edge_runtime.local_state.store import ReactionStore
+from edge_runtime.supervisor.evidence import clips_for
 from edge_runtime.supervisor.inputs import Normalizer, SupervisorInput
 
 
 @dataclass(frozen=True, slots=True)
 class Reaction:
-    """What one input produced: commands to perform, and when to be back.
+    """已提交的判定和下一次唤醒时刻; 调用方不得再次提交。"""
 
-    `wake_at` is repeated on every reaction rather than only when it changes, so a run loop
-    reads its next deadline from the same value it just handled and cannot hold a stale one.
-    """
-
-    commands: tuple[Command, ...]
+    decisions: tuple[Decision, ...]
     wake_at: HostInstant | None
+    closed_instances: tuple[Instance, ...] = ()
+    """本次反应已提交的闭合实例完整快照, 不是待执行的持久化任务。"""
 
 
 class StationSupervisor:
@@ -66,10 +54,12 @@ class StationSupervisor:
         self,
         *,
         state: JudgmentState,
+        store: ReactionStore,
         margins: EvidenceMargins,
         clock: Callable[[], float] = monotonic,
     ) -> None:
         self._state = state
+        self._store = store
         self._margins = margins
         self._clock = clock
         self._normalizer = Normalizer()
@@ -77,7 +67,7 @@ class StationSupervisor:
 
     @property
     def state(self) -> JudgmentState:
-        """The core's state as it now stands, for the caller that persists it (#19)."""
+        """最近一次成功提交的核心状态。"""
         return self._state
 
     @property
@@ -97,7 +87,10 @@ class StationSupervisor:
 
     def receive(self, arriving: SupervisorInput) -> Reaction:
         """One thing that arrived from outside: a chunk, a point-level signal, a fact."""
-        return self._advance(self._normalizer.events_for(arriving))
+        normalizer = deepcopy(self._normalizer)
+        reaction = self._advance(normalizer.events_for(arriving))
+        self._normalizer = normalizer
+        return reaction
 
     def wake(self, *, host: HostLiveness) -> Reaction:
         """The timer the core asked for, if it is in fact due.
@@ -110,10 +103,10 @@ class StationSupervisor:
         Not due yet, or nothing in flight: nothing is decided and the deadline stands.
         """
         if self._deadline is None:
-            return Reaction(commands=(), wake_at=None)
+            return Reaction(decisions=(), wake_at=None)
         now = self._clock()
         if now < self._deadline.seconds:
-            return Reaction(commands=(), wake_at=self._deadline)
+            return Reaction(decisions=(), wake_at=self._deadline)
         return self._advance(
             (
                 TimerFired(
@@ -133,18 +126,28 @@ class StationSupervisor:
         return self._advance((RunInterrupted(at=HostInstant(self._clock())),))
 
     def _advance(self, events: tuple[Event, ...]) -> Reaction:
-        """Send each event through the core, collecting commands and rearming the timer.
-
-        One input can become several events — a re-anchoring impairs, the observation lands,
-        the impairment lifts — and each is a separate transition, because the core takes one
-        event at a time. The deadline is assigned from the last outcome unconditionally,
-        which is how arming, rearming and cancelling are all one line.
-        """
-        commands: list[Command] = []
+        """先收集全部事件的结果, 一次提交成功后才发布新状态和计时器。"""
+        state, deadline = self._state, self._deadline
+        decisions: list[Decision] = []
+        closed_instances: list[Instance] = []
         for event in events:
-            outcome = advance(self._state, event)
-            self._state = outcome.state
-            self._deadline = outcome.wake_at
-            for decision in outcome.decisions:
-                commands.extend(commands_for(decision, margins=self._margins))
-        return Reaction(commands=tuple(commands), wake_at=self._deadline)
+            outcome = advance(state, event)
+            state, deadline = outcome.state, outcome.wake_at
+            closed_instances.extend(outcome.closed_instances)
+            decisions.extend(outcome.decisions)
+        self._store.commit(
+            state=state,
+            decisions=tuple(decisions),
+            evidence=tuple(
+                clip
+                for decision in decisions
+                for clip in clips_for(decision, margins=self._margins)
+            ),
+            closed_instances=tuple(closed_instances),
+        )
+        self._state, self._deadline = state, deadline
+        return Reaction(
+            decisions=tuple(decisions),
+            wake_at=deadline,
+            closed_instances=tuple(closed_instances),
+        )

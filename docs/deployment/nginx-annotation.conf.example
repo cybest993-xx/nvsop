@@ -1,0 +1,328 @@
+# NVSOP 标注媒体入口部署模板。
+# 部署时替换 server_name、上游地址和 TLS 文件；不能把 video-annotator-ms 端口暴露到厂区网络。
+# 中心端 `annotation_media_origin` 必须与第二个 server 使用相同主机名和端口 8444。
+
+map $uri $nvsop_annotation_context_token {
+    default "";
+    ~^/annotation/media/videos/([^/]+)/download$ $1;
+}
+
+map $uri $nvsop_annotation_resource {
+    default "";
+    ~^/annotation/media/clips/([0-9A-Fa-f-]+)/([0-9A-Fa-f-]+)/([0-9]+)/download$ $1:$2:$3;
+    ~^/annotation/media/archives/([0-9A-Fa-f-]+)/([0-9A-Fa-f-]+)/download$ $1:$2;
+}
+
+upstream nvsop_center_api {
+    server control-api:8000;
+}
+
+upstream nvsop_annotation_backend {
+    server annotation-backend:8100;
+}
+
+upstream nvsop_annotation_frontend {
+    server annotation-frontend:80;
+}
+
+server {
+    listen 443 ssl;
+    server_name sop.example.internal;
+
+    ssl_certificate /etc/nginx/tls/sop.crt;
+    ssl_certificate_key /etc/nginx/tls/sop.key;
+    root /srv/control-web;
+    index index.html;
+
+    location = /annotation {
+        return 301 /annotation/$is_args$args;
+    }
+
+    # 独立 NVIDIA React 标注控件；只接受中心会话，不把 Cookie 转给基座。
+    location ^~ /annotation/ {
+        auth_request /_nvsop_center_auth;
+        error_page 401 = @nvsop_auth_required;
+        error_page 403 = @nvsop_auth_denied;
+        proxy_pass http://nvsop_annotation_frontend/;
+        proxy_set_header Host $host;
+        proxy_set_header Cookie "";
+        proxy_set_header Authorization "";
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # CRA 默认把构建资源写成 /static/...；仍经同一会话校验后转给独立控件。
+    location ^~ /static/ {
+        auth_request /_nvsop_center_auth;
+        error_page 401 = @nvsop_auth_required;
+        error_page 403 = @nvsop_auth_denied;
+        proxy_pass http://nvsop_annotation_frontend;
+        proxy_set_header Host $host;
+        proxy_set_header Cookie "";
+        proxy_set_header Authorization "";
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # 训练微服务 API 属于 #33；本票只开放带产品上下文的标注兼容 API，避免旧接口绕过数据集授权。
+    location ~ ^/api/(augmentation|vlm-training|ddm-training|evaluation)/ {
+        return 404;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # 先由中心会话端点验证身份；业务请求仍由 FastAPI 用例再次检查权限和资源归属。
+    location = /_nvsop_center_auth {
+        internal;
+        proxy_pass http://nvsop_center_api/api/v1/annotation/gateway-authorize;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Original-Method $request_method;
+        proxy_set_header X-Original-URI $request_uri;
+        proxy_set_header Cookie $http_cookie;
+        proxy_set_header Authorization "";
+        proxy_set_header X-Authenticated-User "";
+        proxy_set_header X-Auth-Request-User "";
+        proxy_set_header X-Auth-Request-Groups "";
+        proxy_set_header X-User-ID "";
+        proxy_set_header X-Dataset-ID "";
+        proxy_set_header X-Inference-Host-ID "";
+    }
+
+    # 登录和存活探针必须能被匿名调用；受保护业务请求走下方的会话校验。
+    location = /api/v1/auth/session {
+        proxy_pass http://nvsop_center_api;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Authenticated-User "";
+        proxy_set_header X-Auth-Request-User "";
+        proxy_set_header X-Auth-Request-Groups "";
+        proxy_set_header X-User-ID "";
+        proxy_set_header X-Dataset-ID "";
+        proxy_set_header X-Inference-Host-ID "";
+    }
+
+    location = /api/v1/annotation/gateway-authorize {
+        return 404;
+    }
+
+    location = /api/v1/annotation/media/authorize {
+        return 404;
+    }
+
+    location = /api/v1/annotation/media/gateway-authorize {
+        return 404;
+    }
+
+    location = /api/v1/liveness {
+        proxy_pass http://nvsop_center_api;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Authenticated-User "";
+        proxy_set_header X-Auth-Request-User "";
+        proxy_set_header X-Auth-Request-Groups "";
+        proxy_set_header X-User-ID "";
+        proxy_set_header X-Dataset-ID "";
+        proxy_set_header X-Inference-Host-ID "";
+    }
+
+    # 控制面先由中心确认会话；可识别的标注/数据集资源再做对应权限预检，
+    # 其余控制面路由保留各自用例的权限语义，不能把所有写请求当作数据集编辑。
+    location /api/v1/ {
+        auth_request /_nvsop_center_auth;
+        error_page 401 = @nvsop_auth_required;
+        error_page 403 = @nvsop_auth_denied;
+        proxy_pass http://nvsop_center_api;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Authenticated-User "";
+        proxy_set_header X-Auth-Request-User "";
+        proxy_set_header X-Auth-Request-Groups "";
+        proxy_set_header X-User-ID "";
+        proxy_set_header X-Dataset-ID "";
+        proxy_set_header X-Inference-Host-ID "";
+    }
+
+    location /api/annotation/ {
+        auth_request /_nvsop_center_auth;
+        error_page 401 = @nvsop_auth_required;
+        error_page 403 = @nvsop_auth_denied;
+        proxy_pass http://nvsop_center_api;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Authenticated-User "";
+        proxy_set_header X-Auth-Request-User "";
+        proxy_set_header X-Auth-Request-Groups "";
+        proxy_set_header X-User-ID "";
+        proxy_set_header X-Dataset-ID "";
+        proxy_set_header X-Inference-Host-ID "";
+    }
+
+    location @nvsop_auth_required {
+        default_type application/problem+json;
+        add_header Cache-Control "no-store" always;
+        return 401 '{"type":"about:blank","title":"请先登录","status":401,"error_code":"AUTHENTICATION_REQUIRED"}';
+    }
+
+    location @nvsop_auth_denied {
+        default_type application/problem+json;
+        add_header Cache-Control "no-store" always;
+        return 403 '{"type":"about:blank","title":"没有执行该操作的权限","status":403,"error_code":"PERMISSION_DENIED"}';
+    }
+}
+
+# 媒体端口只转发已经由中心授权的派生资源；中心和 Nginx 不中继源视频字节。
+server {
+    listen 8444 ssl;
+    server_name sop.example.internal;
+
+    ssl_certificate /etc/nginx/tls/sop.crt;
+    ssl_certificate_key /etc/nginx/tls/sop.key;
+
+    location = /_nvsop_annotation_video_auth {
+        internal;
+        proxy_pass http://nvsop_center_api/api/v1/annotation/media/gateway-authorize?kind=video&resource=$nvsop_annotation_context_token;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Original-Method $request_method;
+        proxy_set_header X-Original-URI $request_uri;
+        proxy_set_header Cookie $http_cookie;
+        proxy_set_header Authorization "";
+        proxy_set_header X-CSRF-Token "";
+        proxy_set_header X-Authenticated-User "";
+        proxy_set_header X-Auth-Request-User "";
+        proxy_set_header X-Auth-Request-Groups "";
+        proxy_set_header X-User-ID "";
+        proxy_set_header X-Dataset-ID "";
+        proxy_set_header X-Inference-Host-ID "";
+    }
+
+    location = /_nvsop_annotation_clip_auth {
+        internal;
+        proxy_pass http://nvsop_center_api/api/v1/annotation/media/gateway-authorize?kind=clip&resource=$nvsop_annotation_resource;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Original-Method $request_method;
+        proxy_set_header X-Original-URI $request_uri;
+        proxy_set_header Cookie $http_cookie;
+        proxy_set_header Authorization "";
+        proxy_set_header X-CSRF-Token "";
+        proxy_set_header X-Authenticated-User "";
+        proxy_set_header X-Auth-Request-User "";
+        proxy_set_header X-Auth-Request-Groups "";
+        proxy_set_header X-User-ID "";
+        proxy_set_header X-Dataset-ID "";
+        proxy_set_header X-Inference-Host-ID "";
+    }
+
+    location = /_nvsop_annotation_archive_auth {
+        internal;
+        proxy_pass http://nvsop_center_api/api/v1/annotation/media/gateway-authorize?kind=archive&resource=$nvsop_annotation_resource;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Original-Method $request_method;
+        proxy_set_header X-Original-URI $request_uri;
+        proxy_set_header Cookie $http_cookie;
+        proxy_set_header Authorization "";
+        proxy_set_header X-CSRF-Token "";
+        proxy_set_header X-Authenticated-User "";
+        proxy_set_header X-Auth-Request-User "";
+        proxy_set_header X-Auth-Request-Groups "";
+        proxy_set_header X-User-ID "";
+        proxy_set_header X-Dataset-ID "";
+        proxy_set_header X-Inference-Host-ID "";
+    }
+
+    location ^~ /annotation/media/videos/ {
+        if ($nvsop_annotation_context_token = "") { return 404; }
+        auth_request /_nvsop_annotation_video_auth;
+        error_page 401 = @nvsop_media_auth_required;
+        error_page 403 = @nvsop_media_auth_denied;
+        add_header Cache-Control "no-store" always;
+        auth_request_set $nvsop_annotation_upstream_video $upstream_http_x_annotation_upstream_video_id;
+        proxy_pass http://nvsop_annotation_backend/api/v1/videos/$nvsop_annotation_upstream_video/download;
+        proxy_set_header Host $host;
+        proxy_set_header Cookie "";
+        proxy_set_header Authorization "";
+        proxy_set_header X-Annotation-Upstream-Video-ID $nvsop_annotation_upstream_video;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Range $http_range;
+        proxy_hide_header X-Annotation-Upstream-Video-ID;
+        proxy_cache_bypass 1;
+        proxy_no_cache 1;
+        proxy_buffering off;
+        proxy_request_buffering off;
+    }
+
+    location ^~ /annotation/media/clips/ {
+        if ($nvsop_annotation_resource = "") { return 404; }
+        auth_request /_nvsop_annotation_clip_auth;
+        error_page 401 = @nvsop_media_auth_required;
+        error_page 403 = @nvsop_media_auth_denied;
+        add_header Cache-Control "no-store" always;
+        auth_request_set $nvsop_annotation_upstream_clip $upstream_http_x_annotation_upstream_clip_id;
+        proxy_pass http://nvsop_annotation_backend/api/v1/chunks/$nvsop_annotation_upstream_clip/download;
+        proxy_set_header Host $host;
+        proxy_set_header Cookie "";
+        proxy_set_header Authorization "";
+        proxy_set_header X-Annotation-Upstream-Clip-ID $nvsop_annotation_upstream_clip;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Range $http_range;
+        proxy_hide_header X-Annotation-Upstream-Clip-ID;
+        proxy_hide_header X-Annotation-Upstream-Video-ID;
+        proxy_cache_bypass 1;
+        proxy_no_cache 1;
+        proxy_buffering off;
+        proxy_request_buffering off;
+    }
+
+    location ^~ /annotation/media/archives/ {
+        if ($nvsop_annotation_resource = "") { return 404; }
+        auth_request /_nvsop_annotation_archive_auth;
+        error_page 401 = @nvsop_media_auth_required;
+        error_page 403 = @nvsop_media_auth_denied;
+        add_header Cache-Control "no-store" always;
+        auth_request_set $nvsop_annotation_upstream_video $upstream_http_x_annotation_upstream_video_id;
+        proxy_pass http://nvsop_annotation_backend/api/v1/videos/$nvsop_annotation_upstream_video/download-all;
+        proxy_set_header Host $host;
+        proxy_set_header Cookie "";
+        proxy_set_header Authorization "";
+        proxy_set_header X-Annotation-Upstream-Video-ID $nvsop_annotation_upstream_video;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Range $http_range;
+        proxy_hide_header X-Annotation-Upstream-Video-ID;
+        proxy_cache_bypass 1;
+        proxy_no_cache 1;
+        proxy_buffering off;
+        proxy_request_buffering off;
+    }
+
+    location @nvsop_media_auth_required {
+        default_type application/problem+json;
+        add_header Cache-Control "no-store" always;
+        return 401 '{"type":"about:blank","title":"请先登录","status":401,"error_code":"AUTHENTICATION_REQUIRED"}';
+    }
+
+    location @nvsop_media_auth_denied {
+        default_type application/problem+json;
+        add_header Cache-Control "no-store" always;
+        return 403 '{"type":"about:blank","title":"没有执行该操作的权限","status":403,"error_code":"PERMISSION_DENIED"}';
+    }
+
+    # 未匹配资源不应落到训练基座或静态文件。
+    location / {
+        return 404;
+    }
+}

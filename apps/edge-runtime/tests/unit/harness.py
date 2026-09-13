@@ -1,4 +1,4 @@
-"""Shared construction for the judgment core's and the supervisor's unit tests.
+"""Shared construction for the judgment core's, the supervisor's and the connectors' tests.
 
 The core is a pure function, so a test is "build a state, send events, assert on the
 output" and nothing else — no clock, no sleep, no fixture process (§5.18). What repeats
@@ -16,11 +16,24 @@ because the discovery start directory is on the path. That follows the precedent
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
+from nvsop_contracts import (
+    Delivery,
+    EdgePreservation,
+    Measured,
+    Pushed,
+    Sequencing,
+    TimestampSource,
+)
+
 from edge_runtime.judgment.core import advance
+from edge_runtime.judgment.evidence import EvidenceClip
 from edge_runtime.judgment.model import (
     Decision,
     HostInstant,
     HostLiveness,
+    Instance,
     JudgmentState,
     Observation,
     Ordering,
@@ -101,6 +114,27 @@ def fire(
     return advance(state, TimerFired(at=HostInstant(at), host=host, stream=stream))
 
 
+class MemoryReactionStore:
+    """在持久化接缝记录完整反应, 不复制 SQLite 或判定行为。"""
+
+    def __init__(self) -> None:
+        self.reactions: list[
+            tuple[
+                JudgmentState, tuple[Decision, ...], tuple[EvidenceClip, ...], tuple[Instance, ...]
+            ]
+        ] = []
+
+    def commit(
+        self,
+        *,
+        state: JudgmentState,
+        decisions: Sequence[Decision],
+        evidence: Sequence[EvidenceClip],
+        closed_instances: Sequence[Instance],
+    ) -> None:
+        self.reactions.append((state, tuple(decisions), tuple(evidence), tuple(closed_instances)))
+
+
 class FakeClock:
     """The host's monotonic clock, moved by assignment instead of by waiting.
 
@@ -115,3 +149,39 @@ class FakeClock:
 
     def __call__(self) -> float:
         return self.now
+
+
+DELIVERY_DELAY = 0.05
+"""A measured delivery delay well inside any role's share of the 500 ms budget (§5.6).
+
+A test that is about the budget states its own value; the rest inherit one that does not
+make them incidentally about it.
+"""
+
+
+PUSHED = Pushed()
+"""The default delivery mode. A module-level value rather than a call in the signature: the
+declaration is frozen and shared safely, and a call there is what `B008` flags."""
+
+
+def measured_capability(
+    *,
+    delivery: Delivery = PUSHED,
+    max_delivery_delay: float = DELIVERY_DELAY,
+    sequencing: Sequencing = Sequencing.SEQUENCED,
+    edges: EdgePreservation = EdgePreservation.PRESERVED,
+    timestamps: TimestampSource = TimestampSource.HOST_RECEIPT,
+) -> Measured:
+    """A declaration fit for every role, so each test states only what it is about.
+
+    Every value is measured against a real device in production (§5.8). Here they are
+    constructed, which is what lets the adapter and the fitness rule be tested before the
+    device exists — the point of §5.21's 未验证 state.
+    """
+    return Measured(
+        delivery=delivery,
+        max_delivery_delay=max_delivery_delay,
+        sequencing=sequencing,
+        edges=edges,
+        timestamps=timestamps,
+    )

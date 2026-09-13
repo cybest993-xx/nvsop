@@ -23,8 +23,6 @@ services:
       context: ./annotation_backend
       dockerfile: Dockerfile
     container_name: sop-annotation-backend
-    ports:
-      - "${ANNOTATION_BACKEND_PORT:-8100}:${ANNOTATION_BACKEND_PORT:-8100}"
     volumes:
       - ${VIDEO_ROOT:-data}:/app/assets/videos
       - ${LOG_ROOT:-logs}:/app/assets/logs
@@ -40,8 +38,6 @@ services:
       context: ./annotation_frontend
       dockerfile: Dockerfile
     container_name: sop-annotation-frontend
-    ports:
-      - "${FRONTEND_PORT:-80}:${FRONTEND_PORT:-80}"
     env_file:
       - .env
     networks:

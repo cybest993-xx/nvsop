@@ -158,7 +158,7 @@ Before implementation, state the risk, the plan to reuse or add tests, and the v
 
 ### Risk and test additions
 
-- **Low risk**: documentation, copy, pure styling and cleanup with no behavior change default to no new automated tests. Run applicable documentation, static, existing-test or UI checks.
+- **Low risk**: documentation, copy, pure styling and cleanup with no behavior change default to no new automated tests. Run applicable documentation, static, existing-test or UI checks. Changes to normative instructions, security requirements or gate policy are not low-risk merely because they are Markdown; apply the independent-review triggers below.
 - **Ordinary bounded functionality**: reuse existing tests first. Sufficient existing evidence permits zero additions; a real gap normally needs 1–3 independent scenarios. This is a budget, not a quota. Count independent scenarios, not test functions; grouping or parameterization does not shrink the count. Before exceeding the budget, explain the specific independent risk covered by each extra scenario.
 - **Confirmed defects or new/changed critical safety invariants**: use minimal TDD at the owning public seam. First make the narrowest case fail for the observed defect or threatened invariant, implement the minimum change, then run that case to green. Prefer extending an existing case; a new test file is not required. These steps do not depend on a `tdd` skill; ordinary behavior changes follow the reuse policy above.
 
@@ -195,16 +195,18 @@ Fixtures must be synthetic or sanitized, minimal, deterministic, and documented 
 
 ### Evidence reuse and blockers
 
-During development, run only affected checks using §6's commands. Evidence remains valid while its covered code, tests, configuration, dependencies and relevant external inputs remain unchanged. Record the version and inputs in `.tmp/task-handoff.md`; a new window verifies the current differences and continues from that evidence.
+During development, run only affected checks using §6's commands. Evidence remains valid while its covered code, tests, configuration, dependencies and relevant external inputs remain unchanged. Record commands, results, version and relevant inputs in the session; persist them in `.tmp/task-handoff.md` when §6's continuity triggers apply. A new window verifies the current differences and continues from valid evidence rather than repeating all runs.
 
-Default to one consolidated independent review of the complete diff and affected callers, reporting **Spec** and **Standards** together. Use a subagent or another reviewer. The reviewer consumes valid evidence rather than repeating full runs. After repairs, review only the increment and affected callers, and rerun affected checks. If the reviewer edits code, another reviewer checks those edits and affected callers; the full review remains valid elsewhere.
+Self-review the complete diff and affected callers for every change. Low-risk and ordinary bounded changes need no independent reviewer by default. Require one consolidated independent review when the changed behavior affects any critical risk listed above, a public or cross-module interface, shared behavior, dependencies, CI, deployment, `vendor/`, repository policy or agent instructions, or when impact cannot be confidently bounded. These instruction changes do not exempt themselves. State the trigger; classify behavior, not a file suffix.
+
+The independent reviewer is read-only and reports **Spec** and **Standards** together, consuming valid evidence rather than repeating full runs. The main session implements repairs. After repairs, review only the increment and affected callers, and rerun affected checks; the full review remains valid elsewhere. Do not add review rounds or subagents without a concrete risk or unresolved finding. If an independent reviewer is required but unavailable, record that gap, save progress and keep merge readiness pending; self-review is not independent approval.
 
 | Situation | Action |
 |---|---|
 | Window or commit message changes; covered content and relevant inputs are unchanged | Reuse recorded review and check evidence. |
 | Local repair after review | Review the increment and affected callers; rerun affected checks. |
 | Interface, dependency, migration or shared behavior changes | Expand to affected modules; run complete checks only if the impact cannot be bounded. Record the concrete trigger for expansion. |
-| Required validation environment is unavailable | Record the gap, continue other work and save progress; keep merge readiness pending. |
+| Required validation environment or independent reviewer is unavailable | Record the gap, continue other work and save progress; keep merge readiness pending. |
 | Missing-test finding | Block only when it identifies a concrete failure path, a critical risk lacking valid evidence or an unmet acceptance criterion. Broader possible coverage alone is advice. |
 | Naming, size or optional cleanup suggestion | Record advice; block only on a concrete defect, violated invariant or unmet necessary requirement. |
 
@@ -218,7 +220,7 @@ Technology-neutral by intent: the reference baseline's crate layout, named clipp
 
 ### Implementation checklist
 
-Before editing, record these four items once per task in `.tmp/task-handoff.md`; update them when scope changes:
+Before editing, establish these four items once per task; update them when scope changes. For ordinary bounded single-session work, keep them in the working context without a separate checklist file. Use `.tmp/task-handoff.md` only when §6's continuity triggers apply.
 
 - Entry: the entry point and affected callers.
 - Reuse: existing implementations to call, or where you searched if none applies.
@@ -247,13 +249,14 @@ Proceed within the already authorized scope and apply these rules:
    For example, renaming a step preserves its description unless regenerating
    the description is explicitly required.
 
-In that same handoff, cite the reused implementations, explain each new
-helper's responsibility in one sentence, and identify the write locations
-and how other data is preserved. Use file and function references.
+Keep file and function references for reused implementations, new helpers'
+responsibilities and data write locations available to review. Include them
+in a required handoff; do not create a separate helper inventory for a small task.
 
-Use this checklist in the existing consolidated review. Inspect the actual
-diff and affected callers to verify the claims. Keep all acceptance criteria
-through implementation; complete each behavior in turn until the task is done.
+Use this checklist in self-review and any required independent review.
+Inspect the actual diff and affected callers to verify the claims. Keep all
+acceptance criteria through implementation; complete each behavior in turn
+until the task is done.
 
 ### Size and decomposition guidance
 
@@ -269,7 +272,7 @@ Here, size is advisory. It never fails a gate by itself and needs no exception a
 
 `make change-size` reports the task from its merge-base with `BASE` (default `origin/main`), including committed, staged, unstaged and untracked local files. Supplying `HEAD` selects that immutable commit and excludes worktree edits, as CI does. The report separates tests, generated output, migrations, `vendor/`, other files and binary files from authored production implementation and repository scripts. Pure renames recognized by Git do not count their moved contents as new logic. A Git or read failure still fails the command.
 
-Decompose when it reduces mixed responsibilities or coupling. Keep the public interface and table owner, leave orchestration at the existing entry point, and move related tests and explanations beside the extracted behavior. If cohesion is safer, record that reason in the normal review handoff and continue. For mechanical edits or pure deletions, describe their nature rather than staging them solely to reduce the count.
+Decompose when it reduces mixed responsibilities or coupling. Keep the public interface and table owner, leave orchestration at the existing entry point, and move related tests and explanations beside the extracted behavior. If cohesion is safer, record that reason in the normal review notes and continue. For mechanical edits or pure deletions, describe their nature rather than staging them solely to reduce the count.
 
 A separately landed stage must have observable behavior, its own evidence, and a valid intermediate state: no duplicate production path, incompatible migration or caller waiting for a later repair. Preserve every acceptance criterion across stages. Splitting commits alone does not split a pull request.
 
@@ -307,26 +310,30 @@ Its first two targets are `lockfile` (`uv lock --check`, so a manifest edit whos
 
 Package-specific commands support the local evidence selected under §4; CI gate selection is defined in §7. Automation in `scripts/` stays thin: product behavior belongs in an app or package where it can be tested through its interface.
 
-For checks selected under §4, use the affected Make targets: they carry CI's flags, environment and ordering. For a narrow red/green loop, the underlying command may select a test when it preserves the target's interpreter, paths and flags. Run the formatter on changed code without asking first. Let container startup, model loading and integration bring-up finish before judging their result.
+For checks selected under §4, use the smallest affected Make targets with their required setup: frozen Python sync and Web install as applicable. Individual targets may assume those prerequisites already ran; inspect the Makefile rather than inferring that every target provisions its own environment. For a narrow red/green loop, the underlying command may select a test when it preserves the target's interpreter, paths and flags. `make check` is the final code gate, not the default command after each edit; documentation-only work uses `make check-docs`. This local optimization does not replace applicable final CI, integration, browser or release gates. Run the formatter on changed code without asking first. Let container startup, model loading and integration bring-up finish before judging their result.
 
 ### Working and review cycle
 
-Required: preserve authorization, data integrity, architecture invariants, necessary verification and resolution of blocking findings. Default: one isolated task worktree and one main session responsible for completion. Apply [§4](#4-test-placement-and-evidence) for testing, evidence reuse, review and stopping decisions.
+Required: preserve authorization, data integrity, architecture invariants, necessary verification and resolution of blocking findings. Use a task branch and one main session responsible for completion. Apply [§4](#4-test-placement-and-evidence) for testing, evidence reuse, review and stopping decisions.
 
-1. **Scope and resume.** Start each new task from `origin/main` on its own branch and worktree outside the repository, never `main`. Continue that task, repair review findings and change windows in the same worktree. Keep one ignored `.tmp/task-handoff.md` with the request, complete acceptance criteria, §5 checklist, fixed comparison base, candidate commit and any uncommitted/untracked changes, reviewed commit, findings and resolution, valid checks with commands/environment/covered inputs, and next action. Update this record when its contents change. Existing authorized scope and test seams remain approved; ask only about missing decisions that affect behavior or safety. Delete the task branch/worktree after merging; use a new one for the next task.
+**Workspace isolation.** Start each new task from a freshly resolved `origin/main` on its own branch, never edit or commit on `main`. A clean checkout dedicated to one bounded task may use that branch without an additional worktree. Use an isolated worktree outside the repository when the checkout has unrelated work, multiple writers run in parallel, a shared development instance uses the checkout, or switching branches would disrupt another task or running service. In particular, keep the fixed `main` development instance used by `make dev` on `main` and develop elsewhere. A larger, cross-module or long-lived task should use isolation when its impact on other work cannot be bounded. Inspect status before edits; do not discard, auto-stash or overwrite unrelated changes. Continue an existing task on its existing branch/worktree rather than creating a new one for each window or review repair.
+
+**Persistent continuity.** Ordinary bounded single-session work needs no `.tmp/task-handoff.md`. Maintain that one ignored file when the task crosses sessions or context compaction, involves multiple agents or worktrees, changes cross-module behavior or critical invariants, or leaves review/validation to resume later. Create or update it before handing off or compacting, not after context is lost. Keep only the request and complete acceptance criteria, §5 checklist, fixed comparison base, candidate commit and uncommitted/untracked changes, review findings/resolution, valid checks with commands/environment/covered inputs, and next action. Update changed facts rather than duplicating the conversation or creating parallel plan files. A handoff is not authorization or proof that a check passed.
+
+1. **Scope and resume.** Confirm the task branch, working tree, applicable instructions and complete acceptance criteria. Use the isolation and continuity rules above. On resume, compare current inputs with recorded evidence. Existing authorized scope and test seams remain approved; ask only about missing decisions that affect behavior or safety.
 2. **Implement and save progress.** Implement the accepted behavior using [§4](#4-test-placement-and-evidence) to choose test reuse, additions and any minimal TDD. Save stage commits on the task branch when useful. A commit records progress; mark it pending acceptance while review, required validation or acceptance scope remains incomplete.
-3. **Verify the slice.** Complete the acceptance scope and verification required by §4 before the normal review. Record results and validation gaps in the same handoff.
-4. **Review together.** Coordinate the [§4 independent review](#evidence-reuse-and-blockers) in the main session, which can implement, self-review, repair, recheck and commit. Collect all findings before starting the repair batch.
+3. **Verify the slice.** Complete the acceptance scope and verification required by §4 before review. Record actual results and gaps in the session and in the handoff when required. An unavailable environment is a gap, not a successful check.
+4. **Review proportionately.** Self-review the complete diff and affected callers. Coordinate one [§4 independent review](#evidence-reuse-and-blockers) only when its risk triggers apply; keep that reviewer read-only. Collect findings before the main session starts the repair batch.
 5. **Repair and recheck.** Fix the collected blockers together. Apply [§4](#evidence-reuse-and-blockers) to review and checks of repairs, and record any trigger that expands scope.
-6. **Finish by task state.** Merge and issue closure require the full acceptance scope and the review and CI evidence defined in §4 and §7. Record acceptance coverage, review resolution and valid evidence before declaring readiness; tracked deferred validation must satisfy the roadmap's exit conditions and issue-tracker evidence rules. Push, merge and publication follow the user's existing authorization. Session identity does not change these conditions.
+6. **Finish by task state.** Merge and issue closure require the full acceptance scope and the review and CI evidence defined in §4 and §7. Record acceptance coverage, review resolution and valid evidence before declaring readiness; tracked deferred validation must satisfy the roadmap's exit conditions and issue-tracker evidence rules. Push, merge and publication follow the user's existing authorization. Session identity does not change these conditions. After merging, remove task branches/worktrees only when authorized and their work is safely preserved.
 
-Four of this document's rules also run as Git hooks, versioned in `scripts/githooks/` and enabled by `make hooks` (which `make check` runs, so a fresh clone has them after its first gate run): a commit is refused on `main`, a push to `main` is refused from any branch, a staged change under `vendor/` is refused with a pointer to ADR-0007, and unformatted staged Python is refused. They sit in Git rather than in any one agent's configuration because every agent and every person commits through Git, so one implementation holds for all of them. An instruction file is advisory; a hook holds on the turn where the instruction has already scrolled out of context. Each hook is a few standard-library lines that cite the rule it enforces, which is what keeps the two in agreement.
+Four of this document's rules also run as Git hooks, versioned in `scripts/githooks/` and enabled by `make hooks` (which `make check` runs, so a fresh clone has them after its first gate run): a commit is refused on `main`, a push to `main` is refused from any branch, a staged change under `vendor/` is refused with a pointer to ADR-0007, and unformatted staged Python is refused. These hooks provide local guardrails independent of an agent's remembered instructions. They can be bypassed and do not run for every API-based write; they neither isolate a workspace nor prove server-side enforcement. Verify branch protection or rulesets separately before describing `main` as protected. Each hook is a few standard-library lines that cite the rule it enforces.
 
 ## 7. CI gates
 
 ### Blocking pull-request gate
 
-The sole branch-protection status is `CI required` from `.github/workflows/blocking-ci.yml`. Its `always()` gatherer requires explicit success from scope selection, both lockfile checks and every gate job. Failed, cancelled or skipped dependencies fail aggregation. A selector error cannot become a successful no-change result.
+The sole aggregate status to require in branch protection or a ruleset is `CI required` from `.github/workflows/blocking-ci.yml`. The workflow alone does not enable that server-side requirement; verify the repository settings separately and do not change them without authorization. Its `always()` gatherer requires explicit success from scope selection, both lockfile checks and every gate job. Failed, cancelled or skipped dependencies fail aggregation. A selector error cannot become a successful no-change result.
 
 `scripts/ci_scope.py BASE HEAD` emits `docs_only` and `force_all` booleans for the commits CI will compare. It reads NUL-delimited Git paths with rename detection disabled, so moving code into a Markdown file still selects code checks. The workflow checks the candidate tree and uses this scope:
 
@@ -358,11 +365,15 @@ consumers cannot generate it during install or build.
 
 ## 9. Agent instruction hierarchy
 
-Keep `AGENTS.md` as the always-present entry point: the invariants needed before reading files and one conditional pointer per task branch. Name the triggering task and the relevant section. Keep the steps and their completion conditions together; move branch-specific reference behind a pointer. Add a nested `AGENTS.md` only for a real local exception. `CLAUDE.md` remains a pointer to the same root instructions.
+Keep `AGENTS.md` as the always-present entry point: the invariants needed before reading files and one conditional pointer per task branch. Name the triggering task and the relevant subsection. Keep the steps and their completion conditions together; move branch-specific reference behind a pointer. Read only the relevant glossary entries, mechanism sections and ADRs initially, expanding when the task's impact requires it. Scoped reading does not waive rules that apply to the change. Add a nested `AGENTS.md` only for a real local exception. `CLAUDE.md` remains a pointer to the same root instructions.
 
-Each rule has one authoritative home. Point to tool configuration, commands, contracts and ADRs instead of copying their current values or directory inventories. Keep instruction text in English under §5. When guidance is superseded, merge surviving facts into the current source and delete the stale guidance; Git is the archive. Use `writing-for-agents` when updating these instructions.
+Each rule has one authoritative home. Point to tool configuration, commands, contracts and ADRs instead of copying their current values or directory inventories. Keep instruction text in English under §5. When guidance is superseded, merge surviving facts into the current source and delete the stale guidance; Git is the archive. Use `writing-for-agents` when available when updating these instructions; otherwise state that it was unavailable and review clarity, routing and conflicts directly rather than inventing an invocation.
 
-The official [AGENTS.md guide](https://developers.openai.com/codex/guides/agents-md/) defines a default **32 KiB combined project-instruction byte budget**, configured by `project_doc_max_bytes`. That is a loading limit, not a source-file line limit or a per-document word target. Codex discovers the instruction chain at session start; explicitly read changed instructions before continuing. Keep important guidance reachable within the budget; do not turn a suggested document length into another hard size gate.
+The official [AGENTS.md guide](https://developers.openai.com/codex/guides/agents-md/) defines a default **32 KiB combined project-instruction byte budget**, configured by `project_doc_max_bytes`. That is a loading limit, not a source-file line limit or a per-document word target. Codex discovers the instruction chain at session start; explicitly read changed instructions before continuing and use a fresh session to verify startup loading. Keep important guidance reachable within the budget; do not turn a suggested document length into another hard size gate.
+
+When instructions or the agent runtime change, verify the actual client, working directory and applicable global, project, override and directory instructions. A linked Markdown document is not automatically loaded merely because a pointer exists; read the relevant sections explicitly. Check active skills and workflows for conflicting universal TDD, review or worktree requirements. Follow the client's actual instruction hierarchy, report material conflicts, and do not silently weaken a stronger requirement or alter global configuration. Other clients need their own loading verification; do not assume Codex discovery rules apply to Pi or another harness.
+
+Keep this a one-time activation check after material instruction/runtime changes, not a ritual for every task. Inspect actual tool use on representative disposable tasks: a copy edit should not create tests or read the entire roadmap; a bounded feature should reuse existing evidence; a critical defect should receive the required regression evidence and independent review. A model's promise to follow the rules is not proof of those behaviors. This check is not a new CI framework and does not replace §4–§7 gates.
 
 ## 10. Reference-baseline patterns used
 

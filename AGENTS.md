@@ -25,7 +25,7 @@ These five hold before you read anything else. Everything else lives in the harn
 
 ## Implement, verify and stop
 
-Use a task branch, never edit or commit on `main`. Apply the [working cycle](docs/design/repository-harness.md#working-and-review-cycle) to select workspace isolation and persistent handoff; neither is mandatory ceremony for every bounded single-session change.
+Use an `agent/<agent-id>/<task-slug>` branch in its own worktree for task edits. Treat `main` and `dev` as shared refs; do not make direct task commits on either. Before creating or changing branches, worktrees or refs, read the [local branch workflow](docs/design/local-branch-workflow.md) and enable its versioned hooks with `make hooks`. Apply the [working cycle](docs/design/repository-harness.md#working-and-review-cycle) to select workspace isolation and persistent handoff; neither is mandatory ceremony for every bounded single-session change.
 
 State risk, test reuse or additions, and intended checks in at most three lines, then proceed within the authorized scope. Existing evidence may justify zero new tests; follow §4 rather than a universal TDD workflow.
 

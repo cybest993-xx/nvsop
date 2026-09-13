@@ -428,6 +428,7 @@ class ClipMediaProbe(FakeMediaProbe):
 class FakeAnnotationVolume:
     def __init__(self) -> None:
         self.video_reads: list[tuple[str, str, str | None]] = []
+        self.video_bytes = b"a" * 100
         self.annotation_bytes = json.dumps(
             [
                 {
@@ -460,7 +461,7 @@ class FakeAnnotationVolume:
         assert (data_id, video_id) == ("data-1", "video-1")
         assert filename in {None, "01_line-a_1_1.mp4"}
         self.video_reads.append((data_id, video_id, filename))
-        destination.write(b"a" * 100)
+        destination.write(self.video_bytes)
 
 
 class RecordingDdmReader:
@@ -964,6 +965,11 @@ def test_vlm_clip_requires_submission_identity_alongside_execution_identity() ->
 
 def test_vlm_check_reads_a_fixed_annotation_clip_instead_of_the_full_source() -> None:
     datasets = FakeUsageDatasets()
+    datasets.execution = replace(
+        datasets.execution,
+        derived_video_size=100,
+        derived_video_sha256=hashlib.sha256(b"a" * 100).hexdigest(),
+    )
     media = VlmMediaReference(
         key="clip-key.mp4",
         member_id=MEMBER_ID,
@@ -1020,6 +1026,70 @@ def test_vlm_check_reads_a_fixed_annotation_clip_instead_of_the_full_source() ->
     assert result.passed is True
     assert reader.calls
     assert volume.video_reads == [("data-1", "video-1", "01_line-a_1_1.mp4")]
+
+
+def test_vlm_check_rejects_a_changed_annotation_clip_digest() -> None:
+    datasets = FakeUsageDatasets()
+    datasets.execution = replace(
+        datasets.execution,
+        derived_video_size=100,
+        derived_video_sha256=hashlib.sha256(b"a" * 100).hexdigest(),
+    )
+    media = VlmMediaReference(
+        key="clip-key.mp4",
+        member_id=MEMBER_ID,
+        source_object_version_id="version-1",
+        source_sha256="a" * 64,
+        annotation_submission_id=SUBMISSION_ID,
+        annotation_execution_id=EXECUTION_ID,
+        clip_index=0,
+    )
+    candidate = register_vlm_candidate(
+        dataset_id=DATASET_ID,
+        kind=VlmCandidateKind.GQA,
+        action_list_revision=1,
+        records=(
+            {
+                "conversations": [
+                    {"from": "human", "value": "<video>问题"},
+                    {"from": "gpt", "value": "取料"},
+                ],
+                "video": "clip-key.mp4",
+            },
+        ),
+        media=(media,),
+        expected_revision=0,
+        caller=caller(Permission.DATASET_EDIT),
+        now=NOW,
+        datasets=cast(UsageDatasetRepository, datasets),
+    )
+    requested = request_usage_check(
+        dataset_id=DATASET_ID,
+        kind=UsageKind.VLM,
+        candidate_id=candidate.id,
+        caller=caller(Permission.DATASET_EDIT),
+        now=NOW,
+        datasets=cast(UsageDatasetRepository, datasets),
+        jobs=cast(UsageJobQueue, FakeUsageJobs()),
+    )
+    target = begin_usage_check(
+        job=requested.job,
+        datasets=cast(UsageDatasetRepository, datasets),
+        now=NOW + timedelta(seconds=1),
+    )
+    assert target is not None
+    volume = FakeAnnotationVolume()
+    volume.video_bytes = b"b" * 100
+    result = run_usage_check(
+        target=target,
+        storage=cast(ObjectStorage, FakeStorage()),
+        media_probe=ClipMediaProbe(),
+        annotation_volume=volume,
+        vlm_reader=RecordingVlmReader(),
+    )
+
+    assert result.passed is False
+    assert any(issue.code == "USAGE_SOURCE_DIGEST_MISMATCH" for issue in result.issues)
 
 
 def test_complete_usage_check_persists_recovery_metadata() -> None:

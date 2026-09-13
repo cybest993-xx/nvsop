@@ -153,6 +153,9 @@ services:
   center-api:
     image: nvsop-dev-main/center-api:${NVSOP_TARGET_SHA:-local}
     build:
+      # Some Docker hosts can reach package mirrors only through host networking.
+      # This affects image builds only; runtime services retain the Compose network.
+      network: ${NVSOP_DEV_BUILD_NETWORK:-default}
       context: ${NVSOP_SOURCE_DIR:-.}
       dockerfile: deploy/dev/center.Dockerfile
     depends_on:
@@ -209,6 +212,7 @@ services:
   annotation-backend:
     image: nvsop-dev-main/annotation-backend:${NVSOP_TARGET_SHA:-local}
     build:
+      network: ${NVSOP_DEV_BUILD_NETWORK:-default}
       context: ${NVSOP_SOURCE_DIR:-.}
       dockerfile: deploy/dev/annotation-backend.Dockerfile
     depends_on:
@@ -240,6 +244,7 @@ services:
   annotation-frontend:
     image: nvsop-dev-main/annotation-frontend:${NVSOP_TARGET_SHA:-local}
     build:
+      network: ${NVSOP_DEV_BUILD_NETWORK:-default}
       context: ${NVSOP_SOURCE_DIR:-.}
       dockerfile: deploy/dev/annotation-frontend.Dockerfile
     healthcheck:
@@ -251,6 +256,7 @@ services:
   web:
     image: nvsop-dev-main/web:${NVSOP_TARGET_SHA:-local}
     build:
+      network: ${NVSOP_DEV_BUILD_NETWORK:-default}
       context: ${NVSOP_SOURCE_DIR:-.}
       dockerfile: deploy/dev/web.Dockerfile
     healthcheck:

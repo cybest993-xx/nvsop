@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import shutil
@@ -113,6 +114,26 @@ def lfs_media_directory(
     return None
 
 
+def _lfs_object_path(media_directory: Path | None, oid: str) -> Path | None:
+    if media_directory is None:
+        return None
+    return media_directory / oid[:2] / oid[2:4] / oid
+
+
+def _lfs_object_is_valid(media_directory: Path | None, oid: str) -> bool:
+    path = _lfs_object_path(media_directory, oid)
+    if path is None or not path.is_file():
+        return False
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return False
+    return digest.hexdigest() == oid
+
+
 def lfs_files(
     root: Path,
     sha: str,
@@ -136,11 +157,7 @@ def lfs_files(
         parts = line.split(maxsplit=2)
         if len(parts) != 3 or parts[1] not in {"*", "-"}:
             raise SnapshotError(f"无法解析 git lfs ls-files 输出：{line!r}")
-        available = parts[1]
-        if available == "-" and media_directory is not None:
-            object_path = media_directory / parts[0][:2] / parts[0][2:4] / parts[0]
-            if object_path.is_file():
-                available = "*"
+        available = "*" if _lfs_object_is_valid(media_directory, parts[0]) else "-"
         entries.append({"oid": parts[0], "available": available, "path": parts[2]})
     return entries
 
@@ -160,9 +177,9 @@ def hydrate_lfs_files(
     root = snapshot.resolve()
     for entry in available:
         oid = entry["oid"]
-        object_path = media_directory / oid[:2] / oid[2:4] / oid
-        if not object_path.is_file():
-            raise SnapshotError(f"Git-LFS 对象已报告可用但本地文件不存在：{entry['path']} ({oid})")
+        object_path = _lfs_object_path(media_directory, oid)
+        if not _lfs_object_is_valid(media_directory, oid) or object_path is None:
+            raise SnapshotError(f"Git-LFS 对象不可用或校验失败：{entry['path']} ({oid})")
         relative = Path(entry["path"])
         if relative.is_absolute() or ".." in relative.parts:
             raise SnapshotError(f"Git-LFS 路径无效，拒绝写入快照外部：{entry['path']}")

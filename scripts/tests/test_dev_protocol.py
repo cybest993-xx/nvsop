@@ -124,6 +124,43 @@ class DevProtocolTest(unittest.TestCase):
                 DEV.archive_main(item, sha)
 
     @unittest.skipUnless(shutil.which("git-lfs"), "需要 git-lfs 执行真实 LFS archive 流程")
+    def test_hydrated_lfs_without_local_object_fails_before_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            self.make_git_repo(root)
+            self.git(root, "lfs", "track", "*.png")
+            relative = sorted(DEV.OPTIONAL_LFS_PATHS)[0]
+            pointer = root / relative
+            pointer.parent.mkdir(parents=True)
+            pointer.write_bytes(b"available content\\n")
+            self.git(root, "add", ".gitattributes", relative)
+            self.git(root, "commit", "-m", "hydrated but unavailable asset")
+            sha = self.git(root, "rev-parse", "HEAD")
+            oid = self.git(root, "lfs", "ls-files", "--long", sha).split(maxsplit=1)[0]
+            media_directory = Path(
+                next(
+                    line.partition("=")[2]
+                    for line in self.git(root, "lfs", "env").splitlines()
+                    if line.startswith("LocalMediaDir=")
+                )
+            )
+            object_path = media_directory / oid[:2] / oid[2:4] / oid
+            object_path.unlink()
+            item = DEV.DevPaths(root=root, state=Path(directory) / "state")
+
+            with self.assertRaises(DEV.MissingLfsError) as failure:
+                DEV.archive_main(item, sha)
+
+            self.assertIn(relative, str(failure.exception))
+            self.assertIn(oid, str(failure.exception))
+            audit = item.logs / f"snapshot-{sha}.json"
+            self.assertIn(relative, audit.read_text(encoding="utf-8"))
+
+            object_path.write_bytes(b"corrupt object")
+            with self.assertRaises(DEV.MissingLfsError):
+                DEV.archive_main(item, sha)
+
+    @unittest.skipUnless(shutil.which("git-lfs"), "需要 git-lfs 执行真实 LFS archive 流程")
     def test_optional_lfs_keeps_available_objects_as_real_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"

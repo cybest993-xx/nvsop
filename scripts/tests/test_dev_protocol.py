@@ -29,6 +29,49 @@ class DevProtocolTest(unittest.TestCase):
         with self.assertRaises(DEV.DevError):
             DEV.configured_protocol({"NVSOP_DEV_PROTOCOL": "ftp"})
 
+    def test_tls_repairs_a_legacy_ca_without_ca_usage_extensions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            item = DEV.DevPaths(root=Path(directory), state=Path(directory) / ".tmp")
+            DEV.ensure_directories(item)
+            legacy_ca = subprocess.run(
+                [
+                    "openssl",
+                    "req",
+                    "-x509",
+                    "-new",
+                    "-nodes",
+                    "-newkey",
+                    "rsa:2048",
+                    "-keyout",
+                    str(item.tls / "ca.key"),
+                    "-out",
+                    str(item.tls / "ca.crt"),
+                    "-days",
+                    "1",
+                    "-subj",
+                    "/CN=Legacy NVSOP Development CA",
+                ],
+                check=False,
+                capture_output=True,
+            )
+            self.assertEqual(0, legacy_ca.returncode, legacy_ca.stderr.decode())
+
+            DEV.ensure_tls(item)
+
+            self.assertTrue(DEV.usable_ca_certificate(item.tls / "ca.crt"))
+            verified = subprocess.run(
+                [
+                    "openssl",
+                    "verify",
+                    "-CAfile",
+                    str(item.tls / "ca.crt"),
+                    str(item.tls / "dev.crt"),
+                ],
+                check=False,
+                capture_output=True,
+            )
+            self.assertEqual(0, verified.returncode, verified.stderr.decode())
+
     def test_tilt_commands_use_the_committed_snapshot_script(self) -> None:
         item = DEV.DevPaths(root=Path("/repo"), state=Path("/state"))
         environment = DEV.runtime_environment(item, sha="abc", source=Path("/snapshot"))

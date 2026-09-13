@@ -36,6 +36,16 @@ class DevProtocolTest(unittest.TestCase):
         self.assertEqual("/snapshot/scripts/dev.py", environment["NVSOP_LAUNCHER_SCRIPT"])
         self.assertEqual("/repo/scripts/dev.py", environment["NVSOP_HOST_LAUNCHER_SCRIPT"])
 
+    def test_tilt_manual_tests_use_host_launcher_and_do_not_run_on_start(self) -> None:
+        tiltfile = (ROOT / "Tiltfile").read_text(encoding="utf-8")
+        smoke = tiltfile.split('"functional-smoke"', 1)[1].split(")\n\nlocal_resource", 1)[0]
+        ui = tiltfile.split('"visual-tests"', 1)[1].split(")\n", 1)[0]
+
+        self.assertIn("cmd='python3 \"$NVSOP_HOST_LAUNCHER_SCRIPT\" smoke'", smoke)
+        self.assertNotIn("cmd='python3 \"$NVSOP_LAUNCHER_SCRIPT\" smoke'", smoke)
+        self.assertIn("auto_init=False", smoke)
+        self.assertIn("auto_init=False", ui)
+
     def test_failed_required_service_is_reported(self) -> None:
         self.assertTrue(
             DEV.failed_service({"gateway": {"state": "exited", "exit_code": 1}}, "gateway")

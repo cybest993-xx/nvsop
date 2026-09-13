@@ -70,6 +70,8 @@ openapi-generate: openapi-export web-install
 	pnpm --filter control-web run generate:api
 
 policy-test:
+	command -v git-lfs >/dev/null || (echo "policy-test requires git-lfs; LFS tests must not be skipped" >&2; exit 1)
+	git lfs version
 	python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 
 policy:

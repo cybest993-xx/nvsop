@@ -72,8 +72,12 @@ class DevProtocolTest(unittest.TestCase):
         self.git(root, "config", "user.email", "test@example.invalid")
         self.git(root, "config", "user.name", "NVSOP test")
 
-    @unittest.skipUnless(shutil.which("git-lfs"), "需要 git-lfs 执行真实 LFS archive 流程")
+    def require_git_lfs(self) -> None:
+        if shutil.which("git-lfs") is None:
+            self.fail("关键 Git-LFS 测试需要 git-lfs；环境缺失时不能跳过")
+
     def test_archive_main_extracts_a_real_complete_git_snapshot(self) -> None:
+        self.require_git_lfs()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"
             self.make_git_repo(root)
@@ -93,8 +97,8 @@ class DevProtocolTest(unittest.TestCase):
             self.assertTrue(manifest["complete"])
             self.assertEqual([], manifest["missing_lfs_paths"])
 
-    @unittest.skipUnless(shutil.which("git-lfs"), "需要 git-lfs 执行真实 LFS archive 流程")
     def test_missing_lfs_fails_by_default_and_partial_cache_is_not_reused(self) -> None:
+        self.require_git_lfs()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"
             self.make_git_repo(root)
@@ -129,8 +133,8 @@ class DevProtocolTest(unittest.TestCase):
             with self.assertRaises(DEV.MissingLfsError):
                 DEV.archive_main(item, sha)
 
-    @unittest.skipUnless(shutil.which("git-lfs"), "需要 git-lfs 执行真实 LFS archive 流程")
     def test_optional_lfs_does_not_allow_unapproved_paths(self) -> None:
+        self.require_git_lfs()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"
             self.make_git_repo(root)
@@ -155,8 +159,8 @@ class DevProtocolTest(unittest.TestCase):
             audit = json.loads((item.logs / f"snapshot-{sha}.json").read_text(encoding="utf-8"))
             self.assertEqual([relative], audit["unapproved_lfs_paths"])
 
-    @unittest.skipUnless(shutil.which("git-lfs"), "需要 git-lfs 执行真实 LFS archive 流程")
     def test_hydrated_lfs_without_local_object_fails_before_archive(self) -> None:
+        self.require_git_lfs()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"
             self.make_git_repo(root)
@@ -188,8 +192,8 @@ class DevProtocolTest(unittest.TestCase):
             audit = item.logs / f"snapshot-{sha}.json"
             self.assertIn(relative, audit.read_text(encoding="utf-8"))
 
-    @unittest.skipUnless(shutil.which("git-lfs"), "需要 git-lfs 执行真实 LFS archive 流程")
     def test_optional_lfs_keeps_available_objects_as_real_files(self) -> None:
+        self.require_git_lfs()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"
             self.make_git_repo(root)

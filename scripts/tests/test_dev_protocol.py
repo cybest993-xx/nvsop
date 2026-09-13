@@ -611,8 +611,20 @@ configure_manual_test_resources(
             owner.acquire()
             child = subprocess.Popen([sys.executable, str(script), "run"], cwd=root)
             try:
-                time.sleep(0.05)
-                self.assertTrue(DEV.signal_launcher(item, child.pid, signal.SIGTERM))
+                signaled = False
+                last_error: DEV.DevError | None = None
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline and child.poll() is None:
+                    try:
+                        signaled = DEV.signal_launcher(item, child.pid, signal.SIGTERM)
+                    except DEV.DevError as error:
+                        last_error = error
+                    if signaled:
+                        break
+                    time.sleep(0.01)
+                if not signaled and last_error is not None:
+                    self.fail(str(last_error))
+                self.assertTrue(signaled)
                 child.wait(timeout=5)
                 self.assertEqual(-signal.SIGTERM, child.returncode)
             finally:

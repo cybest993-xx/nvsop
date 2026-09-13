@@ -29,6 +29,8 @@ Use an `agent/<agent-id>/<task-slug>` branch in its own worktree for task edits.
 
 State risk, test reuse or additions, and intended checks in at most three lines, then proceed within the authorized scope. Existing evidence may justify zero new tests; follow §4 rather than a universal TDD workflow.
 
+Use contract-driven implementations: cover the specified behavior and required failure paths directly, while keeping speculative, unrequested defensive branches and fallback paths out of the implementation. Preserve validation and error handling required by the contract, repository policy, callers, tests, or security/integrity boundaries. Keep hash verification targeted and non-redundant; avoid broad or repeated hashing of large files, directories, generated trees, or unchanged artifacts unless required by the contract, repository policy, callers, tests, or a security/integrity boundary.
+
 During iteration, run the smallest affected Make targets with their prerequisites. `make check` is the final CPU-only code gate, not the default inner loop; documentation-only changes use `make check-docs`. Required CI, integration, browser and release evidence remain unchanged.
 
 Self-review the complete diff and affected callers. Use the [risk-triggered review policy](docs/design/repository-harness.md#evidence-reuse-and-blockers) for independent review; changes to these instructions or repository policy do not exempt themselves. One responsible main session owns completion.

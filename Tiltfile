@@ -32,10 +32,11 @@ local_resource(
 
 local_resource(
     "functional-smoke",
-    cmd='python3 "$NVSOP_LAUNCHER_SCRIPT" smoke',
+    cmd='python3 "$NVSOP_HOST_LAUNCHER_SCRIPT" smoke',
     deps=["scripts/dev_smoke.py", "scripts/dev.py"],
     resource_deps=["sample-data"],
     trigger_mode=TRIGGER_MODE_MANUAL,
+    auto_init=False,
     labels=["development", "tests"],
     links=[BASE_URL, MEDIA_URL, SMOKE_REPORT],
 )
@@ -46,6 +47,7 @@ local_resource(
     deps=["apps/control-web/playwright.config.ts", "scripts/dev.py"],
     resource_deps=["gateway"],
     trigger_mode=TRIGGER_MODE_MANUAL,
+    auto_init=False,
     labels=["development", "tests"],
     links=["http://localhost:9323", UI_REPORTS],
 )

@@ -2953,7 +2953,25 @@ def _verify_frozen_media(
                     destination=destination,
                     version_id=str(source["object_version_id"]),
                 )
-        if not is_clip and _file_sha256(path) != source.get("source_sha256"):
+        if is_clip:
+            expected_digest = source.get("derived_video_sha256")
+            if not isinstance(expected_digest, str) or len(expected_digest) != 64:
+                issues.append(
+                    UsageIssue(
+                        "USAGE_SOURCE_DIGEST_MISSING",
+                        "标注切片缺少冻结摘要，不能验证固定输入",
+                        str(member_id),
+                    )
+                )
+            elif _file_sha256(path) != expected_digest:
+                issues.append(
+                    UsageIssue(
+                        "USAGE_SOURCE_DIGEST_MISMATCH",
+                        "标注切片与冻结摘要不一致",
+                        str(member_id),
+                    )
+                )
+        elif _file_sha256(path) != source.get("source_sha256"):
             issues.append(
                 UsageIssue(
                     "USAGE_SOURCE_DIGEST_MISMATCH", "下载的媒体与冻结摘要不一致", str(member_id)
@@ -3020,7 +3038,7 @@ def _verify_frozen_media(
     except InvalidMediaError:
         issues.append(UsageIssue("USAGE_MEDIA_INVALID", "媒体无法读取为有效视频", str(member_id)))
         return
-    expected_size = None if is_clip else source.get("actual_size")
+    expected_size = source.get("derived_video_size") if is_clip else source.get("actual_size")
     if isinstance(expected_size, int) and path.stat().st_size != expected_size:
         issues.append(UsageIssue("USAGE_OBJECT_SIZE_CHANGED", "下载媒体大小已变化", str(member_id)))
     expected_duration = (

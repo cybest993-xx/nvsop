@@ -41,6 +41,12 @@ class DevProtocolTest(unittest.TestCase):
         with self.assertRaises(DEV.DevError):
             DEV.configured_protocol({"NVSOP_DEV_PROTOCOL": "ftp"})
 
+    def test_optional_lfs_requires_explicit_configuration(self) -> None:
+        self.assertFalse(DEV.configured_optional_lfs({}))
+        self.assertTrue(DEV.configured_optional_lfs({DEV.OPTIONAL_LFS_ENVIRONMENT: "1"}))
+        with self.assertRaises(DEV.DevError):
+            DEV.configured_optional_lfs({DEV.OPTIONAL_LFS_ENVIRONMENT: "maybe"})
+
     def test_archive_environment_requires_explicit_optional_lfs_opt_in(self) -> None:
         source = {"GIT_LFS_SKIP_SMUDGE": "1", "EXAMPLE": "value"}
 
@@ -66,8 +72,12 @@ class DevProtocolTest(unittest.TestCase):
         self.git(root, "config", "user.email", "test@example.invalid")
         self.git(root, "config", "user.name", "NVSOP test")
 
-    @unittest.skipUnless(shutil.which("git-lfs"), "需要 git-lfs 执行真实 LFS archive 流程")
+    def require_git_lfs(self) -> None:
+        if shutil.which("git-lfs") is None:
+            self.fail("关键 Git-LFS 测试需要 git-lfs；环境缺失时不能跳过")
+
     def test_archive_main_extracts_a_real_complete_git_snapshot(self) -> None:
+        self.require_git_lfs()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"
             self.make_git_repo(root)
@@ -87,8 +97,8 @@ class DevProtocolTest(unittest.TestCase):
             self.assertTrue(manifest["complete"])
             self.assertEqual([], manifest["missing_lfs_paths"])
 
-    @unittest.skipUnless(shutil.which("git-lfs"), "需要 git-lfs 执行真实 LFS archive 流程")
     def test_missing_lfs_fails_by_default_and_partial_cache_is_not_reused(self) -> None:
+        self.require_git_lfs()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"
             self.make_git_repo(root)
@@ -123,8 +133,67 @@ class DevProtocolTest(unittest.TestCase):
             with self.assertRaises(DEV.MissingLfsError):
                 DEV.archive_main(item, sha)
 
-    @unittest.skipUnless(shutil.which("git-lfs"), "需要 git-lfs 执行真实 LFS archive 流程")
+    def test_optional_lfs_does_not_allow_unapproved_paths(self) -> None:
+        self.require_git_lfs()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            self.make_git_repo(root)
+            self.git(root, "lfs", "track", "*.bin")
+            relative = "unapproved.bin"
+            pointer = root / relative
+            pointer.write_text(
+                "version https://git-lfs.github.com/spec/v1\n"
+                "oid sha256:0000000000000000000000000000000000000000000000000000000000000000\n"
+                "size 123\n",
+                encoding="ascii",
+            )
+            self.git(root, "add", ".gitattributes", relative)
+            self.git(root, "commit", "-m", "missing unapproved asset")
+            sha = self.git(root, "rev-parse", "HEAD")
+            item = DEV.DevPaths(root=root, state=Path(directory) / "state")
+
+            with self.assertRaises(DEV.MissingLfsError) as failure:
+                DEV.archive_main(item, sha, allow_missing_optional_lfs=True)
+
+            self.assertEqual([relative], failure.exception.unapproved_lfs_paths)
+            audit = json.loads((item.logs / f"snapshot-{sha}.json").read_text(encoding="utf-8"))
+            self.assertEqual([relative], audit["unapproved_lfs_paths"])
+
+    def test_hydrated_lfs_without_local_object_fails_before_archive(self) -> None:
+        self.require_git_lfs()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            self.make_git_repo(root)
+            self.git(root, "lfs", "track", "*.png")
+            relative = sorted(DEV.OPTIONAL_LFS_PATHS)[0]
+            pointer = root / relative
+            pointer.parent.mkdir(parents=True)
+            pointer.write_bytes(b"available content\\n")
+            self.git(root, "add", ".gitattributes", relative)
+            self.git(root, "commit", "-m", "hydrated but unavailable asset")
+            sha = self.git(root, "rev-parse", "HEAD")
+            oid = self.git(root, "lfs", "ls-files", "--long", sha).split(maxsplit=1)[0]
+            media_directory = Path(
+                next(
+                    line.partition("=")[2]
+                    for line in self.git(root, "lfs", "env").splitlines()
+                    if line.startswith("LocalMediaDir=")
+                )
+            )
+            object_path = media_directory / oid[:2] / oid[2:4] / oid
+            object_path.unlink()
+            item = DEV.DevPaths(root=root, state=Path(directory) / "state")
+
+            with self.assertRaises(DEV.MissingLfsError) as failure:
+                DEV.archive_main(item, sha)
+
+            self.assertIn(relative, str(failure.exception))
+            self.assertIn(oid, str(failure.exception))
+            audit = item.logs / f"snapshot-{sha}.json"
+            self.assertIn(relative, audit.read_text(encoding="utf-8"))
+
     def test_optional_lfs_keeps_available_objects_as_real_files(self) -> None:
+        self.require_git_lfs()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"
             self.make_git_repo(root)

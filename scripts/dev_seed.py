@@ -347,7 +347,7 @@ def main(argv: list[str] | None = None) -> int:
         write_report(report, result)
         print(json.dumps(result, ensure_ascii=False, indent=2), file=sys.stderr)
         return 130
-    except Exception as error:
+    except (OSError, DatasetImportError, ValueError, json.JSONDecodeError) as error:
         result["error"] = str(error)
         write_report(report, result)
         print(json.dumps(result, ensure_ascii=False, indent=2), file=sys.stderr)

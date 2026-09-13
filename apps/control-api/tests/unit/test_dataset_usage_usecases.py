@@ -492,11 +492,6 @@ class RecordingVlmReader:
         self.calls.append((workspace, annotation_filename))
 
 
-class FailingVlmReader:
-    def validate(self, *, workspace: Path, annotation_filename: str) -> None:
-        raise RuntimeError("invalid VLM reader input")
-
-
 class ConcurrentAnnotationVolume(FakeAnnotationVolume):
     def read_annotation(self, *, data_id: str, video_id: str) -> bytes:
         assert (data_id, video_id) == ("data-1", "video-1")
@@ -1059,8 +1054,24 @@ def test_vlm_check_reads_a_fixed_annotation_clip_instead_of_the_full_source() ->
             hashlib.sha256(b"a" * 100).hexdigest(),
             "USAGE_SOURCE_SIZE_MISSING",
         ),
+        (b"a" * 100, 100, "a" * 63, "USAGE_SOURCE_DIGEST_MISSING"),
+        (b"a" * 100, 100, "g" * 64, "USAGE_SOURCE_DIGEST_MISSING"),
+        (
+            b"a" * 100,
+            100,
+            hashlib.sha256(b"a" * 100).hexdigest().upper(),
+            "USAGE_SOURCE_DIGEST_MISMATCH",
+        ),
     ],
-    ids=("digest", "size", "missing_digest", "missing_size"),
+    ids=(
+        "digest",
+        "size",
+        "missing_digest",
+        "missing_size",
+        "short_digest",
+        "non_hex_digest",
+        "uppercase_digest",
+    ),
 )
 def test_vlm_check_rejects_changed_annotation_clip_before_reader(
     video_bytes: bytes, expected_size: int | None, expected_digest: str | None, expected_issue: str
@@ -1117,7 +1128,7 @@ def test_vlm_check_rejects_changed_annotation_clip_before_reader(
     volume = FakeAnnotationVolume()
     volume.video_bytes = video_bytes
     media_probe = ClipMediaProbe()
-    reader = FailingVlmReader()
+    reader = RecordingVlmReader()
     result = run_usage_check(
         target=target,
         storage=cast(ObjectStorage, FakeStorage()),
@@ -1128,8 +1139,8 @@ def test_vlm_check_rejects_changed_annotation_clip_before_reader(
 
     assert result.passed is False
     assert any(issue.code == expected_issue for issue in result.issues)
-    assert any(issue.code == "VLM_READER_UNAVAILABLE" for issue in result.issues)
     assert media_probe.calls == []
+    assert reader.calls == []
 
 
 def test_complete_usage_check_persists_recovery_metadata() -> None:

@@ -6,6 +6,7 @@ import io
 import json
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -572,6 +573,16 @@ configure_manual_test_resources(
             self.assertEqual("stale", updated["last_smoke"]["status"])
             self.assertEqual("stale", updated["last_ui"]["status"])
 
+    def test_port_preflight_reports_the_occupied_service_port(self) -> None:
+        with socket.socket() as occupied:
+            occupied.bind(("127.0.0.1", 0))
+            occupied.listen()
+            port = int(occupied.getsockname()[1])
+            with self.assertRaises(DEV.DevError) as failure:
+                DEV.require_ports({"测试服务": port})
+
+        self.assertIn(f"测试服务={port}", str(failure.exception))
+
     def test_launcher_pid_uses_lifecycle_lock_instead_of_pid_liveness(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "launcher.pid"
@@ -589,29 +600,26 @@ configure_manual_test_resources(
             self.assertFalse(path.exists())
 
     @unittest.skipUnless(os.name != "nt", "需要 Linux /proc")
-    def test_launcher_process_matches_real_proc_command_line(self) -> None:
+    def test_signal_launcher_stops_a_matching_real_process(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             script = root / "scripts" / "dev.py"
             script.parent.mkdir()
             script.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
             item = DEV.DevPaths(root=root, state=root / "state")
+            owner = DEV.LauncherPid(item.launcher_pid)
+            owner.acquire()
             child = subprocess.Popen([sys.executable, str(script), "run"], cwd=root)
             try:
-                matched = False
-                deadline = time.monotonic() + 2
-                while time.monotonic() < deadline:
-                    if DEV.launcher_process_matches(item, child.pid):
-                        matched = True
-                        break
-                    if child.poll() is not None:
-                        break
-                    time.sleep(0.01)
-                self.assertTrue(matched)
+                time.sleep(0.05)
+                self.assertTrue(DEV.signal_launcher(item, child.pid, signal.SIGTERM))
+                child.wait(timeout=5)
+                self.assertEqual(-signal.SIGTERM, child.returncode)
             finally:
                 if child.poll() is None:
                     child.terminate()
-                child.wait(timeout=5)
+                    child.wait(timeout=5)
+                owner.release()
 
     def test_down_cancels_a_running_manual_test_before_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

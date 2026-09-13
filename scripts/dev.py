@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import signal
+import socket
 import ssl
 import subprocess
 import sys
@@ -72,7 +73,8 @@ TILT_PORT = 10350
 BUSINESS_PORT = 8443
 MEDIA_PORT = 8444
 MINIO_PORT = 9443
-PLAYWRIGHT_UI_URL = "http://localhost:9323"
+PLAYWRIGHT_UI_PORT = 9323
+PLAYWRIGHT_UI_URL = f"http://localhost:{PLAYWRIGHT_UI_PORT}"
 PROTOCOL_ENVIRONMENT = "NVSOP_DEV_PROTOCOL"
 DEFAULT_PROTOCOL = "https"
 SUPPORTED_PROTOCOLS = frozenset({"http", "https"})
@@ -469,6 +471,38 @@ def run_checked(
         raise DevError(f"无法执行命令：{' '.join(arguments)}：{error}") from error
 
 
+def require_ports(ports: Mapping[str, int]) -> None:
+    """在启动进程前检查固定端口，并报告占用端口对应的服务。"""
+    occupied = [f"{name}={port}" for name, port in ports.items() if not port_available(port)]
+    if occupied:
+        raise DevError("固定开发实例端口已被占用：" + ", ".join(occupied))
+
+
+def port_available(port: int) -> bool:
+    """检查本机 IPv4 回环地址上的 TCP 端口能否绑定。"""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
+
+
+def require_instance_ports() -> None:
+    require_ports(
+        {
+            "Tilt": TILT_PORT,
+            "业务网关": BUSINESS_PORT,
+            "媒体网关": MEDIA_PORT,
+            "MinIO": MINIO_PORT,
+        }
+    )
+
+
+def require_browser_port() -> None:
+    require_ports({"Playwright UI": PLAYWRIGHT_UI_PORT})
+
+
 def require_tools(*, protocol: str | None = None, include_browser: bool = True) -> None:
     selected = protocol or configured_protocol()
     required = ["git", "git-lfs", "docker", "ffmpeg", "ffprobe", "pnpm", "uv", "tilt"]
@@ -491,6 +525,9 @@ def require_tools(*, protocol: str | None = None, include_browser: bool = True) 
     version_text = (tilt.stdout + tilt.stderr).decode("utf-8", errors="replace")
     if tilt.returncode != 0 or TILT_VERSION not in version_text:
         raise DevError(f"需要 Tilt v{TILT_VERSION}，实际响应为：{version_text.strip()}")
+    require_instance_ports()
+    if include_browser:
+        require_browser_port()
 
 
 def require_main_checkout(item: DevPaths) -> None:
@@ -1974,6 +2011,7 @@ def ensure_snapshot_node_modules(
 def run_ui(item: DevPaths) -> None:
     require_setup(item)
     with ExclusiveLock(item.operation_lock):
+        require_browser_port()
         sha, snapshot, protocol, urls = ready_instance(item, action="打开可视化测试")
         ensure_snapshot_node_modules(item, sha=sha, snapshot=snapshot, protocol=protocol)
         report = report_path(item, "ui", sha)
@@ -1989,7 +2027,7 @@ def run_ui(item: DevPaths) -> None:
             "--ui-host",
             "127.0.0.1",
             "--ui-port",
-            "9323",
+            str(PLAYWRIGHT_UI_PORT),
             "--workers",
             "2",
             "--config",

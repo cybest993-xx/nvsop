@@ -342,6 +342,11 @@ def main(argv: list[str] | None = None) -> int:
         write_report(report, result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
+    except KeyboardInterrupt:
+        result.update({"status": "aborted", "error": "KeyboardInterrupt"})
+        write_report(report, result)
+        print(json.dumps(result, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 130
     except (OSError, DatasetImportError, ValueError, json.JSONDecodeError) as error:
         result["error"] = str(error)
         write_report(report, result)

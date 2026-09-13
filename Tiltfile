@@ -1,3 +1,5 @@
+load("scripts/dev_tilt.star", "configure_manual_test_resources")
+
 # 固定实例的服务图由 Compose 管理；Tilt 只负责可视化状态、日志和手动测试入口。
 # scripts/dev.py 在 Tilt 外拥有快照、更新串行化和停止收尾，避免形成第二个进程管理器。
 BASE_URL = os.getenv("NVSOP_DEV_BASE_URL", "https://localhost:8443")
@@ -30,24 +32,10 @@ local_resource(
     ],
 )
 
-local_resource(
-    "functional-smoke",
-    cmd='python3 "$NVSOP_HOST_LAUNCHER_SCRIPT" smoke',
-    deps=["scripts/dev_smoke.py", "scripts/dev.py"],
-    resource_deps=["sample-data"],
-    trigger_mode=TRIGGER_MODE_MANUAL,
-    auto_init=False,
-    labels=["development", "tests"],
-    links=[BASE_URL, MEDIA_URL, SMOKE_REPORT],
-)
-
-local_resource(
-    "visual-tests",
-    cmd='python3 "$NVSOP_HOST_LAUNCHER_SCRIPT" test-ui',
-    deps=["apps/control-web/playwright.config.ts", "scripts/dev.py"],
-    resource_deps=["gateway"],
-    trigger_mode=TRIGGER_MODE_MANUAL,
-    auto_init=False,
-    labels=["development", "tests"],
-    links=["http://localhost:9323", UI_REPORTS],
+configure_manual_test_resources(
+    base_url=BASE_URL,
+    media_url=MEDIA_URL,
+    smoke_report=SMOKE_REPORT,
+    ui_reports=UI_REPORTS,
+    host_launcher_script=os.getenv("NVSOP_HOST_LAUNCHER_SCRIPT", "scripts/dev.py"),
 )

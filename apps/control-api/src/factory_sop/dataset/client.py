@@ -361,6 +361,51 @@ class ControlPlaneClient:
             expected={200},
         )
 
+    def request_json(
+        self,
+        method: str,
+        path: str,
+        payload: JsonObject | None = None,
+        *,
+        expected: set[int],
+        idempotency_key: str | None = None,
+    ) -> JsonObject:
+        """给开发样例和冒烟复用同一正式 HTTP 会话客户端。"""
+        return _expect_json(
+            self._send_json(method, path, payload, idempotency_key=idempotency_key),
+            expected=expected,
+        )
+
+    def request_bytes(
+        self,
+        method: str,
+        path: str,
+        body: bytes,
+        *,
+        content_type: str,
+        expected: set[int],
+    ) -> HttpResponse:
+        """发送正式 API 的二进制请求，例如模板导入工作簿。"""
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": content_type,
+            "Cookie": self._cookie_header(),
+        }
+        if method in MODIFYING_METHODS:
+            if self.csrf_token is None:
+                raise DatasetImportError("修改控制面资源需要 CSRF token")
+            headers[CSRF_HEADER] = self.csrf_token
+        response = self._transport.request(
+            method,
+            f"{self._base_url}{path}",
+            headers=headers,
+            body=body,
+        )
+        if response.status not in expected:
+            detail = response.body.decode("utf-8", errors="replace")
+            raise DatasetImportError(f"控制面返回 HTTP {response.status}：{detail}")
+        return response
+
     def wait_for_job(
         self,
         *,

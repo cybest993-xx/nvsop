@@ -8,7 +8,15 @@ from uuid import UUID
 
 from factory_sop.auth.api import Caller, Permission, authorize
 from factory_sop.device.errors import DeviceRefusalCode, DeviceRefusedError
-from factory_sop.device.model import Camera, DeviceStatus, InferenceBackend, InferenceHost, Station
+from factory_sop.device.model import (
+    Camera,
+    DeviceStatus,
+    InferenceBackend,
+    InferenceHost,
+    MediaPathMode,
+    RecordingMode,
+    Station,
+)
 from factory_sop.device.repository import (
     CameraRepository,
     ConnectorRepository,
@@ -33,6 +41,8 @@ def create_camera(
     station_id: UUID,
     host_id: UUID,
     backend_id: UUID,
+    media_path_mode: MediaPathMode | None = None,
+    recording_mode: RecordingMode | None = None,
     caller: Caller,
     now: datetime,
     stations: StationRepository,
@@ -71,6 +81,8 @@ def create_camera(
         updated_by=caller.user.id,
         created_at=now,
         updated_at=now,
+        media_path_mode=media_path_mode or MediaPathMode.PASSTHROUGH,
+        recording_mode=recording_mode or RecordingMode.CONTINUOUS,
     )
     cameras.add(camera)
     _logger.info(
@@ -94,6 +106,8 @@ def edit_camera(
     station_id: UUID,
     host_id: UUID,
     backend_id: UUID,
+    media_path_mode: MediaPathMode | None = None,
+    recording_mode: RecordingMode | None = None,
     expected_revision: int,
     caller: Caller,
     now: datetime,
@@ -129,6 +143,8 @@ def edit_camera(
         station_id=station.id,
         host_id=host.id,
         backend_id=backend.id,
+        media_path_mode=camera.media_path_mode if media_path_mode is None else media_path_mode,
+        recording_mode=camera.recording_mode if recording_mode is None else recording_mode,
         revision=expected_revision + 1,
         updated_by=caller.user.id,
         updated_at=now,

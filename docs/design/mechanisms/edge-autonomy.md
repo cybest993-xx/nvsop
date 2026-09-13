@@ -19,15 +19,16 @@
   消费 SSE → 判定核心（序列比对+边界+有效性+三值）
   违规锁存 / 处置派发（含写输出点位）/ 证据切片指令 / 上报与对账
   chunk 静默计时器（空闲超时闭合 + 进程级失联兜底）
-mediamtx（sourceOnDemand，零转码，7 天分段录像）
+MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU 转码、预览按需、录像窗口按主机配置）
 录像压缩归档任务（老化分段 H.264→H.265，NVDEC→NVENC，可限速可暂停，§5.19）
 连接器运行时（轮询或推送输入点位 → 观测；执行输出点位写入）
 本地状态存储（SQLite）
 ```
 
 生产入口是 `python -m edge_runtime`。它读取 `NVSOP_EDGE_COMMAND_CONFIG_FILE` 指向的本机 JSON，
-同时启动委托命令轮询和每个已配置工位的自治判定循环；中心 URL 只允许 HTTPS，设备凭据和主机私钥只从
-本机 secret 文件读取。
+同时启动 MediaMTX 媒体运行时、委托命令轮询和每个已配置工位的自治判定循环；中心 URL 只允许 HTTPS，
+设备凭据、相机 RTSP 凭据和主机私钥只从本机 secret 文件读取。中心导出的相机配置使用
+`camera-<uuid hex>` 稳定 path，由部署人员用 `scripts/apply_media_export.py` 与本机二进制/绑定设置合并。
 
 **为什么流租约不再需要**：租约（原 ADR-0001）存在的唯一理由是"中心多个进程可能重复订阅同一路相机，重复启 DeepStream pipeline 重复占显存"。判定回到推理机后，是本机 supervisor 驱动本机 pipeline，不存在跨机竞争者；"每路流有且仅有一个拥有者"退化为本机的进程管理问题。ADR-0001 因此作废。
 

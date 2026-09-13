@@ -1,6 +1,6 @@
 import ElementPlus from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
 import { ControlPlaneError } from '@/api/controlPlane'
@@ -10,6 +10,7 @@ import { useSessionStore } from '@/session/store'
 const api = vi.hoisted(() => ({
   readConnectors: vi.fn(),
   readConnector: vi.fn(),
+  readCameraMedia: vi.fn(),
   readInferenceHosts: vi.fn(),
   readStations: vi.fn(),
   createConnector: vi.fn(),
@@ -66,10 +67,39 @@ const STATION_CONFIGURATION = {
   backends: [],
 }
 
+const CAMERA_MEDIA = {
+  camera_id: 'camera-1',
+  camera_name: '一号相机',
+  camera_address: '10.0.8.21',
+  main_stream_path: '/Streaming/Channels/101',
+  sub_stream_path: '/Streaming/Channels/102',
+  camera_status: 'active' as const,
+  camera_revision: 2,
+  station_id: 'station-1',
+  station_name: '一号装配工位',
+  station_status: 'active' as const,
+  host_id: 'host-1',
+  host_name: '推理机 A',
+  host_status: 'active' as const,
+  backend_id: 'backend-1',
+  media_path: 'camera-1',
+  media_path_mode: 'passthrough' as const,
+  recording_mode: 'continuous' as const,
+  credentials_configured: false,
+  mediamtx_address: 'https://media.example.test:8889',
+  mediamtx_playback_address: 'https://media.example.test:9996',
+  recording_window_seconds: 3600,
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
 beforeEach(() => {
   setActivePinia(createPinia())
   vi.clearAllMocks()
   api.readConnectors.mockResolvedValue({ items: [CONNECTOR], page: 1, page_size: 50, total: 1 })
+  api.readCameraMedia.mockResolvedValue({ items: [], page: 1, page_size: 50, total: 0 })
   api.readInferenceHosts.mockResolvedValue({
     items: [{ id: 'host-1', name: '推理机 A' }],
     page: 1,
@@ -704,5 +734,69 @@ describe('工位与设备中的连接器', () => {
       },
       7,
     )
+  })
+})
+
+describe('工位与设备中的相机媒体', () => {
+  it('uses the generated media query only for a camera viewer and shows the stable path', async () => {
+    api.readCameraMedia.mockResolvedValue({
+      items: [CAMERA_MEDIA],
+      page: 1,
+      page_size: 50,
+      total: 1,
+    })
+    const session = useSessionStore()
+    session.current = {
+      user_id: 'camera-viewer',
+      login_name: 'viewer',
+      display_name: '查看人员',
+      expires_at: '2026-09-07T13:00:00Z',
+      permissions: ['device.camera.view'],
+    }
+
+    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(api.readCameraMedia).toHaveBeenCalledOnce()
+    expect(wrapper.text()).toContain('直接媒体路径')
+    expect(wrapper.text()).toContain('camera-1')
+    expect(wrapper.text()).toContain('https://media.example.test:9996')
+  })
+
+  it('queries the direct playback interface without sending center credentials', async () => {
+    api.readCameraMedia.mockResolvedValue({
+      items: [CAMERA_MEDIA],
+      page: 1,
+      page_size: 50,
+      total: 1,
+    })
+    const fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve([{ start: '2026-09-12T01:00:00Z', duration: 60 }]),
+    })
+    vi.stubGlobal('fetch', fetch)
+    const session = useSessionStore()
+    session.current = {
+      user_id: 'camera-playback-viewer',
+      login_name: 'viewer',
+      display_name: '查看人员',
+      expires_at: '2026-09-07T13:00:00Z',
+      permissions: ['device.camera.view'],
+    }
+
+    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    await wrapper
+      .findAll('button')
+      .find((button) => button.text() === '查询片段')!
+      .trigger('click')
+    await flushPromises()
+
+    const [request, options] = fetch.mock.calls[0] ?? []
+    expect(request).toBeDefined()
+    expect(String(request)).toContain('https://media.example.test:9996/list')
+    expect(options).toEqual(expect.objectContaining({ credentials: 'omit', cache: 'no-store' }))
+    expect(wrapper.text()).toContain('录像查询')
   })
 })

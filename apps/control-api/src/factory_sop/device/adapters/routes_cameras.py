@@ -10,7 +10,16 @@ from pydantic import BaseModel, Field, field_validator
 from factory_sop.auth.api import Authorized, Permission, needs
 from factory_sop.device.adapters import route_support
 from factory_sop.device.adapters.dependencies import backends, cameras, connectors, hosts, stations
-from factory_sop.device.model import Camera, DeviceStatus, carries_userinfo
+from factory_sop.device.adapters.media_views import CameraMediaView, camera_media_view
+from factory_sop.device.model import (
+    Camera,
+    DeviceStatus,
+    MediaPathMode,
+    RecordingMode,
+    carries_userinfo,
+    is_safe_camera_address,
+    is_safe_stream_path,
+)
 from factory_sop.device.repository import (
     CameraRepository,
     ConnectorRepository,
@@ -26,6 +35,7 @@ from factory_sop.device.usecases.cameras import (
     list_cameras,
     set_camera_status,
 )
+from factory_sop.device.usecases.media import camera_media_by_identifier, list_camera_media
 from factory_sop.responses import DEFAULT_PAGE_SIZE, MAXIMUM_PAGE_SIZE, ItemPage
 
 router = APIRouter(prefix="/cameras", tags=["device"], responses=route_support._UNAUTHORIZED)
@@ -39,12 +49,29 @@ class CameraConfiguration(BaseModel):
     station_id: UUID
     host_id: UUID
     backend_id: UUID
+    # 编辑时可省略以保留旧策略；创建时由领域默认值补齐。
+    media_path_mode: MediaPathMode | None = None
+    recording_mode: RecordingMode | None = None
 
     @field_validator("address", "main_stream_path", "sub_stream_path")
     @classmethod
     def _no_credentials_in_stream_fields(cls, value: str) -> str:
-        if carries_userinfo(value):
+        if carries_userinfo(value) or value != value.strip():
             raise ValueError("不能携带用户名、密码、查询参数或片段")
+        return value
+
+    @field_validator("address")
+    @classmethod
+    def _safe_camera_address(cls, value: str) -> str:
+        if not is_safe_camera_address(value):
+            raise ValueError("相机地址必须是主机名或 IP，可选端口，不能携带参数")
+        return value
+
+    @field_validator("main_stream_path", "sub_stream_path")
+    @classmethod
+    def _safe_media_path(cls, value: str) -> str:
+        if not is_safe_stream_path(value):
+            raise ValueError("流地址必须是安全的媒体路径")
         return value
 
 
@@ -130,6 +157,61 @@ def list_the_cameras(
         page=page,
         page_size=page_size,
         total=total,
+    )
+
+
+@router.get(
+    "/media",
+    operation_id="listCameraMedia",
+    openapi_extra=needs(Permission.CAMERA_VIEW),
+)
+def list_camera_media_descriptions(
+    caller: Authorized,
+    camera_store: Annotated[CameraRepository, Depends(cameras)],
+    station_store: Annotated[StationRepository, Depends(stations)],
+    host_store: Annotated[InferenceHostRepository, Depends(hosts)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=MAXIMUM_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+    station_id: Annotated[UUID | None, Query()] = None,
+) -> ItemPage[CameraMediaView]:
+    items, total = list_camera_media(
+        caller=caller,
+        cameras=camera_store,
+        stations=station_store,
+        hosts=host_store,
+        page=page,
+        page_size=page_size,
+        station_id=station_id,
+    )
+    return ItemPage(
+        items=[camera_media_view(item) for item in items],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@router.get(
+    "/{camera_id}/media",
+    operation_id="readCameraMedia",
+    openapi_extra=needs(Permission.CAMERA_VIEW),
+    responses=route_support._NOT_FOUND_RESPONSES,
+)
+def read_a_camera_media(
+    camera_id: UUID,
+    caller: Authorized,
+    camera_store: Annotated[CameraRepository, Depends(cameras)],
+    station_store: Annotated[StationRepository, Depends(stations)],
+    host_store: Annotated[InferenceHostRepository, Depends(hosts)],
+) -> CameraMediaView:
+    return camera_media_view(
+        camera_media_by_identifier(
+            camera_id=camera_id,
+            caller=caller,
+            cameras=camera_store,
+            stations=station_store,
+            hosts=host_store,
+        )
     )
 
 

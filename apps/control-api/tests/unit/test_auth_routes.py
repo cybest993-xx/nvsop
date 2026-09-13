@@ -39,6 +39,7 @@ def settings(
     idle_minutes: int = 720,
     absolute_minutes: int = 43200,
 ) -> Settings:
+    local = transport == "allow_http"
     return Settings(
         log_level="info",
         database_host="postgres.internal",
@@ -49,29 +50,37 @@ def settings(
         session_idle_timeout_minutes=idle_minutes,
         session_absolute_lifetime_minutes=absolute_minutes,
         session_cookie_transport=transport,
+        deployment_mode="fixed_main" if local else "production",
         csrf_secret=SecretStr("csrf-secret"),
+        minio_endpoint="http://minio:9000" if local else None,
+        minio_bucket="training" if local else None,
+        minio_access_key=SecretStr("minio-access") if local else None,
+        minio_secret_key=SecretStr("minio-secret") if local else None,
+        minio_public_endpoint="http://localhost:9443" if local else None,
+        annotation_backend_url="http://annotation-backend:8100" if local else None,
+        annotation_media_origin="http://localhost:8444" if local else None,
+        annotation_data_root="/tmp/nvsop-dev-annotation" if local else None,
         redis_url=SecretStr("redis://127.0.0.1:1/0"),
     )
 
 
 class Backend:
-    """A running application over in-memory stores, plus a client that talks to it.
+    """用内存存储运行应用，并让客户端协议跟随会话 Cookie 配置。
 
-    The client speaks `https`, because the cookies the deployment sets carry `Secure` and a
-    browser does not send one of those back over plain HTTP. A client on `http` would have
-    every request after the login arrive anonymous, and the suite would be proving the wrong
-    thing about the session.
+    这样同一组路由测试可以分别证明安全部署路径和固定 main 的本地 HTTP 路径。
     """
 
     def __init__(self, *, configured: Settings | None = None) -> None:
         self.users = FakeUsers()
         self.sessions = FakeSessions()
         self.roles = FakeRoles(users=self.users)
-        self.app = create_app(configured or settings())
+        resolved = configured or settings()
+        self.app = create_app(resolved)
         self.app.dependency_overrides[dependencies.users] = lambda: self.users
         self.app.dependency_overrides[dependencies.sessions] = lambda: self.sessions
         self.app.dependency_overrides[dependencies.roles] = lambda: self.roles
-        self.client = TestClient(self.app, base_url="https://testserver")
+        scheme = "https" if resolved.session_cookie_transport == "require_https" else "http"
+        self.client = TestClient(self.app, base_url=f"{scheme}://testserver")
 
     def with_account(self, *, status: UserStatus = UserStatus.ACTIVE) -> Backend:
         self.users.register(
@@ -137,6 +146,16 @@ def test_both_cookies_are_secure_and_samesite_strict_by_default(backend: Backend
     for header in response.headers.get_list("set-cookie"):
         assert "secure" in header.lower()
         assert "samesite=strict" in header.lower()
+
+
+def test_plain_http_development_cookies_work_without_secure() -> None:
+    local = Backend(configured=settings(transport="allow_http")).with_account()
+
+    response = local.client.post(SESSION_PATH, json=CREDENTIALS)
+
+    assert response.status_code == 201
+    assert all("secure" not in header.lower() for header in response.headers.get_list("set-cookie"))
+    assert local.client.get(SESSION_PATH).status_code == 200
 
 
 def test_the_session_cookie_does_not_outlive_the_session_itself(backend: Backend) -> None:

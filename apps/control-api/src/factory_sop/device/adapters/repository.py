@@ -80,7 +80,9 @@ _HOST_BASE_COLUMNS = (
 )
 
 
-def _host_values(host: InferenceHost, *, include_identity: bool) -> dict[str, object]:
+def _host_values(
+    host: InferenceHost, *, include_identity: bool, include_media: bool
+) -> dict[str, object]:
     values: dict[str, object] = {
         "id": host.id,
         "name": host.name,
@@ -97,6 +99,8 @@ def _host_values(host: InferenceHost, *, include_identity: bool) -> dict[str, ob
     }
     if include_identity:
         values["identity_public_key"] = host.identity_public_key
+    if include_media:
+        values["mediamtx_playback_address"] = host.mediamtx_playback_address
     return values
 
 
@@ -106,6 +110,7 @@ def _host_from_values(values: Mapping[str, Any]) -> InferenceHost:
         name=values["name"],
         address=values["address"],
         mediamtx_address=values["mediamtx_address"],
+        mediamtx_playback_address=values.get("mediamtx_playback_address"),
         recording_window_seconds=values["recording_window_seconds"],
         disk_watermark_percent=values["disk_watermark_percent"],
         status=values["status"],
@@ -124,16 +129,21 @@ class PostgresInferenceHostRepository:
     def __init__(self, session: DatabaseSession) -> None:
         self._session = session
         self._has_identity_column: bool | None = None
+        self._has_media_column: bool | None = None
 
     def add(self, host: InferenceHost) -> None:
-        if self._supports_host_identity():
+        if self._supports_host_identity() and self._supports_host_media():
             self._session.add(InferenceHostRow.from_domain(host))
         else:
-            if host.identity_public_key is not None:
+            if host.identity_public_key is not None and not self._supports_host_identity():
                 raise ValueError("旧版主机表不支持公钥身份")
             self._session.execute(
                 insert(cast("Any", InferenceHostRow.__table__)).values(
-                    **_host_values(host, include_identity=False)
+                    **_host_values(
+                        host,
+                        include_identity=self._supports_host_identity(),
+                        include_media=self._supports_host_media(),
+                    )
                 )
             )
         try:
@@ -142,7 +152,11 @@ class PostgresInferenceHostRepository:
             _refuse_constraint_violation(error)
 
     def save(self, host: InferenceHost, *, expected_revision: int) -> None:
-        values = _host_values(host, include_identity=self._supports_host_identity())
+        values = _host_values(
+            host,
+            include_identity=self._supports_host_identity(),
+            include_media=self._supports_host_media(),
+        )
         try:
             result = cast(
                 "CursorResult[Any]",
@@ -167,7 +181,7 @@ class PostgresInferenceHostRepository:
             )
 
     def by_id(self, host_id: UUID) -> InferenceHost | None:
-        if self._supports_host_identity():
+        if self._supports_host_identity() and self._supports_host_media():
             row = self._session.get(InferenceHostRow, host_id)
             return row.to_domain() if row is not None else None
         values = self._legacy_host_by_id(host_id)
@@ -183,8 +197,26 @@ class PostgresInferenceHostRepository:
             )
         return self._has_identity_column
 
+    def _supports_host_media(self) -> bool:
+        if self._has_media_column is None:
+            self._has_media_column = any(
+                column["name"] == "mediamtx_playback_address"
+                for column in inspect(self._session.connection()).get_columns(
+                    InferenceHostRow.__tablename__
+                )
+            )
+        return self._has_media_column
+
+    def _host_columns(self) -> list[Any]:
+        names = list(_HOST_BASE_COLUMNS)
+        if self._supports_host_media():
+            names.insert(names.index("mediamtx_address") + 1, "mediamtx_playback_address")
+        if self._supports_host_identity():
+            names.append("identity_public_key")
+        return [getattr(InferenceHostRow, name) for name in names]
+
     def _legacy_host_by_id(self, host_id: UUID) -> Mapping[str, Any] | None:
-        columns = [getattr(InferenceHostRow, name) for name in _HOST_BASE_COLUMNS]
+        columns = self._host_columns()
         return cast(
             "Mapping[str, Any] | None",
             self._session.execute(select(*columns).where(InferenceHostRow.id == host_id))
@@ -247,7 +279,7 @@ class PostgresInferenceHostRepository:
         total = cast(
             "int", self._session.scalar(select(func.count()).select_from(InferenceHostRow))
         )
-        if self._supports_host_identity():
+        if self._supports_host_identity() and self._supports_host_media():
             rows = self._session.scalars(
                 select(InferenceHostRow)
                 .order_by(InferenceHostRow.created_at.desc(), InferenceHostRow.id.desc())
@@ -256,7 +288,7 @@ class PostgresInferenceHostRepository:
             ).all()
             return [row.to_domain() for row in rows], total
 
-        columns = [getattr(InferenceHostRow, name) for name in _HOST_BASE_COLUMNS]
+        columns = self._host_columns()
         legacy_rows = (
             self._session.execute(
                 select(*columns)
@@ -624,6 +656,8 @@ class PostgresCameraRepository:
                         address=camera.address,
                         main_stream_path=camera.main_stream_path,
                         sub_stream_path=camera.sub_stream_path,
+                        media_path_mode=camera.media_path_mode,
+                        recording_mode=camera.recording_mode,
                         credentials_configured=camera.credentials_configured,
                         station_id=camera.station_id,
                         host_id=camera.host_id,
@@ -681,6 +715,14 @@ class PostgresCameraRepository:
         rows = self._session.scalars(
             select(CameraRow)
             .where(CameraRow.station_id == station_id)
+            .order_by(CameraRow.created_at, CameraRow.id)
+        ).all()
+        return [row.to_domain() for row in rows]
+
+    def for_host(self, host_id: UUID) -> list[Camera]:
+        rows = self._session.scalars(
+            select(CameraRow)
+            .where(CameraRow.host_id == host_id)
             .order_by(CameraRow.created_at, CameraRow.id)
         ).all()
         return [row.to_domain() for row in rows]

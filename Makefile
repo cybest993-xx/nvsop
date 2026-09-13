@@ -4,7 +4,8 @@
 	contracts-python-type contracts-python-unit openapi-export openapi-compat openapi-generate \
 	boundaries secret-scan center-format center-lint center-type center-unit center-integration \
 	center-system edge-format edge-lint edge-type edge-unit edge-integration \
-	web-install web-format web-lint web-type web-unit web-e2e web-build
+	web-install web-format web-lint web-type web-unit web-e2e web-build \
+	dev-setup dev dev-status dev-logs dev-refresh dev-smoke dev-test-ui dev-down
 
 # The CPU-only, Docker-free merge gate (harness §6). CI calls this exact target.
 check: lockfile sync hooks policy-test policy migrations contract-base contract-capability \
@@ -176,3 +177,24 @@ web-e2e:
 
 web-build:
 	pnpm --filter control-web run build
+
+# 固定 main 开发实例（Issue #119），默认 HTTPS；显式 NVSOP_DEV_PROTOCOL=http 才使用本地 HTTP。
+# 脚本只编排 Tilt/Compose，不承载产品业务逻辑。
+# SERVICE、TAIL 可由调用方覆盖，例如 `make dev-logs SERVICE=worker TAIL=200`。
+
+dev-setup:
+	python3 scripts/dev.py setup
+dev:
+	python3 scripts/dev.py run
+dev-status:
+	python3 scripts/dev.py status
+dev-logs:
+	python3 scripts/dev.py logs $(if $(SERVICE),--service "$(SERVICE)") $(if $(TAIL),--tail "$(TAIL)")
+dev-refresh:
+	python3 scripts/dev.py refresh
+dev-smoke:
+	python3 scripts/dev.py smoke
+dev-test-ui:
+	python3 scripts/dev.py test-ui
+dev-down:
+	python3 scripts/dev.py down

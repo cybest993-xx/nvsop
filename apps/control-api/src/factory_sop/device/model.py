@@ -40,8 +40,77 @@ class RuntimeParameterMode(StrEnum):
     CUSTOM = "custom"
 
 
+class MediaPathMode(StrEnum):
+    """相机子码流送入 MediaMTX 前采用的媒体路径。"""
+
+    PASSTHROUGH = "passthrough"
+    CPU_TRANSCODE = "cpu_transcode"
+
+
+class RecordingMode(StrEnum):
+    """相机是否只在观看时取流，还是持续录制。"""
+
+    PREVIEW_ONLY = "preview_only"
+    CONTINUOUS = "continuous"
+
+
 # 兼容更明确的调用方命名；实际枚举只有一个，避免两套模式含义漂移。
 StationRuntimeParameterMode = RuntimeParameterMode
+
+
+def is_safe_stream_path(value: str) -> bool:
+    """判断相机流路径是否是不会逃逸或携带参数的相对媒体路径。"""
+    if (
+        not value.startswith("/")
+        or any(character.isspace() for character in value)
+        or "\x00" in value
+        or "?" in value
+        or "#" in value
+    ):
+        return False
+    parts = value.split("/")[1:]
+    return bool(parts) and all(part not in {"", ".", ".."} for part in parts)
+
+
+def media_path_for_camera(camera_id: UUID) -> str:
+    """从服务端 UUID 生成稳定的 MediaMTX path，不接受显示名称或用户路径。"""
+    return f"camera-{camera_id.hex}"
+
+
+def is_safe_http_base(value: str) -> bool:
+    """判断浏览器直连地址是否是不带路径和凭据的 HTTP(S) 基地址。"""
+    if any(character.isspace() for character in value):
+        return False
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
+        return False
+    if (
+        parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        return False
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    return port is None or 1 <= port <= 65535
+
+
+def is_safe_camera_address(value: str) -> bool:
+    """判断相机地址是否只有主机名/IP 和可选端口。"""
+    if any(character.isspace() for character in value) or any(mark in value for mark in "/?#"):
+        return False
+    parsed = urlsplit(f"//{value}")
+    if parsed.hostname is None or parsed.username is not None or parsed.password is not None:
+        return False
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    return port is None or 1 <= port <= 65535
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +233,8 @@ class InferenceHost:
     updated_at: datetime
     # 中心仅保存非秘密公钥；空值表示尚未配置主机控制面身份。
     identity_public_key: str | None = None
+    # 浏览器回放使用独立的 MediaMTX 原生回放地址，不能从 WebRTC 地址猜测端口。
+    mediamtx_playback_address: str | None = None
 
     def __post_init__(self) -> None:
         if self.identity_public_key:
@@ -172,8 +243,9 @@ class InferenceHost:
             raise ValueError("recording_window_seconds must be greater than zero")
         if not 1 <= self.disk_watermark_percent <= 99:
             raise ValueError("disk_watermark_percent must be between 1 and 99")
-        if self.mediamtx_address is not None and carries_userinfo(self.mediamtx_address):
-            raise ValueError("device URLs cannot carry credentials, queries, or fragments")
+        for address in (self.mediamtx_address, self.mediamtx_playback_address):
+            if address is not None and not is_safe_http_base(address):
+                raise ValueError("device URLs cannot carry credentials, queries, or fragments")
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,6 +346,9 @@ class Camera:
     updated_by: UUID
     created_at: datetime
     updated_at: datetime
+    # 老相机迁移为零转码 + 连续录像；新增配置仍可由设备用例显式替换。
+    media_path_mode: MediaPathMode = MediaPathMode.PASSTHROUGH
+    recording_mode: RecordingMode = RecordingMode.CONTINUOUS
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -284,9 +359,21 @@ class Camera:
             raise ValueError("main_stream_path must not be empty")
         if not self.sub_stream_path:
             raise ValueError("sub_stream_path must not be empty")
-        for value in (self.address, self.main_stream_path, self.sub_stream_path):
+        if not is_safe_camera_address(self.address):
+            raise ValueError("address must be a camera host without credentials or parameters")
+        for value in (self.main_stream_path, self.sub_stream_path):
             if carries_userinfo(value):
                 raise ValueError("camera URLs cannot carry credentials, queries, or fragments")
+        if not isinstance(self.media_path_mode, MediaPathMode):
+            raise ValueError("media_path_mode is invalid")
+        if not isinstance(self.recording_mode, RecordingMode):
+            raise ValueError("recording_mode is invalid")
+        for field, value in (
+            ("main_stream_path", self.main_stream_path),
+            ("sub_stream_path", self.sub_stream_path),
+        ):
+            if not is_safe_stream_path(value):
+                raise ValueError(f"{field} must be an absolute media path without parameters")
 
 
 class ConnectorType(StrEnum):

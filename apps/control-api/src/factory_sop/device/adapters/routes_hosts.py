@@ -15,12 +15,18 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 from pydantic import BaseModel, Field, field_validator
 
 from factory_sop.auth.api import Authorized, Permission, needs
-from factory_sop.device.adapters.dependencies import backends, connectors, hosts
-from factory_sop.device.model import DeviceStatus, InferenceHost, carries_userinfo
+from factory_sop.device.adapters.dependencies import backends, cameras, connectors, hosts, stations
+from factory_sop.device.adapters.media_views import (
+    ExportCameraMediaView,
+    export_camera_media_view,
+)
+from factory_sop.device.model import DeviceStatus, InferenceHost, is_safe_http_base
 from factory_sop.device.repository import (
+    CameraRepository,
     ConnectorRepository,
     InferenceBackendRepository,
     InferenceHostRepository,
+    StationRepository,
 )
 from factory_sop.device.usecases.hosts import (
     create_host,
@@ -33,6 +39,7 @@ from factory_sop.device.usecases.hosts import (
     restore_host,
     retire_host_credential,
 )
+from factory_sop.device.usecases.media import export_host_media_configuration
 from factory_sop.problem import problem_openapi_response
 from factory_sop.responses import DEFAULT_PAGE_SIZE, MAXIMUM_PAGE_SIZE, ItemPage
 from nvsop_contracts import validate_host_identity_public_key
@@ -62,14 +69,17 @@ class HostConfiguration(BaseModel):
     mediamtx_address: str | None = Field(
         default=None, min_length=1, max_length=255, pattern=r"^https?://"
     )
+    mediamtx_playback_address: str | None = Field(
+        default=None, min_length=1, max_length=255, pattern=r"^https?://"
+    )
     recording_window_seconds: int = Field(gt=0)
     disk_watermark_percent: int = Field(ge=1, le=99)
 
-    @field_validator("mediamtx_address")
+    @field_validator("mediamtx_address", "mediamtx_playback_address")
     @classmethod
-    def _no_credentials_in_urls(cls, value: str | None) -> str | None:
-        if value is not None and carries_userinfo(value):
-            raise ValueError("不能携带用户名或密码")
+    def _safe_media_base(cls, value: str | None) -> str | None:
+        if value is not None and not is_safe_http_base(value):
+            raise ValueError("媒体地址必须是无路径、无凭据的 HTTP(S) 基地址")
         return value
 
 
@@ -104,6 +114,19 @@ class InferenceHostIdentityKeyView(BaseModel):
     revision: int
 
 
+class HostMediaConfigurationView(BaseModel):
+    """一台推理机的非秘密媒体配置导出。"""
+
+    host_id: UUID
+    host_name: str
+    host_revision: int
+    host_status: DeviceStatus
+    mediamtx_address: str | None
+    mediamtx_playback_address: str | None
+    recording_window_seconds: int
+    cameras: list[ExportCameraMediaView]
+
+
 class InferenceHostView(BaseModel):
     """API 返回的一台推理机；`revision` 用于 If-Match 乐观锁。"""
 
@@ -111,6 +134,9 @@ class InferenceHostView(BaseModel):
     name: str
     address: str
     mediamtx_address: str | None
+    mediamtx_playback_address: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     recording_window_seconds: int
     disk_watermark_percent: int
     status: DeviceStatus
@@ -127,6 +153,7 @@ def _view(host: InferenceHost) -> InferenceHostView:
         name=host.name,
         address=host.address,
         mediamtx_address=host.mediamtx_address,
+        mediamtx_playback_address=host.mediamtx_playback_address,
         recording_window_seconds=host.recording_window_seconds,
         disk_watermark_percent=host.disk_watermark_percent,
         status=host.status,
@@ -157,6 +184,7 @@ def create_a_host(
         name=configuration.name,
         address=configuration.address,
         mediamtx_address=configuration.mediamtx_address,
+        mediamtx_playback_address=configuration.mediamtx_playback_address,
         recording_window_seconds=configuration.recording_window_seconds,
         disk_watermark_percent=configuration.disk_watermark_percent,
         caller=caller,
@@ -182,6 +210,40 @@ def list_the_hosts(
     items, total = list_hosts(caller=caller, hosts=hosts, page=page, page_size=page_size)
     return ItemPage(
         items=[_view(host) for host in items], page=page, page_size=page_size, total=total
+    )
+
+
+@router.get(
+    "/{host_id}/media-configuration",
+    operation_id="exportInferenceHostMediaConfiguration",
+    openapi_extra=needs(Permission.INFERENCE_HOST_VIEW, Permission.CAMERA_VIEW),
+    responses=_UNAUTHORIZED
+    | _VALIDATION
+    | {404: problem_openapi_response("Host or camera topology not found")},
+)
+def export_a_host_media_configuration(
+    host_id: UUID,
+    caller: Authorized,
+    host_store: Annotated[InferenceHostRepository, Depends(hosts)],
+    camera_store: Annotated[CameraRepository, Depends(cameras)],
+    station_store: Annotated[StationRepository, Depends(stations)],
+) -> HostMediaConfigurationView:
+    exported = export_host_media_configuration(
+        host_id=host_id,
+        caller=caller,
+        cameras=camera_store,
+        hosts=host_store,
+        stations=station_store,
+    )
+    return HostMediaConfigurationView(
+        host_id=exported.host.id,
+        host_name=exported.host.name,
+        host_revision=exported.host.revision,
+        host_status=exported.host.status,
+        mediamtx_address=exported.host.mediamtx_address,
+        mediamtx_playback_address=exported.host.mediamtx_playback_address,
+        recording_window_seconds=exported.host.recording_window_seconds,
+        cameras=[export_camera_media_view(item) for item in exported.cameras],
     )
 
 
@@ -227,6 +289,7 @@ def edit_a_host(
         name=configuration.name,
         address=configuration.address,
         mediamtx_address=configuration.mediamtx_address,
+        mediamtx_playback_address=configuration.mediamtx_playback_address,
         recording_window_seconds=configuration.recording_window_seconds,
         disk_watermark_percent=configuration.disk_watermark_percent,
         expected_revision=if_match,

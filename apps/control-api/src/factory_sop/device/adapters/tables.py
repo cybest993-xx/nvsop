@@ -44,11 +44,13 @@ from factory_sop.device.model import (
     DeviceStatus,
     InferenceBackend,
     InferenceHost,
+    MediaPathMode,
     PendingCommand,
     PendingCommandStatus,
     PendingCommandType,
     Point,
     PointDirection,
+    RecordingMode,
     RuntimeParameterMode,
     Station,
     StationRuntimeParameters,
@@ -103,6 +105,8 @@ class InferenceHostRow(Table):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     identity_public_key: Mapped[str | None] = mapped_column(String(4096))
+    # 浏览器回放的独立原生接口地址；它与 WebRTC 信令地址都不携带凭据。
+    mediamtx_playback_address: Mapped[str | None] = mapped_column(String(255))
 
     def to_domain(self) -> InferenceHost:
         return InferenceHost(
@@ -119,6 +123,7 @@ class InferenceHostRow(Table):
             created_at=self.created_at,
             updated_at=self.updated_at,
             identity_public_key=self.identity_public_key,
+            mediamtx_playback_address=self.mediamtx_playback_address,
         )
 
     @classmethod
@@ -137,6 +142,7 @@ class InferenceHostRow(Table):
             created_at=host.created_at,
             updated_at=host.updated_at,
             identity_public_key=host.identity_public_key,
+            mediamtx_playback_address=host.mediamtx_playback_address,
         )
 
 
@@ -318,6 +324,20 @@ class CameraRow(Table):
     updated_by: Mapped[UUID] = mapped_column(Uuid())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    media_path_mode: Mapped[MediaPathMode] = mapped_column(
+        Enum(
+            MediaPathMode,
+            name="device_media_path_mode",
+            values_callable=lambda enum: [member.value for member in enum],
+        )
+    )
+    recording_mode: Mapped[RecordingMode] = mapped_column(
+        Enum(
+            RecordingMode,
+            name="device_recording_mode",
+            values_callable=lambda enum: [member.value for member in enum],
+        )
+    )
 
     def to_domain(self) -> Camera:
         return Camera(
@@ -336,6 +356,8 @@ class CameraRow(Table):
             updated_by=self.updated_by,
             created_at=self.created_at,
             updated_at=self.updated_at,
+            media_path_mode=self.media_path_mode,
+            recording_mode=self.recording_mode,
         )
 
     @classmethod
@@ -356,6 +378,8 @@ class CameraRow(Table):
             updated_by=camera.updated_by,
             created_at=camera.created_at,
             updated_at=camera.updated_at,
+            media_path_mode=camera.media_path_mode,
+            recording_mode=camera.recording_mode,
         )
 
 

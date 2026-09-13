@@ -373,13 +373,20 @@ def test_every_host_route_declares_the_permission_its_use_case_enforces(center: 
         "POST /inference-hosts": Permission.INFERENCE_HOST_EDIT,
         "GET /inference-hosts": Permission.INFERENCE_HOST_VIEW,
         "GET /inference-hosts/{host_id}": Permission.INFERENCE_HOST_VIEW,
+        "GET /inference-hosts/{host_id}/media-configuration": [
+            Permission.INFERENCE_HOST_VIEW.value,
+            Permission.CAMERA_VIEW.value,
+        ],
         "PATCH /inference-hosts/{host_id}": Permission.INFERENCE_HOST_EDIT,
         "PUT /inference-hosts/{host_id}/status": Permission.INFERENCE_HOST_EDIT,
         "POST /inference-hosts/{host_id}/credential": Permission.INFERENCE_HOST_EDIT,
         "POST /inference-hosts/{host_id}/identity-key": Permission.INFERENCE_HOST_EDIT,
         "DELETE /inference-hosts/{host_id}": Permission.INFERENCE_HOST_DELETE,
     }
-    assert declared == {path: permission.value for path, permission in expected.items()}
+    assert declared == {
+        path: permission.value if isinstance(permission, Permission) else permission
+        for path, permission in expected.items()
+    }
 
 
 def test_status_and_delete_document_if_match_and_stale_revision_conflicts(center: Center) -> None:

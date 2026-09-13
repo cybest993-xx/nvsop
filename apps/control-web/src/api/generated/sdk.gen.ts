@@ -111,12 +111,18 @@ import type {
   EnqueueConnectorConnectionTestData,
   EnqueueConnectorConnectionTestErrors,
   EnqueueConnectorConnectionTestResponses,
+  ExportInferenceHostMediaConfigurationData,
+  ExportInferenceHostMediaConfigurationErrors,
+  ExportInferenceHostMediaConfigurationResponses,
   ImportTemplateDraftData,
   ImportTemplateDraftErrors,
   ImportTemplateDraftResponses,
   ListAnnotationsData,
   ListAnnotationsErrors,
   ListAnnotationsResponses,
+  ListCameraMediaData,
+  ListCameraMediaErrors,
+  ListCameraMediaResponses,
   ListCamerasData,
   ListCamerasErrors,
   ListCamerasResponses,
@@ -185,6 +191,9 @@ import type {
   ReadAnnotationResponses,
   ReadCameraData,
   ReadCameraErrors,
+  ReadCameraMediaData,
+  ReadCameraMediaErrors,
+  ReadCameraMediaResponses,
   ReadCameraResponses,
   ReadConnectorData,
   ReadConnectorErrors,
@@ -642,6 +651,17 @@ export const createCamera = <ThrowOnError extends boolean = false>(
   })
 
 /**
+ * List Camera Media Descriptions
+ */
+export const listCameraMedia = <ThrowOnError extends boolean = false>(
+  options?: Options<ListCameraMediaData, ThrowOnError>,
+): RequestResult<ListCameraMediaResponses, ListCameraMediaErrors, ThrowOnError> =>
+  (options?.client ?? client).get<ListCameraMediaResponses, ListCameraMediaErrors, ThrowOnError>({
+    url: '/api/v1/cameras/media',
+    ...options,
+  })
+
+/**
  * Delete A Camera
  */
 export const deleteCamera = <ThrowOnError extends boolean = false>(
@@ -676,6 +696,17 @@ export const editCamera = <ThrowOnError extends boolean = false>(
       'Content-Type': 'application/json',
       ...options.headers,
     },
+  })
+
+/**
+ * Read A Camera Media
+ */
+export const readCameraMedia = <ThrowOnError extends boolean = false>(
+  options: Options<ReadCameraMediaData, ThrowOnError>,
+): RequestResult<ReadCameraMediaResponses, ReadCameraMediaErrors, ThrowOnError> =>
+  (options.client ?? client).get<ReadCameraMediaResponses, ReadCameraMediaErrors, ThrowOnError>({
+    url: '/api/v1/cameras/{camera_id}/media',
+    ...options,
   })
 
 /**
@@ -1118,6 +1149,22 @@ export const registerInferenceHostIdentityKey = <ThrowOnError extends boolean = 
       ...options.headers,
     },
   })
+
+/**
+ * Export A Host Media Configuration
+ */
+export const exportInferenceHostMediaConfiguration = <ThrowOnError extends boolean = false>(
+  options: Options<ExportInferenceHostMediaConfigurationData, ThrowOnError>,
+): RequestResult<
+  ExportInferenceHostMediaConfigurationResponses,
+  ExportInferenceHostMediaConfigurationErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).get<
+    ExportInferenceHostMediaConfigurationResponses,
+    ExportInferenceHostMediaConfigurationErrors,
+    ThrowOnError
+  >({ url: '/api/v1/inference-hosts/{host_id}/media-configuration', ...options })
 
 /**
  * Set The Host Status

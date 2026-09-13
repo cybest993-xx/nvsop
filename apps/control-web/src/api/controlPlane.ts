@@ -12,6 +12,11 @@ import {
   createAnnotationContext as generatedCreateAnnotationContext,
   downloadDatasetArtifact as generatedDownloadDatasetArtifact,
   createConnector as generatedCreateConnector,
+  editCamera as generatedEditCamera,
+  editInferenceHost as generatedEditInferenceHost,
+  exportInferenceHostMediaConfiguration as generatedExportInferenceHostMediaConfiguration,
+  listCameraMedia as generatedListCameraMedia,
+  readCameraMedia as generatedReadCameraMedia,
   createPoint as generatedCreatePoint,
   createRole as generatedCreateRole,
   createTrainingDataset as generatedCreateTrainingDataset,
@@ -84,6 +89,9 @@ import {
   validatePointBinding as generatedValidatePointBinding,
   validateTemplateBinding as generatedValidateTemplateBinding,
   type ActionListHistoryView,
+  type CameraConfiguration,
+  type CameraMediaView,
+  type CameraView,
   type ActionListInput,
   type ArtifactAcceptedView,
   type ArtifactInput,
@@ -118,6 +126,7 @@ import {
   type EditUserData,
   type FactorySopJobAdaptersRoutesJobView,
   type ItemPageArtifactView,
+  type ItemPageCameraMediaView,
   type ItemPageConnectorView,
   type ItemPageDatasetMemberView,
   type ItemPageDatasetView,
@@ -134,6 +143,9 @@ import {
   type ItemPageUserView,
   type ImportTemplateDraftData,
   type ListPointsData,
+  type HostConfiguration,
+  type HostMediaConfigurationView,
+  type InferenceHostView,
   type OpenSessionData,
   type PendingCommandView,
   type PointConfiguration,
@@ -168,6 +180,8 @@ import {
 export type {
   ActionListHistoryView,
   ActionListInput,
+  CameraConfiguration,
+  CameraMediaView,
   ActionListView,
   ArtifactAcceptedView,
   ArtifactInput,
@@ -184,12 +198,15 @@ export type {
   BindingValidationView,
   ConfirmationView,
   ConnectorPlacement,
+  HostConfiguration,
+  HostMediaConfigurationView,
   ConnectorView,
   DatasetMemberView,
   DatasetView,
   DeviceStatus,
   DownloadTemplateVersionArtifactResponse,
   InferenceHostView,
+  ItemPageCameraMediaView,
   ItemPageConnectorView,
   ItemPageDatasetMemberView,
   ItemPageDatasetView,
@@ -745,12 +762,54 @@ export function readConnectors(): Promise<ItemPageConnectorView> {
   return execute(generatedListConnectors())
 }
 
+export function readCameraMedia(page = 1, pageSize = 50): Promise<ItemPageCameraMediaView> {
+  return execute(generatedListCameraMedia({ query: { page, page_size: pageSize } }))
+}
+
+export function readCameraMediaDetail(cameraId: string): Promise<CameraMediaView> {
+  return execute(generatedReadCameraMedia({ path: { camera_id: cameraId } }))
+}
+
 export function readConnector(connectorId: string): Promise<ConnectorView> {
   return execute(generatedReadConnector({ path: { connector_id: connectorId } }))
 }
 
 export function readInferenceHosts(): Promise<ItemPageInferenceHostView> {
   return execute(generatedListInferenceHosts())
+}
+
+export function editCamera(
+  cameraId: string,
+  submitted: CameraConfiguration,
+  revision: number,
+): Promise<CameraView> {
+  return execute(
+    generatedEditCamera({
+      path: { camera_id: cameraId },
+      headers: { 'If-Match': revision },
+      body: submitted,
+    }),
+  )
+}
+
+export function editInferenceHost(
+  hostId: string,
+  submitted: HostConfiguration,
+  revision: number,
+): Promise<InferenceHostView> {
+  return execute(
+    generatedEditInferenceHost({
+      path: { host_id: hostId },
+      headers: { 'If-Match': revision },
+      body: submitted,
+    }),
+  )
+}
+
+export function exportInferenceHostMediaConfiguration(
+  hostId: string,
+): Promise<HostMediaConfigurationView> {
+  return execute(generatedExportInferenceHostMediaConfiguration({ path: { host_id: hostId } }))
 }
 
 export function readStations(): Promise<ItemPageStationView> {

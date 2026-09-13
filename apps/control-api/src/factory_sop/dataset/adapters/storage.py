@@ -51,6 +51,9 @@ class MinioObjectStorage:
             access_key=settings.minio_access_key.get_secret_value(),
             secret_key=settings.minio_secret_key.get_secret_value(),
         )
+        # 签名需要 bucket region，但公开地址可能是浏览器可达而容器不可达的 localhost
+        # 反代。先通过内部地址读取 region，再让公开 signer 只负责本地生成表单签名。
+        region = internal._get_region(settings.minio_bucket)
         public_endpoint = settings.minio_public_endpoint or settings.minio_endpoint
         public_upload_url = (
             f"{_endpoint_url(public_endpoint)}/{quote(settings.minio_bucket, safe='')}"
@@ -59,6 +62,7 @@ class MinioObjectStorage:
             endpoint=public_endpoint,
             access_key=settings.minio_access_key.get_secret_value(),
             secret_key=settings.minio_secret_key.get_secret_value(),
+            region=region,
         )
         return cls(
             client=internal,
@@ -188,11 +192,12 @@ def _endpoint_url(endpoint: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
-def _client(*, endpoint: str, access_key: str, secret_key: str) -> Minio:
+def _client(*, endpoint: str, access_key: str, secret_key: str, region: str | None = None) -> Minio:
     parsed = urlsplit(_endpoint_url(endpoint))
     return Minio(
         parsed.netloc,
         access_key=access_key,
         secret_key=secret_key,
         secure=parsed.scheme == "https",
+        region=region,
     )

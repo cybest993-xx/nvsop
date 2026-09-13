@@ -1,0 +1,314 @@
+name: nvsop-dev-main
+
+# 本地网关默认由 scripts/dev.py 渲染为 HTTPS；显式设置 NVSOP_DEV_PROTOCOL=http 才放宽为固定 main 本地 HTTP。
+services:
+  center-db:
+    image: postgres:17.2-bookworm
+    environment:
+      POSTGRES_DB: nvsop
+      POSTGRES_USER: nvsop
+      POSTGRES_PASSWORD_FILE: /run/secrets/center-db-password
+    secrets:
+      - center-db-password
+    volumes:
+      - center-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nvsop -d nvsop"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7.4.2-bookworm
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: ["server", "/data", "--address", ":9000", "--console-address", ":9001"]
+    secrets:
+      - minio-access-key
+      - minio-secret-key
+    entrypoint: ["/bin/sh", "/opt/nvsop/minio-entrypoint.sh"]
+    volumes:
+      - minio-data:/data
+      - ${NVSOP_SOURCE_DIR:-.}/deploy/dev/minio-entrypoint.sh:/opt/nvsop/minio-entrypoint.sh:ro
+    healthcheck:
+      test: ["CMD", "curl", "--noproxy", "*", "-fsS", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  minio-init:
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    secrets:
+      - minio-access-key
+      - minio-secret-key
+    environment:
+      NO_PROXY: minio,center-db,annotation-db,redis,annotation-backend,localhost,127.0.0.1
+      no_proxy: minio,center-db,annotation-db,redis,annotation-backend,localhost,127.0.0.1
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        set -eu;
+        access_key="$$(cat /run/secrets/minio-access-key)";
+        secret_key="$$(cat /run/secrets/minio-secret-key)";
+        for attempt in $$(seq 1 60); do
+          if mc alias set local http://minio:9000 "$$access_key" "$$secret_key"; then break; fi;
+          sleep 1;
+        done;
+        mc mb --ignore-existing local/training;
+        mc version enable local/training;
+
+  annotation-db:
+    image: postgres:17.2-bookworm
+    environment:
+      POSTGRES_DB: annotation
+      POSTGRES_USER: annotation
+      POSTGRES_PASSWORD_FILE: /run/secrets/annotation-db-password
+    secrets:
+      - annotation-db-password
+    volumes:
+      - annotation-db-data:/var/lib/postgresql/data
+      - ${NVSOP_SOURCE_DIR:-.}/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/video-annotator-ms/annotation_backend/db-init-scripts/01-init-tables.sql:/docker-entrypoint-initdb.d/01-init-tables.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U annotation -d annotation"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  center-migrate:
+    image: nvsop-dev-main/center-api:${NVSOP_TARGET_SHA:-local}
+    depends_on:
+      center-db:
+        condition: service_healthy
+    environment: &center-environment
+      SOP_DATABASE_HOST: center-db
+      SOP_DATABASE_PORT: "5432"
+      SOP_DATABASE_NAME: nvsop
+      SOP_DATABASE_USER: nvsop
+      SOP_DATABASE_PASSWORD_FILE: /run/secrets/center-db-password
+      SOP_REDIS_URL_FILE: /run/secrets/redis-url
+      SOP_MINIO_ENDPOINT: http://minio:9000
+      SOP_MINIO_PUBLIC_ENDPOINT: ${NVSOP_DEV_MINIO_URL:-https://localhost:9443}
+      SOP_MINIO_BUCKET: training
+      SOP_MINIO_ACCESS_KEY_FILE: /run/secrets/minio-access-key
+      SOP_MINIO_SECRET_KEY_FILE: /run/secrets/minio-secret-key
+      SOP_CSRF_SECRET_FILE: /run/secrets/csrf-secret
+      SOP_DEPLOYMENT_MODE: fixed_main
+      SOP_SESSION_COOKIE_TRANSPORT: ${NVSOP_DEV_COOKIE_TRANSPORT:-require_https}
+      SOP_SESSION_IDLE_TIMEOUT_MINUTES: "30"
+      SOP_SESSION_ABSOLUTE_LIFETIME_MINUTES: "480"
+      SOP_DATASET_UPLOAD_TTL_SECONDS: "900"
+      SOP_DATASET_MAX_UPLOAD_BYTES: "8589934592"
+      SOP_DATASET_SUPPORTED_CODECS: h264,h265
+      SOP_MEDIA_PROBE_TIMEOUT_SECONDS: "60"
+      SOP_ANNOTATION_BACKEND_URL: http://annotation-backend:8100
+      SOP_ANNOTATION_MEDIA_ORIGIN: ${NVSOP_DEV_MEDIA_URL:-https://localhost:8444}
+      SOP_ANNOTATION_DATA_ROOT: /var/lib/nvsop/annotation-data
+      SOP_ANNOTATION_HTTP_TIMEOUT_SECONDS: "120"
+      SOP_MEDIA_PROBE_BINARY: ffprobe
+      SOP_WORKER_HEALTH_CHECK_INTERVAL_SECONDS: "5"
+      SOP_LOG_LEVEL: info
+      NO_PROXY: minio,center-db,annotation-db,redis,annotation-backend,localhost,127.0.0.1
+      no_proxy: minio,center-db,annotation-db,redis,annotation-backend,localhost,127.0.0.1
+    secrets:
+      - center-db-password
+      - redis-url
+      - minio-access-key
+      - minio-secret-key
+      - csrf-secret
+    command: ["alembic", "-c", "/app/apps/control-api/alembic.ini", "upgrade", "head"]
+    restart: "no"
+
+  center-bootstrap:
+    image: nvsop-dev-main/center-api:${NVSOP_TARGET_SHA:-local}
+    depends_on:
+      center-migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *center-environment
+      NVSOP_BOOTSTRAP_LOGIN_NAME: ${NVSOP_DEV_LOGIN_NAME:-dev.admin}
+      NVSOP_BOOTSTRAP_DISPLAY_NAME: 开发环境管理员
+      NVSOP_BOOTSTRAP_PASSWORD_FILE: /run/secrets/bootstrap-password
+    secrets:
+      - center-db-password
+      - redis-url
+      - minio-access-key
+      - minio-secret-key
+      - csrf-secret
+      - bootstrap-password
+    command: ["python", "-m", "factory_sop.bootstrap", "--login-name", "${NVSOP_DEV_LOGIN_NAME:-dev.admin}", "--display-name", "开发环境管理员", "--password-file", "/run/secrets/bootstrap-password"]
+    restart: "no"
+
+  center-api:
+    image: nvsop-dev-main/center-api:${NVSOP_TARGET_SHA:-local}
+    build:
+      context: ${NVSOP_SOURCE_DIR:-.}
+      dockerfile: deploy/dev/center.Dockerfile
+    depends_on:
+      center-bootstrap:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      annotation-db:
+        condition: service_healthy
+    environment: *center-environment
+    secrets:
+      - center-db-password
+      - redis-url
+      - minio-access-key
+      - minio-secret-key
+      - csrf-secret
+    command: ["uvicorn", "factory_sop.entrypoint:build", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test: ["CMD", "curl", "--noproxy", "*", "-fsS", "http://127.0.0.1:8000/api/v1/liveness"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  worker:
+    image: nvsop-dev-main/center-api:${NVSOP_TARGET_SHA:-local}
+    depends_on:
+      center-bootstrap:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      annotation-backend:
+        condition: service_healthy
+    environment: *center-environment
+    volumes:
+      - annotation-media:/var/lib/nvsop/annotation-data:ro
+    secrets:
+      - center-db-password
+      - redis-url
+      - minio-access-key
+      - minio-secret-key
+      - csrf-secret
+    command: ["python", "-m", "factory_sop.worker_entrypoint"]
+    healthcheck:
+      test: ["CMD", "python", "-m", "factory_sop.job.adapters.healthcheck"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  annotation-backend:
+    image: nvsop-dev-main/annotation-backend:${NVSOP_TARGET_SHA:-local}
+    build:
+      context: ${NVSOP_SOURCE_DIR:-.}
+      dockerfile: deploy/dev/annotation-backend.Dockerfile
+    depends_on:
+      annotation-db:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: annotation-db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: annotation
+      POSTGRES_USER: annotation
+      POSTGRES_PASSWORD_FILE: /run/secrets/annotation-db-password
+      DB_HOST: annotation-db
+      DB_PORT: "5432"
+      DB_NAME: annotation
+      DB_USER: annotation
+      DB_PASSWORD_FILE: /run/secrets/annotation-db-password
+      SERVICE_PORT: "8100"
+      MAX_REQUEST_BODY_MB: "2048"
+    secrets:
+      - annotation-db-password
+    volumes:
+      - annotation-media:/app/assets/videos
+    healthcheck:
+      test: ["CMD", "curl", "--noproxy", "*", "-fsS", "http://127.0.0.1:8100/health/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  annotation-frontend:
+    image: nvsop-dev-main/annotation-frontend:${NVSOP_TARGET_SHA:-local}
+    build:
+      context: ${NVSOP_SOURCE_DIR:-.}
+      dockerfile: deploy/dev/annotation-frontend.Dockerfile
+    healthcheck:
+      test: ["CMD", "wget", "-Y", "off", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  web:
+    image: nvsop-dev-main/web:${NVSOP_TARGET_SHA:-local}
+    build:
+      context: ${NVSOP_SOURCE_DIR:-.}
+      dockerfile: deploy/dev/web.Dockerfile
+    healthcheck:
+      test: ["CMD", "wget", "-Y", "off", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  gateway:
+    image: nginx:1.27.3-alpine
+    depends_on:
+      center-api:
+        condition: service_healthy
+      worker:
+        condition: service_healthy
+      annotation-backend:
+        condition: service_healthy
+      annotation-frontend:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8443:8443"
+      - "127.0.0.1:8444:8444"
+      - "127.0.0.1:9443:9443"
+    volumes:
+      - ${NVSOP_DEV_NGINX_CONFIG:-.tmp/dev-main/nginx.conf}:/etc/nginx/conf.d/default.conf:ro
+      - ${NVSOP_DEV_STATE_DIR:-.tmp/dev-main}/tls:/etc/nginx/tls:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -Y off -q --no-check-certificate -O - ${NVSOP_DEV_PROTOCOL:-https}://127.0.0.1:8443/api/v1/liveness >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  center-db-data:
+    name: nvsop-dev-main-center-db
+  redis-data:
+    name: nvsop-dev-main-redis
+  minio-data:
+    name: nvsop-dev-main-minio
+  annotation-db-data:
+    name: nvsop-dev-main-annotation-db
+  annotation-media:
+    name: nvsop-dev-main-annotation-media
+
+secrets:
+  center-db-password:
+    file: ${NVSOP_DEV_STATE_DIR:-.tmp/dev-main}/secrets/center-db-password
+  annotation-db-password:
+    file: ${NVSOP_DEV_STATE_DIR:-.tmp/dev-main}/secrets/annotation-db-password
+  bootstrap-password:
+    file: ${NVSOP_DEV_STATE_DIR:-.tmp/dev-main}/secrets/bootstrap-password
+  csrf-secret:
+    file: ${NVSOP_DEV_STATE_DIR:-.tmp/dev-main}/secrets/csrf-secret
+  minio-access-key:
+    file: ${NVSOP_DEV_STATE_DIR:-.tmp/dev-main}/secrets/minio-access-key
+  minio-secret-key:
+    file: ${NVSOP_DEV_STATE_DIR:-.tmp/dev-main}/secrets/minio-secret-key
+  redis-url:
+    file: ${NVSOP_DEV_STATE_DIR:-.tmp/dev-main}/secrets/redis-url

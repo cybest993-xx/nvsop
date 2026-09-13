@@ -16,7 +16,6 @@ import signal
 import ssl
 import subprocess
 import sys
-import tarfile
 import time
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
@@ -33,6 +32,40 @@ try:
 except ImportError:  # pragma: no cover - 目标开发环境是 WSL2
     fcntl = None  # type: ignore[assignment]
 
+_MODULE_DIRECTORY = Path(__file__).resolve().parent
+_MODULE_PARENT = _MODULE_DIRECTORY.parent
+if str(_MODULE_PARENT) not in sys.path:
+    sys.path.insert(0, str(_MODULE_PARENT))
+
+# isort: off
+from scripts.dev_manual_test import (  # noqa: E402
+    execute_manual_test as _execute_manual_test,
+    failed_test_entry as _failed_test_entry,
+    interrupted_test_entry as _interrupted_test_entry,
+    record_test_result as _record_test_result,
+    test_state as _test_state,
+    test_stop_event as _test_stop_event,
+)
+from scripts.dev_process import process_alive as _process_alive  # noqa: E402
+from scripts.dev_process import process_matches as _process_matches  # noqa: E402
+from scripts.dev_process import signal_process as _signal_process  # noqa: E402
+from scripts.dev_snapshot import (  # noqa: E402
+    MissingLfsError,
+    OPTIONAL_LFS_PATHS as _OPTIONAL_LFS_PATHS,
+    SnapshotError as _SnapshotError,
+    SnapshotInterrupted as _SnapshotInterrupted,
+    archive_environment as _archive_environment,
+    archive_main as _archive_main,
+    hydrate_lfs_files as _hydrate_lfs_files,
+    lfs_files as _lfs_files,
+    lfs_media_directory as _lfs_media_directory,
+    read_snapshot_manifest,
+    snapshot_manifest,
+)
+
+OPTIONAL_LFS_PATHS = _OPTIONAL_LFS_PATHS
+# isort: on
+
 PROJECT_NAME = "nvsop-dev-main"
 TILT_VERSION = "0.37.7"
 TILT_PORT = 10350
@@ -44,24 +77,6 @@ PROTOCOL_ENVIRONMENT = "NVSOP_DEV_PROTOCOL"
 DEFAULT_PROTOCOL = "https"
 SUPPORTED_PROTOCOLS = frozenset({"http", "https"})
 OPTIONAL_LFS_ENVIRONMENT = "NVSOP_ALLOW_MISSING_OPTIONAL_LFS"
-OPTIONAL_LFS_PATHS = frozenset(
-    {
-        "vendor/sop-monitoring-blueprints/agentic/ds-sop-skills/assets/DeepStream-SOP-Inference-Agentic-Workflow.png",
-        (
-            "vendor/sop-monitoring-blueprints/agentic/vss-sop-skills/"
-            "vss-sop-build/references/diagrams/SOP Blueprint - VSS SOP building flow.png"
-        ),
-        (
-            "vendor/sop-monitoring-blueprints/agentic/vss-sop-skills/"
-            "vss-sop-build/references/diagrams/VSS SOP Blueprint Architecture.png"
-        ),
-        "vendor/sop-monitoring-blueprints/assets/SOP-FT-Inference-Agentic-Workflow.png",
-        "vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/docs/deepstream-sop-architecture.png",
-        "vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/ddm-training-ms/ddm/DDM-Net/config/downsample-temporal_stride.png",
-        "vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/evaluation-ms/ddm/DDM-Net/config/downsample-temporal_stride.png",
-        "vendor/sop-monitoring-blueprints/microservices/sop-training-bp/tutorials/SOP_Training_BP_User_Guide.pdf",
-    }
-)
 POLL_SECONDS = 2
 READY_TIMEOUT_SECONDS = 900
 
@@ -72,27 +87,6 @@ class DevError(RuntimeError):
 
 class DevInterrupted(KeyboardInterrupt):
     """收到停止请求，调用方应进入项目级清理。"""
-
-
-class MissingLfsError(DevError):
-    """Git-LFS 对象缺失且不能安全地建立完整快照。"""
-
-    def __init__(
-        self,
-        sha: str,
-        missing_lfs_paths: list[dict[str, str]],
-        unapproved_lfs_paths: list[str] | None = None,
-    ) -> None:
-        self.sha = sha
-        self.missing_lfs_paths = missing_lfs_paths
-        self.unapproved_lfs_paths = unapproved_lfs_paths or []
-        missing = ", ".join(f"{entry['path']} ({entry['oid']})" for entry in missing_lfs_paths)
-        detail = f"main 快照 {sha} 缺少 Git-LFS 对象：{missing}"
-        if self.unapproved_lfs_paths:
-            detail += "; 不能启用可选资源降级，快照包含未列入白名单的 LFS 路径：" + ", ".join(
-                self.unapproved_lfs_paths
-            )
-        super().__init__(detail)
 
 
 def configured_protocol(environ: Mapping[str, str] | None = None) -> str:
@@ -542,56 +536,21 @@ def configured_optional_lfs(environ: Mapping[str, str] | None = None) -> bool:
 def archive_environment(
     environ: Mapping[str, str], *, allow_missing_optional_lfs: bool = False
 ) -> dict[str, str]:
-    """为 git archive 构造显式环境，默认禁止全局 LFS 降级。"""
-    environment = dict(environ)
-    environment.pop("GIT_LFS_SKIP_SMUDGE", None)
-    if allow_missing_optional_lfs:
-        environment["GIT_LFS_SKIP_SMUDGE"] = "1"
-    return environment
+    return _archive_environment(environ, allow_missing_optional_lfs=allow_missing_optional_lfs)
 
 
 def lfs_media_directory(item: DevPaths, *, stop_event: Event | None = None) -> Path | None:
-    result = run_checked(
-        ["git", "lfs", "env"],
-        cwd=item.root,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        stop_event=stop_event,
-    )
-    if result.returncode != 0:
-        detail = result.stderr.decode("utf-8", errors="replace").strip()
-        raise DevError(f"无法定位 Git-LFS 对象目录：{detail}")
-    for line in result.stdout.decode("utf-8", errors="replace").splitlines():
-        if line.startswith("LocalMediaDir="):
-            path = Path(line.partition("=")[2])
-            return path if path.is_absolute() else item.root / path
-    return None
+    try:
+        return _lfs_media_directory(item.root, run_checked=run_checked, stop_event=stop_event)
+    except _SnapshotError as error:
+        raise DevError(str(error)) from error
 
 
 def lfs_files(item: DevPaths, sha: str, *, stop_event: Event | None = None) -> list[dict[str, str]]:
-    result = run_checked(
-        ["git", "lfs", "ls-files", "--long", sha],
-        cwd=item.root,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        stop_event=stop_event,
-    )
-    if result.returncode != 0:
-        detail = result.stderr.decode("utf-8", errors="replace").strip()
-        raise DevError(f"无法检查 main 快照 {sha} 的 Git-LFS 对象：{detail}")
-    media_directory = lfs_media_directory(item, stop_event=stop_event)
-    entries: list[dict[str, str]] = []
-    for line in result.stdout.decode("utf-8", errors="replace").splitlines():
-        parts = line.split(maxsplit=2)
-        if len(parts) != 3 or parts[1] not in {"*", "-"}:
-            raise DevError(f"无法解析 git lfs ls-files 输出：{line!r}")
-        available = parts[1]
-        if available == "-" and media_directory is not None:
-            object_path = media_directory / parts[0][:2] / parts[0][2:4] / parts[0]
-            if object_path.is_file():
-                available = "*"
-        entries.append({"oid": parts[0], "available": available, "path": parts[2]})
-    return entries
+    try:
+        return _lfs_files(item.root, sha, run_checked=run_checked, stop_event=stop_event)
+    except _SnapshotError as error:
+        raise DevError(str(error)) from error
 
 
 def hydrate_lfs_files(
@@ -600,72 +559,10 @@ def hydrate_lfs_files(
     *,
     media_directory: Path | None,
 ) -> None:
-    """用本地 LFS 对象替换归档中的 pointer，保留可用文件的真实内容。"""
-    available = [entry for entry in entries if entry["available"] == "*"]
-    if not available:
-        return
-    if media_directory is None:
-        raise DevError("Git-LFS 报告对象可用，但没有 LocalMediaDir，无法建立完整快照")
-    root = snapshot.resolve()
-    for entry in available:
-        oid = entry["oid"]
-        object_path = media_directory / oid[:2] / oid[2:4] / oid
-        if not object_path.is_file():
-            raise DevError(f"Git-LFS 对象已报告可用但本地文件不存在：{entry['path']} ({oid})")
-        relative = Path(entry["path"])
-        if relative.is_absolute() or ".." in relative.parts:
-            raise DevError(f"Git-LFS 路径无效，拒绝写入快照外部：{entry['path']}")
-        destination = (snapshot / relative).resolve()
-        if root != destination and root not in destination.parents:
-            raise DevError(f"Git-LFS 路径越出快照目录：{entry['path']}")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(object_path, destination)
-
-
-def snapshot_manifest_path(snapshot: Path) -> Path:
-    return snapshot / ".nvsop-snapshot.json"
-
-
-def read_snapshot_manifest(snapshot: Path) -> dict[str, object] | None:
-    path = snapshot_manifest_path(snapshot)
-    if not path.is_file():
-        return None
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    return value if isinstance(value, dict) else None
-
-
-def remove_path(path: Path) -> None:
-    if path.is_symlink() or path.is_file():
-        path.unlink(missing_ok=True)
-    elif path.is_dir():
-        shutil.rmtree(path)
-
-
-def snapshot_manifest(
-    *,
-    sha: str,
-    missing_lfs_paths: list[dict[str, str]],
-    allow_missing_optional_lfs: bool,
-    warning: str | None,
-) -> dict[str, object]:
-    return {
-        "schema": 1,
-        "source_sha": sha,
-        "complete": not missing_lfs_paths,
-        "missing_lfs_paths": missing_lfs_paths,
-        "allow_missing_optional_lfs": allow_missing_optional_lfs,
-        "warning": warning,
-        "created_at": utc_now(),
-    }
-
-
-def write_snapshot_audit(item: DevPaths, sha: str, manifest: dict[str, object]) -> None:
-    item.logs.mkdir(parents=True, exist_ok=True)
-    audit = item.logs / f"snapshot-{sha}.json"
-    audit.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        _hydrate_lfs_files(snapshot, entries, media_directory=media_directory)
+    except _SnapshotError as error:
+        raise DevError(str(error)) from error
 
 
 def archive_main(
@@ -676,119 +573,20 @@ def archive_main(
     stop_event: Event | None = None,
 ) -> Path:
     ensure_directories(item)
-    destination = item.snapshots / sha
-    marker = destination / ".nvsop-source-sha"
-    manifest = read_snapshot_manifest(destination)
-    if (
-        marker.is_file()
-        and marker.read_text(encoding="ascii").strip() == sha
-        and manifest is not None
-        and manifest.get("source_sha") == sha
-        and manifest.get("complete") is True
-        and manifest.get("missing_lfs_paths") == []
-    ):
-        return destination
-
-    entries = lfs_files(item, sha, stop_event=stop_event)
-    missing = [entry for entry in entries if entry["available"] == "-"]
-    unapproved = sorted(
-        {entry["path"] for entry in missing if entry["path"] not in OPTIONAL_LFS_PATHS}
-    )
-    if missing and (not allow_missing_optional_lfs or unapproved):
-        failure_manifest = snapshot_manifest(
-            sha=sha,
-            missing_lfs_paths=missing,
-            allow_missing_optional_lfs=allow_missing_optional_lfs,
-            warning=(
-                "缺少 LFS 对象；未建立快照。"
-                if not allow_missing_optional_lfs
-                else "缺少 LFS 对象，且存在未列入可选白名单的路径；未建立快照。"
-            ),
-        )
-        write_snapshot_audit(item, sha, failure_manifest)
-        raise MissingLfsError(sha, missing, unapproved)
-
-    warning = None
-    if missing:
-        warning = (
-            "这是显式允许的可选文档资源降级；快照中的 missing_lfs_paths 保留为 Git-LFS pointer。"
-        )
-    environment = archive_environment(
-        os.environ,
-        allow_missing_optional_lfs=bool(missing and allow_missing_optional_lfs),
-    )
-    temporary = item.snapshots / f".{sha}.tmp-{os.getpid()}"
-    remove_path(temporary)
-    temporary.mkdir(parents=True)
     try:
-        process = subprocess.Popen(
-            ["git", "archive", "--format=tar", sha],
-            cwd=item.root,
-            env=environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            start_new_session=os.name != "nt",
-        )
-    except OSError as popen_error:
-        remove_path(temporary)
-        raise DevError(f"无法执行 git archive：{popen_error}") from popen_error
-    assert process.stdout is not None
-    completed = False
-    try:
-        with tarfile.open(fileobj=process.stdout, mode="r|") as archive:
-            for member in archive:
-                if stop_event is not None and stop_event.is_set():
-                    raise DevInterrupted("收到停止请求")
-                archive.extract(member, temporary, filter="data")
-        process.stdout.close()
-        return_code = process.wait()
-        stderr_text = (
-            process.stderr.read().decode("utf-8", errors="replace") if process.stderr else ""
-        )
-        if return_code != 0:
-            raise DevError(f"无法建立 main 源码快照 {sha}：{stderr_text.strip()}")
-        if any(entry["available"] == "*" for entry in entries):
-            hydrate_lfs_files(
-                temporary,
-                entries,
-                media_directory=lfs_media_directory(item, stop_event=stop_event),
-            )
-        manifest = snapshot_manifest(
-            sha=sha,
-            missing_lfs_paths=missing,
+        return _archive_main(
+            item,
+            sha,
+            run_checked=run_checked,
             allow_missing_optional_lfs=allow_missing_optional_lfs,
-            warning=warning,
+            stop_event=stop_event,
         )
-        snapshot_manifest_path(temporary).write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
-        if missing:
-            (temporary / ".nvsop-source-sha.partial").write_text(sha + "\n", encoding="ascii")
-        else:
-            (temporary / ".nvsop-source-sha").write_text(sha + "\n", encoding="ascii")
-        remove_path(destination)
-        temporary.replace(destination)
-        write_snapshot_audit(item, sha, manifest)
-        completed = True
-        return destination
-    except (OSError, EOFError, tarfile.TarError, ValueError) as error:
-        _terminate_process(process)
-        process.wait()
-        detail = process.stderr.read().decode("utf-8", errors="replace") if process.stderr else ""
-        raise DevError(
-            f"无法建立 main 源码快照 {sha}：Git archive 流失败：{error}"
-            + (f"；{detail.strip()}" if detail.strip() else "")
-        ) from error
-    finally:
-        if process.poll() is None:
-            _terminate_process(process)
-            process.wait()
-        if process.stdout is not None:
-            process.stdout.close()
-        if process.stderr is not None:
-            process.stderr.close()
-        if not completed:
-            remove_path(temporary)
+    except MissingLfsError:
+        raise
+    except _SnapshotInterrupted as error:
+        raise DevInterrupted(str(error)) from error
+    except _SnapshotError as error:
+        raise DevError(str(error)) from error
 
 
 def runtime_environment(
@@ -1404,30 +1202,11 @@ def pid_alive(path: Path) -> bool:
 
 
 def process_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    return True
+    return _process_alive(pid)
 
 
 def process_matches(item: DevPaths, pid: int, *, command_name: str) -> bool:
-    if os.name == "nt":  # pragma: no cover - 目标开发环境是 WSL2
-        return True
-    try:
-        command = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\\0")
-        working_directory = Path(f"/proc/{pid}/cwd").resolve()
-    except OSError:
-        return False
-    arguments = [value.decode("utf-8", errors="replace") for value in command if value]
-    if command_name not in arguments:
-        return False
-    script = item.root / "scripts" / "dev.py"
-    return any(
-        value in {str(script), "scripts/dev.py", "./scripts/dev.py"}
-        or (value.endswith("/scripts/dev.py") and working_directory == item.root)
-        for value in arguments
-    )
+    return _process_matches(item.root, pid, command_name=command_name)
 
 
 def launcher_process_matches(item: DevPaths, pid: int) -> bool:
@@ -1439,25 +1218,7 @@ def test_process_matches(item: DevPaths, pid: int, *, kind: str) -> bool:
 
 
 def signal_process(pid: int, signum: signal.Signals) -> bool:
-    pidfd_open = getattr(os, "pidfd_open", None)
-    pidfd_send_signal = getattr(signal, "pidfd_send_signal", None)
-    if pidfd_open is not None and pidfd_send_signal is not None:
-        try:
-            descriptor = pidfd_open(pid)
-        except OSError:
-            return False
-        try:
-            pidfd_send_signal(descriptor, signum)
-        except OSError:
-            return False
-        finally:
-            os.close(descriptor)
-        return True
-    try:  # pragma: no cover - Linux Python 3.11 提供 pidfd
-        os.kill(pid, signum)
-    except OSError:
-        return False
-    return True
+    return _signal_process(pid, signum)
 
 
 def signal_launcher(item: DevPaths, pid: int, signum: signal.Signals) -> bool:
@@ -2017,17 +1778,14 @@ def ready_instance(item: DevPaths, *, action: str) -> tuple[str, Path, str, dict
 
 
 def test_state(item: DevPaths, *, kind: str, sha: str, protocol: str, report: Path) -> None:
-    change_state(
+    _test_state(
         item,
-        test={
-            "kind": kind,
-            "pid": os.getpid(),
-            "status": "running",
-            "tested_sha": sha,
-            "protocol": protocol,
-            "report": str(report),
-            "started_at": utc_now(),
-        },
+        kind=kind,
+        sha=sha,
+        protocol=protocol,
+        report=report,
+        change_state=change_state,
+        now=utc_now,
     )
 
 
@@ -2056,24 +1814,13 @@ def cancel_test(item: DevPaths, *, timeout: float = 15.0) -> None:
 
 
 def record_test_result(item: DevPaths, *, kind: str, entry: dict[str, object]) -> None:
-    change_state(item, test=None, **{f"last_{kind}": entry})
+    _record_test_result(item, kind=kind, entry=entry, change_state=change_state)
 
 
 @contextlib.contextmanager
 def test_stop_event() -> Iterator[Event]:
-    """将显式停止转换为可传播给测试子进程的 stop event。"""
-    stopping = Event()
-
-    def request_stop(_signum: int, _frame: object) -> None:
-        stopping.set()
-
-    old_int = signal.signal(signal.SIGINT, request_stop)
-    old_term = signal.signal(signal.SIGTERM, request_stop)
-    try:
+    with _test_stop_event() as stopping:
         yield stopping
-    finally:
-        signal.signal(signal.SIGINT, old_int)
-        signal.signal(signal.SIGTERM, old_term)
 
 
 def interrupted_test_entry(
@@ -2084,19 +1831,14 @@ def interrupted_test_entry(
     report: Path,
     log: Path | None = None,
 ) -> dict[str, object]:
-    entry: dict[str, object] = {
-        "tested_sha": sha,
-        "protocol": protocol,
-        "status": "aborted",
-        "exit_code": 130,
-        "reason": "KeyboardInterrupt",
-        "command": command,
-        "report": str(report),
-        "finished_at": utc_now(),
-    }
-    if log is not None:
-        entry["log"] = str(log)
-    return entry
+    return _interrupted_test_entry(
+        sha=sha,
+        protocol=protocol,
+        command=command,
+        report=report,
+        now=utc_now,
+        log=log,
+    )
 
 
 def failed_test_entry(
@@ -2108,20 +1850,15 @@ def failed_test_entry(
     error: Exception,
     log: Path | None = None,
 ) -> dict[str, object]:
-    entry: dict[str, object] = {
-        "tested_sha": sha,
-        "protocol": protocol,
-        "status": "failed",
-        "exit_code": None,
-        "error": str(error),
-        "error_type": type(error).__name__,
-        "command": command,
-        "report": str(report),
-        "finished_at": utc_now(),
-    }
-    if log is not None:
-        entry["log"] = str(log)
-    return entry
+    return _failed_test_entry(
+        sha=sha,
+        protocol=protocol,
+        command=command,
+        report=report,
+        error=error,
+        now=utc_now,
+        log=log,
+    )
 
 
 def execute_manual_test(
@@ -2135,34 +1872,18 @@ def execute_manual_test(
     execute: Callable[[Event], subprocess.CompletedProcess[bytes]],
     log: Path | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
-    """统一管理手动测试的状态记录、停止传播和异常结果。"""
-    test_state(item, kind=kind, sha=sha, protocol=protocol, report=report)
-    try:
-        with test_stop_event() as stopping:
-            return execute(stopping)
-    except KeyboardInterrupt:
-        record_test_result(
-            item,
-            kind=kind,
-            entry=interrupted_test_entry(
-                sha=sha, protocol=protocol, command=command, report=report, log=log
-            ),
-        )
-        raise
-    except Exception as error:
-        record_test_result(
-            item,
-            kind=kind,
-            entry=failed_test_entry(
-                sha=sha,
-                protocol=protocol,
-                command=command,
-                report=report,
-                error=error,
-                log=log,
-            ),
-        )
-        raise
+    return _execute_manual_test(
+        item,
+        kind=kind,
+        sha=sha,
+        protocol=protocol,
+        command=command,
+        report=report,
+        execute=execute,
+        change_state=change_state,
+        now=utc_now,
+        log=log,
+    )
 
 
 def run_smoke(item: DevPaths) -> None:

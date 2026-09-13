@@ -18,6 +18,8 @@ from pathlib import Path
 from threading import Event
 from unittest.mock import patch
 
+from scripts import dev_snapshot
+
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("nvsop_dev_script", ROOT / "scripts" / "dev.py")
 assert SPEC is not None and SPEC.loader is not None
@@ -163,7 +165,9 @@ class DevProtocolTest(unittest.TestCase):
             sha = self.git(root, "rev-parse", "HEAD")
             item = DEV.DevPaths(root=root, state=Path(directory) / "state")
             with (
-                patch.object(DEV.tarfile, "open", side_effect=tarfile.ReadError("broken tar")),
+                patch.object(
+                    dev_snapshot.tarfile, "open", side_effect=tarfile.ReadError("broken tar")
+                ),
                 self.assertRaises(DEV.DevError) as failure,
             ):
                 DEV.archive_main(item, sha)
@@ -583,6 +587,31 @@ configure_manual_test_resources(
             second.acquire()
             second.release()
             self.assertFalse(path.exists())
+
+    @unittest.skipUnless(os.name != "nt", "需要 Linux /proc")
+    def test_launcher_process_matches_real_proc_command_line(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = root / "scripts" / "dev.py"
+            script.parent.mkdir()
+            script.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+            item = DEV.DevPaths(root=root, state=root / "state")
+            child = subprocess.Popen([sys.executable, str(script), "run"], cwd=root)
+            try:
+                matched = False
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline:
+                    if DEV.launcher_process_matches(item, child.pid):
+                        matched = True
+                        break
+                    if child.poll() is not None:
+                        break
+                    time.sleep(0.01)
+                self.assertTrue(matched)
+            finally:
+                if child.poll() is None:
+                    child.terminate()
+                child.wait(timeout=5)
 
     def test_down_cancels_a_running_manual_test_before_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -19,9 +19,10 @@ check: lockfile sync hooks policy-test policy migrations contract-base contract-
 check-docs: lockfile sync hooks policy secret-scan
 	git diff --check "$(BASE)" $(if $(HEAD),"$(HEAD)") --
 
-# Git hooks that hold for whichever agent or person commits (harness §6): no commit on
-# main, no push to main, no edit under vendor/, no unformatted Python. Versioned under
-# scripts/githooks/ and enabled by pointing git at that directory; part of `check`.
+# Git hooks that hold for whichever agent or person commits (harness §6): the local main/dev
+# workflow and worker branch names, no push to main, no edit under vendor/, and no unformatted
+# Python. Versioned under scripts/githooks/ and enabled by pointing git at that directory; part of
+# `check`.
 hooks:
 	git config core.hooksPath scripts/githooks
 

@@ -481,13 +481,64 @@ def write_secret(path: Path, value: str) -> None:
     path.chmod(0o600)
 
 
+def certificate_text(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    result = run_checked(
+        ["openssl", "x509", "-in", str(path), "-noout", "-text"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.decode("utf-8", errors="replace")
+
+
+def usable_ca_certificate(path: Path) -> bool:
+    text = certificate_text(path)
+    return text is not None and "CA:TRUE" in text and "Certificate Sign" in text
+
+
+def usable_server_certificate(ca: Path, server: Path) -> bool:
+    if not ca.is_file() or not server.is_file():
+        return False
+    result = run_checked(
+        ["openssl", "verify", "-CAfile", str(ca), str(server)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    return result.returncode == 0
+
+
 def ensure_tls(item: DevPaths) -> None:
     ca_key = item.tls / "ca.key"
     ca_crt = item.tls / "ca.crt"
     server_key = item.tls / "dev.key"
     server_crt = item.tls / "dev.crt"
     config = item.tls / "openssl.cnf"
-    if not ca_key.exists() or not ca_crt.exists():
+    config.write_text(
+        """[req]
+ prompt = no
+ distinguished_name = subject
+
+ [subject]
+ CN = localhost
+
+ [v3_ca]
+ subjectKeyIdentifier = hash
+ basicConstraints = critical, CA:true, pathlen:1
+ keyUsage = critical, keyCertSign, cRLSign
+
+ [v3_server]
+ subjectAltName = DNS:localhost,DNS:nginx,IP:127.0.0.1
+ extendedKeyUsage = serverAuth
+ """,
+        encoding="ascii",
+    )
+    if not ca_key.exists() or not usable_ca_certificate(ca_crt):
+        ca_key.unlink(missing_ok=True)
+        ca_crt.unlink(missing_ok=True)
+        server_crt.unlink(missing_ok=True)
         run = run_checked(
             [
                 "openssl",
@@ -505,27 +556,17 @@ def ensure_tls(item: DevPaths) -> None:
                 "825",
                 "-subj",
                 "/CN=NVSOP Development CA",
+                "-config",
+                str(config),
+                "-extensions",
+                "v3_ca",
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
         if run.returncode != 0:
             raise DevError(f"无法生成开发 CA：{run.stderr.decode(errors='replace')}")
-    if not server_key.exists() or not server_crt.exists():
-        config.write_text(
-            """[req]
- prompt = no
- distinguished_name = subject
-
- [subject]
- CN = localhost
-
- [v3_server]
- subjectAltName = DNS:localhost,DNS:nginx,IP:127.0.0.1
- extendedKeyUsage = serverAuth
- """,
-            encoding="ascii",
-        )
+    if not server_key.exists() or not usable_server_certificate(ca_crt, server_crt):
         csr = item.tls / "dev.csr"
         serial = item.tls / "ca.srl"
         generated = run_checked(

@@ -1311,6 +1311,7 @@ def build_worker(
         max_jobs=4,
         job_timeout=settings.media_probe_timeout_seconds + 300,
         max_tries=5,
+        health_check_interval=settings.worker_health_check_interval_seconds,
     )
 
 

@@ -811,14 +811,93 @@ export type CameraConfiguration = {
    * Main Stream Path
    */
   main_stream_path: string
+  media_path_mode?: MediaPathMode | null
   /**
    * Name
    */
   name: string
+  recording_mode?: RecordingMode | null
   /**
    * Station Id
    */
   station_id: string
+  /**
+   * Sub Stream Path
+   */
+  sub_stream_path: string
+}
+
+/**
+ * CameraMediaView
+ *
+ * Web 预览和回放所需的直接地址；不包含相机用户名或密码。
+ */
+export type CameraMediaView = {
+  /**
+   * Backend Id
+   */
+  backend_id: string
+  /**
+   * Camera Address
+   */
+  camera_address: string
+  /**
+   * Camera Id
+   */
+  camera_id: string
+  /**
+   * Camera Name
+   */
+  camera_name: string
+  /**
+   * Camera Revision
+   */
+  camera_revision: number
+  camera_status: DeviceStatus
+  /**
+   * Credentials Configured
+   */
+  credentials_configured: boolean
+  /**
+   * Host Id
+   */
+  host_id: string
+  /**
+   * Host Name
+   */
+  host_name: string
+  host_status: DeviceStatus
+  /**
+   * Main Stream Path
+   */
+  main_stream_path: string
+  /**
+   * Media Path
+   */
+  media_path: string
+  media_path_mode: MediaPathMode
+  /**
+   * Mediamtx Address
+   */
+  mediamtx_address: string | null
+  /**
+   * Mediamtx Playback Address
+   */
+  mediamtx_playback_address: string | null
+  recording_mode: RecordingMode
+  /**
+   * Recording Window Seconds
+   */
+  recording_window_seconds: number
+  /**
+   * Station Id
+   */
+  station_id: string
+  /**
+   * Station Name
+   */
+  station_name: string
+  station_status: DeviceStatus
   /**
    * Sub Stream Path
    */
@@ -1171,6 +1250,22 @@ export type CreateDatasetInput = {
 }
 
 /**
+ * CredentialFileReferences
+ *
+ * 只包含部署约定的路径，不包含 secret 内容。
+ */
+export type CredentialFileReferences = {
+  /**
+   * Password File
+   */
+  password_file: string
+  /**
+   * Username File
+   */
+  username_file: string
+}
+
+/**
  * Credentials
  *
  * What the login form submits.
@@ -1383,6 +1478,84 @@ export type EditedUser = {
 }
 
 /**
+ * ExportCameraMediaView
+ *
+ * 推理机本地应用配置；secret 仍由本机只读文件提供。
+ */
+export type ExportCameraMediaView = {
+  /**
+   * Backend Id
+   */
+  backend_id: string
+  /**
+   * Camera Address
+   */
+  camera_address: string
+  /**
+   * Camera Id
+   */
+  camera_id: string
+  /**
+   * Camera Name
+   */
+  camera_name: string
+  /**
+   * Camera Revision
+   */
+  camera_revision: number
+  camera_status: DeviceStatus
+  credential_files: CredentialFileReferences
+  /**
+   * Credentials Configured
+   */
+  credentials_configured: boolean
+  /**
+   * Host Id
+   */
+  host_id: string
+  /**
+   * Host Name
+   */
+  host_name: string
+  host_status: DeviceStatus
+  /**
+   * Main Stream Path
+   */
+  main_stream_path: string
+  /**
+   * Media Path
+   */
+  media_path: string
+  media_path_mode: MediaPathMode
+  /**
+   * Mediamtx Address
+   */
+  mediamtx_address: string | null
+  /**
+   * Mediamtx Playback Address
+   */
+  mediamtx_playback_address: string | null
+  recording_mode: RecordingMode
+  /**
+   * Recording Window Seconds
+   */
+  recording_window_seconds: number
+  /**
+   * Station Id
+   */
+  station_id: string
+  /**
+   * Station Name
+   */
+  station_name: string
+  station_status: DeviceStatus
+  /**
+   * Sub Stream Path
+   */
+  sub_stream_path: string
+}
+
+/**
  * ExternalSignalInput
  *
  * 外部信号语义标签边界信号。
@@ -1436,6 +1609,10 @@ export type HostConfiguration = {
    */
   mediamtx_address?: string | null
   /**
+   * Mediamtx Playback Address
+   */
+  mediamtx_playback_address?: string | null
+  /**
    * Name
    */
   name: string
@@ -1455,6 +1632,43 @@ export type HostIdentityKeyConfiguration = {
    * Public Key
    */
   public_key: string
+}
+
+/**
+ * HostMediaConfigurationView
+ *
+ * 一台推理机的非秘密媒体配置导出。
+ */
+export type HostMediaConfigurationView = {
+  /**
+   * Cameras
+   */
+  cameras: Array<ExportCameraMediaView>
+  /**
+   * Host Id
+   */
+  host_id: string
+  /**
+   * Host Name
+   */
+  host_name: string
+  /**
+   * Host Revision
+   */
+  host_revision: number
+  host_status: DeviceStatus
+  /**
+   * Mediamtx Address
+   */
+  mediamtx_address: string | null
+  /**
+   * Mediamtx Playback Address
+   */
+  mediamtx_playback_address: string | null
+  /**
+   * Recording Window Seconds
+   */
+  recording_window_seconds: number
 }
 
 /**
@@ -1578,6 +1792,10 @@ export type InferenceHostView = {
    */
   mediamtx_address: string | null
   /**
+   * Mediamtx Playback Address
+   */
+  mediamtx_playback_address?: string | null
+  /**
    * Name
    */
   name: string
@@ -1608,6 +1826,28 @@ export type ItemPageArtifactView = {
    * Items
    */
   items: Array<ArtifactView>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
+ * ItemPage[CameraMediaView]
+ */
+export type ItemPageCameraMediaView = {
+  /**
+   * Items
+   */
+  items: Array<CameraMediaView>
   /**
    * Page
    */
@@ -2011,6 +2251,13 @@ export type MeasuredCapabilityDocument = {
 }
 
 /**
+ * MediaPathMode
+ *
+ * 相机子码流送入 MediaMTX 前采用的媒体路径。
+ */
+export type MediaPathMode = 'passthrough' | 'cpu_transcode'
+
+/**
  * NewPassword
  */
 export type NewPassword = {
@@ -2277,6 +2524,13 @@ export type ProblemDocument = {
    */
   type?: 'about:blank'
 }
+
+/**
+ * RecordingMode
+ *
+ * 相机是否只在观看时取流，还是持续录制。
+ */
+export type RecordingMode = 'preview_only' | 'continuous'
 
 /**
  * RegisterVlmCandidateInput
@@ -4386,6 +4640,56 @@ export type CreateCameraResponses = {
 
 export type CreateCameraResponse = CreateCameraResponses[keyof CreateCameraResponses]
 
+export type ListCameraMediaData = {
+  body?: never
+  path?: never
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+    /**
+     * Station Id
+     */
+    station_id?: string | null
+  }
+  url: '/api/v1/cameras/media'
+}
+
+export type ListCameraMediaErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ListCameraMediaError = ListCameraMediaErrors[keyof ListCameraMediaErrors]
+
+export type ListCameraMediaResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageCameraMediaView
+}
+
+export type ListCameraMediaResponse = ListCameraMediaResponses[keyof ListCameraMediaResponses]
+
 export type DeleteCameraData = {
   body?: never
   headers: {
@@ -4543,6 +4847,52 @@ export type EditCameraResponses = {
 }
 
 export type EditCameraResponse = EditCameraResponses[keyof EditCameraResponses]
+
+export type ReadCameraMediaData = {
+  body?: never
+  path: {
+    /**
+     * Camera Id
+     */
+    camera_id: string
+  }
+  query?: never
+  url: '/api/v1/cameras/{camera_id}/media'
+}
+
+export type ReadCameraMediaErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadCameraMediaError = ReadCameraMediaErrors[keyof ReadCameraMediaErrors]
+
+export type ReadCameraMediaResponses = {
+  /**
+   * Successful Response
+   */
+  200: CameraMediaView
+}
+
+export type ReadCameraMediaResponse = ReadCameraMediaResponses[keyof ReadCameraMediaResponses]
 
 export type SetCameraStatusData = {
   body: CameraStatus
@@ -5976,6 +6326,54 @@ export type RegisterInferenceHostIdentityKeyResponses = {
 
 export type RegisterInferenceHostIdentityKeyResponse =
   RegisterInferenceHostIdentityKeyResponses[keyof RegisterInferenceHostIdentityKeyResponses]
+
+export type ExportInferenceHostMediaConfigurationData = {
+  body?: never
+  path: {
+    /**
+     * Host Id
+     */
+    host_id: string
+  }
+  query?: never
+  url: '/api/v1/inference-hosts/{host_id}/media-configuration'
+}
+
+export type ExportInferenceHostMediaConfigurationErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Host or camera topology not found
+   */
+  404: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ExportInferenceHostMediaConfigurationError =
+  ExportInferenceHostMediaConfigurationErrors[keyof ExportInferenceHostMediaConfigurationErrors]
+
+export type ExportInferenceHostMediaConfigurationResponses = {
+  /**
+   * Successful Response
+   */
+  200: HostMediaConfigurationView
+}
+
+export type ExportInferenceHostMediaConfigurationResponse =
+  ExportInferenceHostMediaConfigurationResponses[keyof ExportInferenceHostMediaConfigurationResponses]
 
 export type SetInferenceHostStatusData = {
   body: HostStatus

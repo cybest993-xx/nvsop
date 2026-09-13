@@ -22,10 +22,10 @@ SECRET_FILE_SUFFIX = "_FILE"  # pragma: allowlist secret
 
 LogLevel = Literal["debug", "info", "warning", "error"]
 
-# The deployment states the required transport explicitly, but there is only one valid state:
-# §六 requires Secure cookies and records no development exception. Local development must
-# terminate TLS rather than changing a production security attribute.
-CookieTransport = Literal["require_https"]
+# 正式部署和 HTTPS 开发模式要求 Secure cookie；只有固定 main 本地实例的明确配置
+# 才允许 HTTP 会话，避免把安全放宽变成任意部署选项。
+CookieTransport = Literal["require_https", "allow_http"]
+DeploymentMode = Literal["production", "fixed_main"]
 _REQUIRED_RUNTIME_SETTINGS = (
     "minio_endpoint",
     "minio_bucket",
@@ -69,6 +69,7 @@ class Settings(BaseSettings):
     session_idle_timeout_minutes: int = Field(gt=0)
     session_absolute_lifetime_minutes: int = Field(gt=0)
     session_cookie_transport: CookieTransport
+    deployment_mode: DeploymentMode = "production"
 
     # Signs the CSRF token derived from each session token (`auth/csrf.py`). A secret, so it
     # arrives as a file path like the database password.
@@ -92,6 +93,8 @@ class Settings(BaseSettings):
     annotation_data_root: str | None = None
     annotation_http_timeout_seconds: int = Field(default=120, gt=0, le=3600)
     annotation_context_ttl_seconds: int = Field(default=3600, gt=0, le=86400)
+    # ARQ 默认值保持 1 小时；开发环境通过环境变量缩短为 5 秒，让 worker 健康事实及时过期。
+    worker_health_check_interval_seconds: int = Field(default=3600, gt=0, le=86400)
 
     @model_validator(mode="after")
     def _validate_deployment_values(self) -> Settings:
@@ -101,6 +104,18 @@ class Settings(BaseSettings):
                 "the idle timeout would then be configured but never able to fire, and the "
                 "deployment would believe an unattended browser is closed when it is not"
             )
+        if self.session_cookie_transport == "allow_http":
+            if self.deployment_mode != "fixed_main":
+                raise ValueError("allow_http is only valid for the fixed_main local deployment")
+            if not _is_fixed_main_http_origin(self.minio_public_endpoint, port=9443):
+                raise ValueError(
+                    "allow_http fixed_main requires minio_public_endpoint at http://localhost:9443"
+                )
+            if not _is_fixed_main_http_origin(self.annotation_media_origin, port=8444):
+                raise ValueError(
+                    "allow_http fixed_main requires annotation_media_origin at "
+                    "http://localhost:8444"
+                )
         minio_values = (
             self.minio_endpoint,
             self.minio_bucket,
@@ -153,7 +168,7 @@ class Settings(BaseSettings):
             except ValueError as error:
                 raise ValueError("annotation_media_origin has an invalid port") from error
             if (
-                media_origin.scheme != "https"
+                media_origin.scheme not in {"http", "https"}
                 or not media_origin.hostname
                 or media_origin.username is not None
                 or media_origin.password is not None
@@ -163,8 +178,12 @@ class Settings(BaseSettings):
                 or (media_port is not None and not 1 <= media_port <= 65535)
             ):
                 raise ValueError(
-                    "annotation_media_origin must be an HTTPS origin without userinfo, "
+                    "annotation_media_origin must be an HTTP(S) origin without userinfo, "
                     "path, query, or fragment"
+                )
+            if media_origin.scheme == "http" and self.session_cookie_transport != "allow_http":
+                raise ValueError(
+                    "HTTP annotation_media_origin is only valid with allow_http local mode"
                 )
         return self
 
@@ -298,6 +317,26 @@ def _require_runtime_infrastructure(settings: Settings) -> None:
 
 def _variable_name(field_name: str) -> str:
     return ENVIRONMENT_PREFIX + field_name.upper()
+
+
+def _is_fixed_main_http_origin(value: str | None, *, port: int) -> bool:
+    if value is None:
+        return False
+    parsed = urlsplit(value)
+    try:
+        parsed_port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "http"
+        and parsed.hostname == "localhost"
+        and parsed_port == port
+        and parsed.path in {"", "/"}
+        and not parsed.username
+        and not parsed.password
+        and not parsed.query
+        and not parsed.fragment
+    )
 
 
 def read_secret_file(path: Path, variable: str) -> SecretStr:

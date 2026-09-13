@@ -170,6 +170,7 @@ exports[`the device page > renders connector configuration with a delegated test
     </div>
   </transition-stub>
   <!--teleport end-->
+  <!--v-if-->
   <section class="station-template" aria-labelledby="station-template-heading">
     <header class="station-template__header">
       <div>
@@ -486,6 +487,7 @@ exports[`the device page > renders the connector form with only non-secret field
     </div>
   </transition-stub>
   <!--teleport end-->
+  <!--v-if-->
   <section class="station-template" aria-labelledby="station-template-heading">
     <header class="station-template__header">
       <div>

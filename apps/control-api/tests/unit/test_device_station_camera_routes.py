@@ -221,6 +221,90 @@ def _normalize_dto(body: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def test_camera_media_query_and_host_export_are_non_secret_and_direct(
+    center: Center,
+) -> None:
+    host_id, backend_id = center.create_host_and_backend()
+    host = center.hosts.rows[UUID(host_id)]
+    center.hosts.rows[host.id] = replace(
+        host,
+        mediamtx_address="https://media.example.test:8889",
+        mediamtx_playback_address="https://media.example.test:9996",
+    )
+    station_id = center.create_station()
+    camera_id = center.create_camera(station_id, host_id, backend_id)
+
+    media = center.send("GET", f"{CAMERAS}/media").json()
+    assert media["items"] == [
+        {
+            "camera_id": camera_id,
+            "camera_name": "一号相机",
+            "camera_address": "10.0.8.21",
+            "main_stream_path": "/Streaming/Channels/101",
+            "sub_stream_path": "/Streaming/Channels/102",
+            "camera_status": "active",
+            "camera_revision": 1,
+            "station_id": station_id,
+            "station_name": "装配一号工位",
+            "station_status": "active",
+            "host_id": host_id,
+            "host_name": "推理机-1",
+            "backend_id": backend_id,
+            "host_status": "active",
+            "media_path": f"camera-{UUID(camera_id).hex}",
+            "media_path_mode": "passthrough",
+            "recording_mode": "continuous",
+            "credentials_configured": False,
+            "mediamtx_address": "https://media.example.test:8889",
+            "mediamtx_playback_address": "https://media.example.test:9996",
+            "recording_window_seconds": 604800,
+        }
+    ]
+    export = center.send(
+        "GET", f"{API_PREFIX}/inference-hosts/{host_id}/media-configuration"
+    ).json()
+    assert export == {
+        "host_id": host_id,
+        "host_name": "推理机-1",
+        "host_revision": 1,
+        "host_status": "active",
+        "mediamtx_address": "https://media.example.test:8889",
+        "mediamtx_playback_address": "https://media.example.test:9996",
+        "recording_window_seconds": 604800,
+        "cameras": [
+            {
+                "camera_id": camera_id,
+                "camera_name": "一号相机",
+                "camera_status": "active",
+                "camera_revision": 1,
+                "station_id": station_id,
+                "station_name": "装配一号工位",
+                "station_status": "active",
+                "host_id": host_id,
+                "host_name": "推理机-1",
+                "host_status": "active",
+                "media_path": f"camera-{UUID(camera_id).hex}",
+                "media_path_mode": "passthrough",
+                "recording_mode": "continuous",
+                "credentials_configured": False,
+                "mediamtx_address": "https://media.example.test:8889",
+                "mediamtx_playback_address": "https://media.example.test:9996",
+                "recording_window_seconds": 604800,
+                "camera_address": "10.0.8.21",
+                "main_stream_path": "/Streaming/Channels/101",
+                "sub_stream_path": "/Streaming/Channels/102",
+                "backend_id": backend_id,
+                "credential_files": {
+                    "username_file": f"/run/secrets/nvsop-camera-{UUID(camera_id).hex}-username",
+                    "password_file": f"/run/secrets/nvsop-camera-{UUID(camera_id).hex}-password",
+                },
+            }
+        ],
+    }
+    assert "hunter2" not in str(export)
+    assert "camera-secret" not in str(export)
+
+
 def test_station_and_camera_are_saved_offline_with_streams_and_status_only_credentials(
     center: Center,
 ) -> None:
@@ -449,7 +533,9 @@ def test_station_and_camera_read_routes_declare_view_permissions(center: Center)
         ("GET", "/api/v1/stations"): Permission.STATION_VIEW.value,
         ("GET", "/api/v1/stations/{station_id}"): Permission.STATION_VIEW.value,
         ("GET", "/api/v1/cameras"): Permission.CAMERA_VIEW.value,
+        ("GET", "/api/v1/cameras/media"): Permission.CAMERA_VIEW.value,
         ("GET", "/api/v1/cameras/{camera_id}"): Permission.CAMERA_VIEW.value,
+        ("GET", "/api/v1/cameras/{camera_id}/media"): Permission.CAMERA_VIEW.value,
     }
 
 

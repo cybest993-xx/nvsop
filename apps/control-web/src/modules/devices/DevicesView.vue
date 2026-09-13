@@ -35,6 +35,7 @@ import {
   reachabilityPresentation,
   statusPresentation,
 } from './devicesPresentation'
+import CameraMediaPanel from './CameraMediaPanel.vue'
 import ConnectionTestControl from './ConnectionTestControl.vue'
 import PointManagement from './PointManagement.vue'
 import StationTemplateConfiguration from './StationTemplateConfiguration.vue'
@@ -624,6 +625,7 @@ onMounted(load)
       </dl>
     </ElDialog>
 
+    <CameraMediaPanel :hosts="hosts" />
     <StationTemplateConfiguration :stations="stations" />
     <PointManagement :connectors="connectors" :stations="stations" @changed="load" />
   </section>

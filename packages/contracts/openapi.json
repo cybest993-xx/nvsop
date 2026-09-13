@@ -1285,11 +1285,31 @@
             "title": "Main Stream Path",
             "type": "string"
           },
+          "media_path_mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MediaPathMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "name": {
             "maxLength": 128,
             "minLength": 1,
             "title": "Name",
             "type": "string"
+          },
+          "recording_mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RecordingMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "station_id": {
             "format": "uuid",
@@ -1313,6 +1333,133 @@
           "backend_id"
         ],
         "title": "CameraConfiguration",
+        "type": "object"
+      },
+      "CameraMediaView": {
+        "description": "Web 预览和回放所需的直接地址；不包含相机用户名或密码。",
+        "properties": {
+          "backend_id": {
+            "format": "uuid",
+            "title": "Backend Id",
+            "type": "string"
+          },
+          "camera_address": {
+            "title": "Camera Address",
+            "type": "string"
+          },
+          "camera_id": {
+            "format": "uuid",
+            "title": "Camera Id",
+            "type": "string"
+          },
+          "camera_name": {
+            "title": "Camera Name",
+            "type": "string"
+          },
+          "camera_revision": {
+            "title": "Camera Revision",
+            "type": "integer"
+          },
+          "camera_status": {
+            "$ref": "#/components/schemas/DeviceStatus"
+          },
+          "credentials_configured": {
+            "title": "Credentials Configured",
+            "type": "boolean"
+          },
+          "host_id": {
+            "format": "uuid",
+            "title": "Host Id",
+            "type": "string"
+          },
+          "host_name": {
+            "title": "Host Name",
+            "type": "string"
+          },
+          "host_status": {
+            "$ref": "#/components/schemas/DeviceStatus"
+          },
+          "main_stream_path": {
+            "title": "Main Stream Path",
+            "type": "string"
+          },
+          "media_path": {
+            "title": "Media Path",
+            "type": "string"
+          },
+          "media_path_mode": {
+            "$ref": "#/components/schemas/MediaPathMode"
+          },
+          "mediamtx_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mediamtx Address"
+          },
+          "mediamtx_playback_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mediamtx Playback Address"
+          },
+          "recording_mode": {
+            "$ref": "#/components/schemas/RecordingMode"
+          },
+          "recording_window_seconds": {
+            "title": "Recording Window Seconds",
+            "type": "integer"
+          },
+          "station_id": {
+            "format": "uuid",
+            "title": "Station Id",
+            "type": "string"
+          },
+          "station_name": {
+            "title": "Station Name",
+            "type": "string"
+          },
+          "station_status": {
+            "$ref": "#/components/schemas/DeviceStatus"
+          },
+          "sub_stream_path": {
+            "title": "Sub Stream Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "camera_id",
+          "camera_name",
+          "camera_address",
+          "main_stream_path",
+          "sub_stream_path",
+          "camera_status",
+          "camera_revision",
+          "station_id",
+          "station_name",
+          "station_status",
+          "host_id",
+          "host_name",
+          "backend_id",
+          "host_status",
+          "media_path",
+          "media_path_mode",
+          "recording_mode",
+          "credentials_configured",
+          "mediamtx_address",
+          "mediamtx_playback_address",
+          "recording_window_seconds"
+        ],
+        "title": "CameraMediaView",
         "type": "object"
       },
       "CameraStatus": {
@@ -1894,6 +2041,25 @@
         "title": "CreateDatasetInput",
         "type": "object"
       },
+      "CredentialFileReferences": {
+        "description": "只包含部署约定的路径，不包含 secret 内容。",
+        "properties": {
+          "password_file": {
+            "title": "Password File",
+            "type": "string"
+          },
+          "username_file": {
+            "title": "Username File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username_file",
+          "password_file"
+        ],
+        "title": "CredentialFileReferences",
+        "type": "object"
+      },
       "Credentials": {
         "description": "What the login form submits.",
         "properties": {
@@ -2246,6 +2412,137 @@
         "title": "EditedUser",
         "type": "object"
       },
+      "ExportCameraMediaView": {
+        "description": "推理机本地应用配置；secret 仍由本机只读文件提供。",
+        "properties": {
+          "backend_id": {
+            "format": "uuid",
+            "title": "Backend Id",
+            "type": "string"
+          },
+          "camera_address": {
+            "title": "Camera Address",
+            "type": "string"
+          },
+          "camera_id": {
+            "format": "uuid",
+            "title": "Camera Id",
+            "type": "string"
+          },
+          "camera_name": {
+            "title": "Camera Name",
+            "type": "string"
+          },
+          "camera_revision": {
+            "title": "Camera Revision",
+            "type": "integer"
+          },
+          "camera_status": {
+            "$ref": "#/components/schemas/DeviceStatus"
+          },
+          "credential_files": {
+            "$ref": "#/components/schemas/CredentialFileReferences"
+          },
+          "credentials_configured": {
+            "title": "Credentials Configured",
+            "type": "boolean"
+          },
+          "host_id": {
+            "format": "uuid",
+            "title": "Host Id",
+            "type": "string"
+          },
+          "host_name": {
+            "title": "Host Name",
+            "type": "string"
+          },
+          "host_status": {
+            "$ref": "#/components/schemas/DeviceStatus"
+          },
+          "main_stream_path": {
+            "title": "Main Stream Path",
+            "type": "string"
+          },
+          "media_path": {
+            "title": "Media Path",
+            "type": "string"
+          },
+          "media_path_mode": {
+            "$ref": "#/components/schemas/MediaPathMode"
+          },
+          "mediamtx_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mediamtx Address"
+          },
+          "mediamtx_playback_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mediamtx Playback Address"
+          },
+          "recording_mode": {
+            "$ref": "#/components/schemas/RecordingMode"
+          },
+          "recording_window_seconds": {
+            "title": "Recording Window Seconds",
+            "type": "integer"
+          },
+          "station_id": {
+            "format": "uuid",
+            "title": "Station Id",
+            "type": "string"
+          },
+          "station_name": {
+            "title": "Station Name",
+            "type": "string"
+          },
+          "station_status": {
+            "$ref": "#/components/schemas/DeviceStatus"
+          },
+          "sub_stream_path": {
+            "title": "Sub Stream Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "camera_id",
+          "camera_name",
+          "camera_address",
+          "main_stream_path",
+          "sub_stream_path",
+          "camera_status",
+          "camera_revision",
+          "station_id",
+          "station_name",
+          "station_status",
+          "host_id",
+          "host_name",
+          "backend_id",
+          "host_status",
+          "media_path",
+          "media_path_mode",
+          "recording_mode",
+          "credentials_configured",
+          "mediamtx_address",
+          "mediamtx_playback_address",
+          "recording_window_seconds",
+          "credential_files"
+        ],
+        "title": "ExportCameraMediaView",
+        "type": "object"
+      },
       "ExternalSignalInput": {
         "additionalProperties": false,
         "description": "外部信号语义标签边界信号。",
@@ -2317,6 +2614,20 @@
             ],
             "title": "Mediamtx Address"
           },
+          "mediamtx_playback_address": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "pattern": "^https?://",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mediamtx Playback Address"
+          },
           "name": {
             "maxLength": 128,
             "minLength": 1,
@@ -2352,6 +2663,72 @@
           "public_key"
         ],
         "title": "HostIdentityKeyConfiguration",
+        "type": "object"
+      },
+      "HostMediaConfigurationView": {
+        "description": "一台推理机的非秘密媒体配置导出。",
+        "properties": {
+          "cameras": {
+            "items": {
+              "$ref": "#/components/schemas/ExportCameraMediaView"
+            },
+            "title": "Cameras",
+            "type": "array"
+          },
+          "host_id": {
+            "format": "uuid",
+            "title": "Host Id",
+            "type": "string"
+          },
+          "host_name": {
+            "title": "Host Name",
+            "type": "string"
+          },
+          "host_revision": {
+            "title": "Host Revision",
+            "type": "integer"
+          },
+          "host_status": {
+            "$ref": "#/components/schemas/DeviceStatus"
+          },
+          "mediamtx_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mediamtx Address"
+          },
+          "mediamtx_playback_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mediamtx Playback Address"
+          },
+          "recording_window_seconds": {
+            "title": "Recording Window Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "host_id",
+          "host_name",
+          "host_revision",
+          "host_status",
+          "mediamtx_address",
+          "mediamtx_playback_address",
+          "recording_window_seconds",
+          "cameras"
+        ],
+        "title": "HostMediaConfigurationView",
         "type": "object"
       },
       "HostStatus": {
@@ -2522,6 +2899,17 @@
             ],
             "title": "Mediamtx Address"
           },
+          "mediamtx_playback_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mediamtx Playback Address"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -2597,6 +2985,40 @@
           "total"
         ],
         "title": "ItemPage[ArtifactView]",
+        "type": "object"
+      },
+      "ItemPage_CameraMediaView_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CameraMediaView"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "minimum": 1.0,
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "minimum": 1.0,
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
+        "title": "ItemPage[CameraMediaView]",
         "type": "object"
       },
       "ItemPage_CameraView_": {
@@ -3213,6 +3635,15 @@
         "title": "MeasuredCapabilityDocument",
         "type": "object"
       },
+      "MediaPathMode": {
+        "description": "相机子码流送入 MediaMTX 前采用的媒体路径。",
+        "enum": [
+          "passthrough",
+          "cpu_transcode"
+        ],
+        "title": "MediaPathMode",
+        "type": "string"
+      },
       "NewPassword": {
         "properties": {
           "password": {
@@ -3680,6 +4111,15 @@
         ],
         "title": "ProblemDocument",
         "type": "object"
+      },
+      "RecordingMode": {
+        "description": "相机是否只在观看时取流，还是持续录制。",
+        "enum": [
+          "preview_only",
+          "continuous"
+        ],
+        "title": "RecordingMode",
+        "type": "string"
       },
       "RegisterVlmCandidateInput": {
         "additionalProperties": false,
@@ -7493,6 +7933,110 @@
         "x-required-permission": "device.camera.edit"
       }
     },
+    "/api/v1/cameras/media": {
+      "get": {
+        "operationId": "listCameraMedia",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "station_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Station Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPage_CameraMediaView_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "List Camera Media Descriptions",
+        "tags": [
+          "device"
+        ],
+        "x-required-permission": "device.camera.view"
+      }
+    },
     "/api/v1/cameras/{camera_id}": {
       "delete": {
         "operationId": "deleteCamera",
@@ -7780,6 +8324,90 @@
           "device"
         ],
         "x-required-permission": "device.camera.edit"
+      }
+    },
+    "/api/v1/cameras/{camera_id}/media": {
+      "get": {
+        "operationId": "readCameraMedia",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "camera_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Camera Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CameraMediaView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device record not found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Read A Camera Media",
+        "tags": [
+          "device"
+        ],
+        "x-required-permission": "device.camera.view"
       }
     },
     "/api/v1/cameras/{camera_id}/status": {
@@ -10566,6 +11194,93 @@
           "device"
         ],
         "x-required-permission": "device.inference_host.edit"
+      }
+    },
+    "/api/v1/inference-hosts/{host_id}/media-configuration": {
+      "get": {
+        "operationId": "exportInferenceHostMediaConfiguration",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "host_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Host Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostMediaConfigurationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Host or camera topology not found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Request invalid"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Export A Host Media Configuration",
+        "tags": [
+          "device"
+        ],
+        "x-required-permission": [
+          "device.inference_host.view",
+          "device.camera.view"
+        ]
       }
     },
     "/api/v1/inference-hosts/{host_id}/status": {

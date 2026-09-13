@@ -169,6 +169,26 @@ async function mockControlPlane(page: Page, sessionPayload = ADMIN_SESSION) {
     await route.continue()
   })
 
+  await page.route('**/api/v1/templates/stations/*/configuration', async (route) => {
+    await route.fulfill(
+      json(200, {
+        station_id: 'station-1',
+        station_revision: 1,
+        status: 'unbound',
+        status_detail: null,
+        desired: null,
+        version: null,
+        backends: [],
+        template_defaults: null,
+        effective_runtime_parameters: null,
+        runtime_overrides: null,
+        runtime_parameter_mode: 'follow_template',
+        runtime_parameters_revision: 0,
+        topology_issues: [],
+      }),
+    )
+  })
+
   await page.route('**/api/v1/point-binding-validations', async (route) => {
     if (route.request().method() === 'POST') {
       await route.fulfill(json(200, { accepted: true, reasons: [] }))

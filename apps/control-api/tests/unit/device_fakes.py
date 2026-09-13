@@ -75,6 +75,7 @@ class FakeInferenceHosts:
         name: str,
         address: str = "10.0.0.1",
         mediamtx_address: str | None = None,
+        mediamtx_playback_address: str | None = None,
         recording_window_seconds: int = 7 * 24 * 3600,
         disk_watermark_percent: int = 85,
         status: DeviceStatus = DeviceStatus.ACTIVE,
@@ -89,6 +90,7 @@ class FakeInferenceHosts:
             name=name,
             address=address,
             mediamtx_address=mediamtx_address,
+            mediamtx_playback_address=mediamtx_playback_address,
             recording_window_seconds=recording_window_seconds,
             disk_watermark_percent=disk_watermark_percent,
             status=status,
@@ -534,6 +536,9 @@ class FakeCameras:
 
     def for_station(self, station_id: UUID) -> list[Camera]:
         return [camera for camera in self.rows.values() if camera.station_id == station_id]
+
+    def for_host(self, host_id: UUID) -> list[Camera]:
+        return [camera for camera in self.rows.values() if camera.host_id == host_id]
 
     def any_for_backend_outside_station(self, backend_id: UUID, station_id: UUID) -> bool:
         return any(

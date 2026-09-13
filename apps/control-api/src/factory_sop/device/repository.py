@@ -161,6 +161,10 @@ class CameraRepository(Protocol):
         """返回分配给工位的全部相机，供拓扑校验使用。"""
         ...
 
+    def for_host(self, host_id: UUID) -> list[Camera]:
+        """返回一台推理机上的全部相机，供媒体配置导出使用。"""
+        ...
+
     def any_for_backend_outside_station(self, backend_id: UUID, station_id: UUID) -> bool:
         """报告推理后端是否还被其他工位的相机引用。"""
         ...

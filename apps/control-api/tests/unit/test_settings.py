@@ -204,6 +204,35 @@ def test_accepts_annotation_backend_with_a_same_host_https_media_origin(tmp_path
     assert settings.annotation_media_origin == "https://sop.example.internal:8444"
 
 
+def test_accepts_annotation_media_origin_over_http_for_fixed_main_development(
+    tmp_path: Path,
+) -> None:
+    settings = Settings.from_environment(
+        environment(
+            tmp_path,
+            SOP_DEPLOYMENT_MODE="fixed_main",
+            SOP_SESSION_COOKIE_TRANSPORT="allow_http",
+            SOP_MINIO_PUBLIC_ENDPOINT="http://localhost:9443",
+            SOP_ANNOTATION_BACKEND_URL="http://annotation-backend.internal:8000",
+            SOP_ANNOTATION_MEDIA_ORIGIN="http://localhost:8444",
+        )
+    )
+
+    assert settings.annotation_media_origin == "http://localhost:8444"
+    assert settings.deployment_mode == "fixed_main"
+
+
+def test_refuses_http_annotation_media_origin_in_secure_mode(tmp_path: Path) -> None:
+    with pytest.raises(ConfigurationError, match="allow_http"):
+        Settings.from_environment(
+            environment(
+                tmp_path,
+                SOP_ANNOTATION_BACKEND_URL="http://annotation-backend.internal:8000",
+                SOP_ANNOTATION_MEDIA_ORIGIN="http://localhost:8444",
+            )
+        )
+
+
 @pytest.mark.parametrize(
     "backend_url",
     [
@@ -226,7 +255,7 @@ def test_refuses_an_unsafe_annotation_backend_url(tmp_path: Path, backend_url: s
 @pytest.mark.parametrize(
     "origin",
     [
-        "http://sop.example.internal:8444",
+        "ftp://sop.example.internal:8444",
         "https://sop.example.internal/annotation",
         "https://sop.example.internal:8444?resource=video",
         "https://sop.example.internal:99999",
@@ -258,11 +287,40 @@ def test_accepts_minio_config_without_a_public_endpoint(tmp_path: Path) -> None:
     assert settings.minio_bucket == "training"
 
 
-def test_refuses_any_cookie_transport_that_allows_plain_http(tmp_path: Path) -> None:
-    # §六 has no development exception: every session cookie is Secure. Local development
-    # must provide HTTPS rather than turning a production security attribute off.
-    with pytest.raises(ConfigurationError, match="session_cookie_transport"):
+def test_refuses_plain_http_cookie_transport_outside_fixed_main(tmp_path: Path) -> None:
+    with pytest.raises(ConfigurationError, match="fixed_main"):
         Settings.from_environment(environment(tmp_path, SOP_SESSION_COOKIE_TRANSPORT="allow_http"))
+
+
+def test_refuses_plain_http_cookie_transport_for_non_loopback_fixed_main(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ConfigurationError, match="localhost:9443"):
+        Settings.from_environment(
+            environment(
+                tmp_path,
+                SOP_DEPLOYMENT_MODE="fixed_main",
+                SOP_SESSION_COOKIE_TRANSPORT="allow_http",
+                SOP_MINIO_PUBLIC_ENDPOINT="http://minio.internal:9443",
+                SOP_ANNOTATION_BACKEND_URL="http://annotation-backend.internal:8000",
+                SOP_ANNOTATION_MEDIA_ORIGIN="http://annotation.internal:8444",
+            )
+        )
+
+
+def test_accepts_plain_http_cookie_transport_only_for_fixed_main(tmp_path: Path) -> None:
+    settings = Settings.from_environment(
+        environment(
+            tmp_path,
+            SOP_DEPLOYMENT_MODE="fixed_main",
+            SOP_SESSION_COOKIE_TRANSPORT="allow_http",
+            SOP_MINIO_PUBLIC_ENDPOINT="http://localhost:9443",
+            SOP_ANNOTATION_BACKEND_URL="http://annotation-backend.internal:8000",
+            SOP_ANNOTATION_MEDIA_ORIGIN="http://localhost:8444",
+        )
+    )
+
+    assert settings.session_cookie_transport == "allow_http"
 
 
 def test_keeps_the_csrf_secret_out_of_the_repr(tmp_path: Path) -> None:

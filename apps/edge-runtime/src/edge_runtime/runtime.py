@@ -27,6 +27,7 @@ from edge_runtime.connectors.port import Reachability
 from edge_runtime.connectors.transport import UrllibIsapiTransport
 from edge_runtime.judgment.model import HostLiveness
 from edge_runtime.local_state.store import LocalState, open_local_state
+from edge_runtime.media import MediaRuntime, validate_sop_camera_bindings
 from edge_runtime.station_runtime import (
     InputWaitExpired,
     SseStationInputSource,
@@ -184,10 +185,12 @@ class AutonomousRuntime:
         command_loop: ConnectionTestCommandLoop,
         stations: tuple[AutonomousStation, ...],
         state: LocalState,
+        media: MediaRuntime | None = None,
     ) -> None:
         self._command_loop = command_loop
         self._stations = stations
         self._state = state
+        self._media = media
 
     @property
     def stations(self) -> tuple[AutonomousStation, ...]:
@@ -197,6 +200,7 @@ class AutonomousRuntime:
         """让命令循环和工位循环并行运行, 任一线程出错都请求整体停机。"""
         stopped = threading.Event()
         errors: list[BaseException] = []
+        threads: list[threading.Thread] = []
 
         def stop_requested() -> bool:
             return stopped.is_set() or should_stop()
@@ -208,24 +212,48 @@ class AutonomousRuntime:
                 errors.append(error)
                 stopped.set()
 
-        threads = [
-            threading.Thread(
-                target=run,
-                args=(lambda: self._command_loop.run_forever(should_stop=stop_requested),),
-                daemon=True,
-            ),
-            *[
+        def run_media() -> None:
+            """让媒体故障重试, 不把媒体启动放到判定线程的前置路径。"""
+            if self._media is None:
+                return
+            while not stop_requested():
+                try:
+                    self._media.start()
+                    return
+                except BaseException:
+                    stopped.wait(0.5)
+
+        try:
+            threads = [
+                *(
+                    [
+                        threading.Thread(
+                            target=run_media,
+                            name="edge-media-runtime",
+                            daemon=True,
+                        )
+                    ]
+                    if self._media is not None
+                    else []
+                ),
                 threading.Thread(
                     target=run,
-                    args=(lambda station=station: station.run_forever(should_stop=stop_requested),),
+                    args=(lambda: self._command_loop.run_forever(should_stop=stop_requested),),
                     daemon=True,
-                )
-                for station in self._stations
-            ],
-        ]
-        for thread in threads:
-            thread.start()
-        try:
+                ),
+                *[
+                    threading.Thread(
+                        target=run,
+                        args=(
+                            lambda station=station: station.run_forever(should_stop=stop_requested),
+                        ),
+                        daemon=True,
+                    )
+                    for station in self._stations
+                ],
+            ]
+            for thread in threads:
+                thread.start()
             while not stop_requested() and any(thread.is_alive() for thread in threads):
                 sleep(0.05)
         finally:
@@ -234,6 +262,8 @@ class AutonomousRuntime:
                 station.close()
             for thread in threads:
                 thread.join()
+            if self._media is not None:
+                self._media.close()
             self._state.close()
         if errors:
             raise errors[0]
@@ -242,6 +272,8 @@ class AutonomousRuntime:
         """关闭输入和本地状态, 供配置失败和进程退出路径共同调用。"""
         for station in self._stations:
             station.close()
+        if self._media is not None:
+            self._media.close()
         self._state.close()
 
 
@@ -320,6 +352,12 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
     """从本地配置装配命令循环、SQLite 状态和每条实时判定流。"""
     config = load_configuration(config_path, include_stations=True)
     command_loop = _build_connection_test_loop(config)
+    if config.media is not None:
+        if config.media.host_id != config.host_id:
+            raise ValueError("media host_id must match edge host_id")
+        validate_sop_camera_bindings(
+            config.media, {station.station_id for station in config.stations}
+        )
     if config.local_state_path is None:
         raise ValueError("local_state_path is required for autonomous runtime")
     state = open_local_state(str(config.local_state_path))
@@ -348,7 +386,12 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
             station.close()
         state.close()
         raise
-    return AutonomousRuntime(command_loop=command_loop, stations=tuple(stations), state=state)
+    return AutonomousRuntime(
+        command_loop=command_loop,
+        stations=tuple(stations),
+        state=state,
+        media=MediaRuntime(config.media) if config.media is not None else None,
+    )
 
 
 def main() -> int:

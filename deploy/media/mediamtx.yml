@@ -1,0 +1,20 @@
+logLevel: info
+rtspAddress: :8554
+webrtcAddress: :8889
+webrtcLocalUDPAddress: :8189
+webrtcAllowOrigins: ['http://localhost:3000', 'https://localhost:8443']
+playback: yes
+playbackAddress: :9996
+playbackAllowOrigins: ['http://localhost:3000', 'https://localhost:8443']
+pathDefaults:
+  recordFormat: fmp4
+  recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+  recordSegmentDuration: 60s
+  recordDeleteAfter: 3600s
+paths:
+  synthetic:
+    source: publisher
+    record: yes
+  cpu-transcoded:
+    source: publisher
+    record: yes

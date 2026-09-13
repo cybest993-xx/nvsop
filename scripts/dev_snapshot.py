@@ -47,10 +47,6 @@ class SnapshotPaths(Protocol):
 
 
 RunChecked = Callable[..., subprocess.CompletedProcess[bytes]]
-LfsFiles = Callable[..., list[dict[str, str]]]
-LfsMediaDirectory = Callable[..., Path | None]
-ArchiveEnvironment = Callable[..., dict[str, str]]
-HydrateLfsFiles = Callable[..., None]
 
 
 class SnapshotError(RuntimeError):
@@ -205,7 +201,6 @@ def snapshot_manifest(
     missing_lfs_paths: list[dict[str, str]],
     allow_missing_optional_lfs: bool,
     warning: str | None,
-    now: Callable[[], str] = _utc_now,
 ) -> dict[str, object]:
     return {
         "schema": 1,
@@ -214,7 +209,7 @@ def snapshot_manifest(
         "missing_lfs_paths": missing_lfs_paths,
         "allow_missing_optional_lfs": allow_missing_optional_lfs,
         "warning": warning,
-        "created_at": now(),
+        "created_at": _utc_now(),
     }
 
 
@@ -231,11 +226,6 @@ def archive_main(
     run_checked: RunChecked,
     allow_missing_optional_lfs: bool = False,
     stop_event: Event | None = None,
-    lfs_files_fn: LfsFiles = lfs_files,
-    lfs_media_directory_fn: LfsMediaDirectory = lfs_media_directory,
-    archive_environment_fn: ArchiveEnvironment = archive_environment,
-    hydrate_lfs_files_fn: HydrateLfsFiles = hydrate_lfs_files,
-    now: Callable[[], str] = _utc_now,
 ) -> Path:
     item.snapshots.mkdir(parents=True, exist_ok=True)
     item.logs.mkdir(parents=True, exist_ok=True)
@@ -252,7 +242,7 @@ def archive_main(
     ):
         return destination
 
-    entries = lfs_files_fn(item.root, sha, run_checked=run_checked, stop_event=stop_event)
+    entries = lfs_files(item.root, sha, run_checked=run_checked, stop_event=stop_event)
     missing = [entry for entry in entries if entry["available"] == "-"]
     unapproved = sorted(
         {entry["path"] for entry in missing if entry["path"] not in OPTIONAL_LFS_PATHS}
@@ -267,7 +257,6 @@ def archive_main(
                 if not allow_missing_optional_lfs
                 else "缺少 LFS 对象，且存在未列入可选白名单的路径；未建立快照。"
             ),
-            now=now,
         )
         write_snapshot_audit(item, sha, failure_manifest)
         raise MissingLfsError(sha, missing, unapproved)
@@ -277,7 +266,7 @@ def archive_main(
         warning = (
             "这是显式允许的可选文档资源降级；快照中的 missing_lfs_paths 保留为 Git-LFS pointer。"
         )
-    environment = archive_environment_fn(
+    environment = archive_environment(
         os.environ,
         allow_missing_optional_lfs=bool(missing and allow_missing_optional_lfs),
     )
@@ -312,10 +301,10 @@ def archive_main(
         if return_code != 0:
             raise SnapshotError(f"无法建立 main 源码快照 {sha}：{stderr_text.strip()}")
         if any(entry["available"] == "*" for entry in entries):
-            hydrate_lfs_files_fn(
+            hydrate_lfs_files(
                 temporary,
                 entries,
-                media_directory=lfs_media_directory_fn(
+                media_directory=lfs_media_directory(
                     item.root, run_checked=run_checked, stop_event=stop_event
                 ),
             )
@@ -324,7 +313,6 @@ def archive_main(
             missing_lfs_paths=missing,
             allow_missing_optional_lfs=allow_missing_optional_lfs,
             warning=warning,
-            now=now,
         )
         snapshot_manifest_path(temporary).write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

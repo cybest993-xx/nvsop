@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import os
 import subprocess
 import sys
 import tempfile
@@ -78,6 +79,12 @@ class DevProtocolTest(unittest.TestCase):
 
         self.assertEqual("/snapshot/scripts/dev.py", environment["NVSOP_LAUNCHER_SCRIPT"])
         self.assertEqual("/repo/scripts/dev.py", environment["NVSOP_HOST_LAUNCHER_SCRIPT"])
+
+    def test_snapshot_archive_does_not_require_a_missing_lfs_object(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            environment = DEV.archive_environment()
+
+        self.assertEqual("1", environment["GIT_LFS_SKIP_SMUDGE"])
 
     def test_tilt_manual_tests_use_host_launcher_and_do_not_run_on_start(self) -> None:
         tiltfile = (ROOT / "Tiltfile").read_text(encoding="utf-8")

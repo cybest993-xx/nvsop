@@ -377,6 +377,13 @@ def main_sha(item: DevPaths) -> str:
     return result.stdout.decode("ascii").strip()
 
 
+def archive_environment() -> dict[str, str]:
+    """Keep missing optional Git-LFS assets from blocking a runnable main snapshot."""
+    environment = os.environ.copy()
+    environment.setdefault("GIT_LFS_SKIP_SMUDGE", "1")
+    return environment
+
+
 def archive_main(item: DevPaths, sha: str) -> Path:
     destination = item.snapshots / sha
     marker = destination / ".nvsop-source-sha"
@@ -389,6 +396,7 @@ def archive_main(item: DevPaths, sha: str) -> Path:
     process = subprocess.Popen(
         ["git", "archive", "--format=tar", sha],
         cwd=item.root,
+        env=archive_environment(),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )

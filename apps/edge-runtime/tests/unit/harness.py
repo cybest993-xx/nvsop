@@ -16,6 +16,8 @@ because the discovery start directory is on the path. That follows the precedent
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from nvsop_contracts import (
     Delivery,
     EdgePreservation,
@@ -26,10 +28,12 @@ from nvsop_contracts import (
 )
 
 from edge_runtime.judgment.core import advance
+from edge_runtime.judgment.evidence import EvidenceClip
 from edge_runtime.judgment.model import (
     Decision,
     HostInstant,
     HostLiveness,
+    Instance,
     JudgmentState,
     Observation,
     Ordering,
@@ -108,6 +112,27 @@ def fire(
 ) -> Outcome:
     """The wake-up the core asked for, with what the supervisor found at that moment."""
     return advance(state, TimerFired(at=HostInstant(at), host=host, stream=stream))
+
+
+class MemoryReactionStore:
+    """在持久化接缝记录完整反应, 不复制 SQLite 或判定行为。"""
+
+    def __init__(self) -> None:
+        self.reactions: list[
+            tuple[
+                JudgmentState, tuple[Decision, ...], tuple[EvidenceClip, ...], tuple[Instance, ...]
+            ]
+        ] = []
+
+    def commit(
+        self,
+        *,
+        state: JudgmentState,
+        decisions: Sequence[Decision],
+        evidence: Sequence[EvidenceClip],
+        closed_instances: Sequence[Instance],
+    ) -> None:
+        self.reactions.append((state, tuple(decisions), tuple(evidence), tuple(closed_instances)))
 
 
 class FakeClock:

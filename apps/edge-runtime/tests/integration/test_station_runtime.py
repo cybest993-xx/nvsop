@@ -22,12 +22,12 @@ from unittest.mock import patch
 
 from nvsop_contracts import HostIdentityKeyPair, generate_host_identity_key_pair
 
+from edge_runtime.judgment.evidence import EvidenceMargins
 from edge_runtime.judgment.model import HostInstant, Ordering, RuntimeParameters, Template
 from edge_runtime.local_state.store import open_local_state
 from edge_runtime.runtime import AutonomousStation, build_autonomous_runtime_from_file
 from edge_runtime.station_runtime import SseStationInputSource
 from edge_runtime.stream_health import StreamFact
-from edge_runtime.supervisor.commands import EvidenceMargins
 from edge_runtime.supervisor.inputs import ActionRecognized, StreamHealthObserved, SupervisorInput
 from edge_runtime.supervisor.startup import resume_station
 from edge_runtime.supervisor.station import StationSupervisor
@@ -478,7 +478,7 @@ class AutonomousStationIntegrationTest(unittest.TestCase):
                 margins=EvidenceMargins(leading=0.0, trailing=0.0),
             )
             source = _OneInputSource()
-            station = AutonomousStation(store=store, supervisor=supervisor, source=source)
+            station = AutonomousStation(supervisor=supervisor, source=source)
 
             station.run_forever(should_stop=lambda: False)
 

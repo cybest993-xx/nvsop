@@ -1,28 +1,22 @@
-"""The inference host's local state: what survives a restart and what still owes a send.
+"""推理机本地状态的重启、事务与待发送队列回归。
 
-These are integration tests, not unit tests, and the distinction is not bureaucratic: SQLite
-is this store's real infrastructure rather than a stand-in for it (harness §4), so every
-assertion here runs against a real database, a real migration, and a real
-`StationSupervisor` producing the commands. They stay in `make check` because SQLite needs
-no container and no GPU — what `make check-integration` exists to keep out is Docker, not
-integration itself.
+SQLite 是该接缝的真实基础设施, 测试使用真实迁移和 supervisor 反应提交。
+无需容器或 GPU, 因此集成用例仍由 make check 执行 (harness §4)。
 
-What these assertions are about, in the ticket's own terms:
-
-- a migration list runs on a database that already holds rows, and a migration that fails
-  leaves neither half a table nor a version claiming it ran;
-- one transaction carries a decision, the violations it latched, and the event owed to the
-  center — never a subset of the three;
-- a latched violation survives rework, an indeterminate close, and an unreachable center;
-- a restart concludes what was in flight instead of resuming it (`RUN_INTERRUPTED`);
-- both queues retry, and a failed retry never drops the only copy we hold;
-- a stored clip keeps the whole span its conclusion required, widened by the margins.
+保留的行为场景:
+- 已有数据上的迁移保持原数据, 失败时不留下半张表或虚假的版本号;
+- 一个事务提交实例、判定、锁存和两个队列, 失败时全部回滚;
+- 返工、不可判定结案和中心不可达不会清除已锁存违规;
+- 重启以 RUN_INTERRUPTED 结案, 不续接上次实例;
+- 两个队列的失败重试都保留本地唯一副本;
+- 证据余量只加宽核心所需跨度, 不截断。
 """
 
 from __future__ import annotations
 
 import sqlite3
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -50,20 +44,10 @@ from edge_runtime.judgment.model import (
 )
 from edge_runtime.judgment.reasons import ReasonCode, Verdict
 from edge_runtime.local_state import open_local_state
-from edge_runtime.local_state.schema import apply_migrations
-from edge_runtime.local_state.store import StationStore
+from edge_runtime.local_state.schema import apply_migrations, migrate
+from edge_runtime.local_state.store import LocalState
 from edge_runtime.supervisor.inputs import StreamHealthObserved
 from edge_runtime.supervisor.startup import resume_station
-from edge_runtime.supervisor.station import Reaction, StationSupervisor
-
-
-def commit_reaction(station: StationStore, driver: StationSupervisor, reaction: Reaction) -> None:
-    """通过持久化 seam 提交 supervisor 产生的领域状态和效果。"""
-    station.commit(
-        state=driver.state,
-        commands=reaction.commands,
-        closed_instances=reaction.closed_instances,
-    )
 
 
 class OneTransactionTest(unittest.TestCase):
@@ -74,16 +58,33 @@ class OneTransactionTest(unittest.TestCase):
     without its decision is a send with nothing to send. Neither may be reachable.
     """
 
+    def test_receive_persists_without_a_second_caller_commit(self) -> None:
+        state = open_local_state(":memory:")
+        self.addCleanup(state.close)
+        station = state.station(STATION)
+        driver = resume_station(
+            station,
+            template=opening_state().template,
+            parameters=opening_state().parameters,
+            margins=MARGINS,
+            clock=FakeClock(),
+        )
+        driver.receive(action(STEPS[0], at=ANCHOR))
+        reaction = driver.receive(action(STEPS[2], at=ANCHOR + 1.0))
+        self.assertEqual(
+            tuple(report.decision for report in station.pending_reports()),
+            (decision_of(reaction),),
+        )
+
     def test_decision_violations_and_report_event_are_stored_together(self) -> None:
         clock = FakeClock()
         state = open_local_state(":memory:")
         station = state.station(STATION)
-        driver = supervisor(opening_state(), clock)
+        driver = supervisor(opening_state(), clock, station)
 
-        commit_reaction(station, driver, driver.receive(action(STEPS[0], at=ANCHOR)))
+        driver.receive(action(STEPS[0], at=ANCHOR))
 
         reaction = driver.receive(action(STEPS[2], at=ANCHOR + 1.0))
-        commit_reaction(station, driver, reaction)
 
         decision = decision_of(reaction)
         (pending,) = station.pending_reports()
@@ -93,45 +94,85 @@ class OneTransactionTest(unittest.TestCase):
         )
 
     def test_a_reaction_that_fails_part_way_through_leaves_none_of_itself_behind(self) -> None:
-        """The other half of the same claim: not a subset, and not the empty subset either.
-
-        The fault is a real one rather than a patched-in failure — `_perform` rejects commands
-        that reach it out of the order the supervisor issued them, because a violation whose
-        decision has not been written cannot be attributed to it. Reversing the tuple is how
-        this test reaches that path with commands the supervisor actually produced.
-
-        What the fault path had already written when it raised is the instance row and the
-        clip, both of which must be gone; what it never reached is the decision and its report
-        event, which must be absent for the other reason. The assertions do not distinguish
-        the two, and should not: the claim is that nothing from this reaction is in the
-        database, not which statement got how far.
-        """
-        clock = FakeClock()
-        state = open_local_state(":memory:")
+        """证据队列写入失败时, 已写入的实例、判定、锁存和报告全部回滚。"""
+        connection, state = self._fault_database()
         station = state.station(STATION)
-        driver = supervisor(opening_state(), clock)
-
-        # Not committed: this reaction opens the instance in memory only, so the reaction that
-        # fails below is the one that would have written the instance row for the first time.
+        driver = supervisor(opening_state(), FakeClock(), station)
         driver.receive(action(STEPS[0], at=ANCHOR))
-        reaction = driver.receive(action(STEPS[2], at=ANCHOR + 1.0))
-        decision = decision_of(reaction)
-        self.assertTrue(decision.violations)
+        before, deadline = driver.state, driver.wake_at
+        arriving = action(STEPS[2], at=ANCHOR + 1.0)
 
-        scrambled = Reaction(commands=tuple(reversed(reaction.commands)), wake_at=reaction.wake_at)
-        with self.assertRaises(ValueError):
-            commit_reaction(station, driver, scrambled)
+        with self.assertRaises(sqlite3.IntegrityError):
+            driver.receive(arriving)
 
+        self.assertEqual((driver.state, driver.wake_at), (before, deadline))
+        self.assertEqual(station.resume(before.template, before.parameters), before)
         self.assertEqual(station.pending_reports(), ())
         self.assertEqual(station.pending_evidence(), ())
-        self.assertEqual(station.latched_violations(instance_id=decision.instance_id), ())
-        # `resume` is where the instance row is read on the path that matters, and
-        # `next_instance_id` is derived from the highest row — so 1 is the store saying it
-        # holds no instance at all, not merely none in flight.
-        opening = opening_state()
-        resumed = station.resume(opening.template, opening.parameters)
-        self.assertIsNone(resumed.instance)
-        self.assertEqual(resumed.next_instance_id, 1)
+        self.assertEqual(station.latched_violations(instance_id=1), ())
+
+        connection.execute("DROP TRIGGER fail_evidence")
+        reaction = driver.receive(arriving)
+        self.assertEqual(
+            tuple(report.decision for report in station.pending_reports()), reaction.decisions
+        )
+        self.assertEqual(
+            station.latched_violations(instance_id=1), reaction.decisions[0].violations
+        )
+        self.assertTrue(reaction.decisions[0].violations)
+
+    def test_failed_reanchoring_is_still_seen_when_the_input_is_retried(self) -> None:
+        """重锚的多事件反应失败后, 不得先消费归一化状态而让重试变成误判。"""
+        connection, state = self._fault_database()
+        station = state.station(STATION)
+        driver = supervisor(opening_state(end_signals=("end",)), FakeClock(), station)
+        driver.receive(action(STEPS[0], at=ANCHOR))
+        before, deadline = driver.state, driver.wake_at
+        arriving = replace(action("end", at=ANCHOR + 1.0), source_anchor=ANCHOR + 2.0)
+        statements: list[str] = []
+        connection.set_trace_callback(statements.append)
+        with self.assertRaises(sqlite3.IntegrityError):
+            driver.receive(arriving)
+        self.assertEqual((driver.state, driver.wake_at), (before, deadline))
+        self.assertEqual(station.resume(before.template, before.parameters), before)
+        self.assertEqual(station.pending_reports(), ())
+        self.assertEqual(station.pending_evidence(), ())
+        self.assertEqual(statements.count("BEGIN IMMEDIATE"), 1)
+        self.assertEqual(statements.count("ROLLBACK"), 1)
+
+        connection.execute("DROP TRIGGER fail_evidence")
+        statements.clear()
+        reaction = driver.receive(arriving)
+        self.assertEqual(
+            reaction.decisions,
+            (
+                Decision(
+                    instance_id=1,
+                    verdict=Verdict.INDETERMINATE,
+                    reasons=(ReasonCode.TIMESTAMP_DISCONTINUITY,),
+                    violations=(),
+                    lifecycle=Lifecycle.CLOSED_BY_END_SIGNAL,
+                    evidence=EvidenceSpan.at(HostInstant(ANCHOR + 1.0)),
+                ),
+            ),
+        )
+        self.assertEqual(tuple(p.decision for p in station.pending_reports()), reaction.decisions)
+        self.assertEqual(statements.count("BEGIN IMMEDIATE"), 1)
+        self.assertEqual(statements.count("COMMIT"), 1)
+
+    def _fault_database(self) -> tuple[sqlite3.Connection, LocalState]:
+        """在真实 SQLite 事务的最后一个队列写入上制造约束失败。"""
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        migrate(connection)
+        connection.execute(
+            "CREATE TRIGGER fail_evidence BEFORE INSERT ON local_evidence_queue "
+            "BEGIN SELECT RAISE(ABORT, 'evidence unavailable'); END"
+        )
+        state = LocalState(connection)
+        self.addCleanup(state.close)
+        return connection, state
 
 
 class LatchSurvivesTest(unittest.TestCase):
@@ -157,10 +198,10 @@ class LatchSurvivesTest(unittest.TestCase):
         clock = FakeClock()
         state = open_local_state(":memory:")
         station = state.station(STATION)
-        driver = supervisor(opening_state(), clock)
+        driver = supervisor(opening_state(), clock, station)
 
         for arriving in (action(STEPS[0], at=ANCHOR), action(STEPS[2], at=ANCHOR + 1.0)):
-            commit_reaction(station, driver, driver.receive(arriving))
+            driver.receive(arriving)
         confirmed = station.latched_violations(instance_id=1)
         self.assertEqual(
             {(violation.reason, violation.steps) for violation in confirmed},
@@ -173,13 +214,8 @@ class LatchSurvivesTest(unittest.TestCase):
         # Sight is lost, and then the operator goes back and does the step that was missed.
         # The pass therefore closes indeterminate — we could not see all of it — while the
         # deviations confirmed while we could see stay confirmed (§5.2).
-        commit_reaction(
-            station,
-            driver,
-            driver.receive(StreamHealthObserved(event=lost_stream(at=ANCHOR + 2.0))),
-        )
+        driver.receive(StreamHealthObserved(event=lost_stream(at=ANCHOR + 2.0)))
         closing = driver.receive(action(STEPS[1], at=ANCHOR + 3.0))
-        commit_reaction(station, driver, closing)
 
         decision = decision_of(closing)
         self.assertEqual(decision.verdict, Verdict.INDETERMINATE)
@@ -218,9 +254,9 @@ class RestartTest(unittest.TestCase):
             path = str(Path(directory) / "local-state.sqlite3")
 
             first = open_local_state(path)
-            driver = supervisor(opening_state(), FakeClock())
             first_station = first.station(STATION)
-            commit_reaction(first_station, driver, driver.receive(action(STEPS[0], at=ANCHOR)))
+            driver = supervisor(opening_state(), FakeClock(), first_station)
+            driver.receive(action(STEPS[0], at=ANCHOR))
             self.assertEqual(driver.state.instance.instance_id if driver.state.instance else 0, 1)
             first.close()
 
@@ -250,8 +286,20 @@ class RestartTest(unittest.TestCase):
                 ),
             )
 
+            # 重复启动和中断不能再次结案或重复入队。
+            pending = station.pending_reports(), station.pending_evidence()
+            resumed = resume_station(
+                station,
+                template=opening_state().template,
+                parameters=opening_state().parameters,
+                margins=MARGINS,
+                clock=clock,
+            )
+            resumed.interrupt()
+            self.assertEqual((station.pending_reports(), station.pending_evidence()), pending)
+
             # The next pass is a new instance, not a continuation of the interrupted one.
-            commit_reaction(station, resumed, resumed.receive(action(STEPS[0], at=ANCHOR + 61.0)))
+            resumed.receive(action(STEPS[0], at=ANCHOR + 61.0))
             self.assertEqual(resumed.state.instance.instance_id if resumed.state.instance else 0, 2)
             second.close()
 
@@ -268,9 +316,9 @@ class QueueRetryTest(unittest.TestCase):
     def setUp(self) -> None:
         self.state = open_local_state(":memory:")
         self.station = self.state.station(STATION)
-        driver = supervisor(opening_state(), FakeClock())
-        commit_reaction(self.station, driver, driver.receive(action(STEPS[0], at=ANCHOR)))
-        commit_reaction(self.station, driver, driver.receive(action(STEPS[2], at=ANCHOR + 1.0)))
+        driver = supervisor(opening_state(), FakeClock(), self.station)
+        driver.receive(action(STEPS[0], at=ANCHOR))
+        driver.receive(action(STEPS[2], at=ANCHOR + 1.0))
 
     def test_repeated_failures_keep_both_queues_owed_and_only_count_attempts(self) -> None:
         (report,) = self.station.pending_reports()
@@ -340,12 +388,15 @@ class EvidenceWindowTest(unittest.TestCase):
     def test_a_deadline_clip_spans_the_whole_wait_widened_by_the_margins(self) -> None:
         clock = FakeClock()
         station = open_local_state(":memory:").station(STATION)
-        driver = supervisor(opening_state(), clock)
-        commit_reaction(station, driver, driver.receive(action(STEPS[0], at=ANCHOR)))
+        driver = supervisor(opening_state(), clock, station)
+        driver.receive(action(STEPS[0], at=ANCHOR))
 
         clock.now = ANCHOR + STEP_DEADLINE + 1.0
-        commit_reaction(station, driver, driver.wake(host=HostLiveness.ALIVE))
+        driver.wake(host=HostLiveness.ALIVE)
 
+        pending = station.pending_reports(), station.pending_evidence()
+        driver.wake(host=HostLiveness.ALIVE)
+        self.assertEqual((station.pending_reports(), station.pending_evidence()), pending)
         (clip,) = station.pending_evidence()
         self.assertEqual(
             (clip.anchor, clip.start, clip.end),

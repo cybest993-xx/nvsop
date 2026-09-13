@@ -419,7 +419,11 @@ class FakeMediaProbe:
 
 
 class ClipMediaProbe(FakeMediaProbe):
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
     def probe(self, path: str) -> MediaMetadata:
+        self.calls.append(path)
         return MediaMetadata(
             duration_seconds=5.0, codec="h264", container="mp4", fps=10.0, frame_count=50
         )
@@ -486,6 +490,11 @@ class RecordingVlmReader:
 
     def validate(self, *, workspace: Path, annotation_filename: str) -> None:
         self.calls.append((workspace, annotation_filename))
+
+
+class FailingVlmReader:
+    def validate(self, *, workspace: Path, annotation_filename: str) -> None:
+        raise RuntimeError("invalid VLM reader input")
 
 
 class ConcurrentAnnotationVolume(FakeAnnotationVolume):
@@ -1028,12 +1037,39 @@ def test_vlm_check_reads_a_fixed_annotation_clip_instead_of_the_full_source() ->
     assert volume.video_reads == [("data-1", "video-1", "01_line-a_1_1.mp4")]
 
 
-def test_vlm_check_rejects_a_changed_annotation_clip_digest() -> None:
+@pytest.mark.parametrize(
+    ("video_bytes", "expected_size", "expected_digest", "expected_issue"),
+    [
+        (
+            b"b" * 100,
+            100,
+            hashlib.sha256(b"a" * 100).hexdigest(),
+            "USAGE_SOURCE_DIGEST_MISMATCH",
+        ),
+        (
+            b"b" * 99,
+            100,
+            hashlib.sha256(b"b" * 99).hexdigest(),
+            "USAGE_OBJECT_SIZE_CHANGED",
+        ),
+        (b"a" * 100, 100, None, "USAGE_SOURCE_DIGEST_MISSING"),
+        (
+            b"a" * 100,
+            None,
+            hashlib.sha256(b"a" * 100).hexdigest(),
+            "USAGE_SOURCE_SIZE_MISSING",
+        ),
+    ],
+    ids=("digest", "size", "missing_digest", "missing_size"),
+)
+def test_vlm_check_rejects_changed_annotation_clip_before_reader(
+    video_bytes: bytes, expected_size: int | None, expected_digest: str | None, expected_issue: str
+) -> None:
     datasets = FakeUsageDatasets()
     datasets.execution = replace(
         datasets.execution,
-        derived_video_size=100,
-        derived_video_sha256=hashlib.sha256(b"a" * 100).hexdigest(),
+        derived_video_size=expected_size,
+        derived_video_sha256=expected_digest,
     )
     media = VlmMediaReference(
         key="clip-key.mp4",
@@ -1079,17 +1115,21 @@ def test_vlm_check_rejects_a_changed_annotation_clip_digest() -> None:
     )
     assert target is not None
     volume = FakeAnnotationVolume()
-    volume.video_bytes = b"b" * 100
+    volume.video_bytes = video_bytes
+    media_probe = ClipMediaProbe()
+    reader = FailingVlmReader()
     result = run_usage_check(
         target=target,
         storage=cast(ObjectStorage, FakeStorage()),
-        media_probe=ClipMediaProbe(),
+        media_probe=media_probe,
         annotation_volume=volume,
-        vlm_reader=RecordingVlmReader(),
+        vlm_reader=reader,
     )
 
     assert result.passed is False
-    assert any(issue.code == "USAGE_SOURCE_DIGEST_MISMATCH" for issue in result.issues)
+    assert any(issue.code == expected_issue for issue in result.issues)
+    assert any(issue.code == "VLM_READER_UNAVAILABLE" for issue in result.issues)
+    assert media_probe.calls == []
 
 
 def test_complete_usage_check_persists_recovery_metadata() -> None:

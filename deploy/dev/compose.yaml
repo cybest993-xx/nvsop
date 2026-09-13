@@ -153,8 +153,8 @@ services:
   center-api:
     image: nvsop-dev-main/center-api:${NVSOP_TARGET_SHA:-local}
     build:
-      # Some Docker hosts can reach package mirrors only through host networking.
-      # This affects image builds only; runtime services retain the Compose network.
+      # 某些 Docker 主机只能通过 host 网络访问软件包镜像。
+      # 该设置只影响镜像构建，运行时服务仍保留 Compose 网络。
       network: ${NVSOP_DEV_BUILD_NETWORK:-default}
       context: ${NVSOP_SOURCE_DIR:-.}
       dockerfile: deploy/dev/center.Dockerfile

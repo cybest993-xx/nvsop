@@ -492,6 +492,11 @@ class RecordingVlmReader:
         self.calls.append((workspace, annotation_filename))
 
 
+class FailingVlmReader:
+    def validate(self, *, workspace: Path, annotation_filename: str) -> None:
+        raise RuntimeError("invalid VLM reader input")
+
+
 class ConcurrentAnnotationVolume(FakeAnnotationVolume):
     def read_annotation(self, *, data_id: str, video_id: str) -> bytes:
         assert (data_id, video_id) == ("data-1", "video-1")
@@ -1128,7 +1133,7 @@ def test_vlm_check_rejects_changed_annotation_clip_before_reader(
     volume = FakeAnnotationVolume()
     volume.video_bytes = video_bytes
     media_probe = ClipMediaProbe()
-    reader = RecordingVlmReader()
+    reader = FailingVlmReader()
     result = run_usage_check(
         target=target,
         storage=cast(ObjectStorage, FakeStorage()),
@@ -1139,8 +1144,8 @@ def test_vlm_check_rejects_changed_annotation_clip_before_reader(
 
     assert result.passed is False
     assert any(issue.code == expected_issue for issue in result.issues)
+    assert any(issue.code == "VLM_READER_UNAVAILABLE" for issue in result.issues)
     assert media_probe.calls == []
-    assert reader.calls == []
 
 
 def test_complete_usage_check_persists_recovery_metadata() -> None:

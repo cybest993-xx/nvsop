@@ -2322,13 +2322,12 @@ def _merge_storage_facts(
                         sampling_counts=sampling_counts,
                     )
                 case UsageKind.VLM:
-                    if not issues:
-                        _validate_vlm_reader(
-                            reader=vlm_reader,
-                            snapshot=snapshot,
-                            directory=Path(temporary),
-                            issues=issues,
-                        )
+                    _validate_vlm_reader(
+                        reader=vlm_reader,
+                        snapshot=snapshot,
+                        directory=Path(temporary),
+                        issues=issues,
+                    )
                 case _:
                     assert_never(kind)
     match kind:

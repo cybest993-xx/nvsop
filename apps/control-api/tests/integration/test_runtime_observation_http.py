@@ -382,7 +382,7 @@ def test_overview_returns_permission_scoped_real_sections(
     assert document["template"] == {"status": "not_permitted", "data": {}}
     assert document["dataset"] == {"status": "not_permitted", "data": {}}
     assert document["monitor"] == {
-        "status": "available",
+        "status": "no_data",
         "data": {
             "recent_decisions": 0,
             "recent_health": 0,

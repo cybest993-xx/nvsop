@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from factory_sop.device.usecases.summary import summary as device_summary
 from factory_sop.overview.usecases import (
     OverviewSection,
     OverviewUnavailableError,
     build_overview,
-    device_summary,
 )
 
 
@@ -46,8 +46,8 @@ def test_overview_reports_partial_owner_failure_without_fabricating_status() -> 
     )
 
     assert result["device"] == {"status": "available", "data": {"hosts": {"total": 1}}}
-    assert result["template"]["status"] == "unavailable"  # type: ignore[index]
-    assert result["template"]["detail"] == "模板摘要暂时不可用"  # type: ignore[index]
+    assert result["template"]["status"] == "partial"  # type: ignore[index]
+    assert result["template"]["detail"] == "模板摘要暂时不可用；其他模块仍返回真实摘要"  # type: ignore[index]
     assert result["dataset"] == {"status": "not_permitted", "data": {}}
     assert result["monitor"]["data"]["runtime_status"] == "reported_observations_only"  # type: ignore[index]
 
@@ -64,11 +64,37 @@ def test_device_summary_counts_statuses_across_all_pages() -> None:
         points=repository,  # type: ignore[arg-type]
     )
 
-    hosts = result.data["inference_hosts"]
+    assert result["status"] == "available"
+    data = result["data"]
+    assert isinstance(data, dict)
+    hosts = data["inference_hosts"]
     assert isinstance(hosts, dict)
-    assert hosts == {"total": 1001, "active": 1000, "deactivated": 1, "unknown": 0}
-    connectors = result.data["connectors"]
+    assert hosts["total"] == 1001
+    assert hosts["active"] == 1000
+    assert hosts["deactivated"] == 1
+    assert hosts["unknown"] == 0
+    assert hosts["by_status"] == {"active": 1000, "deactivated": 1}
+    connectors = data["connectors"]
     assert isinstance(connectors, dict)
     assert connectors["total"] == 1001
     assert connectors["verified"] == 0
     assert connectors["unverified"] == 1001
+
+
+def test_overview_reports_unavailable_when_every_owner_fails() -> None:
+    def failed() -> OverviewSection:
+        raise OverviewUnavailableError("store unavailable")
+
+    result = build_overview(
+        caller=Caller(),  # type: ignore[arg-type]
+        device=failed,
+        template=failed,
+        dataset=failed,
+        monitor=failed,
+    )
+
+    statuses: list[object] = []
+    for section in result.values():
+        assert isinstance(section, dict)
+        statuses.append(section["status"])
+    assert set(statuses) == {"unavailable"}

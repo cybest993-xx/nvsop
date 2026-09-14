@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
+from factory_sop.auth.api import Caller, Permission
 from factory_sop.monitor.api import HostOwnershipGateway
 from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.model import MirroredDecision, MirroredHealth
@@ -19,6 +20,21 @@ from nvsop_contracts import (
     reported_decision_to_wire,
     reported_health_to_wire,
 )
+
+
+def summary(*, caller: Caller, monitor: MonitorRepository) -> dict[str, object]:
+    """Return only persisted observations; never infer a live or healthy state."""
+    if not caller.holds(Permission.MONITOR_VIEW):
+        return {"status": "not_permitted", "data": {}}
+    decisions = monitor.recent_decisions(limit=100)
+    health = monitor.recent_health(limit=100)
+    data = {
+        "recent_decisions": len(decisions),
+        "recent_health": len(health),
+        "runtime_status": "reported_observations_only",
+    }
+    status = "available" if decisions or health else "no_data"
+    return {"status": status, "data": data}
 
 
 def mirror_decision(

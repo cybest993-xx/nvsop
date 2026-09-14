@@ -5,7 +5,7 @@ const SESSION = {
   login_name: 'overview.operator',
   display_name: '概览操作员',
   expires_at: '2026-09-14T09:00:00Z',
-  permissions: ['device.host.view', 'monitor.view'],
+  permissions: ['device.inference_host.view', 'monitor.report.view'],
 }
 
 const OVERVIEW = {
@@ -14,7 +14,11 @@ const OVERVIEW = {
     data: { inference_hosts: { total: 1, active: 1, deactivated: 0, unknown: 0 } },
   },
   template: { status: 'not_permitted', data: {} },
-  dataset: { status: 'unavailable', data: {}, detail: '训练数据摘要暂时不可用' },
+  dataset: {
+    status: 'partial',
+    data: {},
+    detail: '训练数据摘要暂时不可用；其他模块仍返回真实摘要',
+  },
   monitor: {
     status: 'available',
     data: {
@@ -70,7 +74,7 @@ test('SYS-35-46 — overview shows permission-scoped states and a raw SSE reason
   await expect(page.getByText('状态未知')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'SOP 模板' })).toBeVisible()
   await expect(page.getByText('无权限')).toBeVisible()
-  await expect(page.getByText('训练数据摘要暂时不可用')).toBeVisible()
+  await expect(page.getByText('训练数据摘要暂时不可用；其他模块仍返回真实摘要')).toBeVisible()
   await expect(page.getByText('实时上报镜像')).toBeVisible()
   await expect(page.getByText('decision · host-e301:decision-1')).toBeVisible()
   await expect(page.getByText('未知原因码：FUTURE_REASON')).toBeVisible()
@@ -86,7 +90,7 @@ test('SYS-35-46 — a monitor section without permission does not open the SSE s
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ ...SESSION, permissions: ['device.host.view'] }),
+      body: JSON.stringify({ ...SESSION, permissions: ['device.inference_host.view'] }),
     })
   })
   await page.route('**/api/v1/overview', async (route) => {
@@ -112,4 +116,42 @@ test('SYS-35-46 — a monitor section without permission does not open the SSE s
   await expect(monitorSection).toBeVisible()
   await expect(monitorSection.getByText('当前账号无权查看此模块。')).toBeVisible()
   expect(streamRequested).toBe(false)
+})
+
+test('SYS-35-46 — no data is distinct from unavailable and does not invent health', async ({
+  page,
+}) => {
+  await page.route('**/api/v1/auth/session', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(SESSION),
+    })
+  })
+  await page.route('**/api/v1/overview', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        device: { status: 'no_data', data: {} },
+        template: { status: 'no_data', data: {} },
+        dataset: { status: 'no_data', data: {} },
+        monitor: {
+          status: 'no_data',
+          data: {
+            recent_decisions: 0,
+            recent_health: 0,
+            runtime_status: 'reported_observations_only',
+          },
+        },
+      }),
+    })
+  })
+
+  await page.goto('/')
+
+  await expect(page.getByText('无数据')).toHaveCount(4)
+  await expect(page.getByText('当前模块暂无已登记或已上报的数据。')).toHaveCount(4)
+  await expect(page.getByText('在线', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('健康', { exact: true })).toHaveCount(0)
 })

@@ -1303,7 +1303,7 @@ export const streamMonitorEvents = <ThrowOnError extends boolean = false>(
 /**
  * Read Overview
  *
- * Compose all owner summaries through the request's one SQLAlchemy session.
+ * 通过请求唯一的 SQLAlchemy session 组合所有者摘要。
  */
 export const readOverview = <ThrowOnError extends boolean = false>(
   options?: Options<ReadOverviewData, ThrowOnError>,

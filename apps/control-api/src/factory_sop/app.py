@@ -48,6 +48,7 @@ from factory_sop.dataset.adapters.annotation_routes import (
     router as annotation_router,
 )
 from factory_sop.dataset.adapters.routes import router as dataset_router
+from factory_sop.dataset.api import summary as dataset_summary
 from factory_sop.dataset.errors import DatasetRefusedError
 from factory_sop.dataset.errors import refusal_problem as dataset_refusal_problem
 from factory_sop.device.adapters import dependencies as device_dependencies
@@ -66,6 +67,7 @@ from factory_sop.device.adapters.routes_points import (
     router as points_router,
 )
 from factory_sop.device.adapters.routes_stations import router as stations_router
+from factory_sop.device.api import summary as device_summary
 from factory_sop.device.errors import DeviceRefusedError
 from factory_sop.device.errors import refusal_problem as device_refusal_problem
 from factory_sop.job.adapters import dependencies as job_dependencies
@@ -73,13 +75,16 @@ from factory_sop.job.adapters.dispatcher import ArqJobDispatcher
 from factory_sop.job.adapters.routes import router as job_router
 from factory_sop.job.errors import JobRefusedError
 from factory_sop.job.errors import refusal_problem as job_refusal_problem
+from factory_sop.monitor.adapters import dependencies as monitor_dependencies
 from factory_sop.monitor.adapters.routes import router as monitor_router
+from factory_sop.monitor.api import summary as monitor_summary
 from factory_sop.observability import (
     correlation_scope,
     get_logger,
     new_correlation_id,
 )
-from factory_sop.overview.adapters.routes import router as overview_router
+from factory_sop.overview.adapters.routes import create_router as create_overview_router
+from factory_sop.overview.api import OverviewSources
 from factory_sop.problem import (
     PROBLEM_MEDIA_TYPE,
     ApiErrorCode,
@@ -90,6 +95,7 @@ from factory_sop.problem import (
 from factory_sop.settings import Settings
 from factory_sop.template.adapters import dependencies as template_dependencies
 from factory_sop.template.adapters.routes import router as template_router
+from factory_sop.template.api import summary as template_summary
 from factory_sop.template.errors import TemplateRefusedError
 from factory_sop.template.errors import refusal_problem as template_refusal_problem
 
@@ -146,6 +152,31 @@ def create_app(settings: Settings) -> FastAPI:
     app.state.session_policy = SessionPolicy(
         idle_timeout=timedelta(minutes=settings.session_idle_timeout_minutes),
         absolute_lifetime=timedelta(minutes=settings.session_absolute_lifetime_minutes),
+    )
+    overview_router = create_overview_router(
+        OverviewSources(
+            device=lambda caller, session: device_summary(
+                caller=caller,
+                hosts=device_dependencies.hosts(session),
+                backends=device_dependencies.backends(session),
+                stations=device_dependencies.stations(session),
+                cameras=device_dependencies.cameras(session),
+                connectors=device_dependencies.connectors(session),
+                points=device_dependencies.points(session),
+            ),
+            template=lambda caller, session: template_summary(
+                caller=caller,
+                templates=template_dependencies.templates(session),
+            ),
+            dataset=lambda caller, session: dataset_summary(
+                caller=caller,
+                datasets=dataset_dependencies.datasets(session),
+            ),
+            monitor=lambda caller, session: monitor_summary(
+                caller=caller,
+                monitor=monitor_dependencies.monitor(session),
+            ),
+        )
     )
     app.include_router(liveness_router, prefix=API_PREFIX)
     app.include_router(auth_routes.router, prefix=API_PREFIX)

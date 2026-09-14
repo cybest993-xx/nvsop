@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
- * The overview is a permission-trimmed projection of persisted configuration and reported
- * observations. It never invents online, healthy, or judgment state for an object without a
- * corresponding fact in the center mirror.
+ * 概览是已持久化配置和上报观测的权限裁剪投影；
+ * 没有中心镜像事实时，不推断对象在线、健康或判定状态。
+
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 
@@ -211,7 +211,7 @@ function addMonitorEvent(kind: string, event: MessageEvent<string>): void {
     })
     monitorEvents.value = monitorEvents.value.slice(0, 20)
   } catch {
-    // Invalid event data does not change the persisted center mirror.
+    // 无效事件数据不会改变中心已持久化的镜像。
   }
 }
 

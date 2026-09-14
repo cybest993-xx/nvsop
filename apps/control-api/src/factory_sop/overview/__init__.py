@@ -1,1 +1,1 @@
-"""Permission-scoped composition of owner summaries for the overview page."""
+"""overview 模块：组合权限裁剪的只读所有者摘要。"""

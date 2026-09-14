@@ -1,23 +1,22 @@
-"""Permission-scoped composition helpers for the overview HTTP adapter."""
+"""overview 模块的权限裁剪摘要组合用例。"""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 
-from factory_sop.auth.api import Caller
 from factory_sop.observability import get_logger
 
 _logger = get_logger("overview")
 
 
 class OverviewUnavailableError(RuntimeError):
-    """An owner summary could not produce a safe snapshot for this request."""
+    """某个所有者摘要无法为本次请求生成安全快照。"""
 
 
 @dataclass(frozen=True, slots=True)
 class OverviewSection:
-    """The internal section envelope used by the HTTP composition seam."""
+    """HTTP 组合接缝使用的内部分段封装。"""
 
     status: str
     data: Mapping[str, object]
@@ -27,21 +26,19 @@ class OverviewSection:
         return {key: value for key, value in asdict(self).items() if value is not None}
 
 
-def build_overview(
+def compose_overview(
     *,
-    caller: Caller,
     device: Callable[[], OverviewSection | Mapping[str, object]],
     template: Callable[[], OverviewSection | Mapping[str, object]],
     dataset: Callable[[], OverviewSection | Mapping[str, object]],
     monitor: Callable[[], OverviewSection | Mapping[str, object]],
 ) -> dict[str, object]:
-    """Compose owner summaries while keeping one failed section from hiding the others.
+    """组合所有者摘要，避免一个失败分段遮蔽其他真实结果。
 
-    A failed owner is ``partial`` when at least one other owner returned a usable response.
-    If every owner failed, each section is ``unavailable``. ``not_permitted`` and ``no_data``
-    are returned by the owner use cases and are never rewritten as failures here.
+    至少一个其他模块返回可用结果时，失败模块状态为 ``partial``；全部模块失败时，
+    每个分段状态为 ``unavailable``。所有者用例返回的 ``not_permitted`` 和 ``no_data``
+    会原样保留，不会在这里改写成失败。
     """
-    del caller
     providers = {
         "device": device,
         "template": template,
@@ -94,4 +91,4 @@ def _section(value: OverviewSection | Mapping[str, object]) -> OverviewSection:
     return OverviewSection(status=status, data=data, detail=detail)
 
 
-__all__ = ["OverviewSection", "OverviewUnavailableError", "build_overview"]
+__all__ = ["OverviewSection", "OverviewUnavailableError", "compose_overview"]

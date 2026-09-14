@@ -1138,7 +1138,7 @@
         "type": "object"
       },
       "BackendSummary": {
-        "description": "Resource counts plus real endpoint connection observations.",
+        "description": "资源数量及真实端点连接观测。",
         "properties": {
           "active": {
             "minimum": 0.0,
@@ -1534,7 +1534,7 @@
         "type": "object"
       },
       "CameraSummary": {
-        "description": "Camera counts plus the persisted credential-presence flag.",
+        "description": "相机数量及已持久化的凭据存在标志。",
         "properties": {
           "active": {
             "minimum": 0.0,
@@ -2007,7 +2007,7 @@
         "type": "object"
       },
       "ConnectorSummary": {
-        "description": "Connector counts plus measured reachability, including unverified.",
+        "description": "连接器数量及实测可达性，包括未验证状态。",
         "properties": {
           "active": {
             "minimum": 0.0,
@@ -4671,7 +4671,7 @@
         "type": "object"
       },
       "ResourceSummary": {
-        "description": "Counts of a configured resource, preserving unknown status values.",
+        "description": "配置资源的数量，并保留未知状态值。",
         "properties": {
           "active": {
             "minimum": 0.0,
@@ -12541,7 +12541,7 @@
     },
     "/api/v1/overview": {
       "get": {
-        "description": "Compose all owner summaries through the request's one SQLAlchemy session.",
+        "description": "通过请求唯一的 SQLAlchemy session 组合所有者摘要。",
         "operationId": "readOverview",
         "responses": {
           "200": {

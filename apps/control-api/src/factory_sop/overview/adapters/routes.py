@@ -1,35 +1,24 @@
-"""HTTP adapter that composes permission-scoped owner summaries in one UoW."""
+"""在一个请求事务中组合权限裁剪所有者摘要的 HTTP 适配器。"""
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 
 from factory_sop.auth.api import Authorized
-from factory_sop.dataset.adapters import dependencies as dataset_dependencies
-from factory_sop.dataset.usecases.summary import summary as dataset_summary
-from factory_sop.device.adapters import dependencies as device_dependencies
-from factory_sop.device.usecases.summary import summary as device_summary
-from factory_sop.monitor.adapters import dependencies as monitor_dependencies
-from factory_sop.monitor.repository import MonitorRepository
-from factory_sop.monitor.usecases import summary as monitor_summary
-from factory_sop.overview.usecases import (
+from factory_sop.overview.api import (
+    OverviewSources,
     OverviewUnavailableError,
     build_overview,
 )
 from factory_sop.persistence import RequestSession
-from factory_sop.template.adapters import dependencies as template_dependencies
-from factory_sop.template.usecases.summary import summary as template_summary
-
-router = APIRouter(prefix="/overview", tags=["overview"])
 
 
 class ResourceSummary(BaseModel):
-    """Counts of a configured resource, preserving unknown status values."""
+    """配置资源的数量，并保留未知状态值。"""
 
     total: int = Field(ge=0)
     active: int = Field(ge=0)
@@ -39,7 +28,7 @@ class ResourceSummary(BaseModel):
 
 
 class BackendSummary(ResourceSummary):
-    """Resource counts plus real endpoint connection observations."""
+    """资源数量及真实端点连接观测。"""
 
     connection_states: dict[str, int] = Field(default_factory=dict)
     verified: int = Field(ge=0)
@@ -47,14 +36,14 @@ class BackendSummary(ResourceSummary):
 
 
 class CameraSummary(ResourceSummary):
-    """Camera counts plus the persisted credential-presence flag."""
+    """相机数量及已持久化的凭据存在标志。"""
 
     credentials_configured: int = Field(ge=0)
     credentials_not_configured: int = Field(ge=0)
 
 
 class ConnectorSummary(ResourceSummary):
-    """Connector counts plus measured reachability, including unverified."""
+    """连接器数量及实测可达性，包括未验证状态。"""
 
     reachability: dict[str, int] = Field(default_factory=dict)
     verified: int = Field(ge=0)
@@ -134,58 +123,37 @@ class OverviewResponse(BaseModel):
     monitor: MonitorOverviewSection
 
 
-@router.get(
-    "",
-    operation_id="readOverview",
-    response_model=OverviewResponse,
-    response_model_exclude_none=True,
-)
-def read_overview(
-    caller: Authorized,
-    session: RequestSession,
-    monitor: Annotated[MonitorRepository, Depends(monitor_dependencies.monitor)],
-) -> dict[str, object]:
-    """Compose all owner summaries through the request's one SQLAlchemy session."""
-    return build_overview(
-        caller=caller,
-        device=lambda: _read_summary(
-            "device",
-            lambda: device_summary(
-                caller=caller,
-                hosts=device_dependencies.hosts(session),
-                backends=device_dependencies.backends(session),
-                stations=device_dependencies.stations(session),
-                cameras=device_dependencies.cameras(session),
-                connectors=device_dependencies.connectors(session),
-                points=device_dependencies.points(session),
-            ),
-        ),
-        template=lambda: _read_summary(
-            "template",
-            lambda: template_summary(
-                caller=caller,
-                templates=template_dependencies.templates(session),
-            ),
-        ),
-        dataset=lambda: _read_summary(
-            "dataset",
-            lambda: dataset_summary(
-                caller=caller,
-                datasets=dataset_dependencies.datasets(session),
-            ),
-        ),
-        monitor=lambda: _read_summary(
-            "monitor", lambda: monitor_summary(caller=caller, monitor=monitor)
-        ),
+def create_router(sources: OverviewSources) -> APIRouter:
+    """用组合根提供的模块 source 创建 overview HTTP 路由。"""
+    router = APIRouter(prefix="/overview", tags=["overview"])
+
+    @router.get(
+        "",
+        operation_id="readOverview",
+        response_model=OverviewResponse,
+        response_model_exclude_none=True,
     )
+    def read_overview(
+        caller: Authorized,
+        session: RequestSession,
+    ) -> dict[str, object]:
+        """通过请求唯一的 SQLAlchemy session 组合所有者摘要。"""
+        return build_overview(
+            device=lambda: _read_summary("device", lambda: sources.device(caller, session)),
+            template=lambda: _read_summary("template", lambda: sources.template(caller, session)),
+            dataset=lambda: _read_summary("dataset", lambda: sources.dataset(caller, session)),
+            monitor=lambda: _read_summary("monitor", lambda: sources.monitor(caller, session)),
+        )
+
+    return router
 
 
 def _read_summary(section: str, provider: Callable[[], dict[str, object]]) -> dict[str, object]:
-    """Convert known read/pagination failures into a section-level partial failure."""
+    """将已知的读取或分页失败转换为分段级部分失败。"""
     try:
         return provider()
     except (SQLAlchemyError, ValueError) as error:
         raise OverviewUnavailableError(section) from error
 
 
-__all__ = ["OverviewResponse", "router"]
+__all__ = ["OverviewResponse", "create_router"]

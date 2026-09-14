@@ -704,7 +704,7 @@ export type BackendStatus = {
 /**
  * BackendSummary
  *
- * Resource counts plus real endpoint connection observations.
+ * 资源数量及真实端点连接观测。
  */
 export type BackendSummary = {
   /**
@@ -958,7 +958,7 @@ export type CameraStatus = {
 /**
  * CameraSummary
  *
- * Camera counts plus the persisted credential-presence flag.
+ * 相机数量及已持久化的凭据存在标志。
  */
 export type CameraSummary = {
   /**
@@ -1245,7 +1245,7 @@ export type ConnectorStatus = {
 /**
  * ConnectorSummary
  *
- * Connector counts plus measured reachability, including unverified.
+ * 连接器数量及实测可达性，包括未验证状态。
  */
 export type ConnectorSummary = {
   /**
@@ -2852,7 +2852,7 @@ export type RequestedStatus = {
 /**
  * ResourceSummary
  *
- * Counts of a configured resource, preserving unknown status values.
+ * 配置资源的数量，并保留未知状态值。
  */
 export type ResourceSummary = {
   /**

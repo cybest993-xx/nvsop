@@ -10,7 +10,7 @@ import threading
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
-from time import monotonic, sleep
+from time import monotonic, sleep, time
 from types import FrameType
 
 from nvsop_contracts import ConnectionTestOutcome
@@ -22,12 +22,19 @@ from edge_runtime.configuration import (
     load_configuration,
     safe_url,
 )
+from edge_runtime.configuration_sync import ConfigurationSynchronizer, HttpConfigurationPuller
 from edge_runtime.connectors.hikvision import IsapiConnector
 from edge_runtime.connectors.port import Reachability
 from edge_runtime.connectors.transport import UrllibIsapiTransport
 from edge_runtime.judgment.model import HostLiveness
 from edge_runtime.local_state.store import LocalState, open_local_state
 from edge_runtime.media import MediaRuntime, validate_sop_camera_bindings
+from edge_runtime.runtime_configuration import (
+    RuntimeConfiguration,
+    bootstrap_runtime_configuration,
+    confirmed_runtime_configuration,
+    validate_confirmed_runtime_configuration,
+)
 from edge_runtime.station_runtime import (
     InputWaitExpired,
     SseStationInputSource,
@@ -349,21 +356,32 @@ def _build_connection_test_loop(config: EdgeRuntimeConfiguration) -> ConnectionT
 
 
 def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRuntime:
-    """从本地配置装配命令循环、SQLite 状态和每条实时判定流。"""
+    """从本地配置主动拉取确认 bundle,再装配命令循环、SQLite 状态和判定流。"""
     config = load_configuration(config_path, include_stations=True)
-    command_loop = _build_connection_test_loop(config)
-    if config.media is not None:
-        if config.media.host_id != config.host_id:
-            raise ValueError("media host_id must match edge host_id")
-        validate_sop_camera_bindings(
-            config.media, {station.station_id for station in config.stations}
-        )
     if config.local_state_path is None:
         raise ValueError("local_state_path is required for autonomous runtime")
     state = open_local_state(str(config.local_state_path))
     stations: list[AutonomousStation] = []
     try:
-        for station_config in config.stations:
+        runtime_configuration = _synchronize_runtime_configuration(config, state)
+        command_loop = build_connection_test_loop(
+            center_url=config.center_url,
+            host_id=config.host_id,
+            host_private_key=config.host_private_key,
+            command_timeout=config.command_timeout,
+            command_poll_interval=config.command_poll_interval,
+            local_connectors=runtime_configuration.connectors,
+            ssl_context=config.ssl_context,
+        )
+        if config.media is not None:
+            if config.media.host_id != config.host_id:
+                raise ValueError("media host_id must match edge host_id")
+            validate_sop_camera_bindings(
+                config.media,
+                {binding.configuration.station_id for binding in runtime_configuration.stations},
+            )
+        for binding in runtime_configuration.stations:
+            station_config = binding.configuration
             source = SseStationInputSource(
                 inference_url=station_config.inference_url,
                 request_body=station_config.request_body,
@@ -391,6 +409,39 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
         stations=tuple(stations),
         state=state,
         media=MediaRuntime(config.media) if config.media is not None else None,
+    )
+
+
+def _synchronize_runtime_configuration(
+    config: EdgeRuntimeConfiguration, state: LocalState
+) -> RuntimeConfiguration:
+    """主动拉取一次; 失败时使用最后确认 bundle, 首次失败才使用 bootstrap."""
+    synchronizer = ConfigurationSynchronizer(
+        puller=HttpConfigurationPuller(
+            center_url=config.center_url,
+            host_id=config.host_id,
+            host_private_key=config.host_private_key,
+            timeout=config.command_timeout,
+            ssl_context=config.ssl_context,
+        ),
+        store=state.configuration(),
+        expected_host_id=config.host_id,
+        validator=lambda bundle: validate_confirmed_runtime_configuration(
+            bundle=bundle,
+            bootstrap_stations=config.stations,
+            local_connectors=config.connectors,
+        ),
+    )
+    result = synchronizer.synchronize(observed_at=time())
+    if result.active is None:
+        return bootstrap_runtime_configuration(
+            stations=config.stations,
+            connectors=config.connectors,
+        )
+    return confirmed_runtime_configuration(
+        bundle=result.active,
+        bootstrap_stations=config.stations,
+        local_connectors=config.connectors,
     )
 
 

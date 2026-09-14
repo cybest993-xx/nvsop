@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import UUID
@@ -42,20 +41,25 @@ class Repo:
         content = b"{}"
         self.version = SimpleNamespace(
             id=UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f108"),
-            sha256="a" * 64,
+            template_id=UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f109"),
             source_draft_revision=1,
             runtime_defaults=SimpleNamespace(
                 idle_timeout_seconds=10.0,
                 step_deadline_seconds=2.0,
                 disposition_policy="stop",
             ),
-            artifacts=(
+            artifacts=tuple(
                 SimpleNamespace(
-                    name=SimpleNamespace(value="template.json"),
-                    media_type="application/json",
-                    content=content,
-                    sha256=hashlib.sha256(content).hexdigest(),
-                ),
+                    name=SimpleNamespace(value=name),
+                    media_type=media_type,
+                    content=artifact_content,
+                )
+                for name, media_type, artifact_content in (
+                    ("actions.json", "application/json", content),
+                    ("vlm_prompts.txt", "text/plain", b"prompt\n"),
+                    ("template.json", "application/json", content),
+                    ("manifest.json", "application/json", b"internal manifest"),
+                )
             ),
         )
 
@@ -76,11 +80,19 @@ class Repo:
             return []
         return [
             SimpleNamespace(
+                id=UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f110"),
+                name="Camera A",
+                address="camera.local",
+                main_stream_path="/main",
+                sub_stream_path="/sub",
+                credentials_configured=True,
                 station_id=STATION_ID,
                 backend_id=BACKEND_ID,
                 host_id=HOST_ID,
                 status=SimpleNamespace(value="active"),
                 revision=1,
+                media_path_mode=SimpleNamespace(value="passthrough"),
+                recording_mode=SimpleNamespace(value="continuous"),
             )
         ]
 
@@ -89,6 +101,7 @@ class Repo:
             return [
                 SimpleNamespace(
                     id=CONNECTOR_ID,
+                    station_id=STATION_ID,
                     host_id=HOST_ID,
                     status=SimpleNamespace(value="active"),
                     name="PLC",
@@ -99,6 +112,7 @@ class Repo:
                 ),
                 SimpleNamespace(
                     id=FOREIGN_CONNECTOR_ID,
+                    station_id=STATION_ID,
                     host_id=FOREIGN_HOST_ID,
                     status=SimpleNamespace(value="active"),
                     name="foreign",
@@ -115,6 +129,7 @@ class Repo:
             [
                 SimpleNamespace(
                     id=POINT_ID,
+                    station_id=STATION_ID,
                     connector_id=CONNECTOR_ID,
                     revision=9,
                     status=SimpleNamespace(value="active"),
@@ -130,12 +145,14 @@ class Repo:
     def binding_by_station(self, value: UUID) -> object | None:
         return SimpleNamespace(
             desired_version_id=self.version.id,
-            desired_sha256=self.version.sha256,
             desired_config_revision=1,
         )
 
     def version_by_id(self, value: UUID) -> object | None:
         return self.version if value == self.version.id else None
+
+    def template_by_id(self, value: UUID) -> object | None:
+        return SimpleNamespace(station_id=STATION_ID) if value == self.version.template_id else None
 
 
 def test_configuration_for_host_excludes_foreign_connector_and_emits_effective_values() -> None:
@@ -157,6 +174,14 @@ def test_configuration_for_host_excludes_foreign_connector_and_emits_effective_v
     assert station.backend_id == str(BACKEND_ID)
     assert bundle.config_revision == 9
     assert [connector.name for connector in station.connectors] == ["PLC"]
+    assert [camera.camera_id for camera in station.cameras] == [
+        "019937d8-0d10-7b31-8d2d-4e60c8f4f110"
+    ]
     assert station.runtime_parameters.idle_timeout_seconds == 10.0
     assert station.template is not None
-    assert station.template.version_sha256 == "a" * 64
+    assert [artifact.name for artifact in station.template.artifacts] == [
+        "actions.json",
+        "vlm_prompts.txt",
+        "template.json",
+        "manifest.json",
+    ]

@@ -33,6 +33,7 @@ from nvsop_contracts.configuration import (
     ConfigurationArtifact,
     ConfigurationBundle,
     ConfigurationTemplate,
+    ConfiguredCamera,
     ConfiguredConnector,
     ConfiguredPoint,
     ConfiguredStation,
@@ -50,12 +51,14 @@ from nvsop_contracts.host_identity import (
     validate_host_identity_public_key,
     verify_host_identity_request,
 )
+
 __all__ = [
     "CONFIGURATION_CONTRACT_VERSION",
     "Capability",
     "ConfigurationArtifact",
     "ConfigurationBundle",
     "ConfigurationTemplate",
+    "ConfiguredCamera",
     "ConfiguredConnector",
     "ConfiguredPoint",
     "ConfiguredStation",

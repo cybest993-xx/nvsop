@@ -9,6 +9,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Protocol, cast
 
@@ -89,16 +90,22 @@ class HttpConfigurationPuller(ConfigurationPuller):
             raise ConfigurationPullError(
                 "http_rejected", "中心配置接口拒绝请求", status=status
             ) from error
-        except (urllib.error.URLError, TimeoutError) as error:
+        except (urllib.error.URLError, OSError, TimeoutError) as error:
             raise ConfigurationPullError("center_unreachable", "中心配置接口暂时不可达") from error
         try:
             if response.status != 200:
                 raise ConfigurationPullError(
                     "http_rejected", "中心配置接口返回非成功状态", status=response.status
                 )
-            raw = response.read()
+            try:
+                raw = response.read()
+            except (OSError, TimeoutError) as error:
+                raise ConfigurationPullError(
+                    "center_unreachable", "中心配置接口暂时不可达"
+                ) from error
         finally:
-            response.close()
+            with suppress(OSError):
+                response.close()
         try:
             value = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -164,9 +171,17 @@ class ConfigurationSynchronizer:
                 detail=str(error),
                 observed_at=observed_at,
             )
+        except OSError:
+            self._store.record_failure(
+                code="center_unreachable",
+                detail="中心配置接口暂时不可达",
+                observed_at=observed_at,
+            )
         except (TypeError, ValueError) as error:
             detail = str(error)
-            if "reused with different content" in detail:
+            if "host scope" in detail:
+                code = "host_scope_mismatch"
+            elif "reused with different content" in detail:
                 code = "conflicting_confirmation"
             elif "revision is older" in detail or "time is older" in detail:
                 code = "stale_revision"

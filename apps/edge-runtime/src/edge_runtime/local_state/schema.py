@@ -12,7 +12,8 @@ one. `apply_migrations` is that rule as a function and holds no knowledge of thi
 unrelated — nothing here is shared with it, because this schema belongs to the edge and
 outlives an unreachable center.
 
-**本阶段交付配置确认表。** `local_config` 保存最后一个完整确认 bundle，失败记录只用于诊断；连接器处置账本由后续阶段追加。
+**本阶段交付配置确认表。** `local_config` 保存最后一个完整确认 bundle, 失败记录只用于诊断;
+**连接器处置账本由后续阶段追加.**
 
 Standard library only, like the core this state serves (edge-autonomy.md §5.11).
 """
@@ -158,8 +159,29 @@ _V2 = (
     """,
 )
 
+_V3 = (
+    "ALTER TABLE local_config RENAME TO local_config_v2",
+    """
+    CREATE TABLE local_config_v3 (
+        slot             INTEGER PRIMARY KEY CHECK (slot = 1),
+        host_id          TEXT    NOT NULL,
+        config_revision  INTEGER NOT NULL,
+        confirmed_at     REAL    NOT NULL,
+        payload          TEXT    NOT NULL,
+        CHECK (config_revision > 0)
+    )
+    """,
+    """
+    INSERT INTO local_config_v3 (slot, host_id, config_revision, confirmed_at, payload)
+    SELECT slot, host_id, config_revision, confirmed_at, payload
+      FROM local_config_v2
+    """,
+    "DROP TABLE local_config_v2",
+    "ALTER TABLE local_config_v3 RENAME TO local_config",
+)
 
-MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1, _V2)
+
+MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1, _V2, _V3)
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 
 

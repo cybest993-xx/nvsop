@@ -41,7 +41,6 @@ class StationRuntimeConfiguration:
     margins: EvidenceMargins
     backend_id: str | None = None
     template_version_id: str | None = None
-    template_sha256: str | None = None
     model_ids: tuple[str, ...] = ()
     disposition_policy: str | None = None
 
@@ -399,7 +398,6 @@ def station_configuration(value: object) -> StationRuntimeConfiguration:
         optional={
             "backend_id",
             "template_version_id",
-            "template_sha256",
             "model_ids",
             "disposition_policy",
         },
@@ -469,11 +467,6 @@ def station_configuration(value: object) -> StationRuntimeConfiguration:
             None
             if config.get("template_version_id") is None
             else _non_empty_string(config["template_version_id"], "template_version_id")
-        ),
-        template_sha256=(
-            None
-            if config.get("template_sha256") is None
-            else _non_empty_string(config["template_sha256"], "template_sha256")
         ),
         model_ids=model_ids,
         disposition_policy=(

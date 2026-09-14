@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -28,6 +29,7 @@ from nvsop_contracts import (
     ConfigurationArtifact,
     ConfigurationBundle,
     ConfigurationTemplate,
+    ConfiguredCamera,
     ConfiguredConnector,
     ConfiguredPoint,
     ConfiguredStation,
@@ -62,26 +64,26 @@ def configuration_for_host(
     host_cameras = [
         camera for camera in cameras.for_host(host_id) if camera.status.value == "active"
     ]
-    station_ids = {camera.station_id for camera in host_cameras}
     station_values: list[ConfiguredStation] = []
     revision_values = [host.revision]
     for backend in backend_values:
         if backend.status.value != "active":
             continue
-        backend_cameras = [
-            camera
-            for camera in host_cameras
-            if camera.backend_id == backend.id and camera.station_id in station_ids
-        ]
+        if backend.host_id != host.id:
+            raise ConfigurationAssemblyError("host topology contains a foreign inference backend")
+        backend_cameras = [camera for camera in host_cameras if camera.backend_id == backend.id]
         for station_id in sorted({camera.station_id for camera in backend_cameras}, key=str):
             station = stations.by_id(station_id)
             if station is None or station.status.value != "active":
                 continue
+            station_cameras = [
+                camera for camera in backend_cameras if camera.station_id == station.id
+            ]
             station_bundle = _station_bundle(
                 host=host,
                 backend=backend,
                 station=station,
-                backend_cameras=backend_cameras,
+                backend_cameras=station_cameras,
                 connectors=connectors,
                 points=points,
                 templates=templates,
@@ -93,7 +95,7 @@ def configuration_for_host(
                     station.revision,
                     station.runtime_parameters_revision,
                     station_bundle.revision,
-                    *(camera.revision for camera in backend_cameras),
+                    *(camera.revision for camera in station_cameras),
                 ]
             )
 
@@ -115,7 +117,6 @@ def _station_bundle(
     points: PointRepository,
     templates: TemplateRepository,
 ) -> ConfiguredStation:
-    del host  # device repository 查询已经完成归属校验
     binding = templates.binding_by_station(station.id)
     template: ConfigurationTemplate | None = None
     defaults: StationRuntimeParameters | None = None
@@ -124,8 +125,9 @@ def _station_bundle(
         version = templates.version_by_id(binding.desired_version_id)
         if version is None:
             raise ConfigurationAssemblyError("station binding refers to a missing template version")
-        if version.sha256 != binding.desired_sha256:
-            raise ConfigurationAssemblyError("station binding digest does not match its version")
+        template_owner = templates.template_by_id(version.template_id)
+        if template_owner is None or template_owner.station_id != station.id:
+            raise ConfigurationAssemblyError("station binding refers to a foreign template version")
         template = _template(version)
         defaults = _runtime_defaults(version)
         configuration_revision = max(
@@ -137,24 +139,37 @@ def _station_bundle(
     if effective is None:
         raise ConfigurationAssemblyError("station has no complete resolved runtime parameters")
 
+    raw_connectors = connectors.for_station(station.id)
+    for connector in raw_connectors:
+        if connector.station_id != station.id:
+            raise ConfigurationAssemblyError("host topology contains a foreign connector")
     station_connectors = {
         connector.id: connector
-        for connector in connectors.for_station(station.id)
-        if connector.host_id == backend.host_id and connector.status.value == "active"
+        for connector in raw_connectors
+        if connector.host_id == host.id and connector.status.value == "active"
     }
+    raw_points = points.for_station(station.id)
+    for point in raw_points:
+        if point.station_id != station.id:
+            raise ConfigurationAssemblyError("host topology contains a foreign point")
     station_points = [
         point
-        for point in points.for_station(station.id)
+        for point in raw_points
         if point.connector_id in station_connectors and point.status.value == "active"
     ]
     for camera in backend_cameras:
-        if camera.host_id != backend.host_id or camera.backend_id != backend.id:
+        if (
+            camera.host_id != host.id
+            or camera.backend_id != backend.id
+            or camera.station_id != station.id
+        ):
             raise ConfigurationAssemblyError("host topology contains a foreign camera")
     configuration_revision = max(
         configuration_revision,
         station.runtime_parameters_revision,
         *(connector.revision for connector in station_connectors.values()),
         *(point.revision for point in station_points),
+        *(camera.revision for camera in backend_cameras),
     )
     return ConfiguredStation(
         station_id=str(station.id),
@@ -177,6 +192,9 @@ def _station_bundle(
             sorted((_point(value) for value in station_points), key=lambda item: item.point_id)
         ),
         template=template,
+        cameras=tuple(
+            sorted((_camera(value) for value in backend_cameras), key=lambda item: item.camera_id)
+        ),
     )
 
 
@@ -192,6 +210,20 @@ def _connector(value: Connector) -> ConfiguredConnector:
     )
 
 
+def _camera(value: Camera) -> ConfiguredCamera:
+    return ConfiguredCamera(
+        camera_id=str(value.id),
+        name=value.name,
+        address=value.address,
+        main_stream_path=value.main_stream_path,
+        sub_stream_path=value.sub_stream_path,
+        credentials_configured=value.credentials_configured,
+        revision=value.revision,
+        media_path_mode=value.media_path_mode.value,
+        recording_mode=value.recording_mode.value,
+    )
+
+
 def _point(value: Point) -> ConfiguredPoint:
     return ConfiguredPoint(
         point_id=str(value.id),
@@ -204,10 +236,30 @@ def _point(value: Point) -> ConfiguredPoint:
 
 
 def _template(version: TemplateVersion) -> ConfigurationTemplate:
+    artifacts = tuple(_artifact(artifact) for artifact in version.artifacts[:-1])
+    manifest = ConfigurationArtifact(
+        name="manifest.json",
+        media_type="application/json",
+        content=json.dumps(
+            {
+                "artifacts": [
+                    {
+                        "byte_length": len(artifact.content),
+                        "media_type": artifact.media_type,
+                        "name": artifact.name,
+                    }
+                    for artifact in artifacts
+                ],
+                "format_version": 1,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8"),
+    )
     return ConfigurationTemplate(
         version_id=str(version.id),
-        version_sha256=version.sha256,
-        artifacts=tuple(_artifact(artifact) for artifact in version.artifacts),
+        artifacts=(*artifacts, manifest),
     )
 
 
@@ -216,7 +268,6 @@ def _artifact(value: TemplateVersionArtifact) -> ConfigurationArtifact:
         name=value.name.value,
         media_type=value.media_type,
         content=value.content,
-        sha256=value.sha256,
     )
 
 

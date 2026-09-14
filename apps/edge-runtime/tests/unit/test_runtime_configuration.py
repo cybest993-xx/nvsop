@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-import hashlib
 import json
+import sqlite3
 import unittest
 from dataclasses import replace
+from pathlib import Path
+from unittest.mock import patch
 
 from nvsop_contracts import (
     ConfigurationArtifact,
@@ -22,10 +24,14 @@ from nvsop_contracts import (
     Unverified,
 )
 
-from edge_runtime.configuration import LocalIsapiConnectorConfiguration
+from edge_runtime.configuration import EdgeRuntimeConfiguration, LocalIsapiConnectorConfiguration
+from edge_runtime.configuration_sync import ConfigurationPullError
 from edge_runtime.connectors.hikvision import CANDIDATE_PROFILE
 from edge_runtime.judgment.evidence import EvidenceMargins
 from edge_runtime.judgment.model import Ordering, RuntimeParameters, Template
+from edge_runtime.local_state.schema import migrate
+from edge_runtime.local_state.store import LocalState
+from edge_runtime.runtime import _synchronize_runtime_configuration
 from edge_runtime.runtime_configuration import (
     RuntimeConfigurationError,
     confirmed_runtime_configuration,
@@ -86,12 +92,26 @@ def confirmed_bundle() -> ConfigurationBundle:
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
-    artifact = ConfigurationArtifact(
-        name="template.json",
-        media_type="application/json",
-        content=content,
-        sha256=hashlib.sha256(content).hexdigest(),
+    artifacts = (
+        ConfigurationArtifact("actions.json", "application/json", b"{}"),
+        ConfigurationArtifact("vlm_prompts.txt", "text/plain", b"prompt\n"),
+        ConfigurationArtifact("template.json", "application/json", content),
     )
+    manifest = json.dumps(
+        {
+            "artifacts": [
+                {
+                    "byte_length": len(artifact.content),
+                    "media_type": artifact.media_type,
+                    "name": artifact.name,
+                }
+                for artifact in artifacts
+            ],
+            "format_version": 1,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
     measured = Measured(
         delivery=Polled(interval=0.5),
         max_delivery_delay=0.5,
@@ -142,8 +162,10 @@ def confirmed_bundle() -> ConfigurationBundle:
                 ),
                 template=ConfigurationTemplate(
                     version_id="version-a",
-                    version_sha256="a" * 64,
-                    artifacts=(artifact,),
+                    artifacts=(
+                        *artifacts,
+                        ConfigurationArtifact("manifest.json", "application/json", manifest),
+                    ),
                 ),
             ),
         ),
@@ -213,6 +235,60 @@ class ConfirmedRuntimeConfigurationTests(unittest.TestCase):
                 bootstrap_stations=(local_station(),),
                 local_connectors=(),
             )
+
+
+class RuntimeSynchronizationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.connection = sqlite3.connect(":memory:", isolation_level=None)
+        self.connection.row_factory = sqlite3.Row
+        migrate(self.connection)
+        self.state = LocalState(self.connection)
+        self.config = EdgeRuntimeConfiguration(
+            center_url="https://center.example",
+            host_id=HOST_ID,
+            host_private_key="private-key",
+            command_timeout=1.0,
+            command_poll_interval=1.0,
+            connectors=(),
+            ssl_context=None,
+            local_state_path=Path("state.sqlite"),
+            stations=(),
+        )
+
+    def tearDown(self) -> None:
+        self.state.close()
+
+    def test_first_start_uses_bootstrap_when_pull_fails_without_confirmation(self) -> None:
+        with patch(
+            "edge_runtime.runtime.HttpConfigurationPuller.pull",
+            side_effect=ConfigurationPullError("center_unreachable", "center unavailable"),
+        ):
+            result = _synchronize_runtime_configuration(self.config, self.state)
+
+        self.assertIsNone(result.confirmed)
+        self.assertEqual((), result.stations)
+        failure = self.state.configuration().failure()
+        self.assertIsNotNone(failure)
+        assert failure is not None
+        self.assertEqual("center_unreachable", failure.code)
+
+    def test_pull_failure_keeps_the_last_confirmed_bundle_active(self) -> None:
+        bundle = ConfigurationBundle(
+            host_id=HOST_ID,
+            config_revision=1,
+            generated_at="2026-09-13T00:00:00Z",
+            stations=(),
+        )
+        self.state.configuration().confirm(bundle, confirmed_at=1.0)
+
+        with patch(
+            "edge_runtime.runtime.HttpConfigurationPuller.pull",
+            side_effect=ConfigurationPullError("center_unreachable", "center unavailable"),
+        ):
+            result = _synchronize_runtime_configuration(self.config, self.state)
+
+        self.assertEqual(bundle, result.confirmed)
+        self.assertEqual((), result.stations)
 
 
 if __name__ == "__main__":

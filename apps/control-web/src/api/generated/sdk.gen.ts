@@ -228,6 +228,9 @@ import type {
   ReadLivenessData,
   ReadLivenessErrors,
   ReadLivenessResponses,
+  ReadOverviewData,
+  ReadOverviewErrors,
+  ReadOverviewResponses,
   ReadPointData,
   ReadPointErrors,
   ReadPointResponses,
@@ -1296,6 +1299,19 @@ export const streamMonitorEvents = <ThrowOnError extends boolean = false>(
     StreamMonitorEventsErrors,
     ThrowOnError
   >({ url: '/api/v1/monitor/stream', ...options })
+
+/**
+ * Read Overview
+ *
+ * 在一个请求工作单元中组合各 owner 摘要。
+ */
+export const readOverview = <ThrowOnError extends boolean = false>(
+  options?: Options<ReadOverviewData, ThrowOnError>,
+): RequestResult<ReadOverviewResponses, ReadOverviewErrors, ThrowOnError> =>
+  (options?.client ?? client).get<ReadOverviewResponses, ReadOverviewErrors, ThrowOnError>({
+    url: '/api/v1/overview',
+    ...options,
+  })
 
 /**
  * Validate A Point Binding

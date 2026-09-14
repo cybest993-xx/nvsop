@@ -6719,6 +6719,35 @@ export type StreamMonitorEventsResponses = {
   200: unknown
 }
 
+export type ReadOverviewData = {
+  body?: never
+  path?: never
+  query?: never
+  url: '/api/v1/overview'
+}
+
+export type ReadOverviewErrors = {
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadOverviewError = ReadOverviewErrors[keyof ReadOverviewErrors]
+
+export type ReadOverviewResponses = {
+  /**
+   * Response Readoverview
+   *
+   * Successful Response
+   */
+  200: {
+    [key: string]: unknown
+  }
+}
+
+export type ReadOverviewResponse = ReadOverviewResponses[keyof ReadOverviewResponses]
+
 export type ValidatePointBindingData = {
   body: BindingValidationRequest
   path?: never

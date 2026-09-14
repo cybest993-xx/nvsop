@@ -142,6 +142,7 @@ type = "layers"
 layers = [
     "factory_sop.entrypoint",
     "factory_sop.app",
+    "factory_sop.overview",
     "factory_sop.configuration",
     "factory_sop.monitor",
     "factory_sop.template",
@@ -258,6 +259,17 @@ name = "monitor behavior does not depend on adapters"
 type = "forbidden"
 source_modules = ["factory_sop.monitor.api", "factory_sop.monitor.model", "factory_sop.monitor.errors", "factory_sop.monitor.repository", "factory_sop.monitor.usecases"]
 forbidden_modules = ["factory_sop.monitor.adapters", "factory_sop.device.adapters", "factory_sop.auth.adapters", "fastapi", "sqlalchemy"]
+
+[[tool.importlinter.contracts]]
+name = "overview composition does not depend on adapters"
+type = "forbidden"
+source_modules = ["factory_sop.overview.usecases"]
+forbidden_modules = ["factory_sop.device.adapters", "factory_sop.template.adapters", "factory_sop.dataset.adapters", "factory_sop.monitor.adapters", "fastapi", "sqlalchemy"]
+ignore_imports = [
+    "factory_sop.auth.api -> factory_sop.auth.adapters.dependencies",
+    "factory_sop.auth.api -> factory_sop.auth.authorization",
+    "factory_sop.auth.api -> factory_sop.auth.permissions",
+]
 
 [[tool.importlinter.contracts]]
 name = "dataset's behavior does not depend on how it is stored or reached"

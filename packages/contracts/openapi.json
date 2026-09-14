@@ -11948,6 +11948,40 @@
         "x-required-permission": "monitor.report.view"
       }
     },
+    "/api/v1/overview": {
+      "get": {
+        "description": "在一个请求工作单元中组合各 owner 摘要。",
+        "operationId": "readOverview",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Readoverview",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Read Overview",
+        "tags": [
+          "overview"
+        ]
+      }
+    },
     "/api/v1/point-binding-validations": {
       "post": {
         "description": "只校验绑定候选，不创建或修改模板绑定。",

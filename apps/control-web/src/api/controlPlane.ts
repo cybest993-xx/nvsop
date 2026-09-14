@@ -323,6 +323,78 @@ interface GeneratedResult<T> {
   response?: Response
 }
 
+export interface OverviewSection {
+  status: string
+  data: Record<string, unknown>
+  detail?: string | null
+}
+
+export interface OverviewDocument {
+  device: OverviewSection
+  template: OverviewSection
+  dataset: OverviewSection
+  monitor: OverviewSection
+}
+
+export async function readOverview(): Promise<OverviewDocument> {
+  let response: Response
+  try {
+    response = await fetch('/api/v1/overview', {
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    })
+  } catch (error) {
+    throw controlPlaneError(error, undefined)
+  }
+  let body: unknown = null
+  try {
+    body = await response.json()
+  } catch {
+    body = null
+  }
+  if (!response.ok) {
+    throw controlPlaneError(body, response)
+  }
+  if (typeof body !== 'object' || body === null) {
+    throw new ControlPlaneError({
+      message: GENERIC_MESSAGE,
+      errorCode: 'UNKNOWN',
+      status: response.status,
+    })
+  }
+  return parseOverview(body)
+}
+
+function parseOverview(value: object): OverviewDocument {
+  const record = value as Record<string, unknown>
+  return {
+    device: parseOverviewSection(record.device),
+    template: parseOverviewSection(record.template),
+    dataset: parseOverviewSection(record.dataset),
+    monitor: parseOverviewSection(record.monitor),
+  }
+}
+
+function parseOverviewSection(value: unknown): OverviewSection {
+  if (typeof value !== 'object' || value === null) {
+    return {
+      status: 'unavailable',
+      data: {},
+      detail: '概览模块响应格式不可用',
+    }
+  }
+  const record = value as Record<string, unknown>
+  return {
+    status: typeof record.status === 'string' && record.status ? record.status : 'unknown',
+    data:
+      typeof record.data === 'object' && record.data !== null
+        ? (record.data as Record<string, unknown>)
+        : {},
+    detail: typeof record.detail === 'string' ? record.detail : null,
+  }
+}
+
 async function execute<T>(request: Promise<GeneratedResult<T>>): Promise<T> {
   const result = await request
   if (result.error !== undefined) {

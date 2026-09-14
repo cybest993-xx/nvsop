@@ -79,6 +79,7 @@ from factory_sop.observability import (
     get_logger,
     new_correlation_id,
 )
+from factory_sop.overview.adapters.routes import router as overview_router
 from factory_sop.problem import (
     PROBLEM_MEDIA_TYPE,
     ApiErrorCode,
@@ -170,6 +171,7 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(annotation_compatibility_router)
     app.include_router(job_router, prefix=API_PREFIX)
     app.include_router(monitor_router, prefix=API_PREFIX)
+    app.include_router(overview_router, prefix=API_PREFIX)
     # 组合根把跨模块查询和任务依赖接到各自模块的真实适配器。
     app.dependency_overrides[template_dependencies.stations] = device_dependencies.stations
     app.dependency_overrides[template_dependencies.binding_gateway] = (

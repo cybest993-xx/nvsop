@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from queue import Empty, Full, Queue
-from threading import Event, Thread, current_thread
+from threading import Event, Lock, Thread, current_thread
 from time import monotonic
 from typing import Protocol, cast
 
@@ -39,6 +39,11 @@ class StationRuntimeConfiguration:
     template: Template
     parameters: RuntimeParameters
     margins: EvidenceMargins
+    backend_id: str | None = None
+    template_version_id: str | None = None
+    template_sha256: str | None = None
+    model_ids: tuple[str, ...] = ()
+    disposition_policy: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,12 +299,110 @@ class SseStationInputSource(StationInputSource):
         )
 
 
+class MultiplexedStationInputSource(StationInputSource):
+    """把同一工位多个后端的输入合并到一个 supervisor 队列。"""
+
+    def __init__(self, *, sources: tuple[StationInputSource, ...], queue_size: int = 128) -> None:
+        if not sources:
+            raise ValueError("multiplexed station input needs at least one source")
+        if queue_size <= 0:
+            raise ValueError("multiplexed station input queue size must be positive")
+        self._sources = sources
+        self._events: Queue[SupervisorInput] = Queue(maxsize=queue_size)
+        self._stopping = Event()
+        self._state_lock = Lock()
+        self._closed = False
+        self._ended = False
+        self._remaining = len(sources)
+        self._error: BaseException | None = None
+        self._workers: tuple[Thread, ...] = ()
+        self._started = False
+
+    @property
+    def ended(self) -> bool:
+        with self._state_lock:
+            return self._ended
+
+    def next_input(self, *, timeout: float | None) -> SupervisorInput | InputWaitExpired | None:
+        with self._state_lock:
+            if not self._started and not self._closed:
+                self._workers = tuple(
+                    Thread(
+                        target=self._pump,
+                        args=(source,),
+                        name=f"edge-station-source-{index}",
+                        daemon=True,
+                    )
+                    for index, source in enumerate(self._sources)
+                )
+                self._started = True
+                for worker in self._workers:
+                    worker.start()
+            error = self._error
+            closed = self._closed
+            ended = self._ended
+        if error is not None:
+            raise error
+        if closed and self._events.empty():
+            return None
+        try:
+            return self._events.get(timeout=timeout)
+        except Empty:
+            return None if ended else InputWaitExpired()
+
+    def close(self) -> None:
+        with self._state_lock:
+            if self._closed:
+                return
+            self._closed = True
+        self._stopping.set()
+        for source in self._sources:
+            source.close()
+        for worker in self._workers:
+            if worker is not current_thread():
+                worker.join(timeout=1.0)
+        with self._state_lock:
+            self._ended = True
+
+    def _pump(self, source: StationInputSource) -> None:
+        try:
+            while not self._stopping.is_set():
+                arriving = source.next_input(timeout=0.5)
+                if isinstance(arriving, InputWaitExpired):
+                    continue
+                if arriving is None:
+                    if source.ended:
+                        break
+                    continue
+                while not self._stopping.is_set():
+                    try:
+                        self._events.put(arriving, timeout=0.2)
+                        break
+                    except Full:
+                        continue
+        except BaseException as error:
+            with self._state_lock:
+                self._error = error
+        finally:
+            with self._state_lock:
+                self._remaining -= 1
+                if self._remaining == 0:
+                    self._ended = True
+
+
 def station_configuration(value: object) -> StationRuntimeConfiguration:
     """解析一条工位实时判定配置并拒绝未知字段。"""
     config = _object(value, "station configuration")
     _require_keys(
         config,
         required={"station_id", "inference_url", "request", "template", "parameters", "margins"},
+        optional={
+            "backend_id",
+            "template_version_id",
+            "template_sha256",
+            "model_ids",
+            "disposition_policy",
+        },
     )
     request_body = _object(config["request"], "station request")
     if request_body.get("stream") is not True:
@@ -345,6 +448,11 @@ def station_configuration(value: object) -> StationRuntimeConfiguration:
         leading=_non_negative_number(margins["leading"], "evidence leading margin"),
         trailing=_non_negative_number(margins["trailing"], "evidence trailing margin"),
     )
+    model_ids: tuple[str, ...] = ()
+    if "model_ids" in config:
+        model_ids = tuple(
+            _non_empty_string(item, "model id") for item in _array(config["model_ids"], "model_ids")
+        )
     return StationRuntimeConfiguration(
         station_id=_non_empty_string(config["station_id"], "station_id"),
         inference_url=safe_url(config["inference_url"], "inference_url", schemes={"http", "https"}),
@@ -352,11 +460,33 @@ def station_configuration(value: object) -> StationRuntimeConfiguration:
         template=template,
         parameters=resolved_parameters,
         margins=evidence_margins,
+        backend_id=(
+            None
+            if config.get("backend_id") is None
+            else _non_empty_string(config["backend_id"], "backend_id")
+        ),
+        template_version_id=(
+            None
+            if config.get("template_version_id") is None
+            else _non_empty_string(config["template_version_id"], "template_version_id")
+        ),
+        template_sha256=(
+            None
+            if config.get("template_sha256") is None
+            else _non_empty_string(config["template_sha256"], "template_sha256")
+        ),
+        model_ids=model_ids,
+        disposition_policy=(
+            None
+            if config.get("disposition_policy") is None
+            else _non_empty_string(config["disposition_policy"], "disposition_policy")
+        ),
     )
 
 
 __all__ = [
     "InputWaitExpired",
+    "MultiplexedStationInputSource",
     "SseStationInputSource",
     "StationInputSource",
     "StationRuntimeConfiguration",

@@ -30,6 +30,7 @@ from factory_sop.auth.errors import (
     refusal_problem,
 )
 from factory_sop.auth.model import SessionPolicy
+from factory_sop.configuration.adapters.routes import router as configuration_router
 from factory_sop.dataset.adapters import dependencies as dataset_dependencies
 from factory_sop.dataset.adapters.annotation_routes import (
     compatibility_router as annotation_compatibility_router,
@@ -147,6 +148,7 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(liveness_router, prefix=API_PREFIX)
     app.include_router(auth_routes.router, prefix=API_PREFIX)
     app.include_router(inference_hosts_router, prefix=API_PREFIX)
+    app.include_router(configuration_router, prefix=API_PREFIX)
     app.include_router(inference_backends_router, prefix=API_PREFIX)
     app.include_router(device_commands_router, prefix=API_PREFIX)
     app.include_router(stations_router, prefix=API_PREFIX)

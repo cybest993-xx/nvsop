@@ -28,6 +28,19 @@ from nvsop_contracts.commands import (
     connection_test_result_from_wire,
     connection_test_result_to_wire,
 )
+from nvsop_contracts.configuration import (
+    CONFIGURATION_CONTRACT_VERSION,
+    ConfigurationArtifact,
+    ConfigurationBundle,
+    ConfigurationTemplate,
+    ConfiguredConnector,
+    ConfiguredPoint,
+    ConfiguredStation,
+    ResolvedRuntimeParameters,
+    canonical_json,
+    configuration_from_wire,
+    configuration_to_wire,
+)
 from nvsop_contracts.host_identity import (
     HostIdentityKeyPair,
     HostIdentityRequest,
@@ -37,9 +50,15 @@ from nvsop_contracts.host_identity import (
     validate_host_identity_public_key,
     verify_host_identity_request,
 )
-
 __all__ = [
+    "CONFIGURATION_CONTRACT_VERSION",
     "Capability",
+    "ConfigurationArtifact",
+    "ConfigurationBundle",
+    "ConfigurationTemplate",
+    "ConfiguredConnector",
+    "ConfiguredPoint",
+    "ConfiguredStation",
     "ConnectionTestClaim",
     "ConnectionTestCommand",
     "ConnectionTestOutcome",
@@ -52,12 +71,16 @@ __all__ = [
     "PointRole",
     "Polled",
     "Pushed",
+    "ResolvedRuntimeParameters",
     "Sequencing",
     "TimestampSource",
     "Unfitness",
     "Unverified",
+    "canonical_json",
     "capability_from_wire",
     "capability_to_wire",
+    "configuration_from_wire",
+    "configuration_to_wire",
     "connection_test_claim_from_wire",
     "connection_test_claim_to_wire",
     "connection_test_command_from_wire",

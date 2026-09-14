@@ -12,6 +12,7 @@ import threading
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic, sleep
 from types import FrameType
@@ -44,6 +45,8 @@ from edge_runtime.connectors.writes import (
 from edge_runtime.judgment.model import HostInstant, HostLiveness
 from edge_runtime.local_state.store import LocalState, open_local_state
 from edge_runtime.media import MediaRuntime, validate_sop_camera_bindings
+from edge_runtime.reporting import DecisionReporter, ReportContext
+from edge_runtime.reporting_transport import HttpDecisionReportTransport
 from edge_runtime.runtime_configuration import (
     RuntimeConfiguration,
     bootstrap_runtime_configuration,
@@ -296,6 +299,7 @@ class RuntimeComposition:
     stations: tuple[AutonomousStation, ...]
     connector_runtimes: ConnectorRuntimeSet
     output_dispatchers: Mapping[str, OutputDispatcher]
+    reporters: tuple[DecisionReporter, ...] = ()
 
 
 class AutonomousRuntime:
@@ -308,6 +312,7 @@ class AutonomousRuntime:
         stations: tuple[AutonomousStation, ...],
         state: LocalState,
         media: MediaRuntime | None = None,
+        reporters: tuple[DecisionReporter, ...] = (),
         configuration_sync: ConfigurationSynchronizer | None = None,
         maintenance_interval: float = 30.0,
         configuration: RuntimeConfiguration | None = None,
@@ -321,6 +326,7 @@ class AutonomousRuntime:
         self._stations = list(stations)
         self._state = state
         self._media = media
+        self._reporters = reporters
         self._configuration_sync = configuration_sync
         self._maintenance_interval = maintenance_interval
         self._configuration = configuration
@@ -356,6 +362,7 @@ class AutonomousRuntime:
             self._configuration = composition.configuration
             self._connector_runtimes = composition.connector_runtimes
             self._output_dispatchers = dict(composition.output_dispatchers)
+            self._reporters = composition.reporters
         for station in old_stations:
             station.close()
 
@@ -404,6 +411,25 @@ class AutonomousRuntime:
                 nonlocal pending_bundle
                 while not stop_requested():
                     now = HostInstant(monotonic())
+                    reported_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+                    for reporter in self._reporters:
+                        # 上报失败不能阻塞判定,但必须留下可检索的诊断并等待下一轮重试。
+                        try:
+                            attempts = reporter.flush(now=now, reported_at=reported_at)
+                        except (OSError, sqlite3.Error, ValueError) as error:
+                            _logger.warning(
+                                "edge.report_flush.failed error_type=%s",
+                                type(error).__name__,
+                            )
+                        else:
+                            failed_attempts = tuple(
+                                attempt for attempt in attempts if not attempt.sent
+                            )
+                            if failed_attempts:
+                                _logger.warning(
+                                    "edge.report_flush.retry_pending failed_count=%s",
+                                    len(failed_attempts),
+                                )
                     if self._configuration_sync is not None:
                         try:
                             result = self._configuration_sync.synchronize(observed_at=now.seconds)
@@ -471,7 +497,7 @@ class AutonomousRuntime:
                             daemon=True,
                         )
                     ]
-                    if self._configuration_sync is not None
+                    if self._reporters or self._configuration_sync is not None
                     else []
                 ),
             ]
@@ -545,6 +571,7 @@ def _build_runtime_composition(
     config: EdgeRuntimeConfiguration,
     state: LocalState,
     runtime_configuration: RuntimeConfiguration,
+    report_transport: HttpDecisionReportTransport | None,
 ) -> RuntimeComposition:
     """组合已确认拓扑、真实适配器、轮询运行时和持久账本。"""
     registry = ConfiguredLocalConnectorRegistry(runtime_configuration.connectors)
@@ -582,6 +609,7 @@ def _build_runtime_composition(
         )
         for connector_id, adapter in adapters.items()
     }
+    reporters: list[DecisionReporter] = []
     stations: list[AutonomousStation] = []
     try:
         for station_binding in runtime_configuration.stations:
@@ -607,6 +635,21 @@ def _build_runtime_composition(
                 for connector_id in station_binding.connector_ids
                 if connector_id in output_dispatchers
             }
+            if station_config.backend_id is not None and report_transport is not None:
+                reporters.append(
+                    DecisionReporter(
+                        queues=station_store,
+                        context=ReportContext(
+                            host_id=config.host_id,
+                            station_id=station_config.station_id,
+                            backend_id=station_config.backend_id,
+                            template_version_id=station_config.template_version_id,
+                            template_sha256=station_config.template_sha256,
+                            model_ids=station_config.model_ids,
+                        ),
+                        transport=report_transport,
+                    )
+                )
             stations.append(
                 AutonomousStation(
                     station_id=station_config.station_id,
@@ -634,6 +677,7 @@ def _build_runtime_composition(
         stations=tuple(stations),
         connector_runtimes=connector_runtimes,
         output_dispatchers=output_dispatchers,
+        reporters=tuple(reporters),
     )
 
 
@@ -735,10 +779,18 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
             config=config,
             runtime_configuration=active_configuration,
         )
+        report_transport = HttpDecisionReportTransport(
+            center_url=config.center_url,
+            host_id=config.host_id,
+            host_private_key=config.host_private_key,
+            timeout=config.command_timeout,
+            ssl_context=config.ssl_context,
+        )
         composition = _build_runtime_composition(
             config=config,
             state=state,
             runtime_configuration=active_configuration,
+            report_transport=report_transport,
         )
         command_loop = _build_connection_test_loop(config)
 
@@ -756,6 +808,7 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
                 config=config,
                 state=state,
                 runtime_configuration=runtime_configuration,
+                report_transport=report_transport,
             )
 
         def validate_confirmed(bundle: ConfigurationBundle) -> None:
@@ -786,6 +839,7 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
             stations=composition.stations,
             state=state,
             media=MediaRuntime(config.media) if config.media is not None else None,
+            reporters=composition.reporters,
             configuration_sync=configuration_sync,
             maintenance_interval=config.command_poll_interval,
             configuration=composition.configuration,

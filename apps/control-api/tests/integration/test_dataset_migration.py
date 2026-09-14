@@ -1,4 +1,4 @@
-"""用真实 PostgreSQL 走过 0023 → 0029 的训练数据集用途迁移。"""
+"""用真实 PostgreSQL 走过 0023 → 当前 head 的训练数据集用途迁移。"""
 
 from __future__ import annotations
 
@@ -282,7 +282,7 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
 
     with database_at_0023.connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0029"
+    assert version == "0031"
     assert "dataset.dataset.edit" in _permission_codes(database_at_0023)
 
     command.downgrade(configuration, "0025")

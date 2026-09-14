@@ -11638,6 +11638,316 @@
         "summary": "Liveness"
       }
     },
+    "/api/v1/monitor/health": {
+      "post": {
+        "operationId": "reportMonitorHealth",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Inference-Host-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Timestamp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Timestamp"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Nonce",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Nonce"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Signature"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Reportmonitorhealth",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Report Monitor Health",
+        "tags": [
+          "monitor"
+        ]
+      }
+    },
+    "/api/v1/monitor/reported-decisions": {
+      "post": {
+        "operationId": "reportMonitorDecision",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Inference-Host-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Timestamp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Timestamp"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Nonce",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Nonce"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Signature"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Reportmonitordecision",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Report Monitor Decision",
+        "tags": [
+          "monitor"
+        ]
+      }
+    },
+    "/api/v1/monitor/stream": {
+      "get": {
+        "operationId": "streamMonitorEvents",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "once",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Once",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Last-Event-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Stream Monitor Events",
+        "tags": [
+          "monitor"
+        ],
+        "x-required-permission": "monitor.report.view"
+      }
+    },
     "/api/v1/point-binding-validations": {
       "post": {
         "description": "只校验绑定候选，不创建或修改模板绑定。",

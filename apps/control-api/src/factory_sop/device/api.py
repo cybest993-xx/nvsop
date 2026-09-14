@@ -136,10 +136,14 @@ class DeviceTemplateBindingGateway(Protocol):
 
 
 class DeviceHostGateway(Protocol):
-    """模板上报入口调用的主机身份接缝。"""
+    """模板、监控上报入口调用的主机身份接缝。"""
 
     def authenticate(self, *, host: InferenceHostIdentity, now: datetime) -> None:
         """复用登记公钥、签名和 nonce 的正式主机认证。"""
+        ...
+
+    def owns_station(self, *, host_id: UUID, station_id: UUID) -> bool:
+        """只允许认证主机上报自己拥有的工位健康。"""
         ...
 
     def owns_station_backend(self, *, host_id: UUID, station_id: UUID, backend_id: UUID) -> bool:

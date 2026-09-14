@@ -6207,6 +6207,64 @@ export type EditInferenceHostResponses = {
 
 export type EditInferenceHostResponse = EditInferenceHostResponses[keyof EditInferenceHostResponses]
 
+export type PullInferenceHostConfigurationData = {
+  body?: never
+  headers?: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID'?: string | null
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path: {
+    /**
+     * Host Id
+     */
+    host_id: string
+  }
+  query?: never
+  url: '/api/v1/inference-hosts/{host_id}/configuration'
+}
+
+export type PullInferenceHostConfigurationErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type PullInferenceHostConfigurationError =
+  PullInferenceHostConfigurationErrors[keyof PullInferenceHostConfigurationErrors]
+
+export type PullInferenceHostConfigurationResponses = {
+  /**
+   * Response Pullinferencehostconfiguration
+   *
+   * Successful Response
+   */
+  200: {
+    [key: string]: unknown
+  }
+}
+
+export type PullInferenceHostConfigurationResponse =
+  PullInferenceHostConfigurationResponses[keyof PullInferenceHostConfigurationResponses]
+
 export type RotateInferenceHostCredentialData = {
   body?: never
   headers: {
@@ -6507,6 +6565,159 @@ export type ReadLivenessResponses = {
 }
 
 export type ReadLivenessResponse = ReadLivenessResponses[keyof ReadLivenessResponses]
+
+export type ReportMonitorHealthData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  headers?: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID'?: string | null
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/monitor/health'
+}
+
+export type ReportMonitorHealthErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReportMonitorHealthError = ReportMonitorHealthErrors[keyof ReportMonitorHealthErrors]
+
+export type ReportMonitorHealthResponses = {
+  /**
+   * Response Reportmonitorhealth
+   *
+   * Successful Response
+   */
+  200: {
+    [key: string]: unknown
+  }
+}
+
+export type ReportMonitorHealthResponse =
+  ReportMonitorHealthResponses[keyof ReportMonitorHealthResponses]
+
+export type ReportMonitorDecisionData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  headers?: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID'?: string | null
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/monitor/reported-decisions'
+}
+
+export type ReportMonitorDecisionErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReportMonitorDecisionError =
+  ReportMonitorDecisionErrors[keyof ReportMonitorDecisionErrors]
+
+export type ReportMonitorDecisionResponses = {
+  /**
+   * Response Reportmonitordecision
+   *
+   * Successful Response
+   */
+  200: {
+    [key: string]: unknown
+  }
+}
+
+export type ReportMonitorDecisionResponse =
+  ReportMonitorDecisionResponses[keyof ReportMonitorDecisionResponses]
+
+export type StreamMonitorEventsData = {
+  body?: never
+  headers?: {
+    /**
+     * Last-Event-Id
+     */
+    'Last-Event-ID'?: string | null
+  }
+  path?: never
+  query?: {
+    /**
+     * Once
+     */
+    once?: boolean
+  }
+  url: '/api/v1/monitor/stream'
+}
+
+export type StreamMonitorEventsErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type StreamMonitorEventsError = StreamMonitorEventsErrors[keyof StreamMonitorEventsErrors]
+
+export type StreamMonitorEventsResponses = {
+  /**
+   * Successful Response
+   */
+  200: unknown
+}
 
 export type ValidatePointBindingData = {
   body: BindingValidationRequest

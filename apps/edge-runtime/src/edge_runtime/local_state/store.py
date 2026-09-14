@@ -71,7 +71,7 @@ class StationStore(StationQueues):
         station_id: str,
         lock: AbstractContextManager[object],
     ) -> None:
-        super().__init__(connection, station_id)
+        super().__init__(connection, station_id, lock)
         self._lock = lock
 
     def commit(
@@ -298,13 +298,13 @@ class LocalState:
         """返回一个工位的行作用域; 所有工位共享连接和写入锁。"""
         return StationStore(self._connection, station_id, self._lock)
 
-    def configuration(self) -> LocalConfigurationStore:
-        """返回该主机的原子最后确认配置存储。"""
-        return LocalConfigurationStore(self._connection, self._lock)
-
     def disposal(self) -> LocalDisposalLedger:
         """返回该主机唯一的持久连接器写入账本。"""
         return LocalDisposalLedger(self._connection, self._lock)
+
+    def configuration(self) -> LocalConfigurationStore:
+        """返回该主机的原子最后确认配置存储。"""
+        return LocalConfigurationStore(self._connection, self._lock)
 
     def close(self) -> None:
         with self._lock:

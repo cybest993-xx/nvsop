@@ -73,6 +73,7 @@ from factory_sop.job.adapters.dispatcher import ArqJobDispatcher
 from factory_sop.job.adapters.routes import router as job_router
 from factory_sop.job.errors import JobRefusedError
 from factory_sop.job.errors import refusal_problem as job_refusal_problem
+from factory_sop.monitor.adapters.routes import router as monitor_router
 from factory_sop.observability import (
     correlation_scope,
     get_logger,
@@ -168,6 +169,7 @@ def create_app(settings: Settings) -> FastAPI:
     # 兼容基座 React 控件既有 `/api/annotation` 前缀；该路径不进入公开控制面契约。
     app.include_router(annotation_compatibility_router)
     app.include_router(job_router, prefix=API_PREFIX)
+    app.include_router(monitor_router, prefix=API_PREFIX)
     # 组合根把跨模块查询和任务依赖接到各自模块的真实适配器。
     app.dependency_overrides[template_dependencies.stations] = device_dependencies.stations
     app.dependency_overrides[template_dependencies.binding_gateway] = (

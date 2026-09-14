@@ -12,10 +12,15 @@ from nvsop_contracts import (
     ConfiguredStation,
     Measured,
     Polled,
+    ReportedDecision,
+    ReportedHealth,
+    ReportEvidence,
     ResolvedRuntimeParameters,
     Unverified,
     configuration_from_wire,
     configuration_to_wire,
+    reported_decision_from_wire,
+    reported_decision_to_wire,
 )
 
 
@@ -145,3 +150,65 @@ class ConfigurationContractTests(unittest.TestCase):
         connector["password"] = "not-allowed"  # pragma: allowlist secret
         with self.assertRaises(ValueError):
             configuration_from_wire(invalid)
+
+
+class ReportContractTests(unittest.TestCase):
+    def test_unknown_reason_code_survives_round_trip(self) -> None:
+        report = ReportedDecision(
+            event_id="host-a:42",
+            trace_id="trace-42",
+            host_id="host-a",
+            station_id="station-a",
+            backend_id="backend-a",
+            instance_id=42,
+            verdict="indeterminate",
+            reason_codes=("FUTURE_REASON",),
+            violations=(),
+            lifecycle="closed",
+            evidence=ReportEvidence(None, None, None),
+            template_version_id=None,
+            template_sha256=None,
+            model_ids=("model-v1",),
+            reported_at="2026-09-13T00:00:00Z",
+        )
+        self.assertEqual(reported_decision_from_wire(reported_decision_to_wire(report)), report)
+
+    def test_non_finite_evidence_is_rejected_at_the_wire_boundary(self) -> None:
+        report = ReportedDecision(
+            event_id="host-a:43",
+            trace_id="trace-43",
+            host_id="host-a",
+            station_id="station-a",
+            backend_id="backend-a",
+            instance_id=43,
+            verdict="indeterminate",
+            reason_codes=("FUTURE_REASON",),
+            violations=(),
+            lifecycle="closed",
+            evidence=ReportEvidence(1.0, 0.5, 1.5),
+            template_version_id=None,
+            template_sha256=None,
+            model_ids=(),
+            reported_at="2026-09-13T00:00:00Z",
+        )
+        wire = reported_decision_to_wire(report)
+        wire["evidence"] = {"anchor": float("nan"), "start": 0.5, "end": 1.5}
+        with self.assertRaises(ValueError):
+            reported_decision_from_wire(wire)
+
+    def test_health_keeps_raw_status_and_reason(self) -> None:
+        health = ReportedHealth(
+            event_id="host-a:health:1",
+            trace_id="trace-health-1",
+            host_id="host-a",
+            station_id="station-a",
+            status="future_status",
+            reason_code="FUTURE_REASON",
+            detail="preserve me",
+            reported_at="2026-09-13T00:00:00Z",
+        )
+        self.assertEqual(ReportedHealth.from_wire(health.to_wire()), health)
+
+
+if __name__ == "__main__":
+    unittest.main()

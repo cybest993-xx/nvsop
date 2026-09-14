@@ -23,7 +23,7 @@ from nvsop_contracts import (
 
 
 def summary(*, caller: Caller, monitor: MonitorRepository) -> dict[str, object]:
-    """Return only persisted observations; never infer a live or healthy state."""
+    """只返回已持久化的观测，不推断实时或健康状态。"""
     if not caller.holds(Permission.MONITOR_VIEW):
         return {"status": "not_permitted", "data": {}}
     decisions = monitor.recent_decisions(limit=100)

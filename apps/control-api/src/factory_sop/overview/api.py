@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import Protocol
 
 from factory_sop.auth.api import Caller
 from factory_sop.overview.usecases.summary import (
@@ -13,7 +14,13 @@ from factory_sop.overview.usecases.summary import (
 )
 from factory_sop.persistence import RequestSession
 
-SummaryReader = Callable[[Caller, RequestSession], dict[str, object]]
+
+class SummaryReader(Protocol):
+    """组合根向 overview 提供一个模块摘要读取器。"""
+
+    def __call__(self, caller: Caller, session: RequestSession) -> dict[str, object]:
+        """在同一请求事务中读取一个权限裁剪摘要。"""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,5 +53,6 @@ __all__ = [
     "OverviewSection",
     "OverviewSources",
     "OverviewUnavailableError",
+    "SummaryReader",
     "build_overview",
 ]

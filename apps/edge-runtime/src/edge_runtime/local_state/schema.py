@@ -12,7 +12,12 @@ one. `apply_migrations` is that rule as a function and holds no knowledge of thi
 unrelated — nothing here is shared with it, because this schema belongs to the edge and
 outlives an unreachable center.
 
-**本阶段交付配置确认表。** `local_config` 保存最后一个完整确认 bundle，失败记录只用于诊断；连接器处置账本由后续阶段追加。
+**What this ticket delivers, and what it leaves to each table's writer.** The five tables
+below are the ones whose behaviour E5.2 owns: instances, decisions, latched violations, and
+the two queues. `local_config` and `local_template_version` remain owned by the configuration
+landing code. `local_disposal` is created here because connector writes and supervisor
+disposal share one durable deduplication ledger; no connector adapter may create a second
+write ledger.
 
 Standard library only, like the core this state serves (edge-autonomy.md §5.11).
 """
@@ -136,6 +141,36 @@ _V1 = (
 )
 
 _V2 = (
+    # One row per station and idempotency key is the sole durable write ledger. The row is
+    # retained after a result so a restart cannot turn an acknowledged output into a second
+    # physical intent. A lease is metadata for a caller that needs to recover an abandoned
+    # attempt; it never deletes the identity or result of a completed write.
+    """
+    CREATE TABLE local_disposal (
+        station_id       TEXT    NOT NULL,
+        idempotency_key  TEXT    NOT NULL,
+        connector_id     TEXT    NOT NULL,
+        point_id         TEXT    NOT NULL,
+        actor            TEXT    NOT NULL,
+        requested_state  TEXT    NOT NULL,
+        result_kind      TEXT,
+        result_detail    TEXT,
+        result_at        REAL,
+        attempts         INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at  REAL,
+        lease_until      REAL,
+        PRIMARY KEY (station_id, idempotency_key),
+        CHECK (attempts >= 0),
+        CHECK ((result_kind IS NULL) = (result_at IS NULL))
+    )
+    """,
+    """
+    CREATE INDEX local_disposal_by_connector
+        ON local_disposal (station_id, connector_id, point_id)
+    """,
+)
+
+_V3 = (
     """
     CREATE TABLE local_config (
         slot             INTEGER PRIMARY KEY CHECK (slot = 1),
@@ -158,8 +193,7 @@ _V2 = (
     """,
 )
 
-
-MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1, _V2)
+MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1, _V2, _V3)
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 
 

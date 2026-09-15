@@ -474,7 +474,7 @@ EXEMPT = {
     ("POST", f"{API_PREFIX}/device-commands/{{command_id}}/result"),
     # 主机配置上报用公钥签名认证，不接受浏览器会话或人类权限。
     ("POST", f"{API_PREFIX}/templates/configuration-reports"),
-    # Edge report intake is authenticated by the registered host key, not a browser permission.
+    # edge 上报由登记的主机公钥认证, 不使用浏览器会话权限。
     ("POST", f"{API_PREFIX}/monitor/reported-decisions"),
     ("POST", f"{API_PREFIX}/monitor/health"),
 }

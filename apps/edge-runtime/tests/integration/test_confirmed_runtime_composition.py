@@ -40,7 +40,7 @@ from edge_runtime.judgment.model import HostInstant
 from edge_runtime.local_state.store import open_local_state
 from edge_runtime.runtime import AutonomousRuntime, build_autonomous_runtime_from_file
 
-# This module is intentionally self-contained when invoked by the repository's unittest target.
+# 本模块由 unittest target 直接调用时保持自包含。
 
 DEFAULT_WRITE_OUTCOME = Written(at=HostInstant(1.5))
 
@@ -375,7 +375,7 @@ def _local_config(directory: Path, private_key_file: Path) -> dict[str, object]:
 
 
 def _bundle() -> ConfigurationBundle:
-    # Reuse the exact contract shape without depending on another test file's import path.
+    # 复用精确的契约形状, 不依赖其他测试文件的导入路径。
     from hashlib import sha256
 
     from nvsop_contracts import (

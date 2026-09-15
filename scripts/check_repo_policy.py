@@ -206,7 +206,7 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
 
 
 def check_vendor_lfs(root: Path, files: list[Path]) -> list[str]:
-    """Vendored NVIDIA sources must not depend on upstream Git-LFS storage."""
+    """禁止 vendored NVIDIA 源码依赖上游 Git-LFS 对象存储。"""
     errors: list[str] = []
     for path in files:
         if not is_under(path, NVIDIA_VENDOR_ROOT):

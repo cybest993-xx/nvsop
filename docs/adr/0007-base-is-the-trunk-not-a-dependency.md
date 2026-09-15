@@ -72,13 +72,13 @@ NVIDIA 仓库的代码是本系统的躯干，不是外部依赖。姿态分三�
 - 推理侧就地改造维护为可重放 diff，逻辑放 `apps/edge-runtime/`，`vendor/` 内只留最小 hook（import 并调用我们的包）。它是在回调处追加调用，不进入他人控制流，故该分工成立。diff 存于 [`docs/base/patches/0001-stream-health-events.patch`](../base/patches/0001-stream-health-events.patch)，与工作树同步由契约测试保证。
 - 训练侧只登记一个兼容性补丁：为 `upload_video` 增加可选的显式 `target_data_id`（省略时保持 `current_data_id` 旧调用兼容），为复用的时间轴输入补上控件标签和可访问名称，增加已签发上下文的独立 React 入口并让标注服务不发布宿主机端口。它不改切片算法、模型路径或存储语义，diff 存于 [`docs/base/patches/0002-annotation-upload-target-and-accessibility.patch`](../base/patches/0002-annotation-upload-target-and-accessibility.patch)，由基座契约测试验证可重放、目标目录隔离、控件可访问性和独立入口。
 - **hook 在模块层 import**，不在调用点内 try/except 兜底：`edge_runtime` 不可导入的容器必须在启动时显式失败，而不是照常出流、静默不报健康。基座镜像里 `edge_runtime` 的可导入性属部署期事项（PYTHONPATH 或装包），与 E5 的容器编排一并落地。
-- `git subtree pull` 后必跑 `tests/contract/base/`：一类断言验证"我们依赖但不改的基座行为未变"，一类验证"两个已登记补丁仍可干净应用且改造行为正确"，一类验证"我们自己实现的序列比对仍与基座在**合规序列**上结论一致"（不含返工与漏步时机——那正是我们故意与基座不同的地方；可跳过步骤不在对比范围内，因为首版不生成该字段）。
+- `git subtree pull` 后必跑 `tests/contract/base/`：一类断言验证"我们依赖但不改的基座行为未变"，一类验证"已登记的可重放补丁仍可干净应用且各自约束成立"，一类验证"我们自己实现的序列比对仍与基座在**合规序列**上结论一致"（不含返工与漏步时机——那正是我们故意与基座不同的地方；可跳过步骤不在对比范围内，因为首版不生成该字段）。
 - `docs/base/verified-commits.md` 记录每次更新的 NVIDIA 提交号、契约测试结果、补丁是否需要调整。不记录"当前固定在哪个提交"（因为不固定），只记录"哪些提交上验证过"。
-- `vendor/` 内两处补丁都只依赖基座自身和标准库；推理 hook 与判定核心的标准库约束理由见 [ADR-0005](0005-judgment-runs-inside-the-inference-host.md)。
+- `vendor/` 内两处行为补丁都只依赖基座自身和标准库；推理 hook 与判定核心的标准库约束理由见 [ADR-0005](0005-judgment-runs-inside-the-inference-host.md)。
 
 ## Consequences
 
-- `vendor/` 保留两处受控改造：推理侧是一处追加输出，训练侧是一处兼容性补丁；二者都不是并行重写基座能力。
+- `vendor/` 保留两处受控行为改造：推理侧是一处追加输出，训练侧是一处兼容性补丁；二者都不是并行重写基座能力。另有 `0003` 非行为清理补丁，仅删除无法由 subtree 携带实体对象的 LFS 文档资产与 tracking 元数据。
 - 我们拥有序列比对这段核心算法的维护责任。这不是净增负担：边界求解、有效性门、三值判定本来就要我们写，而它们与序列比对共享同一份状态。
 - 基座 checker 与基座处置都靠既有环境变量关闭，不产生补丁。它们在我们的路径上不被调用，故不构成重复实现。
 - 仓库策略中"`vendor/` 只读"的表述作废，改为"`vendor/` 只经 subtree 更新或已登记的可重放补丁变更"。

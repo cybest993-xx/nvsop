@@ -1137,6 +1137,65 @@
         "title": "BackendStatus",
         "type": "object"
       },
+      "BackendSummary": {
+        "description": "资源数量及真实端点连接观测。",
+        "properties": {
+          "active": {
+            "minimum": 0.0,
+            "title": "Active",
+            "type": "integer"
+          },
+          "by_status": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Status",
+            "type": "object"
+          },
+          "connection_states": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Connection States",
+            "type": "object"
+          },
+          "deactivated": {
+            "minimum": 0.0,
+            "title": "Deactivated",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "unknown": {
+            "minimum": 0.0,
+            "title": "Unknown",
+            "type": "integer"
+          },
+          "unverified": {
+            "minimum": 0.0,
+            "title": "Unverified",
+            "type": "integer"
+          },
+          "verified": {
+            "minimum": 0.0,
+            "title": "Verified",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "active",
+          "deactivated",
+          "unknown",
+          "verified",
+          "unverified"
+        ],
+        "title": "BackendSummary",
+        "type": "object"
+      },
       "BindingReasonCode": {
         "description": "绑定前校验返回的稳定原因码。",
         "enum": [
@@ -1472,6 +1531,58 @@
           "status"
         ],
         "title": "CameraStatus",
+        "type": "object"
+      },
+      "CameraSummary": {
+        "description": "相机数量及已持久化的凭据存在标志。",
+        "properties": {
+          "active": {
+            "minimum": 0.0,
+            "title": "Active",
+            "type": "integer"
+          },
+          "by_status": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Status",
+            "type": "object"
+          },
+          "credentials_configured": {
+            "minimum": 0.0,
+            "title": "Credentials Configured",
+            "type": "integer"
+          },
+          "credentials_not_configured": {
+            "minimum": 0.0,
+            "title": "Credentials Not Configured",
+            "type": "integer"
+          },
+          "deactivated": {
+            "minimum": 0.0,
+            "title": "Deactivated",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "unknown": {
+            "minimum": 0.0,
+            "title": "Unknown",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "active",
+          "deactivated",
+          "unknown",
+          "credentials_configured",
+          "credentials_not_configured"
+        ],
+        "title": "CameraSummary",
         "type": "object"
       },
       "CameraView": {
@@ -1895,6 +2006,65 @@
         "title": "ConnectorStatus",
         "type": "object"
       },
+      "ConnectorSummary": {
+        "description": "连接器数量及实测可达性，包括未验证状态。",
+        "properties": {
+          "active": {
+            "minimum": 0.0,
+            "title": "Active",
+            "type": "integer"
+          },
+          "by_status": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Status",
+            "type": "object"
+          },
+          "deactivated": {
+            "minimum": 0.0,
+            "title": "Deactivated",
+            "type": "integer"
+          },
+          "reachability": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Reachability",
+            "type": "object"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "unknown": {
+            "minimum": 0.0,
+            "title": "Unknown",
+            "type": "integer"
+          },
+          "unverified": {
+            "minimum": 0.0,
+            "title": "Unverified",
+            "type": "integer"
+          },
+          "verified": {
+            "minimum": 0.0,
+            "title": "Verified",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "active",
+          "deactivated",
+          "unknown",
+          "verified",
+          "unverified"
+        ],
+        "title": "ConnectorSummary",
+        "type": "object"
+      },
       "ConnectorType": {
         "description": "中心支持的连接器配置类型。",
         "enum": [
@@ -2083,6 +2253,27 @@
         "title": "Credentials",
         "type": "object"
       },
+      "DatasetMemberSummary": {
+        "properties": {
+          "by_status": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Status",
+            "type": "object"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total"
+        ],
+        "title": "DatasetMemberSummary",
+        "type": "object"
+      },
       "DatasetMemberView": {
         "properties": {
           "actual_sha256": {
@@ -2265,6 +2456,64 @@
         "title": "DatasetMemberView",
         "type": "object"
       },
+      "DatasetOverviewSection": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/DatasetSummaryData"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "data"
+        ],
+        "title": "DatasetOverviewSection",
+        "type": "object"
+      },
+      "DatasetSummaryData": {
+        "properties": {
+          "datasets": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Datasets"
+          },
+          "members": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DatasetMemberSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "DatasetSummaryData",
+        "type": "object"
+      },
       "DatasetView": {
         "properties": {
           "created_at": {
@@ -2365,6 +2614,34 @@
         "title": "DesiredTemplateBindingView",
         "type": "object"
       },
+      "DeviceOverviewSection": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/DeviceSummaryData"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "data"
+        ],
+        "title": "DeviceOverviewSection",
+        "type": "object"
+      },
       "DeviceStatus": {
         "description": "可配置设备是否继续参与新绑定和运行。\n\n使用枚举而不是 `is_active` 布尔值，因为所有可变配置对象共用“停用”语义。停用可恢复且不级联，\n已停用推理机的后端仍保留记录和历史。",
         "enum": [
@@ -2373,6 +2650,72 @@
         ],
         "title": "DeviceStatus",
         "type": "string"
+      },
+      "DeviceSummaryData": {
+        "properties": {
+          "cameras": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CameraSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "connectors": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConnectorSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "inference_backends": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BackendSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "inference_hosts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "points": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stations": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "DeviceSummaryData",
+        "type": "object"
       },
       "EditedRole": {
         "properties": {
@@ -3644,6 +3987,75 @@
         "title": "MediaPathMode",
         "type": "string"
       },
+      "MonitorOverviewSection": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/MonitorSummaryData"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "data"
+        ],
+        "title": "MonitorOverviewSection",
+        "type": "object"
+      },
+      "MonitorSummaryData": {
+        "properties": {
+          "recent_decisions": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recent Decisions"
+          },
+          "recent_health": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recent Health"
+          },
+          "runtime_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime Status"
+          }
+        },
+        "title": "MonitorSummaryData",
+        "type": "object"
+      },
       "NewPassword": {
         "properties": {
           "password": {
@@ -3726,6 +4138,30 @@
         ],
         "title": "OrderingMode",
         "type": "string"
+      },
+      "OverviewResponse": {
+        "properties": {
+          "dataset": {
+            "$ref": "#/components/schemas/DatasetOverviewSection"
+          },
+          "device": {
+            "$ref": "#/components/schemas/DeviceOverviewSection"
+          },
+          "monitor": {
+            "$ref": "#/components/schemas/MonitorOverviewSection"
+          },
+          "template": {
+            "$ref": "#/components/schemas/TemplateOverviewSection"
+          }
+        },
+        "required": [
+          "device",
+          "template",
+          "dataset",
+          "monitor"
+        ],
+        "title": "OverviewResponse",
+        "type": "object"
       },
       "PendingCommandStatus": {
         "description": "持久委托命令的生命周期状态。",
@@ -4112,6 +4548,32 @@
         "title": "ProblemDocument",
         "type": "object"
       },
+      "PublishedVersionSummary": {
+        "properties": {
+          "sha256_unverified": {
+            "minimum": 0.0,
+            "title": "Sha256 Unverified",
+            "type": "integer"
+          },
+          "sha256_verified": {
+            "minimum": 0.0,
+            "title": "Sha256 Verified",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "sha256_verified",
+          "sha256_unverified"
+        ],
+        "title": "PublishedVersionSummary",
+        "type": "object"
+      },
       "RecordingMode": {
         "description": "相机是否只在观看时取流，还是持续录制。",
         "enum": [
@@ -4206,6 +4668,46 @@
           "status"
         ],
         "title": "RequestedStatus",
+        "type": "object"
+      },
+      "ResourceSummary": {
+        "description": "配置资源的数量，并保留未知状态值。",
+        "properties": {
+          "active": {
+            "minimum": 0.0,
+            "title": "Active",
+            "type": "integer"
+          },
+          "by_status": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Status",
+            "type": "object"
+          },
+          "deactivated": {
+            "minimum": 0.0,
+            "title": "Deactivated",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "unknown": {
+            "minimum": 0.0,
+            "title": "Unknown",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "active",
+          "deactivated",
+          "unknown"
+        ],
+        "title": "ResourceSummary",
         "type": "object"
       },
       "RetryMode": {
@@ -5209,6 +5711,27 @@
         "title": "TemplateImportResultView",
         "type": "object"
       },
+      "TemplateImportSummary": {
+        "properties": {
+          "by_status": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Status",
+            "type": "object"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total"
+        ],
+        "title": "TemplateImportSummary",
+        "type": "object"
+      },
       "TemplateImportView": {
         "properties": {
           "content_type": {
@@ -5260,6 +5783,34 @@
           "imported_at"
         ],
         "title": "TemplateImportView",
+        "type": "object"
+      },
+      "TemplateOverviewSection": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/TemplateSummaryData"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "data"
+        ],
+        "title": "TemplateOverviewSection",
         "type": "object"
       },
       "TemplateRuntimeDefaultsInput": {
@@ -5398,6 +5949,46 @@
           "description"
         ],
         "title": "TemplateStepView",
+        "type": "object"
+      },
+      "TemplateSummaryData": {
+        "properties": {
+          "drafts": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drafts"
+          },
+          "imports": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TemplateImportSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "published_versions": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublishedVersionSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "TemplateSummaryData",
         "type": "object"
       },
       "TemplateVersionView": {
@@ -10967,6 +11558,126 @@
         "x-required-permission": "device.inference_host.edit"
       }
     },
+    "/api/v1/inference-hosts/{host_id}/configuration": {
+      "get": {
+        "description": "先认证主机，再只组装该主机的拓扑和模板。",
+        "operationId": "pullInferenceHostConfiguration",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "host_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Host Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Timestamp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Timestamp"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Nonce",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Nonce"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Pullinferencehostconfiguration",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Pull Inference Host Configuration",
+        "tags": [
+          "inference-host"
+        ]
+      }
+    },
     "/api/v1/inference-hosts/{host_id}/credential": {
       "post": {
         "deprecated": true,
@@ -11516,6 +12227,348 @@
           }
         },
         "summary": "Liveness"
+      }
+    },
+    "/api/v1/monitor/health": {
+      "post": {
+        "operationId": "reportMonitorHealth",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Inference-Host-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Timestamp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Timestamp"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Nonce",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Nonce"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Signature"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Reportmonitorhealth",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Report Monitor Health",
+        "tags": [
+          "monitor"
+        ]
+      }
+    },
+    "/api/v1/monitor/reported-decisions": {
+      "post": {
+        "operationId": "reportMonitorDecision",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Inference-Host-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Timestamp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Timestamp"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Nonce",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Nonce"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Signature"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Reportmonitordecision",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Report Monitor Decision",
+        "tags": [
+          "monitor"
+        ]
+      }
+    },
+    "/api/v1/monitor/stream": {
+      "get": {
+        "operationId": "streamMonitorEvents",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "once",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Once",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Last-Event-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Stream Monitor Events",
+        "tags": [
+          "monitor"
+        ],
+        "x-required-permission": "monitor.report.view"
+      }
+    },
+    "/api/v1/overview": {
+      "get": {
+        "description": "通过请求唯一的 SQLAlchemy session 组合所有者摘要。",
+        "operationId": "readOverview",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Read Overview",
+        "tags": [
+          "overview"
+        ]
       }
     },
     "/api/v1/point-binding-validations": {

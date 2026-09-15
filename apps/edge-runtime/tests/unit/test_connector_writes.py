@@ -302,5 +302,102 @@ class EveryAttemptLeavesADiagnosticEventTest(unittest.TestCase):
         )
 
 
+class DurableLocalDisposalLedgerTest(unittest.TestCase):
+    def test_failed_result_is_retryable_but_success_closes_the_key(self) -> None:
+        import sqlite3
+        from dataclasses import replace
+
+        from edge_runtime.connectors.writes import SQLiteWriteLedger
+        from edge_runtime.local_state.disposal import LocalDisposalLedger
+        from edge_runtime.local_state.schema import migrate
+
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        connection.row_factory = sqlite3.Row
+        migrate(connection)
+        first_connector = RecordingConnector(outcome=Failed(detail="temporary failure"))
+        first_request = replace(
+            request(),
+            station_id="station-retry",
+            connector_id="connector-a",
+            attempt_at=HostInstant(1.0),
+            lease_seconds=5.0,
+        )
+        first_dispatch = OutputDispatcher(
+            connector=first_connector,
+            ledger=SQLiteWriteLedger(LocalDisposalLedger(connection)),
+            diagnostics=lambda event: None,
+        )
+        self.assertEqual(Failed(detail="temporary failure"), first_dispatch.write(first_request))
+        self.assertEqual(1, len(first_connector.writes))
+
+        second_connector = RecordingConnector()
+        second_dispatch = OutputDispatcher(
+            connector=second_connector,
+            ledger=SQLiteWriteLedger(LocalDisposalLedger(connection)),
+            diagnostics=lambda event: None,
+        )
+        self.assertEqual(
+            ACCEPTED,
+            second_dispatch.write(replace(first_request, attempt_at=HostInstant(2.0))),
+        )
+        self.assertEqual(1, len(second_connector.writes))
+        connection.close()
+
+    def test_written_result_survives_restart_and_expired_attempt_is_not_replayed(self) -> None:
+        import sqlite3
+        from dataclasses import replace
+
+        from edge_runtime.connectors.writes import SQLiteWriteLedger
+        from edge_runtime.local_state.disposal import LocalDisposalLedger
+        from edge_runtime.local_state.schema import migrate
+
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        connection.row_factory = sqlite3.Row
+        migrate(connection)
+        local_ledger = LocalDisposalLedger(connection)
+        first_connector = RecordingConnector()
+        first_request = replace(
+            request(),
+            station_id="station-3",
+            connector_id="connector-a",
+            attempt_at=HostInstant(1.0),
+            lease_seconds=5.0,
+        )
+        first_dispatch = OutputDispatcher(
+            connector=first_connector,
+            ledger=SQLiteWriteLedger(local_ledger),
+            diagnostics=lambda event: None,
+        )
+        self.assertEqual(ACCEPTED, first_dispatch.write(first_request))
+        self.assertEqual(1, len(first_connector.writes))
+
+        restarted_connector = RecordingConnector()
+        restarted_dispatch = OutputDispatcher(
+            connector=restarted_connector,
+            ledger=SQLiteWriteLedger(LocalDisposalLedger(connection)),
+            diagnostics=lambda event: None,
+        )
+        self.assertEqual(
+            ACCEPTED,
+            restarted_dispatch.write(replace(first_request, attempt_at=HostInstant(2.0))),
+        )
+        self.assertEqual([], restarted_connector.writes)
+
+        abandoned = replace(first_request, key="disposal-abandoned")
+        abandoned_ledger = SQLiteWriteLedger(LocalDisposalLedger(connection))
+        abandoned_ledger.prepare(abandoned)
+        self.assertIsNone(abandoned_ledger.claim(abandoned))
+        no_duplicate_connector = RecordingConnector()
+        no_duplicate_dispatch = OutputDispatcher(
+            connector=no_duplicate_connector,
+            ledger=SQLiteWriteLedger(LocalDisposalLedger(connection)),
+            diagnostics=lambda event: None,
+        )
+        outcome = no_duplicate_dispatch.write(replace(abandoned, attempt_at=HostInstant(7.0)))
+        self.assertIsInstance(outcome, Failed)
+        self.assertEqual([], no_duplicate_connector.writes)
+        connection.close()
+
+
 if __name__ == "__main__":
     unittest.main()

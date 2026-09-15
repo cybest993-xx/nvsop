@@ -183,6 +183,9 @@ import type {
   PublishTemplateVersionData,
   PublishTemplateVersionErrors,
   PublishTemplateVersionResponses,
+  PullInferenceHostConfigurationData,
+  PullInferenceHostConfigurationErrors,
+  PullInferenceHostConfigurationResponses,
   ReadAnnotationContextData,
   ReadAnnotationContextErrors,
   ReadAnnotationContextResponses,
@@ -225,6 +228,9 @@ import type {
   ReadLivenessData,
   ReadLivenessErrors,
   ReadLivenessResponses,
+  ReadOverviewData,
+  ReadOverviewErrors,
+  ReadOverviewResponses,
   ReadPointData,
   ReadPointErrors,
   ReadPointResponses,
@@ -261,6 +267,12 @@ import type {
   RegisterVlmCandidateData,
   RegisterVlmCandidateErrors,
   RegisterVlmCandidateResponses,
+  ReportMonitorDecisionData,
+  ReportMonitorDecisionErrors,
+  ReportMonitorDecisionResponses,
+  ReportMonitorHealthData,
+  ReportMonitorHealthErrors,
+  ReportMonitorHealthResponses,
   ReportTemplateConfigurationData,
   ReportTemplateConfigurationErrors,
   ReportTemplateConfigurationResponses,
@@ -309,6 +321,9 @@ import type {
   SetUserStatusData,
   SetUserStatusErrors,
   SetUserStatusResponses,
+  StreamMonitorEventsData,
+  StreamMonitorEventsErrors,
+  StreamMonitorEventsResponses,
   SubmitAnnotationData,
   SubmitAnnotationErrors,
   SubmitAnnotationResponses,
@@ -1106,6 +1121,24 @@ export const editInferenceHost = <ThrowOnError extends boolean = false>(
   })
 
 /**
+ * Pull Inference Host Configuration
+ *
+ * 先认证主机，再只组装该主机的拓扑和模板。
+ */
+export const pullInferenceHostConfiguration = <ThrowOnError extends boolean = false>(
+  options: Options<PullInferenceHostConfigurationData, ThrowOnError>,
+): RequestResult<
+  PullInferenceHostConfigurationResponses,
+  PullInferenceHostConfigurationErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).get<
+    PullInferenceHostConfigurationResponses,
+    PullInferenceHostConfigurationErrors,
+    ThrowOnError
+  >({ url: '/api/v1/inference-hosts/{host_id}/configuration', ...options })
+
+/**
  * Retired A Host Credential
  *
  * 保留旧路径以避免静默改写；不再签发或存储 bearer 凭据。
@@ -1214,6 +1247,69 @@ export const readLiveness = <ThrowOnError extends boolean = false>(
 ): RequestResult<ReadLivenessResponses, ReadLivenessErrors, ThrowOnError> =>
   (options?.client ?? client).get<ReadLivenessResponses, ReadLivenessErrors, ThrowOnError>({
     url: '/api/v1/liveness',
+    ...options,
+  })
+
+/**
+ * Report Monitor Health
+ */
+export const reportMonitorHealth = <ThrowOnError extends boolean = false>(
+  options: Options<ReportMonitorHealthData, ThrowOnError>,
+): RequestResult<ReportMonitorHealthResponses, ReportMonitorHealthErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    ReportMonitorHealthResponses,
+    ReportMonitorHealthErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/monitor/health',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Report Monitor Decision
+ */
+export const reportMonitorDecision = <ThrowOnError extends boolean = false>(
+  options: Options<ReportMonitorDecisionData, ThrowOnError>,
+): RequestResult<ReportMonitorDecisionResponses, ReportMonitorDecisionErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    ReportMonitorDecisionResponses,
+    ReportMonitorDecisionErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/monitor/reported-decisions',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Stream Monitor Events
+ */
+export const streamMonitorEvents = <ThrowOnError extends boolean = false>(
+  options?: Options<StreamMonitorEventsData, ThrowOnError>,
+): RequestResult<StreamMonitorEventsResponses, StreamMonitorEventsErrors, ThrowOnError> =>
+  (options?.client ?? client).get<
+    StreamMonitorEventsResponses,
+    StreamMonitorEventsErrors,
+    ThrowOnError
+  >({ url: '/api/v1/monitor/stream', ...options })
+
+/**
+ * Read Overview
+ *
+ * 通过请求唯一的 SQLAlchemy session 组合所有者摘要。
+ */
+export const readOverview = <ThrowOnError extends boolean = false>(
+  options?: Options<ReadOverviewData, ThrowOnError>,
+): RequestResult<ReadOverviewResponses, ReadOverviewErrors, ThrowOnError> =>
+  (options?.client ?? client).get<ReadOverviewResponses, ReadOverviewErrors, ThrowOnError>({
+    url: '/api/v1/overview',
     ...options,
   })
 

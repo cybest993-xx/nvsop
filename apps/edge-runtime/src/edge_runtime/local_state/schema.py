@@ -1,4 +1,4 @@
-"""The local state schema, as an ordered list of migrations.
+"""按顺序排列的 local state 迁移 schema。
 
 One database per inference host, holding every station that host runs (§5.7). SQLite
 because it is embedded, single-host and in the standard library — the inference host does
@@ -14,11 +14,10 @@ outlives an unreachable center.
 
 **What this ticket delivers, and what it leaves to each table's writer.** The five tables
 below are the ones whose behaviour E5.2 owns: instances, decisions, latched violations, and
-the two queues. `local_config`, `local_template_version` and `local_disposal` are named in
-§七 and are *not* created here, because a table's shape belongs to the module that writes it
-— template landing for the first two, #50/#51 for disposal. What this ticket delivers for
-them is the mechanism rather than the shape: each is one migration appended to the list
-below, applied by `apply_migrations` to hosts whose databases already hold rows.
+the two queues. `local_config` and `local_template_version` remain owned by the configuration
+landing code. `local_disposal` is created here because connector writes and supervisor
+disposal share one durable deduplication ledger; no connector adapter may create a second
+write ledger.
 
 Standard library only, like the core this state serves (edge-autonomy.md §5.11).
 """
@@ -141,12 +140,88 @@ _V1 = (
     """,
 )
 
-MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1,)
+_V2 = (
+    # One row per station and idempotency key is the sole durable write ledger. The row is
+    # retained after a result so a restart cannot turn an acknowledged output into a second
+    # physical intent. A lease is metadata for a caller that needs to recover an abandoned
+    # attempt; it never deletes the identity or result of a completed write.
+    """
+    CREATE TABLE local_disposal (
+        station_id       TEXT    NOT NULL,
+        idempotency_key  TEXT    NOT NULL,
+        connector_id     TEXT    NOT NULL,
+        point_id         TEXT    NOT NULL,
+        actor            TEXT    NOT NULL,
+        requested_state  TEXT    NOT NULL,
+        result_kind      TEXT,
+        result_detail    TEXT,
+        result_at        REAL,
+        attempts         INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at  REAL,
+        lease_until      REAL,
+        PRIMARY KEY (station_id, idempotency_key),
+        CHECK (attempts >= 0),
+        CHECK ((result_kind IS NULL) = (result_at IS NULL))
+    )
+    """,
+    """
+    CREATE INDEX local_disposal_by_connector
+        ON local_disposal (station_id, connector_id, point_id)
+    """,
+)
+
+_V3 = (
+    """
+    CREATE TABLE local_config (
+        slot             INTEGER PRIMARY KEY CHECK (slot = 1),
+        host_id          TEXT    NOT NULL,
+        config_revision  INTEGER NOT NULL,
+        sha256           TEXT    NOT NULL,
+        confirmed_at     REAL    NOT NULL,
+        payload          TEXT    NOT NULL,
+        CHECK (config_revision > 0),
+        CHECK (length(sha256) = 64)
+    )
+    """,
+    """
+    CREATE TABLE local_config_failure (
+        slot          INTEGER PRIMARY KEY CHECK (slot = 1),
+        code          TEXT    NOT NULL,
+        detail        TEXT    NOT NULL,
+        observed_at   REAL    NOT NULL
+    )
+    """,
+)
+
+_V4 = (
+    "ALTER TABLE local_config RENAME TO local_config_v2",
+    """
+    CREATE TABLE local_config_v3 (
+        slot             INTEGER PRIMARY KEY CHECK (slot = 1),
+        host_id          TEXT    NOT NULL,
+        config_revision  INTEGER NOT NULL,
+        sha256           TEXT    NOT NULL,
+        confirmed_at     REAL    NOT NULL,
+        payload          TEXT    NOT NULL,
+        CHECK (config_revision > 0),
+        CHECK (length(sha256) = 64)
+    )
+    """,
+    """
+    INSERT INTO local_config_v3 (slot, host_id, config_revision, sha256, confirmed_at, payload)
+    SELECT slot, host_id, config_revision, sha256, confirmed_at, payload
+      FROM local_config_v2
+    """,
+    "DROP TABLE local_config_v2",
+    "ALTER TABLE local_config_v3 RENAME TO local_config",
+)
+
+MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1, _V2, _V3, _V4)
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 
 
 def apply_migrations(connection: sqlite3.Connection, migrations: Sequence[Sequence[str]]) -> int:
-    """Run whatever of `migrations` this database has not run, returning the version reached.
+    """执行数据库尚未运行的迁移,并返回达到的版本。
 
     The mechanism, with no knowledge of the schema it usually carries: a migration is a
     sequence of statements, and `PRAGMA user_version` is how many have run. It is separate
@@ -175,5 +250,5 @@ def apply_migrations(connection: sqlite3.Connection, migrations: Sequence[Sequen
 
 
 def migrate(connection: sqlite3.Connection) -> int:
-    """Bring one database up to this module's current schema, returning that version."""
+    """把一个数据库迁移到本模块当前 schema,并返回版本。"""
     return apply_migrations(connection, MIGRATIONS)

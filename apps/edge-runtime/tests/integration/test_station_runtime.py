@@ -13,6 +13,7 @@ import time
 import unittest
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from random import Random
@@ -25,8 +26,18 @@ from nvsop_contracts import HostIdentityKeyPair, generate_host_identity_key_pair
 from edge_runtime.judgment.evidence import EvidenceMargins
 from edge_runtime.judgment.model import HostInstant, Ordering, RuntimeParameters, Template
 from edge_runtime.local_state.store import open_local_state
-from edge_runtime.runtime import AutonomousStation, build_autonomous_runtime_from_file
-from edge_runtime.station_runtime import SseStationInputSource
+from edge_runtime.runtime import (
+    AutonomousStation,
+    _station_input_source,
+    build_autonomous_runtime_from_file,
+)
+from edge_runtime.runtime_configuration import StationRuntimeBinding
+from edge_runtime.station_runtime import (
+    InputWaitExpired,
+    MultiplexedStationInputSource,
+    SseStationInputSource,
+    StationRuntimeConfiguration,
+)
 from edge_runtime.stream_health import StreamFact
 from edge_runtime.supervisor.inputs import ActionRecognized, StreamHealthObserved, SupervisorInput
 from edge_runtime.supervisor.startup import resume_station
@@ -194,6 +205,90 @@ def _action(signal: str, *, source_time: float, source_anchor: float) -> bytes:
     )
 
 
+class _FinishedInputSource:
+    @property
+    def ended(self) -> bool:
+        return True
+
+    def next_input(self, *, timeout: float | None) -> None:
+        del timeout
+        return None
+
+    def close(self) -> None:
+        pass
+
+
+class _ExplodingInputSource:
+    @property
+    def ended(self) -> bool:
+        return False
+
+    def next_input(self, *, timeout: float | None) -> None:
+        del timeout
+        raise RuntimeError("synthetic input failure")
+
+    def close(self) -> None:
+        pass
+
+
+class _DelayedInputSource:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.started = Event()
+        self.release = Event()
+        self._ended = False
+        self._fail = fail
+
+    @property
+    def ended(self) -> bool:
+        return self._ended
+
+    def next_input(self, *, timeout: float | None) -> None:
+        del timeout
+        self.started.set()
+        self.release.wait()
+        if self._fail:
+            raise RuntimeError("delayed synthetic input failure")
+        self._ended = True
+        return None
+
+    def close(self) -> None:
+        self.release.set()
+
+
+class _TrackingSseInputSource:
+    instances: ClassVar[list[_TrackingSseInputSource]] = []
+
+    def __init__(
+        self, *, inference_url: str, request_body: dict[str, object], timeout: float
+    ) -> None:
+        del request_body, timeout
+        self.inference_url = inference_url
+        self.started = Event()
+        self.closed = False
+        self._emitted = False
+        type(self).instances.append(self)
+
+    @property
+    def ended(self) -> bool:
+        return False
+
+    def next_input(self, *, timeout: float | None) -> SupervisorInput | InputWaitExpired:
+        del timeout
+        self.started.set()
+        if not self._emitted:
+            self._emitted = True
+            return ActionRecognized(
+                signal=self.inference_url,
+                at=HostInstant(1.0),
+                source_time=1.0,
+                source_anchor=1.0,
+            )
+        return InputWaitExpired()
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class RealSseStationInputSourceTest(unittest.TestCase):
     def test_close_releases_a_real_http_sse_reader(self) -> None:
         with _blocking_sse_server() as url:
@@ -290,6 +385,115 @@ class RealSseStationInputSourceTest(unittest.TestCase):
             [{"stream": True}, {"stream": True}],
             [json.loads(body) for body in _SseHandler.request_bodies],
         )
+
+
+class MultiplexedStationInputSourceTest(unittest.TestCase):
+    def test_blocked_wait_wakes_when_a_source_later_ends_or_fails(self) -> None:
+        def wait_for_input(
+            source: MultiplexedStationInputSource,
+            result: list[object],
+            errors: list[BaseException],
+        ) -> None:
+            try:
+                result.append(source.next_input(timeout=None))
+            except BaseException as error:
+                errors.append(error)
+
+        for fail, expected in ((False, None), (True, "delayed synthetic input failure")):
+            child = _DelayedInputSource(fail=fail)
+            source = MultiplexedStationInputSource(sources=(child,))
+            result: list[object] = []
+            errors: list[BaseException] = []
+
+            reader = threading.Thread(
+                target=wait_for_input,
+                args=(source, result, errors),
+                daemon=True,
+            )
+            reader.start()
+            self.assertTrue(child.started.wait(1.0))
+            self.assertTrue(reader.is_alive())
+            child.release.set()
+            reader.join(1.0)
+            source.close()
+
+            self.assertFalse(reader.is_alive())
+            if expected is None:
+                self.assertEqual([None], result)
+                self.assertEqual([], errors)
+            else:
+                self.assertEqual([], result)
+                self.assertEqual([expected], [str(error) for error in errors])
+
+    def test_wait_without_timeout_wakes_when_sources_end_or_fail(self) -> None:
+        ended = MultiplexedStationInputSource(
+            sources=(_FinishedInputSource(), _FinishedInputSource())
+        )
+        self.assertIsNone(ended.next_input(timeout=None))
+        ended.close()
+
+        failed = MultiplexedStationInputSource(sources=(_ExplodingInputSource(),))
+        with self.assertRaisesRegex(RuntimeError, "synthetic input failure"):
+            failed.next_input(timeout=None)
+        failed.close()
+
+
+class MultiBackendRuntimeCompositionTest(unittest.TestCase):
+    def test_two_backend_sse_sources_start_and_feed_one_station_source(self) -> None:
+        first = StationRuntimeConfiguration(
+            station_id="station-multi",
+            backend_id="backend-a",
+            inference_url="http://backend-a.example/v1/chat/completions",
+            request_body={"stream": True, "messages": []},
+            template=Template(
+                steps=("(1) start",),
+                ordering=Ordering.ORDERED,
+                start_signal="(1) start",
+            ),
+            parameters=RuntimeParameters(idle_timeout=10.0, step_deadline=5.0),
+            margins=EvidenceMargins(leading=0.0, trailing=0.0),
+        )
+        second = replace(
+            first,
+            backend_id="backend-b",
+            inference_url="http://backend-b.example/v1/chat/completions",
+        )
+        binding = StationRuntimeBinding(
+            configuration=first,
+            input_points=(),
+            output_points=(),
+            connector_ids=(),
+            configurations=(first, second),
+        )
+        _TrackingSseInputSource.instances = []
+        with patch("edge_runtime.runtime.SseStationInputSource", _TrackingSseInputSource):
+            source = _station_input_source(binding, timeout=0.1)
+            try:
+                self.assertIsInstance(source, MultiplexedStationInputSource)
+                arriving = {
+                    event.signal
+                    for event in (
+                        source.next_input(timeout=0.2),
+                        source.next_input(timeout=0.2),
+                    )
+                    if isinstance(event, ActionRecognized)
+                }
+                self.assertEqual(
+                    {
+                        "http://backend-a.example/v1/chat/completions",
+                        "http://backend-b.example/v1/chat/completions",
+                    },
+                    arriving,
+                )
+                self.assertEqual(2, len(_TrackingSseInputSource.instances))
+                self.assertTrue(
+                    all(
+                        instance.started.wait(1.0) for instance in _TrackingSseInputSource.instances
+                    )
+                )
+            finally:
+                source.close()
+        self.assertTrue(all(instance.closed for instance in _TrackingSseInputSource.instances))
 
 
 class RuntimeCompositionIntegrationTest(unittest.TestCase):

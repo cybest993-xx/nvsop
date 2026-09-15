@@ -52,6 +52,7 @@ from factory_sop.template.model import (
 )
 from nvsop_contracts import (
     HostIdentityRequest,
+    configuration_from_wire,
     generate_host_identity_key_pair,
     sign_host_identity_request,
 )
@@ -330,6 +331,227 @@ def test_published_version_round_trips_over_real_http_and_postgres(
         assert downloaded.headers["content-type"].split(";")[0] == artifact["media_type"]
         assert hashlib.sha256(downloaded.content).hexdigest() == artifact["sha256"]
     assert hashlib.sha256(downloaded_artifacts["manifest.json"]).hexdigest() == version["sha256"]
+
+
+def test_signed_configuration_pull_is_host_scoped_and_hash_complete_over_http_and_postgres(
+    client: TestClient, engine: Engine, publishable_draft: tuple[UUID, UUID, UUID, UUID]
+) -> None:
+    draft_id, _template_id, _import_id, station_id = publishable_draft
+    published = client.post(
+        f"{API_PREFIX}/templates/drafts/{draft_id}/publish",
+        headers={"If-Match": "1"},
+    )
+    assert published.status_code == 201, published.text
+    version = published.json()
+
+    now = datetime(2026, 9, 8, 4, 0, tzinfo=UTC)
+    host_a_key = generate_host_identity_key_pair()
+    host_b_key = generate_host_identity_key_pair()
+    host_a = InferenceHost(
+        id=new_id(),
+        name="裁剪推理机A",
+        address="10.0.8.70",
+        mediamtx_address=None,
+        recording_window_seconds=604800,
+        disk_watermark_percent=85,
+        status=DeviceStatus.ACTIVE,
+        revision=1,
+        created_by=ACTOR_ID,
+        updated_by=ACTOR_ID,
+        created_at=now,
+        updated_at=now,
+        identity_public_key=host_a_key.public_key,
+        configuration_revision=99,
+    )
+    host_b = InferenceHost(
+        id=new_id(),
+        name="裁剪推理机B",
+        address="10.0.8.71",
+        mediamtx_address=None,
+        recording_window_seconds=604800,
+        disk_watermark_percent=85,
+        status=DeviceStatus.ACTIVE,
+        revision=1,
+        created_by=ACTOR_ID,
+        updated_by=ACTOR_ID,
+        created_at=now,
+        updated_at=now,
+        identity_public_key=host_b_key.public_key,
+    )
+    backend_a = InferenceBackend(
+        id=new_id(),
+        host_id=host_a.id,
+        base_url="http://10.0.8.70:8000",
+        template_version_id=None,
+        status=DeviceStatus.ACTIVE,
+        connection_state=ConnectionState.UNVERIFIED,
+        connection_checked_at=None,
+        connection_detail=None,
+        self_reported_model_ids=(),
+        self_reported_at=None,
+        revision=1,
+        created_by=ACTOR_ID,
+        updated_by=ACTOR_ID,
+        created_at=now,
+        updated_at=now,
+    )
+    backend_b = InferenceBackend(
+        id=new_id(),
+        host_id=host_b.id,
+        base_url="http://10.0.8.71:8000",
+        template_version_id=None,
+        status=DeviceStatus.ACTIVE,
+        connection_state=ConnectionState.UNVERIFIED,
+        connection_checked_at=None,
+        connection_detail=None,
+        self_reported_model_ids=(),
+        self_reported_at=None,
+        revision=1,
+        created_by=ACTOR_ID,
+        updated_by=ACTOR_ID,
+        created_at=now,
+        updated_at=now,
+    )
+    camera_a = Camera(
+        id=new_id(),
+        name="裁剪相机A",
+        address="10.0.8.72",
+        main_stream_path="/Streaming/Channels/101",
+        sub_stream_path="/Streaming/Channels/102",
+        credentials_configured=True,
+        station_id=station_id,
+        host_id=host_a.id,
+        backend_id=backend_a.id,
+        status=DeviceStatus.ACTIVE,
+        revision=1,
+        created_by=ACTOR_ID,
+        updated_by=ACTOR_ID,
+        created_at=now,
+        updated_at=now,
+    )
+    try:
+        with session_factory(engine).begin() as database:
+            PostgresInferenceHostRepository(database).add(host_a)
+            PostgresInferenceHostRepository(database).add(host_b)
+            PostgresInferenceBackendRepository(database).add(backend_a)
+            PostgresInferenceBackendRepository(database).add(backend_b)
+            PostgresCameraRepository(database).add(camera_a)
+
+        binding = client.post(
+            f"{API_PREFIX}/templates/bindings",
+            headers={"If-Match": "1"},
+            json={
+                "station_id": str(station_id),
+                "version_id": version["id"],
+                "runtime_parameter_mode": "follow_template",
+                "runtime_parameters": None,
+            },
+        )
+        assert binding.status_code == 200, binding.text
+
+        def signed_headers(host: InferenceHost, private_key: str, nonce: str) -> dict[str, str]:
+            path = f"{API_PREFIX}/inference-hosts/{host.id}/configuration"
+            request = HostIdentityRequest(
+                method="GET",
+                path=path,
+                host_id=str(host.id),
+                timestamp=int(time()),
+                nonce=nonce,
+                body=None,
+            )
+            return {
+                "X-Inference-Host-ID": str(host.id),
+                "X-Inference-Host-Timestamp": str(request.timestamp),
+                "X-Inference-Host-Nonce": nonce,
+                "X-Inference-Host-Signature": sign_host_identity_request(
+                    request, private_key=private_key
+                ),
+            }
+
+        path_a = f"{API_PREFIX}/inference-hosts/{host_a.id}/configuration"
+        response_a = client.get(
+            path_a,
+            headers=signed_headers(host_a, host_a_key.private_key, "configuration-pull-a"),
+        )
+        assert response_a.status_code == 200, response_a.text
+        assert response_a.json()["contract_version"] == 2
+        bundle_a = configuration_from_wire(response_a.json())
+        assert bundle_a.host_id == str(host_a.id)
+        assert {station.backend_id for station in bundle_a.stations} == {str(backend_a.id)}
+        assert {
+            camera.camera_id for station in bundle_a.stations for camera in station.cameras
+        } == {str(camera_a.id)}
+        assert len(response_a.json()["sha256"]) == 64
+        assert all(
+            len(artifact["sha256"]) == 64
+            for station in response_a.json()["stations"]
+            for artifact in station["template"]["artifacts"]
+        )
+        assert version["sha256"] in response_a.text
+        assert "synthetic-private-credential" not in response_a.text
+        previous_revision = bundle_a.config_revision
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM device_camera WHERE id = :camera_id"),
+                {"camera_id": camera_a.id},
+            )
+            connection.execute(
+                text("DELETE FROM device_inference_backend WHERE id = :backend_id"),
+                {"backend_id": backend_a.id},
+            )
+        removed_response = client.get(
+            path_a,
+            headers=signed_headers(host_a, host_a_key.private_key, "configuration-pull-removed"),
+        )
+        assert removed_response.status_code == 200, removed_response.text
+        removed_bundle = configuration_from_wire(removed_response.json())
+        assert removed_bundle.stations == ()
+        assert removed_bundle.config_revision > previous_revision
+
+        path_b = f"{API_PREFIX}/inference-hosts/{host_b.id}/configuration"
+        response_b = client.get(
+            path_b,
+            headers=signed_headers(host_b, host_b_key.private_key, "configuration-pull-b"),
+        )
+        assert response_b.status_code == 200, response_b.text
+        bundle_b = configuration_from_wire(response_b.json())
+        assert bundle_b.host_id == str(host_b.id)
+        assert bundle_b.stations == ()
+
+        wrong_identity = client.get(
+            path_a,
+            headers=signed_headers(host_b, host_b_key.private_key, "configuration-pull-wrong"),
+        )
+        assert wrong_identity.status_code == 401
+        missing_signature = client.get(path_a)
+        assert missing_signature.status_code == 401
+
+        tampered = dict(response_a.json())
+        tampered["sha256"] = "0" * 64
+        with pytest.raises(ValueError, match="digest"):
+            configuration_from_wire(tampered)
+    finally:
+        with engine.begin() as cleanup:
+            cleanup.execute(
+                text("DELETE FROM template_configuration_report WHERE station_id = :station_id"),
+                {"station_id": station_id},
+            )
+            cleanup.execute(
+                text("DELETE FROM template_station_binding WHERE station_id = :station_id"),
+                {"station_id": station_id},
+            )
+            cleanup.execute(
+                text("DELETE FROM device_camera WHERE id = :camera_a"),
+                {"camera_a": camera_a.id},
+            )
+            cleanup.execute(
+                text("DELETE FROM device_inference_backend WHERE id IN (:backend_a, :backend_b)"),
+                {"backend_a": backend_a.id, "backend_b": backend_b.id},
+            )
+            cleanup.execute(
+                text("DELETE FROM device_inference_host WHERE id IN (:host_a, :host_b)"),
+                {"host_a": host_a.id, "host_b": host_b.id},
+            )
 
 
 def test_binding_and_signed_configuration_report_round_trip_over_http_and_postgres(

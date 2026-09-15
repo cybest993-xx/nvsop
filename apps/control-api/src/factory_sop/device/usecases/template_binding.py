@@ -502,6 +502,20 @@ class RepositoryDeviceTemplateBindingGateway(DeviceTemplateBindingGateway):
                 result.append(camera.backend_id)
         return tuple(result)
 
+    def owns_station(self, *, host_id: UUID, station_id: UUID) -> bool:
+        """判断认证主机是否拥有该工位上的活动相机。"""
+        topology = self._topology(station_id)
+        if topology is None or topology.station.status is DeviceStatus.DEACTIVATED:
+            return False
+        hosts = {host.id: host for host in topology.hosts}
+        return any(
+            camera.status is DeviceStatus.ACTIVE
+            and camera.host_id == host_id
+            and (host := hosts.get(camera.host_id)) is not None
+            and host.status is DeviceStatus.ACTIVE
+            for camera in topology.cameras
+        )
+
     def owns_station_backend(self, *, host_id: UUID, station_id: UUID, backend_id: UUID) -> bool:
         """判断认证主机是否拥有该工位上的活动相机和活动推理后端。"""
         topology = self._topology(station_id)

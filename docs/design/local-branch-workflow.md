@@ -7,13 +7,14 @@ and reference-transition rules. It does not configure or describe remote branch 
 
 | Branch | Role | Normal writer |
 |---|---|---|
-| `main` | Permanent local promotion target | The integration operator only |
-| `dev` | The single local integration branch | The integration operator only |
+| `main` | Permanent trunk, source for new task branches, and local promotion target | The integration operator only |
+| `dev` | The single local integration/staging branch | The integration operator only |
 | `agent/<agent-id>/<task-slug>` | Isolated work for one agent and one task | That agent only |
 
-`main` and `dev` are shared refs, not task workspaces. New local branches and worker renames must
-use `dev` or the worker pattern below. Existing legacy branch names may be deleted, but they must
-not be advanced as task branches.
+`main` and `dev` are shared refs, not task workspaces. New task branches start from the accepted
+`main` tip and use the worker pattern below; `dev` is integration-only and is not the normal source
+for task edits. Existing legacy branch names may be deleted, but they must not be advanced as task
+branches.
 
 ### Worker branch names
 
@@ -81,11 +82,14 @@ integration procedure below; do not reset `dev` over that work.
 
 ### 2. Give each agent an isolated worktree
 
-Create a worker branch from the current integration tip:
+Create a worker branch from the current accepted trunk tip:
 
 ```bash
-git worktree add ../nvsop-agent-a -b agent/a/<task-slug> dev
+git worktree add ../nvsop-agent-a -b agent/a/<task-slug> main
 ```
+
+If `main` moved after the task started, do not silently rebase or reset an active worker. Finish or
+explicitly rebase/update it as a separate integration decision with the affected evidence rerun.
 
 The agent commits only in that worktree. Other agents use different `agent/<agent-id>/...`
 branches and worktrees. Never let two agents share a worktree, index, or worker branch.

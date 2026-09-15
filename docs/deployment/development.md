@@ -21,7 +21,7 @@
 - pnpm：根 `package.json#packageManager`，当前为 **11.22.0**。
 - Tilt：开发编排器强制 **0.37.7**。
 
-还需要 `git`、`git-lfs`、Docker + Docker Compose、`ffmpeg`、`ffprobe`、`uv`。默认 HTTPS 还需要 `openssl`；浏览器测试需要 Node。Docker daemon 必须可用。
+还需要 `git`、`git-lfs`、Docker + Docker Compose、`ffmpeg`、`ffprobe`、`uv`。默认 HTTPS 还需要 `openssl`。`make dev-setup` 默认也会校验 Node 和 Playwright UI 固定端口 9323；Docker daemon 必须可用。
 
 固定端口必须空闲：
 
@@ -60,8 +60,15 @@ make dev-setup
 
 ## 日常命令
 
+`make dev` 是前台常驻 launcher：
+
 ```sh
-make dev             # 启动/保持固定开发实例
+make dev             # 启动/保持固定开发实例；当前终端持续占用直到停止
+```
+
+在另一个终端执行状态、日志、刷新和测试命令：
+
+```sh
 make dev-status      # 输出实例、服务、liveness/readiness 状态
 make dev-logs        # Compose 日志，默认 tail 200
 make dev-refresh     # 切到 main 的新提交快照
@@ -100,13 +107,13 @@ NVSOP_DEV_BUILD_NETWORK=host make dev
 
 ### Git LFS 缺少可选文档资源
 
-只有在已确认缺少的 LFS 对象全部属于可选文档资源时，才显式设置：
+只有在已确认缺少的 LFS 对象全部属于可选文档资源时，才在启动 launcher 时显式设置：
 
 ```sh
-NVSOP_ALLOW_MISSING_OPTIONAL_LFS=1 make dev-setup
+NVSOP_ALLOW_MISSING_OPTIONAL_LFS=1 make dev
 ```
 
-不要用它掩盖运行时模型、媒体或其他必需对象缺失。
+该开关由运行中的 launcher 在制作 `main` 提交快照时读取，`make dev-setup` 不消费它。若 launcher 已经运行，需要用该环境配置重新启动；不要用它掩盖运行时模型、媒体或其他必需对象缺失。
 
 ## 开发实例不是发布证明
 

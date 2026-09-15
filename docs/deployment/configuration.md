@@ -10,7 +10,7 @@
 uvicorn --factory factory_sop.entrypoint:build
 ```
 
-只有该进程入口读取 `os.environ`；下层应用/用例通过参数接收已经解析的配置。
+各进程入口/启动适配层负责从 `os.environ` 构造 `Settings`（包括 API、worker、bootstrap/healthcheck 等入口）；业务模块和用例层通过参数接收已经解析的配置，不直接读取进程环境。
 
 ### 配置规则
 
@@ -74,7 +74,7 @@ NVSOP_EDGE_COMMAND_CONFIG_FILE=/etc/nvsop/edge.json \
 
 可选：`center_ca_file`、`media`。
 
-主机私钥从文件读取并校验；连接器凭据同样留在本机 secret 文件。中心只拥有拓扑、模板、版本和生效运行参数；本机文件拥有本机连接信息、adapter profile 和设备秘密。不要把本机 secret 反向写入中心配置或 Git。
+主机私钥从文件读取并校验；连接器凭据同样留在本机 secret 文件。**当前生产入口以这份本地 JSON 作为 bootstrap/本机部署配置**。设计上的权威分工是中心拥有拓扑、模板、版本和期望运行参数，本机文件拥有本机连接信息、adapter profile 和设备秘密；不要把本机 secret 反向写入中心配置或 Git。
 
 ### 工位配置形状
 
@@ -126,6 +126,8 @@ NVSOP_EDGE_COMMAND_CONFIG_FILE=/etc/nvsop/edge.json \
 
 能力声明是现场实测事实，不是从型号名猜出的能力。模板绑定和判定依赖能力数据；详见 [`../design/mechanisms/edge-autonomy.md`](../design/mechanisms/edge-autonomy.md)。
 
-## 配置变更与最后确认状态
+## 当前配置变更与目标同步机制
 
-边缘自治的目标是中心短时不可达时继续使用**最后已确认**的模板/配置和本地状态。新配置必须经过既定确认/切换语义后生效；不要通过手改 SQLite 或绕过配置入口制造“看似已更新”的状态。
+`python -m edge_runtime` 启动时读取 `NVSOP_EDGE_COMMAND_CONFIG_FILE` 指向的本地 JSON，并据此构建当前自治运行时；本节前面的 JSON 形状描述的是这个**已实现 bootstrap/本机配置入口**。当前 `apps/edge-runtime` 没有中心配置拉取、原子确认或“最后已确认配置”持久化/切换路径。变更本机部署信息时，应更新受管本地配置并按部署流程重启/重新装配运行时，不要手改 SQLite 制造“看似已更新”的状态。
+
+“中心按推理机裁剪拉取、原子确认、中心不可达时继续使用最后已确认配置”是路线 #44 的验收语义。在相应代码路径和契约验证落地前，它是未完成的部署/升级前置条件，而不是当前运行能力。

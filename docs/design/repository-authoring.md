@@ -50,7 +50,7 @@ Do not create product modules from CRUD verbs, transport layers, tables, screen 
 
 ## Interface shape
 
-- Do not expose a bare boolean or ambiguous optional where the call site becomes unreadable; prefer an enum, keyword-only argument or two named functions.
+- A parameter takes neither a bare boolean nor an ambiguous optional. Prefer an enum, keyword-only argument or two named functions so the call site states its meaning. Where a signature cannot change and a literal must be passed, name it at the call site with a comment carrying the callee's parameter name exactly.
 - Branch on local enumerations exhaustively. At cross-process wire boundaries, preserve forward compatibility required by ADR-0003: unknown reason codes render as the raw code plus a generic hint.
 - Every cross-module entry added to `api.py` documents its role and expected caller.
 - Do not move behavior into `api.py`, `packages/`, `scripts/` or an adapter merely to reduce file/change counts.

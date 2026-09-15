@@ -11,7 +11,12 @@
 ```sh
 make hooks
 make dev-setup
-make dev
+make dev          # 前台保持运行
+```
+
+另开一个终端查看状态或执行测试：
+
+```sh
 make dev-status
 ```
 

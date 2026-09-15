@@ -1,3 +1,11 @@
+diff --git a/vendor/sop-monitoring-blueprints/.gitattributes b/vendor/sop-monitoring-blueprints/.gitattributes
+deleted file mode 100644
+index dc0531e..0000000
+--- a/vendor/sop-monitoring-blueprints/.gitattributes
++++ /dev/null
+@@ -1,2 +0,0 @@
+-*.png filter=lfs diff=lfs merge=lfs -text
+-*.pdf filter=lfs diff=lfs merge=lfs -text
 diff --git a/vendor/sop-monitoring-blueprints/README.md b/vendor/sop-monitoring-blueprints/README.md
 index 064ecad..0adccac 100644
 --- a/vendor/sop-monitoring-blueprints/README.md
@@ -30,6 +38,42 @@ index 4452797..4218eab 100644
  
  **Key data flow:** Input sources → FastAPI `/v1/chat/completions` → `SOPProcessManager` → per-request `SOPVideoProcessor` with 4 stages: DeepStream GEBD pipeline (e.g. DDM, GPU) → Clip post-process → VLM inference (Cosmos Reason 1/2) → SOP Checker → SSE stream / Kafka output.
  
+diff --git a/vendor/sop-monitoring-blueprints/agentic/ds-sop-skills/assets/DeepStream-SOP-Inference-Agentic-Workflow.png b/vendor/sop-monitoring-blueprints/agentic/ds-sop-skills/assets/DeepStream-SOP-Inference-Agentic-Workflow.png
+deleted file mode 100644
+index e81685a..0000000
+--- a/vendor/sop-monitoring-blueprints/agentic/ds-sop-skills/assets/DeepStream-SOP-Inference-Agentic-Workflow.png
++++ /dev/null
+@@ -1,3 +0,0 @@
+-version https://git-lfs.github.com/spec/v1
+-oid sha256:71c108eda74d12556ad6e907e62d91fc621366aa0d36e6cf45a7edff77be098b
+-size 827439
+diff --git a/vendor/sop-monitoring-blueprints/agentic/vss-sop-skills/vss-sop-build/references/diagrams/SOP Blueprint - VSS SOP building flow.png b/vendor/sop-monitoring-blueprints/agentic/vss-sop-skills/vss-sop-build/references/diagrams/SOP Blueprint - VSS SOP building flow.png
+deleted file mode 100644
+index d7d0343..0000000
+--- a/vendor/sop-monitoring-blueprints/agentic/vss-sop-skills/vss-sop-build/references/diagrams/SOP Blueprint - VSS SOP building flow.png	
++++ /dev/null
+@@ -1,3 +0,0 @@
+-version https://git-lfs.github.com/spec/v1
+-oid sha256:fa58c72b636fd7e3a981ba2ceccdc280a1c041b109d19c22a30624dc6ad76ce3
+-size 12841
+diff --git a/vendor/sop-monitoring-blueprints/agentic/vss-sop-skills/vss-sop-build/references/diagrams/VSS SOP Blueprint Architecture.png b/vendor/sop-monitoring-blueprints/agentic/vss-sop-skills/vss-sop-build/references/diagrams/VSS SOP Blueprint Architecture.png
+deleted file mode 100644
+index f28995f..0000000
+--- a/vendor/sop-monitoring-blueprints/agentic/vss-sop-skills/vss-sop-build/references/diagrams/VSS SOP Blueprint Architecture.png	
++++ /dev/null
+@@ -1,3 +0,0 @@
+-version https://git-lfs.github.com/spec/v1
+-oid sha256:5574bcb0a7a24c3fb05480e6365fb5284baeb97c77ebfd0a506490813f6fe981
+-size 166791
+diff --git a/vendor/sop-monitoring-blueprints/assets/SOP-FT-Inference-Agentic-Workflow.png b/vendor/sop-monitoring-blueprints/assets/SOP-FT-Inference-Agentic-Workflow.png
+deleted file mode 100644
+index 4b706de..0000000
+--- a/vendor/sop-monitoring-blueprints/assets/SOP-FT-Inference-Agentic-Workflow.png
++++ /dev/null
+@@ -1,3 +0,0 @@
+-version https://git-lfs.github.com/spec/v1
+-oid sha256:1fe5cf36895610ca363694225159c12fd30ed3d8afc7eabca72387fa683f6d11
+-size 896779
 diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/README.md b/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/README.md
 index 107b27d..9320c17 100644
 --- a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/README.md
@@ -42,6 +86,22 @@ index 107b27d..9320c17 100644
  
  **Key Components:**
  
+diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/docs/deepstream-sop-architecture.png b/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/docs/deepstream-sop-architecture.png
+deleted file mode 100644
+index 1f8a665..0000000
+--- a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/docs/deepstream-sop-architecture.png
++++ /dev/null
+@@ -1,3 +0,0 @@
+-version https://git-lfs.github.com/spec/v1
+-oid sha256:1f46ba5256262906e8d057b863ad0f5987d6fabd7559d8d34a3088fa655eb28e
+-size 500985
+diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/.gitattributes b/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/.gitattributes
+deleted file mode 100644
+index 2a2417f..0000000
+--- a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/.gitattributes
++++ /dev/null
+@@ -1 +0,0 @@
+-tutorials/*.pdf filter=lfs diff=lfs merge=lfs -text
 diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/ddm-training-ms/ddm/DDM-Net/config/config_guide.md b/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/ddm-training-ms/ddm/DDM-Net/config/config_guide.md
 index ef83ed3..7aa8b28 100644
 --- a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/ddm-training-ms/ddm/DDM-Net/config/config_guide.md
@@ -54,6 +114,15 @@ index ef83ed3..7aa8b28 100644
  </p>
  
  >
+diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/ddm-training-ms/ddm/DDM-Net/config/downsample-temporal_stride.png b/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/ddm-training-ms/ddm/DDM-Net/config/downsample-temporal_stride.png
+deleted file mode 100644
+index 084a3e7..0000000
+--- a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/ddm-training-ms/ddm/DDM-Net/config/downsample-temporal_stride.png
++++ /dev/null
+@@ -1,3 +0,0 @@
+-version https://git-lfs.github.com/spec/v1
+-oid sha256:b723a6e6a6177852da1179c204e2d2795a76f9ba07d7d547fe8873bbc09fcc8c
+-size 64566
 diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/evaluation-ms/ddm/DDM-Net/config/config_guide.md b/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/evaluation-ms/ddm/DDM-Net/config/config_guide.md
 index ef83ed3..7aa8b28 100644
 --- a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/evaluation-ms/ddm/DDM-Net/config/config_guide.md
@@ -66,3 +135,21 @@ index ef83ed3..7aa8b28 100644
  </p>
  
  >
+diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/evaluation-ms/ddm/DDM-Net/config/downsample-temporal_stride.png b/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/evaluation-ms/ddm/DDM-Net/config/downsample-temporal_stride.png
+deleted file mode 100644
+index 084a3e7..0000000
+--- a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/evaluation-ms/ddm/DDM-Net/config/downsample-temporal_stride.png
++++ /dev/null
+@@ -1,3 +0,0 @@
+-version https://git-lfs.github.com/spec/v1
+-oid sha256:b723a6e6a6177852da1179c204e2d2795a76f9ba07d7d547fe8873bbc09fcc8c
+-size 64566
+diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/tutorials/SOP_Training_BP_User_Guide.pdf b/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/tutorials/SOP_Training_BP_User_Guide.pdf
+deleted file mode 100755
+index f711fc0..0000000
+--- a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/tutorials/SOP_Training_BP_User_Guide.pdf
++++ /dev/null
+@@ -1,3 +0,0 @@
+-version https://git-lfs.github.com/spec/v1
+-oid sha256:eab9c25d6e68f2fd15d97e23be6150fe3eb4175c44c6722171654667174d0174
+-size 9955754

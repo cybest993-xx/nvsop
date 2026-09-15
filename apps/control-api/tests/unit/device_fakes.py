@@ -124,6 +124,20 @@ class FakeInferenceHosts:
     def by_id(self, host_id: UUID) -> InferenceHost | None:
         return self.rows.get(host_id)
 
+    def next_configuration_revision(
+        self, *, host_id: UUID, content_sha256: str, minimum_revision: int = 0
+    ) -> int:
+        host = self.rows[host_id]
+        if host.configuration_sha256 == content_sha256:
+            return host.configuration_revision
+        revision = max(host.configuration_revision + 1, minimum_revision + 1)
+        self.rows[host_id] = replace(
+            host,
+            configuration_revision=revision,
+            configuration_sha256=content_sha256,
+        )
+        return revision
+
     def consume_identity_nonce(self, *, host_id: UUID, nonce: str, seen_at: datetime) -> bool:
         del seen_at
         nonces = self.identity_nonces.setdefault(host_id, set())

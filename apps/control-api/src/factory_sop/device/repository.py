@@ -41,6 +41,12 @@ class InferenceHostRepository(Protocol):
         """按行 UUID 返回推理机；不存在时返回 `None`。"""
         ...
 
+    def next_configuration_revision(
+        self, *, host_id: UUID, content_sha256: str, minimum_revision: int = 0
+    ) -> int:
+        """为有效配置内容分配持久化且单调的主机修订号。"""
+        ...
+
     def consume_identity_nonce(self, *, host_id: UUID, nonce: str, seen_at: datetime) -> bool:
         """登记一次主机签名随机数；返回 `False` 表示请求可能被重放。"""
         ...

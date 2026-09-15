@@ -55,6 +55,7 @@ from edge_runtime.reporting import DecisionReporter, ReportContext
 from edge_runtime.reporting_transport import HttpDecisionReportTransport
 from edge_runtime.runtime_configuration import (
     RuntimeConfiguration,
+    StationRuntimeBinding,
     bootstrap_runtime_configuration,
     confirmed_runtime_configuration,
     validate_confirmed_runtime_configuration,

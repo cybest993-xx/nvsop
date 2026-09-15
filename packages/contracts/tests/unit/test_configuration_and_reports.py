@@ -193,7 +193,7 @@ class ConfigurationContractTests(unittest.TestCase):
         stations = wire["stations"]
         assert isinstance(stations, list)
         assert isinstance(stations[0], dict)
-        self.assertEqual(stations[0]["model_ids"], [])
+        self.assertNotIn("model_ids", stations[0])
         invalid = wire
         connector = invalid["stations"][0]["connectors"][0]  # type: ignore[index]
         connector["password"] = "not-allowed"  # pragma: allowlist secret

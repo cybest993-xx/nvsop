@@ -16,8 +16,7 @@ from typing import cast
 
 from nvsop_contracts.capability import Capability, capability_from_wire, capability_to_wire
 
-LEGACY_CONFIGURATION_CONTRACT_VERSION = 1
-CONFIGURATION_CONTRACT_VERSION = 2
+CONFIGURATION_CONTRACT_VERSION = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -393,10 +392,7 @@ class ConfigurationBundle:
     contract_version: int = CONFIGURATION_CONTRACT_VERSION
 
     def __post_init__(self) -> None:
-        if self.contract_version not in {
-            LEGACY_CONFIGURATION_CONTRACT_VERSION,
-            CONFIGURATION_CONTRACT_VERSION,
-        }:
+        if self.contract_version != CONFIGURATION_CONTRACT_VERSION:
             raise ValueError("configuration contract version is unsupported")
         if not self.host_id or not self.generated_at:
             raise ValueError("configuration bundle identity must not be empty")
@@ -408,7 +404,7 @@ class ConfigurationBundle:
 
     def content_wire(self) -> dict[str, object]:
         stations = [station.to_wire() for station in self.stations]
-        if self.contract_version == LEGACY_CONFIGURATION_CONTRACT_VERSION:
+        if self.contract_version == CONFIGURATION_CONTRACT_VERSION:
             for wire_station, station in zip(stations, self.stations, strict=True):
                 if not wire_station["model_ids"] and not station._model_ids_present:
                     wire_station.pop("model_ids")
@@ -468,9 +464,7 @@ class ConfigurationBundle:
             stations=tuple(
                 ConfiguredStation.from_wire(
                     _object(item, "configuration station"),
-                    allow_missing_model_ids=(
-                        contract_version == LEGACY_CONFIGURATION_CONTRACT_VERSION
-                    ),
+                    allow_missing_model_ids=(contract_version == CONFIGURATION_CONTRACT_VERSION),
                 )
                 for item in raw_stations
             ),

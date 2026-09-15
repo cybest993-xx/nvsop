@@ -12,7 +12,13 @@ const OVERVIEW = {
   device: {
     status: 'future_status',
     data: {
-      inference_hosts: { total: 1, active: 1, deactivated: 0, unknown: 0 },
+      inference_hosts: {
+        total: 1,
+        active: 0,
+        deactivated: 0,
+        unknown: 1,
+        by_status: { future_status: 1 },
+      },
       connection_states: { future_state: 1 },
     },
   },
@@ -91,6 +97,7 @@ test('SYS-35-46 — overview shows permission-scoped states and a raw SSE reason
   await expect(page.getByRole('heading', { name: '概览' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '设备拓扑' })).toBeVisible()
   await expect(page.getByText('状态未知')).toBeVisible()
+  await expect(page.getByText('future_status')).toBeVisible()
   await expect(page.getByText('future_state')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'SOP 模板' })).toBeVisible()
   await expect(page.getByText('无权限')).toBeVisible()

@@ -76,7 +76,7 @@ test('SYS-35-46 — overview shows permission-scoped states and a raw SSE reason
   await expect(page.getByText('无权限')).toBeVisible()
   await expect(page.getByText('训练数据摘要暂时不可用；其他模块仍返回真实摘要')).toBeVisible()
   await expect(page.getByText('实时上报镜像')).toBeVisible()
-  await expect(page.getByText('decision · host-e301:decision-1')).toBeVisible()
+  await expect(page.getByText('判定 · host-e301:decision-1')).toBeVisible()
   await expect(page.getByText('未知原因码：FUTURE_REASON')).toBeVisible()
   await expect(page.getByText('模板 version-e301')).toBeVisible()
   await expect(page.getByText('模型 model-e301')).toBeVisible()

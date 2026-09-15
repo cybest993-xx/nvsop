@@ -16,7 +16,8 @@ from typing import cast
 
 from nvsop_contracts.capability import Capability, capability_from_wire, capability_to_wire
 
-CONFIGURATION_CONTRACT_VERSION = 1
+CONFIGURATION_CONTRACT_VERSION = 2
+_LEGACY_CONFIGURATION_CONTRACT_VERSION = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,6 +270,68 @@ class ConfiguredPoint:
 
 
 @dataclass(frozen=True, slots=True)
+class ConfiguredCamera:
+    """属于该工位/backend 切片且不带凭据的相机拓扑。"""
+
+    camera_id: str
+    name: str
+    address: str
+    main_stream_path: str
+    sub_stream_path: str
+    credentials_configured: bool
+    revision: int
+
+    def __post_init__(self) -> None:
+        if not self.camera_id or not self.name or not self.address:
+            raise ValueError("camera identity and address must not be empty")
+        if not self.main_stream_path or not self.sub_stream_path:
+            raise ValueError("camera stream paths must not be empty")
+        if self.revision < 1:
+            raise ValueError("camera revision must be positive")
+        if _looks_like_secret(self.address):
+            raise ValueError("camera address cannot carry credentials")
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "camera_id": self.camera_id,
+            "name": self.name,
+            "address": self.address,
+            "main_stream_path": self.main_stream_path,
+            "sub_stream_path": self.sub_stream_path,
+            "credentials_configured": self.credentials_configured,
+            "revision": self.revision,
+        }
+
+    @classmethod
+    def from_wire(cls, value: Mapping[str, object]) -> ConfiguredCamera:
+        _require_keys(
+            value,
+            {
+                "camera_id",
+                "name",
+                "address",
+                "main_stream_path",
+                "sub_stream_path",
+                "credentials_configured",
+                "revision",
+            },
+            "camera",
+        )
+        configured = value["credentials_configured"]
+        if not isinstance(configured, bool):
+            raise ValueError("camera credentials_configured is invalid")
+        return cls(
+            camera_id=_string(value["camera_id"], "camera_id"),
+            name=_string(value["name"], "camera name"),
+            address=_string(value["address"], "camera address"),
+            main_stream_path=_string(value["main_stream_path"], "camera main_stream_path"),
+            sub_stream_path=_string(value["sub_stream_path"], "camera sub_stream_path"),
+            credentials_configured=configured,
+            revision=_positive_int(value["revision"], "camera revision"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ConfiguredStation:
     """一台推理机可见的一个工位/backend 切片。"""
 
@@ -281,6 +344,7 @@ class ConfiguredStation:
     connectors: tuple[ConfiguredConnector, ...]
     points: tuple[ConfiguredPoint, ...]
     template: ConfigurationTemplate | None
+    cameras: tuple[ConfiguredCamera, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.station_id or not self.backend_id or not self.code or not self.name:
@@ -293,6 +357,9 @@ class ConfiguredStation:
         point_ids = {point.point_id for point in self.points}
         if len(point_ids) != len(self.points):
             raise ValueError("station point ids must be unique")
+        camera_ids = {camera.camera_id for camera in self.cameras}
+        if len(camera_ids) != len(self.cameras):
+            raise ValueError("station camera ids must be unique")
         if any(point.connector_id not in connector_ids for point in self.points):
             raise ValueError("a point must refer to a connector in the same station")
 
@@ -307,30 +374,34 @@ class ConfiguredStation:
             "connectors": [connector.to_wire() for connector in self.connectors],
             "points": [point.to_wire() for point in self.points],
             "template": None if self.template is None else self.template.to_wire(),
+            "cameras": [camera.to_wire() for camera in self.cameras],
         }
 
     @classmethod
     def from_wire(cls, value: Mapping[str, object]) -> ConfiguredStation:
-        _require_keys(
-            value,
-            {
-                "station_id",
-                "backend_id",
-                "code",
-                "name",
-                "revision",
-                "runtime_parameters",
-                "connectors",
-                "points",
-                "template",
-            },
-            "station",
-        )
+        expected = {
+            "station_id",
+            "backend_id",
+            "code",
+            "name",
+            "revision",
+            "runtime_parameters",
+            "connectors",
+            "points",
+            "template",
+            "cameras",
+        }
+        keys = set(value)
+        if keys != expected and keys != expected - {"cameras"}:
+            raise ValueError("station has unsupported or missing fields")
+        if any(_looks_like_secret(key) for key in value):
+            raise ValueError("station contains a credential-bearing field")
         raw_connectors = _array(value["connectors"], "station connectors")
         raw_points = _array(value["points"], "station points")
         raw_template = value["template"]
         if raw_template is not None and not isinstance(raw_template, Mapping):
             raise ValueError("station template is invalid")
+        raw_cameras = _array(value.get("cameras", ()), "station cameras")
         return cls(
             station_id=_string(value["station_id"], "station_id"),
             backend_id=_string(value["backend_id"], "backend_id"),
@@ -352,6 +423,9 @@ class ConfiguredStation:
                 if raw_template is None
                 else ConfigurationTemplate.from_wire(cast(Mapping[str, object], raw_template))
             ),
+            cameras=tuple(
+                ConfiguredCamera.from_wire(_object(item, "station camera")) for item in raw_cameras
+            ),
         )
 
 
@@ -366,7 +440,10 @@ class ConfigurationBundle:
     contract_version: int = CONFIGURATION_CONTRACT_VERSION
 
     def __post_init__(self) -> None:
-        if self.contract_version != CONFIGURATION_CONTRACT_VERSION:
+        if self.contract_version not in {
+            _LEGACY_CONFIGURATION_CONTRACT_VERSION,
+            CONFIGURATION_CONTRACT_VERSION,
+        }:
             raise ValueError("configuration contract version is unsupported")
         if not self.host_id or not self.generated_at:
             raise ValueError("configuration bundle identity must not be empty")

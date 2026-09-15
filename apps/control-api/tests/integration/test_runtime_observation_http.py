@@ -381,15 +381,16 @@ def test_overview_returns_permission_scoped_real_sections(
         response = client.get(f"{API_PREFIX}/overview")
 
     assert response.status_code == 200
-    document = response.json()
-    assert document["device"] == {"status": "not_permitted", "data": {}}
-    assert document["template"] == {"status": "not_permitted", "data": {}}
-    assert document["dataset"] == {"status": "not_permitted", "data": {}}
-    assert document["monitor"] == {
-        "status": "no_data",
-        "data": {
-            "recent_decisions": 0,
-            "recent_health": 0,
-            "runtime_status": "reported_observations_only",
+    assert response.json() == {
+        "device": {"status": "not_permitted", "data": {}},
+        "template": {"status": "not_permitted", "data": {}},
+        "dataset": {"status": "not_permitted", "data": {}},
+        "monitor": {
+            "status": "no_data",
+            "data": {
+                "recent_decisions": 0,
+                "recent_health": 0,
+                "runtime_status": "reported_observations_only",
+            },
         },
     }

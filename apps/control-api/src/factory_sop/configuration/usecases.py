@@ -28,6 +28,7 @@ from nvsop_contracts import (
     ConfigurationArtifact,
     ConfigurationBundle,
     ConfigurationTemplate,
+    ConfiguredCamera,
     ConfiguredConnector,
     ConfiguredPoint,
     ConfiguredStation,
@@ -198,6 +199,9 @@ def _station_bundle(
             sorted((_point(value) for value in station_points), key=lambda item: item.point_id)
         ),
         template=template,
+        cameras=tuple(
+            sorted((_camera(value) for value in backend_cameras), key=lambda item: item.camera_id)
+        ),
     )
 
 
@@ -208,6 +212,18 @@ def _effective_parameters(
     if station.runtime_parameter_mode.value == "custom":
         return station.runtime_parameter_overrides
     return defaults
+
+
+def _camera(value: CameraSnapshot) -> ConfiguredCamera:
+    return ConfiguredCamera(
+        camera_id=str(value.id),
+        name=value.name,
+        address=value.address,
+        main_stream_path=value.main_stream_path,
+        sub_stream_path=value.sub_stream_path,
+        credentials_configured=value.credentials_configured,
+        revision=value.revision,
+    )
 
 
 def _connector(value: ConnectorSnapshot) -> ConfiguredConnector:

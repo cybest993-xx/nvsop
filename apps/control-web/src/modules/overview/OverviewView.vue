@@ -106,6 +106,11 @@ const enumLabels: Record<string, string> = {
   unreachable: '不可达',
   configured: '已配置',
   not_configured: '未配置',
+  decision: '判定',
+  health: '健康',
+  pass: '通过',
+  fail: '不通过',
+  indeterminate: '不可判定',
 }
 
 function fieldLabel(value: string): string {
@@ -312,7 +317,7 @@ onUnmounted(() => {
         </div>
         <ul class="overview__events" aria-live="polite">
           <li v-for="event in monitorEvents" :key="`${event.kind}:${event.id}`">
-            <strong>{{ event.kind }} · {{ event.id }}</strong>
+            <strong>{{ enumLabel(event.kind) }} · {{ event.id }}</strong>
             <span v-if="event.verdict">结论 {{ enumLabel(event.verdict) }}</span>
             <span v-if="event.reasons.length">
               <span v-for="reason in event.reasons" :key="reason" class="overview__reason">

@@ -106,19 +106,28 @@ _PROFILE_KEYS = frozenset(
 )
 
 
-def load_configuration(
-    config_path: str | Path, *, include_stations: bool = False
+def load_configuration(config_path: str | Path) -> EdgeRuntimeConfiguration:
+    """读取本机委托命令配置。"""
+    return _load_configuration(config_path, stations_required=False)
+
+
+def load_autonomous_configuration(config_path: str | Path) -> EdgeRuntimeConfiguration:
+    """读取包含自治工位和本地状态路径的完整配置。"""
+    return _load_configuration(config_path, stations_required=True)
+
+
+def _load_configuration(
+    config_path: str | Path, *, stations_required: bool
 ) -> EdgeRuntimeConfiguration:
-    """读取本机 JSON 配置; 可选地同时读取自治工位配置。"""
     raw: object = json.loads(Path(config_path).read_text(encoding="utf-8"))
     config = _object(raw, "edge runtime configuration")
-    required = _CONFIG_KEYS | ({"local_state_path", "stations"} if include_stations else set())
+    required = _CONFIG_KEYS | ({"local_state_path", "stations"} if stations_required else set())
     _require_keys(config, required=required, optional={"center_ca_file", "media"})
     connectors_value = _array(config["connectors"], "connectors")
     connectors = tuple(_local_connector(item) for item in connectors_value)
     stations: tuple[StationRuntimeConfiguration, ...] = ()
     local_state_path: Path | None = None
-    if include_stations:
+    if stations_required:
         station_values = _array(config["stations"], "stations")
         if not station_values:
             raise ValueError("stations must be a non-empty JSON array")
@@ -280,6 +289,7 @@ __all__ = [
     "EdgeRuntimeConfiguration",
     "LocalIsapiConnectorConfiguration",
     "connector_configuration",
+    "load_autonomous_configuration",
     "load_configuration",
     "safe_url",
 ]

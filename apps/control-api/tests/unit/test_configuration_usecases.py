@@ -15,6 +15,7 @@ BACKEND_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f104")
 CONNECTOR_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f105")
 FOREIGN_CONNECTOR_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f106")
 POINT_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f107")
+CAMERA_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f109")
 
 
 class Repo:
@@ -73,6 +74,12 @@ class Repo:
             return []
         return [
             SimpleNamespace(
+                id=CAMERA_ID,
+                name="Camera A",
+                address="camera.local",
+                main_stream_path="/Streaming/Channels/101",
+                sub_stream_path="/Streaming/Channels/102",
+                credentials_configured=False,
                 station_id=STATION_ID,
                 backend_id=BACKEND_ID,
                 host_id=HOST_ID,

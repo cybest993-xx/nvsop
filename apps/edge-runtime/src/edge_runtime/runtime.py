@@ -30,7 +30,7 @@ from edge_runtime.command_runtime import (
 from edge_runtime.configuration import (
     EdgeRuntimeConfiguration,
     LocalIsapiConnectorConfiguration,
-    load_configuration,
+    load_autonomous_configuration,
 )
 from edge_runtime.configuration_sync import ConfigurationSynchronizer, HttpConfigurationPuller
 from edge_runtime.connectors.port import (
@@ -70,10 +70,12 @@ from edge_runtime.supervisor.inputs import StreamHealthObserved
 from edge_runtime.supervisor.startup import resume_station
 from edge_runtime.supervisor.station import StationSupervisor
 
+_logger = logging.getLogger("edge_runtime")
 
-def _ignore_write_attempt(event: WriteAttempted) -> None:
-    """默认丢弃未装配诊断接缝的测试事件。"""
-    del event
+
+def _log_write_attempt(event: WriteAttempted) -> None:
+    """把连接器写入事件作为结构化字段交给边缘日志适配器。"""
+    _logger.info(event.event, extra=event.as_dict())
 
 
 class AutonomousStation:
@@ -96,7 +98,7 @@ class AutonomousStation:
         self._connector_runtimes = connector_runtimes
         self._output_dispatchers = dict(output_dispatchers or {})
         self._output_points = dict(output_points or {})
-        self._diagnostics = diagnostics or _ignore_write_attempt
+        self._diagnostics = diagnostics or _log_write_attempt
 
     @property
     def station_id(self) -> str | None:
@@ -464,14 +466,6 @@ class AutonomousRuntime:
         self._state.close()
 
 
-_logger = logging.getLogger("edge_runtime")
-
-
-def _log_write_attempt(event: WriteAttempted) -> None:
-    """把连接器写入事件作为结构化字段交给边缘日志适配器。"""
-    _logger.info(event.event, extra=event.as_dict())
-
-
 def _validate_media_for_runtime(
     *,
     config: EdgeRuntimeConfiguration,
@@ -616,7 +610,7 @@ def build_autonomous_runtime_from_file(
     connector_factory: ConnectorFactory | None = None,
 ) -> AutonomousRuntime:
     """从已确认的本地配置、真实连接器和 SQLite 状态装配自治运行时。"""
-    config = load_configuration(config_path, include_stations=True)
+    config = load_autonomous_configuration(config_path)
     resolved_connector_factory = connector_factory or build_isapi_connector
     if config.local_state_path is None:
         raise ValueError("local_state_path is required for autonomous runtime")

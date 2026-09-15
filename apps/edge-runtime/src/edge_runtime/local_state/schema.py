@@ -1,25 +1,20 @@
 """按顺序排列的 local state 迁移 schema。
 
-One database per inference host, holding every station that host runs (§5.7). SQLite
-because it is embedded, single-host and in the standard library — the inference host does
-not get a second database service to keep alive.
+每台推理机使用一个数据库, 保存该主机运行的全部工位(§5.7)。SQLite 嵌入式、单机且
+属于标准库, 推理机不需要额外维护数据库服务。
 
-**Migrations are append-only and run in order.** `PRAGMA user_version` records how far a
-database has been taken, so a host that has been offline for two releases catches up by
-running what it has not run yet. A landed migration is never edited: the next change adds
-one. `apply_migrations` is that rule as a function and holds no knowledge of this schema;
-`migrate` is this schema going through it. The center's Alembic history is separate and
-unrelated — nothing here is shared with it, because this schema belongs to the edge and
-outlives an unreachable center.
+**迁移只追加并按顺序执行。** `PRAGMA user_version` 记录数据库已经完成的版本; 主机离线
+多个版本后, 会继续执行尚未运行的迁移。已经落地的迁移不得修改, 后续变更必须追加新迁移。
+`apply_migrations` 只实现这条机制, 不了解具体 schema; `migrate` 负责把本 schema 交给它执行。
+中心的 Alembic 历史与本地 schema 相互独立, 因为这里的状态属于 edge, 并且必须在中心不可达时
+继续存活。
 
-**What this ticket delivers, and what it leaves to each table's writer.** The five tables
-below are the ones whose behaviour E5.2 owns: instances, decisions, latched violations, and
-the two queues. `local_config` and `local_template_version` remain owned by the configuration
-landing code. `local_disposal` is created here because connector writes and supervisor
-disposal share one durable deduplication ledger; no connector adapter may create a second
-write ledger.
+**本模块只负责本票拥有的表, 其他表由各自写入模块负责。** 下方表覆盖实例、判定、锁存违规和
+两个队列。`local_config` 与 `local_template_version` 仍由配置落地代码拥有。连接器写入和
+supervisor 处置共用一个持久去重账本, 因此 `local_disposal` 在此创建; 连接器适配器不得再建
+第二套写入账本。
 
-Standard library only, like the core this state serves (edge-autonomy.md §5.11).
+只使用标准库, 与本状态服务的判定核心保持一致(edge-autonomy.md §5.11)。
 """
 
 from __future__ import annotations
@@ -28,10 +23,8 @@ import sqlite3
 from collections.abc import Sequence
 
 _V1 = (
-    # An SOP instance, in flight while `closed_at` is NULL. The row carries the core's
-    # `Instance` faithfully rather than a summary of it, so what comes back after a restart
-    # is what the core had — a summary would be a second, quietly divergent model of the
-    # same thing.
+    # `closed_at` 为 NULL 时表示正在运行的 SOP 实例。该行完整保存核心的 `Instance`,
+    # 而不是保存摘要; 重启后恢复的内容必须与核心当时的状态一致, 避免产生悄然分叉的第二个模型。
     """
     CREATE TABLE local_sop_instance (
         station_id           TEXT    NOT NULL,
@@ -48,10 +41,8 @@ _V1 = (
         CHECK ((closed_at IS NULL) = (lifecycle IS NULL))
     )
     """,
-    # The instant a decision was reached is its evidence anchor (§5.6): the moment the
-    # closing condition held, or the monotonic anchor of the observation that forced it.
-    # There is therefore no separate `decided_at` — a second column holding the same fact
-    # is a second chance to disagree with itself.
+    # 判定产生的时刻就是证据锚点(§5.6): 要么是闭合条件成立的时刻, 要么是迫使判定产生的
+    # 观测单调锚点。因此不另设 `decided_at`, 避免同一事实由两列分别保存而产生不一致。
     """
     CREATE TABLE local_decision (
         decision_id      INTEGER PRIMARY KEY,
@@ -71,11 +62,9 @@ _V1 = (
     CREATE INDEX local_decision_by_instance
         ON local_decision (station_id, instance_id)
     """,
-    # Latched, and therefore insert-only: this module exposes no update and no delete for
-    # this table, which is how "a violation never disappears" (§5.2) holds structurally
-    # rather than by every caller's good behaviour. The uniqueness is the same fact seen
-    # from the other side — one deviation within one instance is one row, however many
-    # times it is re-reported.
+    # 违规一旦锁存就只允许插入; 本模块不提供该表的更新和删除, 因此“违规不会消失”(§5.2)
+    # 由结构保证, 而不是依赖每个调用方自觉遵守。唯一性表达同一事实的另一面: 一个实例中的
+    # 一次偏差只有一行, 无论它被重复上报多少次。
     """
     CREATE TABLE local_violation (
         violation_id     INTEGER PRIMARY KEY,
@@ -93,16 +82,13 @@ _V1 = (
             REFERENCES local_sop_instance (station_id, instance_id)
     )
     """,
-    # The transactional outbox for the center's mirror: written in the same transaction as
-    # the decision it is about, so a decision the center never hears about is unreachable
-    # rather than unlikely. `decision_id` is unique because one decision owes one report,
-    # which is what makes a retry a retry instead of a second event.
+    # 中心镜像的事务性 outbox: 它与所属判定写入同一事务, 因此中心未收到的判定是不可达状态,
+    # 而不是偶然丢失。`decision_id` 唯一, 因为一个判定只对应一条上报; 重试因此仍是重试,
+    # 不会变成第二个事件。
     #
-    # `sent_at` marks the row settled instead of deleting it, because the center's
-    # idempotent upsert needs the local half of the event's identity to stay stable across
-    # retries (#46), and because "what has this host already reported" is the question
-    # retention answers when it trims reported data (§5.19). Trimming settled rows is
-    # retention's, and only ever for rows that carry `sent_at`.
+    # 使用 `sent_at` 标记已结算行而不是删除它, 因为中心幂等 upsert 需要本地事件身份在重试中
+    # 保持稳定(#46), 保留策略也需要知道主机已经上报过什么(§5.19)。只有带有 `sent_at`
+    # 的已结算行才允许由保留策略裁剪。
     """
     CREATE TABLE local_report_queue (
         queue_id         INTEGER PRIMARY KEY,
@@ -115,10 +101,8 @@ _V1 = (
         FOREIGN KEY (decision_id) REFERENCES local_decision (decision_id)
     )
     """,
-    # The clip we owe, one row per anchor. The CHECK is the structural half of "a failed
-    # retry never drops the only copy we hold": a row cannot be recorded as uploaded
-    # without naming where the remote copy is, so no failure path can reach the state that
-    # would let the local file go.
+    # 每个锚点对应一条待交付证据片段。CHECK 约束保证“失败重试不会丢掉唯一副本”: 没有远端
+    # 引用就不能记录为已上传, 因此任何失败路径都不能把本地唯一文件推进到可删除状态。
     """
     CREATE TABLE local_evidence_queue (
         queue_id          INTEGER PRIMARY KEY,
@@ -141,10 +125,9 @@ _V1 = (
 )
 
 _V2 = (
-    # One row per station and idempotency key is the sole durable write ledger. The row is
-    # retained after a result so a restart cannot turn an acknowledged output into a second
-    # physical intent. A lease is metadata for a caller that needs to recover an abandoned
-    # attempt; it never deletes the identity or result of a completed write.
+    # 每个工位和幂等键各有一行, 这是唯一的持久写入账本。结果产生后仍保留该行, 避免重启把
+    # 已确认的输出变成第二个物理意图。租约只是调用方恢复遗弃尝试所需的元数据, 不会删除
+    # 已完成写入的身份或结果。
     """
     CREATE TABLE local_disposal (
         station_id       TEXT    NOT NULL,
@@ -194,21 +177,19 @@ _V3 = (
 )
 
 MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1, _V2, _V3)
-"""Every migration in order. Index + 1 is the `user_version` it takes a database to."""
+"""按顺序排列的全部迁移; 索引加一就是迁移后数据库的 `user_version`。"""
 
 
 def apply_migrations(connection: sqlite3.Connection, migrations: Sequence[Sequence[str]]) -> int:
-    """执行数据库尚未运行的迁移,并返回达到的版本。
+    """执行数据库尚未运行的迁移, 并返回达到的版本。
 
-    The mechanism, with no knowledge of the schema it usually carries: a migration is a
-    sequence of statements, and `PRAGMA user_version` is how many have run. It is separate
-    from `MIGRATIONS` so that the evolution path can be driven over a list a caller owns —
-    the real list is one entry long, so running it can only ever show creation.
+    迁移由 SQL 语句序列组成, `PRAGMA user_version` 记录已经执行的数量。机制与 `MIGRATIONS`
+    分离, 因此调用方可以提供自己的迁移列表; 真实列表目前只有一个迁移集合, 执行结果只会
+    表示 schema 创建或升级。
 
-    Idempotent: a database already at `len(migrations)` runs nothing, which is what a restart
-    does. Each migration is one transaction together with its version bump, so a failure
-    leaves the database at the last version that completed — no half-created table, and a
-    version that still asks for the migration that failed.
+    该过程幂等: 版本已经达到 `len(migrations)` 的数据库不会重复执行。每个迁移和版本递增
+    在同一事务中完成; 失败时保留最后一个已完成版本, 不会留下半建表状态, 并会继续要求重试
+    失败的迁移。
     """
     applied: int = connection.execute("PRAGMA user_version").fetchone()[0]
     for version, statements in enumerate(migrations[applied:], start=applied + 1):
@@ -216,8 +197,7 @@ def apply_migrations(connection: sqlite3.Connection, migrations: Sequence[Sequen
         try:
             for statement in statements:
                 connection.execute(statement)
-            # PRAGMA takes no parameter binding, and `version` is this loop's own index
-            # rather than anything a caller supplies.
+            # PRAGMA 不支持参数绑定; `version` 是本循环自己的索引, 不来自调用方输入。
             connection.execute(f"PRAGMA user_version = {version}")
         except Exception:
             connection.execute("ROLLBACK")

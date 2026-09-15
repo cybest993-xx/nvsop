@@ -1,6 +1,6 @@
 # 部署与运行配置
 
-本文说明 NVSOP 当前配置入口和信任边界。代码是字段/校验的最终权威：中心见 `apps/control-api/src/factory_sop/settings.py`，边缘见 `apps/edge-runtime/src/edge_runtime/configuration.py` 与 `station_runtime.py`，Web 开发代理见 `apps/control-web/vite.config.ts`。
+本文说明 NVSOP 当前配置入口和信任边界。代码是字段/校验的最终权威：中心进程配置见 `apps/control-api/src/factory_sop/settings.py`，中心下发配置见 `apps/control-api/src/factory_sop/configuration/`，边缘见 `apps/edge-runtime/src/edge_runtime/configuration.py`、`configuration_sync.py` 与 `runtime_configuration.py`，Web 开发代理见 `apps/control-web/vite.config.ts`。
 
 ## 中心后台
 
@@ -126,8 +126,14 @@ NVSOP_EDGE_COMMAND_CONFIG_FILE=/etc/nvsop/edge.json \
 
 能力声明是现场实测事实，不是从型号名猜出的能力。模板绑定和判定依赖能力数据；详见 [`../design/mechanisms/edge-autonomy.md`](../design/mechanisms/edge-autonomy.md)。
 
-## 当前配置变更与目标同步机制
+## 当前配置变更与同步机制
 
-`python -m edge_runtime` 启动时读取 `NVSOP_EDGE_COMMAND_CONFIG_FILE` 指向的本地 JSON，并据此构建当前自治运行时；本节前面的 JSON 形状描述的是这个**已实现 bootstrap/本机配置入口**。当前 `apps/edge-runtime` 没有中心配置拉取、原子确认或“最后已确认配置”持久化/切换路径。变更本机部署信息时，应更新受管本地配置并按部署流程重启/重新装配运行时，不要手改 SQLite 制造“看似已更新”的状态。
+`python -m edge_runtime` 仍先读取 `NVSOP_EDGE_COMMAND_CONFIG_FILE` 指向的本地 JSON。这份文件是**已实现的 bootstrap 与主机本地配置入口**：它提供中心地址、主机身份/私钥、本地推理端点与请求体、adapter profile、设备凭据、本地 SQLite 路径，以及首次无法取得中心确认配置时的自治起点；它不是中心拥有的拓扑、模板和运行参数的第二份权威。
 
-“中心按推理机裁剪拉取、原子确认、中心不可达时继续使用最后已确认配置”是路线 #44 的验收语义。在相应代码路径和契约验证落地前，它是未完成的部署/升级前置条件，而不是当前运行能力。
+自治运行时启动后会立即通过带主机签名的 `GET /api/v1/inference-hosts/{host_id}/configuration` 拉取当前主机的配置 bundle。中心先认证主机身份，再只组装该主机的有效后端、工位、相机、连接器/点位、模板版本和运行参数。共享配置契约校验 contract version、revision 和 canonical SHA-256；Edge 拉取层另行校验返回 bundle 的 `host_id` 必须等于本机身份，并证明 bundle 能与本机保存的推理端点、请求体、adapter profile 和凭据安全组合，再允许它替换已确认视图。
+
+确认由 `LocalConfigurationStore` 在 SQLite 的单个事务中写入完整 bundle：跨主机、旧 revision、同 revision 不同内容或无效运行组合都不会覆盖现有确认值。拉取、解析或运行组合验证失败时，只更新 `local_config_failure` 诊断，最后已确认 bundle 保持不变。启动时已有确认值就优先使用它；首次启动尚无确认值且中心不可达时，才使用本地 bootstrap 配置。
+
+运行期间 maintenance loop 按 `command_poll_interval_seconds` 继续拉取。新的有效 bundle 与当前 effective digest 不同时，当前运行循环先停止，再从已确认 bundle 重新组合 station/connector/runtime；中心不可达不会把配置同步放进实时判定进度。
+
+因此配置变更按所有权分两条路径：中心拥有的拓扑、模板、版本、点位和运行参数通过中心数据与配置同步生效；本机推理地址、请求体、adapter profile、设备秘密等主机本地信息通过受管本地 JSON/secret 文件变更，并按部署流程重启或重新装配。不要直接修改 SQLite 来制造确认状态。

@@ -366,13 +366,21 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
     stations: list[AutonomousStation] = []
     try:
         runtime_configuration = _synchronize_runtime_configuration(config, state)
+        confirmed_connector_ids = {
+            connector.connector_id for connector in runtime_configuration.connectors
+        }
+        command_connectors = runtime_configuration.connectors + tuple(
+            connector
+            for connector in config.connectors
+            if connector.connector_id not in confirmed_connector_ids
+        )
         command_loop = build_connection_test_loop(
             center_url=config.center_url,
             host_id=config.host_id,
             host_private_key=config.host_private_key,
             command_timeout=config.command_timeout,
             command_poll_interval=config.command_poll_interval,
-            local_connectors=runtime_configuration.connectors,
+            local_connectors=command_connectors,
             ssl_context=config.ssl_context,
         )
         if config.media is not None:

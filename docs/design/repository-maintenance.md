@@ -30,7 +30,7 @@ git subtree pull --prefix=vendor/sop-monitoring-blueprints \
 
 Then:
 
-1. Inspect the subtree diff and both registered patch surfaces; do not resolve conflicts by silently expanding patch scope.
+1. Inspect the subtree diff and all registered patch surfaces; do not resolve conflicts by silently expanding patch scope.
 2. Run `make check`, which includes `tests/contract/base/`.
 3. If a base assumption changed, either adapt NVSOP deliberately or reopen the architecture decision; do not weaken a contract test just to make the update pass.
 4. Append the NVIDIA commit, contract result and patch-adjustment outcome to `docs/base/verified-commits.md`.

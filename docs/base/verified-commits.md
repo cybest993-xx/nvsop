@@ -46,7 +46,7 @@ git subtree pull --prefix=vendor/sop-monitoring-blueprints \
 
 - 补丁：[`patches/0003-drop-unavailable-lfs-assets.patch`](patches/0003-drop-unavailable-lfs-assets.patch)。删除 8 个仅有 LFS pointer 的文档资产（7 个唯一 OID）以及两处 `filter=lfs` 规则，并移除对应文档嵌入。
 - 原因：NVSOP 的 GitHub LFS endpoint 对 7 个 OID 全部返回 `404 Object does not exist on the server`；subtree 接入只带入 pointer Git blob，不会复制 NVIDIA 的 LFS 对象。
-- 防复发：仓库策略拒绝 `vendor/sop-monitoring-blueprints/` 内的 `filter=lfs` 和 LFS pointer；`tests/contract/base/test_lfs_asset_patch.py` 验证补丁可逆向匹配当前 vendor 树及失效路径持续不存在。
+- 防复发：仓库策略拒绝 `vendor/sop-monitoring-blueprints/` 内的 `filter=lfs` 和 LFS pointer；`tests/contract/base/test_lfs_asset_patch.py` 验证补丁可从清理前 vendor 树前向重放、可从当前 vendor 树反向校验，并确认失效路径持续不存在。
 - 开发快照：移除 `NVSOP_ALLOW_MISSING_OPTIONAL_LFS` 临时降级和对应白名单；任何缺失 LFS 对象都直接失败且留下审计记录，不再生成 partial pointer 快照。
 - 补丁是否需要调整：后续每次 `git subtree pull` 都必须重新应用；若上游改为普通 Git bytes，可重新评估是否恢复相应文档资产。
 

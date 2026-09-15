@@ -23,6 +23,7 @@ commit and whose violation is expensive to unwind afterwards.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -109,12 +110,20 @@ def main() -> int:
         + refuse_vendor_edits(staged)
         + refuse_unformatted_python(root, staged)
     )
-    if not errors:
+    if errors:
+        print("pre-commit refused this commit:", file=sys.stderr)
+        for error in errors:
+            print(f"- {error}", file=sys.stderr)
+        return 1
+
+    lint_staged = root / ".husky" / "pre-commit"
+    if (
+        not lint_staged.is_file()
+        or shutil.which("pnpm") is None
+        or not (root / "node_modules" / ".bin" / "lint-staged").is_file()
+    ):
         return 0
-    print("pre-commit refused this commit:", file=sys.stderr)
-    for error in errors:
-        print(f"- {error}", file=sys.stderr)
-    return 1
+    return subprocess.run(["sh", str(lint_staged)], cwd=root).returncode
 
 
 if __name__ == "__main__":

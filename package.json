@@ -10,6 +10,12 @@
     "web:lint": "pnpm --filter control-web run lint",
     "web:typecheck": "pnpm --filter control-web run typecheck",
     "web:test": "pnpm --filter control-web run test",
-    "web:build": "pnpm --filter control-web run build"
+    "web:build": "pnpm --filter control-web run build",
+    "prepare": "husky && git config core.hooksPath scripts/githooks"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^17.5.1",
+    "prettier": "3.9.6"
   }
 }

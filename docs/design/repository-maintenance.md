@@ -12,8 +12,11 @@ The current registered patch set is maintained under [`docs/base/patches/`](../b
 
 - `0001-stream-health-events.patch` — the inference pipeline health-event hook.
 - `0002-annotation-upload-target-and-accessibility.patch` — the annotation integration compatibility patch.
+- `0003-drop-unavailable-lfs-assets.patch` — removes upstream LFS-only documentation assets and LFS tracking metadata that subtree import cannot hydrate.
 
 The ledger [`docs/base/verified-commits.md`](../base/verified-commits.md) records NVIDIA commits that have been verified. It is **not** a statement that the repository is permanently pinned to the last listed commit.
+
+The vendored NVIDIA subtree must not depend on NVIDIA Git-LFS storage: `git subtree` imports Git blobs but does not copy LFS objects into the NVSOP LFS endpoint. After every subtree update, exclude upstream LFS-only assets (or deliberately vendor their real bytes) and remove `filter=lfs` rules before the update is accepted. Repository policy rejects both LFS tracking metadata and LFS pointer files under `vendor/sop-monitoring-blueprints/`.
 
 ### Update procedure
 

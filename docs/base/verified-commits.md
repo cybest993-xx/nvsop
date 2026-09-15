@@ -42,6 +42,13 @@ git subtree pull --prefix=vendor/sop-monitoring-blueprints \
 - 契约测试：`tests/contract/base/` 的 `test_annotation_patch.py` 验证补丁从当前 vendor 树可逆向干净应用、只触及登记的五个文件、上传请求在一次调用内固定目标、上下文入口存在、标注服务不发布端口，以及控件标签关联未丢失。
 - 补丁是否需要调整：不需要。训练基座的产品接入仍须在上游提交变化后重新运行该族测试。
 
+#### Git-LFS 失效资产清理（2026-09-16）
+
+- 补丁：[`patches/0003-drop-unavailable-lfs-assets.patch`](patches/0003-drop-unavailable-lfs-assets.patch)。删除 8 个仅有 LFS pointer 的文档资产（7 个唯一 OID）以及两处 `filter=lfs` 规则，并移除对应文档嵌入。
+- 原因：NVSOP 的 GitHub LFS endpoint 对 7 个 OID 全部返回 `404 Object does not exist on the server`；subtree 接入只带入 pointer Git blob，不会复制 NVIDIA 的 LFS 对象。
+- 防复发：仓库策略拒绝 `vendor/sop-monitoring-blueprints/` 内的 `filter=lfs` 和 LFS pointer；`tests/contract/base/test_lfs_asset_patch.py` 验证补丁可逆向匹配当前 vendor 树及失效路径持续不存在。
+- 补丁是否需要调整：后续每次 `git subtree pull` 都必须重新应用；若上游改为普通 Git bytes，可重新评估是否恢复相应文档资产。
+
 ## 已知的基座既有缺陷（不修，仅登记）
 
 这些是 NVIDIA 交付物自带的问题。修它们需要超出 [ADR-0007](../adr/0007-base-is-the-trunk-not-a-dependency.md) 已登记范围的补丁，故原样保留并在此登记，避免被误认为我们引入。

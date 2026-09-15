@@ -45,6 +45,8 @@ ALLOWED_ROOT_TEST_AREAS = {"contract", "fixtures", "performance", "system"}
 MARKDOWN_LINK = re.compile(r"!?\[[^]]*]\(([^)]+)\)")
 SECRET_SUFFIXES = {".key", ".pem"}
 VENDOR_ROOT = Path("vendor")
+NVIDIA_VENDOR_ROOT = VENDOR_ROOT / "sop-monitoring-blueprints"
+LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1\n"
 SECRET_VARIABLE = re.compile(
     r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*"
     r"(?:PASSWORD|SECRET|TOKEN|APIKEY|API_KEY|CREDENTIAL|PRIVATE_KEY))\s*=\s*(.*)$"
@@ -198,7 +200,30 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
     errors.extend(check_edge_runtime_isolation(root, files))
     errors.extend(check_shared_contract_isolation(root, files))
     errors.extend(check_center_modules_are_contracted(root, files))
+    errors.extend(check_vendor_lfs(root, files))
 
+    return errors
+
+
+def check_vendor_lfs(root: Path, files: list[Path]) -> list[str]:
+    """Vendored NVIDIA sources must not depend on upstream Git-LFS storage."""
+    errors: list[str] = []
+    for path in files:
+        if not is_under(path, NVIDIA_VENDOR_ROOT):
+            continue
+        target = root / path
+        if path.name == ".gitattributes":
+            for number, line in enumerate(target.read_text(encoding="utf-8").splitlines(), start=1):
+                if "filter=lfs" in line:
+                    errors.append(
+                        f"{path}:{number} enables Git-LFS inside the vendored NVIDIA subtree; "
+                        "subtree imports do not copy upstream LFS objects"
+                    )
+        if target.stat().st_size <= 1024 and target.read_bytes().startswith(LFS_POINTER_PREFIX):
+            errors.append(
+                f"vendored NVIDIA file is a Git-LFS pointer: {path}; "
+                "exclude the upstream LFS-only asset or vendor real bytes"
+            )
     return errors
 
 

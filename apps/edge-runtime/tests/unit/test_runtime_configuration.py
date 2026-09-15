@@ -28,6 +28,7 @@ from edge_runtime.judgment.evidence import EvidenceMargins
 from edge_runtime.judgment.model import Ordering, RuntimeParameters, Template
 from edge_runtime.runtime_configuration import (
     RuntimeConfigurationError,
+    bootstrap_runtime_configuration,
     confirmed_runtime_configuration,
 )
 from edge_runtime.station_runtime import StationRuntimeConfiguration
@@ -151,6 +152,23 @@ def confirmed_bundle() -> ConfigurationBundle:
 
 
 class ConfirmedRuntimeConfigurationTests(unittest.TestCase):
+    def test_bootstrap_keeps_local_connectors_out_of_station_topology(self) -> None:
+        second = replace(local_station(), station_id="station-b", backend_id="backend-b")
+
+        result = bootstrap_runtime_configuration(
+            stations=(local_station(), second),
+            connectors=(local_connector(),),
+        )
+
+        self.assertEqual(
+            ("station-a", "station-b"),
+            tuple(item.configuration.station_id for item in result.stations),
+        )
+        self.assertEqual((), result.stations[0].connector_ids)
+        self.assertEqual((), result.stations[0].input_points)
+        self.assertEqual((), result.stations[0].output_points)
+        self.assertEqual((CONNECTOR_ID,), tuple(item.connector_id for item in result.connectors))
+
     def test_confirmed_values_replace_local_template_and_timing_and_bind_points(self) -> None:
         result = confirmed_runtime_configuration(
             bundle=confirmed_bundle(),

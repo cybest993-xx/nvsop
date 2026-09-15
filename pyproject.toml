@@ -15,19 +15,20 @@ members = ["apps/control-api", "packages/contracts"]
 nvsop-contracts = { workspace = true }
 
 # The center backend's modules: the one declaration of record (harness §3, ADR-0010). Each
-# entry is a package under `apps/control-api/src/factory_sop/` and the prefix its physical
-# tables carry. The gate scripts match this list — the ownership check carries a copy until
-# they read it from here; the roadmap's §六 and harness §3 explain it. Adding a module
-# starts here.
+# entry is a package under `apps/control-api/src/factory_sop/`; persistence modules also use
+# the entry as the prefix for their physical tables. The gate scripts match this list — the
+# roadmap's §六 and harness §3 explain it. Adding a module starts here.
 [tool.nvsop]
 center_modules = [
     "auth",
+    "configuration",
     "dataset",
     "device",
     "evidence",
     "execution",
     "job",
     "monitor",
+    "overview",
     "retention",
     "template",
 ]
@@ -148,6 +149,7 @@ layers = [
     "factory_sop.template",
     "factory_sop.device",
     "factory_sop.auth",
+    "factory_sop.pagination",
     "factory_sop.persistence",
     "factory_sop.observability",
     "factory_sop.settings : factory_sop.identifiers",

@@ -243,6 +243,36 @@ class RepositoryPolicyTest(unittest.TestCase):
             errors,
         )
 
+    def test_rejects_center_module_not_in_the_nvsop_declaration(self) -> None:
+        self.write(
+            "pyproject.toml",
+            '[tool.uv.workspace]\nmembers = ["apps/control-api"]\n'
+            '[tool.nvsop]\ncenter_modules = ["auth"]\n\n'
+            "[[tool.importlinter.contracts]]\n"
+            'name = "overview is contracted"\n'
+            'source_modules = ["factory_sop.overview"]\n',
+        )
+        module = self.write("apps/control-api/src/factory_sop/overview/__init__.py", "")
+        self.assertEqual(
+            ["center module overview is not declared in [tool.nvsop].center_modules"],
+            self.check(str(module)),
+        )
+
+    def test_rejects_malformed_center_module_declaration(self) -> None:
+        self.write(
+            "pyproject.toml",
+            '[tool.uv.workspace]\nmembers = ["apps/control-api"]\n'
+            '[tool.nvsop]\ncenter_modules = "auth"\n\n'
+            "[[tool.importlinter.contracts]]\n"
+            'name = "auth is contracted"\n'
+            'source_modules = ["factory_sop.auth"]\n',
+        )
+        module = self.write("apps/control-api/src/factory_sop/auth/__init__.py", "")
+        self.assertEqual(
+            ["[tool.nvsop].center_modules must be a list of non-empty strings"],
+            self.check(str(module)),
+        )
+
     def test_rejects_center_module_with_no_import_linter_contract(self) -> None:
         # 文件规模仅提示；模块边界仍须由契约强制。
         module = self.write(
@@ -252,8 +282,9 @@ class RepositoryPolicyTest(unittest.TestCase):
         errors = self.check(str(module))
         self.assertEqual(
             [
+                "[tool.nvsop].center_modules is required when center packages exist",
                 "center module auth has no import-linter contract in pyproject.toml; "
-                "a module whose boundary is not named by a contract is unenforced"
+                "a module whose boundary is not named by a contract is unenforced",
             ],
             errors,
         )
@@ -261,7 +292,8 @@ class RepositoryPolicyTest(unittest.TestCase):
     def test_accepts_center_module_named_by_an_import_linter_contract(self) -> None:
         self.write(
             "pyproject.toml",
-            '[tool.uv.workspace]\nmembers = ["apps/control-api"]\n\n'
+            '[tool.uv.workspace]\nmembers = ["apps/control-api"]\n'
+            '[tool.nvsop]\ncenter_modules = ["auth"]\n\n'
             "[[tool.importlinter.contracts]]\n"
             'name = "auth is reached only through its api"\n'
             'source_modules = ["factory_sop.auth"]\n',

@@ -13,6 +13,7 @@ from enum import StrEnum
 from typing import Protocol
 from uuid import UUID
 
+from factory_sop.auth.api import Caller
 from factory_sop.device.model import (
     InferenceHostIdentity,
     RuntimeParameterMode,
@@ -20,7 +21,14 @@ from factory_sop.device.model import (
     StationRuntimeConfiguration,
     StationRuntimeParameters,
 )
-from factory_sop.device.repository import InferenceHostRepository
+from factory_sop.device.repository import (
+    CameraRepository,
+    ConnectorRepository,
+    InferenceBackendRepository,
+    InferenceHostRepository,
+    PointRepository,
+    StationRepository,
+)
 from nvsop_contracts import (
     Capability,
     HostIdentityRequest,
@@ -210,6 +218,30 @@ def host_identity_from_headers(
     return InferenceHostIdentity(host_id=host_id, request=request, signature=signature)
 
 
+def summary(
+    *,
+    caller: Caller,
+    hosts: InferenceHostRepository,
+    backends: InferenceBackendRepository,
+    stations: StationRepository,
+    cameras: CameraRepository,
+    connectors: ConnectorRepository,
+    points: PointRepository,
+) -> dict[str, object]:
+    """返回概览使用的设备摘要; 调用方必须由 device 用例按权限裁剪。"""
+    from factory_sop.device.usecases.summary import summary as build_summary
+
+    return build_summary(
+        caller=caller,
+        hosts=hosts,
+        backends=backends,
+        stations=stations,
+        cameras=cameras,
+        connectors=connectors,
+        points=points,
+    )
+
+
 def authenticate_host(
     *, host: InferenceHostIdentity, now: datetime, hosts: InferenceHostRepository
 ) -> None:
@@ -238,4 +270,5 @@ __all__ = [
     "capability_unfitness",
     "host_identity_from_headers",
     "station_by_code",
+    "summary",
 ]

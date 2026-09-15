@@ -15,25 +15,8 @@ from __future__ import annotations
 import ast
 import re
 import sys
+import tomllib
 from pathlib import Path
-
-# The center backend's modules. The declaration of record is `[tool.nvsop]` in the root
-# pyproject.toml (harness §3); this copy is read until the ownership checker itself reads that
-# table, and must match it until then. A migration may only name one of these, so a typo or an
-# undeclared module fails the gate instead of silently owning a table.
-CENTER_MODULES = frozenset(
-    {
-        "auth",
-        "dataset",
-        "device",
-        "evidence",
-        "execution",
-        "job",
-        "monitor",
-        "retention",
-        "template",
-    }
-)
 
 MIGRATION_FILENAME = re.compile(
     r"^(?P<sequence>\d{4})_(?P<module>[a-z]+)_(?P<slug>[a-z0-9_]+)\.py$"
@@ -61,9 +44,9 @@ TABLE_ARGUMENT: dict[str, tuple[int, str]] = {
 }
 
 
-def module_of(table: str) -> str | None:
+def module_of(table: str, center_modules: frozenset[str]) -> str | None:
     prefix = table.split("_", 1)[0]
-    return prefix if prefix in CENTER_MODULES else None
+    return prefix if prefix in center_modules else None
 
 
 def tables_and_raw_sql(tree: ast.Module) -> tuple[set[str], bool]:
@@ -159,10 +142,12 @@ def assigned_string(tree: ast.Module, name: str) -> str | None:
     return None
 
 
-def check_migrations(versions: Path) -> list[str]:
-    """Check every migration under `versions`; an absent directory is an explicit success."""
+def check_migrations(versions: Path, center_modules: frozenset[str] | None = None) -> list[str]:
+    """检查迁移文件; 目录不存在时明确视为通过。"""
     if not versions.is_dir():
         return []
+    if center_modules is None:
+        center_modules = declared_center_modules(Path(__file__).resolve().parents[1])
 
     errors: list[str] = []
     by_sequence: dict[str, list[str]] = {}
@@ -179,7 +164,7 @@ def check_migrations(versions: Path) -> list[str]:
             )
             continue
         module = match["module"]
-        if module not in CENTER_MODULES:
+        if module not in center_modules:
             errors.append(
                 f"{path.name} names a module that does not exist: {module}; "
                 "declare the module in the harness before it owns a table"
@@ -210,7 +195,7 @@ def check_migrations(versions: Path) -> list[str]:
             else:
                 tables |= declared
         for table in sorted(tables):
-            owner = module_of(table)
+            owner = module_of(table, center_modules)
             if owner is None:
                 errors.append(
                     f"{path.name} migrates a table with no module prefix: {table}; "
@@ -238,9 +223,24 @@ def check_migrations(versions: Path) -> list[str]:
     return errors
 
 
+def declared_center_modules(root: Path) -> frozenset[str]:
+    """读取迁移归属检查使用的中心模块声明。"""
+    with (root / "pyproject.toml").open("rb") as handle:
+        document = tomllib.load(handle)
+    raw_modules = document["tool"]["nvsop"]["center_modules"]
+    if not isinstance(raw_modules, list) or not all(
+        isinstance(module, str) and module for module in raw_modules
+    ):
+        raise ValueError("pyproject.toml [tool.nvsop].center_modules must be non-empty strings")
+    return frozenset(raw_modules)
+
+
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
-    errors = check_migrations(root / "apps/control-api/migrations/versions")
+    errors = check_migrations(
+        root / "apps/control-api/migrations/versions",
+        declared_center_modules(root),
+    )
     if errors:
         print("Migration ownership failed:", file=sys.stderr)
         for error in errors:

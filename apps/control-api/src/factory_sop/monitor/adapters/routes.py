@@ -7,38 +7,44 @@ from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
-from factory_sop.auth.api import Authorized, Permission, authorize, needs
-from factory_sop.device.adapters import dependencies as device_dependencies
-from factory_sop.device.api import authenticate_host, host_identity_from_headers
+from factory_sop.auth.api import Authorized, Permission, needs
+from factory_sop.device.api import host_identity_from_headers
 from factory_sop.monitor.adapters import dependencies
+from factory_sop.monitor.adapters.schemas import (
+    MonitorReportAccepted,
+    MonitorReportedDecision,
+    MonitorReportedHealth,
+)
+from factory_sop.monitor.api import MonitorHostSources
 from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.repository import MonitorRepository
 from factory_sop.monitor.usecases import (
+    authorize_stream_access,
     mirror_decision,
     mirror_health,
     sse_snapshot_state,
     sse_stream,
 )
 from factory_sop.persistence import RequestSession
-from nvsop_contracts import (
-    ReportedDecision,
-    ReportedHealth,
-    reported_decision_from_wire,
-    reported_health_from_wire,
-)
+from nvsop_contracts import ReportedDecision, ReportedHealth
 
 router = APIRouter(prefix="/monitor", tags=["monitor"])
 
 
-@router.post("/reported-decisions", operation_id="reportMonitorDecision")
+@router.post(
+    "/reported-decisions",
+    operation_id="reportMonitorDecision",
+    response_model=MonitorReportAccepted,
+)
 def report_monitor_decision(
     request: Request,
-    body: dict[str, object],
+    body: MonitorReportedDecision,
     session: RequestSession,
     monitor: Annotated[MonitorRepository, Depends(dependencies.monitor)],
+    host_sources: Annotated[MonitorHostSources, Depends(dependencies.host_sources)],
     inference_host_id: Annotated[str | None, Header(alias="X-Inference-Host-ID")] = None,
     inference_host_timestamp: Annotated[
         str | None, Header(alias="X-Inference-Host-Timestamp")
@@ -47,42 +53,52 @@ def report_monitor_decision(
     inference_host_signature: Annotated[
         str | None, Header(alias="X-Inference-Host-Signature")
     ] = None,
-) -> dict[str, object]:
+) -> MonitorReportAccepted:
+    report: ReportedDecision = body
     try:
-        report: ReportedDecision = reported_decision_from_wire(body)
         host_id = UUID(report.host_id)
-    except (ValueError, TypeError) as error:
+    except ValueError as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
         ) from error
     _authenticate_report_host(
         request=request,
         session=session,
-        body=body,
+        body=body.to_wire(),
         host_id=host_id,
         inference_host_id=inference_host_id,
         inference_host_timestamp=inference_host_timestamp,
         inference_host_nonce=inference_host_nonce,
         inference_host_signature=inference_host_signature,
+        host_sources=host_sources,
     )
     try:
         inserted = mirror_decision(
             report,
             received_at=datetime.now(UTC),
             monitor=monitor,
-            host_gateway=device_dependencies.host_gateway(session),
+            host_gateway=host_sources.gateway(session),
         )
     except MonitorRefusedError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
-    return {"accepted": True, "duplicate": not inserted, "event_id": report.event_id}
+    return MonitorReportAccepted(
+        accepted=True,
+        duplicate=not inserted,
+        event_id=report.event_id,
+    )
 
 
-@router.post("/health", operation_id="reportMonitorHealth")
+@router.post(
+    "/health",
+    operation_id="reportMonitorHealth",
+    response_model=MonitorReportAccepted,
+)
 def report_monitor_health(
     request: Request,
-    body: dict[str, object],
+    body: MonitorReportedHealth,
     session: RequestSession,
     monitor: Annotated[MonitorRepository, Depends(dependencies.monitor)],
+    host_sources: Annotated[MonitorHostSources, Depends(dependencies.host_sources)],
     inference_host_id: Annotated[str | None, Header(alias="X-Inference-Host-ID")] = None,
     inference_host_timestamp: Annotated[
         str | None, Header(alias="X-Inference-Host-Timestamp")
@@ -91,62 +107,69 @@ def report_monitor_health(
     inference_host_signature: Annotated[
         str | None, Header(alias="X-Inference-Host-Signature")
     ] = None,
-) -> dict[str, object]:
+) -> MonitorReportAccepted:
+    report: ReportedHealth = body
     try:
-        report: ReportedHealth = reported_health_from_wire(body)
         host_id = UUID(report.host_id)
-    except (ValueError, TypeError) as error:
+    except ValueError as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
         ) from error
     _authenticate_report_host(
         request=request,
         session=session,
-        body=body,
+        body=body.to_wire(),
         host_id=host_id,
         inference_host_id=inference_host_id,
         inference_host_timestamp=inference_host_timestamp,
         inference_host_nonce=inference_host_nonce,
         inference_host_signature=inference_host_signature,
+        host_sources=host_sources,
     )
     try:
         inserted = mirror_health(
             report,
             received_at=datetime.now(UTC),
             monitor=monitor,
-            host_gateway=device_dependencies.host_gateway(session),
+            host_gateway=host_sources.gateway(session),
         )
     except MonitorRefusedError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
-    return {"accepted": True, "duplicate": not inserted, "event_id": report.event_id}
+    return MonitorReportAccepted(
+        accepted=True,
+        duplicate=not inserted,
+        event_id=report.event_id,
+    )
 
 
 @router.get(
     "/stream",
     operation_id="streamMonitorEvents",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "content": {
+                "text/event-stream": {"schema": {"type": "string"}},
+            },
+        }
+    },
     openapi_extra=needs(Permission.MONITOR_VIEW),
 )
 def stream_monitor_events(
     caller: Authorized,
     monitor: Annotated[MonitorRepository, Depends(dependencies.streaming_monitor)],
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
-    once: bool = Query(default=False),
 ) -> StreamingResponse:
-    authorize(caller, Permission.MONITOR_VIEW)
+    authorize_stream_access(caller)
     snapshot = sse_snapshot_state(monitor, last_event_id=last_event_id)
 
     def events() -> Iterator[str]:
         yield from snapshot.frames
-        if not once:
-            yield from sse_stream(
-                monitor,
-                after=snapshot.decision_after,
-                decision_event_id=snapshot.decision_event_id,
-                health_after=snapshot.health_after,
-                health_event_id=snapshot.health_event_id,
-                decision_sequence=snapshot.decision_sequence,
-                health_sequence=snapshot.health_sequence,
-            )
+        yield from sse_stream(
+            monitor,
+            decision_sequence=snapshot.decision_sequence,
+            health_sequence=snapshot.health_sequence,
+        )
 
     return StreamingResponse(events(), media_type="text/event-stream")
 
@@ -161,6 +184,7 @@ def _authenticate_report_host(
     inference_host_timestamp: str | None,
     inference_host_nonce: str | None,
     inference_host_signature: str | None,
+    host_sources: MonitorHostSources,
 ) -> None:
     """统一认证两类推理机上报，避免报告字段和签名身份分叉。"""
     if inference_host_id != str(host_id):
@@ -176,11 +200,7 @@ def _authenticate_report_host(
         nonce=inference_host_nonce,
         signature=inference_host_signature,
     )
-    authenticate_host(
-        host=identity,
-        now=datetime.now(UTC),
-        hosts=device_dependencies.hosts(session),
-    )
+    host_sources.authenticate(host=identity, now=datetime.now(UTC), session=session)
 
 
 __all__ = ["router"]

@@ -33,11 +33,8 @@ class Repo:
             status=SimpleNamespace(value="active"),
             revision=2,
             runtime_parameters_revision=1,
-        )
-        self.station.runtime_parameters_for = lambda defaults: SimpleNamespace(
-            idle_timeout_seconds=defaults.idle_timeout_seconds,
-            step_deadline_seconds=defaults.step_deadline_seconds,
-            disposition_policy=defaults.disposition_policy,
+            runtime_parameter_mode=SimpleNamespace(value="follow_template"),
+            runtime_parameter_overrides=None,
         )
         content = b"{}"
         self.version = SimpleNamespace(

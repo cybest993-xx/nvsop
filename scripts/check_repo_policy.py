@@ -63,6 +63,7 @@ EDGE_APP = Path("apps/edge-runtime")
 EDGE_SOURCE = EDGE_APP / "src"
 CONTRACT_SOURCE = Path("packages/contracts/src/nvsop_contracts")
 CENTER_SOURCE = Path("apps/control-api/src/factory_sop")
+CENTER_INFRASTRUCTURE = frozenset({"observability", "persistence"})
 WEB_APP = Path("apps/control-web")
 # What the web workspace's frozen toolchain is made of (harness §2). Each is required only
 # once `apps/control-web/` exists, because §2 equally forbids adding them before it does.
@@ -329,11 +330,39 @@ def check_center_modules_are_contracted(root: Path, files: list[Path]) -> list[s
     if not modules:
         return []
 
+    document = read_toml(root / "pyproject.toml")
+    tool = document.get("tool")
+    nvsop = tool.get("nvsop") if isinstance(tool, dict) else None
+    declared = nvsop.get("center_modules") if isinstance(nvsop, dict) else None
+    errors: list[str] = []
+    if declared is None:
+        errors.append("[tool.nvsop].center_modules is required when center packages exist")
+    elif not isinstance(declared, list) or not all(
+        isinstance(module, str) and module for module in declared
+    ):
+        errors.append("[tool.nvsop].center_modules must be a list of non-empty strings")
+    else:
+        center_root = root / CENTER_SOURCE
+        actual_packages = (
+            {
+                path.name
+                for path in center_root.iterdir()
+                if path.is_dir()
+                and path.name not in CENTER_INFRASTRUCTURE
+                and any(child.is_file() and child.suffix == ".py" for child in path.rglob("*.py"))
+            }
+            if center_root.is_dir()
+            else set()
+        )
+        errors.extend(
+            f"center module {module} is not declared in [tool.nvsop].center_modules"
+            for module in sorted(actual_packages - set(declared))
+        )
+
     contracts = (
-        read_toml(root / "pyproject.toml")
-        .get("tool", {})
-        .get("importlinter", {})
-        .get("contracts", [])
+        document.get("tool", {}).get("importlinter", {}).get("contracts", [])
+        if isinstance(document.get("tool", {}), dict)
+        else []
     )
     contracted = {
         module
@@ -341,11 +370,12 @@ def check_center_modules_are_contracted(root: Path, files: list[Path]) -> list[s
         for contract in contracts
         if f"factory_sop.{module}" in repr(contract)
     }
-    return [
+    errors.extend(
         f"center module {module} has no import-linter contract in pyproject.toml; "
         "a module whose boundary is not named by a contract is unenforced"
         for module in sorted(modules - contracted)
-    ]
+    )
+    return errors
 
 
 def is_under(path: Path, directory: Path) -> bool:

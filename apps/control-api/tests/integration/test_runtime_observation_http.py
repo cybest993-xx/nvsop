@@ -38,6 +38,7 @@ from factory_sop.device.model import (
     Station,
 )
 from factory_sop.identifiers import new_id
+from factory_sop.monitor.adapters import routes as monitor_routes
 from factory_sop.template.adapters.tables import TemplateStationBindingRow, TemplateVersionRow
 from factory_sop.template.model import TemplateStationBinding
 from nvsop_contracts import (
@@ -285,7 +286,7 @@ def test_configuration_pull_is_host_scoped_and_contains_real_point_address(
 
 
 def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
-    engine: Engine, runtime_topology: RuntimeTopology
+    engine: Engine, runtime_topology: RuntimeTopology, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings = settings_for(engine)
     permissions = frozenset({Permission.MONITOR_VIEW})
@@ -341,10 +342,13 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
                 body=health_body,
             ),
         )
-        stream = client.get(
-            f"{API_PREFIX}/monitor/stream",
-            params={"once": "true"},
-        )
+
+        def finite_stream(*args: object, **kwargs: object) -> Iterator[str]:
+            del args, kwargs
+            yield ": test stream complete\n\n"
+
+        monkeypatch.setattr(monitor_routes, "sse_stream", finite_stream)
+        stream = client.get(f"{API_PREFIX}/monitor/stream")
 
     assert first.status_code == 200
     assert first.json() == {"accepted": True, "duplicate": False, "event_id": report.event_id}

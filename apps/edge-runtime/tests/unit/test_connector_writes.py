@@ -10,6 +10,7 @@ every attempt leaves a diagnostic event naming the operator and the target point
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 
 from harness import measured_capability
 from nvsop_contracts import Capability, Unverified
@@ -24,12 +25,14 @@ from edge_runtime.connectors.port import (
     ReadResult,
     Refused,
     TimedOut,
+    Unknown,
     Unreachable,
     WriteOutcome,
     WriteRefusal,
     Written,
 )
 from edge_runtime.connectors.writes import (
+    UNEXPECTED_WRITE_DETAIL,
     InMemoryWriteLedger,
     OutputDispatcher,
     WriteAttempted,
@@ -50,16 +53,13 @@ def request(key: str = "disposal-7", *, state: PointState = PointState.ACTIVE) -
         actor="supervisor:station-3",
         timeout=2.0,
         capability_budget=0.2,
+        station_id="station-3",
+        connector_id="connector-a",
     )
 
 
 class RecordingConnector:
-    """A connector double that records what it was asked to drive.
-
-    A double at the adapter seam rather than a mock through the call chain (harness §4): what
-    is under test is the dispatcher's own behavior, and what matters is whether a physical
-    write intent reached the adapter at all.
-    """
+    """在连接器适配器接缝记录写入, 不修改具体实现。"""
 
     def __init__(
         self,
@@ -80,6 +80,13 @@ class RecordingConnector:
     def write(self, point: OutputPoint, state: PointState, /, *, timeout: float) -> WriteOutcome:
         self.writes.append((point, state))
         return self._outcome
+
+
+class RaisingConnector(RecordingConnector):
+    """让适配器接缝抛出异常, 验证物理结果未知时的保守收敛。"""
+
+    def write(self, point: OutputPoint, state: PointState, /, *, timeout: float) -> WriteOutcome:
+        raise RuntimeError("unexpected adapter failure")
 
 
 def dispatcher(
@@ -131,6 +138,18 @@ class TheSameKeyDrivesTheDeviceOnceTest(unittest.TestCase):
             [(INTERLOCK, PointState.ACTIVE), (INTERLOCK, PointState.ACTIVE)], connector.writes
         )
 
+    def test_the_same_key_in_another_station_is_a_different_action(self) -> None:
+        connector = RecordingConnector()
+        dispatch, _, _ = dispatcher(connector)
+        dispatch.write(request("shared-key"))
+        dispatch.write(
+            replace(request("shared-key"), station_id="station-4", connector_id="connector-b")
+        )
+
+        self.assertEqual(
+            [(INTERLOCK, PointState.ACTIVE), (INTERLOCK, PointState.ACTIVE)], connector.writes
+        )
+
     def test_a_failed_write_may_be_retried(self) -> None:
         connector = RecordingConnector(outcome=Failed(detail="401 unauthorized"))
         dispatch, _, _ = dispatcher(connector)
@@ -145,19 +164,57 @@ class TheSameKeyDrivesTheDeviceOnceTest(unittest.TestCase):
             "the retry would leave the interlock unwritten on the strength of a failure",
         )
 
-    def test_a_timed_out_write_may_be_retried(self) -> None:
+    def test_a_timed_out_write_is_terminal_and_not_replayed(self) -> None:
         connector = RecordingConnector(outcome=TimedOut(after=2.0))
         dispatch, _, _ = dispatcher(connector)
-        dispatch.write(request())
 
-        dispatch.write(request())
-
+        self.assertEqual(TimedOut(after=2.0), dispatch.write(request()))
+        self.assertEqual(TimedOut(after=2.0), dispatch.write(request()))
         self.assertEqual(
-            2,
+            1,
             len(connector.writes),
-            "the physical outcome is unknown, and a point write assigns a level rather than "
-            "emitting a pulse — repeating it converges on the state that was asked for, "
-            "while not repeating it may leave a 停线联锁 unasserted",
+            "超时结果是终态, 同一幂等键不能再次触碰设备",
+        )
+
+    def test_adapter_exception_becomes_unknown_and_is_not_replayed(self) -> None:
+        connector = RaisingConnector()
+        dispatch, _, events = dispatcher(connector)
+
+        outcome = dispatch.write(request())
+        replayed = dispatch.write(request())
+
+        self.assertEqual(Unknown(detail=UNEXPECTED_WRITE_DETAIL), outcome)
+        self.assertEqual(outcome, replayed)
+        self.assertEqual(
+            [
+                WriteAttempted(
+                    station_id="station-3",
+                    connector_id="connector-a",
+                    point=INTERLOCK,
+                    state=PointState.ACTIVE,
+                    key="disposal-7",
+                    actor="supervisor:station-3",
+                    outcome=outcome,
+                    result="unknown",
+                    result_detail=UNEXPECTED_WRITE_DETAIL,
+                    result_reason=None,
+                    replayed=False,
+                ),
+                WriteAttempted(
+                    station_id="station-3",
+                    connector_id="connector-a",
+                    point=INTERLOCK,
+                    state=PointState.ACTIVE,
+                    key="disposal-7",
+                    actor="supervisor:station-3",
+                    outcome=outcome,
+                    result="unknown",
+                    result_detail=UNEXPECTED_WRITE_DETAIL,
+                    result_reason=None,
+                    replayed=True,
+                ),
+            ],
+            events,
         )
 
 
@@ -186,7 +243,7 @@ class AnUnverifiedConnectorIsNotDrivenTest(unittest.TestCase):
         dispatch.write(request())
 
         self.assertIsNone(
-            ledger.outcome_for("disposal-7"),
+            ledger.outcome_for(request()),
             "nothing was attempted against the device, so a later retry — after the "
             "capability was measured — must be free to proceed",
         )
@@ -244,15 +301,36 @@ class EveryAttemptLeavesADiagnosticEventTest(unittest.TestCase):
         self.assertEqual(
             [
                 WriteAttempted(
+                    station_id="station-3",
+                    connector_id="connector-a",
                     point=INTERLOCK,
                     state=PointState.ACTIVE,
                     key="disposal-7",
                     actor="supervisor:station-3",
                     outcome=ACCEPTED,
+                    result="written",
+                    result_detail=None,
+                    result_reason=None,
                     replayed=False,
                 )
             ],
             events,
+        )
+        self.assertEqual(
+            {
+                "event": "connector.write.attempted",
+                "station_id": "station-3",
+                "connector_id": "connector-a",
+                "point": {"label": "停线联锁", "address": "1"},
+                "state": "active",
+                "key": "disposal-7",
+                "actor": "supervisor:station-3",
+                "result": "written",
+                "result_detail": None,
+                "result_reason": None,
+                "replayed": False,
+            },
+            events[0].as_dict(),
         )
 
     def test_a_suppressed_replay_is_still_recorded_as_one(self) -> None:
@@ -264,11 +342,16 @@ class EveryAttemptLeavesADiagnosticEventTest(unittest.TestCase):
 
         self.assertEqual(
             WriteAttempted(
+                station_id="station-3",
+                connector_id="connector-a",
                 point=INTERLOCK,
                 state=PointState.ACTIVE,
                 key="disposal-7",
                 actor="supervisor:station-3",
                 outcome=ACCEPTED,
+                result="written",
+                result_detail=None,
+                result_reason=None,
                 replayed=True,
             ),
             events[-1],
@@ -285,6 +368,8 @@ class EveryAttemptLeavesADiagnosticEventTest(unittest.TestCase):
         self.assertEqual(
             [
                 WriteAttempted(
+                    station_id="station-3",
+                    connector_id="connector-a",
                     point=INTERLOCK,
                     state=PointState.ACTIVE,
                     key="disposal-7",
@@ -293,6 +378,9 @@ class EveryAttemptLeavesADiagnosticEventTest(unittest.TestCase):
                         reason=WriteRefusal.CAPABILITY_UNVERIFIED,
                         detail="连接器能力声明未验证。不驱动物理执行器",
                     ),
+                    result="refused",
+                    result_detail="连接器能力声明未验证。不驱动物理执行器",
+                    result_reason="capability_unverified",
                     replayed=False,
                 )
             ],
@@ -341,6 +429,84 @@ class DurableLocalDisposalLedgerTest(unittest.TestCase):
             second_dispatch.write(replace(first_request, attempt_at=HostInstant(2.0))),
         )
         self.assertEqual(1, len(second_connector.writes))
+        connection.close()
+
+    def test_capability_refusal_is_structured_but_not_a_persistent_attempt_result(self) -> None:
+        import sqlite3
+        from dataclasses import replace
+
+        from edge_runtime.connectors.writes import SQLiteWriteLedger
+        from edge_runtime.local_state.disposal import LocalDisposalLedger
+        from edge_runtime.local_state.schema import migrate
+
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        connection.row_factory = sqlite3.Row
+        local_ledger = LocalDisposalLedger(connection)
+        migrate(connection)
+        first_request = replace(
+            request(),
+            station_id="station-refusal",
+            attempt_at=HostInstant(1.0),
+            lease_seconds=5.0,
+        )
+        refused_connector = RecordingConnector(capability=Unverified())
+        first_dispatch = OutputDispatcher(
+            connector=refused_connector,
+            ledger=SQLiteWriteLedger(local_ledger),
+            diagnostics=lambda event: None,
+        )
+        self.assertIsInstance(first_dispatch.write(first_request), Refused)
+        self.assertIsNone(local_ledger.result_for("station-refusal", first_request.key))
+
+        accepted_connector = RecordingConnector()
+        second_dispatch = OutputDispatcher(
+            connector=accepted_connector,
+            ledger=SQLiteWriteLedger(LocalDisposalLedger(connection)),
+            diagnostics=lambda event: None,
+        )
+        self.assertEqual(
+            ACCEPTED,
+            second_dispatch.write(replace(first_request, attempt_at=HostInstant(2.0))),
+        )
+        self.assertEqual(1, len(accepted_connector.writes))
+        connection.close()
+
+    def test_timed_out_result_survives_restart_and_is_not_replayed(self) -> None:
+        import sqlite3
+        from dataclasses import replace
+
+        from edge_runtime.connectors.writes import SQLiteWriteLedger
+        from edge_runtime.local_state.disposal import LocalDisposalLedger
+        from edge_runtime.local_state.schema import migrate
+
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        connection.row_factory = sqlite3.Row
+        migrate(connection)
+        first_request = replace(
+            request(),
+            station_id="station-timeout",
+            attempt_at=HostInstant(1.0),
+            lease_seconds=5.0,
+        )
+        first_connector = RecordingConnector(outcome=TimedOut(after=2.0))
+        first_dispatch = OutputDispatcher(
+            connector=first_connector,
+            ledger=SQLiteWriteLedger(LocalDisposalLedger(connection)),
+            diagnostics=lambda event: None,
+        )
+        self.assertEqual(TimedOut(after=2.0), first_dispatch.write(first_request))
+
+        restarted_connector = RecordingConnector()
+        restarted_dispatch = OutputDispatcher(
+            connector=restarted_connector,
+            ledger=SQLiteWriteLedger(LocalDisposalLedger(connection)),
+            diagnostics=lambda event: None,
+        )
+        self.assertEqual(
+            TimedOut(after=2.0),
+            restarted_dispatch.write(replace(first_request, attempt_at=HostInstant(3.0))),
+        )
+        self.assertEqual([], restarted_connector.writes)
         connection.close()
 
     def test_written_result_survives_restart_and_expired_attempt_is_not_replayed(self) -> None:
@@ -394,7 +560,10 @@ class DurableLocalDisposalLedgerTest(unittest.TestCase):
             diagnostics=lambda event: None,
         )
         outcome = no_duplicate_dispatch.write(replace(abandoned, attempt_at=HostInstant(7.0)))
-        self.assertIsInstance(outcome, Failed)
+        self.assertEqual(
+            Unknown(detail="disposal attempt lease expired; physical outcome is unknown"),
+            outcome,
+        )
         self.assertEqual([], no_duplicate_connector.writes)
         connection.close()
 

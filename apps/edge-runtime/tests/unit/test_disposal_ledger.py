@@ -5,6 +5,7 @@ import threading
 import unittest
 
 from edge_runtime.local_state.disposal import (
+    DISPOSAL_RESULT_TIMED_OUT,
     DISPOSAL_RESULT_UNKNOWN,
     DisposalClaim,
     DisposalIntent,
@@ -45,6 +46,24 @@ class DisposalLedgerTests(unittest.TestCase):
         assert held.result is not None
         self.assertEqual(held.result.kind, "written")
 
+    def test_timed_out_result_is_a_terminal_result_after_restart(self) -> None:
+        self.ledger.claim(self.intent, now=1.0, lease_seconds=5.0)
+        self.ledger.record_result(
+            self.intent,
+            result=StoredDisposalResult(
+                kind=DISPOSAL_RESULT_TIMED_OUT,
+                detail="2.0",
+                at=2.0,
+            ),
+        )
+
+        restarted = LocalDisposalLedger(self.connection)
+        held = restarted.claim(self.intent, now=3.0, lease_seconds=5.0)
+
+        self.assertFalse(held.claimed)
+        self.assertEqual(DISPOSAL_RESULT_TIMED_OUT, held.result.kind if held.result else None)
+        self.assertEqual("already_recorded", held.reason)
+
     def test_expired_lease_closes_unknown_instead_of_replaying_physical_write(self) -> None:
         claim = self.ledger.claim(self.intent, now=1.0, lease_seconds=5.0)
         self.assertTrue(claim.claimed)
@@ -83,6 +102,27 @@ class DisposalLedgerTests(unittest.TestCase):
                     requested_state="inactive",
                 )
             )
+
+    def test_the_same_key_is_independent_between_stations(self) -> None:
+        self.ledger.ensure_intent(self.intent)
+        self.ledger.claim(self.intent, now=1.0, lease_seconds=5.0)
+        self.ledger.record_result(
+            self.intent,
+            result=StoredDisposalResult(kind="written", detail=None, at=2.0),
+        )
+
+        other_station = DisposalIntent(
+            station_id="station-b",
+            idempotency_key="disposal-1",
+            connector_id="connector-b",
+            point_id="relay-2",
+            actor="supervisor",
+            requested_state="active",
+        )
+        claim = self.ledger.claim(other_station, now=3.0, lease_seconds=5.0)
+
+        self.assertTrue(claim.claimed)
+        self.assertIsNone(claim.result)
 
     def test_concurrent_claims_reserve_one_physical_attempt(self) -> None:
         connection = sqlite3.connect(":memory:", isolation_level=None, check_same_thread=False)

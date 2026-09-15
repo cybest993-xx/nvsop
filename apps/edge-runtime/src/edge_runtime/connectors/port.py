@@ -131,18 +131,25 @@ class WriteRefusal(Enum):
     """连接器的实测最大延迟超出安全输出角色的调用方预算。"""
 
     POINT_UNREACHABLE = "point_unreachable"
+    """设备访问尚未建立, 本次写入没有发送到目标点位。"""
+
+    OUTPUT_NOT_CONFIGURED = "output_not_configured"
+    """当前工位的已确认输出拓扑不包含请求目标。"""
+
+    LEASE_ACTIVE = "lease_active"
+    """同一幂等键已有活动物理尝试, 本次写入没有发送。"""
 
 
 @dataclass(frozen=True, slots=True)
 class Written:
-    """The device accepted the write."""
+    """设备已接受写入。"""
 
     at: HostInstant
 
 
 @dataclass(frozen=True, slots=True)
 class Refused:
-    """The write was not attempted, for a stated reason."""
+    """写入尚未尝试, 并返回明确的结构化原因。"""
 
     reason: WriteRefusal
     detail: str = ""
@@ -150,26 +157,27 @@ class Refused:
 
 @dataclass(frozen=True, slots=True)
 class TimedOut:
-    """The device did not answer inside the timeout.
-
-    Distinct from `Failed` because the physical outcome is unknown: the relay may have
-    switched. A retry is therefore a decision about whether repeating the physical action is
-    safer than leaving it possibly undone, which is the caller's to make, not this seam's.
-    """
+    """设备在超时时间内没有应答, 物理结果可能已经发生。"""
 
     after: float
 
 
 @dataclass(frozen=True, slots=True)
-class Failed:
-    """The device answered, and the answer was a rejection or an error."""
+class Unknown:
+    """账本无法确认物理结果的终态结果; 同一幂等键不能自动重放。"""
 
     detail: str
 
 
-WriteOutcome = Written | Refused | TimedOut | Failed
-"""What one write attempt produced. Persisted as-is (#19), so it is data with no behavior:
-每次写入尝试产生包含目标点位和调用上下文的稳定诊断事件 is this plus the point and the caller."""
+@dataclass(frozen=True, slots=True)
+class Failed:
+    """设备已应答, 但返回了拒绝或错误。"""
+
+    detail: str
+
+
+WriteOutcome = Written | Refused | TimedOut | Unknown | Failed
+"""一次写入尝试的结构化结果, 可由 local_disposal 持久化。"""
 
 
 class OutputWriter(Protocol):

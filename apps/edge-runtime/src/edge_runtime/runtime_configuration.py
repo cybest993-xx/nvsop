@@ -76,7 +76,7 @@ def bootstrap_runtime_configuration(
                 configuration=station,
                 input_points=(),
                 output_points=(),
-                connector_ids=tuple(connector.connector_id for connector in connectors),
+                connector_ids=(),
                 configurations=(station,),
             )
         )

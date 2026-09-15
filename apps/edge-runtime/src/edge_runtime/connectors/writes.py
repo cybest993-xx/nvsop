@@ -21,12 +21,14 @@ from edge_runtime.connectors.port import (
     PointState,
     Refused,
     TimedOut,
+    Unknown,
     WriteOutcome,
     WriteRefusal,
     Written,
 )
 from edge_runtime.judgment.model import HostInstant
 from edge_runtime.local_state.disposal import (
+    DISPOSAL_RESULT_TIMED_OUT,
     DISPOSAL_RESULT_UNKNOWN,
     DISPOSAL_RESULT_WRITTEN,
     DisposalIntent,
@@ -37,6 +39,8 @@ from edge_runtime.local_state.disposal import (
 UNVERIFIED_DETAIL = "连接器能力声明未验证。不驱动物理执行器"
 TOO_SLOW_DETAIL = "连接器最大投递延迟超出安全输出预算。不驱动物理执行器"
 PERSISTENT_UNKNOWN_DETAIL = "持久化处置结果未知。不会自动重复驱动物理执行器"
+UNEXPECTED_WRITE_DETAIL = "连接器适配器异常。物理结果未知, 不会自动重复驱动物理执行器"
+LEASE_ACTIVE_DETAIL = "同一幂等键已有活动物理尝试租约。不会重复驱动物理执行器"
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,10 +61,10 @@ class WriteRequest:
     capability_budget: float
     """安全输出允许连接器投递消耗的时长;由已验证绑定传入,无默认值。"""
 
-    station_id: str = "default"
-    """持久处置账本使用的 local-state 作用域。"""
+    station_id: str
+    """持久处置账本使用的本地状态工位作用域。"""
 
-    connector_id: str = "unknown"
+    connector_id: str
     """拥有目标点位的已配置连接器。"""
 
     attempt_at: HostInstant | None = None
@@ -70,35 +74,58 @@ class WriteRequest:
     """持久账本必需的租约时长;物理路径不设置默认 cadence。"""
 
 
+WRITE_ATTEMPTED_EVENT = "connector.write.attempted"
+
+
 @dataclass(frozen=True, slots=True)
 class WriteAttempted:
-    """The diagnostic event for one attempt. Q37: 记操作人与目标点位.
+    """一次输出写入的稳定结构化诊断事件。"""
 
-    A stable event name and stable fields, per Q37's decision not to build an audit table:
-    diagnostics are ordinary infrastructure, and this is one event on it.
-    """
-
+    station_id: str
+    connector_id: str
     point: OutputPoint
     state: PointState
     key: str
     actor: str
     outcome: WriteOutcome
+    result: str
+    result_detail: str | None
+    result_reason: str | None
     replayed: bool
-    """表示结果来自账本而不是设备。
+    event: str = WRITE_ATTEMPTED_EVENT
 
-    该字段明确区分“因重复而抑制处置”和“从未派发处置”,便于操作员诊断。
-    """
+    def as_dict(self) -> dict[str, object]:
+        """返回可直接交给结构化日志适配器的稳定字段。"""
+        return {
+            "event": self.event,
+            "station_id": self.station_id,
+            "connector_id": self.connector_id,
+            "point": {"label": self.point.label, "address": self.point.address},
+            "state": self.state.value,
+            "key": self.key,
+            "actor": self.actor,
+            "result": self.result,
+            "result_detail": self.result_detail,
+            "result_reason": self.result_reason,
+            "replayed": self.replayed,
+        }
 
 
 class WriteLedger(Protocol):
-    """记录幂等键已经产生的结果,防止同一动作执行两次。
+    """记录已认领的物理写入结果, 防止同一动作执行两次。
 
-    这是一个接缝;生产实现是 local_state 的 SQLite 账本,必须跨进程重启存活。
+    生产实现是 local_state 的 SQLite 账本, 必须跨进程重启存活。能力或拓扑拒绝发生在
+    claim 之前, 只产生结构化诊断, 不写入物理尝试结果; timed-out、unknown 和其他适配器结果
+    则按结果类型持久化。
     """
 
-    def outcome_for(self, key: str, /) -> WriteOutcome | None: ...
+    def outcome_for(self, request: WriteRequest, /) -> WriteOutcome | None:
+        """按工位作用域和幂等键读取已记录结果。"""
+        ...
 
-    def record(self, key: str, outcome: WriteOutcome, /) -> None: ...
+    def record(self, request: WriteRequest, outcome: WriteOutcome, /) -> None:
+        """按同一工位作用域记录一次已认领的物理写入结果。"""
+        ...
 
 
 class InMemoryWriteLedger:
@@ -108,13 +135,13 @@ class InMemoryWriteLedger:
     """
 
     def __init__(self) -> None:
-        self._outcomes: dict[str, WriteOutcome] = {}
+        self._outcomes: dict[tuple[str, str], WriteOutcome] = {}
 
-    def outcome_for(self, key: str, /) -> WriteOutcome | None:
-        return self._outcomes.get(key)
+    def outcome_for(self, request: WriteRequest, /) -> WriteOutcome | None:
+        return self._outcomes.get((request.station_id, request.key))
 
-    def record(self, key: str, outcome: WriteOutcome, /) -> None:
-        self._outcomes[key] = outcome
+    def record(self, request: WriteRequest, outcome: WriteOutcome, /) -> None:
+        self._outcomes[(request.station_id, request.key)] = outcome
 
 
 class OutputDispatcher:
@@ -142,7 +169,7 @@ class OutputDispatcher:
         prepare = getattr(self._ledger, "prepare", None)
         if prepare is not None:
             prepare(request)
-        held = self._ledger.outcome_for(request.key)
+        held = self._ledger.outcome_for(request)
         if held is not None and not _replayable(held):
             return self._note(request, held, replayed=True)
 
@@ -165,7 +192,8 @@ class OutputDispatcher:
                     )
                 case Unfitness.MAY_DROP_EDGES | Unfitness.NOT_SEQUENCED:
                     raise AssertionError("安全输出规则不读取输入边沿或到达顺序")
-            # 没有请求发往设备,因此不占用幂等键,修正能力后仍可重试。
+            # 这是 claim 之前的能力拒绝: 没有物理尝试结果, local_disposal 只保留身份行,
+            # 诊断事件保留本次拒绝;能力修复后同一 key 可以重新评估。
             return self._note(request, refusal, replayed=False)
 
         claim = getattr(self._ledger, "claim", None)
@@ -174,28 +202,26 @@ class OutputDispatcher:
             if held is not None:
                 return self._note(request, held, replayed=True)
 
-        outcome = self._connector.write(request.point, request.state, timeout=request.timeout)
-        self._ledger.record(request.key, outcome)
+        try:
+            outcome = self._connector.write(request.point, request.state, timeout=request.timeout)
+        except Exception:
+            # claim 已经保留物理尝试租约, 适配器异常时无法判断设备是否收到请求。
+            # 记录 Unknown 并关闭租约, 避免异常路径既没有诊断又被下一次静默重放。
+            outcome = Unknown(detail=UNEXPECTED_WRITE_DETAIL)
+        # 适配器在 claim 之后返回的 Refused 属于一次已 claim 的结构化结果, 由账本记录;
+        # 这与 claim 之前的 capability/topology refusal 是两个明确阶段。
+        self._ledger.record(request, outcome)
         return self._note(request, outcome, replayed=False)
 
     def _note(
         self, request: WriteRequest, outcome: WriteOutcome, *, replayed: bool
     ) -> WriteOutcome:
-        """Emit the diagnostic event and hand the outcome back.
+        """发出诊断事件并返回结果。
 
-        Every path goes through here, including the refused and the suppressed ones, so Q37's
-        "必产生事件" holds by construction rather than by each branch remembering to.
+        拒绝和抑制重放路径也统一经过这里,因此 Q37 的“必产生事件”由结构保证,而不是
+        依赖每个分支自行记住发送事件。
         """
-        self._diagnostics(
-            WriteAttempted(
-                point=request.point,
-                state=request.state,
-                key=request.key,
-                actor=request.actor,
-                outcome=outcome,
-                replayed=replayed,
-            )
-        )
+        self._diagnostics(diagnostic_event(request, outcome, replayed=replayed))
         return outcome
 
 
@@ -207,10 +233,11 @@ class SQLiteWriteLedger:
 
     def __init__(self, ledger: LocalDisposalLedger) -> None:
         self._ledger = ledger
-        self._intents: dict[str, DisposalIntent] = {}
 
-    def prepare(self, request: WriteRequest) -> None:
-        intent = DisposalIntent(
+    @staticmethod
+    def _intent(request: WriteRequest) -> DisposalIntent:
+        """从请求重建 local_disposal 的完整身份, 不缓存第二份身份。"""
+        return DisposalIntent(
             station_id=request.station_id,
             idempotency_key=request.key,
             connector_id=request.connector_id,
@@ -218,18 +245,16 @@ class SQLiteWriteLedger:
             actor=request.actor,
             requested_state=request.state.value,
         )
-        self._ledger.ensure_intent(intent)
-        self._intents[request.key] = intent
+
+    def prepare(self, request: WriteRequest) -> None:
+        """让唯一权威账本校验幂等键和目标身份。"""
+        self._ledger.ensure_intent(self._intent(request))
 
     def claim(self, request: WriteRequest) -> WriteOutcome | None:
         if request.attempt_at is None or request.lease_seconds is None:
             raise ValueError("durable writes require attempt_at and lease_seconds")
-        intent = self._intents.get(request.key)
-        if intent is None:
-            self.prepare(request)
-            intent = self._intents[request.key]
         claim = self._ledger.claim(
-            intent,
+            self._intent(request),
             now=request.attempt_at.seconds,
             lease_seconds=request.lease_seconds,
         )
@@ -237,23 +262,19 @@ class SQLiteWriteLedger:
             return None
         if claim.result is not None:
             return _outcome_from_storage(claim.result.kind, claim.result.detail, claim.result.at)
+        if claim.reason == "lease_active":
+            return Refused(reason=WriteRefusal.LEASE_ACTIVE, detail=LEASE_ACTIVE_DETAIL)
         return Failed(detail=claim.reason or "durable disposal attempt was not claimed")
 
-    def outcome_for(self, key: str, /) -> WriteOutcome | None:
-        intent = self._intents.get(key)
-        if intent is None:
-            return None
-        result = self._ledger.result_for(intent.station_id, key)
+    def outcome_for(self, request: WriteRequest, /) -> WriteOutcome | None:
+        result = self._ledger.result_for(request.station_id, request.key)
         if result is None:
             return None
         return _outcome_from_storage(result.kind, result.detail, result.at)
 
-    def record(self, key: str, outcome: WriteOutcome, /) -> None:
-        intent = self._intents.get(key)
-        if intent is None:
-            raise ValueError("a persistent write must be prepared before recording")
+    def record(self, request: WriteRequest, outcome: WriteOutcome, /) -> None:
         self._ledger.record_result(
-            intent,
+            self._intent(request),
             result=StoredDisposalResult(
                 kind=_outcome_kind(outcome),
                 detail=_outcome_detail(outcome),
@@ -268,7 +289,9 @@ def _outcome_kind(outcome: WriteOutcome) -> str:
     if isinstance(outcome, Refused):
         return f"refused:{outcome.reason.value}"
     if isinstance(outcome, TimedOut):
-        return "timed_out"
+        return DISPOSAL_RESULT_TIMED_OUT
+    if isinstance(outcome, Unknown):
+        return DISPOSAL_RESULT_UNKNOWN
     if isinstance(outcome, Failed):
         return "failed"
     raise AssertionError(f"unsupported write outcome: {outcome!r}")
@@ -279,6 +302,8 @@ def _outcome_detail(outcome: WriteOutcome) -> str | None:
         return outcome.detail
     if isinstance(outcome, TimedOut):
         return str(outcome.after)
+    if isinstance(outcome, Unknown):
+        return outcome.detail
     if isinstance(outcome, Failed):
         return outcome.detail
     return None
@@ -297,35 +322,62 @@ def _outcome_from_storage(kind: str, detail: str | None, at: float) -> WriteOutc
 
     if kind == DISPOSAL_RESULT_WRITTEN:
         return Written(at=HostInstant(at))
-    if kind == "timed_out":
+    if kind == DISPOSAL_RESULT_TIMED_OUT:
         return TimedOut(after=at)
     if kind == "failed":
         return Failed(detail=detail or "persistent write failure")
     if kind == DISPOSAL_RESULT_UNKNOWN:
-        return Failed(detail=PERSISTENT_UNKNOWN_DETAIL)
+        return Unknown(detail=detail or PERSISTENT_UNKNOWN_DETAIL)
     if kind.startswith("refused:"):
         reason = WriteRefusal(kind.removeprefix("refused:"))
         return Refused(reason=reason, detail=detail or "")
-    return Failed(detail=detail or f"unknown persistent write result: {kind}")
+    return Unknown(detail=detail or f"unknown persistent write result: {kind}")
+
+
+def diagnostic_event(
+    request: WriteRequest, outcome: WriteOutcome, *, replayed: bool
+) -> WriteAttempted:
+    """从请求和结构化结果构造稳定的写入诊断事件。"""
+    result, detail, reason = _diagnostic_result(outcome)
+    return WriteAttempted(
+        station_id=request.station_id,
+        connector_id=request.connector_id,
+        point=request.point,
+        state=request.state,
+        key=request.key,
+        actor=request.actor,
+        outcome=outcome,
+        result=result,
+        result_detail=detail,
+        result_reason=reason,
+        replayed=replayed,
+    )
+
+
+def _diagnostic_result(outcome: WriteOutcome) -> tuple[str, str | None, str | None]:
+    """把写入结果投影为稳定的事件类型、明细和原因。"""
+    if isinstance(outcome, Written):
+        return "written", None, None
+    if isinstance(outcome, Refused):
+        return "refused", outcome.detail or None, outcome.reason.value
+    if isinstance(outcome, TimedOut):
+        return "timed_out", str(outcome.after), None
+    if isinstance(outcome, Unknown):
+        return "unknown", outcome.detail, None
+    if isinstance(outcome, Failed):
+        return "failed", outcome.detail, None
+    raise AssertionError(f"unsupported write outcome: {outcome!r}")
 
 
 def _replayable(held: WriteOutcome) -> bool:
-    """Whether a recorded outcome leaves the action still worth attempting.
+    """判断已记录结果是否仍值得尝试。
 
-    An accepted write and an expired lease both close the key. The expired-lease result is
-    deliberately terminal because the physical outcome is unknowable; silently replaying it
-    could drive a physical actuator twice. Other retryable outcomes mean "the state we asked
-    for may not be in force", and for a 停线联锁 that is the dangerous direction to guess in:
+    成功写入、适配器超时和租约过期都会关闭幂等键。物理结果无法安全重建,静默重放
+    可能导致执行器动作两次。只有明确没有进入物理尝试的结果可以重试:
 
-    - `Refused` and `Failed`: nothing physical happened, so suppressing the retry would leave
-      the interlock unasserted on the strength of a failure.
-    - `TimedOut`: the physical outcome is unknown. A point write assigns a level rather than
-      emitting a pulse, so repeating it converges on the state that was asked for — which is
-      why "may have already happened" does not argue for holding back here.
+    - ``Refused`` 和 ``Failed``: 没有发生物理写入,抑制重试会让联锁可能保持未生效。
+    - ``TimedOut`` 和 ``Unknown``: 物理结果未知, 必须等待人工或更高层策略处理。
 
-    A pulsed output, if one is ever needed, cannot use this rule and must not be added behind
-    it silently: it would need the device's own idempotency, not ours.
+    如果以后需要脉冲输出,不能直接复用这里的规则;它需要设备侧幂等能力,不能默默加入。
     """
-    return not isinstance(held, Written) and not (
-        isinstance(held, Failed) and held.detail == PERSISTENT_UNKNOWN_DETAIL
-    )
+    return not isinstance(held, (Written, TimedOut, Unknown))

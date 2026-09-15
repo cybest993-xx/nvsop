@@ -6,10 +6,10 @@ import json
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from uuid import UUID
 
-from factory_sop.auth.api import Caller, Permission
+from factory_sop.auth.api import Caller, Permission, authorize
 from factory_sop.monitor.api import HostOwnershipGateway
 from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.model import MirroredDecision, MirroredHealth
@@ -22,8 +22,13 @@ from nvsop_contracts import (
 )
 
 
+def authorize_stream_access(caller: Caller) -> None:
+    """校验 monitor SSE 的查看权限; HTTP 适配器不直接接触授权函数。"""
+    authorize(caller, Permission.MONITOR_VIEW)
+
+
 def summary(*, caller: Caller, monitor: MonitorRepository) -> dict[str, object]:
-    """Return only persisted observations; never infer a live or healthy state."""
+    """只返回已持久化观测；绝不推断在线或健康状态。"""
     if not caller.holds(Permission.MONITOR_VIEW):
         return {"status": "not_permitted", "data": {}}
     decisions = monitor.recent_decisions(limit=100)
@@ -75,13 +80,9 @@ def mirror_health(
 
 @dataclass(frozen=True, slots=True)
 class SseSnapshot:
-    """初始帧和两个镜像表各自的数据库高水位。"""
+    """初始帧和两个镜像表各自的数据库序号高水位。"""
 
     frames: tuple[str, ...]
-    decision_after: datetime
-    decision_event_id: str
-    health_after: datetime
-    health_event_id: str
     decision_sequence: int = 0
     health_sequence: int = 0
 
@@ -95,17 +96,25 @@ def sse_snapshot_state(
     monitor: MonitorRepository,
     *,
     limit: int = 100,
-    boundary: datetime | None = None,
     last_event_id: str | None = None,
 ) -> SseSnapshot:
-    """读取初始投影并记录数据库序号，避免墙上时钟造成丢事件窗口。"""
-    boundary = boundary or datetime.now(UTC)
-    decisions = monitor.recent_decisions(limit=limit)
-    health = monitor.recent_health(limit=limit)
-    decision_sequence = max((value.stream_sequence or 0 for value in decisions), default=0)
-    health_sequence = max((value.stream_sequence or 0 for value in health), default=0)
-    resume_decision = monitor.decision_sequence_for_event(last_event_id) if last_event_id else None
-    resume_health = monitor.health_sequence_for_event(last_event_id) if last_event_id else None
+    """读取初始投影并记录数据库序号，避免用墙上时钟制造丢事件窗口。"""
+    resume_cursor = monitor.event_cursor_for(last_event_id) if last_event_id else None
+    decision_sequence, health_sequence = monitor.stream_watermarks()
+    if resume_cursor is None:
+        decisions = monitor.recent_decisions(limit=limit, through_sequence=decision_sequence)
+        health = monitor.recent_health(limit=limit, through_sequence=health_sequence)
+    else:
+        decisions = monitor.decisions_after_cursor(
+            after=resume_cursor,
+            limit=None,
+            through_sequence=decision_sequence,
+        )
+        health = monitor.health_after_cursor(
+            after=resume_cursor,
+            limit=None,
+            through_sequence=health_sequence,
+        )
 
     events: list[tuple[datetime, str, str, int, dict[str, object]]] = []
     events.extend(
@@ -117,9 +126,7 @@ def sse_snapshot_state(
             reported_decision_to_wire(value.report),
         )
         for value in decisions
-        if resume_decision is None
-        or (value.stream_sequence or 0) > resume_decision
-        or ((value.stream_sequence or 0) == 0 and value.report.event_id != last_event_id)
+        if resume_cursor is None or (value.received_at, value.report.event_id) > resume_cursor
     )
     events.extend(
         (
@@ -130,33 +137,15 @@ def sse_snapshot_state(
             reported_health_to_wire(value.report),
         )
         for value in health
-        if resume_health is None
-        or (value.stream_sequence or 0) > resume_health
-        or ((value.stream_sequence or 0) == 0 and value.report.event_id != last_event_id)
+        if resume_cursor is None or (value.received_at, value.report.event_id) > resume_cursor
     )
     events.sort(key=lambda item: (item[0], item[2]))
 
-    decision_cursor = _snapshot_cursor(
-        (value.received_at, value.report.event_id) for value in decisions
-    )
-    health_cursor = _snapshot_cursor((value.received_at, value.report.event_id) for value in health)
-    if decision_cursor is None or decision_cursor[0] <= boundary:
-        decision_after, decision_event_id = boundary, ""
-    else:
-        decision_after, decision_event_id = decision_cursor
-    if health_cursor is None or health_cursor[0] <= boundary:
-        health_after, health_event_id = boundary, ""
-    else:
-        health_after, health_event_id = health_cursor
     return SseSnapshot(
         frames=tuple(
             _sse_frame(event=kind, event_id=event_id, data=data)
             for _, kind, event_id, _, data in events
         ),
-        decision_after=decision_after,
-        decision_event_id=decision_event_id,
-        health_after=health_after,
-        health_event_id=health_event_id,
         decision_sequence=decision_sequence,
         health_sequence=health_sequence,
     )
@@ -165,17 +154,11 @@ def sse_snapshot_state(
 def sse_stream(
     monitor: MonitorRepository,
     *,
-    after: datetime | None = None,
     sleep: float = 1.0,
-    decision_after: datetime | None = None,
-    decision_event_id: str = "",
-    health_after: datetime | None = None,
-    health_event_id: str = "",
     decision_sequence: int = 0,
     health_sequence: int = 0,
 ) -> Iterator[str]:
     """只轮询中心镜像，并以数据库序号推进两个独立游标。"""
-    del after, decision_after, decision_event_id, health_after, health_event_id
     while True:
         decisions = monitor.decisions_after_sequence(
             after_sequence=decision_sequence,
@@ -219,10 +202,6 @@ def sse_stream(
             yield _sse_frame(event=kind, event_id=event_id, data=data)
 
 
-def _snapshot_cursor(values: Iterator[tuple[datetime, str]]) -> tuple[datetime, str] | None:
-    return max(values, default=None)
-
-
 def _sse_frame(*, event: str, event_id: str, data: dict[str, object]) -> str:
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     return f"id: {event_id}\nevent: {event}\ndata: {payload}\n\n"
@@ -237,6 +216,7 @@ def _uuid(value: str, label: str) -> UUID:
 
 __all__ = [
     "SseSnapshot",
+    "authorize_stream_access",
     "mirror_decision",
     "mirror_health",
     "sse_snapshot",

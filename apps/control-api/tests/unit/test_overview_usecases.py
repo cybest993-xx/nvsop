@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from factory_sop.device.usecases.summary import summary as device_summary
-from factory_sop.overview.usecases import (
+from factory_sop.overview.api import (
     OverviewSection,
     OverviewUnavailableError,
     build_overview,
@@ -36,7 +36,6 @@ class PagedRepository:
 
 def test_overview_reports_partial_owner_failure_without_fabricating_status() -> None:
     result = build_overview(
-        caller=Caller(),  # type: ignore[arg-type]
         device=lambda: OverviewSection(status="available", data={"hosts": {"total": 1}}),
         template=lambda: (_ for _ in ()).throw(OverviewUnavailableError("template")),
         dataset=lambda: OverviewSection(status="not_permitted", data={}),
@@ -86,7 +85,6 @@ def test_overview_reports_unavailable_when_every_owner_fails() -> None:
         raise OverviewUnavailableError("store unavailable")
 
     result = build_overview(
-        caller=Caller(),  # type: ignore[arg-type]
         device=failed,
         template=failed,
         dataset=failed,

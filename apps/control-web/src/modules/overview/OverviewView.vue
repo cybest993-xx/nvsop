@@ -1,8 +1,6 @@
 <script setup lang="ts">
 /**
- * The overview is a permission-trimmed projection of persisted configuration and reported
- * observations. It never invents online, healthy, or judgment state for an object without a
- * corresponding fact in the center mirror.
+ * 概览是已持久化配置和上报观测的权限裁剪投影；没有中心镜像事实时，不推断对象在线、健康或判定状态。
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 
@@ -159,7 +157,8 @@ function summaryEntries(data: Record<string, unknown>): SummaryEntry[] {
 }
 
 function sectionLink(key: string, status: OverviewSection['status']): string | undefined {
-  if (status === 'not_permitted' || status === 'unavailable') return undefined
+  if (status === 'not_permitted' || status === 'unavailable' || status === 'failed')
+    return undefined
   return sectionLinks[key]
 }
 
@@ -175,13 +174,17 @@ function statusLabel(status: OverviewSection['status']): string {
       return '暂不可用'
     case 'not_permitted':
       return '无权限'
+    case 'failed':
+      return '读取失败'
     default:
       return '状态未知'
   }
 }
 
 function statusTone(status: OverviewSection['status']): string {
-  return ['available', 'no_data', 'partial', 'unavailable', 'not_permitted'].includes(status)
+  return ['available', 'no_data', 'partial', 'unavailable', 'not_permitted', 'failed'].includes(
+    status,
+  )
     ? status
     : 'unknown'
 }
@@ -190,7 +193,13 @@ function sectionMessage(section: OverviewSection): string | null {
   if (section.status === 'not_permitted') return '当前账号无权查看此模块。'
   if (section.status === 'no_data') return '当前模块暂无已登记或已上报的数据。'
   if (section.status === 'partial') {
-    return section.detail ?? '部分摘要读取失败；页面只显示已读取的真实数据。'
+    return section.detail ?? '该模块摘要部分失败；页面只显示已读取的真实数据。'
+  }
+  if (section.status === 'unavailable') {
+    return section.detail ?? '该模块摘要暂时不可用。'
+  }
+  if (section.status === 'failed') {
+    return section.detail ?? '该模块摘要读取失败。'
   }
   return section.detail ?? null
 }
@@ -211,7 +220,7 @@ function addMonitorEvent(kind: string, event: MessageEvent<string>): void {
     })
     monitorEvents.value = monitorEvents.value.slice(0, 20)
   } catch {
-    // Invalid event data does not change the persisted center mirror.
+    // 无效事件数据不会改变中心已持久化的镜像。
   }
 }
 
@@ -222,7 +231,7 @@ function toStrings(value: unknown): string[] {
 }
 
 function canOpenMonitorStream(status: OverviewSection['status']): boolean {
-  return ['available', 'no_data', 'partial'].includes(status)
+  return ['available', 'no_data'].includes(status)
 }
 
 onMounted(async () => {
@@ -386,7 +395,8 @@ onUnmounted(() => {
 
 .overview__section-header span[data-status='no_data'],
 .overview__section-header span[data-status='partial'],
-.overview__section-header span[data-status='unavailable'] {
+.overview__section-header span[data-status='unavailable'],
+.overview__section-header span[data-status='failed'] {
   color: var(--el-color-warning);
 }
 

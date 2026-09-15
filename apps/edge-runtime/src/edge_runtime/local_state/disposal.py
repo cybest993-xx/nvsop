@@ -54,15 +54,20 @@ class DisposalClaim:
 
 
 DISPOSAL_RESULT_WRITTEN = "written"
-"""A confirmed physical write; the idempotency key is terminal."""
+"""已确认的物理写入; 同一幂等键进入终态。"""
+
+DISPOSAL_RESULT_TIMED_OUT = "timed_out"
+"""适配器超时且物理结果未知; 同一幂等键不能隐式重放。"""
 
 DISPOSAL_RESULT_UNKNOWN = "unknown"
-"""A lease expired without a durable physical outcome; never replay implicitly."""
+"""租约恢复时无法确认物理结果; 同一幂等键不能隐式重放。"""
 
-_TERMINAL_RESULT_KINDS = frozenset({DISPOSAL_RESULT_WRITTEN, DISPOSAL_RESULT_UNKNOWN})
+_TERMINAL_RESULT_KINDS = frozenset(
+    {DISPOSAL_RESULT_WRITTEN, DISPOSAL_RESULT_TIMED_OUT, DISPOSAL_RESULT_UNKNOWN}
+)
 
 _DEFAULT_LEDGER_LOCK = RLock()
-"""Serialise users sharing one sqlite connection unless the owner supplies its lock."""
+"""串行化共享同一 SQLite 连接的调用方, 除非所有者提供自己的锁。"""
 
 
 class LocalDisposalLedger:
@@ -151,8 +156,8 @@ class LocalDisposalLedger:
     def claim(self, intent: DisposalIntent, *, now: float, lease_seconds: float) -> DisposalClaim:
         """预留一次物理尝试,或返回已经知道的持久结果。
 
-        ``failed`` 和 ``timed_out`` 可以重试; ``written`` 是终态。租约过期会写入 ``unknown``,
-        此时物理结果不可知, 账本不能静默重复操作。
+        ``failed`` 可以重试; ``written``、``timed_out`` 和租约过期写入的 ``unknown`` 都是终态。
+        物理结果不可安全重建, 账本不能静默重复操作。
         """
         if lease_seconds <= 0:
             raise ValueError("lease_seconds must be positive")
@@ -181,9 +186,8 @@ class LocalDisposalLedger:
                         ),
                         reason="already_recorded",
                     )
-                # A failed or timed-out adapter call did not establish a successful physical
-                # write.  Clear only that result while holding the write transaction; the next
-                # UPDATE below creates the new lease atomically.
+                # 只有明确可重试的失败结果会清除旧结果; 整个过程在写事务内完成,
+                # 下面的 UPDATE 会原子地创建新租约。
                 self._connection.execute(
                     """
                     UPDATE local_disposal
@@ -305,6 +309,7 @@ def _stored_result(row: sqlite3.Row | tuple[object, ...] | None) -> StoredDispos
 
 
 __all__ = [
+    "DISPOSAL_RESULT_TIMED_OUT",
     "DISPOSAL_RESULT_UNKNOWN",
     "DISPOSAL_RESULT_WRITTEN",
     "DisposalClaim",

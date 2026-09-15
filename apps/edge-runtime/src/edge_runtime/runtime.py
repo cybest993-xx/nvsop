@@ -7,40 +7,46 @@ import logging
 import os
 import signal
 import sqlite3
-import ssl
 import threading
 from collections.abc import Callable, Mapping
-from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic, sleep
 from types import FrameType
 
-from nvsop_contracts import ConfigurationBundle, ConnectionTestOutcome
+from nvsop_contracts import ConfigurationBundle
 
+from edge_runtime.command_runtime import (
+    ConfiguredLocalConnectorRegistry,
+    ConnectionTestCommandLoop,
+    ConnectorFactory,
+    build_connection_test_loop,
+    build_connection_test_loop_from_configuration,
+    build_connection_test_loop_from_file,
+    build_connection_test_runner,
+    build_isapi_connector,
+)
 from edge_runtime.configuration import (
     EdgeRuntimeConfiguration,
     LocalIsapiConnectorConfiguration,
-    connector_configuration,
     load_configuration,
-    safe_url,
 )
 from edge_runtime.configuration_sync import ConfigurationSynchronizer, HttpConfigurationPuller
-from edge_runtime.connectors.hikvision import IsapiConnector
 from edge_runtime.connectors.port import (
     InputPoint,
     OutputPoint,
-    Reachability,
+    Refused,
     WriteOutcome,
+    WriteRefusal,
 )
 from edge_runtime.connectors.runtime import ConnectorRuntime, ConnectorRuntimeSet
-from edge_runtime.connectors.transport import UrllibIsapiTransport
 from edge_runtime.connectors.writes import (
     OutputDispatcher,
     SQLiteWriteLedger,
     WriteAttempted,
     WriteRequest,
+    diagnostic_event,
 )
 from edge_runtime.judgment.model import HostInstant, HostLiveness
 from edge_runtime.local_state.store import LocalState, open_local_state
@@ -60,113 +66,14 @@ from edge_runtime.station_runtime import (
     StationRuntimeConfiguration,
 )
 from edge_runtime.stream_health import StreamFact, StreamHealthEvent
-from edge_runtime.supervisor.delegated_commands import (
-    ConnectionTestCommandRunner,
-    ConnectionTestExecutor,
-    LocalConnector,
-    LocalConnectorRegistry,
-    LocalProbeResult,
-)
-from edge_runtime.supervisor.delegated_transport import CommandTransportError, HttpCommandTransport
 from edge_runtime.supervisor.inputs import StreamHealthObserved
 from edge_runtime.supervisor.startup import resume_station
 from edge_runtime.supervisor.station import StationSupervisor
 
 
-class _IsapiConnectionTestProbe:
-    """把连接器包的健康结果转换为 supervisor 的命令探测结果。"""
-
-    def __init__(self, connector: IsapiConnector) -> None:
-        self._connector = connector
-
-    def probe(self, /, *, timeout: float) -> LocalProbeResult:
-        health = self._connector.probe(timeout=timeout)
-        if health.reachability is Reachability.REACHABLE:
-            return LocalProbeResult(
-                outcome=ConnectionTestOutcome.REACHABLE,
-                detail=health.detail or None,
-            )
-        if health.reachability is Reachability.UNREACHABLE:
-            return LocalProbeResult(
-                outcome=ConnectionTestOutcome.UNREACHABLE,
-                detail=health.detail or None,
-            )
-        return LocalProbeResult(
-            outcome=ConnectionTestOutcome.REJECTED,
-            detail="推理机连接器返回了未验证状态",
-            failure_code="COMMAND_RESULT_INVALID",
-        )
-
-
-class ConfiguredLocalConnectorRegistry(LocalConnectorRegistry):
-    """把本机配置装配成真实的 ISAPI 连接器注册表。"""
-
-    def __init__(self, configurations: tuple[LocalIsapiConnectorConfiguration, ...]) -> None:
-        connectors: dict[str, LocalConnector] = {}
-        adapters: dict[str, IsapiConnector] = {}
-        for configuration in configurations:
-            if configuration.connector_id in connectors:
-                raise ValueError(f"duplicate local connector {configuration.connector_id}")
-            adapter = IsapiConnector(
-                transport=UrllibIsapiTransport(
-                    base_url=safe_url(
-                        configuration.base_url,
-                        "connector base_url",
-                        schemes={"http", "https"},
-                    ),
-                    username=configuration.username,
-                    password=configuration.password,
-                ),
-                profile=configuration.profile,
-                capability=configuration.capability,
-            )
-            adapters[configuration.connector_id] = adapter
-            connectors[configuration.connector_id] = LocalConnector(
-                revision=configuration.revision,
-                connector_type=configuration.connector_type,
-                configuration=connector_configuration(configuration.base_url),
-                credentials_configured=configuration.credentials_configured,
-                probe=_IsapiConnectionTestProbe(adapter),
-            )
-        self._connectors = connectors
-        self._adapters = adapters
-
-    @property
-    def adapters(self) -> Mapping[str, IsapiConnector]:
-        """真实适配器,供实时连接器运行时与命令探测共用同一实例。"""
-        return dict(self._adapters)
-
-    def resolve(self, connector_id: str) -> LocalConnector | None:
-        """按中心命令的目标 ID 返回本机真实连接器。"""
-        return self._connectors.get(connector_id)
-
-
-class ConnectionTestCommandLoop:
-    """持续驱动领取、真实本地探测和回报; 中心暂时不可达时安全重试。"""
-
-    def __init__(
-        self,
-        *,
-        runner: ConnectionTestCommandRunner,
-        poll_interval: float,
-        sleep_fn: Callable[[float], None] = sleep,
-    ) -> None:
-        if poll_interval <= 0:
-            raise ValueError("command poll interval must be positive")
-        self._runner = runner
-        self._poll_interval = poll_interval
-        self._sleep = sleep_fn
-
-    def run_once(self) -> bool:
-        """运行一轮真实命令处理, 供进程循环和系统接缝共同使用。"""
-        return self._runner.run_once()
-
-    def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
-        """持续运行, 传输失败只影响本轮并交给下一轮重新领取。"""
-        while not should_stop():
-            with suppress(CommandTransportError):
-                self.run_once()
-            self._sleep(self._poll_interval)
+def _ignore_write_attempt(event: WriteAttempted) -> None:
+    """默认丢弃未装配诊断接缝的测试事件。"""
+    del event
 
 
 class AutonomousStation:
@@ -181,6 +88,7 @@ class AutonomousStation:
         connector_runtimes: tuple[ConnectorRuntime, ...] = (),
         output_dispatchers: Mapping[str, OutputDispatcher] | None = None,
         output_points: Mapping[str, tuple[OutputPoint, ...]] | None = None,
+        diagnostics: Callable[[WriteAttempted], None] | None = None,
     ) -> None:
         self._supervisor = supervisor
         self._source = source
@@ -188,6 +96,7 @@ class AutonomousStation:
         self._connector_runtimes = connector_runtimes
         self._output_dispatchers = dict(output_dispatchers or {})
         self._output_points = dict(output_points or {})
+        self._diagnostics = diagnostics or _ignore_write_attempt
 
     @property
     def station_id(self) -> str | None:
@@ -210,11 +119,31 @@ class AutonomousStation:
         return {connector_id: tuple(points) for connector_id, points in self._output_points.items()}
 
     def write_output(self, request: WriteRequest) -> WriteOutcome:
-        """通过本工位已组合的连接器派发一个输出点写入。"""
+        """只向当前工位已确认输出拓扑中的点位派发写入。"""
+        if request.station_id != self._station_id:
+            return self._refuse_topology(
+                request,
+                "输出请求不属于当前工位的已确认 topology",
+            )
+        configured_points = self._output_points.get(request.connector_id)
+        if configured_points is None or request.point not in configured_points:
+            return self._refuse_topology(
+                request,
+                "输出点不属于当前工位的已确认 output topology",
+            )
         dispatcher = self._output_dispatchers.get(request.connector_id)
         if dispatcher is None:
-            raise KeyError(f"output connector is not configured: {request.connector_id}")
+            return self._refuse_topology(
+                request,
+                "输出连接器不属于当前工位的已确认 output topology",
+            )
         return dispatcher.write(request)
+
+    def _refuse_topology(self, request: WriteRequest, detail: str) -> Refused:
+        """在物理接缝之前拒绝未确认目标, 并发出同一格式的诊断事件。"""
+        outcome = Refused(reason=WriteRefusal.OUTPUT_NOT_CONFIGURED, detail=detail)
+        self._diagnostics(diagnostic_event(request, outcome, replayed=False))
+        return outcome
 
     def close(self) -> None:
         """关闭当前工位输入源。"""
@@ -539,16 +468,8 @@ _logger = logging.getLogger("edge_runtime")
 
 
 def _log_write_attempt(event: WriteAttempted) -> None:
-    """记录连接器写入诊断,但不记录设备凭据。"""
-    _logger.info(
-        "connector write attempt key=%s actor=%s point=%s state=%s replayed=%s outcome=%s",
-        event.key,
-        event.actor,
-        event.point.label,
-        event.state.value,
-        event.replayed,
-        type(event.outcome).__name__,
-    )
+    """把连接器写入事件作为结构化字段交给边缘日志适配器。"""
+    _logger.info(event.event, extra=event.as_dict())
 
 
 def _validate_media_for_runtime(
@@ -572,9 +493,16 @@ def _build_runtime_composition(
     state: LocalState,
     runtime_configuration: RuntimeConfiguration,
     report_transport: HttpDecisionReportTransport | None,
+    connector_factory: ConnectorFactory,
 ) -> RuntimeComposition:
     """组合已确认拓扑、真实适配器、轮询运行时和持久账本。"""
-    registry = ConfiguredLocalConnectorRegistry(runtime_configuration.connectors)
+    active_connectors = (
+        runtime_configuration.connectors if runtime_configuration.confirmed is not None else ()
+    )
+    registry = ConfiguredLocalConnectorRegistry(
+        active_connectors,
+        adapter_factory=connector_factory,
+    )
     adapters = registry.adapters
     points_by_connector: dict[str, list[InputPoint]] = {
         connector_id: [] for connector_id in adapters
@@ -666,6 +594,7 @@ def _build_runtime_composition(
                         connector_id: station_binding.output_points_for(connector_id)
                         for connector_id in station_binding.connector_ids
                     },
+                    diagnostics=_log_write_attempt,
                 )
             )
     except Exception:
@@ -681,80 +610,14 @@ def _build_runtime_composition(
     )
 
 
-def build_connection_test_runner(
-    *,
-    center_url: str,
-    host_id: str,
-    host_private_key: str,
-    command_timeout: float,
-    local_connectors: tuple[LocalIsapiConnectorConfiguration, ...],
-    ssl_context: ssl.SSLContext | None = None,
-) -> ConnectionTestCommandRunner:
-    """装配生产委托命令执行器及本机真实连接器适配器。"""
-    return ConnectionTestCommandRunner(
-        transport=HttpCommandTransport(
-            center_url=center_url,
-            host_id=host_id,
-            host_private_key=host_private_key,
-            timeout=command_timeout,
-            ssl_context=ssl_context,
-        ),
-        executor=ConnectionTestExecutor(
-            registry=ConfiguredLocalConnectorRegistry(local_connectors),
-            timeout=command_timeout,
-        ),
-    )
-
-
-def build_connection_test_loop(
-    *,
-    center_url: str,
-    host_id: str,
-    host_private_key: str,
-    command_timeout: float,
-    command_poll_interval: float,
-    local_connectors: tuple[LocalIsapiConnectorConfiguration, ...],
-    ssl_context: ssl.SSLContext | None = None,
-    sleep_fn: Callable[[float], None] = sleep,
-) -> ConnectionTestCommandLoop:
-    """装配生产委托命令循环及本机真实连接器适配器。"""
-    return ConnectionTestCommandLoop(
-        runner=build_connection_test_runner(
-            center_url=center_url,
-            host_id=host_id,
-            host_private_key=host_private_key,
-            command_timeout=command_timeout,
-            local_connectors=local_connectors,
-            ssl_context=ssl_context,
-        ),
-        poll_interval=command_poll_interval,
-        sleep_fn=sleep_fn,
-    )
-
-
-def build_connection_test_loop_from_file(
+def build_autonomous_runtime_from_file(
     config_path: str | Path,
-) -> ConnectionTestCommandLoop:
-    """从推理机本地配置文件装配生产命令循环。"""
-    config = load_configuration(config_path)
-    return _build_connection_test_loop(config)
-
-
-def _build_connection_test_loop(config: EdgeRuntimeConfiguration) -> ConnectionTestCommandLoop:
-    return build_connection_test_loop(
-        center_url=config.center_url,
-        host_id=config.host_id,
-        host_private_key=config.host_private_key,
-        command_timeout=config.command_timeout,
-        command_poll_interval=config.command_poll_interval,
-        local_connectors=config.connectors,
-        ssl_context=config.ssl_context,
-    )
-
-
-def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRuntime:
+    *,
+    connector_factory: ConnectorFactory | None = None,
+) -> AutonomousRuntime:
     """从已确认的本地配置、真实连接器和 SQLite 状态装配自治运行时。"""
     config = load_configuration(config_path, include_stations=True)
+    resolved_connector_factory = connector_factory or build_isapi_connector
     if config.local_state_path is None:
         raise ValueError("local_state_path is required for autonomous runtime")
     state = open_local_state(str(config.local_state_path))
@@ -791,8 +654,12 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
             state=state,
             runtime_configuration=active_configuration,
             report_transport=report_transport,
+            connector_factory=resolved_connector_factory,
         )
-        command_loop = _build_connection_test_loop(config)
+        command_loop = build_connection_test_loop_from_configuration(
+            config,
+            adapter_factory=resolved_connector_factory,
+        )
 
         def compose_confirmed(bundle: ConfigurationBundle) -> RuntimeComposition:
             runtime_configuration = confirmed_runtime_configuration(
@@ -809,6 +676,7 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
                 state=state,
                 runtime_configuration=runtime_configuration,
                 report_transport=report_transport,
+                connector_factory=resolved_connector_factory,
             )
 
         def validate_confirmed(bundle: ConfigurationBundle) -> None:
@@ -883,6 +751,7 @@ __all__ = [
     "AutonomousStation",
     "ConfiguredLocalConnectorRegistry",
     "ConnectionTestCommandLoop",
+    "ConnectorFactory",
     "InputWaitExpired",
     "LocalIsapiConnectorConfiguration",
     "RuntimeComposition",

@@ -704,7 +704,7 @@ export type BackendStatus = {
 /**
  * BackendSummary
  *
- * Resource counts plus real endpoint connection observations.
+ * 资源计数以及真实端点连接观测。
  */
 export type BackendSummary = {
   /**
@@ -958,7 +958,7 @@ export type CameraStatus = {
 /**
  * CameraSummary
  *
- * Camera counts plus the persisted credential-presence flag.
+ * 相机计数以及已持久化的凭据配置事实。
  */
 export type CameraSummary = {
   /**
@@ -1245,7 +1245,7 @@ export type ConnectorStatus = {
 /**
  * ConnectorSummary
  *
- * Connector counts plus measured reachability, including unverified.
+ * 连接器计数以及实测可达性，包含未验证状态。
  */
 export type ConnectorSummary = {
   /**
@@ -1525,7 +1525,7 @@ export type DatasetOverviewSection = {
   /**
    * Status
    */
-  status: string
+  status: 'available' | 'no_data' | 'not_permitted' | 'unavailable' | 'failed' | 'partial'
 }
 
 /**
@@ -1625,7 +1625,7 @@ export type DeviceOverviewSection = {
   /**
    * Status
    */
-  status: string
+  status: 'available' | 'no_data' | 'not_permitted' | 'unavailable' | 'failed' | 'partial'
 }
 
 /**
@@ -2466,7 +2466,181 @@ export type MonitorOverviewSection = {
   /**
    * Status
    */
+  status: 'available' | 'no_data' | 'not_permitted' | 'unavailable' | 'failed' | 'partial'
+}
+
+/**
+ * MonitorReportAccepted
+ *
+ * monitor 上报接受结果。
+ */
+export type MonitorReportAccepted = {
+  /**
+   * Accepted
+   */
+  accepted: true
+  /**
+   * Duplicate
+   */
+  duplicate: boolean
+  /**
+   * Event Id
+   */
+  event_id: string
+}
+
+/**
+ * MonitorReportEvidence
+ *
+ * 复用 contracts 中判定证据的字段和校验。
+ */
+export type MonitorReportEvidence = {
+  /**
+   * Anchor
+   */
+  anchor: number | null
+  /**
+   * End
+   */
+  end: number | null
+  /**
+   * Start
+   */
+  start: number | null
+}
+
+/**
+ * MonitorReportViolation
+ *
+ * 复用 contracts 中违规观测的字段和校验。
+ */
+export type MonitorReportViolation = {
+  /**
+   * Detail
+   */
+  detail: string | null
+  evidence: MonitorReportEvidence
+  /**
+   * Reason Code
+   */
+  reason_code: string
+  /**
+   * Step Ids
+   */
+  step_ids: Array<string>
+}
+
+/**
+ * MonitorReportedDecision
+ *
+ * 复用 contracts 中判定上报的 wire 字段和校验。
+ */
+export type MonitorReportedDecision = {
+  /**
+   * Backend Id
+   */
+  backend_id: string
+  /**
+   * Contract Version
+   */
+  contract_version: number
+  /**
+   * Event Id
+   */
+  event_id: string
+  evidence: MonitorReportEvidence
+  /**
+   * Host Id
+   */
+  host_id: string
+  /**
+   * Instance Id
+   */
+  instance_id: number
+  /**
+   * Lifecycle
+   */
+  lifecycle: string
+  /**
+   * Model Ids
+   */
+  model_ids: Array<string>
+  /**
+   * Reason Codes
+   */
+  reason_codes: Array<string>
+  /**
+   * Reported At
+   */
+  reported_at: string
+  /**
+   * Station Id
+   */
+  station_id: string
+  /**
+   * Template Sha256
+   */
+  template_sha256: string | null
+  /**
+   * Template Version Id
+   */
+  template_version_id: string | null
+  /**
+   * Trace Id
+   */
+  trace_id: string
+  /**
+   * Verdict
+   */
+  verdict: string
+  /**
+   * Violations
+   */
+  violations: Array<MonitorReportViolation>
+}
+
+/**
+ * MonitorReportedHealth
+ *
+ * 复用 contracts 中健康上报的 wire 字段和校验。
+ */
+export type MonitorReportedHealth = {
+  /**
+   * Contract Version
+   */
+  contract_version: number
+  /**
+   * Detail
+   */
+  detail: string | null
+  /**
+   * Event Id
+   */
+  event_id: string
+  /**
+   * Host Id
+   */
+  host_id: string
+  /**
+   * Reason Code
+   */
+  reason_code: string | null
+  /**
+   * Reported At
+   */
+  reported_at: string
+  /**
+   * Station Id
+   */
+  station_id: string | null
+  /**
+   * Status
+   */
   status: string
+  /**
+   * Trace Id
+   */
+  trace_id: string
 }
 
 /**
@@ -2852,7 +3026,7 @@ export type RequestedStatus = {
 /**
  * ResourceSummary
  *
- * Counts of a configured resource, preserving unknown status values.
+ * 配置资源计数，并保留未知状态值。
  */
 export type ResourceSummary = {
   /**
@@ -3474,7 +3648,7 @@ export type TemplateOverviewSection = {
   /**
    * Status
    */
-  status: string
+  status: 'available' | 'no_data' | 'not_permitted' | 'unavailable' | 'failed' | 'partial'
 }
 
 /**
@@ -6900,12 +7074,7 @@ export type ReadLivenessResponses = {
 export type ReadLivenessResponse = ReadLivenessResponses[keyof ReadLivenessResponses]
 
 export type ReportMonitorHealthData = {
-  /**
-   * Body
-   */
-  body: {
-    [key: string]: unknown
-  }
+  body: MonitorReportedHealth
   headers?: {
     /**
      * X-Inference-Host-Id
@@ -6944,25 +7113,16 @@ export type ReportMonitorHealthError = ReportMonitorHealthErrors[keyof ReportMon
 
 export type ReportMonitorHealthResponses = {
   /**
-   * Response Reportmonitorhealth
-   *
    * Successful Response
    */
-  200: {
-    [key: string]: unknown
-  }
+  200: MonitorReportAccepted
 }
 
 export type ReportMonitorHealthResponse =
   ReportMonitorHealthResponses[keyof ReportMonitorHealthResponses]
 
 export type ReportMonitorDecisionData = {
-  /**
-   * Body
-   */
-  body: {
-    [key: string]: unknown
-  }
+  body: MonitorReportedDecision
   headers?: {
     /**
      * X-Inference-Host-Id
@@ -7002,13 +7162,9 @@ export type ReportMonitorDecisionError =
 
 export type ReportMonitorDecisionResponses = {
   /**
-   * Response Reportmonitordecision
-   *
    * Successful Response
    */
-  200: {
-    [key: string]: unknown
-  }
+  200: MonitorReportAccepted
 }
 
 export type ReportMonitorDecisionResponse =
@@ -7023,12 +7179,7 @@ export type StreamMonitorEventsData = {
     'Last-Event-ID'?: string | null
   }
   path?: never
-  query?: {
-    /**
-     * Once
-     */
-    once?: boolean
-  }
+  query?: never
   url: '/api/v1/monitor/stream'
 }
 
@@ -7049,8 +7200,11 @@ export type StreamMonitorEventsResponses = {
   /**
    * Successful Response
    */
-  200: unknown
+  200: string
 }
+
+export type StreamMonitorEventsResponse =
+  StreamMonitorEventsResponses[keyof StreamMonitorEventsResponses]
 
 export type ReadOverviewData = {
   body?: never

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, Request, Response
@@ -30,7 +30,9 @@ from factory_sop.auth.errors import (
     refusal_problem,
 )
 from factory_sop.auth.model import SessionPolicy
+from factory_sop.configuration.adapters import dependencies as configuration_dependencies
 from factory_sop.configuration.adapters.routes import router as configuration_router
+from factory_sop.configuration.api import ConfigurationSources
 from factory_sop.dataset.adapters import dependencies as dataset_dependencies
 from factory_sop.dataset.adapters.annotation_routes import (
     compatibility_router as annotation_compatibility_router,
@@ -48,6 +50,7 @@ from factory_sop.dataset.adapters.annotation_routes import (
     router as annotation_router,
 )
 from factory_sop.dataset.adapters.routes import router as dataset_router
+from factory_sop.dataset.api import summary as dataset_summary
 from factory_sop.dataset.errors import DatasetRefusedError
 from factory_sop.dataset.errors import refusal_problem as dataset_refusal_problem
 from factory_sop.device.adapters import dependencies as device_dependencies
@@ -66,20 +69,28 @@ from factory_sop.device.adapters.routes_points import (
     router as points_router,
 )
 from factory_sop.device.adapters.routes_stations import router as stations_router
+from factory_sop.device.api import authenticate_host
+from factory_sop.device.api import summary as device_summary
 from factory_sop.device.errors import DeviceRefusedError
 from factory_sop.device.errors import refusal_problem as device_refusal_problem
+from factory_sop.device.model import InferenceHostIdentity
 from factory_sop.job.adapters import dependencies as job_dependencies
 from factory_sop.job.adapters.dispatcher import ArqJobDispatcher
 from factory_sop.job.adapters.routes import router as job_router
 from factory_sop.job.errors import JobRefusedError
 from factory_sop.job.errors import refusal_problem as job_refusal_problem
+from factory_sop.monitor.adapters import dependencies as monitor_dependencies
 from factory_sop.monitor.adapters.routes import router as monitor_router
+from factory_sop.monitor.api import MonitorHostSources
+from factory_sop.monitor.api import summary as monitor_summary
 from factory_sop.observability import (
     correlation_scope,
     get_logger,
     new_correlation_id,
 )
-from factory_sop.overview.adapters.routes import router as overview_router
+from factory_sop.overview.adapters.routes import create_router as create_overview_router
+from factory_sop.overview.api import OverviewSources
+from factory_sop.persistence import RequestSession
 from factory_sop.problem import (
     PROBLEM_MEDIA_TYPE,
     ApiErrorCode,
@@ -90,6 +101,7 @@ from factory_sop.problem import (
 from factory_sop.settings import Settings
 from factory_sop.template.adapters import dependencies as template_dependencies
 from factory_sop.template.adapters.routes import router as template_router
+from factory_sop.template.api import summary as template_summary
 from factory_sop.template.errors import TemplateRefusedError
 from factory_sop.template.errors import refusal_problem as template_refusal_problem
 
@@ -112,6 +124,14 @@ MODIFYING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 CSRF_EXEMPT_REQUESTS = frozenset({("POST", f"{API_PREFIX}/auth/session")})
 
 _logger = get_logger("http")
+
+
+def _authenticate_host_for_request(
+    *, host: InferenceHostIdentity, now: datetime, session: RequestSession
+) -> None:
+    """由组合根把请求事务接到设备模块的主机认证接口。"""
+    authenticate_host(host=host, now=now, hosts=device_dependencies.hosts(session))
+
 
 liveness_router = APIRouter()
 
@@ -147,6 +167,31 @@ def create_app(settings: Settings) -> FastAPI:
         idle_timeout=timedelta(minutes=settings.session_idle_timeout_minutes),
         absolute_lifetime=timedelta(minutes=settings.session_absolute_lifetime_minutes),
     )
+    overview_router = create_overview_router(
+        OverviewSources(
+            device=lambda caller, session: device_summary(
+                caller=caller,
+                hosts=device_dependencies.hosts(session),
+                backends=device_dependencies.backends(session),
+                stations=device_dependencies.stations(session),
+                cameras=device_dependencies.cameras(session),
+                connectors=device_dependencies.connectors(session),
+                points=device_dependencies.points(session),
+            ),
+            template=lambda caller, session: template_summary(
+                caller=caller,
+                templates=template_dependencies.templates(session),
+            ),
+            dataset=lambda caller, session: dataset_summary(
+                caller=caller,
+                datasets=dataset_dependencies.datasets(session),
+            ),
+            monitor=lambda caller, session: monitor_summary(
+                caller=caller,
+                monitor=monitor_dependencies.monitor(session),
+            ),
+        )
+    )
     app.include_router(liveness_router, prefix=API_PREFIX)
     app.include_router(auth_routes.router, prefix=API_PREFIX)
     app.include_router(inference_hosts_router, prefix=API_PREFIX)
@@ -173,6 +218,22 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(monitor_router, prefix=API_PREFIX)
     app.include_router(overview_router, prefix=API_PREFIX)
     # 组合根把跨模块查询和任务依赖接到各自模块的真实适配器。
+    configuration_sources = ConfigurationSources(
+        authenticate=_authenticate_host_for_request,
+        hosts=device_dependencies.hosts,
+        backends=device_dependencies.backends,
+        stations=device_dependencies.stations,
+        cameras=device_dependencies.cameras,
+        connectors=device_dependencies.connectors,
+        points=device_dependencies.points,
+        templates=template_dependencies.templates,
+    )
+    monitor_host_sources = MonitorHostSources(
+        authenticate=_authenticate_host_for_request,
+        gateway=device_dependencies.host_gateway,
+    )
+    app.dependency_overrides[configuration_dependencies.sources] = lambda: configuration_sources
+    app.dependency_overrides[monitor_dependencies.host_sources] = lambda: monitor_host_sources
     app.dependency_overrides[template_dependencies.stations] = device_dependencies.stations
     app.dependency_overrides[template_dependencies.binding_gateway] = (
         device_dependencies.template_binding

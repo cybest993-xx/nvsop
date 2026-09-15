@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
+from auth_fakes import caller_holding
 
+from factory_sop.auth.authorization import AuthorizationRefusedError
+from factory_sop.auth.permissions import Permission
 from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.model import MirroredDecision, MirroredHealth
 from factory_sop.monitor.usecases import (
+    authorize_stream_access,
     mirror_decision,
     mirror_health,
     sse_snapshot,
@@ -45,11 +49,25 @@ class MemoryMonitor:
         self.health[value.report.event_id] = replace(value, stream_sequence=self._health_sequence)
         return True
 
-    def recent_decisions(self, *, limit: int) -> tuple[MirroredDecision, ...]:
-        return tuple(self.decisions.values())[:limit]
+    def recent_decisions(
+        self, *, limit: int, through_sequence: int | None = None
+    ) -> tuple[MirroredDecision, ...]:
+        values = tuple(
+            value
+            for value in self.decisions.values()
+            if through_sequence is None or (value.stream_sequence or 0) <= through_sequence
+        )
+        return values[:limit]
 
-    def recent_health(self, *, limit: int) -> tuple[MirroredHealth, ...]:
-        return tuple(self.health.values())[:limit]
+    def recent_health(
+        self, *, limit: int, through_sequence: int | None = None
+    ) -> tuple[MirroredHealth, ...]:
+        values = tuple(
+            value
+            for value in self.health.values()
+            if through_sequence is None or (value.stream_sequence or 0) <= through_sequence
+        )
+        return values[:limit]
 
     def decisions_after_sequence(
         self, *, after_sequence: int, limit: int
@@ -69,13 +87,49 @@ class MemoryMonitor:
             if (value.stream_sequence or 0) > after_sequence
         )[:limit]
 
-    def decision_sequence_for_event(self, event_id: str) -> int | None:
-        value = self.decisions.get(event_id)
-        return None if value is None else value.stream_sequence
+    def event_cursor_for(self, event_id: str) -> tuple[datetime, str] | None:
+        values = [
+            value.received_at
+            for value in self.decisions.values()
+            if value.report.event_id == event_id
+        ]
+        values.extend(
+            value.received_at for value in self.health.values() if value.report.event_id == event_id
+        )
+        return None if not values else (min(values), event_id)
 
-    def health_sequence_for_event(self, event_id: str) -> int | None:
-        value = self.health.get(event_id)
-        return None if value is None else value.stream_sequence
+    def decisions_after_cursor(
+        self,
+        *,
+        after: tuple[datetime, str],
+        limit: int | None,
+        through_sequence: int | None = None,
+    ) -> tuple[MirroredDecision, ...]:
+        values = tuple(
+            value
+            for value in self.decisions.values()
+            if (value.received_at, value.report.event_id) > after
+            and (through_sequence is None or (value.stream_sequence or 0) <= through_sequence)
+        )
+        return values if limit is None else values[:limit]
+
+    def health_after_cursor(
+        self,
+        *,
+        after: tuple[datetime, str],
+        limit: int | None,
+        through_sequence: int | None = None,
+    ) -> tuple[MirroredHealth, ...]:
+        values = tuple(
+            value
+            for value in self.health.values()
+            if (value.received_at, value.report.event_id) > after
+            and (through_sequence is None or (value.stream_sequence or 0) <= through_sequence)
+        )
+        return values if limit is None else values[:limit]
+
+    def stream_watermarks(self) -> tuple[int, int]:
+        return self._decision_sequence, self._health_sequence
 
 
 class HostGateway:
@@ -107,6 +161,26 @@ def report(event_id: str = "host:event-1") -> ReportedDecision:
         model_ids=("model-1",),
         reported_at="2026-09-13T00:00:00Z",
     )
+
+
+def health_report(event_id: str = "host:health-1") -> ReportedHealth:
+    return ReportedHealth(
+        event_id=event_id,
+        trace_id="trace-health-1",
+        host_id=str(HOST_ID),
+        station_id=str(STATION_ID),
+        status="available",
+        reason_code=None,
+        detail=None,
+        reported_at="2026-09-13T00:00:00Z",
+    )
+
+
+def test_monitor_stream_authorization_is_owned_by_the_usecase() -> None:
+    with pytest.raises(AuthorizationRefusedError):
+        authorize_stream_access(caller_holding())
+
+    authorize_stream_access(caller_holding(Permission.MONITOR_VIEW))
 
 
 def test_decision_mirror_is_idempotent_and_preserves_unknown_reason() -> None:
@@ -177,6 +251,52 @@ def test_sse_resume_consumes_last_event_id_without_replaying_it() -> None:
     assert snapshot.decision_sequence == 1
 
 
+def test_sse_resume_does_not_replay_the_other_event_kind() -> None:
+    monitor = MemoryMonitor()
+    mirror_decision(
+        report("host:decision-before"),
+        received_at=datetime(2026, 9, 13, 0, 0, 1, tzinfo=UTC),
+        monitor=monitor,
+        host_gateway=HostGateway(),
+    )
+    mirror_health(
+        health_report(),
+        received_at=datetime(2026, 9, 13, 0, 0, 2, tzinfo=UTC),
+        monitor=monitor,
+        host_gateway=HostGateway(),
+    )
+    mirror_decision(
+        report("host:decision-after"),
+        received_at=datetime(2026, 9, 13, 0, 0, 3, tzinfo=UTC),
+        monitor=monitor,
+        host_gateway=HostGateway(),
+    )
+
+    snapshot = sse_snapshot_state(monitor, last_event_id="host:health-1")
+
+    assert len(snapshot.frames) == 1
+    assert "host:decision-after" in snapshot.frames[0]
+    assert "host:decision-before" not in snapshot.frames[0]
+
+
+def test_sse_resume_replays_the_entire_backlog_after_the_last_event() -> None:
+    monitor = MemoryMonitor()
+    for index in range(150):
+        mirror_decision(
+            report(f"host:decision-{index}"),
+            received_at=datetime(2026, 9, 13, tzinfo=UTC) + timedelta(seconds=index),
+            monitor=monitor,
+            host_gateway=HostGateway(),
+        )
+
+    snapshot = sse_snapshot_state(monitor, last_event_id="host:decision-0")
+
+    assert len(snapshot.frames) == 149
+    assert "host:decision-1" in snapshot.frames[0]
+    assert "host:decision-149" in snapshot.frames[-1]
+    assert snapshot.decision_sequence == 150
+
+
 def test_sse_cursors_do_not_replay_snapshot_or_skip_same_timestamp_events() -> None:
     monitor = MemoryMonitor()
     received_at = datetime(2026, 9, 13, 0, 0, 0, tzinfo=UTC)
@@ -186,8 +306,8 @@ def test_sse_cursors_do_not_replay_snapshot_or_skip_same_timestamp_events() -> N
         monitor=monitor,
         host_gateway=HostGateway(),
     )
-    snapshot = sse_snapshot_state(monitor, boundary=datetime(2026, 9, 12, tzinfo=UTC))
-    assert snapshot.decision_event_id == "host:event-1"
+    snapshot = sse_snapshot_state(monitor)
+    assert snapshot.decision_sequence == 1
 
     mirror_decision(
         report("host:event-2"),
@@ -197,10 +317,6 @@ def test_sse_cursors_do_not_replay_snapshot_or_skip_same_timestamp_events() -> N
     )
     stream = sse_stream(
         monitor,
-        after=snapshot.decision_after,
-        decision_event_id=snapshot.decision_event_id,
-        health_after=snapshot.health_after,
-        health_event_id=snapshot.health_event_id,
         decision_sequence=snapshot.decision_sequence,
         health_sequence=snapshot.health_sequence,
         sleep=0,

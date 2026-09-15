@@ -1,1 +1,1 @@
-"""Center-side host configuration assembly."""
+"""中心侧推理机配置组装。"""

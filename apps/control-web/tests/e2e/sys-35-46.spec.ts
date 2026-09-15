@@ -108,7 +108,14 @@ test('SYS-35-46 — a monitor section without permission does not open the SSE s
     await route.abort()
   })
 
+  const overviewResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'GET' &&
+      response.url().endsWith('/api/v1/overview') &&
+      response.status() === 200,
+  )
   await page.goto('/')
+  await overviewResponse
 
   const monitorSection = page
     .getByRole('article')

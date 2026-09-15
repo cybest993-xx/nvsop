@@ -1,1 +1,1 @@
-"""Permission-scoped composition of owner summaries for the overview page."""
+"""概览页的权限范围归属模块摘要组合。"""

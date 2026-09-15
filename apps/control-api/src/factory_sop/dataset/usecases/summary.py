@@ -1,23 +1,23 @@
-"""Permission-scoped configuration summary owned by the dataset module."""
+"""dataset 模块拥有的权限范围配置摘要。"""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Sequence
 from uuid import UUID
 
 from factory_sop.auth.api import Caller, Permission
 from factory_sop.dataset.repository import DatasetRepository
+from factory_sop.pagination import all_pages, enum_counts
 
-_PAGE_SIZE = 1000
 Summary = dict[str, object]
 
 
 def summary(*, caller: Caller, datasets: DatasetRepository) -> Summary:
-    """Return real dataset and registered-video facts visible to the caller."""
+    """返回调用方可见的真实数据集和已登记视频事实。"""
     if not caller.holds(Permission.DATASET_VIEW):
         return {"status": "not_permitted", "data": {}}
 
-    dataset_values, dataset_total = _all_pages(
+    dataset_values, dataset_total = all_pages(
         lambda page, size: datasets.page_datasets(page=page, page_size=size)
     )
     member_values: list[object] = []
@@ -33,7 +33,7 @@ def summary(*, caller: Caller, datasets: DatasetRepository) -> Summary:
         ) -> tuple[Sequence[object], int]:
             return datasets.page_members(dataset_id=dataset_id, page=page, page_size=page_size)
 
-        members, total = _all_pages(fetch_members)
+        members, total = all_pages(fetch_members)
         member_values.extend(members)
         member_total += total
 
@@ -41,44 +41,11 @@ def summary(*, caller: Caller, datasets: DatasetRepository) -> Summary:
         "datasets": {"total": dataset_total},
         "members": {
             "total": member_total,
-            "by_status": _enum_counts(getattr(value, "status", None) for value in member_values),
+            "by_status": enum_counts(getattr(value, "status", None) for value in member_values),
         },
     }
     status = "available" if dataset_total else "no_data"
     return {"status": status, "data": data}
-
-
-def _all_pages(
-    fetch: Callable[[int, int], tuple[Sequence[object], int]],
-) -> tuple[tuple[object, ...], int]:
-    page = 1
-    expected_total: int | None = None
-    values: list[object] = []
-    while expected_total is None or len(values) < expected_total:
-        page_values, total = fetch(page, _PAGE_SIZE)
-        if total < 0:
-            raise ValueError("summary pagination total must not be negative")
-        if expected_total is None:
-            expected_total = total
-        elif expected_total != total:
-            raise ValueError("summary pagination total changed during the request")
-        values.extend(page_values)
-        if len(values) >= expected_total:
-            break
-        if not page_values:
-            raise ValueError("summary pagination ended before reaching its total")
-        page += 1
-    assert expected_total is not None
-    return tuple(values[:expected_total]), expected_total
-
-
-def _enum_counts(values: Iterable[object]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for value in values:
-        raw = getattr(value, "value", value)
-        key = "unknown" if raw is None else str(raw)
-        counts[key] = counts.get(key, 0) + 1
-    return counts
 
 
 __all__ = ["summary"]

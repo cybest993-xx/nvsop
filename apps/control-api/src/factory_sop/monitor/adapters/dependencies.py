@@ -6,12 +6,19 @@ from fastapi import Depends
 from sqlalchemy.orm import Session
 
 from factory_sop.monitor.adapters.repository import PostgresMonitorRepository
+from factory_sop.monitor.api import MonitorHostSources
 from factory_sop.monitor.repository import MonitorRepository
 from factory_sop.persistence import RequestSession, request_session
 
 
 def monitor(session: RequestSession) -> MonitorRepository:
+    """返回请求事务中的 monitor 仓储。"""
     return PostgresMonitorRepository(session)
+
+
+def host_sources() -> MonitorHostSources:
+    """返回由组合根装配的主机认证和归属接口。"""
+    raise RuntimeError("monitor host sources were not wired")
 
 
 StreamingSession = Annotated[Session, Depends(request_session, scope="request")]

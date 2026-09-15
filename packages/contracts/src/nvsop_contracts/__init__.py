@@ -30,6 +30,7 @@ from nvsop_contracts.commands import (
 )
 from nvsop_contracts.configuration import (
     CONFIGURATION_CONTRACT_VERSION,
+    LEGACY_CONFIGURATION_CONTRACT_VERSION,
     ConfigurationArtifact,
     ConfigurationBundle,
     ConfigurationTemplate,
@@ -51,9 +52,22 @@ from nvsop_contracts.host_identity import (
     validate_host_identity_public_key,
     verify_host_identity_request,
 )
+from nvsop_contracts.reports import (
+    REPORT_CONTRACT_VERSION,
+    ReportedDecision,
+    ReportedHealth,
+    ReportEvidence,
+    ReportViolation,
+    reported_decision_from_wire,
+    reported_decision_to_wire,
+    reported_health_from_wire,
+    reported_health_to_wire,
+)
 
 __all__ = [
     "CONFIGURATION_CONTRACT_VERSION",
+    "LEGACY_CONFIGURATION_CONTRACT_VERSION",
+    "REPORT_CONTRACT_VERSION",
     "Capability",
     "ConfigurationArtifact",
     "ConfigurationBundle",
@@ -74,6 +88,10 @@ __all__ = [
     "PointRole",
     "Polled",
     "Pushed",
+    "ReportEvidence",
+    "ReportViolation",
+    "ReportedDecision",
+    "ReportedHealth",
     "ResolvedRuntimeParameters",
     "Sequencing",
     "TimestampSource",
@@ -91,6 +109,10 @@ __all__ = [
     "connection_test_result_from_wire",
     "connection_test_result_to_wire",
     "generate_host_identity_key_pair",
+    "reported_decision_from_wire",
+    "reported_decision_to_wire",
+    "reported_health_from_wire",
+    "reported_health_to_wire",
     "sign_host_identity_request",
     "unfit_for",
     "validate_host_identity_private_key",

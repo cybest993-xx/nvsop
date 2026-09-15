@@ -209,6 +209,7 @@ def _station_bundle(
         cameras=tuple(
             sorted((_camera(value) for value in backend_cameras), key=lambda item: item.camera_id)
         ),
+        model_ids=backend.self_reported_model_ids,
     )
 
 

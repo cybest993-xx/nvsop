@@ -87,6 +87,10 @@ class Permission(StrEnum):
     DATASET_EDIT = "dataset.dataset.edit"
     DATASET_IMPORT = "dataset.dataset.import"
 
+    # Read-only mirror of edge decisions and host health. It never grants execution or
+    # configuration authority and is therefore the only monitor permission in this slice.
+    MONITOR_VIEW = "monitor.report.view"
+
 
 class UnregisteredPermissionError(Exception):
     """A string that is not a member of `Permission`.

@@ -702,6 +702,50 @@ export type BackendStatus = {
 }
 
 /**
+ * BackendSummary
+ *
+ * 资源数量及真实端点连接观测。
+ */
+export type BackendSummary = {
+  /**
+   * Active
+   */
+  active: number
+  /**
+   * By Status
+   */
+  by_status?: {
+    [key: string]: number
+  }
+  /**
+   * Connection States
+   */
+  connection_states?: {
+    [key: string]: number
+  }
+  /**
+   * Deactivated
+   */
+  deactivated: number
+  /**
+   * Total
+   */
+  total: number
+  /**
+   * Unknown
+   */
+  unknown: number
+  /**
+   * Unverified
+   */
+  unverified: number
+  /**
+   * Verified
+   */
+  verified: number
+}
+
+/**
  * BindingReasonCode
  *
  * 绑定前校验返回的稳定原因码。
@@ -909,6 +953,44 @@ export type CameraMediaView = {
  */
 export type CameraStatus = {
   status: DeviceStatus
+}
+
+/**
+ * CameraSummary
+ *
+ * 相机数量及已持久化的凭据存在标志。
+ */
+export type CameraSummary = {
+  /**
+   * Active
+   */
+  active: number
+  /**
+   * By Status
+   */
+  by_status?: {
+    [key: string]: number
+  }
+  /**
+   * Credentials Configured
+   */
+  credentials_configured: number
+  /**
+   * Credentials Not Configured
+   */
+  credentials_not_configured: number
+  /**
+   * Deactivated
+   */
+  deactivated: number
+  /**
+   * Total
+   */
+  total: number
+  /**
+   * Unknown
+   */
+  unknown: number
 }
 
 /**
@@ -1161,6 +1243,50 @@ export type ConnectorStatus = {
 }
 
 /**
+ * ConnectorSummary
+ *
+ * 连接器数量及实测可达性，包括未验证状态。
+ */
+export type ConnectorSummary = {
+  /**
+   * Active
+   */
+  active: number
+  /**
+   * By Status
+   */
+  by_status?: {
+    [key: string]: number
+  }
+  /**
+   * Deactivated
+   */
+  deactivated: number
+  /**
+   * Reachability
+   */
+  reachability?: {
+    [key: string]: number
+  }
+  /**
+   * Total
+   */
+  total: number
+  /**
+   * Unknown
+   */
+  unknown: number
+  /**
+   * Unverified
+   */
+  unverified: number
+  /**
+   * Verified
+   */
+  verified: number
+}
+
+/**
  * ConnectorType
  *
  * 中心支持的连接器配置类型。
@@ -1282,6 +1408,22 @@ export type Credentials = {
 }
 
 /**
+ * DatasetMemberSummary
+ */
+export type DatasetMemberSummary = {
+  /**
+   * By Status
+   */
+  by_status?: {
+    [key: string]: number
+  }
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
  * DatasetMemberView
  */
 export type DatasetMemberView = {
@@ -1372,6 +1514,34 @@ export type DatasetMemberView = {
 }
 
 /**
+ * DatasetOverviewSection
+ */
+export type DatasetOverviewSection = {
+  data: DatasetSummaryData
+  /**
+   * Detail
+   */
+  detail?: string | null
+  /**
+   * Status
+   */
+  status: string
+}
+
+/**
+ * DatasetSummaryData
+ */
+export type DatasetSummaryData = {
+  /**
+   * Datasets
+   */
+  datasets?: {
+    [key: string]: number
+  } | null
+  members?: DatasetMemberSummary | null
+}
+
+/**
  * DatasetView
  */
 export type DatasetView = {
@@ -1444,6 +1614,21 @@ export type DesiredTemplateBindingView = {
 }
 
 /**
+ * DeviceOverviewSection
+ */
+export type DeviceOverviewSection = {
+  data: DeviceSummaryData
+  /**
+   * Detail
+   */
+  detail?: string | null
+  /**
+   * Status
+   */
+  status: string
+}
+
+/**
  * DeviceStatus
  *
  * 可配置设备是否继续参与新绑定和运行。
@@ -1452,6 +1637,18 @@ export type DesiredTemplateBindingView = {
  * 已停用推理机的后端仍保留记录和历史。
  */
 export type DeviceStatus = 'active' | 'deactivated'
+
+/**
+ * DeviceSummaryData
+ */
+export type DeviceSummaryData = {
+  cameras?: CameraSummary | null
+  connectors?: ConnectorSummary | null
+  inference_backends?: BackendSummary | null
+  inference_hosts?: ResourceSummary | null
+  points?: ResourceSummary | null
+  stations?: ResourceSummary | null
+}
 
 /**
  * EditedRole
@@ -2258,6 +2455,39 @@ export type MeasuredCapabilityDocument = {
 export type MediaPathMode = 'passthrough' | 'cpu_transcode'
 
 /**
+ * MonitorOverviewSection
+ */
+export type MonitorOverviewSection = {
+  data: MonitorSummaryData
+  /**
+   * Detail
+   */
+  detail?: string | null
+  /**
+   * Status
+   */
+  status: string
+}
+
+/**
+ * MonitorSummaryData
+ */
+export type MonitorSummaryData = {
+  /**
+   * Recent Decisions
+   */
+  recent_decisions?: number | null
+  /**
+   * Recent Health
+   */
+  recent_health?: number | null
+  /**
+   * Runtime Status
+   */
+  runtime_status?: string | null
+}
+
+/**
  * NewPassword
  */
 export type NewPassword = {
@@ -2309,6 +2539,16 @@ export type NewUser = {
  * 模板是否要求动作严格按步骤顺序出现。
  */
 export type OrderingMode = 'strict' | 'unordered'
+
+/**
+ * OverviewResponse
+ */
+export type OverviewResponse = {
+  dataset: DatasetOverviewSection
+  device: DeviceOverviewSection
+  monitor: MonitorOverviewSection
+  template: TemplateOverviewSection
+}
 
 /**
  * PendingCommandStatus
@@ -2526,6 +2766,24 @@ export type ProblemDocument = {
 }
 
 /**
+ * PublishedVersionSummary
+ */
+export type PublishedVersionSummary = {
+  /**
+   * Sha256 Unverified
+   */
+  sha256_unverified: number
+  /**
+   * Sha256 Verified
+   */
+  sha256_verified: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
  * RecordingMode
  *
  * 相机是否只在观看时取流，还是持续录制。
@@ -2589,6 +2847,36 @@ export type RequestVideoUploadInput = {
  */
 export type RequestedStatus = {
   status: UserStatus
+}
+
+/**
+ * ResourceSummary
+ *
+ * 配置资源的数量，并保留未知状态值。
+ */
+export type ResourceSummary = {
+  /**
+   * Active
+   */
+  active: number
+  /**
+   * By Status
+   */
+  by_status?: {
+    [key: string]: number
+  }
+  /**
+   * Deactivated
+   */
+  deactivated: number
+  /**
+   * Total
+   */
+  total: number
+  /**
+   * Unknown
+   */
+  unknown: number
 }
 
 /**
@@ -3124,6 +3412,22 @@ export type TemplateImportResultView = {
 }
 
 /**
+ * TemplateImportSummary
+ */
+export type TemplateImportSummary = {
+  /**
+   * By Status
+   */
+  by_status?: {
+    [key: string]: number
+  }
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
  * TemplateImportView
  */
 export type TemplateImportView = {
@@ -3156,6 +3460,21 @@ export type TemplateImportView = {
    */
   sha256: string
   status: ImportStatus
+}
+
+/**
+ * TemplateOverviewSection
+ */
+export type TemplateOverviewSection = {
+  data: TemplateSummaryData
+  /**
+   * Detail
+   */
+  detail?: string | null
+  /**
+   * Status
+   */
+  status: string
 }
 
 /**
@@ -3228,6 +3547,20 @@ export type TemplateStepView = {
    * Number
    */
   number: number
+}
+
+/**
+ * TemplateSummaryData
+ */
+export type TemplateSummaryData = {
+  /**
+   * Drafts
+   */
+  drafts?: {
+    [key: string]: number
+  } | null
+  imports?: TemplateImportSummary | null
+  published_versions?: PublishedVersionSummary | null
 }
 
 /**
@@ -6565,6 +6898,184 @@ export type ReadLivenessResponses = {
 }
 
 export type ReadLivenessResponse = ReadLivenessResponses[keyof ReadLivenessResponses]
+
+export type ReportMonitorHealthData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  headers?: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID'?: string | null
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/monitor/health'
+}
+
+export type ReportMonitorHealthErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReportMonitorHealthError = ReportMonitorHealthErrors[keyof ReportMonitorHealthErrors]
+
+export type ReportMonitorHealthResponses = {
+  /**
+   * Response Reportmonitorhealth
+   *
+   * Successful Response
+   */
+  200: {
+    [key: string]: unknown
+  }
+}
+
+export type ReportMonitorHealthResponse =
+  ReportMonitorHealthResponses[keyof ReportMonitorHealthResponses]
+
+export type ReportMonitorDecisionData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  headers?: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID'?: string | null
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/monitor/reported-decisions'
+}
+
+export type ReportMonitorDecisionErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReportMonitorDecisionError =
+  ReportMonitorDecisionErrors[keyof ReportMonitorDecisionErrors]
+
+export type ReportMonitorDecisionResponses = {
+  /**
+   * Response Reportmonitordecision
+   *
+   * Successful Response
+   */
+  200: {
+    [key: string]: unknown
+  }
+}
+
+export type ReportMonitorDecisionResponse =
+  ReportMonitorDecisionResponses[keyof ReportMonitorDecisionResponses]
+
+export type StreamMonitorEventsData = {
+  body?: never
+  headers?: {
+    /**
+     * Last-Event-Id
+     */
+    'Last-Event-ID'?: string | null
+  }
+  path?: never
+  query?: {
+    /**
+     * Once
+     */
+    once?: boolean
+  }
+  url: '/api/v1/monitor/stream'
+}
+
+export type StreamMonitorEventsErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type StreamMonitorEventsError = StreamMonitorEventsErrors[keyof StreamMonitorEventsErrors]
+
+export type StreamMonitorEventsResponses = {
+  /**
+   * Successful Response
+   */
+  200: unknown
+}
+
+export type ReadOverviewData = {
+  body?: never
+  path?: never
+  query?: never
+  url: '/api/v1/overview'
+}
+
+export type ReadOverviewErrors = {
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadOverviewError = ReadOverviewErrors[keyof ReadOverviewErrors]
+
+export type ReadOverviewResponses = {
+  /**
+   * Successful Response
+   */
+  200: OverviewResponse
+}
+
+export type ReadOverviewResponse = ReadOverviewResponses[keyof ReadOverviewResponses]
 
 export type ValidatePointBindingData = {
   body: BindingValidationRequest

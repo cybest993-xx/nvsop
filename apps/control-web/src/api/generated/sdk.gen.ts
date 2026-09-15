@@ -228,6 +228,9 @@ import type {
   ReadLivenessData,
   ReadLivenessErrors,
   ReadLivenessResponses,
+  ReadOverviewData,
+  ReadOverviewErrors,
+  ReadOverviewResponses,
   ReadPointData,
   ReadPointErrors,
   ReadPointResponses,
@@ -264,6 +267,12 @@ import type {
   RegisterVlmCandidateData,
   RegisterVlmCandidateErrors,
   RegisterVlmCandidateResponses,
+  ReportMonitorDecisionData,
+  ReportMonitorDecisionErrors,
+  ReportMonitorDecisionResponses,
+  ReportMonitorHealthData,
+  ReportMonitorHealthErrors,
+  ReportMonitorHealthResponses,
   ReportTemplateConfigurationData,
   ReportTemplateConfigurationErrors,
   ReportTemplateConfigurationResponses,
@@ -312,6 +321,9 @@ import type {
   SetUserStatusData,
   SetUserStatusErrors,
   SetUserStatusResponses,
+  StreamMonitorEventsData,
+  StreamMonitorEventsErrors,
+  StreamMonitorEventsResponses,
   SubmitAnnotationData,
   SubmitAnnotationErrors,
   SubmitAnnotationResponses,
@@ -1235,6 +1247,69 @@ export const readLiveness = <ThrowOnError extends boolean = false>(
 ): RequestResult<ReadLivenessResponses, ReadLivenessErrors, ThrowOnError> =>
   (options?.client ?? client).get<ReadLivenessResponses, ReadLivenessErrors, ThrowOnError>({
     url: '/api/v1/liveness',
+    ...options,
+  })
+
+/**
+ * Report Monitor Health
+ */
+export const reportMonitorHealth = <ThrowOnError extends boolean = false>(
+  options: Options<ReportMonitorHealthData, ThrowOnError>,
+): RequestResult<ReportMonitorHealthResponses, ReportMonitorHealthErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    ReportMonitorHealthResponses,
+    ReportMonitorHealthErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/monitor/health',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Report Monitor Decision
+ */
+export const reportMonitorDecision = <ThrowOnError extends boolean = false>(
+  options: Options<ReportMonitorDecisionData, ThrowOnError>,
+): RequestResult<ReportMonitorDecisionResponses, ReportMonitorDecisionErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    ReportMonitorDecisionResponses,
+    ReportMonitorDecisionErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/monitor/reported-decisions',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Stream Monitor Events
+ */
+export const streamMonitorEvents = <ThrowOnError extends boolean = false>(
+  options?: Options<StreamMonitorEventsData, ThrowOnError>,
+): RequestResult<StreamMonitorEventsResponses, StreamMonitorEventsErrors, ThrowOnError> =>
+  (options?.client ?? client).get<
+    StreamMonitorEventsResponses,
+    StreamMonitorEventsErrors,
+    ThrowOnError
+  >({ url: '/api/v1/monitor/stream', ...options })
+
+/**
+ * Read Overview
+ *
+ * 通过请求唯一的 SQLAlchemy session 组合所有者摘要。
+ */
+export const readOverview = <ThrowOnError extends boolean = false>(
+  options?: Options<ReadOverviewData, ThrowOnError>,
+): RequestResult<ReadOverviewResponses, ReadOverviewErrors, ThrowOnError> =>
+  (options?.client ?? client).get<ReadOverviewResponses, ReadOverviewErrors, ThrowOnError>({
+    url: '/api/v1/overview',
     ...options,
   })
 

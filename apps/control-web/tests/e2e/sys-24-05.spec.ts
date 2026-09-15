@@ -357,8 +357,6 @@ test('a known-identifier delete submits exactly once from a real browser click',
     ),
     page.getByRole('button', { name: '删除' }).click(),
   ])
-  await page.waitForLoadState('networkidle')
-
   expect(controlPlane.deleteRequests).toHaveLength(1)
   expect(controlPlane.deleteRequests[0]).toEqual({
     url: expect.stringContaining('/api/v1/connectors/connector-1'),

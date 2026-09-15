@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
+from factory_sop.auth.api import Caller
 from factory_sop.dataset.annotation import (
     AnnotationBackend,
     AnnotationBackendExecutionError,
@@ -64,6 +65,13 @@ from factory_sop.dataset.usecases.usage import (
     render_ddm_artifact_with_base,
     run_usage_check,
 )
+
+
+def summary(*, caller: Caller, datasets: DatasetRepository) -> dict[str, object]:
+    """返回 overview 使用的权限裁剪数据集摘要。"""
+    from factory_sop.dataset.usecases.summary import summary as build_summary
+
+    return build_summary(caller=caller, datasets=datasets)
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,5 +347,6 @@ __all__ = [
     "render_ddm_artifact_with_base",
     "run_usage_check",
     "save_annotation_execution_copy",
+    "summary",
     "validate_video_upload",
 ]

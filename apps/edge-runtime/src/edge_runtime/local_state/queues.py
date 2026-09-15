@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from threading import RLock
 
 from edge_runtime.judgment.model import Decision, HostInstant, Lifecycle, Violation
 from edge_runtime.judgment.reasons import ReasonCode, Verdict
@@ -30,12 +32,10 @@ from edge_runtime.local_state.codec import violation as decode_violation
 
 @dataclass(frozen=True, slots=True)
 class PendingReport:
-    """One decision the center has not acknowledged, with what retrying has cost so far.
+    """中心尚未确认的一项判定,以及重试成本。
 
-    `queue_id` is the local half of the report event's identity. The wire-level event id the
-    center upserts by is composed from the reporting host's identity and this value (#46), so
-    it is stable across every retry of one event without this module inventing a second
-    identifier for what the primary key already names.
+    ``queue_id`` 是上报事件身份的本地半边;wire event id 由主机身份和它组成,因此同一事件的每次重试
+    都稳定,不需要为已有主键再发明第二个标识。
     """
 
     queue_id: int
@@ -61,40 +61,46 @@ class PendingEvidence:
 
 
 class StationQueues:
-    """One station's outstanding work, on the host's database."""
+    """主机数据库中一个工位尚未完成的工作。"""
 
-    def __init__(self, connection: sqlite3.Connection, station_id: str) -> None:
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        station_id: str,
+        lock: AbstractContextManager[object] | None = None,
+    ) -> None:
         self._connection = connection
         self._station_id = station_id
+        self._lock = lock or RLock()
 
     def pending_reports(self, *, limit: int | None = None) -> tuple[PendingReport, ...]:
-        """Decisions the center has not acknowledged, oldest first.
+        """中心尚未确认的判定,按最早优先返回。
 
-        Oldest first because the mirror reads in the order things happened, and `queue_id` is
-        that order.
+        镜像按事件发生顺序读取,``queue_id`` 正好表达该顺序。
         """
-        rows = self._connection.execute(
-            """
-            SELECT q.queue_id, q.attempts, q.last_error, d.decision_id, d.instance_id,
-                   d.verdict, d.reasons, d.lifecycle,
-                   d.evidence_anchor, d.evidence_from, d.evidence_to
-              FROM local_report_queue q
-              JOIN local_decision d ON d.decision_id = q.decision_id
-             WHERE q.station_id = ? AND q.sent_at IS NULL
-             ORDER BY q.queue_id
-             LIMIT ?
-            """,
-            (self._station_id, -1 if limit is None else limit),
-        ).fetchall()
-        return tuple(
-            PendingReport(
-                queue_id=row["queue_id"],
-                decision=self._decision_of(row),
-                attempts=row["attempts"],
-                last_error=row["last_error"],
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT q.queue_id, q.attempts, q.last_error, d.decision_id, d.instance_id,
+                       d.verdict, d.reasons, d.lifecycle,
+                       d.evidence_anchor, d.evidence_from, d.evidence_to
+                  FROM local_report_queue q
+                  JOIN local_decision d ON d.decision_id = q.decision_id
+                 WHERE q.station_id = ? AND q.sent_at IS NULL
+                 ORDER BY q.queue_id
+                 LIMIT ?
+                """,
+                (self._station_id, -1 if limit is None else limit),
+            ).fetchall()
+            return tuple(
+                PendingReport(
+                    queue_id=row["queue_id"],
+                    decision=self._decision_of(row),
+                    attempts=row["attempts"],
+                    last_error=row["last_error"],
+                )
+                for row in rows
             )
-            for row in rows
-        )
 
     def _decision_of(self, row: sqlite3.Row) -> Decision:
         return Decision(
@@ -119,84 +125,84 @@ class StationQueues:
         return tuple(decode_violation(row) for row in rows)
 
     def mark_reported(self, queue_id: int, *, at: HostInstant) -> None:
-        """The center acknowledged this event. It stops being owed and stays on record.
+        """中心已确认该事件;它不再待发送,但继续保留记录。
 
-        Marked rather than deleted: the center's idempotent upsert needs the local half of
-        the event's identity to stay stable across retries (#46), and "what has this host
-        already reported" is the question retention answers when it trims reported data
-        (§5.19). Trimming a settled row is retention's, and only ever one carrying `sent_at`.
+        只标记不删除,以保持重试时的本地事件身份稳定,并让保留策略知道主机已经上报过什么。
         """
-        self._connection.execute(
-            "UPDATE local_report_queue SET sent_at = ? WHERE station_id = ? AND queue_id = ?",
-            (at.seconds, self._station_id, queue_id),
-        )
+        with self._lock:
+            self._connection.execute(
+                "UPDATE local_report_queue SET sent_at = ? WHERE station_id = ? AND queue_id = ?",
+                (at.seconds, self._station_id, queue_id),
+            )
 
     def record_report_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None:
-        """A send failed. The row stays owed and counts one more attempt."""
-        self._connection.execute(
-            """
-            UPDATE local_report_queue
-               SET attempts = attempts + 1, last_attempt_at = ?, last_error = ?
-             WHERE station_id = ? AND queue_id = ?
-            """,
-            (at.seconds, error, self._station_id, queue_id),
-        )
+        """发送失败;行继续待发送并增加一次尝试。"""
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_report_queue
+                   SET attempts = attempts + 1, last_attempt_at = ?, last_error = ?
+                 WHERE station_id = ? AND queue_id = ?
+                """,
+                (at.seconds, error, self._station_id, queue_id),
+            )
 
     def pending_evidence(self, *, limit: int | None = None) -> tuple[PendingEvidence, ...]:
-        """Clips that exist only on this host, oldest first."""
-        rows = self._connection.execute(
-            """
-            SELECT queue_id, instance_id, anchor, window_from, window_to, attempts, last_error
-              FROM local_evidence_queue
-             WHERE station_id = ? AND uploaded_at IS NULL
-             ORDER BY queue_id
-             LIMIT ?
-            """,
-            (self._station_id, -1 if limit is None else limit),
-        ).fetchall()
-        return tuple(
-            PendingEvidence(
-                queue_id=row["queue_id"],
-                instance_id=row["instance_id"],
-                anchor=HostInstant(row["anchor"]),
-                start=HostInstant(row["window_from"]),
-                end=HostInstant(row["window_to"]),
-                attempts=row["attempts"],
-                last_error=row["last_error"],
+        """只存在于本机的证据片段,按最早优先返回。"""
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT queue_id, instance_id, anchor, window_from, window_to, attempts, last_error
+                  FROM local_evidence_queue
+                 WHERE station_id = ? AND uploaded_at IS NULL
+                 ORDER BY queue_id
+                 LIMIT ?
+                """,
+                (self._station_id, -1 if limit is None else limit),
+            ).fetchall()
+            return tuple(
+                PendingEvidence(
+                    queue_id=row["queue_id"],
+                    instance_id=row["instance_id"],
+                    anchor=HostInstant(row["anchor"]),
+                    start=HostInstant(row["window_from"]),
+                    end=HostInstant(row["window_to"]),
+                    attempts=row["attempts"],
+                    last_error=row["last_error"],
+                )
+                for row in rows
             )
-            for row in rows
-        )
 
     def mark_evidence_uploaded(
         self, queue_id: int, *, at: HostInstant, remote_reference: str
     ) -> None:
-        """A remote copy now exists, and this names where it is.
+        """远端副本已经存在,并记录其位置。
 
-        `remote_reference` is required rather than optional because it *is* the evidence that
-        a second copy exists. Until a row carries one, the local file is the only copy there
-        is and nothing may release it (§5.19).
+        ``remote_reference`` 是远端副本存在的证据;没有它时本地文件仍是唯一副本,不能释放。
         """
         if not remote_reference:
             raise ValueError(
                 "uploaded evidence must name where the remote copy is; without it there is "
                 "no proof of a second copy and the local one cannot be released"
             )
-        self._connection.execute(
-            """
-            UPDATE local_evidence_queue
-               SET uploaded_at = ?, remote_reference = ?
-             WHERE station_id = ? AND queue_id = ?
-            """,
-            (at.seconds, remote_reference, self._station_id, queue_id),
-        )
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_evidence_queue
+                   SET uploaded_at = ?, remote_reference = ?
+                 WHERE station_id = ? AND queue_id = ?
+                """,
+                (at.seconds, remote_reference, self._station_id, queue_id),
+            )
 
     def record_evidence_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None:
-        """An upload failed. The row stays owed, and the local copy stays where it is."""
-        self._connection.execute(
-            """
-            UPDATE local_evidence_queue
-               SET attempts = attempts + 1, last_attempt_at = ?, last_error = ?
-             WHERE station_id = ? AND queue_id = ?
-            """,
-            (at.seconds, error, self._station_id, queue_id),
-        )
+        """上传失败;行继续待上传,本地副本继续保留。"""
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_evidence_queue
+                   SET attempts = attempts + 1, last_attempt_at = ?, last_error = ?
+                 WHERE station_id = ? AND queue_id = ?
+                """,
+                (at.seconds, error, self._station_id, queue_id),
+            )

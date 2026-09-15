@@ -35,6 +35,7 @@ from edge_runtime.local_state.store import LocalState
 from edge_runtime.runtime import _synchronize_runtime_configuration
 from edge_runtime.runtime_configuration import (
     RuntimeConfigurationError,
+    bootstrap_runtime_configuration,
     confirmed_runtime_configuration,
 )
 from edge_runtime.station_runtime import StationRuntimeConfiguration
@@ -58,6 +59,7 @@ def local_station() -> StationRuntimeConfiguration:
         ),
         parameters=RuntimeParameters(idle_timeout=99.0, step_deadline=88.0),
         margins=EvidenceMargins(leading=1.0, trailing=2.0),
+        model_ids=("stale-local-model",),
     )
 
 
@@ -181,28 +183,50 @@ def confirmed_bundle() -> ConfigurationBundle:
                         ),
                     ),
                 ),
+                model_ids=("reported-model", "reported-model-2"),
             ),
         ),
     )
 
 
 class ConfirmedRuntimeConfigurationTests(unittest.TestCase):
+    def test_bootstrap_does_not_report_local_static_model_ids(self) -> None:
+        result = bootstrap_runtime_configuration(
+            stations=(local_station(),),
+            connectors=(local_connector(),),
+        )
+
+        self.assertEqual(
+            result.stations[0].configuration,
+            replace(local_station(), model_ids=()),
+        )
+
     def test_confirmed_values_replace_local_template_and_timing_and_bind_points(self) -> None:
+        bundle = confirmed_bundle()
+        configured_template = bundle.stations[0].template
+        assert configured_template is not None
         result = confirmed_runtime_configuration(
-            bundle=confirmed_bundle(),
+            bundle=bundle,
             bootstrap_stations=(local_station(),),
             local_connectors=(local_connector(),),
         )
 
         station = result.stations[0]
-        self.assertEqual(station.configuration.template.steps, ("(1) confirmed",))
-        self.assertEqual(station.configuration.parameters.idle_timeout, 7.0)
-        self.assertEqual(station.configuration.parameters.step_deadline, 3.0)
-        self.assertEqual(station.configuration.template_version_id, "version-a")
-        expected_template = confirmed_bundle().stations[0].template
-        assert expected_template is not None
-        self.assertEqual(station.configuration.template_sha256, expected_template.version_sha256)
-        self.assertEqual(station.configuration.disposition_policy, "stop")
+        expected_configuration = replace(
+            local_station(),
+            template=Template(
+                steps=("(1) confirmed",),
+                ordering=Ordering.ORDERED,
+                start_signal="(1) confirmed",
+            ),
+            parameters=RuntimeParameters(idle_timeout=7.0, step_deadline=3.0),
+            backend_id=BACKEND_ID,
+            template_version_id="version-a",
+            template_sha256=configured_template.version_sha256,
+            model_ids=("reported-model", "reported-model-2"),
+            disposition_policy="stop",
+        )
+        self.assertEqual(station.configuration, expected_configuration)
         self.assertEqual(station.input_points_for(CONNECTOR_ID)[0].address, "1")
         self.assertEqual(station.output_points_for(CONNECTOR_ID)[0].address, "2")
         self.assertEqual(result.connectors[0].revision, 6)

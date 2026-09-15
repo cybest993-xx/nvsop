@@ -116,6 +116,10 @@ class HostGateway(DeviceHostGateway):
         del host, now
         self.authenticated += 1
 
+    def owns_station(self, *, host_id: UUID, station_id: UUID) -> bool:
+        del host_id, station_id
+        return self.allowed
+
     def owns_station_backend(self, *, host_id: UUID, station_id: UUID, backend_id: UUID) -> bool:
         del host_id, station_id, backend_id
         return self.allowed

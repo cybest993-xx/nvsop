@@ -13,6 +13,7 @@ from enum import StrEnum
 from typing import Protocol
 from uuid import UUID
 
+from factory_sop.auth.api import Caller
 from factory_sop.device.model import (
     InferenceHostIdentity,
     RuntimeParameterMode,
@@ -20,7 +21,14 @@ from factory_sop.device.model import (
     StationRuntimeConfiguration,
     StationRuntimeParameters,
 )
-from factory_sop.device.repository import InferenceHostRepository
+from factory_sop.device.repository import (
+    CameraRepository,
+    ConnectorRepository,
+    InferenceBackendRepository,
+    InferenceHostRepository,
+    PointRepository,
+    StationRepository,
+)
 from nvsop_contracts import (
     Capability,
     HostIdentityRequest,
@@ -136,10 +144,14 @@ class DeviceTemplateBindingGateway(Protocol):
 
 
 class DeviceHostGateway(Protocol):
-    """模板上报入口调用的主机身份接缝。"""
+    """模板、监控上报入口调用的主机身份接缝。"""
 
     def authenticate(self, *, host: InferenceHostIdentity, now: datetime) -> None:
         """复用登记公钥、签名和 nonce 的正式主机认证。"""
+        ...
+
+    def owns_station(self, *, host_id: UUID, station_id: UUID) -> bool:
+        """只允许认证主机上报自己拥有的工位健康。"""
         ...
 
     def owns_station_backend(self, *, host_id: UUID, station_id: UUID, backend_id: UUID) -> bool:
@@ -206,10 +218,34 @@ def host_identity_from_headers(
     return InferenceHostIdentity(host_id=host_id, request=request, signature=signature)
 
 
+def summary(
+    *,
+    caller: Caller,
+    hosts: InferenceHostRepository,
+    backends: InferenceBackendRepository,
+    stations: StationRepository,
+    cameras: CameraRepository,
+    connectors: ConnectorRepository,
+    points: PointRepository,
+) -> dict[str, object]:
+    """返回 overview 使用的权限裁剪设备摘要。"""
+    from factory_sop.device.usecases.summary import summary as build_summary
+
+    return build_summary(
+        caller=caller,
+        hosts=hosts,
+        backends=backends,
+        stations=stations,
+        cameras=cameras,
+        connectors=connectors,
+        points=points,
+    )
+
+
 def authenticate_host(
     *, host: InferenceHostIdentity, now: datetime, hosts: InferenceHostRepository
 ) -> None:
-    """通过 `device.api` 转发到现有 `authenticate_command_host`，不暴露适配器。"""
+    """通过 `device.api` 转发到现有认证用例，不暴露适配器。"""
     # 运行时导入避免 `api.py` 与用例层形成模块初始化环；调用仍然只经过设备模块内部。
     from factory_sop.device.usecases.commands import authenticate_command_host
 
@@ -234,4 +270,5 @@ __all__ = [
     "capability_unfitness",
     "host_identity_from_headers",
     "station_by_code",
+    "summary",
 ]

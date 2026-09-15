@@ -31,6 +31,7 @@ class Repo:
             id=BACKEND_ID,
             host_id=HOST_ID,
             status=SimpleNamespace(value="active"),
+            self_reported_model_ids=("reported-model", "reported-model-2"),
             revision=3,
         )
         self.station = SimpleNamespace(
@@ -247,6 +248,7 @@ def test_configuration_for_host_excludes_foreign_connector_and_emits_effective_v
     assert len(bundle.stations) == 1
     station = bundle.stations[0]
     assert station.backend_id == str(BACKEND_ID)
+    assert station.model_ids == ("reported-model", "reported-model-2")
     assert bundle.config_revision == 10
     assert [connector.name for connector in station.connectors] == ["PLC"]
     assert [camera.camera_id for camera in station.cameras] == [

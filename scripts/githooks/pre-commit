@@ -7,9 +7,9 @@ configuration. Standard library only: it must run before `make sync` has ever be
 
 Three refusals, each carrying the rule it enforces:
 
-- no direct commit on `main` or `dev`: `main` only receives a merge from local `dev`, and
-  `dev` only receives a merge from `main` or an `agent/...` branch; the reference-transaction
-  hook is the final guard for all local ref updates;
+- no direct commit on `main` or legacy `dev`: task work stays on `agent/...`, is pushed as that
+  branch, and reaches `main` only through a pull request; the reference-transaction hook is the
+  final guard for local ref updates;
 - no staged change under `vendor/`: the NVIDIA base changes only through `git subtree pull`
   (which merges and does not pass here) or the recorded patch (ADR-0007) — set
   `NVSOP_VENDOR_PATCH=1` to commit a patch change deliberately;
@@ -42,33 +42,13 @@ def staged_files() -> list[Path]:
     return [Path(name) for name in output.split("\0") if name]
 
 
-def allowed_integration_merge(branch: str) -> bool:
-    try:
-        merge_head = Path(git("rev-parse", "--git-path", "MERGE_HEAD").strip())
-        if not merge_head.is_file():
-            return False
-        merge_heads = merge_head.read_text(encoding="ascii").split()
-        if len(merge_heads) != 1:
-            return False
-        if branch == "main":
-            sources = {git("rev-parse", "--verify", "refs/heads/dev^{commit}").strip()}
-        else:
-            sources = {git("rev-parse", "--verify", "refs/heads/main^{commit}").strip()}
-            sources.update(
-                git("for-each-ref", "--format=%(objectname)", "refs/heads/agent/").split()
-            )
-    except (OSError, subprocess.CalledProcessError):
-        return False
-    return merge_heads[0] in sources
-
-
 def refuse_protected_branch() -> list[str]:
     branch = git("rev-parse", "--abbrev-ref", "HEAD").strip()
-    if branch not in PROTECTED_BRANCHES or allowed_integration_merge(branch):
+    if branch not in PROTECTED_BRANCHES:
         return []
     return [
-        f"this tree is on `{branch}`; make task changes on `agent/<agent-id>/<task-slug>` "
-        "and merge the completed work into the integration branch before promoting it to `main`."
+        f"this tree is on `{branch}`; make task changes on `agent/<agent-id>/<task-slug>`, "
+        "push that branch, and open its pull request directly against `main`."
     ]
 
 

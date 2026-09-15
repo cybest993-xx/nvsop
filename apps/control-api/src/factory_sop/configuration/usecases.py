@@ -177,6 +177,7 @@ def _station_bundle(
             sorted((_point(value) for value in station_points), key=lambda item: item.point_id)
         ),
         template=template,
+        model_ids=backend.self_reported_model_ids,
     )
 
 

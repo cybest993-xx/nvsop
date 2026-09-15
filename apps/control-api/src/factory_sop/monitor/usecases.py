@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
-from factory_sop.auth.api import Caller, Permission
+from factory_sop.auth.api import Caller, Permission, authorize
 from factory_sop.monitor.api import HostOwnershipGateway
 from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.model import MirroredDecision, MirroredHealth
@@ -86,19 +86,26 @@ class SseSnapshot:
     health_sequence: int = 0
 
 
-def sse_snapshot(monitor: MonitorRepository, *, limit: int = 100) -> tuple[str, ...]:
+def sse_snapshot(
+    monitor: MonitorRepository,
+    *,
+    caller: Caller,
+    limit: int = 100,
+) -> tuple[str, ...]:
     """返回有限的初始看板帧，供浏览器连接和测试使用。"""
-    return sse_snapshot_state(monitor, limit=limit).frames
+    return sse_snapshot_state(monitor, caller=caller, limit=limit).frames
 
 
 def sse_snapshot_state(
     monitor: MonitorRepository,
     *,
+    caller: Caller,
     limit: int = 100,
     boundary: datetime | None = None,
     last_event_id: str | None = None,
 ) -> SseSnapshot:
     """读取初始投影并记录数据库序号，避免墙上时钟造成丢事件窗口。"""
+    authorize(caller, Permission.MONITOR_VIEW)
     boundary = boundary or datetime.now(UTC)
     decisions = monitor.recent_decisions(limit=limit)
     health = monitor.recent_health(limit=limit)
@@ -165,6 +172,7 @@ def sse_snapshot_state(
 def sse_stream(
     monitor: MonitorRepository,
     *,
+    caller: Caller,
     after: datetime | None = None,
     sleep: float = 1.0,
     decision_after: datetime | None = None,
@@ -175,6 +183,7 @@ def sse_stream(
     health_sequence: int = 0,
 ) -> Iterator[str]:
     """只轮询中心镜像，并以数据库序号推进两个独立游标。"""
+    authorize(caller, Permission.MONITOR_VIEW)
     del after, decision_after, decision_event_id, health_after, health_event_id
     while True:
         decisions = monitor.decisions_after_sequence(

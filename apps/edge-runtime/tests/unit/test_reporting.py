@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import unittest
 
+from nvsop_contracts import ReportedDecision, ReportEvidence
+
 from edge_runtime.judgment.model import Decision, EvidenceSpan, HostInstant, Lifecycle, Violation
 from edge_runtime.judgment.reasons import ReasonCode, Verdict
 from edge_runtime.local_state.queues import PendingReport
@@ -30,10 +32,26 @@ class ReportingTests(unittest.TestCase):
             ),
             reported_at="2026-09-13T00:00:00Z",
         )
-        self.assertEqual(report.event_id, "host-a:44")
-        self.assertEqual(report.trace_id, report.event_id)
-        self.assertEqual(report.reason_codes, ("STREAM_LOST",))
-        self.assertEqual(report.model_ids, ("future-model",))
+        self.assertEqual(
+            report,
+            ReportedDecision(
+                event_id="host-a:44",
+                trace_id="host-a:44",
+                host_id="host-a",
+                station_id="station-a",
+                backend_id="backend-a",
+                instance_id=9,
+                verdict="indeterminate",
+                reason_codes=("STREAM_LOST",),
+                violations=(),
+                lifecycle="closed_by_run_interruption",
+                evidence=ReportEvidence(anchor=12.0, start=12.0, end=12.0),
+                template_version_id="template-a",
+                template_sha256="a" * 64,
+                model_ids=("future-model",),
+                reported_at="2026-09-13T00:00:00Z",
+            ),
+        )
 
     def test_violation_steps_and_evidence_are_carried(self) -> None:
         violation = Violation(

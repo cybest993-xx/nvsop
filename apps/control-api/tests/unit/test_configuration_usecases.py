@@ -6,7 +6,16 @@ from types import SimpleNamespace
 from uuid import UUID
 
 from factory_sop.configuration.usecases import configuration_for_host
-from nvsop_contracts import Unverified
+from nvsop_contracts import (
+    ConfigurationArtifact,
+    ConfigurationBundle,
+    ConfigurationTemplate,
+    ConfiguredConnector,
+    ConfiguredPoint,
+    ConfiguredStation,
+    ResolvedRuntimeParameters,
+    Unverified,
+)
 
 HOST_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f101")
 FOREIGN_HOST_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f102")
@@ -24,6 +33,7 @@ class Repo:
             id=BACKEND_ID,
             host_id=HOST_ID,
             status=SimpleNamespace(value="active"),
+            self_reported_model_ids=("reported-model", "reported-model-2"),
             revision=3,
         )
         self.station = SimpleNamespace(
@@ -152,11 +162,53 @@ def test_configuration_for_host_excludes_foreign_connector_and_emits_effective_v
         templates=repo,  # type: ignore[arg-type]
     )
 
-    assert len(bundle.stations) == 1
-    station = bundle.stations[0]
-    assert station.backend_id == str(BACKEND_ID)
-    assert bundle.config_revision == 9
-    assert [connector.name for connector in station.connectors] == ["PLC"]
-    assert station.runtime_parameters.idle_timeout_seconds == 10.0
-    assert station.template is not None
-    assert station.template.version_sha256 == "a" * 64
+    expected = ConfigurationBundle(
+        host_id=str(HOST_ID),
+        config_revision=9,
+        generated_at="2026-09-13T00:00:00Z",
+        stations=(
+            ConfiguredStation(
+                station_id=str(STATION_ID),
+                backend_id=str(BACKEND_ID),
+                code="S-A",
+                name="Station A",
+                revision=9,
+                runtime_parameters=ResolvedRuntimeParameters(10.0, 2.0, "stop"),
+                connectors=(
+                    ConfiguredConnector(
+                        connector_id=str(CONNECTOR_ID),
+                        name="PLC",
+                        connector_type="modbus",
+                        revision=8,
+                        address="plc.local",
+                        port=502,
+                        capability=Unverified(),
+                    ),
+                ),
+                points=(
+                    ConfiguredPoint(
+                        point_id=str(POINT_ID),
+                        name="start",
+                        direction="input",
+                        connector_id=str(CONNECTOR_ID),
+                        role="input",
+                        address="DI-01",
+                    ),
+                ),
+                template=ConfigurationTemplate(
+                    version_id=str(repo.version.id),
+                    version_sha256="a" * 64,
+                    artifacts=(
+                        ConfigurationArtifact(
+                            name="template.json",
+                            media_type="application/json",
+                            content=b"{}",
+                            sha256=hashlib.sha256(b"{}").hexdigest(),
+                        ),
+                    ),
+                ),
+                model_ids=("reported-model", "reported-model-2"),
+            ),
+        ),
+    )
+    assert bundle == expected

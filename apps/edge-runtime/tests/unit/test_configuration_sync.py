@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import unittest
+from dataclasses import replace
 
-from nvsop_contracts import ConfigurationBundle
+from nvsop_contracts import (
+    ConfigurationBundle,
+    ConfiguredStation,
+    ResolvedRuntimeParameters,
+    configuration_to_wire,
+)
 
 from edge_runtime.configuration_sync import (
     ConfigurationPullError,
@@ -34,6 +41,42 @@ class ConfigurationSyncTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.state.close()
+
+    def test_historical_v1_payload_keeps_model_ids_after_confirmation(self) -> None:
+        current = ConfigurationBundle(
+            host_id="host-a",
+            config_revision=1,
+            generated_at="now",
+            stations=(
+                ConfiguredStation(
+                    station_id="station-a",
+                    backend_id="backend-a",
+                    code="S-A",
+                    name="Station A",
+                    revision=1,
+                    runtime_parameters=ResolvedRuntimeParameters(1, 1, "stop"),
+                    connectors=(),
+                    points=(),
+                    template=None,
+                    model_ids=("reported-model",),
+                ),
+            ),
+        )
+        bundle = replace(current, contract_version=1)
+        wire = configuration_to_wire(bundle)
+        payload = json.dumps(wire, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        self.connection.execute(
+            """
+            INSERT INTO local_config
+                (slot, host_id, config_revision, sha256, confirmed_at, payload)
+            VALUES (1, ?, ?, ?, ?, ?)
+            """,
+            (bundle.host_id, bundle.config_revision, bundle.sha256, 1.0, payload),
+        )
+
+        self.assertEqual(self.state.configuration().confirmed(), bundle)
+        self.state.configuration().confirm(bundle, confirmed_at=2.0)
+        self.assertEqual(self.state.configuration().confirmed(), bundle)
 
     def test_older_revision_keeps_last_confirmed_bundle(self) -> None:
         first = ConfigurationBundle(

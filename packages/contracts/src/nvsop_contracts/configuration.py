@@ -16,7 +16,8 @@ from typing import cast
 
 from nvsop_contracts.capability import Capability, capability_from_wire, capability_to_wire
 
-CONFIGURATION_CONTRACT_VERSION = 1
+LEGACY_CONFIGURATION_CONTRACT_VERSION = 1
+CONFIGURATION_CONTRACT_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,6 +282,7 @@ class ConfiguredStation:
     connectors: tuple[ConfiguredConnector, ...]
     points: tuple[ConfiguredPoint, ...]
     template: ConfigurationTemplate | None
+    model_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.station_id or not self.backend_id or not self.code or not self.name:
@@ -295,6 +297,8 @@ class ConfiguredStation:
             raise ValueError("station point ids must be unique")
         if any(point.connector_id not in connector_ids for point in self.points):
             raise ValueError("a point must refer to a connector in the same station")
+        if any(not model_id for model_id in self.model_ids):
+            raise ValueError("station model ids must not be empty")
 
     def to_wire(self) -> dict[str, object]:
         return {
@@ -307,10 +311,16 @@ class ConfiguredStation:
             "connectors": [connector.to_wire() for connector in self.connectors],
             "points": [point.to_wire() for point in self.points],
             "template": None if self.template is None else self.template.to_wire(),
+            "model_ids": list(self.model_ids),
         }
 
     @classmethod
-    def from_wire(cls, value: Mapping[str, object]) -> ConfiguredStation:
+    def from_wire(
+        cls,
+        value: Mapping[str, object],
+        *,
+        allow_missing_model_ids: bool = False,
+    ) -> ConfiguredStation:
         _require_keys(
             value,
             {
@@ -323,8 +333,22 @@ class ConfiguredStation:
                 "connectors",
                 "points",
                 "template",
+                "model_ids",
+            }
+            if not allow_missing_model_ids
+            else {
+                "station_id",
+                "backend_id",
+                "code",
+                "name",
+                "revision",
+                "runtime_parameters",
+                "connectors",
+                "points",
+                "template",
             },
             "station",
+            optional={"model_ids"} if allow_missing_model_ids else set(),
         )
         raw_connectors = _array(value["connectors"], "station connectors")
         raw_points = _array(value["points"], "station points")
@@ -352,6 +376,7 @@ class ConfiguredStation:
                 if raw_template is None
                 else ConfigurationTemplate.from_wire(cast(Mapping[str, object], raw_template))
             ),
+            model_ids=_strings(value.get("model_ids", ()), "station model_ids"),
         )
 
 
@@ -366,7 +391,10 @@ class ConfigurationBundle:
     contract_version: int = CONFIGURATION_CONTRACT_VERSION
 
     def __post_init__(self) -> None:
-        if self.contract_version != CONFIGURATION_CONTRACT_VERSION:
+        if self.contract_version not in {
+            LEGACY_CONFIGURATION_CONTRACT_VERSION,
+            CONFIGURATION_CONTRACT_VERSION,
+        }:
             raise ValueError("configuration contract version is unsupported")
         if not self.host_id or not self.generated_at:
             raise ValueError("configuration bundle identity must not be empty")
@@ -377,12 +405,17 @@ class ConfigurationBundle:
             raise ValueError("configuration station/backend slices must be unique")
 
     def content_wire(self) -> dict[str, object]:
+        stations = [station.to_wire() for station in self.stations]
+        if self.contract_version == LEGACY_CONFIGURATION_CONTRACT_VERSION:
+            for station in stations:
+                if not station["model_ids"]:
+                    station.pop("model_ids")
         return {
             "contract_version": self.contract_version,
             "host_id": self.host_id,
             "config_revision": self.config_revision,
             "generated_at": self.generated_at,
-            "stations": [station.to_wire() for station in self.stations],
+            "stations": stations,
         }
 
     @property
@@ -423,17 +456,23 @@ class ConfigurationBundle:
         if not _constant_time_equal(supplied_digest, actual_digest):
             raise ValueError("configuration bundle digest does not match its content")
         raw_stations = _array(value["stations"], "configuration stations")
+        contract_version = _positive_int(
+            value["contract_version"], "configuration contract version"
+        )
         return cls(
             host_id=_string(value["host_id"], "configuration host_id"),
             config_revision=_positive_int(value["config_revision"], "configuration revision"),
             generated_at=_string(value["generated_at"], "configuration generated_at"),
             stations=tuple(
-                ConfiguredStation.from_wire(_object(item, "configuration station"))
+                ConfiguredStation.from_wire(
+                    _object(item, "configuration station"),
+                    allow_missing_model_ids=(
+                        contract_version == LEGACY_CONFIGURATION_CONTRACT_VERSION
+                    ),
+                )
                 for item in raw_stations
             ),
-            contract_version=_positive_int(
-                value["contract_version"], "configuration contract version"
-            ),
+            contract_version=contract_version,
         )
 
 
@@ -461,8 +500,16 @@ def _canonical_json(value: Mapping[str, object]) -> str:
         raise ValueError("configuration content must be canonical JSON") from error
 
 
-def _require_keys(value: Mapping[str, object], expected: set[str], label: str) -> None:
-    if set(value) != expected:
+def _require_keys(
+    value: Mapping[str, object],
+    expected: set[str],
+    label: str,
+    *,
+    optional: set[str] | frozenset[str] = frozenset(),
+) -> None:
+    actual = set(value)
+    allowed = expected | set(optional)
+    if not expected.issubset(actual) or not actual.issubset(allowed):
         raise ValueError(f"{label} has unsupported or missing fields")
     if any(_looks_like_secret(key) for key in value):
         raise ValueError(f"{label} contains a credential-bearing field")
@@ -500,6 +547,13 @@ def _string(value: object, label: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{label} must be a non-empty string")
     return value
+
+
+def _strings(value: object, label: str) -> tuple[str, ...]:
+    raw = _array(value, label)
+    if any(not isinstance(item, str) or not item for item in raw):
+        raise ValueError(f"{label} contains an invalid string")
+    return tuple(cast(str, item) for item in raw)
 
 
 def _number(value: object, label: str) -> float:

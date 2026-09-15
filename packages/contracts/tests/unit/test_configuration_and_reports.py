@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import unittest
+from dataclasses import replace
 
 from nvsop_contracts import (
     ConfigurationArtifact,
@@ -79,6 +80,7 @@ class ConfigurationContractTests(unittest.TestCase):
                         version_sha256="a" * 64,
                         artifacts=(artifact,),
                     ),
+                    model_ids=("reported-model", "reported-model-2"),
                 ),
             ),
         )
@@ -86,6 +88,35 @@ class ConfigurationContractTests(unittest.TestCase):
         wire = configuration_to_wire(bundle)
         self.assertEqual(configuration_from_wire(wire), bundle)
         self.assertEqual(wire["sha256"], bundle.sha256)
+        stations = wire["stations"]
+        assert isinstance(stations, list)
+        assert isinstance(stations[0], dict)
+        self.assertEqual(stations[0]["model_ids"], ["reported-model", "reported-model-2"])
+
+        legacy_with_ids = configuration_to_wire(replace(bundle, contract_version=1))
+        self.assertEqual(
+            configuration_from_wire(legacy_with_ids), replace(bundle, contract_version=1)
+        )
+
+        legacy_without_ids = configuration_to_wire(
+            replace(
+                bundle,
+                contract_version=1,
+                stations=(replace(bundle.stations[0], model_ids=()),),
+            )
+        )
+        old_stations = legacy_without_ids["stations"]
+        assert isinstance(old_stations, list)
+        assert isinstance(old_stations[0], dict)
+        self.assertNotIn("model_ids", old_stations[0])
+        self.assertEqual(
+            configuration_from_wire(legacy_without_ids),
+            replace(
+                bundle,
+                contract_version=1,
+                stations=(replace(bundle.stations[0], model_ids=()),),
+            ),
+        )
 
         tampered = dict(wire)
         tampered["host_id"] = "host-b"
@@ -144,8 +175,13 @@ class ConfigurationContractTests(unittest.TestCase):
                 ),
             ),
         )
-        self.assertEqual(configuration_from_wire(configuration_to_wire(bundle)), bundle)
-        invalid = configuration_to_wire(bundle)
+        wire = configuration_to_wire(bundle)
+        self.assertEqual(configuration_from_wire(wire), bundle)
+        stations = wire["stations"]
+        assert isinstance(stations, list)
+        assert isinstance(stations[0], dict)
+        self.assertEqual(stations[0]["model_ids"], [])
+        invalid = wire
         connector = invalid["stations"][0]["connectors"][0]  # type: ignore[index]
         connector["password"] = "not-allowed"  # pragma: allowlist secret
         with self.assertRaises(ValueError):

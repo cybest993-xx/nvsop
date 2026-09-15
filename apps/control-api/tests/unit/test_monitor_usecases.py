@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
 
+from factory_sop.auth.authorization import AuthorizationRefusedError, Caller
+from factory_sop.auth.model import User, UserStatus
+from factory_sop.auth.permissions import Permission
+from factory_sop.identifiers import new_id
 from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.model import MirroredDecision, MirroredHealth
 from factory_sop.monitor.usecases import (
@@ -15,7 +20,13 @@ from factory_sop.monitor.usecases import (
     sse_snapshot_state,
     sse_stream,
 )
-from nvsop_contracts import ReportedDecision, ReportedHealth, ReportEvidence
+from nvsop_contracts import (
+    ReportedDecision,
+    ReportedHealth,
+    ReportEvidence,
+    ReportViolation,
+    reported_decision_to_wire,
+)
 
 HOST_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f101")
 STATION_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f102")
@@ -78,6 +89,19 @@ class MemoryMonitor:
         return None if value is None else value.stream_sequence
 
 
+def caller(*permissions: Permission) -> Caller:
+    return Caller(
+        user=User(
+            id=new_id(),
+            login_name="monitor-viewer",
+            display_name="监控查看者",
+            password_hash="argon2-encoded",  # pragma: allowlist secret
+            status=UserStatus.ACTIVE,
+        ),
+        granted=frozenset(permissions),
+    )
+
+
 class HostGateway:
     def authenticate(self, *, host: object, now: datetime) -> None:
         del host, now
@@ -124,7 +148,64 @@ def test_decision_mirror_is_idempotent_and_preserves_unknown_reason() -> None:
         monitor=monitor,
         host_gateway=HostGateway(),
     )
-    assert monitor.decisions["host:event-1"].report.reason_codes == ("FUTURE_REASON",)
+    assert monitor.decisions["host:event-1"].report == report()
+
+
+def test_decision_mirror_preserves_the_complete_report_without_rejudging() -> None:
+    original = replace(
+        report("host:complete"),
+        verdict="fail",
+        reason_codes=("WRONG_STEP",),
+        violations=(
+            ReportViolation(
+                reason_code="WRONG_STEP",
+                detail="step 2 was not the expected action",
+                step_ids=("step-2",),
+                evidence=ReportEvidence(anchor=12.0, start=11.0, end=12.0),
+            ),
+        ),
+    )
+    monitor = MemoryMonitor()
+
+    assert mirror_decision(
+        original,
+        received_at=datetime.now(UTC),
+        monitor=monitor,
+        host_gateway=HostGateway(),
+    )
+
+    assert monitor.decisions[original.event_id].report == original
+    frame = sse_snapshot(monitor, caller=caller(Permission.MONITOR_VIEW))[0]
+    payload = json.loads(frame.split("data: ", 1)[1])
+    assert payload == reported_decision_to_wire(original)
+
+
+def test_sse_snapshot_preserves_pass_fail_and_indeterminate_verdicts() -> None:
+    reports = (
+        replace(report("host:pass"), verdict="pass", reason_codes=()),
+        replace(report("host:fail"), verdict="fail", reason_codes=("WRONG_STEP",)),
+        replace(report("host:indeterminate"), verdict="indeterminate"),
+    )
+    monitor = MemoryMonitor()
+    for value in reports:
+        assert mirror_decision(
+            value,
+            received_at=datetime.now(UTC),
+            monitor=monitor,
+            host_gateway=HostGateway(),
+        )
+
+    actual = {
+        json.loads(frame.split("data: ", 1)[1])["event_id"]: json.loads(frame.split("data: ", 1)[1])
+        for frame in sse_snapshot(monitor, caller=caller(Permission.MONITOR_VIEW))
+    }
+    expected = {value.event_id: reported_decision_to_wire(value) for value in reports}
+    assert actual == expected
+
+
+def test_sse_usecase_rejects_a_caller_without_monitor_permission() -> None:
+    with pytest.raises(AuthorizationRefusedError):
+        sse_snapshot(MemoryMonitor(), caller=caller())
 
 
 def test_health_mirror_rejects_a_station_outside_the_host_topology() -> None:
@@ -156,7 +237,7 @@ def test_sse_snapshot_contains_event_id_and_raw_reason() -> None:
         monitor=monitor,
         host_gateway=HostGateway(),
     )
-    frames = sse_snapshot(monitor)
+    frames = sse_snapshot(monitor, caller=caller(Permission.MONITOR_VIEW))
     assert len(frames) == 1
     assert "id: host:event-1" in frames[0]
     assert '"FUTURE_REASON"' in frames[0]
@@ -171,7 +252,11 @@ def test_sse_resume_consumes_last_event_id_without_replaying_it() -> None:
         host_gateway=HostGateway(),
     )
 
-    snapshot = sse_snapshot_state(monitor, last_event_id="host:event-1")
+    snapshot = sse_snapshot_state(
+        monitor,
+        caller=caller(Permission.MONITOR_VIEW),
+        last_event_id="host:event-1",
+    )
 
     assert snapshot.frames == ()
     assert snapshot.decision_sequence == 1
@@ -186,7 +271,11 @@ def test_sse_cursors_do_not_replay_snapshot_or_skip_same_timestamp_events() -> N
         monitor=monitor,
         host_gateway=HostGateway(),
     )
-    snapshot = sse_snapshot_state(monitor, boundary=datetime(2026, 9, 12, tzinfo=UTC))
+    snapshot = sse_snapshot_state(
+        monitor,
+        caller=caller(Permission.MONITOR_VIEW),
+        boundary=datetime(2026, 9, 12, tzinfo=UTC),
+    )
     assert snapshot.decision_event_id == "host:event-1"
 
     mirror_decision(
@@ -197,6 +286,7 @@ def test_sse_cursors_do_not_replay_snapshot_or_skip_same_timestamp_events() -> N
     )
     stream = sse_stream(
         monitor,
+        caller=caller(Permission.MONITOR_VIEW),
         after=snapshot.decision_after,
         decision_event_id=snapshot.decision_event_id,
         health_after=snapshot.health_after,

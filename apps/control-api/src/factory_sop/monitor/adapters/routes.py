@@ -10,7 +10,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
-from factory_sop.auth.api import Authorized, Permission, authorize, needs
+from factory_sop.auth.api import Authorized, Permission, needs
 from factory_sop.device.adapters import dependencies as device_dependencies
 from factory_sop.device.api import authenticate_host, host_identity_from_headers
 from factory_sop.monitor.adapters import dependencies
@@ -132,14 +132,14 @@ def stream_monitor_events(
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
     once: bool = Query(default=False),
 ) -> StreamingResponse:
-    authorize(caller, Permission.MONITOR_VIEW)
-    snapshot = sse_snapshot_state(monitor, last_event_id=last_event_id)
+    snapshot = sse_snapshot_state(monitor, caller=caller, last_event_id=last_event_id)
 
     def events() -> Iterator[str]:
         yield from snapshot.frames
         if not once:
             yield from sse_stream(
                 monitor,
+                caller=caller,
                 after=snapshot.decision_after,
                 decision_event_id=snapshot.decision_event_id,
                 health_after=snapshot.health_after,

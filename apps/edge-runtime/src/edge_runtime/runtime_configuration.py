@@ -71,13 +71,14 @@ def bootstrap_runtime_configuration(
     _unique_connector_ids(connectors)
     grouped: dict[str, list[StationRuntimeBinding]] = {}
     for station in stations:
+        bootstrap = replace(station, model_ids=())
         grouped.setdefault(station.station_id, []).append(
             StationRuntimeBinding(
-                configuration=station,
+                configuration=bootstrap,
                 input_points=(),
                 output_points=(),
                 connector_ids=tuple(connector.connector_id for connector in connectors),
-                configurations=(station,),
+                configurations=(bootstrap,),
             )
         )
     return RuntimeConfiguration(
@@ -156,6 +157,7 @@ def _confirmed_station(
         backend_id=configured.backend_id,
         template_version_id=configured.template.version_id,
         template_sha256=configured.template.version_sha256,
+        model_ids=configured.model_ids,
         disposition_policy=configured.runtime_parameters.disposition_policy,
     )
     connector_ids = tuple(connector.connector_id for connector in configured.connectors)

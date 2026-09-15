@@ -40,7 +40,7 @@ def pull_inference_host_configuration(
         str | None, Header(alias="X-Inference-Host-Signature")
     ] = None,
 ) -> dict[str, object]:
-    """先认证主机，再只组装该主机的拓扑和模板。"""
+    """先认证主机, 再只组装该主机的拓扑和模板。"""
     if inference_host_id != str(host_id):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="host identity mismatch"

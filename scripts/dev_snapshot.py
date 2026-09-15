@@ -113,6 +113,12 @@ def lfs_media_directory(
     return None
 
 
+def _lfs_object_path(media_directory: Path | None, oid: str) -> Path | None:
+    if media_directory is None:
+        return None
+    return media_directory / oid[:2] / oid[2:4] / oid
+
+
 def lfs_files(
     root: Path,
     sha: str,
@@ -136,11 +142,8 @@ def lfs_files(
         parts = line.split(maxsplit=2)
         if len(parts) != 3 or parts[1] not in {"*", "-"}:
             raise SnapshotError(f"无法解析 git lfs ls-files 输出：{line!r}")
-        available = parts[1]
-        if available == "-" and media_directory is not None:
-            object_path = media_directory / parts[0][:2] / parts[0][2:4] / parts[0]
-            if object_path.is_file():
-                available = "*"
+        object_path = _lfs_object_path(media_directory, parts[0])
+        available = "*" if object_path is not None and object_path.is_file() else "-"
         entries.append({"oid": parts[0], "available": available, "path": parts[2]})
     return entries
 
@@ -160,8 +163,8 @@ def hydrate_lfs_files(
     root = snapshot.resolve()
     for entry in available:
         oid = entry["oid"]
-        object_path = media_directory / oid[:2] / oid[2:4] / oid
-        if not object_path.is_file():
+        object_path = _lfs_object_path(media_directory, oid)
+        if object_path is None or not object_path.is_file():
             raise SnapshotError(f"Git-LFS 对象已报告可用但本地文件不存在：{entry['path']} ({oid})")
         relative = Path(entry["path"])
         if relative.is_absolute() or ".." in relative.parts:
@@ -258,6 +261,7 @@ def archive_main(
                 else "缺少 LFS 对象，且存在未列入可选白名单的路径；未建立快照。"
             ),
         )
+        failure_manifest["unapproved_lfs_paths"] = unapproved
         write_snapshot_audit(item, sha, failure_manifest)
         raise MissingLfsError(sha, missing, unapproved)
 

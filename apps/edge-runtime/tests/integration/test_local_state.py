@@ -44,7 +44,7 @@ from edge_runtime.judgment.model import (
 )
 from edge_runtime.judgment.reasons import ReasonCode, Verdict
 from edge_runtime.local_state import open_local_state
-from edge_runtime.local_state.schema import apply_migrations, migrate
+from edge_runtime.local_state.schema import MIGRATIONS, apply_migrations, migrate
 from edge_runtime.local_state.store import LocalState
 from edge_runtime.supervisor.inputs import StreamHealthObserved
 from edge_runtime.supervisor.startup import resume_station
@@ -417,6 +417,26 @@ class MigrationTest(unittest.TestCase):
     error. `MigrationMechanismTest` carries evolution, which this list cannot show while it is
     one entry long.
     """
+
+    def test_digest_survives_the_legacy_table_rebuild(self) -> None:
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(connection.close)
+        self.assertEqual(apply_migrations(connection, MIGRATIONS[:2]), 2)
+        digest = "a" * 64
+        connection.execute(
+            """
+            INSERT INTO local_config
+                (slot, host_id, config_revision, sha256, confirmed_at, payload)
+            VALUES (1, 'host-a', 4, ?, 1.0, '{}')
+            """,
+            (digest,),
+        )
+
+        self.assertEqual(apply_migrations(connection, MIGRATIONS), 4)
+        self.assertEqual(
+            connection.execute("SELECT sha256 FROM local_config WHERE slot = 1").fetchone()[0],
+            digest,
+        )
 
     def test_opening_an_already_current_database_changes_nothing(self) -> None:
         with TemporaryDirectory() as directory:

@@ -81,7 +81,11 @@ _HOST_BASE_COLUMNS = (
 
 
 def _host_values(
-    host: InferenceHost, *, include_identity: bool, include_media: bool
+    host: InferenceHost,
+    *,
+    include_identity: bool,
+    include_media: bool,
+    include_configuration: bool,
 ) -> dict[str, object]:
     values: dict[str, object] = {
         "id": host.id,
@@ -101,6 +105,9 @@ def _host_values(
         values["identity_public_key"] = host.identity_public_key
     if include_media:
         values["mediamtx_playback_address"] = host.mediamtx_playback_address
+    if include_configuration:
+        values["configuration_revision"] = host.configuration_revision
+        values["configuration_sha256"] = host.configuration_sha256
     return values
 
 
@@ -115,6 +122,8 @@ def _host_from_values(values: Mapping[str, Any]) -> InferenceHost:
         disk_watermark_percent=values["disk_watermark_percent"],
         status=values["status"],
         revision=values["revision"],
+        configuration_revision=values.get("configuration_revision", 0),
+        configuration_sha256=values.get("configuration_sha256"),
         created_by=values["created_by"],
         updated_by=values["updated_by"],
         created_at=values["created_at"],
@@ -130,9 +139,14 @@ class PostgresInferenceHostRepository:
         self._session = session
         self._has_identity_column: bool | None = None
         self._has_media_column: bool | None = None
+        self._has_configuration_columns: bool | None = None
 
     def add(self, host: InferenceHost) -> None:
-        if self._supports_host_identity() and self._supports_host_media():
+        if (
+            self._supports_host_identity()
+            and self._supports_host_media()
+            and self._supports_host_configuration()
+        ):
             self._session.add(InferenceHostRow.from_domain(host))
         else:
             if host.identity_public_key is not None and not self._supports_host_identity():
@@ -143,6 +157,7 @@ class PostgresInferenceHostRepository:
                         host,
                         include_identity=self._supports_host_identity(),
                         include_media=self._supports_host_media(),
+                        include_configuration=self._supports_host_configuration(),
                     )
                 )
             )
@@ -156,6 +171,7 @@ class PostgresInferenceHostRepository:
             host,
             include_identity=self._supports_host_identity(),
             include_media=self._supports_host_media(),
+            include_configuration=self._supports_host_configuration(),
         )
         try:
             result = cast(
@@ -181,7 +197,11 @@ class PostgresInferenceHostRepository:
             )
 
     def by_id(self, host_id: UUID) -> InferenceHost | None:
-        if self._supports_host_identity() and self._supports_host_media():
+        if (
+            self._supports_host_identity()
+            and self._supports_host_media()
+            and self._supports_host_configuration()
+        ):
             row = self._session.get(InferenceHostRow, host_id)
             return row.to_domain() if row is not None else None
         values = self._legacy_host_by_id(host_id)
@@ -207,12 +227,28 @@ class PostgresInferenceHostRepository:
             )
         return self._has_media_column
 
+    def _supports_host_configuration(self) -> bool:
+        if self._has_configuration_columns is None:
+            columns = {
+                column["name"]
+                for column in inspect(self._session.connection()).get_columns(
+                    InferenceHostRow.__tablename__
+                )
+            }
+            self._has_configuration_columns = {
+                "configuration_revision",
+                "configuration_sha256",
+            }.issubset(columns)
+        return self._has_configuration_columns
+
     def _host_columns(self) -> list[Any]:
         names = list(_HOST_BASE_COLUMNS)
         if self._supports_host_media():
             names.insert(names.index("mediamtx_address") + 1, "mediamtx_playback_address")
         if self._supports_host_identity():
             names.append("identity_public_key")
+        if self._supports_host_configuration():
+            names.extend(("configuration_revision", "configuration_sha256"))
         return [getattr(InferenceHostRow, name) for name in names]
 
     def _legacy_host_by_id(self, host_id: UUID) -> Mapping[str, Any] | None:
@@ -223,6 +259,40 @@ class PostgresInferenceHostRepository:
             .mappings()
             .one_or_none(),
         )
+
+    def next_configuration_revision(
+        self,
+        *,
+        host_id: UUID,
+        content_sha256: str,
+        minimum_revision: int = 0,
+    ) -> int:
+        """按配置内容分配持久化、单调且并发安全的主机版本。"""
+        if minimum_revision < 0:
+            raise ValueError("minimum_revision must not be negative")
+        if not self._supports_host_configuration():
+            raise ValueError("主机表不支持持久化配置版本")
+        row = self._session.execute(
+            select(
+                InferenceHostRow.configuration_revision,
+                InferenceHostRow.configuration_sha256,
+            )
+            .where(InferenceHostRow.id == host_id)
+            .with_for_update()
+        ).one_or_none()
+        if row is None:
+            raise DeviceRefusedError(DeviceRefusalCode.INFERENCE_HOST_NOT_FOUND)
+        if row[1] == content_sha256:
+            return int(row[0])
+        revision = max(1, int(row[0]) + 1)
+        if row[1] is None:
+            revision = max(revision, minimum_revision + 1)
+        self._session.execute(
+            update(InferenceHostRow)
+            .where(InferenceHostRow.id == host_id)
+            .values(configuration_revision=revision, configuration_sha256=content_sha256)
+        )
+        return revision
 
     def consume_identity_nonce(self, *, host_id: UUID, nonce: str, seen_at: datetime) -> bool:
         """原子登记随机数；重复请求在事务内被拒绝。"""
@@ -279,7 +349,11 @@ class PostgresInferenceHostRepository:
         total = cast(
             "int", self._session.scalar(select(func.count()).select_from(InferenceHostRow))
         )
-        if self._supports_host_identity() and self._supports_host_media():
+        if (
+            self._supports_host_identity()
+            and self._supports_host_media()
+            and self._supports_host_configuration()
+        ):
             rows = self._session.scalars(
                 select(InferenceHostRow)
                 .order_by(InferenceHostRow.created_at.desc(), InferenceHostRow.id.desc())

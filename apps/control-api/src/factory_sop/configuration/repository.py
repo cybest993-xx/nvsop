@@ -96,6 +96,12 @@ class CameraSnapshot(Protocol):
     @property
     def revision(self) -> int: ...
 
+    @property
+    def media_path_mode(self) -> EnumSnapshot: ...
+
+    @property
+    def recording_mode(self) -> EnumSnapshot: ...
+
 
 class StationSnapshot(Protocol):
     """配置组装所需的工位身份、运行参数和修订号。"""
@@ -142,6 +148,9 @@ class ConnectorSnapshot(Protocol):
     def id(self) -> UUID: ...
 
     @property
+    def station_id(self) -> UUID: ...
+
+    @property
     def host_id(self) -> UUID: ...
 
     @property
@@ -168,6 +177,9 @@ class PointSnapshot(Protocol):
 
     @property
     def id(self) -> UUID: ...
+
+    @property
+    def station_id(self) -> UUID: ...
 
     @property
     def connector_id(self) -> UUID: ...
@@ -237,6 +249,9 @@ class TemplateVersionSnapshot(Protocol):
     def id(self) -> UUID: ...
 
     @property
+    def template_id(self) -> UUID: ...
+
+    @property
     def source_draft_revision(self) -> int: ...
 
     @property
@@ -250,10 +265,16 @@ class TemplateVersionSnapshot(Protocol):
 
 
 class HostReader(Protocol):
-    """按身份读取推理机。"""
+    """按身份读取推理机并分配稳定配置修订号。"""
 
     def by_id(self, host_id: UUID, /) -> HostSnapshot | None:
         """返回推理机快照；不存在时返回 `None`。"""
+        ...
+
+    def next_configuration_revision(
+        self, *, host_id: UUID, content_sha256: str, minimum_revision: int = 0
+    ) -> int:
+        """为新的有效配置内容分配单调修订号。"""
         ...
 
 
@@ -308,6 +329,10 @@ class TemplateReader(Protocol):
 
     def version_by_id(self, version_id: UUID, /) -> TemplateVersionSnapshot | None:
         """返回已发布版本；不存在时返回 `None`。"""
+        ...
+
+    def template_by_id(self, template_id: UUID, /) -> object | None:
+        """返回模板身份；不存在时返回 `None`。"""
         ...
 
 

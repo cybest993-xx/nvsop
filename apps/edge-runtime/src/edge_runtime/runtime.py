@@ -12,7 +12,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from time import monotonic, sleep
+from time import monotonic, sleep, time
 from types import FrameType
 
 from nvsop_contracts import ConfigurationBundle
@@ -57,6 +57,7 @@ from edge_runtime.runtime_configuration import (
     RuntimeConfiguration,
     bootstrap_runtime_configuration,
     confirmed_runtime_configuration,
+    validate_confirmed_runtime_configuration,
 )
 from edge_runtime.station_runtime import (
     InputWaitExpired,
@@ -475,9 +476,19 @@ def _validate_media_for_runtime(
         return
     if config.media.host_id != config.host_id:
         raise ValueError("media host_id must match edge host_id")
+    confirmed_camera_ids = {
+        camera.camera_id
+        for station in (
+            runtime_configuration.confirmed.stations
+            if runtime_configuration.confirmed is not None
+            else ()
+        )
+        for camera in station.cameras
+    }
     validate_sop_camera_bindings(
         config.media,
         {station.configuration.station_id for station in runtime_configuration.stations},
+        confirmed_camera_ids,
     )
 
 
@@ -715,6 +726,53 @@ def build_autonomous_runtime_from_file(
                 station.close()
         state.close()
         raise
+
+
+def _station_input_source(binding: StationRuntimeBinding, *, timeout: float) -> StationInputSource:
+    """按工位的一个或多个 backend 输入配置构造输入接缝。"""
+    source_configurations = binding.configurations or (binding.configuration,)
+    sources = tuple(
+        SseStationInputSource(
+            inference_url=source_configuration.inference_url,
+            request_body=source_configuration.request_body,
+            timeout=timeout,
+        )
+        for source_configuration in source_configurations
+    )
+    return sources[0] if len(sources) == 1 else MultiplexedStationInputSource(sources=sources)
+
+
+def _synchronize_runtime_configuration(
+    config: EdgeRuntimeConfiguration, state: LocalState
+) -> RuntimeConfiguration:
+    """主动拉取一次; 失败时使用最后确认 bundle, 首次失败才使用 bootstrap。"""
+    synchronizer = ConfigurationSynchronizer(
+        puller=HttpConfigurationPuller(
+            center_url=config.center_url,
+            host_id=config.host_id,
+            host_private_key=config.host_private_key,
+            timeout=config.command_timeout,
+            ssl_context=config.ssl_context,
+        ),
+        store=state.configuration(),
+        expected_host_id=config.host_id,
+        validator=lambda bundle: validate_confirmed_runtime_configuration(
+            bundle=bundle,
+            bootstrap_stations=config.stations,
+            local_connectors=config.connectors,
+        ),
+    )
+    result = synchronizer.synchronize(observed_at=time())
+    if result.active is None:
+        return bootstrap_runtime_configuration(
+            stations=config.stations,
+            connectors=config.connectors,
+        )
+    return confirmed_runtime_configuration(
+        bundle=result.active,
+        bootstrap_stations=config.stations,
+        local_connectors=config.connectors,
+    )
 
 
 def main() -> int:

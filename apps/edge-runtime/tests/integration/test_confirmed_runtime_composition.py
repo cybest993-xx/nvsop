@@ -410,11 +410,47 @@ def _bundle() -> ConfigurationBundle:
         separators=(",", ":"),
         sort_keys=True,
     ).encode()
-    artifact = ConfigurationArtifact(
-        name="template.json",
+    artifacts = (
+        ConfigurationArtifact(
+            name="actions.json",
+            media_type="application/json",
+            content=b"{}",
+            sha256=sha256(b"{}").hexdigest(),
+        ),
+        ConfigurationArtifact(
+            name="vlm_prompts.txt",
+            media_type="text/plain",
+            content=b"prompt\n",
+            sha256=sha256(b"prompt\n").hexdigest(),
+        ),
+        ConfigurationArtifact(
+            name="template.json",
+            media_type="application/json",
+            content=content,
+            sha256=sha256(content).hexdigest(),
+        ),
+    )
+    manifest = json.dumps(
+        {
+            "artifacts": [
+                {
+                    "byte_length": len(artifact.content),
+                    "media_type": artifact.media_type,
+                    "name": artifact.name,
+                    "sha256": artifact.sha256,
+                }
+                for artifact in artifacts
+            ],
+            "format_version": 1,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    manifest_artifact = ConfigurationArtifact(
+        name="manifest.json",
         media_type="application/json",
-        content=content,
-        sha256=sha256(content).hexdigest(),
+        content=manifest,
+        sha256=sha256(manifest).hexdigest(),
     )
     return ConfigurationBundle(
         host_id="host-a",
@@ -465,8 +501,8 @@ def _bundle() -> ConfigurationBundle:
                 ),
                 template=ConfigurationTemplate(
                     version_id="version-a",
-                    version_sha256="a" * 64,
-                    artifacts=(artifact,),
+                    version_sha256=manifest_artifact.sha256,
+                    artifacts=(*artifacts, manifest_artifact),
                 ),
             ),
         ),

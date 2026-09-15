@@ -5,8 +5,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0030"
-down_revision: str | None = "0029"
+revision: str = "0031"
+down_revision: str | None = "0030"
 
 MONITOR_PERMISSIONS = ("monitor.report.view",)
 RAW_SQL_TABLES = frozenset({"auth_role", "auth_role_permission", "auth_permission"})

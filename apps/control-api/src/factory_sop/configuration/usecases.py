@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -78,59 +78,57 @@ def configuration_for_host(
     host_cameras = [
         camera for camera in cameras.for_host(host_id) if camera.status.value == "active"
     ]
-    station_ids = {camera.station_id for camera in host_cameras}
     station_values: list[ConfiguredStation] = []
-    revision_values = [host.revision]
     for backend in backend_values:
         if backend.host_id != host.id:
             raise ConfigurationAssemblyError("host topology contains a foreign backend")
         if backend.status.value != "active":
             continue
-        for station_id in sorted(
-            {
-                camera.station_id
-                for camera in host_cameras
-                if camera.backend_id == backend.id and camera.station_id in station_ids
-            },
-            key=str,
-        ):
+        backend_cameras = [camera for camera in host_cameras if camera.backend_id == backend.id]
+        for station_id in sorted({camera.station_id for camera in backend_cameras}, key=str):
             station = stations.by_id(station_id)
             if station is None or station.status.value != "active":
                 continue
-            backend_cameras = [
-                camera
-                for camera in host_cameras
-                if camera.backend_id == backend.id and camera.station_id == station_id
+            station_cameras = [
+                camera for camera in backend_cameras if camera.station_id == station.id
             ]
-            station_bundle = _station_bundle(
-                backend=backend,
-                station=station,
-                backend_cameras=backend_cameras,
-                connectors=connectors,
-                points=points,
-                templates=templates,
-            )
-            station_values.append(station_bundle)
-            revision_values.extend(
-                [
-                    backend.revision,
-                    station.revision,
-                    station.runtime_parameters_revision,
-                    station_bundle.revision,
-                    *(camera.revision for camera in backend_cameras),
-                ]
+            station_values.append(
+                _station_bundle(
+                    host=host,
+                    backend=backend,
+                    station=station,
+                    backend_cameras=station_cameras,
+                    connectors=connectors,
+                    points=points,
+                    templates=templates,
+                )
             )
 
-    return ConfigurationBundle(
+    candidate = ConfigurationBundle(
         host_id=str(host.id),
-        config_revision=max(revision_values),
+        config_revision=1,
         generated_at=generated_at.isoformat().replace("+00:00", "Z"),
         stations=tuple(sorted(station_values, key=lambda item: (item.station_id, item.backend_id))),
     )
+    legacy_revision_floor = max(
+        [
+            host.revision,
+            *(backend.revision for backend in backend_values if backend.status.value == "active"),
+            *(station.revision for station in station_values),
+            0,
+        ]
+    )
+    config_revision = hosts.next_configuration_revision(
+        host_id=host.id,
+        content_sha256=candidate.effective_sha256,
+        minimum_revision=legacy_revision_floor,
+    )
+    return replace(candidate, config_revision=config_revision)
 
 
 def _station_bundle(
     *,
+    host: object,
     backend: BackendSnapshot,
     station: StationSnapshot,
     backend_cameras: list[CameraSnapshot],
@@ -148,6 +146,9 @@ def _station_bundle(
             raise ConfigurationAssemblyError("station binding refers to a missing template version")
         if version.sha256 != binding.desired_sha256:
             raise ConfigurationAssemblyError("station binding digest does not match its version")
+        template_owner = templates.template_by_id(version.template_id)
+        if template_owner is None or getattr(template_owner, "station_id", None) != station.id:
+            raise ConfigurationAssemblyError("station binding refers to a foreign template version")
         template = _template(version)
         defaults = _runtime_defaults(version)
         configuration_revision = max(
@@ -159,24 +160,37 @@ def _station_bundle(
     if effective is None:
         raise ConfigurationAssemblyError("station has no complete resolved runtime parameters")
 
+    raw_connectors = connectors.for_station(station.id)
+    for connector in raw_connectors:
+        if connector.station_id != station.id:
+            raise ConfigurationAssemblyError("host topology contains a foreign connector")
     station_connectors = {
         connector.id: connector
-        for connector in connectors.for_station(station.id)
+        for connector in raw_connectors
         if connector.host_id == backend.host_id and connector.status.value == "active"
     }
+    raw_points = points.for_station(station.id)
+    for point in raw_points:
+        if point.station_id != station.id:
+            raise ConfigurationAssemblyError("host topology contains a foreign point")
     station_points = [
         point
-        for point in points.for_station(station.id)
+        for point in raw_points
         if point.connector_id in station_connectors and point.status.value == "active"
     ]
     for camera in backend_cameras:
-        if camera.host_id != backend.host_id or camera.backend_id != backend.id:
+        if (
+            camera.host_id != backend.host_id
+            or camera.backend_id != backend.id
+            or camera.station_id != station.id
+        ):
             raise ConfigurationAssemblyError("host topology contains a foreign camera")
     configuration_revision = max(
         configuration_revision,
         station.runtime_parameters_revision,
         *(connector.revision for connector in station_connectors.values()),
         *(point.revision for point in station_points),
+        *(camera.revision for camera in backend_cameras),
     )
     return ConfiguredStation(
         station_id=str(station.id),
@@ -223,6 +237,8 @@ def _camera(value: CameraSnapshot) -> ConfiguredCamera:
         sub_stream_path=value.sub_stream_path,
         credentials_configured=value.credentials_configured,
         revision=value.revision,
+        media_path_mode=value.media_path_mode.value,
+        recording_mode=value.recording_mode.value,
     )
 
 

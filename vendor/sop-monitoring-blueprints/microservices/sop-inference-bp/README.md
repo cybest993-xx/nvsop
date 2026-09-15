@@ -60,7 +60,6 @@ The DeepStream-SOP project implements a highly optimized computer vision inferen
 
 The DeepStream-SOP microservice architecture integrates multiple components to deliver real-time temporal action detection and VLM-based evaluation:
 
-![DeepStream SOP Architecture](docs/deepstream-sop-architecture.png)
 
 **Key Components:**
 

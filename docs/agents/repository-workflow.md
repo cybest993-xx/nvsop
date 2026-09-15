@@ -6,11 +6,11 @@ This document owns task workspace isolation, continuity, the working/review cycl
 
 ## Workspace isolation
 
-`main` is the repository trunk and a shared promotion target. Do not use it as a task workspace and do not make task commits directly on it.
+`main` is the repository trunk and the pull-request target. Do not use it as a task workspace, commit task changes on it, or push task refs directly to it.
 
 For new task work, create one `agent/<agent-id>/<task-slug>` branch from the current accepted `main` tip and give it its own worktree. Continue an existing task on its existing branch/worktree instead of creating another branch for each window or repair.
 
-`dev` remains an integration-only shared ref used by the local protected-ref workflow before promotion to `main`; it is not the normal base for new task edits. The integration operator owns its worktree. See the local branch workflow for the exact allowed ref transitions.
+`dev` is retired from the delivery path. Do not create or advance it for new work; an existing legacy local `dev` ref may be deleted after its commits are accounted for. Publish each completed `agent/...` branch and open its PR directly against `main`. See the local branch workflow for the exact allowed ref transitions.
 
 Use an isolated worktree whenever the primary checkout contains unrelated work, another writer is active, a fixed development instance owns the primary checkout, or switching branches would disrupt running work. Never discard, auto-stash or overwrite unrelated changes to make a task workspace convenient.
 
@@ -47,7 +47,7 @@ Update facts instead of copying conversation history. A handoff is not authoriza
 4. **Self-review.** Inspect the complete diff and affected callers/references.
 5. **Independent review when triggered.** Repository policy, agent instructions, deployment, CI, dependencies, public interfaces and critical invariants require the consolidated read-only review defined by the verification policy.
 6. **Repair and recheck.** Fix blocking findings as one bounded batch, rerun affected checks and review the repair increment when required.
-7. **Finish by state.** Report delivered behavior, checks and remaining gaps. Push, merge, promotion, issue closure and publication require the user's authorization plus the repository's acceptance evidence.
+7. **Finish by state.** Report delivered behavior, checks and remaining gaps. Push the task branch, target its PR at `main`, and merge only with the user's authorization plus the repository's acceptance evidence; issue closure and other publication remain separately authorized.
 
 Stop adding optional tests/refactors once acceptance behavior and required evidence are complete. A concrete blocker reopens only the affected work.
 

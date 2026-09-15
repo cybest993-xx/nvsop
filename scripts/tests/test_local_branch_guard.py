@@ -21,10 +21,11 @@ class LocalBranchGuardTest(unittest.TestCase):
         self.git("add", "README.md")
         self.git("commit", "--quiet", "-m", "base")
         self.initial = self.git("rev-parse", "HEAD")
+
+        # Simulate a clone that still has the retired integration ref before enabling the new guard.
+        self.git("branch", "dev", self.initial)
         self.git("config", "core.hooksPath", str(HOOKS))
         self.git("update-ref", "refs/remotes/origin/main", self.initial)
-        self.git("update-ref", "refs/remotes/origin/dev", self.initial)
-        self.git("branch", "dev", self.initial)
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -41,28 +42,27 @@ class LocalBranchGuardTest(unittest.TestCase):
         return result.stdout.strip()
 
     def make_agent_commit(self) -> str:
-        self.git("switch", "--quiet", "-c", "agent/a/first", "dev")
+        self.git("switch", "--quiet", "-c", "agent/a/first", "main")
         (self.root / "agent.txt").write_text("agent\n", encoding="utf-8")
         self.git("add", "agent.txt")
         self.git("commit", "--quiet", "-m", "agent work")
-        tip = self.git("rev-parse", "HEAD")
-        self.git("switch", "--quiet", "dev")
-        self.git("merge", "--quiet", "--no-ff", "--no-edit", "agent/a/first")
-        return tip
+        return self.git("rev-parse", "HEAD")
 
-    def test_main_only_promotes_the_current_dev_tip(self) -> None:
-        self.make_agent_commit()
+    def test_remote_main_can_advance_local_main(self) -> None:
+        tip = self.make_agent_commit()
+        self.git("update-ref", "refs/remotes/origin/main", tip)
         self.git("switch", "--quiet", "main")
-        fast_forward = self.command("merge", "--ff-only", "dev")
-        self.assertEqual(0, fast_forward.returncode, fast_forward.stderr)
-        self.assertNotEqual(self.initial, self.git("rev-parse", "main"))
-
-    def test_remote_main_can_overwrite_local_main(self) -> None:
-        self.make_agent_commit()
-        self.git("switch", "--quiet", "main")
-        self.git("merge", "--quiet", "--no-ff", "--no-edit", "dev")
 
         self.git("reset", "--quiet", "--hard", "origin/main")
+        self.assertEqual(tip, self.git("rev-parse", "main"))
+
+    def test_local_main_rejects_worker_merge(self) -> None:
+        self.make_agent_commit()
+        self.git("switch", "--quiet", "main")
+
+        merge = self.command("merge", "--ff-only", "agent/a/first")
+        self.assertNotEqual(0, merge.returncode)
+        self.assertIn("local `main` may change only", merge.stderr)
         self.assertEqual(self.initial, self.git("rev-parse", "main"))
 
     def test_direct_main_updates_are_rejected_even_with_no_verify(self) -> None:
@@ -79,28 +79,31 @@ class LocalBranchGuardTest(unittest.TestCase):
         self.assertNotEqual(0, reset.returncode)
         self.assertEqual(self.initial, self.git("rev-parse", "main"))
 
-    def test_main_and_dev_cannot_be_deleted_or_renamed(self) -> None:
+    def test_main_cannot_be_deleted_or_renamed(self) -> None:
         rename_main = self.command("branch", "-m", "main", "renamed")
         self.assertNotEqual(0, rename_main.returncode)
         self.assertIn("`main` is permanent", rename_main.stderr)
         self.assertEqual("main", self.git("branch", "--show-current"))
 
-        self.git("switch", "--quiet", "dev")
+        self.git("switch", "--quiet", "-c", "agent/a/holder", "main")
         delete_main = self.command("branch", "-D", "main")
         self.assertNotEqual(0, delete_main.returncode)
         self.assertIn("`main` is permanent", delete_main.stderr)
 
-        rename_dev = self.command("branch", "-m", "dev", "renamed-dev")
-        self.assertNotEqual(0, rename_dev.returncode)
-        self.assertIn("`dev` is the integration branch", rename_dev.stderr)
+    def test_legacy_dev_may_only_be_deleted(self) -> None:
+        tip = self.make_agent_commit()
+        self.git("switch", "--quiet", "main")
 
-    def test_direct_dev_commit_is_rejected(self) -> None:
-        self.git("switch", "--quiet", "dev")
-        (self.root / "direct-dev.txt").write_text("blocked\n", encoding="utf-8")
-        self.git("add", "direct-dev.txt")
-        commit = self.command("commit", "--no-verify", "-m", "direct dev commit")
-        self.assertNotEqual(0, commit.returncode)
-        self.assertIn("local `dev` may change only", commit.stderr)
+        advance = self.command("branch", "-f", "dev", tip)
+        self.assertNotEqual(0, advance.returncode)
+        self.assertIn("`dev` is retired", advance.stderr)
+
+        delete = self.command("branch", "-D", "dev")
+        self.assertEqual(0, delete.returncode, delete.stderr)
+
+        recreate = self.command("branch", "dev", "main")
+        self.assertNotEqual(0, recreate.returncode)
+        self.assertIn("`dev` is retired", recreate.stderr)
 
     def test_new_local_branches_use_agent_namespace(self) -> None:
         valid = self.command("branch", "agent/a/second", "main")

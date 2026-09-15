@@ -29,7 +29,7 @@ These hold before loading task-specific guidance:
 
 ## Implement, verify and stop
 
-`main` is the shared trunk and must not receive direct task edits or task commits. Start new task work from the accepted `main` tip on an `agent/<agent-id>/<task-slug>` branch in its own worktree. `dev` is integration-only. Before creating or changing branches/worktrees/refs, read [`local-branch-workflow.md`](docs/design/local-branch-workflow.md) and enable the versioned hooks with `make hooks`. Use [`repository-workflow.md`](docs/agents/repository-workflow.md) for the working cycle and continuity rules.
+`main` is the shared trunk and pull-request target; it must not receive direct task edits, task commits, or direct pushes. Start new task work from the accepted `main` tip on an `agent/<agent-id>/<task-slug>` branch in its own worktree, publish that branch, and open its PR directly against `main`. `dev` is retired and is not an integration path. Before creating or changing branches/worktrees/refs, read [`local-branch-workflow.md`](docs/design/local-branch-workflow.md) and enable the versioned hooks with `make hooks`. Use [`repository-workflow.md`](docs/agents/repository-workflow.md) for the working cycle and continuity rules.
 
 State risk, test reuse/additions and intended checks in at most three lines, then proceed within the authorized scope. Existing evidence may justify zero new tests; use the verification policy rather than a universal TDD ceremony.
 

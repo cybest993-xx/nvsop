@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate local branch ref transactions for the main/dev workflow."""
+"""Validate local branch refs for the worker-to-main pull-request workflow."""
 
 from __future__ import annotations
 
@@ -11,8 +11,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 LOCAL_HEADS = "refs/heads/"
-MAIN_REF = f"{LOCAL_HEADS}main"
-DEV_REF = f"{LOCAL_HEADS}dev"
 WORK_BRANCH = re.compile(r"agent/[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*")
 
 
@@ -86,44 +84,6 @@ def refs_with_suffix(root: Path, prefix: str, suffix: str) -> dict[str, str]:
     return result
 
 
-def refs_with_prefix(root: Path, prefix: str) -> dict[str, str]:
-    names = git(root, "for-each-ref", "--format=%(refname)", prefix).splitlines()
-    result: dict[str, str] = {}
-    for name in names:
-        oid = ref_oid(root, name)
-        if oid is not None:
-            result[name] = oid
-    return result
-
-
-def commit_parents(root: Path, oid: str) -> list[str]:
-    if not oid or is_zero_oid(oid):
-        return []
-    try:
-        contents = git(root, "cat-file", "-p", oid)
-    except RuntimeError:
-        return []
-    return [
-        line.removeprefix("parent ") for line in contents.splitlines() if line.startswith("parent ")
-    ]
-
-
-def is_merge_from(root: Path, update: RefUpdate, source_oids: set[str]) -> bool:
-    parents = commit_parents(root, update.new)
-    return len(parents) == 2 and parents[0] == update.old and parents[1] in source_oids
-
-
-def is_ancestor(root: Path, ancestor: str, descendant: str) -> bool:
-    result = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return result.returncode == 0
-
-
 def branch_name(ref: str) -> str:
     return ref.removeprefix(LOCAL_HEADS)
 
@@ -144,51 +104,31 @@ def validate_main_update(root: Path, update: RefUpdate) -> list[str]:
     if update.new in remote_main_oids:
         return []
 
-    dev_oid = ref_oid(root, DEV_REF)
-    if dev_oid is not None and (
-        is_merge_from(root, update, {dev_oid})
-        or (update.new == dev_oid and is_ancestor(root, update.old, update.new))
-    ):
-        return []
-
     return [
-        "local `main` may change only by merging the current `dev` tip or by resetting it "
-        "to a fetched remote-tracking `*/main` ref."
+        "local `main` may change only by syncing it to a fetched remote-tracking `*/main` "
+        "ref after the task branch has been merged through a pull request."
     ]
 
 
-def validate_dev_update(root: Path, update: RefUpdate) -> list[str]:
-    if is_zero_oid(update.old):
-        main_oid = ref_oid(root, MAIN_REF)
-        remote_dev_oids = set(refs_with_suffix(root, "refs/remotes", "dev").values())
-        if update.new == main_oid or update.new in remote_dev_oids:
-            return []
-        return ["create local `dev` from local `main` or a fetched remote-tracking `*/dev` ref."]
-    if is_zero_oid(update.new):
-        return ["`dev` is the integration branch and cannot be deleted or renamed."]
+def validate_dev_update(_root: Path, update: RefUpdate) -> list[str]:
+    if not is_zero_oid(update.old) and is_zero_oid(update.new):
+        return []
     if update.new == update.old:
         return []
-
-    source_oids = set(refs_with_prefix(root, f"{LOCAL_HEADS}agent/").values())
-    main_oid = ref_oid(root, MAIN_REF)
-    if main_oid is not None:
-        source_oids.add(main_oid)
-    if is_merge_from(root, update, source_oids) or any(
-        update.new == source and is_ancestor(root, update.old, source) for source in source_oids
-    ):
-        return []
-
-    return ["local `dev` may change only by merging an `agent/` branch or the current `main` tip."]
+    return [
+        "`dev` is retired and may only be deleted; publish `agent/...` branches and merge them "
+        "to `main` through a pull request."
+    ]
 
 
 def validate_branch_name(update: RefUpdate) -> list[str]:
     name = branch_name(update.ref)
     if is_zero_oid(update.new):
         return []
-    if name in {"main", "dev"} or is_work_branch(name):
+    if is_work_branch(name):
         return []
     return [
-        f"new local branch `{name}` is not allowed; use `dev` or "
+        f"new local branch `{name}` is not allowed; use "
         "`agent/<agent-id>/<task-slug>` with lowercase ASCII names."
     ]
 

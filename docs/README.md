@@ -13,7 +13,7 @@
 | [`design/repository-verification.md`](design/repository-verification.md) | 测试选择、证据、命令、CI 与独立审查 | 选择验证、改测试/CI、判断 merge readiness |
 | [`design/repository-maintenance.md`](design/repository-maintenance.md) | NVIDIA 基座、生成契约与依赖维护 | 更新 `vendor/`、OpenAPI、依赖或锁文件 |
 | [`agents/repository-workflow.md`](agents/repository-workflow.md) | agent 工作树、交接、指令加载与工作循环 | agent 开始/继续/交接一项仓库修改 |
-| [`design/local-branch-workflow.md`](design/local-branch-workflow.md) | `main`、`dev` 与 worker branch 的机械规则 | 创建分支、worktree、合并或清理引用 |
+| [`design/local-branch-workflow.md`](design/local-branch-workflow.md) | `main` 与 `agent/...` 分支的 PR/引用机械规则，含 legacy `dev` 清理 | 创建分支、worktree、PR、合并或清理引用 |
 | [`deployment/development.md`](deployment/development.md) | 本地固定 `main` 开发实例安装、启动与排障 | 第一次搭环境或日常运行开发实例 |
 | [`deployment/configuration.md`](deployment/configuration.md) | 中心、Web、边缘运行时配置边界与示例 | 部署服务或调整运行配置 |
 | [`deployment/limitations.md`](deployment/limitations.md) | 已知产品限制与仍待目标环境验证的能力 | 做交付承诺、现场计划或容量判断 |

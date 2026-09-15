@@ -1,20 +1,21 @@
 # Local branch workflow
 
-**Status: normative.** This document is the single source of truth for the local branch, worktree,
-and reference-transition rules. It does not configure or describe remote branch protection.
+**Status: normative.** This document is the single source of truth for local branch, worktree,
+reference-transition, and task-PR topology. It does not itself configure remote branch protection.
 
 ## Branch roles
 
 | Branch | Role | Normal writer |
 |---|---|---|
-| `main` | Permanent trunk, source for new task branches, and local promotion target | The integration operator only |
-| `dev` | The single local integration/staging branch | The integration operator only |
+| `main` | Permanent trunk, source for new task branches, and PR target | Remote PR merge; local clones only sync from fetched remote `main` |
 | `agent/<agent-id>/<task-slug>` | Isolated work for one agent and one task | That agent only |
 
-`main` and `dev` are shared refs, not task workspaces. New task branches start from the accepted
-`main` tip and use the worker pattern below; `dev` is integration-only and is not the normal source
-for task edits. Existing legacy branch names may be deleted, but they must not be advanced as task
-branches.
+`dev` is retired from normal delivery. Do not create or advance it for new work. An existing legacy
+local `dev` ref may be deleted after its commits are accounted for; it is not a staging hop between a
+worker branch and `main`.
+
+New task branches start from the accepted `main` tip. Completed work is pushed under its `agent/...`
+name and opened as a pull request directly against `main`. `main` never becomes a task workspace.
 
 ### Worker branch names
 
@@ -32,41 +33,26 @@ agent/pi/auth-bootstrap
 agent/camera-2/reconnect-timeout
 ```
 
-The versioned local reference hook enforces this namespace for new local branch refs. Use the
-same pattern when renaming a worker branch. Git has no pre-branch hook for the destination of its
-built-in worker-branch rename operation; `main` and `dev` renames are nevertheless hard-blocked by
-their protected-ref deletion checks.
+The versioned local reference hook enforces this namespace for new local branches. `main` cannot be
+created, deleted, renamed, or locally advanced to task work. Legacy `dev` can only be deleted.
 
 ## Required setup
 
-Enable the versioned hooks in every clone before creating or changing shared refs:
+Enable the versioned hooks in every clone before creating or changing local branch refs:
 
 ```bash
 make hooks
 git config --get core.hooksPath
 ```
 
-The second command must print `scripts/githooks` (or its configured equivalent). The first command
-is complete only when that local configuration exists; the setting is intentionally kept in
-`.git/config`, not committed to the repository.
+The second command must print `scripts/githooks` (or its configured equivalent). The setting lives in
+`.git/config`, not in a committed repository file.
 
-If the local `dev` branch does not exist, create it from the fetched development ref or the local
-`main` ref:
-
-```bash
-git fetch origin main dev
-git branch dev origin/dev       # when origin/dev exists
-git branch dev main            # otherwise
-```
-
-The hook permits only those initial sources for `dev`. It never permits deleting or renaming
-`main` or `dev`.
-
-## Multi-agent sequence
+## Task sequence
 
 ### 1. Refresh the local base
 
-Fetch the remote `main`, then explicitly replace the local `main` when that is the intended base:
+Fetch the remote `main`, then explicitly align the local `main` when that is the accepted base:
 
 ```bash
 git fetch origin main
@@ -74,85 +60,90 @@ git switch main
 git reset --hard origin/main
 ```
 
-**Completion criterion:** `git rev-parse main` equals the fetched remote-tracking `*/main` ref.
-This is the one intentional operation that may overwrite the local `main` history.
+The reference hook permits this only when the new local `main` value matches a fetched remote-tracking
+`*/main` ref. It does not permit a local merge, fast-forward, rebase, cherry-pick, or reset from a task
+branch.
 
-If `dev` contains work that must be retained, integrate the refreshed `main` into `dev` with the
-integration procedure below; do not reset `dev` over that work.
+**Completion criterion:** `git rev-parse main` equals the fetched remote-tracking `*/main` tip selected
+as the task base.
 
-### 2. Give each agent an isolated worktree
+### 2. Give each task an isolated worktree
 
-Create a worker branch from the current accepted trunk tip:
+Create a worker branch from the accepted trunk tip:
 
 ```bash
 git worktree add ../nvsop-agent-a -b agent/a/<task-slug> main
 ```
 
-If `main` moved after the task started, do not silently rebase or reset an active worker. Finish or
-explicitly rebase/update it as a separate integration decision with the affected evidence rerun.
+If `main` moves after the task started, do not silently rebase or reset the active worker. Finish it or
+explicitly update it as a separate integration decision and rerun affected evidence.
 
-The agent commits only in that worktree. Other agents use different `agent/<agent-id>/...`
-branches and worktrees. Never let two agents share a worktree, index, or worker branch.
+The agent commits only in that worktree. Other tasks use different `agent/<agent-id>/...` branches and
+worktrees. Never let two writers share a worktree, index, or worker branch.
 
-**Completion criterion:** the agent's worktree is cleanly associated with one allowed worker branch,
-and the shared `dev` worktree is not used for task edits.
+**Completion criterion:** the task worktree is cleanly associated with one allowed worker branch and
+contains no unrelated work.
 
-### 3. Integrate workers serially into `dev`
+### 3. Publish the worker and open a PR to `main`
 
-One integration operator owns the `dev` worktree and merges completed worker branches one at a
-time:
+After the candidate passes its applicable local checks and required review evidence, publish the exact
+worker branch:
 
 ```bash
-git switch dev
-git merge --no-ff agent/a/<task-slug>
-git merge --no-ff agent/b/<task-slug>
+git push -u origin agent/a/<task-slug>
+gh pr create --base main --head agent/a/<task-slug>
 ```
 
-A fast-forward to the exact current source tip is also accepted by the hook, because Git has no
-local pre-merge hook for fast-forward ref updates. Prefer `--no-ff` so each integration remains
-visible in history.
+The versioned `pre-push` hook rejects any direct push whose destination is `refs/heads/main`, including
+`git push origin HEAD:main`. The worker branch remains the publication unit; GitHub CI and required
+review run on the pull request to `main`.
 
-**Completion criterion:** each accepted `dev` update is either a merge from the current `main` tip
-or a merge/fast-forward from the current tip of an `agent/...` branch. Direct commits on `dev` are
-rejected.
+**Completion criterion:** the remote worker branch points at the verified candidate and its PR base is
+`main`.
 
-After verification, delete a worker branch only when its work is safely represented in `dev`:
+### 4. Merge remotely, then synchronize local `main`
 
-```bash
-git branch -d agent/a/<task-slug>
-git worktree remove ../nvsop-agent-a
-```
-
-### 4. Promote `dev` into `main`
-
-When the integration state is accepted:
+Merge only after the repository-required CI and review evidence is green and merge authorization is
+present. After GitHub reports the PR merged:
 
 ```bash
+git fetch origin main
 git switch main
-git merge --no-ff dev
+git reset --hard origin/main
 ```
 
-A fast-forward to the exact current `dev` tip is also valid. The hook rejects every other local
-`main` update, including direct commits, resets to worker branches, rebases, cherry-picks,
-reverts, and branch deletion or renaming.
+Delete the worker branch/worktree only after proving its candidate commit is reachable from fetched
+`origin/main` and the task worktree is clean. Use ordinary safe branch deletion; a refusal is a cleanup
+blocker, not a reason to force-delete.
 
-**Completion criterion:** the new `main` tip is the current `dev` tip or a merge commit whose second
-parent is the current `dev` tip.
+**Completion criterion:** fetched `origin/main` contains the merged candidate; local `main` matches that
+fetched tip; any authorized cleanup occurs only after ancestry and cleanliness checks.
+
+## Legacy `dev` handling
+
+`dev` is not part of the current task flow. The local reference hook:
+
+- rejects creating a new local `dev` ref;
+- rejects advancing or otherwise changing an existing local `dev` ref;
+- permits deleting an existing legacy local `dev` ref so stale integration state can be retired.
+
+Before deleting a legacy `dev`, account for any commits that are not already represented by `main` or
+an active task branch. Deleting or migrating historical work is a separate repository operation; do not
+silently discard it while starting a new task.
 
 ## Mechanical enforcement
 
 `scripts/githooks/reference-transaction` validates local ref transactions during Git's `prepared`
-phase. It enforces the actual ref movement rather than relying on a commit message or agent
-instruction:
+phase. It enforces the ref movement rather than relying on a commit message or agent instruction:
 
-- `main` cannot be created, deleted, renamed, or directly advanced;
-- `main` may move to the current `dev` tip, merge the current `dev` tip, or match a fetched remote
-  tracking `*/main` ref;
-- `dev` cannot be deleted or renamed and may advance only from `main` or an `agent/...` tip;
-- new local branches must be `dev` or `agent/<agent-id>/<task-slug>`;
-- `--no-verify` does not bypass this ref-transition check.
+- `main` cannot be created, deleted, renamed, or locally advanced to task work;
+- local `main` may move only to an exact commit already present at a fetched remote-tracking `*/main`;
+- `dev` is retired: creation and advancement are rejected, deletion of an existing legacy ref is allowed;
+- new local task branches must be `agent/<agent-id>/<task-slug>`;
+- `--no-verify` does not bypass the reference-transaction check.
 
-`pre-commit` remains an early, readable failure for direct commits on `main` or `dev`; the reference hook is
-the final local guard. The existing `pre-push` and vendor/format checks remain separate local
-checks. Removing or replacing `core.hooksPath` is outside what a repository-owned local hook can
-prevent; a machine-level managed Git wrapper would be required for anti-tamper enforcement.
+`pre-commit` gives an earlier readable failure for direct commits on `main` or legacy `dev`.
+`pre-push` rejects direct pushes to remote `main` and directs the caller to publish the worker branch
+and open a PR against `main`. Vendor/format checks remain separate local checks. Removing or replacing
+`core.hooksPath` is outside what a repository-owned local hook can prevent; machine-level enforcement
+would require a managed Git wrapper or server-side branch protection.

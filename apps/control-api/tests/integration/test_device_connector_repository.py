@@ -501,6 +501,104 @@ def test_connector_permission_migration_can_upgrade_downgrade_and_reload(
         assert permissions >= CONNECTOR_PERMISSIONS
 
 
+def test_configuration_revision_migration_survives_deleting_high_revision_backend(
+    migration_database: Engine,
+) -> None:
+    configuration = Config(str(CONTROL_API / "alembic.ini"))
+    configuration.set_main_option("script_location", str(CONTROL_API / "migrations"))
+    configuration.set_main_option(
+        "sqlalchemy.url", migration_database.url.render_as_string(hide_password=False)
+    )
+    host = a_host(name="配置版本迁移推理机")
+    backend = replace(a_backend(host.id), revision=97)
+
+    command.upgrade(configuration, "0029")
+    with migration_database.begin() as writing:
+        writing.execute(
+            text(
+                """
+                INSERT INTO device_inference_host (
+                    id, name, address, mediamtx_address, mediamtx_playback_address,
+                    recording_window_seconds, disk_watermark_percent, status, revision,
+                    created_by, updated_by, created_at, updated_at
+                ) VALUES (
+                    :id, :name, :address, :mediamtx_address, :mediamtx_playback_address,
+                    :recording_window_seconds, :disk_watermark_percent, :status, :revision,
+                    :created_by, :updated_by, :created_at, :updated_at
+                )
+                """
+            ),
+            {
+                "id": host.id,
+                "name": host.name,
+                "address": host.address,
+                "mediamtx_address": host.mediamtx_address,
+                "mediamtx_playback_address": host.mediamtx_playback_address,
+                "recording_window_seconds": host.recording_window_seconds,
+                "disk_watermark_percent": host.disk_watermark_percent,
+                "status": host.status.value,
+                "revision": host.revision,
+                "created_by": host.created_by,
+                "updated_by": host.updated_by,
+                "created_at": host.created_at,
+                "updated_at": host.updated_at,
+            },
+        )
+        writing.execute(
+            text(
+                """
+                INSERT INTO device_inference_backend (
+                    id, host_id, base_url, template_version_id, status, connection_state,
+                    connection_checked_at, connection_detail, self_reported_model_ids,
+                    self_reported_at, revision, created_by, updated_by, created_at, updated_at
+                ) VALUES (
+                    :id, :host_id, :base_url, NULL, :status, :connection_state,
+                    NULL, NULL, CAST(:model_ids AS jsonb), NULL, :revision,
+                    :created_by, :updated_by, :created_at, :updated_at
+                )
+                """
+            ),
+            {
+                "id": backend.id,
+                "host_id": backend.host_id,
+                "base_url": backend.base_url,
+                "status": backend.status.value,
+                "connection_state": backend.connection_state.value,
+                "model_ids": "[]",
+                "revision": backend.revision,
+                "created_by": backend.created_by,
+                "updated_by": backend.updated_by,
+                "created_at": backend.created_at,
+                "updated_at": backend.updated_at,
+            },
+        )
+
+    command.upgrade(configuration, "head")
+    with migration_database.connect() as connection:
+        assert (
+            connection.execute(
+                text("SELECT configuration_revision FROM device_inference_host WHERE id = :id"),
+                {"id": host.id},
+            ).scalar_one()
+            == backend.revision
+        )
+
+    with migration_database.begin() as writing:
+        writing.execute(
+            text("DELETE FROM device_inference_backend WHERE id = :id"),
+            {"id": backend.id},
+        )
+
+    with DatabaseSession(migration_database) as session:
+        revision = PostgresInferenceHostRepository(session).next_configuration_revision(
+            host_id=host.id,
+            content_sha256="a" * 64,
+        )
+        session.commit()
+
+    assert revision == backend.revision + 1
+
+
 def test_device_migration_0009_rollback_reupgrade_restores_prior_topology_behavior(
     migration_database: Engine,
 ) -> None:
@@ -700,7 +798,7 @@ def test_device_migration_0009_rollback_reupgrade_restores_prior_topology_behavi
         backends = PostgresInferenceBackendRepository(restored)
         cameras = PostgresCameraRepository(restored)
         assert stations.by_id(station.id) == station
-        assert hosts.by_id(host.id) == host
+        assert hosts.by_id(host.id) == replace(host, configuration_revision=1)
         loaded_backend = backends.by_id(backend.id)
         loaded_camera = cameras.by_id(camera.id)
         assert loaded_backend == backend

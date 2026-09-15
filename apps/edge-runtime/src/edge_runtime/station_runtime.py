@@ -41,6 +41,7 @@ class StationRuntimeConfiguration:
     margins: EvidenceMargins
     backend_id: str | None = None
     template_version_id: str | None = None
+    template_sha256: str | None = None
     model_ids: tuple[str, ...] = ()
     disposition_policy: str | None = None
 
@@ -308,6 +309,7 @@ class MultiplexedStationInputSource(StationInputSource):
             raise ValueError("multiplexed station input queue size must be positive")
         self._sources = sources
         self._events: Queue[SupervisorInput] = Queue(maxsize=queue_size)
+        self._wake = Event()
         self._stopping = Event()
         self._state_lock = Lock()
         self._closed = False
@@ -323,6 +325,7 @@ class MultiplexedStationInputSource(StationInputSource):
             return self._ended
 
     def next_input(self, *, timeout: float | None) -> SupervisorInput | InputWaitExpired | None:
+        deadline = None if timeout is None else monotonic() + timeout
         with self._state_lock:
             if not self._started and not self._closed:
                 self._workers = tuple(
@@ -337,17 +340,27 @@ class MultiplexedStationInputSource(StationInputSource):
                 self._started = True
                 for worker in self._workers:
                     worker.start()
-            error = self._error
-            closed = self._closed
-            ended = self._ended
-        if error is not None:
-            raise error
-        if closed and self._events.empty():
-            return None
-        try:
-            return self._events.get(timeout=timeout)
-        except Empty:
-            return None if ended else InputWaitExpired()
+        while True:
+            with self._state_lock:
+                error = self._error
+                closed = self._closed
+                ended = self._ended
+            if error is not None:
+                raise error
+            try:
+                return self._events.get_nowait()
+            except Empty:
+                if (closed or ended) and self._events.empty():
+                    return None
+            if deadline is not None:
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    return InputWaitExpired()
+                wait_for = min(remaining, 0.5)
+            else:
+                wait_for = 0.5
+            self._wake.wait(wait_for)
+            self._wake.clear()
 
     def close(self) -> None:
         with self._state_lock:
@@ -355,6 +368,7 @@ class MultiplexedStationInputSource(StationInputSource):
                 return
             self._closed = True
         self._stopping.set()
+        self._wake.set()
         for source in self._sources:
             source.close()
         for worker in self._workers:
@@ -376,17 +390,20 @@ class MultiplexedStationInputSource(StationInputSource):
                 while not self._stopping.is_set():
                     try:
                         self._events.put(arriving, timeout=0.2)
+                        self._wake.set()
                         break
                     except Full:
                         continue
         except BaseException as error:
             with self._state_lock:
                 self._error = error
+            self._wake.set()
         finally:
             with self._state_lock:
                 self._remaining -= 1
                 if self._remaining == 0:
                     self._ended = True
+            self._wake.set()
 
 
 def station_configuration(value: object) -> StationRuntimeConfiguration:
@@ -398,6 +415,7 @@ def station_configuration(value: object) -> StationRuntimeConfiguration:
         optional={
             "backend_id",
             "template_version_id",
+            "template_sha256",
             "model_ids",
             "disposition_policy",
         },
@@ -467,6 +485,11 @@ def station_configuration(value: object) -> StationRuntimeConfiguration:
             None
             if config.get("template_version_id") is None
             else _non_empty_string(config["template_version_id"], "template_version_id")
+        ),
+        template_sha256=(
+            None
+            if config.get("template_sha256") is None
+            else _non_empty_string(config["template_sha256"], "template_sha256")
         ),
         model_ids=model_ids,
         disposition_policy=(

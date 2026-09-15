@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import unittest
@@ -92,10 +93,16 @@ def confirmed_bundle() -> ConfigurationBundle:
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
-    artifacts = (
-        ConfigurationArtifact("actions.json", "application/json", b"{}"),
-        ConfigurationArtifact("vlm_prompts.txt", "text/plain", b"prompt\n"),
-        ConfigurationArtifact("template.json", "application/json", content),
+    artifact_values = (
+        ("actions.json", "application/json", b"{}"),
+        ("vlm_prompts.txt", "text/plain", b"prompt\n"),
+        ("template.json", "application/json", content),
+    )
+    artifacts = tuple(
+        ConfigurationArtifact(
+            name, media_type, artifact_content, hashlib.sha256(artifact_content).hexdigest()
+        )
+        for name, media_type, artifact_content in artifact_values
     )
     manifest = json.dumps(
         {
@@ -104,6 +111,7 @@ def confirmed_bundle() -> ConfigurationBundle:
                     "byte_length": len(artifact.content),
                     "media_type": artifact.media_type,
                     "name": artifact.name,
+                    "sha256": artifact.sha256,
                 }
                 for artifact in artifacts
             ],
@@ -162,9 +170,15 @@ def confirmed_bundle() -> ConfigurationBundle:
                 ),
                 template=ConfigurationTemplate(
                     version_id="version-a",
+                    version_sha256=hashlib.sha256(manifest).hexdigest(),
                     artifacts=(
                         *artifacts,
-                        ConfigurationArtifact("manifest.json", "application/json", manifest),
+                        ConfigurationArtifact(
+                            "manifest.json",
+                            "application/json",
+                            manifest,
+                            hashlib.sha256(manifest).hexdigest(),
+                        ),
                     ),
                 ),
             ),
@@ -185,6 +199,9 @@ class ConfirmedRuntimeConfigurationTests(unittest.TestCase):
         self.assertEqual(station.configuration.parameters.idle_timeout, 7.0)
         self.assertEqual(station.configuration.parameters.step_deadline, 3.0)
         self.assertEqual(station.configuration.template_version_id, "version-a")
+        expected_template = confirmed_bundle().stations[0].template
+        assert expected_template is not None
+        self.assertEqual(station.configuration.template_sha256, expected_template.version_sha256)
         self.assertEqual(station.configuration.disposition_policy, "stop")
         self.assertEqual(station.input_points_for(CONNECTOR_ID)[0].address, "1")
         self.assertEqual(station.output_points_for(CONNECTOR_ID)[0].address, "2")
@@ -246,7 +263,7 @@ class RuntimeSynchronizationTests(unittest.TestCase):
         self.config = EdgeRuntimeConfiguration(
             center_url="https://center.example",
             host_id=HOST_ID,
-            host_private_key="private-key",
+            host_private_key="private-key",  # pragma: allowlist secret
             command_timeout=1.0,
             command_poll_interval=1.0,
             connectors=(),

@@ -6207,6 +6207,64 @@ export type EditInferenceHostResponses = {
 
 export type EditInferenceHostResponse = EditInferenceHostResponses[keyof EditInferenceHostResponses]
 
+export type PullInferenceHostConfigurationData = {
+  body?: never
+  headers?: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID'?: string | null
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path: {
+    /**
+     * Host Id
+     */
+    host_id: string
+  }
+  query?: never
+  url: '/api/v1/inference-hosts/{host_id}/configuration'
+}
+
+export type PullInferenceHostConfigurationErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type PullInferenceHostConfigurationError =
+  PullInferenceHostConfigurationErrors[keyof PullInferenceHostConfigurationErrors]
+
+export type PullInferenceHostConfigurationResponses = {
+  /**
+   * Response Pullinferencehostconfiguration
+   *
+   * Successful Response
+   */
+  200: {
+    [key: string]: unknown
+  }
+}
+
+export type PullInferenceHostConfigurationResponse =
+  PullInferenceHostConfigurationResponses[keyof PullInferenceHostConfigurationResponses]
+
 export type RotateInferenceHostCredentialData = {
   body?: never
   headers: {

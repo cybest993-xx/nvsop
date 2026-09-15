@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import json
+from dataclasses import replace
 from datetime import UTC, datetime
+from typing import Protocol
 from uuid import UUID
 
 from factory_sop.device.model import (
@@ -19,7 +20,6 @@ from factory_sop.device.repository import (
     CameraRepository,
     ConnectorRepository,
     InferenceBackendRepository,
-    InferenceHostRepository,
     PointRepository,
     StationRepository,
 )
@@ -41,11 +41,21 @@ class ConfigurationAssemblyError(ValueError):
     """中心无法为该推理机构造完整且安全的 bundle。"""
 
 
+class ConfigurationHostRepository(Protocol):
+    """配置组装所需的主机最小接缝。"""
+
+    def by_id(self, host_id: UUID) -> InferenceHost | None: ...
+
+    def next_configuration_revision(
+        self, *, host_id: UUID, content_sha256: str, minimum_revision: int = 0
+    ) -> int: ...
+
+
 def configuration_for_host(
     *,
     host_id: UUID,
     generated_at: datetime,
-    hosts: InferenceHostRepository,
+    hosts: ConfigurationHostRepository,
     backends: InferenceBackendRepository,
     stations: StationRepository,
     cameras: CameraRepository,
@@ -65,7 +75,6 @@ def configuration_for_host(
         camera for camera in cameras.for_host(host_id) if camera.status.value == "active"
     ]
     station_values: list[ConfiguredStation] = []
-    revision_values = [host.revision]
     for backend in backend_values:
         if backend.status.value != "active":
             continue
@@ -89,22 +98,27 @@ def configuration_for_host(
                 templates=templates,
             )
             station_values.append(station_bundle)
-            revision_values.extend(
-                [
-                    backend.revision,
-                    station.revision,
-                    station.runtime_parameters_revision,
-                    station_bundle.revision,
-                    *(camera.revision for camera in station_cameras),
-                ]
-            )
 
-    return ConfigurationBundle(
+    candidate = ConfigurationBundle(
         host_id=str(host.id),
-        config_revision=max(revision_values),
+        config_revision=1,
         generated_at=generated_at.isoformat().replace("+00:00", "Z"),
         stations=tuple(sorted(station_values, key=lambda item: (item.station_id, item.backend_id))),
     )
+    legacy_revision_floor = max(
+        [
+            host.revision,
+            *(backend.revision for backend in backend_values if backend.status.value == "active"),
+            *(station.revision for station in station_values),
+            0,
+        ]
+    )
+    config_revision = hosts.next_configuration_revision(
+        host_id=host.id,
+        content_sha256=candidate.effective_sha256,
+        minimum_revision=legacy_revision_floor,
+    )
+    return replace(candidate, config_revision=config_revision)
 
 
 def _station_bundle(
@@ -236,30 +250,10 @@ def _point(value: Point) -> ConfiguredPoint:
 
 
 def _template(version: TemplateVersion) -> ConfigurationTemplate:
-    artifacts = tuple(_artifact(artifact) for artifact in version.artifacts[:-1])
-    manifest = ConfigurationArtifact(
-        name="manifest.json",
-        media_type="application/json",
-        content=json.dumps(
-            {
-                "artifacts": [
-                    {
-                        "byte_length": len(artifact.content),
-                        "media_type": artifact.media_type,
-                        "name": artifact.name,
-                    }
-                    for artifact in artifacts
-                ],
-                "format_version": 1,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8"),
-    )
     return ConfigurationTemplate(
         version_id=str(version.id),
-        artifacts=(*artifacts, manifest),
+        version_sha256=version.sha256,
+        artifacts=tuple(_artifact(artifact) for artifact in version.artifacts),
     )
 
 
@@ -268,6 +262,7 @@ def _artifact(value: TemplateVersionArtifact) -> ConfigurationArtifact:
         name=value.name.value,
         media_type=value.media_type,
         content=value.content,
+        sha256=value.sha256,
     )
 
 

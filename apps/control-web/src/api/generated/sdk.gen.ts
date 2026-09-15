@@ -183,6 +183,9 @@ import type {
   PublishTemplateVersionData,
   PublishTemplateVersionErrors,
   PublishTemplateVersionResponses,
+  PullInferenceHostConfigurationData,
+  PullInferenceHostConfigurationErrors,
+  PullInferenceHostConfigurationResponses,
   ReadAnnotationContextData,
   ReadAnnotationContextErrors,
   ReadAnnotationContextResponses,
@@ -1104,6 +1107,24 @@ export const editInferenceHost = <ThrowOnError extends boolean = false>(
       ...options.headers,
     },
   })
+
+/**
+ * Pull Inference Host Configuration
+ *
+ * 先认证主机，再只组装该主机的拓扑和模板。
+ */
+export const pullInferenceHostConfiguration = <ThrowOnError extends boolean = false>(
+  options: Options<PullInferenceHostConfigurationData, ThrowOnError>,
+): RequestResult<
+  PullInferenceHostConfigurationResponses,
+  PullInferenceHostConfigurationErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).get<
+    PullInferenceHostConfigurationResponses,
+    PullInferenceHostConfigurationErrors,
+    ThrowOnError
+  >({ url: '/api/v1/inference-hosts/{host_id}/configuration', ...options })
 
 /**
  * Retired A Host Credential

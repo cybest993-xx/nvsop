@@ -155,6 +155,7 @@ def _confirmed_station(
         parameters=parameters,
         backend_id=configured.backend_id,
         template_version_id=configured.template.version_id,
+        template_sha256=configured.template.version_sha256,
         disposition_policy=configured.runtime_parameters.disposition_policy,
     )
     connector_ids = tuple(connector.connector_id for connector in configured.connectors)
@@ -227,6 +228,7 @@ def _same_sop_view(left: StationRuntimeConfiguration, right: StationRuntimeConfi
         and left.parameters == right.parameters
         and left.margins == right.margins
         and left.template_version_id == right.template_version_id
+        and left.template_sha256 == right.template_sha256
         and left.model_ids == right.model_ids
         and left.disposition_policy == right.disposition_policy
     )
@@ -318,6 +320,14 @@ def _template_from_artifact(configured: ConfiguredStation) -> Template:
     if artifact is None:
         raise RuntimeConfigurationError(
             f"station {configured.station_id} confirmed template has no template.json artifact"
+        )
+    manifest = next(
+        (value for value in configured.template.artifacts if value.name == "manifest.json"),
+        None,
+    )
+    if manifest is not None and manifest.sha256 != configured.template.version_sha256:
+        raise RuntimeConfigurationError(
+            f"station {configured.station_id} confirmed template digest does not match manifest"
         )
     try:
         raw = json.loads(artifact.content.decode("utf-8"))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import unittest
 
@@ -25,9 +26,18 @@ from nvsop_contracts import (
 
 def template() -> ConfigurationTemplate:
     artifacts = (
-        ConfigurationArtifact("actions.json", "application/json", b"{}"),
-        ConfigurationArtifact("vlm_prompts.txt", "text/plain", b"prompt\n"),
-        ConfigurationArtifact("template.json", "application/json", b"{}"),
+        ConfigurationArtifact(
+            "actions.json", "application/json", b"{}", hashlib.sha256(b"{}").hexdigest()
+        ),
+        ConfigurationArtifact(
+            "vlm_prompts.txt",
+            "text/plain",
+            b"prompt\n",
+            hashlib.sha256(b"prompt\n").hexdigest(),
+        ),
+        ConfigurationArtifact(
+            "template.json", "application/json", b"{}", hashlib.sha256(b"{}").hexdigest()
+        ),
     )
     manifest = json.dumps(
         {
@@ -36,6 +46,7 @@ def template() -> ConfigurationTemplate:
                     "byte_length": len(artifact.content),
                     "media_type": artifact.media_type,
                     "name": artifact.name,
+                    "sha256": artifact.sha256,
                 }
                 for artifact in artifacts
             ],
@@ -46,9 +57,15 @@ def template() -> ConfigurationTemplate:
     ).encode("utf-8")
     return ConfigurationTemplate(
         version_id="version-a",
+        version_sha256=hashlib.sha256(manifest).hexdigest(),
         artifacts=(
             *artifacts,
-            ConfigurationArtifact("manifest.json", "application/json", manifest),
+            ConfigurationArtifact(
+                "manifest.json",
+                "application/json",
+                manifest,
+                hashlib.sha256(manifest).hexdigest(),
+            ),
         ),
     )
 
@@ -114,19 +131,20 @@ def bundle() -> ConfigurationBundle:
 
 
 class ConfigurationContractTests(unittest.TestCase):
-    def test_round_trip_and_wire_contains_no_sha256_or_credentials(self) -> None:
+    def test_round_trip_and_wire_preserves_sha256_and_excludes_credentials(self) -> None:
         value = bundle()
         wire = configuration_to_wire(value)
 
         self.assertEqual(configuration_from_wire(wire), value)
         serialized = json.dumps(wire, ensure_ascii=False)
-        self.assertNotIn("sha256", serialized)
-        self.assertNotIn("version_sha256", serialized)
+        self.assertIn(value.sha256, serialized)
+        assert value.stations[0].template is not None
+        self.assertIn(value.stations[0].template.version_sha256, serialized)
         self.assertNotIn("password", serialized)
         self.assertTrue(wire["stations"][0]["cameras"][0]["credentials_configured"])  # type: ignore[index]
 
         tampered = dict(wire)
-        tampered["sha256"] = "not-allowed"
+        tampered["sha256"] = "0" * 64
         with self.assertRaises(ValueError):
             configuration_from_wire(tampered)
 
@@ -151,14 +169,31 @@ class ConfigurationContractTests(unittest.TestCase):
         ).encode("utf-8")
         invalid = (
             *value.artifacts[:-1],
-            ConfigurationArtifact("manifest.json", "application/json", manifest),
+            ConfigurationArtifact(
+                "manifest.json",
+                "application/json",
+                manifest,
+                hashlib.sha256(manifest).hexdigest(),
+            ),
         )
 
         with self.assertRaisesRegex(ValueError, "manifest"):
-            ConfigurationTemplate(version_id=value.version_id, artifacts=invalid)
+            ConfigurationTemplate(
+                version_id=value.version_id,
+                version_sha256=hashlib.sha256(manifest).hexdigest(),
+                artifacts=invalid,
+            )
 
         with self.assertRaises(ValueError):
-            ConfigurationArtifact("template.json", "text/plain", b"{}")
+            ConfigurationArtifact(
+                "template.json", "text/plain", b"{}", hashlib.sha256(b"{}").hexdigest()
+            )
+        with self.assertRaisesRegex(ValueError, "version sha256"):
+            ConfigurationTemplate(
+                version_id=value.version_id,
+                version_sha256="0" * 64,
+                artifacts=value.artifacts,
+            )
 
     def test_unverified_capability_is_wireable_but_secret_fields_are_not(self) -> None:
         value = bundle()

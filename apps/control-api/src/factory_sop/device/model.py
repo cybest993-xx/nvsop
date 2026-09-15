@@ -235,8 +235,21 @@ class InferenceHost:
     identity_public_key: str | None = None
     # 浏览器回放使用独立的 MediaMTX 原生回放地址，不能从 WebRTC 地址猜测端口。
     mediamtx_playback_address: str | None = None
+    # 持久化的配置内容版本；它与对象乐观锁 revision 分离，删除对象后仍保持单调。
+    configuration_revision: int = 0
+    configuration_sha256: str | None = None
 
     def __post_init__(self) -> None:
+        if self.configuration_revision < 0:
+            raise ValueError("configuration_revision must not be negative")
+        if self.configuration_sha256 is not None and (
+            len(self.configuration_sha256) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in self.configuration_sha256.lower()
+            )
+        ):
+            raise ValueError("configuration_sha256 must be a SHA-256 hexadecimal digest")
         if self.identity_public_key:
             validate_host_identity_public_key(self.identity_public_key)
         if self.recording_window_seconds <= 0:

@@ -31,12 +31,14 @@ from edge_runtime.local_state.store import LocalState, open_local_state
 from edge_runtime.media import MediaRuntime, validate_sop_camera_bindings
 from edge_runtime.runtime_configuration import (
     RuntimeConfiguration,
+    StationRuntimeBinding,
     bootstrap_runtime_configuration,
     confirmed_runtime_configuration,
     validate_confirmed_runtime_configuration,
 )
 from edge_runtime.station_runtime import (
     InputWaitExpired,
+    MultiplexedStationInputSource,
     SseStationInputSource,
     StationInputSource,
     StationRuntimeConfiguration,
@@ -376,17 +378,23 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
         if config.media is not None:
             if config.media.host_id != config.host_id:
                 raise ValueError("media host_id must match edge host_id")
+            confirmed_camera_ids = {
+                camera.camera_id
+                for station in (
+                    runtime_configuration.confirmed.stations
+                    if runtime_configuration.confirmed is not None
+                    else ()
+                )
+                for camera in station.cameras
+            }
             validate_sop_camera_bindings(
                 config.media,
                 {binding.configuration.station_id for binding in runtime_configuration.stations},
+                confirmed_camera_ids,
             )
         for binding in runtime_configuration.stations:
             station_config = binding.configuration
-            source = SseStationInputSource(
-                inference_url=station_config.inference_url,
-                request_body=station_config.request_body,
-                timeout=config.command_timeout,
-            )
+            source = _station_input_source(binding, timeout=config.command_timeout)
             station_store = state.station(station_config.station_id)
             stations.append(
                 AutonomousStation(
@@ -410,6 +418,19 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
         state=state,
         media=MediaRuntime(config.media) if config.media is not None else None,
     )
+
+
+def _station_input_source(binding: StationRuntimeBinding, *, timeout: float) -> StationInputSource:
+    source_configurations = binding.configurations or (binding.configuration,)
+    sources = tuple(
+        SseStationInputSource(
+            inference_url=source_configuration.inference_url,
+            request_body=source_configuration.request_body,
+            timeout=timeout,
+        )
+        for source_configuration in source_configurations
+    )
+    return sources[0] if len(sources) == 1 else MultiplexedStationInputSource(sources=sources)
 
 
 def _synchronize_runtime_configuration(

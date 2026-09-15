@@ -1,4 +1,4 @@
-"""用真实 PostgreSQL 走过 0023 → 0029 的训练数据集用途迁移。"""
+"""用真实 PostgreSQL 走过 0023 → 0030 的训练数据集用途迁移。"""
 
 from __future__ import annotations
 
@@ -277,17 +277,25 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
         "job_id",
     } <= _columns(database_at_0023, "dataset_artifact")
     assert {"dataset_id"} <= _columns(database_at_0023, "job_application_job")
-    assert {"mediamtx_playback_address"} <= _columns(database_at_0023, "device_inference_host")
+    assert {
+        "mediamtx_playback_address",
+        "configuration_revision",
+        "configuration_sha256",
+    } <= _columns(database_at_0023, "device_inference_host")
     assert {"media_path_mode", "recording_mode"} <= _columns(database_at_0023, "device_camera")
 
     with database_at_0023.connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0029"
+    assert version == "0030"
     assert "dataset.dataset.edit" in _permission_codes(database_at_0023)
 
     command.downgrade(configuration, "0025")
     assert "dataset.dataset.edit" not in _permission_codes(database_at_0023)
     assert "mediamtx_playback_address" not in _columns(database_at_0023, "device_inference_host")
+    assert not {
+        "configuration_revision",
+        "configuration_sha256",
+    } & _columns(database_at_0023, "device_inference_host")
     assert not {"media_path_mode", "recording_mode"} & _columns(database_at_0023, "device_camera")
     command.downgrade(configuration, "0024")
     assert not {

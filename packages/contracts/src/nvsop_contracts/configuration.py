@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import math
 from collections.abc import Mapping, Sequence
@@ -79,6 +81,7 @@ class ConfigurationArtifact:
     name: str
     media_type: str
     content: bytes
+    sha256: str
 
     def __post_init__(self) -> None:
         if not self.name or not self.media_type:
@@ -88,17 +91,21 @@ class ConfigurationArtifact:
             raise ValueError("configuration artifact name or media type is unsupported")
         if not isinstance(self.content, bytes):
             raise ValueError("configuration artifact content must be bytes")
+        if hashlib.sha256(self.content).hexdigest() != self.sha256:
+            raise ValueError("configuration artifact digest does not match its content")
+        _validate_digest(self.sha256, "artifact sha256")
 
     def to_wire(self) -> dict[str, object]:
         return {
             "name": self.name,
             "media_type": self.media_type,
             "content_base64": base64.b64encode(self.content).decode("ascii"),
+            "sha256": self.sha256,
         }
 
     @classmethod
     def from_wire(cls, value: Mapping[str, object]) -> ConfigurationArtifact:
-        _require_keys(value, {"name", "media_type", "content_base64"}, "artifact")
+        _require_keys(value, {"name", "media_type", "content_base64", "sha256"}, "artifact")
         encoded = _string(value["content_base64"], "artifact content_base64")
         try:
             content = base64.b64decode(encoded, validate=True)
@@ -108,6 +115,7 @@ class ConfigurationArtifact:
             name=_string(value["name"], "artifact name"),
             media_type=_string(value["media_type"], "artifact media_type"),
             content=content,
+            sha256=_string(value["sha256"], "artifact sha256"),
         )
 
 
@@ -116,15 +124,19 @@ class ConfigurationTemplate:
     """不可变的已发布模板版本及 edge 所需的全部字节。"""
 
     version_id: str
+    version_sha256: str
     artifacts: tuple[ConfigurationArtifact, ...]
 
     def __post_init__(self) -> None:
         if not self.version_id:
             raise ValueError("template version_id must not be empty")
+        _validate_digest(self.version_sha256, "template version_sha256")
         names = tuple(artifact.name for artifact in self.artifacts)
         if names != _CONFIGURATION_ARTIFACT_ORDER:
             raise ValueError("template artifact set or order is unsupported")
         manifest = self.artifacts[-1]
+        if manifest.sha256 != self.version_sha256:
+            raise ValueError("template version sha256 does not match manifest")
         try:
             manifest_document = json.loads(manifest.content.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -134,6 +146,7 @@ class ConfigurationTemplate:
                 "byte_length": len(artifact.content),
                 "media_type": artifact.media_type,
                 "name": artifact.name,
+                "sha256": artifact.sha256,
             }
             for artifact in self.artifacts[:-1]
         ]
@@ -146,17 +159,19 @@ class ConfigurationTemplate:
     def to_wire(self) -> dict[str, object]:
         return {
             "version_id": self.version_id,
+            "version_sha256": self.version_sha256,
             "artifacts": [artifact.to_wire() for artifact in self.artifacts],
         }
 
     @classmethod
     def from_wire(cls, value: Mapping[str, object]) -> ConfigurationTemplate:
-        _require_keys(value, {"version_id", "artifacts"}, "template")
+        _require_keys(value, {"version_id", "version_sha256", "artifacts"}, "template")
         raw_artifacts = value["artifacts"]
         if not isinstance(raw_artifacts, Sequence) or isinstance(raw_artifacts, str):
             raise ValueError("template artifacts must be an array")
         return cls(
             version_id=_string(value["version_id"], "template version_id"),
+            version_sha256=_string(value["version_sha256"], "template version_sha256"),
             artifacts=tuple(
                 ConfigurationArtifact.from_wire(_object(item, "template artifact"))
                 for item in raw_artifacts
@@ -472,8 +487,23 @@ class ConfigurationBundle:
         content.pop("generated_at")
         return content
 
+    @property
+    def sha256(self) -> str:
+        """返回覆盖整个传输信封的摘要。"""
+        return hashlib.sha256(_canonical_json(self.content_wire()).encode("utf-8")).hexdigest()
+
+    @property
+    def effective_sha256(self) -> str:
+        """返回忽略生成时刻和版本信封字段的有效配置摘要。"""
+        content = self.content_wire()
+        content.pop("config_revision")
+        content.pop("generated_at")
+        return hashlib.sha256(_canonical_json(content).encode("utf-8")).hexdigest()
+
     def to_wire(self) -> dict[str, object]:
-        return self.content_wire()
+        value = self.content_wire()
+        value["sha256"] = self.sha256
+        return value
 
     @classmethod
     def from_wire(cls, value: Mapping[str, object]) -> ConfigurationBundle:
@@ -485,9 +515,16 @@ class ConfigurationBundle:
                 "config_revision",
                 "generated_at",
                 "stations",
+                "sha256",
             },
             "configuration bundle",
         )
+        supplied_digest = _string(value["sha256"], "configuration sha256")
+        _validate_digest(supplied_digest, "configuration sha256")
+        content = {key: value[key] for key in value if key != "sha256"}
+        actual_digest = hashlib.sha256(_canonical_json(content).encode("utf-8")).hexdigest()
+        if not _constant_time_equal(supplied_digest, actual_digest):
+            raise ValueError("configuration bundle digest does not match its content")
         raw_stations = _array(value["stations"], "configuration stations")
         return cls(
             host_id=_string(value["host_id"], "configuration host_id"),
@@ -571,6 +608,15 @@ def _validate_stream_path(value: str, label: str) -> None:
     parts = value.split("/")[1:]
     if not parts or any(part in {"", ".", ".."} for part in parts):
         raise ValueError(f"{label} must be an absolute media path without parameters")
+
+
+def _validate_digest(value: str, label: str) -> None:
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value.lower()):
+        raise ValueError(f"{label} must be a SHA-256 hexadecimal digest")
+
+
+def _constant_time_equal(left: str, right: str) -> bool:
+    return hmac.compare_digest(left.encode("ascii"), right.encode("ascii"))
 
 
 def _looks_like_secret(value: str) -> bool:

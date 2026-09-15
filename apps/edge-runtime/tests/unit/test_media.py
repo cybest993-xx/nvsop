@@ -192,9 +192,13 @@ class MediaConfigurationTest(MediaFixture):
         self.assertIn(f"  {MEDIA_PATH}:\n    source: publisher\n    record: no", path)
         self.assertNotIn("camera-user:camera-secret", path)  # pragma: allowlist secret
 
+    def test_removed_center_camera_is_rejected_at_the_media_runtime_boundary(self) -> None:
+        with self.assertRaisesRegex(ValueError, "confirmed configuration"):
+            validate_sop_camera_bindings(self.configuration, {STATION_ID}, set())
+
     def test_sop_station_rejects_a_non_sop_camera_at_runtime_boundary(self) -> None:
         with self.assertRaisesRegex(ValueError, "SOP stations"):
-            validate_sop_camera_bindings(self.configuration, {STATION_ID})
+            validate_sop_camera_bindings(self.configuration, {STATION_ID}, {CAMERA_ID})
 
     def test_sop_camera_cannot_use_preview_only_recording(self) -> None:
         camera = replace(

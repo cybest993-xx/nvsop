@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import unittest
 from unittest.mock import patch
 
-from nvsop_contracts import ConfigurationBundle
+from nvsop_contracts import ConfigurationBundle, configuration_to_wire
 
 from edge_runtime.configuration_sync import (
     ConfigurationPullError,
@@ -20,6 +21,19 @@ class BrokenResponse:
 
     def read(self) -> bytes:
         raise OSError("password=must-not-leak")
+
+    def close(self) -> None:
+        pass
+
+
+class JsonResponse:
+    status = 200
+
+    def __init__(self, payload: bytes) -> None:
+        self.payload = payload
+
+    def read(self) -> bytes:
+        return self.payload
 
     def close(self) -> None:
         pass
@@ -44,10 +58,34 @@ class ConfigurationSyncTests(unittest.TestCase):
         migrate(self.connection)
         self.state = LocalState(self.connection)
         columns = {row[1] for row in self.connection.execute("PRAGMA table_info(local_config)")}
-        self.assertNotIn("sha256", columns)
+        self.assertIn("sha256", columns)
 
     def tearDown(self) -> None:
         self.state.close()
+
+    def test_new_bundle_after_center_removes_highest_revision_object_confirms(self) -> None:
+        old_configuration = ConfigurationBundle(
+            host_id="host-a",
+            config_revision=99,
+            generated_at="2026-09-13T00:00:00Z",
+            stations=(),
+        )
+        new_configuration = ConfigurationBundle(
+            host_id="host-a",
+            config_revision=100,
+            generated_at="2026-09-13T00:00:01Z",
+            stations=(),
+        )
+        synchronizer = ConfigurationSynchronizer(
+            puller=ScriptedPuller([old_configuration, new_configuration]),
+            store=self.state.configuration(),
+        )
+
+        self.assertTrue(synchronizer.synchronize(observed_at=1.0).applied)
+        result = synchronizer.synchronize(observed_at=2.0)
+
+        self.assertTrue(result.applied)
+        self.assertEqual(result.active, new_configuration)
 
     def test_older_revision_keeps_last_confirmed_bundle(self) -> None:
         first = ConfigurationBundle(
@@ -211,11 +249,42 @@ class ConfigurationSyncTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "metadata"):
             store.confirmed()
 
+    def test_tampered_http_digest_is_rejected_before_local_confirmation(self) -> None:
+        candidate = configuration_to_wire(
+            ConfigurationBundle(
+                host_id="host-a",
+                config_revision=1,
+                generated_at="2026-09-13T00:00:00Z",
+                stations=(),
+            )
+        )
+        candidate["sha256"] = "0" * 64
+        puller = HttpConfigurationPuller(
+            center_url="https://center.example",
+            host_id="host-a",
+            host_private_key="unused",  # pragma: allowlist secret
+            timeout=1.0,
+        )
+        with (
+            patch(
+                "edge_runtime.configuration_sync.sign_host_identity_request",
+                return_value="signature",
+            ),
+            patch(
+                "edge_runtime.configuration_sync.urllib.request.urlopen",
+                return_value=JsonResponse(json.dumps(candidate).encode()),
+            ),
+            self.assertRaises(ConfigurationPullError) as raised,
+        ):
+            puller.pull()
+        self.assertEqual(raised.exception.code, "digest_mismatch")
+        self.assertIsNone(self.state.configuration().confirmed())
+
     def test_http_read_and_connection_failures_are_generic_and_do_not_leak_details(self) -> None:
         puller = HttpConfigurationPuller(
             center_url="https://center.example",
             host_id="host-a",
-            host_private_key="unused",
+            host_private_key="unused",  # pragma: allowlist secret
             timeout=1.0,
         )
         with (

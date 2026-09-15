@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
 
-from factory_sop.configuration.usecases import ConfigurationAssemblyError, configuration_for_host
+from factory_sop.configuration.usecases import (
+    ConfigurationAssemblyError,
+    ConfigurationHostRepository,
+    configuration_for_host,
+)
 from factory_sop.device.adapters import dependencies as device_dependencies
 from factory_sop.device.api import authenticate_host, host_identity_from_headers
 from factory_sop.persistence import RequestSession
@@ -56,7 +60,7 @@ def pull_inference_host_configuration(
         bundle = configuration_for_host(
             host_id=host_id,
             generated_at=datetime.now(UTC),
-            hosts=hosts,
+            hosts=cast(ConfigurationHostRepository, hosts),
             backends=device_dependencies.backends(session),
             stations=device_dependencies.stations(session),
             cameras=device_dependencies.cameras(session),

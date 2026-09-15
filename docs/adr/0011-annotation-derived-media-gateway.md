@@ -27,6 +27,6 @@
 
 ## 后果
 
-Nginx 会为已授权的标注派生媒体承担一次低频字节转发，但不会改变运行态视频的直连边界，也不会让源视频上传经过网关。`docs/deployment/nginx-annotation.conf.example`、`repository-harness.md` 和控制面机制文档共同引用本 ADR，避免把该例外误读为全局视频中继许可。
+Nginx 会为已授权的标注派生媒体承担一次低频字节转发，但不会改变运行态视频的直连边界，也不会让源视频上传经过网关。`docs/deployment/nginx-annotation.conf.example`、[`repository-architecture.md`](../design/repository-architecture.md) 和控制面机制文档共同引用本 ADR，避免把该例外误读为全局视频中继许可。
 
 真实 HTTPS、Nginx、基座服务和浏览器行为仍由后置验证票 #82 负责；静态接线和中心授权由 Issue #31 的配置、用例和契约测试负责。

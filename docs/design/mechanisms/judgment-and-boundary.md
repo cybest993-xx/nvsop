@@ -121,7 +121,7 @@ if 证据覆盖不足 or 流不健康 or 推理不健康 or 时间未对齐:
 
 ## 5.9 基座契约测试与自有回归测试
 
-改造后测试分两类，**落点按依赖归属拆开**：真正依赖 `vendor/` 的断言在 `tests/contract/base/`，`git subtree pull` 后必跑；纯自有逻辑的回归断言归包所有，在 `apps/edge-runtime/tests/unit/`（repository-harness §5「测试归包所有」）。这样 `make contract-base` 的红灯一定意味着基座前提变了，不是我们自己的逻辑回归。两者都在 `make check` 内。
+改造后测试分两类，**落点按依赖归属拆开**：真正依赖 `vendor/` 的断言在 `tests/contract/base/`，`git subtree pull` 后必跑；纯自有逻辑的回归断言归包所有，在 `apps/edge-runtime/tests/unit/`（[`repository-verification.md`](../repository-verification.md) 的测试归属规则）。这样 `make contract-base` 的红灯一定意味着基座前提变了，不是我们自己的逻辑回归。两者都在 `make check` 内。
 
 **一、我们依赖但不改的基座行为**（前提失效检测）
 
@@ -152,7 +152,7 @@ if 证据覆盖不足 or 流不健康 or 推理不健康 or 时间未对齐:
 | **取消或重排计时器不产生重复判定；一次等待只报一次** | §5.18 | 纯 CPU，可控钟按赋值推进，无 sleep（`test_supervisor_station.py`） |
 | 未配连接器与配了连接器的工位走同一条归一化路径 | §5.8 | 纯 CPU，外部信号与动作编号同为观测（`test_supervisor_inputs.py`） |
 | 余量只加宽证据、不截断必需跨度 | §5.20 | 纯 CPU（`test_supervisor_commands.py`） |
-| **`vendor/` 只 import 一处我们的模块，且该模块只依赖标准库** | harness §3 | 纯 CPU 静态检查。`import-linter` 契约随中心 workspace（C1）落地，在此之前由该断言承担 |
+| **`vendor/` 只 import 一处我们的模块，且该模块只依赖标准库** | [`repository-architecture.md`](../repository-architecture.md) | 纯 CPU 静态检查。`import-linter` 契约随中心 workspace（C1）落地，在此之前由该断言承担 |
 | 物理执行租约过期后不再写输出点位 | §5.17 | 纯 CPU，注入过期租约 |
 
 **注意**："纯 CPU 可测"本身也是一条实测结论——基座那四个模块只依赖标准库。若 NVIDIA 给它们加了重依赖，"双跑对比"那条会先失败，这也是有效信号。判定核心只依赖标准库的规则（§5.11）保证我们这一侧持续可测。

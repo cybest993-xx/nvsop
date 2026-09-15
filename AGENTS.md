@@ -4,35 +4,39 @@ This repository is a product monorepo for the SOP compliance system. Use `CONTEX
 
 ## Route the task
 
-Read the matching subsections, not entire reference documents by default. Expand when affected callers, dependencies or conflicting evidence require it; scoped reading does not waive applicable rules. Verify current files and configuration before relying on descriptions or old session notes.
+Read only the guidance triggered by the task, then expand when affected callers, dependencies or conflicting evidence require it. Verify current code/configuration before relying on prose or old session notes.
 
 - **Plan or investigate**: deliver the requested findings or plan; repository edits start when requested.
-- **Change code or check scripts**: start with the [test policy](docs/design/repository-harness.md#risk-and-test-additions) and [implementation checklist](docs/design/repository-harness.md#implementation-checklist). Locate the public entry point, affected callers and existing tests; follow the relevant evidence and authoring subsections for the change.
-- **Change ownership, dependencies, CI, deployment or `vendor/`**: read the relevant [harness §1–§3](docs/design/repository-harness.md#1-architecture-rule) and [§6–§8](docs/design/repository-harness.md#6-stable-command-interface). This is the normative repository harness.
-- **Change product behavior or architecture**: search [`solution-and-roadmap.md`](docs/design/solution-and-roadmap.md) for the affected mechanism, then read its spec and relevant ADRs. It is the current decision source; name any ADR that needs reopening and explain why.
-- **Write instructions or documentation**: use [§4](docs/design/repository-harness.md#4-test-placement-and-evidence) for verification, [§5](docs/design/repository-harness.md#comments-and-documentation-language) for language and [§9](docs/design/repository-harness.md#9-agent-instruction-hierarchy) for instruction structure and loading checks.
+- **Change code or check scripts**: read [`repository-authoring.md`](docs/design/repository-authoring.md) and [`repository-verification.md`](docs/design/repository-verification.md). Locate the public entry point, affected callers and existing tests before editing.
+- **Change repository shape, ownership or cross-module dependencies**: read [`repository-architecture.md`](docs/design/repository-architecture.md).
+- **Change CI, generated contracts, dependencies or `vendor/`**: read [`repository-verification.md`](docs/design/repository-verification.md) and [`repository-maintenance.md`](docs/design/repository-maintenance.md).
+- **Change deployment/runtime configuration or upgrade procedures**: read [`docs/deployment/`](docs/deployment/) through the [`docs/README.md`](docs/README.md) index plus the relevant architecture/verification rules.
+- **Change product behavior or architecture**: search [`solution-and-roadmap.md`](docs/design/solution-and-roadmap.md) for the affected mechanism, then read its mechanism spec and relevant ADRs. Name any ADR that needs reopening and explain why.
+- **Write instructions or documentation**: read [`repository-authoring.md`](docs/design/repository-authoring.md), [`repository-verification.md`](docs/design/repository-verification.md), and for agent instructions [`repository-workflow.md`](docs/agents/repository-workflow.md).
 - **Work with an issue or label**: read [`issue-tracker.md`](docs/agents/issue-tracker.md) and [`triage-labels.md`](docs/agents/triage-labels.md).
+
+[`repository-harness.md`](docs/design/repository-harness.md) remains the compatibility router for historical `harness §N` references; new instructions should link the direct document above.
 
 ## Invariants
 
-These five hold before you read anything else. Everything else lives in the harness or the decision source.
+These hold before loading task-specific guidance:
 
-- The NVIDIA base code in `vendor/sop-monitoring-blueprints/` is this system's trunk, not an external dependency. Reuse what it implements; keep our logic in `apps/edge-runtime/` behind the one recorded hook. Two implementations of one capability on the same path are a defect.
-- The inference host is autonomous: judgment, violation latching, disposal, and evidence buffering keep working while the center is unreachable. The center is a management and aggregation plane, never on the real-time error-proofing path.
-- The judgment core is a pure function over normalized observations, standard-library-only, and knows nothing of camera SDKs, inference frameworks, or connectors.
-- A module owns its behavior, tables, and migrations behind one small interface. Callers and tests cross that same seam.
-- Secrets, credentials, customer media, model weights, generated data, and production dumps stay out of Git. Fixtures are synthetic or explicitly sanitized.
+- The NVIDIA base code in `vendor/sop-monitoring-blueprints/` is this system's trunk, not an ordinary external dependency. Reuse what it implements; keep NVSOP-owned judgment behavior in `apps/edge-runtime/` behind the recorded minimal hook. Two active implementations of one capability on the same path are a defect.
+- The inference host is autonomous: judgment, violation latching, disposal and evidence buffering keep working while the center is unreachable. The center is a management and aggregation plane, never on the real-time error-proofing path.
+- The judgment core is a pure function over normalized observations, standard-library-only, and knows nothing of camera SDKs, inference frameworks or connectors.
+- A module owns its behavior, tables and migrations behind one small interface. Callers and tests cross that same seam.
+- Secrets, credentials, customer media, model weights, generated data and production dumps stay out of Git. Fixtures are synthetic or explicitly sanitized.
 
 ## Implement, verify and stop
 
-Use an `agent/<agent-id>/<task-slug>` branch in its own worktree for task edits. Treat `main` and `dev` as shared refs; do not make direct task commits on either. Before creating or changing branches, worktrees or refs, read the [local branch workflow](docs/design/local-branch-workflow.md) and enable its versioned hooks with `make hooks`. Apply the [working cycle](docs/design/repository-harness.md#working-and-review-cycle) to select workspace isolation and persistent handoff; neither is mandatory ceremony for every bounded single-session change.
+`main` is the shared trunk and pull-request target; it must not receive direct task edits, task commits, or direct pushes. Start new task work from the accepted `main` tip on an `agent/<agent-id>/<task-slug>` branch in its own worktree, publish that branch, and open its PR directly against `main`. `dev` is retired and is not an integration path. Before creating or changing branches/worktrees/refs, read [`local-branch-workflow.md`](docs/design/local-branch-workflow.md) and enable the versioned hooks with `make hooks`. Use [`repository-workflow.md`](docs/agents/repository-workflow.md) for the working cycle and continuity rules.
 
-State risk, test reuse or additions, and intended checks in at most three lines, then proceed within the authorized scope. Existing evidence may justify zero new tests; follow §4 rather than a universal TDD workflow.
+State risk, test reuse/additions and intended checks in at most three lines, then proceed within the authorized scope. Existing evidence may justify zero new tests; use the verification policy rather than a universal TDD ceremony.
 
-Use contract-driven implementations: cover the specified behavior and required failure paths directly, while keeping speculative, unrequested defensive branches and fallback paths out of the implementation. Preserve validation and error handling required by the contract, repository policy, callers, tests, or security/integrity boundaries. Keep hash verification targeted and non-redundant; avoid broad or repeated hashing of large files, directories, generated trees, or unchanged artifacts unless required by the contract, repository policy, callers, tests, or a security/integrity boundary.
+Use contract-driven implementations: cover specified behavior and required failure paths directly; do not add speculative fallback, retry, compatibility or integrity layers without a demonstrated contract need. Preserve validation/error handling required by callers, tests, repository policy or security/integrity boundaries.
 
-During iteration, run the smallest affected Make targets with their prerequisites. `make check` is the final CPU-only code gate, not the default inner loop; documentation-only changes use `make check-docs`. Required CI, integration, browser and release evidence remain unchanged.
+During iteration run the smallest affected Make targets with their prerequisites. `make check` is the final CPU-only code gate, not the default inner loop; documentation-only changes use `make check-docs`. Required integration, browser, CI and release evidence remain unchanged.
 
-Self-review the complete diff and affected callers. Use the [risk-triggered review policy](docs/design/repository-harness.md#evidence-reuse-and-blockers) for independent review; changes to these instructions or repository policy do not exempt themselves. One responsible main session owns completion.
+Self-review the complete diff and affected callers/references. Use the independent-review triggers in [`repository-verification.md`](docs/design/repository-verification.md); instruction and repository-policy changes do not exempt themselves. One responsible main session owns completion.
 
-Keep every acceptance criterion through implementation. Once behavior and required evidence are complete, stop adding optional tests, refactors or cleanup. Report delivered behavior, actual checks and results, and any remaining review or validation gap; committed or pushed does not mean merge-ready. Merge and publication require the user's authorization.
+Keep every acceptance criterion through implementation. Once behavior and required evidence are complete, stop adding optional tests/refactors/cleanup. Report delivered behavior, actual checks/results and remaining gaps; committed or pushed does not mean merge-ready. Merge and publication require the user's authorization.

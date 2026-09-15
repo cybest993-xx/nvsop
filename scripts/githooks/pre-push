@@ -24,8 +24,8 @@ def main() -> int:
         return 0
     print(
         f"pre-push refused: {', '.join(refused)} only receives finished work through a pull "
-        "request (AGENTS.md). Push the ticket branch and open a PR: "
-        "`git push -u origin issue-<n> && gh pr create`.",
+        "request (AGENTS.md). Push the worker branch and open a PR directly against `main`: "
+        "`git push -u origin agent/<agent-id>/<task-slug> && gh pr create --base main`.",
         file=sys.stderr,
     )
     return 1

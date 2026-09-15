@@ -35,7 +35,7 @@ Run `gh issue view <number> --comments`.
 
 ## Delivery phases and status evidence
 
-The current delivery map is issue [#1](https://github.com/cybest993-xx/nvsop/issues/1). Scope, acceptance split, and exit conditions are authoritative in [`solution-and-roadmap.md` §八–九](../design/solution-and-roadmap.md); test evidence is defined in the [harness §4](../design/repository-harness.md#4-test-placement-and-evidence). Do not maintain a second scope list in documentation or reopen superseded/cancelled implementation tickets as part of this synchronization.
+The current delivery map is issue [#1](https://github.com/cybest993-xx/nvsop/issues/1). Scope, acceptance split, and exit conditions are authoritative in [`solution-and-roadmap.md` §八–九](../design/solution-and-roadmap.md); test evidence is defined in [`repository-verification.md`](../design/repository-verification.md). Do not maintain a second scope list in documentation or reopen superseded/cancelled implementation tickets as part of this synchronization.
 
 - Keep separate implementation and validation progress sections on the map, with links to the owning issues rather than duplicated acceptance checklists.
 - Before moving acceptance to a later phase, create and link an open validation issue. Preserve the original acceptance wording, source issue/criterion, required environment, and evidence location. This includes deferred full cross-module system/browser E2E, not just hardware suites.

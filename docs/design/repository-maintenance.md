@@ -12,8 +12,12 @@ The current registered patch set is maintained under [`docs/base/patches/`](../b
 
 - `0001-stream-health-events.patch` — the inference pipeline health-event hook.
 - `0002-annotation-upload-target-and-accessibility.patch` — the annotation integration compatibility patch.
+- `0003-drop-unavailable-lfs-assets.patch` — removes upstream LFS-only documentation assets and LFS tracking metadata that subtree import cannot hydrate.
 
 The ledger [`docs/base/verified-commits.md`](../base/verified-commits.md) records NVIDIA commits that have been verified. It is **not** a statement that the repository is permanently pinned to the last listed commit.
+
+The vendored NVIDIA subtree must not depend on NVIDIA Git-LFS storage: `git subtree` imports Git blobs but does not copy LFS objects into the NVSOP LFS endpoint. After every subtree update, exclude upstream LFS-only assets (or deliberately vendor their real bytes) and remove `filter=lfs` rules before the update is accepted. Repository policy rejects both LFS tracking metadata and LFS pointer files under `vendor/sop-monitoring-blueprints/`.
+The development snapshot path is strict as well: it strips inherited `GIT_LFS_SKIP_SMUDGE` and refuses to create a snapshot when any tracked LFS object is missing; there is no optional-asset bypass.
 
 ### Update procedure
 
@@ -26,7 +30,7 @@ git subtree pull --prefix=vendor/sop-monitoring-blueprints \
 
 Then:
 
-1. Inspect the subtree diff and both registered patch surfaces; do not resolve conflicts by silently expanding patch scope.
+1. Inspect the subtree diff and all registered patch surfaces; do not resolve conflicts by silently expanding patch scope.
 2. Run `make check`, which includes `tests/contract/base/`.
 3. If a base assumption changed, either adapt NVSOP deliberately or reopen the architecture decision; do not weaken a contract test just to make the update pass.
 4. Append the NVIDIA commit, contract result and patch-adjustment outcome to `docs/base/verified-commits.md`.

@@ -102,6 +102,31 @@ class RepositoryPolicyTest(unittest.TestCase):
         path.write_text("[missing](../nowhere/absent.md)\n")
         self.assertEqual([], self.check(str(path.relative_to(self.root))))
 
+    def test_rejects_lfs_filter_inside_vendor_subtree(self) -> None:
+        attributes = self.write(
+            "vendor/sop-monitoring-blueprints/.gitattributes",
+            "*.png filter=lfs diff=lfs merge=lfs -text\n",
+        )
+        self.assertIn(
+            "vendor/sop-monitoring-blueprints/.gitattributes:1 enables Git-LFS inside the "
+            "vendored NVIDIA subtree; subtree imports do not copy upstream LFS objects",
+            self.check(str(attributes)),
+        )
+
+    def test_rejects_lfs_pointer_inside_vendor_subtree(self) -> None:
+        pointer = self.write(
+            "vendor/sop-monitoring-blueprints/assets/diagram.png",
+            "version https://git-lfs.github.com/spec/v1\n"
+            "oid sha256:0000000000000000000000000000000000000000000000000000000000000000\n"
+            "size 123\n",
+        )
+        self.assertIn(
+            "vendored NVIDIA file is a Git-LFS pointer: "
+            "vendor/sop-monitoring-blueprints/assets/diagram.png; "
+            "exclude the upstream LFS-only asset or vendor real bytes",
+            self.check(str(pointer)),
+        )
+
     def test_accepts_vendored_environment_template_with_placeholders(self) -> None:
         path = self.root / "vendor/sop-monitoring-blueprints/deployments/.env"
         path.parent.mkdir(parents=True)

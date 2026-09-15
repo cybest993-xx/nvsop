@@ -188,7 +188,6 @@ web-build:
 # 固定 main 开发实例（Issue #119），默认 HTTPS；显式 NVSOP_DEV_PROTOCOL=http 才使用本地 HTTP。
 # 脚本只编排 Tilt/Compose，不承载产品业务逻辑。
 # Docker bridge 无法访问包镜像时，可仅为构建设置 NVSOP_DEV_BUILD_NETWORK=host；运行时仍使用 Compose 网络。
-# 仅在确认缺失对象都是文档资源时，才显式设置 NVSOP_ALLOW_MISSING_OPTIONAL_LFS=1。
 # SERVICE、TAIL 可由调用方覆盖，例如 `make dev-logs SERVICE=worker TAIL=200`。
 
 dev-setup:

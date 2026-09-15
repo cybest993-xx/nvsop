@@ -45,7 +45,6 @@ These services are designed to work together: train a model with the Training Se
 
 ## End-to-End Workflow
 
-![SOP Fine-Tuning + Inference Agentic Workflow](assets/SOP-FT-Inference-Agentic-Workflow.png)
 
 1. Annotate videos by marking action start/end timestamps (Training).
 2. Generate QA pairs (GQA/BCQ/MCQ) from annotations (Training).
@@ -119,7 +118,6 @@ With the DDM and Cosmos-Reason model checkpoints ready (fine-tuned above, or you
 
 ## VSS Example Application
 
-![VSS SOP Architecture](agentic/vss-sop-skills/vss-sop-build/references/diagrams/VSS%20SOP%20Blueprint%20Architecture.png)
 
 The VSS SOP application is built, deployed, and validated using modular lifecycle skills:
 

@@ -15,25 +15,6 @@ from pathlib import Path
 from threading import Event
 from typing import Protocol
 
-OPTIONAL_LFS_PATHS = frozenset(
-    {
-        "vendor/sop-monitoring-blueprints/agentic/ds-sop-skills/assets/DeepStream-SOP-Inference-Agentic-Workflow.png",
-        (
-            "vendor/sop-monitoring-blueprints/agentic/vss-sop-skills/"
-            "vss-sop-build/references/diagrams/SOP Blueprint - VSS SOP building flow.png"
-        ),
-        (
-            "vendor/sop-monitoring-blueprints/agentic/vss-sop-skills/"
-            "vss-sop-build/references/diagrams/VSS SOP Blueprint Architecture.png"
-        ),
-        "vendor/sop-monitoring-blueprints/assets/SOP-FT-Inference-Agentic-Workflow.png",
-        "vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/docs/deepstream-sop-architecture.png",
-        "vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/ddm-training-ms/ddm/DDM-Net/config/downsample-temporal_stride.png",
-        "vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/evaluation-ms/ddm/DDM-Net/config/downsample-temporal_stride.png",
-        "vendor/sop-monitoring-blueprints/microservices/sop-training-bp/tutorials/SOP_Training_BP_User_Guide.pdf",
-    }
-)
-
 
 class SnapshotPaths(Protocol):
     @property
@@ -60,36 +41,21 @@ class SnapshotInterrupted(KeyboardInterrupt):
 class MissingLfsError(SnapshotError):
     """Git-LFS 对象缺失且不能安全地建立完整快照。"""
 
-    def __init__(
-        self,
-        sha: str,
-        missing_lfs_paths: list[dict[str, str]],
-        unapproved_lfs_paths: list[str] | None = None,
-    ) -> None:
+    def __init__(self, sha: str, missing_lfs_paths: list[dict[str, str]]) -> None:
         self.sha = sha
         self.missing_lfs_paths = missing_lfs_paths
-        self.unapproved_lfs_paths = unapproved_lfs_paths or []
         missing = ", ".join(f"{entry['path']} ({entry['oid']})" for entry in missing_lfs_paths)
-        detail = f"main 快照 {sha} 缺少 Git-LFS 对象：{missing}"
-        if self.unapproved_lfs_paths:
-            detail += "; 不能启用可选资源降级，快照包含未列入白名单的 LFS 路径：" + ", ".join(
-                self.unapproved_lfs_paths
-            )
-        super().__init__(detail)
+        super().__init__(f"main 快照 {sha} 缺少 Git-LFS 对象：{missing}")
 
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
-def archive_environment(
-    environ: Mapping[str, str], *, allow_missing_optional_lfs: bool = False
-) -> dict[str, str]:
-    """为 git archive 构造显式环境，默认禁止全局 LFS 降级。"""
+def archive_environment(environ: Mapping[str, str]) -> dict[str, str]:
+    """为 git archive 构造显式环境，禁止继承全局 LFS 降级。"""
     environment = dict(environ)
     environment.pop("GIT_LFS_SKIP_SMUDGE", None)
-    if allow_missing_optional_lfs:
-        environment["GIT_LFS_SKIP_SMUDGE"] = "1"
     return environment
 
 
@@ -202,7 +168,6 @@ def snapshot_manifest(
     *,
     sha: str,
     missing_lfs_paths: list[dict[str, str]],
-    allow_missing_optional_lfs: bool,
     warning: str | None,
 ) -> dict[str, object]:
     return {
@@ -210,7 +175,6 @@ def snapshot_manifest(
         "source_sha": sha,
         "complete": not missing_lfs_paths,
         "missing_lfs_paths": missing_lfs_paths,
-        "allow_missing_optional_lfs": allow_missing_optional_lfs,
         "warning": warning,
         "created_at": _utc_now(),
     }
@@ -227,7 +191,6 @@ def archive_main(
     sha: str,
     *,
     run_checked: RunChecked,
-    allow_missing_optional_lfs: bool = False,
     stop_event: Event | None = None,
 ) -> Path:
     item.snapshots.mkdir(parents=True, exist_ok=True)
@@ -247,33 +210,16 @@ def archive_main(
 
     entries = lfs_files(item.root, sha, run_checked=run_checked, stop_event=stop_event)
     missing = [entry for entry in entries if entry["available"] == "-"]
-    unapproved = sorted(
-        {entry["path"] for entry in missing if entry["path"] not in OPTIONAL_LFS_PATHS}
-    )
-    if missing and (not allow_missing_optional_lfs or unapproved):
+    if missing:
         failure_manifest = snapshot_manifest(
             sha=sha,
             missing_lfs_paths=missing,
-            allow_missing_optional_lfs=allow_missing_optional_lfs,
-            warning=(
-                "缺少 LFS 对象；未建立快照。"
-                if not allow_missing_optional_lfs
-                else "缺少 LFS 对象，且存在未列入可选白名单的路径；未建立快照。"
-            ),
+            warning="缺少 LFS 对象；未建立快照。",
         )
-        failure_manifest["unapproved_lfs_paths"] = unapproved
         write_snapshot_audit(item, sha, failure_manifest)
-        raise MissingLfsError(sha, missing, unapproved)
+        raise MissingLfsError(sha, missing)
 
-    warning = None
-    if missing:
-        warning = (
-            "这是显式允许的可选文档资源降级；快照中的 missing_lfs_paths 保留为 Git-LFS pointer。"
-        )
-    environment = archive_environment(
-        os.environ,
-        allow_missing_optional_lfs=bool(missing and allow_missing_optional_lfs),
-    )
+    environment = archive_environment(os.environ)
     temporary = item.snapshots / f".{sha}.tmp-{os.getpid()}"
     remove_path(temporary)
     temporary.mkdir(parents=True)
@@ -314,17 +260,13 @@ def archive_main(
             )
         manifest = snapshot_manifest(
             sha=sha,
-            missing_lfs_paths=missing,
-            allow_missing_optional_lfs=allow_missing_optional_lfs,
-            warning=warning,
+            missing_lfs_paths=[],
+            warning=None,
         )
         snapshot_manifest_path(temporary).write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
-        if missing:
-            (temporary / ".nvsop-source-sha.partial").write_text(sha + "\n", encoding="ascii")
-        else:
-            (temporary / ".nvsop-source-sha").write_text(sha + "\n", encoding="ascii")
+        (temporary / ".nvsop-source-sha").write_text(sha + "\n", encoding="ascii")
         remove_path(destination)
         temporary.replace(destination)
         write_snapshot_audit(item, sha, manifest)

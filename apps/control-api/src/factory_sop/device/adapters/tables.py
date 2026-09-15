@@ -97,6 +97,9 @@ class InferenceHostRow(Table):
     status: Mapped[DeviceStatus] = mapped_column(_status_enum())
     # §5.15 的乐观锁版本；每次写入递增，预期版本不匹配时拒绝而不是覆盖。
     revision: Mapped[int] = mapped_column(Integer())
+    # 独立于对象乐观锁的持久化配置内容版本；删除对象后仍保持单调。
+    configuration_revision: Mapped[int] = mapped_column(Integer())
+    configuration_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # §5.15：归因使用这些列而不是审计表，保存操作账号的 UUID；不连接 `auth_user` 外键，避免账号管理
     # 被历史设备行阻塞。
     created_by: Mapped[UUID] = mapped_column(Uuid())
@@ -118,6 +121,8 @@ class InferenceHostRow(Table):
             disk_watermark_percent=self.disk_watermark_percent,
             status=self.status,
             revision=self.revision,
+            configuration_revision=self.configuration_revision,
+            configuration_sha256=self.configuration_sha256,
             created_by=self.created_by,
             updated_by=self.updated_by,
             created_at=self.created_at,
@@ -137,6 +142,8 @@ class InferenceHostRow(Table):
             disk_watermark_percent=host.disk_watermark_percent,
             status=host.status,
             revision=host.revision,
+            configuration_revision=host.configuration_revision,
+            configuration_sha256=host.configuration_sha256,
             created_by=host.created_by,
             updated_by=host.updated_by,
             created_at=host.created_at,

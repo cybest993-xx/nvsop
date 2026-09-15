@@ -4,7 +4,7 @@
 	contracts-python-type contracts-python-unit openapi-export openapi-compat openapi-generate \
 	boundaries secret-scan center-format center-lint center-type center-unit center-integration \
 	center-system edge-format edge-lint edge-type edge-unit edge-integration \
-	web-install web-format web-lint web-type web-unit web-e2e web-build \
+	web-install web-format web-lint web-type web-unit web-e2e web-e2e-whep web-build \
 	dev-setup dev dev-status dev-logs dev-refresh dev-smoke dev-test-ui dev-down
 
 # The CPU-only, Docker-free merge gate (harness §6). CI calls this exact target.
@@ -71,6 +71,8 @@ openapi-generate: openapi-export web-install
 	pnpm --filter control-web run generate:api
 
 policy-test:
+	command -v git-lfs >/dev/null || (echo "policy-test requires git-lfs; LFS tests must not be skipped" >&2; exit 1)
+	git lfs version
 	python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 
 policy:
@@ -175,6 +177,10 @@ web-unit:
 # and Edge; a developer runs the same scenarios against Playwright's pinned Chromium.
 web-e2e:
 	pnpm --filter control-web run test:e2e
+
+# 使用固定 digest 的 MediaMTX 容器和合成 H.264 RTSP 源验证 SYS-34 WHEP。
+web-e2e-whep:
+	python3 scripts/test_whep.py -- pnpm --filter control-web exec playwright test tests/e2e/sys-34-media.spec.ts --workers 2
 
 web-build:
 	pnpm --filter control-web run build

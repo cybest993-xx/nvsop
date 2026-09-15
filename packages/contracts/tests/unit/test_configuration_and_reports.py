@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import unittest
 from dataclasses import replace
 
@@ -26,15 +27,52 @@ from nvsop_contracts import (
 )
 
 
+def template() -> ConfigurationTemplate:
+    artifacts = (
+        ConfigurationArtifact(
+            "actions.json", "application/json", b"{}", hashlib.sha256(b"{}").hexdigest()
+        ),
+        ConfigurationArtifact(
+            "vlm_prompts.txt",
+            "text/plain",
+            b"prompt\\n",
+            hashlib.sha256(b"prompt\\n").hexdigest(),
+        ),
+        ConfigurationArtifact(
+            "template.json", "application/json", b"{}", hashlib.sha256(b"{}").hexdigest()
+        ),
+    )
+    manifest = json.dumps(
+        {
+            "artifacts": [
+                {
+                    "byte_length": len(artifact.content),
+                    "media_type": artifact.media_type,
+                    "name": artifact.name,
+                    "sha256": artifact.sha256,
+                }
+                for artifact in artifacts
+            ],
+            "format_version": 1,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return ConfigurationTemplate(
+        version_id="version-a",
+        version_sha256=hashlib.sha256(manifest).hexdigest(),
+        artifacts=(
+            *artifacts,
+            ConfigurationArtifact(
+                "manifest.json", "application/json", manifest, hashlib.sha256(manifest).hexdigest()
+            ),
+        ),
+    )
+
+
 class ConfigurationContractTests(unittest.TestCase):
     def test_round_trip_and_digest_cover_host_scoped_content(self) -> None:
-        content = b'{"steps":[]}'
-        artifact = ConfigurationArtifact(
-            name="template.json",
-            media_type="application/json",
-            content=content,
-            sha256=hashlib.sha256(content).hexdigest(),
-        )
+        template_value = template()
         bundle = ConfigurationBundle(
             host_id="host-a",
             config_revision=7,
@@ -76,11 +114,7 @@ class ConfigurationContractTests(unittest.TestCase):
                             address="DI-01",
                         ),
                     ),
-                    template=ConfigurationTemplate(
-                        version_id="version-a",
-                        version_sha256="a" * 64,
-                        artifacts=(artifact,),
-                    ),
+                    template=template_value,
                     model_ids=("reported-model", "reported-model-2"),
                 ),
             ),
@@ -137,33 +171,27 @@ class ConfigurationContractTests(unittest.TestCase):
             configuration_from_wire(tampered)
 
     def test_template_manifest_digest_must_match_the_template_version(self) -> None:
-        content = b'{"format_version":1}'
-        artifact = ConfigurationArtifact(
-            name="template.json",
-            media_type="application/json",
-            content=content,
-            sha256=hashlib.sha256(content).hexdigest(),
-        )
+        value = template()
         manifest_content = b"{}"
         manifest = ConfigurationArtifact(
-            name="manifest.json",
-            media_type="application/json",
-            content=manifest_content,
-            sha256=hashlib.sha256(manifest_content).hexdigest(),
+            "manifest.json",
+            "application/json",
+            manifest_content,
+            hashlib.sha256(manifest_content).hexdigest(),
         )
 
         with self.assertRaises(ValueError):
             ConfigurationTemplate(
-                version_id="version-a",
-                version_sha256="a" * 64,
-                artifacts=(artifact, manifest),
+                version_id=value.version_id,
+                version_sha256=hashlib.sha256(manifest_content).hexdigest(),
+                artifacts=(*value.artifacts[:-1], manifest),
             )
 
     def test_unverified_capability_is_wireable_but_secret_fields_are_not(self) -> None:
         bundle = ConfigurationBundle(
             host_id="host-a",
             config_revision=1,
-            generated_at="now",
+            generated_at="2026-09-13T00:00:00Z",
             stations=(
                 ConfiguredStation(
                     station_id="station-a",
@@ -193,7 +221,7 @@ class ConfigurationContractTests(unittest.TestCase):
         stations = wire["stations"]
         assert isinstance(stations, list)
         assert isinstance(stations[0], dict)
-        self.assertNotIn("model_ids", stations[0])
+        self.assertEqual(stations[0]["model_ids"], [])
         invalid = wire
         connector = invalid["stations"][0]["connectors"][0]  # type: ignore[index]
         connector["password"] = "not-allowed"  # pragma: allowlist secret

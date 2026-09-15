@@ -30,9 +30,11 @@ from nvsop_contracts.commands import (
 )
 from nvsop_contracts.configuration import (
     CONFIGURATION_CONTRACT_VERSION,
+    LEGACY_CONFIGURATION_CONTRACT_VERSION,
     ConfigurationArtifact,
     ConfigurationBundle,
     ConfigurationTemplate,
+    ConfiguredCamera,
     ConfiguredConnector,
     ConfiguredPoint,
     ConfiguredStation,
@@ -64,11 +66,13 @@ from nvsop_contracts.reports import (
 
 __all__ = [
     "CONFIGURATION_CONTRACT_VERSION",
+    "LEGACY_CONFIGURATION_CONTRACT_VERSION",
     "REPORT_CONTRACT_VERSION",
     "Capability",
     "ConfigurationArtifact",
     "ConfigurationBundle",
     "ConfigurationTemplate",
+    "ConfiguredCamera",
     "ConfiguredConnector",
     "ConfiguredPoint",
     "ConfiguredStation",

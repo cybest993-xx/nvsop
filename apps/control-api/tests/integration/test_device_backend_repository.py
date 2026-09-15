@@ -78,6 +78,8 @@ def test_a_host_round_trips_through_its_table(session: DatabaseSession) -> None:
     session.expunge_all()
 
     assert hosts.by_id(stored.id) == stored
+    assert stored.configuration_revision == 0
+    assert stored.configuration_sha256 is None
 
 
 def test_a_duplicate_host_name_is_refused_by_the_real_constraint(

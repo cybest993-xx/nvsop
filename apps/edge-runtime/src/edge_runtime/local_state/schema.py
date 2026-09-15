@@ -193,7 +193,30 @@ _V3 = (
     """,
 )
 
-MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1, _V2, _V3)
+_V4 = (
+    "ALTER TABLE local_config RENAME TO local_config_v2",
+    """
+    CREATE TABLE local_config_v3 (
+        slot             INTEGER PRIMARY KEY CHECK (slot = 1),
+        host_id          TEXT    NOT NULL,
+        config_revision  INTEGER NOT NULL,
+        sha256           TEXT    NOT NULL,
+        confirmed_at     REAL    NOT NULL,
+        payload          TEXT    NOT NULL,
+        CHECK (config_revision > 0),
+        CHECK (length(sha256) = 64)
+    )
+    """,
+    """
+    INSERT INTO local_config_v3 (slot, host_id, config_revision, sha256, confirmed_at, payload)
+    SELECT slot, host_id, config_revision, sha256, confirmed_at, payload
+      FROM local_config_v2
+    """,
+    "DROP TABLE local_config_v2",
+    "ALTER TABLE local_config_v3 RENAME TO local_config",
+)
+
+MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1, _V2, _V3, _V4)
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 
 

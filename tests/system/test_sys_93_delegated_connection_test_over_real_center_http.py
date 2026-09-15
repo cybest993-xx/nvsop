@@ -20,12 +20,14 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import BytesIO
 from itertools import count
 from pathlib import Path
 from random import Random
 from typing import Any, ClassVar, cast
 from unittest.mock import patch
 from urllib.parse import urlsplit
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from conftest import ADMIN_CREDENTIALS, BootstrapCommand, csrf_header, log_in
 from edge_runtime.connectors.hikvision import CANDIDATE_PROFILE
@@ -44,9 +46,13 @@ from nvsop_contracts import (
 )
 
 HOSTS = "/api/v1/inference-hosts"
+BACKENDS = "/api/v1/inference-backends"
 STATIONS = "/api/v1/stations"
+CAMERAS = "/api/v1/cameras"
 CONNECTORS = "/api/v1/connectors"
+TEMPLATES = "/api/v1/templates"
 COMMANDS = "/api/v1/device-commands"
+XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _NONCES = count()
 
 
@@ -117,6 +123,70 @@ class LocalInferenceHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format_string: str, *args: object) -> None:
         del format_string, args
+
+
+def _xlsx(sheets: dict[str, list[list[str]]]) -> bytes:
+    """构造模板导入接口所需的最小合成工作簿。"""
+    names = list(sheets)
+    shared = list(dict.fromkeys(value for rows in sheets.values() for row in rows for value in row))
+    shared_index = {value: index for index, value in enumerate(shared)}
+
+    def cell(column: int, row: int, value: str) -> str:
+        reference = ""
+        current = column
+        while current:
+            current, remainder = divmod(current - 1, 26)
+            reference = chr(65 + remainder) + reference
+        return f'<c r="{reference}{row}" t="s"><v>{shared_index[value]}</v></c>'
+
+    def sheet_xml(rows: list[list[str]]) -> str:
+        rendered = []
+        for row_number, row in enumerate(rows, start=1):
+            cells = "".join(cell(column, row_number, value) for column, value in enumerate(row, 1))
+            rendered.append(f'<row r="{row_number}">{cells}</row>')
+        return (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            f"<sheetData>{''.join(rendered)}</sheetData></worksheet>"
+        )
+
+    workbook_sheets = "".join(
+        f'<sheet name="{name}" sheetId="{index}" r:id="rId{index}" />'
+        for index, name in enumerate(names, 1)
+    )
+    workbook = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        f"<sheets>{workbook_sheets}</sheets></workbook>"
+    )
+    relationships = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        + "".join(
+            f'<Relationship Id="rId{index}" '
+            'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+            f'Target="/xl/worksheets/sheet{index}.xml" />'
+            for index in range(1, len(names) + 1)
+        )
+        + "</Relationships>"
+    )
+    shared_strings = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        f'count="{len(shared)}" uniqueCount="{len(shared)}">'
+        + "".join(f"<si><t>{value}</t></si>" for value in shared)
+        + "</sst>"
+    )
+
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as archive:
+        archive.writestr("xl/workbook.xml", workbook)
+        archive.writestr("xl/_rels/workbook.xml.rels", relationships)
+        archive.writestr("xl/sharedStrings.xml", shared_strings)
+        for index, name in enumerate(names, 1):
+            archive.writestr(f"xl/worksheets/sheet{index}.xml", sheet_xml(sheets[name]))
+    return output.getvalue()
 
 
 @contextmanager
@@ -235,6 +305,88 @@ def _create_target(
         "station_id": station_id,
         "connector_id": connector.json()["id"],
     }
+
+
+def _configure_confirmed_station(
+    client: Client,
+    headers: dict[str, str],
+    target: Target,
+    inference_url: str,
+) -> None:
+    """通过公开中心接口准备一个能被 edge 确认的工位拓扑。"""
+    backend = client.post(
+        BACKENDS,
+        json={"host_id": target["host_id"], "base_url": inference_url},
+        headers=headers,
+    )
+    assert backend.status_code == 201, backend.text
+    camera = client.post(
+        CAMERAS,
+        json={
+            "name": "入口相机",
+            "address": "127.0.0.1",
+            "main_stream_path": "/Streaming/Channels/101",
+            "sub_stream_path": "/Streaming/Channels/102",
+            "station_id": target["station_id"],
+            "host_id": target["host_id"],
+            "backend_id": backend.json()["id"],
+        },
+        headers=headers,
+    )
+    assert camera.status_code == 201, camera.text
+    workbook = _xlsx(
+        {
+            "工位表": [["工位号", "工位名称"], ["A-8", "装配工位-8"]],
+            "步骤表": [
+                ["工位号", "步骤号", "步骤名称", "步骤描述"],
+                ["A-8", "1", "开始", "(1) start"],
+                ["A-8", "2", "完成", "(2) done"],
+            ],
+        }
+    )
+    imported = client.post(
+        f"{TEMPLATES}/imports",
+        params={"filename": "sys93-entrypoint-8.xlsx"},
+        headers={**headers, "Content-Type": XLSX},
+        content=workbook,
+    )
+    assert imported.status_code == 201, imported.text
+    draft = imported.json()["draft"]
+    assert draft is not None
+    edited = client.patch(
+        f"{TEMPLATES}/drafts/{draft['id']}",
+        headers={**headers, "If-Match": str(draft["revision"])},
+        json={
+            "steps": [
+                {"number": 1, "name": "开始", "description": "(1) start"},
+                {"number": 2, "name": "完成", "description": "(2) done"},
+            ],
+            "ordering": "strict",
+            "runtime_defaults": {
+                "idle_timeout_seconds": 10.0,
+                "step_deadline_seconds": 10.0,
+                "disposition_policy": "record",
+            },
+            "start_signal": {"kind": "action", "action_number": 1},
+            "end_signals": [{"kind": "action", "action_number": 2}],
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    published = client.post(
+        f"{TEMPLATES}/drafts/{draft['id']}/publish",
+        headers={**headers, "If-Match": str(edited.json()["revision"])},
+    )
+    assert published.status_code == 201, published.text
+    bound = client.post(
+        f"{TEMPLATES}/bindings",
+        headers={**headers, "If-Match": "1"},
+        json={
+            "station_id": target["station_id"],
+            "version_id": published.json()["id"],
+            "runtime_parameter_mode": "follow_template",
+        },
+    )
+    assert bound.status_code == 200, bound.text
 
 
 def _edge_headers(
@@ -772,6 +924,7 @@ def test_production_entrypoint_runs_the_autonomous_loop_in_a_process(
             connector_port=device_port,
         )
         queued = _enqueue(client, headers, target["connector_id"], "sys93-entrypoint-1")
+        _configure_confirmed_station(client, headers, target, inference_url)
 
         host_private_key_file = tmp_path / "host-private-key"
         host_private_key_file.write_text(target["host_private_key"] + "\n", encoding="utf-8")

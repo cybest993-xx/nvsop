@@ -8,15 +8,31 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import cast
+from urllib.parse import urlsplit
 
 from nvsop_contracts.capability import Capability, capability_from_wire, capability_to_wire
 
-CONFIGURATION_CONTRACT_VERSION = 1
+LEGACY_CONFIGURATION_CONTRACT_VERSION = 1
+CONFIGURATION_CONTRACT_VERSION = 2
+_CONFIGURATION_ARTIFACT_ORDER = (
+    "actions.json",
+    "vlm_prompts.txt",
+    "template.json",
+    "manifest.json",
+)
+_CONFIGURATION_ARTIFACT_MEDIA_TYPES = {
+    "actions.json": "application/json",
+    "vlm_prompts.txt": "text/plain",
+    "template.json": "application/json",
+    "manifest.json": "application/json",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +87,11 @@ class ConfigurationArtifact:
     def __post_init__(self) -> None:
         if not self.name or not self.media_type:
             raise ValueError("configuration artifacts need a name and media type")
+        expected_media_type = _CONFIGURATION_ARTIFACT_MEDIA_TYPES.get(self.name)
+        if expected_media_type is None or self.media_type != expected_media_type:
+            raise ValueError("configuration artifact name or media type is unsupported")
+        if not isinstance(self.content, bytes):
+            raise ValueError("configuration artifact content must be bytes")
         if hashlib.sha256(self.content).hexdigest() != self.sha256:
             raise ValueError("configuration artifact digest does not match its content")
         _validate_digest(self.sha256, "artifact sha256")
@@ -111,37 +132,30 @@ class ConfigurationTemplate:
         if not self.version_id:
             raise ValueError("template version_id must not be empty")
         _validate_digest(self.version_sha256, "template version_sha256")
-        if not self.artifacts:
-            raise ValueError("a template must carry at least one artifact")
         names = tuple(artifact.name for artifact in self.artifacts)
-        if len(set(names)) != len(names):
-            raise ValueError("template artifact names must be unique")
-        manifest = next(
-            (artifact for artifact in self.artifacts if artifact.name == "manifest.json"),
-            None,
-        )
-        if manifest is not None:
-            if manifest.sha256 != self.version_sha256:
-                raise ValueError("template version sha256 does not match manifest")
-            try:
-                manifest_document = json.loads(manifest.content.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as error:
-                raise ValueError("template manifest is not valid JSON") from error
-            expected_artifacts = [
-                {
-                    "byte_length": len(artifact.content),
-                    "media_type": artifact.media_type,
-                    "name": artifact.name,
-                    "sha256": artifact.sha256,
-                }
-                for artifact in self.artifacts
-                if artifact.name != "manifest.json"
-            ]
-            if manifest_document != {
-                "artifacts": expected_artifacts,
-                "format_version": 1,
-            }:
-                raise ValueError("template manifest does not match its artifacts")
+        if names != _CONFIGURATION_ARTIFACT_ORDER:
+            raise ValueError("template artifact set or order is unsupported")
+        manifest = self.artifacts[-1]
+        if manifest.sha256 != self.version_sha256:
+            raise ValueError("template version sha256 does not match manifest")
+        try:
+            manifest_document = json.loads(manifest.content.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError("template manifest is not valid JSON") from error
+        expected_artifacts = [
+            {
+                "byte_length": len(artifact.content),
+                "media_type": artifact.media_type,
+                "name": artifact.name,
+                "sha256": artifact.sha256,
+            }
+            for artifact in self.artifacts[:-1]
+        ]
+        if manifest_document != {
+            "artifacts": expected_artifacts,
+            "format_version": 1,
+        }:
+            raise ValueError("template manifest does not match its artifacts")
 
     def to_wire(self) -> dict[str, object]:
         return {
@@ -185,8 +199,7 @@ class ConfiguredConnector:
             raise ValueError("connector revision must be positive")
         if self.port is not None and not 1 <= self.port <= 65535:
             raise ValueError("connector port must be between 1 and 65535")
-        if _looks_like_secret(self.address):
-            raise ValueError("connector address cannot carry credentials")
+        _validate_host_address(self.address, "connector address")
 
     def to_wire(self) -> dict[str, object]:
         return {
@@ -269,6 +282,79 @@ class ConfiguredPoint:
 
 
 @dataclass(frozen=True, slots=True)
+class ConfiguredCamera:
+    """属于当前主机工位/backend 切片且不带凭据的相机。"""
+
+    camera_id: str
+    name: str
+    address: str
+    main_stream_path: str
+    sub_stream_path: str
+    credentials_configured: bool
+    revision: int
+    media_path_mode: str
+    recording_mode: str
+
+    def __post_init__(self) -> None:
+        if not self.camera_id or not self.name:
+            raise ValueError("camera identity must not be empty")
+        _validate_host_address(self.address, "camera address")
+        _validate_stream_path(self.main_stream_path, "camera main_stream_path")
+        _validate_stream_path(self.sub_stream_path, "camera sub_stream_path")
+        if not isinstance(self.credentials_configured, bool):
+            raise ValueError("camera credentials_configured must be a boolean")
+        if self.revision < 1:
+            raise ValueError("camera revision must be positive")
+        if not self.media_path_mode or not self.recording_mode:
+            raise ValueError("camera media modes must not be empty")
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "camera_id": self.camera_id,
+            "name": self.name,
+            "address": self.address,
+            "main_stream_path": self.main_stream_path,
+            "sub_stream_path": self.sub_stream_path,
+            "credentials_configured": self.credentials_configured,
+            "revision": self.revision,
+            "media_path_mode": self.media_path_mode,
+            "recording_mode": self.recording_mode,
+        }
+
+    @classmethod
+    def from_wire(cls, value: Mapping[str, object]) -> ConfiguredCamera:
+        _require_keys(
+            value,
+            {
+                "camera_id",
+                "name",
+                "address",
+                "main_stream_path",
+                "sub_stream_path",
+                "credentials_configured",
+                "revision",
+                "media_path_mode",
+                "recording_mode",
+            },
+            "camera",
+        )
+        credentials_configured = value["credentials_configured"]
+        if not isinstance(credentials_configured, bool):
+            raise ValueError("camera credentials_configured must be a boolean")
+        return cls(
+            camera_id=_string(value["camera_id"], "camera_id"),
+            name=_string(value["name"], "camera name"),
+            address=_string(value["address"], "camera address"),
+            main_stream_path=_string(value["main_stream_path"], "camera main_stream_path"),
+            sub_stream_path=_string(value["sub_stream_path"], "camera sub_stream_path"),
+            credentials_configured=credentials_configured,
+            revision=_positive_int(value["revision"], "camera revision"),
+            media_path_mode=_string(value["media_path_mode"], "camera media_path_mode"),
+            recording_mode=_string(value["recording_mode"], "camera recording_mode"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ConfiguredStation:
     """一台推理机可见的一个工位/backend 切片。"""
 
@@ -281,6 +367,7 @@ class ConfiguredStation:
     connectors: tuple[ConfiguredConnector, ...]
     points: tuple[ConfiguredPoint, ...]
     template: ConfigurationTemplate | None
+    cameras: tuple[ConfiguredCamera, ...] = ()
     model_ids: tuple[str, ...] = ()
     _model_ids_present: bool = field(default=False, repr=False, compare=False)
 
@@ -297,6 +384,9 @@ class ConfiguredStation:
             raise ValueError("station point ids must be unique")
         if any(point.connector_id not in connector_ids for point in self.points):
             raise ValueError("a point must refer to a connector in the same station")
+        camera_ids = {camera.camera_id for camera in self.cameras}
+        if len(camera_ids) != len(self.cameras):
+            raise ValueError("station camera ids must be unique")
         if any(not model_id for model_id in self.model_ids):
             raise ValueError("station model ids must not be empty")
 
@@ -311,6 +401,7 @@ class ConfiguredStation:
             "connectors": [connector.to_wire() for connector in self.connectors],
             "points": [point.to_wire() for point in self.points],
             "template": None if self.template is None else self.template.to_wire(),
+            "cameras": [camera.to_wire() for camera in self.cameras],
             "model_ids": list(self.model_ids),
         }
 
@@ -320,38 +411,33 @@ class ConfiguredStation:
         value: Mapping[str, object],
         *,
         allow_missing_model_ids: bool = False,
+        allow_missing_cameras: bool = False,
     ) -> ConfiguredStation:
-        _require_keys(
-            value,
-            {
-                "station_id",
-                "backend_id",
-                "code",
-                "name",
-                "revision",
-                "runtime_parameters",
-                "connectors",
-                "points",
-                "template",
-                "model_ids",
-            }
-            if not allow_missing_model_ids
-            else {
-                "station_id",
-                "backend_id",
-                "code",
-                "name",
-                "revision",
-                "runtime_parameters",
-                "connectors",
-                "points",
-                "template",
-            },
-            "station",
-            optional={"model_ids"} if allow_missing_model_ids else set(),
-        )
+        expected = {
+            "station_id",
+            "backend_id",
+            "code",
+            "name",
+            "revision",
+            "runtime_parameters",
+            "connectors",
+            "points",
+            "template",
+            "cameras",
+            "model_ids",
+        }
+        optional = {
+            key
+            for key, allowed in (
+                ("cameras", allow_missing_cameras),
+                ("model_ids", allow_missing_model_ids),
+            )
+            if allowed
+        }
+        _require_keys(value, expected - optional, "station", optional=optional)
         raw_connectors = _array(value["connectors"], "station connectors")
         raw_points = _array(value["points"], "station points")
+        raw_cameras = _array(value.get("cameras", ()), "station cameras")
         raw_template = value["template"]
         if raw_template is not None and not isinstance(raw_template, Mapping):
             raise ValueError("station template is invalid")
@@ -376,6 +462,9 @@ class ConfiguredStation:
                 if raw_template is None
                 else ConfigurationTemplate.from_wire(cast(Mapping[str, object], raw_template))
             ),
+            cameras=tuple(
+                ConfiguredCamera.from_wire(_object(item, "station camera")) for item in raw_cameras
+            ),
             model_ids=_strings(value.get("model_ids", ()), "station model_ids"),
             _model_ids_present="model_ids" in value,
         )
@@ -392,10 +481,14 @@ class ConfigurationBundle:
     contract_version: int = CONFIGURATION_CONTRACT_VERSION
 
     def __post_init__(self) -> None:
-        if self.contract_version != CONFIGURATION_CONTRACT_VERSION:
+        if self.contract_version not in {
+            LEGACY_CONFIGURATION_CONTRACT_VERSION,
+            CONFIGURATION_CONTRACT_VERSION,
+        }:
             raise ValueError("configuration contract version is unsupported")
         if not self.host_id or not self.generated_at:
             raise ValueError("configuration bundle identity must not be empty")
+        _parse_utc_timestamp(self.generated_at, "configuration generated_at")
         if self.config_revision < 1:
             raise ValueError("configuration revision must be positive")
         station_keys = {(station.station_id, station.backend_id) for station in self.stations}
@@ -404,8 +497,10 @@ class ConfigurationBundle:
 
     def content_wire(self) -> dict[str, object]:
         stations = [station.to_wire() for station in self.stations]
-        if self.contract_version == CONFIGURATION_CONTRACT_VERSION:
+        if self.contract_version == LEGACY_CONFIGURATION_CONTRACT_VERSION:
             for wire_station, station in zip(stations, self.stations, strict=True):
+                if not wire_station["cameras"]:
+                    wire_station.pop("cameras")
                 if not wire_station["model_ids"] and not station._model_ids_present:
                     wire_station.pop("model_ids")
         return {
@@ -416,6 +511,12 @@ class ConfigurationBundle:
             "stations": stations,
         }
 
+    def stable_content_wire(self) -> dict[str, object]:
+        """返回忽略生成时刻后的配置内容，用于同修订原子确认比较。"""
+        content = self.content_wire()
+        content.pop("generated_at")
+        return content
+
     @property
     def sha256(self) -> str:
         """返回覆盖整个传输信封的摘要。"""
@@ -423,7 +524,7 @@ class ConfigurationBundle:
 
     @property
     def effective_sha256(self) -> str:
-        """返回不包含生成时刻和版本信封字段的有效配置摘要。"""
+        """返回忽略生成时刻和版本信封字段的有效配置摘要。"""
         content = self.content_wire()
         content.pop("config_revision")
         content.pop("generated_at")
@@ -449,14 +550,15 @@ class ConfigurationBundle:
             "configuration bundle",
         )
         supplied_digest = _string(value["sha256"], "configuration sha256")
+        _validate_digest(supplied_digest, "configuration sha256")
         content = {key: value[key] for key in value if key != "sha256"}
         actual_digest = hashlib.sha256(_canonical_json(content).encode("utf-8")).hexdigest()
         if not _constant_time_equal(supplied_digest, actual_digest):
             raise ValueError("configuration bundle digest does not match its content")
-        raw_stations = _array(value["stations"], "configuration stations")
         contract_version = _positive_int(
             value["contract_version"], "configuration contract version"
         )
+        raw_stations = _array(value["stations"], "configuration stations")
         return cls(
             host_id=_string(value["host_id"], "configuration host_id"),
             config_revision=_positive_int(value["config_revision"], "configuration revision"),
@@ -464,7 +566,12 @@ class ConfigurationBundle:
             stations=tuple(
                 ConfiguredStation.from_wire(
                     _object(item, "configuration station"),
-                    allow_missing_model_ids=(contract_version == CONFIGURATION_CONTRACT_VERSION),
+                    allow_missing_model_ids=(
+                        contract_version == LEGACY_CONFIGURATION_CONTRACT_VERSION
+                    ),
+                    allow_missing_cameras=(
+                        contract_version == LEGACY_CONFIGURATION_CONTRACT_VERSION
+                    ),
                 )
                 for item in raw_stations
             ),
@@ -483,7 +590,7 @@ def configuration_from_wire(value: Mapping[str, object]) -> ConfigurationBundle:
 
 
 def canonical_json(value: Mapping[str, object]) -> str:
-    """暴露摘要和请求签名共用的规范化方法。"""
+    """暴露规范化方法，供需要稳定比较配置内容的边界复用。"""
     return _canonical_json(value)
 
 
@@ -511,19 +618,67 @@ def _require_keys(
         raise ValueError(f"{label} contains a credential-bearing field")
 
 
+def _parse_utc_timestamp(value: str, label: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError(f"{label} must be an ISO-8601 timestamp") from error
+    if parsed.tzinfo is None or parsed.utcoffset() != UTC.utcoffset(parsed):
+        raise ValueError(f"{label} must be UTC")
+    return parsed
+
+
+def _validate_host_address(value: str, label: str) -> None:
+    if any(character.isspace() for character in value) or any(mark in value for mark in "/?#"):
+        raise ValueError(f"{label} must be a host without credentials or parameters")
+    try:
+        parsed = urlsplit(f"//{value}")
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError(f"{label} is invalid") from error
+    if hostname is None or parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"{label} must not contain credentials")
+    if port is not None and not 1 <= port <= 65535:
+        raise ValueError(f"{label} has an invalid port")
+
+
+def _validate_stream_path(value: str, label: str) -> None:
+    if (
+        not value.startswith("/")
+        or any(character.isspace() for character in value)
+        or "\x00" in value
+        or "?" in value
+        or "#" in value
+    ):
+        raise ValueError(f"{label} must be an absolute media path without parameters")
+    parts = value.split("/")[1:]
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise ValueError(f"{label} must be an absolute media path without parameters")
+
+
+def _validate_digest(value: str, label: str) -> None:
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value.lower()):
+        raise ValueError(f"{label} must be a SHA-256 hexadecimal digest")
+
+
+def _constant_time_equal(left: str, right: str) -> bool:
+    return hmac.compare_digest(left.encode("ascii"), right.encode("ascii"))
+
+
 def _looks_like_secret(value: str) -> bool:
     lowered = value.replace("-", "_").lower()
+    if lowered in {
+        "credential",
+        "credential_file",
+        "credential_files",
+        "username",
+        "user_name",
+    }:
+        return True
     return any(
         marker in lowered
-        for marker in (
-            "password",
-            "passwd",
-            "secret",
-            "token",
-            "credential",
-            "private_key",
-            "bearer",
-        )
+        for marker in ("password", "passwd", "secret", "token", "private_key", "bearer")
     )
 
 
@@ -564,20 +719,13 @@ def _positive_int(value: object, label: str) -> int:
     return value
 
 
-def _validate_digest(value: str, label: str) -> None:
-    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value.lower()):
-        raise ValueError(f"{label} must be a SHA-256 hexadecimal digest")
-
-
-def _constant_time_equal(left: str, right: str) -> bool:
-    return hashlib.sha256(left.encode()).digest() == hashlib.sha256(right.encode()).digest()
-
-
 __all__ = [
     "CONFIGURATION_CONTRACT_VERSION",
+    "LEGACY_CONFIGURATION_CONTRACT_VERSION",
     "ConfigurationArtifact",
     "ConfigurationBundle",
     "ConfigurationTemplate",
+    "ConfiguredCamera",
     "ConfiguredConnector",
     "ConfiguredPoint",
     "ConfiguredStation",

@@ -52,7 +52,6 @@ from scripts.dev_process import process_matches as _process_matches  # noqa: E40
 from scripts.dev_process import signal_process as _signal_process  # noqa: E402
 from scripts.dev_snapshot import (  # noqa: E402
     MissingLfsError,
-    OPTIONAL_LFS_PATHS as _OPTIONAL_LFS_PATHS,
     SnapshotError as _SnapshotError,
     SnapshotInterrupted as _SnapshotInterrupted,
     archive_environment as _archive_environment,
@@ -64,7 +63,6 @@ from scripts.dev_snapshot import (  # noqa: E402
     snapshot_manifest,
 )
 
-OPTIONAL_LFS_PATHS = _OPTIONAL_LFS_PATHS
 # isort: on
 
 PROJECT_NAME = "nvsop-dev-main"
@@ -78,7 +76,6 @@ PLAYWRIGHT_UI_URL = f"http://localhost:{PLAYWRIGHT_UI_PORT}"
 PROTOCOL_ENVIRONMENT = "NVSOP_DEV_PROTOCOL"
 DEFAULT_PROTOCOL = "https"
 SUPPORTED_PROTOCOLS = frozenset({"http", "https"})
-OPTIONAL_LFS_ENVIRONMENT = "NVSOP_ALLOW_MISSING_OPTIONAL_LFS"
 POLL_SECONDS = 2
 READY_TIMEOUT_SECONDS = 900
 
@@ -560,20 +557,8 @@ def main_sha(item: DevPaths) -> str:
     return result.stdout.decode("ascii").strip()
 
 
-def configured_optional_lfs(environ: Mapping[str, str] | None = None) -> bool:
-    values = os.environ if environ is None else environ
-    raw = values.get(OPTIONAL_LFS_ENVIRONMENT, "").strip().lower()
-    if raw in {"", "0", "false", "no"}:
-        return False
-    if raw in {"1", "true", "yes"}:
-        return True
-    raise DevError(f"{OPTIONAL_LFS_ENVIRONMENT} 必须是 0/1（或 false/true），实际为：{raw!r}")
-
-
-def archive_environment(
-    environ: Mapping[str, str], *, allow_missing_optional_lfs: bool = False
-) -> dict[str, str]:
-    return _archive_environment(environ, allow_missing_optional_lfs=allow_missing_optional_lfs)
+def archive_environment(environ: Mapping[str, str]) -> dict[str, str]:
+    return _archive_environment(environ)
 
 
 def lfs_media_directory(item: DevPaths, *, stop_event: Event | None = None) -> Path | None:
@@ -606,7 +591,6 @@ def archive_main(
     item: DevPaths,
     sha: str,
     *,
-    allow_missing_optional_lfs: bool = False,
     stop_event: Event | None = None,
 ) -> Path:
     ensure_directories(item)
@@ -615,7 +599,6 @@ def archive_main(
             item,
             sha,
             run_checked=run_checked,
-            allow_missing_optional_lfs=allow_missing_optional_lfs,
             stop_event=stop_event,
         )
     except MissingLfsError:
@@ -1519,7 +1502,6 @@ def update_to(
     sha: str,
     protocol: str,
     force: bool = False,
-    allow_missing_optional_lfs: bool = False,
     stop_event: Event | None = None,
 ) -> bool:
     value = read_state(item)
@@ -1549,7 +1531,6 @@ def update_to(
         snapshot = archive_main(
             item,
             sha,
-            allow_missing_optional_lfs=allow_missing_optional_lfs,
             stop_event=stop_event,
         )
         snapshot_info = read_snapshot_manifest(snapshot)
@@ -1570,10 +1551,8 @@ def update_to(
         failure_manifest = snapshot_manifest(
             sha=sha,
             missing_lfs_paths=error.missing_lfs_paths,
-            allow_missing_optional_lfs=allow_missing_optional_lfs,
             warning=str(error),
         )
-        failure_manifest["unapproved_lfs_paths"] = error.unapproved_lfs_paths
         change_state(
             item,
             status="failed",
@@ -1684,7 +1663,6 @@ def run_loop(item: DevPaths) -> None:
     require_setup(item)
     require_tools(protocol=protocol, include_browser=False)
     ensure_directories(item)
-    allow_missing_optional_lfs = configured_optional_lfs()
     owner = LauncherPid(item.launcher_pid)
     owner.acquire()
     stopping = Event()
@@ -1707,7 +1685,6 @@ def run_loop(item: DevPaths) -> None:
                 sha=target,
                 protocol=protocol,
                 force=True,
-                allow_missing_optional_lfs=allow_missing_optional_lfs,
                 stop_event=stopping,
             ):
                 print(
@@ -1753,7 +1730,6 @@ def run_loop(item: DevPaths) -> None:
                                 sha=target,
                                 protocol=protocol,
                                 force=requested,
-                                allow_missing_optional_lfs=allow_missing_optional_lfs,
                                 stop_event=stopping,
                             )
                     finally:

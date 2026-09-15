@@ -17,6 +17,7 @@ The current registered patch set is maintained under [`docs/base/patches/`](../b
 The ledger [`docs/base/verified-commits.md`](../base/verified-commits.md) records NVIDIA commits that have been verified. It is **not** a statement that the repository is permanently pinned to the last listed commit.
 
 The vendored NVIDIA subtree must not depend on NVIDIA Git-LFS storage: `git subtree` imports Git blobs but does not copy LFS objects into the NVSOP LFS endpoint. After every subtree update, exclude upstream LFS-only assets (or deliberately vendor their real bytes) and remove `filter=lfs` rules before the update is accepted. Repository policy rejects both LFS tracking metadata and LFS pointer files under `vendor/sop-monitoring-blueprints/`.
+The development snapshot path is strict as well: it strips inherited `GIT_LFS_SKIP_SMUDGE` and refuses to create a snapshot when any tracked LFS object is missing; there is no optional-asset bypass.
 
 ### Update procedure
 

@@ -105,15 +105,6 @@ NVSOP_DEV_BUILD_NETWORK=host make dev
 
 它只改变镜像**构建**网络；运行时仍使用 Compose 网络。
 
-### Git LFS 缺少可选文档资源
-
-只有在已确认缺少的 LFS 对象全部属于可选文档资源时，才在启动 launcher 时显式设置：
-
-```sh
-NVSOP_ALLOW_MISSING_OPTIONAL_LFS=1 make dev
-```
-
-该开关由运行中的 launcher 在制作 `main` 提交快照时读取，`make dev-setup` 不消费它。若 launcher 已经运行，需要用该环境配置重新启动；不要用它掩盖运行时模型、媒体或其他必需对象缺失。
 
 ## 开发实例不是发布证明
 

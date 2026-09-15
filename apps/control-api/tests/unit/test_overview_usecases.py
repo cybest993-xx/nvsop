@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from types import SimpleNamespace
 
 from factory_sop.device.usecases.summary import summary as device_summary
@@ -8,11 +9,7 @@ from factory_sop.overview.api import (
     OverviewUnavailableError,
     build_overview,
 )
-
-
-class Caller:
-    def holds(self, permission: object) -> bool:
-        return False
+from factory_sop.template.api import summary as template_summary
 
 
 class AllPermissionsCaller:
@@ -20,10 +17,27 @@ class AllPermissionsCaller:
         return True
 
 
+class TemplateSummaryRepository:
+    def __init__(self, versions: list[object]) -> None:
+        self._versions = versions
+
+    def page_drafts(self, *, page: int, page_size: int) -> tuple[list[object], int]:
+        del page, page_size
+        return [], 0
+
+    def page_imports(self, *, page: int, page_size: int) -> tuple[list[object], int]:
+        del page, page_size
+        return [], 0
+
+    def page_versions(self, *, page: int, page_size: int) -> tuple[list[object], int]:
+        del page, page_size
+        return self._versions, len(self._versions)
+
+
 class PagedRepository:
     def page_of(self, *, page: int, page_size: int, **kwargs: object) -> tuple[list[object], int]:
         del page_size, kwargs
-        status = "active" if page == 1 else "deactivated"
+        status = "active" if page == 1 else "future_status"
         values: list[object] = [
             SimpleNamespace(
                 status=status,
@@ -70,14 +84,38 @@ def test_device_summary_counts_statuses_across_all_pages() -> None:
     assert isinstance(hosts, dict)
     assert hosts["total"] == 1001
     assert hosts["active"] == 1000
-    assert hosts["deactivated"] == 1
-    assert hosts["unknown"] == 0
-    assert hosts["by_status"] == {"active": 1000, "deactivated": 1}
+    assert hosts["deactivated"] == 0
+    assert hosts["unknown"] == 1
+    assert hosts["by_status"] == {"active": 1000, "future_status": 1}
     connectors = data["connectors"]
     assert isinstance(connectors, dict)
     assert connectors["total"] == 1001
     assert connectors["verified"] == 0
     assert connectors["unverified"] == 1001
+
+
+def test_template_summary_counts_only_recomputed_manifest_digests() -> None:
+    manifest = b'{"version":1}'
+    verified = SimpleNamespace(
+        sha256=hashlib.sha256(manifest).hexdigest(),
+        artifacts=(SimpleNamespace(content=manifest),),
+    )
+    unverified = SimpleNamespace(sha256="a" * 64, artifacts=(SimpleNamespace(content=manifest),))
+
+    result = template_summary(
+        caller=AllPermissionsCaller(),  # type: ignore[arg-type]
+        templates=TemplateSummaryRepository([verified, unverified]),  # type: ignore[arg-type]
+    )
+
+    assert result["data"] == {
+        "drafts": {"total": 0},
+        "imports": {"total": 0, "by_status": {}},
+        "published_versions": {
+            "total": 2,
+            "sha256_verified": 1,
+            "sha256_unverified": 1,
+        },
+    }
 
 
 def test_overview_reports_unavailable_when_every_owner_fails() -> None:

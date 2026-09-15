@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Iterator
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from uuid import UUID
 
 from factory_sop.auth.api import Caller, Permission, authorize
@@ -83,22 +83,34 @@ class SseSnapshot:
     """初始帧和两个镜像表各自的数据库序号高水位。"""
 
     frames: tuple[str, ...]
+    decision_after: datetime = field(default_factory=lambda: datetime.min.replace(tzinfo=UTC))
+    decision_event_id: str = ""
+    health_after: datetime = field(default_factory=lambda: datetime.min.replace(tzinfo=UTC))
+    health_event_id: str = ""
     decision_sequence: int = 0
     health_sequence: int = 0
 
 
-def sse_snapshot(monitor: MonitorRepository, *, limit: int = 100) -> tuple[str, ...]:
+def sse_snapshot(
+    monitor: MonitorRepository,
+    *,
+    caller: Caller,
+    limit: int = 100,
+) -> tuple[str, ...]:
     """返回有限的初始看板帧，供浏览器连接和测试使用。"""
-    return sse_snapshot_state(monitor, limit=limit).frames
+    return sse_snapshot_state(monitor, caller=caller, limit=limit).frames
 
 
 def sse_snapshot_state(
     monitor: MonitorRepository,
     *,
+    caller: Caller,
     limit: int = 100,
+    boundary: datetime | None = None,
     last_event_id: str | None = None,
 ) -> SseSnapshot:
     """读取初始投影并记录数据库序号，避免用墙上时钟制造丢事件窗口。"""
+    authorize_stream_access(caller)
     resume_cursor = monitor.event_cursor_for(last_event_id) if last_event_id else None
     decision_sequence, health_sequence = monitor.stream_watermarks()
     if resume_cursor is None:
@@ -141,11 +153,22 @@ def sse_snapshot_state(
     )
     events.sort(key=lambda item: (item[0], item[2]))
 
+    decision_cursor = _snapshot_cursor(
+        (value.received_at, value.report.event_id) for value in decisions
+    )
+    health_cursor = _snapshot_cursor((value.received_at, value.report.event_id) for value in health)
+    floor = boundary or datetime.min.replace(tzinfo=UTC)
+    decision_after, decision_event_id = _cursor_after(decision_cursor, floor)
+    health_after, health_event_id = _cursor_after(health_cursor, floor)
     return SseSnapshot(
         frames=tuple(
             _sse_frame(event=kind, event_id=event_id, data=data)
             for _, kind, event_id, _, data in events
         ),
+        decision_after=decision_after,
+        decision_event_id=decision_event_id,
+        health_after=health_after,
+        health_event_id=health_event_id,
         decision_sequence=decision_sequence,
         health_sequence=health_sequence,
     )
@@ -154,11 +177,19 @@ def sse_snapshot_state(
 def sse_stream(
     monitor: MonitorRepository,
     *,
+    caller: Caller,
+    after: datetime | None = None,
+    decision_after: datetime | None = None,
+    decision_event_id: str = "",
+    health_after: datetime | None = None,
+    health_event_id: str = "",
     sleep: float = 1.0,
     decision_sequence: int = 0,
     health_sequence: int = 0,
 ) -> Iterator[str]:
     """只轮询中心镜像，并以数据库序号推进两个独立游标。"""
+    authorize_stream_access(caller)
+    del after, decision_after, decision_event_id, health_after, health_event_id
     while True:
         decisions = monitor.decisions_after_sequence(
             after_sequence=decision_sequence,
@@ -200,6 +231,16 @@ def sse_stream(
             else:
                 health_sequence = max(health_sequence, sequence)
             yield _sse_frame(event=kind, event_id=event_id, data=data)
+
+
+def _snapshot_cursor(values: Iterator[tuple[datetime, str]]) -> tuple[datetime, str] | None:
+    return max(values, default=None)
+
+
+def _cursor_after(cursor: tuple[datetime, str] | None, boundary: datetime) -> tuple[datetime, str]:
+    if cursor is None or cursor[0] <= boundary:
+        return boundary, ""
+    return cursor
 
 
 def _sse_frame(*, event: str, event_id: str, data: dict[str, object]) -> str:

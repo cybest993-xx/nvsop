@@ -59,6 +59,9 @@ class BackendSnapshot(Protocol):
     @property
     def revision(self) -> int: ...
 
+    @property
+    def self_reported_model_ids(self) -> tuple[str, ...]: ...
+
 
 class CameraSnapshot(Protocol):
     """配置组装所需的相机拓扑事实。"""

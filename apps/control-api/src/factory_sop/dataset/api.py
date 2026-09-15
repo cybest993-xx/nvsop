@@ -68,7 +68,7 @@ from factory_sop.dataset.usecases.usage import (
 
 
 def summary(*, caller: Caller, datasets: DatasetRepository) -> dict[str, object]:
-    """返回概览使用的数据集摘要; 调用方权限由 dataset 用例负责裁剪。"""
+    """返回 overview 使用的权限裁剪数据集摘要。"""
     from factory_sop.dataset.usecases.summary import summary as build_summary
 
     return build_summary(caller=caller, datasets=datasets)

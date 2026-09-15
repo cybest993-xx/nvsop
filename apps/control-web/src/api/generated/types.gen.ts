@@ -1525,7 +1525,7 @@ export type DatasetOverviewSection = {
   /**
    * Status
    */
-  status: 'available' | 'no_data' | 'not_permitted' | 'unavailable' | 'failed' | 'partial'
+  status: string
 }
 
 /**
@@ -1625,7 +1625,7 @@ export type DeviceOverviewSection = {
   /**
    * Status
    */
-  status: 'available' | 'no_data' | 'not_permitted' | 'unavailable' | 'failed' | 'partial'
+  status: string
 }
 
 /**
@@ -2466,7 +2466,7 @@ export type MonitorOverviewSection = {
   /**
    * Status
    */
-  status: 'available' | 'no_data' | 'not_permitted' | 'unavailable' | 'failed' | 'partial'
+  status: string
 }
 
 /**
@@ -3648,7 +3648,7 @@ export type TemplateOverviewSection = {
   /**
    * Status
    */
-  status: 'available' | 'no_data' | 'not_permitted' | 'unavailable' | 'failed' | 'partial'
+  status: string
 }
 
 /**
@@ -7179,7 +7179,12 @@ export type StreamMonitorEventsData = {
     'Last-Event-ID'?: string | null
   }
   path?: never
-  query?: never
+  query?: {
+    /**
+     * Once
+     */
+    once?: boolean
+  }
   url: '/api/v1/monitor/stream'
 }
 
@@ -7200,11 +7205,8 @@ export type StreamMonitorEventsResponses = {
   /**
    * Successful Response
    */
-  200: string
+  200: unknown
 }
-
-export type StreamMonitorEventsResponse =
-  StreamMonitorEventsResponses[keyof StreamMonitorEventsResponses]
 
 export type ReadOverviewData = {
   body?: never

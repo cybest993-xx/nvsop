@@ -12,13 +12,14 @@ import hmac
 import json
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import cast
 from urllib.parse import urlsplit
 
 from nvsop_contracts.capability import Capability, capability_from_wire, capability_to_wire
 
+LEGACY_CONFIGURATION_CONTRACT_VERSION = 1
 CONFIGURATION_CONTRACT_VERSION = 2
 _LEGACY_CONFIGURATION_CONTRACT_VERSION = 1
 _CONFIGURATION_ARTIFACT_ORDER = (
@@ -368,6 +369,8 @@ class ConfiguredStation:
     points: tuple[ConfiguredPoint, ...]
     template: ConfigurationTemplate | None
     cameras: tuple[ConfiguredCamera, ...] = ()
+    model_ids: tuple[str, ...] = ()
+    _model_ids_present: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not self.station_id or not self.backend_id or not self.code or not self.name:
@@ -385,6 +388,8 @@ class ConfiguredStation:
         camera_ids = {camera.camera_id for camera in self.cameras}
         if len(camera_ids) != len(self.cameras):
             raise ValueError("station camera ids must be unique")
+        if any(not model_id for model_id in self.model_ids):
+            raise ValueError("station model ids must not be empty")
 
     def to_wire(self) -> dict[str, object]:
         return {
@@ -398,29 +403,42 @@ class ConfiguredStation:
             "points": [point.to_wire() for point in self.points],
             "template": None if self.template is None else self.template.to_wire(),
             "cameras": [camera.to_wire() for camera in self.cameras],
+            "model_ids": list(self.model_ids),
         }
 
     @classmethod
-    def from_wire(cls, value: Mapping[str, object]) -> ConfiguredStation:
-        _require_keys(
-            value,
-            {
-                "station_id",
-                "backend_id",
-                "code",
-                "name",
-                "revision",
-                "runtime_parameters",
-                "connectors",
-                "points",
-                "template",
-                "cameras",
-            },
-            "station",
-        )
+    def from_wire(
+        cls,
+        value: Mapping[str, object],
+        *,
+        allow_missing_model_ids: bool = False,
+        allow_missing_cameras: bool = False,
+    ) -> ConfiguredStation:
+        expected = {
+            "station_id",
+            "backend_id",
+            "code",
+            "name",
+            "revision",
+            "runtime_parameters",
+            "connectors",
+            "points",
+            "template",
+            "cameras",
+            "model_ids",
+        }
+        optional = {
+            key
+            for key, allowed in (
+                ("cameras", allow_missing_cameras),
+                ("model_ids", allow_missing_model_ids),
+            )
+            if allowed
+        }
+        _require_keys(value, expected - optional, "station", optional=optional)
         raw_connectors = _array(value["connectors"], "station connectors")
         raw_points = _array(value["points"], "station points")
-        raw_cameras = _array(value["cameras"], "station cameras")
+        raw_cameras = _array(value.get("cameras", ()), "station cameras")
         raw_template = value["template"]
         if raw_template is not None and not isinstance(raw_template, Mapping):
             raise ValueError("station template is invalid")
@@ -448,6 +466,8 @@ class ConfiguredStation:
             cameras=tuple(
                 ConfiguredCamera.from_wire(_object(item, "station camera")) for item in raw_cameras
             ),
+            model_ids=_strings(value.get("model_ids", ()), "station model_ids"),
+            _model_ids_present="model_ids" in value,
         )
 
 
@@ -463,7 +483,7 @@ class ConfigurationBundle:
 
     def __post_init__(self) -> None:
         if self.contract_version not in {
-            _LEGACY_CONFIGURATION_CONTRACT_VERSION,
+            LEGACY_CONFIGURATION_CONTRACT_VERSION,
             CONFIGURATION_CONTRACT_VERSION,
         }:
             raise ValueError("configuration contract version is unsupported")
@@ -477,12 +497,19 @@ class ConfigurationBundle:
             raise ValueError("configuration station/backend slices must be unique")
 
     def content_wire(self) -> dict[str, object]:
+        stations = [station.to_wire() for station in self.stations]
+        if self.contract_version == LEGACY_CONFIGURATION_CONTRACT_VERSION:
+            for wire_station, station in zip(stations, self.stations, strict=True):
+                if not wire_station["cameras"]:
+                    wire_station.pop("cameras")
+                if not wire_station["model_ids"] and not station._model_ids_present:
+                    wire_station.pop("model_ids")
         return {
             "contract_version": self.contract_version,
             "host_id": self.host_id,
             "config_revision": self.config_revision,
             "generated_at": self.generated_at,
-            "stations": [station.to_wire() for station in self.stations],
+            "stations": stations,
         }
 
     def stable_content_wire(self) -> dict[str, object]:
@@ -529,18 +556,27 @@ class ConfigurationBundle:
         actual_digest = hashlib.sha256(_canonical_json(content).encode("utf-8")).hexdigest()
         if not _constant_time_equal(supplied_digest, actual_digest):
             raise ValueError("configuration bundle digest does not match its content")
+        contract_version = _positive_int(
+            value["contract_version"], "configuration contract version"
+        )
         raw_stations = _array(value["stations"], "configuration stations")
         return cls(
             host_id=_string(value["host_id"], "configuration host_id"),
             config_revision=_positive_int(value["config_revision"], "configuration revision"),
             generated_at=_string(value["generated_at"], "configuration generated_at"),
             stations=tuple(
-                ConfiguredStation.from_wire(_object(item, "configuration station"))
+                ConfiguredStation.from_wire(
+                    _object(item, "configuration station"),
+                    allow_missing_model_ids=(
+                        contract_version == LEGACY_CONFIGURATION_CONTRACT_VERSION
+                    ),
+                    allow_missing_cameras=(
+                        contract_version == LEGACY_CONFIGURATION_CONTRACT_VERSION
+                    ),
+                )
                 for item in raw_stations
             ),
-            contract_version=_positive_int(
-                value["contract_version"], "configuration contract version"
-            ),
+            contract_version=contract_version,
         )
 
 
@@ -568,8 +604,16 @@ def _canonical_json(value: Mapping[str, object]) -> str:
         raise ValueError("configuration content must be canonical JSON") from error
 
 
-def _require_keys(value: Mapping[str, object], expected: set[str], label: str) -> None:
-    if set(value) != expected:
+def _require_keys(
+    value: Mapping[str, object],
+    expected: set[str],
+    label: str,
+    *,
+    optional: set[str] | frozenset[str] = frozenset(),
+) -> None:
+    actual = set(value)
+    allowed = expected | set(optional)
+    if not expected.issubset(actual) or not actual.issubset(allowed):
         raise ValueError(f"{label} has unsupported or missing fields")
     if any(_looks_like_secret(key) for key in value):
         raise ValueError(f"{label} contains a credential-bearing field")
@@ -657,6 +701,13 @@ def _string(value: object, label: str) -> str:
     return value
 
 
+def _strings(value: object, label: str) -> tuple[str, ...]:
+    raw = _array(value, label)
+    if any(not isinstance(item, str) or not item for item in raw):
+        raise ValueError(f"{label} contains an invalid string")
+    return tuple(cast(str, item) for item in raw)
+
+
 def _number(value: object, label: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{label} must be a number")
@@ -671,6 +722,7 @@ def _positive_int(value: object, label: str) -> int:
 
 __all__ = [
     "CONFIGURATION_CONTRACT_VERSION",
+    "LEGACY_CONFIGURATION_CONTRACT_VERSION",
     "ConfigurationArtifact",
     "ConfigurationBundle",
     "ConfigurationTemplate",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import unittest
+from dataclasses import replace
 
 from nvsop_contracts import (
     ConfigurationArtifact,
@@ -10,17 +11,11 @@ from nvsop_contracts import (
     ConfigurationTemplate,
     ConfiguredCamera,
     ConfiguredConnector,
-    ConfiguredPoint,
     ConfiguredStation,
-    EdgePreservation,
-    Measured,
-    Polled,
     ReportedDecision,
     ReportedHealth,
     ReportEvidence,
     ResolvedRuntimeParameters,
-    Sequencing,
-    TimestampSource,
     Unverified,
     configuration_from_wire,
     configuration_to_wire,
@@ -37,8 +32,8 @@ def template() -> ConfigurationTemplate:
         ConfigurationArtifact(
             "vlm_prompts.txt",
             "text/plain",
-            b"prompt\n",
-            hashlib.sha256(b"prompt\n").hexdigest(),
+            b"prompt\\n",
+            hashlib.sha256(b"prompt\\n").hexdigest(),
         ),
         ConfigurationArtifact(
             "template.json", "application/json", b"{}", hashlib.sha256(b"{}").hexdigest()
@@ -66,23 +61,13 @@ def template() -> ConfigurationTemplate:
         artifacts=(
             *artifacts,
             ConfigurationArtifact(
-                "manifest.json",
-                "application/json",
-                manifest,
-                hashlib.sha256(manifest).hexdigest(),
+                "manifest.json", "application/json", manifest, hashlib.sha256(manifest).hexdigest()
             ),
         ),
     )
 
 
 def bundle() -> ConfigurationBundle:
-    measured = Measured(
-        delivery=Polled(interval=0.5),
-        max_delivery_delay=0.5,
-        sequencing=Sequencing.SEQUENCED,
-        edges=EdgePreservation.PRESERVED,
-        timestamps=TimestampSource.HOST_RECEIPT,
-    )
     return ConfigurationBundle(
         host_id="host-a",
         config_revision=7,
@@ -93,29 +78,10 @@ def bundle() -> ConfigurationBundle:
                 backend_id="backend-a",
                 code="S-A",
                 name="Station A",
-                revision=3,
-                runtime_parameters=ResolvedRuntimeParameters(10, 4, "stop"),
-                connectors=(
-                    ConfiguredConnector(
-                        connector_id="connector-a",
-                        name="PLC",
-                        connector_type="modbus",
-                        revision=2,
-                        address="plc.local",
-                        port=502,
-                        capability=measured,
-                    ),
-                ),
-                points=(
-                    ConfiguredPoint(
-                        point_id="point-a",
-                        name="start",
-                        direction="input",
-                        connector_id="connector-a",
-                        role="start_signal",
-                        address="DI-01",
-                    ),
-                ),
+                revision=1,
+                runtime_parameters=ResolvedRuntimeParameters(1, 1, "stop"),
+                connectors=(),
+                points=(),
                 template=template(),
                 cameras=(
                     ConfiguredCamera(
@@ -130,6 +96,7 @@ def bundle() -> ConfigurationBundle:
                         recording_mode="continuous",
                     ),
                 ),
+                model_ids=("reported-model", "reported-model-2"),
             ),
         ),
     )
@@ -173,52 +140,58 @@ class ConfigurationContractTests(unittest.TestCase):
             )
 
     def test_template_manifest_and_artifact_shape_are_strict(self) -> None:
-        value = template()
+        template_value = template()
         manifest = json.dumps(
-            {
-                "artifacts": [],
-                "format_version": 1,
-            },
-            separators=(",", ":"),
-        ).encode("utf-8")
-        invalid = (
-            *value.artifacts[:-1],
-            ConfigurationArtifact(
-                "manifest.json",
-                "application/json",
-                manifest,
-                hashlib.sha256(manifest).hexdigest(),
-            ),
+            {"artifacts": [], "format_version": 1}, separators=(",", ":")
+        ).encode()
+        invalid = ConfigurationArtifact(
+            "manifest.json", "application/json", manifest, hashlib.sha256(manifest).hexdigest()
+        )
+        with self.assertRaises(ValueError):
+            ConfigurationTemplate(
+                version_id=template_value.version_id,
+                version_sha256=template_value.version_sha256,
+                artifacts=(*template_value.artifacts[:-1], invalid),
+            )
+
+        bundle_value = bundle()
+        wire = configuration_to_wire(bundle_value)
+        self.assertEqual(configuration_from_wire(wire), bundle_value)
+        self.assertEqual(wire["sha256"], bundle_value.sha256)
+        stations = wire["stations"]
+        assert isinstance(stations, list) and isinstance(stations[0], dict)
+        self.assertEqual(stations[0]["model_ids"], ["reported-model", "reported-model-2"])
+        legacy = replace(
+            bundle_value,
+            contract_version=1,
+            stations=(replace(bundle_value.stations[0], model_ids=()),),
+        )
+        legacy_wire = configuration_to_wire(legacy)
+        legacy_stations = legacy_wire["stations"]
+        assert isinstance(legacy_stations, list) and isinstance(legacy_stations[0], dict)
+        station = legacy_stations[0]
+        self.assertNotIn("model_ids", station)
+        self.assertEqual(configuration_from_wire(legacy_wire), legacy)
+
+    def test_template_manifest_digest_must_match_the_template_version(self) -> None:
+        value = template()
+        manifest_content = b"{}"
+        manifest = ConfigurationArtifact(
+            "manifest.json",
+            "application/json",
+            manifest_content,
+            hashlib.sha256(manifest_content).hexdigest(),
         )
 
-        with self.assertRaisesRegex(ValueError, "manifest"):
-            ConfigurationTemplate(
-                version_id=value.version_id,
-                version_sha256=hashlib.sha256(manifest).hexdigest(),
-                artifacts=invalid,
-            )
-
         with self.assertRaises(ValueError):
-            ConfigurationArtifact(
-                "template.json", "text/plain", b"{}", hashlib.sha256(b"{}").hexdigest()
-            )
-        with self.assertRaisesRegex(ValueError, "version sha256"):
             ConfigurationTemplate(
                 version_id=value.version_id,
-                version_sha256="0" * 64,
-                artifacts=value.artifacts,
+                version_sha256=hashlib.sha256(manifest_content).hexdigest(),
+                artifacts=(*value.artifacts[:-1], manifest),
             )
 
     def test_unverified_capability_is_wireable_but_secret_fields_are_not(self) -> None:
-        value = bundle()
-        self.assertIsInstance(value.stations[0].connectors[0].capability, Measured)
-        invalid = configuration_to_wire(value)
-        connector = invalid["stations"][0]["connectors"][0]  # type: ignore[index]
-        connector["password"] = "not-allowed"  # pragma: allowlist secret
-        with self.assertRaises(ValueError):
-            configuration_from_wire(invalid)
-
-        without_template = ConfigurationBundle(
+        bundle = ConfigurationBundle(
             host_id="host-a",
             config_revision=1,
             generated_at="2026-09-13T00:00:00Z",
@@ -246,9 +219,14 @@ class ConfigurationContractTests(unittest.TestCase):
                 ),
             ),
         )
-        self.assertEqual(
-            configuration_from_wire(configuration_to_wire(without_template)), without_template
-        )
+        wire = configuration_to_wire(bundle)
+        self.assertEqual(configuration_from_wire(wire), bundle)
+        stations = wire["stations"]
+        assert isinstance(stations, list) and isinstance(stations[0], dict)
+        self.assertEqual(stations[0]["model_ids"], [])
+        stations[0]["password"] = "not-allowed"  # pragma: allowlist secret
+        with self.assertRaises(ValueError):
+            configuration_from_wire(wire)
 
 
 class ReportContractTests(unittest.TestCase):

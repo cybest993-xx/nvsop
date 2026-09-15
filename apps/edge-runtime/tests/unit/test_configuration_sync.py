@@ -3,9 +3,15 @@ from __future__ import annotations
 import json
 import sqlite3
 import unittest
+from dataclasses import replace
 from unittest.mock import patch
 
-from nvsop_contracts import ConfigurationBundle, configuration_to_wire
+from nvsop_contracts import (
+    ConfigurationBundle,
+    ConfiguredStation,
+    ResolvedRuntimeParameters,
+    configuration_to_wire,
+)
 
 from edge_runtime.configuration_sync import (
     ConfigurationPullError,
@@ -62,6 +68,43 @@ class ConfigurationSyncTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.state.close()
+
+    def test_historical_v1_payload_keeps_model_ids_after_confirmation(self) -> None:
+        current = ConfigurationBundle(
+            host_id="host-a",
+            config_revision=1,
+            generated_at="2026-09-13T00:00:00Z",
+            stations=(
+                ConfiguredStation(
+                    station_id="station-a",
+                    backend_id="backend-a",
+                    code="S-A",
+                    name="Station A",
+                    revision=1,
+                    runtime_parameters=ResolvedRuntimeParameters(1, 1, "stop"),
+                    connectors=(),
+                    points=(),
+                    template=None,
+                    model_ids=("reported-model",),
+                ),
+            ),
+        )
+        bundle = replace(current, contract_version=1)
+        wire = configuration_to_wire(bundle)
+        payload = json.dumps(wire, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        self.connection.execute(
+            """
+            INSERT INTO local_config
+                (slot, host_id, config_revision, sha256, confirmed_at, payload)
+            VALUES (1, ?, ?, ?, ?, ?)
+            """,
+            (bundle.host_id, bundle.config_revision, bundle.sha256, 1.0, payload),
+        )
+
+        expected = replace(bundle, contract_version=2)
+        self.assertEqual(self.state.configuration().confirmed(), expected)
+        self.state.configuration().confirm(expected, confirmed_at=2.0)
+        self.assertEqual(self.state.configuration().confirmed(), expected)
 
     def test_new_bundle_after_center_removes_highest_revision_object_confirms(self) -> None:
         old_configuration = ConfigurationBundle(

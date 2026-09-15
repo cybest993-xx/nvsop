@@ -6,8 +6,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
-revision: str = "0032"
-down_revision: str | None = "0031"
+revision: str = "0031"
+down_revision: str | None = "0030"
 
 
 def upgrade() -> None:

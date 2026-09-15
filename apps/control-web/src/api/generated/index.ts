@@ -788,7 +788,6 @@ export type {
   StreamMonitorEventsData,
   StreamMonitorEventsError,
   StreamMonitorEventsErrors,
-  StreamMonitorEventsResponse,
   StreamMonitorEventsResponses,
   SubmitAnnotationData,
   SubmitAnnotationError,

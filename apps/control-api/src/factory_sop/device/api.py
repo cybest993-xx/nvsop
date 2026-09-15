@@ -228,7 +228,7 @@ def summary(
     connectors: ConnectorRepository,
     points: PointRepository,
 ) -> dict[str, object]:
-    """返回概览使用的设备摘要; 调用方必须由 device 用例按权限裁剪。"""
+    """返回 overview 使用的权限裁剪设备摘要。"""
     from factory_sop.device.usecases.summary import summary as build_summary
 
     return build_summary(
@@ -245,7 +245,7 @@ def summary(
 def authenticate_host(
     *, host: InferenceHostIdentity, now: datetime, hosts: InferenceHostRepository
 ) -> None:
-    """通过 `device.api` 转发到现有 `authenticate_command_host`，不暴露适配器。"""
+    """通过 `device.api` 转发到现有认证用例，不暴露适配器。"""
     # 运行时导入避免 `api.py` 与用例层形成模块初始化环；调用仍然只经过设备模块内部。
     from factory_sop.device.usecases.commands import authenticate_command_host
 

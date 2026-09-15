@@ -421,7 +421,7 @@ class MigrationTest(unittest.TestCase):
     def test_digest_survives_the_legacy_table_rebuild(self) -> None:
         connection = sqlite3.connect(":memory:", isolation_level=None)
         self.addCleanup(connection.close)
-        self.assertEqual(apply_migrations(connection, MIGRATIONS[:2]), 2)
+        self.assertEqual(apply_migrations(connection, MIGRATIONS[:3]), 3)
         digest = "a" * 64
         connection.execute(
             """

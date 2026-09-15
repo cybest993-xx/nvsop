@@ -1,6 +1,8 @@
-"""device 模块拥有的权限范围配置摘要。"""
+"""device 模块拥有的权限裁剪配置摘要。"""
 
 from __future__ import annotations
+
+from collections.abc import Sequence
 
 from factory_sop.auth.api import Caller, Permission
 from factory_sop.device.repository import (
@@ -11,7 +13,7 @@ from factory_sop.device.repository import (
     PointRepository,
     StationRepository,
 )
-from factory_sop.pagination import all_pages, enum_counts
+from factory_sop.summary_support import all_pages, enum_counts
 
 Summary = dict[str, object]
 
@@ -26,59 +28,57 @@ def summary(
     connectors: ConnectorRepository,
     points: PointRepository,
 ) -> Summary:
-    """只返回 ``caller`` 可见的真实设备配置事实。
+    """返回调用方可见的真实设备配置事实。
 
-    本用例只报告配置和实测连接事实，不把缺失观测转换为在线或健康。已授权但资源为空时
-    返回 ``no_data``；没有任何设备查看权限时返回 ``not_permitted``。
+    本用例只报告配置和实测连接事实，不会把缺失观测转换成在线或健康状态。已授权但资源
+    为空时返回 ``no_data``；没有任何设备查看权限时返回 ``not_permitted``。
     """
     data: dict[str, object] = {}
     resource_summaries: list[dict[str, object]] = []
 
     if caller.holds(Permission.INFERENCE_HOST_VIEW):
-        host_values, total = all_pages(lambda page, size: hosts.page_of(page=page, page_size=size))
-        item = _resource_counts(host_values, total)
+        values, total = all_pages(lambda page, size: hosts.page_of(page=page, page_size=size))
+        item = _resource_counts(values, total)
         data["inference_hosts"] = item
         resource_summaries.append(item)
 
     if caller.holds(Permission.INFERENCE_BACKEND_VIEW):
-        backend_values, total = all_pages(
+        values, total = all_pages(
             lambda page, size: backends.page_of(page=page, page_size=size, host_id=None)
         )
-        item = _backend_counts(backend_values, total)
+        item = _backend_counts(values, total)
         data["inference_backends"] = item
         resource_summaries.append(item)
 
     if caller.holds(Permission.STATION_VIEW):
-        station_values, total = all_pages(
-            lambda page, size: stations.page_of(page=page, page_size=size)
-        )
-        item = _resource_counts(station_values, total)
+        values, total = all_pages(lambda page, size: stations.page_of(page=page, page_size=size))
+        item = _resource_counts(values, total)
         data["stations"] = item
         resource_summaries.append(item)
 
     if caller.holds(Permission.CAMERA_VIEW):
-        camera_values, total = all_pages(
+        values, total = all_pages(
             lambda page, size: cameras.page_of(page=page, page_size=size, station_id=None)
         )
-        item = _camera_counts(camera_values, total)
+        item = _camera_counts(values, total)
         data["cameras"] = item
         resource_summaries.append(item)
 
     if caller.holds(Permission.CONNECTOR_VIEW):
-        connector_values, total = all_pages(
+        values, total = all_pages(
             lambda page, size: connectors.page_of(page=page, page_size=size, station_id=None)
         )
-        item = _connector_counts(connector_values, total)
+        item = _connector_counts(values, total)
         data["connectors"] = item
         resource_summaries.append(item)
 
     if caller.holds(Permission.POINT_VIEW):
-        point_values, total = all_pages(
+        values, total = all_pages(
             lambda page, size: points.page_of(
                 page=page, page_size=size, station_id=None, connector_id=None
             )
         )
-        item = _resource_counts(point_values, total)
+        item = _resource_counts(values, total)
         data["points"] = item
         resource_summaries.append(item)
 
@@ -88,7 +88,7 @@ def summary(
     return {"status": status, "data": data}
 
 
-def _resource_counts(values: tuple[object, ...], total: int) -> dict[str, object]:
+def _resource_counts(values: Sequence[object], total: int) -> dict[str, object]:
     by_status = enum_counts(getattr(value, "status", None) for value in values)
     return {
         "total": total,
@@ -101,7 +101,7 @@ def _resource_counts(values: tuple[object, ...], total: int) -> dict[str, object
     }
 
 
-def _backend_counts(values: tuple[object, ...], total: int) -> dict[str, object]:
+def _backend_counts(values: Sequence[object], total: int) -> dict[str, object]:
     result = _resource_counts(values, total)
     connection_states = enum_counts(getattr(value, "connection_state", None) for value in values)
     result.update(
@@ -114,7 +114,7 @@ def _backend_counts(values: tuple[object, ...], total: int) -> dict[str, object]
     return result
 
 
-def _camera_counts(values: tuple[object, ...], total: int) -> dict[str, object]:
+def _camera_counts(values: Sequence[object], total: int) -> dict[str, object]:
     result = _resource_counts(values, total)
     credentials = enum_counts(
         "configured" if bool(getattr(value, "credentials_configured", False)) else "not_configured"
@@ -129,7 +129,7 @@ def _camera_counts(values: tuple[object, ...], total: int) -> dict[str, object]:
     return result
 
 
-def _connector_counts(values: tuple[object, ...], total: int) -> dict[str, object]:
+def _connector_counts(values: Sequence[object], total: int) -> dict[str, object]:
     result = _resource_counts(values, total)
     reachability = enum_counts(getattr(value, "reachability", None) for value in values)
     result.update(

@@ -11,7 +11,16 @@ const SESSION = {
 const OVERVIEW = {
   device: {
     status: 'future_status',
-    data: { inference_hosts: { total: 1, active: 1, deactivated: 0, unknown: 0 } },
+    data: {
+      inference_hosts: {
+        total: 1,
+        active: 0,
+        deactivated: 0,
+        unknown: 1,
+        by_status: { future_status: 1 },
+      },
+      connection_states: { future_state: 1 },
+    },
   },
   template: { status: 'not_permitted', data: {} },
   dataset: {
@@ -37,7 +46,23 @@ const SSE_DECISION = [
   '',
 ].join('\n')
 
-async function mockOverview(page: import('@playwright/test').Page) {
+const SSE_VERDICTS = [
+  'id: host-e301:decision-pass',
+  'event: decision',
+  'data: {"event_id":"host-e301:decision-pass","verdict":"pass","reason_codes":[],"model_ids":["model-pass"]}',
+  '',
+  'id: host-e301:decision-fail',
+  'event: decision',
+  'data: {"event_id":"host-e301:decision-fail","verdict":"fail","reason_codes":["WRONG_STEP"],"model_ids":["model-fail"]}',
+  '',
+  'id: host-e301:decision-indeterminate',
+  'event: decision',
+  'data: {"event_id":"host-e301:decision-indeterminate","verdict":"indeterminate","reason_codes":["FUTURE_REASON"],"model_ids":["model-indeterminate"]}',
+  '',
+  '',
+].join('\n')
+
+async function mockOverview(page: import('@playwright/test').Page, streamBody = SSE_DECISION) {
   await page.route('**/api/v1/auth/session', async (route) => {
     await route.fulfill({
       status: 200,
@@ -57,7 +82,7 @@ async function mockOverview(page: import('@playwright/test').Page) {
       status: 200,
       contentType: 'text/event-stream',
       headers: { 'Cache-Control': 'no-cache' },
-      body: SSE_DECISION,
+      body: streamBody,
     })
   })
 }
@@ -72,6 +97,8 @@ test('SYS-35-46 — overview shows permission-scoped states and a raw SSE reason
   await expect(page.getByRole('heading', { name: '概览' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '设备拓扑' })).toBeVisible()
   await expect(page.getByText('状态未知')).toBeVisible()
+  await expect(page.getByText('future_status')).toBeVisible()
+  await expect(page.getByText('future_state')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'SOP 模板' })).toBeVisible()
   await expect(page.getByText('无权限')).toBeVisible()
   await expect(page.getByText('训练数据摘要暂时不可用；其他模块仍返回真实摘要')).toBeVisible()
@@ -80,6 +107,21 @@ test('SYS-35-46 — overview shows permission-scoped states and a raw SSE reason
   await expect(page.getByText('未知原因码：FUTURE_REASON')).toBeVisible()
   await expect(page.getByText('模板 version-e301')).toBeVisible()
   await expect(page.getByText('模型 model-e301')).toBeVisible()
+})
+
+test('SYS-35-46 — SSE mirrors pass, fail, and indeterminate verdicts', async ({ page }) => {
+  await mockOverview(page, SSE_VERDICTS)
+
+  await page.goto('/')
+
+  await expect(page.getByText('结论 通过')).toBeVisible()
+  await expect(page.getByText('结论 不通过')).toBeVisible()
+  await expect(page.getByText('结论 不可判定')).toBeVisible()
+  await expect(page.getByText('WRONG_STEP — 出现了错误步骤')).toBeVisible()
+  await expect(page.getByText('FUTURE_REASON — 未知原因码：FUTURE_REASON')).toBeVisible()
+  await expect(page.getByText('模型 model-pass')).toBeVisible()
+  await expect(page.getByText('模型 model-fail')).toBeVisible()
+  await expect(page.getByText('模型 model-indeterminate')).toBeVisible()
 })
 
 test('SYS-35-46 — a monitor section without permission does not open the SSE stream', async ({

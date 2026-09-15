@@ -15,6 +15,7 @@ outlives an unreachable center.
 **本阶段交付配置确认表。** `local_config` 保存最后一个完整确认 bundle, 失败记录只用于诊断;
 **连接器处置账本由后续阶段追加.**
 
+
 Standard library only, like the core this state serves (edge-autonomy.md §5.11).
 """
 
@@ -137,6 +138,33 @@ _V1 = (
 )
 
 _V2 = (
+    # 连接器写入和 supervisor 处置共用这一张持久账本, 不另建身份或结果缓存。
+    """
+    CREATE TABLE local_disposal (
+        station_id       TEXT    NOT NULL,
+        idempotency_key  TEXT    NOT NULL,
+        connector_id     TEXT    NOT NULL,
+        point_id         TEXT    NOT NULL,
+        actor            TEXT    NOT NULL,
+        requested_state  TEXT    NOT NULL,
+        result_kind      TEXT,
+        result_detail    TEXT,
+        result_at        REAL,
+        attempts         INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at  REAL,
+        lease_until      REAL,
+        PRIMARY KEY (station_id, idempotency_key),
+        CHECK (attempts >= 0),
+        CHECK ((result_kind IS NULL) = (result_at IS NULL))
+    )
+    """,
+    """
+    CREATE INDEX local_disposal_by_connector
+        ON local_disposal (station_id, connector_id, point_id)
+    """,
+)
+
+_V3 = (
     """
     CREATE TABLE local_config (
         slot             INTEGER PRIMARY KEY CHECK (slot = 1),
@@ -159,7 +187,7 @@ _V2 = (
     """,
 )
 
-_V3 = (
+_V4 = (
     "ALTER TABLE local_config RENAME TO local_config_v2",
     """
     CREATE TABLE local_config_v3 (
@@ -180,33 +208,6 @@ _V3 = (
     """,
     "DROP TABLE local_config_v2",
     "ALTER TABLE local_config_v3 RENAME TO local_config",
-)
-
-_V4 = (
-    # 连接器写入和 supervisor 处置共用这一张持久账本, 不另建身份或结果缓存。
-    """
-    CREATE TABLE IF NOT EXISTS local_disposal (
-        station_id       TEXT    NOT NULL,
-        idempotency_key  TEXT    NOT NULL,
-        connector_id     TEXT    NOT NULL,
-        point_id         TEXT    NOT NULL,
-        actor            TEXT    NOT NULL,
-        requested_state  TEXT    NOT NULL,
-        result_kind      TEXT,
-        result_detail    TEXT,
-        result_at        REAL,
-        attempts         INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at  REAL,
-        lease_until      REAL,
-        PRIMARY KEY (station_id, idempotency_key),
-        CHECK (attempts >= 0),
-        CHECK ((result_kind IS NULL) = (result_at IS NULL))
-    )
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS local_disposal_by_connector
-        ON local_disposal (station_id, connector_id, point_id)
-    """,
 )
 
 

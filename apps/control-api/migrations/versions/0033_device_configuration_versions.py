@@ -5,8 +5,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0030"
-down_revision: str | None = "0029"
+revision: str = "0033"
+down_revision: str | None = "0032"
 
 RAW_SQL_TABLES = frozenset(
     {

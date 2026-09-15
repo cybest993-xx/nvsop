@@ -1,4 +1,4 @@
-"""dataset 模块拥有的权限范围配置摘要。"""
+"""dataset 模块拥有的权限裁剪配置摘要。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from uuid import UUID
 
 from factory_sop.auth.api import Caller, Permission
 from factory_sop.dataset.repository import DatasetRepository
-from factory_sop.pagination import all_pages, enum_counts
+from factory_sop.summary_support import all_pages, enum_counts
 
 Summary = dict[str, object]
 

@@ -164,7 +164,7 @@ def runtime_topology(engine: Engine) -> Iterator[RuntimeTopology]:
             connection_state=ConnectionState.UNVERIFIED,
             connection_checked_at=None,
             connection_detail=None,
-            self_reported_model_ids=(),
+            self_reported_model_ids=("reported-model", "reported-model-2"),
             self_reported_at=None,
             revision=1,
             created_by=actor,
@@ -281,6 +281,7 @@ def test_configuration_pull_is_host_scoped_and_contains_real_point_address(
     bundle = configuration_from_wire(response.json())
     assert bundle.host_id == str(runtime_topology.host.id)
     assert bundle.stations[0].runtime_parameters.idle_timeout_seconds == 30.0
+    assert bundle.stations[0].model_ids == ("reported-model", "reported-model-2")
     assert bundle.stations[0].points[0].address == "DI-01"
     assert bundle.stations[0].connectors[0].connector_id == str(runtime_topology.connector.id)
 

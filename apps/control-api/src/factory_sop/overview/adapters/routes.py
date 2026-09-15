@@ -104,25 +104,29 @@ class MonitorSummaryData(BaseModel):
 
 
 class DeviceOverviewSection(BaseModel):
-    status: OverviewStatus
+    # 用例保证状态属于 OverviewStatus；wire schema 保持旧版字符串兼容性。
+    status: str
     data: DeviceSummaryData
     detail: str | None = None
 
 
 class TemplateOverviewSection(BaseModel):
-    status: OverviewStatus
+    # 用例保证状态属于 OverviewStatus；wire schema 保持旧版字符串兼容性。
+    status: str
     data: TemplateSummaryData
     detail: str | None = None
 
 
 class DatasetOverviewSection(BaseModel):
-    status: OverviewStatus
+    # 用例保证状态属于 OverviewStatus；wire schema 保持旧版字符串兼容性。
+    status: str
     data: DatasetSummaryData
     detail: str | None = None
 
 
 class MonitorOverviewSection(BaseModel):
-    status: OverviewStatus
+    # 用例保证状态属于 OverviewStatus；wire schema 保持旧版字符串兼容性。
+    status: str
     data: MonitorSummaryData
     detail: str | None = None
 
@@ -136,6 +140,7 @@ class OverviewResponse(BaseModel):
 
 def create_router(sources: OverviewSources) -> APIRouter:
     """用组合根提供的 owner source 创建 overview HTTP 路由。"""
+
     router = APIRouter(prefix="/overview", tags=["overview"])
 
     @router.get(
@@ -149,6 +154,7 @@ def create_router(sources: OverviewSources) -> APIRouter:
         session: RequestSession,
     ) -> dict[str, object]:
         """使用同一个请求会话组合归属模块摘要; 调用方由各归属模块用例裁剪。"""
+
         return build_overview(
             device=lambda: _read_summary("device", lambda: sources.device(caller, session)),
             template=lambda: _read_summary("template", lambda: sources.template(caller, session)),
@@ -161,6 +167,7 @@ def create_router(sources: OverviewSources) -> APIRouter:
 
 def _read_summary(section: str, provider: Callable[[], dict[str, object]]) -> dict[str, object]:
     """将已知读取或分页失败转换为分区级部分失败。"""
+
     try:
         return provider()
     except SQLAlchemyError as error:

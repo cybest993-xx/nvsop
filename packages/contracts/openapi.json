@@ -2473,14 +2473,6 @@
             "title": "Detail"
           },
           "status": {
-            "enum": [
-              "available",
-              "no_data",
-              "not_permitted",
-              "unavailable",
-              "failed",
-              "partial"
-            ],
             "title": "Status",
             "type": "string"
           }
@@ -2639,14 +2631,6 @@
             "title": "Detail"
           },
           "status": {
-            "enum": [
-              "available",
-              "no_data",
-              "not_permitted",
-              "unavailable",
-              "failed",
-              "partial"
-            ],
             "title": "Status",
             "type": "string"
           }
@@ -4020,14 +4004,6 @@
             "title": "Detail"
           },
           "status": {
-            "enum": [
-              "available",
-              "no_data",
-              "not_permitted",
-              "unavailable",
-              "failed",
-              "partial"
-            ],
             "title": "Status",
             "type": "string"
           }
@@ -6125,14 +6101,6 @@
             "title": "Detail"
           },
           "status": {
-            "enum": [
-              "available",
-              "no_data",
-              "not_permitted",
-              "unavailable",
-              "failed",
-              "partial"
-            ],
             "title": "Status",
             "type": "string"
           }
@@ -12799,6 +12767,16 @@
         "operationId": "streamMonitorEvents",
         "parameters": [
           {
+            "in": "query",
+            "name": "once",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Once",
+              "type": "boolean"
+            }
+          },
+          {
             "in": "header",
             "name": "Last-Event-ID",
             "required": false,
@@ -12818,6 +12796,9 @@
         "responses": {
           "200": {
             "content": {
+              "application/json": {
+                "schema": {}
+              },
               "text/event-stream": {
                 "schema": {
                   "type": "string"

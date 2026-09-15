@@ -22,7 +22,6 @@ from edge_runtime.command_runtime import (
     ConnectionTestCommandLoop,
     ConnectorFactory,
     build_connection_test_loop,
-    build_connection_test_loop_from_configuration,
     build_connection_test_loop_from_file,
     build_connection_test_runner,
     build_isapi_connector,
@@ -624,22 +623,45 @@ def build_autonomous_runtime_from_file(
     """从已确认的本地配置、真实连接器和 SQLite 状态装配自治运行时。"""
     config = load_autonomous_configuration(config_path)
     resolved_connector_factory = connector_factory or build_isapi_connector
+
     if config.local_state_path is None:
         raise ValueError("local_state_path is required for autonomous runtime")
     state = open_local_state(str(config.local_state_path))
     composition: RuntimeComposition | None = None
+
+    def validate_confirmed(bundle: ConfigurationBundle) -> None:
+        runtime_configuration = confirmed_runtime_configuration(
+            bundle=bundle,
+            bootstrap_stations=config.stations,
+            local_connectors=config.connectors,
+        )
+        _validate_media_for_runtime(config=config, runtime_configuration=runtime_configuration)
+
+    configuration_sync = ConfigurationSynchronizer(
+        puller=HttpConfigurationPuller(
+            center_url=config.center_url,
+            host_id=config.host_id,
+            host_private_key=config.host_private_key,
+            timeout=config.command_timeout,
+            ssl_context=config.ssl_context,
+        ),
+        store=state.configuration(),
+        expected_host_id=config.host_id,
+        validator=validate_confirmed,
+    )
     try:
-        confirmed = state.configuration().confirmed()
-        if confirmed is not None and confirmed.host_id != config.host_id:
+        initial = configuration_sync.synchronize(observed_at=time())
+        if initial.active is not None and initial.active.host_id != config.host_id:
             raise ValueError("confirmed configuration belongs to another inference host")
+
         active_configuration = (
             bootstrap_runtime_configuration(
                 stations=config.stations,
                 connectors=config.connectors,
             )
-            if confirmed is None
+            if initial.active is None
             else confirmed_runtime_configuration(
-                bundle=confirmed,
+                bundle=initial.active,
                 bootstrap_stations=config.stations,
                 local_connectors=config.connectors,
             )
@@ -662,8 +684,20 @@ def build_autonomous_runtime_from_file(
             report_transport=report_transport,
             connector_factory=resolved_connector_factory,
         )
-        command_loop = build_connection_test_loop_from_configuration(
-            config,
+        active_connector_ids = {item.connector_id for item in active_configuration.connectors}
+        command_connectors = active_configuration.connectors + tuple(
+            connector
+            for connector in config.connectors
+            if connector.connector_id not in active_connector_ids
+        )
+        command_loop = build_connection_test_loop(
+            center_url=config.center_url,
+            host_id=config.host_id,
+            host_private_key=config.host_private_key,
+            command_timeout=config.command_timeout,
+            command_poll_interval=config.command_poll_interval,
+            local_connectors=command_connectors,
+            ssl_context=config.ssl_context,
             adapter_factory=resolved_connector_factory,
         )
 
@@ -685,29 +719,6 @@ def build_autonomous_runtime_from_file(
                 connector_factory=resolved_connector_factory,
             )
 
-        def validate_confirmed(bundle: ConfigurationBundle) -> None:
-            runtime_configuration = confirmed_runtime_configuration(
-                bundle=bundle,
-                bootstrap_stations=config.stations,
-                local_connectors=config.connectors,
-            )
-            _validate_media_for_runtime(
-                config=config,
-                runtime_configuration=runtime_configuration,
-            )
-
-        configuration_sync = ConfigurationSynchronizer(
-            puller=HttpConfigurationPuller(
-                center_url=config.center_url,
-                host_id=config.host_id,
-                host_private_key=config.host_private_key,
-                timeout=config.command_timeout,
-                ssl_context=config.ssl_context,
-            ),
-            store=state.configuration(),
-            expected_host_id=config.host_id,
-            validator=validate_confirmed,
-        )
         return AutonomousRuntime(
             command_loop=command_loop,
             stations=composition.stations,

@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
 from factory_sop.auth.api import Authorized, Permission, needs
@@ -149,6 +149,7 @@ def report_monitor_health(
     responses={
         200: {
             "content": {
+                "application/json": {"schema": {}},
                 "text/event-stream": {"schema": {"type": "string"}},
             },
         }
@@ -159,17 +160,24 @@ def stream_monitor_events(
     caller: Authorized,
     monitor: Annotated[MonitorRepository, Depends(dependencies.streaming_monitor)],
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+    once: bool = Query(default=False),
 ) -> StreamingResponse:
     authorize_stream_access(caller)
-    snapshot = sse_snapshot_state(monitor, last_event_id=last_event_id)
+    snapshot = sse_snapshot_state(monitor, caller=caller, last_event_id=last_event_id)
 
     def events() -> Iterator[str]:
         yield from snapshot.frames
-        yield from sse_stream(
-            monitor,
-            decision_sequence=snapshot.decision_sequence,
-            health_sequence=snapshot.health_sequence,
-        )
+        if not once:
+            yield from sse_stream(
+                monitor,
+                caller=caller,
+                after=snapshot.decision_after,
+                decision_event_id=snapshot.decision_event_id,
+                health_after=snapshot.health_after,
+                health_event_id=snapshot.health_event_id,
+                decision_sequence=snapshot.decision_sequence,
+                health_sequence=snapshot.health_sequence,
+            )
 
     return StreamingResponse(events(), media_type="text/event-stream")
 

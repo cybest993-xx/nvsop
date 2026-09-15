@@ -11,7 +11,9 @@
             "type": "array"
           }
         },
-        "required": ["items"],
+        "required": [
+          "items"
+        ],
         "title": "ActionListHistoryView",
         "type": "object"
       },
@@ -29,7 +31,9 @@
             "type": "array"
           }
         },
-        "required": ["actions"],
+        "required": [
+          "actions"
+        ],
         "title": "ActionListInput",
         "type": "object"
       },
@@ -86,7 +90,10 @@
             "type": "string"
           }
         },
-        "required": ["kind", "action_number"],
+        "required": [
+          "kind",
+          "action_number"
+        ],
         "title": "ActionSignalInput",
         "type": "object"
       },
@@ -102,7 +109,11 @@
             "$ref": "#/components/schemas/AnnotationSubmissionView"
           }
         },
-        "required": ["submission", "execution", "job"],
+        "required": [
+          "submission",
+          "execution",
+          "job"
+        ],
         "title": "AnnotationAcceptedView",
         "type": "object"
       },
@@ -409,7 +420,9 @@
             "type": "array"
           }
         },
-        "required": ["items"],
+        "required": [
+          "items"
+        ],
         "title": "AnnotationHistoryView",
         "type": "object"
       },
@@ -473,7 +486,10 @@
       },
       "AnnotationMode": {
         "description": "标注界面允许的时间段关系。",
-        "enum": ["single_operator", "two_operator"],
+        "enum": [
+          "single_operator",
+          "two_operator"
+        ],
         "title": "AnnotationMode",
         "type": "string"
       },
@@ -502,7 +518,11 @@
             "type": "number"
           }
         },
-        "required": ["start", "end", "action_index"],
+        "required": [
+          "start",
+          "end",
+          "action_index"
+        ],
         "title": "AnnotationSegmentInput",
         "type": "object"
       },
@@ -527,7 +547,11 @@
             "type": "array"
           }
         },
-        "required": ["context_token", "mode", "segments"],
+        "required": [
+          "context_token",
+          "mode",
+          "segments"
+        ],
         "title": "AnnotationSubmissionInput",
         "type": "object"
       },
@@ -764,7 +788,10 @@
             "$ref": "#/components/schemas/UsageJobView"
           }
         },
-        "required": ["artifact", "job"],
+        "required": [
+          "artifact",
+          "job"
+        ],
         "title": "ArtifactAcceptedView",
         "type": "object"
       },
@@ -778,7 +805,9 @@
             "type": "string"
           }
         },
-        "required": ["check_id"],
+        "required": [
+          "check_id"
+        ],
         "title": "ArtifactInput",
         "type": "object"
       },
@@ -948,7 +977,9 @@
             "type": "array"
           }
         },
-        "required": ["role_ids"],
+        "required": [
+          "role_ids"
+        ],
         "title": "AssignedRoles",
         "type": "object"
       },
@@ -1086,7 +1117,10 @@
             "type": "string"
           }
         },
-        "required": ["host_id", "base_url"],
+        "required": [
+          "host_id",
+          "base_url"
+        ],
         "title": "BackendPlacement",
         "type": "object"
       },
@@ -1097,7 +1131,9 @@
             "$ref": "#/components/schemas/DeviceStatus"
           }
         },
-        "required": ["status"],
+        "required": [
+          "status"
+        ],
         "title": "BackendStatus",
         "type": "object"
       },
@@ -1193,7 +1229,11 @@
             "type": "string"
           }
         },
-        "required": ["code", "field", "message"],
+        "required": [
+          "code",
+          "field",
+          "message"
+        ],
         "title": "BindingReasonView",
         "type": "object"
       },
@@ -1212,7 +1252,11 @@
             "type": "string"
           }
         },
-        "required": ["code", "field", "message"],
+        "required": [
+          "code",
+          "field",
+          "message"
+        ],
         "title": "BindingValidationIssueView",
         "type": "object"
       },
@@ -1246,7 +1290,11 @@
             "type": "string"
           }
         },
-        "required": ["station_id", "role", "budget_seconds"],
+        "required": [
+          "station_id",
+          "role",
+          "budget_seconds"
+        ],
         "title": "BindingValidationRequest",
         "type": "object"
       },
@@ -1265,7 +1313,10 @@
             "type": "array"
           }
         },
-        "required": ["accepted", "reasons"],
+        "required": [
+          "accepted",
+          "reasons"
+        ],
         "title": "BindingValidationView",
         "type": "object"
       },
@@ -1476,7 +1527,9 @@
             "$ref": "#/components/schemas/DeviceStatus"
           }
         },
-        "required": ["status"],
+        "required": [
+          "status"
+        ],
         "title": "CameraStatus",
         "type": "object"
       },
@@ -1632,7 +1685,9 @@
             "type": "string"
           }
         },
-        "required": ["attempt_id"],
+        "required": [
+          "attempt_id"
+        ],
         "title": "ConfirmVideoUploadInput",
         "type": "object"
       },
@@ -1652,13 +1707,20 @@
             "$ref": "#/components/schemas/DatasetMemberView"
           }
         },
-        "required": ["member", "job"],
+        "required": [
+          "member",
+          "job"
+        ],
         "title": "ConfirmationView",
         "type": "object"
       },
       "ConnectionState": {
         "description": "最近一次真实连接测试对后端端点的观测结果。\n\n固定为三态：从未测试是“未验证”，不是“正常”；只有真实到达端点的测试才能报告成功。事实属于\n测试时的部署位置；移动后端或改变端点后，原有自报结果失效。",
-        "enum": ["unverified", "success", "failure"],
+        "enum": [
+          "unverified",
+          "success",
+          "failure"
+        ],
         "title": "ConnectionState",
         "type": "string"
       },
@@ -1678,7 +1740,11 @@
             "type": "string"
           }
         },
-        "required": ["command", "claim_token", "lease_expires_at"],
+        "required": [
+          "command",
+          "claim_token",
+          "lease_expires_at"
+        ],
         "title": "ConnectionTestClaimDocument",
         "type": "object"
       },
@@ -1735,7 +1801,11 @@
       },
       "ConnectionTestOutcome": {
         "description": "推理机真实测试的三种可观察结果。",
-        "enum": ["reachable", "unreachable", "rejected"],
+        "enum": [
+          "reachable",
+          "unreachable",
+          "rejected"
+        ],
         "title": "ConnectionTestOutcome",
         "type": "string"
       },
@@ -1872,7 +1942,9 @@
             "title": "Port"
           }
         },
-        "required": ["address"],
+        "required": [
+          "address"
+        ],
         "title": "ConnectorConfiguration",
         "type": "object"
       },
@@ -1914,7 +1986,11 @@
       },
       "ConnectorReachability": {
         "description": "连接器尚未由推理机真实验证时的显式状态。",
-        "enum": ["unverified", "reachable", "unreachable"],
+        "enum": [
+          "unverified",
+          "reachable",
+          "unreachable"
+        ],
         "title": "ConnectorReachability",
         "type": "string"
       },
@@ -1924,7 +2000,9 @@
             "$ref": "#/components/schemas/DeviceStatus"
           }
         },
-        "required": ["status"],
+        "required": [
+          "status"
+        ],
         "title": "ConnectorStatus",
         "type": "object"
       },
@@ -1989,7 +2067,10 @@
       },
       "ConnectorType": {
         "description": "中心支持的连接器配置类型。",
-        "enum": ["hikvision_isapi", "board_card"],
+        "enum": [
+          "hikvision_isapi",
+          "board_card"
+        ],
         "title": "ConnectorType",
         "type": "string"
       },
@@ -2124,7 +2205,9 @@
             "type": "string"
           }
         },
-        "required": ["name"],
+        "required": [
+          "name"
+        ],
         "title": "CreateDatasetInput",
         "type": "object"
       },
@@ -2140,7 +2223,10 @@
             "type": "string"
           }
         },
-        "required": ["username_file", "password_file"],
+        "required": [
+          "username_file",
+          "password_file"
+        ],
         "title": "CredentialFileReferences",
         "type": "object"
       },
@@ -2160,7 +2246,10 @@
             "type": "string"
           }
         },
-        "required": ["login_name", "password"],
+        "required": [
+          "login_name",
+          "password"
+        ],
         "title": "Credentials",
         "type": "object"
       },
@@ -2179,7 +2268,9 @@
             "type": "integer"
           }
         },
-        "required": ["total"],
+        "required": [
+          "total"
+        ],
         "title": "DatasetMemberSummary",
         "type": "object"
       },
@@ -2394,7 +2485,10 @@
             "type": "string"
           }
         },
-        "required": ["status", "data"],
+        "required": [
+          "status",
+          "data"
+        ],
         "title": "DatasetOverviewSection",
         "type": "object"
       },
@@ -2557,13 +2651,19 @@
             "type": "string"
           }
         },
-        "required": ["status", "data"],
+        "required": [
+          "status",
+          "data"
+        ],
         "title": "DeviceOverviewSection",
         "type": "object"
       },
       "DeviceStatus": {
         "description": "可配置设备是否继续参与新绑定和运行。\n\n使用枚举而不是 `is_active` 布尔值，因为所有可变配置对象共用“停用”语义。停用可恢复且不级联，\n已停用推理机的后端仍保留记录和历史。",
-        "enum": ["active", "deactivated"],
+        "enum": [
+          "active",
+          "deactivated"
+        ],
         "title": "DeviceStatus",
         "type": "string"
       },
@@ -2649,7 +2749,10 @@
             "type": "array"
           }
         },
-        "required": ["name", "permissions"],
+        "required": [
+          "name",
+          "permissions"
+        ],
         "title": "EditedRole",
         "type": "object"
       },
@@ -2662,7 +2765,9 @@
             "type": "string"
           }
         },
-        "required": ["display_name"],
+        "required": [
+          "display_name"
+        ],
         "title": "EditedUser",
         "type": "object"
       },
@@ -2813,7 +2918,10 @@
             "type": "string"
           }
         },
-        "required": ["kind", "semantic_label"],
+        "required": [
+          "kind",
+          "semantic_label"
+        ],
         "title": "ExternalSignalInput",
         "type": "object"
       },
@@ -2829,7 +2937,10 @@
             "type": "string"
           }
         },
-        "required": ["field", "message"],
+        "required": [
+          "field",
+          "message"
+        ],
         "title": "FieldError",
         "type": "object"
       },
@@ -2907,7 +3018,9 @@
             "type": "string"
           }
         },
-        "required": ["public_key"],
+        "required": [
+          "public_key"
+        ],
         "title": "HostIdentityKeyConfiguration",
         "type": "object"
       },
@@ -2984,13 +3097,18 @@
             "$ref": "#/components/schemas/DeviceStatus"
           }
         },
-        "required": ["status"],
+        "required": [
+          "status"
+        ],
         "title": "HostStatus",
         "type": "object"
       },
       "ImportStatus": {
         "description": "一次规范化文档导入是否创建了草稿。",
-        "enum": ["succeeded", "failed"],
+        "enum": [
+          "succeeded",
+          "failed"
+        ],
         "title": "ImportStatus",
         "type": "string"
       },
@@ -3082,7 +3200,10 @@
             "type": "integer"
           }
         },
-        "required": ["credential", "revision"],
+        "required": [
+          "credential",
+          "revision"
+        ],
         "title": "InferenceHostCredentialView",
         "type": "object"
       },
@@ -3094,7 +3215,9 @@
             "type": "integer"
           }
         },
-        "required": ["revision"],
+        "required": [
+          "revision"
+        ],
         "title": "InferenceHostIdentityKeyView",
         "type": "object"
       },
@@ -3214,7 +3337,12 @@
             "type": "integer"
           }
         },
-        "required": ["items", "page", "page_size", "total"],
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
         "title": "ItemPage[ArtifactView]",
         "type": "object"
       },
@@ -3243,7 +3371,12 @@
             "type": "integer"
           }
         },
-        "required": ["items", "page", "page_size", "total"],
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
         "title": "ItemPage[CameraMediaView]",
         "type": "object"
       },
@@ -3272,7 +3405,12 @@
             "type": "integer"
           }
         },
-        "required": ["items", "page", "page_size", "total"],
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
         "title": "ItemPage[CameraView]",
         "type": "object"
       },
@@ -3301,7 +3439,12 @@
             "type": "integer"
           }
         },
-        "required": ["items", "page", "page_size", "total"],
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
         "title": "ItemPage[ConnectorView]",
         "type": "object"
       },
@@ -3330,7 +3473,12 @@
             "type": "integer"
           }
         },
-        "required": ["items", "page", "page_size", "total"],
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
         "title": "ItemPage[DatasetMemberView]",
         "type": "object"
       },
@@ -3359,7 +3507,12 @@
             "type": "integer"
           }
         },
-        "required": ["items", "page", "page_size", "total"],
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
         "title": "ItemPage[DatasetView]",
         "type": "object"
       },
@@ -3388,7 +3541,12 @@
             "type": "integer"
           }
         },
-        "required": ["items", "page", "page_size", "total"],
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
         "title": "ItemPage[InferenceBackendView]",
         "type": "object"
       },
@@ -3417,7 +3575,12 @@
             "type": "integer"
           }
         },
-        "required": ["items", "page", "page_size", "total"],
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
         "title": "ItemPage[InferenceHostView]",
         "type": "object"
       },
@@ -3446,7 +3609,12 @@
             "type": "integer"
           }
         },
-        "required": ["items", "page", "page_size", "total"],
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
         "title": "ItemPage[PointView]",
         "type": "object"
       },
@@ -3475,7 +3643,12 @@
             "type": "integer"
           }
         },
-        "required": ["items", "page", "page_size", "total"],
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
         "title": "ItemPage[RoleView]",
         "type": "object"
       },
@@ -3504,7 +3677,12 @@
             "type": "integer"
           }
         },
-        "required": ["items", "page", "page_size", "total"],
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
         "title": "ItemPage[StationView]",
         "type": "object"
       },
@@ -3533,7 +3711,12 @@
             "type": "integer"
           }
         },
-        "required": ["items", "page", "page_size", "total"],
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
         "title": "ItemPage[TemplateDraftView]",
         "type": "object"
       },
@@ -3562,7 +3745,12 @@
             "type": "integer"
           }
         },
-        "required": ["items", "page", "page_size", "total"],
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
         "title": "ItemPage[TemplateImportView]",
         "type": "object"
       },
@@ -3591,7 +3779,12 @@
             "type": "integer"
           }
         },
-        "required": ["items", "page", "page_size", "total"],
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
         "title": "ItemPage[TemplateVersionView]",
         "type": "object"
       },
@@ -3620,7 +3813,12 @@
             "type": "integer"
           }
         },
-        "required": ["items", "page", "page_size", "total"],
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
         "title": "ItemPage[UsageCheckView]",
         "type": "object"
       },
@@ -3649,7 +3847,12 @@
             "type": "integer"
           }
         },
-        "required": ["items", "page", "page_size", "total"],
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
         "title": "ItemPage[UserView]",
         "type": "object"
       },
@@ -3678,7 +3881,12 @@
             "type": "integer"
           }
         },
-        "required": ["items", "page", "page_size", "total"],
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
         "title": "ItemPage[VlmCandidateView]",
         "type": "object"
       },
@@ -3707,7 +3915,12 @@
             "type": "integer"
           }
         },
-        "required": ["items", "page", "page_size", "total"],
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
         "title": "ItemPage[str]",
         "type": "object"
       },
@@ -3716,12 +3929,18 @@
         "description": "真实设备测得的完整五项能力声明。",
         "properties": {
           "delivery": {
-            "enum": ["pushed", "polled"],
+            "enum": [
+              "pushed",
+              "polled"
+            ],
             "title": "Delivery",
             "type": "string"
           },
           "edge_preservation": {
-            "enum": ["preserved", "may_drop"],
+            "enum": [
+              "preserved",
+              "may_drop"
+            ],
             "title": "Edge Preservation",
             "type": "string"
           },
@@ -3742,12 +3961,18 @@
             "title": "Polling Interval Seconds"
           },
           "sequencing": {
-            "enum": ["sequenced", "unsequenced"],
+            "enum": [
+              "sequenced",
+              "unsequenced"
+            ],
             "title": "Sequencing",
             "type": "string"
           },
           "timestamp_source": {
-            "enum": ["device_clock", "host_receipt"],
+            "enum": [
+              "device_clock",
+              "host_receipt"
+            ],
             "title": "Timestamp Source",
             "type": "string"
           },
@@ -3771,7 +3996,10 @@
       },
       "MediaPathMode": {
         "description": "相机子码流送入 MediaMTX 前采用的媒体路径。",
-        "enum": ["passthrough", "cpu_transcode"],
+        "enum": [
+          "passthrough",
+          "cpu_transcode"
+        ],
         "title": "MediaPathMode",
         "type": "string"
       },
@@ -3804,7 +4032,10 @@
             "type": "string"
           }
         },
-        "required": ["status", "data"],
+        "required": [
+          "status",
+          "data"
+        ],
         "title": "MonitorOverviewSection",
         "type": "object"
       },
@@ -3826,7 +4057,11 @@
             "type": "string"
           }
         },
-        "required": ["accepted", "duplicate", "event_id"],
+        "required": [
+          "accepted",
+          "duplicate",
+          "event_id"
+        ],
         "title": "MonitorReportAccepted",
         "type": "object"
       },
@@ -3868,7 +4103,11 @@
             "title": "Start"
           }
         },
-        "required": ["anchor", "start", "end"],
+        "required": [
+          "anchor",
+          "start",
+          "end"
+        ],
         "title": "MonitorReportEvidence",
         "type": "object"
       },
@@ -3902,7 +4141,12 @@
             "type": "array"
           }
         },
-        "required": ["reason_code", "detail", "step_ids", "evidence"],
+        "required": [
+          "reason_code",
+          "detail",
+          "step_ids",
+          "evidence"
+        ],
         "title": "MonitorReportViolation",
         "type": "object"
       },
@@ -4144,7 +4388,9 @@
             "type": "string"
           }
         },
-        "required": ["password"],
+        "required": [
+          "password"
+        ],
         "title": "NewPassword",
         "type": "object"
       },
@@ -4170,7 +4416,11 @@
             "type": "array"
           }
         },
-        "required": ["code", "name", "permissions"],
+        "required": [
+          "code",
+          "name",
+          "permissions"
+        ],
         "title": "NewRole",
         "type": "object"
       },
@@ -4195,13 +4445,20 @@
             "type": "string"
           }
         },
-        "required": ["login_name", "display_name", "password"],
+        "required": [
+          "login_name",
+          "display_name",
+          "password"
+        ],
         "title": "NewUser",
         "type": "object"
       },
       "OrderingMode": {
         "description": "模板是否要求动作严格按步骤顺序出现。",
-        "enum": ["strict", "unordered"],
+        "enum": [
+          "strict",
+          "unordered"
+        ],
         "title": "OrderingMode",
         "type": "string"
       },
@@ -4220,19 +4477,32 @@
             "$ref": "#/components/schemas/TemplateOverviewSection"
           }
         },
-        "required": ["device", "template", "dataset", "monitor"],
+        "required": [
+          "device",
+          "template",
+          "dataset",
+          "monitor"
+        ],
         "title": "OverviewResponse",
         "type": "object"
       },
       "PendingCommandStatus": {
         "description": "持久委托命令的生命周期状态。",
-        "enum": ["pending", "claimed", "succeeded", "failed", "rejected"],
+        "enum": [
+          "pending",
+          "claimed",
+          "succeeded",
+          "failed",
+          "rejected"
+        ],
         "title": "PendingCommandStatus",
         "type": "string"
       },
       "PendingCommandType": {
         "description": "推理机从中心领取的设备命令类型。",
-        "enum": ["test_connector_connection"],
+        "enum": [
+          "test_connector_connection"
+        ],
         "title": "PendingCommandType",
         "type": "string"
       },
@@ -4431,7 +4701,10 @@
       },
       "PointDirection": {
         "description": "授权点位的物理读写方向。",
-        "enum": ["input", "output"],
+        "enum": [
+          "input",
+          "output"
+        ],
         "title": "PointDirection",
         "type": "string"
       },
@@ -4453,7 +4726,9 @@
             "$ref": "#/components/schemas/DeviceStatus"
           }
         },
-        "required": ["status"],
+        "required": [
+          "status"
+        ],
         "title": "PointStatus",
         "type": "object"
       },
@@ -4588,7 +4863,11 @@
             "type": "string"
           }
         },
-        "required": ["title", "status", "error_code"],
+        "required": [
+          "title",
+          "status",
+          "error_code"
+        ],
         "title": "ProblemDocument",
         "type": "object"
       },
@@ -4610,13 +4889,20 @@
             "type": "integer"
           }
         },
-        "required": ["total", "sha256_verified", "sha256_unverified"],
+        "required": [
+          "total",
+          "sha256_verified",
+          "sha256_unverified"
+        ],
         "title": "PublishedVersionSummary",
         "type": "object"
       },
       "RecordingMode": {
         "description": "相机是否只在观看时取流，还是持续录制。",
-        "enum": ["preview_only", "continuous"],
+        "enum": [
+          "preview_only",
+          "continuous"
+        ],
         "title": "RecordingMode",
         "type": "string"
       },
@@ -4648,7 +4934,12 @@
             "type": "array"
           }
         },
-        "required": ["kind", "action_list_revision", "records", "media"],
+        "required": [
+          "kind",
+          "action_list_revision",
+          "records",
+          "media"
+        ],
         "title": "RegisterVlmCandidateInput",
         "type": "object"
       },
@@ -4696,7 +4987,9 @@
             "$ref": "#/components/schemas/UserStatus"
           }
         },
-        "required": ["status"],
+        "required": [
+          "status"
+        ],
         "title": "RequestedStatus",
         "type": "object"
       },
@@ -4731,13 +5024,21 @@
             "type": "integer"
           }
         },
-        "required": ["total", "active", "deactivated", "unknown"],
+        "required": [
+          "total",
+          "active",
+          "deactivated",
+          "unknown"
+        ],
         "title": "ResourceSummary",
         "type": "object"
       },
       "RetryMode": {
         "description": "失败后的恢复动作，直接表达调用者下一步该做什么。",
-        "enum": ["retry_upload", "retry_validation"],
+        "enum": [
+          "retry_upload",
+          "retry_validation"
+        ],
         "title": "RetryMode",
         "type": "string"
       },
@@ -4749,7 +5050,9 @@
             "$ref": "#/components/schemas/RetryMode"
           }
         },
-        "required": ["mode"],
+        "required": [
+          "mode"
+        ],
         "title": "RetryVideoUploadInput",
         "type": "object"
       },
@@ -4782,7 +5085,12 @@
             ]
           }
         },
-        "required": ["member", "attempt", "upload", "job"],
+        "required": [
+          "member",
+          "attempt",
+          "upload",
+          "job"
+        ],
         "title": "RetryView",
         "type": "object"
       },
@@ -4810,13 +5118,21 @@
             "type": "array"
           }
         },
-        "required": ["id", "code", "name", "permissions"],
+        "required": [
+          "id",
+          "code",
+          "name",
+          "permissions"
+        ],
         "title": "RoleView",
         "type": "object"
       },
       "RuntimeParameterMode": {
         "description": "工位运行参数的整组来源。",
-        "enum": ["follow_template", "custom"],
+        "enum": [
+          "follow_template",
+          "custom"
+        ],
         "title": "RuntimeParameterMode",
         "type": "string"
       },
@@ -4881,7 +5197,9 @@
             ]
           }
         },
-        "required": ["mode"],
+        "required": [
+          "mode"
+        ],
         "title": "RuntimeParametersUpdateInput",
         "type": "object"
       },
@@ -4937,7 +5255,12 @@
             "type": "string"
           }
         },
-        "required": ["user_id", "login_name", "display_name", "expires_at"],
+        "required": [
+          "user_id",
+          "login_name",
+          "display_name",
+          "expires_at"
+        ],
         "title": "SessionView",
         "type": "object"
       },
@@ -4963,7 +5286,10 @@
             "type": "array"
           }
         },
-        "required": ["code", "name"],
+        "required": [
+          "code",
+          "name"
+        ],
         "title": "StationConfiguration",
         "type": "object"
       },
@@ -4973,7 +5299,9 @@
             "$ref": "#/components/schemas/DeviceStatus"
           }
         },
-        "required": ["status"],
+        "required": [
+          "status"
+        ],
         "title": "StationStatus",
         "type": "object"
       },
@@ -5168,7 +5496,10 @@
             "$ref": "#/components/schemas/UserView"
           }
         },
-        "required": ["user", "revoked_sessions"],
+        "required": [
+          "user",
+          "revoked_sessions"
+        ],
         "title": "StatusChanged",
         "type": "object"
       },
@@ -5201,7 +5532,12 @@
             "type": "string"
           }
         },
-        "required": ["name", "media_type", "byte_length", "sha256"],
+        "required": [
+          "name",
+          "media_type",
+          "byte_length",
+          "sha256"
+        ],
         "title": "TemplateArtifactView",
         "type": "object"
       },
@@ -5240,7 +5576,10 @@
             "type": "string"
           }
         },
-        "required": ["station_id", "version_id"],
+        "required": [
+          "station_id",
+          "version_id"
+        ],
         "title": "TemplateBindingInput",
         "type": "object"
       },
@@ -5488,7 +5827,11 @@
             "type": "array"
           }
         },
-        "required": ["steps", "ordering", "runtime_defaults"],
+        "required": [
+          "steps",
+          "ordering",
+          "runtime_defaults"
+        ],
         "title": "TemplateDraftConfiguration",
         "type": "object"
       },
@@ -5659,7 +6002,12 @@
             "type": "string"
           }
         },
-        "required": ["sheet", "row", "field", "message"],
+        "required": [
+          "sheet",
+          "row",
+          "field",
+          "message"
+        ],
         "title": "TemplateFieldErrorView",
         "type": "object"
       },
@@ -5679,7 +6027,10 @@
             "$ref": "#/components/schemas/TemplateImportView"
           }
         },
-        "required": ["import_record", "draft"],
+        "required": [
+          "import_record",
+          "draft"
+        ],
         "title": "TemplateImportResultView",
         "type": "object"
       },
@@ -5698,7 +6049,9 @@
             "type": "integer"
           }
         },
-        "required": ["total"],
+        "required": [
+          "total"
+        ],
         "title": "TemplateImportSummary",
         "type": "object"
       },
@@ -5784,7 +6137,10 @@
             "type": "string"
           }
         },
-        "required": ["status", "data"],
+        "required": [
+          "status",
+          "data"
+        ],
         "title": "TemplateOverviewSection",
         "type": "object"
       },
@@ -5895,7 +6251,11 @@
             "type": "integer"
           }
         },
-        "required": ["number", "name", "description"],
+        "required": [
+          "number",
+          "name",
+          "description"
+        ],
         "title": "TemplateStepInput",
         "type": "object"
       },
@@ -5914,7 +6274,11 @@
             "type": "integer"
           }
         },
-        "required": ["number", "name", "description"],
+        "required": [
+          "number",
+          "name",
+          "description"
+        ],
         "title": "TemplateStepView",
         "type": "object"
       },
@@ -6087,7 +6451,9 @@
             "type": "string"
           }
         },
-        "required": ["verification"],
+        "required": [
+          "verification"
+        ],
         "title": "UnverifiedCapabilityDocument",
         "type": "object"
       },
@@ -6212,7 +6578,11 @@
             ]
           }
         },
-        "required": ["member", "attempt", "upload"],
+        "required": [
+          "member",
+          "attempt",
+          "upload"
+        ],
         "title": "UploadRequestView",
         "type": "object"
       },
@@ -6226,7 +6596,10 @@
             "$ref": "#/components/schemas/UsageJobView"
           }
         },
-        "required": ["check", "job"],
+        "required": [
+          "check",
+          "job"
+        ],
         "title": "UsageCheckAcceptedView",
         "type": "object"
       },
@@ -6250,7 +6623,9 @@
             "$ref": "#/components/schemas/UsageKind"
           }
         },
-        "required": ["kind"],
+        "required": [
+          "kind"
+        ],
         "title": "UsageCheckInput",
         "type": "object"
       },
@@ -6478,13 +6853,19 @@
       },
       "UsageKind": {
         "description": "训练数据用途。",
-        "enum": ["ddm", "vlm"],
+        "enum": [
+          "ddm",
+          "vlm"
+        ],
         "title": "UsageKind",
         "type": "string"
       },
       "UserStatus": {
         "description": "Whether an account may still take part in a new login.\n\nAn enum rather than an `is_active` boolean: `CONTEXT.md` gives 停用 its own definition\nacross every mutable configuration object, and the call site reads\n`status is UserStatus.DEACTIVATED` instead of `not user.is_active`.",
-        "enum": ["active", "deactivated"],
+        "enum": [
+          "active",
+          "deactivated"
+        ],
         "title": "UserStatus",
         "type": "string"
       },
@@ -6516,7 +6897,13 @@
             "$ref": "#/components/schemas/UserStatus"
           }
         },
-        "required": ["id", "login_name", "display_name", "status", "role_ids"],
+        "required": [
+          "id",
+          "login_name",
+          "display_name",
+          "status",
+          "role_ids"
+        ],
         "title": "UserView",
         "type": "object"
       },
@@ -6552,13 +6939,22 @@
             "type": "string"
           }
         },
-        "required": ["loc", "msg", "type"],
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
         "title": "ValidationError",
         "type": "object"
       },
       "VlmCandidateKind": {
         "description": "基座支持的 VLM 输入产物类别。",
-        "enum": ["gqa", "bcq", "mcq", "golden_gqa"],
+        "enum": [
+          "gqa",
+          "bcq",
+          "mcq",
+          "golden_gqa"
+        ],
         "title": "VlmCandidateKind",
         "type": "string"
       },
@@ -7021,7 +7417,9 @@
           }
         },
         "summary": "Read A Context",
-        "tags": ["dataset-annotation"],
+        "tags": [
+          "dataset-annotation"
+        ],
         "x-required-permission": "dataset.dataset.view"
       }
     },
@@ -7107,7 +7505,9 @@
           }
         },
         "summary": "Read The Permission Catalogue",
-        "tags": ["auth"]
+        "tags": [
+          "auth"
+        ]
       }
     },
     "/api/v1/auth/roles": {
@@ -7192,7 +7592,9 @@
           }
         },
         "summary": "Read The Roles",
-        "tags": ["auth"]
+        "tags": [
+          "auth"
+        ]
       },
       "post": {
         "description": "Create a role from registered permission strings.",
@@ -7270,7 +7672,9 @@
           }
         },
         "summary": "Create A Role",
-        "tags": ["auth"],
+        "tags": [
+          "auth"
+        ],
         "x-required-permission": "auth.role.edit"
       }
     },
@@ -7356,7 +7760,9 @@
           }
         },
         "summary": "Delete A Role",
-        "tags": ["auth"],
+        "tags": [
+          "auth"
+        ],
         "x-required-permission": "auth.role.delete"
       },
       "put": {
@@ -7457,7 +7863,9 @@
           }
         },
         "summary": "Edit A Role",
-        "tags": ["auth"],
+        "tags": [
+          "auth"
+        ],
         "x-required-permission": "auth.role.edit"
       }
     },
@@ -7491,7 +7899,9 @@
           }
         },
         "summary": "End The Session",
-        "tags": ["auth"]
+        "tags": [
+          "auth"
+        ]
       },
       "get": {
         "description": "Report the caller's own session. What the Web shell calls to restore one on load.\n\nReaching it at all slid the idle window forward, in `authenticated_caller`, so the\n`expires_at` reported here is the one that now applies.",
@@ -7529,7 +7939,9 @@
           }
         },
         "summary": "Read The Session",
-        "tags": ["auth"]
+        "tags": [
+          "auth"
+        ]
       },
       "post": {
         "description": "Log in. Refuses with `CREDENTIALS_REJECTED` or `ACCOUNT_DEACTIVATED`.\n\nThe one route that must not require a session cookie or a CSRF token: there is no session\nyet, and the credential in the body is what authorizes the call.",
@@ -7597,7 +8009,9 @@
           }
         },
         "summary": "Open A Session",
-        "tags": ["auth"]
+        "tags": [
+          "auth"
+        ]
       }
     },
     "/api/v1/auth/users": {
@@ -7682,7 +8096,9 @@
           }
         },
         "summary": "Read The Users",
-        "tags": ["auth"]
+        "tags": [
+          "auth"
+        ]
       },
       "post": {
         "description": "Create an active account. It can log in immediately; it holds no roles until assigned.",
@@ -7760,7 +8176,9 @@
           }
         },
         "summary": "Create An Account",
-        "tags": ["auth"],
+        "tags": [
+          "auth"
+        ],
         "x-required-permission": "auth.user.edit"
       }
     },
@@ -7846,7 +8264,9 @@
           }
         },
         "summary": "Delete An Account",
-        "tags": ["auth"],
+        "tags": [
+          "auth"
+        ],
         "x-required-permission": "auth.user.delete"
       },
       "patch": {
@@ -7937,7 +8357,9 @@
           }
         },
         "summary": "Edit An Account",
-        "tags": ["auth"],
+        "tags": [
+          "auth"
+        ],
         "x-required-permission": "auth.user.edit"
       }
     },
@@ -8023,7 +8445,9 @@
           }
         },
         "summary": "Reset An Account Password",
-        "tags": ["auth"],
+        "tags": [
+          "auth"
+        ],
         "x-required-permission": "auth.user.edit"
       }
     },
@@ -8126,7 +8550,9 @@
           }
         },
         "summary": "Set The Roles Of An Account",
-        "tags": ["auth"],
+        "tags": [
+          "auth"
+        ],
         "x-required-permission": "auth.user.edit"
       }
     },
@@ -8229,7 +8655,9 @@
           }
         },
         "summary": "Set An Account Status",
-        "tags": ["auth"],
+        "tags": [
+          "auth"
+        ],
         "x-required-permission": "auth.user.edit"
       }
     },
@@ -8331,7 +8759,9 @@
           }
         },
         "summary": "List The Cameras",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.camera.view"
       },
       "post": {
@@ -8419,7 +8849,9 @@
           }
         },
         "summary": "Create A Camera",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.camera.edit"
       }
     },
@@ -8521,7 +8953,9 @@
           }
         },
         "summary": "List Camera Media Descriptions",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.camera.view"
       }
     },
@@ -8615,7 +9049,9 @@
           }
         },
         "summary": "Delete A Camera",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.camera.delete"
       },
       "get": {
@@ -8695,7 +9131,9 @@
           }
         },
         "summary": "Read A Camera",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.camera.view"
       },
       "patch": {
@@ -8804,7 +9242,9 @@
           }
         },
         "summary": "Edit A Camera",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.camera.edit"
       }
     },
@@ -8886,7 +9326,9 @@
           }
         },
         "summary": "Read A Camera Media",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.camera.view"
       }
     },
@@ -8997,7 +9439,9 @@
           }
         },
         "summary": "Set The Camera Status",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.camera.edit"
       }
     },
@@ -9099,7 +9543,9 @@
           }
         },
         "summary": "List The Connectors",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.connector.view"
       },
       "post": {
@@ -9177,7 +9623,9 @@
           }
         },
         "summary": "Create A Connector",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.connector.edit"
       }
     },
@@ -9271,7 +9719,9 @@
           }
         },
         "summary": "Delete A Connector",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.connector.delete"
       },
       "get": {
@@ -9351,7 +9801,9 @@
           }
         },
         "summary": "Read A Connector",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.connector.view"
       },
       "patch": {
@@ -9460,7 +9912,9 @@
           }
         },
         "summary": "Edit A Connector",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.connector.edit"
       }
     },
@@ -9586,7 +10040,9 @@
           }
         },
         "summary": "Update The Connector Capability",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.connector.edit"
       }
     },
@@ -9690,7 +10146,9 @@
           }
         },
         "summary": "Enqueue A Connector Connection Test",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.connector.edit"
       }
     },
@@ -9801,7 +10259,9 @@
           }
         },
         "summary": "Set The Connector Status",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.connector.edit"
       }
     },
@@ -9967,7 +10427,9 @@
           }
         },
         "summary": "Claim Next Device Command",
-        "tags": ["device"]
+        "tags": [
+          "device"
+        ]
       }
     },
     "/api/v1/device-commands/{command_id}": {
@@ -10059,7 +10521,9 @@
           }
         },
         "summary": "Read A Device Command",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.connector.view"
       }
     },
@@ -10253,7 +10717,9 @@
           }
         },
         "summary": "Complete A Device Command",
-        "tags": ["device"]
+        "tags": [
+          "device"
+        ]
       }
     },
     "/api/v1/inference-backends": {
@@ -10355,7 +10821,9 @@
           }
         },
         "summary": "List The Backends",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.inference_backend.view"
       },
       "post": {
@@ -10444,7 +10912,9 @@
           }
         },
         "summary": "Create A Backend",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.inference_backend.edit"
       }
     },
@@ -10539,7 +11009,9 @@
           }
         },
         "summary": "Delete A Backend",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.inference_backend.delete"
       },
       "get": {
@@ -10620,7 +11092,9 @@
           }
         },
         "summary": "Read A Backend",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.inference_backend.view"
       },
       "patch": {
@@ -10730,7 +11204,9 @@
           }
         },
         "summary": "Edit A Backend",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.inference_backend.edit"
       }
     },
@@ -10832,7 +11308,9 @@
           }
         },
         "summary": "Test A Backend Connection",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.inference_backend.edit"
       }
     },
@@ -10944,7 +11422,9 @@
           }
         },
         "summary": "Set The Backend Status",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.inference_backend.edit"
       }
     },
@@ -11030,7 +11510,9 @@
           }
         },
         "summary": "List The Hosts",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.inference_host.view"
       },
       "post": {
@@ -11109,7 +11591,9 @@
           }
         },
         "summary": "Create A Host",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.inference_host.edit"
       }
     },
@@ -11204,7 +11688,9 @@
           }
         },
         "summary": "Delete A Host",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.inference_host.delete"
       },
       "get": {
@@ -11285,7 +11771,9 @@
           }
         },
         "summary": "Read A Host",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.inference_host.view"
       },
       "patch": {
@@ -11395,7 +11883,9 @@
           }
         },
         "summary": "Edit A Host",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.inference_host.edit"
       }
     },
@@ -11514,7 +12004,9 @@
           }
         },
         "summary": "Pull Inference Host Configuration",
-        "tags": ["inference-host"]
+        "tags": [
+          "inference-host"
+        ]
       }
     },
     "/api/v1/inference-hosts/{host_id}/credential": {
@@ -11626,7 +12118,9 @@
           }
         },
         "summary": "Retired A Host Credential",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.inference_host.edit"
       }
     },
@@ -11738,7 +12232,9 @@
           }
         },
         "summary": "Register A Host Identity Key",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.inference_host.edit"
       }
     },
@@ -11820,7 +12316,9 @@
           }
         },
         "summary": "Export A Host Media Configuration",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": [
           "device.inference_host.view",
           "device.camera.view"
@@ -11935,7 +12433,9 @@
           }
         },
         "summary": "Set The Host Status",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.inference_host.edit"
       }
     },
@@ -12018,7 +12518,9 @@
           }
         },
         "summary": "Read A Job",
-        "tags": ["job"],
+        "tags": [
+          "job"
+        ],
         "x-required-permissions": [
           "dataset.dataset.view",
           "dataset.dataset.import"
@@ -12170,7 +12672,9 @@
           }
         },
         "summary": "Report Monitor Health",
-        "tags": ["monitor"]
+        "tags": [
+          "monitor"
+        ]
       }
     },
     "/api/v1/monitor/reported-decisions": {
@@ -12285,7 +12789,9 @@
           }
         },
         "summary": "Report Monitor Decision",
-        "tags": ["monitor"]
+        "tags": [
+          "monitor"
+        ]
       }
     },
     "/api/v1/monitor/stream": {
@@ -12342,7 +12848,9 @@
           }
         },
         "summary": "Stream Monitor Events",
-        "tags": ["monitor"],
+        "tags": [
+          "monitor"
+        ],
         "x-required-permission": "monitor.report.view"
       }
     },
@@ -12373,7 +12881,9 @@
           }
         },
         "summary": "Read Overview",
-        "tags": ["overview"]
+        "tags": [
+          "overview"
+        ]
       }
     },
     "/api/v1/point-binding-validations": {
@@ -12463,7 +12973,9 @@
           }
         },
         "summary": "Validate A Point Binding",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.point.view"
       }
     },
@@ -12582,7 +13094,9 @@
           }
         },
         "summary": "List The Points",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.point.view"
       },
       "post": {
@@ -12670,7 +13184,9 @@
           }
         },
         "summary": "Create A Point",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.point.edit"
       }
     },
@@ -12764,7 +13280,9 @@
           }
         },
         "summary": "Delete A Point",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.point.delete"
       },
       "get": {
@@ -12844,7 +13362,9 @@
           }
         },
         "summary": "Read A Point",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.point.view"
       },
       "patch": {
@@ -12953,7 +13473,9 @@
           }
         },
         "summary": "Edit A Point",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.point.edit"
       }
     },
@@ -13064,7 +13586,9 @@
           }
         },
         "summary": "Set The Point Status",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.point.edit"
       }
     },
@@ -13149,7 +13673,9 @@
           }
         },
         "summary": "List The Stations",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.station.view"
       },
       "post": {
@@ -13227,7 +13753,9 @@
           }
         },
         "summary": "Create A Station",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.station.edit"
       }
     },
@@ -13321,7 +13849,9 @@
           }
         },
         "summary": "Delete A Station",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.station.delete"
       },
       "get": {
@@ -13401,7 +13931,9 @@
           }
         },
         "summary": "Read A Station",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.station.view"
       },
       "patch": {
@@ -13510,7 +14042,9 @@
           }
         },
         "summary": "Edit A Station",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.station.edit"
       }
     },
@@ -13621,7 +14155,9 @@
           }
         },
         "summary": "Set The Station Status",
-        "tags": ["device"],
+        "tags": [
+          "device"
+        ],
         "x-required-permission": "device.station.edit"
       }
     },
@@ -13722,7 +14258,9 @@
           }
         },
         "summary": "Bind A Template Version",
-        "tags": ["template"],
+        "tags": [
+          "template"
+        ],
         "x-required-permission": "device.station.edit"
       }
     },
@@ -13802,7 +14340,9 @@
           }
         },
         "summary": "Validate A Template Binding",
-        "tags": ["template"],
+        "tags": [
+          "template"
+        ],
         "x-required-permission": "device.station.view"
       }
     },
@@ -13948,7 +14488,9 @@
           }
         },
         "summary": "Report A Template Configuration",
-        "tags": ["template"]
+        "tags": [
+          "template"
+        ]
       }
     },
     "/api/v1/templates/drafts": {
@@ -14032,7 +14574,9 @@
           }
         },
         "summary": "List The Template Drafts",
-        "tags": ["template"],
+        "tags": [
+          "template"
+        ],
         "x-required-permission": "template.draft.view"
       }
     },
@@ -14114,7 +14658,9 @@
           }
         },
         "summary": "Read A Template Draft",
-        "tags": ["template"],
+        "tags": [
+          "template"
+        ],
         "x-required-permission": "template.draft.view"
       },
       "patch": {
@@ -14223,7 +14769,9 @@
           }
         },
         "summary": "Edit A Template Draft",
-        "tags": ["template"],
+        "tags": [
+          "template"
+        ],
         "x-required-permission": "template.draft.edit"
       }
     },
@@ -14335,7 +14883,9 @@
           }
         },
         "summary": "Publish A Template Version",
-        "tags": ["template"],
+        "tags": [
+          "template"
+        ],
         "x-required-permission": "template.draft.edit"
       }
     },
@@ -14420,7 +14970,9 @@
           }
         },
         "summary": "List The Template Imports",
-        "tags": ["template"],
+        "tags": [
+          "template"
+        ],
         "x-required-permission": "template.draft.view"
       },
       "post": {
@@ -14520,7 +15072,9 @@
           }
         },
         "summary": "Import A Template Draft",
-        "tags": ["template"],
+        "tags": [
+          "template"
+        ],
         "x-required-permission": "template.draft.edit"
       }
     },
@@ -14602,7 +15156,9 @@
           }
         },
         "summary": "Read An Import",
-        "tags": ["template"],
+        "tags": [
+          "template"
+        ],
         "x-required-permission": "template.draft.view"
       }
     },
@@ -14686,7 +15242,9 @@
           }
         },
         "summary": "Download An Import",
-        "tags": ["template"],
+        "tags": [
+          "template"
+        ],
         "x-required-permission": "template.draft.view"
       }
     },
@@ -14768,7 +15326,9 @@
           }
         },
         "summary": "Read A Station Template Configuration",
-        "tags": ["template"],
+        "tags": [
+          "template"
+        ],
         "x-required-permission": "device.station.view"
       }
     },
@@ -14879,7 +15439,9 @@
           }
         },
         "summary": "Update A Station Runtime Parameters",
-        "tags": ["template"],
+        "tags": [
+          "template"
+        ],
         "x-required-permission": "device.station.edit"
       }
     },
@@ -14964,7 +15526,9 @@
           }
         },
         "summary": "List The Template Versions",
-        "tags": ["template"],
+        "tags": [
+          "template"
+        ],
         "x-required-permission": "template.draft.view"
       }
     },
@@ -15046,7 +15610,9 @@
           }
         },
         "summary": "Read A Template Version",
-        "tags": ["template"],
+        "tags": [
+          "template"
+        ],
         "x-required-permission": "template.draft.view"
       }
     },
@@ -15143,7 +15709,9 @@
           }
         },
         "summary": "Download A Template Version Artifact",
-        "tags": ["template"],
+        "tags": [
+          "template"
+        ],
         "x-required-permission": "template.draft.view"
       }
     },
@@ -15258,7 +15826,9 @@
           }
         },
         "summary": "List The Training Datasets",
-        "tags": ["dataset"],
+        "tags": [
+          "dataset"
+        ],
         "x-required-permission": "dataset.dataset.view"
       },
       "post": {
@@ -15357,7 +15927,9 @@
           }
         },
         "summary": "Create A Training Dataset",
-        "tags": ["dataset"],
+        "tags": [
+          "dataset"
+        ],
         "x-required-permission": "dataset.dataset.import"
       }
     },
@@ -15459,7 +16031,9 @@
           }
         },
         "summary": "Read A Training Dataset",
-        "tags": ["dataset"],
+        "tags": [
+          "dataset"
+        ],
         "x-required-permission": "dataset.dataset.view"
       }
     },
@@ -15561,7 +16135,9 @@
           }
         },
         "summary": "Read A Dataset Action List",
-        "tags": ["dataset-annotation"],
+        "tags": [
+          "dataset-annotation"
+        ],
         "x-required-permission": "dataset.dataset.view"
       },
       "post": {
@@ -15671,7 +16247,9 @@
           }
         },
         "summary": "Register A Dataset Action List",
-        "tags": ["dataset-annotation"],
+        "tags": [
+          "dataset-annotation"
+        ],
         "x-required-permission": "dataset.dataset.edit"
       }
     },
@@ -15773,7 +16351,9 @@
           }
         },
         "summary": "List Dataset Action List Versions",
-        "tags": ["dataset-annotation"],
+        "tags": [
+          "dataset-annotation"
+        ],
         "x-required-permission": "dataset.dataset.view"
       }
     },
@@ -15898,7 +16478,9 @@
           }
         },
         "summary": "List The Dataset Artifacts",
-        "tags": ["dataset"],
+        "tags": [
+          "dataset"
+        ],
         "x-required-permission": "dataset.dataset.view"
       },
       "post": {
@@ -16008,7 +16590,9 @@
           }
         },
         "summary": "Request A Dataset Artifact",
-        "tags": ["dataset"],
+        "tags": [
+          "dataset"
+        ],
         "x-required-permission": "dataset.dataset.edit"
       }
     },
@@ -16120,7 +16704,9 @@
           }
         },
         "summary": "Read A Dataset Artifact",
-        "tags": ["dataset"],
+        "tags": [
+          "dataset"
+        ],
         "x-required-permission": "dataset.dataset.view"
       }
     },
@@ -16233,7 +16819,9 @@
           }
         },
         "summary": "Download A Dataset Artifact",
-        "tags": ["dataset"],
+        "tags": [
+          "dataset"
+        ],
         "x-required-permission": "dataset.dataset.view"
       }
     },
@@ -16358,7 +16946,9 @@
           }
         },
         "summary": "List The Dataset Members",
-        "tags": ["dataset"],
+        "tags": [
+          "dataset"
+        ],
         "x-required-permission": "dataset.dataset.view"
       },
       "post": {
@@ -16484,7 +17074,9 @@
           }
         },
         "summary": "Request A Video Upload",
-        "tags": ["dataset"],
+        "tags": [
+          "dataset"
+        ],
         "x-required-permission": "dataset.dataset.import"
       }
     },
@@ -16596,7 +17188,9 @@
           }
         },
         "summary": "Read A Dataset Member",
-        "tags": ["dataset"],
+        "tags": [
+          "dataset"
+        ],
         "x-required-permission": "dataset.dataset.view"
       }
     },
@@ -16718,7 +17312,9 @@
           }
         },
         "summary": "Create A Context",
-        "tags": ["dataset-annotation"],
+        "tags": [
+          "dataset-annotation"
+        ],
         "x-required-permission": [
           "dataset.dataset.view",
           "dataset.dataset.edit"
@@ -16833,7 +17429,9 @@
           }
         },
         "summary": "List The Annotations",
-        "tags": ["dataset-annotation"],
+        "tags": [
+          "dataset-annotation"
+        ],
         "x-required-permission": "dataset.dataset.view"
       },
       "post": {
@@ -16978,7 +17576,9 @@
           }
         },
         "summary": "Submit An Annotation",
-        "tags": ["dataset-annotation"],
+        "tags": [
+          "dataset-annotation"
+        ],
         "x-required-permission": "dataset.dataset.edit"
       }
     },
@@ -17100,7 +17700,9 @@
           }
         },
         "summary": "Read An Annotation",
-        "tags": ["dataset-annotation"],
+        "tags": [
+          "dataset-annotation"
+        ],
         "x-required-permission": "dataset.dataset.view"
       }
     },
@@ -17222,7 +17824,9 @@
           }
         },
         "summary": "Retry An Annotation",
-        "tags": ["dataset-annotation"],
+        "tags": [
+          "dataset-annotation"
+        ],
         "x-required-permission": "dataset.dataset.edit"
       }
     },
@@ -17354,7 +17958,9 @@
           }
         },
         "summary": "Confirm A Video Upload",
-        "tags": ["dataset"],
+        "tags": [
+          "dataset"
+        ],
         "x-required-permission": "dataset.dataset.import"
       }
     },
@@ -17502,7 +18108,9 @@
           }
         },
         "summary": "Retry A Video Upload",
-        "tags": ["dataset"],
+        "tags": [
+          "dataset"
+        ],
         "x-required-permission": "dataset.dataset.import"
       }
     },
@@ -17627,7 +18235,9 @@
           }
         },
         "summary": "List The Usage Checks",
-        "tags": ["dataset"],
+        "tags": [
+          "dataset"
+        ],
         "x-required-permission": "dataset.dataset.view"
       },
       "post": {
@@ -17737,7 +18347,9 @@
           }
         },
         "summary": "Request A Usage Check",
-        "tags": ["dataset"],
+        "tags": [
+          "dataset"
+        ],
         "x-required-permission": "dataset.dataset.edit"
       }
     },
@@ -17849,7 +18461,9 @@
           }
         },
         "summary": "Read A Usage Check",
-        "tags": ["dataset"],
+        "tags": [
+          "dataset"
+        ],
         "x-required-permission": "dataset.dataset.view"
       }
     },
@@ -17974,7 +18588,9 @@
           }
         },
         "summary": "List The Vlm Candidates",
-        "tags": ["dataset"],
+        "tags": [
+          "dataset"
+        ],
         "x-required-permission": "dataset.dataset.view"
       },
       "post": {
@@ -18093,7 +18709,9 @@
           }
         },
         "summary": "Register A Vlm Candidate",
-        "tags": ["dataset"],
+        "tags": [
+          "dataset"
+        ],
         "x-required-permission": "dataset.dataset.edit"
       }
     },
@@ -18205,7 +18823,9 @@
           }
         },
         "summary": "Read A Vlm Candidate",
-        "tags": ["dataset"],
+        "tags": [
+          "dataset"
+        ],
         "x-required-permission": "dataset.dataset.view"
       }
     }

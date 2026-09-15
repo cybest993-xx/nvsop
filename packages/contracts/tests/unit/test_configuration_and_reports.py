@@ -18,6 +18,7 @@ from nvsop_contracts import (
     ReportEvidence,
     ResolvedRuntimeParameters,
     Unverified,
+    canonical_json,
     configuration_from_wire,
     configuration_to_wire,
     reported_decision_from_wire,
@@ -117,6 +118,18 @@ class ConfigurationContractTests(unittest.TestCase):
                 stations=(replace(bundle.stations[0], model_ids=()),),
             ),
         )
+
+        legacy_explicit_empty = dict(legacy_without_ids)
+        explicit_stations = [dict(station) for station in old_stations]
+        explicit_stations[0]["model_ids"] = []
+        legacy_explicit_empty["stations"] = explicit_stations
+        legacy_explicit_empty.pop("sha256")
+        legacy_explicit_empty["sha256"] = hashlib.sha256(
+            canonical_json(legacy_explicit_empty).encode("utf-8")
+        ).hexdigest()
+        decoded_explicit_empty = configuration_from_wire(legacy_explicit_empty)
+        self.assertEqual(configuration_to_wire(decoded_explicit_empty), legacy_explicit_empty)
+        self.assertEqual(decoded_explicit_empty.sha256, legacy_explicit_empty["sha256"])
 
         tampered = dict(wire)
         tampered["host_id"] = "host-b"

@@ -11,7 +11,7 @@ import hashlib
 import json
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import cast
 
 from nvsop_contracts.capability import Capability, capability_from_wire, capability_to_wire
@@ -283,6 +283,7 @@ class ConfiguredStation:
     points: tuple[ConfiguredPoint, ...]
     template: ConfigurationTemplate | None
     model_ids: tuple[str, ...] = ()
+    _model_ids_present: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not self.station_id or not self.backend_id or not self.code or not self.name:
@@ -377,6 +378,7 @@ class ConfiguredStation:
                 else ConfigurationTemplate.from_wire(cast(Mapping[str, object], raw_template))
             ),
             model_ids=_strings(value.get("model_ids", ()), "station model_ids"),
+            _model_ids_present="model_ids" in value,
         )
 
 
@@ -407,9 +409,9 @@ class ConfigurationBundle:
     def content_wire(self) -> dict[str, object]:
         stations = [station.to_wire() for station in self.stations]
         if self.contract_version == LEGACY_CONFIGURATION_CONTRACT_VERSION:
-            for station in stations:
-                if not station["model_ids"]:
-                    station.pop("model_ids")
+            for wire_station, station in zip(stations, self.stations, strict=True):
+                if not wire_station["model_ids"] and not station._model_ids_present:
+                    wire_station.pop("model_ids")
         return {
             "contract_version": self.contract_version,
             "host_id": self.host_id,

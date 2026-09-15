@@ -77,7 +77,6 @@ dataset_config:
 >   - **Recommendation:** Set `temporal_stride = 1` for the best accuracy (computes scores for every valid frame position).
 >   - The figure below demonstrates the difference between `downsample` and `temporal_stride`:
 <p align="center">
-  <img src="downsample-temporal_stride.png" alt="Temporal Window vs Stride for DDM-Net" width="800"/>
 </p>
 
 >

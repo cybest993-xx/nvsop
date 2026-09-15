@@ -1,0 +1,68 @@
+diff --git a/vendor/sop-monitoring-blueprints/README.md b/vendor/sop-monitoring-blueprints/README.md
+index 064ecad..0adccac 100644
+--- a/vendor/sop-monitoring-blueprints/README.md
++++ b/vendor/sop-monitoring-blueprints/README.md
+@@ -45,7 +45,6 @@ These services are designed to work together: train a model with the Training Se
+ 
+ ## End-to-End Workflow
+ 
+-![SOP Fine-Tuning + Inference Agentic Workflow](assets/SOP-FT-Inference-Agentic-Workflow.png)
+ 
+ 1. Annotate videos by marking action start/end timestamps (Training).
+ 2. Generate QA pairs (GQA/BCQ/MCQ) from annotations (Training).
+@@ -119,7 +118,6 @@ With the DDM and Cosmos-Reason model checkpoints ready (fine-tuned above, or you
+ 
+ ## VSS Example Application
+ 
+-![VSS SOP Architecture](agentic/vss-sop-skills/vss-sop-build/references/diagrams/VSS%20SOP%20Blueprint%20Architecture.png)
+ 
+ The VSS SOP application is built, deployed, and validated using modular lifecycle skills:
+ 
+diff --git a/vendor/sop-monitoring-blueprints/agentic/ds-sop-skills/README.md b/vendor/sop-monitoring-blueprints/agentic/ds-sop-skills/README.md
+index 4452797..4218eab 100644
+--- a/vendor/sop-monitoring-blueprints/agentic/ds-sop-skills/README.md
++++ b/vendor/sop-monitoring-blueprints/agentic/ds-sop-skills/README.md
+@@ -6,7 +6,6 @@ SOP compliance monitoring.
+ 
+ ## Architecture
+ 
+-![DeepStream SOP Inference Agentic Workflow](assets/DeepStream-SOP-Inference-Agentic-Workflow.png)
+ 
+ **Key data flow:** Input sources → FastAPI `/v1/chat/completions` → `SOPProcessManager` → per-request `SOPVideoProcessor` with 4 stages: DeepStream GEBD pipeline (e.g. DDM, GPU) → Clip post-process → VLM inference (Cosmos Reason 1/2) → SOP Checker → SSE stream / Kafka output.
+ 
+diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/README.md b/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/README.md
+index 107b27d..9320c17 100644
+--- a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/README.md
++++ b/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/README.md
+@@ -60,7 +60,6 @@ The DeepStream-SOP project implements a highly optimized computer vision inferen
+ 
+ The DeepStream-SOP microservice architecture integrates multiple components to deliver real-time temporal action detection and VLM-based evaluation:
+ 
+-![DeepStream SOP Architecture](docs/deepstream-sop-architecture.png)
+ 
+ **Key Components:**
+ 
+diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/ddm-training-ms/ddm/DDM-Net/config/config_guide.md b/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/ddm-training-ms/ddm/DDM-Net/config/config_guide.md
+index ef83ed3..7aa8b28 100644
+--- a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/ddm-training-ms/ddm/DDM-Net/config/config_guide.md
++++ b/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/ddm-training-ms/ddm/DDM-Net/config/config_guide.md
+@@ -77,7 +77,6 @@ dataset_config:
+ >   - **Recommendation:** Set `temporal_stride = 1` for the best accuracy (computes scores for every valid frame position).
+ >   - The figure below demonstrates the difference between `downsample` and `temporal_stride`:
+ <p align="center">
+-  <img src="downsample-temporal_stride.png" alt="Temporal Window vs Stride for DDM-Net" width="800"/>
+ </p>
+ 
+ >
+diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/evaluation-ms/ddm/DDM-Net/config/config_guide.md b/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/evaluation-ms/ddm/DDM-Net/config/config_guide.md
+index ef83ed3..7aa8b28 100644
+--- a/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/evaluation-ms/ddm/DDM-Net/config/config_guide.md
++++ b/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/evaluation-ms/ddm/DDM-Net/config/config_guide.md
+@@ -77,7 +77,6 @@ dataset_config:
+ >   - **Recommendation:** Set `temporal_stride = 1` for the best accuracy (computes scores for every valid frame position).
+ >   - The figure below demonstrates the difference between `downsample` and `temporal_stride`:
+ <p align="center">
+-  <img src="downsample-temporal_stride.png" alt="Temporal Window vs Stride for DDM-Net" width="800"/>
+ </p>
+ 
+ >

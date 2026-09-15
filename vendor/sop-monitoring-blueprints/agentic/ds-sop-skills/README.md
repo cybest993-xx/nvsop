@@ -6,7 +6,6 @@ SOP compliance monitoring.
 
 ## Architecture
 
-![DeepStream SOP Inference Agentic Workflow](assets/DeepStream-SOP-Inference-Agentic-Workflow.png)
 
 **Key data flow:** Input sources → FastAPI `/v1/chat/completions` → `SOPProcessManager` → per-request `SOPVideoProcessor` with 4 stages: DeepStream GEBD pipeline (e.g. DDM, GPU) → Clip post-process → VLM inference (Cosmos Reason 1/2) → SOP Checker → SSE stream / Kafka output.
 

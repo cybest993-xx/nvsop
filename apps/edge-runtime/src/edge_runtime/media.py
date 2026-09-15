@@ -188,9 +188,13 @@ def load_media_runtime_configuration(value: object) -> MediaRuntimeConfiguration
 
 
 def validate_sop_camera_bindings(
-    configuration: MediaRuntimeConfiguration, station_ids: set[str]
+    configuration: MediaRuntimeConfiguration,
+    station_ids: set[str],
+    confirmed_camera_ids: set[str],
 ) -> None:
-    """拒绝已由自治工位使用的相机关闭连续录像保障。"""
+    """拒绝未被中心确认或不符合 SOP 录像约束的本地相机。"""
+    if any(camera.camera_id not in confirmed_camera_ids for camera in configuration.cameras):
+        raise ValueError("media cameras must belong to the confirmed configuration")
     if any(
         not camera.sop_execution and camera.station_id in station_ids
         for camera in configuration.cameras

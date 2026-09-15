@@ -123,9 +123,9 @@ def load_configuration(
         if not station_values:
             raise ValueError("stations must be a non-empty JSON array")
         stations = tuple(station_configuration(item) for item in station_values)
-        station_ids = [station.station_id for station in stations]
-        if len(set(station_ids)) != len(station_ids):
-            raise ValueError("stations must have unique station_id values")
+        station_keys = [(station.station_id, station.backend_id) for station in stations]
+        if len(set(station_keys)) != len(station_keys):
+            raise ValueError("stations must have unique station_id/backend_id pairs")
         local_state_path = _path(config["local_state_path"], "local_state_path")
     host_private_key = _read_secret(
         _path(config["host_private_key_file"], "host_private_key_file"),

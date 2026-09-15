@@ -102,7 +102,10 @@ class ApplyMediaExportTest(unittest.TestCase):
             self.assertEqual(str(root / "recordings"), result["media"]["recording_directory"])
             self.assertEqual(camera_id, result["media"]["cameras"][0]["camera_id"])
             self.assertFalse(result["media"]["cameras"][0]["sop_execution"])
-            self.assertNotIn("camera-secret", json.dumps(result))
+            rendered = json.dumps(result)
+            self.assertNotIn("camera-secret", rendered)
+            self.assertNotIn("edge-user-for-test", rendered)
+            self.assertNotIn("edge-password-for-test", rendered)
             self.assertEqual(0o600, output.stat().st_mode & 0o777)
 
             recordings = root / "recordings" / "camera"

@@ -304,19 +304,17 @@ class ConfiguredCamera:
 
     @classmethod
     def from_wire(cls, value: Mapping[str, object]) -> ConfiguredCamera:
-        _require_keys(
-            value,
-            {
-                "camera_id",
-                "name",
-                "address",
-                "main_stream_path",
-                "sub_stream_path",
-                "credentials_configured",
-                "revision",
-            },
-            "camera",
-        )
+        expected = {
+            "camera_id",
+            "name",
+            "address",
+            "main_stream_path",
+            "sub_stream_path",
+            "credentials_configured",
+            "revision",
+        }
+        if set(value) != expected:
+            raise ValueError("camera has unsupported or missing fields")
         configured = value["credentials_configured"]
         if not isinstance(configured, bool):
             raise ValueError("camera credentials_configured is invalid")

@@ -234,11 +234,40 @@ def _bundle() -> ConfigurationBundle:
         separators=(",", ":"),
         sort_keys=True,
     ).encode()
-    artifact = ConfigurationArtifact(
-        name="template.json",
-        media_type="application/json",
-        content=content,
-        sha256=sha256(content).hexdigest(),
+    artifacts = (
+        ConfigurationArtifact("actions.json", "application/json", b"{}", sha256(b"{}").hexdigest()),
+        ConfigurationArtifact(
+            "vlm_prompts.txt", "text/plain", b"prompt\\n", sha256(b"prompt\\n").hexdigest()
+        ),
+        ConfigurationArtifact(
+            "template.json", "application/json", content, sha256(content).hexdigest()
+        ),
+    )
+    manifest = json.dumps(
+        {
+            "artifacts": [
+                {
+                    "byte_length": len(artifact.content),
+                    "media_type": artifact.media_type,
+                    "name": artifact.name,
+                    "sha256": artifact.sha256,
+                }
+                for artifact in artifacts
+            ],
+            "format_version": 1,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    template = ConfigurationTemplate(
+        version_id="version-a",
+        version_sha256=sha256(manifest).hexdigest(),
+        artifacts=(
+            *artifacts,
+            ConfigurationArtifact(
+                "manifest.json", "application/json", manifest, sha256(manifest).hexdigest()
+            ),
+        ),
     )
     return ConfigurationBundle(
         host_id="host-a",
@@ -287,11 +316,7 @@ def _bundle() -> ConfigurationBundle:
                         address="2",
                     ),
                 ),
-                template=ConfigurationTemplate(
-                    version_id="version-a",
-                    version_sha256="a" * 64,
-                    artifacts=(artifact,),
-                ),
+                template=template,
             ),
         ),
     )

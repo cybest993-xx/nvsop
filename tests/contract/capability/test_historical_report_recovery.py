@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import unittest
 from datetime import UTC, datetime
 from uuid import UUID
@@ -19,18 +20,22 @@ from edge_runtime.judgment.model import (
 )
 from edge_runtime.judgment.reasons import Verdict
 from edge_runtime.local_state import open_local_state
-from edge_runtime.local_state.queues import ReportContext
+from edge_runtime.local_state.queues import BackendReportContext, ReportContext
 from edge_runtime.reporting import DecisionReporter
 
 from factory_sop.monitor.model import MirroredDecision
 from factory_sop.monitor.usecases import mirror_decision
-from nvsop_contracts import ReportedDecision
+from nvsop_contracts import (
+    ConfigurationBundle,
+    ReportBackendProvenance,
+    ReportedDecision,
+    configuration_to_wire,
+)
 
 HOST_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f201")
 STATION_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f202")
 BACKEND_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f203")
 TEMPLATE_ID = "019937d8-0d10-7b31-8d2d-4e60c8f4f204"
-CONFIGURATION_SHA256 = "c" * 64
 TEMPLATE_SHA256 = "d" * 64
 
 
@@ -39,6 +44,25 @@ class HistoricalAssignmentGateway:
 
     def owns_station_backend(self, *, host_id: UUID, station_id: UUID, backend_id: UUID) -> bool:
         return False
+
+    def has_configuration_station(
+        self,
+        *,
+        host_id: UUID,
+        configuration_revision: int,
+        configuration_sha256: str,
+        station_id: UUID,
+        template_version_id: str | None,
+        template_sha256: str | None,
+    ) -> bool:
+        return (
+            host_id == HOST_ID
+            and configuration_revision == 7
+            and station_id == STATION_ID
+            and template_version_id == TEMPLATE_ID
+            and template_sha256 == TEMPLATE_SHA256
+            and bool(configuration_sha256)
+        )
 
     def has_configuration_assignment(
         self,
@@ -55,7 +79,7 @@ class HistoricalAssignmentGateway:
         return (
             host_id == HOST_ID
             and configuration_revision == 7
-            and configuration_sha256 == CONFIGURATION_SHA256
+            and bool(configuration_sha256)
             and station_id == STATION_ID
             and backend_id == BACKEND_ID
             and template_version_id == TEMPLATE_ID
@@ -83,7 +107,14 @@ class MirrorTransport:
         self.monitor = monitor
         self.accepted: list[ReportedDecision] = []
 
-    def send_decision(self, report: ReportedDecision) -> None:
+    def send_decision(
+        self,
+        report: ReportedDecision,
+        *,
+        configuration: ConfigurationBundle | None,
+    ) -> None:
+        if configuration is None:
+            raise AssertionError("historical recovery must keep its frozen configuration")
         inserted = mirror_decision(
             report,
             received_at=datetime(2026, 9, 16, tzinfo=UTC),
@@ -98,15 +129,24 @@ class MirrorTransport:
 
 class HistoricalRecoveryContractTest(unittest.TestCase):
     def test_offline_decision_flushes_after_center_rebind_and_clears_outbox(self) -> None:
+        bundle_n = ConfigurationBundle(
+            host_id=str(HOST_ID),
+            config_revision=7,
+            generated_at="2026-09-16T00:00:00Z",
+            stations=(),
+        )
+        provenance_n = BackendReportContext(str(BACKEND_ID), ("model-7",))
         context_n = ReportContext(
             host_id=str(HOST_ID),
             station_id=str(STATION_ID),
-            backend_id=str(BACKEND_ID),
+            backends=(provenance_n,),
             template_version_id=TEMPLATE_ID,
             template_sha256=TEMPLATE_SHA256,
-            model_ids=("model-7",),
             configuration_revision=7,
-            configuration_sha256=CONFIGURATION_SHA256,
+            configuration_sha256=bundle_n.effective_sha256,
+            configuration_json=json.dumps(
+                configuration_to_wire(bundle_n), ensure_ascii=False, separators=(",", ":")
+            ),
         )
         state = open_local_state(":memory:")
         self.addCleanup(state.close)
@@ -137,6 +177,7 @@ class HistoricalRecoveryContractTest(unittest.TestCase):
             decisions=(decision,),
             evidence=(),
             closed_instances=(instance,),
+            report_provenance={1: (provenance_n,)},
         )
 
         (offline_pending,) = station.pending_reports()
@@ -153,7 +194,11 @@ class HistoricalRecoveryContractTest(unittest.TestCase):
         self.assertTrue(attempts[0].sent)
         self.assertEqual(len(transport.accepted), 1)
         self.assertEqual(transport.accepted[0].configuration_revision, 7)
-        self.assertEqual(transport.accepted[0].backend_id, str(BACKEND_ID))
+        self.assertIsNone(transport.accepted[0].backend_id)
+        self.assertEqual(
+            transport.accepted[0].backend_provenance,
+            (ReportBackendProvenance(str(BACKEND_ID), ("model-7",)),),
+        )
         self.assertEqual(station.pending_reports(), ())
 
 

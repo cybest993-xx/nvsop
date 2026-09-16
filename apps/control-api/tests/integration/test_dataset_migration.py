@@ -55,6 +55,32 @@ def database_at_0023(engine: Engine) -> Iterator[Engine]:
         installer.dispose()
 
 
+@pytest.fixture
+def database_at_0033(engine: Engine) -> Iterator[Engine]:
+    """构造真实 0033 数据库，用于验证已下发配置的升级窗口。"""
+    server = engine.url._replace(database="postgres")
+    installer = create_engine(server, isolation_level="AUTOCOMMIT")
+    database_name = f"nvsop_configuration_migration_{uuid4().hex[:12]}"
+    with installer.connect() as connection:
+        connection.exec_driver_sql(f'DROP DATABASE IF EXISTS "{database_name}"')
+        connection.exec_driver_sql(f'CREATE DATABASE "{database_name}"')
+
+    upgraded = create_engine(engine.url._replace(database=database_name))
+    configuration = Config(str(CONTROL_API / "alembic.ini"))
+    configuration.set_main_option("script_location", str(CONTROL_API / "migrations"))
+    configuration.set_main_option(
+        "sqlalchemy.url", upgraded.url.render_as_string(hide_password=False)
+    )
+    command.upgrade(configuration, "0033")
+    try:
+        yield upgraded
+    finally:
+        upgraded.dispose()
+        with installer.connect() as connection:
+            connection.exec_driver_sql(f'DROP DATABASE IF EXISTS "{database_name}"')
+        installer.dispose()
+
+
 def _tables(database: Engine) -> set[str]:
     with database.connect() as connection:
         return set(
@@ -161,6 +187,92 @@ def test_usage_records_round_trip_through_real_postgres(session: Session) -> Non
     assert repository.vlm_candidate_by_id(candidate_id) == candidate
     assert repository.usage_check_by_id(check_id) == check
     assert repository.artifact_by_id(artifact_id) == artifact
+
+
+def test_0034_backfills_only_the_0033_issued_configuration_fact(
+    database_at_0033: Engine,
+) -> None:
+    host_id = uuid4()
+    actor_id = uuid4()
+    issued_digest = "d" * 64
+    now = datetime(2026, 9, 16, tzinfo=UTC)
+    with database_at_0033.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO device_inference_host (
+                    id, name, address, mediamtx_address, mediamtx_playback_address,
+                    recording_window_seconds, disk_watermark_percent, status, revision,
+                    configuration_revision, configuration_sha256,
+                    created_by, updated_by, created_at, updated_at
+                ) VALUES (
+                    :id, 'migration-host', '10.9.0.1', NULL, NULL,
+                    604800, 85, 'active', 1,
+                    7, :configuration_sha256,
+                    :actor, :actor, :now, :now
+                )
+                """
+            ),
+            {
+                "id": host_id,
+                "actor": actor_id,
+                "now": now,
+                "configuration_sha256": issued_digest,
+            },
+        )
+
+    configuration = Config(str(CONTROL_API / "alembic.ini"))
+    configuration.set_main_option("script_location", str(CONTROL_API / "migrations"))
+    configuration.set_main_option(
+        "sqlalchemy.url", database_at_0033.url.render_as_string(hide_password=False)
+    )
+    command.upgrade(configuration, "0034")
+
+    with database_at_0033.connect() as connection:
+        issue = connection.execute(
+            text(
+                """
+                SELECT configuration_revision, configuration_sha256
+                  FROM device_configuration_issue
+                 WHERE host_id = :host_id
+                """
+            ),
+            {"host_id": host_id},
+        ).one()
+        assignment_count = connection.execute(
+            text("SELECT count(*) FROM device_configuration_assignment WHERE host_id = :host_id"),
+            {"host_id": host_id},
+        ).scalar_one()
+    assert issue == (7, issued_digest)
+    assert assignment_count == 0
+
+    command.downgrade(configuration, "0033")
+    assert "device_configuration_issue" not in _tables(database_at_0033)
+    assert "device_configuration_assignment" not in _tables(database_at_0033)
+
+
+def test_0035_allows_v2_reports_without_a_single_backend_column(
+    database_at_0033: Engine,
+) -> None:
+    configuration = Config(str(CONTROL_API / "alembic.ini"))
+    configuration.set_main_option("script_location", str(CONTROL_API / "migrations"))
+    configuration.set_main_option(
+        "sqlalchemy.url", database_at_0033.url.render_as_string(hide_password=False)
+    )
+    command.upgrade(configuration, "head")
+    with database_at_0033.connect() as connection:
+        nullable = connection.execute(
+            text(
+                """
+                SELECT is_nullable
+                  FROM information_schema.columns
+                 WHERE table_schema = 'public'
+                   AND table_name = 'monitor_reported_decision'
+                   AND column_name = 'backend_id'
+                """
+            )
+        ).scalar_one()
+    assert nullable == "YES"
 
 
 def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
@@ -283,11 +395,14 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
         "configuration_sha256",
     } <= _columns(database_at_0023, "device_inference_host")
     assert {"media_path_mode", "recording_mode"} <= _columns(database_at_0023, "device_camera")
-    assert "device_configuration_assignment" in _tables(database_at_0023)
+    assert {
+        "device_configuration_assignment",
+        "device_configuration_issue",
+    } <= _tables(database_at_0023)
 
     with database_at_0023.connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0034"
+    assert version == "0035"
     assert "dataset.dataset.edit" in _permission_codes(database_at_0023)
 
     command.downgrade(configuration, "0025")
@@ -298,7 +413,10 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
         "configuration_sha256",
     } & _columns(database_at_0023, "device_inference_host")
     assert not {"media_path_mode", "recording_mode"} & _columns(database_at_0023, "device_camera")
-    assert "device_configuration_assignment" not in _tables(database_at_0023)
+    assert not {
+        "device_configuration_assignment",
+        "device_configuration_issue",
+    } & _tables(database_at_0023)
     command.downgrade(configuration, "0024")
     assert not {
         "dataset_action_list_revision",

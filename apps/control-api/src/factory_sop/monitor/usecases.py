@@ -15,6 +15,7 @@ from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.model import MirroredDecision, MirroredHealth
 from factory_sop.monitor.repository import MonitorRepository
 from nvsop_contracts import (
+    DECISION_REPORT_CONTRACT_VERSION,
     ReportedDecision,
     ReportedHealth,
     reported_decision_to_wire,
@@ -48,31 +49,50 @@ def mirror_decision(
     """保存推理机的不可变观测，不在中心重新计算结论。"""
     host_id = _uuid(report.host_id, "report host_id")
     station_id = _uuid(report.station_id, "report station_id")
-    backend_id = _uuid(report.backend_id, "report backend_id")
-    if report.configuration_revision is None:
-        owned = host_gateway.owns_station_backend(
+    if report.contract_version != DECISION_REPORT_CONTRACT_VERSION:
+        if report.backend_id is None:
+            raise MonitorRefusedError("v1 reported decision has no backend identity")
+        backend_id = _uuid(report.backend_id, "report backend_id")
+        if not host_gateway.owns_station_backend(
             host_id=host_id,
             station_id=station_id,
             backend_id=backend_id,
-        )
+        ):
+            raise MonitorRefusedError(
+                "reported decision is outside the authenticated host assignment"
+            )
     else:
+        configuration_revision = report.configuration_revision
         configuration_sha256 = report.configuration_sha256
-        if configuration_sha256 is None:
+        if configuration_revision is None or configuration_sha256 is None:
             raise MonitorRefusedError("reported decision has incomplete configuration proof")
         if assignment_gateway is None:
             raise MonitorRefusedError("historical assignment verifier is unavailable")
-        owned = assignment_gateway.has_configuration_assignment(
+        if not assignment_gateway.has_configuration_station(
             host_id=host_id,
-            configuration_revision=report.configuration_revision,
+            configuration_revision=configuration_revision,
             configuration_sha256=configuration_sha256,
             station_id=station_id,
-            backend_id=backend_id,
             template_version_id=report.template_version_id,
             template_sha256=report.template_sha256,
-            model_ids=report.model_ids,
-        )
-    if not owned:
-        raise MonitorRefusedError("reported decision is outside the authenticated host assignment")
+        ):
+            raise MonitorRefusedError(
+                "reported decision station is outside the historical host assignment"
+            )
+        for backend in report.backend_provenance:
+            if not assignment_gateway.has_configuration_assignment(
+                host_id=host_id,
+                configuration_revision=configuration_revision,
+                configuration_sha256=configuration_sha256,
+                station_id=station_id,
+                backend_id=_uuid(backend.backend_id, "report backend provenance id"),
+                template_version_id=report.template_version_id,
+                template_sha256=report.template_sha256,
+                model_ids=backend.model_ids,
+            ):
+                raise MonitorRefusedError(
+                    "reported decision backend provenance is outside the historical host assignment"
+                )
     return monitor.upsert_decision(MirroredDecision(report=report, received_at=received_at))
 
 

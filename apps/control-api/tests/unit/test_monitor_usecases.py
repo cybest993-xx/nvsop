@@ -21,6 +21,8 @@ from factory_sop.monitor.usecases import (
     sse_stream,
 )
 from nvsop_contracts import (
+    DECISION_REPORT_CONTRACT_VERSION,
+    ReportBackendProvenance,
     ReportedDecision,
     ReportedHealth,
     ReportEvidence,
@@ -31,6 +33,7 @@ from nvsop_contracts import (
 HOST_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f101")
 STATION_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f102")
 BACKEND_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f103")
+SECOND_BACKEND_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f104")
 CONFIGURATION_REVISION = 11
 CONFIGURATION_SHA256 = "c" * 64
 
@@ -116,6 +119,25 @@ class HostGateway:
 
 
 class HistoricalAssignments:
+    def has_configuration_station(
+        self,
+        *,
+        host_id: UUID,
+        configuration_revision: int,
+        configuration_sha256: str,
+        station_id: UUID,
+        template_version_id: str | None,
+        template_sha256: str | None,
+    ) -> bool:
+        return (
+            host_id == HOST_ID
+            and configuration_revision == CONFIGURATION_REVISION
+            and configuration_sha256 == CONFIGURATION_SHA256
+            and station_id == STATION_ID
+            and template_version_id is None
+            and template_sha256 is None
+        )
+
     def has_configuration_assignment(
         self,
         *,
@@ -133,10 +155,13 @@ class HistoricalAssignments:
             and configuration_revision == CONFIGURATION_REVISION
             and configuration_sha256 == CONFIGURATION_SHA256
             and station_id == STATION_ID
-            and backend_id == BACKEND_ID
+            and (backend_id, model_ids)
+            in {
+                (BACKEND_ID, ("model-1",)),
+                (SECOND_BACKEND_ID, ("model-2",)),
+            }
             and template_version_id is None
             and template_sha256 is None
-            and model_ids == ("model-1",)
         )
 
 
@@ -163,8 +188,12 @@ def report(event_id: str = "host:event-1") -> ReportedDecision:
 def historical_report(event_id: str = "host:historical") -> ReportedDecision:
     return replace(
         report(event_id),
+        backend_id=None,
+        model_ids=(),
+        backend_provenance=(ReportBackendProvenance(str(BACKEND_ID), ("model-1",)),),
         configuration_revision=CONFIGURATION_REVISION,
         configuration_sha256=CONFIGURATION_SHA256,
+        contract_version=DECISION_REPORT_CONTRACT_VERSION,
     )
 
 
@@ -183,6 +212,46 @@ def test_historical_assignment_is_used_instead_of_current_topology() -> None:
         host_gateway=ReboundGateway(),
         assignment_gateway=HistoricalAssignments(),
     )
+
+
+def test_historical_assignment_accepts_station_only_when_no_backend_input_contributed() -> None:
+    station_only = replace(
+        historical_report("host:historical:connector-only"),
+        backend_provenance=(),
+    )
+    assert mirror_decision(
+        station_only,
+        received_at=datetime.now(UTC),
+        monitor=MemoryMonitor(),
+        host_gateway=HostGateway(),
+        assignment_gateway=HistoricalAssignments(),
+    )
+
+
+def test_historical_assignment_accepts_only_the_actual_non_first_backend_provenance() -> None:
+    report_from_second_backend = replace(
+        historical_report("host:historical:backend-2"),
+        backend_provenance=(ReportBackendProvenance(str(SECOND_BACKEND_ID), ("model-2",)),),
+    )
+    assert mirror_decision(
+        report_from_second_backend,
+        received_at=datetime.now(UTC),
+        monitor=MemoryMonitor(),
+        host_gateway=HostGateway(),
+        assignment_gateway=HistoricalAssignments(),
+    )
+
+    with pytest.raises(MonitorRefusedError, match="backend provenance"):
+        mirror_decision(
+            replace(
+                report_from_second_backend,
+                backend_provenance=(ReportBackendProvenance(str(SECOND_BACKEND_ID), ("model-1",)),),
+            ),
+            received_at=datetime.now(UTC),
+            monitor=MemoryMonitor(),
+            host_gateway=HostGateway(),
+            assignment_gateway=HistoricalAssignments(),
+        )
 
 
 def test_historical_assignment_rejects_tampered_proof() -> None:

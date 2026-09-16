@@ -47,7 +47,7 @@ MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU �
 | 模板版本变更、工位改绑 | 不生效，继续用最后已确认版本与归属 |
 | 上报、看板、复核 | 暂停，恢复后对账 |
 
-**对账语义**：上报按事件 id 幂等 upsert，至少一次；处置记录带幂等键，恢复后不重复执行已执行的动作；证据上传失败可重试且不删除本地唯一副本。版本握手在连接时进行，不兼容即显式告警并拒绝接入，不静默降级（[ADR-0003](../../adr/0003-api-v1-is-a-fixed-prefix.md)）。
+**对账语义**：上报按事件 id 幂等 upsert，至少一次；处置记录带幂等键，恢复后不重复执行已执行的动作；证据上传失败可重试且不删除本地唯一副本。历史判定的事件时配置与 backend provenance 跟 decision/outbox 同事务冻结：多 backend 工位按实例累计实际参与输入的 backend/model 集合，重启和计时器结案沿用已持久化来源，不从当前配置选择任意 backend。带 historical proof 的判定走严格 report v2；发送前用主机签名确认冻结的旧 configuration，Center 只有在该 revision/effective digest 确实曾由自己签发时才建立不可变历史 assignment 并明确协商 v2。旧 Center 不支持握手时保留 outbox，不降级丢证明。其他尚未版本化的机器协议仍受 ADR-0003 的通用 runtime/version handshake 要求约束（[ADR-0003](../../adr/0003-api-v1-is-a-fixed-prefix.md)）。
 
 **健康状态的两种语义与写入者**（避免 `device` 与 `monitor` 各存一份"健康"）：
 

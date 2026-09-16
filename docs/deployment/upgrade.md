@@ -55,9 +55,17 @@ make contracts
 
 路线 #44 的配置同步已经落地：Edge 使用签名主机身份从 `/api/v1/inference-hosts/{host_id}/configuration` 拉取 host-scoped bundle，共享契约验证 contract version/revision/摘要，Edge 再校验 host scope；完整运行组合验证通过后才在本地 SQLite 原子确认。拉取或验证失败保留最后确认 bundle；首次尚无确认值时才回退到本地 bootstrap。运行中的 maintenance loop 会继续拉取，新 effective digest 经确认后触发安全重组，而不会把中心可用性放进实时判定路径。
 
-这套配置 contract version 只保护**配置束协议**，不能替代 ADR-0003 要求的完整 center-edge runtime/version handshake。当前仓库仍未发现启动/连接时交换双方软件版本、对不兼容组合拒绝接入并显式告警的实现。因此异步升级的剩余明确 blocker/gap 是版本握手及其旧/新组合契约和部署证据，而不是配置同步本身。
+这套配置 contract version 只保护**配置束协议**，不能替代 ADR-0003 要求的完整 center-edge runtime/version handshake。历史判定上报已单独落地一个必要的能力握手：严格 v1 继续保持原 wire shape；需要历史配置证明和多 backend provenance 的判定使用严格 v2。新 Edge 在发送 v2 前，先把该 outbox 在事件时冻结的完整 confirmed configuration 通过主机签名端点 `/api/v1/inference-hosts/{host_id}/confirmed-configuration` 提交给 Center；只有 Center 验证这是自己实际签发过的 `(host, revision, effective digest)` 并明确返回支持 decision report contract v2 后，Edge 才发送 v2 判定。旧 Center 不存在该端点时，新 Edge 保留 outbox 并报告不兼容，不删除 historical proof、也不降级成 v1。
 
-改变推理机报告、配置束、物理执行权、状态持久化或恢复语义时，把旧/新中心与旧/新边缘的兼容矩阵作为升级设计的一部分。配置同步相关矩阵应覆盖旧确认值、首次无确认值、无效/旧 revision、中心不可达和恢复后的重新确认；版本握手实现后，还必须覆盖不兼容拒绝和显式告警路径。
+0034 升级只把 0033 已持久化在 `device_inference_host` 的最后一次 `configuration_revision + configuration_sha256` 回填为不可变 issued-configuration 事实，**不从升级时的当前拓扑猜旧 assignment**。若升级后的 Edge 仍基于升级前已确认的 bundle 产生判定，它随 outbox 冻结该完整 bundle；之后即使工位改绑或停用，Center 仍可先按 issued digest 验真旧 bundle，再从该 bundle 固化历史 assignment 并精确校验上报。无法证明为 Center 曾签发内容的 bundle 一律不能建立历史归属。
+
+历史判定 v2 的 backend 语义也是复数 provenance，而不是“工位配置中的第一个 backend”：Edge 在输入进入 supervisor 时保留 backend/model 来源，按 SOP instance 累积并持久化，decision 入 outbox 时冻结实际参与该实例的 backend 集合。计时器结案、重启恢复和重配置沿用该实例已保存的 provenance，不用当前配置补写历史事实。
+
+历史判定兼容矩阵为：旧 Edge→旧 Center 继续严格 v1；旧 Edge→新 Center 继续严格 v1 和既有当前拓扑授权；新 Edge→新 Center 对 confirmed 历史判定使用握手后的严格 v2；新 Edge→旧 Center 在 v2 握手处显式失败并保留待上报队列。首次从未确认过 Center bundle 的 bootstrap 判定仍只能表达既有 v1 当前归属语义，不能伪造 historical proof。
+
+上述能力握手只解决历史判定 report contract 的异步升级边界；仓库仍未实现覆盖所有 Center↔Edge 机器接口的软件版本/能力集合的通用启动握手。后续改变其他机器协议时仍须按 ADR-0003 补充对应的显式兼容协商，而不能把配置 bundle 的 contract version 当成 runtime handshake。
+
+改变推理机报告、配置束、物理执行权、状态持久化或恢复语义时，把旧/新中心与旧/新边缘的兼容矩阵作为升级设计的一部分。配置同步相关矩阵应覆盖旧确认值、首次无确认值、无效/旧 revision、中心不可达和恢复后的重新确认；任何新增机器协议版本都必须覆盖不兼容拒绝和显式告警路径。
 
 ## NVIDIA 基座更新
 

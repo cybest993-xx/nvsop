@@ -162,6 +162,19 @@ class DeviceHostGateway(Protocol):
 class DeviceHistoricalAssignmentGateway(Protocol):
     """供监控上报入口验证 Center 已下发历史配置归属的设备接缝。"""
 
+    def has_configuration_station(
+        self,
+        *,
+        host_id: UUID,
+        configuration_revision: int,
+        configuration_sha256: str,
+        station_id: UUID,
+        template_version_id: str | None,
+        template_sha256: str | None,
+    ) -> bool:
+        """仅在工位/template 精确存在于该历史配置时返回真。"""
+        ...
+
     def has_configuration_assignment(
         self,
         *,

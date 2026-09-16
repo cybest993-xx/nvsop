@@ -11678,6 +11678,138 @@
         ]
       }
     },
+    "/api/v1/inference-hosts/{host_id}/confirmed-configuration": {
+      "post": {
+        "description": "签名确认 Edge 保存的已下发 bundle，并协商 historical decision report v2。",
+        "operationId": "confirmInferenceHostConfigurationHistory",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "host_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Host Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Timestamp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Timestamp"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Nonce",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Nonce"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Signature"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Confirminferencehostconfigurationhistory",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Confirm Inference Host Configuration History",
+        "tags": [
+          "inference-host"
+        ]
+      }
+    },
     "/api/v1/inference-hosts/{host_id}/credential": {
       "post": {
         "deprecated": true,

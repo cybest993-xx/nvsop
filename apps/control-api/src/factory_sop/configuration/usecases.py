@@ -50,7 +50,33 @@ class ConfigurationHostRepository(Protocol):
         self, *, host_id: UUID, content_sha256: str, minimum_revision: int = 0
     ) -> int: ...
 
+    def configuration_was_issued(
+        self,
+        *,
+        host_id: UUID,
+        configuration_revision: int,
+        configuration_sha256: str,
+    ) -> bool: ...
+
     def record_configuration_assignments(self, bundle: ConfigurationBundle) -> None: ...
+
+
+def register_confirmed_configuration(
+    *,
+    host_id: UUID,
+    bundle: ConfigurationBundle,
+    hosts: ConfigurationHostRepository,
+) -> None:
+    """把 Edge 已确认旧 bundle 还原为 assignment history，但只接受 Center 已签发的 digest。"""
+    if bundle.host_id != str(host_id):
+        raise ConfigurationAssemblyError("confirmed configuration belongs to a different host")
+    if not hosts.configuration_was_issued(
+        host_id=host_id,
+        configuration_revision=bundle.config_revision,
+        configuration_sha256=bundle.effective_sha256,
+    ):
+        raise ConfigurationAssemblyError("confirmed configuration was not issued by this Center")
+    hosts.record_configuration_assignments(bundle)
 
 
 def configuration_for_host(

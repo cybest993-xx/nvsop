@@ -37,6 +37,7 @@ from factory_sop.device.adapters.repository_support import (
 from factory_sop.device.adapters.tables import (
     CameraRow,
     ConfigurationAssignmentRow,
+    ConfigurationIssueRow,
     ConnectorRow,
     InferenceBackendRow,
     InferenceHostIdentityNonceRow,
@@ -295,8 +296,52 @@ class PostgresInferenceHostRepository:
         )
         return revision
 
+    def configuration_was_issued(
+        self,
+        *,
+        host_id: UUID,
+        configuration_revision: int,
+        configuration_sha256: str,
+    ) -> bool:
+        """验证 host/revision/effective-digest 是否由 Center 实际生成过。"""
+        return bool(
+            self._session.scalar(
+                select(
+                    exists().where(
+                        ConfigurationIssueRow.host_id == host_id,
+                        ConfigurationIssueRow.configuration_revision == configuration_revision,
+                        ConfigurationIssueRow.configuration_sha256 == configuration_sha256,
+                    )
+                )
+            )
+        )
+
+    def _record_configuration_issue(self, bundle: ConfigurationBundle) -> None:
+        key = {
+            "host_id": UUID(bundle.host_id),
+            "configuration_revision": bundle.config_revision,
+        }
+        existing = self._session.scalar(
+            select(ConfigurationIssueRow).where(
+                ConfigurationIssueRow.host_id == key["host_id"],
+                ConfigurationIssueRow.configuration_revision == key["configuration_revision"],
+            )
+        )
+        if existing is None:
+            self._session.add(
+                ConfigurationIssueRow(
+                    **key,
+                    configuration_sha256=bundle.effective_sha256,
+                )
+            )
+            self._session.flush()
+            return
+        if existing.configuration_sha256 != bundle.effective_sha256:
+            raise ValueError("configuration revision conflicts with immutable issued history")
+
     def record_configuration_assignments(self, bundle: ConfigurationBundle) -> None:
         """只追加 Center 实际组装并下发过的配置归属；同 revision 内容不得改写。"""
+        self._record_configuration_issue(bundle)
         host_id = UUID(bundle.host_id)
         for station in bundle.stations:
             key = {
@@ -338,6 +383,32 @@ class PostgresInferenceHostRepository:
                 raise ValueError(
                     "configuration assignment revision conflicts with immutable history"
                 )
+
+    def has_configuration_station(
+        self,
+        *,
+        host_id: UUID,
+        configuration_revision: int,
+        configuration_sha256: str,
+        station_id: UUID,
+        template_version_id: str | None,
+        template_sha256: str | None,
+    ) -> bool:
+        """验证该 station/template 精确存在于 Center 已固化的历史配置。"""
+        rows = self._session.scalars(
+            select(ConfigurationAssignmentRow).where(
+                ConfigurationAssignmentRow.host_id == host_id,
+                ConfigurationAssignmentRow.configuration_revision == configuration_revision,
+                ConfigurationAssignmentRow.configuration_sha256 == configuration_sha256,
+                ConfigurationAssignmentRow.station_id == station_id,
+            )
+        ).all()
+        return any(
+            (None if row.template_version_id is None else str(row.template_version_id))
+            == template_version_id
+            and row.template_sha256 == template_sha256
+            for row in rows
+        )
 
     def has_configuration_assignment(
         self,

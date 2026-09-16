@@ -22,6 +22,17 @@ class HostOwnershipGateway(Protocol):
 class HistoricalAssignmentGateway(Protocol):
     """验证 Center 已下发的不可变历史配置 assignment。"""
 
+    def has_configuration_station(
+        self,
+        *,
+        host_id: UUID,
+        configuration_revision: int,
+        configuration_sha256: str,
+        station_id: UUID,
+        template_version_id: str | None,
+        template_sha256: str | None,
+    ) -> bool: ...
+
     def has_configuration_assignment(
         self,
         *,

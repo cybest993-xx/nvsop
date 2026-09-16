@@ -9,10 +9,50 @@ from sqlalchemy.dialects import postgresql
 revision: str = "0034"
 down_revision: str | None = "0033"
 
-RAW_SQL_TABLES = frozenset({"device_configuration_assignment"})
+RAW_SQL_TABLES = frozenset(
+    {
+        "device_configuration_assignment",
+        "device_configuration_issue",
+        "device_inference_host",
+    }
+)
 
 
 def upgrade() -> None:
+    op.create_table(
+        "device_configuration_issue",
+        sa.Column("host_id", sa.Uuid(), nullable=False),
+        sa.Column("configuration_revision", sa.Integer(), nullable=False),
+        sa.Column("configuration_sha256", sa.String(length=64), nullable=False),
+        sa.CheckConstraint(
+            "configuration_revision > 0",
+            name=op.f("ck_device_configuration_issue_revision_positive"),
+        ),
+        sa.CheckConstraint(
+            "length(configuration_sha256) = 64",
+            name=op.f("ck_device_configuration_issue_configuration_sha256"),
+        ),
+        sa.PrimaryKeyConstraint(
+            "host_id",
+            "configuration_revision",
+            name=op.f("pk_device_configuration_issue"),
+        ),
+    )
+    # 0033 已把最后一次实际生成配置的 revision/effective digest 固化在 host 行。
+    # 这里只保存该已知事实，不从升级时“当前拓扑”反推旧 assignment。
+    op.execute(
+        sa.text(
+            """
+            INSERT INTO device_configuration_issue (
+                host_id, configuration_revision, configuration_sha256
+            )
+            SELECT id, configuration_revision, configuration_sha256
+              FROM device_inference_host
+             WHERE configuration_revision > 0
+               AND configuration_sha256 IS NOT NULL
+            """
+        )
+    )
     op.create_table(
         "device_configuration_assignment",
         sa.Column("host_id", sa.Uuid(), nullable=False),
@@ -51,3 +91,4 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("device_configuration_assignment")
+    op.drop_table("device_configuration_issue")

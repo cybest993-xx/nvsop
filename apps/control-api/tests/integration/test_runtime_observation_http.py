@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 import time
 from collections.abc import Iterator
@@ -45,14 +46,17 @@ from factory_sop.identifiers import new_id
 from factory_sop.template.adapters.tables import TemplateStationBindingRow, TemplateVersionRow
 from factory_sop.template.model import TemplateStationBinding
 from nvsop_contracts import (
+    DECISION_REPORT_CONTRACT_VERSION,
     ConfigurationBundle,
     HostIdentityKeyPair,
     HostIdentityRequest,
+    ReportBackendProvenance,
     ReportedDecision,
     ReportedHealth,
     ReportEvidence,
     Unverified,
     configuration_from_wire,
+    configuration_to_wire,
     generate_host_identity_key_pair,
     reported_decision_to_wire,
     reported_health_to_wire,
@@ -283,12 +287,13 @@ def _historical_report(
 ) -> ReportedDecision:
     station = bundle.stations[0]
     assert station.template is not None
+    assert station.backend_id is not None
     return ReportedDecision(
         event_id=event_id,
         trace_id=event_id,
         host_id=bundle.host_id,
         station_id=station.station_id,
-        backend_id=station.backend_id,
+        backend_id=None,
         instance_id=17,
         verdict="pass",
         reason_codes=(),
@@ -297,10 +302,12 @@ def _historical_report(
         evidence=ReportEvidence(None, None, None),
         template_version_id=station.template.version_id,
         template_sha256=station.template.version_sha256,
-        model_ids=station.model_ids,
+        model_ids=(),
         reported_at="2026-09-14T01:00:00Z",
+        backend_provenance=(ReportBackendProvenance(station.backend_id, station.model_ids),),
         configuration_revision=bundle.config_revision,
         configuration_sha256=bundle.effective_sha256,
+        contract_version=DECISION_REPORT_CONTRACT_VERSION,
     )
 
 
@@ -462,16 +469,56 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
             assert initial.status_code == 200
             bundle_n = configuration_from_wire(initial.json())
             station_n = bundle_n.stations[0]
+            # 模拟 0033 → 0034 升级窗口：旧 Center 只留下 issued revision/digest，
+            # 尚无 assignment history。拓扑变化之后必须靠 Edge 冻结的旧 bundle 恢复，
+            # 不能根据变化后的当前拓扑反推。
+            with engine.begin() as connection:
+                issued = connection.execute(
+                    text(
+                        """
+                        SELECT configuration_sha256
+                          FROM device_configuration_issue
+                         WHERE host_id = :host_id
+                           AND configuration_revision = :revision
+                        """
+                    ),
+                    {
+                        "host_id": runtime_topology.host.id,
+                        "revision": bundle_n.config_revision,
+                    },
+                ).scalar_one()
+                assert issued == bundle_n.effective_sha256
+                connection.execute(
+                    text(
+                        """
+                        DELETE FROM device_configuration_assignment
+                         WHERE host_id = :host_id
+                           AND configuration_revision = :revision
+                        """
+                    ),
+                    {
+                        "host_id": runtime_topology.host.id,
+                        "revision": bundle_n.config_revision,
+                    },
+                )
             assert station_n.template is not None
+            assert station_n.backend_id is not None
+            provenance_n = edge_queues.BackendReportContext(
+                station_n.backend_id, station_n.model_ids
+            )
             context_n = edge_queues.ReportContext(
                 host_id=bundle_n.host_id,
                 station_id=station_n.station_id,
-                backend_id=station_n.backend_id,
+                backends=(provenance_n,),
                 template_version_id=station_n.template.version_id,
                 template_sha256=station_n.template.version_sha256,
-                model_ids=station_n.model_ids,
                 configuration_revision=bundle_n.config_revision,
                 configuration_sha256=bundle_n.effective_sha256,
+                configuration_json=json.dumps(
+                    configuration_to_wire(bundle_n),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
             )
             edge_station = edge_state.station(station_n.station_id, report_context=context_n)
             instance = edge_model.Instance(
@@ -501,6 +548,7 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
                 ),
                 evidence=(),
                 closed_instances=(instance,),
+                report_provenance={1: (provenance_n,)},
             )
             (offline_pending,) = edge_station.pending_reports()
             assert offline_pending.context == context_n
@@ -519,7 +567,32 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
                 def __init__(self) -> None:
                     self.sent: list[ReportedDecision] = []
 
-                def send_decision(self, report: ReportedDecision) -> None:
+                def send_decision(
+                    self,
+                    report: ReportedDecision,
+                    *,
+                    configuration: ConfigurationBundle | None,
+                ) -> None:
+                    assert configuration is not None
+                    confirm_path = (
+                        f"{API_PREFIX}/inference-hosts/{runtime_topology.host.id}"
+                        "/confirmed-configuration"
+                    )
+                    confirmed_body = configuration_to_wire(configuration)
+                    confirmed = client.post(
+                        confirm_path,
+                        json=confirmed_body,
+                        headers=_host_headers(
+                            runtime_topology,
+                            method="POST",
+                            path=confirm_path,
+                            body=confirmed_body,
+                        ),
+                    )
+                    assert confirmed.status_code == 200
+                    assert confirmed.json() == {
+                        "decision_report_contract_version": DECISION_REPORT_CONTRACT_VERSION
+                    }
                     body = reported_decision_to_wire(report)
                     response = client.post(
                         report_path,
@@ -546,7 +619,10 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
             assert attempts[0].sent is True
             assert len(transport.sent) == 1
             assert transport.sent[0].configuration_revision == bundle_n.config_revision
-            assert transport.sent[0].backend_id == station_n.backend_id
+            assert transport.sent[0].backend_id is None
+            assert transport.sent[0].backend_provenance == (
+                ReportBackendProvenance(station_n.backend_id, station_n.model_ids),
+            )
             assert edge_station.pending_reports() == ()
 
             duplicate_body = reported_decision_to_wire(transport.sent[0])
@@ -663,7 +739,6 @@ def test_historical_report_survives_rebind_and_rejects_forged_history(
                     report,
                     event_id=f"{runtime_topology.host.id}:never-owned-history",
                     station_id=str(new_id()),
-                    backend_id=str(new_id()),
                 )
             )
             never_owned_response = client.post(

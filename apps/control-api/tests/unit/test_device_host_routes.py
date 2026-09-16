@@ -365,7 +365,9 @@ def test_every_host_route_declares_the_permission_its_use_case_enforces(center: 
     declared = {
         f"{method.upper()} {path.removeprefix(API_PREFIX)}": operation["x-required-permission"]
         for path, item in schema["paths"].items()
-        if "/inference-hosts" in path and not path.endswith("/configuration")
+        if "/inference-hosts" in path
+        and not path.endswith("/configuration")
+        and not path.endswith("/confirmed-configuration")
         for method, operation in item.items()
         if method in {"get", "post", "patch", "put", "delete"}
     }

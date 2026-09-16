@@ -165,6 +165,31 @@ class InferenceHostIdentityNonceRow(Table):
     seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class ConfigurationIssueRow(Table):
+    """Center 实际生成过的 host-scoped revision/effective-digest 不可变事实。"""
+
+    __tablename__ = "device_configuration_issue"
+
+    host_id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
+    configuration_revision: Mapped[int] = mapped_column(Integer(), primary_key=True)
+    configuration_sha256: Mapped[str] = mapped_column(String(64))
+
+
+class ConfigurationAssignmentRow(Table):
+    """Center 为一个主机配置修订固化的不可变归属事实。"""
+
+    __tablename__ = "device_configuration_assignment"
+
+    host_id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
+    configuration_revision: Mapped[int] = mapped_column(Integer(), primary_key=True)
+    station_id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
+    backend_id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
+    configuration_sha256: Mapped[str] = mapped_column(String(64))
+    template_version_id: Mapped[UUID | None] = mapped_column(Uuid(), nullable=True)
+    template_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    model_ids: Mapped[list[str]] = mapped_column(JSONB())
+
+
 class StationRow(Table):
     __tablename__ = "device_station"
     __table_args__ = (UniqueConstraint("code"),)

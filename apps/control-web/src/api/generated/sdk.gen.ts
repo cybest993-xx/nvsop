@@ -12,6 +12,9 @@ import type {
   CompleteDeviceCommandData,
   CompleteDeviceCommandErrors,
   CompleteDeviceCommandResponses,
+  ConfirmInferenceHostConfigurationHistoryData,
+  ConfirmInferenceHostConfigurationHistoryErrors,
+  ConfirmInferenceHostConfigurationHistoryResponses,
   ConfirmVideoUploadData,
   ConfirmVideoUploadErrors,
   ConfirmVideoUploadResponses,
@@ -1137,6 +1140,31 @@ export const pullInferenceHostConfiguration = <ThrowOnError extends boolean = fa
     PullInferenceHostConfigurationErrors,
     ThrowOnError
   >({ url: '/api/v1/inference-hosts/{host_id}/configuration', ...options })
+
+/**
+ * Confirm Inference Host Configuration History
+ *
+ * 签名确认 Edge 保存的已下发 bundle，并协商 historical decision report v2。
+ */
+export const confirmInferenceHostConfigurationHistory = <ThrowOnError extends boolean = false>(
+  options: Options<ConfirmInferenceHostConfigurationHistoryData, ThrowOnError>,
+): RequestResult<
+  ConfirmInferenceHostConfigurationHistoryResponses,
+  ConfirmInferenceHostConfigurationHistoryErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    ConfirmInferenceHostConfigurationHistoryResponses,
+    ConfirmInferenceHostConfigurationHistoryErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/inference-hosts/{host_id}/confirmed-configuration',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
 
 /**
  * Retired A Host Credential

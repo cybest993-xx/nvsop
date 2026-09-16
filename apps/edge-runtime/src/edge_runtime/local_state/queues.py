@@ -31,6 +31,63 @@ from edge_runtime.local_state.codec import violation as decode_violation
 
 
 @dataclass(frozen=True, slots=True)
+class BackendReportContext:
+    """判定实例实际使用的一个 backend 及其事件时模型集合。"""
+
+    backend_id: str
+    model_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.backend_id:
+            raise ValueError("backend report context identity must not be empty")
+        if any(not model_id for model_id in self.model_ids):
+            raise ValueError("backend report context model ids must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class ReportContext:
+    """与判定 outbox 行同时冻结的事件时配置和真实 backend provenance。"""
+
+    host_id: str
+    station_id: str
+    backends: tuple[BackendReportContext, ...]
+    template_version_id: str | None
+    template_sha256: str | None
+    configuration_revision: int | None
+    configuration_sha256: str | None
+    configuration_json: str | None
+
+    def __post_init__(self) -> None:
+        if not self.host_id or not self.station_id:
+            raise ValueError("report context identity must not be empty")
+        backend_ids = tuple(backend.backend_id for backend in self.backends)
+        if len(set(backend_ids)) != len(backend_ids) or backend_ids != tuple(sorted(backend_ids)):
+            raise ValueError("report context backends must be unique and sorted")
+        if (self.configuration_revision is None) != (self.configuration_sha256 is None):
+            raise ValueError(
+                "report context configuration revision and digest must be supplied together"
+            )
+        if self.configuration_revision is not None and self.configuration_revision < 1:
+            raise ValueError("report context configuration revision must be positive")
+        if self.configuration_sha256 is not None and (
+            len(self.configuration_sha256) != 64
+            or any(
+                character not in "0123456789abcdefABCDEF" for character in self.configuration_sha256
+            )
+        ):
+            raise ValueError("report context configuration digest must be SHA-256")
+        if (self.configuration_revision is None) != (self.configuration_json is None):
+            raise ValueError("confirmed report context must freeze its configuration bundle")
+        if (self.template_version_id is None) != (self.template_sha256 is None):
+            raise ValueError("report context template version and digest must be supplied together")
+        if self.template_sha256 is not None and (
+            len(self.template_sha256) != 64
+            or any(character not in "0123456789abcdefABCDEF" for character in self.template_sha256)
+        ):
+            raise ValueError("report context template digest must be SHA-256")
+
+
+@dataclass(frozen=True, slots=True)
 class PendingReport:
     """中心尚未确认的一项判定,以及重试成本。
 
@@ -42,6 +99,8 @@ class PendingReport:
     decision: Decision
     attempts: int
     last_error: str | None
+    reported_at: str | None = None
+    context: ReportContext | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,8 +140,13 @@ class StationQueues:
         with self._lock:
             rows = self._connection.execute(
                 """
-                SELECT q.queue_id, q.attempts, q.last_error, d.decision_id, d.instance_id,
-                       d.verdict, d.reasons, d.lifecycle,
+                SELECT q.queue_id, q.attempts, q.last_error,
+                       q.report_host_id, q.report_backend_id, q.report_template_version_id,
+                       q.report_template_sha256, q.report_model_ids, q.report_reported_at,
+                       q.report_backend_provenance,
+                       q.report_configuration,
+                       q.configuration_revision, q.configuration_sha256,
+                       d.decision_id, d.instance_id, d.verdict, d.reasons, d.lifecycle,
                        d.evidence_anchor, d.evidence_from, d.evidence_to
                   FROM local_report_queue q
                   JOIN local_decision d ON d.decision_id = q.decision_id
@@ -98,9 +162,59 @@ class StationQueues:
                     decision=self._decision_of(row),
                     attempts=row["attempts"],
                     last_error=row["last_error"],
+                    reported_at=row["report_reported_at"],
+                    context=self._report_context_of(row),
                 )
                 for row in rows
             )
+
+    def _report_context_of(self, row: sqlite3.Row) -> ReportContext | None:
+        raw_provenance = row["report_backend_provenance"]
+        if raw_provenance is None:
+            # v4/v5 rows predate exact backend provenance. Keeping them unreportable is safer than
+            # relabelling a historical decision from current configuration or the old
+            # first-backend slot.
+            return None
+        if row["report_host_id"] is None:
+            raise ValueError("pending report has incomplete event-time report context")
+        decoded = json.loads(raw_provenance)
+        if not isinstance(decoded, list):
+            raise ValueError("pending report backend provenance is invalid")
+        backends: list[BackendReportContext] = []
+        for item in decoded:
+            if not isinstance(item, dict) or set(item) != {"backend_id", "model_ids"}:
+                raise ValueError("pending report backend provenance is invalid")
+            backend_id = item["backend_id"]
+            model_ids = item["model_ids"]
+            if (
+                not isinstance(backend_id, str)
+                or not isinstance(model_ids, list)
+                or any(not isinstance(model_id, str) for model_id in model_ids)
+            ):
+                raise ValueError("pending report backend provenance is invalid")
+            backends.append(BackendReportContext(backend_id=backend_id, model_ids=tuple(model_ids)))
+        template_version_id = row["report_template_version_id"]
+        template_sha256 = row["report_template_sha256"]
+        if (template_version_id is None) != (template_sha256 is None):
+            raise ValueError("pending report has incomplete template context")
+        return ReportContext(
+            host_id=str(row["report_host_id"]),
+            station_id=self._station_id,
+            backends=tuple(backends),
+            template_version_id=template_version_id,
+            template_sha256=template_sha256,
+            configuration_json=(
+                None if row["report_configuration"] is None else str(row["report_configuration"])
+            ),
+            configuration_revision=(
+                None
+                if row["configuration_revision"] is None
+                else int(row["configuration_revision"])
+            ),
+            configuration_sha256=(
+                None if row["configuration_sha256"] is None else str(row["configuration_sha256"])
+            ),
+        )
 
     def _decision_of(self, row: sqlite3.Row) -> Decision:
         return Decision(
@@ -123,6 +237,31 @@ class StationQueues:
             (self._station_id, decision_id),
         ).fetchall()
         return tuple(decode_violation(row) for row in rows)
+
+    def freeze_reported_at(self, queue_id: int, *, candidate: str) -> str:
+        """持久化首个 wire 上报时刻, 保证同一事件重试保持完全相同的 payload。"""
+        if not candidate:
+            raise ValueError("reported_at candidate must not be empty")
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_report_queue
+                   SET report_reported_at = ?
+                 WHERE station_id = ? AND queue_id = ? AND report_reported_at IS NULL
+                """,
+                (candidate, self._station_id, queue_id),
+            )
+            row = self._connection.execute(
+                """
+                SELECT report_reported_at
+                  FROM local_report_queue
+                 WHERE station_id = ? AND queue_id = ? AND sent_at IS NULL
+                """,
+                (self._station_id, queue_id),
+            ).fetchone()
+        if row is None or row["report_reported_at"] is None:
+            raise ValueError("pending report could not freeze its wire timestamp")
+        return str(row["report_reported_at"])
 
     def mark_reported(self, queue_id: int, *, at: HostInstant) -> None:
         """中心已确认该事件;它不再待发送,但继续保留记录。

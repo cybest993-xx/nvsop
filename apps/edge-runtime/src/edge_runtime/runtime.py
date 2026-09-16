@@ -17,7 +17,7 @@ from pathlib import Path
 from time import monotonic, sleep, time
 from types import FrameType
 
-from nvsop_contracts import ConfigurationBundle, ConnectionTestOutcome
+from nvsop_contracts import ConfigurationBundle, ConnectionTestOutcome, configuration_to_wire
 
 from edge_runtime.configuration import (
     EdgeRuntimeConfiguration,
@@ -43,6 +43,7 @@ from edge_runtime.connectors.writes import (
     WriteRequest,
 )
 from edge_runtime.judgment.model import HostInstant, HostLiveness
+from edge_runtime.local_state.queues import BackendReportContext
 from edge_runtime.local_state.store import LocalState, open_local_state
 from edge_runtime.media import MediaRuntime, validate_sop_camera_bindings
 from edge_runtime.reporting import DecisionReporter, ReportContext
@@ -57,6 +58,8 @@ from edge_runtime.runtime_configuration import (
 from edge_runtime.station_runtime import (
     InputWaitExpired,
     MultiplexedStationInputSource,
+    ProvenancedStationInputSource,
+    ProvenancedSupervisorInput,
     SseStationInputSource,
     StationInputSource,
     StationRuntimeConfiguration,
@@ -252,6 +255,11 @@ class AutonomousStation:
                         supervisor.receive(ended)
                         break
                     supervisor.wake(host=HostLiveness.ALIVE)
+                elif isinstance(arriving, ProvenancedSupervisorInput):
+                    supervisor.receive(
+                        arriving.arriving,
+                        report_provenance=arriving.provenance,
+                    )
                 else:
                     supervisor.receive(arriving)
                 self._poll_due(
@@ -622,18 +630,73 @@ def _build_runtime_composition(
         for connector_id, adapter in adapters.items()
     }
     reporters: list[DecisionReporter] = []
+    reporter_station_ids: set[str] = set()
     stations: list[AutonomousStation] = []
     try:
         for station_binding in runtime_configuration.stations:
             station_config = station_binding.configuration
-            station_store = state.station(station_config.station_id)
+            confirmed = runtime_configuration.confirmed
+            station_configurations = station_binding.configurations or (station_config,)
+            backend_contexts = tuple(
+                sorted(
+                    (
+                        BackendReportContext(
+                            backend_id=station_configuration.backend_id,
+                            model_ids=station_configuration.model_ids,
+                        )
+                        for station_configuration in station_configurations
+                        if station_configuration.backend_id is not None
+                    ),
+                    key=lambda item: item.backend_id,
+                )
+            )
+            report_context = None
+            if backend_contexts:
+                report_context = ReportContext(
+                    host_id=config.host_id if confirmed is None else confirmed.host_id,
+                    station_id=station_config.station_id,
+                    backends=backend_contexts,
+                    template_version_id=station_config.template_version_id,
+                    template_sha256=station_config.template_sha256,
+                    configuration_revision=(
+                        None if confirmed is None else confirmed.config_revision
+                    ),
+                    configuration_sha256=(
+                        None if confirmed is None else confirmed.effective_sha256
+                    ),
+                    configuration_json=(
+                        None
+                        if confirmed is None
+                        else json.dumps(
+                            configuration_to_wire(confirmed),
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                    ),
+                )
+            station_store = state.station(
+                station_config.station_id,
+                report_context=report_context,
+            )
             sources = tuple(
-                SseStationInputSource(
+                ProvenancedStationInputSource(
+                    source=SseStationInputSource(
+                        inference_url=station_configuration.inference_url,
+                        request_body=station_configuration.request_body,
+                        timeout=config.command_timeout,
+                    ),
+                    provenance=BackendReportContext(
+                        backend_id=station_configuration.backend_id,
+                        model_ids=station_configuration.model_ids,
+                    ),
+                )
+                if station_configuration.backend_id is not None
+                else SseStationInputSource(
                     inference_url=station_configuration.inference_url,
                     request_body=station_configuration.request_body,
                     timeout=config.command_timeout,
                 )
-                for station_configuration in (station_binding.configurations or (station_config,))
+                for station_configuration in station_configurations
             )
             source: StationInputSource = (
                 sources[0] if len(sources) == 1 else MultiplexedStationInputSource(sources=sources)
@@ -647,21 +710,14 @@ def _build_runtime_composition(
                 for connector_id in station_binding.connector_ids
                 if connector_id in output_dispatchers
             }
-            if station_config.backend_id is not None and report_transport is not None:
+            if report_context is not None and report_transport is not None:
                 reporters.append(
                     DecisionReporter(
                         queues=station_store,
-                        context=ReportContext(
-                            host_id=config.host_id,
-                            station_id=station_config.station_id,
-                            backend_id=station_config.backend_id,
-                            template_version_id=station_config.template_version_id,
-                            template_sha256=station_config.template_sha256,
-                            model_ids=station_config.model_ids,
-                        ),
                         transport=report_transport,
                     )
                 )
+                reporter_station_ids.add(station_config.station_id)
             stations.append(
                 AutonomousStation(
                     station_id=station_config.station_id,
@@ -680,6 +736,17 @@ def _build_runtime_composition(
                     },
                 )
             )
+        if report_transport is not None:
+            for station_id in state.pending_report_station_ids():
+                if station_id in reporter_station_ids:
+                    continue
+                reporters.append(
+                    DecisionReporter(
+                        queues=state.station(station_id),
+                        transport=report_transport,
+                    )
+                )
+                reporter_station_ids.add(station_id)
     except Exception:
         for built_station in stations:
             built_station.close()
@@ -882,7 +949,19 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
 def _station_input_source(binding: StationRuntimeBinding, *, timeout: float) -> StationInputSource:
     source_configurations = binding.configurations or (binding.configuration,)
     sources = tuple(
-        SseStationInputSource(
+        ProvenancedStationInputSource(
+            source=SseStationInputSource(
+                inference_url=source_configuration.inference_url,
+                request_body=source_configuration.request_body,
+                timeout=timeout,
+            ),
+            provenance=BackendReportContext(
+                backend_id=source_configuration.backend_id,
+                model_ids=source_configuration.model_ids,
+            ),
+        )
+        if source_configuration.backend_id is not None
+        else SseStationInputSource(
             inference_url=source_configuration.inference_url,
             request_body=source_configuration.request_body,
             timeout=timeout,

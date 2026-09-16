@@ -12,8 +12,9 @@ edge-autonomy.md §5.11。
 
 from __future__ import annotations
 
+import json
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from threading import RLock
 from typing import Protocol
@@ -41,7 +42,7 @@ from edge_runtime.local_state.codec import (
 from edge_runtime.local_state.codec import violation as decode_violation
 from edge_runtime.local_state.configuration import LocalConfigurationStore
 from edge_runtime.local_state.disposal import LocalDisposalLedger
-from edge_runtime.local_state.queues import StationQueues
+from edge_runtime.local_state.queues import BackendReportContext, ReportContext, StationQueues
 from edge_runtime.local_state.schema import migrate
 
 
@@ -55,6 +56,7 @@ class ReactionStore(Protocol):
         decisions: Sequence[Decision],
         evidence: Sequence[EvidenceClip],
         closed_instances: Sequence[Instance],
+        report_provenance: Mapping[int, tuple[BackendReportContext, ...] | None],
     ) -> None: ...
 
 
@@ -70,9 +72,11 @@ class StationStore(StationQueues):
         connection: sqlite3.Connection,
         station_id: str,
         lock: AbstractContextManager[object],
+        report_context: ReportContext | None = None,
     ) -> None:
         super().__init__(connection, station_id, lock)
         self._lock = lock
+        self._report_context = report_context
 
     def commit(
         self,
@@ -81,18 +85,24 @@ class StationStore(StationQueues):
         decisions: Sequence[Decision],
         evidence: Sequence[EvidenceClip],
         closed_instances: Sequence[Instance],
+        report_provenance: Mapping[int, tuple[BackendReportContext, ...] | None],
     ) -> None:
         """持久化一次反应, 并串行化共享 SQLite 连接上的工位线程。"""
         with self._lock:
             self._connection.execute("BEGIN IMMEDIATE")
             try:
                 if state.instance is not None:
-                    self._write_instance(state.instance)
+                    self._write_instance(
+                        state.instance, report_provenance.get(state.instance.instance_id)
+                    )
                 for instance in closed_instances:
-                    self._write_instance(instance)
+                    self._write_instance(instance, report_provenance.get(instance.instance_id))
                 for decision in decisions:
                     decision_id = self._write_decision(decision)
-                    self._enqueue_report(decision_id)
+                    self._enqueue_report(
+                        decision_id,
+                        report_provenance.get(decision.instance_id),
+                    )
                     for violation in decision.violations:
                         self._latch(decision.instance_id, decision_id, violation)
                     if decision.lifecycle is not Lifecycle.STAYS_OPEN:
@@ -105,20 +115,26 @@ class StationStore(StationQueues):
                     self._connection.execute("ROLLBACK")
                 raise
 
-    def _write_instance(self, instance: Instance) -> None:
-        """用核心当前持有的完整实例快照替换旧记录, 避免数据库形成第二套不一致模型。"""
+    def _write_instance(
+        self,
+        instance: Instance,
+        provenance: tuple[BackendReportContext, ...] | None,
+    ) -> None:
+        """保存核心实例和独立 reporting provenance; NULL 明确表示旧实例来源未知。"""
+        encoded_provenance = self._encode_provenance(provenance)
         self._connection.execute(
             """
             INSERT INTO local_sop_instance (
                 station_id, instance_id, opened_at, last_observation_at,
-                seen, expected_index, impairments, settled
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                seen, expected_index, impairments, settled, report_backend_provenance
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (station_id, instance_id) DO UPDATE SET
-                last_observation_at = excluded.last_observation_at,
-                seen                = excluded.seen,
-                expected_index      = excluded.expected_index,
-                impairments         = excluded.impairments,
-                settled             = excluded.settled
+                last_observation_at        = excluded.last_observation_at,
+                seen                       = excluded.seen,
+                expected_index             = excluded.expected_index,
+                impairments                = excluded.impairments,
+                settled                    = excluded.settled,
+                report_backend_provenance  = excluded.report_backend_provenance
             """,
             (
                 self._station_id,
@@ -129,6 +145,7 @@ class StationStore(StationQueues):
                 instance.expected_index,
                 dump_reasons(instance.impairments),
                 dump_settled(instance.settled),
+                encoded_provenance,
             ),
         )
 
@@ -175,10 +192,58 @@ class StationStore(StationQueues):
             ),
         )
 
-    def _enqueue_report(self, decision_id: int) -> None:
+    def _enqueue_report(
+        self,
+        decision_id: int,
+        provenance: tuple[BackendReportContext, ...] | None,
+    ) -> None:
+        if self._report_context is None:
+            self._connection.execute(
+                "INSERT INTO local_report_queue (station_id, decision_id) VALUES (?, ?)",
+                (self._station_id, decision_id),
+            )
+            return
+        context = self._report_context
+        if provenance is not None:
+            configured = {backend.backend_id: backend for backend in context.backends}
+            for backend in provenance:
+                if configured.get(backend.backend_id) != backend:
+                    raise ValueError(
+                        "report provenance is outside the event-time station configuration"
+                    )
         self._connection.execute(
-            "INSERT INTO local_report_queue (station_id, decision_id) VALUES (?, ?)",
-            (self._station_id, decision_id),
+            """
+            INSERT INTO local_report_queue (
+                station_id, decision_id, report_host_id,
+                report_template_version_id, report_template_sha256,
+                report_backend_provenance, report_configuration,
+                configuration_revision, configuration_sha256
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                self._station_id,
+                decision_id,
+                context.host_id,
+                context.template_version_id,
+                context.template_sha256,
+                self._encode_provenance(provenance),
+                context.configuration_json,
+                context.configuration_revision,
+                context.configuration_sha256,
+            ),
+        )
+
+    @staticmethod
+    def _encode_provenance(provenance: tuple[BackendReportContext, ...] | None) -> str | None:
+        if provenance is None:
+            return None
+        return json.dumps(
+            [
+                {"backend_id": backend.backend_id, "model_ids": list(backend.model_ids)}
+                for backend in provenance
+            ],
+            ensure_ascii=False,
+            separators=(",", ":"),
         )
 
     def _enqueue_evidence(self, clip: EvidenceClip) -> None:
@@ -237,6 +302,43 @@ class StationStore(StationQueues):
         ).fetchall()
         return tuple(decode_violation(row) for row in rows)
 
+    def resume_report_provenance(self) -> tuple[BackendReportContext, ...] | None:
+        """恢复未结实例的 backend provenance; NULL 表示实例来自旧 schema, 来源不可证明。"""
+        row = self._connection.execute(
+            """
+            SELECT report_backend_provenance
+              FROM local_sop_instance
+             WHERE station_id = ? AND closed_at IS NULL
+             ORDER BY instance_id DESC
+             LIMIT 1
+            """,
+            (self._station_id,),
+        ).fetchone()
+        if row is None or row["report_backend_provenance"] is None:
+            return None
+        decoded = json.loads(row["report_backend_provenance"])
+        if not isinstance(decoded, list):
+            raise ValueError("stored backend report provenance is invalid")
+        values: list[BackendReportContext] = []
+        for item in decoded:
+            if not isinstance(item, dict) or set(item) != {"backend_id", "model_ids"}:
+                raise ValueError("stored backend report provenance is invalid")
+            backend_id = item["backend_id"]
+            model_ids = item["model_ids"]
+            if (
+                not isinstance(backend_id, str)
+                or not isinstance(model_ids, list)
+                or any(not isinstance(model_id, str) for model_id in model_ids)
+            ):
+                raise ValueError("stored backend report provenance is invalid")
+            values.append(BackendReportContext(backend_id=backend_id, model_ids=tuple(model_ids)))
+        result = tuple(values)
+        if tuple(backend.backend_id for backend in result) != tuple(
+            sorted(backend.backend_id for backend in result)
+        ):
+            raise ValueError("stored backend report provenance is not sorted")
+        return result
+
     def resume(self, template: Template, parameters: RuntimeParameters) -> JudgmentState:
         """恢复工位启动时的核心状态。
 
@@ -294,9 +396,24 @@ class LocalState:
         self._connection = connection
         self._lock = lock or RLock()
 
-    def station(self, station_id: str) -> StationStore:
+    def station(
+        self, station_id: str, *, report_context: ReportContext | None = None
+    ) -> StationStore:
         """返回一个工位的行作用域; 所有工位共享连接和写入锁。"""
-        return StationStore(self._connection, station_id, self._lock)
+        return StationStore(self._connection, station_id, self._lock, report_context)
+
+    def pending_report_station_ids(self) -> tuple[str, ...]:
+        """返回仍欠 Center 报告的工位, 包括已从当前配置移除的历史工位。"""
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT DISTINCT station_id
+                  FROM local_report_queue
+                 WHERE sent_at IS NULL
+                 ORDER BY station_id
+                """
+            ).fetchall()
+        return tuple(str(row["station_id"]) for row in rows)
 
     def disposal(self) -> LocalDisposalLedger:
         """返回该主机唯一的持久连接器写入账本。"""

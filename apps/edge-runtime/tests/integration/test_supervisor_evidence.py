@@ -68,6 +68,7 @@ class JudgmentEffectsPersistenceTest(unittest.TestCase):
             decisions=(decision,),
             evidence=clips_for(decision, margins=margins),
             closed_instances=(instance,),
+            report_provenance={},
         )
         self.assertEqual(self.store.pending_reports(), (PendingReport(1, decision, 0, None),))
         return self.store.pending_evidence()

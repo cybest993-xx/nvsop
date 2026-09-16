@@ -26,7 +26,7 @@ class ReportedDecisionRow(Table):
     trace_id: Mapped[str] = mapped_column(String(255))
     host_id: Mapped[str] = mapped_column(String(128), index=True)
     station_id: Mapped[str] = mapped_column(String(128), index=True)
-    backend_id: Mapped[str] = mapped_column(String(128), index=True)
+    backend_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     stream_sequence: Mapped[int] = mapped_column(
         BigInteger(), Identity(), nullable=False, unique=True

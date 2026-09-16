@@ -474,6 +474,8 @@ EXEMPT = {
     ("POST", f"{API_PREFIX}/device-commands/{{command_id}}/result"),
     # 主机配置上报用公钥签名认证，不接受浏览器会话或人类权限。
     ("POST", f"{API_PREFIX}/templates/configuration-reports"),
+    # Historical configuration confirmation is also a host-signed machine endpoint.
+    ("POST", f"{API_PREFIX}/inference-hosts/{{host_id}}/confirmed-configuration"),
     # Edge report intake is authenticated by the registered host key, not a browser permission.
     ("POST", f"{API_PREFIX}/monitor/reported-decisions"),
     ("POST", f"{API_PREFIX}/monitor/health"),

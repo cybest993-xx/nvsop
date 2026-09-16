@@ -231,7 +231,6 @@ def _same_sop_view(left: StationRuntimeConfiguration, right: StationRuntimeConfi
         and left.margins == right.margins
         and left.template_version_id == right.template_version_id
         and left.template_sha256 == right.template_sha256
-        and left.model_ids == right.model_ids
         and left.disposition_policy == right.disposition_policy
     )
 

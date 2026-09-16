@@ -27,6 +27,7 @@ class Repo:
             configuration_sha256=None,
         )
         self.cameras_present = True
+        self.recorded_configurations: list[object] = []
         self.backend = SimpleNamespace(
             id=BACKEND_ID,
             host_id=HOST_ID,
@@ -200,6 +201,9 @@ class Repo:
         self.host.configuration_sha256 = content_sha256
         return int(self.host.configuration_revision)
 
+    def record_configuration_assignments(self, bundle: object) -> None:
+        self.recorded_configurations.append(bundle)
+
 
 def test_configuration_revision_survives_removing_the_highest_revision_object() -> None:
     repo = Repo()
@@ -250,6 +254,7 @@ def test_configuration_for_host_excludes_foreign_connector_and_emits_effective_v
     assert station.backend_id == str(BACKEND_ID)
     assert station.model_ids == ("reported-model", "reported-model-2")
     assert bundle.config_revision == 10
+    assert repo.recorded_configurations == [bundle]
     assert [connector.name for connector in station.connectors] == ["PLC"]
     assert [camera.camera_id for camera in station.cameras] == [
         "019937d8-0d10-7b31-8d2d-4e60c8f4f110"

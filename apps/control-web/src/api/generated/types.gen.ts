@@ -6598,6 +6598,69 @@ export type PullInferenceHostConfigurationResponses = {
 export type PullInferenceHostConfigurationResponse =
   PullInferenceHostConfigurationResponses[keyof PullInferenceHostConfigurationResponses]
 
+export type ConfirmInferenceHostConfigurationHistoryData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  headers?: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID'?: string | null
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path: {
+    /**
+     * Host Id
+     */
+    host_id: string
+  }
+  query?: never
+  url: '/api/v1/inference-hosts/{host_id}/confirmed-configuration'
+}
+
+export type ConfirmInferenceHostConfigurationHistoryErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ConfirmInferenceHostConfigurationHistoryError =
+  ConfirmInferenceHostConfigurationHistoryErrors[keyof ConfirmInferenceHostConfigurationHistoryErrors]
+
+export type ConfirmInferenceHostConfigurationHistoryResponses = {
+  /**
+   * Response Confirminferencehostconfigurationhistory
+   *
+   * Successful Response
+   */
+  200: {
+    [key: string]: unknown
+  }
+}
+
+export type ConfirmInferenceHostConfigurationHistoryResponse =
+  ConfirmInferenceHostConfigurationHistoryResponses[keyof ConfirmInferenceHostConfigurationHistoryResponses]
+
 export type RotateInferenceHostCredentialData = {
   body?: never
   headers: {

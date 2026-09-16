@@ -16,7 +16,7 @@ because the discovery start directory is on the path. That follows the precedent
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from nvsop_contracts import (
     Delivery,
@@ -43,6 +43,7 @@ from edge_runtime.judgment.model import (
     Template,
     TimerFired,
 )
+from edge_runtime.local_state.queues import BackendReportContext
 
 STEPS = ("(1) step 1", "(2) step 2", "(3) step 3", "(4) step 4", "(5) step 5")
 """A five-step template in the base's action-number format, which our `actions.json` must
@@ -123,6 +124,7 @@ class MemoryReactionStore:
                 JudgmentState, tuple[Decision, ...], tuple[EvidenceClip, ...], tuple[Instance, ...]
             ]
         ] = []
+        self.report_provenance: list[Mapping[int, tuple[BackendReportContext, ...] | None]] = []
 
     def commit(
         self,
@@ -131,8 +133,10 @@ class MemoryReactionStore:
         decisions: Sequence[Decision],
         evidence: Sequence[EvidenceClip],
         closed_instances: Sequence[Instance],
+        report_provenance: Mapping[int, tuple[BackendReportContext, ...] | None],
     ) -> None:
         self.reactions.append((state, tuple(decisions), tuple(evidence), tuple(closed_instances)))
+        self.report_provenance.append(dict(report_provenance))
 
 
 class FakeClock:

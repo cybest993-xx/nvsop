@@ -17,7 +17,11 @@ from factory_sop.device.adapters.repository import (
     PostgresPointRepository,
     PostgresStationRepository,
 )
-from factory_sop.device.api import DeviceHostGateway, DeviceTemplateBindingGateway
+from factory_sop.device.api import (
+    DeviceHistoricalAssignmentGateway,
+    DeviceHostGateway,
+    DeviceTemplateBindingGateway,
+)
 from factory_sop.device.probing import ConnectionProbe
 from factory_sop.device.repository import (
     CameraRepository,
@@ -94,6 +98,11 @@ def template_binding(session: RequestSession) -> DeviceTemplateBindingGateway:
         connectors=PostgresConnectorRepository(session),
         points=PostgresPointRepository(session),
     )
+
+
+def historical_assignments(session: RequestSession) -> DeviceHistoricalAssignmentGateway:
+    """监控上报入口使用的历史配置归属验证接缝。"""
+    return PostgresInferenceHostRepository(session)
 
 
 def host_gateway(session: RequestSession) -> DeviceHostGateway:

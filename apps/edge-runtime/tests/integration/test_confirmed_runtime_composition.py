@@ -13,13 +13,26 @@ from nvsop_contracts import (
     HostIdentityKeyPair,
     Unverified,
     capability_to_wire,
+    configuration_to_wire,
     generate_host_identity_key_pair,
 )
 
 from edge_runtime.connectors.hikvision import CANDIDATE_PROFILE
 from edge_runtime.connectors.port import OutputPoint, PointState, Written
 from edge_runtime.connectors.writes import WriteRequest
-from edge_runtime.judgment.model import HostInstant
+from edge_runtime.judgment.model import (
+    Decision,
+    EvidenceSpan,
+    HostInstant,
+    Instance,
+    JudgmentState,
+    Lifecycle,
+    Ordering,
+    RuntimeParameters,
+    Template,
+)
+from edge_runtime.judgment.reasons import Verdict
+from edge_runtime.local_state.queues import BackendReportContext, ReportContext
 from edge_runtime.local_state.store import open_local_state
 from edge_runtime.runtime import AutonomousRuntime, build_autonomous_runtime_from_file
 
@@ -38,7 +51,7 @@ def _fixture_host_identity(seed: int) -> HostIdentityKeyPair:
 class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
     def test_builder_uses_one_station_runtime_for_multiple_backend_slices(self) -> None:
         bundle = _bundle()
-        second_slice = replace(bundle.stations[0], backend_id="backend-b")
+        second_slice = replace(bundle.stations[0], backend_id="backend-b", model_ids=("model-b",))
         bundle = replace(bundle, stations=(bundle.stations[0], second_slice))
         identity = _fixture_host_identity(45)
         with tempfile.TemporaryDirectory() as temporary:
@@ -71,6 +84,105 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
                 self.assertIsNotNone(connector_runtimes)
                 assert connector_runtimes is not None
                 self.assertEqual(1, len(connector_runtimes.runtimes))
+            finally:
+                runtime.close()
+
+    def test_removed_station_keeps_outbox_only_reporter_until_historical_report_is_sent(
+        self,
+    ) -> None:
+        bundle_n = _bundle()
+        bundle_n1 = replace(
+            bundle_n,
+            config_revision=bundle_n.config_revision + 1,
+            generated_at="2026-09-14T00:05:00Z",
+            stations=(),
+        )
+        identity = _fixture_host_identity(46)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            state_path = directory / "state.sqlite"
+            state = open_local_state(str(state_path))
+            station_n = bundle_n.stations[0]
+            assert station_n.template is not None
+            assert station_n.backend_id is not None
+            provenance = BackendReportContext(station_n.backend_id, station_n.model_ids)
+            station = state.station(
+                station_n.station_id,
+                report_context=ReportContext(
+                    host_id=bundle_n.host_id,
+                    station_id=station_n.station_id,
+                    backends=(provenance,),
+                    template_version_id=station_n.template.version_id,
+                    template_sha256=station_n.template.version_sha256,
+                    configuration_revision=bundle_n.config_revision,
+                    configuration_sha256=bundle_n.effective_sha256,
+                    configuration_json=json.dumps(
+                        configuration_to_wire(bundle_n),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                ),
+            )
+            instance = Instance(
+                instance_id=1,
+                opened_at=HostInstant(1.0),
+                last_observation_at=HostInstant(2.0),
+            )
+            station.commit(
+                state=JudgmentState(
+                    template=Template(
+                        steps=("(1) confirmed",),
+                        ordering=Ordering.ORDERED,
+                        start_signal="(1) confirmed",
+                    ),
+                    parameters=RuntimeParameters(idle_timeout=7.0, step_deadline=3.0),
+                    next_instance_id=2,
+                ),
+                decisions=(
+                    Decision(
+                        instance_id=1,
+                        verdict=Verdict.PASS,
+                        reasons=(),
+                        violations=(),
+                        lifecycle=Lifecycle.CLOSED_BY_END_SIGNAL,
+                        evidence=EvidenceSpan.at(HostInstant(2.0)),
+                    ),
+                ),
+                evidence=(),
+                closed_instances=(instance,),
+                report_provenance={1: (provenance,)},
+            )
+            self.assertEqual((station_n.station_id,), state.pending_report_station_ids())
+            state.configuration().confirm(bundle_n1, confirmed_at=3.0)
+            state.close()
+
+            private_key_file = directory / "host-private-key"
+            private_key_file.write_text(identity.private_key, encoding="utf-8")
+            config_path = directory / "edge.json"
+            config_path.write_text(
+                json.dumps(_local_config(directory, private_key_file)), encoding="utf-8"
+            )
+
+            runtime = build_autonomous_runtime_from_file(config_path)
+            try:
+                self.assertEqual((), runtime.stations)
+                self.assertEqual(1, len(runtime._reporters))
+                with patch(
+                    "edge_runtime.reporting_transport.HttpDecisionReportTransport.send_decision"
+                ) as send_decision:
+                    attempts = runtime._reporters[0].flush(
+                        now=HostInstant(4.0),
+                        reported_at="2026-09-14T00:10:00Z",
+                    )
+                self.assertEqual(1, len(attempts))
+                self.assertTrue(attempts[0].sent)
+                send_decision.assert_called_once()
+
+                inspection = open_local_state(str(state_path))
+                try:
+                    self.assertEqual((), inspection.pending_report_station_ids())
+                finally:
+                    inspection.close()
             finally:
                 runtime.close()
 

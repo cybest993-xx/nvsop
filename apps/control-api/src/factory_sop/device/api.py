@@ -159,6 +159,38 @@ class DeviceHostGateway(Protocol):
         ...
 
 
+class DeviceHistoricalAssignmentGateway(Protocol):
+    """供监控上报入口验证 Center 已下发历史配置归属的设备接缝。"""
+
+    def has_configuration_station(
+        self,
+        *,
+        host_id: UUID,
+        configuration_revision: int,
+        configuration_sha256: str,
+        station_id: UUID,
+        template_version_id: str | None,
+        template_sha256: str | None,
+    ) -> bool:
+        """仅在工位/template 精确存在于该历史配置时返回真。"""
+        ...
+
+    def has_configuration_assignment(
+        self,
+        *,
+        host_id: UUID,
+        configuration_revision: int,
+        configuration_sha256: str,
+        station_id: UUID,
+        backend_id: UUID,
+        template_version_id: str | None,
+        template_sha256: str | None,
+        model_ids: tuple[str, ...],
+    ) -> bool:
+        """仅在完整上下文精确匹配不可变历史 assignment 时返回真。"""
+        ...
+
+
 class StationCodeLookup(Protocol):
     """设备模块为自然编码查询提供的最小存储 seam。"""
 
@@ -260,6 +292,7 @@ __all__ = [
     "BindingSignal",
     "BindingSignalKind",
     "BindingValidationIssue",
+    "DeviceHistoricalAssignmentGateway",
     "DeviceHostGateway",
     "DeviceTemplateBindingGateway",
     "StationCodeLookup",

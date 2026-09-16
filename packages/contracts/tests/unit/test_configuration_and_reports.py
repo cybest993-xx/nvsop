@@ -6,6 +6,7 @@ import unittest
 from dataclasses import replace
 
 from nvsop_contracts import (
+    DECISION_REPORT_CONTRACT_VERSION,
     ConfigurationArtifact,
     ConfigurationBundle,
     ConfigurationTemplate,
@@ -14,6 +15,7 @@ from nvsop_contracts import (
     ConfiguredStation,
     Measured,
     Polled,
+    ReportBackendProvenance,
     ReportedDecision,
     ReportedHealth,
     ReportEvidence,
@@ -249,6 +251,130 @@ class ReportContractTests(unittest.TestCase):
             reported_at="2026-09-13T00:00:00Z",
         )
         self.assertEqual(reported_decision_from_wire(reported_decision_to_wire(report)), report)
+
+    def test_v2_configuration_proof_and_backend_provenance_are_strict(self) -> None:
+        report = ReportedDecision(
+            event_id="host-a:proof",
+            trace_id="trace-proof",
+            host_id="host-a",
+            station_id="station-a",
+            backend_id=None,
+            instance_id=1,
+            verdict="pass",
+            reason_codes=(),
+            violations=(),
+            lifecycle="closed",
+            evidence=ReportEvidence(None, None, None),
+            template_version_id="template-a",
+            template_sha256="a" * 64,
+            model_ids=(),
+            reported_at="2026-09-13T00:00:00Z",
+            backend_provenance=(
+                ReportBackendProvenance("backend-a", ("model-a",)),
+                ReportBackendProvenance("backend-b", ("model-b",)),
+            ),
+            configuration_revision=7,
+            configuration_sha256="b" * 64,
+            contract_version=DECISION_REPORT_CONTRACT_VERSION,
+        )
+        wire = reported_decision_to_wire(report)
+        self.assertEqual(wire["configuration_revision"], 7)
+        self.assertEqual(wire["configuration_sha256"], "b" * 64)
+        self.assertNotIn("backend_id", wire)
+        self.assertNotIn("model_ids", wire)
+        self.assertEqual(reported_decision_from_wire(wire), report)
+
+        missing_digest = reported_decision_to_wire(report)
+        del missing_digest["configuration_sha256"]
+        with self.assertRaises(ValueError):
+            reported_decision_from_wire(missing_digest)
+
+        invalid_revision = reported_decision_to_wire(report)
+        invalid_revision["configuration_revision"] = 0
+        with self.assertRaises(ValueError):
+            reported_decision_from_wire(invalid_revision)
+
+        invalid_digest = reported_decision_to_wire(report)
+        invalid_digest["configuration_sha256"] = "not-a-sha256"
+        with self.assertRaises(ValueError):
+            reported_decision_from_wire(invalid_digest)
+
+        mixed_v1_field = reported_decision_to_wire(report)
+        mixed_v1_field["backend_id"] = "backend-a"
+        with self.assertRaises(ValueError):
+            reported_decision_from_wire(mixed_v1_field)
+
+        no_backend_input = replace(report, backend_provenance=())
+        self.assertEqual(
+            reported_decision_from_wire(reported_decision_to_wire(no_backend_input)),
+            no_backend_input,
+        )
+
+    def test_legacy_report_omits_configuration_proof_fields(self) -> None:
+        report = ReportedDecision(
+            event_id="host-a:legacy",
+            trace_id="trace-legacy",
+            host_id="host-a",
+            station_id="station-a",
+            backend_id="backend-a",
+            instance_id=2,
+            verdict="pass",
+            reason_codes=(),
+            violations=(),
+            lifecycle="closed",
+            evidence=ReportEvidence(None, None, None),
+            template_version_id=None,
+            template_sha256=None,
+            model_ids=(),
+            reported_at="2026-09-13T00:00:00Z",
+        )
+        wire = reported_decision_to_wire(report)
+        self.assertNotIn("configuration_revision", wire)
+        self.assertNotIn("configuration_sha256", wire)
+        self.assertEqual(reported_decision_from_wire(wire), report)
+
+    def test_legacy_report_wire_shape_remains_strict_v1(self) -> None:
+        report = ReportedDecision(
+            event_id="host-a:legacy-shape",
+            trace_id="trace-legacy-shape",
+            host_id="host-a",
+            station_id="station-a",
+            backend_id="backend-a",
+            instance_id=3,
+            verdict="pass",
+            reason_codes=(),
+            violations=(),
+            lifecycle="closed",
+            evidence=ReportEvidence(None, None, None),
+            template_version_id=None,
+            template_sha256=None,
+            model_ids=(),
+            reported_at="2026-09-13T00:00:00Z",
+        )
+        wire = reported_decision_to_wire(report)
+        legacy_keys = {
+            "contract_version",
+            "event_id",
+            "trace_id",
+            "host_id",
+            "station_id",
+            "backend_id",
+            "instance_id",
+            "verdict",
+            "reason_codes",
+            "violations",
+            "lifecycle",
+            "evidence",
+            "template_version_id",
+            "template_sha256",
+            "model_ids",
+            "reported_at",
+        }
+        self.assertEqual(set(wire), legacy_keys)
+        incompatible = dict(wire)
+        incompatible["configuration_revision"] = 1
+        with self.assertRaises(ValueError):
+            reported_decision_from_wire(incompatible)
 
     def test_non_finite_evidence_is_rejected_at_the_wire_boundary(self) -> None:
         report = ReportedDecision(

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import cast
 
 REPORT_CONTRACT_VERSION = 1
+DECISION_REPORT_CONTRACT_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,14 +91,39 @@ class ReportViolation:
 
 
 @dataclass(frozen=True, slots=True)
+class ReportBackendProvenance:
+    """实际参与该 SOP 实例的一个推理后端及其事件时模型集合。"""
+
+    backend_id: str
+    model_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.backend_id:
+            raise ValueError("backend provenance id must not be empty")
+        if any(not model_id for model_id in self.model_ids):
+            raise ValueError("backend provenance model ids must not be empty")
+
+    def to_wire(self) -> dict[str, object]:
+        return {"backend_id": self.backend_id, "model_ids": list(self.model_ids)}
+
+    @classmethod
+    def from_wire(cls, value: Mapping[str, object]) -> ReportBackendProvenance:
+        _require_keys(value, {"backend_id", "model_ids"}, "backend provenance")
+        return cls(
+            backend_id=_string(value["backend_id"], "backend provenance id"),
+            model_ids=_strings(value["model_ids"], "backend provenance model_ids"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ReportedDecision:
-    """一项不可变的 edge 判定事件，可安全重复提交。"""
+    """一项不可变的 edge 判定事件；v1/v2 wire shape 都严格且互不混用。"""
 
     event_id: str
     trace_id: str
     host_id: str
     station_id: str
-    backend_id: str
+    backend_id: str | None
     instance_id: int
     verdict: str
     reason_codes: tuple[str, ...]
@@ -108,6 +134,9 @@ class ReportedDecision:
     template_sha256: str | None
     model_ids: tuple[str, ...]
     reported_at: str
+    backend_provenance: tuple[ReportBackendProvenance, ...] = ()
+    configuration_revision: int | None = None
+    configuration_sha256: str | None = None
     contract_version: int = REPORT_CONTRACT_VERSION
 
     def __post_init__(self) -> None:
@@ -116,13 +145,12 @@ class ReportedDecision:
             ("trace_id", self.trace_id),
             ("host_id", self.host_id),
             ("station_id", self.station_id),
-            ("backend_id", self.backend_id),
             ("lifecycle", self.lifecycle),
             ("reported_at", self.reported_at),
         ):
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{name} must not be empty")
-        if self.contract_version != REPORT_CONTRACT_VERSION:
+        if self.contract_version not in {REPORT_CONTRACT_VERSION, DECISION_REPORT_CONTRACT_VERSION}:
             raise ValueError("reported decision contract version is unsupported")
         if self.instance_id < 0:
             raise ValueError("reported decision instance_id must not be negative")
@@ -138,15 +166,39 @@ class ReportedDecision:
             raise ValueError("template version and digest must be supplied together")
         if self.template_sha256 is not None and not _is_sha256(self.template_sha256):
             raise ValueError("template_sha256 is invalid")
+        if (self.configuration_revision is None) != (self.configuration_sha256 is None):
+            raise ValueError("configuration revision and digest must be supplied together")
+        if self.configuration_revision is not None and self.configuration_revision < 1:
+            raise ValueError("configuration_revision must be positive")
+        if self.configuration_sha256 is not None and not _is_sha256(self.configuration_sha256):
+            raise ValueError("configuration_sha256 is invalid")
+        if self.contract_version == REPORT_CONTRACT_VERSION:
+            if not isinstance(self.backend_id, str) or not self.backend_id:
+                raise ValueError("v1 reported decision requires backend_id")
+            if self.backend_provenance:
+                raise ValueError("v1 reported decision cannot carry backend provenance")
+            if self.configuration_revision is not None:
+                raise ValueError("v1 reported decision cannot carry configuration proof")
+            return
+        if self.backend_id is not None or self.model_ids:
+            raise ValueError(
+                "v2 reported decision uses backend_provenance instead of backend_id/model_ids"
+            )
+        if self.configuration_revision is None:
+            raise ValueError("v2 reported decision requires configuration proof")
+        backend_ids = tuple(item.backend_id for item in self.backend_provenance)
+        if len(set(backend_ids)) != len(backend_ids):
+            raise ValueError("v2 reported decision backend provenance must be unique")
+        if backend_ids != tuple(sorted(backend_ids)):
+            raise ValueError("v2 reported decision backend provenance must be sorted")
 
     def to_wire(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "contract_version": self.contract_version,
             "event_id": self.event_id,
             "trace_id": self.trace_id,
             "host_id": self.host_id,
             "station_id": self.station_id,
-            "backend_id": self.backend_id,
             "instance_id": self.instance_id,
             "verdict": self.verdict,
             "reason_codes": list(self.reason_codes),
@@ -155,36 +207,48 @@ class ReportedDecision:
             "evidence": self.evidence.to_wire(),
             "template_version_id": self.template_version_id,
             "template_sha256": self.template_sha256,
-            "model_ids": list(self.model_ids),
             "reported_at": self.reported_at,
         }
+        if self.contract_version == REPORT_CONTRACT_VERSION:
+            result["backend_id"] = self.backend_id
+            result["model_ids"] = list(self.model_ids)
+            return result
+        result["backend_provenance"] = [item.to_wire() for item in self.backend_provenance]
+        result["configuration_revision"] = self.configuration_revision
+        result["configuration_sha256"] = self.configuration_sha256
+        return result
 
     @classmethod
     def from_wire(cls, value: Mapping[str, object]) -> ReportedDecision:
-        _require_keys(
-            value,
-            {
-                "contract_version",
-                "event_id",
-                "trace_id",
-                "host_id",
-                "station_id",
-                "backend_id",
-                "instance_id",
-                "verdict",
-                "reason_codes",
-                "violations",
-                "lifecycle",
-                "evidence",
-                "template_version_id",
-                "template_sha256",
-                "model_ids",
-                "reported_at",
-            },
-            "reported decision",
-        )
+        contract_version = _positive_int(value.get("contract_version"), "contract_version")
+        common = {
+            "contract_version",
+            "event_id",
+            "trace_id",
+            "host_id",
+            "station_id",
+            "instance_id",
+            "verdict",
+            "reason_codes",
+            "violations",
+            "lifecycle",
+            "evidence",
+            "template_version_id",
+            "template_sha256",
+            "reported_at",
+        }
+        if contract_version == REPORT_CONTRACT_VERSION:
+            required = common | {"backend_id", "model_ids"}
+        elif contract_version == DECISION_REPORT_CONTRACT_VERSION:
+            required = common | {
+                "backend_provenance",
+                "configuration_revision",
+                "configuration_sha256",
+            }
+        else:
+            raise ValueError("reported decision contract version is unsupported")
+        _require_keys(value, required, "reported decision")
         reasons = _strings(value["reason_codes"], "reason_codes", require_nonempty=False)
-        model_ids = _strings(value["model_ids"], "model_ids")
         raw_violations = _array(value["violations"], "violations")
         template_id = value["template_version_id"]
         template_sha = value["template_sha256"]
@@ -192,12 +256,29 @@ class ReportedDecision:
             raise ValueError("template_version_id is invalid")
         if template_sha is not None and not isinstance(template_sha, str):
             raise ValueError("template_sha256 is invalid")
+        backend_id: str | None = None
+        model_ids: tuple[str, ...] = ()
+        backend_provenance: tuple[ReportBackendProvenance, ...] = ()
+        configuration_revision: int | None = None
+        configuration_sha256: str | None = None
+        if contract_version == REPORT_CONTRACT_VERSION:
+            backend_id = _string(value["backend_id"], "backend_id")
+            model_ids = _strings(value["model_ids"], "model_ids")
+        else:
+            backend_provenance = tuple(
+                ReportBackendProvenance.from_wire(_object(item, "backend provenance"))
+                for item in _array(value["backend_provenance"], "backend_provenance")
+            )
+            configuration_revision = _positive_int(
+                value["configuration_revision"], "configuration_revision"
+            )
+            configuration_sha256 = _string(value["configuration_sha256"], "configuration_sha256")
         return cls(
             event_id=_string(value["event_id"], "event_id"),
             trace_id=_string(value["trace_id"], "trace_id"),
             host_id=_string(value["host_id"], "host_id"),
             station_id=_string(value["station_id"], "station_id"),
-            backend_id=_string(value["backend_id"], "backend_id"),
+            backend_id=backend_id,
             instance_id=_nonnegative_int(value["instance_id"], "instance_id"),
             verdict=_string(value["verdict"], "verdict"),
             reason_codes=reasons,
@@ -211,7 +292,10 @@ class ReportedDecision:
             template_sha256=template_sha,
             model_ids=model_ids,
             reported_at=_string(value["reported_at"], "reported_at"),
-            contract_version=_positive_int(value["contract_version"], "contract_version"),
+            backend_provenance=backend_provenance,
+            configuration_revision=configuration_revision,
+            configuration_sha256=configuration_sha256,
+            contract_version=contract_version,
         )
 
 
@@ -381,7 +465,9 @@ def _is_sha256(value: str) -> bool:
 
 
 __all__ = [
+    "DECISION_REPORT_CONTRACT_VERSION",
     "REPORT_CONTRACT_VERSION",
+    "ReportBackendProvenance",
     "ReportEvidence",
     "ReportViolation",
     "ReportedDecision",

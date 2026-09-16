@@ -53,7 +53,9 @@ from nvsop_contracts.host_identity import (
     verify_host_identity_request,
 )
 from nvsop_contracts.reports import (
+    DECISION_REPORT_CONTRACT_VERSION,
     REPORT_CONTRACT_VERSION,
+    ReportBackendProvenance,
     ReportedDecision,
     ReportedHealth,
     ReportEvidence,
@@ -66,6 +68,7 @@ from nvsop_contracts.reports import (
 
 __all__ = [
     "CONFIGURATION_CONTRACT_VERSION",
+    "DECISION_REPORT_CONTRACT_VERSION",
     "LEGACY_CONFIGURATION_CONTRACT_VERSION",
     "REPORT_CONTRACT_VERSION",
     "Capability",
@@ -88,6 +91,7 @@ __all__ = [
     "PointRole",
     "Polled",
     "Pushed",
+    "ReportBackendProvenance",
     "ReportEvidence",
     "ReportViolation",
     "ReportedDecision",

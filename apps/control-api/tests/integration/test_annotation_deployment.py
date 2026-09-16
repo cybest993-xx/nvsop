@@ -51,11 +51,13 @@ def test_control_requests_use_center_session_auth_without_auth_loop() -> None:
 def test_host_signed_machine_routes_bypass_only_browser_auth_and_preserve_signature_headers() -> (
     None
 ):
+    machine_location_lines: list[str] = []
     for path in (CONFIG, DEV_CONFIG):
         source = path.read_text()
         start = source.index(MACHINE_LOCATION_PREFIX)
         end = source.index("\n    }\n", start) + len("\n    }")
         location = source[start:end]
+        machine_location_lines.append(location.splitlines()[0])
 
         assert "auth_request" not in location
         assert 'proxy_set_header Cookie "";' in location
@@ -76,6 +78,7 @@ def test_host_signed_machine_routes_bypass_only_browser_auth_and_preserve_signat
         ):
             assert route in location
 
+    assert machine_location_lines[0] == machine_location_lines[1]
     assert "location /api/v1/ {\n        auth_request /_nvsop_center_auth;" in CONFIG.read_text()
     assert (
         "location /api/v1/ {\n        auth_request /_nvsop_center_auth;" in DEV_CONFIG.read_text()

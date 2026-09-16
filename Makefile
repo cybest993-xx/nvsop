@@ -150,11 +150,11 @@ edge-type:
 	cd $(EDGE) && MYPYPATH=$(CURDIR)/$(CONTRACT_PY)/src $(MYPY) --strict src tests
 
 edge-unit:
-	cd $(EDGE) && PYTHONPATH=$(CURDIR)/$(CONTRACT_PY)/src:src python3 -m unittest \
+	cd $(EDGE) && PYTHONPATH=$(CURDIR)/$(CONTRACT_PY)/src:src $(PYTHON) -m unittest \
 		discover -s tests/unit -t tests/unit -p 'test_*.py'
 
 edge-integration:
-	cd $(EDGE) && PYTHONPATH=$(CURDIR)/$(CONTRACT_PY)/src:src python3 -m unittest \
+	cd $(EDGE) && PYTHONPATH=$(CURDIR)/$(CONTRACT_PY)/src:src $(PYTHON) -m unittest \
 		discover -s tests/integration -t tests/integration -p 'test_*.py'
 
 WEB := apps/control-web

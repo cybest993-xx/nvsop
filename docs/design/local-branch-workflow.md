@@ -101,23 +101,67 @@ review run on the pull request to `main`.
 **Completion criterion:** the remote worker branch points at the verified candidate and its PR base is
 `main`.
 
-### 4. Merge remotely, then synchronize local `main`
+### 4. Merge remotely, synchronize local `main`, then retire merged task workspaces
 
 Merge only after the repository-required CI and review evidence is green and merge authorization is
-present. After GitHub reports the PR merged:
+present. After GitHub reports the PR merged, local synchronization and safe task cleanup are part of the
+merge closeout rather than a later optional step.
+
+First fetch the accepted trunk and prove that the merged PR head is reachable from it:
 
 ```bash
-git fetch origin main
-git switch main
-git reset --hard origin/main
+git fetch --prune origin main
+MERGED_TARGET=origin/main
+CANDIDATE_SHA=<merged-pr-head-sha>
+git merge-base --is-ancestor "$CANDIDATE_SHA" "$MERGED_TARGET"
 ```
 
-Delete the worker branch/worktree only after proving its candidate commit is reachable from fetched
-`origin/main` and the task worktree is clean. Use ordinary safe branch deletion; a refusal is a cleanup
-blocker, not a reason to force-delete.
+Then synchronize the dedicated primary `main` worktree to that fetched commit. Identify that worktree
+from `git worktree list --porcelain`; require it to be on `main` and completely clean first. If either
+check fails, preserve the worktree and stop instead of resetting or cleaning it.
 
-**Completion criterion:** fetched `origin/main` contains the merged candidate; local `main` matches that
-fetched tip; any authorized cleanup occurs only after ancestry and cleanliness checks.
+```bash
+MAIN_WORKTREE=<primary-main-worktree>
+test "$(git -C "$MAIN_WORKTREE" branch --show-current)" = main
+test -z "$(git -C "$MAIN_WORKTREE" status --porcelain=v1 --untracked-files=all)"
+git -C "$MAIN_WORKTREE" reset --hard "$MERGED_TARGET"
+test "$(git -C "$MAIN_WORKTREE" rev-parse HEAD)" = "$(git rev-parse "$MERGED_TARGET")"
+```
+
+After `main` is synchronized, inspect all local `agent/*` task branches and their registered worktrees.
+Retire every eligible merged task, including the just-merged task and any older merged residue, only when
+all of these are true:
+
+- GitHub reports that task's PR state as `MERGED`; ancestry by itself never classifies a task as merged;
+- the **current local task-branch tip** is reachable from fetched `origin/main`, so no later local commits
+  would be discarded;
+- its task worktree, when present, is clean including untracked files; and
+- its worktree is a dedicated task worktree, never the primary `main` checkout.
+
+Use the fetched trunk to discover ancestry candidates, confirm each candidate's PR state, then remove each
+eligible worktree from a different worktree and use ordinary safe branch deletion. A branch with no
+registered worktree still requires both the merged-PR proof and ancestry proof before safe deletion.
+
+```bash
+git branch --merged "$MERGED_TARGET" --list 'agent/*'
+git worktree list --porcelain
+gh pr list --state merged --base main --head "$TASK_BRANCH" --json number,state,headRefName,headRefOid
+
+git merge-base --is-ancestor "$TASK_BRANCH" "$MERGED_TARGET"
+test -z "$(git -C "$TASK_WORKTREE" status --porcelain=v1 --untracked-files=all)"
+git worktree remove "$TASK_WORKTREE"
+git branch -d "$TASK_BRANCH"
+```
+
+Preserve a task when no merged PR is proven for it, its current branch tip is not contained in
+`origin/main`, or its worktree has tracked or untracked changes. Those conditions identify ongoing,
+unmerged, or divergent work. Leave its branch and worktree untouched; a cleanup pass never uses
+`git clean`, task-worktree resets, forced worktree removal, or forced branch deletion to make the task
+look merged. `git fetch --prune` may remove stale remote-tracking refs after GitHub deletes a merged head
+branch, but remote branch deletion is separate from this local cleanup.
+
+**Completion criterion:** local `main` exactly matches fetched `origin/main`; every eligible merged local
+task is retired without force; every unmerged, divergent, or dirty task remains unchanged.
 
 ## Legacy `dev` handling
 

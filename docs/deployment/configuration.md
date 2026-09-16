@@ -132,6 +132,8 @@ NVSOP_EDGE_COMMAND_CONFIG_FILE=/etc/nvsop/edge.json \
 
 自治运行时启动后会立即通过带主机签名的 `GET /api/v1/inference-hosts/{host_id}/configuration` 拉取当前主机的配置 bundle。中心先认证主机身份，再只组装该主机的有效后端、工位、相机、连接器/点位、模板版本和运行参数。共享配置契约校验 contract version、revision 和 canonical SHA-256；Edge 拉取层另行校验返回 bundle 的 `host_id` 必须等于本机身份，并证明 bundle 能与本机保存的推理端点、请求体、adapter profile 和凭据安全组合，再允许它替换已确认视图。
 
+统一 Nginx 入口只对当前主机签名机器路径做显式白名单分流：主机配置拉取与已确认配置历史握手、monitor decision/health 上报、delegated command 领取/结果回报，以及模板配置确认上报。这些路径不经过浏览器 session `auth_request`，也不使用浏览器 Cookie、Authorization 或 CSRF 身份；`X-Inference-Host-ID`、timestamp、nonce、signature 则保持原请求值并由 FastAPI 的主机签名认证最终校验。其余 `/api/v1/` 管理接口仍由现有 session + CSRF + permission 边界保护，annotation 内部授权入口和媒体网关不在该白名单内。
+
 确认由 `LocalConfigurationStore` 在 SQLite 的单个事务中写入完整 bundle：跨主机、旧 revision、同 revision 不同内容或无效运行组合都不会覆盖现有确认值。拉取、解析或运行组合验证失败时，只更新 `local_config_failure` 诊断，最后已确认 bundle 保持不变。启动时已有确认值就优先使用它；首次启动尚无确认值且中心不可达时，才使用本地 bootstrap 配置。
 
 运行期间 maintenance loop 按 `command_poll_interval_seconds` 继续拉取。新的有效 bundle 与当前 effective digest 不同时，当前运行循环先停止，再从已确认 bundle 重新组合 station/connector/runtime；中心不可达不会把配置同步放进实时判定进度。

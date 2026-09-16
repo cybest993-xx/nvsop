@@ -68,6 +68,7 @@ def test_host_signed_machine_routes_bypass_only_browser_auth_and_preserve_signat
         for route in (
             "inference-hosts/",
             "/configuration",
+            "confirmed-configuration",
             "monitor/(?:reported-decisions|health)",
             "device-commands/(?:next|",
             "/result)",

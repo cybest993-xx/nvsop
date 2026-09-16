@@ -308,10 +308,8 @@ def test_host_signed_machine_api_crosses_real_nginx_https_without_browser_sessio
                 ),
                 json=confirmed_configuration_body,
             )
-            # #146 owns the gateway route. Before #151 lands the owning FastAPI endpoint is absent;
-            # after it lands the same signed request is accepted. Neither state may become browser
-            # session authentication.
-            assert confirmed_configuration.status_code in {200, 404}, confirmed_configuration.text
+            assert confirmed_configuration.status_code == 200, confirmed_configuration.text
+            assert confirmed_configuration.json() == {"decision_report_contract_version": 2}
 
             forged_id_only = edge.get(
                 configuration_path,

@@ -34,7 +34,7 @@ class _VisionConfig:
 
 class _PydanticBaseModel:
     def __init__(self, **values: Any) -> None:
-        for name in self.__annotations__:
+        for name in type(self).__annotations__:
             value = values.get(name, getattr(type(self), name, None))
             setattr(self, name, value)
 

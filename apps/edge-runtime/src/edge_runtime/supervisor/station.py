@@ -23,6 +23,7 @@ from edge_runtime.judgment.model import (
     RunInterrupted,
     TimerFired,
 )
+from edge_runtime.local_state.queues import BackendReportContext
 from edge_runtime.local_state.store import ReactionStore
 from edge_runtime.supervisor.evidence import clips_for
 from edge_runtime.supervisor.inputs import Normalizer, SupervisorInput
@@ -57,6 +58,7 @@ class StationSupervisor:
         store: ReactionStore,
         margins: EvidenceMargins,
         clock: Callable[[], float] = monotonic,
+        initial_report_provenance: tuple[BackendReportContext, ...] | None = (),
     ) -> None:
         self._state = state
         self._store = store
@@ -64,6 +66,13 @@ class StationSupervisor:
         self._clock = clock
         self._normalizer = Normalizer()
         self._deadline: HostInstant | None = None
+        self._report_provenance: dict[int, dict[str, BackendReportContext] | None] = {}
+        if state.instance is not None:
+            self._report_provenance[state.instance.instance_id] = (
+                None
+                if initial_report_provenance is None
+                else {item.backend_id: item for item in initial_report_provenance}
+            )
 
     @property
     def state(self) -> JudgmentState:
@@ -85,10 +94,17 @@ class StationSupervisor:
             return None
         return max(0.0, self._deadline.seconds - self._clock())
 
-    def receive(self, arriving: SupervisorInput) -> Reaction:
-        """One thing that arrived from outside: a chunk, a point-level signal, a fact."""
+    def receive(
+        self,
+        arriving: SupervisorInput,
+        *,
+        report_provenance: BackendReportContext | None = None,
+    ) -> Reaction:
+        """One thing that arrived from outside; reporting provenance stays outside judgment core."""
         normalizer = deepcopy(self._normalizer)
-        reaction = self._advance(normalizer.events_for(arriving))
+        reaction = self._advance(
+            normalizer.events_for(arriving), report_provenance=report_provenance
+        )
         self._normalizer = normalizer
         return reaction
 
@@ -125,16 +141,42 @@ class StationSupervisor:
         """
         return self._advance((RunInterrupted(at=HostInstant(self._clock())),))
 
-    def _advance(self, events: tuple[Event, ...]) -> Reaction:
-        """先收集全部事件的结果, 一次提交成功后才发布新状态和计时器。"""
+    def _advance(
+        self,
+        events: tuple[Event, ...],
+        *,
+        report_provenance: BackendReportContext | None = None,
+    ) -> Reaction:
+        """先收集全部事件的结果, 一次提交成功后才发布新状态、provenance 和计时器。"""
         state, deadline = self._state, self._deadline
         decisions: list[Decision] = []
         closed_instances: list[Instance] = []
+        touched_ids: set[int] = set()
+        if state.instance is not None:
+            touched_ids.add(state.instance.instance_id)
         for event in events:
+            before = state.instance
             outcome = advance(state, event)
             state, deadline = outcome.state, outcome.wake_at
+            if before is not None:
+                touched_ids.add(before.instance_id)
+            if state.instance is not None:
+                touched_ids.add(state.instance.instance_id)
+            touched_ids.update(instance.instance_id for instance in outcome.closed_instances)
+            touched_ids.update(decision.instance_id for decision in outcome.decisions)
             closed_instances.extend(outcome.closed_instances)
             decisions.extend(outcome.decisions)
+        if events:
+            for instance_id in touched_ids:
+                existing = self._report_provenance.setdefault(instance_id, {})
+                if existing is not None and report_provenance is not None:
+                    existing[report_provenance.backend_id] = report_provenance
+        committed_provenance: dict[int, tuple[BackendReportContext, ...] | None] = {}
+        for instance_id in touched_ids:
+            values = self._report_provenance.get(instance_id)
+            committed_provenance[instance_id] = (
+                None if values is None else tuple(values[key] for key in sorted(values))
+            )
         self._store.commit(
             state=state,
             decisions=tuple(decisions),
@@ -144,7 +186,10 @@ class StationSupervisor:
                 for clip in clips_for(decision, margins=self._margins)
             ),
             closed_instances=tuple(closed_instances),
+            report_provenance=committed_provenance,
         )
+        for instance in closed_instances:
+            self._report_provenance.pop(instance.instance_id, None)
         self._state, self._deadline = state, deadline
         return Reaction(
             decisions=tuple(decisions),

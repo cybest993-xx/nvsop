@@ -13,6 +13,7 @@ from nvsop_contracts import (
     HostIdentityKeyPair,
     Unverified,
     capability_to_wire,
+    configuration_to_wire,
     generate_host_identity_key_pair,
 )
 
@@ -31,7 +32,7 @@ from edge_runtime.judgment.model import (
     Template,
 )
 from edge_runtime.judgment.reasons import Verdict
-from edge_runtime.local_state.queues import ReportContext
+from edge_runtime.local_state.queues import BackendReportContext, ReportContext
 from edge_runtime.local_state.store import open_local_state
 from edge_runtime.runtime import AutonomousRuntime, build_autonomous_runtime_from_file
 
@@ -50,7 +51,7 @@ def _fixture_host_identity(seed: int) -> HostIdentityKeyPair:
 class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
     def test_builder_uses_one_station_runtime_for_multiple_backend_slices(self) -> None:
         bundle = _bundle()
-        second_slice = replace(bundle.stations[0], backend_id="backend-b")
+        second_slice = replace(bundle.stations[0], backend_id="backend-b", model_ids=("model-b",))
         bundle = replace(bundle, stations=(bundle.stations[0], second_slice))
         identity = _fixture_host_identity(45)
         with tempfile.TemporaryDirectory() as temporary:
@@ -103,17 +104,23 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
             state = open_local_state(str(state_path))
             station_n = bundle_n.stations[0]
             assert station_n.template is not None
+            assert station_n.backend_id is not None
+            provenance = BackendReportContext(station_n.backend_id, station_n.model_ids)
             station = state.station(
                 station_n.station_id,
                 report_context=ReportContext(
                     host_id=bundle_n.host_id,
                     station_id=station_n.station_id,
-                    backend_id=station_n.backend_id,
+                    backends=(provenance,),
                     template_version_id=station_n.template.version_id,
                     template_sha256=station_n.template.version_sha256,
-                    model_ids=station_n.model_ids,
                     configuration_revision=bundle_n.config_revision,
                     configuration_sha256=bundle_n.effective_sha256,
+                    configuration_json=json.dumps(
+                        configuration_to_wire(bundle_n),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
                 ),
             )
             instance = Instance(
@@ -143,6 +150,7 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
                 ),
                 evidence=(),
                 closed_instances=(instance,),
+                report_provenance={1: (provenance,)},
             )
             self.assertEqual((station_n.station_id,), state.pending_report_station_ids())
             state.configuration().confirm(bundle_n1, confirmed_at=3.0)

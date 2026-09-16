@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
 from nvsop_contracts import (
+    DECISION_REPORT_CONTRACT_VERSION,
+    ConfigurationBundle,
+    ReportBackendProvenance,
     ReportedDecision,
     ReportEvidence,
     ReportViolation,
+    configuration_from_wire,
 )
 
 from edge_runtime.judgment.model import Decision, HostInstant
@@ -16,7 +22,12 @@ from edge_runtime.local_state.queues import PendingReport, ReportContext, Statio
 
 
 class DecisionReportTransport(Protocol):
-    def send_decision(self, report: ReportedDecision) -> None: ...
+    def send_decision(
+        self,
+        report: ReportedDecision,
+        *,
+        configuration: ConfigurationBundle | None,
+    ) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +83,10 @@ class DecisionReporter:
                 )
                 continue
             try:
-                self._transport.send_decision(report)
+                self._transport.send_decision(
+                    report,
+                    configuration=_configuration_from_context(pending.context),
+                )
             except Exception as error:
                 message = f"{type(error).__name__}: {error}"[:255]
                 self._queues.record_report_failure(pending.queue_id, at=now, error=message)
@@ -103,41 +117,91 @@ def reported_decision_from_pending(
     if context is None:
         raise ValueError("legacy pending report has no event-time report context")
     event_id = f"{context.host_id}:{pending.queue_id}"
+    violations = tuple(
+        ReportViolation(
+            reason_code=violation.reason.value,
+            detail=None,
+            step_ids=tuple(violation.steps),
+            evidence=ReportEvidence(
+                anchor=violation.evidence.anchor.seconds,
+                start=violation.evidence.required_from.seconds,
+                end=violation.evidence.required_to.seconds,
+            ),
+        )
+        for violation in decision.violations
+    )
+    evidence = ReportEvidence(
+        anchor=decision.evidence.anchor.seconds,
+        start=decision.evidence.required_from.seconds,
+        end=decision.evidence.required_to.seconds,
+    )
+    if context.configuration_revision is None:
+        if len(context.backends) != 1:
+            raise ValueError("unconfirmed report requires exactly one backend provenance for v1")
+        backend = context.backends[0]
+        return ReportedDecision(
+            event_id=event_id,
+            trace_id=event_id,
+            host_id=context.host_id,
+            station_id=context.station_id,
+            backend_id=backend.backend_id,
+            instance_id=decision.instance_id,
+            verdict=decision.verdict.value,
+            reason_codes=tuple(reason.value for reason in decision.reasons),
+            violations=violations,
+            lifecycle=decision.lifecycle.value,
+            evidence=evidence,
+            template_version_id=context.template_version_id,
+            template_sha256=context.template_sha256,
+            model_ids=backend.model_ids,
+            reported_at=reported_at,
+        )
     return ReportedDecision(
         event_id=event_id,
         trace_id=event_id,
         host_id=context.host_id,
         station_id=context.station_id,
-        backend_id=context.backend_id,
+        backend_id=None,
         instance_id=decision.instance_id,
         verdict=decision.verdict.value,
         reason_codes=tuple(reason.value for reason in decision.reasons),
-        violations=tuple(
-            ReportViolation(
-                reason_code=violation.reason.value,
-                detail=None,
-                step_ids=tuple(violation.steps),
-                evidence=ReportEvidence(
-                    anchor=violation.evidence.anchor.seconds,
-                    start=violation.evidence.required_from.seconds,
-                    end=violation.evidence.required_to.seconds,
-                ),
-            )
-            for violation in decision.violations
-        ),
+        violations=violations,
         lifecycle=decision.lifecycle.value,
-        evidence=ReportEvidence(
-            anchor=decision.evidence.anchor.seconds,
-            start=decision.evidence.required_from.seconds,
-            end=decision.evidence.required_to.seconds,
-        ),
+        evidence=evidence,
         template_version_id=context.template_version_id,
         template_sha256=context.template_sha256,
-        model_ids=context.model_ids,
+        model_ids=(),
         reported_at=reported_at,
+        backend_provenance=tuple(
+            ReportBackendProvenance(backend_id=item.backend_id, model_ids=item.model_ids)
+            for item in context.backends
+        ),
         configuration_revision=context.configuration_revision,
         configuration_sha256=context.configuration_sha256,
+        contract_version=DECISION_REPORT_CONTRACT_VERSION,
     )
+
+
+def _configuration_from_context(context: ReportContext | None) -> ConfigurationBundle | None:
+    if context is None or context.configuration_revision is None:
+        return None
+    raw = context.configuration_json
+    if raw is None:
+        raise ValueError("historical report has no frozen confirmed configuration")
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise ValueError("frozen confirmed configuration is invalid JSON") from error
+    if not isinstance(value, Mapping):
+        raise ValueError("frozen confirmed configuration is not an object")
+    bundle = configuration_from_wire(value)
+    if (
+        bundle.host_id != context.host_id
+        or bundle.config_revision != context.configuration_revision
+        or bundle.effective_sha256 != context.configuration_sha256
+    ):
+        raise ValueError("frozen confirmed configuration does not match report proof")
+    return bundle
 
 
 __all__ = [

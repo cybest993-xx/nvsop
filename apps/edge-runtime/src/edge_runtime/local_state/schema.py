@@ -227,7 +227,16 @@ _V5 = (
     "ALTER TABLE local_report_queue ADD COLUMN configuration_sha256 TEXT",
 )
 
-MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1, _V2, _V3, _V4, _V5)
+_V6 = (
+    # v5 froze one configured backend per station and therefore could not prove which backend
+    # actually contributed to a multi-backend SOP instance. NULL means provenance predates this
+    # migration and must not be guessed; new rows persist JSON (including [] for known-empty).
+    "ALTER TABLE local_sop_instance ADD COLUMN report_backend_provenance TEXT",
+    "ALTER TABLE local_report_queue ADD COLUMN report_backend_provenance TEXT",
+    "ALTER TABLE local_report_queue ADD COLUMN report_configuration TEXT",
+)
+
+MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1, _V2, _V3, _V4, _V5, _V6)
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 
 

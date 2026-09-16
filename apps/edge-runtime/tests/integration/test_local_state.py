@@ -14,12 +14,19 @@ SQLite 是该接缝的真实基础设施, 测试使用真实迁移和 supervisor
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import unittest
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from nvsop_contracts import (
+    ConfigurationBundle,
+    ReportBackendProvenance,
+    ReportedDecision,
+    configuration_to_wire,
+)
 from store_harness import (
     ANCHOR,
     MARGINS,
@@ -44,7 +51,7 @@ from edge_runtime.judgment.model import (
 )
 from edge_runtime.judgment.reasons import ReasonCode, Verdict
 from edge_runtime.local_state import open_local_state
-from edge_runtime.local_state.queues import ReportContext
+from edge_runtime.local_state.queues import BackendReportContext, ReportContext
 from edge_runtime.local_state.schema import MIGRATIONS, apply_migrations, migrate
 from edge_runtime.local_state.store import LocalState
 from edge_runtime.reporting import DecisionReporter
@@ -307,28 +314,37 @@ class RestartTest(unittest.TestCase):
 
 
 class HistoricalReportContextTest(unittest.TestCase):
-    def context(self, *, revision: int, backend_id: str, digest: str) -> ReportContext:
+    def context(self, *, revision: int, backend_id: str) -> ReportContext:
+        bundle = ConfigurationBundle(
+            host_id="host-a",
+            config_revision=revision,
+            generated_at=f"2026-09-{revision:02d}T00:00:00Z",
+            stations=(),
+        )
         return ReportContext(
             host_id="host-a",
             station_id=STATION,
-            backend_id=backend_id,
+            backends=(BackendReportContext(backend_id, (f"model-{revision}",)),),
             template_version_id="template-a",
             template_sha256="a" * 64,
-            model_ids=(f"model-{revision}",),
             configuration_revision=revision,
-            configuration_sha256=digest,
+            configuration_sha256=bundle.effective_sha256,
+            configuration_json=json.dumps(
+                configuration_to_wire(bundle), ensure_ascii=False, separators=(",", ":")
+            ),
         )
 
     def test_report_context_is_frozen_across_reconfiguration_and_sqlite_restart(self) -> None:
-        context_n = self.context(revision=7, backend_id="backend-old", digest="b" * 64)
-        context_n1 = self.context(revision=8, backend_id="backend-new", digest="c" * 64)
+        context_n = self.context(revision=7, backend_id="backend-old")
+        context_n1 = self.context(revision=8, backend_id="backend-new")
         with TemporaryDirectory() as temporary:
             database = str(Path(temporary) / "state.sqlite")
             first = open_local_state(database)
             station = first.station(STATION, report_context=context_n)
             driver = supervisor(opening_state(), FakeClock(), station)
-            driver.receive(action(STEPS[0], at=ANCHOR))
-            driver.receive(action(STEPS[2], at=ANCHOR + 1.0))
+            provenance = context_n.backends[0]
+            driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=provenance)
+            driver.receive(action(STEPS[2], at=ANCHOR + 1.0), report_provenance=provenance)
             (pending,) = station.pending_reports()
             self.assertEqual(pending.context, context_n)
             first.close()
@@ -345,24 +361,119 @@ class HistoricalReportContextTest(unittest.TestCase):
             self.assertEqual(after_restart.context, context_n)
             third.close()
 
+    def test_non_first_backend_provenance_reaches_the_report_outbox(self) -> None:
+        bundle = ConfigurationBundle(
+            host_id="host-a",
+            config_revision=9,
+            generated_at="2026-09-16T00:00:00Z",
+            stations=(),
+        )
+        backend_a = BackendReportContext("backend-a", ("model-a",))
+        backend_b = BackendReportContext("backend-b", ("model-b",))
+        context = ReportContext(
+            host_id="host-a",
+            station_id=STATION,
+            backends=(backend_a, backend_b),
+            template_version_id="template-a",
+            template_sha256="a" * 64,
+            configuration_revision=bundle.config_revision,
+            configuration_sha256=bundle.effective_sha256,
+            configuration_json=json.dumps(
+                configuration_to_wire(bundle), ensure_ascii=False, separators=(",", ":")
+            ),
+        )
+        state = open_local_state(":memory:")
+        self.addCleanup(state.close)
+        station = state.station(STATION, report_context=context)
+        driver = supervisor(opening_state(), FakeClock(), station)
+        driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=backend_b)
+        driver.receive(action(STEPS[2], at=ANCHOR + 1.0), report_provenance=backend_b)
+        (pending,) = station.pending_reports()
+        assert pending.context is not None
+        self.assertEqual(pending.context.backends, (backend_b,))
+
+        class Transport:
+            def __init__(self) -> None:
+                self.sent: list[ReportedDecision] = []
+
+            def send_decision(
+                self,
+                report: ReportedDecision,
+                *,
+                configuration: ConfigurationBundle | None,
+            ) -> None:
+                self.assert_configuration(configuration)
+                self.sent.append(report)
+
+            @staticmethod
+            def assert_configuration(configuration: ConfigurationBundle | None) -> None:
+                if configuration is None:
+                    raise AssertionError("v2 report must carry the frozen configuration")
+
+        transport = Transport()
+        attempts = DecisionReporter(queues=station, transport=transport).flush(
+            now=HostInstant(ANCHOR + 2.0),
+            reported_at="2026-09-16T00:00:00Z",
+        )
+        self.assertTrue(attempts[0].sent)
+        self.assertEqual(
+            transport.sent[0].backend_provenance,
+            (ReportBackendProvenance("backend-b", ("model-b",)),),
+        )
+
+    def test_confirmed_connector_only_decision_reports_empty_backend_provenance(self) -> None:
+        context = self.context(revision=10, backend_id="backend-configured")
+        state = open_local_state(":memory:")
+        self.addCleanup(state.close)
+        station = state.station(STATION, report_context=context)
+        driver = supervisor(opening_state(), FakeClock(), station)
+        driver.receive(action(STEPS[0], at=ANCHOR))
+        driver.receive(action(STEPS[2], at=ANCHOR + 1.0))
+        (pending,) = station.pending_reports()
+        assert pending.context is not None
+        self.assertEqual(pending.context.backends, ())
+
+        class Transport:
+            def __init__(self) -> None:
+                self.sent: list[ReportedDecision] = []
+
+            def send_decision(
+                self,
+                report: ReportedDecision,
+                *,
+                configuration: ConfigurationBundle | None,
+            ) -> None:
+                if configuration is None:
+                    raise AssertionError("confirmed decision must carry its frozen configuration")
+                self.sent.append(report)
+
+        transport = Transport()
+        attempts = DecisionReporter(queues=station, transport=transport).flush(
+            now=HostInstant(ANCHOR + 2.0),
+            reported_at="2026-09-16T00:00:00Z",
+        )
+        self.assertTrue(attempts[0].sent)
+        self.assertEqual(transport.sent[0].backend_provenance, ())
+
     def test_event_time_context_without_history_is_not_confused_with_legacy_pending(self) -> None:
         unproven = ReportContext(
             host_id="host-a",
             station_id=STATION,
-            backend_id="backend-bootstrap",
+            backends=(BackendReportContext("backend-bootstrap", ()),),
             template_version_id="template-bootstrap",
             template_sha256="e" * 64,
-            model_ids=(),
             configuration_revision=None,
             configuration_sha256=None,
+            configuration_json=None,
         )
         with TemporaryDirectory() as temporary:
             database = str(Path(temporary) / "bootstrap.sqlite")
             first = open_local_state(database)
             station = first.station(STATION, report_context=unproven)
             driver = supervisor(opening_state(), FakeClock(), station)
-            driver.receive(action(STEPS[0], at=ANCHOR))
-            driver.receive(action(STEPS[2], at=ANCHOR + 1.0))
+            provenance = unproven.backends[0]
+            driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=provenance)
+            driver.receive(action(STEPS[2], at=ANCHOR + 1.0), report_provenance=provenance)
             (pending,) = station.pending_reports()
             self.assertEqual(pending.context, unproven)
             first.close()
@@ -384,7 +495,13 @@ class HistoricalReportContextTest(unittest.TestCase):
             def __init__(self) -> None:
                 self.sent: list[object] = []
 
-            def send_decision(self, report: object) -> None:
+            def send_decision(
+                self,
+                report: ReportedDecision,
+                *,
+                configuration: ConfigurationBundle | None,
+            ) -> None:
+                del configuration
                 self.sent.append(report)
 
         transport = Transport()
@@ -400,8 +517,8 @@ class HistoricalReportContextTest(unittest.TestCase):
         self.assertEqual(still_pending.attempts, 1)
         self.assertIsNone(still_pending.context)
 
-    def test_v4_pending_reopens_as_unproven_legacy_after_v5_migration(self) -> None:
-        context = self.context(revision=8, backend_id="backend-new", digest="c" * 64)
+    def test_v4_pending_reopens_as_unproven_legacy_after_v6_migration(self) -> None:
+        context = self.context(revision=8, backend_id="backend-new")
         with TemporaryDirectory() as temporary:
             database = str(Path(temporary) / "legacy.sqlite")
             connection = sqlite3.connect(database)
@@ -446,20 +563,26 @@ class HistoricalReportContextTest(unittest.TestCase):
                 reopened.close()
 
     def test_lost_ack_retry_reuses_the_exact_report_payload(self) -> None:
-        context = self.context(revision=7, backend_id="backend-old", digest="b" * 64)
+        context = self.context(revision=7, backend_id="backend-old")
         state = open_local_state(":memory:")
         self.addCleanup(state.close)
         station = state.station(STATION, report_context=context)
         driver = supervisor(opening_state(), FakeClock(), station)
-        driver.receive(action(STEPS[0], at=ANCHOR))
-        driver.receive(action(STEPS[2], at=ANCHOR + 1.0))
+        provenance = context.backends[0]
+        driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=provenance)
+        driver.receive(action(STEPS[2], at=ANCHOR + 1.0), report_provenance=provenance)
 
         class LostAckTransport:
             def __init__(self) -> None:
                 self.sent: list[object] = []
 
-            def send_decision(self, report: object) -> None:
-                self.sent.append(report)
+            def send_decision(
+                self,
+                report: ReportedDecision,
+                *,
+                configuration: ConfigurationBundle | None,
+            ) -> None:
+                self.sent.append((report, configuration))
                 if len(self.sent) == 1:
                     raise OSError("center committed but acknowledgement was lost")
 
@@ -481,21 +604,27 @@ class HistoricalReportContextTest(unittest.TestCase):
         self.assertEqual(station.pending_reports(), ())
 
     def test_successful_flush_marks_only_the_outbox_row_reported(self) -> None:
-        context = self.context(revision=7, backend_id="backend-old", digest="b" * 64)
+        context = self.context(revision=7, backend_id="backend-old")
         state = open_local_state(":memory:")
         self.addCleanup(state.close)
         station = state.station(STATION, report_context=context)
         driver = supervisor(opening_state(), FakeClock(), station)
-        driver.receive(action(STEPS[0], at=ANCHOR))
-        driver.receive(action(STEPS[2], at=ANCHOR + 1.0))
+        provenance = context.backends[0]
+        driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=provenance)
+        driver.receive(action(STEPS[2], at=ANCHOR + 1.0), report_provenance=provenance)
         (pending,) = station.pending_reports()
 
         class Transport:
             def __init__(self) -> None:
                 self.sent: list[object] = []
 
-            def send_decision(self, report: object) -> None:
-                self.sent.append(report)
+            def send_decision(
+                self,
+                report: ReportedDecision,
+                *,
+                configuration: ConfigurationBundle | None,
+            ) -> None:
+                self.sent.append((report, configuration))
 
         transport = Transport()
         attempts = DecisionReporter(queues=station, transport=transport).flush(

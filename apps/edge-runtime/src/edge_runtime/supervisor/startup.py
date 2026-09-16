@@ -25,7 +25,11 @@ def resume_station(
 ) -> StationSupervisor:
     """恢复工位并结案启动前遗留的实例。"""
     supervisor = StationSupervisor(
-        state=store.resume(template, parameters), store=store, margins=margins, clock=clock
+        state=store.resume(template, parameters),
+        store=store,
+        margins=margins,
+        clock=clock,
+        initial_report_provenance=store.resume_report_provenance(),
     )
     supervisor.interrupt()
     return supervisor

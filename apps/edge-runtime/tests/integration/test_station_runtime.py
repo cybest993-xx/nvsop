@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from random import Random
 from threading import Event
-from typing import ClassVar
+from typing import ClassVar, cast
 from unittest.mock import patch
 
 from nvsop_contracts import HostIdentityKeyPair, generate_host_identity_key_pair
@@ -35,6 +35,7 @@ from edge_runtime.runtime_configuration import StationRuntimeBinding
 from edge_runtime.station_runtime import (
     InputWaitExpired,
     MultiplexedStationInputSource,
+    ProvenancedSupervisorInput,
     SseStationInputSource,
     StationRuntimeConfiguration,
 )
@@ -452,11 +453,13 @@ class MultiBackendRuntimeCompositionTest(unittest.TestCase):
             ),
             parameters=RuntimeParameters(idle_timeout=10.0, step_deadline=5.0),
             margins=EvidenceMargins(leading=0.0, trailing=0.0),
+            model_ids=("model-a",),
         )
         second = replace(
             first,
             backend_id="backend-b",
             inference_url="http://backend-b.example/v1/chat/completions",
+            model_ids=("model-b",),
         )
         binding = StationRuntimeBinding(
             configuration=first,
@@ -470,21 +473,25 @@ class MultiBackendRuntimeCompositionTest(unittest.TestCase):
             source = _station_input_source(binding, timeout=0.1)
             try:
                 self.assertIsInstance(source, MultiplexedStationInputSource)
-                arriving = {
-                    event.signal
-                    for event in (
-                        source.next_input(timeout=0.2),
-                        source.next_input(timeout=0.2),
-                    )
-                    if isinstance(event, ActionRecognized)
-                }
-                self.assertEqual(
-                    {
-                        "http://backend-a.example/v1/chat/completions",
-                        "http://backend-b.example/v1/chat/completions",
-                    },
-                    arriving,
+                events = (
+                    source.next_input(timeout=0.2),
+                    source.next_input(timeout=0.2),
                 )
+                provenanced = tuple(
+                    event for event in events if isinstance(event, ProvenancedSupervisorInput)
+                )
+                self.assertEqual(2, len(provenanced))
+                by_backend = {event.provenance.backend_id: event for event in provenanced}
+                self.assertEqual(
+                    "http://backend-a.example/v1/chat/completions",
+                    cast(ActionRecognized, by_backend["backend-a"].arriving).signal,
+                )
+                self.assertEqual(
+                    "http://backend-b.example/v1/chat/completions",
+                    cast(ActionRecognized, by_backend["backend-b"].arriving).signal,
+                )
+                self.assertEqual(("model-a",), by_backend["backend-a"].provenance.model_ids)
+                self.assertEqual(("model-b",), by_backend["backend-b"].provenance.model_ids)
                 self.assertEqual(2, len(_TrackingSseInputSource.instances))
                 self.assertTrue(
                     all(

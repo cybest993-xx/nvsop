@@ -25,6 +25,7 @@ from edge_runtime.configuration_values import (
 )
 from edge_runtime.judgment.evidence import EvidenceMargins
 from edge_runtime.judgment.model import HostInstant, Ordering, RuntimeParameters, Template
+from edge_runtime.local_state.queues import BackendReportContext
 from edge_runtime.stream_health import StreamFact, StreamHealthEvent, decode
 from edge_runtime.supervisor.inputs import ActionRecognized, StreamHealthObserved, SupervisorInput
 
@@ -51,13 +52,23 @@ class InputWaitExpired:
     """输入源等待到期, 主循环应触发 supervisor 的核心计时器。"""
 
 
+@dataclass(frozen=True, slots=True)
+class ProvenancedSupervisorInput:
+    """仅供运行时/持久化层携带的 backend 来源; judgment core 不消费它。"""
+
+    arriving: SupervisorInput
+    provenance: BackendReportContext
+
+
 class StationInputSource(Protocol):
     """实时判定循环所需的最小输入接缝。"""
 
     @property
     def ended(self) -> bool: ...
 
-    def next_input(self, *, timeout: float | None) -> SupervisorInput | InputWaitExpired | None: ...
+    def next_input(
+        self, *, timeout: float | None
+    ) -> SupervisorInput | ProvenancedSupervisorInput | InputWaitExpired | None: ...
 
     def close(self) -> None: ...
 
@@ -109,7 +120,9 @@ class SseStationInputSource(StationInputSource):
     def ended(self) -> bool:
         return self._ended
 
-    def next_input(self, *, timeout: float | None) -> SupervisorInput | InputWaitExpired | None:
+    def next_input(
+        self, *, timeout: float | None
+    ) -> SupervisorInput | ProvenancedSupervisorInput | InputWaitExpired | None:
         """在核心 deadline 到达时返回 None, 而不是阻塞在网络读取上。"""
         if self._closed:
             return None
@@ -299,6 +312,31 @@ class SseStationInputSource(StationInputSource):
         )
 
 
+class ProvenancedStationInputSource(StationInputSource):
+    """给一个 backend 的所有推理输入附加固定的事件时来源。"""
+
+    def __init__(self, *, source: StationInputSource, provenance: BackendReportContext) -> None:
+        self._source = source
+        self._provenance = provenance
+
+    @property
+    def ended(self) -> bool:
+        return self._source.ended
+
+    def next_input(
+        self, *, timeout: float | None
+    ) -> ProvenancedSupervisorInput | InputWaitExpired | None:
+        arriving = self._source.next_input(timeout=timeout)
+        if arriving is None or isinstance(arriving, InputWaitExpired):
+            return arriving
+        if isinstance(arriving, ProvenancedSupervisorInput):
+            raise ValueError("station input already has backend provenance")
+        return ProvenancedSupervisorInput(arriving=arriving, provenance=self._provenance)
+
+    def close(self) -> None:
+        self._source.close()
+
+
 class MultiplexedStationInputSource(StationInputSource):
     """把同一工位多个后端的输入合并到一个 supervisor 队列。"""
 
@@ -308,7 +346,9 @@ class MultiplexedStationInputSource(StationInputSource):
         if queue_size <= 0:
             raise ValueError("multiplexed station input queue size must be positive")
         self._sources = sources
-        self._events: Queue[SupervisorInput] = Queue(maxsize=queue_size)
+        self._events: Queue[SupervisorInput | ProvenancedSupervisorInput] = Queue(
+            maxsize=queue_size
+        )
         self._wake = Event()
         self._stopping = Event()
         self._state_lock = Lock()
@@ -324,7 +364,9 @@ class MultiplexedStationInputSource(StationInputSource):
         with self._state_lock:
             return self._ended
 
-    def next_input(self, *, timeout: float | None) -> SupervisorInput | InputWaitExpired | None:
+    def next_input(
+        self, *, timeout: float | None
+    ) -> SupervisorInput | ProvenancedSupervisorInput | InputWaitExpired | None:
         deadline = None if timeout is None else monotonic() + timeout
         with self._state_lock:
             if not self._started and not self._closed:
@@ -503,6 +545,8 @@ def station_configuration(value: object) -> StationRuntimeConfiguration:
 __all__ = [
     "InputWaitExpired",
     "MultiplexedStationInputSource",
+    "ProvenancedStationInputSource",
+    "ProvenancedSupervisorInput",
     "SseStationInputSource",
     "StationInputSource",
     "StationRuntimeConfiguration",

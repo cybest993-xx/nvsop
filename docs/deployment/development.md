@@ -21,19 +21,19 @@
 - pnpm：根 `package.json#packageManager`，当前为 **11.22.0**。
 - Tilt：开发编排器强制 **0.37.7**。
 
-还需要 `git`、`git-lfs`、Docker + Docker Compose、`ffmpeg`、`ffprobe`、`uv`。默认 HTTPS 还需要 `openssl`。`make dev-setup` 默认也会校验 Node 和 Playwright UI 固定端口 9323；Docker daemon 必须可用。
+还需要 `git`、`git-lfs`、Docker + Docker Compose、`ffmpeg`、`ffprobe`、`uv`。只有显式 HTTPS 模式需要 `openssl`。`make dev-setup` 默认也会校验 Node 和 Playwright UI 固定端口 9323；Docker daemon 必须可用。
 
 固定端口必须空闲：
 
 | 服务 | 地址/端口 |
 |---|---|
-| 业务入口 | `https://localhost:8443`（默认） |
-| 标注派生媒体 | `https://localhost:8444` |
-| MinIO 上传入口 | `https://localhost:9443` |
+| 业务入口 | `http://localhost:8443`（默认） |
+| 标注派生媒体 | `http://localhost:8444` |
+| MinIO 上传入口 | `http://localhost:9443` |
 | Tilt | `http://localhost:10350` |
 | Playwright UI | `http://localhost:9323` |
 
-显式设置 `NVSOP_DEV_PROTOCOL=http` 才会把前三个本地入口改为 HTTP；这是 `fixed_main` 开发特例，不是生产部署建议。
+固定 `main` 本地实例默认使用 HTTP。需要验证本地 TLS 时显式设置 `NVSOP_DEV_PROTOCOL=https`；正式部署仍使用 HTTPS 安全边界。
 
 ## 第一次准备
 
@@ -47,16 +47,23 @@ make dev-setup
 `make dev-setup` 会：
 
 - 校验工具、Docker daemon、Compose、Tilt 版本和固定端口；
-- 生成开发 secrets、HTTPS CA/服务端证书和合成测试视频；
+- 生成开发 secrets 和合成测试视频；显式 HTTPS 模式才生成开发 CA/服务端证书；
 - 执行 frozen `pnpm install` 与 `uv sync`；
 - 拉取 PostgreSQL、Redis、MinIO、annotation DB、Nginx 等基础镜像；
 - 在 `.tmp/dev-main/`（或 `--state-dir` 指定目录）写入状态、凭据路径和测试制品。
 
 开发账号信息写入 `.tmp/dev-main/credentials.txt`，默认登录名为 `dev.admin`；密码本身保存在独立 secret 文件中。不要把状态目录、密码或证书私钥提交进 Git。
 
-### HTTPS CA
+### 可选 HTTPS CA
 
-默认 HTTPS 会在状态目录的 `tls/` 生成开发 CA，并生成 `TRUST-CA.txt`。浏览器访问前，把 `ca.crt` 导入当前用户的可信根证书存储。Playwright 和本地 HTTPS 客户端使用同一 CA，不以“跳过 TLS 校验”作为正常工作流。
+默认 HTTP 不生成也不要求本地 CA。需要本地 TLS 时重新准备并以同一协议启动：
+
+```sh
+NVSOP_DEV_PROTOCOL=https make dev-setup
+NVSOP_DEV_PROTOCOL=https make dev
+```
+
+HTTPS 模式会在状态目录的 `tls/` 生成开发 CA，并生成 `TRUST-CA.txt`。浏览器访问前，把 `ca.crt` 导入当前用户的可信根证书存储。Playwright 和本地 HTTPS 客户端使用同一 CA，不以“跳过 TLS 校验”作为正常工作流。
 
 ## 日常命令
 

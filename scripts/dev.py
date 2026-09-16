@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Issue #119 的固定 main 开发实例编排器。
 
-本地入口默认使用 HTTPS；显式设置 `NVSOP_DEV_PROTOCOL=http` 才放宽为固定 main 本地 HTTP。
+本地入口默认使用 HTTP；显式设置 `NVSOP_DEV_PROTOCOL=https` 才启用固定 main 本地 TLS。
 本脚本只编排 Git 快照、Tilt、Docker Compose 和测试命令；产品业务仍由各应用提供。
 """
 
@@ -74,7 +74,7 @@ MINIO_PORT = 9443
 PLAYWRIGHT_UI_PORT = 9323
 PLAYWRIGHT_UI_URL = f"http://localhost:{PLAYWRIGHT_UI_PORT}"
 PROTOCOL_ENVIRONMENT = "NVSOP_DEV_PROTOCOL"
-DEFAULT_PROTOCOL = "https"
+DEFAULT_PROTOCOL = "http"
 SUPPORTED_PROTOCOLS = frozenset({"http", "https"})
 POLL_SECONDS = 2
 READY_TIMEOUT_SECONDS = 900
@@ -89,7 +89,7 @@ class DevInterrupted(KeyboardInterrupt):
 
 
 def configured_protocol(environ: Mapping[str, str] | None = None) -> str:
-    """读取本地入口协议；HTTPS 是默认值，HTTP 只在显式选择时启用。"""
+    """读取本地入口协议；HTTP 是默认值，HTTPS 只在显式选择时启用。"""
     values = os.environ if environ is None else environ
     protocol = values.get(PROTOCOL_ENVIRONMENT, DEFAULT_PROTOCOL).strip().lower()
     if protocol not in SUPPORTED_PROTOCOLS:
@@ -112,10 +112,10 @@ def public_urls(protocol: str) -> dict[str, str]:
 
 
 def state_protocol(item: DevPaths) -> str:
-    """读取运行实例已经使用的协议；旧状态文件按 HTTPS 解释。"""
+    """读取运行实例已经使用的协议；缺失字段仅兼容早期 HTTPS 状态文件。"""
     raw = read_state(item).get("protocol")
     if raw is None:
-        return DEFAULT_PROTOCOL
+        return "https"
     if not isinstance(raw, str) or raw not in SUPPORTED_PROTOCOLS:
         raise DevError(f"开发实例状态中的协议无效：{raw!r}")
     return raw

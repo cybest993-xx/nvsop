@@ -1,6 +1,6 @@
 name: nvsop-dev-main
 
-# 本地网关默认由 scripts/dev.py 渲染为 HTTPS；显式设置 NVSOP_DEV_PROTOCOL=http 才放宽为固定 main 本地 HTTP。
+# 本地网关默认由 scripts/dev.py 渲染为 HTTP；显式设置 NVSOP_DEV_PROTOCOL=https 才启用固定 main 本地 TLS。
 services:
   center-db:
     image: postgres:17.2-bookworm
@@ -99,13 +99,13 @@ services:
       SOP_DATABASE_PASSWORD_FILE: /run/secrets/center-db-password
       SOP_REDIS_URL_FILE: /run/secrets/redis-url
       SOP_MINIO_ENDPOINT: http://minio:9000
-      SOP_MINIO_PUBLIC_ENDPOINT: ${NVSOP_DEV_MINIO_URL:-https://localhost:9443}
+      SOP_MINIO_PUBLIC_ENDPOINT: ${NVSOP_DEV_MINIO_URL:-http://localhost:9443}
       SOP_MINIO_BUCKET: training
       SOP_MINIO_ACCESS_KEY_FILE: /run/secrets/minio-access-key
       SOP_MINIO_SECRET_KEY_FILE: /run/secrets/minio-secret-key
       SOP_CSRF_SECRET_FILE: /run/secrets/csrf-secret
       SOP_DEPLOYMENT_MODE: fixed_main
-      SOP_SESSION_COOKIE_TRANSPORT: ${NVSOP_DEV_COOKIE_TRANSPORT:-require_https}
+      SOP_SESSION_COOKIE_TRANSPORT: ${NVSOP_DEV_COOKIE_TRANSPORT:-allow_http}
       SOP_SESSION_IDLE_TIMEOUT_MINUTES: "30"
       SOP_SESSION_ABSOLUTE_LIFETIME_MINUTES: "480"
       SOP_DATASET_UPLOAD_TTL_SECONDS: "900"
@@ -113,7 +113,7 @@ services:
       SOP_DATASET_SUPPORTED_CODECS: h264,h265
       SOP_MEDIA_PROBE_TIMEOUT_SECONDS: "60"
       SOP_ANNOTATION_BACKEND_URL: http://annotation-backend:8100
-      SOP_ANNOTATION_MEDIA_ORIGIN: ${NVSOP_DEV_MEDIA_URL:-https://localhost:8444}
+      SOP_ANNOTATION_MEDIA_ORIGIN: ${NVSOP_DEV_MEDIA_URL:-http://localhost:8444}
       SOP_ANNOTATION_DATA_ROOT: /var/lib/nvsop/annotation-data
       SOP_ANNOTATION_HTTP_TIMEOUT_SECONDS: "120"
       SOP_MEDIA_PROBE_BINARY: ffprobe
@@ -286,7 +286,7 @@ services:
       - ${NVSOP_DEV_NGINX_CONFIG:-.tmp/dev-main/nginx.conf}:/etc/nginx/conf.d/default.conf:ro
       - ${NVSOP_DEV_STATE_DIR:-.tmp/dev-main}/tls:/etc/nginx/tls:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -Y off -q --no-check-certificate -O - ${NVSOP_DEV_PROTOCOL:-https}://127.0.0.1:8443/api/v1/liveness >/dev/null"]
+      test: ["CMD-SHELL", "wget -Y off -q --no-check-certificate -O - ${NVSOP_DEV_PROTOCOL:-http}://127.0.0.1:8443/api/v1/liveness >/dev/null"]
       interval: 5s
       timeout: 5s
       retries: 30

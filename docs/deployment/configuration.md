@@ -34,7 +34,7 @@ uvicorn --factory factory_sop.entrypoint:build
 | Annotation | backend URL、media origin、data root、timeouts | backend + media origin 成组，data root 为绝对路径 |
 | Worker | health-check interval | 由 worker 运行环境提供 |
 
-`SOP_SESSION_COOKIE_TRANSPORT=allow_http` 只允许与 `SOP_DEPLOYMENT_MODE=fixed_main` 联用，并且 MinIO/annotation 本地入口必须分别是 `http://localhost:9443` 与 `http://localhost:8444`。生产部署使用 HTTPS 安全边界。
+开发 Compose 默认使用 `SOP_DEPLOYMENT_MODE=fixed_main` + `SOP_SESSION_COOKIE_TRANSPORT=allow_http`，MinIO/annotation 本地入口分别是 `http://localhost:9443` 与 `http://localhost:8444`。`allow_http` 仍只允许与 `fixed_main` 联用；生产部署使用 HTTPS 安全边界。
 
 开发 Compose 中的完整当前变量集合见 [`../../deploy/dev/compose.yaml`](../../deploy/dev/compose.yaml)，不要把其中的开发值复制成生产默认值。
 

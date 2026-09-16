@@ -109,7 +109,7 @@
 
 ## 六、系统结构
 
-**【已定】技术与部署基线**：中心后台采用 FastAPI + SQLAlchemy 2.x + Alembic；基础 Web 采用 Vue 3 + TypeScript + Vite，并通过 OpenAPI 生成客户端。Nginx 是统一访问入口。Nginx、FastAPI、ARQ worker、PostgreSQL、MinIO、Redis 与原样复用的训练微服务由一份中心机 Compose 统一安装和运维。正式部署与固定 main 本地 HTTPS 验收路径使用 `HttpOnly + Secure + SameSite` 会话 Cookie；固定 main 允许显式设置 `NVSOP_DEV_PROTOCOL=http` 进行本地 HTTP 调试，但默认和验收路径必须使用 HTTPS。修改请求仍执行 CSRF 校验，不在 `localStorage` 保存长期令牌。
+**【已定】技术与部署基线**：中心后台采用 FastAPI + SQLAlchemy 2.x + Alembic；基础 Web 采用 Vue 3 + TypeScript + Vite，并通过 OpenAPI 生成客户端。Nginx 是统一访问入口。Nginx、FastAPI、ARQ worker、PostgreSQL、MinIO、Redis 与原样复用的训练微服务由一份中心机 Compose 统一安装和运维。正式部署必须使用 HTTPS，并使用 `HttpOnly + Secure + SameSite` 会话 Cookie；固定 main 本地开发实例默认使用 HTTP，`allow_http` 仅限该部署模式，也可显式设置 `NVSOP_DEV_PROTOCOL=https` 验证本地 TLS 路径。修改请求仍执行 CSRF 校验，不在 `localStorage` 保存长期令牌。
 
 中心后台是**模块化单体**：业务模块在一个 FastAPI 部署单元内通过进程内接口协作，各自拥有行为、表和迁移；首版不引入内部 HTTP、服务网格、消息总线或分布式事务。
 

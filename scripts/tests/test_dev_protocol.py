@@ -30,12 +30,17 @@ SPEC.loader.exec_module(DEV)
 
 
 class DevProtocolTest(unittest.TestCase):
-    def test_https_is_the_default_and_http_is_explicit(self) -> None:
-        self.assertEqual("https", DEV.configured_protocol({}))
+    def test_http_is_the_default_and_https_is_explicit(self) -> None:
+        self.assertEqual("http", DEV.configured_protocol({}))
         self.assertEqual("http", DEV.configured_protocol({"NVSOP_DEV_PROTOCOL": "http"}))
         self.assertEqual("https", DEV.configured_protocol({"NVSOP_DEV_PROTOCOL": "https"}))
         self.assertEqual("http://localhost:8443", DEV.public_urls("http")["business"])
         self.assertEqual("https://localhost:8443", DEV.public_urls("https")["business"])
+
+    def test_state_without_protocol_keeps_legacy_https_meaning(self) -> None:
+        item = DEV.DevPaths(root=Path("/repo"), state=Path("/state"))
+        with patch.object(DEV, "read_state", return_value={}):
+            self.assertEqual("https", DEV.state_protocol(item))
 
     def test_unknown_protocol_is_rejected(self) -> None:
         with self.assertRaises(DEV.DevError):

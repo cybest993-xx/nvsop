@@ -2,8 +2,8 @@ load("scripts/dev_tilt.star", "configure_manual_test_resources")
 
 # 固定实例的服务图由 Compose 管理；Tilt 只负责可视化状态、日志和手动测试入口。
 # scripts/dev.py 在 Tilt 外拥有快照、更新串行化和停止收尾，避免形成第二个进程管理器。
-BASE_URL = os.getenv("NVSOP_DEV_BASE_URL", "https://localhost:8443")
-MEDIA_URL = os.getenv("NVSOP_DEV_MEDIA_URL", "https://localhost:8444")
+BASE_URL = os.getenv("NVSOP_DEV_BASE_URL", "http://localhost:8443")
+MEDIA_URL = os.getenv("NVSOP_DEV_MEDIA_URL", "http://localhost:8444")
 STATE_DIR = os.getenv("NVSOP_DEV_STATE_DIR", ".tmp/dev-main")
 REPORTS_DIR = os.path.abspath(os.path.join(STATE_DIR, "reports"))
 TARGET_SHA = os.getenv("NVSOP_TARGET_SHA", "local")

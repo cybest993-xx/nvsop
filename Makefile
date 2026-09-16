@@ -46,6 +46,7 @@ sync:
 	uv sync --frozen --all-packages
 
 VENV := $(CURDIR)/.venv/bin
+PYTHON := $(VENV)/python
 RUFF := $(VENV)/ruff
 MYPY := $(VENV)/mypy
 PYTEST := $(VENV)/pytest
@@ -73,16 +74,16 @@ openapi-generate: openapi-export web-install
 policy-test:
 	command -v git-lfs >/dev/null || (echo "policy-test requires git-lfs; LFS tests must not be skipped" >&2; exit 1)
 	git lfs version
-	python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+	$(PYTHON) -m unittest discover -s scripts/tests -p 'test_*.py'
 
 policy:
-	python3 scripts/check_repo_policy.py
+	$(PYTHON) scripts/check_repo_policy.py
 
 migrations:
-	python3 scripts/check_migration_ownership.py
+	$(PYTHON) scripts/check_migration_ownership.py
 
 contract-base:
-	python3 -m unittest discover -s tests/contract/base -p 'test_*.py'
+	$(PYTHON) -m unittest discover -s tests/contract/base -p 'test_*.py'
 
 contract-capability:
 	PYTHONPATH=$(CONTRACT_PY)/src:apps/edge-runtime/src:apps/control-api/src $(VENV)/python \
@@ -102,7 +103,7 @@ contracts-python-type:
 		$(CONTRACT_PY)/src $(CONTRACT_PY)/tests
 
 contracts-python-unit:
-	PYTHONPATH=$(CONTRACT_PY)/src python3 -m unittest discover \
+	PYTHONPATH=$(CONTRACT_PY)/src $(PYTHON) -m unittest discover \
 		-s $(CONTRACT_PY)/tests/unit -t $(CONTRACT_PY)/tests/unit -p 'test_*.py'
 
 boundaries:
@@ -149,11 +150,11 @@ edge-type:
 	cd $(EDGE) && MYPYPATH=$(CURDIR)/$(CONTRACT_PY)/src $(MYPY) --strict src tests
 
 edge-unit:
-	cd $(EDGE) && PYTHONPATH=$(CURDIR)/$(CONTRACT_PY)/src:src python3 -m unittest \
+	cd $(EDGE) && PYTHONPATH=$(CURDIR)/$(CONTRACT_PY)/src:src $(PYTHON) -m unittest \
 		discover -s tests/unit -t tests/unit -p 'test_*.py'
 
 edge-integration:
-	cd $(EDGE) && PYTHONPATH=$(CURDIR)/$(CONTRACT_PY)/src:src python3 -m unittest \
+	cd $(EDGE) && PYTHONPATH=$(CURDIR)/$(CONTRACT_PY)/src:src $(PYTHON) -m unittest \
 		discover -s tests/integration -t tests/integration -p 'test_*.py'
 
 WEB := apps/control-web

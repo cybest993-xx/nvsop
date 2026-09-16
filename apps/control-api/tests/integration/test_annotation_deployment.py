@@ -10,6 +10,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 CONFIG = REPO_ROOT / "docs/deployment/nginx-annotation.conf.example"
+DEV_CONFIG = REPO_ROOT / "deploy/dev/nginx.conf"
+MACHINE_LOCATION_PREFIX = 'location ~ "^/api/v1/(?:inference-hosts/'
 TRAINING_COMPOSE = (
     REPO_ROOT / "vendor/sop-monitoring-blueprints/microservices/sop-training-bp/docker-compose.yml"
 )
@@ -44,6 +46,43 @@ def test_control_requests_use_center_session_auth_without_auth_loop() -> None:
     assert "location = /api/v1/annotation/media/authorize {\n        return 404;" in source
     assert "location = /api/v1/annotation/media/gateway-authorize {\n        return 404;" in source
     assert "location = /api/v1/liveness" in source
+
+
+def test_host_signed_machine_routes_bypass_only_browser_auth_and_preserve_signature_headers() -> (
+    None
+):
+    machine_location_lines: list[str] = []
+    for path in (CONFIG, DEV_CONFIG):
+        source = path.read_text()
+        start = source.index(MACHINE_LOCATION_PREFIX)
+        end = source.index("\n    }\n", start) + len("\n    }")
+        location = source[start:end]
+        machine_location_lines.append(location.splitlines()[0])
+
+        assert "auth_request" not in location
+        assert 'proxy_set_header Cookie "";' in location
+        assert 'proxy_set_header Authorization "";' in location
+        assert 'proxy_set_header X-CSRF-Token "";' in location
+        assert "proxy_set_header X-Inference-Host-ID" not in location
+        assert "proxy_set_header X-Inference-Host-Timestamp" not in location
+        assert "proxy_set_header X-Inference-Host-Nonce" not in location
+        assert "proxy_set_header X-Inference-Host-Signature" not in location
+        for route in (
+            "inference-hosts/",
+            "/configuration",
+            "confirmed-configuration",
+            "monitor/(?:reported-decisions|health)",
+            "device-commands/(?:next|",
+            "/result)",
+            "templates/configuration-reports",
+        ):
+            assert route in location
+
+    assert machine_location_lines[0] == machine_location_lines[1]
+    assert "location /api/v1/ {\n        auth_request /_nvsop_center_auth;" in CONFIG.read_text()
+    assert (
+        "location /api/v1/ {\n        auth_request /_nvsop_center_auth;" in DEV_CONFIG.read_text()
+    )
 
 
 def test_dataset_annotation_volume_wires_writer_and_read_only_worker() -> None:

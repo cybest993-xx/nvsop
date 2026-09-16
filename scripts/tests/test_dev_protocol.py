@@ -42,6 +42,40 @@ class DevProtocolTest(unittest.TestCase):
         with patch.object(DEV, "read_state", return_value={}):
             self.assertEqual("https", DEV.state_protocol(item))
 
+    def test_default_http_runtime_environment_uses_local_http_contract(self) -> None:
+        item = DEV.DevPaths(root=Path("/repo"), state=Path("/state"))
+
+        environment = DEV.runtime_environment(
+            item,
+            sha="abc",
+            source=Path("/snapshot"),
+            protocol=DEV.configured_protocol({}),
+        )
+
+        self.assertEqual("http", environment["NVSOP_DEV_PROTOCOL"])
+        self.assertEqual("allow_http", environment["NVSOP_DEV_COOKIE_TRANSPORT"])
+        self.assertEqual("http://localhost:8443", environment["NVSOP_DEV_BASE_URL"])
+        self.assertEqual("http://localhost:8444", environment["NVSOP_DEV_MEDIA_URL"])
+        self.assertEqual("http://localhost:9443", environment["NVSOP_DEV_MINIO_URL"])
+        self.assertNotIn("SSL_CERT_FILE", environment)
+
+    def test_explicit_https_runtime_environment_keeps_tls_contract(self) -> None:
+        item = DEV.DevPaths(root=Path("/repo"), state=Path("/state"))
+
+        environment = DEV.runtime_environment(
+            item,
+            sha="abc",
+            source=Path("/snapshot"),
+            protocol="https",
+        )
+
+        self.assertEqual("https", environment["NVSOP_DEV_PROTOCOL"])
+        self.assertEqual("require_https", environment["NVSOP_DEV_COOKIE_TRANSPORT"])
+        self.assertEqual("https://localhost:8443", environment["NVSOP_DEV_BASE_URL"])
+        self.assertEqual("https://localhost:8444", environment["NVSOP_DEV_MEDIA_URL"])
+        self.assertEqual("https://localhost:9443", environment["NVSOP_DEV_MINIO_URL"])
+        self.assertEqual("/state/tls/ca.crt", environment["SSL_CERT_FILE"])
+
     def test_unknown_protocol_is_rejected(self) -> None:
         with self.assertRaises(DEV.DevError):
             DEV.configured_protocol({"NVSOP_DEV_PROTOCOL": "ftp"})

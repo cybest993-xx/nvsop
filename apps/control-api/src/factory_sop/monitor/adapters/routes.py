@@ -71,6 +71,7 @@ def report_monitor_decision(
             received_at=datetime.now(UTC),
             monitor=monitor,
             host_gateway=device_dependencies.host_gateway(session),
+            assignment_gateway=device_dependencies.historical_assignments(session),
         )
     except MonitorRefusedError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error

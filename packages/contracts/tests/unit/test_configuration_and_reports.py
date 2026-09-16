@@ -250,6 +250,68 @@ class ReportContractTests(unittest.TestCase):
         )
         self.assertEqual(reported_decision_from_wire(reported_decision_to_wire(report)), report)
 
+    def test_configuration_proof_round_trips_and_is_all_or_nothing(self) -> None:
+        report = ReportedDecision(
+            event_id="host-a:proof",
+            trace_id="trace-proof",
+            host_id="host-a",
+            station_id="station-a",
+            backend_id="backend-a",
+            instance_id=1,
+            verdict="pass",
+            reason_codes=(),
+            violations=(),
+            lifecycle="closed",
+            evidence=ReportEvidence(None, None, None),
+            template_version_id="template-a",
+            template_sha256="a" * 64,
+            model_ids=("model-v1",),
+            reported_at="2026-09-13T00:00:00Z",
+            configuration_revision=7,
+            configuration_sha256="b" * 64,
+        )
+        wire = reported_decision_to_wire(report)
+        self.assertEqual(wire["configuration_revision"], 7)
+        self.assertEqual(wire["configuration_sha256"], "b" * 64)
+        self.assertEqual(reported_decision_from_wire(wire), report)
+
+        del wire["configuration_sha256"]
+        with self.assertRaises(ValueError):
+            reported_decision_from_wire(wire)
+
+        invalid_revision = reported_decision_to_wire(report)
+        invalid_revision["configuration_revision"] = 0
+        with self.assertRaises(ValueError):
+            reported_decision_from_wire(invalid_revision)
+
+        invalid_digest = reported_decision_to_wire(report)
+        invalid_digest["configuration_sha256"] = "not-a-sha256"
+        with self.assertRaises(ValueError):
+            reported_decision_from_wire(invalid_digest)
+
+    def test_legacy_report_omits_configuration_proof_fields(self) -> None:
+        report = ReportedDecision(
+            event_id="host-a:legacy",
+            trace_id="trace-legacy",
+            host_id="host-a",
+            station_id="station-a",
+            backend_id="backend-a",
+            instance_id=2,
+            verdict="pass",
+            reason_codes=(),
+            violations=(),
+            lifecycle="closed",
+            evidence=ReportEvidence(None, None, None),
+            template_version_id=None,
+            template_sha256=None,
+            model_ids=(),
+            reported_at="2026-09-13T00:00:00Z",
+        )
+        wire = reported_decision_to_wire(report)
+        self.assertNotIn("configuration_revision", wire)
+        self.assertNotIn("configuration_sha256", wire)
+        self.assertEqual(reported_decision_from_wire(wire), report)
+
     def test_non_finite_evidence_is_rejected_at_the_wire_boundary(self) -> None:
         report = ReportedDecision(
             event_id="host-a:43",

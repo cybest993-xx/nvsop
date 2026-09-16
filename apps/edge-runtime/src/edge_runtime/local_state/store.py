@@ -12,6 +12,7 @@ edge-autonomy.md §5.11。
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
@@ -41,7 +42,7 @@ from edge_runtime.local_state.codec import (
 from edge_runtime.local_state.codec import violation as decode_violation
 from edge_runtime.local_state.configuration import LocalConfigurationStore
 from edge_runtime.local_state.disposal import LocalDisposalLedger
-from edge_runtime.local_state.queues import StationQueues
+from edge_runtime.local_state.queues import ReportContext, StationQueues
 from edge_runtime.local_state.schema import migrate
 
 
@@ -70,9 +71,11 @@ class StationStore(StationQueues):
         connection: sqlite3.Connection,
         station_id: str,
         lock: AbstractContextManager[object],
+        report_context: ReportContext | None = None,
     ) -> None:
         super().__init__(connection, station_id, lock)
         self._lock = lock
+        self._report_context = report_context
 
     def commit(
         self,
@@ -176,9 +179,32 @@ class StationStore(StationQueues):
         )
 
     def _enqueue_report(self, decision_id: int) -> None:
+        if self._report_context is None:
+            self._connection.execute(
+                "INSERT INTO local_report_queue (station_id, decision_id) VALUES (?, ?)",
+                (self._station_id, decision_id),
+            )
+            return
+        context = self._report_context
         self._connection.execute(
-            "INSERT INTO local_report_queue (station_id, decision_id) VALUES (?, ?)",
-            (self._station_id, decision_id),
+            """
+            INSERT INTO local_report_queue (
+                station_id, decision_id, report_host_id, report_backend_id,
+                report_template_version_id, report_template_sha256, report_model_ids,
+                configuration_revision, configuration_sha256
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                self._station_id,
+                decision_id,
+                context.host_id,
+                context.backend_id,
+                context.template_version_id,
+                context.template_sha256,
+                json.dumps(context.model_ids, ensure_ascii=False, separators=(",", ":")),
+                context.configuration_revision,
+                context.configuration_sha256,
+            ),
         )
 
     def _enqueue_evidence(self, clip: EvidenceClip) -> None:
@@ -294,9 +320,24 @@ class LocalState:
         self._connection = connection
         self._lock = lock or RLock()
 
-    def station(self, station_id: str) -> StationStore:
+    def station(
+        self, station_id: str, *, report_context: ReportContext | None = None
+    ) -> StationStore:
         """返回一个工位的行作用域; 所有工位共享连接和写入锁。"""
-        return StationStore(self._connection, station_id, self._lock)
+        return StationStore(self._connection, station_id, self._lock, report_context)
+
+    def pending_report_station_ids(self) -> tuple[str, ...]:
+        """返回仍欠 Center 报告的工位, 包括已从当前配置移除的历史工位。"""
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT DISTINCT station_id
+                  FROM local_report_queue
+                 WHERE sent_at IS NULL
+                 ORDER BY station_id
+                """
+            ).fetchall()
+        return tuple(str(row["station_id"]) for row in rows)
 
     def disposal(self) -> LocalDisposalLedger:
         """返回该主机唯一的持久连接器写入账本。"""

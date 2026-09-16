@@ -12,17 +12,7 @@ from nvsop_contracts import (
 )
 
 from edge_runtime.judgment.model import Decision, HostInstant
-from edge_runtime.local_state.queues import PendingReport, StationQueues
-
-
-@dataclass(frozen=True, slots=True)
-class ReportContext:
-    host_id: str
-    station_id: str
-    backend_id: str
-    template_version_id: str | None
-    template_sha256: str | None
-    model_ids: tuple[str, ...]
+from edge_runtime.local_state.queues import PendingReport, ReportContext, StationQueues
 
 
 class DecisionReportTransport(Protocol):
@@ -44,11 +34,9 @@ class DecisionReporter:
         self,
         *,
         queues: StationQueues,
-        context: ReportContext,
         transport: DecisionReportTransport,
     ) -> None:
         self._queues = queues
-        self._context = context
         self._transport = transport
 
     def flush(
@@ -56,12 +44,20 @@ class DecisionReporter:
     ) -> tuple[ReportAttempt, ...]:
         attempts: list[ReportAttempt] = []
         for pending in self._queues.pending_reports(limit=limit):
-            event_id = f"{self._context.host_id}:{pending.queue_id}"
+            event_id = (
+                f"{pending.context.host_id}:{pending.queue_id}"
+                if pending.context is not None
+                else f"legacy-pending:{pending.queue_id}"
+            )
             try:
+                stable_reported_at = pending.reported_at
+                if stable_reported_at is None and pending.context is not None:
+                    stable_reported_at = self._queues.freeze_reported_at(
+                        pending.queue_id, candidate=reported_at
+                    )
                 report = reported_decision_from_pending(
                     pending,
-                    context=self._context,
-                    reported_at=reported_at,
+                    reported_at=stable_reported_at or reported_at,
                 )
             except Exception as error:
                 message = f"{type(error).__name__}: {error}"[:255]
@@ -99,11 +95,13 @@ class DecisionReporter:
 def reported_decision_from_pending(
     pending: PendingReport,
     *,
-    context: ReportContext,
     reported_at: str,
 ) -> ReportedDecision:
     """映射精确的本地持久判定;中心不重新判定。"""
     decision: Decision = pending.decision
+    context = pending.context
+    if context is None:
+        raise ValueError("legacy pending report has no event-time report context")
     event_id = f"{context.host_id}:{pending.queue_id}"
     return ReportedDecision(
         event_id=event_id,
@@ -137,6 +135,8 @@ def reported_decision_from_pending(
         template_sha256=context.template_sha256,
         model_ids=context.model_ids,
         reported_at=reported_at,
+        configuration_revision=context.configuration_revision,
+        configuration_sha256=context.configuration_sha256,
     )
 
 

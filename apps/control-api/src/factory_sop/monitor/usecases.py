@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from factory_sop.auth.api import Caller, Permission, authorize
-from factory_sop.monitor.api import HostOwnershipGateway
+from factory_sop.monitor.api import HistoricalAssignmentGateway, HostOwnershipGateway
 from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.model import MirroredDecision, MirroredHealth
 from factory_sop.monitor.repository import MonitorRepository
@@ -43,17 +43,36 @@ def mirror_decision(
     received_at: datetime,
     monitor: MonitorRepository,
     host_gateway: HostOwnershipGateway,
+    assignment_gateway: HistoricalAssignmentGateway | None = None,
 ) -> bool:
     """保存推理机的不可变观测，不在中心重新计算结论。"""
     host_id = _uuid(report.host_id, "report host_id")
     station_id = _uuid(report.station_id, "report station_id")
     backend_id = _uuid(report.backend_id, "report backend_id")
-    if not host_gateway.owns_station_backend(
-        host_id=host_id,
-        station_id=station_id,
-        backend_id=backend_id,
-    ):
-        raise MonitorRefusedError("reported decision is outside the authenticated host topology")
+    if report.configuration_revision is None:
+        owned = host_gateway.owns_station_backend(
+            host_id=host_id,
+            station_id=station_id,
+            backend_id=backend_id,
+        )
+    else:
+        configuration_sha256 = report.configuration_sha256
+        if configuration_sha256 is None:
+            raise MonitorRefusedError("reported decision has incomplete configuration proof")
+        if assignment_gateway is None:
+            raise MonitorRefusedError("historical assignment verifier is unavailable")
+        owned = assignment_gateway.has_configuration_assignment(
+            host_id=host_id,
+            configuration_revision=report.configuration_revision,
+            configuration_sha256=configuration_sha256,
+            station_id=station_id,
+            backend_id=backend_id,
+            template_version_id=report.template_version_id,
+            template_sha256=report.template_sha256,
+            model_ids=report.model_ids,
+        )
+    if not owned:
+        raise MonitorRefusedError("reported decision is outside the authenticated host assignment")
     return monitor.upsert_decision(MirroredDecision(report=report, received_at=received_at))
 
 

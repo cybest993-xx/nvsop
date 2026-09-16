@@ -108,6 +108,8 @@ class ReportedDecision:
     template_sha256: str | None
     model_ids: tuple[str, ...]
     reported_at: str
+    configuration_revision: int | None = None
+    configuration_sha256: str | None = None
     contract_version: int = REPORT_CONTRACT_VERSION
 
     def __post_init__(self) -> None:
@@ -138,9 +140,15 @@ class ReportedDecision:
             raise ValueError("template version and digest must be supplied together")
         if self.template_sha256 is not None and not _is_sha256(self.template_sha256):
             raise ValueError("template_sha256 is invalid")
+        if (self.configuration_revision is None) != (self.configuration_sha256 is None):
+            raise ValueError("configuration revision and digest must be supplied together")
+        if self.configuration_revision is not None and self.configuration_revision < 1:
+            raise ValueError("configuration_revision must be positive")
+        if self.configuration_sha256 is not None and not _is_sha256(self.configuration_sha256):
+            raise ValueError("configuration_sha256 is invalid")
 
     def to_wire(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "contract_version": self.contract_version,
             "event_id": self.event_id,
             "trace_id": self.trace_id,
@@ -158,31 +166,34 @@ class ReportedDecision:
             "model_ids": list(self.model_ids),
             "reported_at": self.reported_at,
         }
+        if self.configuration_revision is not None:
+            result["configuration_revision"] = self.configuration_revision
+            result["configuration_sha256"] = self.configuration_sha256
+        return result
 
     @classmethod
     def from_wire(cls, value: Mapping[str, object]) -> ReportedDecision:
-        _require_keys(
-            value,
-            {
-                "contract_version",
-                "event_id",
-                "trace_id",
-                "host_id",
-                "station_id",
-                "backend_id",
-                "instance_id",
-                "verdict",
-                "reason_codes",
-                "violations",
-                "lifecycle",
-                "evidence",
-                "template_version_id",
-                "template_sha256",
-                "model_ids",
-                "reported_at",
-            },
-            "reported decision",
-        )
+        required = {
+            "contract_version",
+            "event_id",
+            "trace_id",
+            "host_id",
+            "station_id",
+            "backend_id",
+            "instance_id",
+            "verdict",
+            "reason_codes",
+            "violations",
+            "lifecycle",
+            "evidence",
+            "template_version_id",
+            "template_sha256",
+            "model_ids",
+            "reported_at",
+        }
+        optional = {"configuration_revision", "configuration_sha256"}
+        if not required.issubset(value) or not set(value).issubset(required | optional):
+            raise ValueError("reported decision has unsupported or missing fields")
         reasons = _strings(value["reason_codes"], "reason_codes", require_nonempty=False)
         model_ids = _strings(value["model_ids"], "model_ids")
         raw_violations = _array(value["violations"], "violations")
@@ -211,6 +222,16 @@ class ReportedDecision:
             template_sha256=template_sha,
             model_ids=model_ids,
             reported_at=_string(value["reported_at"], "reported_at"),
+            configuration_revision=(
+                None
+                if "configuration_revision" not in value
+                else _positive_int(value["configuration_revision"], "configuration_revision")
+            ),
+            configuration_sha256=(
+                None
+                if "configuration_sha256" not in value
+                else _string(value["configuration_sha256"], "configuration_sha256")
+            ),
             contract_version=_positive_int(value["contract_version"], "contract_version"),
         )
 

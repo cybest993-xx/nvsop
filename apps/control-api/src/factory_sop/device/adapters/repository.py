@@ -36,6 +36,7 @@ from factory_sop.device.adapters.repository_support import (
 )
 from factory_sop.device.adapters.tables import (
     CameraRow,
+    ConfigurationAssignmentRow,
     ConnectorRow,
     InferenceBackendRow,
     InferenceHostIdentityNonceRow,
@@ -52,7 +53,7 @@ from factory_sop.device.model import (
     Point,
     Station,
 )
-from nvsop_contracts import capability_to_wire
+from nvsop_contracts import ConfigurationBundle, capability_to_wire
 
 __all__ = [
     "PostgresCameraRepository",
@@ -293,6 +294,81 @@ class PostgresInferenceHostRepository:
             .values(configuration_revision=revision, configuration_sha256=content_sha256)
         )
         return revision
+
+    def record_configuration_assignments(self, bundle: ConfigurationBundle) -> None:
+        """只追加 Center 实际组装并下发过的配置归属；同 revision 内容不得改写。"""
+        host_id = UUID(bundle.host_id)
+        for station in bundle.stations:
+            key = {
+                "host_id": host_id,
+                "configuration_revision": bundle.config_revision,
+                "station_id": UUID(station.station_id),
+                "backend_id": UUID(station.backend_id),
+            }
+            expected = {
+                "configuration_sha256": bundle.effective_sha256,
+                "template_version_id": (
+                    None if station.template is None else UUID(station.template.version_id)
+                ),
+                "template_sha256": (
+                    None if station.template is None else station.template.version_sha256
+                ),
+                "model_ids": list(station.model_ids),
+            }
+            existing = self._session.scalar(
+                select(ConfigurationAssignmentRow).where(
+                    ConfigurationAssignmentRow.host_id == key["host_id"],
+                    ConfigurationAssignmentRow.configuration_revision
+                    == key["configuration_revision"],
+                    ConfigurationAssignmentRow.station_id == key["station_id"],
+                    ConfigurationAssignmentRow.backend_id == key["backend_id"],
+                )
+            )
+            if existing is None:
+                self._session.add(ConfigurationAssignmentRow(**key, **expected))
+                self._session.flush()
+                continue
+            actual = {
+                "configuration_sha256": existing.configuration_sha256,
+                "template_version_id": existing.template_version_id,
+                "template_sha256": existing.template_sha256,
+                "model_ids": existing.model_ids,
+            }
+            if actual != expected:
+                raise ValueError(
+                    "configuration assignment revision conflicts with immutable history"
+                )
+
+    def has_configuration_assignment(
+        self,
+        *,
+        host_id: UUID,
+        configuration_revision: int,
+        configuration_sha256: str,
+        station_id: UUID,
+        backend_id: UUID,
+        template_version_id: str | None,
+        template_sha256: str | None,
+        model_ids: tuple[str, ...],
+    ) -> bool:
+        """验证报告完整上下文是否精确匹配 Center 已下发的历史 assignment。"""
+        row = self._session.scalar(
+            select(ConfigurationAssignmentRow).where(
+                ConfigurationAssignmentRow.host_id == host_id,
+                ConfigurationAssignmentRow.configuration_revision == configuration_revision,
+                ConfigurationAssignmentRow.station_id == station_id,
+                ConfigurationAssignmentRow.backend_id == backend_id,
+            )
+        )
+        if row is None:
+            return False
+        return (
+            row.configuration_sha256 == configuration_sha256
+            and (None if row.template_version_id is None else str(row.template_version_id))
+            == template_version_id
+            and row.template_sha256 == template_sha256
+            and tuple(row.model_ids) == model_ids
+        )
 
     def consume_identity_nonce(self, *, host_id: UUID, nonce: str, seen_at: datetime) -> bool:
         """原子登记随机数；重复请求在事务内被拒绝。"""

@@ -622,11 +622,32 @@ def _build_runtime_composition(
         for connector_id, adapter in adapters.items()
     }
     reporters: list[DecisionReporter] = []
+    reporter_station_ids: set[str] = set()
     stations: list[AutonomousStation] = []
     try:
         for station_binding in runtime_configuration.stations:
             station_config = station_binding.configuration
-            station_store = state.station(station_config.station_id)
+            confirmed = runtime_configuration.confirmed
+            report_context = None
+            if station_config.backend_id is not None:
+                report_context = ReportContext(
+                    host_id=config.host_id if confirmed is None else confirmed.host_id,
+                    station_id=station_config.station_id,
+                    backend_id=station_config.backend_id,
+                    template_version_id=station_config.template_version_id,
+                    template_sha256=station_config.template_sha256,
+                    model_ids=station_config.model_ids,
+                    configuration_revision=(
+                        None if confirmed is None else confirmed.config_revision
+                    ),
+                    configuration_sha256=(
+                        None if confirmed is None else confirmed.effective_sha256
+                    ),
+                )
+            station_store = state.station(
+                station_config.station_id,
+                report_context=report_context,
+            )
             sources = tuple(
                 SseStationInputSource(
                     inference_url=station_configuration.inference_url,
@@ -651,17 +672,10 @@ def _build_runtime_composition(
                 reporters.append(
                     DecisionReporter(
                         queues=station_store,
-                        context=ReportContext(
-                            host_id=config.host_id,
-                            station_id=station_config.station_id,
-                            backend_id=station_config.backend_id,
-                            template_version_id=station_config.template_version_id,
-                            template_sha256=station_config.template_sha256,
-                            model_ids=station_config.model_ids,
-                        ),
                         transport=report_transport,
                     )
                 )
+                reporter_station_ids.add(station_config.station_id)
             stations.append(
                 AutonomousStation(
                     station_id=station_config.station_id,
@@ -680,6 +694,17 @@ def _build_runtime_composition(
                     },
                 )
             )
+        if report_transport is not None:
+            for station_id in state.pending_report_station_ids():
+                if station_id in reporter_station_ids:
+                    continue
+                reporters.append(
+                    DecisionReporter(
+                        queues=state.station(station_id),
+                        transport=report_transport,
+                    )
+                )
+                reporter_station_ids.add(station_id)
     except Exception:
         for built_station in stations:
             built_station.close()

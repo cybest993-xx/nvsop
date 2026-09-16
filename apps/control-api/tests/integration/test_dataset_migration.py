@@ -283,10 +283,11 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
         "configuration_sha256",
     } <= _columns(database_at_0023, "device_inference_host")
     assert {"media_path_mode", "recording_mode"} <= _columns(database_at_0023, "device_camera")
+    assert "device_configuration_assignment" in _tables(database_at_0023)
 
     with database_at_0023.connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0033"
+    assert version == "0034"
     assert "dataset.dataset.edit" in _permission_codes(database_at_0023)
 
     command.downgrade(configuration, "0025")
@@ -297,6 +298,7 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
         "configuration_sha256",
     } & _columns(database_at_0023, "device_inference_host")
     assert not {"media_path_mode", "recording_mode"} & _columns(database_at_0023, "device_camera")
+    assert "device_configuration_assignment" not in _tables(database_at_0023)
     command.downgrade(configuration, "0024")
     assert not {
         "dataset_action_list_revision",

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import importlib
+import sys
 import time
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from _integration_support import client_for, settings_for
@@ -41,6 +45,7 @@ from factory_sop.identifiers import new_id
 from factory_sop.template.adapters.tables import TemplateStationBindingRow, TemplateVersionRow
 from factory_sop.template.model import TemplateStationBinding
 from nvsop_contracts import (
+    ConfigurationBundle,
     HostIdentityKeyPair,
     HostIdentityRequest,
     ReportedDecision,
@@ -234,6 +239,10 @@ def runtime_topology(engine: Engine) -> Iterator[RuntimeTopology]:
                 {"station_id": station.id},
             )
             connection.execute(
+                text("DELETE FROM device_configuration_assignment WHERE host_id = :host_id"),
+                {"host_id": host.id},
+            )
+            connection.execute(
                 text("DELETE FROM device_inference_host WHERE id = :host_id"),
                 {"host_id": host.id},
             )
@@ -266,6 +275,147 @@ def _host_headers(
     }
 
 
+def _historical_report(
+    topology: RuntimeTopology,
+    bundle: ConfigurationBundle,
+    *,
+    event_id: str,
+) -> ReportedDecision:
+    station = bundle.stations[0]
+    assert station.template is not None
+    return ReportedDecision(
+        event_id=event_id,
+        trace_id=event_id,
+        host_id=bundle.host_id,
+        station_id=station.station_id,
+        backend_id=station.backend_id,
+        instance_id=17,
+        verdict="pass",
+        reason_codes=(),
+        violations=(),
+        lifecycle="closed_by_end_signal",
+        evidence=ReportEvidence(None, None, None),
+        template_version_id=station.template.version_id,
+        template_sha256=station.template.version_sha256,
+        model_ids=station.model_ids,
+        reported_at="2026-09-14T01:00:00Z",
+        configuration_revision=bundle.config_revision,
+        configuration_sha256=bundle.effective_sha256,
+    )
+
+
+def _rebound_topology(engine: Engine, original: RuntimeTopology) -> RuntimeTopology:
+    identity = generate_host_identity_key_pair()
+    actor = new_id()
+    host = InferenceHost(
+        id=new_id(),
+        name=f"HTTP 改绑推理机-{new_id().hex[:8]}",
+        address="10.0.8.211",
+        mediamtx_address=None,
+        recording_window_seconds=604800,
+        disk_watermark_percent=85,
+        status=DeviceStatus.ACTIVE,
+        revision=1,
+        created_by=actor,
+        updated_by=actor,
+        created_at=NOW,
+        updated_at=NOW,
+        identity_public_key=identity.public_key,
+    )
+    backend = InferenceBackend(
+        id=new_id(),
+        host_id=host.id,
+        base_url="http://10.0.8.211:8000",
+        template_version_id=original.template.version_id,
+        status=DeviceStatus.ACTIVE,
+        connection_state=ConnectionState.UNVERIFIED,
+        connection_checked_at=None,
+        connection_detail=None,
+        self_reported_model_ids=("rebound-model",),
+        self_reported_at=None,
+        revision=1,
+        created_by=actor,
+        updated_by=actor,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    with DatabaseSession(engine) as session:
+        session.add(InferenceHostRow.from_domain(host))
+        session.flush()
+        session.add(InferenceBackendRow.from_domain(backend))
+        session.commit()
+    return RuntimeTopology(
+        host=host,
+        station=original.station,
+        backend=backend,
+        connector=original.connector,
+        point=original.point,
+        template=original.template,
+        identity=identity,
+    )
+
+
+def _rebind_station_to_host_b(
+    engine: Engine, original: RuntimeTopology, rebound: RuntimeTopology
+) -> None:
+    actor = new_id()
+    camera = Camera(
+        id=new_id(),
+        name="HTTP 改绑相机",
+        address="10.0.8.213",
+        main_stream_path="/Streaming/Channels/101",
+        sub_stream_path="/Streaming/Channels/102",
+        credentials_configured=False,
+        station_id=original.station.id,
+        host_id=rebound.host.id,
+        backend_id=rebound.backend.id,
+        status=DeviceStatus.ACTIVE,
+        revision=2,
+        created_by=actor,
+        updated_by=actor,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    with DatabaseSession(engine) as session:
+        session.execute(
+            text("DELETE FROM device_point WHERE station_id = :station_id"),
+            {"station_id": original.station.id},
+        )
+        session.execute(
+            text("DELETE FROM device_connector WHERE station_id = :station_id"),
+            {"station_id": original.station.id},
+        )
+        session.execute(
+            text("DELETE FROM device_camera WHERE station_id = :station_id"),
+            {"station_id": original.station.id},
+        )
+        session.flush()
+        session.add(CameraRow.from_domain(camera))
+        session.commit()
+
+
+def _remove_rebound_topology(
+    engine: Engine, original: RuntimeTopology, rebound: RuntimeTopology
+) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            text("DELETE FROM device_camera WHERE station_id = :station_id AND host_id = :host_id"),
+            {"station_id": original.station.id, "host_id": rebound.host.id},
+        )
+        connection.execute(
+            text("DELETE FROM device_configuration_assignment WHERE host_id = :host_id"),
+            {"host_id": rebound.host.id},
+        )
+        connection.execute(
+            text("DELETE FROM device_inference_backend WHERE id = :backend_id"),
+            {"backend_id": rebound.backend.id},
+        )
+        connection.execute(
+            text("DELETE FROM device_inference_host WHERE id = :host_id"),
+            {"host_id": rebound.host.id},
+        )
+
+
 def test_configuration_pull_is_host_scoped_and_contains_real_point_address(
     engine: Engine, runtime_topology: RuntimeTopology
 ) -> None:
@@ -283,6 +433,324 @@ def test_configuration_pull_is_host_scoped_and_contains_real_point_address(
     assert bundle.stations[0].model_ids == ("reported-model", "reported-model-2")
     assert bundle.stations[0].points[0].address == "DI-01"
     assert bundle.stations[0].connectors[0].connector_id == str(runtime_topology.connector.id)
+
+
+def test_edge_offline_decision_flushes_after_real_center_rebind(
+    engine: Engine, runtime_topology: RuntimeTopology
+) -> None:
+    edge_source = str(Path(__file__).resolve().parents[4] / "apps/edge-runtime/src")
+    sys.path.insert(0, edge_source)
+    try:
+        edge_model = cast(Any, importlib.import_module("edge_runtime.judgment.model"))
+        edge_reasons = cast(Any, importlib.import_module("edge_runtime.judgment.reasons"))
+        edge_local_state = cast(Any, importlib.import_module("edge_runtime.local_state"))
+        edge_queues = cast(Any, importlib.import_module("edge_runtime.local_state.queues"))
+        edge_reporting = cast(Any, importlib.import_module("edge_runtime.reporting"))
+    finally:
+        sys.path.remove(edge_source)
+    settings = settings_for(engine)
+    config_path = f"{API_PREFIX}/inference-hosts/{runtime_topology.host.id}/configuration"
+    report_path = f"{API_PREFIX}/monitor/reported-decisions"
+    rebound = _rebound_topology(engine, runtime_topology)
+    edge_state = edge_local_state.open_local_state(":memory:")
+    try:
+        with client_for(engine, settings) as client:
+            initial = client.get(
+                config_path,
+                headers=_host_headers(runtime_topology, method="GET", path=config_path),
+            )
+            assert initial.status_code == 200
+            bundle_n = configuration_from_wire(initial.json())
+            station_n = bundle_n.stations[0]
+            assert station_n.template is not None
+            context_n = edge_queues.ReportContext(
+                host_id=bundle_n.host_id,
+                station_id=station_n.station_id,
+                backend_id=station_n.backend_id,
+                template_version_id=station_n.template.version_id,
+                template_sha256=station_n.template.version_sha256,
+                model_ids=station_n.model_ids,
+                configuration_revision=bundle_n.config_revision,
+                configuration_sha256=bundle_n.effective_sha256,
+            )
+            edge_station = edge_state.station(station_n.station_id, report_context=context_n)
+            instance = edge_model.Instance(
+                instance_id=1,
+                opened_at=edge_model.HostInstant(1.0),
+                last_observation_at=edge_model.HostInstant(2.0),
+            )
+            edge_station.commit(
+                state=edge_model.JudgmentState(
+                    template=edge_model.Template(
+                        steps=("step-1",),
+                        ordering=edge_model.Ordering.ORDERED,
+                        start_signal="step-1",
+                    ),
+                    parameters=edge_model.RuntimeParameters(idle_timeout=30.0, step_deadline=10.0),
+                    next_instance_id=2,
+                ),
+                decisions=(
+                    edge_model.Decision(
+                        instance_id=1,
+                        verdict=edge_reasons.Verdict.PASS,
+                        reasons=(),
+                        violations=(),
+                        lifecycle=edge_model.Lifecycle.CLOSED_BY_END_SIGNAL,
+                        evidence=edge_model.EvidenceSpan.at(edge_model.HostInstant(2.0)),
+                    ),
+                ),
+                evidence=(),
+                closed_instances=(instance,),
+            )
+            (offline_pending,) = edge_station.pending_reports()
+            assert offline_pending.context == context_n
+
+            _rebind_station_to_host_b(engine, runtime_topology, rebound)
+            changed = client.get(
+                config_path,
+                headers=_host_headers(runtime_topology, method="GET", path=config_path),
+            )
+            assert changed.status_code == 200
+            bundle_n1 = configuration_from_wire(changed.json())
+            assert bundle_n1.config_revision > bundle_n.config_revision
+            assert bundle_n1.stations == ()
+
+            class SignedHttpTransport:
+                def __init__(self) -> None:
+                    self.sent: list[ReportedDecision] = []
+
+                def send_decision(self, report: ReportedDecision) -> None:
+                    body = reported_decision_to_wire(report)
+                    response = client.post(
+                        report_path,
+                        json=body,
+                        headers=_host_headers(
+                            runtime_topology,
+                            method="POST",
+                            path=report_path,
+                            body=body,
+                        ),
+                    )
+                    assert response.status_code == 200
+                    assert response.json()["accepted"] is True
+                    self.sent.append(report)
+
+            transport = SignedHttpTransport()
+            attempts = edge_reporting.DecisionReporter(
+                queues=edge_station, transport=transport
+            ).flush(
+                now=edge_model.HostInstant(10.0),
+                reported_at="2026-09-16T00:00:00Z",
+            )
+            assert len(attempts) == 1
+            assert attempts[0].sent is True
+            assert len(transport.sent) == 1
+            assert transport.sent[0].configuration_revision == bundle_n.config_revision
+            assert transport.sent[0].backend_id == station_n.backend_id
+            assert edge_station.pending_reports() == ()
+
+            duplicate_body = reported_decision_to_wire(transport.sent[0])
+            duplicate = client.post(
+                report_path,
+                json=duplicate_body,
+                headers=_host_headers(
+                    runtime_topology,
+                    method="POST",
+                    path=report_path,
+                    body=duplicate_body,
+                ),
+            )
+            assert duplicate.status_code == 200
+            assert duplicate.json()["duplicate"] is True
+    finally:
+        edge_state.close()
+        _remove_rebound_topology(engine, runtime_topology, rebound)
+
+
+def test_historical_report_survives_rebind_and_rejects_forged_history(
+    engine: Engine, runtime_topology: RuntimeTopology
+) -> None:
+    settings = settings_for(engine)
+    config_path = f"{API_PREFIX}/inference-hosts/{runtime_topology.host.id}/configuration"
+    report_path = f"{API_PREFIX}/monitor/reported-decisions"
+    rebound = _rebound_topology(engine, runtime_topology)
+    try:
+        with client_for(engine, settings) as client:
+            initial = client.get(
+                config_path,
+                headers=_host_headers(runtime_topology, method="GET", path=config_path),
+            )
+            assert initial.status_code == 200
+            bundle_n = configuration_from_wire(initial.json())
+            report = _historical_report(
+                runtime_topology,
+                bundle_n,
+                event_id=f"{runtime_topology.host.id}:historical-rebind",
+            )
+
+            _rebind_station_to_host_b(engine, runtime_topology, rebound)
+
+            changed = client.get(
+                config_path,
+                headers=_host_headers(runtime_topology, method="GET", path=config_path),
+            )
+            assert changed.status_code == 200
+            bundle_n1 = configuration_from_wire(changed.json())
+            assert bundle_n1.config_revision > bundle_n.config_revision
+            assert bundle_n1.stations == ()
+
+            body = reported_decision_to_wire(report)
+            accepted = client.post(
+                report_path,
+                json=body,
+                headers=_host_headers(runtime_topology, method="POST", path=report_path, body=body),
+            )
+            duplicate = client.post(
+                report_path,
+                json=body,
+                headers=_host_headers(runtime_topology, method="POST", path=report_path, body=body),
+            )
+
+            conflicting = reported_decision_to_wire(
+                replace(report, verdict="fail", reason_codes=("WRONG_STEP",))
+            )
+            conflict = client.post(
+                report_path,
+                json=conflicting,
+                headers=_host_headers(
+                    runtime_topology,
+                    method="POST",
+                    path=report_path,
+                    body=conflicting,
+                ),
+            )
+
+            tampered = reported_decision_to_wire(
+                replace(
+                    report,
+                    event_id=f"{runtime_topology.host.id}:tampered-history",
+                    configuration_sha256="d" * 64,
+                )
+            )
+            tampered_response = client.post(
+                report_path,
+                json=tampered,
+                headers=_host_headers(
+                    runtime_topology, method="POST", path=report_path, body=tampered
+                ),
+            )
+
+            tampered_revision = reported_decision_to_wire(
+                replace(
+                    report,
+                    event_id=f"{runtime_topology.host.id}:tampered-revision-history",
+                    configuration_revision=(report.configuration_revision or 0) + 1,
+                )
+            )
+            tampered_revision_response = client.post(
+                report_path,
+                json=tampered_revision,
+                headers=_host_headers(
+                    runtime_topology,
+                    method="POST",
+                    path=report_path,
+                    body=tampered_revision,
+                ),
+            )
+
+            never_owned = reported_decision_to_wire(
+                replace(
+                    report,
+                    event_id=f"{runtime_topology.host.id}:never-owned-history",
+                    station_id=str(new_id()),
+                    backend_id=str(new_id()),
+                )
+            )
+            never_owned_response = client.post(
+                report_path,
+                json=never_owned,
+                headers=_host_headers(
+                    runtime_topology,
+                    method="POST",
+                    path=report_path,
+                    body=never_owned,
+                ),
+            )
+
+            borrowed = reported_decision_to_wire(
+                replace(
+                    report,
+                    event_id=f"{rebound.host.id}:borrowed-history",
+                    trace_id=f"{rebound.host.id}:borrowed-history",
+                    host_id=str(rebound.host.id),
+                )
+            )
+            borrowed_response = client.post(
+                report_path,
+                json=borrowed,
+                headers=_host_headers(rebound, method="POST", path=report_path, body=borrowed),
+            )
+
+        assert accepted.status_code == 200
+        assert accepted.json()["duplicate"] is False
+        assert duplicate.status_code == 200
+        assert duplicate.json()["duplicate"] is True
+        assert conflict.status_code == 409
+        assert tampered_response.status_code == 409
+        assert tampered_revision_response.status_code == 409
+        assert never_owned_response.status_code == 409
+        assert borrowed_response.status_code == 409
+    finally:
+        _remove_rebound_topology(engine, runtime_topology, rebound)
+
+
+def test_historical_report_survives_station_and_backend_deactivation(
+    engine: Engine, runtime_topology: RuntimeTopology
+) -> None:
+    settings = settings_for(engine)
+    config_path = f"{API_PREFIX}/inference-hosts/{runtime_topology.host.id}/configuration"
+    report_path = f"{API_PREFIX}/monitor/reported-decisions"
+    with client_for(engine, settings) as client:
+        initial = client.get(
+            config_path,
+            headers=_host_headers(runtime_topology, method="GET", path=config_path),
+        )
+        assert initial.status_code == 200
+        bundle_n = configuration_from_wire(initial.json())
+        report = _historical_report(
+            runtime_topology,
+            bundle_n,
+            event_id=f"{runtime_topology.host.id}:historical-deactivated",
+        )
+
+        with engine.begin() as connection:
+            connection.execute(
+                text("UPDATE device_station SET status = 'deactivated' WHERE id = :id"),
+                {"id": runtime_topology.station.id},
+            )
+            connection.execute(
+                text("UPDATE device_inference_backend SET status = 'deactivated' WHERE id = :id"),
+                {"id": runtime_topology.backend.id},
+            )
+
+        changed = client.get(
+            config_path,
+            headers=_host_headers(runtime_topology, method="GET", path=config_path),
+        )
+        assert changed.status_code == 200
+        bundle_n1 = configuration_from_wire(changed.json())
+        assert bundle_n1.config_revision > bundle_n.config_revision
+        assert bundle_n1.stations == ()
+
+        body = reported_decision_to_wire(report)
+        accepted = client.post(
+            report_path,
+            json=body,
+            headers=_host_headers(runtime_topology, method="POST", path=report_path, body=body),
+        )
+
+    assert accepted.status_code == 200
+    assert accepted.json()["duplicate"] is False
 
 
 def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(

@@ -50,6 +50,8 @@ class ConfigurationHostRepository(Protocol):
         self, *, host_id: UUID, content_sha256: str, minimum_revision: int = 0
     ) -> int: ...
 
+    def record_configuration_assignments(self, bundle: ConfigurationBundle) -> None: ...
+
 
 def configuration_for_host(
     *,
@@ -118,7 +120,9 @@ def configuration_for_host(
         content_sha256=candidate.effective_sha256,
         minimum_revision=legacy_revision_floor,
     )
-    return replace(candidate, config_revision=config_revision)
+    bundle = replace(candidate, config_revision=config_revision)
+    hosts.record_configuration_assignments(bundle)
+    return bundle
 
 
 def _station_bundle(

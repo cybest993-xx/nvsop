@@ -44,8 +44,10 @@ from edge_runtime.judgment.model import (
 )
 from edge_runtime.judgment.reasons import ReasonCode, Verdict
 from edge_runtime.local_state import open_local_state
+from edge_runtime.local_state.queues import ReportContext
 from edge_runtime.local_state.schema import MIGRATIONS, apply_migrations, migrate
 from edge_runtime.local_state.store import LocalState
+from edge_runtime.reporting import DecisionReporter
 from edge_runtime.supervisor.inputs import StreamHealthObserved
 from edge_runtime.supervisor.startup import resume_station
 
@@ -304,6 +306,211 @@ class RestartTest(unittest.TestCase):
             second.close()
 
 
+class HistoricalReportContextTest(unittest.TestCase):
+    def context(self, *, revision: int, backend_id: str, digest: str) -> ReportContext:
+        return ReportContext(
+            host_id="host-a",
+            station_id=STATION,
+            backend_id=backend_id,
+            template_version_id="template-a",
+            template_sha256="a" * 64,
+            model_ids=(f"model-{revision}",),
+            configuration_revision=revision,
+            configuration_sha256=digest,
+        )
+
+    def test_report_context_is_frozen_across_reconfiguration_and_sqlite_restart(self) -> None:
+        context_n = self.context(revision=7, backend_id="backend-old", digest="b" * 64)
+        context_n1 = self.context(revision=8, backend_id="backend-new", digest="c" * 64)
+        with TemporaryDirectory() as temporary:
+            database = str(Path(temporary) / "state.sqlite")
+            first = open_local_state(database)
+            station = first.station(STATION, report_context=context_n)
+            driver = supervisor(opening_state(), FakeClock(), station)
+            driver.receive(action(STEPS[0], at=ANCHOR))
+            driver.receive(action(STEPS[2], at=ANCHOR + 1.0))
+            (pending,) = station.pending_reports()
+            self.assertEqual(pending.context, context_n)
+            first.close()
+
+            second = open_local_state(database)
+            rebound = second.station(STATION, report_context=context_n1)
+            (after_reconfigure,) = rebound.pending_reports()
+            self.assertEqual(after_reconfigure.context, context_n)
+            second.close()
+
+            third = open_local_state(database)
+            restarted = third.station(STATION, report_context=context_n1)
+            (after_restart,) = restarted.pending_reports()
+            self.assertEqual(after_restart.context, context_n)
+            third.close()
+
+    def test_event_time_context_without_history_is_not_confused_with_legacy_pending(self) -> None:
+        unproven = ReportContext(
+            host_id="host-a",
+            station_id=STATION,
+            backend_id="backend-bootstrap",
+            template_version_id="template-bootstrap",
+            template_sha256="e" * 64,
+            model_ids=(),
+            configuration_revision=None,
+            configuration_sha256=None,
+        )
+        with TemporaryDirectory() as temporary:
+            database = str(Path(temporary) / "bootstrap.sqlite")
+            first = open_local_state(database)
+            station = first.station(STATION, report_context=unproven)
+            driver = supervisor(opening_state(), FakeClock(), station)
+            driver.receive(action(STEPS[0], at=ANCHOR))
+            driver.receive(action(STEPS[2], at=ANCHOR + 1.0))
+            (pending,) = station.pending_reports()
+            self.assertEqual(pending.context, unproven)
+            first.close()
+
+            second = open_local_state(database)
+            (reopened,) = second.station(STATION).pending_reports()
+            self.assertEqual(reopened.context, unproven)
+            second.close()
+
+    def test_legacy_pending_is_retained_and_never_sent_with_current_context(self) -> None:
+        state = open_local_state(":memory:")
+        self.addCleanup(state.close)
+        station = state.station(STATION)
+        driver = supervisor(opening_state(), FakeClock(), station)
+        driver.receive(action(STEPS[0], at=ANCHOR))
+        driver.receive(action(STEPS[2], at=ANCHOR + 1.0))
+
+        class Transport:
+            def __init__(self) -> None:
+                self.sent: list[object] = []
+
+            def send_decision(self, report: object) -> None:
+                self.sent.append(report)
+
+        transport = Transport()
+        attempts = DecisionReporter(queues=station, transport=transport).flush(
+            now=HostInstant(ANCHOR + 2.0),
+            reported_at="2026-09-16T00:00:00Z",
+        )
+        self.assertEqual(transport.sent, [])
+        self.assertEqual(len(attempts), 1)
+        self.assertFalse(attempts[0].sent)
+        self.assertIn("event-time report context", attempts[0].error or "")
+        (still_pending,) = station.pending_reports()
+        self.assertEqual(still_pending.attempts, 1)
+        self.assertIsNone(still_pending.context)
+
+    def test_v4_pending_reopens_as_unproven_legacy_after_v5_migration(self) -> None:
+        context = self.context(revision=8, backend_id="backend-new", digest="c" * 64)
+        with TemporaryDirectory() as temporary:
+            database = str(Path(temporary) / "legacy.sqlite")
+            connection = sqlite3.connect(database)
+            apply_migrations(connection, MIGRATIONS[:4])
+            connection.execute(
+                """
+                INSERT INTO local_sop_instance (
+                    station_id, instance_id, opened_at, last_observation_at, seen,
+                    expected_index, impairments, settled, closed_at, lifecycle
+                ) VALUES (?, 1, 1.0, 2.0, '[]', 0, '[]', '[]', 2.0, ?)
+                """,
+                (STATION, Lifecycle.CLOSED_BY_END_SIGNAL.value),
+            )
+            connection.execute(
+                """
+                INSERT INTO local_decision (
+                    decision_id, station_id, instance_id, verdict, reasons, lifecycle,
+                    evidence_anchor, evidence_from, evidence_to
+                ) VALUES (1, ?, 1, ?, '[]', ?, 2.0, 2.0, 2.0)
+                """,
+                (STATION, Verdict.PASS.value, Lifecycle.CLOSED_BY_END_SIGNAL.value),
+            )
+            connection.execute(
+                "INSERT INTO local_report_queue (station_id, decision_id) VALUES (?, 1)",
+                (STATION,),
+            )
+            connection.commit()
+            connection.close()
+
+            state = open_local_state(database)
+            (pending,) = state.station(STATION, report_context=context).pending_reports()
+            self.assertIsNone(pending.context)
+            self.assertEqual(pending.attempts, 0)
+            state.close()
+
+            reopened = sqlite3.connect(database)
+            try:
+                self.assertEqual(
+                    reopened.execute("PRAGMA user_version").fetchone()[0], len(MIGRATIONS)
+                )
+            finally:
+                reopened.close()
+
+    def test_lost_ack_retry_reuses_the_exact_report_payload(self) -> None:
+        context = self.context(revision=7, backend_id="backend-old", digest="b" * 64)
+        state = open_local_state(":memory:")
+        self.addCleanup(state.close)
+        station = state.station(STATION, report_context=context)
+        driver = supervisor(opening_state(), FakeClock(), station)
+        driver.receive(action(STEPS[0], at=ANCHOR))
+        driver.receive(action(STEPS[2], at=ANCHOR + 1.0))
+
+        class LostAckTransport:
+            def __init__(self) -> None:
+                self.sent: list[object] = []
+
+            def send_decision(self, report: object) -> None:
+                self.sent.append(report)
+                if len(self.sent) == 1:
+                    raise OSError("center committed but acknowledgement was lost")
+
+        transport = LostAckTransport()
+        first = DecisionReporter(queues=station, transport=transport).flush(
+            now=HostInstant(ANCHOR + 2.0),
+            reported_at="2026-09-16T00:00:00Z",
+        )
+        self.assertFalse(first[0].sent)
+        (pending_after_loss,) = station.pending_reports()
+        self.assertEqual(pending_after_loss.reported_at, "2026-09-16T00:00:00Z")
+
+        second = DecisionReporter(queues=station, transport=transport).flush(
+            now=HostInstant(ANCHOR + 3.0),
+            reported_at="2026-09-16T00:05:00Z",
+        )
+        self.assertTrue(second[0].sent)
+        self.assertEqual(transport.sent[0], transport.sent[1])
+        self.assertEqual(station.pending_reports(), ())
+
+    def test_successful_flush_marks_only_the_outbox_row_reported(self) -> None:
+        context = self.context(revision=7, backend_id="backend-old", digest="b" * 64)
+        state = open_local_state(":memory:")
+        self.addCleanup(state.close)
+        station = state.station(STATION, report_context=context)
+        driver = supervisor(opening_state(), FakeClock(), station)
+        driver.receive(action(STEPS[0], at=ANCHOR))
+        driver.receive(action(STEPS[2], at=ANCHOR + 1.0))
+        (pending,) = station.pending_reports()
+
+        class Transport:
+            def __init__(self) -> None:
+                self.sent: list[object] = []
+
+            def send_decision(self, report: object) -> None:
+                self.sent.append(report)
+
+        transport = Transport()
+        attempts = DecisionReporter(queues=station, transport=transport).flush(
+            now=HostInstant(ANCHOR + 2.0),
+            reported_at="2026-09-16T00:00:00Z",
+        )
+        self.assertEqual(len(transport.sent), 1)
+        self.assertTrue(attempts[0].sent)
+        self.assertEqual(station.pending_reports(), ())
+        self.assertEqual(
+            station.latched_violations(instance_id=pending.decision.instance_id),
+            pending.decision.violations,
+        )
+
+
 class QueueRetryTest(unittest.TestCase):
     """Both queues are at-least-once, and a failure may only ever cost an attempt.
 
@@ -432,7 +639,7 @@ class MigrationTest(unittest.TestCase):
             (digest,),
         )
 
-        self.assertEqual(apply_migrations(connection, MIGRATIONS), 4)
+        self.assertEqual(apply_migrations(connection, MIGRATIONS), len(MIGRATIONS))
         self.assertEqual(
             connection.execute("SELECT sha256 FROM local_config WHERE slot = 1").fetchone()[0],
             digest,

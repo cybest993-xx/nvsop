@@ -216,7 +216,18 @@ _V4 = (
     "ALTER TABLE local_config_v3 RENAME TO local_config",
 )
 
-MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1, _V2, _V3, _V4)
+_V5 = (
+    "ALTER TABLE local_report_queue ADD COLUMN report_host_id TEXT",
+    "ALTER TABLE local_report_queue ADD COLUMN report_backend_id TEXT",
+    "ALTER TABLE local_report_queue ADD COLUMN report_template_version_id TEXT",
+    "ALTER TABLE local_report_queue ADD COLUMN report_template_sha256 TEXT",
+    "ALTER TABLE local_report_queue ADD COLUMN report_model_ids TEXT",
+    "ALTER TABLE local_report_queue ADD COLUMN report_reported_at TEXT",
+    "ALTER TABLE local_report_queue ADD COLUMN configuration_revision INTEGER",
+    "ALTER TABLE local_report_queue ADD COLUMN configuration_sha256 TEXT",
+)
+
+MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1, _V2, _V3, _V4, _V5)
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 
 

@@ -31,6 +31,8 @@ from nvsop_contracts import (
 HOST_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f101")
 STATION_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f102")
 BACKEND_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f103")
+CONFIGURATION_REVISION = 11
+CONFIGURATION_SHA256 = "c" * 64
 
 
 class MemoryMonitor:
@@ -113,6 +115,31 @@ class HostGateway:
         return host_id == HOST_ID and station_id == STATION_ID and backend_id == BACKEND_ID
 
 
+class HistoricalAssignments:
+    def has_configuration_assignment(
+        self,
+        *,
+        host_id: UUID,
+        configuration_revision: int,
+        configuration_sha256: str,
+        station_id: UUID,
+        backend_id: UUID,
+        template_version_id: str | None,
+        template_sha256: str | None,
+        model_ids: tuple[str, ...],
+    ) -> bool:
+        return (
+            host_id == HOST_ID
+            and configuration_revision == CONFIGURATION_REVISION
+            and configuration_sha256 == CONFIGURATION_SHA256
+            and station_id == STATION_ID
+            and backend_id == BACKEND_ID
+            and template_version_id is None
+            and template_sha256 is None
+            and model_ids == ("model-1",)
+        )
+
+
 def report(event_id: str = "host:event-1") -> ReportedDecision:
     return ReportedDecision(
         event_id=event_id,
@@ -131,6 +158,42 @@ def report(event_id: str = "host:event-1") -> ReportedDecision:
         model_ids=("model-1",),
         reported_at="2026-09-13T00:00:00Z",
     )
+
+
+def historical_report(event_id: str = "host:historical") -> ReportedDecision:
+    return replace(
+        report(event_id),
+        configuration_revision=CONFIGURATION_REVISION,
+        configuration_sha256=CONFIGURATION_SHA256,
+    )
+
+
+def test_historical_assignment_is_used_instead_of_current_topology() -> None:
+    class ReboundGateway(HostGateway):
+        def owns_station_backend(
+            self, *, host_id: UUID, station_id: UUID, backend_id: UUID
+        ) -> bool:
+            return False
+
+    monitor = MemoryMonitor()
+    assert mirror_decision(
+        historical_report(),
+        received_at=datetime.now(UTC),
+        monitor=monitor,
+        host_gateway=ReboundGateway(),
+        assignment_gateway=HistoricalAssignments(),
+    )
+
+
+def test_historical_assignment_rejects_tampered_proof() -> None:
+    with pytest.raises(MonitorRefusedError, match="assignment"):
+        mirror_decision(
+            replace(historical_report(), configuration_sha256="d" * 64),
+            received_at=datetime.now(UTC),
+            monitor=MemoryMonitor(),
+            host_gateway=HostGateway(),
+            assignment_gateway=HistoricalAssignments(),
+        )
 
 
 def test_decision_mirror_is_idempotent_and_preserves_unknown_reason() -> None:

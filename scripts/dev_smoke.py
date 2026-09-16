@@ -53,9 +53,12 @@ def media_probe(url: str, cookie: str, ca: Path) -> dict[str, object]:
             content_range = response.headers.get("Content-Range")
             if not content_range or not content_range.startswith("bytes 0-"):
                 raise DatasetImportError("标注媒体 Range 响应缺少有效 Content-Range")
+            content_type = response.headers.get("Content-Type")
+            if not content_type or not content_type.lower().startswith("video/"):
+                raise DatasetImportError(f"标注媒体必须返回视频类型，实际为：{content_type!r}")
             return {
                 "status": response.status,
-                "content_type": response.headers.get("Content-Type"),
+                "content_type": content_type,
                 "content_range": content_range,
                 "bytes_read": len(body),
             }
@@ -172,7 +175,10 @@ def run(arguments: argparse.Namespace) -> dict[str, object]:
     if not isinstance(clips, list) or not clips:
         raise DatasetImportError("标注切片响应没有 clips")
     clip_media = media_probe(
-        f"{arguments.base_url}/annotation/media/clips/{submission_id}/{execution_id}/0/download",
+        (
+            f"{arguments.base_url}/api/annotation/api/v1/annotation-submissions/"
+            f"{submission_id}/executions/{execution_id}/clips/0/download"
+        ),
         cookie,
         arguments.ca_file,
     )

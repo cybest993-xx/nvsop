@@ -10,6 +10,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 CONFIG = REPO_ROOT / "docs/deployment/nginx-annotation.conf.example"
+DEV_CONFIG = REPO_ROOT / "deploy/dev/nginx.conf"
 TRAINING_COMPOSE = (
     REPO_ROOT / "vendor/sop-monitoring-blueprints/microservices/sop-training-bp/docker-compose.yml"
 )
@@ -106,6 +107,17 @@ def test_nginx_template_parses_when_nginx_is_available() -> None:
             check=False,
         )
     assert result.returncode == 0, result.stderr
+
+
+def test_clip_media_gateway_forces_ranges_for_the_base_chunk_response() -> None:
+    for config in (CONFIG, DEV_CONFIG):
+        source = config.read_text()
+        marker = "location ^~ /annotation/media/clips/"
+        start = source.index(marker)
+        end = source.index("\n    }\n", start) + len("\n    }")
+        location = source[start:end]
+        assert "proxy_set_header Range $http_range;" in location
+        assert "proxy_force_ranges on;" in location
 
 
 def test_media_requests_authorize_before_proxying_upstream_identity() -> None:

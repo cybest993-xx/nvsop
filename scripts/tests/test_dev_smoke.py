@@ -58,6 +58,17 @@ class DevSmokeTest(unittest.TestCase):
         ):
             SMOKE.media_probe("http://localhost:8444/media", "sop_session=token", Path("ca"))
 
+    def test_media_probe_rejects_html_partial_content(self) -> None:
+        response = Response(
+            206,
+            {"Content-Range": "bytes 0-31/516", "Content-Type": "text/html"},
+        )
+        with (
+            patch.object(SMOKE, "urlopen", return_value=response),
+            self.assertRaises(SMOKE.DatasetImportError),
+        ):
+            SMOKE.media_probe("http://localhost:8444/media", "sop_session=token", Path("ca"))
+
 
 if __name__ == "__main__":
     unittest.main()

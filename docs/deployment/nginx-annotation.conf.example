@@ -298,6 +298,7 @@ server {
         proxy_set_header X-Annotation-Upstream-Clip-ID $nvsop_annotation_upstream_clip;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header Range $http_range;
+        proxy_force_ranges on;
         proxy_hide_header X-Annotation-Upstream-Clip-ID;
         proxy_hide_header X-Annotation-Upstream-Video-ID;
         proxy_cache_bypass 1;

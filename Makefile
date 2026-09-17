@@ -37,13 +37,15 @@ HEAD ?=
 change-size:
 	python3 scripts/check_change_size.py "$(BASE)" $(if $(HEAD),"$(HEAD)")
 
+UV ?= $(or $(shell command -v uv 2>/dev/null),$(HOME)/.local/bin/uv)
+
 # A dependency change and its lockfile update land together. Frozen checks refuse stale locks.
 lockfile:
-	uv lock --check
+	$(UV) lock --check
 
 # One frozen environment for the whole gate.
 sync:
-	uv sync --frozen --all-packages
+	$(UV) sync --frozen --all-packages
 
 VENV := $(CURDIR)/.venv/bin
 PYTHON := $(VENV)/python

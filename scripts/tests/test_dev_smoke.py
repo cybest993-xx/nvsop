@@ -57,6 +57,22 @@ class DevSmokeTest(unittest.TestCase):
             result,
         )
 
+    def test_media_probe_accepts_case_insensitive_content_range_unit(self) -> None:
+        response = Response(
+            206,
+            {
+                "Content-Range": "Bytes 0-31/128",
+                "Content-Type": "video/mp4",
+                "Content-Length": "32",
+            },
+        )
+        with patch.object(SMOKE, "urlopen", return_value=response):
+            result = SMOKE.media_probe(
+                "http://localhost:8444/media", "sop_session=token", Path("ca")
+            )
+
+        self.assertEqual("Bytes 0-31/128", result["content_range"])
+
     def test_media_probe_rejects_a_full_response_to_a_range_request(self) -> None:
         response = Response(200, {})
         with (

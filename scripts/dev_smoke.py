@@ -28,7 +28,7 @@ from factory_sop.dataset.client import (  # noqa: E402
 SAMPLE_DATASET_NAME = "开发样例数据集"
 SAMPLE_VIDEO_FILENAME = "dev-sample.mp4"
 MEDIA_RANGE_END = 31
-MEDIA_CONTENT_RANGE = re.compile(r"^bytes (\d+)-(\d+)/(\d+)$")
+MEDIA_CONTENT_RANGE = re.compile(r"^bytes (\d+)-(\d+)/(\d+)$", re.IGNORECASE)
 
 
 def required_string(value: object, name: str) -> str:

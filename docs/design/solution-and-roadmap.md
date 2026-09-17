@@ -113,7 +113,7 @@
 
 中心后台是**模块化单体**：业务模块在一个 FastAPI 部署单元内通过进程内接口协作，各自拥有行为、表和迁移；首版不引入内部 HTTP、服务网格、消息总线或分布式事务。
 
-首切片持久化只启用 PostgreSQL、MinIO 与 Redis；TimescaleDB 在 `monitor` 开始持久化时序上报时的实施切片中再启用。推理机本地状态用 SQLite（§5.7）。
+首切片持久化只启用 PostgreSQL、MinIO 与 Redis；当前 `monitor` 上报镜像已由 [`0031_monitor_report_mirror.py`](../../apps/control-api/migrations/versions/0031_monitor_report_mirror.py) 落在普通 PostgreSQL 表，TimescaleDB/hypertable 压缩仍是 §九 P9 的批准目标，尚未在迁移中启用。推理机本地状态用 SQLite（§5.7）。
 
 **训练侧 `metadata_db` 与中心后台合并为一个 Postgres 实例、两个 schema**（Q35）：中心业务一个 schema，原样复用的训练微服务一个 schema。训练是低频活动，不值得为它单立一个实例与一套独立的备份、监控与升级流程；原样复用的训练服务只改连接串，不改代码。两个 schema 由不同的数据库角色持有，中心迁移不触碰训练 schema，训练服务也不读中心表——它们之间没有跨 schema 外键。
 
@@ -126,7 +126,7 @@
 │    ├── /api/v1 → FastAPI               │    →SSE→supervisor 判定     │
 │    └── 反代：标注 UI / 训练微服务       ├── supervisor（锁存/处置/    ├── supervisor
 ├── FastAPI 后台（单一入口点）            │    上报/对账/证据切片）      │
-├── PostgreSQL（+Timescale 后置）         ├── 连接器运行时              ├── 连接器运行时
+├── PostgreSQL（Timescale P9 待落地）    ├── 连接器运行时              ├── 连接器运行时
 ├── Redis / MinIO / ARQ worker           ├── mediamtx                 ├── mediamtx
 └── 训练微服务（原样复用）+ metadata_db   └── SQLite 本地状态          └── SQLite
                                                ↑                          ↑
@@ -166,7 +166,7 @@
 
 **依赖规则**：判定核心不依赖任何相机 SDK、推理框架或连接器实现，只消费归一化观测；中心各模块各自拥有数据表，不跨模块直接读写；前端只调后端用例，不承载判定规则。
 
-**【已定】边界靠机械检查，不靠评审。** 每个中心模块一个 Python 包，包内 `api.py` 是唯一允许的跨模块导入目标；`import-linter` 契约在合并门禁中强制：判定核心不得导入任何适配器包、任意模块只能导入他人 `api`、`adapters/*` 不得被 domain 层导入、**`vendor/` 内的 hook 只能导入 `edge-runtime` 中指定的那一个健康事件入口模块**（§5.11）。最后一条使"补丁面只剩一处纯追加"从纪律变成可检查的事实——没有它，那处 hook 可以在后续修改中逐步长出对 `edge-runtime` 任意内部模块的依赖，而 `vendor/` 里的代码不受本仓库 lint 覆盖这一点会让它长期看不见。物理表名带模块前缀（§七），使迁移所有权可纯静态判断。
+**【已定】边界靠机械检查，不靠评审。** 每个中心模块一个 Python 包，包内 `api.py` 是唯一允许的跨模块导入目标；`import-linter` 契约强制中心/边缘包间依赖方向，基座契约测试 [`test_stream_health_patch.py`](../../tests/contract/base/test_stream_health_patch.py) 单独检查 **`vendor/` 内的 hook 只调用登记的健康事件入口，且该入口不把基座传递到其他 `edge-runtime` 内部模块**（§5.11）。这样“补丁面只剩一处纯追加”是可检查事实，而不是依赖评审记忆。物理表名带模块前缀（§七），迁移所有权由仓库门禁静态检查。
 
 **【已定】跨模块用例共享一个请求级事务**（[ADR-0002](../adr/0002-request-scoped-unit-of-work.md)）：HTTP 适配层开启并提交单个 Unit of Work，模块门面只参与、不自行提交，`Session` 经请求作用域注入。代价是事务边界不再兜底模块边界，故上述机械检查是本决定的前提而非可选增强。
 

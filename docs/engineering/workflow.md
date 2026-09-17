@@ -54,11 +54,11 @@ Every new scenario must explain which failure it prevents and why existing evide
 | System/browser | User-visible flows across applications and published interfaces |
 | Performance/hardware | Explicit environment, model/digest, data set, p50/p95/p99, queue depth and pass budget |
 
-Critical risks require evidence where they exist: judgment safety and violation latching, authentication/authorization, data isolation, transactions/migrations, report/queue/disposal idempotence, physical-execution rights and evidence protection. The ordinary scenario budget does not waive them. At the judgment public interface, invalid observations must never create a false failure and the rework sequence `1,2,3,2,4,5` remains compliant.
+Critical risks still require evidence at their owning seam; the ordinary scenario budget does not waive them. Product-specific safety invariants, accepted sequences and failure semantics are owned by the affected [mechanism specifications](../design/solution-and-roadmap.md) and ADRs. Follow those sources instead of copying their acceptance details into this workflow.
 
 Use real infrastructure or adapter-backed integration evidence for affected persistence, authorization integration, queue/outbox behavior, disposal across restart, execution-right uniqueness/lease expiry, evidence protection and supervisor persistence of judgment effects. A pure-rule test does not replace that integration evidence. Preserve applicable browser/UI coverage when the risk crosses the browser or applications.
 
-Synthetic tests cannot prove target-hardware or field acceptance. For this MVP only, full cross-module E2E, combined-fault, long-stability, scale-performance and field evidence may be deferred under [roadmap §8](../design/solution-and-roadmap.md#八开发路线), with original criteria explicitly assigned to open validation owners. Necessary software integration evidence stays with implementation.
+Synthetic tests cannot prove target-hardware or field acceptance. The current MVP software/validation split and exact deferred criteria are owned by [roadmap §8–9](../design/solution-and-roadmap.md#八开发路线) and the [target-environment validation matrix](../research/target-environment-validation-matrix.md). Keep every deferred criterion linked to an open validation owner; necessary software integration evidence stays with implementation.
 
 Fixtures are minimal, deterministic, synthetic or sanitized and provenance-documented. Customer media, credentials, model weights and production exports are not fixtures. Prefer complete output assertions; reuse helpers; put tests outside production files. Configure a unit through its public/configuration seam, not by mutating process environment variables.
 
@@ -173,6 +173,6 @@ Ordinary bounded single-session work needs no handoff file. Maintain ignored `.t
 
 ## Target-environment and release gates
 
-GPU, camera, connector, multi-stream, 72-hour and 7-day suites remain explicit manual/scheduled or non-blocking target-environment evidence until release policy changes. Unavailable required hardware/services produces a gap, never silent mock success.
+Target-environment scenarios, thresholds and pass criteria are owned by [roadmap §9](../design/solution-and-roadmap.md) and the [target-environment validation matrix](../research/target-environment-validation-matrix.md). This workflow only requires applicable evidence to be real and attributable; unavailable required hardware or services produces a gap, never silent mock success.
 
-Release promotion additionally needs applicable SBOM/license review, image/dependency scanning, migration/rollback rehearsal, offline-start verification and immutable image/model digests. See [upgrade.md](../deployment/upgrade.md) and the [target validation matrix](../research/target-environment-validation-matrix.md). Missing required release environments remain blockers.
+Release-promotion evidence is owned by [upgrade.md](../deployment/upgrade.md) together with the [target-environment validation matrix](../research/target-environment-validation-matrix.md). This workflow requires every applicable release item to have evidence or remain an explicit blocker; it does not duplicate the deployment inventory here.

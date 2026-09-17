@@ -17,7 +17,7 @@ Record these once per task, updating only when scope changes: **Entry** (public 
 
 ## Size and decomposition
 
-Size is advisory; correctness, ownership and compatibility are mandatory. Roughly 500 physical lines is a production-file readability target; around 800, assess an independent responsibility for extraction. A small fix in a large file does not require unrelated refactoring. Product modules have no cumulative line cap. Around 800 added/deleted implementation lines prompts PR scope review; mechanical migration is different from new logic. Use `make change-size`.
+Size is a diagnostic signal, never a design threshold. Use `make change-size` to notice broad changes, then decide whether to split by responsibility, change driver, coupling, interface depth and independent landability. A small fix in a large file does not authorize unrelated refactoring, and a large mechanical migration does not become new logic merely because the diff is large.
 
 Extract only to reduce mixed responsibilities or coupling. Keep public interfaces/state owners stable, orchestration at its existing entry and related tests/explanations beside the behavior. A separately landed stage must be valid and observable on its own; splitting commits does not make an incoherent change smaller.
 

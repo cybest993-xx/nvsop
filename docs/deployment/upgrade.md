@@ -82,7 +82,7 @@ NVIDIA 仓库是 NVSOP 的基座躯干。subtree 更新、检查全部已登记�
 
 ## 发布 promotion 证据
 
-正式发布遵循 [交付工作流的目标环境与发布要求](../engineering/workflow.md#target-environment-and-release-gates)。升级任务不能用同版本软件测试替代其中的供应链、迁移/回滚、离线启动、不可变制品或目标环境证据；所需环境不可用时保持 blocker/gap。
+正式发布的部署证据至少覆盖适用的 SBOM/许可证审查、镜像与依赖扫描、迁移/回滚演练、离线启动、不可变镜像/模型摘要，以及[目标环境验证矩阵](../research/target-environment-validation-matrix.md)中适用的现场门禁。升级任务不能用同版本软件测试替代这些证据；所需环境不可用时保持 blocker/gap。
 
 ## 发布前最小升级证据
 

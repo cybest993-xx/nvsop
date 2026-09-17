@@ -84,7 +84,7 @@
 
 **停用与删除**：可变配置对象（工位、相机、推理后端、连接器、用户）用**停用**表达下线，可逆，历史记录与关联关系完整保留；**删除**是另一项按权限开放的操作。模板版本不适用停用——它是不可变记录，回滚即重新绑定历史版本。停用用户必须同时吊销其全部会话。
 
-**长任务进度**：REST 轮询 `GET /api/v1/jobs/{id}`。看板 SSE 在运行切片随上报入口一起落地。
+**长任务进度**：REST 轮询 `GET /api/v1/jobs/{id}`。看板 SSE 已随 `monitor` 上报镜像落地，当前实现见 [`monitor` 路由](../../../apps/control-api/src/factory_sop/monitor/adapters/routes.py)；它只投影已持久化的上报事实，不进入实时防错链路。
 
 **机器契约按已实现的公共格式维护**：共享包 [`nvsop_contracts`](../../../packages/contracts/src/nvsop_contracts/__init__.py) 已包含 `ConfigurationBundle`、`ReportedDecision` 与 `ReportedHealth`，不再只有首切片的 `openapi.json`。字段与版本以 [`configuration.py`](../../../packages/contracts/src/nvsop_contracts/configuration.py) 和 [`reports.py`](../../../packages/contracts/src/nvsop_contracts/reports.py) 为准；配置确认、历史判定 v2 及旧新组合见[升级兼容说明](../../deployment/upgrade.md#中心与边缘运行时)。原设计的模板/设备信息由当前配置束表达，不另建平行 DTO；未实现的上报内容和 ADR-0003 通用启动握手仍保留各自的原验收归属，局部握手不代表全量完成。
 
@@ -100,7 +100,7 @@
 
 ## 5.16 模块形状与切片顺序
 
-**【已定】`api.py` 是跨模块契约，不是本模块的对外入口全集。** 每模块有一个用例层（`usecases/`），授权在此强制；`api.py` 只暴露**其他模块真正调用的那个子集**。例如 `device` 的约 40 个配置用例中，只有 `resolve_station_topology`、`report_health` 这类会被 `template`/`monitor` 调用的进 `api.py`，其余停在用例层。
+**【已定】`api.py` 是跨模块契约，不是本模块的对外入口全集。** 每模块有一个用例层（`usecases/`），授权在此强制；`api.py` 只暴露**其他模块真正调用的那个子集**。例如 `device` 的配置用例中，只有被 `template`/`monitor` 等其他拥有模块实际调用的能力进入 `api.py`，仅供 HTTP 使用的用例停在所属用例层。
 
 理由：`api.py` 的存在理由是限制跨模块耦合面。把只有 HTTP 一个调用者的用例也塞进去，会让"跨模块契约"与"对外 API 全集"混成一个文件，`import-linter` 也就无法再告诉我们哪些行为真的被别人依赖。反过来，若让配置类模块的 CRUD 一律穿过 `api.py`，得到的是 HTTP handler → `api.py` → repository → 表，中间那层不贡献任何东西。
 

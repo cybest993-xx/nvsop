@@ -1,6 +1,6 @@
 # 标注组合证据运行说明
 
-这组命令用于证明 #31 的真实部署边界，不把替身测试当作发布验收。
+这组命令验证 NVIDIA 标注服务、中心授权和浏览器的真实部署边界。它保留 #31 的验收追溯；替身或 skip 不作为发布通过证据。
 
 ## 统一入口部署
 
@@ -8,7 +8,7 @@ Nginx 与 NVIDIA 基座服务必须加入同一个内部 `sop-network`。只使�
 `docs/deployment/nginx-annotation.conf.example`，将其第一组上游连接到
 `control-api:8000`、`annotation-frontend:80` 和 `annotation-backend:8100`；标注 UI 和派生媒体客户端只访问
 HTTPS 网关的 443/8444 端口；源视频仍按 #30 通过预签名 URL 直传 MinIO。标注后端和前端不发布 `ports`，不能直接从
-厂区网络访问；训练微服务的统一入口和端口隔离留给 #33。本票只经中心兼容适配器开放带产品上下文的标注 API，避免旧接口绕过数据集授权。
+厂区网络访问。训练服务的当前统一入口与配置见[运行配置](configuration.md)及实际 Nginx/Compose 资产，不再把 #33 当作未实施的部署步骤。标注 API 仅经中心适配器开放带产品上下文的调用，避免旧接口绕过数据集授权。
 
 标注页面由中心训练数据集入口创建并准备上下文后，打开
 `/annotation/?context=<opaque-context-token>`。React 页面只读取该已签发上下文和媒体 URL，

@@ -6,14 +6,7 @@
 - 子树前缀：`vendor/sop-monitoring-blueprints/`
 - 接入方式：`git subtree ... --squash`。NVIDIA 的提交历史不进入本仓库的提交图，本文件是版本台账。
 
-更新命令：
-
-```sh
-git subtree pull --prefix=vendor/sop-monitoring-blueprints \
-  https://github.com/NVIDIA/sop-monitoring-blueprints.git <ref> --squash
-```
-
-更新后必跑 `make check`（含 `tests/contract/base/`），并在本文件追加一行。
+更新命令、完整验证和独立审查流程统一由[仓库维护](../engineering/maintenance.md#nvidia-base-code)管理；本文件只追加对应提交的真实验证记录。
 
 ## 记录
 

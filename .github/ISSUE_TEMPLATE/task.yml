@@ -104,7 +104,7 @@ body:
     id: evidence
     attributes:
       label: Evidence plan
-      description: Select evidence by risk using repository-verification.md. Reuse existing evidence first; ordinary gaps normally need 1-3 independent scenarios, low-risk work may need no new tests, and target-environment evidence belongs in linked validation issues when allowed by the roadmap.
+      description: Select evidence by risk using docs/engineering/workflow.md. Reuse existing evidence first; ordinary gaps normally need 1-3 independent scenarios, low-risk work may need no new tests, and target-environment evidence belongs in linked validation issues when allowed by the roadmap.
     validations:
       required: true
 

@@ -92,12 +92,10 @@ class RecordedPatchIsAppendOnlyTest(unittest.TestCase):
 
 
 class HookIsTheOnlyReachIntoOurCodeTest(unittest.TestCase):
-    """`vendor/` reaches exactly one module of ours, and only to call it.
+    """核验 vendor 只调用登记的入口，避免 hook 扩大对 edge_runtime 内部的依赖。
 
-    repository-harness §3 assigns this to an `import-linter` contract; that tool arrives
-    with the center workspace (C1), and until then this is the mechanical check. Code under
-    `vendor/` is outside our lint and type coverage, so without one the hook can silently
-    grow dependencies on arbitrary `edge_runtime` internals.
+    此处直接检查未纳入本仓库 lint/type 覆盖的基座源码；包间依赖另由 import-linter 检查，
+    所有权规则见 docs/engineering/architecture.md。
     """
 
     def base_files_importing_our_code(self) -> dict[Path, list[str]]:

@@ -69,22 +69,9 @@ make contracts
 
 ## NVIDIA 基座更新
 
-NVIDIA 仓库是 NVSOP 的基座躯干。标准更新命令由 [`../base/verified-commits.md`](../base/verified-commits.md) 维护：
+NVIDIA 仓库是 NVSOP 的基座躯干。subtree 更新、检查全部已登记补丁、契约验证和独立审查的唯一流程见[仓库维护](../engineering/maintenance.md#nvidia-base-code)。补丁以[实际目录](../base/patches/)为准，不在升级说明中另维护补丁数量。
 
-```sh
-git subtree pull --prefix=vendor/sop-monitoring-blueprints \
-  https://github.com/NVIDIA/sop-monitoring-blueprints.git <ref> --squash
-```
-
-更新后：
-
-1. 检查登记的两个补丁是否仍保持原有边界，不能静默扩大修改面；
-2. 运行 `make check`，其中包含 `tests/contract/base/`；
-3. 处理真实基座行为变化，而不是放宽契约测试隐藏变化；
-4. 在 `docs/base/verified-commits.md` 追加 NVIDIA commit、测试结果和补丁调整结论；
-5. 完成 `vendor/` 变化要求的独立只读审查。
-
-`verified-commits.md` 是“哪些 NVIDIA 提交验证过”的账本，不代表永久 pin 在最后一条记录。
+[基座验证台账](../base/verified-commits.md)记录已验证提交及补丁调整，不代表永久 pin。部署升级还须核对本章要求的镜像、持久化状态、机器协议及回滚组合；仓库契约通过不替代目标环境发布证据。
 
 ## 工具链和依赖升级
 
@@ -95,7 +82,7 @@ git subtree pull --prefix=vendor/sop-monitoring-blueprints \
 
 ## 发布 promotion 证据
 
-正式发布遵循 [`repository-verification.md` 的目标环境与 release gates](../design/repository-verification.md#target-environment-and-release-gates)。升级任务不能用同版本软件测试替代其中的供应链、迁移/回滚、离线启动、不可变制品或目标环境证据；所需环境不可用时保持 blocker/gap。
+正式发布遵循 [交付工作流的目标环境与发布要求](../engineering/workflow.md#target-environment-and-release-gates)。升级任务不能用同版本软件测试替代其中的供应链、迁移/回滚、离线启动、不可变制品或目标环境证据；所需环境不可用时保持 blocker/gap。
 
 ## 发布前最小升级证据
 

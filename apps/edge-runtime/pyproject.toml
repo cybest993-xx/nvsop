@@ -5,15 +5,9 @@ description = "Inference-host autonomous judgment unit: judgment core, boundary 
 requires-python = ">=3.11"
 dependencies = []
 
-# 3.11 for `typing.assert_never`, which is how the core's event dispatch is checked to be
-# exhaustive at gate time: a catch-all arm would swallow the next event kind added
-# (repository-harness.md §5). Not bound to the center's 3.12 pin — the core runs in the
-# supervisor, not the base container (ADR-0005).
-# No lockfile and no root uv workspace membership: this package has no dependencies
-# to lock. The judgment core is standard-library-only (edge-autonomy.md §5.11) and
-# therefore not bound to the center's Python 3.12 pin. The root `pyproject.toml` plus
-# `uv.lock` arrive with the center workspace (C1), which does have dependencies.
-# Tool versions used by the gate are pinned in the Makefile, not here.
+# Python 3.11 提供事件穷尽检查所需的 typing.assert_never（docs/engineering/coding.md）。
+# 判定核心运行在 supervisor，不在基座容器；标准库边界与 uv 工作区隔离见仓库架构和 ADR-0005。
+# 检查工具由根 uv.lock 冻结，Makefile 提供稳定命令入口；本包不另建锁文件。
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -10,13 +10,16 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
-from urllib.parse import unquote
+
+from check_documentation import check_documentation
 
 REQUIRED_FILES = {
     Path("AGENTS.md"),
     Path("CONTEXT.md"),
     Path("Makefile"),
-    Path("docs/design/repository-harness.md"),
+    Path("docs/README.md"),
+    Path("docs/engineering/workflow.md"),
+    Path("docs/engineering/documentation.md"),
     Path("docs/design/solution-and-roadmap.md"),
     Path(".github/workflows/blocking-ci.yml"),
     # The center backend's frozen toolchain: the pin, the workspace root, and the lockfile
@@ -42,7 +45,6 @@ ALLOWED_TOP_LEVEL_DIRS = {
 }
 ALLOWED_APPS = {"control-api", "control-web", "edge-runtime"}
 ALLOWED_ROOT_TEST_AREAS = {"contract", "fixtures", "performance", "system"}
-MARKDOWN_LINK = re.compile(r"!?\[[^]]*]\(([^)]+)\)")
 SECRET_SUFFIXES = {".key", ".pem"}
 VENDOR_ROOT = Path("vendor")
 NVIDIA_VENDOR_ROOT = VENDOR_ROOT / "sop-monitoring-blueprints"
@@ -170,12 +172,11 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
         if is_python_test and path.parts[0] in {"apps", "packages"} and "tests" not in path.parts:
             errors.append(f"Python test must live in its owner's tests/ tree: {path}")
 
-    for path in sorted(p for p in files if p.suffix.lower() == ".md" and not is_vendor(p)):
-        errors.extend(check_markdown_links(root, path))
+    errors.extend(check_documentation(root, files))
 
     agents = root / "AGENTS.md"
-    if agents.is_file() and "docs/design/repository-harness.md" not in agents.read_text():
-        errors.append("AGENTS.md must point layout changes to the repository harness")
+    if agents.is_file() and "docs/engineering/architecture.md" not in agents.read_text():
+        errors.append("AGENTS.md must point layout changes to docs/engineering/architecture.md")
 
     workflow = root / ".github/workflows/blocking-ci.yml"
     if workflow.is_file():
@@ -438,28 +439,17 @@ def check_vendor_env_values(root: Path, path: Path) -> list[str]:
     return errors
 
 
-def check_markdown_links(root: Path, path: Path) -> list[str]:
-    errors: list[str] = []
-    text = (root / path).read_text(encoding="utf-8")
-    for match in MARKDOWN_LINK.finditer(text):
-        destination = match.group(1).strip().split()[0].strip("<>")
-        destination = unquote(destination.split("#", 1)[0])
-        if not destination or "://" in destination or destination.startswith("mailto:"):
-            continue
-        target = (root / path.parent / destination).resolve()
-        try:
-            target.relative_to(root.resolve())
-        except ValueError:
-            errors.append(f"Markdown link escapes repository: {path} -> {destination}")
-            continue
-        if not target.exists():
-            errors.append(f"broken local Markdown link: {path} -> {destination}")
-    return errors
-
-
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
-    errors = check_repository(root, repository_files(root))
+    if sys.argv[1:] not in ([], ["--docs-only"]):
+        print("usage: check_repo_policy.py [--docs-only]", file=sys.stderr)
+        return 2
+    files = repository_files(root)
+    errors = (
+        check_documentation(root, files)
+        if sys.argv[1:] == ["--docs-only"]
+        else check_repository(root, files)
+    )
     if errors:
         print("Repository policy failed:", file=sys.stderr)
         for error in errors:

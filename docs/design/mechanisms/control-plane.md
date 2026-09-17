@@ -86,7 +86,7 @@
 
 **长任务进度**：REST 轮询 `GET /api/v1/jobs/{id}`。看板 SSE 在运行切片随上报入口一起落地。
 
-**推迟的契约（显式清单，非沉默省略）**：推理机→中心的上报契约（`ReportedDecision`、`ReportedViolation`、`ReportedHealth`）与中心→推理机的拉取契约（`TemplateBundle`、`DeviceConfigBundle`）留到运行切片，用真实录制 chunk 与真机行为确定。seam 的名称、拥有模块与落表位置已在 §六/§七 固定。`packages/contracts/` 首切片只放导出的 `openapi.json`。理由：ADR-0003 的兼容性门禁为保护真实调用方而设——把未见过真实数据的猜测放进去只会锁死自己。
+**机器契约按已实现的公共格式维护**：共享包 [`nvsop_contracts`](../../../packages/contracts/src/nvsop_contracts/__init__.py) 已包含 `ConfigurationBundle`、`ReportedDecision` 与 `ReportedHealth`，不再只有首切片的 `openapi.json`。字段与版本以 [`configuration.py`](../../../packages/contracts/src/nvsop_contracts/configuration.py) 和 [`reports.py`](../../../packages/contracts/src/nvsop_contracts/reports.py) 为准；配置确认、历史判定 v2 及旧新组合见[升级兼容说明](../../deployment/upgrade.md#中心与边缘运行时)。原设计的模板/设备信息由当前配置束表达，不另建平行 DTO；未实现的上报内容和 ADR-0003 通用启动握手仍保留各自的原验收归属，局部握手不代表全量完成。
 
 **但拉取契约的作用域现在就定：按请求方主机身份裁剪。** `DeviceConfigBundle` 只含该推理机自己绑定的工位、相机、推理后端、连接器与点位，以及这些工位的运行参数生效值（§5.3 已解析，不是默认值加覆盖组两份）与物理执行权状态；不含其他推理机的任何拓扑。`TemplateBundle` 同理，只含该机绑定的模板版本。
 

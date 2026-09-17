@@ -14,10 +14,19 @@ class RepositoryPolicyTest(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
         self.files = {
-            Path("AGENTS.md"): "docs/design/repository-harness.md",
+            Path("AGENTS.md"): (
+                "[Docs](docs/README.md)\n[Architecture](docs/engineering/architecture.md)\n"
+            ),
             Path("CONTEXT.md"): "# Language\n",
             Path("Makefile"): "check:\n\ttrue\n",
-            Path("docs/design/repository-harness.md"): "# Harness\n",
+            Path("docs/README.md"): (
+                "[Language](../CONTEXT.md)\n[Workflow](engineering/workflow.md)\n"
+                "[Documentation](engineering/documentation.md)\n"
+                "[Design](design/solution-and-roadmap.md)\n"
+            ),
+            Path("docs/engineering/architecture.md"): "# Architecture\n",
+            Path("docs/engineering/workflow.md"): "# Workflow\n",
+            Path("docs/engineering/documentation.md"): "# Documentation\n",
             Path("docs/design/solution-and-roadmap.md"): "# Current decisions\n",
             Path(".github/workflows/blocking-ci.yml"): (
                 "pull_request:\nCI required\nalways()\nmake check\n"
@@ -86,6 +95,13 @@ class RepositoryPolicyTest(unittest.TestCase):
         errors = self.check(str(path.relative_to(self.root)))
         self.assertTrue(
             any("root test has no declared cross-app owner" in error for error in errors)
+        )
+
+    def test_rejects_document_without_a_reader_entry(self) -> None:
+        path = self.write("docs/design/orphan.md", "# Orphan\n")
+        self.assertIn(
+            "unindexed Markdown document: docs/design/orphan.md; link from a reachable owner",
+            self.check(str(path)),
         )
 
     def test_rejects_broken_local_markdown_link(self) -> None:

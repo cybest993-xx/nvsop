@@ -5,10 +5,10 @@ services:
     image: bluenviron/mediamtx:1.21.0@sha256:095da39dd94defa496d592e8b7a968bfd171491ea325d5176c6d32929ba4f1f9
     command: ["/config/mediamtx.yml"]
     ports:
-      - "127.0.0.1:8554:8554/tcp"
-      - "127.0.0.1:8889:8889/tcp"
-      - "127.0.0.1:8189:8189/udp"
-      - "127.0.0.1:9996:9996/tcp"
+      - "127.0.0.1:${NVSOP_MEDIA_RTSP_HOST_PORT:-8554}:8554/tcp"
+      - "127.0.0.1:${NVSOP_MEDIA_WEBRTC_HOST_PORT:-8889}:8889/tcp"
+      - "127.0.0.1:${NVSOP_MEDIA_ICE_HOST_PORT:-8189}:8189/udp"
+      - "127.0.0.1:${NVSOP_MEDIA_PLAYBACK_HOST_PORT:-9996}:9996/tcp"
     volumes:
       - ./mediamtx.yml:/config/mediamtx.yml:ro
       - media-recordings:/recordings

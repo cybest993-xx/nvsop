@@ -22,6 +22,7 @@ REQUIRED_FILES = {
     Path("docs/engineering/documentation.md"),
     Path("docs/design/solution-and-roadmap.md"),
     Path(".github/workflows/blocking-ci.yml"),
+    Path("scripts/ci_scope.py"),
     # The center backend's frozen toolchain: the pin, the workspace root, and the lockfile
     # CI installs from with `uv sync --frozen` (solution-and-roadmap.md §六).
     Path(".python-version"),
@@ -184,17 +185,17 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
         for required_text in ("pull_request:", "make check", "CI required", "always()"):
             if required_text not in text:
                 errors.append(f"blocking-ci.yml is missing required gate behavior: {required_text}")
-        if any(is_under(path, Path("tests/system")) for path in files):
-            integration_filter = re.search(
-                r"integration-gate:.*?grep -E '([^']+)'",
-                text,
-                flags=re.DOTALL,
+        if "needs.scope.outputs.integration" not in text:
+            errors.append("blocking-ci.yml must consume the shared ci_scope integration output")
+
+    selector = root / "scripts/ci_scope.py"
+    if selector.is_file() and any(is_under(path, Path("tests/system")) for path in files):
+        selector_text = selector.read_text(encoding="utf-8")
+        if '"tests/system/"' not in selector_text or '"apps/edge-runtime/"' not in selector_text:
+            errors.append(
+                "ci_scope.py integration selection must include tests/system/ and "
+                "apps/edge-runtime/; path filtering is an optimization, not an exemption"
             )
-            if integration_filter is None or "tests/system/" not in integration_filter.group(1):
-                errors.append(
-                    "blocking-ci.yml integration path filter must include tests/system/; "
-                    "path filtering is not an exemption (harness §7)"
-                )
 
     errors.extend(check_python_pin(root))
     errors.extend(check_web_toolchain(root, files))

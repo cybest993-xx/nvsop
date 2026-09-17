@@ -9,7 +9,8 @@ playbackAllowOrigins: ['http://localhost:3000', 'http://localhost:8443', 'https:
 pathDefaults:
   recordFormat: fmp4
   recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
-  recordSegmentDuration: 60s
+  # 合成验证环境用短分段，避免真实回放检查等待一分钟；生产值来自边缘配置。
+  recordSegmentDuration: 2s
   recordDeleteAfter: 3600s
 paths:
   synthetic:

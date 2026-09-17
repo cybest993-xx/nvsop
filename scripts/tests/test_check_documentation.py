@@ -41,6 +41,33 @@ class DocumentationTest(unittest.TestCase):
             ],
         )
 
+    def test_fragments_follow_visible_headings_and_explicit_anchors(self) -> None:
+        files = [
+            self.write(
+                "README.md",
+                "[Guide](docs/guide.md#部署与验证)\n[Again](docs/guide.md#部署与验证-1)\n"
+                "[ID](docs/guide.md#stable-id)\n[Local](#hello-world)\n# Hello, *world*!\n",
+            ),
+            self.write(
+                "docs/guide.md",
+                '# Guide\n## 部署与验证\n## 部署与验证\n<a id="stable-id"></a>\n'
+                "```md\n## Not real\n```\n",
+            ),
+        ]
+        self.assertEqual(check_documentation(self.root, files), [])
+        self.write("README.md", "[Missing](docs/guide.md#not-real)\n[Local](#absent)\n")
+        errors = check_documentation(self.root, files)
+        self.assertTrue(any("#not-real" in error for error in errors), errors)
+        self.assertTrue(any("#absent" in error for error in errors), errors)
+
+    def test_local_ignored_material_cannot_satisfy_a_document_link(self) -> None:
+        files = [self.write("README.md", "[Local file](.tmp/local.txt)\n")]
+        self.write(".tmp/local.txt", "present only on this machine\n")
+        errors = check_documentation(self.root, files)
+        self.assertTrue(any("not in repository inputs" in error for error in errors), errors)
+        files.append(Path(".tmp/local.txt"))
+        self.assertEqual(check_documentation(self.root, files), [])
+
     def test_link_deletion_and_repository_boundary_keep_explicit_failures(self) -> None:
         files = [
             self.write(
@@ -50,7 +77,7 @@ class DocumentationTest(unittest.TestCase):
                 "[Mail](mailto:docs@example.invalid)\n"
                 "```md\n[Example](not-a-real-link.md)\n```\n",
             ),
-            self.write("docs/a guide.md", "# Guide\n"),
+            self.write("docs/a guide.md", "# Guide\n\n## Details\n"),
         ]
         self.assertEqual(check_documentation(self.root, files), [])
         (self.root / files.pop()).unlink()

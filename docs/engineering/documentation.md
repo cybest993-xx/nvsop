@@ -59,9 +59,9 @@ After material instruction/runtime changes, check routing in a fresh session wit
 
 ## Mechanical checks
 
-`make docs-check` runs the offline, standard-library document check. It verifies repository-local inline Markdown link targets and that maintained first-party Markdown is reachable from `README.md` or `AGENTS.md`. Directory links enter that directory's `README.md` when one exists; they do not silently index all descendants. Use inline Markdown links for maintained navigation. Vendor content is excluded from editorial/link enforcement under [ADR-0007](../adr/0007-base-is-the-trunk-not-a-dependency.md).
+`make docs-check` runs the offline, standard-library document check. It verifies repository-local inline Markdown targets, heading/explicit-anchor fragments, that local targets belong to the repository inputs rather than ignored machine-only files, and that maintained first-party Markdown is reachable from `README.md` or `AGENTS.md`. Directory links enter that directory's `README.md` when one exists; they do not silently index all descendants. Use inline Markdown links for maintained navigation. Vendor content is excluded from editorial/link enforcement under [ADR-0007](../adr/0007-base-is-the-trunk-not-a-dependency.md).
 
-The check is also part of the existing repository policy, hence `make check-docs` and `make check`. It does not crawl external URLs, prove fragment targets, classify duplicated meaning or decide whether a requirement is obsolete; review owns those judgments. No document database, hash registry, mandatory timestamp refresh, word-count quota or new dependency is needed.
+The check is also part of the existing repository policy, hence `make check-docs` and `make check`. It does not crawl external URLs, classify duplicated meaning or decide whether a requirement is obsolete; review owns those judgments. No document database, hash registry, mandatory timestamp refresh, word-count quota or new dependency is needed.
 
 ## Transitional links
 

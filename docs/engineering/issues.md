@@ -65,6 +65,7 @@ gh issue comment <number> --body-file <file>
 ```
 
 Before claiming, confirm the ticket is open, sufficiently specified, has no open native blocker and is unassigned. In a ticket-driven session, claiming is the first Issue write. The frontier is the map's open children with no open blocker or assignee; map order selects among them. Bound queries and read relevant comments/labels rather than copying every body into context.
+`make issue-check ISSUE=<number>` is a read-only preflight for the mechanical subset: required form sections, readiness labels, assignees and native blockers. Query failure or unreadable native dependencies are reported as blocked/unknown, not as “no blockers”. The command cannot judge whether an Outcome is well designed, scope is independently landable or the evidence plan is proportionate; those remain repository/code review judgments before claim.
 
 A skill request to “publish to the issue tracker” means create a GitHub Issue; “fetch the relevant ticket” means read the Issue and comments. Resolve shared Issue/PR number space with `gh pr view <n>` or `gh issue view <n>` as appropriate.
 

@@ -7,6 +7,38 @@ import subprocess
 import sys
 
 ROOT_DOCS = {"AGENTS.md", "CLAUDE.md", "CONTEXT.md", "README.md"}
+INTEGRATION_PREFIXES = (
+    "apps/control-api/",
+    "apps/edge-runtime/",
+    "packages/contracts/",
+    "tests/system/",
+    "tests/fixtures/",
+    "deploy/media/",
+)
+INTEGRATION_FILES = {"Makefile", "uv.lock", "pyproject.toml"}
+BROWSER_PREFIXES = ("apps/control-web/",)
+BROWSER_FILES = {"Makefile", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"}
+MEDIA_PREFIXES = ("deploy/media/",)
+MEDIA_FILES = {
+    "scripts/test_media_playback.py",
+    "scripts/test_whep.py",
+    "tests/system/test_sys_34_media.py",
+    "apps/control-web/tests/e2e/sys-34-media.spec.ts",
+}
+
+
+def selected(path: str, prefixes: tuple[str, ...], files: set[str]) -> bool:
+    return path in files or path.startswith(prefixes)
+
+
+def emit(
+    *, docs_only: bool, force_all: bool, integration: bool, browser: bool, media: bool
+) -> None:
+    print(f"docs_only={str(docs_only).lower()}")
+    print(f"force_all={str(force_all).lower()}")
+    print(f"integration={str(integration).lower()}")
+    print(f"browser={str(browser).lower()}")
+    print(f"media={str(media).lower()}")
 
 
 def resolve_commit(reference: str) -> str:
@@ -29,7 +61,7 @@ def main(argv: list[str]) -> int:
             base = resolve_commit(argv[1])
         except subprocess.CalledProcessError:
             print("No usable base commit; running all gates.", file=sys.stderr)
-            print("docs_only=false\nforce_all=true")
+            emit(docs_only=False, force_all=True, integration=True, browser=True, media=True)
             return 0
         changed = subprocess.run(
             ["git", "diff", "--name-only", "--no-renames", "-z", base, head, "--"],
@@ -48,10 +80,26 @@ def main(argv: list[str]) -> int:
         path in ROOT_DOCS or (path.startswith("docs/") and path.endswith(".md")) for path in paths
     )
     force_all = any(
-        path.startswith(".github/") or path in {"Makefile", "scripts/ci_scope.py"} for path in paths
+        path.startswith(".github/")
+        or path in {"Makefile", "scripts/ci_scope.py", "scripts/install_actionlint.py"}
+        for path in paths
     )
-    print(f"docs_only={str(docs_only).lower()}")
-    print(f"force_all={str(force_all).lower()}")
+    media = force_all or any(selected(path, MEDIA_PREFIXES, MEDIA_FILES) for path in paths)
+    integration = (
+        force_all
+        or media
+        or any(selected(path, INTEGRATION_PREFIXES, INTEGRATION_FILES) for path in paths)
+    )
+    browser = (
+        force_all or media or any(selected(path, BROWSER_PREFIXES, BROWSER_FILES) for path in paths)
+    )
+    emit(
+        docs_only=docs_only,
+        force_all=force_all,
+        integration=integration,
+        browser=browser,
+        media=media,
+    )
     return 0
 
 

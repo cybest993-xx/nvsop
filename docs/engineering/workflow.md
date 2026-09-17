@@ -72,7 +72,12 @@ The [Makefile](../../Makefile) is the local/CI command interface. During iterati
 | `make check-docs` | Final documentation lane: frozen Python resolution, hooks, policy/documentation checks, secrets and diff whitespace |
 | `make check` | Final CPU-only, Docker-free code gate |
 | `make check-integration` | Center integration/system evidence with real local infrastructure |
+| `make media-system` | Real fixed-digest MediaMTX recording/playback evidence; missing live URLs are not counted as a pass |
 | `make web-e2e` | Browser scenarios |
+| `make web-e2e-whep` | Real MediaMTX WHEP browser evidence for media-owned changes |
+| `make ci-plan BASE=<sha> HEAD=<sha>` | Read-only report of the same CI scope selector used by GitHub Actions |
+| `make ci-lint` | Offline GitHub Actions static lint after one explicit `make ci-tools` install of the pinned binary |
+| `make pr-check PR=<number>` | Read-only machine-state preflight; never substitutes for independent review or merge authorization |
 | `make change-size` | Advisory size report from `BASE`, default `origin/main` |
 | `make contracts` | Generated OpenAPI compatibility and Web client; procedure in [maintenance.md](maintenance.md#generated-contracts) |
 
@@ -93,6 +98,7 @@ Repair concrete findings as one bounded batch, rerun affected checks and review 
 ## 4. Publish the candidate and evaluate CI
 
 Publication requires user authorization for the action and target. Publish only the task branch and open its PR directly against `main`; never push `HEAD:main`. Use the [PR template](../../.github/pull_request_template.md) to record outcome, scope, risks, actual evidence and documentation impact, not another full rulebook.
+Before requesting merge, `make pr-check PR=<number>` may aggregate the PR head/base, `CI required`, branch-protection visibility and local candidate identity. Treat `unknown` protection or a missing check as blocked. Its output deliberately leaves independent review as manual confirmation and never grants merge authorization.
 
 ```sh
 git push -u origin agent/a/<task-slug>
@@ -104,14 +110,18 @@ gh pr create --base main --head agent/a/<task-slug>
 The sole aggregate required PR status is `CI required` from [blocking-ci.yml](../../.github/workflows/blocking-ci.yml). Server-side repository settings must separately require it; a workflow file alone does not enable protection. Its `always()` gatherer requires explicit success from scope, lockfile checks and every gate family; failed, cancelled or skipped dependencies are not success.
 
 [ci_scope.py](../../scripts/ci_scope.py) compares the actual base/candidate commits with rename detection disabled. A missing comparison baseline forces all gates.
+The selector also owns integration, browser and media applicability; jobs consume its outputs instead of maintaining their own path regexes. Media-owned inputs select both real-infrastructure and browser lanes, then run `make media-system` and `make web-e2e-whep` with explicit live fixtures so environment-dependent tests cannot silently satisfy media evidence by skipping.
 
 | Compared paths | Existing blocking lane |
 |---|---|
-| Only root `AGENTS.md`, `CLAUDE.md`, `CONTEXT.md`, `README.md` or Markdown under `docs/` | `make check-docs`; integration/browser report explicit no-change success |
-| Any other path | `make check` plus applicable integration/browser filters |
-| `.github/`, `Makefile`, the selector, or unusable baseline | All blocking families |
+| Only root `AGENTS.md`, `CLAUDE.md`, `CONTEXT.md`, `README.md` or Markdown under `docs/` | `make check-docs`; integration/browser/media report explicit no-change success |
+| Center, Edge, shared contracts, system fixtures or system tests | `make check` plus the real-infrastructure lane |
+| Web inputs | `make check` plus the browser lane |
+| Media deployment/test inputs | `make check` plus real-infrastructure, playback and WHEP browser evidence |
+| `.github/`, `Makefile`, the selector/actionlint installer, or unusable baseline | All blocking families |
 
 Filtering is an optimization, not an exemption. Lockfiles are always checked; applicable code gates regenerate artifacts and verify tracked and untracked cleanliness. Keep immutable action pins, least-privilege permissions, frozen installs, job timeouts and cancellation of superseded PR runs. Do not relax this selection merely because a script change accompanies documentation.
+Workflow changes additionally install the pinned `actionlint` release through the checksum-verifying repository installer and run `make ci-lint`. Browser failures upload only Playwright `test-results/` with a pinned upload action and short retention; do not upload `.tmp/dev-main`, environment files or broader workspaces as diagnostic artifacts.
 
 **Done:** the published branch names the verified candidate, PR base is `main` and that final candidate has applicable green CI and review evidence. An earlier candidate's green CI does not transfer across content changes.
 

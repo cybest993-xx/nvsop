@@ -84,7 +84,7 @@
 
 **停用与删除**：可变配置对象（工位、相机、推理后端、连接器、用户）用**停用**表达下线，可逆，历史记录与关联关系完整保留；**删除**是另一项按权限开放的操作。模板版本不适用停用——它是不可变记录，回滚即重新绑定历史版本。停用用户必须同时吊销其全部会话。
 
-**长任务进度**：REST 轮询 `GET /api/v1/jobs/{id}`。运行观测的 SSE 展示链路已经实现：中心 `/api/v1/monitor/stream` 投影已持久化的上报事实，Web 概览页订阅该流；这只表示现有展示链路可用，不代表 §九 P9 整体完成。P9 中 TimescaleDB/hypertable 原生压缩等剩余验收仍按原门禁追踪，SSE 本身也不进入实时防错链路。
+**长任务进度**：REST 轮询 `GET /api/v1/jobs/{id}`。运行观测的 SSE 展示链路已经实现：中心 [monitor SSE 路由](../../../apps/control-api/src/factory_sop/monitor/adapters/routes.py)的 `/api/v1/monitor/stream` 投影已持久化的上报事实，Web [概览页](../../../apps/control-web/src/modules/overview/OverviewView.vue)订阅该流；这只表示现有展示链路可用，不代表 §九 P9 整体完成。P9 中 TimescaleDB/hypertable 原生压缩等剩余验收仍按原门禁追踪，SSE 本身也不进入实时防错链路。
 
 **机器契约按已实现的公共格式维护**：共享包 [`nvsop_contracts`](../../../packages/contracts/src/nvsop_contracts/__init__.py) 已包含 `ConfigurationBundle`、`ReportedDecision` 与 `ReportedHealth`，不再只有首切片的 `openapi.json`。字段与版本以 [`configuration.py`](../../../packages/contracts/src/nvsop_contracts/configuration.py) 和 [`reports.py`](../../../packages/contracts/src/nvsop_contracts/reports.py) 为准；配置确认、历史判定 v2 及旧新组合见[升级兼容说明](../../deployment/upgrade.md#中心与边缘运行时)。原设计的模板/设备信息由当前配置束表达，不另建平行 DTO；未实现的上报内容和 ADR-0003 通用启动握手仍保留各自的原验收归属，局部握手不代表全量完成。
 

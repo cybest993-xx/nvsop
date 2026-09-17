@@ -98,7 +98,7 @@ Repair concrete findings as one bounded batch, rerun affected checks and review 
 ## 4. Publish the candidate and evaluate CI
 
 Publication requires user authorization for the action and target. Publish only the task branch and open its PR directly against `main`; never push `HEAD:main`. Use the [PR template](../../.github/pull_request_template.md) to record outcome, scope, risks, actual evidence and documentation impact, not another full rulebook.
-Before requesting merge, `make pr-check PR=<number>` may aggregate the PR head/base, `CI required`, branch-protection visibility and local candidate identity. Treat `unknown` protection or a missing check as blocked. Its output deliberately leaves independent review as manual confirmation and never grants merge authorization.
+Before requesting merge, `make pr-check PR=<number>` may aggregate the PR head/base, `CI required`, branch-protection visibility and local candidate identity. Treat `unknown` or absent protection and a missing check as blocked. If GitHub explicitly reports that branch protection is unavailable for the repository plan, the check reports `unsupported`: the exact PR head still needs successful `CI required`, and merge remains a manual action requiring explicit user authorization. Its output deliberately leaves independent review as manual confirmation and never grants merge authorization.
 
 ```sh
 git push -u origin agent/a/<task-slug>
@@ -107,7 +107,7 @@ gh pr create --base main --head agent/a/<task-slug>
 
 ### CI gates
 
-The sole aggregate required PR status is `CI required` from [blocking-ci.yml](../../.github/workflows/blocking-ci.yml). Server-side repository settings must separately require it; a workflow file alone does not enable protection. Its `always()` gatherer requires explicit success from scope, lockfile checks and every gate family; failed, cancelled or skipped dependencies are not success.
+The sole aggregate required PR status is `CI required` from [blocking-ci.yml](../../.github/workflows/blocking-ci.yml). Server-side repository settings must separately require it when the GitHub plan exposes branch protection or rulesets; a workflow file alone does not enable protection. If GitHub explicitly reports that those controls are unavailable for the repository plan, `pr-check` makes the missing server enforcement visible and requires manual confirmation of the green `CI required` result plus explicit merge authorization. Its `always()` gatherer requires explicit success from scope, lockfile checks and every gate family; failed, cancelled or skipped dependencies are not success.
 
 [ci_scope.py](../../scripts/ci_scope.py) compares the actual base/candidate commits with rename detection disabled. A missing comparison baseline forces all gates.
 The selector also owns integration, browser and media applicability; jobs consume its outputs instead of maintaining their own path regexes. Media-owned inputs select both real-infrastructure and browser lanes, then run `make media-system` and `make web-e2e-whep` with explicit live fixtures so environment-dependent tests cannot silently satisfy media evidence by skipping.

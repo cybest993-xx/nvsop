@@ -68,10 +68,17 @@ def evaluate(pr: dict[str, Any], protection: str, local_branch: str, local_head:
         blockers.append(f"base={base or 'missing'}")
     if ci != "success":
         blockers.append(f"{REQUIRED_CHECK}={ci}")
-    if protection != "protected":
+    if protection not in {"protected", "unsupported"}:
         blockers.append(f"branch_protection={protection}")
     if local != "matches":
         blockers.append(f"local_candidate={local}")
+
+    if protection == "protected":
+        merge_guard = "server-protected"
+    elif protection == "unsupported":
+        merge_guard = "manual-ci-confirmation-required"
+    else:
+        merge_guard = "unverified"
 
     lines = (
         f"state={state}",
@@ -79,6 +86,7 @@ def evaluate(pr: dict[str, Any], protection: str, local_branch: str, local_head:
         f"head={head_branch}@{head_sha or 'missing'}",
         f"ci_required={ci}",
         f"branch_protection={protection}",
+        f"merge_guard={merge_guard}",
         f"local_candidate={local}",
         f"github_review_decision={review}",
         "independent_review=manual-confirmation-required",
@@ -93,6 +101,8 @@ def protection_state(repository: str, branch: str) -> str:
     if result.returncode == 0:
         return "protected"
     message = result.stderr.lower()
+    if "upgrade to github pro or make this repository public to enable this feature" in message:
+        return "unsupported"
     if "404" in message or "not found" in message:
         return "absent"
     return "unknown"

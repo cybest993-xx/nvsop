@@ -52,3 +52,5 @@ Control-plane `/api/v1` is a fixed prefix, not a version axis ([ADR-0003](../adr
 ## Enforcement
 
 Use existing import-linter contracts, migration ownership, repository policy, contract tests and generated-contract compatibility to enforce checkable boundaries. Documentation explains these controls and the reasons; it must not become another machine-readable registry. [workflow.md](workflow.md) owns commands and evidence.
+
+Adding or deleting a product module, changing `[tool.nvsop].center_modules` membership, changing a cross-module `api.py` contract, moving table/state ownership, changing shared machine-contract semantics, or materially changing a cross-owner composition root is **architecture-sensitive**. PR preflight must mechanically require an independent semantic architecture review against the current roadmap/mechanism/ADR authority; the checker only identifies the sensitive surface and never decides whether the design is correct. New or retained product modules also use the [module preflight and deletion test](coding.md#size-and-decomposition).

@@ -95,6 +95,66 @@ class PrReadinessTest(unittest.TestCase):
         self.assertIn("local_candidate=different-branch", result.lines)
         self.assertIn("blockers=local_candidate=different-branch", result.lines)
 
+    def test_authority_change_requires_dispatch_impact_evidence(self) -> None:
+        pr = {
+            "state": "OPEN",
+            "baseRefName": "main",
+            "headRefName": "agent/test/task",
+            "headRefOid": "abc",
+            "statusCheckRollup": [{"name": "CI required", "conclusion": "SUCCESS"}],
+            "body": (
+                "Dispatch impact: `not-required`\nAffected open/ready Issues: `N/A`\nActions: `N/A`"
+            ),
+        }
+        missing = evaluate(
+            pr,
+            "protected",
+            "agent/test/task",
+            "abc",
+            ["docs/engineering/issues.md"],
+        )
+        self.assertFalse(missing.ready)
+        self.assertIn("dispatch_impact_review=required", missing.lines)
+        self.assertIn("dispatch_impact_evidence=missing", missing.lines)
+
+        pr["body"] = (
+            "Dispatch impact: `reviewed`\n"
+            "Affected open/ready Issues: `none-found`\n"
+            "Actions: `scan-recorded`"
+        )
+        reviewed = evaluate(
+            pr,
+            "protected",
+            "agent/test/task",
+            "abc",
+            ["docs/engineering/issues.md"],
+        )
+        self.assertTrue(reviewed.ready)
+        self.assertIn("dispatch_impact_evidence=present", reviewed.lines)
+
+    def test_synthetic_public_seam_change_requires_architecture_review_evidence(self) -> None:
+        pr = {
+            "state": "OPEN",
+            "baseRefName": "main",
+            "headRefName": "agent/test/task",
+            "headRefOid": "abc",
+            "statusCheckRollup": [{"name": "CI required", "conclusion": "SUCCESS"}],
+            "body": ("Architecture review: `not-required`\nArchitecture authority checked: `N/A`"),
+        }
+        changed = ["apps/control-api/src/factory_sop/synthetic_owner/api.py"]
+        missing = evaluate(pr, "protected", "agent/test/task", "abc", changed)
+        self.assertFalse(missing.ready)
+        self.assertIn("architecture_review=required", missing.lines)
+        self.assertIn("architecture_review_evidence=missing", missing.lines)
+
+        pr["body"] = (
+            "Architecture review: `reviewed`\n"
+            "Architecture authority checked: `docs/engineering/architecture.md`"
+        )
+        reviewed = evaluate(pr, "protected", "agent/test/task", "abc", changed)
+        self.assertTrue(reviewed.ready)
+        self.assertIn("architecture_review_evidence=present", reviewed.lines)
+
     def test_missing_ci_or_unreadable_protection_never_claims_automated_readiness(self) -> None:
         result = evaluate(
             {

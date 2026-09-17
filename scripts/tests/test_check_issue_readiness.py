@@ -19,6 +19,12 @@ S999
 One observable result.
 ## Authority and current evidence
 Roadmap plus current source.
+## Architecture impact
+none
+## Architecture authority
+N/A
+## Architecture validation baseline
+N/A
 ## Existing seam and reuse
 Existing public seam.
 ## Scope
@@ -56,6 +62,54 @@ class IssueReadinessTest(unittest.TestCase):
         self.assertTrue(result.ready)
         self.assertIn("automated_readiness=ready", result.lines)
         self.assertIn("semantic_quality=manual-review-required", result.lines)
+
+    def test_map_is_valid_but_never_dispatchable(self) -> None:
+        result = evaluate(
+            {
+                "state": "OPEN",
+                "body": """## Delivery map
+- #292
+## Acceptance criteria
+- [ ] Children close independently.
+## Dependencies and blockers
+None
+## Evidence plan
+Aggregate child evidence.
+## Out of scope
+No implementation here.
+## Map readiness
+Children own execution.
+""",
+                "labels": [{"name": "wayfinder:map"}],
+                "assignees": [],
+            },
+            [],
+        )
+        self.assertTrue(result.ready)
+        self.assertIn("map_structure=valid", result.lines)
+        self.assertIn("dispatchable=no", result.lines)
+        self.assertIn("automated_readiness=map-valid", result.lines)
+
+    def test_changed_architecture_authority_revokes_ready_state(self) -> None:
+        architecture_body = READY_BODY.replace(
+            "## Architecture impact\nnone\n## Architecture authority\nN/A\n"
+            "## Architecture validation baseline\nN/A\n",
+            "## Architecture impact\narchitecture-sensitive\n"
+            "## Architecture authority\n- `docs/engineering/architecture.md`\n"
+            "## Architecture validation baseline\n"
+            "main@0123456789abcdef0123456789abcdef01234567\n",
+        )
+        issue = {
+            "state": "OPEN",
+            "body": architecture_body,
+            "labels": [{"name": "wayfinder:task"}, {"name": "ready-for-agent"}],
+            "assignees": [],
+        }
+        self.assertTrue(evaluate(issue, [], "unchanged").ready)
+        changed = evaluate(issue, [], "changed")
+        self.assertFalse(changed.ready)
+        self.assertIn("existing_seam_revalidation=required", changed.lines)
+        self.assertIn("blockers=manual-revalidation-required", changed.lines)
 
     def test_unknown_native_blockers_and_readiness_conflict_fail_closed(self) -> None:
         result = evaluate(

@@ -99,6 +99,7 @@ Repair concrete findings as one bounded batch, rerun affected checks and review 
 
 Publication requires user authorization for the action and target. Publish only the task branch and open its PR directly against `main`; never push `HEAD:main`. Use the [PR template](../../.github/pull_request_template.md) to record outcome, scope, risks, actual evidence and documentation impact, not another full rulebook.
 Before requesting merge, `make pr-check PR=<number>` may aggregate the PR head/base, `CI required`, branch-protection visibility and local candidate identity. Treat `unknown` or absent protection and a missing check as blocked. If GitHub explicitly reports that branch protection is unavailable for the repository plan, the check reports `unsupported`: the exact PR head still needs successful `CI required`, and merge remains a manual action requiring explicit user authorization. Its output deliberately leaves independent review as manual confirmation and never grants merge authorization.
+For candidates that change architecture/Issue/mechanism/ADR authority, the module-registry manifest or shared machine contracts, the same preflight reports `dispatch_impact_review=required`. Record the actual open/ready Issue scan and dispositions in the PR template; this mechanical evidence does not replace semantic review of whether the affected set is complete.
 
 ```sh
 git push -u origin agent/a/<task-slug>

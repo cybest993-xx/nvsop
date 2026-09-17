@@ -16,8 +16,9 @@ nvsop-contracts = { workspace = true }
 
 # The center backend's modules: the one declaration of record (harness §3, ADR-0010). Each
 # entry is a package under `apps/control-api/src/factory_sop/` and the prefix its physical
-# tables carry. Ownership/membership gates read this list directly; the roadmap's §六 and
-# harness §3 explain it. Adding a module starts here.
+# tables carry. Migration ownership reads this list directly; any gate that needs declared
+# product-module membership must consume this authority rather than copy it. The roadmap's
+# §六 and harness §3 explain it. Adding a module starts here.
 [tool.nvsop]
 center_modules = [
     "auth",

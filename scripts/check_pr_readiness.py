@@ -101,7 +101,10 @@ def protection_state(repository: str, branch: str) -> str:
     if result.returncode == 0:
         return "protected"
     message = result.stderr.lower()
-    if "upgrade to github pro or make this repository public to enable this feature" in message:
+    plan_capability_error = (
+        "upgrade to github pro or make this repository public to enable this feature"
+    )
+    if plan_capability_error in message and "http 403" in message:
         return "unsupported"
     if "404" in message or "not found" in message:
         return "absent"

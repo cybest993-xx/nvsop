@@ -63,6 +63,17 @@ class PrReadinessTest(unittest.TestCase):
             args=[],
             returncode=1,
             stdout="",
+            stderr=(
+                "gh: Upgrade to GitHub Pro or make this repository public to enable this "
+                "feature. (HTTP 500)"
+            ),
+        )
+        self.assertEqual(protection_state("owner/repo", "main"), "unknown")
+
+        run_mock.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="",
             stderr="gh: Resource not accessible by integration (HTTP 403)",
         )
         self.assertEqual(protection_state("owner/repo", "main"), "unknown")

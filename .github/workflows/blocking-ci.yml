@@ -20,6 +20,9 @@ jobs:
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
       force_all: ${{ steps.scope.outputs.force_all }}
+      integration: ${{ steps.scope.outputs.integration }}
+      browser: ${{ steps.scope.outputs.browser }}
+      media: ${{ steps.scope.outputs.media }}
     steps:
       - name: Checkout candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -37,12 +40,26 @@ jobs:
         env:
           DOCS_ONLY: ${{ steps.scope.outputs.docs_only }}
           FORCE_ALL: ${{ steps.scope.outputs.force_all }}
+          INTEGRATION: ${{ steps.scope.outputs.integration }}
+          BROWSER: ${{ steps.scope.outputs.browser }}
+          MEDIA: ${{ steps.scope.outputs.media }}
         run: |
           set -euo pipefail
-          case "$DOCS_ONLY:$FORCE_ALL" in
-            true:false|false:true|false:false) ;;
-            *) echo "Invalid CI scope outputs." >&2; exit 1 ;;
-          esac
+          for value in "$DOCS_ONLY" "$FORCE_ALL" "$INTEGRATION" "$BROWSER" "$MEDIA"; do
+            case "$value" in true|false) ;; *) echo "Invalid CI scope output: $value" >&2; exit 1 ;; esac
+          done
+          if [ "$DOCS_ONLY" = true ] && [ "$FORCE_ALL:$INTEGRATION:$BROWSER:$MEDIA" != false:false:false:false ]; then
+            echo "Documentation fast lane cannot select another gate." >&2
+            exit 1
+          fi
+          if [ "$FORCE_ALL" = true ] && [ "$DOCS_ONLY:$INTEGRATION:$BROWSER:$MEDIA" != false:true:true:true ]; then
+            echo "force_all must select every blocking family." >&2
+            exit 1
+          fi
+          if [ "$MEDIA" = true ] && { [ "$INTEGRATION" != true ] || [ "$BROWSER" != true ]; }; then
+            echo "Media changes require integration and browser evidence." >&2
+            exit 1
+          fi
 
   # 两份锁文件始终检查，文档快线也不能绕过冻结依赖约束。
   lockfile:
@@ -92,6 +109,12 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Install pinned workflow linter
+        if: needs.scope.outputs.force_all == 'true'
+        run: make ci-tools
+      - name: Lint GitHub Actions workflows
+        if: needs.scope.outputs.force_all == 'true'
+        run: make ci-lint
       - name: Install the pinned Python toolchain runner
         # `make check` starts by running `uv sync --frozen`, which provisions the interpreter
         # named by `.python-version` and installs every dependency and gate tool from
@@ -160,11 +183,10 @@ jobs:
             exit 1
           fi
 
-  # Family 3 (harness §7): the center backend against real containerized infrastructure. A
-  # separate job because it needs Docker, which `make check` deliberately does not. Same
-  # explicit-success rule as above — path filtering is an optimization, not an exemption.
+  # Real local infrastructure: center integration/system flows plus MediaMTX when its owning
+  # inputs changed. The shared selector decides applicability once; skipped suites are explicit.
   integration-gate:
-    name: Center backend against real PostgreSQL
+    name: Center and cross-app system evidence
     needs: scope
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -174,51 +196,27 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: Decide whether the suite has anything to check
-        id: relevant
-        env:
-          DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}
-          FORCE_ALL: ${{ needs.scope.outputs.force_all }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
-        # Narrower than the merge gate's filter: this suite reads the center backend, its
-        # migrations, the lockfile it installs from, and the target that invokes it.
-        run: |
-          set -euo pipefail
-          if [ "$FORCE_ALL" = true ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ "$DOCS_ONLY" = true ]; then
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git diff --name-only --no-renames -z "$BASE_SHA" "$HEAD_SHA" -- > "$RUNNER_TEMP/ci-paths"
-          if grep -E '^(apps/control-api/|packages/contracts/|tests/system/|Makefile$|uv\.lock$|pyproject\.toml$|\.github/workflows/)' -zq "$RUNNER_TEMP/ci-paths"; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            result=$?
-            test "$result" -eq 1
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          fi
       - name: Install the pinned Python toolchain runner
-        if: steps.relevant.outputs.run == 'true'
+        if: needs.scope.outputs.integration == 'true'
         run: pipx install uv==0.12.5
       - name: Install media test tools
-        if: steps.relevant.outputs.run == 'true'
+        if: needs.scope.outputs.integration == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y ffmpeg=7:6.1.1-3ubuntu5
           command -v ffmpeg
           command -v ffprobe
       - name: Run the integration suite
-        if: steps.relevant.outputs.run == 'true'
+        if: needs.scope.outputs.integration == 'true'
         # Docker is present on the GitHub-hosted runner, which is what testcontainers uses to
         # start PostgreSQL. No service container is declared here: the suite owns the image
         # tag and the lifecycle, so a developer runs the same database CI does.
         run: make check-integration
+      - name: Run real MediaMTX recording and playback evidence
+        if: needs.scope.outputs.media == 'true'
+        run: make media-system
       - name: Explicit success with nothing to check
-        if: steps.relevant.outputs.run == 'false'
+        if: needs.scope.outputs.integration == 'false'
         run: echo "No paths the integration suite reads were changed."
 
   # Family 4 (harness §7): SYS-22-07 in the two branded browser families the product supports.
@@ -235,53 +233,47 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: Decide whether the browser suite has anything to check
-        id: relevant
-        env:
-          DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}
-          FORCE_ALL: ${{ needs.scope.outputs.force_all }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          if [ "$FORCE_ALL" = true ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ "$DOCS_ONLY" = true ]; then
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git diff --name-only --no-renames -z "$BASE_SHA" "$HEAD_SHA" -- > "$RUNNER_TEMP/ci-paths"
-          if grep -E '^(apps/control-web/|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|Makefile$|\.github/workflows/)' -zq "$RUNNER_TEMP/ci-paths"; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            result=$?
-            test "$result" -eq 1
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          fi
       - name: Set up the pinned Node runtime
-        if: steps.relevant.outputs.run == 'true'
+        if: needs.scope.outputs.browser == 'true'
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version-file: .nvmrc
       - name: Install the pinned package manager and workspace
-        if: steps.relevant.outputs.run == 'true'
+        if: needs.scope.outputs.browser == 'true'
         run: |
           set -euo pipefail
           corepack enable pnpm
           corepack install
           pnpm install --frozen-lockfile
       - name: Install stable Chrome and Edge
-        if: steps.relevant.outputs.run == 'true'
+        if: needs.scope.outputs.browser == 'true'
         run: pnpm --filter control-web exec playwright install --with-deps chrome msedge
+      - name: Install WHEP media test tool
+        if: needs.scope.outputs.media == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ffmpeg=7:6.1.1-3ubuntu5
+          command -v ffmpeg
       - name: Run SYS-22-07 in branded browsers
-        if: steps.relevant.outputs.run == 'true'
+        if: needs.scope.outputs.browser == 'true'
         env:
           PLAYWRIGHT_BRANDED: "1"
         run: make web-e2e
+      - name: Run real MediaMTX WHEP evidence
+        if: needs.scope.outputs.media == 'true'
+        env:
+          PLAYWRIGHT_BRANDED: "1"
+        run: make web-e2e-whep
+      - name: Upload failed browser evidence
+        if: failure() && needs.scope.outputs.browser == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: browser-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: apps/control-web/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Explicit success with nothing to check
-        if: steps.relevant.outputs.run == 'false'
+        if: needs.scope.outputs.browser == 'false'
         run: echo "No paths the browser suite reads were changed."
 
   required:

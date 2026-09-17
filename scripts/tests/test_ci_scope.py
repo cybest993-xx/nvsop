@@ -45,6 +45,57 @@ class CiScopeTest(unittest.TestCase):
             text=True,
         )
 
+    @staticmethod
+    def outputs(result: subprocess.CompletedProcess[str]) -> dict[str, str]:
+        return dict(line.split("=", 1) for line in result.stdout.splitlines())
+
+    def test_edge_and_shared_runtime_inputs_select_real_system_evidence(self) -> None:
+        for name in (
+            "apps/edge-runtime/src/edge_runtime/runtime.py",
+            "tests/fixtures/runtime.json",
+            "deploy/media/compose.yaml",
+        ):
+            with self.subTest(path=name):
+                base = self.git("rev-parse", "HEAD").strip()
+                self.write(name)
+                result = self.scope(base, self.commit("runtime input"))
+                self.assertEqual(0, result.returncode, result.stderr)
+                values = self.outputs(result)
+                is_media = name.startswith("deploy/media/")
+                self.assertEqual("true", values.get("integration"), values)
+                self.assertEqual("true" if is_media else "false", values.get("browser"), values)
+                self.assertEqual("true" if is_media else "false", values.get("media"), values)
+
+    def test_runtime_version_pins_select_their_affected_evidence(self) -> None:
+        for name, integration, browser in (
+            (".python-version", "true", "false"),
+            (".nvmrc", "false", "true"),
+        ):
+            with self.subTest(path=name):
+                base = self.git("rev-parse", "HEAD").strip()
+                self.write(name)
+                result = self.scope(base, self.commit("runtime pin"))
+                self.assertEqual(0, result.returncode, result.stderr)
+                values = self.outputs(result)
+                self.assertEqual(integration, values.get("integration"), values)
+                self.assertEqual(browser, values.get("browser"), values)
+                self.assertEqual("false", values.get("media"), values)
+
+    def test_web_inputs_select_browser_without_center_integration(self) -> None:
+        self.write("apps/control-web/src/main.ts")
+        result = self.scope(self.base, self.commit("web input"))
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(
+            {
+                "docs_only": "false",
+                "force_all": "false",
+                "integration": "false",
+                "browser": "true",
+                "media": "false",
+            },
+            self.outputs(result),
+        )
+
     def test_documentation_only_uses_the_fast_lane(self) -> None:
         for name in (
             "AGENTS.md",
@@ -60,7 +111,10 @@ class CiScopeTest(unittest.TestCase):
         result = self.scope(self.base, head)
 
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual("docs_only=true\nforce_all=false\n", result.stdout)
+        self.assertEqual(
+            "docs_only=true\nforce_all=false\nintegration=false\nbrowser=false\nmedia=false\n",
+            result.stdout,
+        )
 
     def test_mixed_or_unlisted_paths_use_the_code_gate(self) -> None:
         for name in (
@@ -82,7 +136,9 @@ class CiScopeTest(unittest.TestCase):
                 result = self.scope(base, self.commit("mixed change"))
 
                 self.assertEqual(0, result.returncode, result.stderr)
-                self.assertEqual("docs_only=false\nforce_all=false\n", result.stdout)
+                values = self.outputs(result)
+                self.assertEqual("false", values.get("docs_only"), values)
+                self.assertEqual("false", values.get("force_all"), values)
 
     def test_renaming_code_to_markdown_keeps_code_checks(self) -> None:
         self.git("config", "diff.renames", "true")
@@ -94,7 +150,10 @@ class CiScopeTest(unittest.TestCase):
         result = self.scope(base, self.commit("rename code to markdown"))
 
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual("docs_only=false\nforce_all=false\n", result.stdout)
+        self.assertEqual(
+            "docs_only=false\nforce_all=false\nintegration=false\nbrowser=false\nmedia=false\n",
+            result.stdout,
+        )
 
     def test_ci_configuration_and_selector_changes_force_all_gates(self) -> None:
         for name in (
@@ -102,6 +161,7 @@ class CiScopeTest(unittest.TestCase):
             ".github/actions/check/action.yml",
             "Makefile",
             "scripts/ci_scope.py",
+            "scripts/install_actionlint.py",
         ):
             with self.subTest(path=name):
                 base = self.git("rev-parse", "HEAD").strip()
@@ -110,7 +170,10 @@ class CiScopeTest(unittest.TestCase):
                 result = self.scope(base, self.commit("CI changes"))
 
                 self.assertEqual(0, result.returncode, result.stderr)
-                self.assertEqual("docs_only=false\nforce_all=true\n", result.stdout)
+                self.assertEqual(
+                    "docs_only=false\nforce_all=true\nintegration=true\nbrowser=true\nmedia=true\n",
+                    result.stdout,
+                )
 
     def test_unusable_baseline_forces_all_gates(self) -> None:
         self.write("README.md")
@@ -120,7 +183,10 @@ class CiScopeTest(unittest.TestCase):
                 result = self.scope(base, head)
 
                 self.assertEqual(0, result.returncode, result.stderr)
-                self.assertEqual("docs_only=false\nforce_all=true\n", result.stdout)
+                self.assertEqual(
+                    "docs_only=false\nforce_all=true\nintegration=true\nbrowser=true\nmedia=true\n",
+                    result.stdout,
+                )
 
     def test_invalid_target_and_usage_fail_without_success_outputs(self) -> None:
         for refs in ((), (self.base,), (self.base, "missing-head"), (self.base, "--stat")):
@@ -141,13 +207,25 @@ class CiScopeTest(unittest.TestCase):
         result = self.scope(self.base, head)
 
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual("docs_only=true\nforce_all=false\n", result.stdout)
+        self.assertEqual(
+            "docs_only=true\nforce_all=false\nintegration=false\nbrowser=false\nmedia=false\n",
+            result.stdout,
+        )
 
     def test_deleted_paths_still_determine_scope(self) -> None:
         for name, expected in (
-            ("docs/guide.md", "docs_only=true\nforce_all=false\n"),
-            ("source.py", "docs_only=false\nforce_all=false\n"),
-            ("Makefile", "docs_only=false\nforce_all=true\n"),
+            (
+                "docs/guide.md",
+                "docs_only=true\nforce_all=false\nintegration=false\nbrowser=false\nmedia=false\n",
+            ),
+            (
+                "source.py",
+                "docs_only=false\nforce_all=false\nintegration=false\nbrowser=false\nmedia=false\n",
+            ),
+            (
+                "Makefile",
+                "docs_only=false\nforce_all=true\nintegration=true\nbrowser=true\nmedia=true\n",
+            ),
         ):
             with self.subTest(path=name):
                 self.write(name)
@@ -163,7 +241,10 @@ class CiScopeTest(unittest.TestCase):
         result = self.scope(self.base, self.base)
 
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual("docs_only=false\nforce_all=false\n", result.stdout)
+        self.assertEqual(
+            "docs_only=false\nforce_all=false\nintegration=false\nbrowser=false\nmedia=false\n",
+            result.stdout,
+        )
 
 
 if __name__ == "__main__":

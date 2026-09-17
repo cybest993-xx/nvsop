@@ -1,4 +1,4 @@
-.PHONY: check check-docs check-integration change-size hooks lockfile sync policy policy-test migrations contract-base \
+.PHONY: check check-docs docs-check check-integration media-system change-size ci-plan ci-tools ci-lint pr-check issue-check hooks lockfile sync policy policy-test migrations contract-base \
 	contract-capability \
 	contracts contracts-python-check contracts-python-format contracts-python-lint \
 	contracts-python-type contracts-python-unit openapi-export openapi-compat openapi-generate \
@@ -13,6 +13,10 @@ check: lockfile sync hooks policy-test policy migrations contract-base contract-
 	boundaries secret-scan center-format center-lint center-type center-unit \
 	edge-format edge-lint edge-type edge-unit edge-integration \
 	contracts web-format web-lint web-type web-unit web-build
+
+# 文档内循环只需本机 Python 标准库和 Git；最终门禁仍使用 check-docs/check。
+docs-check:
+	python3 scripts/check_repo_policy.py --docs-only
 
 # 文档快线复用冻结工具、仓库政策（含 Markdown 链接）与敏感信息扫描。
 # 本地省略 HEAD 时检查从 BASE 到工作区的差异；CI 传入实际比较提交。
@@ -30,12 +34,39 @@ hooks:
 # started as containers via testcontainers. `center-system` runs §5.15's acceptance scenarios.
 check-integration: sync center-integration center-system
 
+# 固定 digest 的真实 MediaMTX 录像/回放证据；夹具使用独立 Compose project 并在结束时清理。
+media-system: sync
+	$(PYTHON) scripts/test_media_playback.py -- $(PYTEST) tests/system/test_sys_34_media.py -q
+
 # Harness §5 的规模提示：省略 HEAD 时统计已提交、暂存、未暂存及未跟踪文件。
 # CI 传入 BASE 与 HEAD，只读取该 PR 的固定提交。
 BASE ?= origin/main
 HEAD ?=
 change-size:
 	python3 scripts/check_change_size.py "$(BASE)" $(if $(HEAD),"$(HEAD)")
+
+# 与 CI 使用同一个路径选择器，只读说明固定 base/candidate 会运行哪些 lane。
+ci-plan:
+	python3 scripts/ci_scope.py "$(BASE)" "$(if $(HEAD),$(HEAD),HEAD)"
+
+ACTIONLINT_VERSION := 1.7.12
+ACTIONLINT := $(CURDIR)/.tmp/tools/actionlint-$(ACTIONLINT_VERSION)/actionlint
+
+# 工具安装和 lint 分开：安装显式联网且校验官方 SHA256；ci-lint 本身只读取本地固定版本。
+ci-tools:
+	python3 scripts/install_actionlint.py "$(ACTIONLINT)"
+
+ci-lint:
+	test -x "$(ACTIONLINT)" || (echo "ci-lint requires actionlint $(ACTIONLINT_VERSION); run 'make ci-tools' once" >&2; exit 1)
+	"$(ACTIONLINT)" -shellcheck= -pyflakes=
+
+pr-check:
+	test -n "$(PR)" || (echo "usage: make pr-check PR=<number>" >&2; exit 2)
+	python3 scripts/check_pr_readiness.py "$(PR)"
+
+issue-check:
+	test -n "$(ISSUE)" || (echo "usage: make issue-check ISSUE=<number>" >&2; exit 2)
+	python3 scripts/check_issue_readiness.py "$(ISSUE)"
 
 UV ?= $(or $(shell command -v uv 2>/dev/null),$(HOME)/.local/bin/uv)
 

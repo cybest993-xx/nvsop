@@ -14,13 +14,26 @@ class RepositoryPolicyTest(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
         self.files = {
-            Path("AGENTS.md"): "docs/design/repository-harness.md",
+            Path("AGENTS.md"): (
+                "[Docs](docs/README.md)\n[Architecture](docs/engineering/architecture.md)\n"
+            ),
             Path("CONTEXT.md"): "# Language\n",
             Path("Makefile"): "check:\n\ttrue\n",
-            Path("docs/design/repository-harness.md"): "# Harness\n",
+            Path("docs/README.md"): (
+                "[Language](../CONTEXT.md)\n[Workflow](engineering/workflow.md)\n"
+                "[Documentation](engineering/documentation.md)\n"
+                "[Design](design/solution-and-roadmap.md)\n"
+            ),
+            Path("docs/engineering/architecture.md"): "# Architecture\n",
+            Path("docs/engineering/workflow.md"): "# Workflow\n",
+            Path("docs/engineering/documentation.md"): "# Documentation\n",
             Path("docs/design/solution-and-roadmap.md"): "# Current decisions\n",
             Path(".github/workflows/blocking-ci.yml"): (
                 "pull_request:\nCI required\nalways()\nmake check\n"
+                "if: needs.scope.outputs.integration == 'true'\n"
+            ),
+            Path("scripts/ci_scope.py"): (
+                'INTEGRATION_PREFIXES = ("apps/edge-runtime/", "tests/system/")\n'
             ),
             Path(".python-version"): "3.12\n",
             Path("uv.lock"): "version = 1\n",
@@ -44,16 +57,15 @@ class RepositoryPolicyTest(unittest.TestCase):
     def test_accepts_minimum_harness(self) -> None:
         self.assertEqual([], self.check())
 
-    def test_rejects_an_integration_filter_that_omits_system_tests(self) -> None:
+    def test_rejects_a_shared_selector_that_omits_system_tests(self) -> None:
         system_test = self.write("tests/system/test_case.py", "")
         self.write(
-            ".github/workflows/blocking-ci.yml",
-            "pull_request:\nCI required\nalways()\nmake check\n"
-            "integration-gate:\n  run: git diff | grep -E '^(apps/control-api/|Makefile$)'\n",
+            "scripts/ci_scope.py",
+            'INTEGRATION_PREFIXES = ("apps/control-api/", "apps/edge-runtime/")\n',
         )
         self.assertIn(
-            "blocking-ci.yml integration path filter must include tests/system/; "
-            "path filtering is not an exemption (harness §7)",
+            "ci_scope.py integration selection must include tests/system/ and apps/edge-runtime/; "
+            "path filtering is an optimization, not an exemption",
             self.check(str(system_test)),
         )
 
@@ -86,6 +98,13 @@ class RepositoryPolicyTest(unittest.TestCase):
         errors = self.check(str(path.relative_to(self.root)))
         self.assertTrue(
             any("root test has no declared cross-app owner" in error for error in errors)
+        )
+
+    def test_rejects_document_without_a_reader_entry(self) -> None:
+        path = self.write("docs/design/orphan.md", "# Orphan\n")
+        self.assertIn(
+            "unindexed Markdown document: docs/design/orphan.md; link from a reachable owner",
+            self.check(str(path)),
         )
 
     def test_rejects_broken_local_markdown_link(self) -> None:

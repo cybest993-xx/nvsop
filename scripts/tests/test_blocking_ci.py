@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-import tempfile
 import textwrap
 import unittest
 from pathlib import Path
@@ -66,57 +65,52 @@ class BlockingCiTest(unittest.TestCase):
                     self.assertNotEqual(0, result.returncode, result.stdout)
 
     def test_scope_outputs_must_be_complete_and_consistent(self) -> None:
-        for docs_only, force_all, succeeds in (
-            ("true", "false", True),
-            ("false", "true", True),
-            ("false", "false", True),
-            ("true", "true", False),
-            ("", "", False),
-            ("unknown", "false", False),
+        for docs_only, force_all, integration, browser, media, succeeds in (
+            ("true", "false", "false", "false", "false", True),
+            ("false", "true", "true", "true", "true", True),
+            ("false", "false", "false", "false", "false", True),
+            ("false", "false", "true", "false", "false", True),
+            ("false", "false", "false", "true", "false", True),
+            ("false", "false", "true", "true", "false", True),
+            ("false", "false", "true", "true", "true", True),
+            ("true", "true", "true", "true", "true", False),
+            ("true", "false", "true", "false", "false", False),
+            ("false", "false", "false", "true", "true", False),
+            ("", "", "", "", "", False),
+            ("unknown", "false", "false", "false", "false", False),
         ):
-            with self.subTest(scope=(docs_only, force_all)):
+            with self.subTest(scope=(docs_only, force_all, integration, browser, media)):
                 result = self.run_step(
                     "scope",
                     "Validate scope outputs",
-                    {"DOCS_ONLY": docs_only, "FORCE_ALL": force_all},
+                    {
+                        "DOCS_ONLY": docs_only,
+                        "FORCE_ALL": force_all,
+                        "INTEGRATION": integration,
+                        "BROWSER": browser,
+                        "MEDIA": media,
+                    },
                 )
                 self.assertEqual(succeeds, result.returncode == 0, result.stderr)
 
-    def test_suite_filters_honor_shared_scope_and_propagate_git_errors(self) -> None:
-        steps = {
-            "integration-gate": "Decide whether the suite has anything to check",
-            "browser-gate": "Decide whether the browser suite has anything to check",
-        }
-        for job, step in steps.items():
-            for docs_only, force_all, base, head, expected in (
-                ("true", "false", "unused-base", "unused-head", "run=false\n"),
-                ("false", "true", "HEAD", "HEAD", "run=true\n"),
-                ("false", "false", "HEAD", "HEAD", "run=false\n"),
-                ("false", "false", "HEAD", "missing-head", ""),
-            ):
-                with (
-                    self.subTest(job=job, scope=(docs_only, force_all), head=head),
-                    tempfile.TemporaryDirectory() as temporary,
-                ):
-                    output = Path(temporary) / "output"
-                    output.touch()
-                    result = self.run_step(
-                        job,
-                        step,
-                        {
-                            "DOCS_ONLY": docs_only,
-                            "FORCE_ALL": force_all,
-                            "BASE_SHA": base,
-                            "HEAD_SHA": head,
-                            "GITHUB_OUTPUT": str(output),
-                            "RUNNER_TEMP": temporary,
-                        },
-                    )
-                    self.assertEqual(expected, output.read_text())
-                    if head == "missing-head":
-                        self.assertNotEqual(0, result.returncode)
-                    else:
-                        self.assertEqual(0, result.returncode, result.stderr)
+    def test_expensive_jobs_consume_the_shared_scope_without_second_path_filter(self) -> None:
+        workflow = WORKFLOW.read_text()
+        self.assertIn("needs.scope.outputs.integration == 'true'", workflow)
+        self.assertIn("needs.scope.outputs.browser == 'true'", workflow)
+        self.assertIn("needs.scope.outputs.media == 'true'", workflow)
+        self.assertIn("run: make media-system", workflow)
+        self.assertIn("run: make web-e2e-whep", workflow)
+        self.assertNotIn("git diff --name-only --no-renames -z", workflow)
+        self.assertNotIn("steps.relevant.outputs.run", workflow)
+
+    def test_browser_failure_upload_is_pinned_and_limited_to_playwright_output(self) -> None:
+        workflow = WORKFLOW.read_text()
+        self.assertIn(
+            "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2",
+            workflow,
+        )
+        self.assertIn("path: apps/control-web/test-results/", workflow)
+        self.assertNotIn(".tmp/dev-main", workflow)
 
 
 if __name__ == "__main__":

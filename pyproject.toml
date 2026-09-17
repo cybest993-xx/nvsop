@@ -1,6 +1,6 @@
 # Repository-wide Python workspace root. Intentionally not a package: this repository is a
 # product monorepo, not a distribution. Only real workspaces are members
-# (docs/design/repository-harness.md §2).
+# (docs/engineering/architecture.md, layout and manifests).
 #
 # `apps/edge-runtime/` is deliberately NOT a member. Its judgment core is standard-library
 # only (edge-autonomy.md §5.11); membership would give it a resolvable path to every

@@ -29,7 +29,8 @@ make dev-status
 - [`docs/deployment/configuration.md`](docs/deployment/configuration.md) — 中心、Web 与边缘运行配置
 - [`docs/deployment/limitations.md`](docs/deployment/limitations.md) — 已知限制与仍待现场验证的能力
 - [`docs/deployment/upgrade.md`](docs/deployment/upgrade.md) — API、迁移、边缘兼容、NVIDIA 基座与依赖升级
-- [`docs/design/repository-harness.md`](docs/design/repository-harness.md) — 仓库规则兼容路由；新工作按其中的直接文档进入
+- [工程工作流](docs/engineering/workflow.md) — 分支、验证、独立审查、PR/CI、合并与清理
+- [文档管理](docs/engineering/documentation.md) — 新增、更新、迁移和删除规范；`make docs-check` 离线检查入口与本地链接
 - [`docs/research/target-environment-validation-matrix.md`](docs/research/target-environment-validation-matrix.md) — GPU、相机、连接器、离线、性能与长稳验证
 
 当前优先交付完整软件 MVP，必要验证随实现完成，全量目标环境验证分期推进。交付范围、顺序与退出条件以 [`solution-and-roadmap.md` §八–九](docs/design/solution-and-roadmap.md) 为准，实时进度见 [#1](https://github.com/cybest993-xx/nvsop/issues/1)。

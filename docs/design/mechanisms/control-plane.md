@@ -84,9 +84,9 @@
 
 **停用与删除**：可变配置对象（工位、相机、推理后端、连接器、用户）用**停用**表达下线，可逆，历史记录与关联关系完整保留；**删除**是另一项按权限开放的操作。模板版本不适用停用——它是不可变记录，回滚即重新绑定历史版本。停用用户必须同时吊销其全部会话。
 
-**长任务进度**：REST 轮询 `GET /api/v1/jobs/{id}`。看板 SSE 在运行切片随上报入口一起落地。
+**长任务进度**：REST 轮询 `GET /api/v1/jobs/{id}`。运行观测的 SSE 展示链路已经实现：中心 [monitor SSE 路由](../../../apps/control-api/src/factory_sop/monitor/adapters/routes.py)的 `/api/v1/monitor/stream` 投影已持久化的上报事实，Web [概览页](../../../apps/control-web/src/modules/overview/OverviewView.vue)订阅该流；这只表示现有展示链路可用，不代表 §九 P9 整体完成。P9 中 TimescaleDB/hypertable 原生压缩等剩余验收仍按原门禁追踪，SSE 本身也不进入实时防错链路。
 
-**推迟的契约（显式清单，非沉默省略）**：推理机→中心的上报契约（`ReportedDecision`、`ReportedViolation`、`ReportedHealth`）与中心→推理机的拉取契约（`TemplateBundle`、`DeviceConfigBundle`）留到运行切片，用真实录制 chunk 与真机行为确定。seam 的名称、拥有模块与落表位置已在 §六/§七 固定。`packages/contracts/` 首切片只放导出的 `openapi.json`。理由：ADR-0003 的兼容性门禁为保护真实调用方而设——把未见过真实数据的猜测放进去只会锁死自己。
+**机器契约按已实现的公共格式维护**：共享包 [`nvsop_contracts`](../../../packages/contracts/src/nvsop_contracts/__init__.py) 已包含 `ConfigurationBundle`、`ReportedDecision` 与 `ReportedHealth`，不再只有首切片的 `openapi.json`。字段与版本以 [`configuration.py`](../../../packages/contracts/src/nvsop_contracts/configuration.py) 和 [`reports.py`](../../../packages/contracts/src/nvsop_contracts/reports.py) 为准；配置确认、历史判定 v2 及旧新组合见[升级兼容说明](../../deployment/upgrade.md#中心与边缘运行时)。原设计的模板/设备信息由当前配置束表达，不另建平行 DTO；未实现的上报内容和 ADR-0003 通用启动握手仍保留各自的原验收归属，局部握手不代表全量完成。
 
 **但拉取契约的作用域现在就定：按请求方主机身份裁剪。** `DeviceConfigBundle` 只含该推理机自己绑定的工位、相机、推理后端、连接器与点位，以及这些工位的运行参数生效值（§5.3 已解析，不是默认值加覆盖组两份）与物理执行权状态；不含其他推理机的任何拓扑。`TemplateBundle` 同理，只含该机绑定的模板版本。
 
@@ -100,7 +100,7 @@
 
 ## 5.16 模块形状与切片顺序
 
-**【已定】`api.py` 是跨模块契约，不是本模块的对外入口全集。** 每模块有一个用例层（`usecases/`），授权在此强制；`api.py` 只暴露**其他模块真正调用的那个子集**。例如 `device` 的约 40 个配置用例中，只有 `resolve_station_topology`、`report_health` 这类会被 `template`/`monitor` 调用的进 `api.py`，其余停在用例层。
+**【已定】`api.py` 是跨模块契约，不是本模块的对外入口全集。** 每模块有一个用例层（`usecases/`），授权在此强制；`api.py` 只暴露**其他模块真正调用的那个子集**。例如 `device` 的配置用例中，只有被 `template`/`monitor` 等其他拥有模块实际调用的能力进入 `api.py`，仅供 HTTP 使用的用例停在所属用例层。
 
 理由：`api.py` 的存在理由是限制跨模块耦合面。把只有 HTTP 一个调用者的用例也塞进去，会让"跨模块契约"与"对外 API 全集"混成一个文件，`import-linter` 也就无法再告诉我们哪些行为真的被别人依赖。反过来，若让配置类模块的 CRUD 一律穿过 `api.py`，得到的是 HTTP handler → `api.py` → repository → 表，中间那层不贡献任何东西。
 

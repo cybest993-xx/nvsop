@@ -113,7 +113,7 @@
 
 中心后台是**模块化单体**：业务模块在一个 FastAPI 部署单元内通过进程内接口协作，各自拥有行为、表和迁移；首版不引入内部 HTTP、服务网格、消息总线或分布式事务。
 
-首切片持久化只启用 PostgreSQL、MinIO 与 Redis；当前 `monitor` 上报镜像已由 [`0031_monitor_report_mirror.py`](../../apps/control-api/migrations/versions/0031_monitor_report_mirror.py) 落在普通 PostgreSQL 表，TimescaleDB/hypertable 压缩仍是 §九 P9 的批准目标，尚未在迁移中启用。推理机本地状态用 SQLite（§5.7）。
+首切片持久化只启用 PostgreSQL、MinIO 与 Redis；`monitor` 记录存储与压缩的当前实现状态见[证据与保留机制](mechanisms/evidence-and-retention.md)，TimescaleDB/hypertable 压缩仍是 §九 P9 的批准目标。推理机本地状态用 SQLite（§5.7）。
 
 **训练侧 `metadata_db` 与中心后台合并为一个 Postgres 实例、两个 schema**（Q35）：中心业务一个 schema，原样复用的训练微服务一个 schema。训练是低频活动，不值得为它单立一个实例与一套独立的备份、监控与升级流程；原样复用的训练服务只改连接串，不改代码。两个 schema 由不同的数据库角色持有，中心迁移不触碰训练 schema，训练服务也不读中心表——它们之间没有跨 schema 外键。
 
@@ -126,7 +126,7 @@
 │    ├── /api/v1 → FastAPI               │    →SSE→supervisor 判定     │
 │    └── 反代：标注 UI / 训练微服务       ├── supervisor（锁存/处置/    ├── supervisor
 ├── FastAPI 后台（单一入口点）            │    上报/对账/证据切片）      │
-├── PostgreSQL（Timescale P9 待落地）    ├── 连接器运行时              ├── 连接器运行时
+├── PostgreSQL（+Timescale 后置）         ├── 连接器运行时              ├── 连接器运行时
 ├── Redis / MinIO / ARQ worker           ├── mediamtx                 ├── mediamtx
 └── 训练微服务（原样复用）+ metadata_db   └── SQLite 本地状态          └── SQLite
                                                ↑                          ↑
@@ -166,7 +166,7 @@
 
 **依赖规则**：判定核心不依赖任何相机 SDK、推理框架或连接器实现，只消费归一化观测；中心各模块各自拥有数据表，不跨模块直接读写；前端只调后端用例，不承载判定规则。
 
-**【已定】边界靠机械检查，不靠评审。** 每个中心模块一个 Python 包，包内 `api.py` 是唯一允许的跨模块导入目标；`import-linter` 契约强制中心/边缘包间依赖方向，基座契约测试 [`test_stream_health_patch.py`](../../tests/contract/base/test_stream_health_patch.py) 单独检查 **`vendor/` 内的 hook 只调用登记的健康事件入口，且该入口不把基座传递到其他 `edge-runtime` 内部模块**（§5.11）。这样“补丁面只剩一处纯追加”是可检查事实，而不是依赖评审记忆。物理表名带模块前缀（§七），迁移所有权由仓库门禁静态检查。
+**【已定】边界靠机械检查，不靠评审。** 每个中心模块一个 Python 包，包内 `api.py` 是唯一允许的跨模块导入目标；`import-linter` 契约强制中心/边缘包间依赖方向，基座契约测试单独检查 **`vendor/` 内的 hook 只调用登记的健康事件入口，且该入口不把基座传递到其他 `edge-runtime` 内部模块**（§5.11）。这样“补丁面只剩一处纯追加”是可检查事实，而不是依赖评审记忆。物理表名带模块前缀（§七），迁移所有权由仓库门禁静态检查。
 
 **【已定】跨模块用例共享一个请求级事务**（[ADR-0002](../adr/0002-request-scoped-unit-of-work.md)）：HTTP 适配层开启并提交单个 Unit of Work，模块门面只参与、不自行提交，`Session` 经请求作用域注入。代价是事务边界不再兜底模块边界，故上述机械检查是本决定的前提而非可选增强。
 
@@ -209,7 +209,7 @@
 - **连接器域**（`device`，仅配置）：`device_connector`（类型 = `hikvision_isapi` / `board_card`、连接参数、健康状态、**该适配器的能力声明**：投递方式、最大投递延迟、是否保序、是否可能丢边沿、时间戳来源，§5.8）、`device_connector_point`（方向 in/out、点位号、语义标签如"工件到位"/"停线联锁"、外键 → connector 与 station）。模板按语义标签引用点位，不写死设备地址。**工位可以没有任何连接器。**
 - **模板域**（`template`）：`template_sop`、`template_version`（不可变，含 Excel 导入引用、actions.json、vlm_prompts、**运行参数默认值**、顺序性声明、sha256、发布者与发布时刻）、`template_draft`（可编辑，含 `revision` 乐观锁列）、`template_station_binding`（`desired_version` / `reported_version`，后者由推理机上报，§5.3）。
 - **训练数据域**（`dataset`）：`dataset_training_dataset`、`dataset_member`（**数据集内的视频**：MinIO key、来源、大小、sha256、时长、编码）、`dataset_action_list_revision`、`dataset_annotation_context`、`dataset_annotation_submission`、`dataset_annotation_execution`（动作时间段标注及其不可变执行候选）、`dataset_usage_check`（DDM/VLM 用途、状态、原因）、`dataset_artifact`（生成的 DDM `annotation.json` 等派生制品及摘要）。上传、标注、用途检查、转换和训练是不同状态，不合并成一个"成功"。
-- **上报镜像域**（`monitor`）：`monitor_sop_instance`（起止、闭合原因、边界信号来源、上报时刻）、`monitor_decision`（判定结果 + 原因码 + 模板版本 + 推理机自报模型标识）、`monitor_observation`（动作编号与外部信号同表）、`monitor_stream_health`（含时间锚定偏移）、`monitor_violation`（kind、锁存标志、来源推理机）、`monitor_disposal`（action、执行状态、幂等键）。当前镜像表均落在普通 PostgreSQL；§九 P9 才启用 Timescale hypertable 与记录原生压缩。全部按事件 id 幂等 upsert，权威在推理机本地；违规与处置的执行权威同样在推理机，这两张表是归档载体（[ADR-0010](../adr/0010-alert-merges-into-monitor.md)）。
+- **上报镜像域**（`monitor`）：`monitor_sop_instance`（起止、闭合原因、边界信号来源、上报时刻）、`monitor_decision`（判定结果 + 原因码 + 模板版本 + 推理机自报模型标识）、`monitor_observation`（动作编号与外部信号同表）、`monitor_stream_health`（含时间锚定偏移）、`monitor_violation`（kind、锁存标志、来源推理机）、`monitor_disposal`（action、执行状态、幂等键）。记录存储与压缩的当前实现状态见[证据与保留机制](mechanisms/evidence-and-retention.md)。全部按事件 id 幂等 upsert，权威在推理机本地；违规与处置的执行权威同样在推理机，这两张表是归档载体（[ADR-0010](../adr/0010-alert-merges-into-monitor.md)）。
 - **证据与复核域**（`evidence`）：`evidence_evidence`（MinIO key、类型、**锚点时刻、窗口前后余量、素材代次、发起来源=自动/再切片**）、`evidence_reclip_request`（新窗口参数、目标推理机、状态、发起人、失败原因如"素材已过期"）、`evidence_review`（复核结论、复核人、指向具体哪条证据）。
 - **基础域**（`auth`）：`auth_user`（含停用状态）、`auth_role`、`auth_permission`、`auth_role_permission`、`auth_session`。**不设 `auth_audit_log`**（§5.15）。
 - **作业域**（`job`）：`job_application_job`（异步任务权威与 outbox；ADR-0004）。

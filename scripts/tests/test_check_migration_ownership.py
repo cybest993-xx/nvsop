@@ -95,6 +95,12 @@ class MigrationOwnershipTest(unittest.TestCase):
             errors,
         )
 
+    def test_registry_change_is_observed_without_editing_the_checker(self) -> None:
+        registry = Path(self.temp_dir.name) / "pyproject.toml"
+        registry.write_text('[tool.nvsop]\ncenter_modules = ["synthetic"]\n', encoding="utf-8")
+        self.write_create("0001_synthetic_create_item.py", "synthetic_item")
+        self.assertEqual([], check_migrations(self.versions, pyproject=registry))
+
     def test_rejects_duplicate_sequence_number(self) -> None:
         self.write_create("0001_auth_create_user.py", "auth_user", revision="a")
         self.write_create("0001_device_create_camera.py", "device_camera", revision="b")

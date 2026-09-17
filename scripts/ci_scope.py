@@ -15,9 +15,15 @@ INTEGRATION_PREFIXES = (
     "tests/fixtures/",
     "deploy/media/",
 )
-INTEGRATION_FILES = {"Makefile", "uv.lock", "pyproject.toml"}
+INTEGRATION_FILES = {"Makefile", "uv.lock", "pyproject.toml", ".python-version"}
 BROWSER_PREFIXES = ("apps/control-web/",)
-BROWSER_FILES = {"Makefile", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"}
+BROWSER_FILES = {
+    "Makefile",
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    ".nvmrc",
+}
 MEDIA_PREFIXES = ("deploy/media/",)
 MEDIA_FILES = {
     "scripts/test_media_playback.py",

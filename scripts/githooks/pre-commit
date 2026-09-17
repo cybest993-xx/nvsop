@@ -37,7 +37,9 @@ def git(*args: str) -> str:
 
 
 def staged_files(diff_filter: str) -> list[Path]:
-    output = git("diff", "--cached", "--name-only", f"--diff-filter={diff_filter}", "-z")
+    output = git(
+        "diff", "--cached", "--name-only", "--no-renames", f"--diff-filter={diff_filter}", "-z"
+    )
     return [Path(name) for name in output.split("\0") if name]
 
 

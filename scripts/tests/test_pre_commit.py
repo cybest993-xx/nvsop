@@ -70,6 +70,18 @@ class PreCommitTest(unittest.TestCase):
         self.assertEqual(1, result.returncode, result.stderr)
         self.assertIn("vendor", result.stderr)
 
+    def test_vendor_rename_outside_vendor_cannot_escape_the_patch_boundary(self) -> None:
+        source = self.root / "vendor/upstream.py"
+        source.parent.mkdir()
+        source.write_text("x = 1\n")
+        self.git("add", "vendor/upstream.py")
+        self.git("commit", "--quiet", "-m", "fixture vendor")
+        (self.root / "apps").mkdir()
+        self.git("mv", "vendor/upstream.py", "apps/upstream.py")
+        result = self.hook()
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("vendor/upstream.py", result.stderr)
+
     def test_missing_formatter_reports_the_unperformed_check(self) -> None:
         (self.root / ".venv/bin/ruff").unlink()
         (self.root / "sample.py").write_text("x = 1\n")

@@ -66,6 +66,21 @@ class CiScopeTest(unittest.TestCase):
                 self.assertEqual("true" if is_media else "false", values.get("browser"), values)
                 self.assertEqual("true" if is_media else "false", values.get("media"), values)
 
+    def test_runtime_version_pins_select_their_affected_evidence(self) -> None:
+        for name, integration, browser in (
+            (".python-version", "true", "false"),
+            (".nvmrc", "false", "true"),
+        ):
+            with self.subTest(path=name):
+                base = self.git("rev-parse", "HEAD").strip()
+                self.write(name)
+                result = self.scope(base, self.commit("runtime pin"))
+                self.assertEqual(0, result.returncode, result.stderr)
+                values = self.outputs(result)
+                self.assertEqual(integration, values.get("integration"), values)
+                self.assertEqual(browser, values.get("browser"), values)
+                self.assertEqual("false", values.get("media"), values)
+
     def test_web_inputs_select_browser_without_center_integration(self) -> None:
         self.write("apps/control-web/src/main.ts")
         result = self.scope(self.base, self.commit("web input"))

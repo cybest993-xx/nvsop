@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import ssl
 import sys
 import time
@@ -26,6 +27,8 @@ from factory_sop.dataset.client import (  # noqa: E402
 
 SAMPLE_DATASET_NAME = "开发样例数据集"
 SAMPLE_VIDEO_FILENAME = "dev-sample.mp4"
+MEDIA_RANGE_END = 31
+MEDIA_CONTENT_RANGE = re.compile(r"^bytes (\d+)-(\d+)/(\d+)$")
 
 
 def required_string(value: object, name: str) -> str:
@@ -35,7 +38,7 @@ def required_string(value: object, name: str) -> str:
 
 
 def media_probe(url: str, cookie: str, ca: Path) -> dict[str, object]:
-    request = Request(url, headers={"Cookie": cookie, "Range": "bytes=0-31"})
+    request = Request(url, headers={"Cookie": cookie, "Range": f"bytes=0-{MEDIA_RANGE_END}"})
     try:
         if urlsplit(url).scheme == "https":
             context = ssl.create_default_context(cafile=str(ca))
@@ -43,7 +46,7 @@ def media_probe(url: str, cookie: str, ca: Path) -> dict[str, object]:
         else:
             response_context = urlopen(request, timeout=20)
         with response_context as response:
-            body = response.read(32)
+            body = response.read(MEDIA_RANGE_END + 2)
             if not body:
                 raise DatasetImportError("标注媒体响应为空")
             if response.status != 206:
@@ -51,8 +54,32 @@ def media_probe(url: str, cookie: str, ca: Path) -> dict[str, object]:
                     f"标注媒体 Range 请求必须返回 HTTP 206，实际为 {response.status}"
                 )
             content_range = response.headers.get("Content-Range")
-            if not content_range or not content_range.startswith("bytes 0-"):
+            match = MEDIA_CONTENT_RANGE.fullmatch(content_range or "")
+            if match is None:
                 raise DatasetImportError("标注媒体 Range 响应缺少有效 Content-Range")
+            range_start, range_end, total_size = (int(value) for value in match.groups())
+            expected_end = min(MEDIA_RANGE_END, total_size - 1) if total_size > 0 else -1
+            if range_start != 0 or range_end != expected_end:
+                raise DatasetImportError(
+                    f"标注媒体 Range 响应与 bytes=0-{MEDIA_RANGE_END} 不一致：{content_range!r}"
+                )
+            expected_length = range_end - range_start + 1
+            if len(body) != expected_length:
+                raise DatasetImportError(
+                    f"标注媒体 Range 响应体长度应为 {expected_length}，实际为 {len(body)}"
+                )
+            content_length = response.headers.get("Content-Length")
+            if content_length is not None:
+                try:
+                    declared_length = int(content_length)
+                except ValueError as error:
+                    raise DatasetImportError(
+                        f"标注媒体 Content-Length 无效：{content_length!r}"
+                    ) from error
+                if declared_length != len(body):
+                    raise DatasetImportError(
+                        f"标注媒体 Content-Length 应为 {len(body)}，实际为 {declared_length}"
+                    )
             content_type = response.headers.get("Content-Type")
             if not content_type or not content_type.lower().startswith("video/"):
                 raise DatasetImportError(f"标注媒体必须返回视频类型，实际为：{content_type!r}")

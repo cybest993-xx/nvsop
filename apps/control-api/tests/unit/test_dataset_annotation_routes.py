@@ -867,7 +867,10 @@ def test_legacy_split_is_async_and_video_access_redirects_to_separate_media_orig
         follow_redirects=False,
     )
     assert clip_redirect.status_code == 302
-    assert "/annotation/media/clips/" in clip_redirect.headers["location"]
+    assert clip_redirect.headers["location"] == (
+        "https://annotation-media.test:8444/annotation/media/clips/"
+        f"{split.json()['submission_id']}/{execution_id}/0/download"
+    )
 
     archive_redirect = client.get(
         f"/api/annotation/api/v1/annotation-submissions/{split.json()['submission_id']}"

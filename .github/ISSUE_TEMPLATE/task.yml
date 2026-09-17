@@ -1,0 +1,137 @@
+name: NVSOP work item
+description: Dispatch one implementation, validation, decision, or needs-info task with an explicit outcome and bounded evidence plan.
+title: "[P?][S???] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use one issue for one primary outcome. Keep implementation and deferred validation separate. Reuse current seams and evidence before adding new abstractions or tests.
+
+  - type: dropdown
+    id: task_type
+    attributes:
+      label: Task type
+      description: Choose the work this issue actually owns.
+      options:
+        - implementation
+        - validation
+        - decision
+        - needs-info
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - P0
+        - P1
+        - P2
+    validations:
+      required: true
+
+  - type: input
+    id: plan_id
+    attributes:
+      label: Plan ID
+      description: Stable planning identifier, for example S042.
+      placeholder: S000
+    validations:
+      required: true
+
+  - type: input
+    id: parent
+    attributes:
+      label: Parent map
+      description: Parent delivery map or issue. Use #1 for the current delivery map unless another map is authoritative.
+      value: "#1"
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome
+      description: State the single observable result this issue owns. Describe what becomes true, not a preferred internal implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: authority
+    attributes:
+      label: Authority and current evidence
+      description: Link the roadmap/mechanism/ADR/source issue and name the current code, PR, or measured fact that must be checked before implementation. Use N/A only when there is genuinely no prior authority.
+    validations:
+      required: true
+
+  - type: textarea
+    id: seam
+    attributes:
+      label: Existing seam and reuse
+      description: Name the owning module/public entry point and existing implementation/tests to reuse. If no seam exists, state where you searched and why a new one is required.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: List the allowed behavior/state changes. Preserve unrelated fields, history, and user work.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Write checkable behavior or evidence criteria. Keep software-owned criteria here; link deferred field/hardware/full-E2E validation instead of duplicating it.
+      placeholder: |
+        - [ ] AC1: ...
+        - [ ] AC2: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and blockers
+      description: List only real blockers. GitHub native issue dependencies are authoritative. Decisions or hardware block only work that truly requires them. Write "None" when unblocked.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence plan
+      description: Select evidence by risk using repository-verification.md. Reuse existing evidence first; ordinary gaps normally need 1-3 independent scenarios, low-risk work may need no new tests, and target-environment evidence belongs in linked validation issues when allowed by the roadmap.
+    validations:
+      required: true
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of scope
+      description: Name the nearest tempting expansions that this issue does not authorize, especially parallel implementations, speculative fallback/retry/compatibility layers, generic frameworks, or unrelated cleanup.
+    validations:
+      required: true
+
+  - type: textarea
+    id: traceability
+    attributes:
+      label: Traceability and linked validation
+      description: Link source acceptance text and any deferred validation issue. Do not copy a broad historical checklist unless this issue owns it.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: readiness
+    attributes:
+      label: Dispatch readiness
+      options:
+        - label: The issue has one primary outcome and its scope is independently landable.
+          required: true
+        - label: The evidence plan is risk-based rather than a universal full-suite or test-count requirement.
+          required: true
+        - label: Any unresolved prerequisite is represented as a real blocker or needs-info state instead of being hidden inside implementation work.
+          required: true

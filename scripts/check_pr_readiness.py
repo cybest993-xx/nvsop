@@ -42,6 +42,7 @@ CENTER_STATE_OWNER = re.compile(
     r"^apps/control-api/src/factory_sop/[^/]+/(?:model|repository)\.py$"
 )
 CENTER_MIGRATIONS = "apps/control-api/migrations/versions/"
+EDGE_STATE_OWNER_PREFIX = "apps/edge-runtime/src/edge_runtime/local_state/"
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,7 @@ def requires_architecture_review(changed_files: list[str] | tuple[str, ...]) -> 
         path in ARCHITECTURE_AUTHORITY_FILES
         or path in ARCHITECTURE_COMPOSITION_FILES
         or path.startswith(CENTER_MIGRATIONS)
+        or path.startswith(EDGE_STATE_OWNER_PREFIX)
         or CENTER_PUBLIC_SEAM.fullmatch(path) is not None
         or CENTER_STATE_OWNER.fullmatch(path) is not None
         or any(path.startswith(prefix) for prefix in ARCHITECTURE_AUTHORITY_PREFIXES)
@@ -248,12 +250,18 @@ def pr_files(repository: str, number: str) -> list[str] | None:
         return None
     if not isinstance(pages, list) or not all(isinstance(page, list) for page in pages):
         return None
-    return [
-        str(item["filename"])
-        for page in pages
-        for item in page
-        if isinstance(item, dict) and isinstance(item.get("filename"), str)
-    ]
+    files: list[str] = []
+    for page in pages:
+        for item in page:
+            if not isinstance(item, dict):
+                continue
+            filename = item.get("filename")
+            previous_filename = item.get("previous_filename")
+            if isinstance(filename, str):
+                files.append(filename)
+            if isinstance(previous_filename, str):
+                files.append(previous_filename)
+    return list(dict.fromkeys(files))
 
 
 def main(argv: list[str]) -> int:

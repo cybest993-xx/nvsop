@@ -4,7 +4,13 @@ import subprocess
 import unittest
 from unittest.mock import Mock, patch
 
-from scripts.check_pr_readiness import evaluate, protection_state
+from scripts.check_pr_readiness import (
+    evaluate,
+    pr_files,
+    protection_state,
+    requires_architecture_review,
+    requires_dispatch_impact,
+)
 
 
 class PrReadinessTest(unittest.TestCase):
@@ -154,6 +160,33 @@ class PrReadinessTest(unittest.TestCase):
         reviewed = evaluate(pr, "protected", "agent/test/task", "abc", changed)
         self.assertTrue(reviewed.ready)
         self.assertIn("architecture_review_evidence=present", reviewed.lines)
+
+    def test_edge_state_owner_change_requires_architecture_review(self) -> None:
+        self.assertTrue(
+            requires_architecture_review(
+                ["apps/edge-runtime/src/edge_runtime/local_state/synthetic_store.py"]
+            )
+        )
+
+    @patch("scripts.check_pr_readiness.run")
+    def test_renamed_authority_keeps_previous_path_for_dispatch_impact(
+        self, run_mock: Mock
+    ) -> None:
+        run_mock.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                '[[{"filename":"docs/engineering/architecture-renamed.md",'
+                '"previous_filename":"docs/engineering/architecture.md",'
+                '"status":"renamed"}]]'
+            ),
+            stderr="",
+        )
+        files = pr_files("owner/repo", "123")
+        self.assertIsNotNone(files)
+        assert files is not None
+        self.assertIn("docs/engineering/architecture.md", files)
+        self.assertTrue(requires_dispatch_impact(files))
 
     def test_missing_ci_or_unreadable_protection_never_claims_automated_readiness(self) -> None:
         result = evaluate(

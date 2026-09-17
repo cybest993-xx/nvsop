@@ -4,7 +4,7 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 
 ## Conventions
 
-- **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.
+- **Create dispatched work**: follow [`issue-authoring.md`](issue-authoring.md) and the repository issue form `.github/ISSUE_TEMPLATE/task.yml`. When creating through `gh`, render the same sections; do not bypass the authoring rules with an unstructured body.
 - **Read an issue**: `gh issue view <number> --comments`, filtering comments by `jq` and also fetching labels.
 - **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
 - **Comment on an issue**: `gh issue comment <number> --body "..."`
@@ -12,6 +12,8 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 - **Close**: `gh issue close <number> --comment "..."`
 
 Infer the repo from `git remote -v` — `gh` does this automatically when run inside a clone.
+
+Task type, readiness, scope, acceptance, blockers and evidence rules are authoritative in [`issue-authoring.md`](issue-authoring.md). Keep tracker mechanics here rather than duplicating those rules.
 
 ## Pull requests as a triage surface
 

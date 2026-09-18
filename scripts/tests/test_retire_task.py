@@ -332,11 +332,12 @@ class RetireTaskTest(unittest.TestCase):
         branch = "agent/a/demo"
         candidate, merge_commit, task = self.make_merged_task(branch)
         config = self.repo / ".git" / "config"
-        config.chmod(0o000)
-        self.addCleanup(lambda: config.chmod(0o600) if config.exists() else None)
-
-        result = self.run_cli(branch, candidate, merge_commit)
-        config.chmod(0o600)
+        original_config = config.read_bytes()
+        config.write_bytes(b"[invalid\n")
+        try:
+            result = self.run_cli(branch, candidate, merge_commit)
+        finally:
+            config.write_bytes(original_config)
 
         self.assertNotEqual(0, result.returncode)
         self.assert_branch_exists(branch)

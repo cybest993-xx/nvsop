@@ -24,7 +24,8 @@ jobs:
     timeout-minutes: 10
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }} # pragma: allowlist secret
+      # pragma: allowlist nextline secret
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_MODEL: ${{ vars.AI_REVIEW_MODEL || 'gpt-5.6-luna' }}
       OPENAI_BASE_URL: ${{ vars.AI_REVIEW_BASE_URL || 'https://api.openai.com/v1' }}
       AI_REVIEW_REASONING_EFFORT: ${{ vars.AI_REVIEW_REASONING_EFFORT || 'medium' }}

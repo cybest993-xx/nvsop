@@ -97,6 +97,9 @@ class PrReadinessTest(unittest.TestCase):
                     '[{"type":"pull_request"},'
                     '{"type":"required_status_checks","parameters":{'
                     '"strict_required_status_checks_policy":true,'
+                    '"required_status_checks":[{"context":"Another check"}]}},'
+                    '{"type":"required_status_checks","parameters":{'
+                    '"strict_required_status_checks_policy":true,'
                     '"required_status_checks":[{"context":"CI required"}]}}]'
                 ),
                 stderr="",

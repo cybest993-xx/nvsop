@@ -245,30 +245,28 @@ def protection_state(repository: str, branch: str) -> str:
         (rule for rule in payload if isinstance(rule, dict) and rule.get("type") == "pull_request"),
         None,
     )
-    required_status_rule = next(
-        (
-            rule
-            for rule in payload
-            if isinstance(rule, dict) and rule.get("type") == "required_status_checks"
-        ),
-        None,
-    )
-    if not isinstance(pull_request_rule, dict) or not isinstance(required_status_rule, dict):
+    required_status_rules = [
+        rule
+        for rule in payload
+        if isinstance(rule, dict) and rule.get("type") == "required_status_checks"
+    ]
+    if not isinstance(pull_request_rule, dict) or not required_status_rules:
         return "absent"
 
-    parameters = required_status_rule.get("parameters")
-    if not isinstance(parameters, dict):
-        return "absent"
-    if not parameters.get("strict_required_status_checks_policy"):
-        return "absent"
-    checks = parameters.get("required_status_checks")
-    if not isinstance(checks, list):
-        return "absent"
-    if not any(
-        isinstance(check, dict) and check.get("context") == REQUIRED_CHECK for check in checks
-    ):
-        return "absent"
-    return "protected"
+    for required_status_rule in required_status_rules:
+        parameters = required_status_rule.get("parameters")
+        if not isinstance(parameters, dict):
+            continue
+        if not parameters.get("strict_required_status_checks_policy"):
+            continue
+        checks = parameters.get("required_status_checks")
+        if not isinstance(checks, list):
+            continue
+        if any(
+            isinstance(check, dict) and check.get("context") == REQUIRED_CHECK for check in checks
+        ):
+            return "protected"
+    return "absent"
 
 
 def local_identity() -> tuple[str, str]:

@@ -6,7 +6,6 @@ on:
     types: [completed]
 
 permissions:
-  actions: read
   contents: write
   issues: write
   pull-requests: write
@@ -119,7 +118,7 @@ jobs:
               set_status(sha, "failure", title, target_url)
               comment(number, f"## AI Code Review - blocked\n\n{detail}\n\nThe PR was not merged.")
 
-          associated = request("GET", f"actions/runs/{RUN['id']}/pull_requests?per_page=10")
+          associated = RUN.get("pull_requests") or []
           if len(associated) != 1:
               raise RuntimeError("workflow run must map to exactly one pull request")
           run_pr = associated[0]

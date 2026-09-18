@@ -24,6 +24,7 @@ jobs:
     outputs:
       pr_number: ${{ steps.review.outputs.pr_number }}
       head_sha: ${{ steps.review.outputs.head_sha }}
+      base_sha: ${{ steps.review.outputs.base_sha }}
       merge: ${{ steps.review.outputs.merge }}
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -129,9 +130,11 @@ jobs:
           run_pr = associated[0]
           number = run_pr["number"]
           run_head = run_pr["head"]["sha"]
+          run_base = run_pr["base"]["sha"]
           pr = request("GET", f"pulls/{number}")
           head = pr["head"]["sha"]
           base = pr["base"]["ref"]
+          base_sha = pr["base"]["sha"]
           pr_url = pr["html_url"]
           run_url = RUN.get("html_url", "")
 
@@ -140,6 +143,9 @@ jobs:
               raise SystemExit(0)
           if head != run_head:
               print(f"stale CI run ignored: {run_head} != {head}")
+              raise SystemExit(0)
+          if base_sha != run_base:
+              print(f"stale CI base ignored: {run_base} != {base_sha}")
               raise SystemExit(0)
           if RUN.get("conclusion") != "success":
               fail(
@@ -299,7 +305,7 @@ jobs:
               raise SystemExit(1)
 
           latest = request("GET", f"pulls/{number}")
-          if latest["head"]["sha"] != head:
+          if latest["head"]["sha"] != head or latest["base"]["sha"] != base_sha:
               print(f"PR #{number} moved during AI review; verdict discarded")
               raise SystemExit(0)
 
@@ -354,8 +360,12 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               print(f"pr_number={number}", file=output)
               print(f"head_sha={head}", file=output)
+              print(f"base_sha={base_sha}", file=output)
               print("merge=true", file=output)
-          print(f"Approved PR #{number} at reviewed head {head} for exact-head squash merge")
+          print(
+              f"Approved PR #{number} at reviewed head/base {head}/{base_sha} "
+              "for exact-candidate squash merge"
+          )
           PY
 
   merge:
@@ -371,6 +381,7 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PR_NUMBER: ${{ needs.review.outputs.pr_number }}
       REVIEWED_HEAD: ${{ needs.review.outputs.head_sha }}
+      REVIEWED_BASE: ${{ needs.review.outputs.base_sha }}
     steps:
       - name: Merge exact reviewed head
         shell: bash
@@ -385,6 +396,7 @@ jobs:
           TOKEN = os.environ["GITHUB_TOKEN"]
           NUMBER = int(os.environ["PR_NUMBER"])
           REVIEWED_HEAD = os.environ["REVIEWED_HEAD"]
+          REVIEWED_BASE = os.environ["REVIEWED_BASE"]
 
           def request(method, path, *, body=None):
               url = f"https://api.github.com/repos/{REPO}/{path.lstrip('/')}"
@@ -404,11 +416,16 @@ jobs:
 
           pr = request("GET", f"pulls/{NUMBER}")
           current_head = pr["head"]["sha"]
+          current_base = pr["base"]["sha"]
           if pr["state"] != "open" or pr["base"]["ref"] != "main":
               raise RuntimeError(f"PR #{NUMBER} is no longer an open PR targeting main")
           if current_head != REVIEWED_HEAD:
               raise RuntimeError(
                   f"PR #{NUMBER} moved after AI review: {REVIEWED_HEAD} != {current_head}"
+              )
+          if current_base != REVIEWED_BASE:
+              raise RuntimeError(
+                  f"main moved after CI/review: {REVIEWED_BASE} != {current_base}"
               )
 
           merge = request(

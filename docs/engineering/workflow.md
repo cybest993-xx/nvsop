@@ -138,16 +138,21 @@ All accepted pull requests are merged manually with squash after the exact candi
 
 ## 5. Merge and clean up
 
-Merges require explicit authorization and the required CI/review evidence. Use GitHub's squash merge path after the active `main` ruleset is satisfied; there is no repository-owned automatic AI merge path. After GitHub reports `MERGED`, synchronize the dedicated primary `main` and safely retire eligible merged tasks as part of closeout.
+Merges require explicit authorization and the required CI/review evidence. Use GitHub's squash merge path after the active `main` ruleset is satisfied; there is no repository-owned automatic AI merge path. After GitHub reports `MERGED`, verify that the PR merged the exact reviewed head and that GitHub's recorded squash commit is retained by fetched `origin/main`; the pre-squash PR head is not expected to be an ancestor of `main`.
 
 ```sh
 git fetch --prune origin main
 MERGED_TARGET=origin/main
+PR_NUMBER=<merged-pr-number>
 CANDIDATE_SHA=<merged-pr-head-sha>
-git merge-base --is-ancestor "$CANDIDATE_SHA" "$MERGED_TARGET"
+test "$(gh pr view "$PR_NUMBER" --json state --jq .state)" = MERGED
+test "$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)" = "$CANDIDATE_SHA"
+MERGE_COMMIT="$(gh pr view "$PR_NUMBER" --json mergeCommit --jq '.mergeCommit.oid')"
+test -n "$MERGE_COMMIT"
+git merge-base --is-ancestor "$MERGE_COMMIT" "$MERGED_TARGET"
 ```
 
-If ancestry does not prove the candidate is retained, stop this cleanup; do not force-delete it. Identify `MAIN_WORKTREE` from `git worktree list --porcelain`, require branch `main` and a completely clean worktree, then synchronize:
+If the PR state/head or recorded merge commit does not prove that exact candidate is retained, stop cleanup; do not substitute an ancestry test on the pre-squash head. Identify `MAIN_WORKTREE` from `git worktree list --porcelain`, require branch `main` and a completely clean worktree, then synchronize:
 
 ```sh
 test "$(git -C "$MAIN_WORKTREE" branch --show-current)" = main
@@ -156,19 +161,24 @@ git -C "$MAIN_WORKTREE" reset --hard "$MERGED_TARGET"
 test "$(git -C "$MAIN_WORKTREE" rev-parse HEAD)" = "$(git rev-parse "$MERGED_TARGET")"
 ```
 
-Inspect all local `agent/*` branches and registered task worktrees, including older merged residue. Retire a task only if its PR is actually `MERGED`, its **current local tip** is reachable from fetched `origin/main`, and its dedicated worktree is clean including untracked files and is not the primary checkout. A branch with no worktree still needs both PR and ancestry evidence.
+Inspect all local `agent/*` branches and registered task worktrees, including older merged residue. Retire a task only if an actually `MERGED` PR records the **current local tip** as its exact `headRefOid`, that PR's recorded `mergeCommit` is retained by fetched `origin/main`, and its dedicated worktree is clean including untracked files and is not the primary checkout. A branch with no worktree still needs the same PR-head and merge-commit evidence.
 
 ```sh
-git branch --merged "$MERGED_TARGET" --list 'agent/*'
 git worktree list --porcelain
+TASK_TIP="$(git rev-parse "$TASK_BRANCH")"
 gh pr list --state merged --base main --head "$TASK_BRANCH" --json number,state,headRefName,headRefOid
-git merge-base --is-ancestor "$TASK_BRANCH" "$MERGED_TARGET"
+PR_NUMBER=<merged-pr-number-whose-headRefOid-equals-TASK_TIP>
+test "$(gh pr view "$PR_NUMBER" --json state --jq .state)" = MERGED
+test "$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)" = "$TASK_TIP"
+MERGE_COMMIT="$(gh pr view "$PR_NUMBER" --json mergeCommit --jq '.mergeCommit.oid')"
+test -n "$MERGE_COMMIT"
+git merge-base --is-ancestor "$MERGE_COMMIT" "$MERGED_TARGET"
 test -z "$(git -C "$TASK_WORKTREE" status --porcelain=v1 --untracked-files=all)"
 git worktree remove "$TASK_WORKTREE"
-git branch -d "$TASK_BRANCH"
+git update-ref -d "refs/heads/$TASK_BRANCH" "$TASK_TIP"
 ```
 
-Remove a worktree from a different worktree. Preserve unmerged, divergent and dirty tasks. `git clean`, task resets, forced worktree removal and forced branch deletion are not cleanup tools here. Pruning remote-tracking refs is not remote branch deletion; remote deletion and Issue closure require separate authorization.
+Remove a worktree from a different worktree. The expected old SHA on `git update-ref -d` makes local branch retirement fail closed if the branch moves after verification. Preserve unmerged, divergent and dirty tasks. `git clean`, task resets, forced worktree removal and forced branch deletion are not cleanup tools here. Pruning remote-tracking refs is not remote branch deletion; remote deletion and Issue closure require separate authorization.
 
 **Done:** local `main` equals the fetched accepted trunk, eligible merged local tasks are retired without force, and all other work is untouched. Report delivered behavior, checks, review, publication state and remaining gaps.
 

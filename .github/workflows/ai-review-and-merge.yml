@@ -48,7 +48,7 @@ jobs:
 
           REPO = os.environ["GITHUB_REPOSITORY"]
           TOKEN = os.environ["GITHUB_TOKEN"]
-          API_KEY = os.environ.get("AI_CREDENTIAL", "").strip()
+          AI_AUTH_VALUE = os.environ.get("AI_CREDENTIAL", "").strip()
           MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.6-luna").strip()
           OPENAI_BASE = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
           EFFORT = os.environ.get("AI_REVIEW_REASONING_EFFORT", "medium").strip()
@@ -151,8 +151,8 @@ jobs:
               raise SystemExit(0)
 
           set_status(head, "pending", "AI review is evaluating the exact CI-passed head", run_url)
-          if not API_KEY:
-              fail(head, number, "OPENAI_API_KEY is not configured", "Repository secret `OPENAI_API_KEY` is missing.", pr_url)
+          if not AI_AUTH_VALUE:
+              fail(head, number, "AI reviewer credential is not configured", "The configured repository credential is missing.", pr_url)
               raise SystemExit(1)
           if MAX_DIFF < 10000:
               fail(head, number, "AI review configuration is invalid", "`AI_REVIEW_MAX_DIFF_CHARS` must be at least 10000.", pr_url)
@@ -264,7 +264,7 @@ jobs:
               data=json.dumps(payload).encode(),
               method="POST",
           )
-          req.add_header("Authorization", f"Bearer {API_KEY}")
+          req.add_header("Authorization", f"Bearer {AI_AUTH_VALUE}")
           req.add_header("Content-Type", "application/json")
           try:
               with urllib.request.urlopen(req, timeout=180) as response:

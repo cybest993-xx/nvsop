@@ -128,7 +128,7 @@ Filtering is an optimization, not an exemption. Lockfiles are always checked; ap
 
 Codex GitHub review is the semantic review layer. Automatic review may run when a pull request is opened for review or moved out of draft. Treat Codex as review evidence, not as a replacement for deterministic CI, branch protection or the repository's independent-review rule. The repository does not run a second model reviewer, translate Codex comments into a custom status, or automatically merge after an AI verdict.
 
-If the candidate changes after the last Codex review, or a Codex finding is repaired, request a fresh review with `@codex review` and record the reviewed commit in the PR. Concrete unresolved Codex findings block merge by process. Deterministic style, lint, generated-file and test gates remain owned by `blocking-ci`; Codex should focus on correctness, architecture, safety and repository-governance regressions.
+If the candidate changes after the last Codex review, or a Codex finding is repaired, request a fresh review with `@codex review` and record the reviewed commit in the PR. For each candidate SHA, issue one manual `@codex review` and do not retrigger it while that request is queued, running, completed or has produced a review; only a confirmed terminal delivery failure that produced no review permits another request for the same SHA. For each repair round, collect the currently known findings first, perform at most one code/file write operation that addresses that round, then use only read-only validation and review; a newly discovered finding starts the next repair round. Concrete unresolved Codex findings block merge by process. Deterministic style, lint, generated-file and test gates remain owned by `blocking-ci`; Codex should focus on correctness, architecture, safety and repository-governance regressions.
 
 The active server-side `main` ruleset is the mechanical merge boundary. It requires a pull request, successful `CI required`, an up-to-date branch before merge and resolved review conversations; force pushes and branch deletion are blocked. Repository-policy, CI, architecture, shared-contract and other critical changes still require the consolidated independent read-only Spec + Standards review from section 3 in addition to Codex review.
 
@@ -138,39 +138,52 @@ All accepted pull requests are merged manually with squash after the exact candi
 
 ## 5. Merge and clean up
 
-Merges require explicit authorization and the required CI/review evidence. Use GitHub's squash merge path after the active `main` ruleset is satisfied; there is no repository-owned automatic AI merge path. After GitHub reports `MERGED`, synchronize the dedicated primary `main` and safely retire eligible merged tasks as part of closeout.
+Merges require explicit authorization and the required CI/review evidence. Use GitHub's squash merge path after the active `main` ruleset is satisfied; there is no repository-owned automatic AI merge path. Keep merge confirmation separate from local task retirement, and stop all task writers before starting cleanup.
 
-```sh
-git fetch --prune origin main
-MERGED_TARGET=origin/main
-CANDIDATE_SHA=<merged-pr-head-sha>
-git merge-base --is-ancestor "$CANDIDATE_SHA" "$MERGED_TARGET"
+### 5.1 Confirm the exact squash merge
+
+From a clean worktree that is not the task worktree, fetch the accepted trunk and inspect the PR once:
+
+```bash
+git fetch origin main
+gh pr view <pr-number> --json state,headRefName,headRefOid,baseRefName,mergeCommit
+git merge-base --is-ancestor <merge-commit-oid> origin/main
 ```
 
-If ancestry does not prove the candidate is retained, stop this cleanup; do not force-delete it. Identify `MAIN_WORKTREE` from `git worktree list --porcelain`, require branch `main` and a completely clean worktree, then synchronize:
+Continue only when the response is `MERGED`, its `baseRefName` is `main`, its `headRefName` and `headRefOid` equal the reviewed branch and candidate SHA, its `mergeCommit.oid` is present, and that recorded commit is retained by `origin/main`. A squash merge does not make the pre-squash candidate an ancestor of `main`; do not substitute that check. This confirmation is read-only evidence for the operator, not shared state consumed by the cleanup command.
 
-```sh
-test "$(git -C "$MAIN_WORKTREE" branch --show-current)" = main
-test -z "$(git -C "$MAIN_WORKTREE" status --porcelain=v1 --untracked-files=all)"
-git -C "$MAIN_WORKTREE" reset --hard "$MERGED_TARGET"
-test "$(git -C "$MAIN_WORKTREE" rev-parse HEAD)" = "$(git rev-parse "$MERGED_TARGET")"
+If the primary checkout must be synchronized, identify it from `git worktree list --porcelain`. Only when that checkout is on `main` and clean including untracked and ignored files may it be synchronized:
+
+```bash
+MAIN_WORKTREE=<primary-main-worktree>
+(
+    set -eu
+    test "$(git -C "$MAIN_WORKTREE" branch --show-current)" = main
+    MAIN_STATUS="$(git -C "$MAIN_WORKTREE" status --porcelain=v1 --untracked-files=all --ignored=matching)"
+    test -z "$MAIN_STATUS"
+    git -C "$MAIN_WORKTREE" reset --hard origin/main
+    test "$(git -C "$MAIN_WORKTREE" rev-parse HEAD)" = "$(git rev-parse origin/main)"
+)
 ```
 
-Inspect all local `agent/*` branches and registered task worktrees, including older merged residue. Retire a task only if its PR is actually `MERGED`, its **current local tip** is reachable from fetched `origin/main`, and its dedicated worktree is clean including untracked files and is not the primary checkout. A branch with no worktree still needs both PR and ancestry evidence.
+Do not reset a task or dirty primary checkout. This synchronization is a separate manual operation; `retire_task.py` never performs it.
 
-```sh
-git branch --merged "$MERGED_TARGET" --list 'agent/*'
-git worktree list --porcelain
-gh pr list --state merged --base main --head "$TASK_BRANCH" --json number,state,headRefName,headRefOid
-git merge-base --is-ancestor "$TASK_BRANCH" "$MERGED_TARGET"
-test -z "$(git -C "$TASK_WORKTREE" status --porcelain=v1 --untracked-files=all)"
-git worktree remove "$TASK_WORKTREE"
-git branch -d "$TASK_BRANCH"
+### 5.2 Retire one verified task
+
+With writers stopped, run the versioned single-task command from a different worktree and provide the exact reviewed head SHA:
+
+```bash
+python3 scripts/retire_task.py \
+    --pr <pr-number> \
+    --branch agent/<owner>/<task> \
+    --candidate <reviewed-head-sha>
 ```
 
-Remove a worktree from a different worktree. Preserve unmerged, divergent and dirty tasks. `git clean`, task resets, forced worktree removal and forced branch deletion are not cleanup tools here. Pruning remote-tracking refs is not remote branch deletion; remote deletion and Issue closure require separate authorization.
+The command does not scan branches or historical PRs. Before any destructive command it verifies the direct local `refs/heads/agent/<owner>/<task>` tip, queries the supplied PR once for `state`, `headRefName`, `headRefOid`, `baseRefName`, and `mergeCommit`, fetches `origin main`, and verifies the recorded squash commit is retained by `origin/main`. It refuses symbolic or out-of-scope refs, a mismatched candidate, multiple registered worktrees, the primary or current worktree, dirty worktrees including ignored files, and Git read or configuration failures. A clean task worktree is removed without force; the exact local branch ref is then deleted with `git update-ref --no-deref` and its expected old SHA. Only the exact local `branch.<task>` configuration section is removed; global and similarly prefixed sections remain untouched.
 
-**Done:** local `main` equals the fetched accepted trunk, eligible merged local tasks are retired without force, and all other work is untouched. Report delivered behavior, checks, review, publication state and remaining gaps.
+All checks finish before the first cleanup command. The individual worktree removal, ref deletion, and local configuration removal are not a multi-command transaction: if a later command fails, earlier changes remain, the command exits nonzero, and no rollback is promised. Inspect the repository and reconcile that partial result manually. The script never resets or synchronizes `main`, deletes remote refs, closes Issues, uses force deletion, or sweeps other tasks.
+
+**Done:** the explicitly supplied merged task is retired only after the exact squash proof, and every unproved or unsafe task remains untouched. Report the command, actual result, and any partial-failure or synchronization gap.
 
 ## Persistent continuity
 

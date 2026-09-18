@@ -171,7 +171,7 @@ TASK_BRANCH=<eligible-agent-branch>
 
 (
     set -eu
-    TASK_TIP="$(git rev-parse "$TASK_BRANCH")"
+    TASK_TIP="$(git rev-parse "refs/heads/$TASK_BRANCH")"
     TASK_WORKTREE="$(git for-each-ref --format='%(worktreepath)' "refs/heads/$TASK_BRANCH")"
     gh pr list --state merged --base main --head "$TASK_BRANCH" --json number,state,headRefName,headRefOid
     PR_NUMBER=<merged-pr-number-whose-headRefOid-equals-TASK_TIP>
@@ -183,6 +183,7 @@ TASK_BRANCH=<eligible-agent-branch>
 
     if test -n "$TASK_WORKTREE"; then
         test "$(git -C "$TASK_WORKTREE" symbolic-ref --quiet HEAD)" = "refs/heads/$TASK_BRANCH"
+        test "$(git -C "$TASK_WORKTREE" rev-parse HEAD)" = "$TASK_TIP"
         test "$TASK_WORKTREE" != "$(git rev-parse --show-toplevel)"
         test -z "$(git -C "$TASK_WORKTREE" status --porcelain=v1 --untracked-files=all --ignored=matching)"
         git worktree remove "$TASK_WORKTREE"

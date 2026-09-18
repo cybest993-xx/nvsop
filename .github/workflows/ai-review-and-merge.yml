@@ -374,6 +374,9 @@ jobs:
     if: ${{ needs.review.outputs.merge == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    concurrency:
+      group: ai-review-merge-main
+      cancel-in-progress: false
     permissions:
       contents: write
       pull-requests: read

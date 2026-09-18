@@ -12,6 +12,7 @@ import tomllib
 from pathlib import Path
 
 from check_documentation import check_documentation
+from nvsop_config import load_center_modules
 
 REQUIRED_FILES = {
     Path("AGENTS.md"),
@@ -342,25 +343,9 @@ def check_shared_contract_isolation(root: Path, files: list[Path]) -> list[str]:
     return errors
 
 
-def load_center_modules(root: Path) -> frozenset[str]:
-    """Read the Center product-module declaration of record from `[tool.nvsop]`."""
-    config = read_toml(root / "pyproject.toml")
-    try:
-        modules = config["tool"]["nvsop"]["center_modules"]
-    except (KeyError, TypeError) as error:
-        raise ValueError("[tool.nvsop].center_modules is required") from error
-    if (
-        not isinstance(modules, list)
-        or not modules
-        or not all(isinstance(module, str) and module for module in modules)
-    ):
-        raise ValueError("[tool.nvsop].center_modules must be a non-empty list of strings")
-    return frozenset(modules)
-
-
 def check_center_modules_are_contracted(root: Path, files: list[Path]) -> list[str]:
-    """Every implemented registered Center module must be named by an import-linter contract."""
-    registered = load_center_modules(root)
+    """要求已有生产文件的注册 Center 模块都被 import-linter 契约命名。"""
+    registered = load_center_modules(root / "pyproject.toml")
     physical = {
         path.relative_to(CENTER_SOURCE).parts[0]
         for path in files
@@ -390,8 +375,8 @@ def check_center_modules_are_contracted(root: Path, files: list[Path]) -> list[s
 
 
 def center_boundary_violations(root: Path, files: list[Path]) -> list[str]:
-    """Evaluate the generic Center owner boundary without activating it as a repository gate."""
-    registered = load_center_modules(root)
+    """评估通用 Center owner 边界，不在本任务中激活仓库阻塞门禁。"""
+    registered = load_center_modules(root / "pyproject.toml")
     violations: list[tuple[str, int, str]] = []
 
     for path in sorted(files):

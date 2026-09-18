@@ -25,4 +25,9 @@ Actions: `N/A`
 
 ## Readiness and remaining work
 
-<!-- Deferred original acceptance links, unverified target-environment evidence and blockers. Publication/CI status is not merge authorization. Rules: docs/engineering/workflow.md. -->
+<!-- Record the exact-head CI/review state. For manual-merge authority changes, successful AI review does not replace the required independent review or explicit merge authorization. Rules: docs/engineering/workflow.md. -->
+CI required: `pending`
+AI Code Review: `pending`
+Merge path: `manual` / `automatic`
+
+<!-- Deferred original acceptance links, unverified target-environment evidence and blockers. Publication/CI status alone is not merge authorization. -->

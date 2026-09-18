@@ -1,6 +1,6 @@
 # Engineering delivery workflow
 
-Status: **normative**. This is the home for task isolation, verification, review, PR/CI, merge and local cleanup. Read the relevant section for the current step; product acceptance belongs to [the roadmap](../design/solution-and-roadmap.md), and Issue state to [issues.md](issues.md). The [Makefile](../../Makefile), [CI workflow](../../.github/workflows/blocking-ci.yml) and [versioned hooks](../../scripts/githooks/) own executable behavior.
+Status: **normative**. This is the home for task isolation, verification, review, PR/CI, AI review, merge and local cleanup. Read the relevant section for the current step; product acceptance belongs to [the roadmap](../design/solution-and-roadmap.md), and Issue state to [issues.md](issues.md). The [Makefile](../../Makefile), [blocking CI workflow](../../.github/workflows/blocking-ci.yml), [AI review/merge workflow](../../.github/workflows/ai-review-and-merge.yml) and [versioned hooks](../../scripts/githooks/) own executable behavior.
 
 ## 1. Establish the task workspace
 
@@ -98,7 +98,7 @@ Repair concrete findings as one bounded batch, rerun affected checks and review 
 ## 4. Publish the candidate and evaluate CI
 
 Publication requires user authorization for the action and target. Publish only the task branch and open its PR directly against `main`; never push `HEAD:main`. Use the [PR template](../../.github/pull_request_template.md) to record outcome, scope, risks, actual evidence and documentation impact, not another full rulebook.
-Before requesting merge, `make pr-check PR=<number>` may aggregate the PR head/base, `CI required`, branch-protection visibility and local candidate identity. Treat `unknown` or absent protection and a missing check as blocked. If GitHub explicitly reports that branch protection is unavailable for the repository plan, the check reports `unsupported`: the exact PR head still needs successful `CI required`, and merge remains a manual action requiring explicit user authorization. Its output deliberately leaves independent review as manual confirmation and never grants merge authorization.
+Before a manual merge, `make pr-check PR=<number>` may aggregate the PR head/base, `CI required`, branch-protection visibility and local candidate identity. Treat `unknown` or absent protection and a missing check as blocked for that operator-controlled path. If GitHub reports protection as unavailable or unsupported, the exact PR head still needs successful `CI required` plus explicit user authorization. `pr-check` deliberately leaves independent review as manual confirmation and never grants merge authorization. The automatic path does not take authorization from `pr-check`; it is limited by the exact-candidate AI review/merge policy below.
 For candidates that change architecture/Issue/mechanism/ADR authority, the module-registry manifest or shared machine contracts, the same preflight reports `dispatch_impact_review=required`. Record the actual open/ready Issue scan and dispositions in the PR template; this mechanical evidence does not replace semantic review of whether the affected set is complete.
 
 ```sh
@@ -108,10 +108,11 @@ gh pr create --base main --head agent/a/<task-slug>
 
 ### CI gates
 
-The sole aggregate required PR status is `CI required` from [blocking-ci.yml](../../.github/workflows/blocking-ci.yml). Server-side repository settings must separately require it when the GitHub plan exposes branch protection or rulesets; a workflow file alone does not enable protection. If GitHub explicitly reports that those controls are unavailable for the repository plan, `pr-check` makes the missing server enforcement visible and requires manual confirmation of the green `CI required` result plus explicit merge authorization. Its `always()` gatherer requires explicit success from scope, lockfile checks and every gate family; failed, cancelled or skipped dependencies are not success.
+The supported CI path uses GitHub-hosted `ubuntu-24.04` runners. The repository is intentionally public; do not replace the hosted path with a local or self-hosted runner as an account-billing workaround. A runner-topology change is a separate CI-policy change and requires the same review as other workflow authority changes. Repository visibility, Actions permissions, branch protection/rulesets and repository secrets remain server-side settings; workflow files do not configure them.
 
-[ci_scope.py](../../scripts/ci_scope.py) compares the actual base/candidate commits with rename detection disabled. A missing comparison baseline forces all gates.
-The selector also owns integration, browser and media applicability; jobs consume its outputs instead of maintaining their own path regexes. Media-owned inputs select both real-infrastructure and browser lanes, then run `make media-system` and `make web-e2e-whep` with explicit live fixtures so environment-dependent tests cannot silently satisfy media evidence by skipping.
+The sole aggregate required PR status is `CI required` from [blocking-ci.yml](../../.github/workflows/blocking-ci.yml). Server-side repository settings must separately require it when protection is available. `pr-check` makes missing or unknown enforcement visible; regardless of server enforcement, the exact PR head still needs successful `CI required`. Its `always()` gatherer requires explicit success from scope, lockfile checks and every gate family; failed, cancelled or skipped dependencies are not success.
+
+[ci_scope.py](../../scripts/ci_scope.py) compares the actual base/candidate commits with rename detection disabled. A missing comparison baseline forces all gates. The selector also owns integration, browser and media applicability; jobs consume its outputs instead of maintaining their own path regexes. Media-owned inputs select both real-infrastructure and browser lanes, then run `make media-system` and `make web-e2e-whep` with explicit live fixtures so environment-dependent tests cannot silently satisfy media evidence by skipping.
 
 | Compared paths | Existing blocking lane |
 |---|---|
@@ -121,14 +122,27 @@ The selector also owns integration, browser and media applicability; jobs consum
 | Media deployment/test inputs | `make check` plus real-infrastructure, playback and WHEP browser evidence |
 | `.github/`, `Makefile`, the selector/actionlint installer, or unusable baseline | All blocking families |
 
-Filtering is an optimization, not an exemption. Lockfiles are always checked; applicable code gates regenerate artifacts and verify tracked and untracked cleanliness. Keep immutable action pins, least-privilege permissions, frozen installs, job timeouts and cancellation of superseded PR runs. Do not relax this selection merely because a script change accompanies documentation.
-Workflow changes additionally install the pinned `actionlint` release through the checksum-verifying repository installer and run `make ci-lint`. Browser failures upload only Playwright `test-results/` with a pinned upload action and short retention; do not upload `.tmp/dev-main`, environment files or broader workspaces as diagnostic artifacts.
+Filtering is an optimization, not an exemption. Lockfiles are always checked; applicable code gates regenerate artifacts and verify tracked and untracked cleanliness. Keep immutable action pins, least-privilege permissions, frozen installs, job timeouts and cancellation of superseded PR runs. Do not relax this selection merely because a script change accompanies documentation. Workflow changes additionally install the pinned `actionlint` release through the checksum-verifying repository installer and run `make ci-lint`. Browser failures upload only Playwright `test-results/` with a pinned upload action and short retention; do not upload `.tmp/dev-main`, environment files or broader workspaces as diagnostic artifacts.
 
-**Done:** the published branch names the verified candidate, PR base is `main` and that final candidate has applicable green CI and review evidence. An earlier candidate's green CI does not transfer across content changes.
+### AI review and merge chain
+
+[ai-review-and-merge.yml](../../.github/workflows/ai-review-and-merge.yml) is triggered by completion of `blocking-ci` through `workflow_run`. It associates the run to a PR only from `github.event.workflow_run.pull_requests` and requires exactly one associated PR; do not recover PR identity through the Actions run `/pull_requests` API. The reviewer validates that the PR is still open against `main`, and that both the current PR head SHA and base SHA equal the head/base recorded by the completed CI run. A stale run is ignored. A non-successful `blocking-ci` result sets `AI Code Review` to failure and does not call the model.
+
+The privileged AI workflow never checks out or executes the PR tree. It retrieves the PR diff as untrusted data through the GitHub API, reads reviewer instructions from the default branch, and gives each job only its required permissions. The OpenAI credential stays in the repository secret; model/base-URL/reasoning/diff-size tuning stays in repository variables. The status context is `AI Code Review`; a concrete blocking finding fails that status and leaves the PR unmerged.
+
+After a clean AI verdict, merge behavior depends on the changed authority:
+
+- Changes to `.github/workflows/`, `AGENTS.md`, `Makefile`, `docs/engineering/workflow.md`, `scripts/check_pr_readiness.py` or `scripts/ci_scope.py` are **manual-merge** changes. They may receive a successful AI review, but the workflow does not authorize its own policy change. Complete the required independent read-only review and merge only with explicit user authorization.
+- Other non-draft PRs with green `CI required` and `AI Code Review` may enter the automatic squash-merge job. That job is serialized for `main`, re-fetches the PR, and requires the exact reviewed head SHA and exact reviewed base SHA before GitHub accepts the merge. If either side moved, no automatic merge occurs; obtain fresh CI/review evidence for the current candidate.
+- Draft PRs are reviewed but are never automatically merged.
+
+`workflow_run` executes the AI workflow definition from the default branch. Therefore a PR that changes `ai-review-and-merge.yml` cannot prove its new reviewer implementation by observing its own run: the run still uses the pre-merge default-branch definition. Bootstrap such a change with green `blocking-ci`, the required independent read-only review and an explicit manual merge. Subsequent PRs then exercise the newly accepted reviewer workflow.
+
+**Done:** the published branch names the verified candidate, PR base is `main`, the final candidate has green `CI required`, and its required review path is complete. Outside the documented reviewer-workflow bootstrap exception, `AI Code Review` must refer to the same exact head/base candidate before automatic merge. Earlier CI or AI-review evidence does not transfer across candidate or base changes.
 
 ## 5. Merge and clean up
 
-Merge only with explicit authorization and the required CI/review evidence. After GitHub reports `MERGED`, synchronize the dedicated primary `main` and safely retire eligible merged tasks as part of closeout.
+Manual merges require explicit authorization and the required CI/review evidence. The automatic path is limited to the exact-candidate AI-review flow defined above and never extends to manual-merge authority changes. After GitHub reports `MERGED` by either path, synchronize the dedicated primary `main` and safely retire eligible merged tasks as part of closeout.
 
 ```sh
 git fetch --prune origin main

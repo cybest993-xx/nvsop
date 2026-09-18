@@ -186,8 +186,14 @@ TASK_WORKTREE=<registered-task-worktree-or-empty>
         git worktree remove "$TASK_WORKTREE"
     fi
 
+    git config --list --name-only >/dev/null
+    BRANCH_CONFIG_PRESENT=false
+    if git config --name-only --get-regexp '^branch\.' | grep -Fq "branch.$TASK_BRANCH."; then
+        BRANCH_CONFIG_PRESENT=true
+    fi
+
     git update-ref -d "refs/heads/$TASK_BRANCH" "$TASK_TIP"
-    if git config --get "branch.$TASK_BRANCH.remote" >/dev/null 2>&1; then
+    if test "$BRANCH_CONFIG_PRESENT" = true; then
         git config --remove-section "branch.$TASK_BRANCH"
     fi
 )

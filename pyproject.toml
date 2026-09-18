@@ -115,10 +115,10 @@ root_packages = ["factory_sop", "edge_runtime", "nvsop_contracts"]
 # a contract requires this.
 include_external_packages = true
 
-# Module boundaries are enforced mechanically, not by review (harness §3). Every center
-# module must be named by a contract here — `scripts/check_repo_policy.py` fails the gate
-# for one that is not, because a contract nobody wrote is a boundary nobody checks and
-# `lint-imports` only ever checks the contracts it was given.
+# Product-module membership comes only from `[tool.nvsop].center_modules` (harness §3).
+# Every registered module that has production files must be named by a contract here —
+# `scripts/check_repo_policy.py` fails that coverage gap. A shared/composition namespace does
+# not become a product module merely because it has a package directory.
 
 [[tool.importlinter.contracts]]
 name = "The center's shared infrastructure does not depend on what depends on it"

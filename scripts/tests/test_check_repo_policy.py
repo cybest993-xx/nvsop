@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from check_repo_policy import check_repository
+from check_repo_policy import center_boundary_violations, check_repository
 
 
 class RepositoryPolicyTest(unittest.TestCase):
@@ -39,6 +39,7 @@ class RepositoryPolicyTest(unittest.TestCase):
             Path("uv.lock"): "version = 1\n",
             Path("pyproject.toml"): (
                 '[tool.uv.workspace]\nmembers = ["apps/control-api"]\n'
+                '[tool.nvsop]\ncenter_modules = ["auth"]\n'
                 '[tool.importlinter]\nroot_packages = ["factory_sop"]\n'
             ),
         }
@@ -53,6 +54,9 @@ class RepositoryPolicyTest(unittest.TestCase):
     def check(self, *extra: str) -> list[str]:
         paths = list(self.files) + [Path(path) for path in extra]
         return check_repository(self.root, paths)
+
+    def center_boundaries(self, *paths: Path) -> list[str]:
+        return center_boundary_violations(self.root, list(paths))
 
     def test_accepts_minimum_harness(self) -> None:
         self.assertEqual([], self.check())
@@ -219,7 +223,8 @@ class RepositoryPolicyTest(unittest.TestCase):
         # dependency, leaving "standard library only" as discipline rather than a fact.
         self.write(
             "pyproject.toml",
-            '[tool.uv.workspace]\nmembers = ["apps/control-api", "apps/edge-runtime"]\n',
+            '[tool.uv.workspace]\nmembers = ["apps/control-api", "apps/edge-runtime"]\n'
+            '[tool.nvsop]\ncenter_modules = ["auth"]\n',
         )
         errors = self.check()
         self.assertIn(
@@ -302,16 +307,82 @@ class RepositoryPolicyTest(unittest.TestCase):
             errors,
         )
 
+    def test_unregistered_shared_namespace_is_not_a_product_module_by_directory(self) -> None:
+        infrastructure = self.write(
+            "apps/control-api/src/factory_sop/observability/logger.py",
+            "value = 1\n",
+        )
+        self.assertEqual([], self.check(str(infrastructure)))
+
     def test_accepts_center_module_named_by_an_import_linter_contract(self) -> None:
         self.write(
             "pyproject.toml",
             '[tool.uv.workspace]\nmembers = ["apps/control-api"]\n\n'
+            '[tool.nvsop]\ncenter_modules = ["auth"]\n\n'
             "[[tool.importlinter.contracts]]\n"
             'name = "auth is reached only through its api"\n'
             'source_modules = ["factory_sop.auth"]\n',
         )
         module = self.write("apps/control-api/src/factory_sop/auth/usecases/open_session.py", "")
         self.assertEqual([], self.check(str(module)))
+
+    def test_center_boundary_evaluator_rejects_cross_owner_internal_imports(self) -> None:
+        self.write(
+            "pyproject.toml",
+            '[tool.nvsop]\ncenter_modules = ["alpha", "beta"]\n',
+        )
+        module = self.write(
+            "apps/control-api/src/factory_sop/alpha/usecases.py",
+            "from factory_sop.beta.model import Thing\nfrom ..beta.repository import Repository\n",
+        )
+        self.assertEqual(
+            [
+                "apps/control-api/src/factory_sop/alpha/usecases.py:1 registered center module "
+                "alpha imports factory_sop.beta.model; cross-owner production imports must use "
+                "factory_sop.beta.api",
+                "apps/control-api/src/factory_sop/alpha/usecases.py:2 registered center module "
+                "alpha imports factory_sop.beta.repository; cross-owner production imports must "
+                "use factory_sop.beta.api",
+            ],
+            self.center_boundaries(module),
+        )
+
+    def test_center_boundary_evaluator_accepts_public_api_and_composition_root(self) -> None:
+        self.write(
+            "pyproject.toml",
+            '[tool.nvsop]\ncenter_modules = ["alpha", "beta"]\n',
+        )
+        module = self.write(
+            "apps/control-api/src/factory_sop/alpha/usecases.py",
+            "from factory_sop.beta.api import Summary\n",
+        )
+        composition = self.write(
+            "apps/control-api/src/factory_sop/app.py",
+            "from factory_sop.beta.adapters.routes import router\n",
+        )
+        infrastructure = self.write(
+            "apps/control-api/src/factory_sop/observability/__init__.py",
+            "value = 1\n",
+        )
+        self.assertEqual([], self.center_boundaries(module, composition, infrastructure))
+
+    def test_center_boundary_evaluator_rejects_hidden_owner_shape(self) -> None:
+        self.write(
+            "pyproject.toml",
+            '[tool.nvsop]\ncenter_modules = ["alpha", "beta"]\n',
+        )
+        hidden = self.write(
+            "apps/control-api/src/factory_sop/gamma/usecases.py",
+            "def assemble() -> None:\n    pass\n",
+        )
+        self.assertEqual(
+            [
+                "apps/control-api/src/factory_sop/gamma/usecases.py gives unregistered center "
+                "namespace gamma a product-owner shape; ownership must be resolved explicitly "
+                "rather than inferred outside [tool.nvsop].center_modules"
+            ],
+            self.center_boundaries(hidden),
+        )
 
     def test_rejects_literal_authorization_header_in_json(self) -> None:
         manifest = self.write(

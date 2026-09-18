@@ -65,11 +65,42 @@ body:
     validations:
       required: true
 
+  - type: dropdown
+    id: architecture_impact
+    attributes:
+      label: Architecture impact
+      description: Choose architecture-sensitive when this task can change module membership/ownership, cross-module public seams, state/table ownership, shared machine contracts, or a major composition seam.
+      options:
+        - none
+        - architecture-sensitive
+    validations:
+      required: true
+
+  - type: textarea
+    id: architecture_authority
+    attributes:
+      label: Architecture authority
+      description: For architecture-sensitive work, list current repo-relative authority paths in backticks, one per line. Use N/A for impact=none.
+      placeholder: |
+        - `docs/engineering/architecture.md`
+        - `docs/design/solution-and-roadmap.md`
+    validations:
+      required: true
+
+  - type: input
+    id: architecture_baseline
+    attributes:
+      label: Architecture validation baseline
+      description: For architecture-sensitive work, record the accepted main commit used for semantic validation as main@<40-hex-sha>. Use N/A for impact=none.
+      placeholder: main@0123456789abcdef0123456789abcdef01234567
+    validations:
+      required: true
+
   - type: textarea
     id: seam
     attributes:
       label: Existing seam and reuse
-      description: Name the owning module/public entry point and existing implementation/tests to reuse. If no seam exists, state where you searched and why a new one is required.
+      description: Name the owning module/public entry point and existing implementation/tests to reuse. For architecture-sensitive work, revalidate this seam against Architecture authority: existing code is evidence, not authority. If no seam exists, state where you searched and why a new one is required.
     validations:
       required: true
 

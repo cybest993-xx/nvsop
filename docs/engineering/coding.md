@@ -23,6 +23,8 @@ Extract only to reduce mixed responsibilities or coupling. Keep public interface
 
 A new product module needs a coherent invariant/behavior, distinct change driver, small acyclic interface and clear state owner or pure behavior. CRUD verbs, transport layers, tables, screen sections, file types, utility buckets and an adapter plus its fake are not module boundaries by themselves.
 
+Before adding or retaining a product module, record its **Owner**, **Invariant**, **State or pure behavior**, **Independent change driver** and **Public Interface**, and check those answers against the current architecture/mechanism/ADR authority rather than against the fact that code already exists. Apply the deletion test: if removing the module only moves the same complexity unchanged into an adapter or caller, the module has not earned an independent ownership boundary.
+
 ## Interface shape
 
 - Prefer enums, keyword-only arguments or named functions over bare boolean or ambiguous optional parameters. If a signature cannot change, name an opaque literal at the call site with a comment containing the exact callee parameter name.

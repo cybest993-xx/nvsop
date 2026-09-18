@@ -4,7 +4,13 @@ import subprocess
 import unittest
 from unittest.mock import Mock, patch
 
-from scripts.check_pr_readiness import evaluate, protection_state
+from scripts.check_pr_readiness import (
+    evaluate,
+    pr_files,
+    protection_state,
+    requires_architecture_review,
+    requires_dispatch_impact,
+)
 
 
 class PrReadinessTest(unittest.TestCase):
@@ -94,6 +100,93 @@ class PrReadinessTest(unittest.TestCase):
         self.assertFalse(result.ready)
         self.assertIn("local_candidate=different-branch", result.lines)
         self.assertIn("blockers=local_candidate=different-branch", result.lines)
+
+    def test_authority_change_requires_dispatch_impact_evidence(self) -> None:
+        pr = {
+            "state": "OPEN",
+            "baseRefName": "main",
+            "headRefName": "agent/test/task",
+            "headRefOid": "abc",
+            "statusCheckRollup": [{"name": "CI required", "conclusion": "SUCCESS"}],
+            "body": (
+                "Dispatch impact: `not-required`\nAffected open/ready Issues: `N/A`\nActions: `N/A`"
+            ),
+        }
+        missing = evaluate(
+            pr,
+            "protected",
+            "agent/test/task",
+            "abc",
+            ["docs/engineering/issues.md"],
+        )
+        self.assertFalse(missing.ready)
+        self.assertIn("dispatch_impact_review=required", missing.lines)
+        self.assertIn("dispatch_impact_evidence=missing", missing.lines)
+
+        pr["body"] = (
+            "Dispatch impact: `reviewed`\n"
+            "Affected open/ready Issues: `none-found`\n"
+            "Actions: `scan-recorded`"
+        )
+        reviewed = evaluate(
+            pr,
+            "protected",
+            "agent/test/task",
+            "abc",
+            ["docs/engineering/issues.md"],
+        )
+        self.assertTrue(reviewed.ready)
+        self.assertIn("dispatch_impact_evidence=present", reviewed.lines)
+
+    def test_synthetic_public_seam_change_requires_architecture_review_evidence(self) -> None:
+        pr = {
+            "state": "OPEN",
+            "baseRefName": "main",
+            "headRefName": "agent/test/task",
+            "headRefOid": "abc",
+            "statusCheckRollup": [{"name": "CI required", "conclusion": "SUCCESS"}],
+            "body": ("Architecture review: `not-required`\nArchitecture authority checked: `N/A`"),
+        }
+        changed = ["apps/control-api/src/factory_sop/synthetic_owner/api.py"]
+        missing = evaluate(pr, "protected", "agent/test/task", "abc", changed)
+        self.assertFalse(missing.ready)
+        self.assertIn("architecture_review=required", missing.lines)
+        self.assertIn("architecture_review_evidence=missing", missing.lines)
+
+        pr["body"] = (
+            "Architecture review: `reviewed`\n"
+            "Architecture authority checked: `docs/engineering/architecture.md`"
+        )
+        reviewed = evaluate(pr, "protected", "agent/test/task", "abc", changed)
+        self.assertTrue(reviewed.ready)
+        self.assertIn("architecture_review_evidence=present", reviewed.lines)
+
+    def test_edge_state_owner_change_requires_architecture_review(self) -> None:
+        self.assertTrue(
+            requires_architecture_review(
+                ["apps/edge-runtime/src/edge_runtime/local_state/synthetic_store.py"]
+            )
+        )
+
+    @patch("scripts.check_pr_readiness.run")
+    def test_renamed_authority_keeps_previous_path_for_dispatch_impact(
+        self, run_mock: Mock
+    ) -> None:
+        run_mock.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                '[[{"filename":"docs/engineering/architecture-renamed.md",'
+                '"previous_filename":"docs/engineering/architecture.md",'
+                '"status":"renamed"}]]'
+            ),
+            stderr="",
+        )
+        files = pr_files("owner/repo", "123")
+        self.assertIsNotNone(files)
+        assert files is not None
+        self.assertIn("docs/engineering/architecture.md", files)
+        self.assertTrue(requires_dispatch_impact(files))
 
     def test_missing_ci_or_unreadable_protection_never_claims_automated_readiness(self) -> None:
         result = evaluate(

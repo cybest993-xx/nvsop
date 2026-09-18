@@ -138,106 +138,52 @@ All accepted pull requests are merged manually with squash after the exact candi
 
 ## 5. Merge and clean up
 
-Merges require explicit authorization and the required CI/review evidence. Use GitHub's squash merge path after the active `main` ruleset is satisfied; there is no repository-owned automatic AI merge path. After GitHub reports `MERGED`, verify that the PR merged the exact reviewed head and that GitHub's recorded squash commit is retained by fetched `origin/main`; the pre-squash PR head is not expected to be an ancestor of `main`.
+Merges require explicit authorization and the required CI/review evidence. Use GitHub's squash merge path after the active `main` ruleset is satisfied; there is no repository-owned automatic AI merge path. Keep merge confirmation separate from local task retirement, and stop all task writers before starting cleanup.
 
-Identify `MAIN_WORKTREE` from `git worktree list --porcelain`. Run the following examples in the same Bash session, with task writers stopped for the duration of cleanup. Establish the merge proof and primary-`main` synchronization as one fail-closed gate before any task retirement:
+### 5.1 Confirm the exact squash merge
+
+From a clean worktree that is not the task worktree, fetch the accepted trunk and inspect the PR once:
 
 ```bash
-MERGED_TARGET=origin/main
-PR_NUMBER=<merged-pr-number>
-CANDIDATE_SHA=<merged-pr-head-sha>
-MAIN_WORKTREE=<primary-main-worktree>
-CLEANUP_READY=false
-
-git fetch --prune origin main \
-    && test "$(gh pr view "$PR_NUMBER" --json state --jq .state)" = MERGED \
-    && test "$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)" = "$CANDIDATE_SHA" \
-    && MERGE_COMMIT="$(gh pr view "$PR_NUMBER" --json mergeCommit --jq '.mergeCommit.oid')" \
-    && test -n "$MERGE_COMMIT" \
-    && git merge-base --is-ancestor "$MERGE_COMMIT" "$MERGED_TARGET" \
-    && test "$(git -C "$MAIN_WORKTREE" branch --show-current)" = main \
-    && MAIN_STATUS="$(git -C "$MAIN_WORKTREE" status --porcelain=v1 --untracked-files=all)" \
-    && test -z "$MAIN_STATUS" \
-    && git -C "$MAIN_WORKTREE" reset --hard "$MERGED_TARGET" \
-    && test "$(git -C "$MAIN_WORKTREE" rev-parse HEAD)" = "$(git rev-parse "$MERGED_TARGET")" \
-    && CLEANUP_READY=true
-
-test "$CLEANUP_READY" = true
+git fetch origin main
+gh pr view <pr-number> --json state,headRefName,headRefOid,baseRefName,mergeCommit
+git merge-base --is-ancestor <merge-commit-oid> origin/main
 ```
 
-If this gate is not true, stop cleanup; do not substitute an ancestry test on the pre-squash head. Every later destructive cleanup block must re-check `CLEANUP_READY` so continuing an interactive shell after a failed command cannot bypass the reviewed-candidate proof.
+Continue only when the response is `MERGED`, its `baseRefName` is `main`, its `headRefName` and `headRefOid` equal the reviewed branch and candidate SHA, its `mergeCommit.oid` is present, and that recorded commit is retained by `origin/main`. A squash merge does not make the pre-squash candidate an ancestor of `main`; do not substitute that check. This confirmation is read-only evidence for the operator, not shared state consumed by the cleanup command.
 
-Inspect all local `agent/*` branches and registered task worktrees, including older merged residue. Branch enumeration and worktree enumeration are separate because a task branch can remain after its worktree is already gone. Retire a task only if an actually `MERGED` PR records the **current local tip** as its exact `headRefOid`, that PR's recorded `mergeCommit` is retained by fetched `origin/main`, and the branch has at most one registered dedicated worktree, which must be clean including untracked and ignored files and must not be the primary checkout.
+If the primary checkout must be synchronized, identify it from `git worktree list --porcelain`. Only when that checkout is on `main` and clean including untracked and ignored files may it be synchronized:
 
 ```bash
-git branch --list 'agent/*'
-git worktree list --porcelain
-
-TASK_BRANCH=<eligible-agent-branch>
-
+MAIN_WORKTREE=<primary-main-worktree>
 (
-    set -euo pipefail
-    test "${CLEANUP_READY:-false}" = true
-    case "$TASK_BRANCH" in agent/*) ;; *) exit 1 ;; esac
-    TASK_REF="refs/heads/$TASK_BRANCH"
-    TASK_TIP="$(git rev-parse "$TASK_REF")"
-    TASK_WORKTREES="$(
-        git worktree list --porcelain |
-            awk -v ref="$TASK_REF" '
-                $1 == "worktree" { path = substr($0, 10) }
-                $1 == "branch" && $2 == ref { print path }
-            '
-    )"
-    TASK_WORKTREE_COUNT="$(
-        printf '%s\n' "$TASK_WORKTREES" |
-            awk 'NF { count++ } END { print count + 0 }'
-    )"
-    test "$TASK_WORKTREE_COUNT" -le 1
-    TASK_WORKTREE="$TASK_WORKTREES"
-
-    gh pr list --state merged --base main --head "$TASK_BRANCH" --json number,state,headRefName,headRefOid
-    PR_NUMBER=<merged-pr-number-whose-headRefOid-equals-TASK_TIP>
-    test "$(gh pr view "$PR_NUMBER" --json state --jq .state)" = MERGED
-    test "$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)" = "$TASK_TIP"
-    MERGE_COMMIT="$(gh pr view "$PR_NUMBER" --json mergeCommit --jq '.mergeCommit.oid')"
-    test -n "$MERGE_COMMIT"
-    git merge-base --is-ancestor "$MERGE_COMMIT" "$MERGED_TARGET"
-
-    BRANCH_CONFIG_KEYS="$(git config --local --list --name-only)"
-    BRANCH_CONFIG_PRESENT=false
-    if printf '%s\n' "$BRANCH_CONFIG_KEYS" |
-        awk -v prefix="branch.$TASK_BRANCH." '
-            index($0, prefix) == 1 {
-                rest = substr($0, length(prefix) + 1)
-                if (index(rest, ".") == 0) {
-                    found = 1
-                }
-            }
-            END { exit found ? 0 : 1 }
-        '
-    then
-        BRANCH_CONFIG_PRESENT=true
-    fi
-
-    if test -n "$TASK_WORKTREE"; then
-        test "$(git -C "$TASK_WORKTREE" symbolic-ref --quiet HEAD)" = "$TASK_REF"
-        test "$(git -C "$TASK_WORKTREE" rev-parse HEAD)" = "$TASK_TIP"
-        test "$TASK_WORKTREE" != "$(git rev-parse --show-toplevel)"
-        TASK_STATUS="$(git -C "$TASK_WORKTREE" status --porcelain=v1 --untracked-files=all --ignored=matching)"
-        test -z "$TASK_STATUS"
-        git worktree remove "$TASK_WORKTREE"
-    fi
-
-    git update-ref -d "$TASK_REF" "$TASK_TIP"
-    if test "$BRANCH_CONFIG_PRESENT" = true; then
-        git config --local --remove-section "branch.$TASK_BRANCH"
-    fi
+    set -eu
+    test "$(git -C "$MAIN_WORKTREE" branch --show-current)" = main
+    MAIN_STATUS="$(git -C "$MAIN_WORKTREE" status --porcelain=v1 --untracked-files=all --ignored=matching)"
+    test -z "$MAIN_STATUS"
+    git -C "$MAIN_WORKTREE" reset --hard origin/main
+    test "$(git -C "$MAIN_WORKTREE" rev-parse HEAD)" = "$(git rev-parse origin/main)"
 )
 ```
 
-Derive registered worktrees from `git worktree list --porcelain` and refuse retirement when more than one checkout owns the same task branch; do not choose one arbitrarily. Run each retirement from a different worktree in the shown fail-closed subshell and require the established `CLEANUP_READY` gate. The expected old SHA on `git update-ref -d` additionally rejects deletion if the branch moves after verification. Complete configuration reads before removal and detect branch-specific configuration by literal prefix and key shape rather than interpolating a branch name into a regular expression. Read failures are not empty/clean results; Bash `pipefail` also propagates failure of worktree enumeration. Preserve unmerged, divergent and dirty tasks. `git clean`, task resets, forced worktree removal and forced branch deletion are not cleanup tools here. Pruning remote-tracking refs is not remote branch deletion; remote deletion and Issue closure require separate authorization.
+Do not reset a task or dirty primary checkout. This synchronization is a separate manual operation; `retire_task.py` never performs it.
 
-**Done:** local `main` equals the fetched accepted trunk, eligible merged local tasks are retired without force, and all other work is untouched. Report delivered behavior, checks, review, publication state and remaining gaps.
+### 5.2 Retire one verified task
+
+With writers stopped, run the versioned single-task command from a different worktree and provide the exact reviewed head SHA:
+
+```bash
+python3 scripts/retire_task.py \
+    --pr <pr-number> \
+    --branch agent/<owner>/<task> \
+    --candidate <reviewed-head-sha>
+```
+
+The command does not scan branches or historical PRs. Before any destructive command it verifies the direct local `refs/heads/agent/<owner>/<task>` tip, queries the supplied PR once for `state`, `headRefName`, `headRefOid`, `baseRefName`, and `mergeCommit`, fetches `origin main`, and verifies the recorded squash commit is retained by `origin/main`. It refuses symbolic or out-of-scope refs, a mismatched candidate, multiple registered worktrees, the primary or current worktree, dirty worktrees including ignored files, and Git read or configuration failures. A clean task worktree is removed without force; the exact local branch ref is then deleted with `git update-ref --no-deref` and its expected old SHA. Only the exact local `branch.<task>` configuration section is removed; global and similarly prefixed sections remain untouched.
+
+All checks finish before the first cleanup command. The individual worktree removal, ref deletion, and local configuration removal are not a multi-command transaction: if a later command fails, earlier changes remain, the command exits nonzero, and no rollback is promised. Inspect the repository and reconcile that partial result manually. The script never resets or synchronizes `main`, deletes remote refs, closes Issues, uses force deletion, or sweeps other tasks.
+
+**Done:** the explicitly supplied merged task is retired only after the exact squash proof, and every unproved or unsafe task remains untouched. Report the command, actual result, and any partial-failure or synchronization gap.
 
 ## Persistent continuity
 

@@ -8,6 +8,8 @@
 
 开发实例固定从**主工作树 `main`**运行；任务修改必须从 `main` 新建 `agent/...` 分支和独立 worktree，不直接修改 `main`。
 
+PR 合并前必须经过仓库门禁；具体审查、CI 和合并规则以 [`docs/engineering/workflow.md`](docs/engineering/workflow.md) 为准。
+
 ```sh
 make hooks
 make dev-setup

@@ -168,11 +168,11 @@ git branch --list 'agent/*'
 git worktree list --porcelain
 
 TASK_BRANCH=<eligible-agent-branch>
-TASK_WORKTREE=<registered-task-worktree-or-empty>
 
 (
     set -eu
     TASK_TIP="$(git rev-parse "$TASK_BRANCH")"
+    TASK_WORKTREE="$(git for-each-ref --format='%(worktreepath)' "refs/heads/$TASK_BRANCH")"
     gh pr list --state merged --base main --head "$TASK_BRANCH" --json number,state,headRefName,headRefOid
     PR_NUMBER=<merged-pr-number-whose-headRefOid-equals-TASK_TIP>
     test "$(gh pr view "$PR_NUMBER" --json state --jq .state)" = MERGED
@@ -182,6 +182,8 @@ TASK_WORKTREE=<registered-task-worktree-or-empty>
     git merge-base --is-ancestor "$MERGE_COMMIT" "$MERGED_TARGET"
 
     if test -n "$TASK_WORKTREE"; then
+        test "$(git -C "$TASK_WORKTREE" symbolic-ref --quiet HEAD)" = "refs/heads/$TASK_BRANCH"
+        test "$TASK_WORKTREE" != "$(git rev-parse --show-toplevel)"
         test -z "$(git -C "$TASK_WORKTREE" status --porcelain=v1 --untracked-files=all)"
         git worktree remove "$TASK_WORKTREE"
     fi
@@ -200,7 +202,7 @@ TASK_WORKTREE=<registered-task-worktree-or-empty>
 )
 ```
 
-Run each retirement from a different worktree in the shown subshell so a failed PR/head/merge/worktree check stops before destructive commands. The expected old SHA on `git update-ref -d` additionally rejects deletion if the branch moves after verification. Removing the branch-specific config prevents stale upstream state from surviving retirement. Preserve unmerged, divergent and dirty tasks. `git clean`, task resets, forced worktree removal and forced branch deletion are not cleanup tools here. Pruning remote-tracking refs is not remote branch deletion; remote deletion and Issue closure require separate authorization.
+Derive the registered worktree directly from the branch ref rather than supplying a path manually. Run each retirement from a different worktree in the shown subshell so a failed PR/head/merge/worktree check stops before destructive commands. The expected old SHA on `git update-ref -d` additionally rejects deletion if the branch moves after verification. Removing the branch-specific config prevents stale upstream state from surviving retirement. Preserve unmerged, divergent and dirty tasks. `git clean`, task resets, forced worktree removal and forced branch deletion are not cleanup tools here. Pruning remote-tracking refs is not remote branch deletion; remote deletion and Issue closure require separate authorization.
 
 **Done:** local `main` equals the fetched accepted trunk, eligible merged local tasks are retired without force, and all other work is untouched. Report delivered behavior, checks, review, publication state and remaining gaps.
 

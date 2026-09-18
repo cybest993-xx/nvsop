@@ -84,6 +84,54 @@ class PrReadinessTest(unittest.TestCase):
         )
         self.assertEqual(protection_state("owner/repo", "main"), "unknown")
 
+    @patch("scripts.check_pr_readiness.run")
+    def test_protection_state_accepts_ruleset_with_strict_ci_required(self, run_mock: Mock) -> None:
+        run_mock.side_effect = [
+            subprocess.CompletedProcess(
+                args=[], returncode=1, stdout="", stderr="gh: Branch not protected (HTTP 404)"
+            ),
+            subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=(
+                    '[{"type":"pull_request"},'
+                    '{"type":"required_status_checks","parameters":{'
+                    '"strict_required_status_checks_policy":true,'
+                    '"required_status_checks":[{"context":"CI required"}]}}]'
+                ),
+                stderr="",
+            ),
+        ]
+
+        self.assertEqual(protection_state("owner/repo", "main"), "protected")
+        self.assertEqual(
+            run_mock.call_args_list[1].args,
+            ("gh", "api", "repos/owner/repo/rules/branches/main"),
+        )
+
+    @patch("scripts.check_pr_readiness.run")
+    def test_ruleset_without_strict_ci_required_is_not_reported_as_protected(
+        self, run_mock: Mock
+    ) -> None:
+        run_mock.side_effect = [
+            subprocess.CompletedProcess(
+                args=[], returncode=1, stdout="", stderr="gh: Branch not protected (HTTP 404)"
+            ),
+            subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=(
+                    '[{"type":"pull_request"},'
+                    '{"type":"required_status_checks","parameters":{'
+                    '"strict_required_status_checks_policy":false,'
+                    '"required_status_checks":[{"context":"CI required"}]}}]'
+                ),
+                stderr="",
+            ),
+        ]
+
+        self.assertEqual(protection_state("owner/repo", "main"), "absent")
+
     def test_different_local_branch_cannot_be_reported_as_automatically_ready(self) -> None:
         result = evaluate(
             {

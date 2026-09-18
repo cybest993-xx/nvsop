@@ -25,9 +25,11 @@ Actions: `N/A`
 
 ## Readiness and remaining work
 
-<!-- Record the exact-head CI/review state. For manual-merge authority changes, successful AI review does not replace the required independent review or explicit merge authorization. Rules: docs/engineering/workflow.md. -->
+<!-- Record the exact-head CI/review state. Codex review supplements CI and does not replace a required independent review or explicit merge authorization. Re-run @codex review after repairing findings or changing the candidate. Rules: docs/engineering/workflow.md. -->
 CI required: `pending`
-AI Code Review: `pending`
-Merge path: `manual` / `automatic`
+Codex review: `pending`
+Codex reviewed commit: `pending`
+Unresolved Codex findings: `pending`
+Merge authorization: `pending`
 
 <!-- Deferred original acceptance links, unverified target-environment evidence and blockers. Publication/CI status alone is not merge authorization. -->

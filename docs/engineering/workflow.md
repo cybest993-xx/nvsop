@@ -1,6 +1,6 @@
 # Engineering delivery workflow
 
-Status: **normative**. This is the home for task isolation, verification, review, PR/CI, merge and local cleanup. Read the relevant section for the current step; product acceptance belongs to [the roadmap](../design/solution-and-roadmap.md), and Issue state to [issues.md](issues.md). The [Makefile](../../Makefile), [CI workflow](../../.github/workflows/blocking-ci.yml) and [versioned hooks](../../scripts/githooks/) own executable behavior.
+Status: **normative**. This is the home for task isolation, verification, review, PR/CI, Codex review, merge and local cleanup. Read the relevant section for the current step; product acceptance belongs to [the roadmap](../design/solution-and-roadmap.md), and Issue state to [issues.md](issues.md). The [Makefile](../../Makefile), [blocking CI workflow](../../.github/workflows/blocking-ci.yml) and [versioned hooks](../../scripts/githooks/) own executable repository behavior.
 
 ## 1. Establish the task workspace
 
@@ -98,7 +98,7 @@ Repair concrete findings as one bounded batch, rerun affected checks and review 
 ## 4. Publish the candidate and evaluate CI
 
 Publication requires user authorization for the action and target. Publish only the task branch and open its PR directly against `main`; never push `HEAD:main`. Use the [PR template](../../.github/pull_request_template.md) to record outcome, scope, risks, actual evidence and documentation impact, not another full rulebook.
-Before requesting merge, `make pr-check PR=<number>` may aggregate the PR head/base, `CI required`, branch-protection visibility and local candidate identity. Treat `unknown` or absent protection and a missing check as blocked. If GitHub explicitly reports that branch protection is unavailable for the repository plan, the check reports `unsupported`: the exact PR head still needs successful `CI required`, and merge remains a manual action requiring explicit user authorization. Its output deliberately leaves independent review as manual confirmation and never grants merge authorization.
+Before merge, `make pr-check PR=<number>` may aggregate the PR head/base, `CI required`, branch-protection visibility and local candidate identity. Treat `unknown` or absent protection and a missing check as blocked. The exact PR head needs successful `CI required`, the required review evidence and explicit user authorization. `pr-check` deliberately leaves Codex and independent review as manual confirmation and never grants merge authorization.
 For candidates that change architecture/Issue/mechanism/ADR authority, the module-registry manifest or shared machine contracts, the same preflight reports `dispatch_impact_review=required`. Record the actual open/ready Issue scan and dispositions in the PR template; this mechanical evidence does not replace semantic review of whether the affected set is complete.
 
 ```sh
@@ -108,10 +108,11 @@ gh pr create --base main --head agent/a/<task-slug>
 
 ### CI gates
 
-The sole aggregate required PR status is `CI required` from [blocking-ci.yml](../../.github/workflows/blocking-ci.yml). Server-side repository settings must separately require it when the GitHub plan exposes branch protection or rulesets; a workflow file alone does not enable protection. If GitHub explicitly reports that those controls are unavailable for the repository plan, `pr-check` makes the missing server enforcement visible and requires manual confirmation of the green `CI required` result plus explicit merge authorization. Its `always()` gatherer requires explicit success from scope, lockfile checks and every gate family; failed, cancelled or skipped dependencies are not success.
+The supported CI path uses GitHub-hosted `ubuntu-24.04` runners. The repository is intentionally public; do not replace the hosted path with a local or self-hosted runner as an account-billing workaround. A runner-topology change is a separate CI-policy change and requires the same review as other workflow authority changes. Repository visibility, Actions permissions, branch protection/rulesets and repository secrets remain server-side settings; workflow files do not configure them.
 
-[ci_scope.py](../../scripts/ci_scope.py) compares the actual base/candidate commits with rename detection disabled. A missing comparison baseline forces all gates.
-The selector also owns integration, browser and media applicability; jobs consume its outputs instead of maintaining their own path regexes. Media-owned inputs select both real-infrastructure and browser lanes, then run `make media-system` and `make web-e2e-whep` with explicit live fixtures so environment-dependent tests cannot silently satisfy media evidence by skipping.
+The sole aggregate required PR status is `CI required` from [blocking-ci.yml](../../.github/workflows/blocking-ci.yml). Server-side repository settings must separately require it when protection is available. `pr-check` makes missing or unknown enforcement visible; regardless of server enforcement, the exact PR head still needs successful `CI required`. Its `always()` gatherer requires explicit success from scope, lockfile checks and every gate family; failed, cancelled or skipped dependencies are not success.
+
+[ci_scope.py](../../scripts/ci_scope.py) compares the actual base/candidate commits with rename detection disabled. A missing comparison baseline forces all gates. The selector also owns integration, browser and media applicability; jobs consume its outputs instead of maintaining their own path regexes. Media-owned inputs select both real-infrastructure and browser lanes, then run `make media-system` and `make web-e2e-whep` with explicit live fixtures so environment-dependent tests cannot silently satisfy media evidence by skipping.
 
 | Compared paths | Existing blocking lane |
 |---|---|
@@ -121,14 +122,23 @@ The selector also owns integration, browser and media applicability; jobs consum
 | Media deployment/test inputs | `make check` plus real-infrastructure, playback and WHEP browser evidence |
 | `.github/`, `Makefile`, the selector/actionlint installer, or unusable baseline | All blocking families |
 
-Filtering is an optimization, not an exemption. Lockfiles are always checked; applicable code gates regenerate artifacts and verify tracked and untracked cleanliness. Keep immutable action pins, least-privilege permissions, frozen installs, job timeouts and cancellation of superseded PR runs. Do not relax this selection merely because a script change accompanies documentation.
-Workflow changes additionally install the pinned `actionlint` release through the checksum-verifying repository installer and run `make ci-lint`. Browser failures upload only Playwright `test-results/` with a pinned upload action and short retention; do not upload `.tmp/dev-main`, environment files or broader workspaces as diagnostic artifacts.
+Filtering is an optimization, not an exemption. Lockfiles are always checked; applicable code gates regenerate artifacts and verify tracked and untracked cleanliness. Keep immutable action pins, least-privilege permissions, frozen installs, job timeouts and cancellation of superseded PR runs. Do not relax this selection merely because a script change accompanies documentation. Workflow changes additionally install the pinned `actionlint` release through the checksum-verifying repository installer and run `make ci-lint`. Browser failures upload only Playwright `test-results/` with a pinned upload action and short retention; do not upload `.tmp/dev-main`, environment files or broader workspaces as diagnostic artifacts.
 
-**Done:** the published branch names the verified candidate, PR base is `main` and that final candidate has applicable green CI and review evidence. An earlier candidate's green CI does not transfer across content changes.
+### Codex review and merge
+
+Codex GitHub review is the semantic review layer. Automatic review may run when a pull request is opened for review or moved out of draft. Treat Codex as review evidence, not as a replacement for deterministic CI, branch protection or the repository's independent-review rule. The repository does not run a second model reviewer, translate Codex comments into a custom status, or automatically merge after an AI verdict.
+
+If the candidate changes after the last Codex review, or a Codex finding is repaired, request a fresh review with `@codex review` and record the reviewed commit in the PR. Concrete unresolved Codex findings block merge by process. Deterministic style, lint, generated-file and test gates remain owned by `blocking-ci`; Codex should focus on correctness, architecture, safety and repository-governance regressions.
+
+The active server-side `main` ruleset is the mechanical merge boundary. It requires a pull request, successful `CI required`, an up-to-date branch before merge and resolved review conversations; force pushes and branch deletion are blocked. Repository-policy, CI, architecture, shared-contract and other critical changes still require the consolidated independent read-only Spec + Standards review from section 3 in addition to Codex review.
+
+All accepted pull requests are merged manually with squash after the exact candidate satisfies the required CI and review evidence and the user explicitly authorizes merge. Do not enable a repository workflow that treats Codex output as merge authorization or races GitHub's branch rules.
+
+**Done:** the published branch names the verified candidate, PR base is `main`, the final candidate has green `CI required`, Codex review covers the current candidate with no unresolved concrete findings, required conversations are resolved, any required independent review is complete, and merge authorization is explicit. Earlier CI or review evidence does not transfer across candidate changes.
 
 ## 5. Merge and clean up
 
-Merge only with explicit authorization and the required CI/review evidence. After GitHub reports `MERGED`, synchronize the dedicated primary `main` and safely retire eligible merged tasks as part of closeout.
+Merges require explicit authorization and the required CI/review evidence. Use GitHub's squash merge path after the active `main` ruleset is satisfied; there is no repository-owned automatic AI merge path. After GitHub reports `MERGED`, synchronize the dedicated primary `main` and safely retire eligible merged tasks as part of closeout.
 
 ```sh
 git fetch --prune origin main

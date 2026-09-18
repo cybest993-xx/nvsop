@@ -215,15 +215,58 @@ def protection_state(repository: str, branch: str) -> str:
     result = run("gh", "api", f"repos/{repository}/branches/{branch}/protection")
     if result.returncode == 0:
         return "protected"
+
     message = result.stderr.lower()
     plan_capability_error = (
         "upgrade to github pro or make this repository public to enable this feature"
     )
     if plan_capability_error in message and "http 403" in message:
         return "unsupported"
-    if "404" in message or "not found" in message:
+    if "404" not in message and "not found" not in message:
+        return "unknown"
+
+    rules = run("gh", "api", f"repos/{repository}/rules/branches/{branch}")
+    if rules.returncode != 0:
+        rules_message = rules.stderr.lower()
+        if plan_capability_error in rules_message and "http 403" in rules_message:
+            return "unsupported"
+        if "404" in rules_message or "not found" in rules_message:
+            return "absent"
+        return "unknown"
+
+    try:
+        payload = json.loads(rules.stdout)
+    except json.JSONDecodeError:
+        return "unknown"
+    if not isinstance(payload, list):
+        return "unknown"
+
+    pull_request_rule = next(
+        (rule for rule in payload if isinstance(rule, dict) and rule.get("type") == "pull_request"),
+        None,
+    )
+    required_status_rules = [
+        rule
+        for rule in payload
+        if isinstance(rule, dict) and rule.get("type") == "required_status_checks"
+    ]
+    if not isinstance(pull_request_rule, dict) or not required_status_rules:
         return "absent"
-    return "unknown"
+
+    for required_status_rule in required_status_rules:
+        parameters = required_status_rule.get("parameters")
+        if not isinstance(parameters, dict):
+            continue
+        if not parameters.get("strict_required_status_checks_policy"):
+            continue
+        checks = parameters.get("required_status_checks")
+        if not isinstance(checks, list):
+            continue
+        if any(
+            isinstance(check, dict) and check.get("context") == REQUIRED_CHECK for check in checks
+        ):
+            return "protected"
+    return "absent"
 
 
 def local_identity() -> tuple[str, str]:

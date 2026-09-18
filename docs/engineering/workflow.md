@@ -193,7 +193,7 @@ TASK_WORKTREE=<registered-task-worktree-or-empty>
 )
 ```
 
-Run each retirement in the shown subshell so a failed PR/head/merge/worktree check stops before destructive commands. The expected old SHA on `git update-ref -d` additionally rejects deletion if the branch moves after verification. Removing the branch-specific config prevents stale upstream state from surviving retirement. Preserve unmerged, divergent and dirty tasks. `git clean`, task resets, forced worktree removal and forced branch deletion are not cleanup tools here. Pruning remote-tracking refs is not remote branch deletion; remote deletion and Issue closure require separate authorization.
+Run each retirement from a different worktree in the shown subshell so a failed PR/head/merge/worktree check stops before destructive commands. The expected old SHA on `git update-ref -d` additionally rejects deletion if the branch moves after verification. Removing the branch-specific config prevents stale upstream state from surviving retirement. Preserve unmerged, divergent and dirty tasks. `git clean`, task resets, forced worktree removal and forced branch deletion are not cleanup tools here. Pruning remote-tracking refs is not remote branch deletion; remote deletion and Issue closure require separate authorization.
 
 **Done:** local `main` equals the fetched accepted trunk, eligible merged local tasks are retired without force, and all other work is untouched. Report delivered behavior, checks, review, publication state and remaining gaps.
 

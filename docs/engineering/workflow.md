@@ -128,7 +128,7 @@ Filtering is an optimization, not an exemption. Lockfiles are always checked; ap
 
 Codex GitHub review is the semantic review layer. Automatic review may run when a pull request is opened for review or moved out of draft. Treat Codex as review evidence, not as a replacement for deterministic CI, branch protection or the repository's independent-review rule. The repository does not run a second model reviewer, translate Codex comments into a custom status, or automatically merge after an AI verdict.
 
-If the candidate changes after the last Codex review, or a Codex finding is repaired, request a fresh review with `@codex review` and record the reviewed commit in the PR. Concrete unresolved Codex findings block merge by process. Deterministic style, lint, generated-file and test gates remain owned by `blocking-ci`; Codex should focus on correctness, architecture, safety and repository-governance regressions.
+If the candidate changes after the last Codex review, or a Codex finding is repaired, request a fresh review with `@codex review` and record the reviewed commit in the PR. For each candidate SHA, issue at most one manual `@codex review`; once that review is running, only wait for and inspect its result rather than retriggering the same SHA. For each repair round, collect the currently known findings first, perform at most one code/file write operation that addresses that round, then use only read-only validation and review; a newly discovered finding starts the next repair round. Concrete unresolved Codex findings block merge by process. Deterministic style, lint, generated-file and test gates remain owned by `blocking-ci`; Codex should focus on correctness, architecture, safety and repository-governance regressions.
 
 The active server-side `main` ruleset is the mechanical merge boundary. It requires a pull request, successful `CI required`, an up-to-date branch before merge and resolved review conversations; force pushes and branch deletion are blocked. Repository-policy, CI, architecture, shared-contract and other critical changes still require the consolidated independent read-only Spec + Standards review from section 3 in addition to Codex review.
 
@@ -161,7 +161,7 @@ git -C "$MAIN_WORKTREE" reset --hard "$MERGED_TARGET"
 test "$(git -C "$MAIN_WORKTREE" rev-parse HEAD)" = "$(git rev-parse "$MERGED_TARGET")"
 ```
 
-Inspect all local `agent/*` branches and registered task worktrees, including older merged residue. Branch enumeration and worktree enumeration are separate because a task branch can remain after its worktree is already gone. Retire a task only if an actually `MERGED` PR records the **current local tip** as its exact `headRefOid`, that PR's recorded `mergeCommit` is retained by fetched `origin/main`, and any registered dedicated worktree is clean including untracked files and is not the primary checkout.
+Inspect all local `agent/*` branches and registered task worktrees, including older merged residue. Branch enumeration and worktree enumeration are separate because a task branch can remain after its worktree is already gone. Retire a task only if an actually `MERGED` PR records the **current local tip** as its exact `headRefOid`, that PR's recorded `mergeCommit` is retained by fetched `origin/main`, and any registered dedicated worktree is clean including untracked and ignored files and is not the primary checkout.
 
 ```sh
 git branch --list 'agent/*'
@@ -184,7 +184,7 @@ TASK_BRANCH=<eligible-agent-branch>
     if test -n "$TASK_WORKTREE"; then
         test "$(git -C "$TASK_WORKTREE" symbolic-ref --quiet HEAD)" = "refs/heads/$TASK_BRANCH"
         test "$TASK_WORKTREE" != "$(git rev-parse --show-toplevel)"
-        test -z "$(git -C "$TASK_WORKTREE" status --porcelain=v1 --untracked-files=all)"
+        test -z "$(git -C "$TASK_WORKTREE" status --porcelain=v1 --untracked-files=all --ignored=matching)"
         git worktree remove "$TASK_WORKTREE"
     fi
 

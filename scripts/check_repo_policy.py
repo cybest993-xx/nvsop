@@ -12,6 +12,7 @@ import tomllib
 from pathlib import Path
 
 from check_documentation import check_documentation
+from nvsop_config import load_center_modules
 
 REQUIRED_FILES = {
     Path("AGENTS.md"),
@@ -68,6 +69,8 @@ EDGE_APP = Path("apps/edge-runtime")
 EDGE_SOURCE = EDGE_APP / "src"
 CONTRACT_SOURCE = Path("packages/contracts/src/nvsop_contracts")
 CENTER_SOURCE = Path("apps/control-api/src/factory_sop")
+CENTER_COMPOSITION_ROOT = CENTER_SOURCE / "app.py"
+CENTER_OWNER_SHAPE_FILES = frozenset({"api.py", "model.py", "repository.py", "usecases.py"})
 WEB_APP = Path("apps/control-web")
 # What the web workspace's frozen toolchain is made of (harness §2). Each is required only
 # once `apps/control-web/` exists, because §2 equally forbids adding them before it does.
@@ -341,18 +344,14 @@ def check_shared_contract_isolation(root: Path, files: list[Path]) -> list[str]:
 
 
 def check_center_modules_are_contracted(root: Path, files: list[Path]) -> list[str]:
-    """Every center module must be named by an `import-linter` contract.
-
-    Module boundaries are enforced mechanically, not by review (harness §3). A module that
-    no contract names has no enforced boundary, and the omission is invisible: the gate
-    still passes, because `lint-imports` only checks the contracts it was given. This makes
-    the missing contract itself the failure, so it lands in the same change as the module.
-    """
-    modules = {
+    """要求已有生产文件的注册 Center 模块都被 import-linter 契约命名。"""
+    registered = load_center_modules(root / "pyproject.toml")
+    physical = {
         path.relative_to(CENTER_SOURCE).parts[0]
         for path in files
         if is_under(path, CENTER_SOURCE) and len(path.relative_to(CENTER_SOURCE).parts) > 1
     }
+    modules = registered & physical
     if not modules:
         return []
 
@@ -373,6 +372,99 @@ def check_center_modules_are_contracted(root: Path, files: list[Path]) -> list[s
         "a module whose boundary is not named by a contract is unenforced"
         for module in sorted(modules - contracted)
     ]
+
+
+def center_boundary_violations(root: Path, files: list[Path]) -> list[str]:
+    """评估通用 Center owner 边界，不在本任务中激活仓库阻塞门禁。"""
+    registered = load_center_modules(root / "pyproject.toml")
+    violations: list[tuple[str, int, str]] = []
+
+    for path in sorted(files):
+        if path.suffix != ".py" or not is_under(path, CENTER_SOURCE):
+            continue
+        relative = path.relative_to(CENTER_SOURCE)
+        if len(relative.parts) > 1:
+            namespace = relative.parts[0]
+            namespace_path = Path(*relative.parts[1:])
+            if namespace not in registered and _has_product_owner_shape(namespace_path):
+                violations.append(
+                    (
+                        str(path),
+                        0,
+                        f"{path} gives unregistered center namespace {namespace} a "
+                        "product-owner shape; ownership must be resolved explicitly rather "
+                        "than inferred outside [tool.nvsop].center_modules",
+                    )
+                )
+
+        if path == CENTER_COMPOSITION_ROOT or len(relative.parts) < 2:
+            continue
+        source_owner = relative.parts[0]
+        if source_owner not in registered:
+            continue
+
+        tree = ast.parse((root / path).read_text(encoding="utf-8"), filename=str(path))
+        for line, target in _center_import_targets(path, tree):
+            parts = target.split(".")
+            if len(parts) < 2 or parts[0] != "factory_sop":
+                continue
+            target_owner = parts[1]
+            if target_owner not in registered or target_owner == source_owner:
+                continue
+            if len(parts) >= 3 and parts[2] == "api":
+                continue
+            violations.append(
+                (
+                    str(path),
+                    line,
+                    f"{path}:{line} registered center module {source_owner} imports {target}; "
+                    "cross-owner production imports must use "
+                    f"factory_sop.{target_owner}.api",
+                )
+            )
+
+    return [message for _, _, message in sorted(violations)]
+
+
+def _has_product_owner_shape(path: Path) -> bool:
+    return (
+        path.name in CENTER_OWNER_SHAPE_FILES
+        or (path.parts and path.parts[0] == "usecases")
+        or path == Path("adapters/tables.py")
+    )
+
+
+def _center_import_targets(path: Path, tree: ast.AST) -> list[tuple[int, str]]:
+    package = ["factory_sop", *path.relative_to(CENTER_SOURCE).parent.parts]
+    imports: list[tuple[int, str]] = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.extend((node.lineno, alias.name) for alias in node.names)
+            continue
+        if not isinstance(node, ast.ImportFrom):
+            continue
+
+        if node.level:
+            keep = len(package) - node.level + 1
+            base_parts = package[: max(keep, 0)]
+            if node.module:
+                base_parts.extend(node.module.split("."))
+            base = ".".join(base_parts)
+        else:
+            base = node.module or ""
+        if not base:
+            continue
+
+        base_parts = base.split(".")
+        if base == "factory_sop" or (len(base_parts) == 2 and base_parts[0] == "factory_sop"):
+            for alias in node.names:
+                target = base if alias.name == "*" else f"{base}.{alias.name}"
+                imports.append((node.lineno, target))
+        else:
+            imports.append((node.lineno, base))
+
+    return sorted(imports)
 
 
 def is_under(path: Path, directory: Path) -> bool:

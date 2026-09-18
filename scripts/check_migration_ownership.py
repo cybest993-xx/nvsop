@@ -15,8 +15,9 @@ from __future__ import annotations
 import ast
 import re
 import sys
-import tomllib
 from pathlib import Path
+
+from nvsop_config import load_center_modules
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -44,23 +45,6 @@ TABLE_ARGUMENT: dict[str, tuple[int, str]] = {
     "create_primary_key": (1, "table_name"),
     "bulk_insert": (0, "table"),
 }
-
-
-def load_center_modules(pyproject: Path) -> frozenset[str]:
-    """Read the Center module declaration of record from ``[tool.nvsop]``."""
-    with pyproject.open("rb") as handle:
-        config = tomllib.load(handle)
-    try:
-        modules = config["tool"]["nvsop"]["center_modules"]
-    except (KeyError, TypeError) as error:
-        raise ValueError("[tool.nvsop].center_modules is required") from error
-    if (
-        not isinstance(modules, list)
-        or not modules
-        or not all(isinstance(module, str) and module for module in modules)
-    ):
-        raise ValueError("[tool.nvsop].center_modules must be a non-empty list of strings")
-    return frozenset(modules)
 
 
 def module_of(table: str, center_modules: frozenset[str]) -> str | None:

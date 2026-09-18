@@ -161,24 +161,39 @@ git -C "$MAIN_WORKTREE" reset --hard "$MERGED_TARGET"
 test "$(git -C "$MAIN_WORKTREE" rev-parse HEAD)" = "$(git rev-parse "$MERGED_TARGET")"
 ```
 
-Inspect all local `agent/*` branches and registered task worktrees, including older merged residue. Retire a task only if an actually `MERGED` PR records the **current local tip** as its exact `headRefOid`, that PR's recorded `mergeCommit` is retained by fetched `origin/main`, and its dedicated worktree is clean including untracked files and is not the primary checkout. A branch with no worktree still needs the same PR-head and merge-commit evidence.
+Inspect all local `agent/*` branches and registered task worktrees, including older merged residue. Branch enumeration and worktree enumeration are separate because a task branch can remain after its worktree is already gone. Retire a task only if an actually `MERGED` PR records the **current local tip** as its exact `headRefOid`, that PR's recorded `mergeCommit` is retained by fetched `origin/main`, and any registered dedicated worktree is clean including untracked files and is not the primary checkout.
 
 ```sh
+git branch --list 'agent/*'
 git worktree list --porcelain
-TASK_TIP="$(git rev-parse "$TASK_BRANCH")"
-gh pr list --state merged --base main --head "$TASK_BRANCH" --json number,state,headRefName,headRefOid
-PR_NUMBER=<merged-pr-number-whose-headRefOid-equals-TASK_TIP>
-test "$(gh pr view "$PR_NUMBER" --json state --jq .state)" = MERGED
-test "$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)" = "$TASK_TIP"
-MERGE_COMMIT="$(gh pr view "$PR_NUMBER" --json mergeCommit --jq '.mergeCommit.oid')"
-test -n "$MERGE_COMMIT"
-git merge-base --is-ancestor "$MERGE_COMMIT" "$MERGED_TARGET"
-test -z "$(git -C "$TASK_WORKTREE" status --porcelain=v1 --untracked-files=all)"
-git worktree remove "$TASK_WORKTREE"
-git update-ref -d "refs/heads/$TASK_BRANCH" "$TASK_TIP"
+
+TASK_BRANCH=<eligible-agent-branch>
+TASK_WORKTREE=<registered-task-worktree-or-empty>
+
+(
+    set -eu
+    TASK_TIP="$(git rev-parse "$TASK_BRANCH")"
+    gh pr list --state merged --base main --head "$TASK_BRANCH" --json number,state,headRefName,headRefOid
+    PR_NUMBER=<merged-pr-number-whose-headRefOid-equals-TASK_TIP>
+    test "$(gh pr view "$PR_NUMBER" --json state --jq .state)" = MERGED
+    test "$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)" = "$TASK_TIP"
+    MERGE_COMMIT="$(gh pr view "$PR_NUMBER" --json mergeCommit --jq '.mergeCommit.oid')"
+    test -n "$MERGE_COMMIT"
+    git merge-base --is-ancestor "$MERGE_COMMIT" "$MERGED_TARGET"
+
+    if test -n "$TASK_WORKTREE"; then
+        test -z "$(git -C "$TASK_WORKTREE" status --porcelain=v1 --untracked-files=all)"
+        git worktree remove "$TASK_WORKTREE"
+    fi
+
+    git update-ref -d "refs/heads/$TASK_BRANCH" "$TASK_TIP"
+    if git config --get "branch.$TASK_BRANCH.remote" >/dev/null 2>&1; then
+        git config --remove-section "branch.$TASK_BRANCH"
+    fi
+)
 ```
 
-Remove a worktree from a different worktree. The expected old SHA on `git update-ref -d` makes local branch retirement fail closed if the branch moves after verification. Preserve unmerged, divergent and dirty tasks. `git clean`, task resets, forced worktree removal and forced branch deletion are not cleanup tools here. Pruning remote-tracking refs is not remote branch deletion; remote deletion and Issue closure require separate authorization.
+Run each retirement in the shown subshell so a failed PR/head/merge/worktree check stops before destructive commands. The expected old SHA on `git update-ref -d` additionally rejects deletion if the branch moves after verification. Removing the branch-specific config prevents stale upstream state from surviving retirement. Preserve unmerged, divergent and dirty tasks. `git clean`, task resets, forced worktree removal and forced branch deletion are not cleanup tools here. Pruning remote-tracking refs is not remote branch deletion; remote deletion and Issue closure require separate authorization.
 
 **Done:** local `main` equals the fetched accepted trunk, eligible merged local tasks are retired without force, and all other work is untouched. Report delivered behavior, checks, review, publication state and remaining gaps.
 

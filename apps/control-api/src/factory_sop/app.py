@@ -83,8 +83,8 @@ from factory_sop.observability import (
     get_logger,
     new_correlation_id,
 )
-from factory_sop.overview.adapters.routes import create_router as create_overview_router
-from factory_sop.overview.api import OverviewSources
+from factory_sop.overview import OverviewSources
+from factory_sop.overview import create_router as create_overview_router
 from factory_sop.problem import (
     PROBLEM_MEDIA_TYPE,
     ApiErrorCode,

@@ -236,7 +236,7 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
                  break
  
          while self._boundary_queue.get(block=True) is not None:
-@@ -919,14 +1036,42 @@
+@@ -919,14 +1036,40 @@
          need_check_delayed = False
          is_ready = False
          chunk_idx = 0
@@ -256,8 +256,6 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
 +                    continue
 +                _, pts, _ = item
 +                self._clip_start_sec = pts
-+                self._clip_cur_sec = pts
-+                continue
              if item is None:
                  logger.info("last item is None received")
                  is_last_item = True
@@ -279,7 +277,7 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
                  self._clip_cur_sec = pts
                  if score < 0:  # this is the first ready frame, need to init some base timestamp offsets
                      # the self.first_timestamp and start_time is a match for live stream processing
-@@ -958,8 +1103,15 @@
+@@ -958,8 +1101,15 @@
                  if end is not None:
                      tm.log_elapsed_time(f"calculated next chunk clip {self._clip_start_sec:.3f} - {end:.3f} video ")
                      chunk_info = self._make_chunk_info(chunk_idx, self._clip_start_sec, end, score, tm.elapsed_time)
@@ -296,7 +294,7 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
                      self._clip_start_sec = end
                      tm.reset()
                  boundaries.clear()
-@@ -1012,6 +1164,13 @@
+@@ -1012,6 +1162,13 @@
              if chunk is None:
                  break
              chunk_info = chunk
@@ -310,7 +308,7 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
              start_time, end_time = chunk_info["start_time"], chunk_info["end_time"]
              logger.info(f"VLM start inference on chunk {start_time:.3f} - {end_time:.3f} video")
              chunk_info["pipeline_vlm_starting_timestamp"] = self._tm_e2e.now()
-@@ -1032,6 +1191,8 @@
+@@ -1032,6 +1189,8 @@
                      # system_prompt=VLM_SYSTEM_PROMPT,
                  )
  
@@ -319,7 +317,7 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
              if response_future is not None:
                  response_future.add_done_callback(future_callback_profiling(vlm_tm))
  
-@@ -1047,20 +1208,34 @@
+@@ -1047,20 +1206,34 @@
      def submit_vllm_inference(self, prompt, system_prompt, start_time, end_time, chunk_info):
          decoded_frame_queue = self._decoded_frame_retriever.decoded_frame_queue
          assert decoded_frame_queue is not None, "decoded frame queue is not set"
@@ -356,7 +354,7 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
              logger.debug(
                  f"before submit_vllm_inference: get decoded frame, timestamp: {timestamp}, tensor.shape: {tensor.shape}"
              )
-@@ -1072,6 +1247,9 @@
+@@ -1072,6 +1245,9 @@
          encode_frames.put(None)
          chunk_info["frame_number"] = len(frames)
  
@@ -366,7 +364,7 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
          if len(frames) == 0:
              logger.warning(f"submit_vllm_inference: no frames decoded, start: {start_time}, end: {end_time}")
              return None
-@@ -1132,6 +1310,15 @@
+@@ -1132,6 +1308,15 @@
              chunk_info = self._vlm_response_future_queue.get(block=True)
              if chunk_info is None:
                  break
@@ -382,7 +380,7 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
              response_future = chunk_info.pop("response_future", None)
              response = {}
              try:
-@@ -1142,6 +1329,8 @@
+@@ -1142,6 +1327,8 @@
              except Exception as e:
                  logger.exception(f"VLM inference failed: {e}")
                  response = None

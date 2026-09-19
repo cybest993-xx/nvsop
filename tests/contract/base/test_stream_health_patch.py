@@ -159,6 +159,15 @@ class RecordedPatchStaysWithinRegisteredSeamsTest(unittest.TestCase):
         self.assertIn("else self.clip_post_process", source)
         self.assertLess(source.index("clip_fn ="), source.index("if not DISABLE_VLM_INFERENCE:"))
 
+    def test_ddm_epoch_change_preserves_previous_pts_until_rollback_check(self) -> None:
+        source = function_source(PROCESS, "clip_post_process")
+        epoch_branch = source.index("if current_epoch != stream_epoch:")
+        rollback = source.index("if self._clip_cur_sec > 0 and pts < self._clip_cur_sec:")
+        before_rollback = source[epoch_branch:rollback]
+        self.assertIn("self._clip_start_sec = pts", before_rollback)
+        self.assertNotIn("self._clip_cur_sec = pts", before_rollback)
+        self.assertNotIn("continue", before_rollback.rsplit("if item is None:", 1)[-1])
+
 
 class HookIsTheOnlyReachIntoOurCodeTest(unittest.TestCase):
     """核验 vendor 只调用登记的入口，避免 hook 扩大对 edge_runtime 内部的依赖。

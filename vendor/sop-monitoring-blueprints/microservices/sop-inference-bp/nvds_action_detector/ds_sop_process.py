@@ -1052,8 +1052,6 @@ class SOPVideoProcessor:
                     continue
                 _, pts, _ = item
                 self._clip_start_sec = pts
-                self._clip_cur_sec = pts
-                continue
             if item is None:
                 logger.info("last item is None received")
                 is_last_item = True

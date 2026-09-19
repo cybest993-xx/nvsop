@@ -67,6 +67,9 @@ JSON_AUTHORIZATION_HEADER = re.compile(r'"Authorization"\s*:\s*"(?P<value>[^"]*)
 ENVIRONMENT_REFERENCE = re.compile(r"^\s*(?:Bearer\s+)?\$\{[^}]+\}\s*$")
 EDGE_APP = Path("apps/edge-runtime")
 EDGE_SOURCE = EDGE_APP / "src"
+EDGE_RUNTIME_PACKAGES = frozenset(
+    {"connectors", "judgment", "local_state", "stream_health", "supervisor"}
+)
 CONTRACT_SOURCE = Path("packages/contracts/src/nvsop_contracts")
 CENTER_SOURCE = Path("apps/control-api/src/factory_sop")
 CENTER_COMPOSITION_ROOT = CENTER_SOURCE / "app.py"
@@ -329,17 +332,31 @@ def check_edge_runtime_isolation(root: Path, files: list[Path]) -> list[str]:
 
 
 def check_edge_dependency_directions(root: Path, files: list[Path]) -> list[str]:
-    """Enforce the Edge directions not already covered by import-linter contracts."""
-    stream_health = EDGE_SOURCE / "edge_runtime" / "stream_health.py"
-    connector_root = EDGE_SOURCE / "edge_runtime" / "connectors"
+    """补齐 import-linter 尚未覆盖的 Edge 依赖方向。"""
+    edge_root = EDGE_SOURCE / "edge_runtime"
+    stream_health = edge_root / "stream_health.py"
+    composition_root = edge_root / "runtime.py"
+    connector_root = edge_root / "connectors"
     write_ledger_debt = connector_root / "writes.py"
     violations: list[str] = []
 
     for path in sorted(files):
-        if path.suffix != ".py" or not is_under(path, EDGE_SOURCE / "edge_runtime"):
+        if path.suffix != ".py" or not is_under(path, edge_root):
             continue
         tree = ast.parse((root / path).read_text(encoding="utf-8"), filename=str(path))
-        for line, target in _edge_import_targets(path, tree):
+        imports = _edge_import_targets(path, tree)
+        imported_packages = {
+            target.split(".", 2)[1]
+            for _, target in imports
+            if target.startswith("edge_runtime.")
+            and target.split(".", 2)[1] in EDGE_RUNTIME_PACKAGES
+        }
+        if path != composition_root and imported_packages >= EDGE_RUNTIME_PACKAGES:
+            violations.append(
+                f"{path} imports all Edge runtime packages; only edge_runtime/runtime.py may "
+                "be the composition root"
+            )
+        for line, target in imports:
             if target == "edge_runtime" or target.startswith("edge_runtime."):
                 if path == stream_health:
                     violations.append(
@@ -357,9 +374,8 @@ def check_edge_dependency_directions(root: Path, files: list[Path]) -> list[str]
                     "edge_runtime.supervisor.inputs."
                 ):
                     continue
-                # #300 owns removal of this already-present persistence coupling. Keeping the
-                # exact production debt here lets #295 block any new connector-side ownership
-                # leak without moving WriteLedger behavior into this task.
+                # #300 负责清除这条既有持久化耦合；这里只保留精确债务豁免，
+                # 让 #295 阻止新增 connector ownership 泄漏而不越界实现 WriteLedger。
                 if path == write_ledger_debt and target == "edge_runtime.local_state.disposal":
                     continue
                 violations.append(
@@ -386,6 +402,26 @@ def _edge_import_targets(path: Path, tree: ast.AST) -> list[tuple[int, str]]:
             base = ".".join(base_parts)
         else:
             base = node.module or ""
+        if base == "edge_runtime":
+            direct_packages = [
+                f"edge_runtime.{alias.name}"
+                for alias in node.names
+                if alias.name in EDGE_RUNTIME_PACKAGES
+            ]
+            if direct_packages:
+                imports.extend((node.lineno, target) for target in direct_packages)
+                if len(direct_packages) == len(node.names):
+                    continue
+        if base == "edge_runtime.supervisor" and any(
+            alias.name == "inputs" for alias in node.names
+        ):
+            imports.extend(
+                (node.lineno, "edge_runtime.supervisor.inputs")
+                for alias in node.names
+                if alias.name == "inputs"
+            )
+            if all(alias.name == "inputs" for alias in node.names):
+                continue
         if base:
             imports.append((node.lineno, base))
     return sorted(imports)

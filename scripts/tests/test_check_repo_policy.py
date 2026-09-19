@@ -319,6 +319,19 @@ class RepositoryPolicyTest(unittest.TestCase):
             errors,
         )
 
+    def test_rejects_non_root_importing_every_edge_runtime_package(self) -> None:
+        module = self.write(
+            "apps/edge-runtime/src/edge_runtime/future_runtime.py",
+            "from edge_runtime import connectors, judgment, local_state, stream_health, "
+            "supervisor\n",
+        )
+        errors = self.check(str(module))
+        self.assertIn(
+            "apps/edge-runtime/src/edge_runtime/future_runtime.py imports all Edge runtime "
+            "packages; only edge_runtime/runtime.py may be the composition root",
+            errors,
+        )
+
     def test_accepts_the_approved_standard_library_contract_inside_edge_runtime(self) -> None:
         contract = self.write(
             "packages/contracts/src/nvsop_contracts/capability.py",

@@ -6,7 +6,11 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import UUID
 
-from factory_sop.configuration.usecases import configuration_for_host
+import pytest
+
+from factory_sop.configuration.composition import ConfigurationAssemblyError, configuration_for_host
+from factory_sop.device.usecases.configuration import RepositoryDeviceConfigurationGateway
+from factory_sop.template.usecases.configuration import RepositoryTemplateConfigurationGateway
 from nvsop_contracts import Unverified
 
 HOST_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f101")
@@ -27,6 +31,7 @@ class Repo:
             configuration_sha256=None,
         )
         self.cameras_present = True
+        self.camera_host_id = HOST_ID
         self.recorded_configurations: list[object] = []
         self.backend = SimpleNamespace(
             id=BACKEND_ID,
@@ -102,6 +107,8 @@ class Repo:
             return self.host
         if value == STATION_ID:
             return self.station
+        if value == BACKEND_ID:
+            return self.backend
         return None
 
     def page_of(
@@ -122,7 +129,7 @@ class Repo:
                 credentials_configured=True,
                 station_id=STATION_ID,
                 backend_id=BACKEND_ID,
-                host_id=HOST_ID,
+                host_id=self.camera_host_id,
                 status=SimpleNamespace(value="active"),
                 revision=1,
                 media_path_mode=SimpleNamespace(value="passthrough"),
@@ -205,30 +212,62 @@ class Repo:
         self.recorded_configurations.append(bundle)
 
 
+def _device_gateway(repo: Repo) -> RepositoryDeviceConfigurationGateway:
+    return RepositoryDeviceConfigurationGateway(
+        hosts=repo,  # type: ignore[arg-type]
+        backends=repo,  # type: ignore[arg-type]
+        stations=repo,  # type: ignore[arg-type]
+        cameras=repo,  # type: ignore[arg-type]
+        connectors=repo,  # type: ignore[arg-type]
+        points=SimpleNamespace(for_station=repo.points_for_station),
+    )
+
+
+def _template_gateway(repo: Repo) -> RepositoryTemplateConfigurationGateway:
+    return RepositoryTemplateConfigurationGateway(repo)  # type: ignore[arg-type]
+
+
+def test_configuration_for_host_skips_inactive_station() -> None:
+    repo = Repo()
+    repo.station.status.value = "inactive"
+
+    bundle = configuration_for_host(
+        host_id=HOST_ID,
+        generated_at=datetime(2026, 9, 13, tzinfo=UTC),
+        device=_device_gateway(repo),
+        templates=_template_gateway(repo),
+    )
+
+    assert bundle.stations == ()
+
+
+def test_configuration_for_host_rejects_foreign_camera_on_active_station() -> None:
+    repo = Repo()
+    repo.camera_host_id = FOREIGN_HOST_ID
+
+    with pytest.raises(ConfigurationAssemblyError, match="foreign camera"):
+        configuration_for_host(
+            host_id=HOST_ID,
+            generated_at=datetime(2026, 9, 13, tzinfo=UTC),
+            device=_device_gateway(repo),
+            templates=_template_gateway(repo),
+        )
+
+
 def test_configuration_revision_survives_removing_the_highest_revision_object() -> None:
     repo = Repo()
     first = configuration_for_host(
         host_id=HOST_ID,
         generated_at=datetime(2026, 9, 13, tzinfo=UTC),
-        hosts=repo,  # type: ignore[arg-type]
-        backends=repo,  # type: ignore[arg-type]
-        stations=repo,  # type: ignore[arg-type]
-        cameras=repo,  # type: ignore[arg-type]
-        connectors=repo,  # type: ignore[arg-type]
-        points=SimpleNamespace(for_station=repo.points_for_station),
-        templates=repo,  # type: ignore[arg-type]
+        device=_device_gateway(repo),
+        templates=_template_gateway(repo),
     )
     repo.cameras_present = False
     second = configuration_for_host(
         host_id=HOST_ID,
         generated_at=datetime(2026, 9, 13, 0, 0, 1, tzinfo=UTC),
-        hosts=repo,  # type: ignore[arg-type]
-        backends=repo,  # type: ignore[arg-type]
-        stations=repo,  # type: ignore[arg-type]
-        cameras=repo,  # type: ignore[arg-type]
-        connectors=repo,  # type: ignore[arg-type]
-        points=SimpleNamespace(for_station=repo.points_for_station),
-        templates=repo,  # type: ignore[arg-type]
+        device=_device_gateway(repo),
+        templates=_template_gateway(repo),
     )
 
     assert second.config_revision > first.config_revision
@@ -240,13 +279,8 @@ def test_configuration_for_host_excludes_foreign_connector_and_emits_effective_v
     bundle = configuration_for_host(
         host_id=HOST_ID,
         generated_at=datetime(2026, 9, 13, tzinfo=UTC),
-        hosts=repo,  # type: ignore[arg-type]
-        backends=repo,  # type: ignore[arg-type]
-        stations=repo,  # type: ignore[arg-type]
-        cameras=repo,  # type: ignore[arg-type]
-        connectors=repo,  # type: ignore[arg-type]
-        points=SimpleNamespace(for_station=repo.points_for_station),
-        templates=repo,  # type: ignore[arg-type]
+        device=_device_gateway(repo),
+        templates=_template_gateway(repo),
     )
 
     assert len(bundle.stations) == 1

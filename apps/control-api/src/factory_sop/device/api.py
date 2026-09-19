@@ -31,8 +31,11 @@ from factory_sop.device.repository import (
 )
 from nvsop_contracts import (
     Capability,
+    ConfigurationBundle,
+    ConfiguredStation,
     HostIdentityRequest,
     PointRole,
+    ResolvedRuntimeParameters,
     Unfitness,
     unfit_for,
 )
@@ -191,6 +194,60 @@ class DeviceHistoricalAssignmentGateway(Protocol):
         ...
 
 
+class DeviceConfigurationError(ValueError):
+    """设备 owner 无法提供一致的机器配置投影。"""
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceConfigurationTarget:
+    """一台主机上需要组装配置的工位/后端组合。"""
+
+    station_id: UUID
+    backend_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceConfigurationTopology:
+    """配置组合层可见的最小设备拓扑。"""
+
+    host_id: UUID
+    host_revision: int
+    backend_revisions: tuple[int, ...]
+    targets: tuple[DeviceConfigurationTarget, ...]
+
+
+class DeviceConfigurationGateway(Protocol):
+    """机器配置组合只可通过的 device owner 接缝。"""
+
+    def authenticate(self, *, host: InferenceHostIdentity, now: datetime) -> None:
+        """认证拉取/确认配置的推理机身份。"""
+        ...
+
+    def topology_for_host(self, host_id: UUID) -> DeviceConfigurationTopology:
+        """返回该主机活动配置目标及 owner 修订事实。"""
+        ...
+
+    def station_configuration(
+        self,
+        *,
+        host_id: UUID,
+        target: DeviceConfigurationTarget,
+        runtime_defaults: ResolvedRuntimeParameters | None,
+    ) -> ConfiguredStation:
+        """解析 device 拥有的拓扑与工位生效运行参数。"""
+        ...
+
+    def finalize_configuration(
+        self, candidate: ConfigurationBundle, *, minimum_revision: int
+    ) -> ConfigurationBundle:
+        """分配配置修订并记录已签发 assignment history。"""
+        ...
+
+    def confirm_configuration(self, *, host_id: UUID, bundle: ConfigurationBundle) -> None:
+        """只接受本 Center 已签发配置，并恢复其 assignment history。"""
+        ...
+
+
 class StationCodeLookup(Protocol):
     """设备模块为自然编码查询提供的最小存储 seam。"""
 
@@ -292,6 +349,10 @@ __all__ = [
     "BindingSignal",
     "BindingSignalKind",
     "BindingValidationIssue",
+    "DeviceConfigurationError",
+    "DeviceConfigurationGateway",
+    "DeviceConfigurationTarget",
+    "DeviceConfigurationTopology",
     "DeviceHistoricalAssignmentGateway",
     "DeviceHostGateway",
     "DeviceTemplateBindingGateway",

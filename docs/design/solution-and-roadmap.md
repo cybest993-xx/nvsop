@@ -160,7 +160,7 @@
 
 `dataset` 是独立模块而非 `template` 的一部分：`CONTEXT.md` 对「训练数据集」的定义明确写了它不定义 SOP 模板，并把「SOP 模板」列为 _Avoid_ 项，合并二者会在代码层重新粘合术语层刻意拆开的概念。
 
-**推理机侧组成**（`apps/edge-runtime/`，包清单与所有权表见 [仓库架构](../engineering/architecture.md)）：判定核心（纯标准库、纯函数、无钟无 I/O，§5.18）、边界求解、本地状态（SQLite）、supervisor（SSE 消费与判定调用 / 请求看护 / 锁存 / 处置派发 / 上报对账 / 计时器持有 / **一反应一事务的持久化**）、连接器运行时（每个已配置连接器一个）、mediamtx 看护、证据切片、录像压缩归档任务（§5.19）。`vendor/` 内只留同一登记补丁的健康 hook、internal-vLLM 旧帧队列清理与 uniform/DDM 两条 PTS 回退状态重置（§5.11）。
+**推理机侧组成**（`apps/edge-runtime/`，包清单与所有权表见 [仓库架构](../engineering/architecture.md)）：判定核心（纯标准库、纯函数、无钟无 I/O，§5.18）、边界求解、本地状态（SQLite）、supervisor（SSE 消费与判定调用 / 请求看护 / 锁存 / 处置派发 / 上报对账 / 计时器持有 / **一反应一事务的持久化**）、连接器运行时（每个已配置连接器一个）、mediamtx 看护、证据切片、录像压缩归档任务（§5.19）。`vendor/` 内只留同一登记补丁的健康 hook、VLM 两阶段保序旁路、internal-vLLM 旧帧队列清理与 uniform/DDM 两条 PTS 回退状态重置（§5.11）。
 
 **边缘包间依赖方向**（由 import-linter 契约兜底，见 [仓库架构](../engineering/architecture.md)）：`supervisor → local_state → judgment`；`connectors → judgment` 与 `supervisor` 的输入词汇；`stream_health` 不导入本包任何东西；运行循环是唯一的装配根，也是唯一同时认识全部包的地方。存储模块只认识领域类型，不认识编排它的人——反过来的方向（存储导入 supervisor）已实测会让"一反应一事务"退化成调用方契约。
 

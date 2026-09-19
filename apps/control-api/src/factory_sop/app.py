@@ -30,6 +30,7 @@ from factory_sop.auth.errors import (
     refusal_problem,
 )
 from factory_sop.auth.model import SessionPolicy
+from factory_sop.configuration.adapters import dependencies as configuration_dependencies
 from factory_sop.configuration.adapters.routes import router as configuration_router
 from factory_sop.dataset.adapters import dependencies as dataset_dependencies
 from factory_sop.dataset.adapters.annotation_routes import (
@@ -204,6 +205,12 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(monitor_router, prefix=API_PREFIX)
     app.include_router(overview_router, prefix=API_PREFIX)
     # 组合根把跨模块查询和任务依赖接到各自模块的真实适配器。
+    app.dependency_overrides[configuration_dependencies.device_gateway] = (
+        device_dependencies.configuration_gateway
+    )
+    app.dependency_overrides[configuration_dependencies.template_gateway] = (
+        template_dependencies.configuration_gateway
+    )
     app.dependency_overrides[template_dependencies.stations] = device_dependencies.stations
     app.dependency_overrides[template_dependencies.binding_gateway] = (
         device_dependencies.template_binding

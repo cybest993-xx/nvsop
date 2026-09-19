@@ -18,6 +18,7 @@ from factory_sop.device.adapters.repository import (
     PostgresStationRepository,
 )
 from factory_sop.device.api import (
+    DeviceConfigurationGateway,
     DeviceHistoricalAssignmentGateway,
     DeviceHostGateway,
     DeviceTemplateBindingGateway,
@@ -32,6 +33,7 @@ from factory_sop.device.repository import (
     PointRepository,
     StationRepository,
 )
+from factory_sop.device.usecases.configuration import RepositoryDeviceConfigurationGateway
 from factory_sop.device.usecases.template_binding import RepositoryDeviceTemplateBindingGateway
 from factory_sop.persistence import RequestSession
 
@@ -94,6 +96,18 @@ def template_binding(session: RequestSession) -> DeviceTemplateBindingGateway:
         stations=PostgresStationRepository(session),
         hosts=PostgresInferenceHostRepository(session),
         backends=PostgresInferenceBackendRepository(session),
+        cameras=PostgresCameraRepository(session),
+        connectors=PostgresConnectorRepository(session),
+        points=PostgresPointRepository(session),
+    )
+
+
+def configuration_gateway(session: RequestSession) -> DeviceConfigurationGateway:
+    """机器配置 transport 使用的 device owner seam。"""
+    return RepositoryDeviceConfigurationGateway(
+        hosts=PostgresInferenceHostRepository(session),
+        backends=PostgresInferenceBackendRepository(session),
+        stations=PostgresStationRepository(session),
         cameras=PostgresCameraRepository(session),
         connectors=PostgresConnectorRepository(session),
         points=PostgresPointRepository(session),

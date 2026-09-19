@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -112,6 +113,24 @@ class LocalBranchGuardTest(unittest.TestCase):
         invalid = self.command("branch", "feature/second", "main")
         self.assertNotEqual(0, invalid.returncode)
         self.assertIn("new local branch `feature/second` is not allowed", invalid.stderr)
+
+    def test_reference_transaction_does_not_write_bytecode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            hooks = Path(directory)
+            shutil.copy2(HOOKS / "reference-transaction", hooks / "reference-transaction")
+            shutil.copy2(HOOKS / "local_branch_guard.py", hooks / "local_branch_guard.py")
+
+            result = subprocess.run(
+                [hooks / "reference-transaction", "committed"],
+                cwd=self.root,
+                input="",
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertFalse((hooks / "__pycache__").exists())
 
 
 if __name__ == "__main__":

@@ -236,7 +236,7 @@ web-e2e-whep:
 		python3 scripts/test_whep.py -- pnpm --filter control-web exec playwright test tests/e2e/sys-34-media.spec.ts --workers 2
 
 web-build:
-	NVSOP_WEB_OUT_DIR=$(LOCAL_ARTIFACTS)/web/dist pnpm --filter control-web run build
+	pnpm --filter control-web exec vite build --outDir "$(LOCAL_ARTIFACTS)/web/dist" --emptyOutDir
 
 # 固定 main 开发实例（Issue #119），默认 HTTP；显式 NVSOP_DEV_PROTOCOL=https 才启用本地 TLS。
 # 脚本只编排 Tilt/Compose，不承载产品业务逻辑。

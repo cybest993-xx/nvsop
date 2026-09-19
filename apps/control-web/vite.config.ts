@@ -22,8 +22,6 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: process.env.NVSOP_WEB_OUT_DIR ?? 'dist',
-    emptyOutDir: true,
     // Element Plus 的共享 chunk 约为 700 kB；保留阈值可让 reporter 继续暴露更大的异常增长。
     chunkSizeWarningLimit: 800,
   },

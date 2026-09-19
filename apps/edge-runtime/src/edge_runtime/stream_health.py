@@ -39,17 +39,20 @@ not a payload, and its length is not ours to trust."""
 
 
 class StreamFact(Enum):
-    """What the base's pipeline callback can actually observe about one stream.
+    """A concrete stream-validity fact observed at the seam that owns it.
 
-    Only observable facts are named. "Reconnecting" is deliberately absent: the base sets
-    `init-rtsp-reconnect-interval` on the source and DeepStream retries inside the element
-    without announcing it on the bus (§2.4), so a `RECONNECTING` member would be invented
-    rather than observed. Recovery reaches the supervisor as `SOURCE_ERROR` followed by
-    `DELIVERING`, which is the same information without the fiction.
+    The base pipeline hook can emit `SOURCE_ERROR`, `DELIVERING`, and `STREAM_ENDED`.
+    The local SSE input adapter can additionally emit `INFERENCE_TIMEOUT` and
+    `CHUNK_BACKLOG_EXCEEDED` from its own network-read and queue observations.
 
-    Timeline re-zeroing is not a member either, for the opposite reason: it is not an event
-    but a change in `source_anchor`, which every event carries, so the supervisor reads it
-    by comparing anchors rather than by being told.
+    "Reconnecting" is deliberately absent: the base sets `init-rtsp-reconnect-interval`
+    on the source and DeepStream retries inside the element without announcing it on the
+    bus (§2.4), so a `RECONNECTING` member would be invented rather than observed. Recovery
+    reaches the supervisor as `SOURCE_ERROR` followed by `DELIVERING`.
+
+    Timeline re-zeroing is not a member either: pipeline events and action chunks carry
+    `source_anchor` when available, and the supervisor detects a reset by comparing those
+    anchors rather than by being told through a separate fact.
     """
 
     SOURCE_ERROR = "source_error"
@@ -57,15 +60,6 @@ class StreamFact(Enum):
     STREAM_ENDED = "stream_ended"
     INFERENCE_TIMEOUT = "inference_timeout"
     CHUNK_BACKLOG_EXCEEDED = "chunk_backlog_exceeded"
-    """Best-effort, unlike the other two.
-
-    The base's VLM thread puts its own `None` sentinel on the same queue when it finishes
-    (`ds_sop_process.py:1175`), and the dispatch loop stops forwarding at that sentinel. An
-    end-of-stream event racing behind it is dropped. Nothing is lost by that: the SSE
-    response itself ends, which the supervisor sees directly, and stream termination is
-    already the chunk-silence timer's job (§5.11). `SOURCE_ERROR` and `DELIVERING` arrive
-    mid-stream, well before any sentinel, so the facts judgment depends on do not race.
-    """
 
     @property
     def impairs_observation(self) -> bool:
@@ -108,7 +102,7 @@ class StreamHealthEvent:
     """
 
     at_monotonic: float | None
-    """When the callback saw it, on the host's monotonic clock.
+    """When the producing seam observed it, on the host's monotonic clock.
 
     The same clock the judgment core measures the idle timeout and step deadline on. Taken
     to be comparable across the two processes because Linux's `CLOCK_MONOTONIC` counts from

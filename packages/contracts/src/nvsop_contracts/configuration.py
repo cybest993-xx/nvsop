@@ -12,14 +12,13 @@ import hmac
 import json
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import cast
 from urllib.parse import urlsplit
 
 from nvsop_contracts.capability import Capability, capability_from_wire, capability_to_wire
 
-LEGACY_CONFIGURATION_CONTRACT_VERSION = 1
 CONFIGURATION_CONTRACT_VERSION = 2
 _CONFIGURATION_ARTIFACT_ORDER = (
     "actions.json",
@@ -369,7 +368,6 @@ class ConfiguredStation:
     template: ConfigurationTemplate | None
     cameras: tuple[ConfiguredCamera, ...] = ()
     model_ids: tuple[str, ...] = ()
-    _model_ids_present: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not self.station_id or not self.backend_id or not self.code or not self.name:
@@ -406,13 +404,7 @@ class ConfiguredStation:
         }
 
     @classmethod
-    def from_wire(
-        cls,
-        value: Mapping[str, object],
-        *,
-        allow_missing_model_ids: bool = False,
-        allow_missing_cameras: bool = False,
-    ) -> ConfiguredStation:
+    def from_wire(cls, value: Mapping[str, object]) -> ConfiguredStation:
         expected = {
             "station_id",
             "backend_id",
@@ -426,18 +418,10 @@ class ConfiguredStation:
             "cameras",
             "model_ids",
         }
-        optional = {
-            key
-            for key, allowed in (
-                ("cameras", allow_missing_cameras),
-                ("model_ids", allow_missing_model_ids),
-            )
-            if allowed
-        }
-        _require_keys(value, expected - optional, "station", optional=optional)
+        _require_keys(value, expected, "station")
         raw_connectors = _array(value["connectors"], "station connectors")
         raw_points = _array(value["points"], "station points")
-        raw_cameras = _array(value.get("cameras", ()), "station cameras")
+        raw_cameras = _array(value["cameras"], "station cameras")
         raw_template = value["template"]
         if raw_template is not None and not isinstance(raw_template, Mapping):
             raise ValueError("station template is invalid")
@@ -465,8 +449,7 @@ class ConfiguredStation:
             cameras=tuple(
                 ConfiguredCamera.from_wire(_object(item, "station camera")) for item in raw_cameras
             ),
-            model_ids=_strings(value.get("model_ids", ()), "station model_ids"),
-            _model_ids_present="model_ids" in value,
+            model_ids=_strings(value["model_ids"], "station model_ids"),
         )
 
 
@@ -479,13 +462,21 @@ class ConfigurationBundle:
     generated_at: str
     stations: tuple[ConfiguredStation, ...]
     contract_version: int = CONFIGURATION_CONTRACT_VERSION
+    producer: str | None = None
+    required_capabilities: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.contract_version not in {
-            LEGACY_CONFIGURATION_CONTRACT_VERSION,
-            CONFIGURATION_CONTRACT_VERSION,
-        }:
+        if self.contract_version != CONFIGURATION_CONTRACT_VERSION:
             raise ValueError("configuration contract version is unsupported")
+        if self.producer is not None and (not isinstance(self.producer, str) or not self.producer):
+            raise ValueError("configuration producer must be a non-empty string when present")
+        if any(
+            not isinstance(capability, str) or not capability
+            for capability in self.required_capabilities
+        ):
+            raise ValueError("configuration required capabilities must not be empty")
+        if tuple(sorted(set(self.required_capabilities))) != self.required_capabilities:
+            raise ValueError("configuration required capabilities must be unique and sorted")
         if not self.host_id or not self.generated_at:
             raise ValueError("configuration bundle identity must not be empty")
         _parse_utc_timestamp(self.generated_at, "configuration generated_at")
@@ -496,25 +487,24 @@ class ConfigurationBundle:
             raise ValueError("configuration station/backend slices must be unique")
 
     def content_wire(self) -> dict[str, object]:
-        stations = [station.to_wire() for station in self.stations]
-        if self.contract_version == LEGACY_CONFIGURATION_CONTRACT_VERSION:
-            for wire_station, station in zip(stations, self.stations, strict=True):
-                if not wire_station["cameras"]:
-                    wire_station.pop("cameras")
-                if not wire_station["model_ids"] and not station._model_ids_present:
-                    wire_station.pop("model_ids")
-        return {
+        content: dict[str, object] = {
             "contract_version": self.contract_version,
             "host_id": self.host_id,
             "config_revision": self.config_revision,
             "generated_at": self.generated_at,
-            "stations": stations,
+            "stations": [station.to_wire() for station in self.stations],
         }
+        if self.producer is not None:
+            content["producer"] = self.producer
+        if self.required_capabilities:
+            content["required_capabilities"] = list(self.required_capabilities)
+        return content
 
     def stable_content_wire(self) -> dict[str, object]:
         """返回忽略生成时刻后的配置内容，用于同修订原子确认比较。"""
         content = self.content_wire()
         content.pop("generated_at")
+        content.pop("producer", None)
         return content
 
     @property
@@ -528,6 +518,7 @@ class ConfigurationBundle:
         content = self.content_wire()
         content.pop("config_revision")
         content.pop("generated_at")
+        content.pop("producer", None)
         return hashlib.sha256(_canonical_json(content).encode("utf-8")).hexdigest()
 
     def to_wire(self) -> dict[str, object]:
@@ -548,6 +539,7 @@ class ConfigurationBundle:
                 "sha256",
             },
             "configuration bundle",
+            optional={"producer", "required_capabilities"},
         )
         supplied_digest = _string(value["sha256"], "configuration sha256")
         _validate_digest(supplied_digest, "configuration sha256")
@@ -558,24 +550,27 @@ class ConfigurationBundle:
         contract_version = _positive_int(
             value["contract_version"], "configuration contract version"
         )
+        if contract_version != CONFIGURATION_CONTRACT_VERSION:
+            raise ValueError("configuration contract version is unsupported")
         raw_stations = _array(value["stations"], "configuration stations")
+        producer = value.get("producer")
+        if producer is not None:
+            producer = _string(producer, "configuration producer")
+        required_capabilities = _strings(
+            value.get("required_capabilities", ()),
+            "configuration required_capabilities",
+        )
         return cls(
             host_id=_string(value["host_id"], "configuration host_id"),
             config_revision=_positive_int(value["config_revision"], "configuration revision"),
             generated_at=_string(value["generated_at"], "configuration generated_at"),
             stations=tuple(
-                ConfiguredStation.from_wire(
-                    _object(item, "configuration station"),
-                    allow_missing_model_ids=(
-                        contract_version == LEGACY_CONFIGURATION_CONTRACT_VERSION
-                    ),
-                    allow_missing_cameras=(
-                        contract_version == LEGACY_CONFIGURATION_CONTRACT_VERSION
-                    ),
-                )
+                ConfiguredStation.from_wire(_object(item, "configuration station"))
                 for item in raw_stations
             ),
             contract_version=contract_version,
+            producer=producer,
+            required_capabilities=required_capabilities,
         )
 
 
@@ -721,7 +716,6 @@ def _positive_int(value: object, label: str) -> int:
 
 __all__ = [
     "CONFIGURATION_CONTRACT_VERSION",
-    "LEGACY_CONFIGURATION_CONTRACT_VERSION",
     "ConfigurationArtifact",
     "ConfigurationBundle",
     "ConfigurationTemplate",

@@ -22,6 +22,8 @@ from nvsop_contracts import (
 
 from edge_runtime.local_state.configuration import ConfigurationFailure, LocalConfigurationStore
 
+_SUPPORTED_CONFIGURATION_CAPABILITIES: frozenset[str] = frozenset()
+
 
 class ConfigurationPullError(RuntimeError):
     """拉取在替换本地确认状态前失败。"""
@@ -38,8 +40,8 @@ class ConfigurationPuller(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class ConfigurationSyncResult:
-    applied: bool
-    active: ConfigurationBundle | None
+    candidate: ConfigurationBundle | None
+    confirmed: ConfigurationBundle | None
     failure: ConfigurationFailure | None
 
 
@@ -160,23 +162,28 @@ class ConfigurationSynchronizer:
         self._validator = validator
 
     def synchronize(self, *, observed_at: float) -> ConfigurationSyncResult:
+        """拉取并校验候选,但不把候选写成 durable confirmed。"""
         try:
             bundle = self._puller.pull()
             if self._expected_host_id is not None and bundle.host_id != self._expected_host_id:
                 raise ConfigurationPullError("host_scope_mismatch", "配置响应不属于本机推理机")
-            if self._validator is not None:
-                self._validator(bundle)
-            self._store.confirm(bundle, confirmed_at=observed_at)
-        except ConfigurationPullError as error:
-            self._store.record_failure(
-                code=error.code,
-                detail=str(error),
-                observed_at=observed_at,
+            unsupported = tuple(
+                capability
+                for capability in bundle.required_capabilities
+                if capability not in _SUPPORTED_CONFIGURATION_CAPABILITIES
             )
+            if unsupported:
+                raise ConfigurationPullError(
+                    "unsupported_capability",
+                    f"推理机不支持配置能力要求: {', '.join(unsupported)}",
+                )
+            self._store.validate_candidate(bundle)
+        except ConfigurationPullError as error:
+            return self._failed(error.code, str(error), observed_at=observed_at)
         except OSError:
-            self._store.record_failure(
-                code="center_unreachable",
-                detail="中心配置接口暂时不可达",
+            return self._failed(
+                "center_unreachable",
+                "中心配置接口暂时不可达",
                 observed_at=observed_at,
             )
         except (TypeError, ValueError) as error:
@@ -187,18 +194,45 @@ class ConfigurationSynchronizer:
                 code = "digest_mismatch"
             elif "reused with different content" in detail:
                 code = "conflicting_confirmation"
-            elif "revision is older" in detail or "time is older" in detail:
+            elif "revision is older" in detail:
                 code = "stale_revision"
-            elif self._validator is not None:
-                code = "runtime_configuration_invalid"
             else:
                 code = "contract_invalid"
-            self._store.record_failure(code=code, detail=detail, observed_at=observed_at)
-        failure = self._store.failure()
+            return self._failed(code, detail, observed_at=observed_at)
+
+        if self._validator is not None:
+            try:
+                self._validator(bundle)
+            except (TypeError, ValueError) as error:
+                return self._failed(
+                    "runtime_configuration_invalid",
+                    str(error),
+                    observed_at=observed_at,
+                )
         return ConfigurationSyncResult(
-            applied=failure is None,
-            active=self._store.confirmed(),
-            failure=failure,
+            candidate=bundle,
+            confirmed=self._store.confirmed(),
+            failure=None,
+        )
+
+    def confirm(self, bundle: ConfigurationBundle, *, confirmed_at: float) -> None:
+        """仅在运行时完成实际切换后持久确认同一候选。"""
+        self._store.confirm(bundle, confirmed_at=confirmed_at)
+
+    def reject_application(self, *, detail: str, observed_at: float) -> None:
+        """记录候选已验证但运行时组合/切换失败。"""
+        self._store.record_failure(
+            code="runtime_application_failed",
+            detail=detail,
+            observed_at=observed_at,
+        )
+
+    def _failed(self, code: str, detail: str, *, observed_at: float) -> ConfigurationSyncResult:
+        self._store.record_failure(code=code, detail=detail, observed_at=observed_at)
+        return ConfigurationSyncResult(
+            candidate=None,
+            confirmed=self._store.confirmed(),
+            failure=self._store.failure(),
         )
 
 

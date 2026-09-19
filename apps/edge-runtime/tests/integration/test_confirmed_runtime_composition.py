@@ -186,6 +186,47 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
             finally:
                 runtime.close()
 
+    def test_startup_assembly_failure_does_not_advance_durable_confirmation(self) -> None:
+        confirmed = _bundle()
+        candidate = replace(
+            confirmed,
+            config_revision=confirmed.config_revision + 1,
+            generated_at="2026-09-14T00:05:00Z",
+        )
+        identity = _fixture_host_identity(47)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            state_path = directory / "state.sqlite"
+            state = open_local_state(str(state_path))
+            state.configuration().confirm(confirmed, confirmed_at=1.0)
+            state.close()
+
+            private_key_file = directory / "host-private-key"
+            private_key_file.write_text(identity.private_key, encoding="utf-8")
+            config_path = directory / "edge.json"
+            config_path.write_text(
+                json.dumps(_local_config(directory, private_key_file)), encoding="utf-8"
+            )
+
+            with (
+                patch(
+                    "edge_runtime.runtime.HttpConfigurationPuller.pull",
+                    return_value=candidate,
+                ),
+                patch(
+                    "edge_runtime.runtime.build_connection_test_loop",
+                    side_effect=ValueError("command runtime assembly failed"),
+                ),
+                self.assertRaisesRegex(ValueError, "command runtime assembly failed"),
+            ):
+                build_autonomous_runtime_from_file(config_path)
+
+            inspection = open_local_state(str(state_path))
+            try:
+                self.assertEqual(confirmed, inspection.configuration().confirmed())
+            finally:
+                inspection.close()
+
     def test_builder_uses_last_confirmed_station_and_composes_real_connector_seams(self) -> None:
         bundle = _bundle()
         identity = _fixture_host_identity(44)

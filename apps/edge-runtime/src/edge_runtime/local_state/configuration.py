@@ -9,7 +9,6 @@ import json
 import sqlite3
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from threading import RLock
 
 from nvsop_contracts import ConfigurationBundle, configuration_from_wire, configuration_to_wire
@@ -52,6 +51,10 @@ class LocalConfigurationStore:
             return None
         return ConfigurationFailure(code=row[0], detail=row[1], observed_at=row[2])
 
+    def validate_candidate(self, bundle: ConfigurationBundle) -> None:
+        """只读校验候选能否在 revision/host 边界替换最后确认配置。"""
+        _validate_transition(self.confirmed(), bundle)
+
     def confirm(self, bundle: ConfigurationBundle, *, confirmed_at: float) -> None:
         """在一个事务中替换完整 bundle 并清除之前的失败记录。"""
         payload_value = configuration_to_wire(bundle)
@@ -71,23 +74,8 @@ class LocalConfigurationStore:
                     "SELECT host_id, config_revision, sha256, confirmed_at, payload "
                     "FROM local_config WHERE slot = 1"
                 ).fetchone()
-                if current is not None:
-                    current_bundle = _bundle_from_row(current)
-                    if current_bundle.host_id != bundle.host_id:
-                        raise ValueError("configuration host scope cannot change in local state")
-                    if current_bundle.config_revision > bundle.config_revision:
-                        raise ValueError(
-                            "configuration revision is older than the last confirmation"
-                        )
-                    if (
-                        current_bundle.config_revision == bundle.config_revision
-                        and current_bundle.stable_content_wire() != bundle.stable_content_wire()
-                    ):
-                        raise ValueError("configuration revision was reused with different content")
-                    if current_bundle.config_revision == bundle.config_revision and _generated_at(
-                        bundle
-                    ) < _generated_at(current_bundle):
-                        raise ValueError("configuration revision was reused with different content")
+                current_bundle = None if current is None else _bundle_from_row(current)
+                _validate_transition(current_bundle, bundle)
                 self._connection.execute(
                     """
                     INSERT INTO local_config
@@ -141,14 +129,41 @@ def _bundle_from_row(row: sqlite3.Row | tuple[object, ...]) -> ConfigurationBund
         raise ValueError("confirmed local configuration is not valid JSON") from error
     if not isinstance(value, dict):
         raise ValueError("confirmed local configuration is not an object")
-    legacy_digest = value.get("sha256")
-    original_contract_version = value.get("contract_version")
+    legacy_digest = _validate_persisted_digest(value)
     bundle = configuration_from_wire(_upgrade_legacy_wire(value))
     if bundle.host_id != row[0] or bundle.config_revision != row[1]:
         raise ValueError("confirmed local configuration metadata does not match its payload")
-    if bundle.sha256 != row[2] and not (original_contract_version == 1 and legacy_digest == row[2]):
+    if row[2] not in {bundle.sha256, legacy_digest}:
         raise ValueError("confirmed local configuration metadata does not match its payload")
     return bundle
+
+
+def _validate_transition(
+    current: ConfigurationBundle | None,
+    candidate: ConfigurationBundle,
+) -> None:
+    if current is None:
+        return
+    if current.host_id != candidate.host_id:
+        raise ValueError("configuration host scope cannot change in local state")
+    if current.config_revision > candidate.config_revision:
+        raise ValueError("configuration revision is older than the last confirmation")
+    if (
+        current.config_revision == candidate.config_revision
+        and current.stable_content_wire() != candidate.stable_content_wire()
+    ):
+        raise ValueError("configuration revision was reused with different content")
+
+
+def _validate_persisted_digest(value: dict[str, object]) -> str:
+    supplied = value.get("sha256")
+    if not isinstance(supplied, str):
+        raise ValueError("confirmed local configuration has no valid digest")
+    content = {key: item for key, item in value.items() if key != "sha256"}
+    actual = hashlib.sha256(_canonical_json(content).encode("utf-8")).hexdigest()
+    if supplied != actual:
+        raise ValueError("confirmed local configuration digest does not match its payload")
+    return supplied
 
 
 def _upgrade_legacy_wire(value: dict[str, object]) -> dict[str, object]:
@@ -164,7 +179,9 @@ def _upgrade_legacy_wire(value: dict[str, object]) -> dict[str, object]:
     for raw_station in raw_stations:
         if not isinstance(raw_station, dict):
             raise ValueError("confirmed local configuration station is invalid")
-        raw_station.setdefault("cameras", [])
+        if contract_version == 1:
+            raw_station.setdefault("cameras", [])
+            raw_station.setdefault("model_ids", [])
         raw_template = raw_station.get("template")
         if raw_template is None:
             continue
@@ -238,14 +255,6 @@ def _canonical_json(value: dict[str, object]) -> str:
         )
     except (TypeError, ValueError) as error:
         raise ValueError("confirmed local configuration is not canonical JSON") from error
-
-
-def _generated_at(bundle: ConfigurationBundle) -> datetime:
-    value = bundle.generated_at.replace("Z", "+00:00")
-    parsed = datetime.fromisoformat(value)
-    if parsed.tzinfo is None or parsed.utcoffset() != UTC.utcoffset(parsed):
-        raise ValueError("configuration generated_at must be UTC")
-    return parsed
 
 
 __all__ = ["ConfigurationFailure", "LocalConfigurationStore"]

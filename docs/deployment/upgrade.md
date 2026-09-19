@@ -55,7 +55,7 @@ make contracts
 
 配置同步采用[单一当前机器契约](../design/mechanisms/machine-contract-evolution.md)：Edge 使用签名主机身份从 `/api/v1/inference-hosts/{host_id}/configuration` 拉取 host-scoped bundle，共享解析器只接受当前严格格式；`config_revision` 负责单调 assignment 次序，`effective_sha256` 负责运行语义身份，`generated_at`/`producer` 只是信封元数据。兼容的非行为元数据可按已知可选字段扩展；行为字段必须绑定 `required_capabilities`，Edge 对未知能力显式拒绝。常规演进不新增 v3/v4 并行分支。
 
-候选拉取、校验和运行组合都不会前移 durable confirmed。运行时先成功构造候选组合，再停止旧循环并切换实际 runtime，最后才原子确认同一候选；组合/应用失败继续旧配置。本地确认失败不会让新循环继续运行。历史 SQLite 中已确认的配置 v1/v2 只由 Edge local-state owner 迁移读取，共享 HTTP parser 不再接受旧 generation；成功确认会写回当前格式。
+候选拉取和纯运行配置解析不会前移 durable confirmed，也不会读取或写入正在运行工位的 supervisor 状态。通过纯解析后先停止并 join 旧循环，再基于最新 SQLite 状态恢复 supervisor、构造候选 composition、切换实际 runtime，最后才原子确认同一候选；停机后的 composition 失败会重新构造旧活动配置。本地确认失败不会让新循环继续运行。历史 SQLite 中已确认的配置 v1/v2 只由 Edge local-state owner 迁移读取，共享 HTTP parser 不再接受旧 generation；成功确认会写回当前格式。
 
 配置束的 `contract_version` 只保护**配置束 wire shape**，不能替代 ADR-0003 要求的跨全部 Center↔Edge 机器接口兼容协商。历史判定上报已单独落地一个必要的能力握手：严格 v1 继续保持原 wire shape；需要历史配置证明和多 backend provenance 的判定使用严格 v2。新 Edge 在发送 v2 前，先把该 outbox 在事件时冻结的完整 confirmed configuration 通过主机签名端点 `/api/v1/inference-hosts/{host_id}/confirmed-configuration` 提交给 Center；只有 Center 验证这是自己实际签发过的 `(host, revision, effective digest)` 并明确返回支持 decision report contract v2 后，Edge 才发送 v2 判定。旧 Center 不存在该端点时，新 Edge 保留 outbox 并报告不兼容，不删除 historical proof、也不降级成 v1。
 

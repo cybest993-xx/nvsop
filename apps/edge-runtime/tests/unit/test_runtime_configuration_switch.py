@@ -36,9 +36,15 @@ class _State:
 class _Station:
     def __init__(self) -> None:
         self.closed = False
+        self.stopped = False
 
     def close(self) -> None:
         self.closed = True
+
+    def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
+        while not should_stop():
+            sleep(0.001)
+        self.stopped = True
 
 
 class _Synchronizer:
@@ -89,15 +95,23 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
             connector_runtimes=cast(ConnectorRuntimeSet, object()),
             output_dispatchers={},
         )
+        old_station = _Station()
         old_connector_runtimes = cast(ConnectorRuntimeSet, object())
+
+        def compose(runtime_configuration: RuntimeConfiguration) -> RuntimeComposition:
+            self.assertIs(runtime_configuration, candidate_runtime)
+            self.assertTrue(old_station.stopped)
+            return composition
+
         runtime = AutonomousRuntime(
             command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
-            stations=(),
+            stations=(cast(AutonomousStation, old_station),),
             state=cast(LocalState, state),
             configuration_sync=cast(ConfigurationSynchronizer, synchronizer),
             maintenance_interval=0.001,
             configuration=RuntimeConfiguration(stations=(), connectors=(), confirmed=old),
-            configuration_factory=lambda bundle: composition,
+            configuration_resolver=lambda bundle: candidate_runtime,
+            configuration_factory=compose,
             connector_runtimes=old_connector_runtimes,
         )
         synchronizer.runtime = runtime
@@ -120,9 +134,16 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
         old_runtime = RuntimeConfiguration(stations=(), connectors=(), confirmed=old)
         candidate_runtime = RuntimeConfiguration(stations=(), connectors=(), confirmed=candidate)
         candidate_station = _Station()
+        rollback_runtime = RuntimeConfiguration(stations=(), connectors=(), confirmed=old)
         composition = RuntimeComposition(
             configuration=candidate_runtime,
             stations=(cast(AutonomousStation, candidate_station),),
+            connector_runtimes=cast(ConnectorRuntimeSet, object()),
+            output_dispatchers={},
+        )
+        rollback = RuntimeComposition(
+            configuration=rollback_runtime,
+            stations=(),
             connector_runtimes=cast(ConnectorRuntimeSet, object()),
             output_dispatchers={},
         )
@@ -133,7 +154,10 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
             configuration_sync=cast(ConfigurationSynchronizer, synchronizer),
             maintenance_interval=0.001,
             configuration=old_runtime,
-            configuration_factory=lambda bundle: composition,
+            configuration_resolver=lambda bundle: candidate_runtime,
+            configuration_factory=lambda value: (
+                composition if value is candidate_runtime else rollback
+            ),
             connector_runtimes=cast(ConnectorRuntimeSet, object()),
         )
         synchronizer.runtime = runtime
@@ -153,9 +177,18 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
         synchronizer = _Synchronizer(candidate=candidate, confirmed=old)
         state = _State()
         old_runtime = RuntimeConfiguration(stations=(), connectors=(), confirmed=old)
+        candidate_runtime = RuntimeConfiguration(stations=(), connectors=(), confirmed=candidate)
+        rollback = RuntimeComposition(
+            configuration=old_runtime,
+            stations=(),
+            connector_runtimes=cast(ConnectorRuntimeSet, object()),
+            output_dispatchers={},
+        )
 
-        def reject_candidate(bundle: ConfigurationBundle) -> RuntimeComposition:
-            raise ValueError("candidate cannot be composed")
+        def compose(runtime_configuration: RuntimeConfiguration) -> RuntimeComposition:
+            if runtime_configuration is candidate_runtime:
+                raise ValueError("candidate cannot be composed")
+            return rollback
 
         runtime = AutonomousRuntime(
             command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
@@ -164,7 +197,8 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
             configuration_sync=cast(ConfigurationSynchronizer, synchronizer),
             maintenance_interval=0.001,
             configuration=old_runtime,
-            configuration_factory=reject_candidate,
+            configuration_resolver=lambda bundle: candidate_runtime,
+            configuration_factory=compose,
             connector_runtimes=cast(ConnectorRuntimeSet, object()),
         )
         synchronizer.runtime = runtime

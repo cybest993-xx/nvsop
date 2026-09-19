@@ -38,10 +38,10 @@
 配置同步只有一条生产路径：
 
 1. Edge 拉取候选并验证 wire 摘要、host scope、revision/同 revision 内容冲突及 `required_capabilities`。
-2. 候选与主机本地端点、request、adapter profile、凭据组合成完整的候选 runtime；此时 SQLite 的 durable confirmed 不变。
-3. 候选组合失败时记录诊断，旧 runtime 和最后 confirmed 继续使用。
-4. 候选组合成功后才停止旧运行循环并切换到已构造的 runtime。
-5. 实际切换成功后，`LocalConfigurationStore.confirm()` 才原子持久确认同一候选。确认失败会撤回候选的内存 runtime 指针并关闭候选工位资源，不启动新 runtime 循环；随后失败退出，重启仍以最后 durable confirmed 为恢复事实。
+2. 旧循环仍运行时，只把候选与主机本地端点、request、adapter profile、凭据解析为纯 `RuntimeConfiguration`；这一阶段不读取/写入 live station supervisor state，SQLite 的 durable confirmed 不变。
+3. 纯解析失败时记录诊断，旧 runtime 和最后 confirmed 继续使用；成功时才请求旧循环停机。
+4. 旧工位线程全部 join 后，Edge 才从最新 SQLite 状态恢复 supervisor 并构造候选 `RuntimeComposition`。此时不存在旧 supervisor 与候选 supervisor 并发提交；若 composition 失败，重新从原活动 `RuntimeConfiguration` 构造 runtime 并继续最后 confirmed。
+5. 候选 composition 构造成功后切换内存 runtime，`LocalConfigurationStore.confirm()` 才原子持久确认同一候选。确认失败会关闭候选工位资源，不启动新 runtime 循环；随后失败退出，重启仍以最后 durable confirmed 为恢复事实。
 6. 判定 outbox 的 Center 确认/上报失败沿既有重试路径重发，不触发配置重复应用。
 
 同 revision + 同 effective identity 的 `generated_at`/`producer` 更新可以直接刷新 durable envelope，不重组 runtime；revision 改变即使 effective identity 相同，仍是新的 assignment，必须按新的 revision 确认并用于后续历史归属。

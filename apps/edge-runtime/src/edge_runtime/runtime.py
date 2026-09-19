@@ -443,7 +443,8 @@ class AutonomousRuntime:
         configuration_sync: ConfigurationSynchronizer | None = None,
         maintenance_interval: float = 30.0,
         configuration: RuntimeConfiguration | None = None,
-        configuration_factory: Callable[[ConfigurationBundle], RuntimeComposition] | None = None,
+        configuration_resolver: Callable[[ConfigurationBundle], RuntimeConfiguration] | None = None,
+        configuration_factory: Callable[[RuntimeConfiguration], RuntimeComposition] | None = None,
         connector_runtimes: ConnectorRuntimeSet | None = None,
         output_dispatchers: Mapping[str, OutputDispatcher] | None = None,
     ) -> None:
@@ -457,6 +458,7 @@ class AutonomousRuntime:
         self._configuration_sync = configuration_sync
         self._maintenance_interval = maintenance_interval
         self._configuration = configuration
+        self._configuration_resolver = configuration_resolver
         self._configuration_factory = configuration_factory
         self._connector_runtimes = connector_runtimes
         self._output_dispatchers = dict(output_dispatchers or {})
@@ -504,7 +506,7 @@ class AutonomousRuntime:
     def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
         """让命令循环和工位循环并行运行, 配置确认后安全重启本机运行周期。"""
         pending_bundle: ConfigurationBundle | None = None
-        pending_composition: RuntimeComposition | None = None
+        pending_configuration: RuntimeConfiguration | None = None
         pending_confirmed_at: float | None = None
         while not should_stop():
             cycle_stop = threading.Event()
@@ -539,7 +541,7 @@ class AutonomousRuntime:
 
             def run_maintenance(current_stop: threading.Event = cycle_stop) -> None:
                 """重试中心辅助工作,但不把它放进判定进度。"""
-                nonlocal pending_bundle, pending_composition, pending_confirmed_at
+                nonlocal pending_bundle, pending_configuration, pending_confirmed_at
                 while not stop_requested():
                     now = HostInstant(monotonic())
                     reported_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
@@ -597,7 +599,10 @@ class AutonomousRuntime:
                                             "edge.configuration_confirm.failed error_type=%s",
                                             type(error).__name__,
                                         )
-                                elif self._configuration_factory is None:
+                                elif (
+                                    self._configuration_resolver is None
+                                    or self._configuration_factory is None
+                                ):
                                     self._configuration_sync.reject_application(
                                         detail=(
                                             "runtime configuration replacement is not configured"
@@ -606,7 +611,9 @@ class AutonomousRuntime:
                                     )
                                 else:
                                     try:
-                                        composition = self._configuration_factory(candidate)
+                                        runtime_configuration = self._configuration_resolver(
+                                            candidate
+                                        )
                                     except (OSError, sqlite3.Error, ValueError) as error:
                                         self._configuration_sync.reject_application(
                                             detail=str(error),
@@ -618,7 +625,7 @@ class AutonomousRuntime:
                                         )
                                     else:
                                         pending_bundle = candidate
-                                        pending_composition = composition
+                                        pending_configuration = runtime_configuration
                                         pending_confirmed_at = now.seconds
                                         current_stop.set()
                     current_stop.wait(self._maintenance_interval)
@@ -678,15 +685,39 @@ class AutonomousRuntime:
                 raise errors[0]
             if pending_bundle is not None:
                 bundle, pending_bundle = pending_bundle, None
-                composition, pending_composition = pending_composition, None
+                runtime_configuration, pending_configuration = pending_configuration, None
                 confirmed_at, pending_confirmed_at = pending_confirmed_at, None
-                if composition is None or confirmed_at is None or self._configuration_sync is None:
+                current_configuration = self.configuration
+                if (
+                    runtime_configuration is None
+                    or confirmed_at is None
+                    or self._configuration_sync is None
+                    or self._configuration_factory is None
+                    or current_configuration is None
+                ):
                     raise RuntimeError("pending configuration switch is incomplete")
+                try:
+                    composition = self._configuration_factory(runtime_configuration)
+                except (OSError, sqlite3.Error, ValueError) as error:
+                    self._configuration_sync.reject_application(
+                        detail=str(error),
+                        observed_at=confirmed_at,
+                    )
+                    _logger.warning(
+                        "edge.configuration_apply.rejected error_type=%s",
+                        type(error).__name__,
+                    )
+                    restored = self._configuration_factory(current_configuration)
+                    stale = self._replace_composition(restored)
+                    for station in stale.stations:
+                        station.close()
+                    continue
                 previous = self._replace_composition(composition)
                 try:
                     self._configuration_sync.confirm(bundle, confirmed_at=confirmed_at)
                 except Exception:
-                    rejected = self._replace_composition(previous)
+                    restored = self._configuration_factory(previous.configuration)
+                    rejected = self._replace_composition(restored)
                     for station in rejected.stations:
                         station.close()
                     raise
@@ -1004,13 +1035,17 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
     state = open_local_state(str(config.local_state_path))
     composition: RuntimeComposition | None = None
 
-    def validate_confirmed(bundle: ConfigurationBundle) -> None:
+    def resolve_confirmed(bundle: ConfigurationBundle) -> RuntimeConfiguration:
         runtime_configuration = confirmed_runtime_configuration(
             bundle=bundle,
             bootstrap_stations=config.stations,
             local_connectors=config.connectors,
         )
         _validate_media_for_runtime(config=config, runtime_configuration=runtime_configuration)
+        return runtime_configuration
+
+    def validate_confirmed(bundle: ConfigurationBundle) -> None:
+        resolve_confirmed(bundle)
 
     configuration_sync = ConfigurationSynchronizer(
         puller=HttpConfigurationPuller(
@@ -1034,11 +1069,7 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
                 connectors=config.connectors,
             )
             if initial_bundle is None
-            else confirmed_runtime_configuration(
-                bundle=initial_bundle,
-                bootstrap_stations=config.stations,
-                local_connectors=config.connectors,
-            )
+            else resolve_confirmed(initial_bundle)
         )
         _validate_media_for_runtime(
             config=config,
@@ -1075,16 +1106,7 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
             ssl_context=config.ssl_context,
         )
 
-        def compose_confirmed(bundle: ConfigurationBundle) -> RuntimeComposition:
-            runtime_configuration = confirmed_runtime_configuration(
-                bundle=bundle,
-                bootstrap_stations=config.stations,
-                local_connectors=config.connectors,
-            )
-            _validate_media_for_runtime(
-                config=config,
-                runtime_configuration=runtime_configuration,
-            )
+        def compose_runtime(runtime_configuration: RuntimeConfiguration) -> RuntimeComposition:
             return _build_runtime_composition(
                 config=config,
                 state=state,
@@ -1101,7 +1123,8 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
             configuration_sync=configuration_sync,
             maintenance_interval=config.command_poll_interval,
             configuration=composition.configuration,
-            configuration_factory=compose_confirmed,
+            configuration_resolver=resolve_confirmed,
+            configuration_factory=compose_runtime,
             connector_runtimes=composition.connector_runtimes,
             output_dispatchers=composition.output_dispatchers,
         )

@@ -12,17 +12,7 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
  
  logger = ds_logger.get_logger(__name__)
  
-@@ -401,6 +405,9 @@
-                         return 0
- 
-                 with self._lock:
-+                    if self._last_timestamp > 0 and timestamp < self._last_timestamp:
-+                        # A live-source reconnect can reset PTS; expose the new timeline anchor.
-+                        self._sop_video_processor.first_timestamp = wall_clock_entry
-                     self._last_timestamp = timestamp
-                 self.new_frame_event.set()
-             except Exception as e:
-@@ -845,6 +852,15 @@
+@@ -845,6 +849,15 @@
                      f"inference pipeline has finished w/ EOS queue size: {self._boundary_queue.qsize()}"
                  )
  
@@ -38,3 +28,37 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
          self._inference_pipeline.start(on_message)
          tm.log_elapsed_time("inference pipeline is starting in async mode")
          self._inference_pipeline.wait()
+@@ -880,10 +893,17 @@
+ 
+         chunk_length_sec = self._chunk_params.chunk_length_sec
+         chunk_idx, clip_start = 0, None
++        previous_ts = None
+         while True:
+             retriever.wait_for_new_frame()
+             last_ts = retriever.last_timestamp()
+             is_eos = retriever.is_end_of_stream()
++            if previous_ts is not None and last_ts < previous_ts:
++                # Reset the fixed-length segment together with a live-source PTS reset.
++                self.first_timestamp = self._tm_e2e.now()
++                clip_start = last_ts
++                tm.reset()
++            previous_ts = last_ts
+             if clip_start is None:
+                 clip_start = last_ts
+ 
+@@ -927,6 +947,15 @@
+             else:
+                 # items.append(item)
+                 frame_id, pts, score = item
++                if self._clip_cur_sec > 0 and pts < self._clip_cur_sec:
++                    # Drop pre-reconnect boundary state when the live-source PTS resets.
++                    self.first_timestamp = self._tm_e2e.now()
++                    self._clip_start_sec = pts
++                    boundaries.clear()
++                    delayed_frames = 0
++                    need_check_delayed = False
++                    is_ready = False
++                    tm.reset()
+                 self._clip_cur_sec = pts
+                 if score < 0:  # this is the first ready frame, need to init some base timestamp offsets
+                     # the self.first_timestamp and start_time is a match for live stream processing

@@ -1,8 +1,8 @@
 """Family two (§5.9): the recorded patch, and the base premises it stands on.
 
-The registered inference-base modification (ADR-0007) is three appended blocks in one base
-file: one import, one decoded-PTS reset observation, and one call at the end of the serving
-pipeline's message callback. Everything here is about that patch staying append-only and
+The registered inference-base modification (ADR-0007) is five contiguous added runs in one base
+file: one import, one PTS-reset block in each chunk post-processor, and one call at the end
+of the serving pipeline's message callback. Everything here is about that patch staying append-only and
 about the base facts that make the chosen sink and source anchor work.
 
 Standard library only, pure CPU: `ds_sop_process.py` imports torch and pyservicemaker, so
@@ -78,9 +78,9 @@ class RecordedPatchIsAppendOnlyTest(unittest.TestCase):
         source = read(PROCESS)
         blocks = added_blocks(self.patch)
         self.assertEqual(
-            3,
+            5,
             len(blocks),
-            "expected three appended blocks: import, PTS re-anchor, and hook call",
+            "expected five added runs: import, hook, uniform state/init, and DDM reset",
         )
         for block in blocks:
             self.assertIn(
@@ -105,16 +105,26 @@ class RecordedPatchIsAppendOnlyTest(unittest.TestCase):
         self.assertEqual(1, len(headers), f"expected one patched file, got {headers}")
         self.assertIn("ds_sop_process.py", headers[0])
 
-    def test_pts_regression_reanchors_the_source_timeline(self) -> None:
-        consume = function_source(PROCESS, "consume")
-        self.assertIn(
-            "if self._last_timestamp > 0 and timestamp < self._last_timestamp:",
-            consume,
-        )
-        self.assertIn(
-            "self._sop_video_processor.first_timestamp = wall_clock_entry",
-            consume,
-        )
+    def test_uniform_pts_regression_reanchors_and_resets_chunk_state(self) -> None:
+        source = function_source(PROCESS, "uniform_clip_post_process")
+        self.assertIn("if previous_ts is not None and last_ts < previous_ts:", source)
+        self.assertIn("self.first_timestamp = self._tm_e2e.now()", source)
+        self.assertIn("clip_start = last_ts", source)
+
+    def test_ddm_pts_regression_reanchors_and_resets_boundary_state(self) -> None:
+        source = function_source(PROCESS, "clip_post_process")
+        self.assertIn("if self._clip_cur_sec > 0 and pts < self._clip_cur_sec:", source)
+        self.assertIn("self.first_timestamp = self._tm_e2e.now()", source)
+        self.assertIn("self._clip_start_sec = pts", source)
+        self.assertIn("boundaries.clear()", source)
+        self.assertIn("delayed_frames = 0", source)
+        self.assertIn("need_check_delayed = False", source)
+        self.assertIn("is_ready = False", source)
+
+    def test_ddm_pts_observation_does_not_depend_on_the_vlm_backend(self) -> None:
+        source = function_source(PROCESS, "start")
+        self.assertIn("else self.clip_post_process", source)
+        self.assertLess(source.index("clip_fn ="), source.index("if not DISABLE_VLM_INFERENCE:"))
 
 
 class HookIsTheOnlyReachIntoOurCodeTest(unittest.TestCase):

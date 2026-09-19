@@ -13,8 +13,8 @@ this module cannot classify counts as impairing rather than healthy.
 
 Standard library only, and this file is bound to that harder than the judgment core is: it
 executes inside the DeepStream container, whose interpreter the base image sets (§5.11).
-It also imports nothing from `edge_runtime` — the hook in `vendor/` reaches exactly this
-module and no further, which is what keeps the patch surface at one call.
+It also imports nothing from `edge_runtime` — the health hook in `vendor/` reaches exactly
+this module and no further. The vendor-side PTS-reset observations use only base-local state.
 """
 
 from __future__ import annotations
@@ -116,9 +116,9 @@ class StreamHealthEvent:
     """The base's `first_timestamp`: the wall-clock moment it anchored the source timeline.
 
     Wall clock, not monotonic — the base reads `time.time()` for it — so it is an identity
-    to compare, never an interval to measure. The registered vendor patch re-anchors it when
-    decoded PTS regresses after a live-source recovery, and every chunk carries the same
-    field, which is how the supervisor detects that the source timeline went back to zero.
+    to compare, never an interval to measure. The registered vendor patch re-anchors it in
+    whichever chunk post-processor owns the active algorithm when its consumed PTS regresses;
+    the next produced chunk carries the new field, which is how the supervisor detects reset.
     """
 
     stream_id: str = ""

@@ -58,11 +58,11 @@ chunk4 动作(5)  cycle_completed=False  missing=[]
 
 复核 `69352021` 后修正早期"无重连"结论：RTSP pipeline 给 `nvurisrcbin` 设置了 `init-rtsp-reconnect-interval=10`（`ds_3d_action_pipeline.py:491`）。按 NVIDIA DeepStream 源码，该属性在 RTSP 源收到错误时等待后触发重连；基座没有设置用于"持续无数据"检测的 `rtsp-reconnect-interval`，也没有显式设置重连次数。
 
-关键在于基座原本没有把服务路径回调可观测的 `INVALID`（source error）、`PLAYING`（delivering）与 EOS 归一成 SSE 流健康事实；源元件内部的重连没有独立总线消息。恢复后若解码帧 PTS 回退，登记补丁在 `DecodedFrameRetriever.consume()` 以该帧 wall-clock 重新设置 `first_timestamp`，supervisor 再通过锚点变化识别时间轴归零。`checker_result.error_message` 也只反映 checker 自身异常。
+关键在于基座原本没有把服务路径回调可观测的 `INVALID`（source error）、`PLAYING`（delivering）与 EOS 归一成 SSE 流健康事实；源元件内部的重连没有独立总线消息。恢复后若 PTS 回退，登记补丁由当前 chunk 算法的后处理同时重置旧分块状态和 `first_timestamp`：uniform 重置固定分块起点，DDM 清空旧边界并重置 `_clip_start_sec`；下一正常 chunk 携带新锚点。`checker_result.error_message` 只反映 checker 自身异常。
 
 **E4 实施时修正回调落点**：早期结论指向 `ds_boundary_infernce` 的 `on_message`（`ds_3d_action_pipeline.py:779-784`）。该函数只被同文件 `if __name__ == "__main__":`（`:815`、`:852`）的命令行入口调用，**不在服务路径上**。服务路径是 `SOPVideoProcessor.run_pipeline` 的 `on_message`（`ds_sop_process.py:823`，由 `:848` 的 `start(on_message)` 注册），它处理 `StateTransitionMessage` 与 `EOSMessage` 两类消息，且 `INVALID` / `PLAYING` 分别是 source error / delivering 的可观测形式。改造因此落在服务路径这一处，只登记这些真实可观测事实；不虚构独立的重连状态。
 
-→ 流健康状态迁移的第一手信号在推理机 pipeline 回调，时间轴是否回退的第一手信号在同机 decoded-frame seam。**判定必须与它们同机**，否则中心侧只能靠独立探活二次猜测——那正是"两套东西"。改造方案见 §5.7。完整证据见 [`nvidia-base-capability-boundary.md`](../research/nvidia-base-capability-boundary.md)。
+→ 流健康状态迁移的第一手信号在推理机 pipeline 回调，时间轴是否回退的第一手信号在同机 chunk 后处理。**判定必须与它们同机**，否则中心侧只能靠独立探活二次猜测——那正是"两套东西"。改造方案见 §5.7。完整证据见 [`nvidia-base-capability-boundary.md`](../research/nvidia-base-capability-boundary.md)。
 
 ## 2.5 基座三项能力空白
 

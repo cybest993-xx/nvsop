@@ -32,9 +32,9 @@
 #### S010 时间锚修正（2026-09-20）
 
 - 复核 Issue #152 时确认：NVIDIA 基座的 `first_timestamp` 只在初始 post-process 启动设置，内部 RTSP 恢复不会自动重新锚定。
-- `0001-stream-health-events.patch` 仍只触及 `ds_sop_process.py` 且零删除；由两个追加块扩为三个：模块 import、decoded PTS 回退时重新锚定、`run_pipeline.on_message` 健康 hook。
-- 重新锚定只在新 decoded frame PTS 小于上一帧时发生，使用该帧已有 `wall_clock_entry`；普通恢复但 PTS 连续时不产生 `TIMESTAMP_DISCONTINUITY`。
-- `test_stream_health_patch.py` 增加 producer-side 契约断言，并要求登记 patch 与工作树同步且可反向应用。
+- `0001-stream-health-events.patch` 仍只触及 `ds_sop_process.py` 且零删除；逻辑上是模块 import + 三个观测触点（`on_message`、uniform、DDM），unified diff 机械上形成 5 个连续追加 run。
+- 重新锚定只在 active chunk 后处理观察到 PTS 小于上一消费值时发生；uniform 同步重置 `clip_start`，DDM 同步清空旧 `boundaries`/延迟状态并重置 `_clip_start_sec`。普通恢复但 PTS 连续时不产生 `TIMESTAMP_DISCONTINUITY`。
+- DDM 的 `clip_post_process` 由 chunk 算法选择，早于且独立于 VLM 后端启动，因此覆盖 `USE_VLLM_INFERENCE=false`；契约测试固定该前提，并要求登记 patch 与工作树同步且可反向应用。
 
 #### 标注接入补丁在该提交上落地（2026-09-09）
 

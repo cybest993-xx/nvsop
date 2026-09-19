@@ -23,7 +23,7 @@
 
 1. `actions.json` 和 VLM prompt 是**进程级文件配置**，不是每个请求或工位携带的模板；同一进程动态承载多个模板没有公开契约。→ 靠部署隔离解决，不改基座：推理后端定义为"承载一份模板配置的进程端点"。
 2. 基座检查器只知道动作编号序列，不知道流健康或 SOP 实例的物理边界；周期边界靠启发式推断，**返工序列会被误判为违规**（见下文实测）。→ 序列比对与周期边界在 `apps/edge-runtime/` 自己实现（声明式边界 + 有效性门 + 三值判定），基座检查器按配置关闭，不打补丁改造。
-3. RTSP 源设置了"收到错误后的初始重连间隔"，但没有配置"持续无数据后的重连间隔"，也没有把重连/掉流状态作为 API 观测输出。这些信号其实存在于 pipeline 回调中，只是回调只处理 EOS 后全部丢弃。→ 必须改造该回调，把流健康作为合成事件送进 `_vlm_response_queue`，经 SSE 到达本机 supervisor。
+3. RTSP 源设置了"收到错误后的初始重连间隔"，但没有配置"持续无数据后的重连间隔"。服务路径 pipeline 回调能观测状态迁移与 EOS，却原本没有把 `INVALID` / `PLAYING` / EOS 归一为 API 流健康输出；源元件内部重连没有独立总线消息。→ 合成健康事实进入动作共用的 `_chunk_queue`，VLM 开启时按键保序旁路、关闭时直接输出，再经 SSE 到达本机 supervisor。
 
 后两条同时说明**判定必须与推理服务同机**：有效性所需的第一手信号在推理机的 pipeline 里，把判定放在中心只能靠独立探活二次猜测，必然产生两套不一致的实现（[ADR-0005](../adr/0005-judgment-runs-inside-the-inference-host.md)）。
 
@@ -56,7 +56,7 @@
 | 超时、ROI、外部信号、工业连接器 | 全新建设（运行时在推理机内） | 推理服务没有这些 SOP 业务原语；外部信号先规范化为观测，再与动作编号并列进判定。 |
 | 证据、人工复核、数据保留 | 全新建设 | 推理服务可编码 chunk，但没有产品证据/复核生命周期。切片在推理机，归档与复核在中心。 |
 | 每工位动态模板或同进程多模板 | **部署隔离，不改基座** | 动作/prompt 是进程级。推理后端定义为"承载一份模板配置的进程端点"，一台推理机可跑多个后端；每后端常驻显存开销须在 G2 门禁单列。 |
-| 每路流状态、掉流原因和重连事件 | **改造 pipeline 回调** | 信号已存在于 `on_message`，但只处理 EOS、其余全部丢弃。改造为送出合成健康事件，经 SSE 供同机 supervisor 消费。该通道只在进程存活时可投递，进程级失联由 supervisor 的 chunk 静默计时器兜底。 |
+| 每路流健康与恢复状态 | **改造 pipeline 回调** | `on_message` 能观测 `INVALID` / `PLAYING` / EOS，但原本未归一为 SSE 健康事实；源元件内部重连没有独立消息。改造为送出真实可观测的合成健康事件，经 SSE 供同机 supervisor 消费。该通道只在进程存活时可投递，进程级失联由 supervisor 的 chunk 静默计时器兜底。 |
 | 持续 RTSP 掉流恢复策略 | 配置/验证后再定补丁 | 当前只设置 `init-rtsp-reconnect-interval=10`，未设置无数据重连属性和尝试次数；必须在目标镜像故障注入。 |
 | 真并发多流性能测试 | 测试补齐，非产品功能 | `concurrent=True` 明确打印未实现并顺序执行。需自有基准工具或向 NVIDIA 贡献。 |
 
@@ -134,7 +134,7 @@ keep_alive=False → final_missing=[1,3]
 
 基座给 `nvurisrcbin` 设置 `init-rtsp-reconnect-interval=10`。NVIDIA DeepStream 源码将该属性描述为：RTSP 源收到错误时，等待指定秒数后强制重连。官方还提供另一属性 `rtsp-reconnect-interval`，用于最后一次收到数据后超时重连，以及 `rtsp-reconnect-attempts` 控制次数；基座没有设置后两项。
 
-pipeline 回调只显式处理 EOS 并终止队列，没有把 source error、正在重连、重连成功、最后一帧时间或时间轴重置作为 SSE 业务字段。故修正旧结论如下：基座不是“完全没有重连”，而是**存在有限的初始错误重连配置，但没有产品所需的可观测流健康契约，持续断流恢复行为也尚未实测**。
+服务路径 pipeline 回调处理状态迁移与 EOS，但没有把 `INVALID`（source error）、`PLAYING`（delivering）与 EOS 归一为 SSE 流健康业务字段；源元件内部重连没有独立总线消息，恢复后的时间轴变化需比较 `first_timestamp`。故修正旧结论如下：基座不是“完全没有重连”，而是**存在有限的初始错误重连配置，但没有产品所需的可观测流健康契约，持续断流恢复行为也尚未实测**。
 
 来源：
 
@@ -174,7 +174,7 @@ pipeline 回调只显式处理 EOS 并终止队列，没有把 source error、�
 
 ## 改造范围已裁决
 
-“裁决基座复用、配置、适配与必要补丁清单”已由 [`edge-autonomy.md`](../design/mechanisms/edge-autonomy.md) §5.11 与 [ADR-0007](../adr/0007-base-is-the-trunk-not-a-dependency.md) 结案：就地改造限于 pipeline 消息回调一处（纯加输出，把流健康作为合成事件送进 `_vlm_response_queue`），序列比对与周期边界在 `apps/edge-runtime/` 自己实现且 `vendor/` 不留补丁，基座 checker 与处置按既有环境变量关闭，其余原样复用或全新建设。
+“裁决基座复用、配置、适配与必要补丁清单”已由 [`edge-autonomy.md`](../design/mechanisms/edge-autonomy.md) §5.11 与 [ADR-0007](../adr/0007-base-is-the-trunk-not-a-dependency.md) 结案：推理侧就地改造限于同一个 vendor 文件的登记 owner 补丁——stream epoch barrier 统一 source transition、PTS reset、chunk emission 与 internal-vLLM frame wait，健康事实再沿现有 chunk/VLM/SSE 链输出；序列比对与周期边界在 `apps/edge-runtime/` 自己实现，基座 checker 与处置按既有环境变量关闭。
 
 以下门槛用于判断**将来新出现**的改造候选是否越界：
 

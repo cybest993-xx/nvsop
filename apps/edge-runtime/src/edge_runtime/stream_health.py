@@ -1,20 +1,14 @@
-"""The stream-health channel: the one thing the hook inside `vendor/` is allowed to call.
+"""流健康事实的生产/解码契约, 也是 `vendor/` 健康 hook 唯一允许调用的模块.
 
-The base's pipeline callback already sees the facts that decide whether we could observe at
-all — the source failed, the pipeline is playing again, the stream ended — and discards
-every one of them (§2.4). E4 appends one call at that callback so they reach the supervisor
-over the SSE the base already serves, as a synthetic chunk marked by one explicit key
-(§5.11). Nothing on the base's computation path changes: this module only adds output.
+基座 pipeline 回调只登记真实可观测的 source error、delivering 与 EOS。vendor 在动作
+进入 `_chunk_queue` 前用 stream epoch barrier 退休尚未完成 normalization 的旧 work;
+健康事实随后沿既有 chunk/VLM/SSE 链输出。PTS 回退使用同一代际失效旧 frame/descriptor.
 
-Both halves of that wire shape live here, because the producer runs inside the base
-container and the consumer runs in the supervisor. They upgrade independently, so an
-unknown fact must survive decoding as itself rather than be dropped (ADR-0003), and a fact
-this module cannot classify counts as impairing rather than healthy.
+生产者运行在基座容器, 消费者运行在 supervisor, 二者可独立升级, 因此未知事实必须
+按原始值保留 (ADR-0003), 且无法分类的事实按观测受损处理而不是按健康处理.
 
-Standard library only, and this file is bound to that harder than the judgment core is: it
-executes inside the DeepStream container, whose interpreter the base image sets (§5.11).
-It also imports nothing from `edge_runtime` — the hook in `vendor/` reaches exactly this
-module and no further, which is what keeps the patch surface at one call.
+本模块只依赖标准库, 也不导入 `edge_runtime` 的其他模块; barrier 与队列所有权仍在
+vendor 基座本地, 避免健康 hook 扩大到判定实现.
 """
 
 from __future__ import annotations
@@ -39,17 +33,14 @@ not a payload, and its length is not ours to trust."""
 
 
 class StreamFact(Enum):
-    """What the base's pipeline callback can actually observe about one stream.
+    """由拥有该接缝的组件直接观测到的流有效性事实.
 
-    Only observable facts are named. "Reconnecting" is deliberately absent: the base sets
-    `init-rtsp-reconnect-interval` on the source and DeepStream retries inside the element
-    without announcing it on the bus (§2.4), so a `RECONNECTING` member would be invented
-    rather than observed. Recovery reaches the supervisor as `SOURCE_ERROR` followed by
-    `DELIVERING`, which is the same information without the fiction.
+    pipeline hook 产生 `SOURCE_ERROR`、`DELIVERING`、`STREAM_ENDED`; 本机 SSE 输入看护
+    还可根据网络读取与队列状态产生 `INFERENCE_TIMEOUT`、`CHUNK_BACKLOG_EXCEEDED`.
 
-    Timeline re-zeroing is not a member either, for the opposite reason: it is not an event
-    but a change in `source_anchor`, which every event carries, so the supervisor reads it
-    by comparing anchors rather than by being told.
+    不定义 `RECONNECTING`: DeepStream 在源元件内部重试但不广播该状态, 恢复由
+    `SOURCE_ERROR` 后的 `DELIVERING` 表达. 时间轴归零也不是独立事实; pipeline 事件与
+    动作 chunk 在可用时携带 `source_anchor`, supervisor 通过锚点变化识别归零.
     """
 
     SOURCE_ERROR = "source_error"
@@ -57,15 +48,6 @@ class StreamFact(Enum):
     STREAM_ENDED = "stream_ended"
     INFERENCE_TIMEOUT = "inference_timeout"
     CHUNK_BACKLOG_EXCEEDED = "chunk_backlog_exceeded"
-    """Best-effort, unlike the other two.
-
-    The base's VLM thread puts its own `None` sentinel on the same queue when it finishes
-    (`ds_sop_process.py:1175`), and the dispatch loop stops forwarding at that sentinel. An
-    end-of-stream event racing behind it is dropped. Nothing is lost by that: the SSE
-    response itself ends, which the supervisor sees directly, and stream termination is
-    already the chunk-silence timer's job (§5.11). `SOURCE_ERROR` and `DELIVERING` arrive
-    mid-stream, well before any sentinel, so the facts judgment depends on do not race.
-    """
 
     @property
     def impairs_observation(self) -> bool:
@@ -79,12 +61,10 @@ class StreamFact(Enum):
 
 
 class HealthSink(Protocol):
-    """Where the event goes: `_vlm_response_queue`, the one usable sink of three (§5.11).
+    """健康事实写入点的最小契约, 只要求 FIFO 队列提供 `put`.
 
-    A protocol rather than `queue.Queue`, so this module states what it needs — one
-    `put` — instead of naming a type it never constructs. `_boundary_queue` is unusable
-    because `clip_post_process` unpacks its items positionally, and `_chunk_queue` is
-    unusable because a VLM inference would be run against the event.
+    vendor hook 实际写入动作共用的 `_chunk_queue`; VLM 启用时基座按 `stream_health`
+    键旁路推理并继续沿 future/response 队列转发, VLM 禁用时该队列直接进入 SSE.
     """
 
     def put(self, item: dict[str, Any], /) -> None: ...
@@ -108,23 +88,18 @@ class StreamHealthEvent:
     """
 
     at_monotonic: float | None
-    """When the callback saw it, on the host's monotonic clock.
+    """事实产生接缝观测到它时的主机 monotonic 时间.
 
-    The same clock the judgment core measures the idle timeout and step deadline on. Taken
-    to be comparable across the two processes because Linux's `CLOCK_MONOTONIC` counts from
-    boot rather than per process — a **premise, not a measured fact**, registered in
-    measured-facts.md §2.13 along with the one thing that would break it (a container time
-    namespace) and the fallback if it does. None only when a malformed event arrived, which
-    is itself a reason to distrust what we are seeing.
+    判定核心的 idle timeout 与 step deadline 使用同一时钟. 跨进程可比较依赖 Linux
+    `CLOCK_MONOTONIC` 从 boot 起计时这一前提; 该前提及容器 time namespace 风险记录在
+    measured-facts.md §2.13. 格式错误事件可为 None, 此时本身就表示观测不可信.
     """
 
     source_anchor: float | None = None
-    """The base's `first_timestamp`: the wall-clock moment it anchored the source timeline.
+    """基座 `first_timestamp`, 即源时间轴建立锚点时的 wall-clock.
 
-    Wall clock, not monotonic — the base reads `time.time()` for it — so it is an identity
-    to compare, never an interval to measure. The base re-anchors it after a reconnect, and
-    every chunk carries the same field, which is how the supervisor detects that the source
-    timeline went back to zero underneath it.
+    它来自 `time.time()`, 只用于比较身份, 不能用于测量间隔. 登记的 vendor 补丁在当前
+    chunk 算法观测到 PTS 回退时重新锚定, 下一正常 chunk 携带新值供 supervisor 识别归零.
     """
 
     stream_id: str = ""

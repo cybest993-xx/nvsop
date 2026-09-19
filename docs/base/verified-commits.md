@@ -29,6 +29,15 @@
 - 契约测试：`tests/contract/base/` 共 35 条通过，其中 16 条为本次新增（`test_stream_health_patch.py`：补丁纯追加、补丁与工作树同步、`vendor/` 只 import 一处我们的模块、hook 调用位于回调末尾、基座消息类型与状态名未变、`DISABLE_SOP_CHECKER` 下的队列路由与消费者集合未变）。
 - 补丁是否需要调整：不需要。
 
+#### S010 时间锚修正（2026-09-20）
+
+- 复核 Issue #152 时确认：NVIDIA 基座的 `first_timestamp` 只在初始 post-process 启动设置，内部 RTSP 恢复不会自动重新锚定。
+- S010 最终确认仅靠追加队列旁路不足以满足 AC1：`0001-stream-health-events.patch` 仍只触及 `ds_sop_process.py`，但新增 stream epoch barrier，并允许替换 3 条 chunk enqueue 与 5 条 decoded-frame tuple/get/unpack 基座行；完整 diff 仍可从当前工作树反向应用。
+- `INVALID` / `PLAYING` 与 PTS reset 都推进 stream epoch：pending boundary/frame、已排队或正在等待旧 frame 的 chunk descriptor 统一退休；uniform/DDM 在下一代输入上重建局部状态。普通恢复但 PTS 连续时仍不产生 `TIMESTAMP_DISCONTINUITY`。
+- DDM 的 `clip_post_process` 由 chunk 算法选择，早于且独立于 VLM 后端启动，因此覆盖 `USE_VLLM_INFERENCE=false`；契约测试固定该前提，并要求登记 patch 与工作树同步且可反向应用。
+- S010 最终 base contract：54/54 通过；`center-format` / `center-lint` 通过。
+- 健康事实最终仍进入 `_chunk_queue`，但 source transition 会先打开 barrier 并推进 epoch；旧代际 normalization work 不会在健康恢复后重新出现。VLM 开启时两个处理 loop 仍只按 `stream_health` 键旁路推理；内部 `_stream_epoch` 在 final output 前移除。
+
 #### 标注接入补丁在该提交上落地（2026-09-09）
 
 - 补丁：[`patches/0002-annotation-upload-target-and-accessibility.patch`](patches/0002-annotation-upload-target-and-accessibility.patch)。改动训练标注基座的显式目标上传、独立上下文入口、异步结果轮询、控件可访问性和标注服务端口边界；不复制时间轴或切片逻辑。

@@ -134,12 +134,12 @@ if 证据覆盖不足 or 流不健康 or 推理不健康 or 时间未对齐:
 | warmup 管线仍无条件加载 DDM（uniform 绕不开） | §2.7 | 静态检查 |
 | DDM 标注字段（`start_timestamp`/`end_timestamp`/`description`）未变 | §2.7 | 静态检查 `ddm_dataset.py` |
 | RTSP 初始错误重连配置仍存在 | §2.4 | 静态检查 `init-rtsp-reconnect-interval` |
-| **`_vlm_response_queue` 的消费者集合未变** | §5.11（合成事件靠键区分，新消费者不检查该键即静默破损） | 静态检查该队列的全部 `get()` 调用点，出现未登记的消费者即失败（已落地，随 E4） |
+| **健康事实与动作共享 `_chunk_queue` FIFO，VLM 两阶段只按合成键旁路** | §5.11（AC1 要求有序消费，不能直写下游 response queue） | 静态检查 hook sink、request/response 旁路位置与 `inference_last_queue` 两种 VLM 模式（已落地） |
 | **基座仍以 `EOSMessage` / `new_state` 这些名字表达 pipeline 消息** | §5.11（hook 不导入 `pyservicemaker`，按名字与属性鸭子类型识别消息） | 静态检查基座的 import 与状态名（已落地，随 E4） |
 
 **二、我们自己实现或改造过的行为**（正确性 + 回归 + 补丁有效性）
 
-下表中「与基座双跑对比」与「补丁纯追加」两条依赖 `vendor/`，留在 `tests/contract/base/`；其余是我们自有逻辑的回归，归包所有（判定核心与流健康事件契约的在 `apps/edge-runtime/tests/unit/`）。
+下表中「与基座双跑对比」与「登记补丁边界」两条依赖 `vendor/`，留在 `tests/contract/base/`；其余是我们自有逻辑的回归，归包所有（判定核心与流健康事件契约在 `apps/edge-runtime/tests/unit/`）。
 
 | 断言 | 依据 | 测法 |
 |---|---|---|
@@ -148,7 +148,7 @@ if 证据覆盖不足 or 流不健康 or 推理不健康 or 时间未对齐:
 | 顺序型模板跳号即报漏步 | §5.1 | 纯 CPU |
 | 流不健康期间的实例闭合为不可判定，不为不通过 | §5.2 | 纯 CPU，注入健康事件 |
 | **我们的序列比对与基座在合规序列上结论一致** | §5.11 | 纯 CPU，双跑对比；**不含返工与漏步时机**——那正是我们故意不同之处 |
-| 该处补丁纯追加、与工作树同步、hook 位于回调末尾 | §5.11 | 纯 CPU 静态检查（`test_stream_health_patch.py`）。E4 实施后取代早期「打补丁 + 导入」的测法：补丁已落在工作树里，要验的是它没有越界，而不是它能否应用 |
+| 登记补丁只替换 8 条批准的 frame/chunk owner 行、与工作树同步且可反向应用 | §5.11 | 纯 CPU 静态检查（`test_stream_health_patch.py`）：核验 stream epoch barrier、stale descriptor 退休、允许替换行集合和可逆 patch |
 | **取消或重排计时器不产生重复判定；一次等待只报一次** | §5.18 | 纯 CPU，可控钟按赋值推进，无 sleep（`test_supervisor_station.py`） |
 | 未配连接器与配了连接器的工位走同一条归一化路径 | §5.8 | 纯 CPU，外部信号与动作编号同为观测（`test_supervisor_inputs.py`） |
 | 余量只加宽证据、不截断必需跨度 | §5.20 | 纯 CPU（`test_supervisor_commands.py`） |

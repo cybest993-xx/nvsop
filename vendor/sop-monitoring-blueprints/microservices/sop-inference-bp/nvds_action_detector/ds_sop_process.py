@@ -340,12 +340,15 @@ class SOPVideoProcessor:
             self._lock = threading.Lock()
             self.new_frame_event = threading.Event()
             self._last_timestamp = 0
+            self._last_timestamp_epoch = sop_video_processor._stream_epoch
             self.end_of_stream = False
             self._start_sec = 0.0
             self._duration_sec = sop_video_processor._chunk_params.duration_sec
 
         def last_timestamp(self):
             with self._lock:
+                if self._last_timestamp_epoch != self._sop_video_processor._stream_epoch:
+                    return 0
                 return self._last_timestamp
 
         def end_sec(self):
@@ -378,27 +381,24 @@ class SOPVideoProcessor:
                 logger.debug(
                     f"received frame: {self._count}, timestamp: {timestamp}, tensor.shape: {torch_tensor.shape}"
                 )
+                frame_epoch = self._sop_video_processor._stream_epoch
                 with self._lock:
                     timeline_reset = self._last_timestamp > 0 and timestamp < self._last_timestamp
                 if timeline_reset:
-                    # 时间轴回退后先清空内置 vLLM 尚未消费的旧时间轴帧，再入队当前恢复帧。
-                    while True:
-                        try:
-                            self.decoded_frame_queue.get(block=False)
-                        except Empty:
-                            break
+                    # PTS 回退建立新代际，旧帧、旧边界和旧 chunk descriptor 一起失效。
+                    frame_epoch = self._sop_video_processor._advance_stream_epoch(source_anchor=wall_clock_entry)
 
                 try:
                     # video file will be blocked call,
                     # live stream will drop frames if inference speed is getting slower than streaming
                     block = not self._sop_video_processor._is_live
-                    self.decoded_frame_queue.put((timestamp, wall_clock_entry, torch_tensor), block=block)
+                    self.decoded_frame_queue.put((frame_epoch, timestamp, wall_clock_entry, torch_tensor), block=block)
                 except Full:
                     # for live stream dropping only
                     try:
                         dropped_frame = self.decoded_frame_queue.get(block=False)
                         if dropped_frame is not None:
-                            dropped_timestamp, _, _ = dropped_frame
+                            _, dropped_timestamp, _, _ = dropped_frame
                             logger.warning(
                                 f"DecodedFrameRetriever queue is full (size: {self.decoded_frame_queue.qsize()}), "
                                 f"dropping oldest frame with timestamp: {dropped_timestamp:.3f}s to make room for new frame at {timestamp:.3f}s"
@@ -406,7 +406,9 @@ class SOPVideoProcessor:
                     except Empty:
                         pass
                     try:
-                        self.decoded_frame_queue.put((timestamp, wall_clock_entry, torch_tensor), block=False)
+                        self.decoded_frame_queue.put(
+                            (frame_epoch, timestamp, wall_clock_entry, torch_tensor), block=False
+                        )
                     except Full:
                         # This should rarely happen, but handle it gracefully
                         logger.error(
@@ -416,6 +418,7 @@ class SOPVideoProcessor:
 
                 with self._lock:
                     self._last_timestamp = timestamp
+                    self._last_timestamp_epoch = frame_epoch
                 self.new_frame_event.set()
             except Exception as e:
                 logger.exception(f"Error in DecodedFrameRetriever consume: {e}")
@@ -506,6 +509,9 @@ class SOPVideoProcessor:
         self._post_dispatch_thread_pool = futures.ThreadPoolExecutor(max_workers=1)
         self._post_dispatch_future = None
         self._final_queue = Queue()
+        self._stream_order_lock = threading.Lock()
+        self._stream_epoch = 0
+        self._stream_barrier_open = False
         self._messager = messager
         self._message_pool = kwargs.get("message_pool", None)
         self.first_timestamp = 0.0
@@ -610,6 +616,40 @@ class SOPVideoProcessor:
             return self._vlm_response_queue
         else:
             return self._sop_checker_result_queue
+
+    def _drain_pending_queue_locked(self, queue):
+        saw_sentinel = False
+        while True:
+            try:
+                item = queue.get(block=False)
+            except Empty:
+                break
+            if item is None:
+                saw_sentinel = True
+        if saw_sentinel:
+            queue.put(None)
+
+    def _advance_stream_epoch_locked(self):
+        self._stream_epoch += 1
+        self._drain_pending_queue_locked(self._boundary_queue)
+        if self._decoded_frame_retriever is not None:
+            self._drain_pending_queue_locked(self._decoded_frame_retriever.decoded_frame_queue)
+        return self._stream_epoch
+
+    def _advance_stream_epoch(self, *, source_anchor=None):
+        with self._stream_order_lock:
+            epoch = self._advance_stream_epoch_locked()
+            if source_anchor is not None:
+                self.first_timestamp = source_anchor
+            return epoch
+
+    def _put_chunk_if_current(self, chunk_info, stream_epoch):
+        with self._stream_order_lock:
+            if self._stream_barrier_open or stream_epoch != self._stream_epoch:
+                return False
+            chunk_info["_stream_epoch"] = stream_epoch
+            self._chunk_queue.put(chunk_info)
+            return True
 
     @classmethod
     def get_media_info(cls, file_path):
@@ -815,6 +855,9 @@ class SOPVideoProcessor:
             logger.debug(f"========Post dispatch process started")
             inference_last_queue = self.inference_last_queue
             chunk = inference_last_queue.get(block=True)
+            if chunk is not None:
+                chunk.pop("_stream_epoch", None)
+                chunk.pop("_stream_stale", None)
             self._final_queue.put(chunk)
             if chunk is None:
                 logger.debug(f"========Post dispatch process end of stream")
@@ -837,6 +880,17 @@ class SOPVideoProcessor:
         def on_message(message):
             nonlocal is_pipeline_ready
             nonlocal is_pipeline_playing
+            barrier_transition = (
+                isinstance(message, StateTransitionMessage)
+                and message.new_state in (PipelineState.INVALID, PipelineState.PLAYING)
+            )
+            wake_retriever = is_pipeline_playing
+            if barrier_transition:
+                with self._stream_order_lock:
+                    self._stream_barrier_open = True
+                    self._advance_stream_epoch_locked()
+                if wake_retriever and self._decoded_frame_retriever is not None:
+                    self._decoded_frame_retriever.new_frame_event.set()
             if isinstance(message, StateTransitionMessage):
                 logger.debug(f"StateTransitionMessage received: {message}")
                 if message.new_state == PipelineState.PLAYING and not is_pipeline_playing:
@@ -859,14 +913,26 @@ class SOPVideoProcessor:
                     f"inference pipeline has finished w/ EOS queue size: {self._boundary_queue.qsize()}"
                 )
 
-            # --- 记录补丁，仅追加输出（ADR-0007） ---
-            # 保持在回调末尾；基座原有分支先完成，不改变基座控制流。
-            note_pipeline_message(
-                message,
-                sink=self._chunk_queue,
-                stream_id=str(self.id),
-                source_anchor=self.first_timestamp,
-            )
+            # --- 记录补丁（ADR-0007） ---
+            # 健康迁移先关闭旧代际，再进入动作共用 FIFO。
+            if barrier_transition:
+                with self._stream_order_lock:
+                    try:
+                        note_pipeline_message(
+                            message,
+                            sink=self._chunk_queue,
+                            stream_id=str(self.id),
+                            source_anchor=self.first_timestamp,
+                        )
+                    finally:
+                        self._stream_barrier_open = False
+            else:
+                note_pipeline_message(
+                    message,
+                    sink=self._chunk_queue,
+                    stream_id=str(self.id),
+                    source_anchor=self.first_timestamp,
+                )
 
         self._inference_pipeline.start(on_message)
         tm.log_elapsed_time("inference pipeline is starting in async mode")
@@ -904,13 +970,22 @@ class SOPVideoProcessor:
         chunk_length_sec = self._chunk_params.chunk_length_sec
         chunk_idx, clip_start = 0, None
         previous_ts = None
+        stream_epoch = self._stream_epoch
         while True:
             retriever.wait_for_new_frame()
             last_ts = retriever.last_timestamp()
             is_eos = retriever.is_end_of_stream()
+            current_epoch = self._stream_epoch
+            if current_epoch != stream_epoch:
+                stream_epoch = current_epoch
+                clip_start = None
+                previous_ts = None
+                tm.reset()
+                if is_eos:
+                    break
+                continue
             if previous_ts is not None and last_ts < previous_ts:
-                # 实时源 PTS 回退时同步重置固定长度分块。
-                self.first_timestamp = self._tm_e2e.now()
+                # retriever 已推进代际，这里只重置固定长度分块。
                 clip_start = last_ts
                 tm.reset()
             previous_ts = last_ts
@@ -919,14 +994,21 @@ class SOPVideoProcessor:
 
             while last_ts >= clip_start + chunk_length_sec:
                 end = clip_start + chunk_length_sec
-                self._chunk_queue.put(self._make_chunk_info(chunk_idx, clip_start, end, 1.0, tm.elapsed_time))
+                chunk_info = self._make_chunk_info(chunk_idx, clip_start, end, 1.0, tm.elapsed_time)
+                if not self._put_chunk_if_current(chunk_info, stream_epoch):
+                    stream_epoch = self._stream_epoch
+                    clip_start = last_ts if is_eos else None
+                    previous_ts = None
+                    tm.reset()
+                    break
                 chunk_idx += 1
                 clip_start = end
                 tm.reset()
 
             if is_eos:
                 if last_ts > clip_start:
-                    self._chunk_queue.put(self._make_chunk_info(chunk_idx, clip_start, last_ts, 1.0, tm.elapsed_time))
+                    chunk_info = self._make_chunk_info(chunk_idx, clip_start, last_ts, 1.0, tm.elapsed_time)
+                    self._put_chunk_if_current(chunk_info, stream_epoch)
                 break
 
         while self._boundary_queue.get(block=True) is not None:
@@ -949,8 +1031,24 @@ class SOPVideoProcessor:
         need_check_delayed = False
         is_ready = False
         chunk_idx = 0
+        stream_epoch = self._stream_epoch
         while not is_last_item:
             item = self._boundary_queue.get(block=True)
+            current_epoch = self._stream_epoch
+            if current_epoch != stream_epoch:
+                stream_epoch = current_epoch
+                boundaries.clear()
+                delayed_frames = 0
+                need_check_delayed = False
+                is_ready = False
+                tm.reset()
+                if item is None:
+                    is_last_item = True
+                    continue
+                _, pts, _ = item
+                self._clip_start_sec = pts
+                self._clip_cur_sec = pts
+                continue
             if item is None:
                 logger.info("last item is None received")
                 is_last_item = True
@@ -958,8 +1056,11 @@ class SOPVideoProcessor:
                 # items.append(item)
                 frame_id, pts, score = item
                 if self._clip_cur_sec > 0 and pts < self._clip_cur_sec:
-                    # 实时源 PTS 回退时丢弃重连前的边界状态。
-                    self.first_timestamp = self._tm_e2e.now()
+                    # 外部 VLM 没有 decoded retriever，由 DDM owner 推进代际。
+                    if self._decoded_frame_retriever is None:
+                        stream_epoch = self._advance_stream_epoch(source_anchor=self._tm_e2e.now())
+                    else:
+                        stream_epoch = self._stream_epoch
                     self._clip_start_sec = pts
                     boundaries.clear()
                     delayed_frames = 0
@@ -997,8 +1098,15 @@ class SOPVideoProcessor:
                 if end is not None:
                     tm.log_elapsed_time(f"calculated next chunk clip {self._clip_start_sec:.3f} - {end:.3f} video ")
                     chunk_info = self._make_chunk_info(chunk_idx, self._clip_start_sec, end, score, tm.elapsed_time)
+                    if not self._put_chunk_if_current(chunk_info, stream_epoch):
+                        stream_epoch = self._stream_epoch
+                        boundaries.clear()
+                        delayed_frames = 0
+                        need_check_delayed = False
+                        is_ready = False
+                        tm.reset()
+                        continue
                     chunk_idx += 1
-                    self._chunk_queue.put(chunk_info)
                     self._clip_start_sec = end
                     tm.reset()
                 boundaries.clear()
@@ -1051,9 +1159,12 @@ class SOPVideoProcessor:
             if chunk is None:
                 break
             chunk_info = chunk
+            chunk_epoch = chunk_info.get("_stream_epoch", self._stream_epoch)
             if STREAM_HEALTH_KEY in chunk_info:
                 # 健康事实与动作共用 chunk FIFO；仅旁路 VLM 推理，保持相对顺序。
                 self._vlm_response_future_queue.put(chunk_info)
+                continue
+            if chunk_epoch != self._stream_epoch:
                 continue
             start_time, end_time = chunk_info["start_time"], chunk_info["end_time"]
             logger.info(f"VLM start inference on chunk {start_time:.3f} - {end_time:.3f} video")
@@ -1075,6 +1186,8 @@ class SOPVideoProcessor:
                     # system_prompt=VLM_SYSTEM_PROMPT,
                 )
 
+            if chunk_info.pop("_stream_stale", False):
+                continue
             if response_future is not None:
                 response_future.add_done_callback(future_callback_profiling(vlm_tm))
 
@@ -1090,20 +1203,34 @@ class SOPVideoProcessor:
     def submit_vllm_inference(self, prompt, system_prompt, start_time, end_time, chunk_info):
         decoded_frame_queue = self._decoded_frame_retriever.decoded_frame_queue
         assert decoded_frame_queue is not None, "decoded frame queue is not set"
+        stream_epoch = chunk_info.get("_stream_epoch", self._stream_epoch)
 
         while (
             not self._decoded_frame_retriever.is_end_of_stream()
             and self._decoded_frame_retriever.last_timestamp() < end_time
         ):
+            if stream_epoch != self._stream_epoch:
+                chunk_info["_stream_stale"] = True
+                return None
             self._decoded_frame_retriever.wait_for_new_frame()
+
+        if stream_epoch != self._stream_epoch:
+            chunk_info["_stream_stale"] = True
+            return None
 
         frames = []
         encode_frames = Queue()
         while not decoded_frame_queue.empty():
-            frame = decoded_frame_queue.get(block=True)
+            with self._stream_order_lock:
+                if stream_epoch != self._stream_epoch:
+                    chunk_info["_stream_stale"] = True
+                    return None
+                frame = decoded_frame_queue.get(block=True)
             if frame is None:
                 break
-            timestamp, wall_clock, tensor = frame
+            frame_epoch, timestamp, wall_clock, tensor = frame
+            if frame_epoch != stream_epoch:
+                continue
             logger.debug(
                 f"before submit_vllm_inference: get decoded frame, timestamp: {timestamp}, tensor.shape: {tensor.shape}"
             )
@@ -1115,6 +1242,9 @@ class SOPVideoProcessor:
         encode_frames.put(None)
         chunk_info["frame_number"] = len(frames)
 
+        if stream_epoch != self._stream_epoch:
+            chunk_info["_stream_stale"] = True
+            return None
         if len(frames) == 0:
             logger.warning(f"submit_vllm_inference: no frames decoded, start: {start_time}, end: {end_time}")
             return None
@@ -1179,6 +1309,11 @@ class SOPVideoProcessor:
                 # future FIFO 已确定动作/健康顺序；健康事实不读取动作字段，直接转发。
                 self._vlm_response_queue.put(chunk_info)
                 continue
+            if chunk_info.get("_stream_epoch", self._stream_epoch) != self._stream_epoch:
+                response_future = chunk_info.pop("response_future", None)
+                if response_future is not None:
+                    response_future.cancel()
+                continue
             response_future = chunk_info.pop("response_future", None)
             response = {}
             try:
@@ -1189,6 +1324,8 @@ class SOPVideoProcessor:
             except Exception as e:
                 logger.exception(f"VLM inference failed: {e}")
                 response = None
+            if chunk_info.get("_stream_epoch", self._stream_epoch) != self._stream_epoch:
+                continue
             tm = chunk_info.pop("vlm_time_measure", None)
             vlm_execute_time = None
             if tm is not None:

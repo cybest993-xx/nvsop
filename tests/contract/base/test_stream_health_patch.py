@@ -1,10 +1,7 @@
 """§5.9 第二族：登记补丁及其依赖的基座前提。
 
-ADR-0007 的推理补丁仍只触及一个基座文件，登记 import、健康事件有序旁路、internal-vLLM
-旧帧清理和 uniform/DDM 时间轴处理；契约机械检查补丁只追加、可逆且与工作树同步。
-
-`ds_sop_process.py` 依赖 torch/pyservicemaker，因此测试只读源码、不导入基座运行时，保持
-纯 CPU；每次 `git subtree pull` 后必须重跑。
+S010 用 stream epoch barrier 统一 source error、PTS reset、chunk emission 与 internal-vLLM
+frame wait。契约机械检查登记 diff 可逆、替换点受限且与工作树同步。
 """
 
 from __future__ import annotations
@@ -52,35 +49,29 @@ def removed_lines(patch: str) -> list[str]:
     ]
 
 
-class RecordedPatchIsAppendOnlyTest(unittest.TestCase):
-    """机械核验 ADR-0007 的登记补丁纪律，而不是依赖人工评审记忆。
-
-    补丁允许为合成健康事件增加显式旁路，但不得删除或改写基座原行；否则 subtree 更新时
-    冲突面已超出登记边界，必须显式失败。
-    """
+class RecordedPatchStaysWithinRegisteredSeamsTest(unittest.TestCase):
+    """机械核验登记补丁只替换批准的 chunk/frame owner 行。"""
 
     def setUp(self) -> None:
         self.patch = read(PATCH)
 
-    def test_the_patch_deletes_no_base_line(self) -> None:
-        self.assertEqual(
-            [],
-            removed_lines(self.patch),
-            "the recorded patch must only add lines; a deletion means it entered the "
-            "base's control flow and ADR-0007's premise no longer holds",
-        )
+    def test_replaced_base_lines_are_limited_to_registered_owner_operations(self) -> None:
+        allowed = {
+            "self.decoded_frame_queue.put((timestamp, wall_clock_entry, torch_tensor), block=block)",
+            "dropped_timestamp, _, _ = dropped_frame",
+            "self.decoded_frame_queue.put((timestamp, wall_clock_entry, torch_tensor), block=False)",
+            "self._chunk_queue.put(self._make_chunk_info(chunk_idx, clip_start, end, 1.0, tm.elapsed_time))",
+            "self._chunk_queue.put(self._make_chunk_info(chunk_idx, clip_start, last_ts, 1.0, tm.elapsed_time))",
+            "self._chunk_queue.put(chunk_info)",
+            "frame = decoded_frame_queue.get(block=True)",
+            "timestamp, wall_clock, tensor = frame",
+        }
+        removed = {line.strip() for line in removed_lines(self.patch)}
+        self.assertEqual(allowed, removed)
 
     def test_the_recorded_patch_matches_what_is_in_the_tree(self) -> None:
-        # The ledger and the tree drifting apart is the failure this catches: the patch is
-        # the artifact a reviewer reads and a `subtree pull` conflict is resolved against.
         source = read(PROCESS)
-        blocks = added_blocks(self.patch)
-        self.assertEqual(
-            8,
-            len(blocks),
-            "expected eight added runs: import, queue hygiene, hook, ordered bypasses, uniform state/init, and DDM reset",
-        )
-        for block in blocks:
+        for block in added_blocks(self.patch):
             self.assertIn(
                 block,
                 source,
@@ -103,34 +94,55 @@ class RecordedPatchIsAppendOnlyTest(unittest.TestCase):
         self.assertEqual(1, len(headers), f"expected one patched file, got {headers}")
         self.assertIn("ds_sop_process.py", headers[0])
 
-    def test_internal_vllm_queue_is_cleared_before_the_reset_frame_is_enqueued(self) -> None:
-        source = function_source(PROCESS, "consume")
-        self.assertIn(
-            "timeline_reset = self._last_timestamp > 0 and timestamp < self._last_timestamp", source
-        )
-        self.assertIn("self.decoded_frame_queue.get(block=False)", source)
+    def test_source_transitions_open_barrier_before_health_enqueue(self) -> None:
+        callback = function_source(PROCESS, "on_message")
+        self.assertIn("PipelineState.INVALID, PipelineState.PLAYING", callback)
+        self.assertIn("self._stream_barrier_open = True", callback)
         self.assertLess(
-            source.index("if timeline_reset:"),
+            callback.index("self._advance_stream_epoch_locked()"),
+            callback.index("note_pipeline_message("),
+        )
+
+    def test_pts_reset_advances_epoch_before_recovered_frame_enqueue(self) -> None:
+        source = function_source(PROCESS, "consume")
+        marker = "self._sop_video_processor._advance_stream_epoch(source_anchor=wall_clock_entry)"
+        self.assertIn(marker, source)
+        self.assertLess(
+            source.index(marker),
             source.index(
-                "self.decoded_frame_queue.put((timestamp, wall_clock_entry, torch_tensor), block=block)"
+                "self.decoded_frame_queue.put((frame_epoch, timestamp, wall_clock_entry, torch_tensor), block=block)"
             ),
         )
 
-    def test_uniform_pts_regression_reanchors_and_resets_chunk_state(self) -> None:
-        source = function_source(PROCESS, "uniform_clip_post_process")
-        self.assertIn("if previous_ts is not None and last_ts < previous_ts:", source)
-        self.assertIn("self.first_timestamp = self._tm_e2e.now()", source)
-        self.assertIn("clip_start = last_ts", source)
+    def test_chunk_emissions_are_epoch_guarded(self) -> None:
+        uniform = function_source(PROCESS, "uniform_clip_post_process")
+        ddm = function_source(PROCESS, "clip_post_process")
+        helper = function_source(PROCESS, "_put_chunk_if_current")
+        self.assertIn("_stream_barrier_open", helper)
+        self.assertIn("stream_epoch != self._stream_epoch", helper)
+        self.assertIn("_put_chunk_if_current", uniform)
+        self.assertIn("_put_chunk_if_current", ddm)
+        self.assertIn("current_epoch != stream_epoch", uniform)
+        self.assertIn("current_epoch != stream_epoch", ddm)
 
-    def test_ddm_pts_regression_reanchors_and_resets_boundary_state(self) -> None:
-        source = function_source(PROCESS, "clip_post_process")
-        self.assertIn("if self._clip_cur_sec > 0 and pts < self._clip_cur_sec:", source)
-        self.assertIn("self.first_timestamp = self._tm_e2e.now()", source)
-        self.assertIn("self._clip_start_sec = pts", source)
-        self.assertIn("boundaries.clear()", source)
-        self.assertIn("delayed_frames = 0", source)
-        self.assertIn("need_check_delayed = False", source)
-        self.assertIn("is_ready = False", source)
+    def test_internal_vllm_retires_stale_descriptors(self) -> None:
+        request = function_source(PROCESS, "vlm_inference_request_process")
+        submit = function_source(PROCESS, "submit_vllm_inference")
+        response = function_source(PROCESS, "vlm_inference_response_process")
+        self.assertIn("chunk_epoch != self._stream_epoch", request)
+        last_timestamp = function_source(PROCESS, "last_timestamp")
+        self.assertIn('chunk_info["_stream_stale"] = True', submit)
+        self.assertIn("stream_epoch != self._stream_epoch", submit)
+        self.assertIn("frame_epoch, timestamp, wall_clock, tensor = frame", submit)
+        self.assertIn("if frame_epoch != stream_epoch:", submit)
+        self.assertIn(
+            "_last_timestamp_epoch != self._sop_video_processor._stream_epoch", last_timestamp
+        )
+        self.assertIn('chunk_info.get("_stream_epoch", self._stream_epoch)', response)
+        self.assertLess(
+            response.index("response_future.result()"),
+            response.rindex('chunk_info.get("_stream_epoch", self._stream_epoch)'),
+        )
 
     def test_ddm_pts_observation_does_not_depend_on_the_vlm_backend(self) -> None:
         source = function_source(PROCESS, "start")
@@ -191,26 +203,22 @@ class HookIsTheOnlyReachIntoOurCodeTest(unittest.TestCase):
         )
 
 
-class HookAddsNoControlFlowTest(unittest.TestCase):
-    """The call is appended to the callback, not woven into it.
-
-    The base's callback releases a waiting starter (`_started_event`) and pushes the
-    end-of-stream sentinel. If our call sat before those, an exception in it would hang a
-    pipeline start; last, every base branch has already run.
-    """
+class HookStaysAtCallbackTailTest(unittest.TestCase):
+    """健康 hook 保持在基座原分支之后，并在状态迁移 barrier 内入队。"""
 
     def setUp(self) -> None:
         self.callback = function_source(PROCESS, "on_message")
 
-    def test_the_hook_is_the_last_statement_of_the_callback(self) -> None:
-        body = ast.parse(self.callback.strip()).body[0]
-        assert isinstance(body, ast.FunctionDef)
-        last = body.body[-1]
-        self.assertIsInstance(last, ast.Expr, "the hook call must be the callback's last statement")
-        self.assertIn("note_pipeline_message", ast.unparse(last))
+    def test_the_hook_remains_after_base_branches(self) -> None:
+        self.assertLess(
+            self.callback.index("self._boundary_queue.put(None)"),
+            self.callback.index("# --- 记录补丁"),
+        )
+        self.assertIn("self._stream_barrier_open = False", self.callback)
 
-    def test_the_hook_is_called_once(self) -> None:
-        self.assertEqual(1, self.callback.count("note_pipeline_message("))
+    def test_barrier_and_non_barrier_paths_use_the_same_hook(self) -> None:
+        self.assertEqual(2, self.callback.count("note_pipeline_message("))
+        self.assertEqual(2, self.callback.count(f"sink={ORDERING_QUEUE}"))
 
     def test_the_base_branches_are_untouched(self) -> None:
         # The two facts the base's own callback acts on. Our patch adds output beside them;
@@ -262,6 +270,7 @@ class OrderedHealthPathTest(unittest.TestCase):
     def test_hook_writes_health_to_the_same_chunk_fifo_as_actions(self) -> None:
         callback = function_source(PROCESS, "on_message")
         self.assertIn(f"sink={ORDERING_QUEUE}", callback)
+        self.assertIn("self._stream_barrier_open = True", callback)
 
     def test_vlm_request_loop_forwards_health_without_running_inference(self) -> None:
         request = function_source(PROCESS, "vlm_inference_request_process")
@@ -296,8 +305,10 @@ class OrderedHealthPathTest(unittest.TestCase):
             with self.subTest(flag=flag):
                 self.assertIn(f'os.getenv("{flag}")', self.source, default)
 
-    def test_dispatch_loop_still_forwards_the_selected_output(self) -> None:
+    def test_dispatch_loop_strips_private_epoch_before_output(self) -> None:
         dispatch = function_source(PROCESS, "post_dispatch_process")
+        self.assertIn('chunk.pop("_stream_epoch", None)', dispatch)
+        self.assertIn('chunk.pop("_stream_stale", None)', dispatch)
         self.assertIn("self._final_queue.put(chunk)", dispatch)
 
 

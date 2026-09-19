@@ -32,10 +32,11 @@
 #### S010 时间锚修正（2026-09-20）
 
 - 复核 Issue #152 时确认：NVIDIA 基座的 `first_timestamp` 只在初始 post-process 启动设置，内部 RTSP 恢复不会自动重新锚定。
-- `0001-stream-health-events.patch` 仍只触及 `ds_sop_process.py` 且零删除；逻辑上是模块 import + `on_message` 健康 hook + request/response 两个保序旁路 + internal-vLLM 旧帧清理 + uniform/DDM 两条时间轴处理，unified diff 机械上形成 8 个连续追加 run。
-- 重新锚定只在 active chunk 后处理观察到 PTS 小于上一消费值时发生；uniform 同步重置 `clip_start`，DDM 同步清空旧 `boundaries`/延迟状态并重置 `_clip_start_sec`。内置 vLLM 在恢复帧入队前清空 decoded-frame queue 的旧时间轴帧；普通恢复但 PTS 连续时不产生 `TIMESTAMP_DISCONTINUITY`。
+- S010 最终确认仅靠追加队列旁路不足以满足 AC1：`0001-stream-health-events.patch` 仍只触及 `ds_sop_process.py`，但新增 stream epoch barrier，并允许替换 3 条 chunk enqueue 与 5 条 decoded-frame tuple/get/unpack 基座行；完整 diff 仍可从当前工作树反向应用。
+- `INVALID` / `PLAYING` 与 PTS reset 都推进 stream epoch：pending boundary/frame、已排队或正在等待旧 frame 的 chunk descriptor 统一退休；uniform/DDM 在下一代输入上重建局部状态。普通恢复但 PTS 连续时仍不产生 `TIMESTAMP_DISCONTINUITY`。
 - DDM 的 `clip_post_process` 由 chunk 算法选择，早于且独立于 VLM 后端启动，因此覆盖 `USE_VLLM_INFERENCE=false`；契约测试固定该前提，并要求登记 patch 与工作树同步且可反向应用。
-- 健康事实统一先进入 `_chunk_queue`；VLM 开启时两个处理 loop 只按 `stream_health` 键旁路推理并维持 FIFO，VLM 禁用时 `inference_last_queue` 直接读取该队列。
+- S010 最终 base contract：53/53 通过；`center-format` 通过。
+- 健康事实最终仍进入 `_chunk_queue`，但 source transition 会先打开 barrier 并推进 epoch；旧代际 normalization work 不会在健康恢复后重新出现。VLM 开启时两个处理 loop 仍只按 `stream_health` 键旁路推理；内部 `_stream_epoch` 在 final output 前移除。
 
 #### 标注接入补丁在该提交上落地（2026-09-09）
 

@@ -73,12 +73,12 @@ MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU �
 | 姿态 | 范围 |
 |---|---|
 | **原样复用** | DeepStream 取流、DDM 分段、vLLM 分类、`/v1/*` 接口、文件 API、Prometheus 指标；训练侧 5 个微服务；**React 标注 UI 连界面一起复用** |
-| **就地改造（一处，登记补丁）** | pipeline `on_message` 把健康事实送入动作共用 FIFO；VLM 两阶段按合成键保序旁路；internal-vLLM 清理旧时间轴帧；uniform/DDM 在 PTS 回退时重置旧分块状态并更新 `source_anchor` |
+| **就地改造（一处，登记补丁）** | pipeline 健康事实 + stream epoch barrier；`INVALID` / `PLAYING` 与 PTS reset 退休旧 normalization work，uniform/DDM 按代际产出 chunk，internal-vLLM stale descriptor 退出 |
 | **自己实现（一处）** | 序列比对 + 声明式边界 + 有效性门 + 三值判定，全部在 `apps/edge-runtime/`，`vendor/` 不留补丁 |
 | **配置关闭（不打补丁）** | 基座 checker（`DISABLE_SOP_CHECKER=true`）；基座处置（`ENABLE_ALERT_SOUND`/`ENABLE_MESSAGING` 保持默认 false） |
 | **全新建设** | 账户权限、工位/相机/连接器配置、Excel→模板版本发布、聚合看板、违规复核、证据生命周期、上报与对账 |
 
-该处就地改造只增加登记的健康/恢复处理：回调末尾把健康事实写入动作共用 FIFO；VLM request/response loop 只对 `stream_health` 合成键旁路计算；uniform/DDM 后处理追加 PTS 回退检测并重置旧状态。正常动作的 DeepStream/Triton/VLM 计算路径不变。
+该处就地改造限于登记的健康/恢复 owner seam：source transition / PTS reset 推进 stream epoch，尚未完成 normalization 的旧 work 失效；chunk 只有在代际仍匹配且 barrier 已关闭时才能进入动作 FIFO；internal-vLLM 等待旧 frame 时遇到代际变化立即退休 descriptor。DeepStream/Triton/VLM 算法本身不复制。
 
 **判定核心在 supervisor 进程内，不在基座进程内**（[ADR-0005](../../adr/0005-judgment-runs-inside-the-inference-host.md)）。supervisor 消费本机 `/v1/chat/completions` 的 SSE 流，在自己的进程里调用判定核心。基座 checker 用既有环境变量关掉，不打补丁替换其调用点——那是控制流替换，且承载它的循环是 `_vlm_response_queue.get(block=True)`（`ds_sop_process.py:715`，无超时），空闲超时在其中永远触发不了。
 
@@ -88,13 +88,13 @@ MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU �
 
 这不违反"不许两套实现"：我们的判定路径上只有一套（我们的），基座那份被 `DISABLE_SOP_CHECKER` 关闭后连线程都不启动（`:652`），`inference_last_queue`（`:592-598`）直接返回 `_vlm_response_queue`。
 
-**合成健康事件的注入点（已实测）**：必须进入动作最早共用的 `_chunk_queue`。直接注入 `_vlm_response_future_queue` 会越过尚未提交 future 的动作，直接注入 `_vlm_response_queue` 会越过仍在等待 future 的动作。VLM 开启时 request/response loop 按 `stream_health` 键原序旁路，关闭时 post-dispatch 直接消费 `_chunk_queue`。
+**合成健康事件的注入点（已实测）**：最终仍进入动作最早共用的 `_chunk_queue`，但 FIFO 之前必须先建立 stream epoch barrier。`INVALID` / `PLAYING` 先打开 barrier、推进 epoch，再写健康事实；barrier 打开期间旧代际 chunk 不能入队。直接注入下游 future/response queue 仍会破坏顺序，因此不采用。
 
-**E4 / S010 实施修正**（[ADR-0007](../../adr/0007-base-is-the-trunk-not-a-dependency.md)）："正在重连"不作为独立事实登记；重连成功由 `SOURCE_ERROR` 后的 `DELIVERING` 表达。S010 进一步确认仅换锚不够，必须在 active chunk 后处理检测真实 PTS 回退并同步重置旧分块状态；普通恢复但 PTS 连续时锚点与分块状态都保持不变。
+**E4 / S010 实施修正**（[ADR-0007](../../adr/0007-base-is-the-trunk-not-a-dependency.md)）："正在重连"不作为独立事实登记；重连成功由 `SOURCE_ERROR` 后的 `DELIVERING` 表达。S010 最终确认 queue FIFO 本身也不够：source transition 可发生在旧 frame 已进入 chunking、但动作尚未入队时；PTS reset 也会留下旧 descriptor。两类边界统一由 stream epoch 退休旧 work。
 
-**该通道只在进程与 pipeline 存活时能投递。** 健康事实和动作从 `_chunk_queue` 起共享 FIFO，所以不会越过更早动作；若恢复同时发生 PTS 归零，`DELIVERING` 仍可先带旧锚点，随后恢复的正常 chunk 带新 `source_anchor`。进程死亡由 **chunk 静默计时器**兜底。
+**该通道只在进程与 pipeline 存活时能投递。** source transition 会先推进 stream epoch，旧代际 pending chunk/frame/descriptor 不会在健康恢复后重新出现；健康事实随后进入 `_chunk_queue`。若恢复同时发生 PTS 归零，下一正常 chunk 才带新 `source_anchor`。进程死亡由 **chunk 静默计时器**兜底。
 
-**代码放置**：`apps/edge-runtime/` 持有健康事件与判定逻辑；`vendor/` 只留同一登记补丁的健康 hook、两个保序旁路、internal-vLLM 队列卫生与 uniform/DDM PTS 回退状态重置。补丁维护为可重放 diff，由纯 CPU 契约测试验证。
+**代码放置**：`apps/edge-runtime/` 持有健康事件与判定逻辑；`vendor/` 只留同一登记补丁的 stream epoch barrier、健康 hook/旁路、internal-vLLM stale work 退休与 uniform/DDM 状态重置。补丁维护为可重放 diff；纯 CPU 契约测试限定 8 条允许替换的 frame/chunk owner 行，并验证可逆性与工作树同步。
 
 **依赖约束（硬规则）**：判定核心只依赖 Python 标准库。判定核心运行在 supervisor 进程里，故这条不再由运行环境强制，而是为**可测试性与可移植性**保留：成本近零，且保证判定核心可纯 CPU 测试——基座那四个模块本来就是这样。`vendor/` 内那处 hook 仍受运行环境强制，因为它确实跑在 DeepStream 容器内（§2.10）。
 

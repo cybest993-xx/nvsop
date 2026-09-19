@@ -1,14 +1,14 @@
 """流健康事实的生产/解码契约, 也是 `vendor/` 健康 hook 唯一允许调用的模块.
 
-基座 pipeline 回调能直接观测 source error、delivering 与 EOS。hook 把事实包装成带
-`stream_health` 键的合成 chunk, 并与动作 chunk 共用 `_chunk_queue` FIFO; VLM 开启时
-基座只按键旁路推理并保留队列顺序, 关闭时则由同一 chunk 队列直接输出 (§5.11).
+基座 pipeline 回调只登记真实可观测的 source error、delivering 与 EOS。vendor 在动作
+进入 `_chunk_queue` 前用 stream epoch barrier 退休尚未完成 normalization 的旧 work;
+健康事实随后沿既有 chunk/VLM/SSE 链输出。PTS 回退使用同一代际失效旧 frame/descriptor.
 
 生产者运行在基座容器, 消费者运行在 supervisor, 二者可独立升级, 因此未知事实必须
 按原始值保留 (ADR-0003), 且无法分类的事实按观测受损处理而不是按健康处理.
 
-本模块只依赖标准库, 也不导入 `edge_runtime` 的其他模块; vendor 的 PTS 回退处理只使用
-基座本地状态, 避免健康 hook 扩大到判定实现.
+本模块只依赖标准库, 也不导入 `edge_runtime` 的其他模块; barrier 与队列所有权仍在
+vendor 基座本地, 避免健康 hook 扩大到判定实现.
 """
 
 from __future__ import annotations

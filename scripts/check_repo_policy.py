@@ -15,6 +15,7 @@ from check_documentation import check_documentation
 from nvsop_config import load_center_modules
 
 REQUIRED_FILES = {
+    Path(".gitignore"),
     Path("AGENTS.md"),
     Path("CONTEXT.md"),
     Path("Makefile"),
@@ -97,6 +98,7 @@ PACKAGE_MANAGER_PIN = re.compile(r"^[a-z]+@\d+\.\d+\.\d+$")
 # `sys.stdlib_module_names` is the interpreter's own answer, so this set needs no
 # maintenance as the standard library grows.
 STANDARD_LIBRARY = frozenset(sys.stdlib_module_names)
+LOCAL_STATE_ROOT = Path(".nvsop")
 
 
 def is_vendor(path: Path) -> bool:
@@ -133,6 +135,16 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
         if required not in present and not (root / required).is_file():
             errors.append(f"missing required file: {required}")
 
+    gitignore = root / ".gitignore"
+    if gitignore.is_file():
+        ignore_rules = {
+            line.strip()
+            for line in gitignore.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+        if ".nvsop/" not in ignore_rules:
+            errors.append(".gitignore must ignore .nvsop/ repository-local state")
+
     top_dirs = {path.parts[0] for path in files if len(path.parts) > 1}
     for directory in sorted(top_dirs - ALLOWED_TOP_LEVEL_DIRS):
         if not directory.startswith("."):
@@ -149,6 +161,9 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
         errors.append(f"undeclared production app: apps/{app}/")
 
     for path in files:
+        if path.parts[:1] == (LOCAL_STATE_ROOT.name,):
+            errors.append(f"repository-local state must not be committed: {path}")
+
         # `vendor/` is the NVIDIA base code and stays as delivered (ADR-0007), so its
         # own file names are not ours to rename. The rule that matters there is that no
         # real secret value ships, which is checked by value rather than by file name.

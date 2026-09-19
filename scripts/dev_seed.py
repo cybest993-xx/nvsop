@@ -318,7 +318,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--video", type=Path, required=True)
     parser.add_argument("--report-file", type=Path)
     arguments = parser.parse_args(argv)
-    report = arguments.report_file or Path(".tmp/dev-main/reports/sample-manual.json")
+    report = arguments.report_file or Path(".nvsop/dev-main/reports/sample-manual.json")
     result: dict[str, object] = {"status": "failed", "base_url": arguments.base_url}
     try:
         password = arguments.password_file.read_text(encoding="utf-8").strip()

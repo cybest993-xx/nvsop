@@ -309,7 +309,7 @@ def paths(root: Path | None = None, state: Path | None = None) -> DevPaths:
     configured = state or (
         Path(os.environ["NVSOP_DEV_STATE_DIR"])
         if os.environ.get("NVSOP_DEV_STATE_DIR")
-        else repository / ".tmp" / "dev-main"
+        else repository / ".nvsop" / "dev-main"
     )
     return DevPaths(root=repository, state=configured.expanduser().resolve())
 
@@ -2113,7 +2113,7 @@ def down(item: DevPaths) -> None:
 
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description="管理固定 nvsop-dev-main 开发实例")
-    root.add_argument("--state-dir", type=Path, help="覆盖默认 .tmp/dev-main 状态目录")
+    root.add_argument("--state-dir", type=Path, help="覆盖默认 .nvsop/dev-main 状态目录")
     commands = root.add_subparsers(dest="command", required=True)
     commands.add_parser("setup")
     commands.add_parser("run")

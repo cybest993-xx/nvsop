@@ -1,4 +1,4 @@
-.PHONY: check check-docs docs-check check-integration media-system change-size ci-plan ci-tools ci-lint pr-check issue-check hooks lockfile sync policy policy-test migrations contract-base \
+.PHONY: check check-docs docs-check check-integration media-system change-size ci-plan ci-tools ci-lint pr-check issue-check hooks local-clean lockfile sync policy policy-test migrations contract-base \
 	contract-capability \
 	contracts contracts-python-check contracts-python-format contracts-python-lint \
 	contracts-python-type contracts-python-unit openapi-export openapi-compat openapi-generate \
@@ -6,6 +6,16 @@
 	center-system edge-format edge-lint edge-type edge-unit edge-integration \
 	web-install web-format web-lint web-type web-unit web-e2e web-e2e-whep web-build \
 	dev-setup dev dev-status dev-logs dev-refresh dev-smoke dev-test-ui dev-down
+
+LOCAL_STATE := $(CURDIR)/.nvsop
+LOCAL_CACHE := $(LOCAL_STATE)/cache
+LOCAL_ARTIFACTS := $(LOCAL_STATE)/artifacts
+LOCAL_TOOLS := $(LOCAL_STATE)/tools
+UV_PROJECT_ENVIRONMENT := $(LOCAL_STATE)/venv
+UV_CACHE_DIR := $(LOCAL_CACHE)/uv
+export UV_PROJECT_ENVIRONMENT UV_CACHE_DIR
+export PYTHONDONTWRITEBYTECODE := 1
+export RUFF_CACHE_DIR := $(LOCAL_CACHE)/ruff
 
 # The CPU-only, Docker-free merge gate (harness §6). CI calls this exact target.
 check: lockfile sync hooks policy-test policy migrations contract-base contract-capability \
@@ -30,6 +40,10 @@ check-docs: lockfile sync hooks policy secret-scan
 hooks:
 	git config core.hooksPath scripts/githooks
 
+# 删除仓库明确拥有的可再生本地产物；保留 .nvsop/dev-main、本地 secrets 和未知 ignored 文件。
+local-clean:
+	python3 scripts/clean_local_artifacts.py
+
 # The second required target (harness §6): one application plus real local infrastructure,
 # started as containers via testcontainers. `center-system` runs §5.15's acceptance scenarios.
 check-integration: sync center-integration center-system
@@ -50,7 +64,7 @@ ci-plan:
 	python3 scripts/ci_scope.py "$(BASE)" "$(if $(HEAD),$(HEAD),HEAD)"
 
 ACTIONLINT_VERSION := 1.7.12
-ACTIONLINT := $(CURDIR)/.tmp/tools/actionlint-$(ACTIONLINT_VERSION)/actionlint
+ACTIONLINT := $(LOCAL_TOOLS)/actionlint-$(ACTIONLINT_VERSION)/actionlint
 
 # 工具安装和 lint 分开：安装显式联网且校验官方 SHA256；ci-lint 本身只读取本地固定版本。
 ci-tools:
@@ -78,11 +92,11 @@ lockfile:
 sync:
 	$(UV) sync --frozen --all-packages
 
-VENV := $(CURDIR)/.venv/bin
+VENV := $(UV_PROJECT_ENVIRONMENT)/bin
 PYTHON := $(VENV)/python
 RUFF := $(VENV)/ruff
 MYPY := $(VENV)/mypy
-PYTEST := $(VENV)/pytest
+PYTEST := $(VENV)/pytest -o cache_dir=$(LOCAL_CACHE)/pytest
 CONTRACT_PY := packages/contracts
 OPENAPI := $(CONTRACT_PY)/openapi.json
 OPENAPI_BASE_REF ?= origin/main
@@ -132,7 +146,8 @@ contracts-python-lint:
 	$(RUFF) check --target-version py311 $(CONTRACT_PY)/src $(CONTRACT_PY)/tests
 
 contracts-python-type:
-	MYPYPATH=$(CONTRACT_PY)/src $(MYPY) --python-version 3.11 --strict \
+	MYPYPATH=$(CONTRACT_PY)/src $(MYPY) --cache-dir $(LOCAL_CACHE)/mypy \
+		--python-version 3.11 --strict \
 		$(CONTRACT_PY)/src $(CONTRACT_PY)/tests
 
 contracts-python-unit:
@@ -140,7 +155,8 @@ contracts-python-unit:
 		-s $(CONTRACT_PY)/tests/unit -t $(CONTRACT_PY)/tests/unit -p 'test_*.py'
 
 boundaries:
-	PYTHONPATH=apps/control-api/src:apps/edge-runtime/src:$(CONTRACT_PY)/src $(VENV)/lint-imports
+	PYTHONPATH=apps/control-api/src:apps/edge-runtime/src:$(CONTRACT_PY)/src \
+		$(VENV)/lint-imports --cache-dir $(LOCAL_CACHE)/import-linter
 
 # `vendor/` is excluded because the policy check already reads its templates by value. The
 # two lockfiles contain package integrity hashes, and the exported OpenAPI document is generated
@@ -160,7 +176,7 @@ center-lint:
 	$(RUFF) check $(CENTER_PATHS)
 
 center-type:
-	MYPYPATH=$(CENTER)/src $(MYPY) $(CENTER)/src $(CENTER)/tests
+	MYPYPATH=$(CENTER)/src $(MYPY) --cache-dir $(LOCAL_CACHE)/mypy $(CENTER)/src $(CENTER)/tests
 
 center-unit:
 	cd $(CENTER) && PYTHONPATH=src $(PYTEST) tests/unit -q
@@ -180,7 +196,8 @@ edge-lint:
 	cd $(EDGE) && $(RUFF) check src tests
 
 edge-type:
-	cd $(EDGE) && MYPYPATH=$(CURDIR)/$(CONTRACT_PY)/src $(MYPY) --strict src tests
+	cd $(EDGE) && MYPYPATH=$(CURDIR)/$(CONTRACT_PY)/src $(MYPY) \
+		--cache-dir $(LOCAL_CACHE)/mypy --strict src tests
 
 edge-unit:
 	cd $(EDGE) && PYTHONPATH=$(CURDIR)/$(CONTRACT_PY)/src:src $(PYTHON) -m unittest \
@@ -210,14 +227,16 @@ web-unit:
 # Browser-level evidence for SYS-22-07. CI sets PLAYWRIGHT_BRANDED=1 and installs stable Chrome
 # and Edge; a developer runs the same scenarios against Playwright's pinned Chromium.
 web-e2e:
-	pnpm --filter control-web run test:e2e
+	PLAYWRIGHT_OUTPUT_DIR=$(LOCAL_ARTIFACTS)/web/test-results \
+		pnpm --filter control-web run test:e2e
 
 # 使用固定 digest 的 MediaMTX 容器和合成 H.264 RTSP 源验证 SYS-34 WHEP。
 web-e2e-whep:
-	python3 scripts/test_whep.py -- pnpm --filter control-web exec playwright test tests/e2e/sys-34-media.spec.ts --workers 2
+	PLAYWRIGHT_OUTPUT_DIR=$(LOCAL_ARTIFACTS)/web/test-results \
+		python3 scripts/test_whep.py -- pnpm --filter control-web exec playwright test tests/e2e/sys-34-media.spec.ts --workers 2
 
 web-build:
-	pnpm --filter control-web run build
+	pnpm --filter control-web exec vite build --outDir "$(LOCAL_ARTIFACTS)/web/dist" --emptyOutDir
 
 # 固定 main 开发实例（Issue #119），默认 HTTP；显式 NVSOP_DEV_PROTOCOL=https 才启用本地 TLS。
 # 脚本只编排 Tilt/Compose，不承载产品业务逻辑。

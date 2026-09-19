@@ -4,7 +4,7 @@ load("scripts/dev_tilt.star", "configure_manual_test_resources")
 # scripts/dev.py 在 Tilt 外拥有快照、更新串行化和停止收尾，避免形成第二个进程管理器。
 BASE_URL = os.getenv("NVSOP_DEV_BASE_URL", "http://localhost:8443")
 MEDIA_URL = os.getenv("NVSOP_DEV_MEDIA_URL", "http://localhost:8444")
-STATE_DIR = os.getenv("NVSOP_DEV_STATE_DIR", ".tmp/dev-main")
+STATE_DIR = os.getenv("NVSOP_DEV_STATE_DIR", ".nvsop/dev-main")
 REPORTS_DIR = os.path.abspath(os.path.join(STATE_DIR, "reports"))
 TARGET_SHA = os.getenv("NVSOP_TARGET_SHA", "local")
 SMOKE_REPORT = "file://" + os.path.join(REPORTS_DIR, "smoke-" + TARGET_SHA + ".json")

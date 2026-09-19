@@ -37,6 +37,13 @@ class DevProtocolTest(unittest.TestCase):
         self.assertEqual("http://localhost:8443", DEV.public_urls("http")["business"])
         self.assertEqual("https://localhost:8443", DEV.public_urls("https")["business"])
 
+    def test_default_state_dir_uses_repository_local_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.dict(os.environ, {"NVSOP_DEV_STATE_DIR": ""}):
+                item = DEV.paths(root=root)
+        self.assertEqual(root.resolve() / ".nvsop" / "dev-main", item.state)
+
     def test_state_without_protocol_keeps_legacy_https_meaning(self) -> None:
         item = DEV.DevPaths(root=Path("/repo"), state=Path("/state"))
         with patch.object(DEV, "read_state", return_value={}):

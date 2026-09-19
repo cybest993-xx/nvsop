@@ -1,19 +1,28 @@
 diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvds_action_detector/ds_sop_process.py b/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvds_action_detector/ds_sop_process.py
-index 7e4c3a2..58ae5fd 100644
 --- a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvds_action_detector/ds_sop_process.py
 +++ b/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvds_action_detector/ds_sop_process.py
-@@ -44,6 +44,15 @@ from .sop_step_checker import SopCheckerCache, SopCheckerRequest, SopCheckerResp
+@@ -43,6 +43,10 @@
+ from .sop_step_checker import SopCheckerCache, SopCheckerRequest, SopCheckerResponse
  from .utils import SafeThreadEventLoop, TimeMeasure, get_media_info_gst
  from .vlm_inference_client import VLMInferenceClient
- 
++
 +# --- 记录补丁，仅追加输出（ADR-0007） ---
 +# 回调已看到流健康事实；此处只把它作为合成 chunk 送入指定队列，逻辑仍在 edge-runtime。
 +from edge_runtime.stream_health import note_pipeline_message
-+
+ 
  logger = ds_logger.get_logger(__name__)
  
+@@ -401,6 +405,9 @@
+                         return 0
  
-@@ -845,6 +854,16 @@ class SOPVideoProcessor:
+                 with self._lock:
++                    if self._last_timestamp > 0 and timestamp < self._last_timestamp:
++                        # A live-source reconnect can reset PTS; expose the new timeline anchor.
++                        self._sop_video_processor.first_timestamp = wall_clock_entry
+                     self._last_timestamp = timestamp
+                 self.new_frame_event.set()
+             except Exception as e:
+@@ -845,6 +852,15 @@
                      f"inference pipeline has finished w/ EOS queue size: {self._boundary_queue.qsize()}"
                  )
  

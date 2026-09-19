@@ -116,9 +116,9 @@ class StreamHealthEvent:
     """The base's `first_timestamp`: the wall-clock moment it anchored the source timeline.
 
     Wall clock, not monotonic — the base reads `time.time()` for it — so it is an identity
-    to compare, never an interval to measure. The base re-anchors it after a reconnect, and
-    every chunk carries the same field, which is how the supervisor detects that the source
-    timeline went back to zero underneath it.
+    to compare, never an interval to measure. The registered vendor patch re-anchors it when
+    decoded PTS regresses after a live-source recovery, and every chunk carries the same
+    field, which is how the supervisor detects that the source timeline went back to zero.
     """
 
     stream_id: str = ""

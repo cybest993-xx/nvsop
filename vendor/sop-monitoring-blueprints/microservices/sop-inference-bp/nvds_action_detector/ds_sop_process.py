@@ -405,6 +405,9 @@ class SOPVideoProcessor:
                         return 0
 
                 with self._lock:
+                    if self._last_timestamp > 0 and timestamp < self._last_timestamp:
+                        # A live-source reconnect can reset PTS; expose the new timeline anchor.
+                        self._sop_video_processor.first_timestamp = wall_clock_entry
                     self._last_timestamp = timestamp
                 self.new_frame_event.set()
             except Exception as e:

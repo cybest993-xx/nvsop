@@ -7,12 +7,12 @@ NVIDIA 仓库的代码是本系统的躯干，不是外部依赖。姿态分三�
 | 姿态 | 范围 |
 |---|---|
 | 原样复用 | DeepStream 取流、DDM 分段、vLLM 分类、`/v1/*` 接口、文件 API、Prometheus 指标；训练侧 5 个微服务；**React 标注 UI 连界面一起复用** |
-| 就地改造（一处） | pipeline `on_message`：把真实可观测的 source error / delivering / EOS 作为**合成健康事件**送进本机流，并携带 `source_anchor` 供 supervisor 判断时间轴变化。见下节 |
+| 就地改造（一处） | 同一登记补丁在 `on_message` 输出 source error / delivering / EOS，并在 decoded-frame PTS 实际回退时重新锚定 `source_anchor`。见下节 |
 | 自己实现（一处） | **序列比对与周期边界**：在 `apps/edge-runtime/` 重新实现，不打补丁。见下节 |
 | 全新建设 | 账户权限、工位/相机/连接器配置、Excel→模板版本发布、聚合看板、违规复核、证据生命周期、上报与对账 |
 | 配置关闭（不打补丁） | 基座 checker（`DISABLE_SOP_CHECKER=true`）、基座处置（`ENABLE_ALERT_SOUND`/`ENABLE_MESSAGING` 保持默认 false） |
 
-这一处就地改造是**纯加输出**，不动 DeepStream / Triton / vLLM 的计算路径，故 NVIDIA 的性能改进与 CUDA/DeepStream 版本适配仍可 `subtree pull` 进来。
+这一处就地改造保持**纯追加**：只增加健康输出与时间轴观测元数据，不替换 DeepStream / Triton / vLLM 的控制流或计算路径，故 NVIDIA 的性能改进与 CUDA/DeepStream 版本适配仍可 `subtree pull` 进来。
 
 ## 为什么处置不再是一处改造
 
@@ -42,16 +42,16 @@ NVIDIA 仓库的代码是本系统的躯干，不是外部依赖。姿态分三�
 | `_chunk_queue` | 不可用：`vlm_inference_request_process:1014` 要求数值 `start_time`/`end_time`，并会**对它跑一次 VLM 推理** |
 | `_vlm_response_queue` | **可用**：`:1136` 对 `response_future` 有默认值与判空；`DISABLE_SOP_CHECKER` 下它就是 `inference_last_queue` |
 
-因此补丁是**一个触点、一个文件，纯追加**：`SOPVideoProcessor.run_pipeline` 的 `on_message`（`ds_sop_process.py:823`）末尾追加一次对我们 hook 的调用，现有 `StateTransitionMessage` 与 `EOSMessage` 分支不动。逻辑在 `apps/edge-runtime/`，`vendor/` 内只留 import 与调用。
+因此补丁仍是**一个文件、纯追加**，但有两个最小观测触点：`SOPVideoProcessor.run_pipeline.on_message` 末尾追加一次健康 hook，现有 `StateTransitionMessage` 与 `EOSMessage` 分支不动；`DecodedFrameRetriever.consume()` 只在新帧 PTS 小于上一帧时把 `first_timestamp` 更新为该帧 wall-clock，使真实时间轴归零可被后续 SSE chunk 观测。
 
 **E4 实施时的修正**（本 ADR 早期版本记为"两个触点、两个文件"）：早期版本指向 `ds_3d_action_pipeline.py:779` 的 `on_message`，并要求在 `ds_sop_process.py:556` 调用 `create_inference_pipeline` 时多传一个 sink。核实代码后两条都不成立：
 
 - `ds_3d_action_pipeline.py:779` 属于 `ds_boundary_infernce`，只被同文件 `if __name__ == "__main__":`（`:815`）下的命令行入口调用（`:852`），**不在服务路径上**。服务路径的回调是 `ds_sop_process.py:823`。
 - 该回调是 `SOPVideoProcessor` 的方法内闭包，`self._vlm_response_queue` 与 `self.first_timestamp` 在此**已在作用域内**，无需经 `create_inference_pipeline` 传入。第二个触点因此消失。
 
-修正后补丁面比早期记录更小（一处而非两处），ADR 的结论方向不变。
+E4 修正后补丁先收敛为一个回调触点；S010 又发现基座不会在内部重连后自动重新锚定 `first_timestamp`，因此在同一文件补上一处 PTS 回退观测。仍不进入 NVIDIA 的判断或推理控制流。
 
-合成事件用**显式键**（`stream_health`）标记，不用哨兵数值——消费者按键存在与否分支，比认魔数安全，且不与契约测试中针对 `_make_chunk_info` 的断言冲突。事件同时带上基座的 `first_timestamp` 作为 `source_anchor`：基座重连后会重新锚定该值（`ds_sop_process.py:874`、`:933`），而每个正常 chunk 也带同一字段，故"恢复后时间轴归零"由 supervisor 比对锚点得出，不需要单独的事件类型。它是 `time.time()` 墙钟，只可比对身份，不可用于计时。
+合成事件用**显式键**（`stream_health`）标记，不用哨兵数值。事件与正常 chunk 都携带 `first_timestamp` 作为 `source_anchor`。基座原实现只在初始启动设置该值；登记补丁在 decoded frame 的 PTS 实际回退时以该帧 wall-clock 重新锚定，因此普通恢复但 PTS 连续不会虚构断裂，而真实时间轴归零会由 supervisor 比对锚点得出。该值是 `time.time()` 墙钟，只可比对身份，不可用于计时。
 
 **该通道的边界**：它只在进程与 pipeline 存活时能投递，故能带序送出 source error、delivering 与 EOS；恢复后的时间轴变化由同序事件携带的 `source_anchor` 比较得出，不设独立事件。进程死亡送不出任何东西，那种情形由 supervisor 的 chunk 静默计时器兜底。选它买到的是**事件序**（"该事件发生在 chunk N 与 N+1 之间"可直接用于闭合时的有效性判断），不是全覆盖。
 
@@ -65,11 +65,11 @@ NVIDIA 仓库的代码是本系统的躯干，不是外部依赖。姿态分三�
 - **全量吸收（fork）**：低估 GPU 基础设施维护成本。`vss-engine:2.4.1` 与 DeepStream 9.0 的升级适配本身就是持续工作量，分叉意味着自建一个 DeepStream 维护团队，并放弃 NVIDIA 的安全补丁与性能改进。
 - **三处都打补丁**（最早方案）：其中序列比对那处必须侵入方法内部控制流，每次 `subtree pull` 都要在他人的状态机里解冲突。
 - **两处加输出 + 一处自己实现**（前一版）：把处置列为第二处改造。判定移入 supervisor 后该处失去必要性，见上节。
-- **一处加输出 + 一处自己实现 + 两处配置关闭（采纳）**：推理基座只保留一处健康事件追加 hook；训练基座另登记一处兼容性补丁，冲突面仍受限；最需要我们掌握的判定核心完全由我们拥有。
+- **一处登记补丁 + 一处自己实现 + 两处配置关闭（采纳）**：推理基座只保留同一 vendor 文件中的健康事件 hook 与 PTS 回退重新锚定两个追加观测触点；训练基座另登记一处兼容性补丁，冲突面仍受限；最需要我们掌握的判定核心完全由我们拥有。
 
 ## 补丁纪律
 
-- 推理侧就地改造维护为可重放 diff，逻辑放 `apps/edge-runtime/`，`vendor/` 内只留最小 hook（import 并调用我们的包）。它是在回调处追加调用，不进入他人控制流，故该分工成立。diff 存于 [`docs/base/patches/0001-stream-health-events.patch`](../base/patches/0001-stream-health-events.patch)，与工作树同步由契约测试保证。
+- 推理侧就地改造维护为可重放 diff；健康分类逻辑放 `apps/edge-runtime/`，`vendor/` 只保留模块级 hook import、回调末尾调用，以及基于既有 frame PTS/wall-clock 的三行重新锚定观测。三处均为追加，不替换基座控制流。diff 存于 [`docs/base/patches/0001-stream-health-events.patch`](../base/patches/0001-stream-health-events.patch)，与工作树同步由契约测试保证。
 - 训练侧只登记一个兼容性补丁：为 `upload_video` 增加可选的显式 `target_data_id`（省略时保持 `current_data_id` 旧调用兼容），为复用的时间轴输入补上控件标签和可访问名称，增加已签发上下文的独立 React 入口并让标注服务不发布宿主机端口。它不改切片算法、模型路径或存储语义，diff 存于 [`docs/base/patches/0002-annotation-upload-target-and-accessibility.patch`](../base/patches/0002-annotation-upload-target-and-accessibility.patch)，由基座契约测试验证可重放、目标目录隔离、控件可访问性和独立入口。
 - **hook 在模块层 import**，不在调用点内 try/except 兜底：`edge_runtime` 不可导入的容器必须在启动时显式失败，而不是照常出流、静默不报健康。基座镜像里 `edge_runtime` 的可导入性属部署期事项（PYTHONPATH 或装包），与 E5 的容器编排一并落地。
 - `git subtree pull` 后必跑 `tests/contract/base/`：一类断言验证"我们依赖但不改的基座行为未变"，一类验证"已登记的可重放补丁仍可干净应用且各自约束成立"，一类验证"我们自己实现的序列比对仍与基座在**合规序列**上结论一致"（不含返工与漏步时机——那正是我们故意与基座不同的地方；可跳过步骤不在对比范围内，因为首版不生成该字段）。
@@ -78,7 +78,7 @@ NVIDIA 仓库的代码是本系统的躯干，不是外部依赖。姿态分三�
 
 ## Consequences
 
-- `vendor/` 保留两处受控行为改造：推理侧是一处追加输出，训练侧是一处兼容性补丁；二者都不是并行重写基座能力。另有 `0003` 非行为清理补丁，仅删除无法由 subtree 携带实体对象的 LFS 文档资产与 tracking 元数据。
+- `vendor/` 保留两处受控行为改造：推理侧是一处纯追加观测补丁（同一文件两个观测触点），训练侧是一处兼容性补丁；二者都不是并行重写基座能力。另有 `0003` 非行为清理补丁，仅删除无法由 subtree 携带实体对象的 LFS 文档资产与 tracking 元数据。
 - 我们拥有序列比对这段核心算法的维护责任。这不是净增负担：边界求解、有效性门、三值判定本来就要我们写，而它们与序列比对共享同一份状态。
 - 基座 checker 与基座处置都靠既有环境变量关闭，不产生补丁。它们在我们的路径上不被调用，故不构成重复实现。
 - 仓库策略中"`vendor/` 只读"的表述作废，改为"`vendor/` 只经 subtree 更新或已登记的可重放补丁变更"。

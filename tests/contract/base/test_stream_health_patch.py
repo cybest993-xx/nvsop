@@ -1,9 +1,9 @@
 """Family two (§5.9): the recorded patch, and the base premises it stands on.
 
-E4's one in-place modification (ADR-0007) is two appended blocks in one base file: an
-import, and one call at the end of the serving pipeline's message callback. Everything here
-is about that patch staying what it claims to be — append-only, one hook, reaching one
-module of ours — and about the base facts that make the chosen sink work.
+The registered inference-base modification (ADR-0007) is three appended blocks in one base
+file: one import, one decoded-PTS reset observation, and one call at the end of the serving
+pipeline's message callback. Everything here is about that patch staying append-only and
+about the base facts that make the chosen sink and source anchor work.
 
 Standard library only, pure CPU: `ds_sop_process.py` imports torch and pyservicemaker, so
 it is read as source rather than imported. Mandatory after every `git subtree pull`, where
@@ -13,6 +13,7 @@ a red test here means the base moved under the patch.
 from __future__ import annotations
 
 import ast
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -55,8 +56,8 @@ def removed_lines(patch: str) -> list[str]:
 class RecordedPatchIsAppendOnlyTest(unittest.TestCase):
     """The patch discipline ADR-0007 rests on, checked mechanically rather than by review.
 
-    "Pure output-adding" is what lets NVIDIA's performance work and CUDA/DeepStream version
-    adaptation keep arriving by `subtree pull`. A patch that started deleting or rewriting
+    Purely additive observation is what lets NVIDIA's performance work and CUDA/DeepStream
+    version adaptation keep arriving by `subtree pull`. A patch that started deleting or rewriting
     base lines would forfeit that without anything failing, so it fails here.
     """
 
@@ -76,7 +77,11 @@ class RecordedPatchIsAppendOnlyTest(unittest.TestCase):
         # the artifact a reviewer reads and a `subtree pull` conflict is resolved against.
         source = read(PROCESS)
         blocks = added_blocks(self.patch)
-        self.assertEqual(2, len(blocks), "expected two appended blocks: the import and the call")
+        self.assertEqual(
+            3,
+            len(blocks),
+            "expected three appended blocks: import, PTS re-anchor, and hook call",
+        )
         for block in blocks:
             self.assertIn(
                 block,
@@ -85,10 +90,31 @@ class RecordedPatchIsAppendOnlyTest(unittest.TestCase):
                 "regenerate docs/base/patches/0001-stream-health-events.patch",
             )
 
+    def test_the_recorded_patch_can_be_reversed_from_the_current_tree(self) -> None:
+        result = subprocess.run(
+            ["git", "apply", "--reverse", "--check", str(PATCH)],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+
     def test_the_patch_touches_exactly_one_base_file(self) -> None:
         headers = [line for line in self.patch.splitlines() if line.startswith("+++ ")]
         self.assertEqual(1, len(headers), f"expected one patched file, got {headers}")
         self.assertIn("ds_sop_process.py", headers[0])
+
+    def test_pts_regression_reanchors_the_source_timeline(self) -> None:
+        consume = function_source(PROCESS, "consume")
+        self.assertIn(
+            "if self._last_timestamp > 0 and timestamp < self._last_timestamp:",
+            consume,
+        )
+        self.assertIn(
+            "self._sop_video_processor.first_timestamp = wall_clock_entry",
+            consume,
+        )
 
 
 class HookIsTheOnlyReachIntoOurCodeTest(unittest.TestCase):

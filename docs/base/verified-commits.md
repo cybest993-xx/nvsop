@@ -29,6 +29,13 @@
 - 契约测试：`tests/contract/base/` 共 35 条通过，其中 16 条为本次新增（`test_stream_health_patch.py`：补丁纯追加、补丁与工作树同步、`vendor/` 只 import 一处我们的模块、hook 调用位于回调末尾、基座消息类型与状态名未变、`DISABLE_SOP_CHECKER` 下的队列路由与消费者集合未变）。
 - 补丁是否需要调整：不需要。
 
+#### S010 时间锚修正（2026-09-20）
+
+- 复核 Issue #152 时确认：NVIDIA 基座的 `first_timestamp` 只在初始 post-process 启动设置，内部 RTSP 恢复不会自动重新锚定。
+- `0001-stream-health-events.patch` 仍只触及 `ds_sop_process.py` 且零删除；由两个追加块扩为三个：模块 import、decoded PTS 回退时重新锚定、`run_pipeline.on_message` 健康 hook。
+- 重新锚定只在新 decoded frame PTS 小于上一帧时发生，使用该帧已有 `wall_clock_entry`；普通恢复但 PTS 连续时不产生 `TIMESTAMP_DISCONTINUITY`。
+- `test_stream_health_patch.py` 增加 producer-side 契约断言，并要求登记 patch 与工作树同步且可反向应用。
+
 #### 标注接入补丁在该提交上落地（2026-09-09）
 
 - 补丁：[`patches/0002-annotation-upload-target-and-accessibility.patch`](patches/0002-annotation-upload-target-and-accessibility.patch)。改动训练标注基座的显式目标上传、独立上下文入口、异步结果轮询、控件可访问性和标注服务端口边界；不复制时间轴或切片逻辑。

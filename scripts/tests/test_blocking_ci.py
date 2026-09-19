@@ -109,8 +109,8 @@ class BlockingCiTest(unittest.TestCase):
             "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2",
             workflow,
         )
-        self.assertIn("path: apps/control-web/test-results/", workflow)
-        self.assertNotIn(".tmp/dev-main", workflow)
+        self.assertIn("path: .nvsop/artifacts/web/test-results/", workflow)
+        self.assertNotIn(".nvsop/dev-main", workflow)
 
 
 if __name__ == "__main__":

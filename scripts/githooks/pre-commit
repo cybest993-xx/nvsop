@@ -74,7 +74,7 @@ def refuse_vendor_edits(staged: list[Path]) -> list[str]:
 
 
 def refuse_unformatted_python(root: Path, staged: list[Path]) -> list[str]:
-    ruff = root / ".venv" / "bin" / "ruff"
+    ruff = root / ".nvsop" / "venv" / "bin" / "ruff"
     python = [path for path in staged if path.suffix == ".py" and path.parts[:1] != (VENDOR,)]
     if not python:
         return []
@@ -103,7 +103,7 @@ def refuse_unformatted_python(root: Path, staged: list[Path]) -> list[str]:
     if not unformatted:
         return []
     return [
-        "staged Python is not formatted: run `.venv/bin/ruff format` on the source files, "
+        "staged Python is not formatted: run `.nvsop/venv/bin/ruff format` on the source files, "
         "stage them again, and retry.\n" + "\n".join(unformatted)
     ]
 

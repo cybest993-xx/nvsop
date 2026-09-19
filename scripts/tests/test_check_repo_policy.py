@@ -14,6 +14,7 @@ class RepositoryPolicyTest(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
         self.files = {
+            Path(".gitignore"): ".nvsop/\n.env\n.env.*\n*.key\n*.pem\n",
             Path("AGENTS.md"): (
                 "[Docs](docs/README.md)\n[Architecture](docs/engineering/architecture.md)\n"
             ),
@@ -94,6 +95,17 @@ class RepositoryPolicyTest(unittest.TestCase):
         path.write_text("SECRET=value\n")
         errors = self.check(str(path.relative_to(self.root)))
         self.assertIn("secret-like environment file must not be committed: .env.production", errors)
+
+    def test_requires_repository_local_state_ignore_rule(self) -> None:
+        (self.root / ".gitignore").write_text(".env\n")
+        self.assertIn(".gitignore must ignore .nvsop/ repository-local state", self.check())
+
+    def test_rejects_committed_repository_local_state(self) -> None:
+        path = self.write(".nvsop/cache/tool/output.txt", "generated")
+        self.assertIn(
+            "repository-local state must not be committed: .nvsop/cache/tool/output.txt",
+            self.check(str(path)),
+        )
 
     def test_rejects_root_test_without_cross_app_owner(self) -> None:
         path = self.root / "tests/unit/test_example.py"

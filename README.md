@@ -20,7 +20,7 @@ make dev          # 前台保持运行
 make dev-status
 ```
 
-默认业务入口为 `http://localhost:8443`，无需本地 CA。需要本地 TLS 时显式设置 `NVSOP_DEV_PROTOCOL=https`；账号信息见 `.tmp/dev-main/credentials.txt`。完整前置工具、端口、可选 HTTPS CA、日志、refresh/smoke/UI/down 和排障见 [`docs/deployment/development.md`](docs/deployment/development.md)。
+默认业务入口为 `http://localhost:8443`，无需本地 CA。需要本地 TLS 时显式设置 `NVSOP_DEV_PROTOCOL=https`；账号信息见 `.nvsop/dev-main/credentials.txt`。仓库生成的本地环境、缓存、工具和测试/构建制品统一放在被忽略的 `.nvsop/` 下；开发实例 secrets 不属于通用清理范围。完整前置工具、端口、可选 HTTPS CA、日志、refresh/smoke/UI/down 和排障见 [`docs/deployment/development.md`](docs/deployment/development.md)。
 
 ## 文档入口
 

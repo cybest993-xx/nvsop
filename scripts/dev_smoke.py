@@ -236,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--ca-file",
         type=Path,
-        default=Path(__file__).resolve().parents[1] / ".tmp" / "dev-main" / "tls" / "ca.crt",
+        default=Path(__file__).resolve().parents[1] / ".nvsop" / "dev-main" / "tls" / "ca.crt",
     )
     arguments = parser.parse_args(argv)
     try:

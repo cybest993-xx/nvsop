@@ -28,3 +28,19 @@ Python resolution belongs to `pyproject.toml`, `.python-version` and `uv.lock`; 
 Use frozen installs through repository commands, not ad-hoc package installs documented as an alternative. A runtime/toolchain bump includes code compatibility, generated artifacts, CI and deployment evidence in the same coherent change. Select affected checks through workflow.md and retain all applicable release requirements.
 
 GitHub Actions syntax uses the repository-pinned `actionlint` version and upstream SHA256 values in `scripts/install_actionlint.py`. `make ci-tools` is the explicit network/bootstrap step; `make ci-lint` never installs or silently substitutes another version. Update version, supported architecture checksums, installer behavior and CI evidence together.
+
+## Repository-local state
+
+Supported repository commands place repository-owned local state under the ignored `.nvsop/` root:
+
+- `venv/` owns the frozen Python environment used by Make targets and hooks;
+- `cache/` owns uv, Ruff, mypy, pytest and import-linter caches;
+- `tools/` owns explicitly bootstrapped repository tools such as `actionlint`;
+- `artifacts/` owns disposable local build and test output;
+- `dev-main/` owns the fixed development instance, including local credentials, TLS material and Docker secret files.
+
+`.nvsop/dev-main/` is local state but **not** a disposable cache. `make local-clean` deletes only the declared reproducible subtrees plus known tool-layout exceptions and legacy generated paths; it never deletes `dev-main/`, `.env*`, key material, `.tmp/task-handoff.md` or unknown ignored state. Do not replace it with `git clean -fdx`.
+
+pnpm still requires workspace `node_modules/` layout for the current Vue toolchain, and editable Python installs can write `*.egg-info/` beside sources. These are explicit tool-layout exceptions rather than a second state root; `make local-clean` owns their removal. Direct tool invocation may also recreate legacy ignored cache paths, but supported Make commands use `.nvsop/`.
+
+The primary `main` checkout may preserve ignored `.nvsop/`, workspace `node_modules/` and the three current editable-install `*.egg-info/` directories while synchronizing to accepted `origin/main`; these exact paths are reproducible and are listed explicitly in workflow.md. Any tracked/untracked change or other ignored path still blocks synchronization. Task retirement remains stricter and requires a fully clean task worktree, so run `make local-clean` before retirement when reproducible artifacts are present.

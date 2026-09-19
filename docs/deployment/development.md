@@ -50,9 +50,9 @@ make dev-setup
 - 生成开发 secrets 和合成测试视频；显式 HTTPS 模式才生成开发 CA/服务端证书；
 - 执行 frozen `pnpm install` 与 `uv sync`；
 - 拉取 PostgreSQL、Redis、MinIO、annotation DB、Nginx 等基础镜像；
-- 在 `.tmp/dev-main/`（或 `--state-dir` 指定目录）写入状态、凭据路径和测试制品。
+- 在 `.nvsop/dev-main/`（或 `--state-dir` 指定目录）写入状态、凭据路径和测试制品。
 
-开发账号信息写入 `.tmp/dev-main/credentials.txt`，默认登录名为 `dev.admin`；密码本身保存在独立 secret 文件中。不要把状态目录、密码或证书私钥提交进 Git。
+开发账号信息写入 `.nvsop/dev-main/credentials.txt`，默认登录名为 `dev.admin`；密码本身保存在独立 secret 文件中。不要把状态目录、密码或证书私钥提交进 Git。旧工作树若仍有 `.tmp/dev-main/`，先停止旧实例；需要保留本地状态时显式移动到 `.nvsop/dev-main/`，否则重新执行 `make dev-setup`。脚本不会静默回退到旧目录。
 
 ### 可选 HTTPS CA
 

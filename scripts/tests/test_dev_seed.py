@@ -66,7 +66,7 @@ class RetryClient:
 
 class DevSeedTest(unittest.TestCase):
     def test_failed_video_retries_the_returned_upload_instructions(self) -> None:
-        video = ROOT / ".tmp" / "test-dev-seed.mp4"
+        video = ROOT / ".nvsop" / "artifacts" / "tests" / "test-dev-seed.mp4"
         video.parent.mkdir(parents=True, exist_ok=True)
         video.write_bytes(b"synthetic")
         self.addCleanup(video.unlink, missing_ok=True)

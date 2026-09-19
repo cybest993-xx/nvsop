@@ -23,10 +23,10 @@ class PreCommitTest(unittest.TestCase):
         self.git("config", "user.email", "index@example.invalid")
         self.git("config", "commit.gpgsign", "false")
         self.git("config", "core.hooksPath", str(self.root / "no-hooks"))
-        binary = self.root / ".venv/bin/ruff"
+        binary = self.root / ".nvsop/venv/bin/ruff"
         binary.parent.mkdir(parents=True)
-        binary.symlink_to(ROOT / ".venv/bin/ruff")
-        (self.root / ".gitignore").write_text(".venv/\n")
+        binary.symlink_to(ROOT / ".nvsop/venv/bin/ruff")
+        (self.root / ".gitignore").write_text(".nvsop/\n")
         self.git("add", ".gitignore")
         self.git("commit", "--quiet", "-m", "fixture")
 
@@ -83,7 +83,7 @@ class PreCommitTest(unittest.TestCase):
         self.assertIn("vendor/upstream.py", result.stderr)
 
     def test_missing_formatter_reports_the_unperformed_check(self) -> None:
-        (self.root / ".venv/bin/ruff").unlink()
+        (self.root / ".nvsop/venv/bin/ruff").unlink()
         (self.root / "sample.py").write_text("x = 1\n")
         self.git("add", "sample.py")
         result = self.hook()

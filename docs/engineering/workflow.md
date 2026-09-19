@@ -18,12 +18,14 @@ git worktree list --porcelain
 git fetch origin main
 ```
 
-The hook path must resolve to `scripts/githooks` or its configured equivalent. Locate the dedicated primary `main` worktree from the actual list. Synchronize it only when it is on `main` and clean, including untracked files; otherwise preserve it and stop that synchronization. Never reset a task worktree to obtain a clean base.
+The hook path must resolve to `scripts/githooks` or its configured equivalent. Locate the dedicated primary `main` worktree from the actual list. Synchronize it only when it is on `main` and has no tracked/untracked change or unknown ignored state; otherwise preserve it and stop that synchronization. The only ignored paths allowed to remain are the policy-reserved `.nvsop/` root and the current pnpm/setuptools layout exceptions listed below. Never reset a task worktree to obtain a clean base. `.nvsop/` is policy-enforced as untracked local state, so preserving it cannot overwrite a committed path.
 
 ```sh
 MAIN_WORKTREE=<primary-main-worktree>
 test "$(git -C "$MAIN_WORKTREE" branch --show-current)" = main
-test -z "$(git -C "$MAIN_WORKTREE" status --porcelain=v1 --untracked-files=all)"
+MAIN_STATUS="$(git -C "$MAIN_WORKTREE" status --porcelain=v1 --untracked-files=all --ignored=matching)"
+MAIN_BLOCKERS="$(printf '%s\n' "$MAIN_STATUS" | grep -Ev '^!! (\.nvsop/|node_modules/|apps/control-web/node_modules/|apps/control-api/src/control_api\.egg-info/|apps/edge-runtime/src/edge_runtime\.egg-info/|packages/contracts/src/nvsop_contracts\.egg-info/)$' || true)"
+test -z "$MAIN_BLOCKERS"
 git -C "$MAIN_WORKTREE" reset --hard origin/main
 git -C "$MAIN_WORKTREE" worktree add ../nvsop-task -b agent/a/<task-slug> main
 ```
@@ -77,6 +79,7 @@ The [Makefile](../../Makefile) is the local/CI command interface. During iterati
 | `make web-e2e-whep` | Real MediaMTX WHEP browser evidence for media-owned changes |
 | `make ci-plan BASE=<sha> HEAD=<sha>` | Read-only report of the same CI scope selector used by GitHub Actions |
 | `make ci-lint` | Offline GitHub Actions static lint after one explicit `make ci-tools` install of the pinned binary |
+| `make local-clean` | Delete only declared reproducible local artifacts; preserve `.nvsop/dev-main`, secrets and unknown ignored state |
 | `make pr-check PR=<number>` | Read-only machine-state preflight; never substitutes for independent review or merge authorization |
 | `make change-size` | Advisory size report from `BASE`, default `origin/main` |
 | `make contracts` | Generated OpenAPI compatibility and Web client; procedure in [maintenance.md](maintenance.md#generated-contracts) |
@@ -122,7 +125,7 @@ The sole aggregate required PR status is `CI required` from [blocking-ci.yml](..
 | Media deployment/test inputs | `make check` plus real-infrastructure, playback and WHEP browser evidence |
 | `.github/`, `Makefile`, the selector/actionlint installer, or unusable baseline | All blocking families |
 
-Filtering is an optimization, not an exemption. Lockfiles are always checked; applicable code gates regenerate artifacts and verify tracked and untracked cleanliness. Keep immutable action pins, least-privilege permissions, frozen installs, job timeouts and cancellation of superseded PR runs. Do not relax this selection merely because a script change accompanies documentation. Workflow changes additionally install the pinned `actionlint` release through the checksum-verifying repository installer and run `make ci-lint`. Browser failures upload only Playwright `test-results/` with a pinned upload action and short retention; do not upload `.tmp/dev-main`, environment files or broader workspaces as diagnostic artifacts.
+Filtering is an optimization, not an exemption. Lockfiles are always checked; applicable code gates regenerate artifacts and verify tracked and untracked cleanliness. Keep immutable action pins, least-privilege permissions, frozen installs, job timeouts and cancellation of superseded PR runs. Do not relax this selection merely because a script change accompanies documentation. Workflow changes additionally install the pinned `actionlint` release through the checksum-verifying repository installer and run `make ci-lint`. Browser failures upload only `.nvsop/artifacts/web/test-results/` with a pinned upload action and short retention; do not upload `.nvsop/dev-main`, environment files or broader workspaces as diagnostic artifacts.
 
 ### Codex review and merge
 
@@ -152,7 +155,7 @@ git merge-base --is-ancestor <merge-commit-oid> origin/main
 
 Continue only when the response is `MERGED`, its `baseRefName` is `main`, its `headRefName` and `headRefOid` equal the reviewed branch and candidate SHA, its `mergeCommit.oid` is present, and that recorded commit is retained by `origin/main`. A squash merge does not make the pre-squash candidate an ancestor of `main`; do not substitute that check. This confirmation is read-only evidence for the operator, not shared state consumed by the cleanup command.
 
-If the primary checkout must be synchronized, identify it from `git worktree list --porcelain`. Only when that checkout is on `main` and clean including untracked and ignored files may it be synchronized:
+If the primary checkout must be synchronized, identify it from `git worktree list --porcelain`. Only when that checkout is on `main`, has no tracked/untracked change and has no ignored entry except the policy-reserved `.nvsop/` root plus the current pnpm/setuptools layout exceptions may it be synchronized:
 
 ```bash
 MAIN_WORKTREE=<primary-main-worktree>
@@ -160,13 +163,14 @@ MAIN_WORKTREE=<primary-main-worktree>
     set -eu
     test "$(git -C "$MAIN_WORKTREE" branch --show-current)" = main
     MAIN_STATUS="$(git -C "$MAIN_WORKTREE" status --porcelain=v1 --untracked-files=all --ignored=matching)"
-    test -z "$MAIN_STATUS"
+    MAIN_BLOCKERS="$(printf '%s\n' "$MAIN_STATUS" | grep -Ev '^!! (\.nvsop/|node_modules/|apps/control-web/node_modules/|apps/control-api/src/control_api\.egg-info/|apps/edge-runtime/src/edge_runtime\.egg-info/|packages/contracts/src/nvsop_contracts\.egg-info/)$' || true)"
+    test -z "$MAIN_BLOCKERS"
     git -C "$MAIN_WORKTREE" reset --hard origin/main
     test "$(git -C "$MAIN_WORKTREE" rev-parse HEAD)" = "$(git rev-parse origin/main)"
 )
 ```
 
-Do not reset a task or dirty primary checkout. This synchronization is a separate manual operation; `retire_task.py` never performs it.
+Do not reset a task or a primary checkout with state outside that exact allowlist. This synchronization is a separate manual operation; `retire_task.py` never performs it. Use `make local-clean` when a task worktree must remove reproducible artifacts before retirement; the command deliberately preserves fixed-instance state and unknown ignored files.
 
 ### 5.2 Retire one verified task
 

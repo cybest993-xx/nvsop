@@ -5,6 +5,10 @@
 *.key
 *.pem
 
+# Repository-owned local state. Supported repository commands keep generated
+# environments, caches, tools, artifacts and the fixed dev instance below this root.
+.nvsop/
+
 # Python
 __pycache__/
 *.py[cod]

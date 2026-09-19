@@ -7,7 +7,7 @@ NVIDIA 仓库的代码是本系统的躯干，不是外部依赖。姿态分三�
 | 姿态 | 范围 |
 |---|---|
 | 原样复用 | DeepStream 取流、DDM 分段、vLLM 分类、`/v1/*` 接口、文件 API、Prometheus 指标；训练侧 5 个微服务；**React 标注 UI 连界面一起复用** |
-| 就地改造（一处） | pipeline `on_message`：把 source error / 正在重连 / 重连成功 / 最后一帧时刻 / 时间轴归零作为**合成健康事件**送进本机流。见下节 |
+| 就地改造（一处） | pipeline `on_message`：把真实可观测的 source error / delivering / EOS 作为**合成健康事件**送进本机流，并携带 `source_anchor` 供 supervisor 判断时间轴变化。见下节 |
 | 自己实现（一处） | **序列比对与周期边界**：在 `apps/edge-runtime/` 重新实现，不打补丁。见下节 |
 | 全新建设 | 账户权限、工位/相机/连接器配置、Excel→模板版本发布、聚合看板、违规复核、证据生命周期、上报与对账 |
 | 配置关闭（不打补丁） | 基座 checker（`DISABLE_SOP_CHECKER=true`）、基座处置（`ENABLE_ALERT_SOUND`/`ENABLE_MESSAGING` 保持默认 false） |
@@ -53,7 +53,7 @@ NVIDIA 仓库的代码是本系统的躯干，不是外部依赖。姿态分三�
 
 合成事件用**显式键**（`stream_health`）标记，不用哨兵数值——消费者按键存在与否分支，比认魔数安全，且不与契约测试中针对 `_make_chunk_info` 的断言冲突。事件同时带上基座的 `first_timestamp` 作为 `source_anchor`：基座重连后会重新锚定该值（`ds_sop_process.py:874`、`:933`），而每个正常 chunk 也带同一字段，故"恢复后时间轴归零"由 supervisor 比对锚点得出，不需要单独的事件类型。它是 `time.time()` 墙钟，只可比对身份，不可用于计时。
 
-**该通道的边界**：它只在进程与 pipeline 存活时能投递，故能带序送出 source error、正在重连、重连成功、时间轴归零这类可恢复状态；进程死亡送不出任何东西，那种情形由 supervisor 的 chunk 静默计时器兜底。选它买到的是**事件序**（"该事件发生在 chunk N 与 N+1 之间"可直接用于闭合时的有效性判断），不是全覆盖。
+**该通道的边界**：它只在进程与 pipeline 存活时能投递，故能带序送出 source error、delivering 与 EOS；恢复后的时间轴变化由同序事件携带的 `source_anchor` 比较得出，不设独立事件。进程死亡送不出任何东西，那种情形由 supervisor 的 chunk 静默计时器兜底。选它买到的是**事件序**（"该事件发生在 chunk N 与 N+1 之间"可直接用于闭合时的有效性判断），不是全覆盖。
 
 **只登记可观测的事实**（E4 实测）：服务路径回调能观测到 `PipelineState.INVALID`（source error）、`PLAYING`（正在投递）与 EOS 三类。"正在重连"**没有**对应的总线消息——基座只给源设置 `init-rtsp-reconnect-interval`，DeepStream 在元件内部重试且不广播，故不设该事实，否则是编造而非观测。重连成功由 `SOURCE_ERROR` 之后紧跟 `DELIVERING` 表达，信息等价。
 

@@ -1,6 +1,6 @@
 # Repository maintenance
 
-Status: **normative**. Read when changing NVIDIA base code, generated contracts, dependencies or locks. [workflow.md](workflow.md) owns checks/review; [upgrade.md](../deployment/upgrade.md) owns deployment compatibility and rollout consequences.
+Status: **normative**. Read when adding or changing repository-local generated/ignored state, NVIDIA base code, generated contracts, dependencies or locks. [workflow.md](workflow.md) owns checks/review; [upgrade.md](../deployment/upgrade.md) owns deployment compatibility and rollout consequences.
 
 ## NVIDIA base code
 
@@ -38,6 +38,8 @@ Supported repository commands place repository-owned local state under the ignor
 - `tools/` owns explicitly bootstrapped repository tools such as `actionlint`;
 - `artifacts/` owns disposable local build and test output;
 - `dev-main/` owns the fixed development instance, including local credentials, TLS material and Docker secret files.
+
+Classify every new path before creating it. Durable source, configuration, documentation, test assets and other repository content stay tracked under their existing owner. Repository-owned untracked state created by supported commands belongs under `.nvsop/`. A new repository-owned ignored path outside `.nvsop/` is an explicit exception: use it only when the responsible tool requires that layout, record the reason here, give `make local-clean` exact cleanup ownership when it is reproducible, and update workflow/policy allowlists only when that path is intentionally safe to preserve. `.tmp/task-handoff.md` is the sole repository-defined continuity exception and is created only under [workflow persistent continuity](workflow.md#persistent-continuity). User-supplied secrets remain governed by their documented configuration/security paths rather than being treated as generated state.
 
 `.nvsop/dev-main/` is local state but **not** a disposable cache. `make local-clean` deletes only the declared reproducible subtrees plus known tool-layout exceptions and legacy generated paths; it never deletes `dev-main/`, `.env*`, key material, `.tmp/task-handoff.md` or unknown ignored state. Do not replace it with `git clean -fdx`.
 

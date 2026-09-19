@@ -12,7 +12,7 @@
 | 新建、拆分、领取、分派或关闭 Issue，处理标签和依赖 | [Issue 管理](engineering/issues.md) |
 | 编码、复用、接口设计、拆分模块和注释 | [代码写作](engineering/coding.md) |
 | 改仓库布局、模块所有权或跨模块依赖 | [仓库架构](engineering/architecture.md) |
-| 更新 NVIDIA 基座、生成契约、依赖与锁文件 | [仓库维护](engineering/maintenance.md) |
+| 新增或调整仓库本地生成/忽略状态，更新 NVIDIA 基座、生成契约、依赖与锁文件 | [仓库维护](engineering/maintenance.md) |
 | 新增、更新、合并、迁移或删除文档/agent 指令 | [文档管理](engineering/documentation.md) |
 
 本地文档迭代可运行 `make docs-check`；最终检查与独立审查条件见交付工作流。命令的实际实现由根 [Makefile](../Makefile) 维护，不在各文档复制完整检查清单。

@@ -354,7 +354,6 @@ def check_edge_dependency_directions(root: Path, files: list[Path]) -> list[str]
     stream_health_package = edge_root / "stream_health"
     composition_root = edge_root / "runtime.py"
     connector_root = edge_root / "connectors"
-    write_ledger_debt = connector_root / "writes.py"
     violations: list[str] = []
 
     for path in sorted(files):
@@ -398,10 +397,6 @@ def check_edge_dependency_directions(root: Path, files: list[Path]) -> list[str]
                 if target == "edge_runtime.supervisor.inputs" or target.startswith(
                     "edge_runtime.supervisor.inputs."
                 ):
-                    continue
-                # #300 负责清除这条既有持久化耦合；这里只保留精确债务豁免，
-                # 让 #295 阻止新增 connector ownership 泄漏而不越界实现 WriteLedger。
-                if path == write_ledger_debt and target == "edge_runtime.local_state.disposal":
                     continue
                 violations.append(
                     f"{path}:{line} imports {target}; connectors may depend only on judgment and "

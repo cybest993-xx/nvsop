@@ -29,20 +29,32 @@ from edge_runtime.configuration import (
 from edge_runtime.configuration_sync import ConfigurationSynchronizer, HttpConfigurationPuller
 from edge_runtime.connectors.hikvision import IsapiConnector
 from edge_runtime.connectors.port import (
+    Failed,
     InputPoint,
     OutputPoint,
     Reachability,
+    Refused,
+    TimedOut,
     WriteOutcome,
+    WriteRefusal,
+    Written,
 )
 from edge_runtime.connectors.runtime import ConnectorRuntime, ConnectorRuntimeSet
 from edge_runtime.connectors.transport import UrllibIsapiTransport
 from edge_runtime.connectors.writes import (
+    PERSISTENT_UNKNOWN_DETAIL,
     OutputDispatcher,
-    SQLiteWriteLedger,
     WriteAttempted,
     WriteRequest,
 )
 from edge_runtime.judgment.model import HostInstant, HostLiveness
+from edge_runtime.local_state.disposal import (
+    DISPOSAL_RESULT_UNKNOWN,
+    DISPOSAL_RESULT_WRITTEN,
+    DisposalIntent,
+    LocalDisposalLedger,
+    StoredDisposalResult,
+)
 from edge_runtime.local_state.queues import BackendReportContext
 from edge_runtime.local_state.store import LocalState, open_local_state
 from edge_runtime.media import MediaRuntime, validate_sop_camera_bindings
@@ -76,6 +88,111 @@ from edge_runtime.supervisor.delegated_transport import CommandTransportError, H
 from edge_runtime.supervisor.inputs import StreamHealthObserved
 from edge_runtime.supervisor.startup import resume_station
 from edge_runtime.supervisor.station import StationSupervisor
+
+
+class SQLiteWriteLedger:
+    """在组合根把连接器写契约绑定到 local_state 的唯一 SQLite 账本。"""
+
+    def __init__(self, ledger: LocalDisposalLedger) -> None:
+        self._ledger = ledger
+        self._intents: dict[str, DisposalIntent] = {}
+
+    def prepare(self, request: WriteRequest, /) -> None:
+        intent = DisposalIntent(
+            station_id=request.station_id,
+            idempotency_key=request.key,
+            connector_id=request.connector_id,
+            point_id=request.point.address,
+            actor=request.actor,
+            requested_state=request.state.value,
+        )
+        self._ledger.ensure_intent(intent)
+        self._intents[request.key] = intent
+
+    def claim(self, request: WriteRequest, /) -> WriteOutcome | None:
+        if request.attempt_at is None or request.lease_seconds is None:
+            raise ValueError("durable writes require attempt_at and lease_seconds")
+        intent = self._intents.get(request.key)
+        if intent is None:
+            self.prepare(request)
+            intent = self._intents[request.key]
+        claim = self._ledger.claim(
+            intent,
+            now=request.attempt_at.seconds,
+            lease_seconds=request.lease_seconds,
+        )
+        if claim.claimed:
+            return None
+        if claim.result is not None:
+            return _outcome_from_storage(claim.result.kind, claim.result.detail, claim.result.at)
+        return Failed(detail=claim.reason or "durable disposal attempt was not claimed")
+
+    def outcome_for(self, key: str, /) -> WriteOutcome | None:
+        intent = self._intents.get(key)
+        if intent is None:
+            return None
+        result = self._ledger.result_for(intent.station_id, key)
+        if result is None:
+            return None
+        return _outcome_from_storage(result.kind, result.detail, result.at)
+
+    def record(self, key: str, outcome: WriteOutcome, /) -> None:
+        intent = self._intents.get(key)
+        if intent is None:
+            raise ValueError("a persistent write must be prepared before recording")
+        self._ledger.record_result(
+            intent,
+            result=StoredDisposalResult(
+                kind=_outcome_kind(outcome),
+                detail=_outcome_detail(outcome),
+                at=_outcome_at(outcome),
+            ),
+        )
+
+
+def _outcome_kind(outcome: WriteOutcome) -> str:
+    if isinstance(outcome, Written):
+        return DISPOSAL_RESULT_WRITTEN
+    if isinstance(outcome, Refused):
+        return f"refused:{outcome.reason.value}"
+    if isinstance(outcome, TimedOut):
+        return "timed_out"
+    if isinstance(outcome, Failed):
+        return "failed"
+    raise AssertionError(f"unsupported write outcome: {outcome!r}")
+
+
+def _outcome_detail(outcome: WriteOutcome) -> str | None:
+    if isinstance(outcome, Refused):
+        return outcome.detail
+    if isinstance(outcome, TimedOut):
+        return str(outcome.after)
+    if isinstance(outcome, Failed):
+        return outcome.detail
+    return None
+
+
+def _outcome_at(outcome: WriteOutcome) -> float:
+    if isinstance(outcome, Written):
+        return outcome.at.seconds
+    if isinstance(outcome, TimedOut):
+        return outcome.after
+    return 0.0
+
+
+def _outcome_from_storage(kind: str, detail: str | None, at: float) -> WriteOutcome:
+    if kind == DISPOSAL_RESULT_WRITTEN:
+        return Written(at=HostInstant(at))
+    if kind == "timed_out":
+        return TimedOut(after=at)
+    if kind == "failed":
+        return Failed(detail=detail or "persistent write failure")
+    if kind == DISPOSAL_RESULT_UNKNOWN:
+        return Failed(detail=PERSISTENT_UNKNOWN_DETAIL)
+    if kind.startswith("refused:"):
+        reason = WriteRefusal(kind.removeprefix("refused:"))
+        return Refused(reason=reason, detail=detail or "")
+    return Failed(detail=detail or f"unknown persistent write result: {kind}")
 
 
 class _IsapiConnectionTestProbe:

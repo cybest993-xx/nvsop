@@ -334,7 +334,8 @@ def check_edge_runtime_isolation(root: Path, files: list[Path]) -> list[str]:
 def check_edge_dependency_directions(root: Path, files: list[Path]) -> list[str]:
     """补齐 import-linter 尚未覆盖的 Edge 依赖方向。"""
     edge_root = EDGE_SOURCE / "edge_runtime"
-    stream_health = edge_root / "stream_health.py"
+    stream_health_module = edge_root / "stream_health.py"
+    stream_health_package = edge_root / "stream_health"
     composition_root = edge_root / "runtime.py"
     connector_root = edge_root / "connectors"
     write_ledger_debt = connector_root / "writes.py"
@@ -345,6 +346,7 @@ def check_edge_dependency_directions(root: Path, files: list[Path]) -> list[str]
             continue
         tree = ast.parse((root / path).read_text(encoding="utf-8"), filename=str(path))
         imports = _edge_import_targets(path, tree)
+        is_stream_health = path == stream_health_module or is_under(path, stream_health_package)
         imported_packages = {
             target.split(".", 2)[1]
             for _, target in imports
@@ -358,7 +360,7 @@ def check_edge_dependency_directions(root: Path, files: list[Path]) -> list[str]
             )
         for line, target in imports:
             if target == "edge_runtime" or target.startswith("edge_runtime."):
-                if path == stream_health:
+                if is_stream_health:
                     violations.append(
                         f"{path}:{line} imports {target}; stream_health is the vendor-hook "
                         "boundary and must import no edge_runtime sibling"
@@ -366,8 +368,11 @@ def check_edge_dependency_directions(root: Path, files: list[Path]) -> list[str]
                     continue
                 if not is_under(path, connector_root):
                     continue
-                if target.startswith("edge_runtime.connectors") or target.startswith(
-                    "edge_runtime.judgment"
+                if (
+                    target == "edge_runtime.connectors"
+                    or target.startswith("edge_runtime.connectors.")
+                    or target == "edge_runtime.judgment"
+                    or target.startswith("edge_runtime.judgment.")
                 ):
                     continue
                 if target == "edge_runtime.supervisor.inputs" or target.startswith(

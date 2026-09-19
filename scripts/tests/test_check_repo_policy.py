@@ -293,6 +293,19 @@ class RepositoryPolicyTest(unittest.TestCase):
             errors,
         )
 
+    def test_rejects_stream_health_package_importing_edge_sibling(self) -> None:
+        module = self.write(
+            "apps/edge-runtime/src/edge_runtime/stream_health/adapter.py",
+            "from edge_runtime.judgment import Decision\n",
+        )
+        errors = self.check(str(module))
+        self.assertIn(
+            "apps/edge-runtime/src/edge_runtime/stream_health/adapter.py:1 imports "
+            "edge_runtime.judgment; stream_health is the vendor-hook boundary and must import "
+            "no edge_runtime sibling",
+            errors,
+        )
+
     def test_rejects_connector_importing_unowned_edge_state(self) -> None:
         module = self.write(
             "apps/edge-runtime/src/edge_runtime/connectors/future.py",
@@ -315,6 +328,19 @@ class RepositoryPolicyTest(unittest.TestCase):
         self.assertIn(
             "apps/edge-runtime/src/edge_runtime/connectors/future.py:1 imports "
             "edge_runtime.supervisor.station; connectors may depend only on judgment and "
+            "supervisor input vocabulary outside their own package",
+            errors,
+        )
+
+    def test_rejects_connector_importing_allowed_prefix_lookalike(self) -> None:
+        module = self.write(
+            "apps/edge-runtime/src/edge_runtime/connectors/future.py",
+            "from edge_runtime.judgment_adapter import Decision\n",
+        )
+        errors = self.check(str(module))
+        self.assertIn(
+            "apps/edge-runtime/src/edge_runtime/connectors/future.py:1 imports "
+            "edge_runtime.judgment_adapter; connectors may depend only on judgment and "
             "supervisor input vocabulary outside their own package",
             errors,
         )

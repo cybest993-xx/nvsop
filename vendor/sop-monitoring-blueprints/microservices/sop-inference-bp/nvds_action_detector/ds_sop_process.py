@@ -351,6 +351,10 @@ class SOPVideoProcessor:
                     return 0
                 return self._last_timestamp
 
+        def has_current_timestamp(self):
+            with self._lock:
+                return self._last_timestamp_epoch == self._sop_video_processor._stream_epoch
+
         def end_sec(self):
             return self._start_sec + self._duration_sec
 
@@ -978,8 +982,9 @@ class SOPVideoProcessor:
             current_epoch = self._stream_epoch
             if current_epoch != stream_epoch:
                 stream_epoch = current_epoch
-                clip_start = None
-                previous_ts = None
+                has_current_timestamp = retriever.has_current_timestamp()
+                clip_start = last_ts if has_current_timestamp else None
+                previous_ts = last_ts if has_current_timestamp else None
                 tm.reset()
                 if is_eos:
                     break

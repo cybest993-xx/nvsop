@@ -118,12 +118,17 @@ class RecordedPatchStaysWithinRegisteredSeamsTest(unittest.TestCase):
         uniform = function_source(PROCESS, "uniform_clip_post_process")
         ddm = function_source(PROCESS, "clip_post_process")
         helper = function_source(PROCESS, "_put_chunk_if_current")
+        current_timestamp = function_source(PROCESS, "has_current_timestamp")
         self.assertIn("_stream_barrier_open", helper)
         self.assertIn("stream_epoch != self._stream_epoch", helper)
         self.assertIn("_put_chunk_if_current", uniform)
         self.assertIn("_put_chunk_if_current", ddm)
         self.assertIn("current_epoch != stream_epoch", uniform)
         self.assertIn("current_epoch != stream_epoch", ddm)
+        self.assertIn(
+            "_last_timestamp_epoch == self._sop_video_processor._stream_epoch", current_timestamp
+        )
+        self.assertIn("clip_start = last_ts if has_current_timestamp else None", uniform)
 
     def test_internal_vllm_retires_stale_descriptors(self) -> None:
         request = function_source(PROCESS, "vlm_inference_request_process")

@@ -444,6 +444,26 @@ class RepositoryPolicyTest(unittest.TestCase):
             self.center_boundaries(module),
         )
 
+    def test_repository_policy_blocks_cross_owner_internal_imports(self) -> None:
+        self.write(
+            "pyproject.toml",
+            '[tool.uv.workspace]\nmembers = ["apps/control-api"]\n\n'
+            '[tool.nvsop]\ncenter_modules = ["alpha", "beta"]\n\n'
+            "[[tool.importlinter.contracts]]\n"
+            'name = "registered owners"\n'
+            'source_modules = ["factory_sop.alpha", "factory_sop.beta"]\n',
+        )
+        module = self.write(
+            "apps/control-api/src/factory_sop/alpha/usecases.py",
+            "from factory_sop.beta.model import Thing\n",
+        )
+        self.assertIn(
+            "apps/control-api/src/factory_sop/alpha/usecases.py:1 registered center module "
+            "alpha imports factory_sop.beta.model; cross-owner production imports must use "
+            "factory_sop.beta.api",
+            self.check(str(module)),
+        )
+
     def test_center_boundary_evaluator_accepts_public_api_and_composition_root(self) -> None:
         self.write(
             "pyproject.toml",

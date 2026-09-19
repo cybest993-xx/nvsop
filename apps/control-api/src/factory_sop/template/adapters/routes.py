@@ -28,10 +28,11 @@ from factory_sop.device.api import (
     INFERENCE_HOST_TIMESTAMP_HEADER,
     DeviceHostGateway,
     DeviceTemplateBindingGateway,
+    RuntimeParameterMode,
     StationCodeLookup,
+    StationRuntimeParameters,
     host_identity_from_headers,
 )
-from factory_sop.device.model import RuntimeParameterMode, StationRuntimeParameters
 from factory_sop.problem import ApiErrorCode, FieldError, problem_openapi_response, problem_response
 from factory_sop.responses import DEFAULT_PAGE_SIZE, MAXIMUM_PAGE_SIZE, ItemPage
 from factory_sop.template.adapters import dependencies as template_dependencies

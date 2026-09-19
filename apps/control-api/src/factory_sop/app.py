@@ -216,6 +216,10 @@ def create_app(settings: Settings) -> FastAPI:
         device_dependencies.template_binding
     )
     app.dependency_overrides[template_dependencies.host_gateway] = device_dependencies.host_gateway
+    app.dependency_overrides[monitor_dependencies.host_gateway] = device_dependencies.host_gateway
+    app.dependency_overrides[monitor_dependencies.historical_assignment_gateway] = (
+        device_dependencies.historical_assignments
+    )
     app.dependency_overrides[job_dependencies.dataset_resource] = (
         dataset_dependencies.dataset_resource
     )

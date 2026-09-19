@@ -361,6 +361,10 @@ def check_edge_dependency_directions(root: Path, files: list[Path]) -> list[str]
         for line, target in imports:
             if target == "edge_runtime" or target.startswith("edge_runtime."):
                 if is_stream_health:
+                    if target == "edge_runtime.stream_health" or target.startswith(
+                        "edge_runtime.stream_health."
+                    ):
+                        continue
                     violations.append(
                         f"{path}:{line} imports {target}; stream_health is the vendor-hook "
                         "boundary and must import no edge_runtime sibling"

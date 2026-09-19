@@ -306,6 +306,13 @@ class RepositoryPolicyTest(unittest.TestCase):
             errors,
         )
 
+    def test_accepts_stream_health_package_internal_import(self) -> None:
+        module = self.write(
+            "apps/edge-runtime/src/edge_runtime/stream_health/adapter.py",
+            "from .model import WireEvent\n",
+        )
+        self.assertEqual([], self.check(str(module)))
+
     def test_rejects_connector_importing_unowned_edge_state(self) -> None:
         module = self.write(
             "apps/edge-runtime/src/edge_runtime/connectors/future.py",

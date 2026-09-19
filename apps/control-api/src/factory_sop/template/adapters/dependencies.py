@@ -9,7 +9,9 @@ from factory_sop.device.api import (
 )
 from factory_sop.persistence import RequestSession
 from factory_sop.template.adapters.repository import PostgresTemplateRepository
+from factory_sop.template.api import TemplateConfigurationGateway
 from factory_sop.template.repository import TemplateRepository
+from factory_sop.template.usecases.configuration import RepositoryTemplateConfigurationGateway
 
 
 def templates(
@@ -17,6 +19,11 @@ def templates(
 ) -> TemplateRepository:
     """返回请求事务中的 `template_*` 行。"""
     return PostgresTemplateRepository(session)
+
+
+def configuration_gateway(session: RequestSession) -> TemplateConfigurationGateway:
+    """机器配置 transport 使用的 template owner seam。"""
+    return RepositoryTemplateConfigurationGateway(PostgresTemplateRepository(session))
 
 
 def stations() -> StationCodeLookup:

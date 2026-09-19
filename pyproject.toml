@@ -249,10 +249,14 @@ ignore_imports = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "configuration assembly does not depend on adapters"
+name = "configuration composition only depends on owner public seams"
 type = "forbidden"
-source_modules = ["factory_sop.configuration.usecases"]
-forbidden_modules = ["factory_sop.configuration.adapters", "factory_sop.device.adapters", "factory_sop.template.adapters", "fastapi", "sqlalchemy"]
+source_modules = ["factory_sop.configuration.composition"]
+forbidden_modules = ["factory_sop.configuration.adapters", "factory_sop.device", "factory_sop.template", "fastapi", "sqlalchemy"]
+ignore_imports = [
+    "factory_sop.configuration.composition -> factory_sop.device.api",
+    "factory_sop.configuration.composition -> factory_sop.template.api",
+]
 
 [[tool.importlinter.contracts]]
 name = "monitor behavior does not depend on adapters"

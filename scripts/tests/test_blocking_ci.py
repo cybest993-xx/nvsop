@@ -110,6 +110,7 @@ class BlockingCiTest(unittest.TestCase):
             workflow,
         )
         self.assertIn("path: .nvsop/artifacts/web/test-results/", workflow)
+        self.assertIn("include-hidden-files: true", workflow)
         self.assertNotIn(".nvsop/dev-main", workflow)
 
 

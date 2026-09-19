@@ -270,6 +270,7 @@ jobs:
         with:
           name: browser-failure-${{ github.run_id }}-${{ github.run_attempt }}
           path: .nvsop/artifacts/web/test-results/
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
       - name: Explicit success with nothing to check

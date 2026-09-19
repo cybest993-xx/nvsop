@@ -5,6 +5,8 @@ import unittest
 from unittest.mock import Mock, patch
 
 from scripts.check_pr_readiness import (
+    architecture_review_evidence,
+    body_field,
     evaluate,
     pr_files,
     protection_state,
@@ -217,6 +219,29 @@ class PrReadinessTest(unittest.TestCase):
             requires_architecture_review(
                 ["apps/edge-runtime/src/edge_runtime/local_state/synthetic_store.py"]
             )
+        )
+
+    def test_composition_role_changes_require_architecture_review(self) -> None:
+        for path in (
+            "apps/control-api/src/factory_sop/overview.py",
+            "apps/control-api/src/factory_sop/configuration/composition.py",
+            "apps/control-api/src/factory_sop/synthetic_aggregate.py",
+            "apps/control-api/src/factory_sop/synthetic/composition.py",
+            "apps/control-api/src/factory_sop/synthetic/adapters/composition.py",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(requires_architecture_review([path]))
+
+    def test_body_field_reads_complete_inline_value_without_next_line(self) -> None:
+        body = (
+            "Architecture review: `reviewed`\n"
+            "Architecture authority checked: `path1`, `path2`\n"
+            "Next field: should-not-be-consumed"
+        )
+        self.assertEqual(body_field(body, "Architecture authority checked"), "`path1`, `path2`")
+        self.assertTrue(architecture_review_evidence(body))
+        self.assertEqual(
+            body_field("Architecture review:\nNext field: reviewed", "Architecture review"), ""
         )
 
     @patch("scripts.check_pr_readiness.run")

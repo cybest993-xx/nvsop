@@ -127,6 +127,12 @@ def architecture_freshness(issue: dict[str, Any]) -> str:
     if run("git", "merge-base", "--is-ancestor", base_sha, current_sha).returncode != 0:
         return "unknown"
 
+    for path in paths:
+        exists_in_base = run("git", "cat-file", "-e", f"{base_sha}:{path}").returncode == 0
+        exists_in_current = run("git", "cat-file", "-e", f"{current_sha}:{path}").returncode == 0
+        if not exists_in_base and not exists_in_current:
+            return "invalid-authority-paths"
+
     diff = run("git", "diff", "--quiet", base_sha, current_sha, "--", *paths)
     if diff.returncode == 0:
         return "unchanged"

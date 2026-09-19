@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import subprocess
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
-from scripts.check_issue_readiness import REQUIRED_SECTIONS, evaluate
+from scripts.check_issue_readiness import REQUIRED_SECTIONS, architecture_freshness, evaluate
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -110,6 +112,49 @@ Children own execution.
         self.assertFalse(changed.ready)
         self.assertIn("existing_seam_revalidation=required", changed.lines)
         self.assertIn("blockers=manual-revalidation-required", changed.lines)
+
+    @patch("scripts.check_issue_readiness.run")
+    def test_nonexistent_authority_path_is_not_reported_unchanged(self, run_mock: Mock) -> None:
+        run_mock.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="current-sha\n", stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=""),
+        ]
+        result = architecture_freshness(
+            {
+                "body": (
+                    "## Architecture impact\narchitecture-sensitive\n"
+                    "## Architecture authority\n- `docs/engineering/does-not-exist.md`\n"
+                    "## Architecture validation baseline\n"
+                    "main@0123456789abcdef0123456789abcdef01234567\n"
+                )
+            }
+        )
+        self.assertEqual(result, "invalid-authority-paths")
+
+    @patch("scripts.check_issue_readiness.run")
+    def test_deleted_authority_path_stays_a_changed_authority(self, run_mock: Mock) -> None:
+        run_mock.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="current-sha\n", stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=""),
+        ]
+        result = architecture_freshness(
+            {
+                "body": (
+                    "## Architecture impact\narchitecture-sensitive\n"
+                    "## Architecture authority\n- `docs/engineering/architecture.md`\n"
+                    "## Architecture validation baseline\n"
+                    "main@0123456789abcdef0123456789abcdef01234567\n"
+                )
+            }
+        )
+        self.assertEqual(result, "changed")
 
     def test_unknown_native_blockers_and_readiness_conflict_fail_closed(self) -> None:
         result = evaluate(

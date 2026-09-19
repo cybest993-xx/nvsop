@@ -34,9 +34,12 @@ ARCHITECTURE_AUTHORITY_PREFIXES = (
     "packages/contracts/src/",
 )
 ARCHITECTURE_COMPOSITION_FILES = {
-    "apps/control-api/src/factory_sop/app.py",
     "apps/edge-runtime/src/edge_runtime/runtime.py",
 }
+# 根级装配/共享入口和显式 composition seam 保守触发审查，不按业务名称识别。
+CENTER_COMPOSITION_ROLE = re.compile(
+    r"^apps/control-api/src/factory_sop/(?:[^/]+\.py|(?:[^/]+/)+composition\.py)$"
+)
 CENTER_PUBLIC_SEAM = re.compile(r"^apps/control-api/src/factory_sop/[^/]+/api\.py$")
 CENTER_STATE_OWNER = re.compile(
     r"^apps/control-api/src/factory_sop/[^/]+/(?:model|repository)\.py$"
@@ -94,6 +97,7 @@ def requires_architecture_review(changed_files: list[str] | tuple[str, ...]) -> 
         or path in ARCHITECTURE_COMPOSITION_FILES
         or path.startswith(CENTER_MIGRATIONS)
         or path.startswith(EDGE_STATE_OWNER_PREFIX)
+        or CENTER_COMPOSITION_ROLE.fullmatch(path) is not None
         or CENTER_PUBLIC_SEAM.fullmatch(path) is not None
         or CENTER_STATE_OWNER.fullmatch(path) is not None
         or any(path.startswith(prefix) for prefix in ARCHITECTURE_AUTHORITY_PREFIXES)
@@ -102,8 +106,13 @@ def requires_architecture_review(changed_files: list[str] | tuple[str, ...]) -> 
 
 
 def body_field(body: str, name: str) -> str:
-    match = re.search(rf"(?im)^{re.escape(name)}:\s*`?([^`\n]+)`?\s*$", body)
-    return "" if match is None else match.group(1).strip()
+    match = re.search(rf"(?im)^{re.escape(name)}:[ \t]*(.*)$", body)
+    if match is None:
+        return ""
+    value = match.group(1).strip()
+    if value.startswith("`") and value.endswith("`") and value.count("`") == 2:
+        value = value[1:-1].strip()
+    return value
 
 
 def dispatch_evidence(body: str) -> bool:

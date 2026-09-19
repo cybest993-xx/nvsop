@@ -134,7 +134,7 @@ if 证据覆盖不足 or 流不健康 or 推理不健康 or 时间未对齐:
 | warmup 管线仍无条件加载 DDM（uniform 绕不开） | §2.7 | 静态检查 |
 | DDM 标注字段（`start_timestamp`/`end_timestamp`/`description`）未变 | §2.7 | 静态检查 `ddm_dataset.py` |
 | RTSP 初始错误重连配置仍存在 | §2.4 | 静态检查 `init-rtsp-reconnect-interval` |
-| **`_vlm_response_queue` 的消费者集合未变** | §5.11（合成事件靠键区分，新消费者不检查该键即静默破损） | 静态检查该队列的全部 `get()` 调用点，出现未登记的消费者即失败（已落地，随 E4） |
+| **健康事实与动作共享 `_chunk_queue` FIFO，VLM 两阶段只按合成键旁路** | §5.11（AC1 要求有序消费，不能直写下游 response queue） | 静态检查 hook sink、request/response 旁路位置与 `inference_last_queue` 两种 VLM 模式（已落地） |
 | **基座仍以 `EOSMessage` / `new_state` 这些名字表达 pipeline 消息** | §5.11（hook 不导入 `pyservicemaker`，按名字与属性鸭子类型识别消息） | 静态检查基座的 import 与状态名（已落地，随 E4） |
 
 **二、我们自己实现或改造过的行为**（正确性 + 回归 + 补丁有效性）

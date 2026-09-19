@@ -13,7 +13,7 @@
 ```
 推理服务容器（基座 + §5.11 一处改造；基座 checker 与处置按配置关闭）
   DeepStream 取流 → DDM 分段(Triton) → vLLM 分类 → SSE
-  pipeline on_message → 合成健康事件 → _vlm_response_queue → SSE
+  pipeline on_message → 合成健康事件 → _chunk_queue →（VLM 开启时按键保序旁路）→ SSE
 本机 supervisor（自研，判定在此进程内）
   读本地配置，为每路已配置相机启动一个 /v1/chat/completions 请求并看护
   消费 SSE → 判定核心（序列比对+边界+有效性+三值）
@@ -78,7 +78,7 @@ MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU �
 | **配置关闭（不打补丁）** | 基座 checker（`DISABLE_SOP_CHECKER=true`）；基座处置（`ENABLE_ALERT_SOUND`/`ENABLE_MESSAGING` 保持默认 false） |
 | **全新建设** | 账户权限、工位/相机/连接器配置、Excel→模板版本发布、聚合看板、违规复核、证据生命周期、上报与对账 |
 
-该处就地改造只做**追加观测**：回调末尾追加健康事件输出；uniform/DDM 后处理各自追加 PTS 回退检测，并把锚点与该算法的旧分块状态一起重置。不替换 DeepStream/Triton/vLLM 控制流或计算路径。
+该处就地改造只增加登记的健康/恢复处理：回调末尾把健康事实写入动作共用 FIFO；VLM request/response loop 只对 `stream_health` 合成键旁路计算；uniform/DDM 后处理追加 PTS 回退检测并重置旧状态。正常动作的 DeepStream/Triton/VLM 计算路径不变。
 
 **判定核心在 supervisor 进程内，不在基座进程内**（[ADR-0005](../../adr/0005-judgment-runs-inside-the-inference-host.md)）。supervisor 消费本机 `/v1/chat/completions` 的 SSE 流，在自己的进程里调用判定核心。基座 checker 用既有环境变量关掉，不打补丁替换其调用点——那是控制流替换，且承载它的循环是 `_vlm_response_queue.get(block=True)`（`ds_sop_process.py:715`，无超时），空闲超时在其中永远触发不了。
 
@@ -88,11 +88,11 @@ MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU �
 
 这不违反"不许两套实现"：我们的判定路径上只有一套（我们的），基座那份被 `DISABLE_SOP_CHECKER` 关闭后连线程都不启动（`:652`），`inference_last_queue`（`:592-598`）直接返回 `_vlm_response_queue`。
 
-**合成健康事件的注入点（已实测）**：三个候选 sink 只有 `_vlm_response_queue` 可用。登记补丁仍只触及 **一个 vendor 文件且纯追加**：`run_pipeline.on_message` 追加健康事件 hook；`DecodedFrameRetriever.consume()` 在 PTS 回退时清理 internal-vLLM 尚未消费的旧时间轴帧；`uniform_clip_post_process()` 重置 `clip_start` 与锚点；`clip_post_process()` 清空 DDM 旧边界状态并重置 `_clip_start_sec` 与锚点。两条 chunk 路径与 VLM 后端选择无关。
+**合成健康事件的注入点（已实测）**：必须进入动作最早共用的 `_chunk_queue`。直接注入 `_vlm_response_future_queue` 会越过尚未提交 future 的动作，直接注入 `_vlm_response_queue` 会越过仍在等待 future 的动作。VLM 开启时 request/response loop 按 `stream_health` 键原序旁路，关闭时 post-dispatch 直接消费 `_chunk_queue`。
 
 **E4 / S010 实施修正**（[ADR-0007](../../adr/0007-base-is-the-trunk-not-a-dependency.md)）："正在重连"不作为独立事实登记；重连成功由 `SOURCE_ERROR` 后的 `DELIVERING` 表达。S010 进一步确认仅换锚不够，必须在 active chunk 后处理检测真实 PTS 回退并同步重置旧分块状态；普通恢复但 PTS 连续时锚点与分块状态都保持不变。
 
-**该通道只在进程与 pipeline 存活时能投递。** 它按 SSE 顺序送出 source error、delivering 与 EOS；若恢复同时发生 PTS 归零，`DELIVERING` 可能先带旧锚点，随后恢复输出的正常 chunk 带新 `source_anchor`，supervisor 由此识别断裂。进程死亡则由 **chunk 静默计时器**兜底。
+**该通道只在进程与 pipeline 存活时能投递。** 健康事实和动作从 `_chunk_queue` 起共享 FIFO，所以不会越过更早动作；若恢复同时发生 PTS 归零，`DELIVERING` 仍可先带旧锚点，随后恢复的正常 chunk 带新 `source_anchor`。进程死亡由 **chunk 静默计时器**兜底。
 
 **代码放置**：`apps/edge-runtime/` 持有健康事件与判定逻辑；`vendor/` 只留同一登记补丁的健康 hook、internal-vLLM 队列卫生与 uniform/DDM PTS 回退状态重置。补丁维护为可重放 diff，由纯 CPU 契约测试验证。
 

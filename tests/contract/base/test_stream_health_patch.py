@@ -1,13 +1,10 @@
-"""Family two (§5.9): the recorded patch, and the base premises it stands on.
+"""§5.9 第二族：登记补丁及其依赖的基座前提。
 
-The registered inference-base modification (ADR-0007) is six contiguous added runs in one base
-file: one import, one internal-vLLM queue-reset block, one PTS-reset block in each chunk
-post-processor, and one call at the end of the serving pipeline's message callback. Everything here is about that patch staying append-only and
-about the base facts that make the chosen sink and source anchor work.
+ADR-0007 的推理补丁仍只触及一个基座文件，登记 import、健康事件有序旁路、internal-vLLM
+旧帧清理和 uniform/DDM 时间轴处理；契约机械检查补丁只追加、可逆且与工作树同步。
 
-Standard library only, pure CPU: `ds_sop_process.py` imports torch and pyservicemaker, so
-it is read as source rather than imported. Mandatory after every `git subtree pull`, where
-a red test here means the base moved under the patch.
+`ds_sop_process.py` 依赖 torch/pyservicemaker，因此测试只读源码、不导入基座运行时，保持
+纯 CPU；每次 `git subtree pull` 后必须重跑。
 """
 
 from __future__ import annotations
@@ -21,8 +18,10 @@ from base_harness import DETECTOR, INFERENCE_ROOT, REPO_ROOT, function_source, r
 
 PROCESS = DETECTOR / "ds_sop_process.py"
 PATCH = REPO_ROOT / "docs/base/patches/0001-stream-health-events.patch"
-HOOK_ENTRYPOINT = "from edge_runtime.stream_health import note_pipeline_message"
-SINK = "self._vlm_response_queue"
+HOOK_ENTRYPOINT = "from edge_runtime.stream_health import STREAM_HEALTH_KEY, note_pipeline_message"
+ORDERING_QUEUE = "self._chunk_queue"
+FUTURE_QUEUE = "self._vlm_response_future_queue"
+OUTPUT_QUEUE = "self._vlm_response_queue"
 
 
 def added_blocks(patch: str) -> list[str]:
@@ -54,11 +53,10 @@ def removed_lines(patch: str) -> list[str]:
 
 
 class RecordedPatchIsAppendOnlyTest(unittest.TestCase):
-    """The patch discipline ADR-0007 rests on, checked mechanically rather than by review.
+    """机械核验 ADR-0007 的登记补丁纪律，而不是依赖人工评审记忆。
 
-    Purely additive observation is what lets NVIDIA's performance work and CUDA/DeepStream
-    version adaptation keep arriving by `subtree pull`. A patch that started deleting or rewriting
-    base lines would forfeit that without anything failing, so it fails here.
+    补丁允许为合成健康事件增加显式旁路，但不得删除或改写基座原行；否则 subtree 更新时
+    冲突面已超出登记边界，必须显式失败。
     """
 
     def setUp(self) -> None:
@@ -78,9 +76,9 @@ class RecordedPatchIsAppendOnlyTest(unittest.TestCase):
         source = read(PROCESS)
         blocks = added_blocks(self.patch)
         self.assertEqual(
-            6,
+            8,
             len(blocks),
-            "expected six added runs: import, queue hygiene, hook, uniform state/init, and DDM reset",
+            "expected eight added runs: import, queue hygiene, hook, ordered bypasses, uniform state/init, and DDM reset",
         )
         for block in blocks:
             self.assertIn(
@@ -218,8 +216,8 @@ class HookAddsNoControlFlowTest(unittest.TestCase):
         self.assertIn("EOSMessage", self.callback)
         self.assertIn("self._boundary_queue.put(None)", self.callback)
 
-    def test_the_hook_is_handed_the_one_usable_sink(self) -> None:
-        self.assertIn(f"sink={SINK}", self.callback.replace(" ", "").replace("\n", ""))
+    def test_the_hook_is_handed_the_ordering_queue(self) -> None:
+        self.assertIn(f"sink={ORDERING_QUEUE}", self.callback)
 
 
 class MessageTypesTheHookDuckTypesTest(unittest.TestCase):
@@ -251,28 +249,39 @@ class MessageTypesTheHookDuckTypesTest(unittest.TestCase):
                 self.assertIn(state, self.source)
 
 
-class SinkStaysReachableTest(unittest.TestCase):
-    """§5.11: the chosen sink works only while these three facts hold.
-
-    `_vlm_response_queue` was the only usable one of three candidates, and what makes it
-    usable is that with the base checker off it *is* the last queue, and that every consumer
-    on the path reads its keys defensively. A new consumer that does not check our key would
-    break silently, which is why the consumer set is pinned rather than the queue alone.
-    """
+class OrderedHealthPathTest(unittest.TestCase):
+    """§5.11：健康事实与动作必须共享既有 FIFO，并只旁路不适用的 VLM 计算。"""
 
     def setUp(self) -> None:
         self.source = read(PROCESS)
 
-    def test_disabling_the_base_checker_still_routes_the_queue_to_the_output(self) -> None:
-        # We disable the base checker by configuration rather than by patch (ADR-0007).
-        # That is what puts our synthetic chunk on the SSE: with it set, the queue we feed
-        # is the queue `post_dispatch_process` forwards to the client.
+    def test_hook_writes_health_to_the_same_chunk_fifo_as_actions(self) -> None:
+        callback = function_source(PROCESS, "on_message")
+        self.assertIn(f"sink={ORDERING_QUEUE}", callback)
+
+    def test_vlm_request_loop_forwards_health_without_running_inference(self) -> None:
+        request = function_source(PROCESS, "vlm_inference_request_process")
+        branch = "if STREAM_HEALTH_KEY in chunk_info:"
+        self.assertIn(branch, request)
+        self.assertIn("self._vlm_response_future_queue.put(chunk_info)", request)
+        self.assertLess(request.index(branch), request.index('chunk_info["start_time"]'))
+
+    def test_vlm_response_loop_forwards_health_without_action_fields(self) -> None:
+        response = function_source(PROCESS, "vlm_inference_response_process")
+        branch = "if STREAM_HEALTH_KEY in chunk_info:"
+        self.assertIn(branch, response)
+        self.assertIn("self._vlm_response_queue.put(chunk_info)", response)
+        self.assertLess(response.index(branch), response.index('chunk_info.pop("response_future", None)'))
+
+    def test_supported_vlm_modes_reach_the_same_sse_output_chain(self) -> None:
         selector = function_source(PROCESS, "inference_last_queue")
-        self.assertIn("if DISABLE_VLM_INFERENCE:", selector)
-        self.assertIn(f"elif DISABLE_SOP_CHECKER:\n            return {SINK}", selector)
+        self.assertIn(f"if DISABLE_VLM_INFERENCE:\n            return {ORDERING_QUEUE}", selector)
+        self.assertIn(f"elif DISABLE_SOP_CHECKER:\n            return {OUTPUT_QUEUE}", selector)
+        response = function_source(PROCESS, "vlm_inference_response_process")
+        self.assertIn(f"chunk_info = {FUTURE_QUEUE}.get(block=True)", response)
+        self.assertIn(f"{OUTPUT_QUEUE}.put(chunk_info)", response)
 
     def test_the_base_checker_and_disposal_still_default_to_off(self) -> None:
-        # Not a patch, a default: E4 leaves both response surfaces as delivered.
         for flag, default in (
             ('DISABLE_SOP_CHECKER", "false', "off by default, we set it true"),
             ('ENABLE_ALERT_SOUND", "false', "left at its default"),
@@ -281,28 +290,7 @@ class SinkStaysReachableTest(unittest.TestCase):
             with self.subTest(flag=flag):
                 self.assertIn(f'os.getenv("{flag}")', self.source, default)
 
-    def test_the_registered_consumers_of_the_queue_are_unchanged(self) -> None:
-        # §5.9 names this assertion: our event is distinguished by a key, so a consumer that
-        # does not check for it would read the event as a chunk of work. Two `get()` call
-        # sites are registered — the base checker's loop, which our configuration never
-        # starts, and the dispatch loop that forwards to the SSE.
-        consumers = {
-            name
-            for name in ("sop_checker_process", "post_dispatch_process")
-            if f"{SINK}.get(" in function_source(PROCESS, name)
-            or "inference_last_queue.get(" in function_source(PROCESS, name)
-        }
-        self.assertEqual({"sop_checker_process", "post_dispatch_process"}, consumers)
-        self.assertEqual(
-            2,
-            self.source.count(f"{SINK}.get(") + self.source.count("inference_last_queue.get("),
-            "an unregistered consumer of the queue appeared; it must be checked for the "
-            "stream-health key or our synthetic chunk will be read as a chunk of work",
-        )
-
-    def test_the_dispatch_loop_still_forwards_whatever_it_receives(self) -> None:
-        # It must stay a pass-through: it is what carries our event to the SSE, and it also
-        # fires the base's disposal surfaces, which is why those stay off by default.
+    def test_dispatch_loop_still_forwards_the_selected_output(self) -> None:
         dispatch = function_source(PROCESS, "post_dispatch_process")
         self.assertIn("self._final_queue.put(chunk)", dispatch)
 

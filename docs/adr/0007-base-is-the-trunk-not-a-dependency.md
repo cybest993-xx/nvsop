@@ -34,30 +34,31 @@ NVIDIA 仓库的代码是本系统的躯干，不是外部依赖。姿态分三�
 
 ## 合成健康事件的注入点（已实测）
 
-补丁把健康事件作为一个**合成 chunk** 送进本机流，沿用基座自己的做法——它在流结束时就造过一个 `chunk_idx=-1` 的合成 chunk（`ds_sop_process.py:719-730`）。可用的注入点只有一个，另两个都不可用：
+补丁把健康事件作为一个**合成 chunk** 送进本机流。AC1 要求动作与健康事实保持同一 FIFO 顺序，因此入口必须放在动作最早共用的队列：
 
 | 候选 sink | 结论 |
 |---|---|
-| `_boundary_queue`（回调当前持有） | 不可用：`clip_post_process:923` 按 `(frame_id, pts, score)` 位置解包，塞 dict 即崩 |
-| `_chunk_queue` | 不可用：`vlm_inference_request_process:1014` 要求数值 `start_time`/`end_time`，并会**对它跑一次 VLM 推理** |
-| `_vlm_response_queue` | **可用**：`:1136` 对 `response_future` 有默认值与判空；`DISABLE_SOP_CHECKER` 下它就是 `inference_last_queue` |
+| `_boundary_queue`（回调当前持有） | 不可用：`clip_post_process` 按 `(frame_id, pts, score)` 位置解包，塞 dict 即崩 |
+| `_chunk_queue` | **采用**：动作与健康事实从这里开始共享 FIFO；VLM 开启时 request loop 按 `stream_health` 键旁路推理并原序送入 future queue，VLM 关闭时它本身就是 `inference_last_queue` |
+| `_vlm_response_future_queue` | 不直接注入：会越过尚在 `_chunk_queue`、还没提交 VLM future 的更早动作 chunk |
+| `_vlm_response_queue` | 不直接注入：会越过已经提交但仍在等待 `response_future.result()` 的更早动作 chunk |
 
-因此补丁仍是**一个文件、纯追加**：`SOPVideoProcessor.run_pipeline.on_message` 末尾追加健康 hook；`DecodedFrameRetriever.consume()` 在 PTS 回退时先清空内置 vLLM 尚未消费的旧时间轴帧，再入队当前恢复帧；`uniform_clip_post_process()` 同步重置固定分块起点和 `first_timestamp`；`clip_post_process()` 在 DDM PTS 回退时清空重连前边界状态、重置分块起点和 `first_timestamp`。后两条 chunk 路径由算法选择驱动，不依赖内置或外部 VLM 后端。
+因此补丁仍只触及**一个 vendor 文件且机械上只追加**：`on_message` 把健康事实写入 `_chunk_queue`；VLM request/response loop 各追加一个只匹配 `stream_health` 的旁路分支，正常动作路径不变；`DecodedFrameRetriever.consume()` 在 PTS 回退时清理 internal-vLLM 旧帧；uniform/DDM 后处理同步重置各自时间轴状态。
 
 **E4 实施时的修正**（本 ADR 早期版本记为"两个触点、两个文件"）：早期版本指向 `ds_3d_action_pipeline.py:779` 的 `on_message`，并要求在 `ds_sop_process.py:556` 调用 `create_inference_pipeline` 时多传一个 sink。核实代码后两条都不成立：
 
 - `ds_3d_action_pipeline.py:779` 属于 `ds_boundary_infernce`，只被同文件 `if __name__ == "__main__":`（`:815`）下的命令行入口调用（`:852`），**不在服务路径上**。服务路径的回调是 `ds_sop_process.py:823`。
-- 该回调是 `SOPVideoProcessor` 的方法内闭包，`self._vlm_response_queue` 与 `self.first_timestamp` 在此**已在作用域内**，无需经 `create_inference_pipeline` 传入。第二个触点因此消失。
+- 该回调是 `SOPVideoProcessor` 的方法内闭包，`self._chunk_queue` 与 `self.first_timestamp` 在此**已在作用域内**，无需经 `create_inference_pipeline` 传入。第二个跨文件触点因此消失。
 
-E4 修正后补丁先收敛为一个回调触点；S010 又确认时间轴归零必须与实际 chunk 状态一起处理，因此在同一文件的 uniform/DDM 两条 chunk 后处理路径分别追加 PTS 回退观测。仍不替换 NVIDIA 的判断或推理控制流。
+E4 修正后补丁先收敛为一个回调触点；S010 又确认两件事：时间轴归零必须与实际 chunk 状态一起处理；健康事实不能越过更早的动作 future。因此同一登记补丁增加 uniform/DDM PTS 回退处理和两个仅针对合成健康键的 VLM 旁路。正常动作的推理/响应控制流不变。
 
 合成事件用**显式键**（`stream_health`）标记，不用哨兵数值。事件与正常 chunk 都携带 `first_timestamp` 作为 `source_anchor`。基座原实现只在初始启动设置该值；登记补丁在 active chunk 后处理看到 PTS 实际回退时重新锚定，并同步丢弃旧时间轴的分块状态；内置 vLLM 的 decoded-frame queue 也在当前恢复帧入队前清掉旧时间轴帧。普通恢复但 PTS 连续不会虚构断裂，真实归零后的下一正常 chunk 才携带新锚点。该值是墙钟身份，只可比对，不可用于计时。
 
-**该通道的边界**：它只在进程与 pipeline 存活时能投递，故能带序送出 source error、delivering 与 EOS；恢复后的时间轴变化由随后正常 chunk 携带的新 `source_anchor` 比较得出，不设独立事件。进程死亡送不出任何东西，那种情形由 supervisor 的 chunk 静默计时器兜底。选它买到的是**事件序**，不是全覆盖。
+**该通道的边界**：它只在进程与 pipeline 存活时能投递。健康事实和动作从 `_chunk_queue` 起共享 FIFO；VLM 启用时健康事实依次旁路 request/response 计算，VLM 禁用时由该队列直接输出，因此不会越过更早动作。恢复后的时间轴变化仍由随后正常 chunk 的新 `source_anchor` 表达。进程死亡由 supervisor 的 chunk 静默计时器兜底。
 
 **只登记可观测的事实**（E4 实测）：服务路径回调能观测到 `PipelineState.INVALID`（source error）、`PLAYING`（正在投递）与 EOS 三类。"正在重连"**没有**对应的总线消息——基座只给源设置 `init-rtsp-reconnect-interval`，DeepStream 在元件内部重试且不广播，故不设该事实，否则是编造而非观测。重连成功由 `SOURCE_ERROR` 之后紧跟 `DELIVERING` 表达，信息等价。
 
-**EOS 那一类是尽力而为**（E4 实测，供 E5 依赖时参考）：基座的 VLM 线程结束时会往同一队列投 `None` 哨兵（`ds_sop_process.py:1175`），派发循环见哨兵即停止转发，故落在其后的流结束事件会被丢弃。这不构成损失：SSE 响应本身会结束，supervisor 直接看得到，且流终止本来就由 chunk 静默计时器负责。判定真正依赖的 `SOURCE_ERROR` 与 `DELIVERING` 产生于流中途，远早于任何哨兵，不参与这个竞争。
+**EOS 那一类是尽力而为**：EOS 回调与 chunk 后处理结束并发，若 `_chunk_queue` 的 `None` 哨兵先于合成 EOS 入队，后者不会进入 SSE。这不构成损失：SSE 响应本身会结束，supervisor 直接看得到，且流终止本来就由 chunk 静默计时器负责。判定依赖的 `SOURCE_ERROR` 与 `DELIVERING` 发生于流中途，不参与这个结束竞争。
 
 ## Considered Options
 
@@ -69,7 +70,7 @@ E4 修正后补丁先收敛为一个回调触点；S010 又确认时间轴归零
 
 ## 补丁纪律
 
-- 推理侧就地改造维护为可重放 diff；健康分类逻辑放 `apps/edge-runtime/`，`vendor/` 只保留模块级 hook import、回调末尾调用、internal-vLLM 旧帧队列清理，以及 uniform/DDM 后处理中的两个 PTS 回退状态重置块。这些登记追加块都不删除基座代码，diff 存于 [`docs/base/patches/0001-stream-health-events.patch`](../base/patches/0001-stream-health-events.patch)，与工作树同步由契约测试保证。
+- 推理侧就地改造维护为可重放 diff；健康分类逻辑放 `apps/edge-runtime/`，`vendor/` 只保留模块级 hook import、`_chunk_queue` 注入、两个合成健康键旁路、internal-vLLM 旧帧清理和 uniform/DDM PTS 状态重置。这些登记块都不删除基座原行，diff 存于 [`docs/base/patches/0001-stream-health-events.patch`](../base/patches/0001-stream-health-events.patch)，与工作树同步由契约测试保证。
 - 训练侧只登记一个兼容性补丁：为 `upload_video` 增加可选的显式 `target_data_id`（省略时保持 `current_data_id` 旧调用兼容），为复用的时间轴输入补上控件标签和可访问名称，增加已签发上下文的独立 React 入口并让标注服务不发布宿主机端口。它不改切片算法、模型路径或存储语义，diff 存于 [`docs/base/patches/0002-annotation-upload-target-and-accessibility.patch`](../base/patches/0002-annotation-upload-target-and-accessibility.patch)，由基座契约测试验证可重放、目标目录隔离、控件可访问性和独立入口。
 - **hook 在模块层 import**，不在调用点内 try/except 兜底：`edge_runtime` 不可导入的容器必须在启动时显式失败，而不是照常出流、静默不报健康。基座镜像里 `edge_runtime` 的可导入性属部署期事项（PYTHONPATH 或装包），与 E5 的容器编排一并落地。
 - `git subtree pull` 后必跑 `tests/contract/base/`：一类断言验证"我们依赖但不改的基座行为未变"，一类验证"已登记的可重放补丁仍可干净应用且各自约束成立"，一类验证"我们自己实现的序列比对仍与基座在**合规序列**上结论一致"（不含返工与漏步时机——那正是我们故意与基座不同的地方；可跳过步骤不在对比范围内，因为首版不生成该字段）。

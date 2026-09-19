@@ -46,7 +46,7 @@ from .vlm_inference_client import VLMInferenceClient
 
 # --- 记录补丁，仅追加输出（ADR-0007） ---
 # 回调已看到流健康事实；此处只把它作为合成 chunk 送入指定队列，逻辑仍在 edge-runtime。
-from edge_runtime.stream_health import note_pipeline_message
+from edge_runtime.stream_health import STREAM_HEALTH_KEY, note_pipeline_message
 
 logger = ds_logger.get_logger(__name__)
 
@@ -863,7 +863,7 @@ class SOPVideoProcessor:
             # 保持在回调末尾；基座原有分支先完成，不改变基座控制流。
             note_pipeline_message(
                 message,
-                sink=self._vlm_response_queue,
+                sink=self._chunk_queue,
                 stream_id=str(self.id),
                 source_anchor=self.first_timestamp,
             )
@@ -1051,6 +1051,10 @@ class SOPVideoProcessor:
             if chunk is None:
                 break
             chunk_info = chunk
+            if STREAM_HEALTH_KEY in chunk_info:
+                # 健康事实与动作共用 chunk FIFO；仅旁路 VLM 推理，保持相对顺序。
+                self._vlm_response_future_queue.put(chunk_info)
+                continue
             start_time, end_time = chunk_info["start_time"], chunk_info["end_time"]
             logger.info(f"VLM start inference on chunk {start_time:.3f} - {end_time:.3f} video")
             chunk_info["pipeline_vlm_starting_timestamp"] = self._tm_e2e.now()
@@ -1171,6 +1175,10 @@ class SOPVideoProcessor:
             chunk_info = self._vlm_response_future_queue.get(block=True)
             if chunk_info is None:
                 break
+            if STREAM_HEALTH_KEY in chunk_info:
+                # future FIFO 已确定动作/健康顺序；健康事实不读取动作字段，直接转发。
+                self._vlm_response_queue.put(chunk_info)
+                continue
             response_future = chunk_info.pop("response_future", None)
             response = {}
             try:

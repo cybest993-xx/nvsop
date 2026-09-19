@@ -73,7 +73,7 @@ MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU �
 | 姿态 | 范围 |
 |---|---|
 | **原样复用** | DeepStream 取流、DDM 分段、vLLM 分类、`/v1/*` 接口、文件 API、Prometheus 指标；训练侧 5 个微服务；**React 标注 UI 连界面一起复用** |
-| **就地改造（一处，纯加输出）** | pipeline `on_message`：把 source error / 正在重连 / 重连成功 / 最后一帧时刻 / 时间轴归零作为**合成健康事件**送进 `_vlm_response_queue` |
+| **就地改造（一处，纯加输出）** | pipeline `on_message`：把真实可观测的 source error / delivering / EOS 作为**合成健康事件**送进 `_vlm_response_queue`，并随事件携带 `source_anchor` 供 supervisor 判断时间轴归零 |
 | **自己实现（一处）** | 序列比对 + 声明式边界 + 有效性门 + 三值判定，全部在 `apps/edge-runtime/`，`vendor/` 不留补丁 |
 | **配置关闭（不打补丁）** | 基座 checker（`DISABLE_SOP_CHECKER=true`）；基座处置（`ENABLE_ALERT_SOUND`/`ENABLE_MESSAGING` 保持默认 false） |
 | **全新建设** | 账户权限、工位/相机/连接器配置、Excel→模板版本发布、聚合看板、违规复核、证据生命周期、上报与对账 |
@@ -92,7 +92,7 @@ MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU �
 
 **E4 实施时的两处修正**（[ADR-0007](../../adr/0007-base-is-the-trunk-not-a-dependency.md) 记录了完整理由）：早期记为"两个触点、两个文件"，指向 `ds_3d_action_pipeline.py:779` 并要求经 `create_inference_pipeline` 传入 sink。前者是命令行入口 `ds_boundary_infernce` 的回调，不在服务路径上；后者因回调本就在 `SOPVideoProcessor` 方法内而不必要。补丁面因此比早期记录更小。其次，"正在重连"不作为独立事实登记——基座在元件内部重试且不广播总线消息，回调能观测到的只有 `INVALID`、`PLAYING`、EOS 三类；重连成功由 `SOURCE_ERROR` 后紧跟 `DELIVERING` 表达。时间轴归零也不是独立事实，而是事件所带 `source_anchor`（基座的 `first_timestamp`）的变化，由 supervisor 比对锚点得出。
 
-**该通道只在进程与 pipeline 存活时能投递。** 它带序送出可恢复状态（source error、正在重连、重连成功、时间轴归零），"该事件发生在 chunk N 与 N+1 之间"可直接用于闭合时的有效性判断。进程死亡送不出任何东西，那种情形由 supervisor 的 **chunk 静默计时器**兜底——后者也是空闲超时（§5.1）所需的同一个计时器。
+**该通道只在进程与 pipeline 存活时能投递。** 它按 SSE 顺序送出回调真实可观测的 source error、delivering 与 EOS；时间轴归零由同序事件携带的 `source_anchor` 变化表达。"该事件发生在 chunk N 与 N+1 之间"可直接用于闭合时的有效性判断。进程死亡送不出任何东西，那种情形由 supervisor 的 **chunk 静默计时器**兜底——后者也是空闲超时（§5.1）所需的同一个计时器。
 
 **代码放置**：`apps/edge-runtime/` 是独立 Python 包；`vendor/` 内只留一处最小 hook。我们的代码因此可被 lint、type check 与单元测试覆盖。补丁维护为可重放 diff，`subtree pull` 后由契约测试验证仍可干净应用。
 

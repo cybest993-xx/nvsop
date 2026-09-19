@@ -23,6 +23,7 @@ from unittest.mock import patch
 
 from nvsop_contracts import HostIdentityKeyPair, generate_host_identity_key_pair
 
+from edge_runtime.judgment import ReasonCode, Verdict
 from edge_runtime.judgment.evidence import EvidenceMargins
 from edge_runtime.judgment.model import HostInstant, Ordering, RuntimeParameters, Template
 from edge_runtime.local_state.store import open_local_state
@@ -39,10 +40,10 @@ from edge_runtime.station_runtime import (
     SseStationInputSource,
     StationRuntimeConfiguration,
 )
-from edge_runtime.stream_health import StreamFact
+from edge_runtime.stream_health import StreamFact, StreamHealthEvent
 from edge_runtime.supervisor.inputs import ActionRecognized, StreamHealthObserved, SupervisorInput
 from edge_runtime.supervisor.startup import resume_station
-from edge_runtime.supervisor.station import StationSupervisor
+from edge_runtime.supervisor.station import Reaction, StationSupervisor
 
 
 def _fixture_host_identity(seed: int) -> HostIdentityKeyPair:
@@ -671,6 +672,83 @@ class ProductionEntrypointIntegrationTest(unittest.TestCase):
                     process.terminate()
                 stdout, stderr = process.communicate(timeout=10)
                 self.assertEqual(0, process.returncode, f"stdout={stdout} stderr={stderr}")
+
+
+class NormalizedContractReplayTest(unittest.TestCase):
+    """同一归一化契约输入在纯 CPU 环境重放时必须得到同一完整反应。"""
+
+    @staticmethod
+    def _inputs() -> tuple[SupervisorInput, ...]:
+        first_anchor = 1_700_000_000.0
+        second_anchor = first_anchor + 30.0
+        return (
+            ActionRecognized(
+                signal="(1) start",
+                at=HostInstant(100.0),
+                source_time=1.0,
+                source_anchor=first_anchor,
+            ),
+            StreamHealthObserved(
+                event=StreamHealthEvent(
+                    fact=StreamFact.SOURCE_ERROR,
+                    at_monotonic=101.0,
+                    source_anchor=first_anchor,
+                )
+            ),
+            StreamHealthObserved(
+                event=StreamHealthEvent(
+                    fact=StreamFact.DELIVERING,
+                    at_monotonic=102.0,
+                    source_anchor=second_anchor,
+                )
+            ),
+            ActionRecognized(
+                signal="(2) finish",
+                at=HostInstant(103.0),
+                source_time=2.0,
+                source_anchor=second_anchor,
+            ),
+        )
+
+    @staticmethod
+    def _replay(inputs: tuple[SupervisorInput, ...], path: Path) -> tuple[Reaction, ...]:
+        state = open_local_state(str(path))
+        try:
+            supervisor = resume_station(
+                state.station("station-replay"),
+                template=Template(
+                    steps=("(1) start", "(2) finish"),
+                    ordering=Ordering.ORDERED,
+                    start_signal="(1) start",
+                ),
+                parameters=RuntimeParameters(idle_timeout=10.0, step_deadline=10.0),
+                margins=EvidenceMargins(leading=0.0, trailing=0.0),
+            )
+            return tuple(supervisor.receive(arriving) for arriving in inputs)
+        finally:
+            state.close()
+
+    def test_same_input_reproduces_verdict_reasons_evidence_and_next_wake(self) -> None:
+        inputs = self._inputs()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = self._replay(inputs, root / "first.sqlite")
+            second = self._replay(inputs, root / "second.sqlite")
+
+        self.assertEqual(first, second)
+        self.assertEqual(HostInstant(110.0), first[0].wake_at)
+        final = first[-1]
+        self.assertIsNone(final.wake_at)
+        self.assertEqual(1, len(final.decisions))
+        decision = final.decisions[0]
+        self.assertIs(Verdict.INDETERMINATE, decision.verdict)
+        self.assertEqual(
+            {ReasonCode.STREAM_LOST, ReasonCode.TIMESTAMP_DISCONTINUITY},
+            set(decision.reasons),
+        )
+        self.assertEqual(HostInstant(103.0), decision.evidence.anchor)
+        self.assertEqual(HostInstant(103.0), decision.evidence.required_from)
+        self.assertEqual(HostInstant(103.0), decision.evidence.required_to)
 
 
 class AutonomousStationIntegrationTest(unittest.TestCase):

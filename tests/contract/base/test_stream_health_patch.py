@@ -105,11 +105,15 @@ class RecordedPatchIsAppendOnlyTest(unittest.TestCase):
 
     def test_internal_vllm_queue_is_cleared_before_the_reset_frame_is_enqueued(self) -> None:
         source = function_source(PROCESS, "consume")
-        self.assertIn("timeline_reset = self._last_timestamp > 0 and timestamp < self._last_timestamp", source)
+        self.assertIn(
+            "timeline_reset = self._last_timestamp > 0 and timestamp < self._last_timestamp", source
+        )
         self.assertIn("self.decoded_frame_queue.get(block=False)", source)
         self.assertLess(
             source.index("if timeline_reset:"),
-            source.index("self.decoded_frame_queue.put((timestamp, wall_clock_entry, torch_tensor), block=block)"),
+            source.index(
+                "self.decoded_frame_queue.put((timestamp, wall_clock_entry, torch_tensor), block=block)"
+            ),
         )
 
     def test_uniform_pts_regression_reanchors_and_resets_chunk_state(self) -> None:
@@ -271,7 +275,9 @@ class OrderedHealthPathTest(unittest.TestCase):
         branch = "if STREAM_HEALTH_KEY in chunk_info:"
         self.assertIn(branch, response)
         self.assertIn("self._vlm_response_queue.put(chunk_info)", response)
-        self.assertLess(response.index(branch), response.index('chunk_info.pop("response_future", None)'))
+        self.assertLess(
+            response.index(branch), response.index('chunk_info.pop("response_future", None)')
+        )
 
     def test_supported_vlm_modes_reach_the_same_sse_output_chain(self) -> None:
         selector = function_source(PROCESS, "inference_last_queue")

@@ -25,6 +25,7 @@
 | [判定与边界](design/mechanisms/judgment-and-boundary.md) | 声明式边界、三值判定、原因码、延迟和基座契约 |
 | [推理机自治](design/mechanisms/edge-autonomy.md) | 本地运行、连接器、凭据、基座 hook、模型与物理执行权 |
 | [控制面](design/mechanisms/control-plane.md) | 配置、模板、Web、中心契约、异步任务和模块职责 |
+| [机器契约演进](design/mechanisms/machine-contract-evolution.md) | Center↔Edge 配置契约字段所有权、兼容演进、能力门禁与历史持久化 |
 | [证据与保留](design/mechanisms/evidence-and-retention.md) | 预览录像、证据片段、复核、保留与压缩 |
 | [ADR 索引](adr/README.md) | 单项架构决定、取舍与重新打开决定的依据 |
 

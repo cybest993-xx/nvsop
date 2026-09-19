@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import unittest
@@ -130,42 +131,56 @@ class ConfigurationContractTests(unittest.TestCase):
         assert isinstance(stations[0], dict)
         self.assertEqual(stations[0]["model_ids"], ["reported-model", "reported-model-2"])
 
-        legacy_with_ids = configuration_to_wire(replace(bundle, contract_version=1))
-        self.assertEqual(
-            configuration_from_wire(legacy_with_ids), replace(bundle, contract_version=1)
-        )
-
-        legacy_without_ids = configuration_to_wire(
-            replace(
-                bundle,
-                contract_version=1,
-                stations=(replace(bundle.stations[0], model_ids=()),),
-            )
-        )
-        old_stations = legacy_without_ids["stations"]
-        assert isinstance(old_stations, list)
-        assert isinstance(old_stations[0], dict)
-        self.assertNotIn("model_ids", old_stations[0])
-        self.assertEqual(
-            configuration_from_wire(legacy_without_ids),
-            replace(
-                bundle,
-                contract_version=1,
-                stations=(replace(bundle.stations[0], model_ids=()),),
-            ),
-        )
-
-        legacy_explicit_empty = dict(legacy_without_ids)
-        explicit_stations = [dict(station) for station in old_stations]
-        explicit_stations[0]["model_ids"] = []
-        legacy_explicit_empty["stations"] = explicit_stations
-        legacy_explicit_empty.pop("sha256")
-        legacy_explicit_empty["sha256"] = hashlib.sha256(
-            canonical_json(legacy_explicit_empty).encode("utf-8")
+        metadata_wire = copy.deepcopy(wire)
+        metadata_wire["producer"] = "control-api@2026.09"
+        metadata_wire.pop("sha256")
+        metadata_wire["sha256"] = hashlib.sha256(
+            canonical_json(metadata_wire).encode("utf-8")
         ).hexdigest()
-        decoded_explicit_empty = configuration_from_wire(legacy_explicit_empty)
-        self.assertEqual(configuration_to_wire(decoded_explicit_empty), legacy_explicit_empty)
-        self.assertEqual(decoded_explicit_empty.sha256, legacy_explicit_empty["sha256"])
+        with_metadata = configuration_from_wire(metadata_wire)
+        self.assertEqual(with_metadata.producer, "control-api@2026.09")
+        self.assertEqual(with_metadata.effective_sha256, bundle.effective_sha256)
+        self.assertEqual(with_metadata.stable_content_wire(), bundle.stable_content_wire())
+
+        capability_wire = copy.deepcopy(wire)
+        capability_wire["required_capabilities"] = ["future.behavior"]
+        capability_wire.pop("sha256")
+        capability_wire["sha256"] = hashlib.sha256(
+            canonical_json(capability_wire).encode("utf-8")
+        ).hexdigest()
+        with_capability = configuration_from_wire(capability_wire)
+        self.assertEqual(with_capability.required_capabilities, ("future.behavior",))
+        self.assertNotEqual(with_capability.effective_sha256, bundle.effective_sha256)
+
+        legacy_wire = copy.deepcopy(wire)
+        legacy_wire["contract_version"] = 1
+        legacy_wire.pop("sha256")
+        legacy_wire["sha256"] = hashlib.sha256(
+            canonical_json(legacy_wire).encode("utf-8")
+        ).hexdigest()
+        with self.assertRaisesRegex(ValueError, "contract version"):
+            configuration_from_wire(legacy_wire)
+
+        missing_core_field = copy.deepcopy(wire)
+        missing_stations = missing_core_field["stations"]
+        assert isinstance(missing_stations, list)
+        assert isinstance(missing_stations[0], dict)
+        missing_stations[0].pop("model_ids")
+        missing_core_field.pop("sha256")
+        missing_core_field["sha256"] = hashlib.sha256(
+            canonical_json(missing_core_field).encode("utf-8")
+        ).hexdigest()
+        with self.assertRaisesRegex(ValueError, "unsupported or missing fields"):
+            configuration_from_wire(missing_core_field)
+
+        unknown_field = copy.deepcopy(wire)
+        unknown_field["extensions"] = {}
+        unknown_field.pop("sha256")
+        unknown_field["sha256"] = hashlib.sha256(
+            canonical_json(unknown_field).encode("utf-8")
+        ).hexdigest()
+        with self.assertRaisesRegex(ValueError, "unsupported or missing fields"):
+            configuration_from_wire(unknown_field)
 
         tampered = dict(wire)
         tampered["host_id"] = "host-b"

@@ -53,9 +53,11 @@ make contracts
 - 不允许“看起来还能跑”的静默降级；
 - 中心离线期间继续使用最后已确认的可用配置，恢复后重新拉取并按确认语义切换。
 
-路线 #44 的配置同步已经落地：Edge 使用签名主机身份从 `/api/v1/inference-hosts/{host_id}/configuration` 拉取 host-scoped bundle，共享契约验证 contract version/revision/摘要，Edge 再校验 host scope；完整运行组合验证通过后才在本地 SQLite 原子确认。拉取或验证失败保留最后确认 bundle；首次尚无确认值时才回退到本地 bootstrap。运行中的 maintenance loop 会继续拉取，新 effective digest 经确认后触发安全重组，而不会把中心可用性放进实时判定路径。
+配置同步采用[单一当前机器契约](../design/mechanisms/machine-contract-evolution.md)：Edge 使用签名主机身份从 `/api/v1/inference-hosts/{host_id}/configuration` 拉取 host-scoped bundle，共享解析器只接受当前严格格式；`config_revision` 负责单调 assignment 次序，`effective_sha256` 负责运行语义身份，`generated_at`/`producer` 只是信封元数据。兼容的非行为元数据可按已知可选字段扩展；行为字段必须绑定 `required_capabilities`，Edge 对未知能力显式拒绝。常规演进不新增 v3/v4 并行分支。
 
-这套配置 contract version 只保护**配置束协议**，不能替代 ADR-0003 要求的完整 center-edge runtime/version handshake。历史判定上报已单独落地一个必要的能力握手：严格 v1 继续保持原 wire shape；需要历史配置证明和多 backend provenance 的判定使用严格 v2。新 Edge 在发送 v2 前，先把该 outbox 在事件时冻结的完整 confirmed configuration 通过主机签名端点 `/api/v1/inference-hosts/{host_id}/confirmed-configuration` 提交给 Center；只有 Center 验证这是自己实际签发过的 `(host, revision, effective digest)` 并明确返回支持 decision report contract v2 后，Edge 才发送 v2 判定。旧 Center 不存在该端点时，新 Edge 保留 outbox 并报告不兼容，不删除 historical proof、也不降级成 v1。
+候选拉取和纯运行配置解析不会前移 durable confirmed，也不会读取或写入正在运行工位的 supervisor 状态。通过纯解析后先停止并 join 旧循环，再基于最新 SQLite 状态恢复 supervisor、构造候选 composition、切换实际 runtime，最后才原子确认同一候选；停机后的 composition 失败会重新构造旧活动配置。本地确认失败不会让新循环继续运行。历史 SQLite 中已确认的配置 v1/v2 只由 Edge local-state owner 迁移读取，共享 HTTP parser 不再接受旧 generation；成功确认会写回当前格式。
+
+配置束的 `contract_version` 只保护**配置束 wire shape**，不能替代 ADR-0003 要求的跨全部 Center↔Edge 机器接口兼容协商。历史判定上报已单独落地一个必要的能力握手：严格 v1 继续保持原 wire shape；需要历史配置证明和多 backend provenance 的判定使用严格 v2。新 Edge 在发送 v2 前，先把该 outbox 在事件时冻结的完整 confirmed configuration 通过主机签名端点 `/api/v1/inference-hosts/{host_id}/confirmed-configuration` 提交给 Center；只有 Center 验证这是自己实际签发过的 `(host, revision, effective digest)` 并明确返回支持 decision report contract v2 后，Edge 才发送 v2 判定。旧 Center 不存在该端点时，新 Edge 保留 outbox 并报告不兼容，不删除 historical proof、也不降级成 v1。
 
 0034 升级只把 0033 已持久化在 `device_inference_host` 的最后一次 `configuration_revision + configuration_sha256` 回填为不可变 issued-configuration 事实，**不从升级时的当前拓扑猜旧 assignment**。若升级后的 Edge 仍基于升级前已确认的 bundle 产生判定，它随 outbox 冻结该完整 bundle；之后即使工位改绑或停用，Center 仍可先按 issued digest 验真旧 bundle，再从该 bundle 固化历史 assignment 并精确校验上报。无法证明为 Center 曾签发内容的 bundle 一律不能建立历史归属。
 

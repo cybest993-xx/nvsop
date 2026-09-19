@@ -209,6 +209,7 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
     errors.extend(check_edge_dependency_directions(root, files))
     errors.extend(check_shared_contract_isolation(root, files))
     errors.extend(check_center_modules_are_contracted(root, files))
+    errors.extend(center_boundary_violations(root, files))
     errors.extend(check_vendor_lfs(root, files))
 
     return errors
@@ -484,7 +485,7 @@ def check_center_modules_are_contracted(root: Path, files: list[Path]) -> list[s
 
 
 def center_boundary_violations(root: Path, files: list[Path]) -> list[str]:
-    """评估通用 Center owner 边界，不在本任务中激活仓库阻塞门禁。"""
+    """评估通用 Center owner 边界；`check_repository` 将同一结果作为阻塞门禁。"""
     registered = load_center_modules(root / "pyproject.toml")
     violations: list[tuple[str, int, str]] = []
 

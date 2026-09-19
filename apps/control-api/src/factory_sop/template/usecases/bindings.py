@@ -18,13 +18,11 @@ from factory_sop.device.api import (
     BindingValidationIssue,
     DeviceHostGateway,
     DeviceTemplateBindingGateway,
-    TemplateBindingSpecification,
-)
-from factory_sop.device.model import (
     InferenceHostIdentity,
     RuntimeParameterMode,
     StationRuntimeConfiguration,
     StationRuntimeParameters,
+    TemplateBindingSpecification,
 )
 from factory_sop.identifiers import new_id
 from factory_sop.observability import get_logger

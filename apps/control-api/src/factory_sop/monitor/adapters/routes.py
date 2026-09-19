@@ -11,8 +11,11 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 from fastapi.responses import StreamingResponse
 
 from factory_sop.auth.api import Authorized, Permission, needs
-from factory_sop.device.adapters import dependencies as device_dependencies
-from factory_sop.device.api import authenticate_host, host_identity_from_headers
+from factory_sop.device.api import (
+    DeviceHistoricalAssignmentGateway,
+    DeviceHostGateway,
+    host_identity_from_headers,
+)
 from factory_sop.monitor.adapters import dependencies
 from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.repository import MonitorRepository
@@ -22,7 +25,6 @@ from factory_sop.monitor.usecases import (
     sse_snapshot_state,
     sse_stream,
 )
-from factory_sop.persistence import RequestSession
 from nvsop_contracts import (
     ReportedDecision,
     ReportedHealth,
@@ -37,8 +39,12 @@ router = APIRouter(prefix="/monitor", tags=["monitor"])
 def report_monitor_decision(
     request: Request,
     body: dict[str, object],
-    session: RequestSession,
     monitor: Annotated[MonitorRepository, Depends(dependencies.monitor)],
+    host_gateway: Annotated[DeviceHostGateway, Depends(dependencies.host_gateway)],
+    assignment_gateway: Annotated[
+        DeviceHistoricalAssignmentGateway,
+        Depends(dependencies.historical_assignment_gateway),
+    ],
     inference_host_id: Annotated[str | None, Header(alias="X-Inference-Host-ID")] = None,
     inference_host_timestamp: Annotated[
         str | None, Header(alias="X-Inference-Host-Timestamp")
@@ -57,7 +63,7 @@ def report_monitor_decision(
         ) from error
     _authenticate_report_host(
         request=request,
-        session=session,
+        host_gateway=host_gateway,
         body=body,
         host_id=host_id,
         inference_host_id=inference_host_id,
@@ -70,8 +76,8 @@ def report_monitor_decision(
             report,
             received_at=datetime.now(UTC),
             monitor=monitor,
-            host_gateway=device_dependencies.host_gateway(session),
-            assignment_gateway=device_dependencies.historical_assignments(session),
+            host_gateway=host_gateway,
+            assignment_gateway=assignment_gateway,
         )
     except MonitorRefusedError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
@@ -82,8 +88,8 @@ def report_monitor_decision(
 def report_monitor_health(
     request: Request,
     body: dict[str, object],
-    session: RequestSession,
     monitor: Annotated[MonitorRepository, Depends(dependencies.monitor)],
+    host_gateway: Annotated[DeviceHostGateway, Depends(dependencies.host_gateway)],
     inference_host_id: Annotated[str | None, Header(alias="X-Inference-Host-ID")] = None,
     inference_host_timestamp: Annotated[
         str | None, Header(alias="X-Inference-Host-Timestamp")
@@ -102,7 +108,7 @@ def report_monitor_health(
         ) from error
     _authenticate_report_host(
         request=request,
-        session=session,
+        host_gateway=host_gateway,
         body=body,
         host_id=host_id,
         inference_host_id=inference_host_id,
@@ -115,7 +121,7 @@ def report_monitor_health(
             report,
             received_at=datetime.now(UTC),
             monitor=monitor,
-            host_gateway=device_dependencies.host_gateway(session),
+            host_gateway=host_gateway,
         )
     except MonitorRefusedError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
@@ -155,7 +161,7 @@ def stream_monitor_events(
 def _authenticate_report_host(
     *,
     request: Request,
-    session: RequestSession,
+    host_gateway: DeviceHostGateway,
     body: Mapping[str, object],
     host_id: UUID,
     inference_host_id: str | None,
@@ -177,11 +183,7 @@ def _authenticate_report_host(
         nonce=inference_host_nonce,
         signature=inference_host_signature,
     )
-    authenticate_host(
-        host=identity,
-        now=datetime.now(UTC),
-        hosts=device_dependencies.hosts(session),
-    )
+    host_gateway.authenticate(host=identity, now=datetime.now(UTC))
 
 
 __all__ = ["router"]

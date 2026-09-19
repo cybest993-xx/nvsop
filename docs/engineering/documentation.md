@@ -41,7 +41,7 @@ A deletion is ready when all of these hold:
 
 When a verified live external consumer cannot be migrated in this change, retain only a routing stub with its current destination, consumer and removal condition. Keep new entrypoints pointed at the real owner. Remove the stub once the consumer is migrated; a speculative future reader is not a reason to retain it.
 
-Temporary audit notes and migration inventories belong in `.tmp/` or the PR. A completed `issue-*-spec.md` is not a second current product specification: migrate durable facts and acceptance ownership, then delete it.
+Disposable audit notes and migration inventories belong under `.nvsop/artifacts/` or in the PR. Only the continuity handoff defined by [workflow.md](workflow.md#persistent-continuity) uses `.tmp/task-handoff.md`. A completed `issue-*-spec.md` is not a second current product specification: migrate durable facts and acceptance ownership, then delete it.
 
 ## Write for the reader
 

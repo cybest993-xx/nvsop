@@ -9,7 +9,7 @@ Read guidance only when its trigger applies, expanding for affected callers or c
 - **Plan or investigate:** deliver findings or the requested plan; start edits only when requested.
 - **Implement code or scripts:** read [coding.md](docs/engineering/coding.md) and the implementation/verification sections of [workflow.md](docs/engineering/workflow.md). Locate the public entry, affected callers and existing tests first.
 - **Change repository shape, ownership or dependencies between modules:** read [architecture.md](docs/engineering/architecture.md).
-- **Change CI, generated contracts, dependencies or vendor code:** read [workflow.md](docs/engineering/workflow.md) and [maintenance.md](docs/engineering/maintenance.md).
+- **Add or change repository-local generated/ignored state; change CI, generated contracts, dependencies or vendor code:** read [maintenance.md](docs/engineering/maintenance.md) and [workflow.md](docs/engineering/workflow.md).
 - **Write, move or delete documentation/instructions:** read [documentation.md](docs/engineering/documentation.md) and the applicable validation/review sections of [workflow.md](docs/engineering/workflow.md).
 - **Work with Issues, labels or task dispatch:** read [issues.md](docs/engineering/issues.md).
 - **Create branches/worktrees, review, publish, merge or clean up:** read the relevant step of [workflow.md](docs/engineering/workflow.md).

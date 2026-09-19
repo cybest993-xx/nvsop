@@ -57,11 +57,15 @@ class RecordedPatchStaysWithinRegisteredSeamsTest(unittest.TestCase):
 
     def test_replaced_base_lines_are_limited_to_registered_owner_operations(self) -> None:
         allowed = {
-            "self.decoded_frame_queue.put((timestamp, wall_clock_entry, torch_tensor), block=block)",
+            "self.decoded_frame_queue.put("
+            "(timestamp, wall_clock_entry, torch_tensor), block=block)",
             "dropped_timestamp, _, _ = dropped_frame",
-            "self.decoded_frame_queue.put((timestamp, wall_clock_entry, torch_tensor), block=False)",
-            "self._chunk_queue.put(self._make_chunk_info(chunk_idx, clip_start, end, 1.0, tm.elapsed_time))",
-            "self._chunk_queue.put(self._make_chunk_info(chunk_idx, clip_start, last_ts, 1.0, tm.elapsed_time))",
+            "self.decoded_frame_queue.put("
+            "(timestamp, wall_clock_entry, torch_tensor), block=False)",
+            "self._chunk_queue.put("
+            "self._make_chunk_info(chunk_idx, clip_start, end, 1.0, tm.elapsed_time))",
+            "self._chunk_queue.put("
+            "self._make_chunk_info(chunk_idx, clip_start, last_ts, 1.0, tm.elapsed_time))",
             "self._chunk_queue.put(chunk_info)",
             "frame = decoded_frame_queue.get(block=True)",
             "timestamp, wall_clock, tensor = frame",
@@ -110,7 +114,8 @@ class RecordedPatchStaysWithinRegisteredSeamsTest(unittest.TestCase):
         self.assertLess(
             source.index(marker),
             source.index(
-                "self.decoded_frame_queue.put((frame_epoch, timestamp, wall_clock_entry, torch_tensor), block=block)"
+                "self.decoded_frame_queue.put("
+                "(frame_epoch, timestamp, wall_clock_entry, torch_tensor), block=block)"
             ),
         )
 

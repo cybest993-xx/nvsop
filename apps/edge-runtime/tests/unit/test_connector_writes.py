@@ -307,9 +307,9 @@ class DurableLocalDisposalLedgerTest(unittest.TestCase):
         import sqlite3
         from dataclasses import replace
 
-        from edge_runtime.connectors.writes import SQLiteWriteLedger
         from edge_runtime.local_state.disposal import LocalDisposalLedger
         from edge_runtime.local_state.schema import migrate
+        from edge_runtime.runtime import SQLiteWriteLedger
 
         connection = sqlite3.connect(":memory:", isolation_level=None)
         connection.row_factory = sqlite3.Row
@@ -347,9 +347,9 @@ class DurableLocalDisposalLedgerTest(unittest.TestCase):
         import sqlite3
         from dataclasses import replace
 
-        from edge_runtime.connectors.writes import SQLiteWriteLedger
         from edge_runtime.local_state.disposal import LocalDisposalLedger
         from edge_runtime.local_state.schema import migrate
+        from edge_runtime.runtime import SQLiteWriteLedger
 
         connection = sqlite3.connect(":memory:", isolation_level=None)
         connection.row_factory = sqlite3.Row

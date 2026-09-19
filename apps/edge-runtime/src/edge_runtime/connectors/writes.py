@@ -20,19 +20,11 @@ from edge_runtime.connectors.port import (
     OutputPoint,
     PointState,
     Refused,
-    TimedOut,
     WriteOutcome,
     WriteRefusal,
     Written,
 )
 from edge_runtime.judgment.model import HostInstant
-from edge_runtime.local_state.disposal import (
-    DISPOSAL_RESULT_UNKNOWN,
-    DISPOSAL_RESULT_WRITTEN,
-    DisposalIntent,
-    LocalDisposalLedger,
-    StoredDisposalResult,
-)
 
 UNVERIFIED_DETAIL = "连接器能力声明未验证。不驱动物理执行器"
 TOO_SLOW_DETAIL = "连接器最大投递延迟超出安全输出预算。不驱动物理执行器"
@@ -91,12 +83,16 @@ class WriteAttempted:
 
 
 class WriteLedger(Protocol):
-    """记录幂等键已经产生的结果,防止同一动作执行两次。
+    """显式描述一次写入从意图、占用到结果落账的完整契约。
 
-    这是一个接缝;生产实现是 local_state 的 SQLite 账本,必须跨进程重启存活。
+    生产实现由组合根绑定到 local_state 的 SQLite 账本,必须跨进程重启存活。
     """
 
+    def prepare(self, request: WriteRequest, /) -> None: ...
+
     def outcome_for(self, key: str, /) -> WriteOutcome | None: ...
+
+    def claim(self, request: WriteRequest, /) -> WriteOutcome | None: ...
 
     def record(self, key: str, outcome: WriteOutcome, /) -> None: ...
 
@@ -110,8 +106,14 @@ class InMemoryWriteLedger:
     def __init__(self) -> None:
         self._outcomes: dict[str, WriteOutcome] = {}
 
+    def prepare(self, request: WriteRequest, /) -> None:
+        return None
+
     def outcome_for(self, key: str, /) -> WriteOutcome | None:
         return self._outcomes.get(key)
+
+    def claim(self, request: WriteRequest, /) -> WriteOutcome | None:
+        return None
 
     def record(self, key: str, outcome: WriteOutcome, /) -> None:
         self._outcomes[key] = outcome
@@ -139,9 +141,7 @@ class OutputDispatcher:
 
         结果采用结构化值,因为调用方需要持久化它;异常越过事务边界会丢失实际尝试记录。
         """
-        prepare = getattr(self._ledger, "prepare", None)
-        if prepare is not None:
-            prepare(request)
+        self._ledger.prepare(request)
         held = self._ledger.outcome_for(request.key)
         if held is not None and not _replayable(held):
             return self._note(request, held, replayed=True)
@@ -168,11 +168,9 @@ class OutputDispatcher:
             # 没有请求发往设备,因此不占用幂等键,修正能力后仍可重试。
             return self._note(request, refusal, replayed=False)
 
-        claim = getattr(self._ledger, "claim", None)
-        if claim is not None:
-            held = claim(request)
-            if held is not None:
-                return self._note(request, held, replayed=True)
+        held = self._ledger.claim(request)
+        if held is not None:
+            return self._note(request, held, replayed=True)
 
         outcome = self._connector.write(request.point, request.state, timeout=request.timeout)
         self._ledger.record(request.key, outcome)
@@ -197,116 +195,6 @@ class OutputDispatcher:
             )
         )
         return outcome
-
-
-class SQLiteWriteLedger:
-    """对 ``local_state.local_disposal`` 的连接器侧转换。
-
-    这是适配器,不是另一份账本;所有身份和结果行都由 ``LocalDisposalLedger`` 拥有并跨重启保存。
-    """
-
-    def __init__(self, ledger: LocalDisposalLedger) -> None:
-        self._ledger = ledger
-        self._intents: dict[str, DisposalIntent] = {}
-
-    def prepare(self, request: WriteRequest) -> None:
-        intent = DisposalIntent(
-            station_id=request.station_id,
-            idempotency_key=request.key,
-            connector_id=request.connector_id,
-            point_id=request.point.address,
-            actor=request.actor,
-            requested_state=request.state.value,
-        )
-        self._ledger.ensure_intent(intent)
-        self._intents[request.key] = intent
-
-    def claim(self, request: WriteRequest) -> WriteOutcome | None:
-        if request.attempt_at is None or request.lease_seconds is None:
-            raise ValueError("durable writes require attempt_at and lease_seconds")
-        intent = self._intents.get(request.key)
-        if intent is None:
-            self.prepare(request)
-            intent = self._intents[request.key]
-        claim = self._ledger.claim(
-            intent,
-            now=request.attempt_at.seconds,
-            lease_seconds=request.lease_seconds,
-        )
-        if claim.claimed:
-            return None
-        if claim.result is not None:
-            return _outcome_from_storage(claim.result.kind, claim.result.detail, claim.result.at)
-        return Failed(detail=claim.reason or "durable disposal attempt was not claimed")
-
-    def outcome_for(self, key: str, /) -> WriteOutcome | None:
-        intent = self._intents.get(key)
-        if intent is None:
-            return None
-        result = self._ledger.result_for(intent.station_id, key)
-        if result is None:
-            return None
-        return _outcome_from_storage(result.kind, result.detail, result.at)
-
-    def record(self, key: str, outcome: WriteOutcome, /) -> None:
-        intent = self._intents.get(key)
-        if intent is None:
-            raise ValueError("a persistent write must be prepared before recording")
-        self._ledger.record_result(
-            intent,
-            result=StoredDisposalResult(
-                kind=_outcome_kind(outcome),
-                detail=_outcome_detail(outcome),
-                at=_outcome_at(outcome),
-            ),
-        )
-
-
-def _outcome_kind(outcome: WriteOutcome) -> str:
-    if isinstance(outcome, Written):
-        return DISPOSAL_RESULT_WRITTEN
-    if isinstance(outcome, Refused):
-        return f"refused:{outcome.reason.value}"
-    if isinstance(outcome, TimedOut):
-        return "timed_out"
-    if isinstance(outcome, Failed):
-        return "failed"
-    raise AssertionError(f"unsupported write outcome: {outcome!r}")
-
-
-def _outcome_detail(outcome: WriteOutcome) -> str | None:
-    if isinstance(outcome, Refused):
-        return outcome.detail
-    if isinstance(outcome, TimedOut):
-        return str(outcome.after)
-    if isinstance(outcome, Failed):
-        return outcome.detail
-    return None
-
-
-def _outcome_at(outcome: WriteOutcome) -> float:
-    if isinstance(outcome, Written):
-        return outcome.at.seconds
-    if isinstance(outcome, TimedOut):
-        return outcome.after
-    return 0.0
-
-
-def _outcome_from_storage(kind: str, detail: str | None, at: float) -> WriteOutcome:
-    from edge_runtime.judgment.model import HostInstant
-
-    if kind == DISPOSAL_RESULT_WRITTEN:
-        return Written(at=HostInstant(at))
-    if kind == "timed_out":
-        return TimedOut(after=at)
-    if kind == "failed":
-        return Failed(detail=detail or "persistent write failure")
-    if kind == DISPOSAL_RESULT_UNKNOWN:
-        return Failed(detail=PERSISTENT_UNKNOWN_DETAIL)
-    if kind.startswith("refused:"):
-        reason = WriteRefusal(kind.removeprefix("refused:"))
-        return Refused(reason=reason, detail=detail or "")
-    return Failed(detail=detail or f"unknown persistent write result: {kind}")
 
 
 def _replayable(held: WriteOutcome) -> bool:

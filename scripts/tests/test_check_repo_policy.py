@@ -338,6 +338,19 @@ class RepositoryPolicyTest(unittest.TestCase):
             errors,
         )
 
+    def test_rejects_write_ledger_importing_local_state(self) -> None:
+        module = self.write(
+            "apps/edge-runtime/src/edge_runtime/connectors/writes.py",
+            "from edge_runtime.local_state.disposal import LocalDisposalLedger\n",
+        )
+        errors = self.check(str(module))
+        self.assertIn(
+            "apps/edge-runtime/src/edge_runtime/connectors/writes.py:1 imports "
+            "edge_runtime.local_state.disposal; connectors may depend only on judgment and "
+            "supervisor input vocabulary outside their own package",
+            errors,
+        )
+
     def test_rejects_connector_importing_supervisor_implementation(self) -> None:
         module = self.write(
             "apps/edge-runtime/src/edge_runtime/connectors/future.py",

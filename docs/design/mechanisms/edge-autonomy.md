@@ -88,13 +88,13 @@ MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU �
 
 这不违反"不许两套实现"：我们的判定路径上只有一套（我们的），基座那份被 `DISABLE_SOP_CHECKER` 关闭后连线程都不启动（`:652`），`inference_last_queue`（`:592-598`）直接返回 `_vlm_response_queue`。
 
-**合成健康事件的注入点（已实测）**：三个候选 sink 只有 `_vlm_response_queue` 可用。登记补丁仍只触及 **一个 vendor 文件且纯追加**，有三个观测触点：`run_pipeline.on_message` 追加健康事件 hook；`uniform_clip_post_process()` 在消费 PTS 回退时重置 `clip_start` 与锚点；`clip_post_process()` 在 DDM PTS 回退时清空旧边界状态并重置 `_clip_start_sec` 与锚点。后两者按 chunk 算法执行，与 VLM 后端选择无关。
+**合成健康事件的注入点（已实测）**：三个候选 sink 只有 `_vlm_response_queue` 可用。登记补丁仍只触及 **一个 vendor 文件且纯追加**：`run_pipeline.on_message` 追加健康事件 hook；`DecodedFrameRetriever.consume()` 在 PTS 回退时清理 internal-vLLM 尚未消费的旧时间轴帧；`uniform_clip_post_process()` 重置 `clip_start` 与锚点；`clip_post_process()` 清空 DDM 旧边界状态并重置 `_clip_start_sec` 与锚点。两条 chunk 路径与 VLM 后端选择无关。
 
 **E4 / S010 实施修正**（[ADR-0007](../../adr/0007-base-is-the-trunk-not-a-dependency.md)）："正在重连"不作为独立事实登记；重连成功由 `SOURCE_ERROR` 后的 `DELIVERING` 表达。S010 进一步确认仅换锚不够，必须在 active chunk 后处理检测真实 PTS 回退并同步重置旧分块状态；普通恢复但 PTS 连续时锚点与分块状态都保持不变。
 
 **该通道只在进程与 pipeline 存活时能投递。** 它按 SSE 顺序送出 source error、delivering 与 EOS；若恢复同时发生 PTS 归零，`DELIVERING` 可能先带旧锚点，随后恢复输出的正常 chunk 带新 `source_anchor`，supervisor 由此识别断裂。进程死亡则由 **chunk 静默计时器**兜底。
 
-**代码放置**：`apps/edge-runtime/` 持有健康事件与判定逻辑；`vendor/` 只留同一登记补丁的三个观测触点（健康 hook + uniform/DDM PTS 回退状态重置）。补丁维护为可重放 diff，由纯 CPU 契约测试验证。
+**代码放置**：`apps/edge-runtime/` 持有健康事件与判定逻辑；`vendor/` 只留同一登记补丁的健康 hook、internal-vLLM 队列卫生与 uniform/DDM PTS 回退状态重置。补丁维护为可重放 diff，由纯 CPU 契约测试验证。
 
 **依赖约束（硬规则）**：判定核心只依赖 Python 标准库。判定核心运行在 supervisor 进程里，故这条不再由运行环境强制，而是为**可测试性与可移植性**保留：成本近零，且保证判定核心可纯 CPU 测试——基座那四个模块本来就是这样。`vendor/` 内那处 hook 仍受运行环境强制，因为它确实跑在 DeepStream 容器内（§2.10）。
 

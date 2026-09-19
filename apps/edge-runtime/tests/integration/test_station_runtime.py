@@ -707,7 +707,7 @@ class NormalizedContractReplayTest(unittest.TestCase):
             (
                 _action("(1) start", source_time=1.0, source_anchor=first_anchor),
                 health("source_error", at_monotonic=101.0, source_anchor=first_anchor),
-                health("delivering", at_monotonic=102.0, source_anchor=second_anchor),
+                health("delivering", at_monotonic=102.0, source_anchor=first_anchor),
                 _action("(2) finish", source_time=2.0, source_anchor=second_anchor),
                 b"data: [DONE]\n\n",
             )

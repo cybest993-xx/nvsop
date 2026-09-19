@@ -1,8 +1,8 @@
 """Family two (§5.9): the recorded patch, and the base premises it stands on.
 
-The registered inference-base modification (ADR-0007) is five contiguous added runs in one base
-file: one import, one PTS-reset block in each chunk post-processor, and one call at the end
-of the serving pipeline's message callback. Everything here is about that patch staying append-only and
+The registered inference-base modification (ADR-0007) is six contiguous added runs in one base
+file: one import, one internal-vLLM queue-reset block, one PTS-reset block in each chunk
+post-processor, and one call at the end of the serving pipeline's message callback. Everything here is about that patch staying append-only and
 about the base facts that make the chosen sink and source anchor work.
 
 Standard library only, pure CPU: `ds_sop_process.py` imports torch and pyservicemaker, so
@@ -78,9 +78,9 @@ class RecordedPatchIsAppendOnlyTest(unittest.TestCase):
         source = read(PROCESS)
         blocks = added_blocks(self.patch)
         self.assertEqual(
-            5,
+            6,
             len(blocks),
-            "expected five added runs: import, hook, uniform state/init, and DDM reset",
+            "expected six added runs: import, queue hygiene, hook, uniform state/init, and DDM reset",
         )
         for block in blocks:
             self.assertIn(
@@ -104,6 +104,15 @@ class RecordedPatchIsAppendOnlyTest(unittest.TestCase):
         headers = [line for line in self.patch.splitlines() if line.startswith("+++ ")]
         self.assertEqual(1, len(headers), f"expected one patched file, got {headers}")
         self.assertIn("ds_sop_process.py", headers[0])
+
+    def test_internal_vllm_queue_is_cleared_before_the_reset_frame_is_enqueued(self) -> None:
+        source = function_source(PROCESS, "consume")
+        self.assertIn("timeline_reset = self._last_timestamp > 0 and timestamp < self._last_timestamp", source)
+        self.assertIn("self.decoded_frame_queue.get(block=False)", source)
+        self.assertLess(
+            source.index("if timeline_reset:"),
+            source.index("self.decoded_frame_queue.put((timestamp, wall_clock_entry, torch_tensor), block=block)"),
+        )
 
     def test_uniform_pts_regression_reanchors_and_resets_chunk_state(self) -> None:
         source = function_source(PROCESS, "uniform_clip_post_process")

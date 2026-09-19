@@ -174,7 +174,7 @@ keep_alive=False → final_missing=[1,3]
 
 ## 改造范围已裁决
 
-“裁决基座复用、配置、适配与必要补丁清单”已由 [`edge-autonomy.md`](../design/mechanisms/edge-autonomy.md) §5.11 与 [ADR-0007](../adr/0007-base-is-the-trunk-not-a-dependency.md) 结案：推理侧就地改造限于同一个 vendor 文件的登记纯追加补丁——pipeline 回调输出流健康，uniform/DDM chunk 后处理在 PTS 实际回退时重置各自旧分块状态并重新锚定时间轴；序列比对与周期边界在 `apps/edge-runtime/` 自己实现，基座 checker 与处置按既有环境变量关闭，其余原样复用或全新建设。
+“裁决基座复用、配置、适配与必要补丁清单”已由 [`edge-autonomy.md`](../design/mechanisms/edge-autonomy.md) §5.11 与 [ADR-0007](../adr/0007-base-is-the-trunk-not-a-dependency.md) 结案：推理侧就地改造限于同一个 vendor 文件的登记纯追加补丁——pipeline 回调输出流健康，internal-vLLM 在 PTS 回退时先清旧 decoded frame，uniform/DDM chunk 后处理再重置各自旧分块状态并重新锚定时间轴；序列比对与周期边界在 `apps/edge-runtime/` 自己实现，基座 checker 与处置按既有环境变量关闭，其余原样复用或全新建设。
 
 以下门槛用于判断**将来新出现**的改造候选是否越界：
 

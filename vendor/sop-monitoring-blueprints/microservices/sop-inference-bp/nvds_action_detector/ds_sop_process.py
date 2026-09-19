@@ -378,6 +378,16 @@ class SOPVideoProcessor:
                 logger.debug(
                     f"received frame: {self._count}, timestamp: {timestamp}, tensor.shape: {torch_tensor.shape}"
                 )
+                with self._lock:
+                    timeline_reset = self._last_timestamp > 0 and timestamp < self._last_timestamp
+                if timeline_reset:
+                    # 时间轴回退后先清空内置 vLLM 尚未消费的旧时间轴帧，再入队当前恢复帧。
+                    while True:
+                        try:
+                            self.decoded_frame_queue.get(block=False)
+                        except Empty:
+                            break
+
                 try:
                     # video file will be blocked call,
                     # live stream will drop frames if inference speed is getting slower than streaming
@@ -899,7 +909,7 @@ class SOPVideoProcessor:
             last_ts = retriever.last_timestamp()
             is_eos = retriever.is_end_of_stream()
             if previous_ts is not None and last_ts < previous_ts:
-                # Reset the fixed-length segment together with a live-source PTS reset.
+                # 实时源 PTS 回退时同步重置固定长度分块。
                 self.first_timestamp = self._tm_e2e.now()
                 clip_start = last_ts
                 tm.reset()
@@ -948,7 +958,7 @@ class SOPVideoProcessor:
                 # items.append(item)
                 frame_id, pts, score = item
                 if self._clip_cur_sec > 0 and pts < self._clip_cur_sec:
-                    # Drop pre-reconnect boundary state when the live-source PTS resets.
+                    # 实时源 PTS 回退时丢弃重连前的边界状态。
                     self.first_timestamp = self._tm_e2e.now()
                     self._clip_start_sec = pts
                     boundaries.clear()

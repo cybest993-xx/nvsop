@@ -67,6 +67,9 @@ JSON_AUTHORIZATION_HEADER = re.compile(r'"Authorization"\s*:\s*"(?P<value>[^"]*)
 ENVIRONMENT_REFERENCE = re.compile(r"^\s*(?:Bearer\s+)?\$\{[^}]+\}\s*$")
 EDGE_APP = Path("apps/edge-runtime")
 EDGE_SOURCE = EDGE_APP / "src"
+EDGE_RUNTIME_PACKAGES = frozenset(
+    {"connectors", "judgment", "local_state", "stream_health", "supervisor"}
+)
 CONTRACT_SOURCE = Path("packages/contracts/src/nvsop_contracts")
 CENTER_SOURCE = Path("apps/control-api/src/factory_sop")
 CENTER_COMPOSITION_ROOT = CENTER_SOURCE / "app.py"
@@ -203,6 +206,7 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
     errors.extend(check_python_pin(root))
     errors.extend(check_web_toolchain(root, files))
     errors.extend(check_edge_runtime_isolation(root, files))
+    errors.extend(check_edge_dependency_directions(root, files))
     errors.extend(check_shared_contract_isolation(root, files))
     errors.extend(check_center_modules_are_contracted(root, files))
     errors.extend(check_vendor_lfs(root, files))
@@ -325,6 +329,111 @@ def check_edge_runtime_isolation(root: Path, files: list[Path]) -> list[str]:
                 "(edge-autonomy.md §5.11)"
             )
     return errors
+
+
+def check_edge_dependency_directions(root: Path, files: list[Path]) -> list[str]:
+    """补齐 import-linter 尚未覆盖的 Edge 依赖方向。"""
+    edge_root = EDGE_SOURCE / "edge_runtime"
+    stream_health_module = edge_root / "stream_health.py"
+    stream_health_package = edge_root / "stream_health"
+    composition_root = edge_root / "runtime.py"
+    connector_root = edge_root / "connectors"
+    write_ledger_debt = connector_root / "writes.py"
+    violations: list[str] = []
+
+    for path in sorted(files):
+        if path.suffix != ".py" or not is_under(path, edge_root):
+            continue
+        tree = ast.parse((root / path).read_text(encoding="utf-8"), filename=str(path))
+        imports = _edge_import_targets(path, tree)
+        is_stream_health = path == stream_health_module or is_under(path, stream_health_package)
+        imported_packages = {
+            target.split(".", 2)[1]
+            for _, target in imports
+            if target.startswith("edge_runtime.")
+            and target.split(".", 2)[1] in EDGE_RUNTIME_PACKAGES
+        }
+        if path != composition_root and imported_packages >= EDGE_RUNTIME_PACKAGES:
+            violations.append(
+                f"{path} imports all Edge runtime packages; only edge_runtime/runtime.py may "
+                "be the composition root"
+            )
+        for line, target in imports:
+            if target == "edge_runtime" or target.startswith("edge_runtime."):
+                if is_stream_health:
+                    if target == "edge_runtime.stream_health" or target.startswith(
+                        "edge_runtime.stream_health."
+                    ):
+                        continue
+                    violations.append(
+                        f"{path}:{line} imports {target}; stream_health is the vendor-hook "
+                        "boundary and must import no edge_runtime sibling"
+                    )
+                    continue
+                if not is_under(path, connector_root):
+                    continue
+                if (
+                    target == "edge_runtime.connectors"
+                    or target.startswith("edge_runtime.connectors.")
+                    or target == "edge_runtime.judgment"
+                    or target.startswith("edge_runtime.judgment.")
+                ):
+                    continue
+                if target == "edge_runtime.supervisor.inputs" or target.startswith(
+                    "edge_runtime.supervisor.inputs."
+                ):
+                    continue
+                # #300 负责清除这条既有持久化耦合；这里只保留精确债务豁免，
+                # 让 #295 阻止新增 connector ownership 泄漏而不越界实现 WriteLedger。
+                if path == write_ledger_debt and target == "edge_runtime.local_state.disposal":
+                    continue
+                violations.append(
+                    f"{path}:{line} imports {target}; connectors may depend only on judgment and "
+                    "supervisor input vocabulary outside their own package"
+                )
+    return violations
+
+
+def _edge_import_targets(path: Path, tree: ast.AST) -> list[tuple[int, str]]:
+    package = ["edge_runtime", *path.relative_to(EDGE_SOURCE / "edge_runtime").parent.parts]
+    imports: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.extend((node.lineno, alias.name) for alias in node.names)
+            continue
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.level:
+            keep = len(package) - node.level + 1
+            base_parts = package[: max(keep, 0)]
+            if node.module:
+                base_parts.extend(node.module.split("."))
+            base = ".".join(base_parts)
+        else:
+            base = node.module or ""
+        if base == "edge_runtime":
+            direct_packages = [
+                f"edge_runtime.{alias.name}"
+                for alias in node.names
+                if alias.name in EDGE_RUNTIME_PACKAGES
+            ]
+            if direct_packages:
+                imports.extend((node.lineno, target) for target in direct_packages)
+                if len(direct_packages) == len(node.names):
+                    continue
+        if base == "edge_runtime.supervisor" and any(
+            alias.name == "inputs" for alias in node.names
+        ):
+            imports.extend(
+                (node.lineno, "edge_runtime.supervisor.inputs")
+                for alias in node.names
+                if alias.name == "inputs"
+            )
+            if all(alias.name == "inputs" for alias in node.names):
+                continue
+        if base:
+            imports.append((node.lineno, base))
+    return sorted(imports)
 
 
 def check_shared_contract_isolation(root: Path, files: list[Path]) -> list[str]:

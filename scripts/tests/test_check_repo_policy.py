@@ -268,6 +268,103 @@ class RepositoryPolicyTest(unittest.TestCase):
             errors,
         )
 
+    def test_rejects_stream_health_importing_any_edge_sibling(self) -> None:
+        module = self.write(
+            "apps/edge-runtime/src/edge_runtime/stream_health.py",
+            "from edge_runtime.future_adapter import EventSink\n",
+        )
+        errors = self.check(str(module))
+        self.assertIn(
+            "apps/edge-runtime/src/edge_runtime/stream_health.py:1 imports "
+            "edge_runtime.future_adapter; stream_health is the vendor-hook boundary and must "
+            "import no edge_runtime sibling",
+            errors,
+        )
+
+    def test_rejects_stream_health_relative_sibling_import(self) -> None:
+        module = self.write(
+            "apps/edge-runtime/src/edge_runtime/stream_health.py",
+            "from .judgment import Decision\n",
+        )
+        errors = self.check(str(module))
+        self.assertIn(
+            "apps/edge-runtime/src/edge_runtime/stream_health.py:1 imports edge_runtime.judgment; "
+            "stream_health is the vendor-hook boundary and must import no edge_runtime sibling",
+            errors,
+        )
+
+    def test_rejects_stream_health_package_importing_edge_sibling(self) -> None:
+        module = self.write(
+            "apps/edge-runtime/src/edge_runtime/stream_health/adapter.py",
+            "from edge_runtime.judgment import Decision\n",
+        )
+        errors = self.check(str(module))
+        self.assertIn(
+            "apps/edge-runtime/src/edge_runtime/stream_health/adapter.py:1 imports "
+            "edge_runtime.judgment; stream_health is the vendor-hook boundary and must import "
+            "no edge_runtime sibling",
+            errors,
+        )
+
+    def test_accepts_stream_health_package_internal_import(self) -> None:
+        module = self.write(
+            "apps/edge-runtime/src/edge_runtime/stream_health/adapter.py",
+            "from .model import WireEvent\n",
+        )
+        self.assertEqual([], self.check(str(module)))
+
+    def test_rejects_connector_importing_unowned_edge_state(self) -> None:
+        module = self.write(
+            "apps/edge-runtime/src/edge_runtime/connectors/future.py",
+            "from edge_runtime.local_state.queues import StationQueues\n",
+        )
+        errors = self.check(str(module))
+        self.assertIn(
+            "apps/edge-runtime/src/edge_runtime/connectors/future.py:1 imports "
+            "edge_runtime.local_state.queues; connectors may depend only on judgment and "
+            "supervisor input vocabulary outside their own package",
+            errors,
+        )
+
+    def test_rejects_connector_importing_supervisor_implementation(self) -> None:
+        module = self.write(
+            "apps/edge-runtime/src/edge_runtime/connectors/future.py",
+            "from edge_runtime.supervisor.station import StationSupervisor\n",
+        )
+        errors = self.check(str(module))
+        self.assertIn(
+            "apps/edge-runtime/src/edge_runtime/connectors/future.py:1 imports "
+            "edge_runtime.supervisor.station; connectors may depend only on judgment and "
+            "supervisor input vocabulary outside their own package",
+            errors,
+        )
+
+    def test_rejects_connector_importing_allowed_prefix_lookalike(self) -> None:
+        module = self.write(
+            "apps/edge-runtime/src/edge_runtime/connectors/future.py",
+            "from edge_runtime.judgment_adapter import Decision\n",
+        )
+        errors = self.check(str(module))
+        self.assertIn(
+            "apps/edge-runtime/src/edge_runtime/connectors/future.py:1 imports "
+            "edge_runtime.judgment_adapter; connectors may depend only on judgment and "
+            "supervisor input vocabulary outside their own package",
+            errors,
+        )
+
+    def test_rejects_non_root_importing_every_edge_runtime_package(self) -> None:
+        module = self.write(
+            "apps/edge-runtime/src/edge_runtime/future_runtime.py",
+            "from edge_runtime import connectors, judgment, local_state, stream_health, "
+            "supervisor\n",
+        )
+        errors = self.check(str(module))
+        self.assertIn(
+            "apps/edge-runtime/src/edge_runtime/future_runtime.py imports all Edge runtime "
+            "packages; only edge_runtime/runtime.py may be the composition root",
+            errors,
+        )
+
     def test_accepts_the_approved_standard_library_contract_inside_edge_runtime(self) -> None:
         contract = self.write(
             "packages/contracts/src/nvsop_contracts/capability.py",

@@ -73,7 +73,7 @@ MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU �
 | 姿态 | 范围 |
 |---|---|
 | **原样复用** | DeepStream 取流、DDM 分段、vLLM 分类、`/v1/*` 接口、文件 API、Prometheus 指标；训练侧 5 个微服务；**React 标注 UI 连界面一起复用** |
-| **就地改造（一处，登记补丁）** | pipeline 健康事实 + stream epoch barrier；`INVALID` / `PLAYING` 与 PTS reset 退休旧 normalization work，uniform/DDM 按代际产出 chunk，internal-vLLM stale descriptor 退出 |
+| **就地改造（一处，登记补丁）** | pipeline 健康事实 + stream epoch barrier；DDM producer 携带代际；EOS 在尾块后投递；`INVALID` / `PLAYING` 与 PTS reset 退休旧 normalization work，active VLM wait 可被 epoch 唤醒 |
 | **自己实现（一处）** | 序列比对 + 声明式边界 + 有效性门 + 三值判定，全部在 `apps/edge-runtime/`，`vendor/` 不留补丁 |
 | **配置关闭（不打补丁）** | 基座 checker（`DISABLE_SOP_CHECKER=true`）；基座处置（`ENABLE_ALERT_SOUND`/`ENABLE_MESSAGING` 保持默认 false） |
 | **全新建设** | 账户权限、工位/相机/连接器配置、Excel→模板版本发布、聚合看板、违规复核、证据生命周期、上报与对账 |
@@ -88,13 +88,13 @@ MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU �
 
 这不违反"不许两套实现"：我们的判定路径上只有一套（我们的），基座那份被 `DISABLE_SOP_CHECKER` 关闭后连线程都不启动（`:652`），`inference_last_queue`（`:592-598`）直接返回 `_vlm_response_queue`。
 
-**合成健康事件的注入点（已实测）**：最终仍进入动作最早共用的 `_chunk_queue`，但 FIFO 之前必须先建立 stream epoch barrier。`INVALID` / `PLAYING` 先打开 barrier、推进 epoch，再写健康事实；barrier 打开期间旧代际 chunk 不能入队。直接注入下游 future/response queue 仍会破坏顺序，因此不采用。
+**合成健康事件的注入点（已实测）**：最终仍进入动作最早共用的 `_chunk_queue`，但 FIFO 之前必须先建立 stream epoch barrier。`INVALID` / `PLAYING` 先打开 barrier、推进 epoch，再写健康事实；DDM metadata 在 producer callback 入口捕获 epoch，晚到旧 boundary 会被消费者丢弃；active VLM response wait 被 epoch 变化唤醒。EOS 单独延迟到 clip owner flush 尾块之后。直接注入下游 future/response queue 仍会破坏顺序，因此不采用。
 
-**E4 / S010 实施修正**（[ADR-0007](../../adr/0007-base-is-the-trunk-not-a-dependency.md)）："正在重连"不作为独立事实登记；重连成功由 `SOURCE_ERROR` 后的 `DELIVERING` 表达。S010 最终确认 queue FIFO 本身也不够：source transition 可发生在旧 frame 已进入 chunking、但动作尚未入队时；PTS reset 也会留下旧 descriptor。两类边界统一由 stream epoch 退休旧 work。
+**E4 / S010 实施修正**（[ADR-0007](../../adr/0007-base-is-the-trunk-not-a-dependency.md)）："正在重连"不作为独立事实登记；重连成功由 `SOURCE_ERROR` 后的 `DELIVERING` 表达。S010 最终确认 queue FIFO 本身也不够：除 partial chunk 与旧 descriptor 外，还存在 DDM producer 晚到、active VLM future 阻塞 health、EOS 抢在尾块之前三类竞态；均在真实 owner seam 上收敛。
 
-**该通道只在进程与 pipeline 存活时能投递。** source transition 会先推进 stream epoch，旧代际 pending chunk/frame/descriptor 不会在健康恢复后重新出现；健康事实随后进入 `_chunk_queue`。若恢复同时发生 PTS 归零，下一正常 chunk 才带新 `source_anchor`。进程死亡由 **chunk 静默计时器**兜底。
+**该通道只在进程与 pipeline 存活时能投递。** source transition 会先推进 stream epoch，旧代际 pending chunk/frame/boundary/descriptor 不会在健康恢复后重新出现；active VLM wait 被立即唤醒，健康事实可继续向下游传播。EOS 则在有效尾块之后投递。若恢复同时发生 PTS 归零，下一正常 chunk 才带新 `source_anchor`。进程死亡由 **chunk 静默计时器**兜底。
 
-**代码放置**：`apps/edge-runtime/` 持有健康事件与判定逻辑；`vendor/` 只留同一登记补丁的 stream epoch barrier、健康 hook/旁路、internal-vLLM stale work 退休与 uniform/DDM 状态重置。补丁维护为可重放 diff；纯 CPU 契约测试限定 8 条允许替换的 frame/chunk owner 行，并验证可逆性与工作树同步。
+**代码放置**：`apps/edge-runtime/` 持有健康事件与判定逻辑；登记 vendor 补丁只触及 `ds_sop_process.py` 与 `ds_3d_action_pipeline.py`。前者持有健康/chunk/VLM 排序，后者只为 DDM metadata producer 附加 epoch。补丁维护为可重放 diff；纯 CPU 契约测试限定 15 条允许替换的 owner 行，并验证可逆性与工作树同步。
 
 **依赖约束（硬规则）**：判定核心只依赖 Python 标准库。判定核心运行在 supervisor 进程里，故这条不再由运行环境强制，而是为**可测试性与可移植性**保留：成本近零，且保证判定核心可纯 CPU 测试——基座那四个模块本来就是这样。`vendor/` 内那处 hook 仍受运行环境强制，因为它确实跑在 DeepStream 容器内（§2.10）。
 

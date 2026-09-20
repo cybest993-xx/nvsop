@@ -14,6 +14,7 @@ from pathlib import Path
 from base_harness import DETECTOR, INFERENCE_ROOT, REPO_ROOT, function_source, read
 
 PROCESS = DETECTOR / "ds_sop_process.py"
+PIPELINE = DETECTOR / "ds_3d_action_pipeline.py"
 PATCH = REPO_ROOT / "docs/base/patches/0001-stream-health-events.patch"
 HOOK_ENTRYPOINT = "from edge_runtime.stream_health import STREAM_HEALTH_KEY, note_pipeline_message"
 ORDERING_QUEUE = "self._chunk_queue"
@@ -49,6 +50,14 @@ def removed_lines(patch: str) -> list[str]:
     ]
 
 
+def patch_section(patch: str, filename: str) -> str:
+    sections = patch.split("diff --git ")
+    for section in sections[1:]:
+        if f"/{filename} " in section.splitlines()[0]:
+            return "diff --git " + section
+    raise AssertionError(f"patch section not found: {filename}")
+
+
 class RecordedPatchStaysWithinRegisteredSeamsTest(unittest.TestCase):
     """机械核验登记补丁只替换批准的 chunk/frame owner 行。"""
 
@@ -57,6 +66,10 @@ class RecordedPatchStaysWithinRegisteredSeamsTest(unittest.TestCase):
 
     def test_replaced_base_lines_are_limited_to_registered_owner_operations(self) -> None:
         allowed = {
+            "def __init__(self, queue: Queue):",
+            "self._queue.put((frame_num, pts, -1))",
+            "self._queue.put((frame_i, pts_i, confidence))",
+            'meta_probe = Probe("probe", InferenceOutputTensorParser(queue=score_queue))',
             "self.decoded_frame_queue.put("
             "(timestamp, wall_clock_entry, torch_tensor), block=block)",
             "dropped_timestamp, _, _ = dropped_frame",
@@ -66,6 +79,9 @@ class RecordedPatchStaysWithinRegisteredSeamsTest(unittest.TestCase):
             "self._make_chunk_info(chunk_idx, clip_start, end, 1.0, tm.elapsed_time))",
             "self._chunk_queue.put("
             "self._make_chunk_info(chunk_idx, clip_start, last_ts, 1.0, tm.elapsed_time))",
+            "if isinstance(message, EOSMessage):",
+            "# items.append(item)",
+            "frame_id, pts, score = item",
             "self._chunk_queue.put(chunk_info)",
             "frame = decoded_frame_queue.get(block=True)",
             "timestamp, wall_clock, tensor = frame",
@@ -74,14 +90,16 @@ class RecordedPatchStaysWithinRegisteredSeamsTest(unittest.TestCase):
         self.assertEqual(allowed, removed)
 
     def test_the_recorded_patch_matches_what_is_in_the_tree(self) -> None:
-        source = read(PROCESS)
-        for block in added_blocks(self.patch):
-            self.assertIn(
-                block,
-                source,
-                f"the recorded patch adds a block that is not in {PROCESS.name} verbatim; "
-                "regenerate docs/base/patches/0001-stream-health-events.patch",
-            )
+        for path in (PROCESS, PIPELINE):
+            source = read(path)
+            section = patch_section(self.patch, path.name)
+            for block in added_blocks(section):
+                self.assertIn(
+                    block,
+                    source,
+                    f"the recorded patch adds a block that is not in {path.name} verbatim; "
+                    "regenerate docs/base/patches/0001-stream-health-events.patch",
+                )
 
     def test_the_recorded_patch_can_be_reversed_from_the_current_tree(self) -> None:
         result = subprocess.run(
@@ -93,10 +111,13 @@ class RecordedPatchStaysWithinRegisteredSeamsTest(unittest.TestCase):
         )
         self.assertEqual(0, result.returncode, result.stderr)
 
-    def test_the_patch_touches_exactly_one_base_file(self) -> None:
+    def test_the_patch_touches_exactly_two_registered_base_files(self) -> None:
         headers = [line for line in self.patch.splitlines() if line.startswith("+++ ")]
-        self.assertEqual(1, len(headers), f"expected one patched file, got {headers}")
-        self.assertIn("ds_sop_process.py", headers[0])
+        self.assertEqual(2, len(headers), f"expected two patched files, got {headers}")
+        self.assertEqual(
+            {"ds_sop_process.py", "ds_3d_action_pipeline.py"},
+            {Path(header.split()[-1]).name for header in headers},
+        )
 
     def test_source_transitions_open_barrier_before_health_enqueue(self) -> None:
         callback = function_source(PROCESS, "on_message")
@@ -166,7 +187,49 @@ class RecordedPatchStaysWithinRegisteredSeamsTest(unittest.TestCase):
         before_rollback = source[epoch_branch:rollback]
         self.assertIn("self._clip_start_sec = pts", before_rollback)
         self.assertNotIn("self._clip_cur_sec = pts", before_rollback)
-        self.assertNotIn("continue", before_rollback.rsplit("if item is None:", 1)[-1])
+
+    def test_ddm_boundary_producer_captures_epoch_before_queueing(self) -> None:
+        pipeline_source = read(PIPELINE)
+        create = function_source(PIPELINE, "create_inference_pipeline")
+        ddm = function_source(PROCESS, "clip_post_process")
+        self.assertIn("class InferenceOutputTensorParser", pipeline_source)
+        self.assertIn("def __init__(self, queue: Queue, stream_epoch_provider:", pipeline_source)
+        self.assertIn("stream_epoch = self._stream_epoch_provider()", pipeline_source)
+        self.assertLess(
+            pipeline_source.index("stream_epoch = self._stream_epoch_provider()"),
+            pipeline_source.index("for frame_meta in batch_meta.frame_items:"),
+        )
+        self.assertIn(
+            "self._put_boundary((frame_i, pts_i, confidence), stream_epoch)", pipeline_source
+        )
+        self.assertIn("stream_epoch_provider=stream_epoch_provider", create)
+        self.assertIn("item_epoch, frame_id, pts, score = item", ddm)
+        self.assertIn("if item_epoch != current_epoch:", ddm)
+
+    def test_eos_health_is_emitted_only_after_trailing_chunk_flush(self) -> None:
+        callback = function_source(PROCESS, "on_message")
+        uniform = function_source(PROCESS, "uniform_clip_post_process")
+        ddm = function_source(PROCESS, "clip_post_process")
+        emitter = function_source(PROCESS, "_emit_pending_eos_health")
+        self.assertIn("self._pending_eos_message = message", callback)
+        self.assertIn("elif not is_eos:", callback)
+        self.assertIn("note_pipeline_message", emitter)
+        for worker in (uniform, ddm):
+            self.assertLess(
+                worker.index("_emit_pending_eos_health()"), worker.rindex("_chunk_queue.put(None)")
+            )
+
+    def test_active_vlm_wait_is_woken_by_epoch_change(self) -> None:
+        advance = function_source(PROCESS, "_advance_stream_epoch_locked")
+        response = function_source(PROCESS, "vlm_inference_response_process")
+        self.assertIn("self._active_vlm_response_waiter.set()", advance)
+        self.assertIn("response_waiter = threading.Event()", response)
+        self.assertIn("waiter=response_waiter", response)
+        self.assertIn("self._active_vlm_response_waiter = response_waiter", response)
+        self.assertIn("response_waiter.wait()", response)
+        self.assertLess(
+            response.index("response_waiter.wait()"), response.index("response_future.result()")
+        )
 
 
 class HookIsTheOnlyReachIntoOurCodeTest(unittest.TestCase):

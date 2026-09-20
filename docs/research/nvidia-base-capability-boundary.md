@@ -174,7 +174,7 @@ keep_alive=False → final_missing=[1,3]
 
 ## 改造范围已裁决
 
-“裁决基座复用、配置、适配与必要补丁清单”已由 [`edge-autonomy.md`](../design/mechanisms/edge-autonomy.md) §5.11 与 [ADR-0007](../adr/0007-base-is-the-trunk-not-a-dependency.md) 结案：推理侧就地改造限于同一个 vendor 文件的登记 owner 补丁——stream epoch barrier 统一 source transition、PTS reset、chunk emission 与 internal-vLLM frame wait，健康事实再沿现有 chunk/VLM/SSE 链输出；序列比对与周期边界在 `apps/edge-runtime/` 自己实现，基座 checker 与处置按既有环境变量关闭。
+“裁决基座复用、配置、适配与必要补丁清单”已由 [`edge-autonomy.md`](../design/mechanisms/edge-autonomy.md) §5.11 与 [ADR-0007](../adr/0007-base-is-the-trunk-not-a-dependency.md) 结案：推理侧就地改造限于两个批准 vendor 文件的同一登记 owner 补丁——`ds_sop_process.py` 统一 source transition、PTS reset、chunk emission、EOS 尾块排序与 active VLM wait，`ds_3d_action_pipeline.py` 仅在 DDM metadata producer 附加 epoch；健康事实再沿现有 chunk/VLM/SSE 链输出。
 
 以下门槛用于判断**将来新出现**的改造候选是否越界：
 

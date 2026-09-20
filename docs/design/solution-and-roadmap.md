@@ -160,13 +160,13 @@
 
 `dataset` 是独立模块而非 `template` 的一部分：`CONTEXT.md` 对「训练数据集」的定义明确写了它不定义 SOP 模板，并把「SOP 模板」列为 _Avoid_ 项，合并二者会在代码层重新粘合术语层刻意拆开的概念。
 
-**推理机侧组成**（`apps/edge-runtime/`，包清单与所有权表见 [仓库架构](../engineering/architecture.md)）：判定核心（纯标准库、纯函数、无钟无 I/O，§5.18）、边界求解、本地状态（SQLite）、supervisor（SSE 消费与判定调用 / 请求看护 / 锁存 / 处置派发 / 上报对账 / 计时器持有 / **一反应一事务的持久化**）、连接器运行时、mediamtx 看护、证据切片与归档任务。`vendor/` 内只留同一登记补丁的 stream epoch barrier、健康 hook/旁路、internal-vLLM stale work 退休与 uniform/DDM 状态重置（§5.11）。
+**推理机侧组成**（`apps/edge-runtime/`，包清单与所有权表见 [仓库架构](../engineering/architecture.md)）：判定核心（纯标准库、纯函数、无钟无 I/O，§5.18）、边界求解、本地状态（SQLite）、supervisor（SSE 消费与判定调用 / 请求看护 / 锁存 / 处置派发 / 上报对账 / 计时器持有 / **一反应一事务的持久化**）、连接器运行时、mediamtx 看护、证据切片与归档任务。`vendor/` 内只留同一登记补丁的 stream epoch barrier、DDM producer 代际标签、EOS 尾块排序、健康 hook/旁路、active-VLM / stale work 退休与 uniform/DDM 状态重置（§5.11）。
 
 **边缘包间依赖方向**（由 import-linter 契约兜底，见 [仓库架构](../engineering/architecture.md)）：`supervisor → local_state → judgment`；`connectors → judgment` 与 `supervisor` 的输入词汇；`stream_health` 不导入本包任何东西；运行循环是唯一的装配根，也是唯一同时认识全部包的地方。存储模块只认识领域类型，不认识编排它的人——反过来的方向（存储导入 supervisor）已实测会让"一反应一事务"退化成调用方契约。
 
 **依赖规则**：判定核心不依赖任何相机 SDK、推理框架或连接器实现，只消费归一化观测；中心各模块各自拥有数据表，不跨模块直接读写；前端只调后端用例，不承载判定规则。
 
-**【已定】边界靠机械检查，不靠评审。** 每个中心模块一个 Python 包，包内 `api.py` 是唯一允许的跨模块导入目标；`import-linter` 契约强制中心/边缘包间依赖方向，基座契约测试单独检查 **登记 patch 只触及一个 vendor 文件、只替换 8 条批准的 frame/chunk owner 行、stream epoch barrier 能退休旧 work、patch 可反向应用且与工作树同步**（§5.11）。
+**【已定】边界靠机械检查，不靠评审。** 每个中心模块一个 Python 包，包内 `api.py` 是唯一允许的跨模块导入目标；`import-linter` 契约强制中心/边缘包间依赖方向，基座契约测试单独检查 **登记 patch 只触及 2 个批准 vendor 文件、只替换 15 条 owner 行、stream epoch barrier / DDM producer tag / EOS 尾块排序 / active VLM wait 唤醒均成立、patch 可反向应用且与工作树同步**（§5.11）。
 
 **【已定】跨模块用例共享一个请求级事务**（[ADR-0002](../adr/0002-request-scoped-unit-of-work.md)）：HTTP 适配层开启并提交单个 Unit of Work，模块门面只参与、不自行提交，`Session` 经请求作用域注入。代价是事务边界不再兜底模块边界，故上述机械检查是本决定的前提而非可选增强。
 

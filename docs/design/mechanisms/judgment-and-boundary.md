@@ -148,7 +148,7 @@ if 证据覆盖不足 or 流不健康 or 推理不健康 or 时间未对齐:
 | 顺序型模板跳号即报漏步 | §5.1 | 纯 CPU |
 | 流不健康期间的实例闭合为不可判定，不为不通过 | §5.2 | 纯 CPU，注入健康事件 |
 | **我们的序列比对与基座在合规序列上结论一致** | §5.11 | 纯 CPU，双跑对比；**不含返工与漏步时机**——那正是我们故意不同之处 |
-| 登记补丁只替换 8 条批准的 frame/chunk owner 行、与工作树同步且可反向应用 | §5.11 | 纯 CPU 静态检查（`test_stream_health_patch.py`）：核验 stream epoch barrier、stale descriptor 退休、允许替换行集合和可逆 patch |
+| 登记补丁只触及 2 个批准 vendor 文件 / 15 条 owner 行、与工作树同步且可反向应用 | §5.11 | 纯 CPU 静态检查（`test_stream_health_patch.py`）：核验 epoch barrier、DDM producer 标签、EOS 尾块排序、active VLM wait 唤醒、允许替换行集合和可逆 patch |
 | **取消或重排计时器不产生重复判定；一次等待只报一次** | §5.18 | 纯 CPU，可控钟按赋值推进，无 sleep（`test_supervisor_station.py`） |
 | 未配连接器与配了连接器的工位走同一条归一化路径 | §5.8 | 纯 CPU，外部信号与动作编号同为观测（`test_supervisor_inputs.py`） |
 | 余量只加宽证据、不截断必需跨度 | §5.20 | 纯 CPU（`test_supervisor_commands.py`） |

@@ -1,3 +1,72 @@
+diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvds_action_detector/ds_3d_action_pipeline.py b/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvds_action_detector/ds_3d_action_pipeline.py
+--- a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvds_action_detector/ds_3d_action_pipeline.py
++++ b/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvds_action_detector/ds_3d_action_pipeline.py
+@@ -210,15 +210,23 @@
+ 
+ 
+ class InferenceOutputTensorParser(BatchMetadataOperator):
+-    def __init__(self, queue: Queue):
++    def __init__(self, queue: Queue, stream_epoch_provider: Optional[Callable[[], int]] = None):
+         super().__init__()
+         self._queue = queue
++        self._stream_epoch_provider = stream_epoch_provider
+         self._sliding_windows_size = SLIDING_WINDOWS_SIZE
+         self._temporal_pts = []
+         self._first_metadata = True
+ 
++    def _put_boundary(self, item, stream_epoch):
++        if stream_epoch is None:
++            self._queue.put(item)
++        else:
++            self._queue.put((stream_epoch, *item))
++
+     def handle_metadata(self, batch_meta):
+         logger.debug(f"######## batch_meta: {batch_meta}")
++        stream_epoch = self._stream_epoch_provider() if self._stream_epoch_provider is not None else None
+         for frame_meta in batch_meta.frame_items:
+             logger.debug(f"######## frame_meta: {frame_meta}")
+             frame_num = frame_meta.frame_number
+@@ -226,7 +234,7 @@
+             self._temporal_pts.append((frame_num, pts))
+             if self._first_metadata:
+                 self._first_metadata = False
+-                self._queue.put((frame_num, pts, -1))
++                self._put_boundary((frame_num, pts, -1), stream_epoch)
+ 
+             if len(self._temporal_pts) > self._sliding_windows_size:
+                 self._temporal_pts.pop(0)
+@@ -253,7 +261,7 @@
+                 frame_i, pts_i = self._temporal_pts[FRAMES_PER_SIDE + i]
+                 if frame_i != frame_id:
+                     logger.warning(f"handle_metadata frame_i != frame_id, frame_i: {frame_i}, frame_id: {frame_id}")
+-                self._queue.put((frame_i, pts_i, confidence))
++                self._put_boundary((frame_i, pts_i, confidence), stream_epoch)
+ 
+             # tensor_items = list(frame_meta.tensor_items)
+             # print(f"######## tensor_items, size: {len(tensor_items)}, tensor_items: {tensor_items}")
+@@ -396,6 +404,7 @@
+     #    pipeline.add("filesrc", "src", {"location": file_path})
+     #    pipeline.add("decodebin", "srcbin")
+     frame_retriever = kwargs.get("frame_retriever", None)
++    stream_epoch_provider = kwargs.get("stream_epoch_provider", None)
+     mux_width = kwargs.get("mux_width", CAMERA_WIDTH)
+     mux_height = kwargs.get("mux_height", CAMERA_HEIGHT)
+     is_camera = False
+@@ -523,7 +532,13 @@
+         else:
+             pipeline.add("nvinfer", "inferencer", {"config-file-path": INFERENCE_CONFIG, "gpu-id": gpu_id})
+         pipeline.add("fakesink", "fakesink", {"sync": False, "qos": False})
+-        meta_probe = Probe("probe", InferenceOutputTensorParser(queue=score_queue))
++        meta_probe = Probe(
++            "probe",
++            InferenceOutputTensorParser(
++                queue=score_queue,
++                stream_epoch_provider=stream_epoch_provider,
++            ),
++        )
+         pipeline.attach("queue2", meta_probe)
+         pipeline.link("mux", "tee1", "queue1", "preprocess_3d", "inferencer", "queue2", "fakesink")
+         logger.info("######## linked mux -> tee1 -> preprocess_3d -> inferencer -> fakesink")
 diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvds_action_detector/ds_sop_process.py b/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvds_action_detector/ds_sop_process.py
 --- a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvds_action_detector/ds_sop_process.py
 +++ b/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvds_action_detector/ds_sop_process.py
@@ -6,8 +75,8 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
  from .utils import SafeThreadEventLoop, TimeMeasure, get_media_info_gst
  from .vlm_inference_client import VLMInferenceClient
 +
-+# --- 记录补丁，仅追加输出（ADR-0007） ---
-+# 回调已看到流健康事实；此处只把它作为合成 chunk 送入指定队列，逻辑仍在 edge-runtime。
++# --- 记录补丁入口（ADR-0007） ---
++# 健康语义仍在 edge-runtime；vendor 只持有代际、排序与合成 chunk 投递 seam。
 +from edge_runtime.stream_health import STREAM_HEALTH_KEY, note_pipeline_message
  
  logger = ds_logger.get_logger(__name__)
@@ -79,20 +148,31 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
                  self.new_frame_event.set()
              except Exception as e:
                  logger.exception(f"Error in DecodedFrameRetriever consume: {e}")
-@@ -492,6 +513,9 @@
+@@ -492,6 +513,11 @@
          self._post_dispatch_thread_pool = futures.ThreadPoolExecutor(max_workers=1)
          self._post_dispatch_future = None
          self._final_queue = Queue()
 +        self._stream_order_lock = threading.Lock()
 +        self._stream_epoch = 0
 +        self._stream_barrier_open = False
++        self._pending_eos_message = None
++        self._active_vlm_response_waiter = None
          self._messager = messager
          self._message_pool = kwargs.get("message_pool", None)
          self.first_timestamp = 0.0
-@@ -597,6 +621,40 @@
+@@ -558,6 +584,7 @@
+                     self._boundary_queue,
+                     self._gpu_id,
+                     frame_retriever=self._decoded_frame_retriever,
++                    stream_epoch_provider=self._current_stream_epoch,
+                     update_args=update_args,
+                     uniform_chunk=(self._chunk_params.algorithm == "uniform"),
+                     **kwargs,
+@@ -596,6 +623,58 @@
+             return self._vlm_response_queue
          else:
              return self._sop_checker_result_queue
- 
++
 +    def _drain_pending_queue_locked(self, queue):
 +        saw_sentinel = False
 +        while True:
@@ -107,10 +187,16 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
 +
 +    def _advance_stream_epoch_locked(self):
 +        self._stream_epoch += 1
++        if self._active_vlm_response_waiter is not None:
++            self._active_vlm_response_waiter.set()
 +        self._drain_pending_queue_locked(self._boundary_queue)
 +        if self._decoded_frame_retriever is not None:
 +            self._drain_pending_queue_locked(self._decoded_frame_retriever.decoded_frame_queue)
 +        return self._stream_epoch
++
++    def _current_stream_epoch(self):
++        with self._stream_order_lock:
++            return self._stream_epoch
 +
 +    def _advance_stream_epoch(self, *, source_anchor=None):
 +        with self._stream_order_lock:
@@ -127,10 +213,21 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
 +            self._chunk_queue.put(chunk_info)
 +            return True
 +
++    def _emit_pending_eos_health(self):
++        with self._stream_order_lock:
++            message = self._pending_eos_message
++            self._pending_eos_message = None
++            if message is not None:
++                note_pipeline_message(
++                    message,
++                    sink=self._chunk_queue,
++                    stream_id=str(self.id),
++                    source_anchor=self.first_timestamp,
++                )
+ 
      @classmethod
      def get_media_info(cls, file_path):
-         DISABLE_SERVICE_MAKER_INFO = True
-@@ -801,6 +859,9 @@
+@@ -801,6 +880,9 @@
              logger.debug(f"========Post dispatch process started")
              inference_last_queue = self.inference_last_queue
              chunk = inference_last_queue.get(block=True)
@@ -140,7 +237,7 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
              self._final_queue.put(chunk)
              if chunk is None:
                  logger.debug(f"========Post dispatch process end of stream")
-@@ -823,6 +884,17 @@
+@@ -823,6 +905,17 @@
          def on_message(message):
              nonlocal is_pipeline_ready
              nonlocal is_pipeline_playing
@@ -158,10 +255,23 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
              if isinstance(message, StateTransitionMessage):
                  logger.debug(f"StateTransitionMessage received: {message}")
                  if message.new_state == PipelineState.PLAYING and not is_pipeline_playing:
-@@ -845,6 +917,27 @@
-                     f"inference pipeline has finished w/ EOS queue size: {self._boundary_queue.qsize()}"
-                 )
+@@ -836,13 +929,37 @@
+                     self._started_event.set()
+                     self._tm_e2e.log_elapsed_time(f"inference pipeline: {self.id} has entered INVALID state")
  
+-            if isinstance(message, EOSMessage):
++            is_eos = isinstance(message, EOSMessage)
++            if is_eos:
++                with self._stream_order_lock:
++                    self._pending_eos_message = message
+                 logger.info("End-of-Stream received! Pipeline has finished processing.")
+                 self._boundary_queue.put(None)
+                 if self._decoded_frame_retriever is not None:
+                     self._decoded_frame_retriever.set_end_of_stream()
+                 tm.log_elapsed_time(
+                     f"inference pipeline has finished w/ EOS queue size: {self._boundary_queue.qsize()}"
++                )
++
 +            # --- 记录补丁（ADR-0007） ---
 +            # 健康迁移先关闭旧代际，再进入动作共用 FIFO。
 +            if barrier_transition:
@@ -175,18 +285,16 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
 +                        )
 +                    finally:
 +                        self._stream_barrier_open = False
-+            else:
++            elif not is_eos:
 +                note_pipeline_message(
 +                    message,
 +                    sink=self._chunk_queue,
 +                    stream_id=str(self.id),
 +                    source_anchor=self.first_timestamp,
-+                )
-+
+                 )
+ 
          self._inference_pipeline.start(on_message)
-         tm.log_elapsed_time("inference pipeline is starting in async mode")
-         self._inference_pipeline.wait()
-@@ -880,23 +973,47 @@
+@@ -880,28 +997,53 @@
  
          chunk_length_sec = self._chunk_params.chunk_length_sec
          chunk_idx, clip_start = 0, None
@@ -236,7 +344,13 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
                  break
  
          while self._boundary_queue.get(block=True) is not None:
-@@ -919,14 +1036,40 @@
+             pass
+ 
++        self._emit_pending_eos_health()
+         self._chunk_queue.put(None)
+         logger.info(f"SOPVideoProcessor: {self.id} uniform_clip_post_process done")
+ 
+@@ -919,14 +1061,46 @@
          need_check_delayed = False
          is_ready = False
          chunk_idx = 0
@@ -244,6 +358,10 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
          while not is_last_item:
              item = self._boundary_queue.get(block=True)
 +            current_epoch = self._stream_epoch
++            if item is not None:
++                item_epoch, frame_id, pts, score = item
++            else:
++                item_epoch = None
 +            if current_epoch != stream_epoch:
 +                stream_epoch = current_epoch
 +                boundaries.clear()
@@ -254,14 +372,18 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
 +                if item is None:
 +                    is_last_item = True
 +                    continue
-+                _, pts, _ = item
++                if item_epoch != current_epoch:
++                    continue
 +                self._clip_start_sec = pts
              if item is None:
                  logger.info("last item is None received")
                  is_last_item = True
              else:
-                 # items.append(item)
-                 frame_id, pts, score = item
+-                # items.append(item)
+-                frame_id, pts, score = item
++                if item_epoch != current_epoch:
++                    continue
++                item = (frame_id, pts, score)
 +                if self._clip_cur_sec > 0 and pts < self._clip_cur_sec:
 +                    # 外部 VLM 没有 decoded retriever，由 DDM owner 推进代际。
 +                    if self._decoded_frame_retriever is None:
@@ -277,7 +399,7 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
                  self._clip_cur_sec = pts
                  if score < 0:  # this is the first ready frame, need to init some base timestamp offsets
                      # the self.first_timestamp and start_time is a match for live stream processing
-@@ -958,8 +1101,15 @@
+@@ -958,8 +1132,15 @@
                  if end is not None:
                      tm.log_elapsed_time(f"calculated next chunk clip {self._clip_start_sec:.3f} - {end:.3f} video ")
                      chunk_info = self._make_chunk_info(chunk_idx, self._clip_start_sec, end, score, tm.elapsed_time)
@@ -294,7 +416,15 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
                      self._clip_start_sec = end
                      tm.reset()
                  boundaries.clear()
-@@ -1012,6 +1162,13 @@
+@@ -968,6 +1149,7 @@
+                 is_ready = False
+ 
+         # this is the end of the clips post processing
++        self._emit_pending_eos_health()
+         self._chunk_queue.put(None)
+         logger.info(f"SOPVideoProcessor: {self.id} clip_post_process done")
+ 
+@@ -1012,6 +1194,13 @@
              if chunk is None:
                  break
              chunk_info = chunk
@@ -308,7 +438,7 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
              start_time, end_time = chunk_info["start_time"], chunk_info["end_time"]
              logger.info(f"VLM start inference on chunk {start_time:.3f} - {end_time:.3f} video")
              chunk_info["pipeline_vlm_starting_timestamp"] = self._tm_e2e.now()
-@@ -1032,6 +1189,8 @@
+@@ -1032,6 +1221,8 @@
                      # system_prompt=VLM_SYSTEM_PROMPT,
                  )
  
@@ -317,7 +447,7 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
              if response_future is not None:
                  response_future.add_done_callback(future_callback_profiling(vlm_tm))
  
-@@ -1047,20 +1206,34 @@
+@@ -1047,20 +1238,34 @@
      def submit_vllm_inference(self, prompt, system_prompt, start_time, end_time, chunk_info):
          decoded_frame_queue = self._decoded_frame_retriever.decoded_frame_queue
          assert decoded_frame_queue is not None, "decoded frame queue is not set"
@@ -354,7 +484,7 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
              logger.debug(
                  f"before submit_vllm_inference: get decoded frame, timestamp: {timestamp}, tensor.shape: {tensor.shape}"
              )
-@@ -1072,6 +1245,9 @@
+@@ -1072,6 +1277,9 @@
          encode_frames.put(None)
          chunk_info["frame_number"] = len(frames)
  
@@ -364,7 +494,7 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
          if len(frames) == 0:
              logger.warning(f"submit_vllm_inference: no frames decoded, start: {start_time}, end: {end_time}")
              return None
-@@ -1132,6 +1308,15 @@
+@@ -1132,16 +1340,44 @@
              chunk_info = self._vlm_response_future_queue.get(block=True)
              if chunk_info is None:
                  break
@@ -380,7 +510,27 @@ diff --git a/vendor/sop-monitoring-blueprints/microservices/sop-inference-bp/nvd
              response_future = chunk_info.pop("response_future", None)
              response = {}
              try:
-@@ -1142,6 +1327,8 @@
+                 if response_future is not None:
++                    response_waiter = threading.Event()
++                    response_future.add_done_callback(lambda _future, waiter=response_waiter: waiter.set())
++                    with self._stream_order_lock:
++                        if chunk_info.get("_stream_epoch", self._stream_epoch) != self._stream_epoch:
++                            response_future.cancel()
++                            continue
++                        self._active_vlm_response_waiter = response_waiter
++                    response_waiter.wait()
++                    with self._stream_order_lock:
++                        if self._active_vlm_response_waiter is response_waiter:
++                            self._active_vlm_response_waiter = None
++                        response_is_stale = (
++                            chunk_info.get("_stream_epoch", self._stream_epoch) != self._stream_epoch
++                        )
++                    if response_is_stale:
++                        response_future.cancel()
++                        continue
+                     response = response_future.result()
+                 chunk_info.update(response)
+                 logger.debug(f"VLM inference result: {response}")
              except Exception as e:
                  logger.exception(f"VLM inference failed: {e}")
                  response = None

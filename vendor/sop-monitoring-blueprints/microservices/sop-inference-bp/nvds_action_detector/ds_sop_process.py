@@ -44,8 +44,8 @@ from .sop_step_checker import SopCheckerCache, SopCheckerRequest, SopCheckerResp
 from .utils import SafeThreadEventLoop, TimeMeasure, get_media_info_gst
 from .vlm_inference_client import VLMInferenceClient
 
-# --- 记录补丁，仅追加输出（ADR-0007） ---
-# 回调已看到流健康事实；此处只把它作为合成 chunk 送入指定队列，逻辑仍在 edge-runtime。
+# --- 记录补丁入口（ADR-0007） ---
+# 健康语义仍在 edge-runtime；vendor 只持有代际、排序与合成 chunk 投递 seam。
 from edge_runtime.stream_health import STREAM_HEALTH_KEY, note_pipeline_message
 
 logger = ds_logger.get_logger(__name__)
@@ -516,6 +516,8 @@ class SOPVideoProcessor:
         self._stream_order_lock = threading.Lock()
         self._stream_epoch = 0
         self._stream_barrier_open = False
+        self._pending_eos_message = None
+        self._active_vlm_response_waiter = None
         self._messager = messager
         self._message_pool = kwargs.get("message_pool", None)
         self.first_timestamp = 0.0
@@ -582,6 +584,7 @@ class SOPVideoProcessor:
                     self._boundary_queue,
                     self._gpu_id,
                     frame_retriever=self._decoded_frame_retriever,
+                    stream_epoch_provider=self._current_stream_epoch,
                     update_args=update_args,
                     uniform_chunk=(self._chunk_params.algorithm == "uniform"),
                     **kwargs,
@@ -635,10 +638,16 @@ class SOPVideoProcessor:
 
     def _advance_stream_epoch_locked(self):
         self._stream_epoch += 1
+        if self._active_vlm_response_waiter is not None:
+            self._active_vlm_response_waiter.set()
         self._drain_pending_queue_locked(self._boundary_queue)
         if self._decoded_frame_retriever is not None:
             self._drain_pending_queue_locked(self._decoded_frame_retriever.decoded_frame_queue)
         return self._stream_epoch
+
+    def _current_stream_epoch(self):
+        with self._stream_order_lock:
+            return self._stream_epoch
 
     def _advance_stream_epoch(self, *, source_anchor=None):
         with self._stream_order_lock:
@@ -654,6 +663,18 @@ class SOPVideoProcessor:
             chunk_info["_stream_epoch"] = stream_epoch
             self._chunk_queue.put(chunk_info)
             return True
+
+    def _emit_pending_eos_health(self):
+        with self._stream_order_lock:
+            message = self._pending_eos_message
+            self._pending_eos_message = None
+            if message is not None:
+                note_pipeline_message(
+                    message,
+                    sink=self._chunk_queue,
+                    stream_id=str(self.id),
+                    source_anchor=self.first_timestamp,
+                )
 
     @classmethod
     def get_media_info(cls, file_path):
@@ -908,7 +929,10 @@ class SOPVideoProcessor:
                     self._started_event.set()
                     self._tm_e2e.log_elapsed_time(f"inference pipeline: {self.id} has entered INVALID state")
 
-            if isinstance(message, EOSMessage):
+            is_eos = isinstance(message, EOSMessage)
+            if is_eos:
+                with self._stream_order_lock:
+                    self._pending_eos_message = message
                 logger.info("End-of-Stream received! Pipeline has finished processing.")
                 self._boundary_queue.put(None)
                 if self._decoded_frame_retriever is not None:
@@ -930,7 +954,7 @@ class SOPVideoProcessor:
                         )
                     finally:
                         self._stream_barrier_open = False
-            else:
+            elif not is_eos:
                 note_pipeline_message(
                     message,
                     sink=self._chunk_queue,
@@ -1019,6 +1043,7 @@ class SOPVideoProcessor:
         while self._boundary_queue.get(block=True) is not None:
             pass
 
+        self._emit_pending_eos_health()
         self._chunk_queue.put(None)
         logger.info(f"SOPVideoProcessor: {self.id} uniform_clip_post_process done")
 
@@ -1040,6 +1065,10 @@ class SOPVideoProcessor:
         while not is_last_item:
             item = self._boundary_queue.get(block=True)
             current_epoch = self._stream_epoch
+            if item is not None:
+                item_epoch, frame_id, pts, score = item
+            else:
+                item_epoch = None
             if current_epoch != stream_epoch:
                 stream_epoch = current_epoch
                 boundaries.clear()
@@ -1050,14 +1079,16 @@ class SOPVideoProcessor:
                 if item is None:
                     is_last_item = True
                     continue
-                _, pts, _ = item
+                if item_epoch != current_epoch:
+                    continue
                 self._clip_start_sec = pts
             if item is None:
                 logger.info("last item is None received")
                 is_last_item = True
             else:
-                # items.append(item)
-                frame_id, pts, score = item
+                if item_epoch != current_epoch:
+                    continue
+                item = (frame_id, pts, score)
                 if self._clip_cur_sec > 0 and pts < self._clip_cur_sec:
                     # 外部 VLM 没有 decoded retriever，由 DDM owner 推进代际。
                     if self._decoded_frame_retriever is None:
@@ -1118,6 +1149,7 @@ class SOPVideoProcessor:
                 is_ready = False
 
         # this is the end of the clips post processing
+        self._emit_pending_eos_health()
         self._chunk_queue.put(None)
         logger.info(f"SOPVideoProcessor: {self.id} clip_post_process done")
 
@@ -1321,6 +1353,23 @@ class SOPVideoProcessor:
             response = {}
             try:
                 if response_future is not None:
+                    response_waiter = threading.Event()
+                    response_future.add_done_callback(lambda _future, waiter=response_waiter: waiter.set())
+                    with self._stream_order_lock:
+                        if chunk_info.get("_stream_epoch", self._stream_epoch) != self._stream_epoch:
+                            response_future.cancel()
+                            continue
+                        self._active_vlm_response_waiter = response_waiter
+                    response_waiter.wait()
+                    with self._stream_order_lock:
+                        if self._active_vlm_response_waiter is response_waiter:
+                            self._active_vlm_response_waiter = None
+                        response_is_stale = (
+                            chunk_info.get("_stream_epoch", self._stream_epoch) != self._stream_epoch
+                        )
+                    if response_is_stale:
+                        response_future.cancel()
+                        continue
                     response = response_future.result()
                 chunk_info.update(response)
                 logger.debug(f"VLM inference result: {response}")

@@ -2,7 +2,8 @@
 
 基座 pipeline 回调只登记真实可观测的 source error、delivering 与 EOS。vendor 在动作
 进入 `_chunk_queue` 前用 stream epoch barrier 退休尚未完成 normalization 的旧 work;
-健康事实随后沿既有 chunk/VLM/SSE 链输出。PTS 回退使用同一代际失效旧 frame/descriptor.
+DDM metadata producer 同步携带代际, EOS 在尾部 chunk flush 后投递, 活跃 VLM wait 会被
+代际变化唤醒。健康事实随后沿既有 chunk/VLM/SSE 链输出。
 
 生产者运行在基座容器, 消费者运行在 supervisor, 二者可独立升级, 因此未知事实必须
 按原始值保留 (ADR-0003), 且无法分类的事实按观测受损处理而不是按健康处理.

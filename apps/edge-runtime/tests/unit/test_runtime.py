@@ -23,6 +23,7 @@ from nvsop_contracts import (
 
 from edge_runtime.connectors.hikvision import CANDIDATE_PROFILE
 from edge_runtime.judgment.model import HostInstant
+from edge_runtime.judgment.reasons import ReasonCode
 from edge_runtime.runtime import (
     ConnectionTestCommandLoop,
     InputWaitExpired,
@@ -32,7 +33,13 @@ from edge_runtime.runtime import (
 from edge_runtime.stream_health import StreamFact, StreamHealthEvent
 from edge_runtime.supervisor.delegated_commands import ConnectionTestCommandRunner
 from edge_runtime.supervisor.delegated_transport import CommandTransportError
-from edge_runtime.supervisor.inputs import ActionRecognized, StreamHealthObserved, SupervisorInput
+from edge_runtime.supervisor.inputs import (
+    ActionRecognized,
+    StreamHealthObserved,
+    SupervisorInput,
+    Validity,
+    ValidityChanged,
+)
 
 
 def _fixture_host_identity(seed: int) -> HostIdentityKeyPair:
@@ -262,7 +269,9 @@ class StationRuntimeTest(unittest.TestCase):
         self.assertEqual(StreamFact.INFERENCE_TIMEOUT, arriving.event.fact)
         source.close()
 
-    def test_sse_source_reports_a_source_error_when_the_inference_stream_cannot_open(self) -> None:
+    def test_sse_source_reports_backend_unreachable_when_the_inference_stream_cannot_open(
+        self,
+    ) -> None:
         source = SseStationInputSource(
             inference_url="http://inference.example/v1/chat/completions",
             request_body={"stream": True},
@@ -274,9 +283,13 @@ class StationRuntimeTest(unittest.TestCase):
         ):
             arriving = source.next_input(timeout=None)
 
-        self.assertIsInstance(arriving, StreamHealthObserved)
-        assert isinstance(arriving, StreamHealthObserved)
-        self.assertEqual(StreamFact.SOURCE_ERROR, arriving.event.fact)
+        self.assertEqual(
+            ValidityChanged(
+                reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                now=Validity.IMPAIRED,
+            ),
+            arriving,
+        )
         self.assertFalse(source.ended)
         source.close()
         self.assertTrue(source.ended)
@@ -449,8 +462,22 @@ class StationRuntimeTest(unittest.TestCase):
             side_effect=open_stream,
         ):
             failed = source.next_input(timeout=None)
-            self.assertIsInstance(failed, StreamHealthObserved)
+            restored = source.next_input(timeout=1.0)
             arriving = source.next_input(timeout=1.0)
+            self.assertEqual(
+                ValidityChanged(
+                    reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                    now=Validity.IMPAIRED,
+                ),
+                failed,
+            )
+            self.assertEqual(
+                ValidityChanged(
+                    reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                    now=Validity.RESTORED,
+                ),
+                restored,
+            )
             self.assertIsInstance(arriving, ActionRecognized)
             self.assertEqual(2, calls)
         source.close()

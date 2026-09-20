@@ -445,6 +445,112 @@ class HistoricalReportContextTest(unittest.TestCase):
         self.assertEqual(pending.decision.verdict, Verdict.INDETERMINATE)
         self.assertIn(ReasonCode.INFERENCE_BACKEND_UNREACHABLE, pending.decision.reasons)
 
+    def test_recovered_backend_is_not_seeded_into_a_later_instance(self) -> None:
+        bundle = ConfigurationBundle(
+            host_id="host-a",
+            config_revision=9,
+            generated_at="2026-09-16T00:00:00Z",
+            stations=(),
+        )
+        backend_a = BackendReportContext("backend-a", ("model-a",))
+        backend_b = BackendReportContext("backend-b", ("model-b",))
+        backend_c = BackendReportContext("backend-c", ("model-c",))
+        context = ReportContext(
+            host_id="host-a",
+            station_id=STATION,
+            backends=(backend_a, backend_b, backend_c),
+            template_version_id="template-a",
+            template_sha256="a" * 64,
+            configuration_revision=bundle.config_revision,
+            configuration_sha256=bundle.effective_sha256,
+            configuration_json=json.dumps(
+                configuration_to_wire(bundle), ensure_ascii=False, separators=(",", ":")
+            ),
+        )
+        state = open_local_state(":memory:")
+        self.addCleanup(state.close)
+        station = state.station(STATION, report_context=context)
+        driver = supervisor(opening_state(), FakeClock(), station)
+
+        driver.receive(
+            ValidityChanged(
+                reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                now=Validity.IMPAIRED,
+            ),
+            report_provenance=backend_a,
+        )
+        driver.receive(
+            ValidityChanged(
+                reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                now=Validity.IMPAIRED,
+            ),
+            report_provenance=backend_b,
+        )
+        driver.receive(
+            ValidityChanged(
+                reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                now=Validity.RESTORED,
+            ),
+            report_provenance=backend_a,
+        )
+        driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=backend_c)
+        driver.receive(action(STEPS[2], at=ANCHOR + 1.0), report_provenance=backend_c)
+
+        (pending,) = station.pending_reports()
+        assert pending.context is not None
+        self.assertEqual(pending.context.backends, (backend_b, backend_c))
+        self.assertEqual(pending.decision.verdict, Verdict.INDETERMINATE)
+        self.assertIn(ReasonCode.INFERENCE_BACKEND_UNREACHABLE, pending.decision.reasons)
+
+    def test_second_impaired_backend_is_recorded_for_an_open_instance(self) -> None:
+        bundle = ConfigurationBundle(
+            host_id="host-a",
+            config_revision=9,
+            generated_at="2026-09-16T00:00:00Z",
+            stations=(),
+        )
+        backend_a = BackendReportContext("backend-a", ("model-a",))
+        backend_b = BackendReportContext("backend-b", ("model-b",))
+        context = ReportContext(
+            host_id="host-a",
+            station_id=STATION,
+            backends=(backend_a, backend_b),
+            template_version_id="template-a",
+            template_sha256="a" * 64,
+            configuration_revision=bundle.config_revision,
+            configuration_sha256=bundle.effective_sha256,
+            configuration_json=json.dumps(
+                configuration_to_wire(bundle), ensure_ascii=False, separators=(",", ":")
+            ),
+        )
+        state = open_local_state(":memory:")
+        self.addCleanup(state.close)
+        station = state.station(STATION, report_context=context)
+        driver = supervisor(opening_state(), FakeClock(), station)
+
+        driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=backend_a)
+        driver.receive(
+            ValidityChanged(
+                reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                now=Validity.IMPAIRED,
+            ),
+            report_provenance=backend_a,
+        )
+        driver.receive(
+            ValidityChanged(
+                reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                now=Validity.IMPAIRED,
+            ),
+            report_provenance=backend_b,
+        )
+        driver.receive(action(STEPS[2], at=ANCHOR + 1.0), report_provenance=backend_a)
+
+        (pending,) = station.pending_reports()
+        assert pending.context is not None
+        self.assertEqual(pending.context.backends, (backend_a, backend_b))
+        self.assertEqual(pending.decision.verdict, Verdict.INDETERMINATE)
+        self.assertIn(ReasonCode.INFERENCE_BACKEND_UNREACHABLE, pending.decision.reasons)
+
     def test_non_first_backend_provenance_reaches_the_report_outbox(self) -> None:
         bundle = ConfigurationBundle(
             host_id="host-a",

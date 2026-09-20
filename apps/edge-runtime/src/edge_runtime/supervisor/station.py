@@ -104,19 +104,23 @@ class StationSupervisor:
     ) -> Reaction:
         """One thing that arrived from outside; reporting provenance stays outside judgment core."""
         normalizer = deepcopy(self._normalizer)
-        reaction = self._advance(
-            normalizer.events_for(arriving), report_provenance=report_provenance
-        )
         active_impaired_backend_provenance = dict(self._active_impaired_backend_provenance)
+        aggregate_transition = True
         if (
             isinstance(arriving, ValidityChanged)
             and arriving.reason is ReasonCode.INFERENCE_BACKEND_UNREACHABLE
             and report_provenance is not None
         ):
+            was_impaired = bool(active_impaired_backend_provenance)
             if arriving.now is Validity.IMPAIRED:
                 active_impaired_backend_provenance[report_provenance.backend_id] = report_provenance
             else:
-                active_impaired_backend_provenance.clear()
+                active_impaired_backend_provenance.pop(report_provenance.backend_id, None)
+            aggregate_transition = was_impaired != bool(active_impaired_backend_provenance)
+        reaction = self._advance(
+            normalizer.events_for(arriving) if aggregate_transition else (),
+            report_provenance=report_provenance,
+        )
         self._normalizer = normalizer
         self._active_impaired_backend_provenance = active_impaired_backend_provenance
         return reaction
@@ -184,14 +188,13 @@ class StationSupervisor:
             touched_ids.update(decision.instance_id for decision in outcome.decisions)
             closed_instances.extend(outcome.closed_instances)
             decisions.extend(outcome.decisions)
-        if events:
-            for instance_id in touched_ids:
-                existing = self._report_provenance.setdefault(instance_id, {})
-                if existing is not None and report_provenance is not None:
-                    existing[report_provenance.backend_id] = report_provenance
-                if existing is not None and instance_id in opened_ids:
-                    for provenance in self._active_impaired_backend_provenance.values():
-                        existing[provenance.backend_id] = provenance
+        for instance_id in touched_ids:
+            existing = self._report_provenance.setdefault(instance_id, {})
+            if existing is not None and report_provenance is not None:
+                existing[report_provenance.backend_id] = report_provenance
+            if existing is not None and instance_id in opened_ids:
+                for provenance in self._active_impaired_backend_provenance.values():
+                    existing[provenance.backend_id] = provenance
         committed_provenance: dict[int, tuple[BackendReportContext, ...] | None] = {}
         for instance_id in touched_ids:
             values = self._report_provenance.get(instance_id)

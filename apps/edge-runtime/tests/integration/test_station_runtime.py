@@ -249,82 +249,6 @@ class _BackendReachabilityInputSource:
         )
 
 
-class _BareBackendReachabilityInputSource:
-    def __init__(self) -> None:
-        self._phase = 0
-        self.waiting_for_restore = Event()
-        self.allow_restore = Event()
-        self._closed = Event()
-
-    @property
-    def ended(self) -> bool:
-        return False
-
-    def next_input(self, *, timeout: float | None) -> ValidityChanged | InputWaitExpired | None:
-        if self._phase == 0:
-            self._phase = 1
-            return ValidityChanged(
-                reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
-                now=Validity.IMPAIRED,
-            )
-        if self._phase == 1:
-            self.waiting_for_restore.set()
-            if not self.allow_restore.wait(timeout):
-                return InputWaitExpired()
-            self._phase = 2
-            return ValidityChanged(
-                reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
-                now=Validity.RESTORED,
-            )
-        if self._closed.wait(timeout):
-            return None
-        return InputWaitExpired()
-
-    def close(self) -> None:
-        self._closed.set()
-        self.allow_restore.set()
-
-
-class _ReachabilityRaceInputSource:
-    def __init__(self, backend_id: str, *, first: SupervisorInput | None = None) -> None:
-        self._backend_id = backend_id
-        self._first = first
-        self._emitted_first = first is None
-        self.allow_transition = Event()
-        self.transition_ready = Event()
-        self._closed = Event()
-
-    @property
-    def ended(self) -> bool:
-        return False
-
-    def next_input(
-        self, *, timeout: float | None
-    ) -> ProvenancedSupervisorInput | InputWaitExpired | None:
-        if not self._emitted_first:
-            self._emitted_first = True
-            assert self._first is not None
-            return ProvenancedSupervisorInput(
-                arriving=self._first,
-                provenance=BackendReportContext(backend_id=self._backend_id, model_ids=()),
-            )
-        self.transition_ready.set()
-        if not self.allow_transition.wait(timeout):
-            return InputWaitExpired()
-        self.allow_transition.clear()
-        return ProvenancedSupervisorInput(
-            arriving=ValidityChanged(
-                reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
-                now=Validity.IMPAIRED,
-            ),
-            provenance=BackendReportContext(backend_id=self._backend_id, model_ids=()),
-        )
-
-    def close(self) -> None:
-        self._closed.set()
-        self.allow_transition.set()
-
-
 class _OneInputSource:
     def __init__(self) -> None:
         self._input: SupervisorInput | None = ActionRecognized(
@@ -627,7 +551,7 @@ class RealSseStationInputSourceTest(unittest.TestCase):
 
 
 class MultiplexedStationInputSourceTest(unittest.TestCase):
-    def test_backend_reachability_keeps_each_impairment_provenance_and_restores_last(self) -> None:
+    def test_backend_reachability_preserves_each_transition_and_provenance(self) -> None:
         first = _BackendReachabilityInputSource("backend-a")
         second = _BackendReachabilityInputSource("backend-b")
         source = MultiplexedStationInputSource(sources=(first, second))
@@ -655,124 +579,30 @@ class MultiplexedStationInputSourceTest(unittest.TestCase):
             )
 
             first.allow_restore.set()
-            self.assertIsInstance(source.next_input(timeout=0.1), InputWaitExpired)
+            restored_first = source.next_input(timeout=1.0)
+            self.assertIsInstance(restored_first, ProvenancedSupervisorInput)
+            assert isinstance(restored_first, ProvenancedSupervisorInput)
+            self.assertEqual("backend-a", restored_first.provenance.backend_id)
+            self.assertEqual(
+                ValidityChanged(
+                    reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                    now=Validity.RESTORED,
+                ),
+                restored_first.arriving,
+            )
+
             second.allow_restore.set()
-            restored = source.next_input(timeout=1.0)
-
-            self.assertIsInstance(restored, ProvenancedSupervisorInput)
-            assert isinstance(restored, ProvenancedSupervisorInput)
+            restored_second = source.next_input(timeout=1.0)
+            self.assertIsInstance(restored_second, ProvenancedSupervisorInput)
+            assert isinstance(restored_second, ProvenancedSupervisorInput)
+            self.assertEqual("backend-b", restored_second.provenance.backend_id)
             self.assertEqual(
                 ValidityChanged(
                     reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
                     now=Validity.RESTORED,
                 ),
-                restored.arriving,
+                restored_second.arriving,
             )
-        finally:
-            source.close()
-
-    def test_unprovenanced_source_participates_in_shared_reachability_aggregation(self) -> None:
-        identified = _BackendReachabilityInputSource("backend-a")
-        bare = _BareBackendReachabilityInputSource()
-        source = MultiplexedStationInputSource(sources=(identified, bare))
-        try:
-            impaired = (source.next_input(timeout=1.0), source.next_input(timeout=1.0))
-            self.assertTrue(identified.waiting_for_restore.wait(1.0))
-            self.assertTrue(bare.waiting_for_restore.wait(1.0))
-            validities: list[Validity] = []
-            for item in impaired:
-                validity = item.arriving if isinstance(item, ProvenancedSupervisorInput) else item
-                self.assertIsInstance(validity, ValidityChanged)
-                assert isinstance(validity, ValidityChanged)
-                validities.append(validity.now)
-            self.assertEqual([Validity.IMPAIRED, Validity.IMPAIRED], validities)
-
-            bare.allow_restore.set()
-            self.assertIsInstance(source.next_input(timeout=0.1), InputWaitExpired)
-            identified.allow_restore.set()
-            restored = source.next_input(timeout=1.0)
-
-            self.assertIsInstance(restored, ProvenancedSupervisorInput)
-            assert isinstance(restored, ProvenancedSupervisorInput)
-            self.assertEqual(
-                ValidityChanged(
-                    reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
-                    now=Validity.RESTORED,
-                ),
-                restored.arriving,
-            )
-        finally:
-            source.close()
-
-    def test_reachability_transition_order_is_serialized_with_queue_publication(self) -> None:
-        first = _BackendReachabilityInputSource("backend-a")
-        filler = ActionRecognized(
-            signal="(1) start",
-            at=HostInstant(1.0),
-            source_time=1.0,
-            source_anchor=1.0,
-        )
-        second = _ReachabilityRaceInputSource("backend-b", first=filler)
-        source = MultiplexedStationInputSource(sources=(first, second), queue_size=1)
-        try:
-            impaired = source.next_input(timeout=1.0)
-            self.assertIsInstance(impaired, ProvenancedSupervisorInput)
-            self.assertTrue(first.waiting_for_restore.wait(1.0))
-            self.assertTrue(second.transition_ready.wait(1.0))
-
-            first.allow_restore.set()
-            second.allow_transition.set()
-            queued = source.next_input(timeout=1.0)
-            transition = source.next_input(timeout=1.0)
-
-            self.assertIsInstance(queued, ProvenancedSupervisorInput)
-            assert isinstance(queued, ProvenancedSupervisorInput)
-            self.assertIsInstance(queued.arriving, ActionRecognized)
-            self.assertIsInstance(transition, ProvenancedSupervisorInput)
-            assert isinstance(transition, ProvenancedSupervisorInput)
-            validity = cast(ValidityChanged, transition.arriving)
-            if validity.now is Validity.RESTORED:
-                impaired_second = source.next_input(timeout=1.0)
-                self.assertIsInstance(impaired_second, ProvenancedSupervisorInput)
-                assert isinstance(impaired_second, ProvenancedSupervisorInput)
-                self.assertEqual(
-                    Validity.IMPAIRED,
-                    cast(ValidityChanged, impaired_second.arriving).now,
-                )
-            else:
-                self.assertEqual(Validity.IMPAIRED, validity.now)
-                self.assertIsInstance(source.next_input(timeout=0.1), InputWaitExpired)
-        finally:
-            source.close()
-
-    def test_ordinary_input_uses_the_same_publication_order_as_reachability(self) -> None:
-        source = MultiplexedStationInputSource(sources=(_FinishedInputSource(),))
-        action = ProvenancedSupervisorInput(
-            arriving=ActionRecognized(
-                signal="(1) start",
-                at=HostInstant(1.0),
-                source_time=1.0,
-                source_anchor=1.0,
-            ),
-            provenance=BackendReportContext(backend_id="backend-a", model_ids=()),
-        )
-        started = Event()
-        finished = Event()
-
-        def publish() -> None:
-            started.set()
-            source._publish_backend_reachability(action, source_key="test-source")
-            finished.set()
-
-        publisher = threading.Thread(target=publish, daemon=True)
-        try:
-            with source._reachability_lock:
-                publisher.start()
-                self.assertTrue(started.wait(1.0))
-                self.assertFalse(finished.wait(0.05))
-            publisher.join(timeout=1.0)
-            self.assertFalse(publisher.is_alive())
-            self.assertEqual(action, source.next_input(timeout=1.0))
         finally:
             source.close()
 

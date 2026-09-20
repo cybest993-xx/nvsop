@@ -200,6 +200,10 @@ def _merge_station_bindings(
         raise RuntimeConfigurationError(
             f"station {first.configuration.station_id} 的 backend SOP 视图不兼容"
         )
+    if len(configurations) > 1 and any(value.backend_id is None for value in configurations):
+        raise RuntimeConfigurationError(
+            f"station {first.configuration.station_id} 的多 backend 运行时必须声明 backend_id"
+        )
     input_points: list[tuple[str, InputPoint]] = []
     output_points: list[tuple[str, OutputPoint]] = []
     connector_ids: list[str] = []

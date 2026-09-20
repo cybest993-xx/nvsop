@@ -504,6 +504,19 @@ class AutonomousRuntime:
             self._reporters = composition.reporters
         return previous
 
+    @staticmethod
+    def _close_stations(stations: tuple[AutonomousStation, ...]) -> None:
+        """关闭全部工位, 完成清理后再传播首个关闭失败。"""
+        first_error: BaseException | None = None
+        for station in stations:
+            try:
+                station.close()
+            except BaseException as error:
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
+            raise first_error
+
     def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
         """让命令循环和工位循环并行运行, 配置确认后安全重启本机运行周期。"""
         pending_bundle: ConfigurationBundle | None = None
@@ -685,11 +698,22 @@ class AutonomousRuntime:
             while not stop_requested() and any(thread.is_alive() for thread in threads):
                 sleep(0.05)
             cycle_stop.set()
-            for station in stations:
-                station.close()
+            try:
+                self._close_stations(stations)
+            except BaseException as error:
+                errors.append(error)
             for thread in threads:
                 thread.join()
             if errors:
+                if self._media is not None:
+                    try:
+                        self._media.close()
+                    except BaseException as error:
+                        errors.append(error)
+                try:
+                    self._state.close()
+                except BaseException as error:
+                    errors.append(error)
                 raise errors[0]
             if pending_bundle is not None:
                 bundle, pending_bundle = pending_bundle, None
@@ -721,8 +745,7 @@ class AutonomousRuntime:
                     )
                     restored = self._configuration_factory(current_configuration)
                     stale = self._replace_composition(restored)
-                    for station in stale.stations:
-                        station.close()
+                    self._close_stations(stale.stations)
                     continue
                 previous = self._replace_composition(composition)
                 try:
@@ -731,27 +754,31 @@ class AutonomousRuntime:
                 except Exception:
                     restored = self._configuration_factory(previous.configuration)
                     rejected = self._replace_composition(restored)
-                    for station in rejected.stations:
-                        station.close()
+                    self._close_stations(rejected.stations)
                     raise
 
-        with self._lock:
-            stations = tuple(self._stations)
-        for station in stations:
-            station.close()
-        if self._media is not None:
-            self._media.close()
-        self._state.close()
+        self.close()
 
     def close(self) -> None:
-        """关闭输入和本地状态, 供配置失败和进程退出路径共同调用。"""
+        """关闭全部运行资源, 完成清理后再传播首个关闭失败。"""
         with self._lock:
             stations = tuple(self._stations)
-        for station in stations:
-            station.close()
+        errors: list[BaseException] = []
+        try:
+            self._close_stations(stations)
+        except BaseException as error:
+            errors.append(error)
         if self._media is not None:
-            self._media.close()
-        self._state.close()
+            try:
+                self._media.close()
+            except BaseException as error:
+                errors.append(error)
+        try:
+            self._state.close()
+        except BaseException as error:
+            errors.append(error)
+        if errors:
+            raise errors[0]
 
 
 _logger = logging.getLogger("edge_runtime")

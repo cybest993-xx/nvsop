@@ -405,13 +405,19 @@ class MultiplexedStationInputSource(StationInputSource):
             self._closed = True
         self._stopping.set()
         self._wake.set()
+        errors: list[BaseException] = []
         for source in self._sources:
-            source.close()
+            try:
+                source.close()
+            except BaseException as error:
+                errors.append(error)
         for worker in self._workers:
             if worker is not current_thread():
                 worker.join(timeout=1.0)
         with self._state_lock:
             self._ended = True
+        if errors:
+            raise errors[0]
 
     def _pump(self, source: StationInputSource) -> None:
         try:

@@ -295,6 +295,30 @@ class _DelayedInputSource:
         self.release.set()
 
 
+class _CloseTrackingInputSource:
+    def __init__(self, *, fail_close: bool = False) -> None:
+        self.started = Event()
+        self.release = Event()
+        self.closed = False
+        self._fail_close = fail_close
+
+    @property
+    def ended(self) -> bool:
+        return self.closed
+
+    def next_input(self, *, timeout: float | None) -> None:
+        del timeout
+        self.started.set()
+        self.release.wait()
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+        self.release.set()
+        if self._fail_close:
+            raise RuntimeError("synthetic close failure")
+
+
 class _TrackingSseInputSource:
     instances: ClassVar[list[_TrackingSseInputSource]] = []
 
@@ -501,6 +525,22 @@ class MultiplexedStationInputSourceTest(unittest.TestCase):
             else:
                 self.assertEqual([], result)
                 self.assertEqual([expected], [str(error) for error in errors])
+
+    def test_close_finishes_all_children_and_workers_before_propagating_failure(self) -> None:
+        failing = _CloseTrackingInputSource(fail_close=True)
+        later = _CloseTrackingInputSource()
+        source = MultiplexedStationInputSource(sources=(failing, later))
+
+        self.assertIsInstance(source.next_input(timeout=0.01), InputWaitExpired)
+        self.assertTrue(failing.started.wait(1.0))
+        self.assertTrue(later.started.wait(1.0))
+
+        with self.assertRaisesRegex(RuntimeError, "synthetic close failure"):
+            source.close()
+
+        self.assertTrue(failing.closed)
+        self.assertTrue(later.closed)
+        self.assertTrue(source.ended)
 
     def test_wait_without_timeout_wakes_when_sources_end_or_fail(self) -> None:
         ended = MultiplexedStationInputSource(

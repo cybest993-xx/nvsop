@@ -488,16 +488,16 @@ class MultiplexedStationInputSource(StationInputSource):
     def _publish_backend_reachability(
         self, arriving: SupervisorInput | ProvenancedSupervisorInput
     ) -> bool:
-        if not isinstance(arriving, ProvenancedSupervisorInput):
-            return self._publish(arriving)
-        validity = arriving.arriving
-        if (
-            not isinstance(validity, ValidityChanged)
-            or validity.reason is not ReasonCode.INFERENCE_BACKEND_UNREACHABLE
-        ):
-            return self._publish(arriving)
-        backend_id = arriving.provenance.backend_id
         with self._reachability_lock:
+            if not isinstance(arriving, ProvenancedSupervisorInput):
+                return self._publish(arriving)
+            validity = arriving.arriving
+            if (
+                not isinstance(validity, ValidityChanged)
+                or validity.reason is not ReasonCode.INFERENCE_BACKEND_UNREACHABLE
+            ):
+                return self._publish(arriving)
+            backend_id = arriving.provenance.backend_id
             if validity.now is Validity.IMPAIRED:
                 self._unreachable_backends.add(backend_id)
                 return self._publish(arriving)

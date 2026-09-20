@@ -654,18 +654,56 @@ class MultiplexedStationInputSourceTest(unittest.TestCase):
             first.allow_restore.set()
             second.allow_transition.set()
             queued = source.next_input(timeout=1.0)
-            restored = source.next_input(timeout=1.0)
-            impaired_second = source.next_input(timeout=1.0)
+            transition = source.next_input(timeout=1.0)
 
             self.assertIsInstance(queued, ProvenancedSupervisorInput)
             assert isinstance(queued, ProvenancedSupervisorInput)
             self.assertIsInstance(queued.arriving, ActionRecognized)
-            self.assertIsInstance(restored, ProvenancedSupervisorInput)
-            assert isinstance(restored, ProvenancedSupervisorInput)
-            self.assertEqual(Validity.RESTORED, cast(ValidityChanged, restored.arriving).now)
-            self.assertIsInstance(impaired_second, ProvenancedSupervisorInput)
-            assert isinstance(impaired_second, ProvenancedSupervisorInput)
-            self.assertEqual(Validity.IMPAIRED, cast(ValidityChanged, impaired_second.arriving).now)
+            self.assertIsInstance(transition, ProvenancedSupervisorInput)
+            assert isinstance(transition, ProvenancedSupervisorInput)
+            validity = cast(ValidityChanged, transition.arriving)
+            if validity.now is Validity.RESTORED:
+                impaired_second = source.next_input(timeout=1.0)
+                self.assertIsInstance(impaired_second, ProvenancedSupervisorInput)
+                assert isinstance(impaired_second, ProvenancedSupervisorInput)
+                self.assertEqual(
+                    Validity.IMPAIRED,
+                    cast(ValidityChanged, impaired_second.arriving).now,
+                )
+            else:
+                self.assertEqual(Validity.IMPAIRED, validity.now)
+                self.assertIsInstance(source.next_input(timeout=0.1), InputWaitExpired)
+        finally:
+            source.close()
+
+    def test_ordinary_input_uses_the_same_publication_order_as_reachability(self) -> None:
+        source = MultiplexedStationInputSource(sources=(_FinishedInputSource(),))
+        action = ProvenancedSupervisorInput(
+            arriving=ActionRecognized(
+                signal="(1) start",
+                at=HostInstant(1.0),
+                source_time=1.0,
+                source_anchor=1.0,
+            ),
+            provenance=BackendReportContext(backend_id="backend-a", model_ids=()),
+        )
+        started = Event()
+        finished = Event()
+
+        def publish() -> None:
+            started.set()
+            source._publish_backend_reachability(action)
+            finished.set()
+
+        publisher = threading.Thread(target=publish, daemon=True)
+        try:
+            with source._reachability_lock:
+                publisher.start()
+                self.assertTrue(started.wait(1.0))
+                self.assertFalse(finished.wait(0.05))
+            publisher.join(timeout=1.0)
+            self.assertFalse(publisher.is_alive())
+            self.assertEqual(action, source.next_input(timeout=1.0))
         finally:
             source.close()
 

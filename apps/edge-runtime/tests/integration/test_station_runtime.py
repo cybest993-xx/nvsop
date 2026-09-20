@@ -23,6 +23,7 @@ from unittest.mock import patch
 
 from nvsop_contracts import HostIdentityKeyPair, generate_host_identity_key_pair
 
+from edge_runtime.judgment import ReasonCode, Verdict
 from edge_runtime.judgment.evidence import EvidenceMargins
 from edge_runtime.judgment.model import HostInstant, Ordering, RuntimeParameters, Template
 from edge_runtime.local_state.store import open_local_state
@@ -42,7 +43,7 @@ from edge_runtime.station_runtime import (
 from edge_runtime.stream_health import StreamFact
 from edge_runtime.supervisor.inputs import ActionRecognized, StreamHealthObserved, SupervisorInput
 from edge_runtime.supervisor.startup import resume_station
-from edge_runtime.supervisor.station import StationSupervisor
+from edge_runtime.supervisor.station import Reaction, StationSupervisor
 
 
 def _fixture_host_identity(seed: int) -> HostIdentityKeyPair:
@@ -671,6 +672,105 @@ class ProductionEntrypointIntegrationTest(unittest.TestCase):
                     process.terminate()
                 stdout, stderr = process.communicate(timeout=10)
                 self.assertEqual(0, process.returncode, f"stdout={stdout} stderr={stderr}")
+
+
+class NormalizedContractReplayTest(unittest.TestCase):
+    """同一 SSE 契约输入经真实输入 seam 重放时必须得到同一完整反应。"""
+
+    @staticmethod
+    def _payload() -> bytes:
+        first_anchor = 1_700_000_000.0
+        second_anchor = first_anchor + 30.0
+
+        def health(fact: str, *, at_monotonic: float, source_anchor: float) -> bytes:
+            return (
+                b"data: "
+                + json.dumps(
+                    {
+                        "choices": [
+                            {
+                                "chunk_metadata": {
+                                    "stream_health": {
+                                        "fact": fact,
+                                        "at_monotonic": at_monotonic,
+                                        "source_anchor": source_anchor,
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
+                + b"\n\n"
+            )
+
+        return b"".join(
+            (
+                _action("(1) start", source_time=1.0, source_anchor=first_anchor),
+                health("source_error", at_monotonic=101.0, source_anchor=first_anchor),
+                health("delivering", at_monotonic=102.0, source_anchor=first_anchor),
+                _action("(2) finish", source_time=2.0, source_anchor=second_anchor),
+                b"data: [DONE]\n\n",
+            )
+        )
+
+    @staticmethod
+    def _replay(payload: bytes, path: Path) -> tuple[Reaction, ...]:
+        state = open_local_state(str(path))
+        try:
+            supervisor = resume_station(
+                state.station("station-replay"),
+                template=Template(
+                    steps=("(1) start", "(2) finish"),
+                    ordering=Ordering.ORDERED,
+                    start_signal="(1) start",
+                ),
+                parameters=RuntimeParameters(idle_timeout=10.0, step_deadline=10.0),
+                margins=EvidenceMargins(leading=0.0, trailing=0.0),
+            )
+            with _sse_server([payload]) as url:
+                source = SseStationInputSource(
+                    inference_url=url,
+                    request_body={"stream": True},
+                    timeout=1.0,
+                )
+                try:
+                    reactions: list[Reaction] = []
+                    with patch(
+                        "edge_runtime.station_runtime.monotonic",
+                        side_effect=(0.0, 100.0, 103.0),
+                    ):
+                        for _ in range(4):
+                            arriving = source.next_input(timeout=None)
+                            if not isinstance(arriving, (ActionRecognized, StreamHealthObserved)):
+                                raise AssertionError(f"unexpected SSE input: {arriving!r}")
+                            reactions.append(supervisor.receive(arriving))
+                    return tuple(reactions)
+                finally:
+                    source.close()
+        finally:
+            state.close()
+
+    def test_same_sse_replay_reproduces_verdict_reasons_evidence_and_next_wake(self) -> None:
+        payload = self._payload()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = self._replay(payload, root / "first.sqlite")
+            second = self._replay(payload, root / "second.sqlite")
+
+        self.assertEqual(first, second)
+        self.assertEqual(HostInstant(110.0), first[0].wake_at)
+        final = first[-1]
+        self.assertIsNone(final.wake_at)
+        self.assertEqual(1, len(final.decisions))
+        decision = final.decisions[0]
+        self.assertIs(Verdict.INDETERMINATE, decision.verdict)
+        self.assertEqual(
+            {ReasonCode.STREAM_LOST, ReasonCode.TIMESTAMP_DISCONTINUITY},
+            set(decision.reasons),
+        )
+        self.assertEqual(HostInstant(103.0), decision.evidence.anchor)
+        self.assertEqual(HostInstant(103.0), decision.evidence.required_from)
+        self.assertEqual(HostInstant(103.0), decision.evidence.required_to)
 
 
 class AutonomousStationIntegrationTest(unittest.TestCase):

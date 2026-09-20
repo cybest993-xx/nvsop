@@ -25,7 +25,13 @@ from nvsop_contracts import HostIdentityKeyPair, generate_host_identity_key_pair
 
 from edge_runtime.judgment import ReasonCode, Verdict
 from edge_runtime.judgment.evidence import EvidenceMargins
-from edge_runtime.judgment.model import HostInstant, Ordering, RuntimeParameters, Template
+from edge_runtime.judgment.model import (
+    HostInstant,
+    Lifecycle,
+    Ordering,
+    RuntimeParameters,
+    Template,
+)
 from edge_runtime.local_state.queues import BackendReportContext
 from edge_runtime.local_state.store import open_local_state
 from edge_runtime.runtime import (
@@ -1045,7 +1051,10 @@ class AutonomousStationIntegrationTest(unittest.TestCase):
             station.run_forever(should_stop=lambda: False)
 
             self.assertTrue(source.closed)
-            self.assertEqual(1, len(store.pending_reports()))
+            reports = store.pending_reports()
+            self.assertEqual(1, len(reports))
+            self.assertIn(ReasonCode.RUN_INTERRUPTED, reports[0].decision.reasons)
+            self.assertIs(Lifecycle.CLOSED_BY_RUN_INTERRUPTION, reports[0].decision.lifecycle)
             state.close()
 
 

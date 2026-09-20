@@ -54,18 +54,25 @@ class _Synchronizer:
         candidate: ConfigurationBundle,
         confirmed: ConfigurationBundle,
         confirm_error: Exception | None = None,
+        candidate_sequence: tuple[ConfigurationBundle, ...] | None = None,
     ) -> None:
-        self.candidate = candidate
+        self._candidate_sequence = candidate_sequence or (candidate,)
         self.confirmed_bundle = confirmed
         self.confirm_error = confirm_error
         self.runtime: AutonomousRuntime | None = None
         self.confirmation_completed = False
         self.rejected = False
+        self.rejection_count = 0
+        self.synchronize_calls = 0
         self.confirm_saw_applied_runtime = False
 
     def synchronize(self, *, observed_at: float) -> ConfigurationSyncResult:
+        candidate = self._candidate_sequence[
+            min(self.synchronize_calls, len(self._candidate_sequence) - 1)
+        ]
+        self.synchronize_calls += 1
         return ConfigurationSyncResult(
-            candidate=self.candidate,
+            candidate=candidate,
             confirmed=self.confirmed_bundle,
             failure=None,
         )
@@ -80,6 +87,7 @@ class _Synchronizer:
 
     def reject_application(self, *, detail: str, observed_at: float) -> None:
         self.rejected = True
+        self.rejection_count += 1
 
 
 class RuntimeConfigurationSwitchTest(unittest.TestCase):
@@ -171,23 +179,46 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
         finally:
             runtime.close()
 
-    def test_composition_failure_keeps_old_runtime_unconfirmed(self) -> None:
+    def test_composition_failure_quarantines_candidate_until_identity_changes(self) -> None:
         old = _bundle(1)
-        candidate = _bundle(2)
-        synchronizer = _Synchronizer(candidate=candidate, confirmed=old)
+        rejected = _bundle(2)
+        replacement = _bundle(3)
+        synchronizer = _Synchronizer(
+            candidate=rejected,
+            confirmed=old,
+            candidate_sequence=(rejected, rejected, replacement),
+        )
         state = _State()
         old_runtime = RuntimeConfiguration(stations=(), connectors=(), confirmed=old)
-        candidate_runtime = RuntimeConfiguration(stations=(), connectors=(), confirmed=candidate)
+        rejected_runtime = RuntimeConfiguration(stations=(), connectors=(), confirmed=rejected)
+        replacement_runtime = RuntimeConfiguration(
+            stations=(), connectors=(), confirmed=replacement
+        )
         rollback = RuntimeComposition(
             configuration=old_runtime,
             stations=(),
             connector_runtimes=cast(ConnectorRuntimeSet, object()),
             output_dispatchers={},
         )
+        replacement_composition = RuntimeComposition(
+            configuration=replacement_runtime,
+            stations=(),
+            connector_runtimes=cast(ConnectorRuntimeSet, object()),
+            output_dispatchers={},
+        )
+        composition_attempts: list[int] = []
+
+        def resolve(bundle: ConfigurationBundle) -> RuntimeConfiguration:
+            return rejected_runtime if bundle is rejected else replacement_runtime
 
         def compose(runtime_configuration: RuntimeConfiguration) -> RuntimeComposition:
-            if runtime_configuration is candidate_runtime:
+            confirmed = runtime_configuration.confirmed
+            assert confirmed is not None
+            composition_attempts.append(confirmed.config_revision)
+            if runtime_configuration is rejected_runtime:
                 raise ValueError("candidate cannot be composed")
+            if runtime_configuration is replacement_runtime:
+                return replacement_composition
             return rollback
 
         runtime = AutonomousRuntime(
@@ -197,16 +228,18 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
             configuration_sync=cast(ConfigurationSynchronizer, synchronizer),
             maintenance_interval=0.001,
             configuration=old_runtime,
-            configuration_resolver=lambda bundle: candidate_runtime,
+            configuration_resolver=resolve,
             configuration_factory=compose,
             connector_runtimes=cast(ConnectorRuntimeSet, object()),
         )
         synchronizer.runtime = runtime
 
-        runtime.run_forever(should_stop=lambda: synchronizer.rejected)
+        runtime.run_forever(should_stop=lambda: synchronizer.confirmation_completed)
 
-        self.assertFalse(synchronizer.confirmation_completed)
-        self.assertEqual(runtime.configuration, old_runtime)
+        self.assertEqual(synchronizer.rejection_count, 1)
+        self.assertGreaterEqual(synchronizer.synchronize_calls, 3)
+        self.assertEqual(composition_attempts, [2, 1, 3])
+        self.assertEqual(runtime.configuration, replacement_runtime)
         self.assertTrue(state.closed)
 
 

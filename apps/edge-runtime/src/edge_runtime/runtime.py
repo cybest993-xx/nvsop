@@ -460,6 +460,7 @@ class AutonomousRuntime:
         self._configuration = configuration
         self._configuration_resolver = configuration_resolver
         self._configuration_factory = configuration_factory
+        self._rejected_configuration_identity: tuple[int, str] | None = None
         self._connector_runtimes = connector_runtimes
         self._output_dispatchers = dict(output_dispatchers or {})
         self._lock = threading.RLock()
@@ -579,7 +580,14 @@ class AutonomousRuntime:
                                 )
                             candidate = result.candidate
                             current = self.configuration
-                            if candidate is not None:
+                            if (
+                                candidate is not None
+                                and (
+                                    candidate.config_revision,
+                                    candidate.effective_sha256,
+                                )
+                                != self._rejected_configuration_identity
+                            ):
                                 current_confirmed = None if current is None else current.confirmed
                                 same_runtime_identity = (
                                     current_confirmed is not None
@@ -703,6 +711,10 @@ class AutonomousRuntime:
                         detail=str(error),
                         observed_at=confirmed_at,
                     )
+                    self._rejected_configuration_identity = (
+                        bundle.config_revision,
+                        bundle.effective_sha256,
+                    )
                     _logger.warning(
                         "edge.configuration_apply.rejected error_type=%s",
                         type(error).__name__,
@@ -715,6 +727,7 @@ class AutonomousRuntime:
                 previous = self._replace_composition(composition)
                 try:
                     self._configuration_sync.confirm(bundle, confirmed_at=confirmed_at)
+                    self._rejected_configuration_identity = None
                 except Exception:
                     restored = self._configuration_factory(previous.configuration)
                     rejected = self._replace_composition(restored)

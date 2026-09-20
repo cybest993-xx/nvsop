@@ -40,7 +40,7 @@
 1. Edge 拉取候选并验证 wire 摘要、host scope、revision/同 revision 内容冲突及 `required_capabilities`。
 2. 旧循环仍运行时，只把候选与主机本地端点、request、adapter profile、凭据解析为纯 `RuntimeConfiguration`；这一阶段不读取/写入 live station supervisor state，SQLite 的 durable confirmed 不变。
 3. 纯解析失败时记录诊断，旧 runtime 和最后 confirmed 继续使用；成功时才请求旧循环停机。
-4. 旧工位线程全部 join 后，Edge 才从最新 SQLite 状态恢复 supervisor 并构造候选 `RuntimeComposition`。此时不存在旧 supervisor 与候选 supervisor 并发提交；若 composition 失败，重新从原活动 `RuntimeConfiguration` 构造 runtime 并继续最后 confirmed。
+4. 旧工位线程全部 join 后，Edge 才从最新 SQLite 状态恢复 supervisor 并构造候选 `RuntimeComposition`。此时不存在旧 supervisor 与候选 supervisor 并发提交；若 composition 失败，重新从原活动 `RuntimeConfiguration` 构造 runtime 并继续最后 confirmed，同时在当前进程内按 `(config_revision, effective_sha256)` 隔离该失败候选。相同候选后续同步不得再次停工位，只有候选身份变化才重新尝试 composition。
 5. 候选 composition 构造成功后切换内存 runtime，`LocalConfigurationStore.confirm()` 才原子持久确认同一候选。确认失败会关闭候选工位资源，不启动新 runtime 循环；随后失败退出，重启仍以最后 durable confirmed 为恢复事实。
 6. 判定 outbox 的 Center 确认/上报失败沿既有重试路径重发，不触发配置重复应用。
 

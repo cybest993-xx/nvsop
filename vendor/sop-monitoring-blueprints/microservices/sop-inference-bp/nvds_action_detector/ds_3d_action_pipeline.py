@@ -210,15 +210,23 @@ class TensorInspector(BatchMetadataOperator):
 
 
 class InferenceOutputTensorParser(BatchMetadataOperator):
-    def __init__(self, queue: Queue):
+    def __init__(self, queue: Queue, stream_epoch_provider: Optional[Callable[[], int]] = None):
         super().__init__()
         self._queue = queue
+        self._stream_epoch_provider = stream_epoch_provider
         self._sliding_windows_size = SLIDING_WINDOWS_SIZE
         self._temporal_pts = []
         self._first_metadata = True
 
+    def _put_boundary(self, item, stream_epoch):
+        if stream_epoch is None:
+            self._queue.put(item)
+        else:
+            self._queue.put((stream_epoch, *item))
+
     def handle_metadata(self, batch_meta):
         logger.debug(f"######## batch_meta: {batch_meta}")
+        stream_epoch = self._stream_epoch_provider() if self._stream_epoch_provider is not None else None
         for frame_meta in batch_meta.frame_items:
             logger.debug(f"######## frame_meta: {frame_meta}")
             frame_num = frame_meta.frame_number
@@ -226,7 +234,7 @@ class InferenceOutputTensorParser(BatchMetadataOperator):
             self._temporal_pts.append((frame_num, pts))
             if self._first_metadata:
                 self._first_metadata = False
-                self._queue.put((frame_num, pts, -1))
+                self._put_boundary((frame_num, pts, -1), stream_epoch)
 
             if len(self._temporal_pts) > self._sliding_windows_size:
                 self._temporal_pts.pop(0)
@@ -253,7 +261,7 @@ class InferenceOutputTensorParser(BatchMetadataOperator):
                 frame_i, pts_i = self._temporal_pts[FRAMES_PER_SIDE + i]
                 if frame_i != frame_id:
                     logger.warning(f"handle_metadata frame_i != frame_id, frame_i: {frame_i}, frame_id: {frame_id}")
-                self._queue.put((frame_i, pts_i, confidence))
+                self._put_boundary((frame_i, pts_i, confidence), stream_epoch)
 
             # tensor_items = list(frame_meta.tensor_items)
             # print(f"######## tensor_items, size: {len(tensor_items)}, tensor_items: {tensor_items}")
@@ -396,6 +404,7 @@ def create_inference_pipeline(
     #    pipeline.add("filesrc", "src", {"location": file_path})
     #    pipeline.add("decodebin", "srcbin")
     frame_retriever = kwargs.get("frame_retriever", None)
+    stream_epoch_provider = kwargs.get("stream_epoch_provider", None)
     mux_width = kwargs.get("mux_width", CAMERA_WIDTH)
     mux_height = kwargs.get("mux_height", CAMERA_HEIGHT)
     is_camera = False
@@ -523,7 +532,13 @@ def create_inference_pipeline(
         else:
             pipeline.add("nvinfer", "inferencer", {"config-file-path": INFERENCE_CONFIG, "gpu-id": gpu_id})
         pipeline.add("fakesink", "fakesink", {"sync": False, "qos": False})
-        meta_probe = Probe("probe", InferenceOutputTensorParser(queue=score_queue))
+        meta_probe = Probe(
+            "probe",
+            InferenceOutputTensorParser(
+                queue=score_queue,
+                stream_epoch_provider=stream_epoch_provider,
+            ),
+        )
         pipeline.attach("queue2", meta_probe)
         pipeline.link("mux", "tee1", "queue1", "preprocess_3d", "inferencer", "queue2", "fakesink")
         logger.info("######## linked mux -> tee1 -> preprocess_3d -> inferencer -> fakesink")

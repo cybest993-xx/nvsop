@@ -169,6 +169,9 @@ class SseStationInputSource(StationInputSource):
         reader = self._reader
         if reader is not None and reader is not current_thread():
             reader.join(timeout=self._timeout + 0.1)
+            if reader.is_alive():
+                raise RuntimeError("station SSE reader did not stop after close")
+            self._reader = None
 
     def _wait_for_retry(self, timeout: float | None) -> bool:
         delay = max(0.0, self._next_retry_at - monotonic())

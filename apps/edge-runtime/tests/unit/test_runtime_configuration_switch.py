@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from collections.abc import Callable
+from threading import Event
 from time import sleep
 from typing import cast
 
@@ -49,6 +50,19 @@ class _Station:
         while not should_stop():
             sleep(0.001)
         self.stopped = True
+
+
+class _CoordinatedStation(_Station):
+    def __init__(self, *, close_started: Event, wait_for_close_started: Event) -> None:
+        super().__init__()
+        self._close_started = close_started
+        self._wait_for_close_started = wait_for_close_started
+
+    def close(self) -> None:
+        self._close_started.set()
+        if not self._wait_for_close_started.wait(0.2):
+            raise RuntimeError("station close was serialized")
+        super().close()
 
 
 class _Media:
@@ -128,6 +142,33 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
         self.assertTrue(failing.closed)
         self.assertTrue(later.closed)
         self.assertTrue(media.closed)
+        self.assertTrue(state.closed)
+
+    def test_close_starts_all_station_shutdowns_before_waiting(self) -> None:
+        first_started = Event()
+        second_started = Event()
+        first = _CoordinatedStation(
+            close_started=first_started,
+            wait_for_close_started=second_started,
+        )
+        second = _CoordinatedStation(
+            close_started=second_started,
+            wait_for_close_started=first_started,
+        )
+        state = _State()
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            stations=(
+                cast(AutonomousStation, first),
+                cast(AutonomousStation, second),
+            ),
+            state=cast(LocalState, state),
+        )
+
+        runtime.close()
+
+        self.assertTrue(first.closed)
+        self.assertTrue(second.closed)
         self.assertTrue(state.closed)
 
     def test_configuration_switch_close_failure_cleans_runtime_before_propagating(self) -> None:

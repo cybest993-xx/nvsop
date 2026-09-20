@@ -506,16 +506,30 @@ class AutonomousRuntime:
 
     @staticmethod
     def _close_stations(stations: tuple[AutonomousStation, ...]) -> None:
-        """关闭全部工位, 完成清理后再传播首个关闭失败。"""
-        first_error: BaseException | None = None
-        for station in stations:
+        """同时启动全部工位关闭, 完成清理后再传播首个关闭失败。"""
+        errors: list[BaseException | None] = [None] * len(stations)
+
+        def close_station(index: int, station: AutonomousStation) -> None:
             try:
                 station.close()
             except BaseException as error:
-                if first_error is None:
-                    first_error = error
-        if first_error is not None:
-            raise first_error
+                errors[index] = error
+
+        closers = tuple(
+            threading.Thread(
+                target=close_station,
+                args=(index, station),
+                name=f"edge-station-close-{index}",
+            )
+            for index, station in enumerate(stations)
+        )
+        for closer in closers:
+            closer.start()
+        for closer in closers:
+            closer.join()
+        for error in errors:
+            if error is not None:
+                raise error
 
     def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
         """让命令循环和工位循环并行运行, 配置确认后安全重启本机运行周期。"""

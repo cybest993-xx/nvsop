@@ -405,19 +405,30 @@ class MultiplexedStationInputSource(StationInputSource):
             self._closed = True
         self._stopping.set()
         self._wake.set()
-        errors: list[BaseException] = []
-        for source in self._sources:
+        errors: list[BaseException | None] = [None] * len(self._sources)
+
+        def close_source(index: int, source: StationInputSource) -> None:
             try:
                 source.close()
             except BaseException as error:
-                errors.append(error)
+                errors[index] = error
+
+        closers = tuple(
+            Thread(target=close_source, args=(index, source), name=f"edge-station-close-{index}")
+            for index, source in enumerate(self._sources)
+        )
+        for closer in closers:
+            closer.start()
+        for closer in closers:
+            closer.join()
         for worker in self._workers:
             if worker is not current_thread():
                 worker.join(timeout=1.0)
         with self._state_lock:
             self._ended = True
-        if errors:
-            raise errors[0]
+        for error in errors:
+            if error is not None:
+                raise error
 
     def _pump(self, source: StationInputSource) -> None:
         try:

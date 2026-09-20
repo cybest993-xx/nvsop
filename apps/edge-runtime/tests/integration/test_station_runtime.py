@@ -319,6 +319,19 @@ class _CloseTrackingInputSource:
             raise RuntimeError("synthetic close failure")
 
 
+class _CoordinatedCloseInputSource(_CloseTrackingInputSource):
+    def __init__(self, *, close_started: Event, wait_for_close_started: Event) -> None:
+        super().__init__()
+        self._close_started = close_started
+        self._wait_for_close_started = wait_for_close_started
+
+    def close(self) -> None:
+        self._close_started.set()
+        if not self._wait_for_close_started.wait(0.2):
+            raise RuntimeError("source close was serialized")
+        super().close()
+
+
 class _TrackingSseInputSource:
     instances: ClassVar[list[_TrackingSseInputSource]] = []
 
@@ -540,6 +553,25 @@ class MultiplexedStationInputSourceTest(unittest.TestCase):
 
         self.assertTrue(failing.closed)
         self.assertTrue(later.closed)
+        self.assertTrue(source.ended)
+
+    def test_close_starts_all_child_shutdowns_before_waiting(self) -> None:
+        first_started = Event()
+        second_started = Event()
+        first = _CoordinatedCloseInputSource(
+            close_started=first_started,
+            wait_for_close_started=second_started,
+        )
+        second = _CoordinatedCloseInputSource(
+            close_started=second_started,
+            wait_for_close_started=first_started,
+        )
+        source = MultiplexedStationInputSource(sources=(first, second))
+
+        source.close()
+
+        self.assertTrue(first.closed)
+        self.assertTrue(second.closed)
         self.assertTrue(source.ended)
 
     def test_wait_without_timeout_wakes_when_sources_end_or_fail(self) -> None:

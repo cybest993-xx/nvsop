@@ -108,7 +108,6 @@ class SseStationInputSource(StationInputSource):
         self._timeout = timeout
         self._events: Queue[SupervisorInput | _Disconnected] = Queue(maxsize=queue_size)
         self._reader: Thread | None = None
-        self._response: _SseResponse | None = None
         self._closed = False
         self._ended = False
         self._next_retry_at = 0.0
@@ -161,11 +160,6 @@ class SseStationInputSource(StationInputSource):
         except Full:
             self._discard_events()
             self._events.put_nowait(_Disconnected(StreamFact.STREAM_ENDED))
-        response = self._response
-        if response is not None:
-            with suppress(OSError, AttributeError):
-                response.close()
-            self._response = None
         reader = self._reader
         if reader is not None and reader is not current_thread():
             reader.join(timeout=self._timeout + 0.1)
@@ -214,7 +208,6 @@ class SseStationInputSource(StationInputSource):
                 return
             except OSError:
                 return
-            self._response = response
             data_lines: list[str] = []
             while not self._closed:
                 try:
@@ -250,8 +243,6 @@ class SseStationInputSource(StationInputSource):
             if response is not None:
                 with suppress(OSError, AttributeError):
                     response.close()
-            if self._response is response:
-                self._response = None
             if not self._closed:
                 self._enqueue_disconnect(disconnect_fact)
 

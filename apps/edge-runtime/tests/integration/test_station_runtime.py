@@ -113,6 +113,28 @@ class _BlockingSseHandler(BaseHTTPRequestHandler):
         del format_string, args
 
 
+class _TricklingSseHandler(BaseHTTPRequestHandler):
+    first_byte_sent: ClassVar[Event]
+    release: ClassVar[Event]
+
+    def do_POST(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        self.wfile.flush()
+        while not self.release.wait(0.05):
+            try:
+                self.wfile.write(b"x")
+                self.wfile.flush()
+            except OSError:
+                return
+            self.first_byte_sent.set()
+
+    def log_message(self, format_string: str, *args: object) -> None:
+        del format_string, args
+
+
 @contextmanager
 def _sse_server(payloads: list[bytes]) -> Iterator[str]:
     _SseHandler.payloads = list(payloads)
@@ -157,6 +179,22 @@ def _blocking_sse_server() -> Iterator[str]:
         yield f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
     finally:
         _BlockingSseHandler.release.set()
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+@contextmanager
+def _trickling_sse_server() -> Iterator[str]:
+    _TricklingSseHandler.first_byte_sent = Event()
+    _TricklingSseHandler.release = Event()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _TricklingSseHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
+    finally:
+        _TricklingSseHandler.release.set()
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
@@ -310,6 +348,43 @@ class RealSseStationInputSourceTest(unittest.TestCase):
             reader.join(timeout=1.0)
             self.assertFalse(reader.is_alive())
             self.assertEqual([None], result)
+
+    def test_close_is_bounded_when_real_http_sse_never_finishes_a_line(self) -> None:
+        with _trickling_sse_server() as url:
+            source = SseStationInputSource(
+                inference_url=url,
+                request_body={"stream": True},
+                timeout=0.2,
+            )
+            result: list[object] = []
+            reader = threading.Thread(
+                target=lambda: result.append(source.next_input(timeout=None)),
+                daemon=True,
+            )
+            reader.start()
+            self.assertTrue(_TricklingSseHandler.first_byte_sent.wait(1.0))
+
+            errors: list[BaseException] = []
+
+            def close_source() -> None:
+                try:
+                    source.close()
+                except BaseException as error:
+                    errors.append(error)
+
+            closer = threading.Thread(target=close_source, daemon=True)
+            closer.start()
+            closer.join(timeout=0.75)
+            self.assertFalse(closer.is_alive())
+            self.assertEqual(1, len(errors))
+            self.assertIsInstance(errors[0], RuntimeError)
+            self.assertIn("SSE reader did not stop", str(errors[0]))
+            reader.join(timeout=1.0)
+            self.assertFalse(reader.is_alive())
+            self.assertEqual([None], result)
+
+            _TricklingSseHandler.release.set()
+            source.close()
 
     def test_real_http_sse_preserves_health_and_action_then_reconnects(self) -> None:
         first_payload = b"".join(

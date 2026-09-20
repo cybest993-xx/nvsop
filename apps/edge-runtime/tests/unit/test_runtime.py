@@ -339,6 +339,7 @@ class StationRuntimeTest(unittest.TestCase):
         self.assertTrue(response.started.wait(1.0))
         self.assertLess(elapsed, 0.5)
         self.assertFalse(source.ended)
+        response.release.set()
         source.close()
         self.assertTrue(response.closed)
 

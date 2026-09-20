@@ -66,7 +66,7 @@ E4 修正后健康 hook 收敛为一个服务路径回调；S010 最终确认 FI
 - **全量吸收（fork）**：低估 GPU 基础设施维护成本。`vss-engine:2.4.1` 与 DeepStream 9.0 的升级适配本身就是持续工作量，分叉意味着自建一个 DeepStream 维护团队，并放弃 NVIDIA 的安全补丁与性能改进。
 - **三处都打补丁**（最早方案）：其中序列比对那处必须侵入方法内部控制流，每次 `subtree pull` 都要在他人的状态机里解冲突。
 - **两处加输出 + 一处自己实现**（前一版）：把处置列为第二处改造。判定移入 supervisor 后该处失去必要性，见上节。
-- **一处登记补丁 + 一处自己实现 + 两处配置关闭（采纳）**：推理基座只保留同一 vendor 文件中的 stream epoch barrier、健康 hook/旁路、internal-vLLM stale work 退休与 uniform/DDM 状态重置；训练基座另登记一处兼容性补丁；最需要我们掌握的判定核心完全由我们拥有。
+- **一处登记补丁 + 一处自己实现 + 两处配置关闭（采纳）**：推理基座只保留同一登记补丁涉及的两个批准 vendor 文件：`ds_sop_process.py` 持有 stream epoch barrier、健康排序、EOS 尾块排序与 VLM stale work 退休，`ds_3d_action_pipeline.py` 只给 DDM metadata producer 附加 epoch；训练基座另登记一处兼容性补丁；最需要我们掌握的判定核心完全由我们拥有。
 
 ## 补丁纪律
 

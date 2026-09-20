@@ -108,7 +108,6 @@ class SseStationInputSource(StationInputSource):
         self._timeout = timeout
         self._events: Queue[SupervisorInput | _Disconnected] = Queue(maxsize=queue_size)
         self._reader: Thread | None = None
-        self._response: _SseResponse | None = None
         self._closed = False
         self._ended = False
         self._next_retry_at = 0.0
@@ -161,14 +160,12 @@ class SseStationInputSource(StationInputSource):
         except Full:
             self._discard_events()
             self._events.put_nowait(_Disconnected(StreamFact.STREAM_ENDED))
-        response = self._response
-        if response is not None:
-            with suppress(OSError, AttributeError):
-                response.close()
-            self._response = None
         reader = self._reader
         if reader is not None and reader is not current_thread():
             reader.join(timeout=self._timeout + 0.1)
+            if reader.is_alive():
+                raise RuntimeError("station SSE reader did not stop after close")
+            self._reader = None
 
     def _wait_for_retry(self, timeout: float | None) -> bool:
         delay = max(0.0, self._next_retry_at - monotonic())
@@ -211,7 +208,6 @@ class SseStationInputSource(StationInputSource):
                 return
             except OSError:
                 return
-            self._response = response
             data_lines: list[str] = []
             while not self._closed:
                 try:
@@ -247,8 +243,6 @@ class SseStationInputSource(StationInputSource):
             if response is not None:
                 with suppress(OSError, AttributeError):
                     response.close()
-            if self._response is response:
-                self._response = None
             if not self._closed:
                 self._enqueue_disconnect(disconnect_fact)
 
@@ -411,13 +405,30 @@ class MultiplexedStationInputSource(StationInputSource):
             self._closed = True
         self._stopping.set()
         self._wake.set()
-        for source in self._sources:
-            source.close()
+        errors: list[BaseException | None] = [None] * len(self._sources)
+
+        def close_source(index: int, source: StationInputSource) -> None:
+            try:
+                source.close()
+            except BaseException as error:
+                errors[index] = error
+
+        closers = tuple(
+            Thread(target=close_source, args=(index, source), name=f"edge-station-close-{index}")
+            for index, source in enumerate(self._sources)
+        )
+        for closer in closers:
+            closer.start()
+        for closer in closers:
+            closer.join()
         for worker in self._workers:
             if worker is not current_thread():
                 worker.join(timeout=1.0)
         with self._state_lock:
             self._ended = True
+        for error in errors:
+            if error is not None:
+                raise error
 
     def _pump(self, source: StationInputSource) -> None:
         try:

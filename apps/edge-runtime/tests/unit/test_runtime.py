@@ -281,7 +281,7 @@ class StationRuntimeTest(unittest.TestCase):
         source.close()
         self.assertTrue(source.ended)
 
-    def test_close_returns_while_http_stream_open_is_blocked(self) -> None:
+    def test_close_fails_if_http_stream_open_does_not_stop_within_timeout(self) -> None:
         opened = Event()
         release = Event()
         response = FakeSseResponse()
@@ -308,7 +308,8 @@ class StationRuntimeTest(unittest.TestCase):
             )
             reader.start()
             self.assertTrue(opened.wait(1.0))
-            source.close()
+            with self.assertRaisesRegex(RuntimeError, "SSE reader did not stop"):
+                source.close()
             reader.join(timeout=1.0)
             self.assertFalse(reader.is_alive())
             self.assertEqual([None], arriving)
@@ -338,6 +339,7 @@ class StationRuntimeTest(unittest.TestCase):
         self.assertTrue(response.started.wait(1.0))
         self.assertLess(elapsed, 0.5)
         self.assertFalse(source.ended)
+        response.release.set()
         source.close()
         self.assertTrue(response.closed)
 

@@ -113,6 +113,28 @@ class _BlockingSseHandler(BaseHTTPRequestHandler):
         del format_string, args
 
 
+class _TricklingSseHandler(BaseHTTPRequestHandler):
+    first_byte_sent: ClassVar[Event]
+    release: ClassVar[Event]
+
+    def do_POST(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        self.wfile.flush()
+        while not self.release.wait(0.05):
+            try:
+                self.wfile.write(b"x")
+                self.wfile.flush()
+            except OSError:
+                return
+            self.first_byte_sent.set()
+
+    def log_message(self, format_string: str, *args: object) -> None:
+        del format_string, args
+
+
 @contextmanager
 def _sse_server(payloads: list[bytes]) -> Iterator[str]:
     _SseHandler.payloads = list(payloads)
@@ -157,6 +179,22 @@ def _blocking_sse_server() -> Iterator[str]:
         yield f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
     finally:
         _BlockingSseHandler.release.set()
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+@contextmanager
+def _trickling_sse_server() -> Iterator[str]:
+    _TricklingSseHandler.first_byte_sent = Event()
+    _TricklingSseHandler.release = Event()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _TricklingSseHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
+    finally:
+        _TricklingSseHandler.release.set()
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
@@ -257,6 +295,43 @@ class _DelayedInputSource:
         self.release.set()
 
 
+class _CloseTrackingInputSource:
+    def __init__(self, *, fail_close: bool = False) -> None:
+        self.started = Event()
+        self.release = Event()
+        self.closed = False
+        self._fail_close = fail_close
+
+    @property
+    def ended(self) -> bool:
+        return self.closed
+
+    def next_input(self, *, timeout: float | None) -> None:
+        del timeout
+        self.started.set()
+        self.release.wait()
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+        self.release.set()
+        if self._fail_close:
+            raise RuntimeError("synthetic close failure")
+
+
+class _CoordinatedCloseInputSource(_CloseTrackingInputSource):
+    def __init__(self, *, close_started: Event, wait_for_close_started: Event) -> None:
+        super().__init__()
+        self._close_started = close_started
+        self._wait_for_close_started = wait_for_close_started
+
+    def close(self) -> None:
+        self._close_started.set()
+        if not self._wait_for_close_started.wait(0.2):
+            raise RuntimeError("source close was serialized")
+        super().close()
+
+
 class _TrackingSseInputSource:
     instances: ClassVar[list[_TrackingSseInputSource]] = []
 
@@ -310,6 +385,43 @@ class RealSseStationInputSourceTest(unittest.TestCase):
             reader.join(timeout=1.0)
             self.assertFalse(reader.is_alive())
             self.assertEqual([None], result)
+
+    def test_close_is_bounded_when_real_http_sse_never_finishes_a_line(self) -> None:
+        with _trickling_sse_server() as url:
+            source = SseStationInputSource(
+                inference_url=url,
+                request_body={"stream": True},
+                timeout=0.2,
+            )
+            result: list[object] = []
+            reader = threading.Thread(
+                target=lambda: result.append(source.next_input(timeout=None)),
+                daemon=True,
+            )
+            reader.start()
+            self.assertTrue(_TricklingSseHandler.first_byte_sent.wait(1.0))
+
+            errors: list[BaseException] = []
+
+            def close_source() -> None:
+                try:
+                    source.close()
+                except BaseException as error:
+                    errors.append(error)
+
+            closer = threading.Thread(target=close_source, daemon=True)
+            closer.start()
+            closer.join(timeout=0.75)
+            self.assertFalse(closer.is_alive())
+            self.assertEqual(1, len(errors))
+            self.assertIsInstance(errors[0], RuntimeError)
+            self.assertIn("SSE reader did not stop", str(errors[0]))
+            reader.join(timeout=1.0)
+            self.assertFalse(reader.is_alive())
+            self.assertEqual([None], result)
+
+            _TricklingSseHandler.release.set()
+            source.close()
 
     def test_real_http_sse_preserves_health_and_action_then_reconnects(self) -> None:
         first_payload = b"".join(
@@ -426,6 +538,41 @@ class MultiplexedStationInputSourceTest(unittest.TestCase):
             else:
                 self.assertEqual([], result)
                 self.assertEqual([expected], [str(error) for error in errors])
+
+    def test_close_finishes_all_children_and_workers_before_propagating_failure(self) -> None:
+        failing = _CloseTrackingInputSource(fail_close=True)
+        later = _CloseTrackingInputSource()
+        source = MultiplexedStationInputSource(sources=(failing, later))
+
+        self.assertIsInstance(source.next_input(timeout=0.01), InputWaitExpired)
+        self.assertTrue(failing.started.wait(1.0))
+        self.assertTrue(later.started.wait(1.0))
+
+        with self.assertRaisesRegex(RuntimeError, "synthetic close failure"):
+            source.close()
+
+        self.assertTrue(failing.closed)
+        self.assertTrue(later.closed)
+        self.assertTrue(source.ended)
+
+    def test_close_starts_all_child_shutdowns_before_waiting(self) -> None:
+        first_started = Event()
+        second_started = Event()
+        first = _CoordinatedCloseInputSource(
+            close_started=first_started,
+            wait_for_close_started=second_started,
+        )
+        second = _CoordinatedCloseInputSource(
+            close_started=second_started,
+            wait_for_close_started=first_started,
+        )
+        source = MultiplexedStationInputSource(sources=(first, second))
+
+        source.close()
+
+        self.assertTrue(first.closed)
+        self.assertTrue(second.closed)
+        self.assertTrue(source.ended)
 
     def test_wait_without_timeout_wakes_when_sources_end_or_fail(self) -> None:
         ended = MultiplexedStationInputSource(

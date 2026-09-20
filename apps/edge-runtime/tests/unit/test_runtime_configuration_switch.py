@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from collections.abc import Callable
+from threading import Event
 from time import sleep
 from typing import cast
 
@@ -10,6 +11,7 @@ from nvsop_contracts import ConfigurationBundle
 from edge_runtime.configuration_sync import ConfigurationSynchronizer, ConfigurationSyncResult
 from edge_runtime.connectors.runtime import ConnectorRuntimeSet
 from edge_runtime.local_state.store import LocalState
+from edge_runtime.media import MediaRuntime
 from edge_runtime.runtime import (
     AutonomousRuntime,
     AutonomousStation,
@@ -34,17 +36,45 @@ class _State:
 
 
 class _Station:
-    def __init__(self) -> None:
+    def __init__(self, *, close_error: BaseException | None = None) -> None:
         self.closed = False
         self.stopped = False
+        self.close_error = close_error
 
     def close(self) -> None:
         self.closed = True
+        if self.close_error is not None:
+            raise self.close_error
 
     def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
         while not should_stop():
             sleep(0.001)
         self.stopped = True
+
+
+class _CoordinatedStation(_Station):
+    def __init__(self, *, close_started: Event, wait_for_close_started: Event) -> None:
+        super().__init__()
+        self._close_started = close_started
+        self._wait_for_close_started = wait_for_close_started
+
+    def close(self) -> None:
+        self._close_started.set()
+        if not self._wait_for_close_started.wait(0.2):
+            raise RuntimeError("station close was serialized")
+        super().close()
+
+
+class _Media:
+    def __init__(self) -> None:
+        self.started = False
+        self.closed = False
+
+    def start(self) -> None:
+        self.started = True
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class _Synchronizer:
@@ -91,6 +121,104 @@ class _Synchronizer:
 
 
 class RuntimeConfigurationSwitchTest(unittest.TestCase):
+    def test_close_finishes_runtime_cleanup_before_propagating_station_failure(self) -> None:
+        failing = _Station(close_error=RuntimeError("synthetic station close failure"))
+        later = _Station()
+        state = _State()
+        media = _Media()
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            stations=(
+                cast(AutonomousStation, failing),
+                cast(AutonomousStation, later),
+            ),
+            state=cast(LocalState, state),
+            media=cast(MediaRuntime, media),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "synthetic station close failure"):
+            runtime.close()
+
+        self.assertTrue(failing.closed)
+        self.assertTrue(later.closed)
+        self.assertTrue(media.closed)
+        self.assertTrue(state.closed)
+
+    def test_close_starts_all_station_shutdowns_before_waiting(self) -> None:
+        first_started = Event()
+        second_started = Event()
+        first = _CoordinatedStation(
+            close_started=first_started,
+            wait_for_close_started=second_started,
+        )
+        second = _CoordinatedStation(
+            close_started=second_started,
+            wait_for_close_started=first_started,
+        )
+        state = _State()
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            stations=(
+                cast(AutonomousStation, first),
+                cast(AutonomousStation, second),
+            ),
+            state=cast(LocalState, state),
+        )
+
+        runtime.close()
+
+        self.assertTrue(first.closed)
+        self.assertTrue(second.closed)
+        self.assertTrue(state.closed)
+
+    def test_configuration_switch_close_failure_cleans_runtime_before_propagating(self) -> None:
+        old = _bundle(1)
+        candidate = _bundle(2)
+        synchronizer = _Synchronizer(candidate=candidate, confirmed=old)
+        failing = _Station(close_error=RuntimeError("synthetic station close failure"))
+        later = _Station()
+        state = _State()
+        media = _Media()
+        candidate_runtime = RuntimeConfiguration(stations=(), connectors=(), confirmed=candidate)
+        composition_called = False
+
+        def compose(runtime_configuration: RuntimeConfiguration) -> RuntimeComposition:
+            nonlocal composition_called
+            composition_called = True
+            self.assertIs(runtime_configuration, candidate_runtime)
+            return RuntimeComposition(
+                configuration=candidate_runtime,
+                stations=(),
+                connector_runtimes=cast(ConnectorRuntimeSet, object()),
+                output_dispatchers={},
+            )
+
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            stations=(
+                cast(AutonomousStation, failing),
+                cast(AutonomousStation, later),
+            ),
+            state=cast(LocalState, state),
+            media=cast(MediaRuntime, media),
+            configuration_sync=cast(ConfigurationSynchronizer, synchronizer),
+            maintenance_interval=0.001,
+            configuration=RuntimeConfiguration(stations=(), connectors=(), confirmed=old),
+            configuration_resolver=lambda bundle: candidate_runtime,
+            configuration_factory=compose,
+            connector_runtimes=cast(ConnectorRuntimeSet, object()),
+        )
+        synchronizer.runtime = runtime
+
+        with self.assertRaisesRegex(RuntimeError, "synthetic station close failure"):
+            runtime.run_forever(should_stop=lambda: False)
+
+        self.assertFalse(composition_called)
+        self.assertTrue(failing.closed)
+        self.assertTrue(later.closed)
+        self.assertTrue(media.closed)
+        self.assertTrue(state.closed)
+
     def test_runtime_switch_precedes_durable_confirmation(self) -> None:
         old = _bundle(1)
         candidate = _bundle(2)

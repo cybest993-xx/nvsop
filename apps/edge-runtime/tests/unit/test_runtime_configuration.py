@@ -201,6 +201,16 @@ class ConfirmedRuntimeConfigurationTests(unittest.TestCase):
             replace(local_station(), model_ids=()),
         )
 
+    def test_multiple_bootstrap_backend_slices_require_backend_ids(self) -> None:
+        with self.assertRaisesRegex(RuntimeConfigurationError, "backend_id"):
+            bootstrap_runtime_configuration(
+                stations=(
+                    replace(local_station(), backend_id=None),
+                    replace(local_station(), backend_id="backend-b"),
+                ),
+                connectors=(local_connector(),),
+            )
+
     def test_confirmed_values_replace_local_template_and_timing_and_bind_points(self) -> None:
         bundle = confirmed_bundle()
         configured_template = bundle.stations[0].template

@@ -23,6 +23,7 @@ from nvsop_contracts import (
 
 from edge_runtime.connectors.hikvision import CANDIDATE_PROFILE
 from edge_runtime.judgment.model import HostInstant
+from edge_runtime.judgment.reasons import ReasonCode
 from edge_runtime.runtime import (
     ConnectionTestCommandLoop,
     InputWaitExpired,
@@ -32,7 +33,13 @@ from edge_runtime.runtime import (
 from edge_runtime.stream_health import StreamFact, StreamHealthEvent
 from edge_runtime.supervisor.delegated_commands import ConnectionTestCommandRunner
 from edge_runtime.supervisor.delegated_transport import CommandTransportError
-from edge_runtime.supervisor.inputs import ActionRecognized, StreamHealthObserved, SupervisorInput
+from edge_runtime.supervisor.inputs import (
+    ActionRecognized,
+    StreamHealthObserved,
+    SupervisorInput,
+    Validity,
+    ValidityChanged,
+)
 
 
 def _fixture_host_identity(seed: int) -> HostIdentityKeyPair:
@@ -262,7 +269,9 @@ class StationRuntimeTest(unittest.TestCase):
         self.assertEqual(StreamFact.INFERENCE_TIMEOUT, arriving.event.fact)
         source.close()
 
-    def test_sse_source_reports_a_source_error_when_the_inference_stream_cannot_open(self) -> None:
+    def test_sse_source_reports_backend_unreachable_when_the_inference_stream_cannot_open(
+        self,
+    ) -> None:
         source = SseStationInputSource(
             inference_url="http://inference.example/v1/chat/completions",
             request_body={"stream": True},
@@ -274,9 +283,13 @@ class StationRuntimeTest(unittest.TestCase):
         ):
             arriving = source.next_input(timeout=None)
 
-        self.assertIsInstance(arriving, StreamHealthObserved)
-        assert isinstance(arriving, StreamHealthObserved)
-        self.assertEqual(StreamFact.SOURCE_ERROR, arriving.event.fact)
+        self.assertEqual(
+            ValidityChanged(
+                reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                now=Validity.IMPAIRED,
+            ),
+            arriving,
+        )
         self.assertFalse(source.ended)
         source.close()
         self.assertTrue(source.ended)
@@ -409,6 +422,82 @@ class StationRuntimeTest(unittest.TestCase):
         source.close()
         self.assertTrue(response.closed)
 
+    def test_sse_source_retries_restoration_if_backpressure_discards_it(self) -> None:
+        chunk = json.dumps(
+            {
+                "choices": [
+                    {
+                        "delta": {"content": "(1) start"},
+                        "chunk_metadata": {
+                            "response": "(1) start",
+                            "start_time": 1.5,
+                            "first_timestamp": 8.0,
+                        },
+                    }
+                ]
+            }
+        ).encode("utf-8")
+        overflow = BackpressureSseResponse(b"data: " + chunk + b"\n", b"\n")
+        recovered = BlockingSseResponse()
+        allow_overflow_connection = Event()
+        clock = [0.0]
+        calls = 0
+
+        def open_stream(*args: object, **kwargs: object) -> FakeSseResponse | BlockingSseResponse:
+            del args, kwargs
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise urllib.error.URLError("offline")
+            if calls == 2:
+                allow_overflow_connection.wait()
+                return cast(FakeSseResponse, overflow)
+            return recovered
+
+        source = SseStationInputSource(
+            inference_url="http://inference.example/v1/chat/completions",
+            request_body={"stream": True},
+            timeout=0.01,
+            queue_size=1,
+        )
+        with (
+            patch("edge_runtime.station_runtime.monotonic", side_effect=lambda: clock[0]),
+            patch("edge_runtime.station_runtime.urllib.request.urlopen", side_effect=open_stream),
+        ):
+            failed = source.next_input(timeout=None)
+            clock[0] = 1.0
+            started = source.next_input(timeout=0.0)
+            allow_overflow_connection.set()
+            self.assertTrue(overflow.started.wait(1.0))
+            overflow.allow_first_event.set()
+            self.assertTrue(overflow.finished.wait(1.0))
+            backlog = source.next_input(timeout=1.0)
+            clock[0] = 2.0
+            restored = source.next_input(timeout=1.0)
+
+        self.assertEqual(
+            ValidityChanged(
+                reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                now=Validity.IMPAIRED,
+            ),
+            failed,
+        )
+        self.assertIsInstance(started, StreamHealthObserved)
+        assert isinstance(started, StreamHealthObserved)
+        self.assertEqual(StreamFact.INFERENCE_TIMEOUT, started.event.fact)
+        self.assertIsInstance(backlog, StreamHealthObserved)
+        assert isinstance(backlog, StreamHealthObserved)
+        self.assertEqual(StreamFact.CHUNK_BACKLOG_EXCEEDED, backlog.event.fact)
+        self.assertEqual(
+            ValidityChanged(
+                reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                now=Validity.RESTORED,
+            ),
+            restored,
+        )
+        recovered.release.set()
+        source.close()
+
     def test_sse_source_reconnects_after_a_temporary_stream_failure(self) -> None:
         response = FakeSseResponse(
             b"data: "
@@ -449,8 +538,22 @@ class StationRuntimeTest(unittest.TestCase):
             side_effect=open_stream,
         ):
             failed = source.next_input(timeout=None)
-            self.assertIsInstance(failed, StreamHealthObserved)
+            restored = source.next_input(timeout=1.0)
             arriving = source.next_input(timeout=1.0)
+            self.assertEqual(
+                ValidityChanged(
+                    reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                    now=Validity.IMPAIRED,
+                ),
+                failed,
+            )
+            self.assertEqual(
+                ValidityChanged(
+                    reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                    now=Validity.RESTORED,
+                ),
+                restored,
+            )
             self.assertIsInstance(arriving, ActionRecognized)
             self.assertEqual(2, calls)
         source.close()

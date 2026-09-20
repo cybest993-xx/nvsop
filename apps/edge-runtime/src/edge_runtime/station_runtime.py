@@ -25,9 +25,16 @@ from edge_runtime.configuration_values import (
 )
 from edge_runtime.judgment.evidence import EvidenceMargins
 from edge_runtime.judgment.model import HostInstant, Ordering, RuntimeParameters, Template
+from edge_runtime.judgment.reasons import ReasonCode
 from edge_runtime.local_state.queues import BackendReportContext
 from edge_runtime.stream_health import StreamFact, StreamHealthEvent, decode
-from edge_runtime.supervisor.inputs import ActionRecognized, StreamHealthObserved, SupervisorInput
+from edge_runtime.supervisor.inputs import (
+    ActionRecognized,
+    StreamHealthObserved,
+    SupervisorInput,
+    Validity,
+    ValidityChanged,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +93,7 @@ class _Disconnected:
     """一条 SSE 连接结束, 主循环应记录失联并稍后重连。"""
 
     fact: StreamFact
+    backend_unreachable: bool = False
 
 
 class SseStationInputSource(StationInputSource):
@@ -114,6 +122,7 @@ class SseStationInputSource(StationInputSource):
         self._retry_delay = min(max(timeout, 0.1), 5.0)
         self._retry_wakeup = Event()
         self._timeout_reported = False
+        self._backend_unreachable = False
 
     @property
     def ended(self) -> bool:
@@ -145,8 +154,22 @@ class SseStationInputSource(StationInputSource):
             if self._closed:
                 return None
             self._next_retry_at = monotonic() + self._retry_delay
+            if arriving.backend_unreachable:
+                if self._backend_unreachable:
+                    return InputWaitExpired()
+                self._backend_unreachable = True
+                return ValidityChanged(
+                    reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                    now=Validity.IMPAIRED,
+                )
             return self._source_error(arriving.fact)
         self._timeout_reported = False
+        if (
+            isinstance(arriving, ValidityChanged)
+            and arriving.reason is ReasonCode.INFERENCE_BACKEND_UNREACHABLE
+            and arriving.now is Validity.RESTORED
+        ):
+            self._backend_unreachable = False
         return arriving
 
     def close(self) -> None:
@@ -185,6 +208,7 @@ class SseStationInputSource(StationInputSource):
     def _read_stream(self) -> None:
         response: _SseResponse | None = None
         disconnect_fact = StreamFact.SOURCE_ERROR
+        backend_unreachable = False
         try:
             request = urllib.request.Request(
                 self._inference_url,
@@ -205,8 +229,23 @@ class SseStationInputSource(StationInputSource):
             except urllib.error.URLError as error:
                 if isinstance(error.reason, TimeoutError):
                     disconnect_fact = StreamFact.INFERENCE_TIMEOUT
+                else:
+                    backend_unreachable = True
                 return
             except OSError:
+                backend_unreachable = True
+                return
+            if (
+                self._backend_unreachable
+                and not self._closed
+                and not self._enqueue(
+                    ValidityChanged(
+                        reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                        now=Validity.RESTORED,
+                    )
+                )
+            ):
+                disconnect_fact = StreamFact.CHUNK_BACKLOG_EXCEEDED
                 return
             data_lines: list[str] = []
             while not self._closed:
@@ -244,7 +283,10 @@ class SseStationInputSource(StationInputSource):
                 with suppress(OSError, AttributeError):
                     response.close()
             if not self._closed:
-                self._enqueue_disconnect(disconnect_fact)
+                self._enqueue_disconnect(
+                    disconnect_fact,
+                    backend_unreachable=backend_unreachable,
+                )
 
     def _enqueue(self, arriving: SupervisorInput) -> bool:
         try:
@@ -262,12 +304,13 @@ class SseStationInputSource(StationInputSource):
             except Empty:
                 return
 
-    def _enqueue_disconnect(self, fact: StreamFact) -> None:
+    def _enqueue_disconnect(self, fact: StreamFact, *, backend_unreachable: bool = False) -> None:
+        disconnected = _Disconnected(fact, backend_unreachable=backend_unreachable)
         try:
-            self._events.put_nowait(_Disconnected(fact))
+            self._events.put_nowait(disconnected)
         except Full:
             self._discard_events()
-            self._events.put_nowait(_Disconnected(fact))
+            self._events.put_nowait(disconnected)
 
     def _source_error(self, fact: StreamFact = StreamFact.SOURCE_ERROR) -> StreamHealthObserved:
         return StreamHealthObserved(event=StreamHealthEvent(fact=fact, at_monotonic=monotonic()))
@@ -430,6 +473,16 @@ class MultiplexedStationInputSource(StationInputSource):
             if error is not None:
                 raise error
 
+    def _publish(self, arriving: SupervisorInput | ProvenancedSupervisorInput) -> bool:
+        while not self._stopping.is_set():
+            try:
+                self._events.put(arriving, timeout=0.2)
+                self._wake.set()
+                return True
+            except Full:
+                continue
+        return False
+
     def _pump(self, source: StationInputSource) -> None:
         try:
             while not self._stopping.is_set():
@@ -440,13 +493,7 @@ class MultiplexedStationInputSource(StationInputSource):
                     if source.ended:
                         break
                     continue
-                while not self._stopping.is_set():
-                    try:
-                        self._events.put(arriving, timeout=0.2)
-                        self._wake.set()
-                        break
-                    except Full:
-                        continue
+                self._publish(arriving)
         except BaseException as error:
             with self._state_lock:
                 self._error = error

@@ -23,10 +23,11 @@ from edge_runtime.judgment.model import (
     RunInterrupted,
     TimerFired,
 )
+from edge_runtime.judgment.reasons import ReasonCode
 from edge_runtime.local_state.queues import BackendReportContext
 from edge_runtime.local_state.store import ReactionStore
 from edge_runtime.supervisor.evidence import clips_for
-from edge_runtime.supervisor.inputs import Normalizer, SupervisorInput
+from edge_runtime.supervisor.inputs import Normalizer, SupervisorInput, Validity, ValidityChanged
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +68,7 @@ class StationSupervisor:
         self._normalizer = Normalizer()
         self._deadline: HostInstant | None = None
         self._report_provenance: dict[int, dict[str, BackendReportContext] | None] = {}
+        self._active_impaired_backend_provenance: dict[str, BackendReportContext] = {}
         if state.instance is not None:
             self._report_provenance[state.instance.instance_id] = (
                 None
@@ -102,10 +104,25 @@ class StationSupervisor:
     ) -> Reaction:
         """One thing that arrived from outside; reporting provenance stays outside judgment core."""
         normalizer = deepcopy(self._normalizer)
+        active_impaired_backend_provenance = dict(self._active_impaired_backend_provenance)
+        aggregate_transition = True
+        if (
+            isinstance(arriving, ValidityChanged)
+            and arriving.reason is ReasonCode.INFERENCE_BACKEND_UNREACHABLE
+            and report_provenance is not None
+        ):
+            was_impaired = bool(active_impaired_backend_provenance)
+            if arriving.now is Validity.IMPAIRED:
+                active_impaired_backend_provenance[report_provenance.backend_id] = report_provenance
+            else:
+                active_impaired_backend_provenance.pop(report_provenance.backend_id, None)
+            aggregate_transition = was_impaired != bool(active_impaired_backend_provenance)
         reaction = self._advance(
-            normalizer.events_for(arriving), report_provenance=report_provenance
+            normalizer.events_for(arriving) if aggregate_transition else (),
+            report_provenance=report_provenance,
         )
         self._normalizer = normalizer
+        self._active_impaired_backend_provenance = active_impaired_backend_provenance
         return reaction
 
     def wake(self, *, host: HostLiveness) -> Reaction:
@@ -152,6 +169,7 @@ class StationSupervisor:
         decisions: list[Decision] = []
         closed_instances: list[Instance] = []
         touched_ids: set[int] = set()
+        opened_ids: set[int] = set()
         if state.instance is not None:
             touched_ids.add(state.instance.instance_id)
         for event in events:
@@ -162,15 +180,21 @@ class StationSupervisor:
                 touched_ids.add(before.instance_id)
             if state.instance is not None:
                 touched_ids.add(state.instance.instance_id)
+                if before is None:
+                    opened_ids.add(state.instance.instance_id)
+            if before is None:
+                opened_ids.update(instance.instance_id for instance in outcome.closed_instances)
             touched_ids.update(instance.instance_id for instance in outcome.closed_instances)
             touched_ids.update(decision.instance_id for decision in outcome.decisions)
             closed_instances.extend(outcome.closed_instances)
             decisions.extend(outcome.decisions)
-        if events:
-            for instance_id in touched_ids:
-                existing = self._report_provenance.setdefault(instance_id, {})
-                if existing is not None and report_provenance is not None:
-                    existing[report_provenance.backend_id] = report_provenance
+        for instance_id in touched_ids:
+            existing = self._report_provenance.setdefault(instance_id, {})
+            if existing is not None and report_provenance is not None:
+                existing[report_provenance.backend_id] = report_provenance
+            if existing is not None and instance_id in opened_ids:
+                for provenance in self._active_impaired_backend_provenance.values():
+                    existing[provenance.backend_id] = provenance
         committed_provenance: dict[int, tuple[BackendReportContext, ...] | None] = {}
         for instance_id in touched_ids:
             values = self._report_provenance.get(instance_id)

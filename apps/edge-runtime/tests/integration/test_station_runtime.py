@@ -11,7 +11,7 @@ import tempfile
 import threading
 import time
 import unittest
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -21,19 +21,35 @@ from threading import Event
 from typing import ClassVar, cast
 from unittest.mock import patch
 
-from nvsop_contracts import HostIdentityKeyPair, generate_host_identity_key_pair
+from nvsop_contracts import (
+    ConfigurationBundle,
+    HostIdentityKeyPair,
+    configuration_to_wire,
+    generate_host_identity_key_pair,
+)
 
+from edge_runtime.configuration_sync import ConfigurationSynchronizer
+from edge_runtime.connectors.runtime import ConnectorRuntimeSet
 from edge_runtime.judgment import ReasonCode, Verdict
 from edge_runtime.judgment.evidence import EvidenceMargins
-from edge_runtime.judgment.model import HostInstant, Ordering, RuntimeParameters, Template
-from edge_runtime.local_state.queues import BackendReportContext
+from edge_runtime.judgment.model import (
+    HostInstant,
+    Lifecycle,
+    Ordering,
+    RuntimeParameters,
+    Template,
+)
+from edge_runtime.local_state.queues import BackendReportContext, ReportContext
 from edge_runtime.local_state.store import open_local_state
 from edge_runtime.runtime import (
+    AutonomousRuntime,
     AutonomousStation,
+    ConnectionTestCommandLoop,
+    RuntimeComposition,
     _station_input_source,
     build_autonomous_runtime_from_file,
 )
-from edge_runtime.runtime_configuration import StationRuntimeBinding
+from edge_runtime.runtime_configuration import RuntimeConfiguration, StationRuntimeBinding
 from edge_runtime.station_runtime import (
     InputWaitExpired,
     MultiplexedStationInputSource,
@@ -271,6 +287,59 @@ class _OneInputSource:
 
     def close(self) -> None:
         self.closed = True
+
+
+class _SwitchInputSource:
+    def __init__(
+        self,
+        *,
+        station_ready: Event,
+        provenance: BackendReportContext,
+    ) -> None:
+        self._station_ready = station_ready
+        self._provenance = provenance
+        self._sent = False
+        self.closed = False
+
+    @property
+    def ended(self) -> bool:
+        return False
+
+    def next_input(self, *, timeout: float | None) -> ProvenancedSupervisorInput | InputWaitExpired:
+        if not self._sent:
+            self._sent = True
+            return ProvenancedSupervisorInput(
+                arriving=ActionRecognized(
+                    signal="(1) start",
+                    at=HostInstant(1.0),
+                    source_time=1.0,
+                    source_anchor=1.0,
+                ),
+                provenance=self._provenance,
+            )
+        self._station_ready.set()
+        time.sleep(min(timeout or 0.001, 0.001))
+        return InputWaitExpired()
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _IdleCommandLoop:
+    def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
+        while not should_stop():
+            time.sleep(0.001)
+
+
+class _SwitchConfigurationPuller:
+    def __init__(self, *, candidate: ConfigurationBundle, station_ready: Event) -> None:
+        self._candidate = candidate
+        self._station_ready = station_ready
+
+    def pull(self) -> ConfigurationBundle:
+        if not self._station_ready.wait(0.5):
+            raise ValueError("station did not open before configuration switch")
+        return self._candidate
 
 
 def _action(signal: str, *, source_time: float, source_anchor: float) -> bytes:
@@ -1045,8 +1114,127 @@ class AutonomousStationIntegrationTest(unittest.TestCase):
             station.run_forever(should_stop=lambda: False)
 
             self.assertTrue(source.closed)
-            self.assertEqual(1, len(store.pending_reports()))
+            reports = store.pending_reports()
+            self.assertEqual(1, len(reports))
+            self.assertIn(ReasonCode.RUN_INTERRUPTED, reports[0].decision.reasons)
+            self.assertIs(Lifecycle.CLOSED_BY_RUN_INTERRUPTION, reports[0].decision.lifecycle)
             state.close()
+
+    def test_confirmed_configuration_switch_interrupts_active_sqlite_station_once(self) -> None:
+        old = ConfigurationBundle(
+            host_id="host-switch",
+            config_revision=1,
+            generated_at="2026-09-20T00:00:01Z",
+            stations=(),
+        )
+        candidate = ConfigurationBundle(
+            host_id="host-switch",
+            config_revision=2,
+            generated_at="2026-09-20T00:00:02Z",
+            stations=(),
+        )
+        provenance = BackendReportContext("backend-old", ("model-old",))
+        old_context = ReportContext(
+            host_id=old.host_id,
+            station_id="station-switch",
+            backends=(provenance,),
+            template_version_id="template-old",
+            template_sha256="a" * 64,
+            configuration_revision=old.config_revision,
+            configuration_sha256=old.effective_sha256,
+            configuration_json=json.dumps(
+                configuration_to_wire(old), ensure_ascii=False, separators=(",", ":")
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            database = str(Path(temporary) / "switch.sqlite")
+            state = open_local_state(database)
+            store = state.station("station-switch", report_context=old_context)
+            supervisor = resume_station(
+                store,
+                template=Template(
+                    steps=("(1) start", "(2) finish"),
+                    ordering=Ordering.ORDERED,
+                    start_signal="(1) start",
+                ),
+                parameters=RuntimeParameters(idle_timeout=10.0, step_deadline=10.0),
+                margins=EvidenceMargins(leading=0.0, trailing=0.0),
+                clock=lambda: 2.0,
+            )
+            configuration_store = state.configuration()
+            configuration_store.confirm(old, confirmed_at=0.0)
+            station_ready = Event()
+            source = _SwitchInputSource(
+                station_ready=station_ready,
+                provenance=provenance,
+            )
+            station = AutonomousStation(supervisor=supervisor, source=source)
+            synchronizer = ConfigurationSynchronizer(
+                puller=_SwitchConfigurationPuller(
+                    candidate=candidate,
+                    station_ready=station_ready,
+                ),
+                store=configuration_store,
+            )
+            candidate_runtime = RuntimeConfiguration(
+                stations=(), connectors=(), confirmed=candidate
+            )
+            candidate_composition = RuntimeComposition(
+                configuration=candidate_runtime,
+                stations=(),
+                connector_runtimes=cast(ConnectorRuntimeSet, object()),
+                output_dispatchers={},
+            )
+            runtime = AutonomousRuntime(
+                command_loop=cast(ConnectionTestCommandLoop, _IdleCommandLoop()),
+                stations=(station,),
+                state=state,
+                configuration_sync=synchronizer,
+                maintenance_interval=0.001,
+                configuration=RuntimeConfiguration(stations=(), connectors=(), confirmed=old),
+                configuration_resolver=lambda bundle: candidate_runtime,
+                configuration_factory=lambda configuration: candidate_composition,
+                connector_runtimes=cast(ConnectorRuntimeSet, object()),
+            )
+            real_confirm = synchronizer.confirm
+            confirm_observed = False
+
+            def confirm_after_switch(bundle: ConfigurationBundle, *, confirmed_at: float) -> None:
+                nonlocal confirm_observed
+                self.assertEqual(candidate_runtime, runtime.configuration)
+                reports = store.pending_reports()
+                self.assertEqual(1, len(reports))
+                self.assertEqual((ReasonCode.RUN_INTERRUPTED,), reports[0].decision.reasons)
+                self.assertIs(
+                    Lifecycle.CLOSED_BY_RUN_INTERRUPTION,
+                    reports[0].decision.lifecycle,
+                )
+                confirm_observed = True
+                real_confirm(bundle, confirmed_at=confirmed_at)
+
+            with patch.object(synchronizer, "confirm", side_effect=confirm_after_switch):
+                runtime.run_forever(
+                    should_stop=lambda: configuration_store.confirmed() == candidate
+                )
+
+            self.assertTrue(confirm_observed)
+            self.assertTrue(source.closed)
+
+            reopened = open_local_state(database)
+            self.addCleanup(reopened.close)
+            self.assertEqual(candidate, reopened.configuration().confirmed())
+            reopened_store = reopened.station("station-switch", report_context=old_context)
+            reports = reopened_store.pending_reports()
+            evidence = reopened_store.pending_evidence()
+            self.assertEqual(1, len(reports))
+            self.assertEqual((ReasonCode.RUN_INTERRUPTED,), reports[0].decision.reasons)
+            self.assertIs(
+                Lifecycle.CLOSED_BY_RUN_INTERRUPTION,
+                reports[0].decision.lifecycle,
+            )
+            self.assertEqual(old_context, reports[0].context)
+            self.assertEqual(1, len(evidence))
+            self.assertEqual(reports[0].decision.instance_id, evidence[0].instance_id)
 
 
 if __name__ == "__main__":

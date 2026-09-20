@@ -53,8 +53,10 @@ from edge_runtime.runtime_configuration import RuntimeConfiguration, StationRunt
 from edge_runtime.station_runtime import (
     InputWaitExpired,
     MultiplexedStationInputSource,
+    ProvenancedStationInputSource,
     ProvenancedSupervisorInput,
     SseStationInputSource,
+    StationInputSource,
     StationRuntimeConfiguration,
 )
 from edge_runtime.stream_health import StreamFact
@@ -158,6 +160,32 @@ class _TricklingSseHandler(BaseHTTPRequestHandler):
         del format_string, args
 
 
+class _SwitchBoundarySseHandler(BaseHTTPRequestHandler):
+    first_payload: ClassVar[bytes]
+    late_payload: ClassVar[bytes]
+    first_sent: ClassVar[Event]
+    release_late: ClassVar[Event]
+
+    def do_POST(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        self.wfile.write(self.first_payload)
+        self.wfile.flush()
+        self.first_sent.set()
+        if not self.release_late.wait(1.0):
+            return
+        try:
+            self.wfile.write(self.late_payload)
+            self.wfile.flush()
+        except OSError:
+            return
+
+    def log_message(self, format_string: str, *args: object) -> None:
+        del format_string, args
+
+
 @contextmanager
 def _sse_server(payloads: list[bytes]) -> Iterator[str]:
     _SseHandler.payloads = list(payloads)
@@ -221,6 +249,52 @@ def _trickling_sse_server() -> Iterator[str]:
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+@contextmanager
+def _switch_boundary_sse_server(
+    *, first_payload: bytes, late_payload: bytes
+) -> Iterator[tuple[str, Event, Event]]:
+    _SwitchBoundarySseHandler.first_payload = first_payload
+    _SwitchBoundarySseHandler.late_payload = late_payload
+    _SwitchBoundarySseHandler.first_sent = Event()
+    _SwitchBoundarySseHandler.release_late = Event()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _SwitchBoundarySseHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield (
+            f"http://127.0.0.1:{server.server_port}/v1/chat/completions",
+            _SwitchBoundarySseHandler.first_sent,
+            _SwitchBoundarySseHandler.release_late,
+        )
+    finally:
+        _SwitchBoundarySseHandler.release_late.set()
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+class _SecondReadSignalingInputSource:
+    def __init__(self, source: StationInputSource) -> None:
+        self._source = source
+        self._calls = 0
+        self.second_read_started = Event()
+
+    @property
+    def ended(self) -> bool:
+        return self._source.ended
+
+    def next_input(
+        self, *, timeout: float | None
+    ) -> SupervisorInput | ProvenancedSupervisorInput | InputWaitExpired | None:
+        self._calls += 1
+        if self._calls == 2:
+            self.second_read_started.set()
+        return self._source.next_input(timeout=timeout)
+
+    def close(self) -> None:
+        self._source.close()
 
 
 class _BackendReachabilityInputSource:
@@ -1119,6 +1193,80 @@ class AutonomousStationIntegrationTest(unittest.TestCase):
             self.assertIn(ReasonCode.RUN_INTERRUPTED, reports[0].decision.reasons)
             self.assertIs(Lifecycle.CLOSED_BY_RUN_INTERRUPTION, reports[0].decision.lifecycle)
             state.close()
+
+    def test_stop_boundary_drops_late_real_sse_input_before_interrupting_sqlite_instance(
+        self,
+    ) -> None:
+        provenance = BackendReportContext("backend-old", ("model-old",))
+        context = ReportContext(
+            host_id="host-switch",
+            station_id="station-switch",
+            backends=(provenance,),
+            template_version_id="template-old",
+            template_sha256="a" * 64,
+            configuration_revision=None,
+            configuration_sha256=None,
+            configuration_json=None,
+        )
+        template = Template(
+            steps=("(1) start", "(2) finish"),
+            ordering=Ordering.ORDERED,
+            start_signal="(1) start",
+        )
+        parameters = RuntimeParameters(idle_timeout=10.0, step_deadline=10.0)
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            _switch_boundary_sse_server(
+                first_payload=_action("(1) start", source_time=1.0, source_anchor=1.0),
+                late_payload=_action("(2) finish", source_time=2.0, source_anchor=1.0),
+            ) as (inference_url, first_sent, release_late),
+        ):
+            state = open_local_state(str(Path(temporary) / "late-switch.sqlite"))
+            self.addCleanup(state.close)
+            store = state.station("station-switch", report_context=context)
+            supervisor = resume_station(
+                store,
+                template=template,
+                parameters=parameters,
+                margins=EvidenceMargins(leading=0.0, trailing=0.0),
+                clock=lambda: 3.0,
+            )
+            source = _SecondReadSignalingInputSource(
+                ProvenancedStationInputSource(
+                    source=SseStationInputSource(
+                        inference_url=inference_url,
+                        request_body={"stream": True},
+                        timeout=1.0,
+                    ),
+                    provenance=provenance,
+                )
+            )
+            station = AutonomousStation(supervisor=supervisor, source=source)
+            stopping = Event()
+            errors: list[BaseException] = []
+
+            def run_station() -> None:
+                try:
+                    station.run_forever(should_stop=stopping.is_set)
+                except BaseException as error:
+                    errors.append(error)
+
+            worker = threading.Thread(target=run_station, daemon=True)
+            worker.start()
+            self.assertTrue(first_sent.wait(1.0))
+            self.assertTrue(source.second_read_started.wait(1.0))
+            self.assertIsNotNone(supervisor.state.instance)
+
+            stopping.set()
+            release_late.set()
+            worker.join(timeout=2.0)
+
+            self.assertFalse(worker.is_alive())
+            self.assertEqual([], errors)
+            (report,) = store.pending_reports()
+            self.assertEqual((ReasonCode.RUN_INTERRUPTED,), report.decision.reasons)
+            self.assertIs(Lifecycle.CLOSED_BY_RUN_INTERRUPTION, report.decision.lifecycle)
+            self.assertEqual(context, report.context)
 
     def test_confirmed_configuration_switch_interrupts_active_sqlite_station_once(self) -> None:
         old = ConfigurationBundle(

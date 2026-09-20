@@ -359,6 +359,8 @@ class AutonomousStation:
                         connector_runtimes=connector_runtimes,
                     )
                 )
+                if should_stop():
+                    break
                 if isinstance(arriving, InputWaitExpired):
                     supervisor.wake(host=HostLiveness.ALIVE)
                 elif arriving is None:

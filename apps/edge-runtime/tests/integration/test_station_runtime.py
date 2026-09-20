@@ -249,6 +249,46 @@ class _BackendReachabilityInputSource:
         )
 
 
+class _ReachabilityRaceInputSource:
+    def __init__(self, backend_id: str, *, first: SupervisorInput | None = None) -> None:
+        self._backend_id = backend_id
+        self._first = first
+        self._emitted_first = first is None
+        self.allow_transition = Event()
+        self.transition_ready = Event()
+        self._closed = Event()
+
+    @property
+    def ended(self) -> bool:
+        return False
+
+    def next_input(
+        self, *, timeout: float | None
+    ) -> ProvenancedSupervisorInput | InputWaitExpired | None:
+        if not self._emitted_first:
+            self._emitted_first = True
+            assert self._first is not None
+            return ProvenancedSupervisorInput(
+                arriving=self._first,
+                provenance=BackendReportContext(backend_id=self._backend_id, model_ids=()),
+            )
+        self.transition_ready.set()
+        if not self.allow_transition.wait(timeout):
+            return InputWaitExpired()
+        self.allow_transition.clear()
+        return ProvenancedSupervisorInput(
+            arriving=ValidityChanged(
+                reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                now=Validity.IMPAIRED,
+            ),
+            provenance=BackendReportContext(backend_id=self._backend_id, model_ids=()),
+        )
+
+    def close(self) -> None:
+        self._closed.set()
+        self.allow_transition.set()
+
+
 class _OneInputSource:
     def __init__(self) -> None:
         self._input: SupervisorInput | None = ActionRecognized(
@@ -551,22 +591,31 @@ class RealSseStationInputSourceTest(unittest.TestCase):
 
 
 class MultiplexedStationInputSourceTest(unittest.TestCase):
-    def test_backend_reachability_restores_only_after_every_backend_recovers(self) -> None:
+    def test_backend_reachability_keeps_each_impairment_provenance_and_restores_last(self) -> None:
         first = _BackendReachabilityInputSource("backend-a")
         second = _BackendReachabilityInputSource("backend-b")
         source = MultiplexedStationInputSource(sources=(first, second))
         try:
-            impaired = source.next_input(timeout=1.0)
+            impaired = (source.next_input(timeout=1.0), source.next_input(timeout=1.0))
             self.assertTrue(first.waiting_for_restore.wait(1.0))
             self.assertTrue(second.waiting_for_restore.wait(1.0))
-            self.assertIsInstance(impaired, ProvenancedSupervisorInput)
-            assert isinstance(impaired, ProvenancedSupervisorInput)
+            provenanced = tuple(
+                item for item in impaired if isinstance(item, ProvenancedSupervisorInput)
+            )
+            self.assertEqual(2, len(provenanced))
             self.assertEqual(
-                ValidityChanged(
-                    reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
-                    now=Validity.IMPAIRED,
-                ),
-                impaired.arriving,
+                {"backend-a", "backend-b"},
+                {item.provenance.backend_id for item in provenanced},
+            )
+            self.assertTrue(
+                all(
+                    item.arriving
+                    == ValidityChanged(
+                        reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                        now=Validity.IMPAIRED,
+                    )
+                    for item in provenanced
+                )
             )
 
             first.allow_restore.set()
@@ -583,6 +632,40 @@ class MultiplexedStationInputSourceTest(unittest.TestCase):
                 ),
                 restored.arriving,
             )
+        finally:
+            source.close()
+
+    def test_reachability_transition_order_is_serialized_with_queue_publication(self) -> None:
+        first = _BackendReachabilityInputSource("backend-a")
+        filler = ActionRecognized(
+            signal="(1) start",
+            at=HostInstant(1.0),
+            source_time=1.0,
+            source_anchor=1.0,
+        )
+        second = _ReachabilityRaceInputSource("backend-b", first=filler)
+        source = MultiplexedStationInputSource(sources=(first, second), queue_size=1)
+        try:
+            impaired = source.next_input(timeout=1.0)
+            self.assertIsInstance(impaired, ProvenancedSupervisorInput)
+            self.assertTrue(first.waiting_for_restore.wait(1.0))
+            self.assertTrue(second.transition_ready.wait(1.0))
+
+            first.allow_restore.set()
+            second.allow_transition.set()
+            queued = source.next_input(timeout=1.0)
+            restored = source.next_input(timeout=1.0)
+            impaired_second = source.next_input(timeout=1.0)
+
+            self.assertIsInstance(queued, ProvenancedSupervisorInput)
+            assert isinstance(queued, ProvenancedSupervisorInput)
+            self.assertIsInstance(queued.arriving, ActionRecognized)
+            self.assertIsInstance(restored, ProvenancedSupervisorInput)
+            assert isinstance(restored, ProvenancedSupervisorInput)
+            self.assertEqual(Validity.RESTORED, cast(ValidityChanged, restored.arriving).now)
+            self.assertIsInstance(impaired_second, ProvenancedSupervisorInput)
+            assert isinstance(impaired_second, ProvenancedSupervisorInput)
+            self.assertEqual(Validity.IMPAIRED, cast(ValidityChanged, impaired_second.arriving).now)
         finally:
             source.close()
 

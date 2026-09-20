@@ -389,6 +389,7 @@ class MultiplexedStationInputSource(StationInputSource):
         self._wake = Event()
         self._stopping = Event()
         self._state_lock = Lock()
+        self._reachability_lock = Lock()
         self._closed = False
         self._ended = False
         self._remaining = len(sources)
@@ -474,27 +475,38 @@ class MultiplexedStationInputSource(StationInputSource):
             if error is not None:
                 raise error
 
-    def _aggregate_backend_reachability(
+    def _publish(self, arriving: SupervisorInput | ProvenancedSupervisorInput) -> bool:
+        while not self._stopping.is_set():
+            try:
+                self._events.put(arriving, timeout=0.2)
+                self._wake.set()
+                return True
+            except Full:
+                continue
+        return False
+
+    def _publish_backend_reachability(
         self, arriving: SupervisorInput | ProvenancedSupervisorInput
-    ) -> SupervisorInput | ProvenancedSupervisorInput | None:
+    ) -> bool:
         if not isinstance(arriving, ProvenancedSupervisorInput):
-            return arriving
+            return self._publish(arriving)
         validity = arriving.arriving
         if (
             not isinstance(validity, ValidityChanged)
             or validity.reason is not ReasonCode.INFERENCE_BACKEND_UNREACHABLE
         ):
-            return arriving
+            return self._publish(arriving)
         backend_id = arriving.provenance.backend_id
-        with self._state_lock:
+        with self._reachability_lock:
             if validity.now is Validity.IMPAIRED:
-                first_unreachable = not self._unreachable_backends
                 self._unreachable_backends.add(backend_id)
-                return arriving if first_unreachable else None
+                return self._publish(arriving)
             if backend_id not in self._unreachable_backends:
-                return None
+                return True
             self._unreachable_backends.remove(backend_id)
-            return arriving if not self._unreachable_backends else None
+            if self._unreachable_backends:
+                return True
+            return self._publish(arriving)
 
     def _pump(self, source: StationInputSource) -> None:
         try:
@@ -506,16 +518,7 @@ class MultiplexedStationInputSource(StationInputSource):
                     if source.ended:
                         break
                     continue
-                arriving = self._aggregate_backend_reachability(arriving)
-                if arriving is None:
-                    continue
-                while not self._stopping.is_set():
-                    try:
-                        self._events.put(arriving, timeout=0.2)
-                        self._wake.set()
-                        break
-                    except Full:
-                        continue
+                self._publish_backend_reachability(arriving)
         except BaseException as error:
             with self._state_lock:
                 self._error = error

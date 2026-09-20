@@ -164,6 +164,12 @@ class SseStationInputSource(StationInputSource):
                 )
             return self._source_error(arriving.fact)
         self._timeout_reported = False
+        if (
+            isinstance(arriving, ValidityChanged)
+            and arriving.reason is ReasonCode.INFERENCE_BACKEND_UNREACHABLE
+            and arriving.now is Validity.RESTORED
+        ):
+            self._backend_unreachable = False
         return arriving
 
     def close(self) -> None:
@@ -229,16 +235,18 @@ class SseStationInputSource(StationInputSource):
             except OSError:
                 backend_unreachable = True
                 return
-            if self._backend_unreachable and not self._closed:
-                if not self._enqueue(
+            if (
+                self._backend_unreachable
+                and not self._closed
+                and not self._enqueue(
                     ValidityChanged(
                         reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
                         now=Validity.RESTORED,
                     )
-                ):
-                    disconnect_fact = StreamFact.CHUNK_BACKLOG_EXCEEDED
-                    return
-                self._backend_unreachable = False
+                )
+            ):
+                disconnect_fact = StreamFact.CHUNK_BACKLOG_EXCEEDED
+                return
             data_lines: list[str] = []
             while not self._closed:
                 try:
@@ -387,6 +395,7 @@ class MultiplexedStationInputSource(StationInputSource):
         self._error: BaseException | None = None
         self._workers: tuple[Thread, ...] = ()
         self._started = False
+        self._unreachable_backends: set[str] = set()
 
     @property
     def ended(self) -> bool:
@@ -465,6 +474,28 @@ class MultiplexedStationInputSource(StationInputSource):
             if error is not None:
                 raise error
 
+    def _aggregate_backend_reachability(
+        self, arriving: SupervisorInput | ProvenancedSupervisorInput
+    ) -> SupervisorInput | ProvenancedSupervisorInput | None:
+        if not isinstance(arriving, ProvenancedSupervisorInput):
+            return arriving
+        validity = arriving.arriving
+        if (
+            not isinstance(validity, ValidityChanged)
+            or validity.reason is not ReasonCode.INFERENCE_BACKEND_UNREACHABLE
+        ):
+            return arriving
+        backend_id = arriving.provenance.backend_id
+        with self._state_lock:
+            if validity.now is Validity.IMPAIRED:
+                first_unreachable = not self._unreachable_backends
+                self._unreachable_backends.add(backend_id)
+                return arriving if first_unreachable else None
+            if backend_id not in self._unreachable_backends:
+                return None
+            self._unreachable_backends.remove(backend_id)
+            return arriving if not self._unreachable_backends else None
+
     def _pump(self, source: StationInputSource) -> None:
         try:
             while not self._stopping.is_set():
@@ -474,6 +505,9 @@ class MultiplexedStationInputSource(StationInputSource):
                 if arriving is None:
                     if source.ended:
                         break
+                    continue
+                arriving = self._aggregate_backend_reachability(arriving)
+                if arriving is None:
                     continue
                 while not self._stopping.is_set():
                     try:

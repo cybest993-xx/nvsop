@@ -422,6 +422,82 @@ class StationRuntimeTest(unittest.TestCase):
         source.close()
         self.assertTrue(response.closed)
 
+    def test_sse_source_retries_restoration_if_backpressure_discards_it(self) -> None:
+        chunk = json.dumps(
+            {
+                "choices": [
+                    {
+                        "delta": {"content": "(1) start"},
+                        "chunk_metadata": {
+                            "response": "(1) start",
+                            "start_time": 1.5,
+                            "first_timestamp": 8.0,
+                        },
+                    }
+                ]
+            }
+        ).encode("utf-8")
+        overflow = BackpressureSseResponse(b"data: " + chunk + b"\n", b"\n")
+        recovered = BlockingSseResponse()
+        allow_overflow_connection = Event()
+        clock = [0.0]
+        calls = 0
+
+        def open_stream(*args: object, **kwargs: object) -> FakeSseResponse | BlockingSseResponse:
+            del args, kwargs
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise urllib.error.URLError("offline")
+            if calls == 2:
+                allow_overflow_connection.wait()
+                return cast(FakeSseResponse, overflow)
+            return recovered
+
+        source = SseStationInputSource(
+            inference_url="http://inference.example/v1/chat/completions",
+            request_body={"stream": True},
+            timeout=0.01,
+            queue_size=1,
+        )
+        with (
+            patch("edge_runtime.station_runtime.monotonic", side_effect=lambda: clock[0]),
+            patch("edge_runtime.station_runtime.urllib.request.urlopen", side_effect=open_stream),
+        ):
+            failed = source.next_input(timeout=None)
+            clock[0] = 1.0
+            started = source.next_input(timeout=0.0)
+            allow_overflow_connection.set()
+            self.assertTrue(overflow.started.wait(1.0))
+            overflow.allow_first_event.set()
+            self.assertTrue(overflow.finished.wait(1.0))
+            backlog = source.next_input(timeout=1.0)
+            clock[0] = 2.0
+            restored = source.next_input(timeout=1.0)
+
+        self.assertEqual(
+            ValidityChanged(
+                reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                now=Validity.IMPAIRED,
+            ),
+            failed,
+        )
+        self.assertIsInstance(started, StreamHealthObserved)
+        assert isinstance(started, StreamHealthObserved)
+        self.assertEqual(StreamFact.INFERENCE_TIMEOUT, started.event.fact)
+        self.assertIsInstance(backlog, StreamHealthObserved)
+        assert isinstance(backlog, StreamHealthObserved)
+        self.assertEqual(StreamFact.CHUNK_BACKLOG_EXCEEDED, backlog.event.fact)
+        self.assertEqual(
+            ValidityChanged(
+                reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                now=Validity.RESTORED,
+            ),
+            restored,
+        )
+        recovered.release.set()
+        source.close()
+
     def test_sse_source_reconnects_after_a_temporary_stream_failure(self) -> None:
         response = FakeSseResponse(
             b"data: "

@@ -26,6 +26,7 @@ from nvsop_contracts import HostIdentityKeyPair, generate_host_identity_key_pair
 from edge_runtime.judgment import ReasonCode, Verdict
 from edge_runtime.judgment.evidence import EvidenceMargins
 from edge_runtime.judgment.model import HostInstant, Ordering, RuntimeParameters, Template
+from edge_runtime.local_state.queues import BackendReportContext
 from edge_runtime.local_state.store import open_local_state
 from edge_runtime.runtime import (
     AutonomousStation,
@@ -41,7 +42,13 @@ from edge_runtime.station_runtime import (
     StationRuntimeConfiguration,
 )
 from edge_runtime.stream_health import StreamFact
-from edge_runtime.supervisor.inputs import ActionRecognized, StreamHealthObserved, SupervisorInput
+from edge_runtime.supervisor.inputs import (
+    ActionRecognized,
+    StreamHealthObserved,
+    SupervisorInput,
+    Validity,
+    ValidityChanged,
+)
 from edge_runtime.supervisor.startup import resume_station
 from edge_runtime.supervisor.station import Reaction, StationSupervisor
 
@@ -198,6 +205,48 @@ def _trickling_sse_server() -> Iterator[str]:
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+class _BackendReachabilityInputSource:
+    def __init__(self, backend_id: str) -> None:
+        self._backend_id = backend_id
+        self._phase = 0
+        self.waiting_for_restore = Event()
+        self.allow_restore = Event()
+        self._closed = Event()
+
+    @property
+    def ended(self) -> bool:
+        return False
+
+    def next_input(
+        self, *, timeout: float | None
+    ) -> ProvenancedSupervisorInput | InputWaitExpired | None:
+        if self._phase == 0:
+            self._phase = 1
+            return self._event(Validity.IMPAIRED)
+        if self._phase == 1:
+            self.waiting_for_restore.set()
+            if not self.allow_restore.wait(timeout):
+                return InputWaitExpired()
+            self._phase = 2
+            return self._event(Validity.RESTORED)
+        if self._closed.wait(timeout):
+            return None
+        return InputWaitExpired()
+
+    def close(self) -> None:
+        self._closed.set()
+        self.allow_restore.set()
+
+    def _event(self, now: Validity) -> ProvenancedSupervisorInput:
+        return ProvenancedSupervisorInput(
+            arriving=ValidityChanged(
+                reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                now=now,
+            ),
+            provenance=BackendReportContext(backend_id=self._backend_id, model_ids=()),
+        )
 
 
 class _OneInputSource:
@@ -502,6 +551,41 @@ class RealSseStationInputSourceTest(unittest.TestCase):
 
 
 class MultiplexedStationInputSourceTest(unittest.TestCase):
+    def test_backend_reachability_restores_only_after_every_backend_recovers(self) -> None:
+        first = _BackendReachabilityInputSource("backend-a")
+        second = _BackendReachabilityInputSource("backend-b")
+        source = MultiplexedStationInputSource(sources=(first, second))
+        try:
+            impaired = source.next_input(timeout=1.0)
+            self.assertTrue(first.waiting_for_restore.wait(1.0))
+            self.assertTrue(second.waiting_for_restore.wait(1.0))
+            self.assertIsInstance(impaired, ProvenancedSupervisorInput)
+            assert isinstance(impaired, ProvenancedSupervisorInput)
+            self.assertEqual(
+                ValidityChanged(
+                    reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                    now=Validity.IMPAIRED,
+                ),
+                impaired.arriving,
+            )
+
+            first.allow_restore.set()
+            self.assertIsInstance(source.next_input(timeout=0.1), InputWaitExpired)
+            second.allow_restore.set()
+            restored = source.next_input(timeout=1.0)
+
+            self.assertIsInstance(restored, ProvenancedSupervisorInput)
+            assert isinstance(restored, ProvenancedSupervisorInput)
+            self.assertEqual(
+                ValidityChanged(
+                    reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                    now=Validity.RESTORED,
+                ),
+                restored.arriving,
+            )
+        finally:
+            source.close()
+
     def test_blocked_wait_wakes_when_a_source_later_ends_or_fails(self) -> None:
         def wait_for_input(
             source: MultiplexedStationInputSource,

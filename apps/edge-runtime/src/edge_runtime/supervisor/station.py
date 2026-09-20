@@ -178,6 +178,8 @@ class StationSupervisor:
                 touched_ids.add(state.instance.instance_id)
                 if before is None:
                     opened_ids.add(state.instance.instance_id)
+            if before is None:
+                opened_ids.update(instance.instance_id for instance in outcome.closed_instances)
             touched_ids.update(instance.instance_id for instance in outcome.closed_instances)
             touched_ids.update(decision.instance_id for decision in outcome.decisions)
             closed_instances.extend(outcome.closed_instances)

@@ -396,7 +396,7 @@ class MultiplexedStationInputSource(StationInputSource):
         self._error: BaseException | None = None
         self._workers: tuple[Thread, ...] = ()
         self._started = False
-        self._unreachable_backends: set[str] = set()
+        self._unreachable_sources: set[str] = set()
 
     @property
     def ended(self) -> bool:
@@ -412,7 +412,7 @@ class MultiplexedStationInputSource(StationInputSource):
                 self._workers = tuple(
                     Thread(
                         target=self._pump,
-                        args=(source,),
+                        args=(source, f"source:{index}"),
                         name=f"edge-station-source-{index}",
                         daemon=True,
                     )
@@ -486,29 +486,34 @@ class MultiplexedStationInputSource(StationInputSource):
         return False
 
     def _publish_backend_reachability(
-        self, arriving: SupervisorInput | ProvenancedSupervisorInput
+        self,
+        arriving: SupervisorInput | ProvenancedSupervisorInput,
+        *,
+        source_key: str,
     ) -> bool:
         with self._reachability_lock:
-            if not isinstance(arriving, ProvenancedSupervisorInput):
-                return self._publish(arriving)
-            validity = arriving.arriving
+            if isinstance(arriving, ProvenancedSupervisorInput):
+                validity = arriving.arriving
+                reachability_key = f"backend:{arriving.provenance.backend_id}"
+            else:
+                validity = arriving
+                reachability_key = source_key
             if (
                 not isinstance(validity, ValidityChanged)
                 or validity.reason is not ReasonCode.INFERENCE_BACKEND_UNREACHABLE
             ):
                 return self._publish(arriving)
-            backend_id = arriving.provenance.backend_id
             if validity.now is Validity.IMPAIRED:
-                self._unreachable_backends.add(backend_id)
+                self._unreachable_sources.add(reachability_key)
                 return self._publish(arriving)
-            if backend_id not in self._unreachable_backends:
+            if reachability_key not in self._unreachable_sources:
                 return True
-            self._unreachable_backends.remove(backend_id)
-            if self._unreachable_backends:
+            self._unreachable_sources.remove(reachability_key)
+            if self._unreachable_sources:
                 return True
             return self._publish(arriving)
 
-    def _pump(self, source: StationInputSource) -> None:
+    def _pump(self, source: StationInputSource, source_key: str) -> None:
         try:
             while not self._stopping.is_set():
                 arriving = source.next_input(timeout=0.5)
@@ -518,7 +523,7 @@ class MultiplexedStationInputSource(StationInputSource):
                     if source.ended:
                         break
                     continue
-                self._publish_backend_reachability(arriving)
+                self._publish_backend_reachability(arriving, source_key=source_key)
         except BaseException as error:
             with self._state_lock:
                 self._error = error

@@ -249,6 +249,42 @@ class _BackendReachabilityInputSource:
         )
 
 
+class _BareBackendReachabilityInputSource:
+    def __init__(self) -> None:
+        self._phase = 0
+        self.waiting_for_restore = Event()
+        self.allow_restore = Event()
+        self._closed = Event()
+
+    @property
+    def ended(self) -> bool:
+        return False
+
+    def next_input(self, *, timeout: float | None) -> ValidityChanged | InputWaitExpired | None:
+        if self._phase == 0:
+            self._phase = 1
+            return ValidityChanged(
+                reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                now=Validity.IMPAIRED,
+            )
+        if self._phase == 1:
+            self.waiting_for_restore.set()
+            if not self.allow_restore.wait(timeout):
+                return InputWaitExpired()
+            self._phase = 2
+            return ValidityChanged(
+                reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                now=Validity.RESTORED,
+            )
+        if self._closed.wait(timeout):
+            return None
+        return InputWaitExpired()
+
+    def close(self) -> None:
+        self._closed.set()
+        self.allow_restore.set()
+
+
 class _ReachabilityRaceInputSource:
     def __init__(self, backend_id: str, *, first: SupervisorInput | None = None) -> None:
         self._backend_id = backend_id
@@ -635,6 +671,39 @@ class MultiplexedStationInputSourceTest(unittest.TestCase):
         finally:
             source.close()
 
+    def test_unprovenanced_source_participates_in_shared_reachability_aggregation(self) -> None:
+        identified = _BackendReachabilityInputSource("backend-a")
+        bare = _BareBackendReachabilityInputSource()
+        source = MultiplexedStationInputSource(sources=(identified, bare))
+        try:
+            impaired = (source.next_input(timeout=1.0), source.next_input(timeout=1.0))
+            self.assertTrue(identified.waiting_for_restore.wait(1.0))
+            self.assertTrue(bare.waiting_for_restore.wait(1.0))
+            validities: list[Validity] = []
+            for item in impaired:
+                validity = item.arriving if isinstance(item, ProvenancedSupervisorInput) else item
+                self.assertIsInstance(validity, ValidityChanged)
+                assert isinstance(validity, ValidityChanged)
+                validities.append(validity.now)
+            self.assertEqual([Validity.IMPAIRED, Validity.IMPAIRED], validities)
+
+            bare.allow_restore.set()
+            self.assertIsInstance(source.next_input(timeout=0.1), InputWaitExpired)
+            identified.allow_restore.set()
+            restored = source.next_input(timeout=1.0)
+
+            self.assertIsInstance(restored, ProvenancedSupervisorInput)
+            assert isinstance(restored, ProvenancedSupervisorInput)
+            self.assertEqual(
+                ValidityChanged(
+                    reason=ReasonCode.INFERENCE_BACKEND_UNREACHABLE,
+                    now=Validity.RESTORED,
+                ),
+                restored.arriving,
+            )
+        finally:
+            source.close()
+
     def test_reachability_transition_order_is_serialized_with_queue_publication(self) -> None:
         first = _BackendReachabilityInputSource("backend-a")
         filler = ActionRecognized(
@@ -692,7 +761,7 @@ class MultiplexedStationInputSourceTest(unittest.TestCase):
 
         def publish() -> None:
             started.set()
-            source._publish_backend_reachability(action)
+            source._publish_backend_reachability(action, source_key="test-source")
             finished.set()
 
         publisher = threading.Thread(target=publish, daemon=True)

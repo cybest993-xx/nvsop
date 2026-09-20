@@ -130,12 +130,12 @@ NVSOP_EDGE_COMMAND_CONFIG_FILE=/etc/nvsop/edge.json \
 
 `python -m edge_runtime` 仍先读取 `NVSOP_EDGE_COMMAND_CONFIG_FILE` 指向的本地 JSON。这份文件是**已实现的 bootstrap 与主机本地配置入口**：它提供中心地址、主机身份/私钥、本地推理端点与请求体、adapter profile、设备凭据、本地 SQLite 路径，以及首次无法取得中心确认配置时的自治起点；它不是中心拥有的拓扑、模板和运行参数的第二份权威。
 
-自治运行时启动后会立即通过带主机签名的 `GET /api/v1/inference-hosts/{host_id}/configuration` 拉取当前主机的配置 bundle。中心先认证主机身份，再只组装该主机的有效后端、工位、相机、连接器/点位、模板版本和运行参数。共享配置契约校验 contract version、revision 和 canonical SHA-256；Edge 拉取层另行校验返回 bundle 的 `host_id` 必须等于本机身份，并证明 bundle 能与本机保存的推理端点、请求体、adapter profile 和凭据安全组合，再允许它替换已确认视图。
+自治运行时启动后会立即通过带主机签名的 `GET /api/v1/inference-hosts/{host_id}/configuration` 拉取当前主机的配置 bundle。中心先认证主机身份，再只组装该主机的有效后端、工位、相机、连接器/点位、模板版本和运行参数。共享配置契约只有一个当前 wire 模型：严格校验核心字段、`contract_version` 与 canonical SHA-256，不维护 v1/v2/v3 运行时分支。`config_revision` 是中心签发的单调 assignment revision；`effective_sha256` 是运行语义身份；`generated_at` 与可选 `producer` 是信封元数据，不参与运行语义身份。影响 Edge 行为的新数据必须同时声明 `required_capabilities`；当前 Edge 遇到未知 capability 会显式拒绝，不静默忽略。完整字段所有权和演进规则见[机器契约演进](../design/mechanisms/machine-contract-evolution.md)。
 
 统一 Nginx 入口只对当前主机签名机器路径做显式白名单分流：主机配置拉取与已确认配置历史握手、monitor decision/health 上报、delegated command 领取/结果回报，以及模板配置确认上报。这些路径不经过浏览器 session `auth_request`，也不使用浏览器 Cookie、Authorization 或 CSRF 身份；`X-Inference-Host-ID`、timestamp、nonce、signature 则保持原请求值并由 FastAPI 的主机签名认证最终校验。固定 `main` 开发入口的权威实现是 [`../../deploy/dev/nginx.conf`](../../deploy/dev/nginx.conf)；正式部署的随仓 Nginx 配置示例是 [`nginx-annotation.conf.example`](nginx-annotation.conf.example)，两者的机器路由白名单由部署契约测试机械保持一致。其余 `/api/v1/` 管理接口仍由现有 session + CSRF + permission 边界保护，annotation 内部授权入口和媒体网关不在该白名单内。
 
-确认由 `LocalConfigurationStore` 在 SQLite 的单个事务中写入完整 bundle：跨主机、旧 revision、同 revision 不同内容或无效运行组合都不会覆盖现有确认值。拉取、解析或运行组合验证失败时，只更新 `local_config_failure` 诊断，最后已确认 bundle 保持不变。启动时已有确认值就优先使用它；首次启动尚无确认值且中心不可达时，才使用本地 bootstrap 配置。
+`LocalConfigurationStore` 只持久化**实际已经生效**的 bundle。旧循环运行时，候选只完成 host scope、revision/同 revision 冲突、能力要求，以及不读取/写入 live station state 的运行配置解析；这些步骤不会前移 durable confirmed。通过纯解析的候选才请求旧循环停机；旧工位线程全部退出后，Edge 才从最新 SQLite 状态恢复 supervisor、构造候选 composition 并切换实际 runtime，最后由 `LocalConfigurationStore` 在 SQLite 单事务确认同一候选。停机后的 composition 失败会重新从原活动配置构造 runtime、记录 `local_config_failure`，并按 revision/effective digest 在当前进程隔离该候选；中心仍返回同一失败候选时只同步诊断、不再反复停掉健康工位，候选身份变化后才重新尝试。该路径不会让候选 supervisor 与仍运行的旧 supervisor 并发写同一工位状态；本地确认失败会关闭候选工位资源，不启动新 runtime 循环，随后失败退出并从最后 durable confirmed 恢复。启动时没有旧循环并发，完整装配成功后才确认；首次无确认值且中心不可达时才使用本地 bootstrap。
 
-运行期间 maintenance loop 按 `command_poll_interval_seconds` 继续拉取。新的有效 bundle 与当前 effective digest 不同时，当前运行循环先停止，再从已确认 bundle 重新组合 station/connector/runtime；中心不可达不会把配置同步放进实时判定进度。
+maintenance loop 按 `command_poll_interval_seconds` 继续拉取。相同 revision + 相同 effective digest 的元数据刷新不重组 runtime；revision 改变时即使 effective digest 相同，也按新的 assignment 身份完成切换/确认。中心不可达不会进入实时判定进度。历史 SQLite 中已确认的配置 v1/v2 只在 `edge_runtime.local_state` 内归一化读取；共享 HTTP 契约不再接受旧 generation，下一次成功确认始终写当前格式。
 
 因此配置变更按所有权分两条路径：中心拥有的拓扑、模板、版本、点位和运行参数通过中心数据与配置同步生效；本机推理地址、请求体、adapter profile、设备秘密等主机本地信息通过受管本地 JSON/secret 文件变更，并按部署流程重启或重新装配。不要直接修改 SQLite 来制造确认状态。

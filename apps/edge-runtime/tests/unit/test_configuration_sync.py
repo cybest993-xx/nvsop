@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import unittest
-from dataclasses import replace
 from unittest.mock import patch
 
 from nvsop_contracts import (
     ConfigurationBundle,
     ConfiguredStation,
     ResolvedRuntimeParameters,
+    canonical_json,
     configuration_to_wire,
 )
 
@@ -89,8 +90,10 @@ class ConfigurationSyncTests(unittest.TestCase):
                 ),
             ),
         )
-        bundle = replace(current, contract_version=1)
-        wire = configuration_to_wire(bundle)
+        wire = configuration_to_wire(current)
+        wire["contract_version"] = 1
+        wire.pop("sha256")
+        wire["sha256"] = hashlib.sha256(canonical_json(wire).encode("utf-8")).hexdigest()
         payload = json.dumps(wire, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         self.connection.execute(
             """
@@ -98,13 +101,99 @@ class ConfigurationSyncTests(unittest.TestCase):
                 (slot, host_id, config_revision, sha256, confirmed_at, payload)
             VALUES (1, ?, ?, ?, ?, ?)
             """,
-            (bundle.host_id, bundle.config_revision, bundle.sha256, 1.0, payload),
+            (current.host_id, current.config_revision, wire["sha256"], 1.0, payload),
         )
 
-        expected = replace(bundle, contract_version=2)
-        self.assertEqual(self.state.configuration().confirmed(), expected)
-        self.state.configuration().confirm(expected, confirmed_at=2.0)
-        self.assertEqual(self.state.configuration().confirmed(), expected)
+        self.assertEqual(self.state.configuration().confirmed(), current)
+        self.state.configuration().confirm(current, confirmed_at=2.0)
+        self.assertEqual(self.state.configuration().confirmed(), current)
+
+    def test_historical_v1_missing_collections_restore_as_empty_only(self) -> None:
+        current = ConfigurationBundle(
+            host_id="host-a",
+            config_revision=1,
+            generated_at="2026-09-13T00:00:00Z",
+            stations=(
+                ConfiguredStation(
+                    station_id="station-a",
+                    backend_id="backend-a",
+                    code="S-A",
+                    name="Station A",
+                    revision=1,
+                    runtime_parameters=ResolvedRuntimeParameters(1, 1, "stop"),
+                    connectors=(),
+                    points=(),
+                    template=None,
+                    model_ids=(),
+                ),
+            ),
+        )
+        wire = configuration_to_wire(current)
+        wire["contract_version"] = 1
+        raw_stations = wire["stations"]
+        assert isinstance(raw_stations, list)
+        raw_station = raw_stations[0]
+        assert isinstance(raw_station, dict)
+        raw_station.pop("cameras")
+        raw_station.pop("model_ids")
+        wire.pop("sha256")
+        wire["sha256"] = hashlib.sha256(canonical_json(wire).encode("utf-8")).hexdigest()
+        payload = json.dumps(wire, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        self.connection.execute(
+            """
+            INSERT INTO local_config
+                (slot, host_id, config_revision, sha256, confirmed_at, payload)
+            VALUES (1, ?, ?, ?, ?, ?)
+            """,
+            (current.host_id, current.config_revision, wire["sha256"], 1.0, payload),
+        )
+
+        restored = self.state.configuration().confirmed()
+        assert restored is not None
+        self.assertEqual(restored.stations[0].cameras, ())
+        self.assertEqual(restored.stations[0].model_ids, ())
+        self.assertEqual(restored.stations[0].backend_id, "backend-a")
+
+    def test_historical_v2_missing_core_collections_is_rejected(self) -> None:
+        current = ConfigurationBundle(
+            host_id="host-a",
+            config_revision=1,
+            generated_at="2026-09-13T00:00:00Z",
+            stations=(
+                ConfiguredStation(
+                    station_id="station-a",
+                    backend_id="backend-a",
+                    code="S-A",
+                    name="Station A",
+                    revision=1,
+                    runtime_parameters=ResolvedRuntimeParameters(1, 1, "stop"),
+                    connectors=(),
+                    points=(),
+                    template=None,
+                ),
+            ),
+        )
+        wire = configuration_to_wire(current)
+        raw_stations = wire["stations"]
+        assert isinstance(raw_stations, list)
+        raw_station = raw_stations[0]
+        assert isinstance(raw_station, dict)
+        raw_station.pop("cameras")
+        raw_station.pop("model_ids")
+        wire.pop("sha256")
+        wire["sha256"] = hashlib.sha256(canonical_json(wire).encode("utf-8")).hexdigest()
+        payload = json.dumps(wire, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        self.connection.execute(
+            """
+            INSERT INTO local_config
+                (slot, host_id, config_revision, sha256, confirmed_at, payload)
+            VALUES (1, ?, ?, ?, ?, ?)
+            """,
+            (current.host_id, current.config_revision, wire["sha256"], 1.0, payload),
+        )
+
+        with self.assertRaisesRegex(ValueError, "unsupported or missing fields"):
+            self.state.configuration().confirmed()
 
     def test_new_bundle_after_center_removes_highest_revision_object_confirms(self) -> None:
         old_configuration = ConfigurationBundle(
@@ -116,7 +205,7 @@ class ConfigurationSyncTests(unittest.TestCase):
         new_configuration = ConfigurationBundle(
             host_id="host-a",
             config_revision=100,
-            generated_at="2026-09-13T00:00:01Z",
+            generated_at="2026-09-12T00:00:00Z",
             stations=(),
         )
         synchronizer = ConfigurationSynchronizer(
@@ -124,11 +213,16 @@ class ConfigurationSyncTests(unittest.TestCase):
             store=self.state.configuration(),
         )
 
-        self.assertTrue(synchronizer.synchronize(observed_at=1.0).applied)
-        result = synchronizer.synchronize(observed_at=2.0)
+        first = synchronizer.synchronize(observed_at=1.0)
+        self.assertEqual(first.candidate, old_configuration)
+        self.assertIsNone(self.state.configuration().confirmed())
+        synchronizer.confirm(old_configuration, confirmed_at=1.0)
 
-        self.assertTrue(result.applied)
-        self.assertEqual(result.active, new_configuration)
+        result = synchronizer.synchronize(observed_at=2.0)
+        self.assertEqual(result.candidate, new_configuration)
+        self.assertEqual(result.confirmed, old_configuration)
+        synchronizer.confirm(new_configuration, confirmed_at=2.0)
+        self.assertEqual(self.state.configuration().confirmed(), new_configuration)
 
     def test_older_revision_keeps_last_confirmed_bundle(self) -> None:
         first = ConfigurationBundle(
@@ -147,10 +241,12 @@ class ConfigurationSyncTests(unittest.TestCase):
             puller=ScriptedPuller([first, older]),
             store=self.state.configuration(),
         )
-        synchronizer.synchronize(observed_at=1.0)
+        accepted = synchronizer.synchronize(observed_at=1.0)
+        assert accepted.candidate is not None
+        synchronizer.confirm(accepted.candidate, confirmed_at=1.0)
         result = synchronizer.synchronize(observed_at=2.0)
-        self.assertFalse(result.applied)
-        self.assertEqual(result.active, first)
+        self.assertIsNone(result.candidate)
+        self.assertEqual(result.confirmed, first)
         assert result.failure is not None
         self.assertEqual(result.failure.code, "stale_revision")
 
@@ -165,17 +261,31 @@ class ConfigurationSyncTests(unittest.TestCase):
             host_id="host-a",
             config_revision=1,
             generated_at="2026-09-12T00:00:00Z",
-            stations=(),
+            stations=(
+                ConfiguredStation(
+                    station_id="station-a",
+                    backend_id="backend-a",
+                    code="S-A",
+                    name="Station A",
+                    revision=1,
+                    runtime_parameters=ResolvedRuntimeParameters(1, 1, "stop"),
+                    connectors=(),
+                    points=(),
+                    template=None,
+                ),
+            ),
         )
         synchronizer = ConfigurationSynchronizer(
             puller=ScriptedPuller([first, conflicting]),
             store=self.state.configuration(),
         )
 
-        synchronizer.synchronize(observed_at=1.0)
+        accepted = synchronizer.synchronize(observed_at=1.0)
+        assert accepted.candidate is not None
+        synchronizer.confirm(accepted.candidate, confirmed_at=1.0)
         result = synchronizer.synchronize(observed_at=2.0)
-        self.assertFalse(result.applied)
-        self.assertEqual(first, result.active)
+        self.assertIsNone(result.candidate)
+        self.assertEqual(first, result.confirmed)
         assert result.failure is not None
         self.assertEqual(result.failure.code, "conflicting_confirmation")
 
@@ -197,13 +307,17 @@ class ConfigurationSyncTests(unittest.TestCase):
             store=self.state.configuration(),
         )
 
-        synchronizer.synchronize(observed_at=1.0)
+        accepted = synchronizer.synchronize(observed_at=1.0)
+        assert accepted.candidate is not None
+        synchronizer.confirm(accepted.candidate, confirmed_at=1.0)
         result = synchronizer.synchronize(observed_at=2.0)
 
-        self.assertTrue(result.applied)
-        self.assertEqual(result.active, repeated)
+        self.assertEqual(result.candidate, repeated)
+        self.assertEqual(result.confirmed, first)
         self.assertIsNone(result.failure)
         self.assertEqual(first.stable_content_wire(), repeated.stable_content_wire())
+        synchronizer.confirm(repeated, confirmed_at=2.0)
+        self.assertEqual(self.state.configuration().confirmed(), repeated)
 
     def test_invalid_runtime_view_is_not_confirmed(self) -> None:
         candidate = ConfigurationBundle(
@@ -222,8 +336,8 @@ class ConfigurationSyncTests(unittest.TestCase):
 
         result = synchronizer.synchronize(observed_at=1.0)
 
-        self.assertFalse(result.applied)
-        self.assertIsNone(result.active)
+        self.assertIsNone(result.candidate)
+        self.assertIsNone(result.confirmed)
         self.assertIsNotNone(result.failure)
         assert result.failure is not None
         self.assertEqual(result.failure.code, "runtime_configuration_invalid")
@@ -242,12 +356,12 @@ class ConfigurationSyncTests(unittest.TestCase):
             store=self.state.configuration(),
         )
 
-        confirmed = synchronizer.synchronize(observed_at=1.0)
-        self.assertTrue(confirmed.applied)
-        self.assertEqual(confirmed.active, first)
+        accepted = synchronizer.synchronize(observed_at=1.0)
+        self.assertEqual(accepted.candidate, first)
+        synchronizer.confirm(first, confirmed_at=1.0)
         failed = synchronizer.synchronize(observed_at=2.0)
-        self.assertFalse(failed.applied)
-        self.assertEqual(failed.active, first)
+        self.assertIsNone(failed.candidate)
+        self.assertEqual(failed.confirmed, first)
         self.assertIsNotNone(failed.failure)
         assert failed.failure is not None
         self.assertEqual(failed.failure.code, "contract_invalid")
@@ -271,10 +385,13 @@ class ConfigurationSyncTests(unittest.TestCase):
             store=self.state.configuration(),
         )
 
-        synchronizer.synchronize(observed_at=1.0)
+        accepted = synchronizer.synchronize(observed_at=1.0)
+        assert accepted.candidate is not None
+        synchronizer.confirm(accepted.candidate, confirmed_at=1.0)
         result = synchronizer.synchronize(observed_at=2.0)
 
-        self.assertEqual(result.active, first)
+        self.assertIsNone(result.candidate)
+        self.assertEqual(result.confirmed, first)
         assert result.failure is not None
         self.assertEqual(result.failure.code, "host_scope_mismatch")
 
@@ -322,6 +439,27 @@ class ConfigurationSyncTests(unittest.TestCase):
             puller.pull()
         self.assertEqual(raised.exception.code, "digest_mismatch")
         self.assertIsNone(self.state.configuration().confirmed())
+
+    def test_synchronizer_rejects_unsupported_required_capability(self) -> None:
+        candidate = ConfigurationBundle(
+            host_id="host-a",
+            config_revision=1,
+            generated_at="2026-09-13T00:00:00Z",
+            stations=(),
+            required_capabilities=("future.behavior",),
+        )
+        synchronizer = ConfigurationSynchronizer(
+            puller=ScriptedPuller([candidate]),
+            store=self.state.configuration(),
+        )
+
+        result = synchronizer.synchronize(observed_at=1.0)
+
+        self.assertIsNone(result.candidate)
+        self.assertIsNone(result.confirmed)
+        assert result.failure is not None
+        self.assertEqual(result.failure.code, "unsupported_capability")
+        self.assertIn("future.behavior", result.failure.detail)
 
     def test_http_read_and_connection_failures_are_generic_and_do_not_leak_details(self) -> None:
         puller = HttpConfigurationPuller(

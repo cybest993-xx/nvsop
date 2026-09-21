@@ -119,16 +119,19 @@
 
 **【已定】统一访问入口是控制面入口，不是全流量中继。** Nginx 只承载 Web 静态资源、中心后台 REST/JSON、会话、小数据实时更新，以及原样复用的标注 UI 与训练微服务（在网关补鉴权）。视频的 WebRTC 信令与媒体均由浏览器直连推理机 mediamtx。
 
+下图表达批准的目标部署结构，不表示其中每个 Edge 组件都已在当前 `main` 落地。
+
 ```
 中心机（管理面，非运行面）                推理机 A（自治判定单元）      推理机 B
 ├── Nginx 统一访问入口                   ├── 推理服务容器             ├── 推理服务容器
 │    ├── Vue3 前端                       │    DeepStream→DDM→vLLM     │
 │    ├── /api/v1 → FastAPI               │    →SSE→supervisor 判定     │
 │    └── 反代：标注 UI / 训练微服务       ├── supervisor（锁存/处置/    ├── supervisor
-├── FastAPI 后台（单一入口点）            │    上报/对账/证据切片）      │
-├── PostgreSQL（+Timescale 后置）         ├── 连接器运行时              ├── 连接器运行时
-├── Redis / MinIO / ARQ worker           ├── mediamtx                 ├── mediamtx
-└── 训练微服务（原样复用）+ metadata_db   └── SQLite 本地状态          └── SQLite
+├── FastAPI 后台（单一入口点）            │    证据切片）                │
+├── PostgreSQL（+Timescale 后置）         ├── 主机级上报对账            ├── 主机级上报对账
+├── Redis / MinIO / ARQ worker           ├── 连接器运行时              ├── 连接器运行时
+└── 训练微服务（原样复用）+ metadata_db   ├── mediamtx                 ├── mediamtx
+                                         └── SQLite 本地状态          └── SQLite
                                                ↑                          ↑
           ← 上报（幂等 upsert）                相机 1~8                  相机 9~16
           → 拉取（模板/配置，推理机主动）  （视频不跨中心；中心离线现场继续判定与处置）
@@ -160,9 +163,7 @@
 
 `dataset` 是独立模块而非 `template` 的一部分：`CONTEXT.md` 对「训练数据集」的定义明确写了它不定义 SOP 模板，并把「SOP 模板」列为 _Avoid_ 项，合并二者会在代码层重新粘合术语层刻意拆开的概念。
 
-**推理机侧组成**（`apps/edge-runtime/`，包清单与所有权表见 [仓库架构](../engineering/architecture.md)）：判定核心（纯标准库、纯函数、无钟无 I/O，§5.18）、边界求解、本地状态（SQLite）、supervisor（SSE 消费与判定调用 / 请求看护 / 锁存 / 处置派发 / 上报对账 / 计时器持有 / **一反应一事务的持久化**）、连接器运行时、mediamtx 看护、证据切片与归档任务。`vendor/` 内只留同一登记补丁的 stream epoch barrier、DDM producer 代际标签、EOS 尾块排序、健康 hook/旁路、active-VLM / stale work 退休与 uniform/DDM 状态重置（§5.11）。
-
-**边缘包间依赖方向**（由 import-linter 契约兜底，见 [仓库架构](../engineering/architecture.md)）：`supervisor → local_state → judgment`；`connectors → judgment` 与 `supervisor` 的输入词汇；`stream_health` 不导入本包任何东西；运行循环是唯一的装配根，也是唯一同时认识全部包的地方。存储模块只认识领域类型，不认识编排它的人——反过来的方向（存储导入 supervisor）已实测会让"一反应一事务"退化成调用方契约。
+**【已定目标】推理机侧组成**：判定核心、边界求解、本地状态（SQLite）、supervisor、主机级上报对账、配置同步、连接器运行时、mediamtx 看护，以及证据切片/上传与归档任务。运行机制与离线语义见[推理机自治机制](mechanisms/edge-autonomy.md)；包所有权、公共 seam 与依赖方向由[仓库架构](../engineering/architecture.md)统一定义，不在此重复。`vendor/` 的批准改造边界仍由 §5.11 定义。
 
 **依赖规则**：判定核心不依赖任何相机 SDK、推理框架或连接器实现，只消费归一化观测；中心各模块各自拥有数据表，不跨模块直接读写；前端只调后端用例，不承载判定规则。
 
@@ -182,7 +183,7 @@
 
 **【已定】API 前缀**：控制面路径固定 `/api/v1`，但该前缀不是版本轴，不会出现 v2（[ADR-0003](../adr/0003-api-v1-is-a-fixed-prefix.md)）。`openapi.json` 由 FastAPI 生成并导出到 `packages/contracts/`；契约检查必须让删除路径/字段、新增必填字段、收窄类型失败。推理机是可能非同步升级的客户端，靠启动时版本握手而非 URL 版本。
 
-**契约清单**：**推理服务 OpenAI 兼容 API**（基座既定，我们是同机消费者）、**上报契约**（推理机→中心：`ReportedDecision` / `ReportedViolation` / `ReportedHealth`）、**拉取契约**（中心→推理机：`TemplateBundle` / `DeviceConfigBundle`）。已实现的配置拉取与判定/健康上报格式以 [`configuration.py`](../../packages/contracts/src/nvsop_contracts/configuration.py) 和 [`reports.py`](../../packages/contracts/src/nvsop_contracts/reports.py) 为准；通用运行时握手及尚未落地的上报内容仍按 §5.15 与原验收追踪，不因已有局部协议而视为全部完成。
+**契约清单（批准目标）**：**推理服务 OpenAI 兼容 API**（基座既定，我们是同机消费者）、**上报契约**（推理机→中心：`ReportedDecision` / `ReportedSopInstance` / `ReportedViolation` / `ReportedHealth`）、**拉取契约**（中心→推理机：`TemplateBundle` / `DeviceConfigBundle`）。批准目标不表示全部已实现；当前机器契约以 [`configuration.py`](../../packages/contracts/src/nvsop_contracts/configuration.py)、[`reports.py`](../../packages/contracts/src/nvsop_contracts/reports.py) 及其生成/验证结果为事实来源。
 
 实时结果路径固定为：
 
@@ -218,7 +219,7 @@
 
 ### 推理机（SQLite，每机一份）
 
-`local_config`（已确认的设备配置与凭据密文）、`local_template_version`（已确认模板版本 + sha256）、`local_sop_instance`、`local_decision`、`local_violation`（锁存）、`local_disposal`（处置记录：幂等键、目标点位、操作人、执行结果；**它就是点位写入的去重账本**，连接器运行时与处置派发共用这一张表，不各建一份）、`local_report_queue`（待上报，至少一次）、`local_evidence_queue`（待上传）。
+`local_config`（已确认的设备配置与凭据密文）、`local_template_version`（已确认模板版本 + sha256）、`local_sop_instance`、`local_decision`、`local_violation`（锁存）、`local_disposal`（处置记录与点位写入去重账本）、`local_report_queue`（发往 Center `monitor` 的结构化待办，至少一次）、`local_evidence_queue`（待上传证据）。具体对账、证据与处置生命周期由对应机制文档定义。
 
 **关键不变量**：违规一经确认即锁存，不因后续补做或处置失败而消失；锁存发生在推理机本地，不依赖中心可达。
 

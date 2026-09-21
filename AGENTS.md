@@ -14,6 +14,7 @@ Read guidance only when its trigger applies, expanding for affected callers or c
 - **Work with Issues, labels or task dispatch:** read [issues.md](docs/engineering/issues.md).
 - **Create branches/worktrees, review, publish, merge or clean up:** read the relevant step of [workflow.md](docs/engineering/workflow.md).
 - **Change deployment or runtime configuration:** use the [deployment index](docs/README.md#部署与验证), then relevant architecture/verification rules.
+- **Change Edge autonomy, local persistence or Edge→Center reporting:** read [edge-autonomy.md](docs/design/mechanisms/edge-autonomy.md). Also read [architecture.md](docs/engineering/architecture.md) when moving ownership, a public seam or a dependency direction, and [the roadmap](docs/design/solution-and-roadmap.md) when changing approved product behavior or system structure.
 - **Name domain concepts or change product behavior:** use [CONTEXT.md](CONTEXT.md); for behavior/architecture read the affected mechanism and ADRs through [the roadmap](docs/design/solution-and-roadmap.md). Identify an ADR that needs reopening rather than silently overriding it.
 
 ## Invariants

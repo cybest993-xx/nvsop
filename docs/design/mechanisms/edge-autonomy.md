@@ -8,7 +8,7 @@
 
 ## 5.7 推理机是自治判定单元
 
-每台推理机上的组件：
+每台推理机上的目标组件形状（尚未落地项以“目标”标记）：
 
 ```
 推理服务容器（基座 + §5.11 一处改造；基座 checker 与处置按配置关闭）
@@ -17,10 +17,12 @@
 本机 supervisor（自研，判定在此进程内）
   读本地配置，为每路已配置相机启动一个 /v1/chat/completions 请求并看护
   消费 SSE → 判定核心（序列比对+边界+有效性+三值）
-  违规锁存 / 处置派发（含写输出点位）/ 证据切片指令 / 上报与对账
+  违规锁存 / 处置派发（含写输出点位）/ 证据切片指令
   chunk 静默计时器（空闲超时闭合 + 进程级失联兜底）
+【目标】主机级上报对账（跨工位排空 local_report_queue 中的 typed pending facts → Center monitor）
+【目标】证据上传（专用大字节链路；生命周期见[证据与保留机制](evidence-and-retention.md)）
 MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU 转码、预览按需、录像窗口按主机配置）
-录像压缩归档任务（老化分段 H.264→H.265，NVDEC→NVENC，可限速可暂停，§5.19）
+【目标】录像压缩归档任务（老化分段重编码，可限速可暂停，具体编码与验证约束见 §5.19）
 连接器运行时（轮询或推送输入点位 → 观测；执行输出点位写入）
 本地状态存储（SQLite）
 ```
@@ -46,6 +48,10 @@ MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU �
 | 预览（浏览器直连 mediamtx） | 继续 |
 | 模板版本变更、工位改绑 | 不生效，继续用最后已确认版本与归属 |
 | 上报、看板、复核 | 暂停，恢复后对账 |
+
+**【已定目标】上报对账按主机而不是按当前工位对象组织。** 主机级 reconciler 从本机 durable backlog 跨工位取待办，因此工位从当前配置移除、runtime 重建或进程重启后，历史 pending 仍可继续发送；某一条待办的编码、兼容协商或网络失败只更新该待办的失败状态，不得阻塞同轮其他工位。发送所有权属于主机 durable backlog，不绑定当前工位对象的生命周期。
+
+这个 reconciler 只承载发往 Center `monitor` 的小型结构化事实。证据上传保留独立的大字节/对象确认生命周期，配置同步保留 Center→Edge candidate/confirmed 生命周期，物理处置保留 `local_disposal` 幂等账本与本地执行路径；不引入通用事件总线、Event Sourcing 或 `kind + payload` 万能 outbox。
 
 **对账语义**：上报按事件 id 幂等 upsert，至少一次；处置记录带幂等键，恢复后不重复执行已执行的动作；证据上传失败可重试且不删除本地唯一副本。历史判定的事件时配置与 backend provenance 跟 decision/outbox 同事务冻结：多 backend 工位按实例累计实际参与输入的 backend/model 集合，重启和计时器结案沿用已持久化来源，不从当前配置选择任意 backend。带 historical proof 的判定走严格 report v2；发送前用主机签名确认冻结的旧 configuration，Center 只有在该 revision/effective digest 确实曾由自己签发时才建立不可变历史 assignment 并明确协商 v2。旧 Center 不支持握手时保留 outbox，不降级丢证明。其他尚未版本化的机器协议仍受 ADR-0003 的通用 runtime/version handshake 要求约束（[ADR-0003](../../adr/0003-api-v1-is-a-fixed-prefix.md)）。
 

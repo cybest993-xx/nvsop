@@ -361,6 +361,26 @@ class HistoricalReportContextTest(unittest.TestCase):
             self.assertEqual(after_restart.context, context_n)
             third.close()
 
+    def test_open_instance_uses_existing_report_outbox_and_close_supersedes_unsent_open(
+        self,
+    ) -> None:
+        context = self.context(revision=7, backend_id="backend-old")
+        state = open_local_state(":memory:")
+        self.addCleanup(state.close)
+        station = state.station(STATION, report_context=context)
+        driver = supervisor(opening_state(), FakeClock(), station)
+        provenance = context.backends[0]
+
+        driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=provenance)
+        (opening,) = station.pending_instance_reports()
+        self.assertEqual(opening.instance_id, 1)
+        self.assertEqual(opening.context, context)
+
+        driver.receive(action(STEPS[1], at=ANCHOR + 1.0), report_provenance=provenance)
+        driver.receive(action(STEPS[2], at=ANCHOR + 2.0), report_provenance=provenance)
+        self.assertEqual(station.pending_instance_reports(), ())
+        self.assertEqual(len(station.pending_reports()), 1)
+
     def test_pre_instance_impaired_backend_provenance_reaches_the_report_outbox(self) -> None:
         bundle = ConfigurationBundle(
             host_id="host-a",
@@ -600,8 +620,10 @@ class HistoricalReportContextTest(unittest.TestCase):
                 if configuration is None:
                     raise AssertionError("v2 report must carry the frozen configuration")
 
-            def send_instance(self, report: object) -> None:
-                del report
+            def send_instance(
+                self, report: object, *, configuration: ConfigurationBundle | None
+            ) -> None:
+                del report, configuration
 
         transport = Transport()
         attempts = DecisionReporter(queues=station, transport=transport).flush(
@@ -640,8 +662,10 @@ class HistoricalReportContextTest(unittest.TestCase):
                     raise AssertionError("confirmed decision must carry its frozen configuration")
                 self.sent.append(report)
 
-            def send_instance(self, report: object) -> None:
-                del report
+            def send_instance(
+                self, report: object, *, configuration: ConfigurationBundle | None
+            ) -> None:
+                del report, configuration
 
         transport = Transport()
         attempts = DecisionReporter(queues=station, transport=transport).flush(
@@ -700,8 +724,10 @@ class HistoricalReportContextTest(unittest.TestCase):
                 del configuration
                 self.sent.append(report)
 
-            def send_instance(self, report: object) -> None:
-                del report
+            def send_instance(
+                self, report: object, *, configuration: ConfigurationBundle | None
+            ) -> None:
+                del report, configuration
 
         transport = Transport()
         attempts = DecisionReporter(queues=station, transport=transport).flush(
@@ -785,15 +811,20 @@ class HistoricalReportContextTest(unittest.TestCase):
                 if len(self.sent) == 1:
                     raise OSError("center committed but acknowledgement was lost")
 
-            def send_instance(self, report: object) -> None:
-                del report
+            def send_instance(
+                self, report: object, *, configuration: ConfigurationBundle | None
+            ) -> None:
+                del report, configuration
 
         transport = LostAckTransport()
         first = DecisionReporter(queues=station, transport=transport).flush(
             now=HostInstant(ANCHOR + 2.0),
             reported_at="2026-09-16T00:00:00Z",
         )
-        self.assertFalse(first[0].sent)
+        self.assertEqual(len(first), 2)
+        self.assertTrue(first[0].sent)
+        self.assertFalse(first[1].sent)
+        self.assertEqual(station.pending_instance_reports(), ())
         (pending_after_loss,) = station.pending_reports()
         self.assertEqual(pending_after_loss.reported_at, "2026-09-16T00:00:00Z")
 
@@ -828,8 +859,10 @@ class HistoricalReportContextTest(unittest.TestCase):
             ) -> None:
                 self.sent.append((report, configuration))
 
-            def send_instance(self, report: object) -> None:
-                del report
+            def send_instance(
+                self, report: object, *, configuration: ConfigurationBundle | None
+            ) -> None:
+                del report, configuration
 
         transport = Transport()
         attempts = DecisionReporter(queues=station, transport=transport).flush(

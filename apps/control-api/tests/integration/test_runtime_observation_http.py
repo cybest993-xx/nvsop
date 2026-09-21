@@ -47,6 +47,9 @@ from factory_sop.template.adapters.tables import TemplateStationBindingRow, Temp
 from factory_sop.template.model import TemplateStationBinding
 from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
+    REPORT_CAPABILITIES_HEADER,
+    SOP_INSTANCE_REPORT_CAPABILITY,
+    SOP_INSTANCE_REPORT_CONTRACT_VERSION,
     ConfigurationBundle,
     HostIdentityKeyPair,
     HostIdentityRequest,
@@ -572,6 +575,7 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
             class SignedHttpTransport:
                 def __init__(self) -> None:
                     self.sent: list[ReportedDecision] = []
+                    self.instances: list[ReportedSopInstance] = []
 
                 def send_decision(
                     self,
@@ -585,19 +589,24 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
                         "/confirmed-configuration"
                     )
                     confirmed_body = configuration_to_wire(configuration)
+                    confirm_headers = _host_headers(
+                        runtime_topology,
+                        method="POST",
+                        path=confirm_path,
+                        body=confirmed_body,
+                    )
+                    confirm_headers[REPORT_CAPABILITIES_HEADER] = SOP_INSTANCE_REPORT_CAPABILITY
                     confirmed = client.post(
                         confirm_path,
                         json=confirmed_body,
-                        headers=_host_headers(
-                            runtime_topology,
-                            method="POST",
-                            path=confirm_path,
-                            body=confirmed_body,
-                        ),
+                        headers=confirm_headers,
                     )
                     assert confirmed.status_code == 200
                     assert confirmed.json() == {
-                        "decision_report_contract_version": DECISION_REPORT_CONTRACT_VERSION
+                        "decision_report_contract_version": DECISION_REPORT_CONTRACT_VERSION,
+                        "sop_instance_report_contract_version": (
+                            SOP_INSTANCE_REPORT_CONTRACT_VERSION
+                        ),
                     }
                     body = reported_decision_to_wire(report)
                     response = client.post(
@@ -614,6 +623,29 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
                     assert response.json()["accepted"] is True
                     self.sent.append(report)
 
+                def send_instance(
+                    self,
+                    report: ReportedSopInstance,
+                    *,
+                    configuration: ConfigurationBundle | None,
+                ) -> None:
+                    assert configuration is not None
+                    instance_path = f"{API_PREFIX}/monitor/instances"
+                    body = reported_sop_instance_to_wire(report)
+                    response = client.post(
+                        instance_path,
+                        json=body,
+                        headers=_host_headers(
+                            runtime_topology,
+                            method="POST",
+                            path=instance_path,
+                            body=body,
+                        ),
+                    )
+                    assert response.status_code == 200
+                    assert response.json()["accepted"] is True
+                    self.instances.append(report)
+
             transport = SignedHttpTransport()
             attempts = edge_reporting.DecisionReporter(
                 queues=edge_station, transport=transport
@@ -624,11 +656,14 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
             assert len(attempts) == 1
             assert attempts[0].sent is True
             assert len(transport.sent) == 1
+            assert len(transport.instances) == 1
             assert transport.sent[0].configuration_revision == bundle_n.config_revision
             assert transport.sent[0].backend_id is None
             assert transport.sent[0].backend_provenance == (
                 ReportBackendProvenance(station_n.backend_id, station_n.model_ids),
             )
+            assert transport.instances[0].configuration_revision == bundle_n.config_revision
+            assert transport.instances[0].instance_id == 1
             assert edge_station.pending_reports() == ()
 
             duplicate_body = reported_decision_to_wire(transport.sent[0])
@@ -906,8 +941,8 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
             station_id=str(runtime_topology.station.id),
             instance_id=7,
             opened_at=1.0,
-            closed_at=8.0,
-            close_reason="closed_by_complete_set",
+            closed_at=None,
+            close_reason=None,
             template_version_id=station.template.version_id,
             template_sha256=station.template.version_sha256,
             backend_provenance=(
@@ -927,6 +962,48 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
             ),
         )
         instance_duplicate = client.post(
+            instance_path,
+            json=instance_body,
+            headers=_host_headers(
+                runtime_topology, method="POST", path=instance_path, body=instance_body
+            ),
+        )
+        tampered_close = replace(
+            instance,
+            opened_at=2.0,
+            closed_at=8.0,
+            close_reason="closed_by_complete_set",
+            reported_at="2026-09-14T01:00:01Z",
+        )
+        tampered_close_body = reported_sop_instance_to_wire(tampered_close)
+        tampered_close_response = client.post(
+            instance_path,
+            json=tampered_close_body,
+            headers=_host_headers(
+                runtime_topology,
+                method="POST",
+                path=instance_path,
+                body=tampered_close_body,
+            ),
+        )
+        closed_instance = replace(
+            instance,
+            closed_at=8.0,
+            close_reason="closed_by_complete_set",
+            reported_at="2026-09-14T01:00:01Z",
+        )
+        closed_instance_body = reported_sop_instance_to_wire(closed_instance)
+        instance_closed = client.post(
+            instance_path,
+            json=closed_instance_body,
+            headers=_host_headers(
+                runtime_topology,
+                method="POST",
+                path=instance_path,
+                body=closed_instance_body,
+            ),
+        )
+        delayed_open = client.post(
             instance_path,
             json=instance_body,
             headers=_host_headers(
@@ -953,8 +1030,13 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
     assert instance_first.json()["duplicate"] is False
     assert instance_duplicate.status_code == 200
     assert instance_duplicate.json()["duplicate"] is True
+    assert tampered_close_response.status_code == 409
+    assert instance_closed.status_code == 200
+    assert instance_closed.json()["duplicate"] is False
+    assert delayed_open.status_code == 200
+    assert delayed_open.json()["duplicate"] is True
     assert instance_list.status_code == 200
-    assert instance_list.json()["items"][0] == instance_body
+    assert instance_list.json()["items"][0] == closed_instance_body
     assert stream.status_code == 200
     assert "event: decision" in stream.text
     assert f"id: {report.event_id}" in stream.text

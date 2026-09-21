@@ -12,15 +12,47 @@ from nvsop_contracts import (
 
 from edge_runtime.judgment.model import Decision, EvidenceSpan, HostInstant, Lifecycle, Violation
 from edge_runtime.judgment.reasons import ReasonCode, Verdict
-from edge_runtime.local_state.queues import BackendReportContext, PendingReport
+from edge_runtime.local_state.queues import (
+    BackendReportContext,
+    PendingReport,
+    PendingSopInstanceReport,
+)
 from edge_runtime.reporting import (
     ReportContext,
     reported_decision_from_pending,
     reported_instance_from_pending,
+    reported_open_instance_from_pending,
 )
 
 
 class ReportingTests(unittest.TestCase):
+    def test_open_instance_uses_stable_instance_identity(self) -> None:
+        context = ReportContext(
+            host_id="host-a",
+            station_id="station-a",
+            backends=(BackendReportContext("backend-a", ("model-a",)),),
+            template_version_id="template-a",
+            template_sha256="a" * 64,
+            configuration_revision=3,
+            configuration_sha256="b" * 64,
+            configuration_json="{}",
+        )
+        report = reported_open_instance_from_pending(
+            PendingSopInstanceReport(
+                queue_id=6,
+                instance_id=4,
+                opened_at=1.0,
+                attempts=0,
+                last_error=None,
+                reported_at=None,
+                context=context,
+            ),
+            reported_at="now",
+        )
+        self.assertEqual(report.event_id, "host-a:station-a:instance:4")
+        self.assertIsNone(report.closed_at)
+        self.assertIsNone(report.close_reason)
+
     def test_closed_instance_reuses_frozen_event_time_provenance(self) -> None:
         pending = PendingReport(
             queue_id=7,

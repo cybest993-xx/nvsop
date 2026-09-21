@@ -13,6 +13,9 @@ from typing import cast
 
 REPORT_CONTRACT_VERSION = 1
 DECISION_REPORT_CONTRACT_VERSION = 2
+SOP_INSTANCE_REPORT_CONTRACT_VERSION = 1
+REPORT_CAPABILITIES_HEADER = "X-NVSOP-Report-Capabilities"
+SOP_INSTANCE_REPORT_CAPABILITY = "sop-instance-report-v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -402,7 +405,7 @@ class ReportedSopInstance:
     configuration_revision: int
     configuration_sha256: str
     reported_at: str
-    contract_version: int = REPORT_CONTRACT_VERSION
+    contract_version: int = SOP_INSTANCE_REPORT_CONTRACT_VERSION
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -416,7 +419,7 @@ class ReportedSopInstance:
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{name} must not be empty")
         if (
-            self.contract_version != REPORT_CONTRACT_VERSION
+            self.contract_version != SOP_INSTANCE_REPORT_CONTRACT_VERSION
             or self.instance_id < 0
             or self.configuration_revision < 1
         ):

@@ -6622,6 +6622,10 @@ export type ConfirmInferenceHostConfigurationHistoryData = {
      * X-Inference-Host-Signature
      */
     'X-Inference-Host-Signature'?: string | null
+    /**
+     * X-Nvsop-Report-Capabilities
+     */
+    'X-NVSOP-Report-Capabilities'?: string | null
   }
   path: {
     /**

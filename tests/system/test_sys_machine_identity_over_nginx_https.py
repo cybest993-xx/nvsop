@@ -565,6 +565,7 @@ def test_host_signed_machine_api_crosses_real_nginx_gateway_without_browser_sess
                 body=configuration_body,
                 success_status=200,
             )
+            # No capability header models an old Edge talking to the new Center.
             assert confirmed.json() == {"decision_report_contract_version": 2}
 
             health_path = "/api/v1/monitor/health"

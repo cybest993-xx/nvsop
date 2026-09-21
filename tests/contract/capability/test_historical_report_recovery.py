@@ -138,7 +138,14 @@ class MirrorTransport:
             raise AssertionError("first recovery delivery must insert the mirror")
         self.accepted.append(report)
 
-    def send_instance(self, report: ReportedSopInstance) -> None:
+    def send_instance(
+        self,
+        report: ReportedSopInstance,
+        *,
+        configuration: ConfigurationBundle | None,
+    ) -> None:
+        if configuration is None:
+            raise AssertionError("instance recovery must keep its frozen configuration")
         inserted = mirror_instance(
             report,
             received_at=datetime(2026, 9, 16, tzinfo=UTC),

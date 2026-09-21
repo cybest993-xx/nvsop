@@ -11,6 +11,9 @@ from unittest.mock import patch
 
 from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
+    REPORT_CAPABILITIES_HEADER,
+    SOP_INSTANCE_REPORT_CAPABILITY,
+    SOP_INSTANCE_REPORT_CONTRACT_VERSION,
     ConfigurationBundle,
     ReportBackendProvenance,
     ReportedDecision,
@@ -128,7 +131,12 @@ class ReportCompatibilityTests(unittest.TestCase):
         responses = iter(
             (
                 JsonResponse(
-                    {"decision_report_contract_version": DECISION_REPORT_CONTRACT_VERSION}
+                    {
+                        "decision_report_contract_version": DECISION_REPORT_CONTRACT_VERSION,
+                        "sop_instance_report_contract_version": (
+                            SOP_INSTANCE_REPORT_CONTRACT_VERSION
+                        ),
+                    }
                 ),
                 JsonResponse(),
                 JsonResponse(),
@@ -154,6 +162,11 @@ class ReportCompatibilityTests(unittest.TestCase):
 
         self.assertEqual(len(requests), 3)
         self.assertTrue(requests[0].full_url.endswith("/confirmed-configuration"))
+        handshake_headers = {key.lower(): value for key, value in requests[0].header_items()}
+        self.assertEqual(
+            handshake_headers[REPORT_CAPABILITIES_HEADER.lower()],
+            SOP_INSTANCE_REPORT_CAPABILITY,
+        )
         self.assertTrue(requests[1].full_url.endswith("/monitor/reported-decisions"))
         self.assertTrue(requests[2].full_url.endswith("/monitor/reported-decisions"))
 
@@ -187,13 +200,15 @@ class ReportCompatibilityTests(unittest.TestCase):
         self.assertEqual(len(requests), 1)
         self.assertTrue(requests[0].full_url.endswith("/confirmed-configuration"))
 
-    def test_v2_requires_center_to_explicitly_advertise_v2(self) -> None:
+    def test_v2_requires_center_to_advertise_instance_support_before_decision_post(self) -> None:
         bundle = configuration()
         requests: list[urllib.request.Request] = []
 
         def incompatible(request: urllib.request.Request, **_: object) -> JsonResponse:
             requests.append(request)
-            return JsonResponse({"decision_report_contract_version": 1})
+            return JsonResponse(
+                {"decision_report_contract_version": DECISION_REPORT_CONTRACT_VERSION}
+            )
 
         with (
             patch(
@@ -203,7 +218,7 @@ class ReportCompatibilityTests(unittest.TestCase):
             patch(
                 "edge_runtime.reporting_transport.urllib.request.urlopen", side_effect=incompatible
             ),
-            self.assertRaisesRegex(ReportTransportError, "不支持"),
+            self.assertRaisesRegex(ReportTransportError, "不受支持"),
         ):
             self.transport().send_decision(v2_report(bundle), configuration=bundle)
 

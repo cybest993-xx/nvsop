@@ -53,7 +53,10 @@ from nvsop_contracts.host_identity import (
 )
 from nvsop_contracts.reports import (
     DECISION_REPORT_CONTRACT_VERSION,
+    REPORT_CAPABILITIES_HEADER,
     REPORT_CONTRACT_VERSION,
+    SOP_INSTANCE_REPORT_CAPABILITY,
+    SOP_INSTANCE_REPORT_CONTRACT_VERSION,
     ReportBackendProvenance,
     ReportedDecision,
     ReportedHealth,
@@ -71,7 +74,10 @@ from nvsop_contracts.reports import (
 __all__ = [
     "CONFIGURATION_CONTRACT_VERSION",
     "DECISION_REPORT_CONTRACT_VERSION",
+    "REPORT_CAPABILITIES_HEADER",
     "REPORT_CONTRACT_VERSION",
+    "SOP_INSTANCE_REPORT_CAPABILITY",
+    "SOP_INSTANCE_REPORT_CONTRACT_VERSION",
     "Capability",
     "ConfigurationArtifact",
     "ConfigurationBundle",

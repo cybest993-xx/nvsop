@@ -19,7 +19,12 @@ from nvsop_contracts import (
 )
 
 from edge_runtime.judgment.model import Decision, HostInstant
-from edge_runtime.local_state.queues import PendingReport, ReportContext, StationQueues
+from edge_runtime.local_state.queues import (
+    PendingReport,
+    PendingSopInstanceReport,
+    ReportContext,
+    StationQueues,
+)
 
 
 class DecisionReportTransport(Protocol):
@@ -30,7 +35,12 @@ class DecisionReportTransport(Protocol):
         configuration: ConfigurationBundle | None,
     ) -> None: ...
 
-    def send_instance(self, report: ReportedSopInstance) -> None: ...
+    def send_instance(
+        self,
+        report: ReportedSopInstance,
+        *,
+        configuration: ConfigurationBundle | None,
+    ) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +67,49 @@ class DecisionReporter:
         self, *, now: HostInstant, reported_at: str, limit: int | None = None
     ) -> tuple[ReportAttempt, ...]:
         attempts: list[ReportAttempt] = []
-        for pending in self._queues.pending_reports(limit=limit):
+        pending_items: list[PendingReport | PendingSopInstanceReport] = [
+            *self._queues.pending_reports(),
+            *self._queues.pending_instance_reports(),
+        ]
+        pending_items.sort(key=lambda item: item.queue_id)
+        if limit is not None:
+            pending_items = pending_items[:limit]
+        for pending in pending_items:
+            if isinstance(pending, PendingSopInstanceReport):
+                event_id = (
+                    f"{pending.context.host_id}:{pending.context.station_id}:"
+                    f"instance:{pending.instance_id}"
+                )
+                try:
+                    stable_reported_at = pending.reported_at
+                    if stable_reported_at is None:
+                        stable_reported_at = self._queues.freeze_reported_at(
+                            pending.queue_id, candidate=reported_at
+                        )
+                    opening_report = reported_open_instance_from_pending(
+                        pending, reported_at=stable_reported_at
+                    )
+                    self._transport.send_instance(
+                        opening_report,
+                        configuration=_configuration_from_context(pending.context),
+                    )
+                except Exception as error:
+                    message = f"{type(error).__name__}: {error}"[:255]
+                    self._queues.record_report_failure(pending.queue_id, at=now, error=message)
+                    attempts.append(
+                        ReportAttempt(
+                            queue_id=pending.queue_id,
+                            sent=False,
+                            event_id=event_id,
+                            error=message,
+                        )
+                    )
+                    continue
+                self._queues.mark_reported(pending.queue_id, at=now)
+                attempts.append(
+                    ReportAttempt(queue_id=pending.queue_id, sent=True, event_id=event_id)
+                )
+                continue
             event_id = (
                 f"{pending.context.host_id}:{pending.queue_id}"
                 if pending.context is not None
@@ -69,7 +121,7 @@ class DecisionReporter:
                     stable_reported_at = self._queues.freeze_reported_at(
                         pending.queue_id, candidate=reported_at
                     )
-                report = reported_decision_from_pending(
+                decision_report = reported_decision_from_pending(
                     pending,
                     reported_at=stable_reported_at or reported_at,
                 )
@@ -87,14 +139,17 @@ class DecisionReporter:
                 continue
             try:
                 self._transport.send_decision(
-                    report,
+                    decision_report,
                     configuration=_configuration_from_context(pending.context),
                 )
                 instance_report = reported_instance_from_pending(
                     pending, reported_at=stable_reported_at or reported_at
                 )
                 if instance_report is not None:
-                    self._transport.send_instance(instance_report)
+                    self._transport.send_instance(
+                        instance_report,
+                        configuration=_configuration_from_context(pending.context),
+                    )
             except Exception as error:
                 message = f"{type(error).__name__}: {error}"[:255]
                 self._queues.record_report_failure(pending.queue_id, at=now, error=message)
@@ -102,14 +157,18 @@ class DecisionReporter:
                     ReportAttempt(
                         queue_id=pending.queue_id,
                         sent=False,
-                        event_id=report.event_id,
+                        event_id=decision_report.event_id,
                         error=message,
                     )
                 )
                 continue
             self._queues.mark_reported(pending.queue_id, at=now)
             attempts.append(
-                ReportAttempt(queue_id=pending.queue_id, sent=True, event_id=report.event_id)
+                ReportAttempt(
+                    queue_id=pending.queue_id,
+                    sent=True,
+                    event_id=decision_report.event_id,
+                )
             )
         return tuple(attempts)
 
@@ -242,6 +301,34 @@ def reported_instance_from_pending(
     )
 
 
+def reported_open_instance_from_pending(
+    pending: PendingSopInstanceReport, *, reported_at: str
+) -> ReportedSopInstance:
+    context = pending.context
+    if context.configuration_revision is None or context.configuration_sha256 is None:
+        raise ValueError("pending instance report has no confirmed configuration provenance")
+    event_id = f"{context.host_id}:{context.station_id}:instance:{pending.instance_id}"
+    return ReportedSopInstance(
+        event_id=event_id,
+        trace_id=event_id,
+        host_id=context.host_id,
+        station_id=context.station_id,
+        instance_id=pending.instance_id,
+        opened_at=pending.opened_at,
+        closed_at=None,
+        close_reason=None,
+        template_version_id=context.template_version_id,
+        template_sha256=context.template_sha256,
+        backend_provenance=tuple(
+            ReportBackendProvenance(backend_id=item.backend_id, model_ids=item.model_ids)
+            for item in context.backends
+        ),
+        configuration_revision=context.configuration_revision,
+        configuration_sha256=context.configuration_sha256,
+        reported_at=reported_at,
+    )
+
+
 __all__ = [
     "DecisionReportTransport",
     "DecisionReporter",
@@ -249,4 +336,5 @@ __all__ = [
     "ReportContext",
     "reported_decision_from_pending",
     "reported_instance_from_pending",
+    "reported_open_instance_from_pending",
 ]

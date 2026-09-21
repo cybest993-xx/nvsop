@@ -11680,7 +11680,7 @@
     },
     "/api/v1/inference-hosts/{host_id}/confirmed-configuration": {
       "post": {
-        "description": "签名确认 Edge 保存的已下发 bundle，并协商 historical decision report v2。",
+        "description": "签名确认已下发 bundle，并协商当前 Edge 明确请求的 report capability。",
         "operationId": "confirmInferenceHostConfigurationHistory",
         "parameters": [
           {
@@ -11755,6 +11755,22 @@
                 }
               ],
               "title": "X-Inference-Host-Signature"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-NVSOP-Report-Capabilities",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Nvsop-Report-Capabilities"
             }
           }
         ],

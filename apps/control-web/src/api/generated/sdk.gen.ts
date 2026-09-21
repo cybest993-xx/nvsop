@@ -1150,7 +1150,7 @@ export const pullInferenceHostConfiguration = <ThrowOnError extends boolean = fa
 /**
  * Confirm Inference Host Configuration History
  *
- * 签名确认 Edge 保存的已下发 bundle，并协商 historical decision report v2。
+ * 签名确认已下发 bundle，并协商当前 Edge 明确请求的 report capability。
  */
 export const confirmInferenceHostConfigurationHistory = <ThrowOnError extends boolean = false>(
   options: Options<ConfirmInferenceHostConfigurationHistoryData, ThrowOnError>,

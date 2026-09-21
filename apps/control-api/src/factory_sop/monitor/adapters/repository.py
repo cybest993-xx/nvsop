@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from sqlalchemy import Table, select
+from sqlalchemy import Table, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.orm import Session
 
@@ -16,6 +16,7 @@ from factory_sop.monitor.adapters.tables import (
 from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.model import MirroredDecision, MirroredHealth, MirroredSopInstance
 from factory_sop.monitor.repository import MonitorRepository
+from nvsop_contracts import ReportedSopInstance
 
 
 class PostgresMonitorRepository(MonitorRepository):
@@ -86,23 +87,42 @@ class PostgresMonitorRepository(MonitorRepository):
             payload=row.payload,
         )
         result = self._session.execute(
-            statement.on_conflict_do_update(
-                index_elements=[table.c.event_id],
-                set_={
-                    "closed_at": statement.excluded.closed_at,
-                    "close_reason": statement.excluded.close_reason,
-                    "received_at": statement.excluded.received_at,
-                    "payload": statement.excluded.payload,
-                },
-                where=table.c.closed_at.is_(None) & statement.excluded.closed_at.is_not(None),
-            ).returning(table.c.event_id)
+            statement.on_conflict_do_nothing(index_elements=[table.c.event_id]).returning(
+                table.c.event_id
+            )
         )
         if result.scalar_one_or_none() is not None:
             return True
         existing = self._session.get(ReportedSopInstanceRow, row.event_id)
         if existing is None:
             raise RuntimeError("instance mirror upsert completed without a visible row")
-        if existing.closed_at is not None and row.closed_at is None:
+        existing_report = existing.to_domain().report
+        incoming_report = value.report
+        if existing_report.closed_at is None and incoming_report.closed_at is not None:
+            _ensure_instance_progression(existing_report, incoming_report)
+            closed = self._session.execute(
+                update(ReportedSopInstanceRow)
+                .where(
+                    ReportedSopInstanceRow.event_id == row.event_id,
+                    ReportedSopInstanceRow.closed_at.is_(None),
+                )
+                .values(
+                    closed_at=row.closed_at,
+                    close_reason=row.close_reason,
+                    received_at=row.received_at,
+                    payload=row.payload,
+                )
+                .returning(ReportedSopInstanceRow.event_id)
+            )
+            if closed.scalar_one_or_none() is not None:
+                return True
+            current = self._session.get(ReportedSopInstanceRow, row.event_id)
+            if current is None:
+                raise RuntimeError("instance mirror close raced without a visible row")
+            _ensure_same(current.payload, row.payload, "instance", row.event_id)
+            return False
+        if existing_report.closed_at is not None and incoming_report.closed_at is None:
+            _ensure_instance_progression(incoming_report, existing_report)
             return False
         _ensure_same(existing.payload, row.payload, "instance", row.event_id)
         return False
@@ -173,6 +193,43 @@ def _ensure_same(
         raise MonitorRefusedError(
             f"{kind} event id {event_id!r} was reused with a different payload"
         )
+
+
+def _ensure_instance_progression(opened: ReportedSopInstance, closed: ReportedSopInstance) -> None:
+    if opened.closed_at is not None or closed.closed_at is None:
+        raise MonitorRefusedError("instance lifecycle transition must be open to closed")
+    immutable_open = (
+        opened.event_id,
+        opened.trace_id,
+        opened.host_id,
+        opened.station_id,
+        opened.instance_id,
+        opened.opened_at,
+        opened.template_version_id,
+        opened.template_sha256,
+        opened.configuration_revision,
+        opened.configuration_sha256,
+        opened.contract_version,
+    )
+    immutable_closed = (
+        closed.event_id,
+        closed.trace_id,
+        closed.host_id,
+        closed.station_id,
+        closed.instance_id,
+        closed.opened_at,
+        closed.template_version_id,
+        closed.template_sha256,
+        closed.configuration_revision,
+        closed.configuration_sha256,
+        closed.contract_version,
+    )
+    if immutable_open != immutable_closed:
+        raise MonitorRefusedError("instance event reused with different immutable provenance")
+    opened_provenance = {item.backend_id: item.model_ids for item in opened.backend_provenance}
+    closed_provenance = {item.backend_id: item.model_ids for item in closed.backend_provenance}
+    if any(closed_provenance.get(key) != value for key, value in opened_provenance.items()):
+        raise MonitorRefusedError("instance provenance cannot remove or rewrite observed sources")
 
 
 __all__ = ["PostgresMonitorRepository"]

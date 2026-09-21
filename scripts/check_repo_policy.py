@@ -392,13 +392,9 @@ def check_edge_dependency_directions(root: Path, files: list[Path]) -> list[str]
                         "boundary and must import no edge_runtime sibling"
                     )
                     continue
-                if (
-                    not is_under(path, local_state_root)
-                    and not is_under(path, connector_root)
-                    and any(
-                        target == private or target.startswith(f"{private}.")
-                        for private in local_state_private_modules
-                    )
+                if not is_under(path, local_state_root) and any(
+                    target == private or target.startswith(f"{private}.")
+                    for private in local_state_private_modules
                 ):
                     violations.append(
                         f"{path}:{line} imports {target}; LocalState persistence implementation "

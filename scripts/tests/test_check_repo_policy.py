@@ -346,8 +346,8 @@ class RepositoryPolicyTest(unittest.TestCase):
         errors = self.check(str(module))
         self.assertIn(
             "apps/edge-runtime/src/edge_runtime/connectors/future.py:1 imports "
-            "edge_runtime.local_state.queues; connectors may depend only on judgment and "
-            "supervisor input vocabulary outside their own package",
+            "edge_runtime.local_state.queues; LocalState persistence implementation must stay "
+            "behind edge_runtime.local_state",
             errors,
         )
 

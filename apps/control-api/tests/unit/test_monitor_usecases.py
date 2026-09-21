@@ -12,8 +12,9 @@ from factory_sop.auth.model import User, UserStatus
 from factory_sop.auth.permissions import Permission
 from factory_sop.identifiers import new_id
 from factory_sop.monitor.errors import MonitorRefusedError
-from factory_sop.monitor.model import MirroredDecision, MirroredHealth
+from factory_sop.monitor.model import MirroredDecision, MirroredHealth, MirroredSopInstance
 from factory_sop.monitor.usecases import (
+    list_instances,
     mirror_decision,
     mirror_health,
     sse_snapshot,
@@ -42,6 +43,7 @@ class MemoryMonitor:
     def __init__(self) -> None:
         self.decisions: dict[str, MirroredDecision] = {}
         self.health: dict[str, MirroredHealth] = {}
+        self.instances: dict[str, MirroredSopInstance] = {}
         self._decision_sequence = 0
         self._health_sequence = 0
 
@@ -63,6 +65,19 @@ class MemoryMonitor:
 
     def recent_decisions(self, *, limit: int) -> tuple[MirroredDecision, ...]:
         return tuple(self.decisions.values())[:limit]
+
+    def upsert_instance(self, value: MirroredSopInstance) -> bool:
+        if value.report.event_id in self.instances:
+            return False
+        self.instances[value.report.event_id] = value
+        return True
+
+    def page_instances(
+        self, *, page: int, page_size: int
+    ) -> tuple[tuple[MirroredSopInstance, ...], int]:
+        values = tuple(self.instances.values())
+        start = (page - 1) * page_size
+        return values[start : start + page_size], len(values)
 
     def recent_health(self, *, limit: int) -> tuple[MirroredHealth, ...]:
         return tuple(self.health.values())[:limit]
@@ -333,6 +348,11 @@ def test_sse_snapshot_preserves_pass_fail_and_indeterminate_verdicts() -> None:
     }
     expected = {value.event_id: reported_decision_to_wire(value) for value in reports}
     assert actual == expected
+
+
+def test_list_instances_rejects_a_caller_without_monitor_permission() -> None:
+    with pytest.raises(AuthorizationRefusedError):
+        list_instances(MemoryMonitor(), caller=caller(), page=1, page_size=50)
 
 
 def test_sse_usecase_rejects_a_caller_without_monitor_permission() -> None:

@@ -92,11 +92,13 @@ class StationStore(StationQueues):
             self._connection.execute("BEGIN IMMEDIATE")
             try:
                 if state.instance is not None:
-                    self._write_instance(
-                        state.instance, report_provenance.get(state.instance.instance_id)
-                    )
+                    provenance = report_provenance.get(state.instance.instance_id)
+                    if self._write_instance(state.instance, provenance):
+                        self._enqueue_instance_open_report(state.instance.instance_id, provenance)
                 for instance in closed_instances:
-                    self._write_instance(instance, report_provenance.get(instance.instance_id))
+                    provenance = report_provenance.get(instance.instance_id)
+                    if self._write_instance(instance, provenance):
+                        self._enqueue_instance_open_report(instance.instance_id, provenance)
                 for decision in decisions:
                     decision_id = self._write_decision(decision)
                     self._enqueue_report(
@@ -107,6 +109,9 @@ class StationStore(StationQueues):
                         self._latch(decision.instance_id, decision_id, violation)
                     if decision.lifecycle is not Lifecycle.STAYS_OPEN:
                         self._close_instance(decision)
+                        self._supersede_instance_open_report(
+                            decision.instance_id, at=decision.evidence.anchor
+                        )
                 for clip in evidence:
                     self._enqueue_evidence(clip)
                 self._connection.execute("COMMIT")
@@ -119,22 +124,36 @@ class StationStore(StationQueues):
         self,
         instance: Instance,
         provenance: tuple[BackendReportContext, ...] | None,
-    ) -> None:
-        """保存核心实例和独立 reporting provenance; NULL 明确表示旧实例来源未知。"""
+    ) -> bool:
+        """保存核心实例和独立 reporting provenance; 返回是否为首次落盘。"""
+        created = (
+            self._connection.execute(
+                """
+                SELECT 1
+                  FROM local_sop_instance
+                 WHERE station_id = ? AND instance_id = ?
+                """,
+                (self._station_id, instance.instance_id),
+            ).fetchone()
+            is None
+        )
         encoded_provenance = self._encode_provenance(provenance)
         self._connection.execute(
             """
             INSERT INTO local_sop_instance (
                 station_id, instance_id, opened_at, last_observation_at,
-                seen, expected_index, impairments, settled, report_backend_provenance
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                seen, expected_index, impairments, settled, report_backend_provenance,
+                open_boundary_signal, close_boundary_signal
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (station_id, instance_id) DO UPDATE SET
                 last_observation_at        = excluded.last_observation_at,
                 seen                       = excluded.seen,
                 expected_index             = excluded.expected_index,
                 impairments                = excluded.impairments,
                 settled                    = excluded.settled,
-                report_backend_provenance  = excluded.report_backend_provenance
+                report_backend_provenance  = excluded.report_backend_provenance,
+                open_boundary_signal       = excluded.open_boundary_signal,
+                close_boundary_signal      = excluded.close_boundary_signal
             """,
             (
                 self._station_id,
@@ -146,8 +165,11 @@ class StationStore(StationQueues):
                 dump_reasons(instance.impairments),
                 dump_settled(instance.settled),
                 encoded_provenance,
+                instance.open_boundary_signal,
+                instance.close_boundary_signal,
             ),
         )
+        return created
 
     def _write_decision(self, decision: Decision) -> int:
         cursor = self._connection.execute(
@@ -199,7 +221,10 @@ class StationStore(StationQueues):
     ) -> None:
         if self._report_context is None:
             self._connection.execute(
-                "INSERT INTO local_report_queue (station_id, decision_id) VALUES (?, ?)",
+                """
+                INSERT INTO local_report_queue (station_id, decision_id, report_kind)
+                VALUES (?, ?, 'decision')
+                """,
                 (self._station_id, decision_id),
             )
             return
@@ -214,11 +239,11 @@ class StationStore(StationQueues):
         self._connection.execute(
             """
             INSERT INTO local_report_queue (
-                station_id, decision_id, report_host_id,
+                station_id, decision_id, report_kind, report_host_id,
                 report_template_version_id, report_template_sha256,
                 report_backend_provenance, report_configuration,
                 configuration_revision, configuration_sha256
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, 'decision', ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 self._station_id,
@@ -231,6 +256,57 @@ class StationStore(StationQueues):
                 context.configuration_revision,
                 context.configuration_sha256,
             ),
+        )
+
+    def _enqueue_instance_open_report(
+        self,
+        instance_id: int,
+        provenance: tuple[BackendReportContext, ...] | None,
+    ) -> None:
+        context = self._report_context
+        if context is None or context.configuration_revision is None or provenance is None:
+            return
+        configured = {backend.backend_id: backend for backend in context.backends}
+        for backend in provenance:
+            if configured.get(backend.backend_id) != backend:
+                raise ValueError(
+                    "instance provenance is outside the event-time station configuration"
+                )
+        self._connection.execute(
+            """
+            INSERT INTO local_report_queue (
+                station_id, instance_id, report_kind, report_host_id,
+                report_template_version_id, report_template_sha256,
+                report_backend_provenance, report_configuration,
+                configuration_revision, configuration_sha256
+            ) VALUES (?, ?, 'instance', ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                self._station_id,
+                instance_id,
+                context.host_id,
+                context.template_version_id,
+                context.template_sha256,
+                self._encode_provenance(provenance),
+                context.configuration_json,
+                context.configuration_revision,
+                context.configuration_sha256,
+            ),
+        )
+
+    def _supersede_instance_open_report(self, instance_id: int, *, at: HostInstant) -> None:
+        """未送达的开放快照由同实例的闭合快照取代;已确认开放快照保留。"""
+        self._connection.execute(
+            """
+            UPDATE local_report_queue
+               SET superseded_at = ?
+             WHERE station_id = ?
+               AND report_kind = 'instance'
+               AND instance_id = ?
+               AND sent_at IS NULL
+               AND superseded_at IS NULL
+            """,
+            (at.seconds, self._station_id, instance_id),
         )
 
     @staticmethod
@@ -356,7 +432,7 @@ class StationStore(StationQueues):
         row = self._connection.execute(
             """
             SELECT instance_id, opened_at, last_observation_at, seen, expected_index,
-                   impairments, settled
+                   impairments, settled, open_boundary_signal
               FROM local_sop_instance
              WHERE station_id = ? AND closed_at IS NULL
              ORDER BY instance_id DESC
@@ -374,6 +450,7 @@ class StationStore(StationQueues):
             expected_index=row["expected_index"],
             impairments=load_reasons(row["impairments"]),
             settled=load_settled(row["settled"]),
+            open_boundary_signal=row["open_boundary_signal"],
         )
 
     def _next_instance_id(self) -> int:
@@ -409,7 +486,7 @@ class LocalState:
                 """
                 SELECT DISTINCT station_id
                   FROM local_report_queue
-                 WHERE sent_at IS NULL
+                 WHERE sent_at IS NULL AND superseded_at IS NULL
                  ORDER BY station_id
                 """
             ).fetchall()

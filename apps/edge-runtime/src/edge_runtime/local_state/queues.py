@@ -23,6 +23,7 @@ import sqlite3
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from threading import RLock
+from typing import cast
 
 from edge_runtime.judgment.model import Decision, HostInstant, Lifecycle, Violation
 from edge_runtime.judgment.reasons import ReasonCode, Verdict
@@ -101,6 +102,25 @@ class PendingReport:
     last_error: str | None
     reported_at: str | None = None
     context: ReportContext | None = None
+    opened_at: float | None = None
+    closed_at: float | None = None
+    close_reason: str | None = None
+    open_boundary_signal: str | None = None
+    close_boundary_signal: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PendingSopInstanceReport:
+    """现有 report outbox 中尚未确认的实例开放快照。"""
+
+    queue_id: int
+    instance_id: int
+    opened_at: float
+    open_boundary_signal: str | None
+    attempts: int
+    last_error: str | None
+    reported_at: str | None
+    context: ReportContext
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,10 +167,17 @@ class StationQueues:
                        q.report_configuration,
                        q.configuration_revision, q.configuration_sha256,
                        d.decision_id, d.instance_id, d.verdict, d.reasons, d.lifecycle,
-                       d.evidence_anchor, d.evidence_from, d.evidence_to
+                       d.evidence_anchor, d.evidence_from, d.evidence_to,
+                       i.opened_at, i.closed_at, i.lifecycle AS instance_lifecycle,
+                       i.open_boundary_signal, i.close_boundary_signal
                   FROM local_report_queue q
                   JOIN local_decision d ON d.decision_id = q.decision_id
-                 WHERE q.station_id = ? AND q.sent_at IS NULL
+                  JOIN local_sop_instance i
+                    ON i.station_id = q.station_id AND i.instance_id = d.instance_id
+                 WHERE q.station_id = ?
+                   AND q.report_kind = 'decision'
+                   AND q.sent_at IS NULL
+                   AND q.superseded_at IS NULL
                  ORDER BY q.queue_id
                  LIMIT ?
                 """,
@@ -164,6 +191,53 @@ class StationQueues:
                     last_error=row["last_error"],
                     reported_at=row["report_reported_at"],
                     context=self._report_context_of(row),
+                    opened_at=row["opened_at"] if row["closed_at"] is not None else None,
+                    closed_at=row["closed_at"],
+                    close_reason=(
+                        row["instance_lifecycle"] if row["closed_at"] is not None else None
+                    ),
+                    open_boundary_signal=row["open_boundary_signal"],
+                    close_boundary_signal=row["close_boundary_signal"],
+                )
+                for row in rows
+            )
+
+    def pending_instance_reports(
+        self, *, limit: int | None = None
+    ) -> tuple[PendingSopInstanceReport, ...]:
+        """返回同一 report outbox 中仍开放且尚未确认的实例快照。"""
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT q.queue_id, q.attempts, q.last_error, q.report_reported_at,
+                       q.report_host_id, q.report_template_version_id,
+                       q.report_template_sha256, q.report_backend_provenance,
+                       q.report_configuration, q.configuration_revision,
+                       q.configuration_sha256, q.instance_id, i.opened_at,
+                       i.open_boundary_signal
+                  FROM local_report_queue q
+                  JOIN local_sop_instance i
+                    ON i.station_id = q.station_id AND i.instance_id = q.instance_id
+                 WHERE q.station_id = ?
+                   AND q.report_kind = 'instance'
+                   AND q.sent_at IS NULL
+                   AND q.superseded_at IS NULL
+                   AND i.closed_at IS NULL
+                 ORDER BY q.queue_id
+                 LIMIT ?
+                """,
+                (self._station_id, -1 if limit is None else limit),
+            ).fetchall()
+            return tuple(
+                PendingSopInstanceReport(
+                    queue_id=int(row["queue_id"]),
+                    instance_id=int(row["instance_id"]),
+                    opened_at=float(row["opened_at"]),
+                    open_boundary_signal=row["open_boundary_signal"],
+                    attempts=int(row["attempts"]),
+                    last_error=row["last_error"],
+                    reported_at=row["report_reported_at"],
+                    context=cast(ReportContext, self._report_context_of(row)),
                 )
                 for row in rows
             )
@@ -255,7 +329,10 @@ class StationQueues:
                 """
                 SELECT report_reported_at
                   FROM local_report_queue
-                 WHERE station_id = ? AND queue_id = ? AND sent_at IS NULL
+                 WHERE station_id = ?
+                   AND queue_id = ?
+                   AND sent_at IS NULL
+                   AND superseded_at IS NULL
                 """,
                 (self._station_id, queue_id),
             ).fetchone()

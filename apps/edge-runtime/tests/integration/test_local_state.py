@@ -291,9 +291,10 @@ class RestartTest(unittest.TestCase):
                     reasons=(ReasonCode.RUN_INTERRUPTED,),
                     violations=(),
                     lifecycle=Lifecycle.CLOSED_BY_RUN_INTERRUPTION,
-                    evidence=EvidenceSpan.at(HostInstant(ANCHOR + 60.0)),
+                    evidence=EvidenceSpan.at(HostInstant(ANCHOR)),
                 ),
             )
+            self.assertEqual(station.pending_reports()[-1].closed_at, ANCHOR)
 
             # 重复启动和中断不能再次结案或重复入队。
             pending = station.pending_reports(), station.pending_evidence()
@@ -311,6 +312,31 @@ class RestartTest(unittest.TestCase):
             resumed.receive(action(STEPS[0], at=ANCHOR + 61.0))
             self.assertEqual(resumed.state.instance.instance_id if resumed.state.instance else 0, 2)
             second.close()
+
+    def test_host_reboot_clock_reset_closes_at_last_comparable_instant(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = str(Path(directory) / "local-state.sqlite3")
+            first = open_local_state(path)
+            driver = supervisor(opening_state(), FakeClock(), first.station(STATION))
+            driver.receive(action(STEPS[0], at=ANCHOR))
+            first.close()
+
+            second = open_local_state(path)
+            station = second.station(STATION)
+            resumed = resume_station(
+                station,
+                template=opening_state().template,
+                parameters=opening_state().parameters,
+                margins=MARGINS,
+                clock=FakeClock(now=1.0),
+            )
+            self.addCleanup(second.close)
+
+            self.assertIsNone(resumed.state.instance)
+            (pending,) = station.pending_reports()
+            self.assertEqual(pending.opened_at, ANCHOR)
+            self.assertEqual(pending.closed_at, ANCHOR)
+            self.assertEqual(pending.decision.evidence, EvidenceSpan.at(HostInstant(ANCHOR)))
 
 
 class HistoricalReportContextTest(unittest.TestCase):
@@ -360,6 +386,28 @@ class HistoricalReportContextTest(unittest.TestCase):
             (after_restart,) = restarted.pending_reports()
             self.assertEqual(after_restart.context, context_n)
             third.close()
+
+    def test_open_instance_uses_existing_report_outbox_and_close_supersedes_unsent_open(
+        self,
+    ) -> None:
+        context = self.context(revision=7, backend_id="backend-old")
+        state = open_local_state(":memory:")
+        self.addCleanup(state.close)
+        station = state.station(STATION, report_context=context)
+        driver = supervisor(opening_state(end_signals=("end-a", "end-b")), FakeClock(), station)
+        provenance = context.backends[0]
+
+        driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=provenance)
+        (opening,) = station.pending_instance_reports()
+        self.assertEqual(opening.instance_id, 1)
+        self.assertEqual(opening.open_boundary_signal, STEPS[0])
+        self.assertEqual(opening.context, context)
+
+        driver.receive(action("end-b", at=ANCHOR + 1.0), report_provenance=provenance)
+        self.assertEqual(station.pending_instance_reports(), ())
+        (closed,) = station.pending_reports()
+        self.assertEqual(closed.open_boundary_signal, STEPS[0])
+        self.assertEqual(closed.close_boundary_signal, "end-b")
 
     def test_pre_instance_impaired_backend_provenance_reaches_the_report_outbox(self) -> None:
         bundle = ConfigurationBundle(
@@ -600,6 +648,11 @@ class HistoricalReportContextTest(unittest.TestCase):
                 if configuration is None:
                     raise AssertionError("v2 report must carry the frozen configuration")
 
+            def send_instance(
+                self, report: object, *, configuration: ConfigurationBundle | None
+            ) -> None:
+                del report, configuration
+
         transport = Transport()
         attempts = DecisionReporter(queues=station, transport=transport).flush(
             now=HostInstant(ANCHOR + 2.0),
@@ -636,6 +689,11 @@ class HistoricalReportContextTest(unittest.TestCase):
                 if configuration is None:
                     raise AssertionError("confirmed decision must carry its frozen configuration")
                 self.sent.append(report)
+
+            def send_instance(
+                self, report: object, *, configuration: ConfigurationBundle | None
+            ) -> None:
+                del report, configuration
 
         transport = Transport()
         attempts = DecisionReporter(queues=station, transport=transport).flush(
@@ -693,6 +751,11 @@ class HistoricalReportContextTest(unittest.TestCase):
             ) -> None:
                 del configuration
                 self.sent.append(report)
+
+            def send_instance(
+                self, report: object, *, configuration: ConfigurationBundle | None
+            ) -> None:
+                del report, configuration
 
         transport = Transport()
         attempts = DecisionReporter(queues=station, transport=transport).flush(
@@ -776,12 +839,20 @@ class HistoricalReportContextTest(unittest.TestCase):
                 if len(self.sent) == 1:
                     raise OSError("center committed but acknowledgement was lost")
 
+            def send_instance(
+                self, report: object, *, configuration: ConfigurationBundle | None
+            ) -> None:
+                del report, configuration
+
         transport = LostAckTransport()
         first = DecisionReporter(queues=station, transport=transport).flush(
             now=HostInstant(ANCHOR + 2.0),
             reported_at="2026-09-16T00:00:00Z",
         )
-        self.assertFalse(first[0].sent)
+        self.assertEqual(len(first), 2)
+        self.assertTrue(first[0].sent)
+        self.assertFalse(first[1].sent)
+        self.assertEqual(station.pending_instance_reports(), ())
         (pending_after_loss,) = station.pending_reports()
         self.assertEqual(pending_after_loss.reported_at, "2026-09-16T00:00:00Z")
 
@@ -815,6 +886,11 @@ class HistoricalReportContextTest(unittest.TestCase):
                 configuration: ConfigurationBundle | None,
             ) -> None:
                 self.sent.append((report, configuration))
+
+            def send_instance(
+                self, report: object, *, configuration: ConfigurationBundle | None
+            ) -> None:
+                del report, configuration
 
         transport = Transport()
         attempts = DecisionReporter(queues=station, transport=transport).flush(

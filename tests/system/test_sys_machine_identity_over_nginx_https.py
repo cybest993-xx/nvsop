@@ -565,6 +565,7 @@ def test_host_signed_machine_api_crosses_real_nginx_gateway_without_browser_sess
                 body=configuration_body,
                 success_status=200,
             )
+            # No capability header models an old Edge talking to the new Center.
             assert confirmed.json() == {"decision_report_contract_version": 2}
 
             health_path = "/api/v1/monitor/health"
@@ -617,6 +618,22 @@ def test_host_signed_machine_api_crosses_real_nginx_gateway_without_browser_sess
                 body=decision,
                 success_status=200,
             )
+
+            instance_report_path = "/api/v1/monitor/reported-instances"
+            malformed_instance: dict[str, object] = {}
+            instance_route = edge.post(
+                instance_report_path,
+                json=malformed_instance,
+                headers=_signed_headers(
+                    host_id=host_id,
+                    private_key=private_key,
+                    method="POST",
+                    path=instance_report_path,
+                    body=malformed_instance,
+                ),
+            )
+            assert instance_route.status_code == 422, instance_route.text
+            assert edge.get("/api/v1/monitor/instances").status_code == 401
 
             claim_path = f"{COMMANDS}/next"
             _assert_signature_rejection_matrix(

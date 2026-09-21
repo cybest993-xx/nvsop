@@ -150,13 +150,15 @@ class StationSupervisor:
             )
         )
 
-    def interrupt(self) -> Reaction:
+    def interrupt(self, *, at: HostInstant | None = None) -> Reaction:
         """A configuration switch or a shutdown ended this run.
 
         The pass in flight is concluded as indeterminate rather than carried across, so one
-        maintenance action does not manufacture a violation (§5.2).
+        maintenance action does not manufacture a violation (§5.2). Startup supplies the
+        last persisted observation instant for a recovered instance because a previous
+        process's monotonic-clock epoch cannot be assumed comparable with the current one.
         """
-        return self._advance((RunInterrupted(at=HostInstant(self._clock())),))
+        return self._advance((RunInterrupted(at=at or HostInstant(self._clock())),))
 
     def _advance(
         self,

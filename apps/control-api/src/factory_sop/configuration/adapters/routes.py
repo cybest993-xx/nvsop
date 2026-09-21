@@ -18,6 +18,9 @@ from factory_sop.device.api import DeviceConfigurationGateway, host_identity_fro
 from factory_sop.template.api import TemplateConfigurationGateway
 from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
+    REPORT_CAPABILITIES_HEADER,
+    SOP_INSTANCE_REPORT_CAPABILITY,
+    SOP_INSTANCE_REPORT_CONTRACT_VERSION,
     configuration_from_wire,
     configuration_to_wire,
 )
@@ -89,8 +92,9 @@ def confirm_inference_host_configuration_history(
     inference_host_signature: Annotated[
         str | None, Header(alias="X-Inference-Host-Signature")
     ] = None,
+    report_capabilities: Annotated[str | None, Header(alias=REPORT_CAPABILITIES_HEADER)] = None,
 ) -> dict[str, object]:
-    """签名确认 Edge 保存的已下发 bundle，并协商 historical decision report v2。"""
+    """签名确认已下发 bundle，并协商当前 Edge 明确请求的 report capability。"""
     if inference_host_id != str(host_id):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="host identity mismatch"
@@ -118,7 +122,12 @@ def confirm_inference_host_configuration_history(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
         ) from error
-    return {"decision_report_contract_version": DECISION_REPORT_CONTRACT_VERSION}
+    response: dict[str, object] = {
+        "decision_report_contract_version": DECISION_REPORT_CONTRACT_VERSION
+    }
+    if report_capabilities == SOP_INSTANCE_REPORT_CAPABILITY:
+        response["sop_instance_report_contract_version"] = SOP_INSTANCE_REPORT_CONTRACT_VERSION
+    return response
 
 
 __all__ = ["router"]

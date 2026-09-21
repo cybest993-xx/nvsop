@@ -13,13 +13,18 @@ from typing import Protocol, cast
 
 from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
+    REPORT_CAPABILITIES_HEADER,
+    SOP_INSTANCE_REPORT_CAPABILITY,
+    SOP_INSTANCE_REPORT_CONTRACT_VERSION,
     ConfigurationBundle,
     HostIdentityRequest,
     ReportedDecision,
     ReportedHealth,
+    ReportedSopInstance,
     configuration_to_wire,
     reported_decision_to_wire,
     reported_health_to_wire,
+    reported_sop_instance_to_wire,
     sign_host_identity_request,
 )
 
@@ -66,39 +71,72 @@ class HttpDecisionReportTransport(DecisionReportTransport):
         if report.contract_version == DECISION_REPORT_CONTRACT_VERSION:
             if configuration is None:
                 raise ValueError("v2 report requires its frozen confirmed configuration")
-            self._ensure_v2_compatibility(report=report, configuration=configuration)
+            self._ensure_report_compatibility(
+                host_id=report.host_id,
+                configuration_revision=report.configuration_revision,
+                configuration_sha256=report.configuration_sha256,
+                configuration=configuration,
+            )
         elif configuration is not None:
             raise ValueError("v1 report cannot carry a confirmed configuration proof")
         self._post("/api/v1/monitor/reported-decisions", reported_decision_to_wire(report))
 
-    def _ensure_v2_compatibility(
+    def _ensure_report_compatibility(
         self,
         *,
-        report: ReportedDecision,
+        host_id: str,
+        configuration_revision: int | None,
+        configuration_sha256: str | None,
         configuration: ConfigurationBundle,
     ) -> None:
         if (
-            configuration.host_id != report.host_id
-            or configuration.config_revision != report.configuration_revision
-            or configuration.effective_sha256 != report.configuration_sha256
+            configuration.host_id != host_id
+            or configuration.config_revision != configuration_revision
+            or configuration.effective_sha256 != configuration_sha256
         ):
-            raise ValueError("frozen configuration does not match decision report proof")
+            raise ValueError("frozen configuration does not match report proof")
         key = (configuration.config_revision, configuration.effective_sha256)
         if key in self._confirmed_report_configurations:
             return
         path = f"/api/v1/inference-hosts/{self._host_id}/confirmed-configuration"
-        response = self._post_json(path, configuration_to_wire(configuration))
-        if set(response) != {"decision_report_contract_version"}:
+        response = self._post_json(
+            path,
+            configuration_to_wire(configuration),
+            extra_headers={REPORT_CAPABILITIES_HEADER: SOP_INSTANCE_REPORT_CAPABILITY},
+        )
+        if set(response) != {
+            "decision_report_contract_version",
+            "sop_instance_report_contract_version",
+        }:
             raise ReportTransportError("中心运行时兼容响应格式不受支持")
-        version = response["decision_report_contract_version"]
-        if version != DECISION_REPORT_CONTRACT_VERSION:
+        if response["decision_report_contract_version"] != DECISION_REPORT_CONTRACT_VERSION:
             raise ReportTransportError("中心不支持当前 historical decision report contract")
+        if response["sop_instance_report_contract_version"] != SOP_INSTANCE_REPORT_CONTRACT_VERSION:
+            raise ReportTransportError("中心不支持当前 SOP instance report contract")
         self._confirmed_report_configurations.add(key)
 
     def send_health(self, report: ReportedHealth) -> None:
         if report.host_id != self._host_id:
             raise ValueError("a health report cannot be sent by a different host")
         self._post("/api/v1/monitor/health", reported_health_to_wire(report))
+
+    def send_instance(
+        self,
+        report: ReportedSopInstance,
+        *,
+        configuration: ConfigurationBundle | None,
+    ) -> None:
+        if report.host_id != self._host_id:
+            raise ValueError("an instance report cannot be sent by a different host")
+        if configuration is None:
+            raise ValueError("instance report requires its frozen confirmed configuration")
+        self._ensure_report_compatibility(
+            host_id=report.host_id,
+            configuration_revision=report.configuration_revision,
+            configuration_sha256=report.configuration_sha256,
+            configuration=configuration,
+        )
+        self._post("/api/v1/monitor/reported-instances", reported_sop_instance_to_wire(report))
 
     def _post(self, path: str, body: dict[str, object]) -> None:
         payload = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -135,7 +173,13 @@ class HttpDecisionReportTransport(DecisionReportTransport):
         finally:
             response.close()
 
-    def _post_json(self, path: str, body: dict[str, object]) -> Mapping[str, object]:
+    def _post_json(
+        self,
+        path: str,
+        body: dict[str, object],
+        *,
+        extra_headers: Mapping[str, str] | None = None,
+    ) -> Mapping[str, object]:
         payload = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         request = urllib.request.Request(
             f"{self._base_url}{path}",
@@ -144,6 +188,7 @@ class HttpDecisionReportTransport(DecisionReportTransport):
                 "Accept": "application/json",
                 "Content-Type": "application/json",
                 **self._signed_headers(path, body),
+                **({} if extra_headers is None else dict(extra_headers)),
             },
             method="POST",
         )

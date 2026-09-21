@@ -5,17 +5,19 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, cast
 
-from sqlalchemy import BigInteger, DateTime, Identity, String
+from sqlalchemy import BigInteger, DateTime, Identity, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from factory_sop.monitor.model import MirroredDecision, MirroredHealth
+from factory_sop.monitor.model import MirroredDecision, MirroredHealth, MirroredSopInstance
 from factory_sop.persistence import Table
 from nvsop_contracts import (
     reported_decision_from_wire,
     reported_decision_to_wire,
     reported_health_from_wire,
     reported_health_to_wire,
+    reported_sop_instance_from_wire,
+    reported_sop_instance_to_wire,
 )
 
 
@@ -91,3 +93,41 @@ class ReportedHealthRow(Table):
         if value.stream_sequence is not None:
             row.stream_sequence = value.stream_sequence
         return row
+
+
+class ReportedSopInstanceRow(Table):
+    __tablename__ = "monitor_sop_instance"
+    event_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    host_id: Mapped[str] = mapped_column(String(128), index=True)
+    station_id: Mapped[str] = mapped_column(String(128), index=True)
+    instance_id: Mapped[int] = mapped_column(BigInteger())
+    opened_at: Mapped[float]
+    closed_at: Mapped[float | None] = mapped_column(nullable=True)
+    close_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    open_boundary_signal: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    close_boundary_signal: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+    def to_domain(self) -> MirroredSopInstance:
+        return MirroredSopInstance(
+            report=reported_sop_instance_from_wire(cast(dict[str, object], self.payload)),
+            received_at=self.received_at,
+        )
+
+    @classmethod
+    def from_domain(cls, value: MirroredSopInstance) -> ReportedSopInstanceRow:
+        report = value.report
+        return cls(
+            event_id=report.event_id,
+            host_id=report.host_id,
+            station_id=report.station_id,
+            instance_id=report.instance_id,
+            opened_at=report.opened_at,
+            closed_at=report.closed_at,
+            close_reason=report.close_reason,
+            open_boundary_signal=report.open_boundary_signal,
+            close_boundary_signal=report.close_boundary_signal,
+            received_at=value.received_at,
+            payload=reported_sop_instance_to_wire(report),
+        )

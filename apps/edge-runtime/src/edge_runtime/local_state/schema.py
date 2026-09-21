@@ -236,7 +236,72 @@ _V6 = (
     "ALTER TABLE local_report_queue ADD COLUMN report_configuration TEXT",
 )
 
-MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1, _V2, _V3, _V4, _V5, _V6)
+_V7 = (
+    "ALTER TABLE local_report_queue RENAME TO local_report_queue_v6",
+    """
+    CREATE TABLE local_report_queue (
+        queue_id                    INTEGER PRIMARY KEY,
+        station_id                  TEXT    NOT NULL,
+        decision_id                 INTEGER UNIQUE,
+        instance_id                 INTEGER,
+        report_kind                 TEXT    NOT NULL,
+        attempts                    INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at             REAL,
+        last_error                  TEXT,
+        sent_at                     REAL,
+        superseded_at               REAL,
+        report_host_id              TEXT,
+        report_backend_id           TEXT,
+        report_template_version_id  TEXT,
+        report_template_sha256      TEXT,
+        report_model_ids            TEXT,
+        report_reported_at          TEXT,
+        configuration_revision      INTEGER,
+        configuration_sha256        TEXT,
+        report_backend_provenance   TEXT,
+        report_configuration        TEXT,
+        FOREIGN KEY (decision_id) REFERENCES local_decision (decision_id),
+        FOREIGN KEY (station_id, instance_id)
+            REFERENCES local_sop_instance (station_id, instance_id),
+        CHECK (
+            (report_kind = 'decision' AND decision_id IS NOT NULL AND instance_id IS NULL)
+            OR
+            (report_kind = 'instance' AND decision_id IS NULL AND instance_id IS NOT NULL)
+        )
+    )
+    """,
+    """
+    INSERT INTO local_report_queue (
+        queue_id, station_id, decision_id, instance_id, report_kind,
+        attempts, last_attempt_at, last_error, sent_at, superseded_at,
+        report_host_id, report_backend_id, report_template_version_id,
+        report_template_sha256, report_model_ids, report_reported_at,
+        configuration_revision, configuration_sha256,
+        report_backend_provenance, report_configuration
+    )
+    SELECT
+        queue_id, station_id, decision_id, NULL, 'decision',
+        attempts, last_attempt_at, last_error, sent_at, NULL,
+        report_host_id, report_backend_id, report_template_version_id,
+        report_template_sha256, report_model_ids, report_reported_at,
+        configuration_revision, configuration_sha256,
+        report_backend_provenance, report_configuration
+      FROM local_report_queue_v6
+    """,
+    "DROP TABLE local_report_queue_v6",
+    """
+    CREATE UNIQUE INDEX local_report_queue_instance_event
+        ON local_report_queue (station_id, instance_id)
+     WHERE report_kind = 'instance'
+    """,
+)
+
+_V8 = (
+    "ALTER TABLE local_sop_instance ADD COLUMN open_boundary_signal TEXT",
+    "ALTER TABLE local_sop_instance ADD COLUMN close_boundary_signal TEXT",
+)
+
+MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1, _V2, _V3, _V4, _V5, _V6, _V7, _V8)
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 
 

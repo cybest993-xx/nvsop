@@ -13,6 +13,9 @@ from typing import cast
 
 REPORT_CONTRACT_VERSION = 1
 DECISION_REPORT_CONTRACT_VERSION = 2
+SOP_INSTANCE_REPORT_CONTRACT_VERSION = 1
+REPORT_CAPABILITIES_HEADER = "X-NVSOP-Report-Capabilities"
+SOP_INSTANCE_REPORT_CAPABILITY = "sop-instance-report-v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,6 +387,159 @@ class ReportedHealth:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ReportedSopInstance:
+    """edge SOP 实例生命周期镜像；中心只保存，不重建边界。"""
+
+    event_id: str
+    trace_id: str
+    host_id: str
+    station_id: str
+    instance_id: int
+    opened_at: float
+    closed_at: float | None
+    close_reason: str | None
+    open_boundary_signal: str | None
+    close_boundary_signal: str | None
+    template_version_id: str | None
+    template_sha256: str | None
+    backend_provenance: tuple[ReportBackendProvenance, ...]
+    configuration_revision: int
+    configuration_sha256: str
+    reported_at: str
+    contract_version: int = SOP_INSTANCE_REPORT_CONTRACT_VERSION
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("event_id", self.event_id),
+            ("trace_id", self.trace_id),
+            ("host_id", self.host_id),
+            ("station_id", self.station_id),
+            ("configuration_sha256", self.configuration_sha256),
+            ("reported_at", self.reported_at),
+        ):
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{name} must not be empty")
+        if (
+            self.contract_version != SOP_INSTANCE_REPORT_CONTRACT_VERSION
+            or self.instance_id < 0
+            or self.configuration_revision < 1
+        ):
+            raise ValueError("reported SOP instance identity is invalid")
+        _finite_number(self.opened_at, "instance opened_at")
+        if self.closed_at is not None:
+            _finite_number(self.closed_at, "instance closed_at")
+            if self.closed_at < self.opened_at:
+                raise ValueError("instance closed_at must not precede opened_at")
+        if (self.closed_at is None) != (self.close_reason is None):
+            raise ValueError("instance close time and reason must be supplied together")
+        for name, signal in (
+            ("open_boundary_signal", self.open_boundary_signal),
+            ("close_boundary_signal", self.close_boundary_signal),
+        ):
+            if signal is not None and (not isinstance(signal, str) or not signal):
+                raise ValueError(f"{name} must be non-empty or null")
+        if self.closed_at is None and self.close_boundary_signal is not None:
+            raise ValueError("open instance cannot carry a close boundary signal")
+        if self.close_boundary_signal is not None and self.close_reason != "closed_by_end_signal":
+            raise ValueError("close boundary signal requires end-signal closure")
+        if (self.template_version_id is None) != (self.template_sha256 is None):
+            raise ValueError("template version and digest must be supplied together")
+        if self.template_sha256 is not None and not _is_sha256(self.template_sha256):
+            raise ValueError("template_sha256 is invalid")
+        if not _is_sha256(self.configuration_sha256):
+            raise ValueError("configuration_sha256 is invalid")
+        ids = tuple(item.backend_id for item in self.backend_provenance)
+        if ids != tuple(sorted(ids)) or len(set(ids)) != len(ids):
+            raise ValueError("instance backend provenance must be unique and sorted")
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "contract_version": self.contract_version,
+            "event_id": self.event_id,
+            "trace_id": self.trace_id,
+            "host_id": self.host_id,
+            "station_id": self.station_id,
+            "instance_id": self.instance_id,
+            "opened_at": self.opened_at,
+            "closed_at": self.closed_at,
+            "close_reason": self.close_reason,
+            "open_boundary_signal": self.open_boundary_signal,
+            "close_boundary_signal": self.close_boundary_signal,
+            "template_version_id": self.template_version_id,
+            "template_sha256": self.template_sha256,
+            "backend_provenance": [item.to_wire() for item in self.backend_provenance],
+            "configuration_revision": self.configuration_revision,
+            "configuration_sha256": self.configuration_sha256,
+            "reported_at": self.reported_at,
+        }
+
+    @classmethod
+    def from_wire(cls, value: Mapping[str, object]) -> ReportedSopInstance:
+        _require_keys(
+            value,
+            {
+                "contract_version",
+                "event_id",
+                "trace_id",
+                "host_id",
+                "station_id",
+                "instance_id",
+                "opened_at",
+                "closed_at",
+                "close_reason",
+                "open_boundary_signal",
+                "close_boundary_signal",
+                "template_version_id",
+                "template_sha256",
+                "backend_provenance",
+                "configuration_revision",
+                "configuration_sha256",
+                "reported_at",
+            },
+            "reported SOP instance",
+        )
+        close_reason = value["close_reason"]
+        open_boundary_signal = value["open_boundary_signal"]
+        close_boundary_signal = value["close_boundary_signal"]
+        template_id = value["template_version_id"]
+        template_sha = value["template_sha256"]
+        if close_reason is not None and not isinstance(close_reason, str):
+            raise ValueError("instance close_reason is invalid")
+        if open_boundary_signal is not None and not isinstance(open_boundary_signal, str):
+            raise ValueError("instance open_boundary_signal is invalid")
+        if close_boundary_signal is not None and not isinstance(close_boundary_signal, str):
+            raise ValueError("instance close_boundary_signal is invalid")
+        if template_id is not None and not isinstance(template_id, str):
+            raise ValueError("instance template_version_id is invalid")
+        if template_sha is not None and not isinstance(template_sha, str):
+            raise ValueError("instance template_sha256 is invalid")
+        return cls(
+            event_id=_string(value["event_id"], "event_id"),
+            trace_id=_string(value["trace_id"], "trace_id"),
+            host_id=_string(value["host_id"], "host_id"),
+            station_id=_string(value["station_id"], "station_id"),
+            instance_id=_nonnegative_int(value["instance_id"], "instance_id"),
+            opened_at=_finite_number(value["opened_at"], "opened_at"),
+            closed_at=_optional_number(value["closed_at"], "closed_at"),
+            close_reason=close_reason,
+            open_boundary_signal=open_boundary_signal,
+            close_boundary_signal=close_boundary_signal,
+            template_version_id=template_id,
+            template_sha256=template_sha,
+            backend_provenance=tuple(
+                ReportBackendProvenance.from_wire(_object(item, "backend provenance"))
+                for item in _array(value["backend_provenance"], "backend_provenance")
+            ),
+            configuration_revision=_positive_int(
+                value["configuration_revision"], "configuration_revision"
+            ),
+            configuration_sha256=_string(value["configuration_sha256"], "configuration_sha256"),
+            reported_at=_string(value["reported_at"], "reported_at"),
+            contract_version=_positive_int(value["contract_version"], "contract_version"),
+        )
+
+
 def reported_decision_to_wire(report: ReportedDecision) -> dict[str, object]:
     return report.to_wire()
 
@@ -398,6 +554,14 @@ def reported_health_to_wire(report: ReportedHealth) -> dict[str, object]:
 
 def reported_health_from_wire(value: Mapping[str, object]) -> ReportedHealth:
     return ReportedHealth.from_wire(value)
+
+
+def reported_sop_instance_to_wire(report: ReportedSopInstance) -> dict[str, object]:
+    return report.to_wire()
+
+
+def reported_sop_instance_from_wire(value: Mapping[str, object]) -> ReportedSopInstance:
+    return ReportedSopInstance.from_wire(value)
 
 
 def _require_keys(value: Mapping[str, object], expected: set[str], label: str) -> None:

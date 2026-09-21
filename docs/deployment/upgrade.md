@@ -65,7 +65,7 @@ make contracts
 
 历史判定兼容矩阵为：旧 Edge→旧 Center 继续严格 v1；旧 Edge→新 Center 继续严格 v1 和既有当前拓扑授权；新 Edge→新 Center 对 confirmed 历史判定使用握手后的严格 v2；新 Edge→旧 Center 在 v2 握手处显式失败并保留待上报队列。首次从未确认过 Center bundle 的 bootstrap 判定仍只能表达既有 v1 当前归属语义，不能伪造 historical proof。
 
-上述能力握手只解决历史判定 report contract 的异步升级边界；仓库仍未实现覆盖所有 Center↔Edge 机器接口的软件版本/能力集合的通用启动握手。后续改变其他机器协议时仍须按 ADR-0003 补充对应的显式兼容协商，而不能把配置 bundle 的 contract version 当成 runtime handshake。
+同一个 confirmed-configuration 握手同时承载 SOP instance report 能力，但保持旧 Edge 的响应形状：旧 Edge 不发送 report capability header，因此新 Center 仍只返回既有 decision v2 字段；新 Edge 显式请求 `sop-instance-report-v1` 后，新 Center 才附加 instance contract version。新 Edge 在发送实例开放快照或在判定后提交实例闭合快照前都必须先确认该能力，因此新 Edge→旧 Center 会在 decision POST 前显式拒绝并保留 outbox，而旧 Edge→新 Center 不受新增字段影响。上述能力握手只覆盖当前 historical decision 与 SOP instance report 的异步升级边界；仓库仍未实现覆盖所有 Center↔Edge 机器接口的软件版本/能力集合的通用启动握手。后续改变其他机器协议时仍须按 ADR-0003 补充对应的显式兼容协商，而不能把配置 bundle 的 contract version 当成 runtime handshake。
 
 改变推理机报告、配置束、物理执行权、状态持久化或恢复语义时，把旧/新中心与旧/新边缘的兼容矩阵作为升级设计的一部分。配置同步相关矩阵应覆盖旧确认值、首次无确认值、无效/旧 revision、中心不可达和恢复后的重新确认；任何新增机器协议版本都必须覆盖不兼容拒绝和显式告警路径。
 

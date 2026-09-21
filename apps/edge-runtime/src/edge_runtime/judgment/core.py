@@ -224,15 +224,31 @@ def _observe(state: JudgmentState, observation: Observation) -> Outcome:
             opened_at=observation.at,
             last_observation_at=observation.at,
             impairments=state.active_impairments,
+            open_boundary_signal=observation.signal,
         )
         state = replace(state, instance=instance, next_instance_id=state.next_instance_id + 1)
 
     instance = replace(instance, last_observation_at=observation.at)
     index = template.index_of(observation.signal)
 
+    if observation.signal in template.end_signals:
+        if index is None:
+            return _close(
+                state,
+                instance,
+                observation.at,
+                Lifecycle.CLOSED_BY_END_SIGNAL,
+                close_boundary_signal=observation.signal,
+            )
+        return _observe_step(
+            state,
+            instance,
+            observation.at,
+            index,
+            close_boundary_signal=observation.signal,
+        )
+
     if index is None:
-        if observation.signal in template.end_signals:
-            return _close(state, instance, observation.at, Lifecycle.CLOSED_BY_END_SIGNAL)
         if observation.signal == template.start_signal:
             # The start signal repeating inside an open instance is rework, not a new pass.
             return Outcome(state=replace(state, instance=instance))
@@ -259,7 +275,14 @@ def _observe(state: JudgmentState, observation: Observation) -> Outcome:
     return _observe_step(state, instance, observation.at, index)
 
 
-def _observe_step(state: JudgmentState, instance: Instance, at: HostInstant, index: int) -> Outcome:
+def _observe_step(
+    state: JudgmentState,
+    instance: Instance,
+    at: HostInstant,
+    index: int,
+    *,
+    close_boundary_signal: StepSignal | None = None,
+) -> Outcome:
     template = state.template
     signal = template.steps[index]
     violations: tuple[Violation, ...] = ()
@@ -277,6 +300,16 @@ def _observe_step(state: JudgmentState, instance: Instance, at: HostInstant, ind
 
     violations = _unsettled(instance, violations)
     instance = replace(instance, settled=instance.settled | {_key(v) for v in violations})
+
+    if close_boundary_signal is not None:
+        return _close(
+            state,
+            instance,
+            at,
+            Lifecycle.CLOSED_BY_END_SIGNAL,
+            carried=violations,
+            close_boundary_signal=close_boundary_signal,
+        )
 
     if instance.seen == frozenset(template.steps):
         return _close(state, instance, at, Lifecycle.CLOSED_BY_COMPLETE_SET, carried=violations)
@@ -340,6 +373,7 @@ def _close(
     at: HostInstant,
     lifecycle: Lifecycle,
     carried: tuple[Violation, ...] = (),
+    close_boundary_signal: StepSignal | None = None,
 ) -> Outcome:
     """Conclude the instance, after the validity gate (§5.1).
 
@@ -348,6 +382,7 @@ def _close(
     comparison and discarding its result would leave the next reader of this function one
     edit away from using it.
     """
+    closed_instance = replace(instance, close_boundary_signal=close_boundary_signal)
     evidence = EvidenceSpan.at(at)
     if instance.impairments:
         return Outcome(
@@ -362,7 +397,7 @@ def _close(
                     evidence=evidence,
                 ),
             ),
-            closed_instances=(instance,),
+            closed_instances=(closed_instance,),
         )
 
     missing = _unsettled(
@@ -387,7 +422,7 @@ def _close(
                 evidence=evidence,
             ),
         ),
-        closed_instances=(instance,),
+        closed_instances=(closed_instance,),
     )
 
 

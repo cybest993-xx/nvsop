@@ -24,14 +24,16 @@ def resume_station(
     clock: Callable[[], float] = monotonic,
 ) -> StationSupervisor:
     """恢复工位并结案启动前遗留的实例。"""
+    state = store.resume(template, parameters)
     supervisor = StationSupervisor(
-        state=store.resume(template, parameters),
+        state=state,
         store=store,
         margins=margins,
         clock=clock,
         initial_report_provenance=store.resume_report_provenance(),
     )
-    supervisor.interrupt()
+    interruption_at = state.instance.last_observation_at if state.instance is not None else None
+    supervisor.interrupt(at=interruption_at)
     return supervisor
 
 

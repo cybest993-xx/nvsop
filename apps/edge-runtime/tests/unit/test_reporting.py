@@ -94,6 +94,38 @@ class ReportingTests(unittest.TestCase):
         self.assertEqual(report.close_boundary_signal, "end-signal-b")
         self.assertEqual(report.backend_provenance[0].model_ids, ("model-a",))
 
+    def test_stays_open_decision_never_emits_later_instance_closure(self) -> None:
+        pending = PendingReport(
+            queue_id=8,
+            decision=Decision(
+                instance_id=4,
+                verdict=Verdict.PASS,
+                reasons=(),
+                violations=(),
+                lifecycle=Lifecycle.STAYS_OPEN,
+                evidence=EvidenceSpan.at(HostInstant(5.0)),
+            ),
+            attempts=0,
+            last_error=None,
+            opened_at=1.0,
+            closed_at=9.0,
+            close_reason=Lifecycle.CLOSED_BY_END_SIGNAL.value,
+            open_boundary_signal="start-signal",
+            close_boundary_signal="end-signal-b",
+            context=ReportContext(
+                host_id="host-a",
+                station_id="station-a",
+                backends=(BackendReportContext("backend-a", ("model-a",)),),
+                template_version_id="template-a",
+                template_sha256="a" * 64,
+                configuration_revision=3,
+                configuration_sha256="b" * 64,
+                configuration_json="{}",
+            ),
+        )
+
+        self.assertIsNone(reported_instance_from_pending(pending, reported_at="now"))
+
     def test_event_and_trace_identity_are_stable_and_unknown_wire_data_is_preserved(self) -> None:
         decision = Decision(
             instance_id=9,

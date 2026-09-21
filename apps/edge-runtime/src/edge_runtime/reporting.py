@@ -18,7 +18,7 @@ from nvsop_contracts import (
     configuration_from_wire,
 )
 
-from edge_runtime.judgment.model import Decision, HostInstant
+from edge_runtime.judgment.model import Decision, HostInstant, Lifecycle
 from edge_runtime.local_state.queues import (
     PendingReport,
     PendingSopInstanceReport,
@@ -275,7 +275,12 @@ def reported_instance_from_pending(
     pending: PendingReport, *, reported_at: str
 ) -> ReportedSopInstance | None:
     context = pending.context
-    if context is None or context.configuration_revision is None or pending.closed_at is None:
+    if (
+        context is None
+        or context.configuration_revision is None
+        or pending.closed_at is None
+        or pending.decision.lifecycle is Lifecycle.STAYS_OPEN
+    ):
         return None
     if pending.opened_at is None or context.configuration_sha256 is None:
         raise ValueError("pending report has incomplete SOP instance provenance")

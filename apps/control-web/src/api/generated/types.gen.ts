@@ -7063,64 +7063,6 @@ export type ListMonitorSopInstancesResponses = {
 export type ListMonitorSopInstancesResponse =
   ListMonitorSopInstancesResponses[keyof ListMonitorSopInstancesResponses]
 
-export type ReportMonitorSopInstanceData = {
-  /**
-   * Body
-   */
-  body: {
-    [key: string]: unknown
-  }
-  headers?: {
-    /**
-     * X-Inference-Host-Id
-     */
-    'X-Inference-Host-ID'?: string | null
-    /**
-     * X-Inference-Host-Timestamp
-     */
-    'X-Inference-Host-Timestamp'?: string | null
-    /**
-     * X-Inference-Host-Nonce
-     */
-    'X-Inference-Host-Nonce'?: string | null
-    /**
-     * X-Inference-Host-Signature
-     */
-    'X-Inference-Host-Signature'?: string | null
-  }
-  path?: never
-  query?: never
-  url: '/api/v1/monitor/instances'
-}
-
-export type ReportMonitorSopInstanceErrors = {
-  /**
-   * Validation Error
-   */
-  422: ProblemDocument
-  /**
-   * Internal server error
-   */
-  500: ProblemDocument
-}
-
-export type ReportMonitorSopInstanceError =
-  ReportMonitorSopInstanceErrors[keyof ReportMonitorSopInstanceErrors]
-
-export type ReportMonitorSopInstanceResponses = {
-  /**
-   * Response Reportmonitorsopinstance
-   *
-   * Successful Response
-   */
-  200: {
-    [key: string]: unknown
-  }
-}
-
-export type ReportMonitorSopInstanceResponse =
-  ReportMonitorSopInstanceResponses[keyof ReportMonitorSopInstanceResponses]
-
 export type ReportMonitorDecisionData = {
   /**
    * Body
@@ -7178,6 +7120,64 @@ export type ReportMonitorDecisionResponses = {
 
 export type ReportMonitorDecisionResponse =
   ReportMonitorDecisionResponses[keyof ReportMonitorDecisionResponses]
+
+export type ReportMonitorSopInstanceData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  headers?: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID'?: string | null
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/monitor/reported-instances'
+}
+
+export type ReportMonitorSopInstanceErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReportMonitorSopInstanceError =
+  ReportMonitorSopInstanceErrors[keyof ReportMonitorSopInstanceErrors]
+
+export type ReportMonitorSopInstanceResponses = {
+  /**
+   * Response Reportmonitorsopinstance
+   *
+   * Successful Response
+   */
+  200: {
+    [key: string]: unknown
+  }
+}
+
+export type ReportMonitorSopInstanceResponse =
+  ReportMonitorSopInstanceResponses[keyof ReportMonitorSopInstanceResponses]
 
 export type StreamMonitorEventsData = {
   body?: never

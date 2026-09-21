@@ -136,7 +136,7 @@ class HttpDecisionReportTransport(DecisionReportTransport):
             configuration_sha256=report.configuration_sha256,
             configuration=configuration,
         )
-        self._post("/api/v1/monitor/instances", reported_sop_instance_to_wire(report))
+        self._post("/api/v1/monitor/reported-instances", reported_sop_instance_to_wire(report))
 
     def _post(self, path: str, body: dict[str, object]) -> None:
         payload = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")

@@ -630,7 +630,7 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
                     configuration: ConfigurationBundle | None,
                 ) -> None:
                     assert configuration is not None
-                    instance_path = f"{API_PREFIX}/monitor/instances"
+                    instance_path = f"{API_PREFIX}/monitor/reported-instances"
                     body = reported_sop_instance_to_wire(report)
                     response = client.post(
                         instance_path,
@@ -957,7 +957,7 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
             reported_at="2026-09-14T01:00:00Z",
         )
         instance_body = reported_sop_instance_to_wire(instance)
-        instance_path = f"{API_PREFIX}/monitor/instances"
+        instance_path = f"{API_PREFIX}/monitor/reported-instances"
         instance_first = client.post(
             instance_path,
             json=instance_body,
@@ -1016,7 +1016,7 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
                 runtime_topology, method="POST", path=instance_path, body=instance_body
             ),
         )
-        instance_list = client.get(instance_path)
+        instance_list = client.get(f"{API_PREFIX}/monitor/instances")
         stream = client.get(
             f"{API_PREFIX}/monitor/stream",
             params={"once": "true"},

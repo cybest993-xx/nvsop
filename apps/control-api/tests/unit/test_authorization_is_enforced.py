@@ -479,7 +479,7 @@ EXEMPT = {
     # Edge report intake is authenticated by the registered host key, not a browser permission.
     ("POST", f"{API_PREFIX}/monitor/reported-decisions"),
     ("POST", f"{API_PREFIX}/monitor/health"),
-    ("POST", f"{API_PREFIX}/monitor/instances"),
+    ("POST", f"{API_PREFIX}/monitor/reported-instances"),
 }
 
 

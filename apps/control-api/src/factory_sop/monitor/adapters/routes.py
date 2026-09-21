@@ -132,7 +132,7 @@ def report_monitor_health(
     return {"accepted": True, "duplicate": not inserted, "event_id": report.event_id}
 
 
-@router.post("/instances", operation_id="reportMonitorSopInstance")
+@router.post("/reported-instances", operation_id="reportMonitorSopInstance")
 def report_monitor_instance(
     request: Request,
     body: dict[str, object],

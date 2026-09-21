@@ -1316,25 +1316,6 @@ export const listMonitorSopInstances = <ThrowOnError extends boolean = false>(
   >({ url: '/api/v1/monitor/instances', ...options })
 
 /**
- * Report Monitor Instance
- */
-export const reportMonitorSopInstance = <ThrowOnError extends boolean = false>(
-  options: Options<ReportMonitorSopInstanceData, ThrowOnError>,
-): RequestResult<ReportMonitorSopInstanceResponses, ReportMonitorSopInstanceErrors, ThrowOnError> =>
-  (options.client ?? client).post<
-    ReportMonitorSopInstanceResponses,
-    ReportMonitorSopInstanceErrors,
-    ThrowOnError
-  >({
-    url: '/api/v1/monitor/instances',
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
-  })
-
-/**
  * Report Monitor Decision
  */
 export const reportMonitorDecision = <ThrowOnError extends boolean = false>(
@@ -1346,6 +1327,25 @@ export const reportMonitorDecision = <ThrowOnError extends boolean = false>(
     ThrowOnError
   >({
     url: '/api/v1/monitor/reported-decisions',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Report Monitor Instance
+ */
+export const reportMonitorSopInstance = <ThrowOnError extends boolean = false>(
+  options: Options<ReportMonitorSopInstanceData, ThrowOnError>,
+): RequestResult<ReportMonitorSopInstanceResponses, ReportMonitorSopInstanceErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    ReportMonitorSopInstanceResponses,
+    ReportMonitorSopInstanceErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/monitor/reported-instances',
     ...options,
     headers: {
       'Content-Type': 'application/json',

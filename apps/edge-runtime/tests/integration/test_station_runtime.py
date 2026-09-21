@@ -165,6 +165,7 @@ class _SwitchBoundarySseHandler(BaseHTTPRequestHandler):
     late_payload: ClassVar[bytes]
     first_sent: ClassVar[Event]
     release_late: ClassVar[Event]
+    late_sent: ClassVar[Event]
 
     def do_POST(self) -> None:
         self.send_response(200)
@@ -174,11 +175,11 @@ class _SwitchBoundarySseHandler(BaseHTTPRequestHandler):
         self.wfile.write(self.first_payload)
         self.wfile.flush()
         self.first_sent.set()
-        if not self.release_late.wait(1.0):
-            return
+        self.release_late.wait()
         try:
             self.wfile.write(self.late_payload)
             self.wfile.flush()
+            self.late_sent.set()
         except OSError:
             return
 
@@ -254,11 +255,12 @@ def _trickling_sse_server() -> Iterator[str]:
 @contextmanager
 def _switch_boundary_sse_server(
     *, first_payload: bytes, late_payload: bytes
-) -> Iterator[tuple[str, Event, Event]]:
+) -> Iterator[tuple[str, Event, Event, Event]]:
     _SwitchBoundarySseHandler.first_payload = first_payload
     _SwitchBoundarySseHandler.late_payload = late_payload
     _SwitchBoundarySseHandler.first_sent = Event()
     _SwitchBoundarySseHandler.release_late = Event()
+    _SwitchBoundarySseHandler.late_sent = Event()
     server = ThreadingHTTPServer(("127.0.0.1", 0), _SwitchBoundarySseHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -267,6 +269,7 @@ def _switch_boundary_sse_server(
             f"http://127.0.0.1:{server.server_port}/v1/chat/completions",
             _SwitchBoundarySseHandler.first_sent,
             _SwitchBoundarySseHandler.release_late,
+            _SwitchBoundarySseHandler.late_sent,
         )
     finally:
         _SwitchBoundarySseHandler.release_late.set()
@@ -1219,7 +1222,7 @@ class AutonomousStationIntegrationTest(unittest.TestCase):
             _switch_boundary_sse_server(
                 first_payload=_action("(1) start", source_time=1.0, source_anchor=1.0),
                 late_payload=_action("(2) finish", source_time=2.0, source_anchor=1.0),
-            ) as (inference_url, first_sent, release_late),
+            ) as (inference_url, first_sent, release_late, late_sent),
         ):
             state = open_local_state(str(Path(temporary) / "late-switch.sqlite"))
             self.addCleanup(state.close)
@@ -1259,6 +1262,7 @@ class AutonomousStationIntegrationTest(unittest.TestCase):
 
             stopping.set()
             release_late.set()
+            self.assertTrue(late_sent.wait(1.0))
             worker.join(timeout=2.0)
 
             self.assertFalse(worker.is_alive())

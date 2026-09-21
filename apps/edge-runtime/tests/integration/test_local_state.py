@@ -909,6 +909,97 @@ class HistoricalReportContextTest(unittest.TestCase):
         self.assertEqual(len(stations[0].pending_reports()), 1)
         self.assertEqual(stations[1].pending_reports(), ())
 
+    def test_host_reconciler_continues_after_one_station_report_cannot_decode(self) -> None:
+        context = self.context(revision=7, backend_id="backend-old")
+        other_context = replace(context, station_id=OTHER_STATION)
+        with TemporaryDirectory() as temporary:
+            database = str(Path(temporary) / "corrupt-report.sqlite")
+            state = open_local_state(database)
+            stations = (
+                state.station(STATION, report_context=context),
+                state.station(OTHER_STATION, report_context=other_context),
+            )
+            for station, report_context in zip(stations, (context, other_context), strict=True):
+                driver = supervisor(opening_state(), FakeClock(), station)
+                provenance = report_context.backends[0]
+                driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=provenance)
+                driver.receive(action(STEPS[2], at=ANCHOR + 1.0), report_provenance=provenance)
+            state.close()
+
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    """
+                    UPDATE local_report_queue
+                       SET report_backend_provenance = '{'
+                     WHERE station_id = ? AND report_kind = 'decision'
+                    """,
+                    (STATION,),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            state = open_local_state(database)
+
+            class Transport:
+                def __init__(self) -> None:
+                    self.attempted_decisions: list[str] = []
+
+                def send_decision(
+                    self,
+                    report: ReportedDecision,
+                    *,
+                    configuration: ConfigurationBundle | None,
+                ) -> None:
+                    del configuration
+                    self.attempted_decisions.append(report.station_id)
+
+                def send_instance(
+                    self, report: object, *, configuration: ConfigurationBundle | None
+                ) -> None:
+                    del report, configuration
+
+            transport = Transport()
+            try:
+                attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(
+                    now=HostInstant(ANCHOR + 2.0),
+                    reported_at="2026-09-16T00:00:00Z",
+                )
+            finally:
+                state.close()
+
+            self.assertEqual(transport.attempted_decisions, [OTHER_STATION])
+            self.assertEqual(len(attempts), 4)
+            failures = tuple(attempt for attempt in attempts if not attempt.sent)
+            self.assertEqual(len(failures), 1)
+            self.assertIn("JSONDecodeError", failures[0].error or "")
+
+            connection = sqlite3.connect(database)
+            try:
+                bad = connection.execute(
+                    """
+                    SELECT attempts, sent_at
+                      FROM local_report_queue
+                     WHERE station_id = ? AND report_kind = 'decision'
+                    """,
+                    (STATION,),
+                ).fetchone()
+                good = connection.execute(
+                    """
+                    SELECT attempts, sent_at
+                      FROM local_report_queue
+                     WHERE station_id = ? AND report_kind = 'decision'
+                    """,
+                    (OTHER_STATION,),
+                ).fetchone()
+            finally:
+                connection.close()
+            assert bad is not None
+            assert good is not None
+            self.assertEqual((bad[0], bad[1]), (1, None))
+            self.assertIsNotNone(good[1])
+
     def test_successful_flush_marks_only_the_outbox_row_reported(self) -> None:
         context = self.context(revision=7, backend_id="backend-old")
         state = open_local_state(":memory:")

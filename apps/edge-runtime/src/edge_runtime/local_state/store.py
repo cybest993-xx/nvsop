@@ -69,9 +69,9 @@ class ReactionStore(Protocol):
 class ReportStore(Protocol):
     """主机级结构化事实上报持久化接缝。"""
 
-    def pending_items(
-        self, *, limit: int | None = None
-    ) -> tuple[PendingReport | PendingSopInstanceReport, ...]: ...
+    def pending_ids(self, *, limit: int | None = None) -> tuple[int, ...]: ...
+
+    def pending_item(self, queue_id: int) -> PendingReport | PendingSopInstanceReport: ...
 
     def freeze_reported_at(self, queue_id: int, *, candidate: str) -> str: ...
 
@@ -527,27 +527,38 @@ class _HostReportStore:
         self._connection = connection
         self._lock = lock
 
-    def pending_items(
-        self, *, limit: int | None = None
-    ) -> tuple[PendingReport | PendingSopInstanceReport, ...]:
-        pending: list[PendingReport | PendingSopInstanceReport] = []
+    def pending_ids(self, *, limit: int | None = None) -> tuple[int, ...]:
         with self._lock:
             rows = self._connection.execute(
                 """
-                SELECT DISTINCT station_id
+                SELECT queue_id
                   FROM local_report_queue
                  WHERE sent_at IS NULL AND superseded_at IS NULL
-                 ORDER BY station_id
-                """
+                 ORDER BY queue_id
+                 LIMIT ?
+                """,
+                (-1 if limit is None else limit,),
             ).fetchall()
-        for row in rows:
-            queues = StationQueues(self._connection, str(row["station_id"]), self._lock)
-            pending.extend(queues.pending_reports())
-            pending.extend(queues.pending_instance_reports())
-        pending.sort(key=lambda item: item.queue_id)
-        if limit is not None:
-            pending = pending[:limit]
-        return tuple(pending)
+        return tuple(int(row["queue_id"]) for row in rows)
+
+    def pending_item(self, queue_id: int) -> PendingReport | PendingSopInstanceReport:
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT station_id, report_kind
+                  FROM local_report_queue
+                 WHERE queue_id = ? AND sent_at IS NULL AND superseded_at IS NULL
+                """,
+                (queue_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError("pending report queue item does not exist")
+        queues = StationQueues(self._connection, str(row["station_id"]), self._lock)
+        if row["report_kind"] == "decision":
+            return queues.pending_report(queue_id)
+        if row["report_kind"] == "instance":
+            return queues.pending_instance_report(queue_id)
+        raise ValueError("pending report kind is invalid")
 
     def freeze_reported_at(self, queue_id: int, *, candidate: str) -> str:
         return self._queue(queue_id).freeze_reported_at(queue_id, candidate=candidate)

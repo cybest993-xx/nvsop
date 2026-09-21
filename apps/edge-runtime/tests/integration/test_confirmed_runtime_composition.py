@@ -152,7 +152,7 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
                 closed_instances=(instance,),
                 report_provenance={1: (provenance,)},
             )
-            self.assertTrue(state.reports().pending_items())
+            self.assertTrue(state.reports().pending_ids())
             state.configuration().confirm(bundle_n1, confirmed_at=3.0)
             state.close()
 
@@ -187,7 +187,7 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
 
                 inspection = open_local_state(str(state_path))
                 try:
-                    self.assertEqual((), inspection.reports().pending_items())
+                    self.assertEqual((), inspection.reports().pending_ids())
                 finally:
                     inspection.close()
             finally:

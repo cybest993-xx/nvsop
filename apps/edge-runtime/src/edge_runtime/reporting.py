@@ -67,7 +67,21 @@ class HostReportReconciler:
         self, *, now: HostInstant, reported_at: str, limit: int | None = None
     ) -> tuple[ReportAttempt, ...]:
         attempts: list[ReportAttempt] = []
-        for pending in self._reports.pending_items(limit=limit):
+        for queue_id in self._reports.pending_ids(limit=limit):
+            try:
+                pending = self._reports.pending_item(queue_id)
+            except Exception as error:
+                message = f"{type(error).__name__}: {error}"[:255]
+                self._reports.record_report_failure(queue_id, at=now, error=message)
+                attempts.append(
+                    ReportAttempt(
+                        queue_id=queue_id,
+                        sent=False,
+                        event_id=f"pending:{queue_id}",
+                        error=message,
+                    )
+                )
+                continue
             if isinstance(pending, PendingSopInstanceReport):
                 event_id = (
                     f"{pending.context.host_id}:{pending.context.station_id}:"

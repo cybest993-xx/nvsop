@@ -934,6 +934,8 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
         )
         station = bundle.stations[0]
         assert station.template is not None
+        long_open_boundary_signal = "s" * 1024
+        long_close_boundary_signal = "e" * 1024
         instance = ReportedSopInstance(
             event_id=f"{runtime_topology.host.id}:{runtime_topology.station.id}:instance:7",
             trace_id="trace-instance-integration-7",
@@ -943,7 +945,7 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
             opened_at=1.0,
             closed_at=None,
             close_reason=None,
-            open_boundary_signal="fixture-start",
+            open_boundary_signal=long_open_boundary_signal,
             close_boundary_signal=None,
             template_version_id=station.template.version_id,
             template_sha256=station.template.version_sha256,
@@ -975,7 +977,7 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
             opened_at=2.0,
             closed_at=8.0,
             close_reason="closed_by_end_signal",
-            close_boundary_signal="fixture-end-b",
+            close_boundary_signal=long_close_boundary_signal,
             reported_at="2026-09-14T01:00:01Z",
         )
         tampered_close_body = reported_sop_instance_to_wire(tampered_close)
@@ -993,7 +995,7 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
             instance,
             closed_at=8.0,
             close_reason="closed_by_end_signal",
-            close_boundary_signal="fixture-end-b",
+            close_boundary_signal=long_close_boundary_signal,
             reported_at="2026-09-14T01:00:01Z",
         )
         closed_instance_body = reported_sop_instance_to_wire(closed_instance)
@@ -1041,8 +1043,8 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
     assert delayed_open.json()["duplicate"] is True
     assert instance_list.status_code == 200
     assert instance_list.json()["items"][0] == closed_instance_body
-    assert instance_list.json()["items"][0]["open_boundary_signal"] == "fixture-start"
-    assert instance_list.json()["items"][0]["close_boundary_signal"] == "fixture-end-b"
+    assert instance_list.json()["items"][0]["open_boundary_signal"] == long_open_boundary_signal
+    assert instance_list.json()["items"][0]["close_boundary_signal"] == long_close_boundary_signal
     assert stream.status_code == 200
     assert "event: decision" in stream.text
     assert f"id: {report.event_id}" in stream.text

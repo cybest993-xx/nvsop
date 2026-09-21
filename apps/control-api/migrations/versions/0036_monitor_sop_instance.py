@@ -1,6 +1,7 @@
 """monitor：持久化 edge 上报的 SOP 实例生命周期镜像。"""
 
 from __future__ import annotations
+
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
@@ -19,8 +20,8 @@ def upgrade() -> None:
         sa.Column("opened_at", sa.Float(), nullable=False),
         sa.Column("closed_at", sa.Float(), nullable=True),
         sa.Column("close_reason", sa.String(length=64), nullable=True),
-        sa.Column("open_boundary_signal", sa.String(length=255), nullable=True),
-        sa.Column("close_boundary_signal", sa.String(length=255), nullable=True),
+        sa.Column("open_boundary_signal", sa.Text(), nullable=True),
+        sa.Column("close_boundary_signal", sa.Text(), nullable=True),
         sa.Column("received_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("payload", JSONB(), nullable=False),
         sa.PrimaryKeyConstraint("event_id", name=op.f("pk_monitor_sop_instance")),

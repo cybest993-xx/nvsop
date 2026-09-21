@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, cast
 
-from sqlalchemy import BigInteger, DateTime, Identity, String
+from sqlalchemy import BigInteger, DateTime, Identity, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -104,8 +104,8 @@ class ReportedSopInstanceRow(Table):
     opened_at: Mapped[float]
     closed_at: Mapped[float | None] = mapped_column(nullable=True)
     close_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    open_boundary_signal: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    close_boundary_signal: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    open_boundary_signal: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    close_boundary_signal: Mapped[str | None] = mapped_column(Text(), nullable=True)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
 

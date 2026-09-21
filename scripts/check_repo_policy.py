@@ -354,6 +354,13 @@ def check_edge_dependency_directions(root: Path, files: list[Path]) -> list[str]
     stream_health_package = edge_root / "stream_health"
     composition_root = edge_root / "runtime.py"
     connector_root = edge_root / "connectors"
+    local_state_root = edge_root / "local_state"
+    local_state_private_modules = {
+        "edge_runtime.local_state.codec",
+        "edge_runtime.local_state.queues",
+        "edge_runtime.local_state.schema",
+        "edge_runtime.local_state.store",
+    }
     violations: list[str] = []
 
     for path in sorted(files):
@@ -383,6 +390,19 @@ def check_edge_dependency_directions(root: Path, files: list[Path]) -> list[str]
                     violations.append(
                         f"{path}:{line} imports {target}; stream_health is the vendor-hook "
                         "boundary and must import no edge_runtime sibling"
+                    )
+                    continue
+                if (
+                    not is_under(path, local_state_root)
+                    and not is_under(path, connector_root)
+                    and any(
+                        target == private or target.startswith(f"{private}.")
+                        for private in local_state_private_modules
+                    )
+                ):
+                    violations.append(
+                        f"{path}:{line} imports {target}; LocalState persistence implementation "
+                        "must stay behind edge_runtime.local_state"
                     )
                     continue
                 if not is_under(path, connector_root):

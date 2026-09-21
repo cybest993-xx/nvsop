@@ -26,7 +26,7 @@ from edge_runtime.configuration_values import (
 from edge_runtime.judgment.evidence import EvidenceMargins
 from edge_runtime.judgment.model import HostInstant, Ordering, RuntimeParameters, Template
 from edge_runtime.judgment.reasons import ReasonCode
-from edge_runtime.local_state.queues import BackendReportContext
+from edge_runtime.local_state import BackendReportContext
 from edge_runtime.stream_health import StreamFact, StreamHealthEvent, decode
 from edge_runtime.supervisor.inputs import (
     ActionRecognized,

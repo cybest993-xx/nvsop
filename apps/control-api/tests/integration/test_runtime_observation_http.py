@@ -647,8 +647,8 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
                     self.instances.append(report)
 
             transport = SignedHttpTransport()
-            attempts = edge_reporting.DecisionReporter(
-                queues=edge_station, transport=transport
+            attempts = edge_reporting.HostReportReconciler(
+                reports=edge_state.reports(), transport=transport
             ).flush(
                 now=edge_model.HostInstant(10.0),
                 reported_at="2026-09-16T00:00:00Z",

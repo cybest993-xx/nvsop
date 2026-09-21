@@ -11,7 +11,7 @@ from time import monotonic
 
 from edge_runtime.judgment.evidence import EvidenceMargins
 from edge_runtime.judgment.model import RuntimeParameters, Template
-from edge_runtime.local_state.store import StationStore
+from edge_runtime.local_state import StationStore
 from edge_runtime.supervisor.station import StationSupervisor
 
 

@@ -143,6 +143,22 @@ class InstanceBoundaryTest(unittest.TestCase):
         self.assertEqual(closed.open_boundary_signal, STEPS[0])
         self.assertEqual(closed.close_boundary_signal, alternate_end)
 
+    def test_action_backed_end_signal_counts_as_a_step_then_closes_by_boundary(self) -> None:
+        state = opening_state(Ordering.ORDERED, end_signals=(STEPS[-1],))
+        state, _ = observe_each(state, *STEPS[:-1])
+
+        outcome = advance(
+            state,
+            Observation(signal=STEPS[-1], at=HostInstant(5.0), source_time=5.0),
+        )
+
+        (decision,) = outcome.decisions
+        (closed,) = outcome.closed_instances
+        self.assertEqual(decision.lifecycle, Lifecycle.CLOSED_BY_END_SIGNAL)
+        self.assertEqual(decision.verdict, Verdict.PASS)
+        self.assertEqual(closed.seen, frozenset(STEPS))
+        self.assertEqual(closed.close_boundary_signal, STEPS[-1])
+
     def test_a_complete_step_set_closes_the_instance_immediately(self) -> None:
         # The base's `cycle_completed` fast path, kept: `len(seen) == N` (§5.1).
         state = opening_state(Ordering.UNORDERED)

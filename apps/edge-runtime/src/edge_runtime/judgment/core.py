@@ -231,8 +231,8 @@ def _observe(state: JudgmentState, observation: Observation) -> Outcome:
     instance = replace(instance, last_observation_at=observation.at)
     index = template.index_of(observation.signal)
 
-    if index is None:
-        if observation.signal in template.end_signals:
+    if observation.signal in template.end_signals:
+        if index is None:
             return _close(
                 state,
                 instance,
@@ -240,6 +240,15 @@ def _observe(state: JudgmentState, observation: Observation) -> Outcome:
                 Lifecycle.CLOSED_BY_END_SIGNAL,
                 close_boundary_signal=observation.signal,
             )
+        return _observe_step(
+            state,
+            instance,
+            observation.at,
+            index,
+            close_boundary_signal=observation.signal,
+        )
+
+    if index is None:
         if observation.signal == template.start_signal:
             # The start signal repeating inside an open instance is rework, not a new pass.
             return Outcome(state=replace(state, instance=instance))
@@ -266,7 +275,14 @@ def _observe(state: JudgmentState, observation: Observation) -> Outcome:
     return _observe_step(state, instance, observation.at, index)
 
 
-def _observe_step(state: JudgmentState, instance: Instance, at: HostInstant, index: int) -> Outcome:
+def _observe_step(
+    state: JudgmentState,
+    instance: Instance,
+    at: HostInstant,
+    index: int,
+    *,
+    close_boundary_signal: StepSignal | None = None,
+) -> Outcome:
     template = state.template
     signal = template.steps[index]
     violations: tuple[Violation, ...] = ()
@@ -284,6 +300,16 @@ def _observe_step(state: JudgmentState, instance: Instance, at: HostInstant, ind
 
     violations = _unsettled(instance, violations)
     instance = replace(instance, settled=instance.settled | {_key(v) for v in violations})
+
+    if close_boundary_signal is not None:
+        return _close(
+            state,
+            instance,
+            at,
+            Lifecycle.CLOSED_BY_END_SIGNAL,
+            carried=violations,
+            close_boundary_signal=close_boundary_signal,
+        )
 
     if instance.seen == frozenset(template.steps):
         return _close(state, instance, at, Lifecycle.CLOSED_BY_COMPLETE_SET, carried=violations)

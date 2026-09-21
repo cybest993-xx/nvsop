@@ -312,6 +312,31 @@ class RestartTest(unittest.TestCase):
             self.assertEqual(resumed.state.instance.instance_id if resumed.state.instance else 0, 2)
             second.close()
 
+    def test_host_reboot_clock_reset_closes_at_last_comparable_instant(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = str(Path(directory) / "local-state.sqlite3")
+            first = open_local_state(path)
+            driver = supervisor(opening_state(), FakeClock(), first.station(STATION))
+            driver.receive(action(STEPS[0], at=ANCHOR))
+            first.close()
+
+            second = open_local_state(path)
+            station = second.station(STATION)
+            resumed = resume_station(
+                station,
+                template=opening_state().template,
+                parameters=opening_state().parameters,
+                margins=MARGINS,
+                clock=FakeClock(now=1.0),
+            )
+            self.addCleanup(second.close)
+
+            self.assertIsNone(resumed.state.instance)
+            (pending,) = station.pending_reports()
+            self.assertEqual(pending.opened_at, ANCHOR)
+            self.assertEqual(pending.closed_at, ANCHOR)
+            self.assertEqual(pending.decision.evidence, EvidenceSpan.at(HostInstant(ANCHOR)))
+
 
 class HistoricalReportContextTest(unittest.TestCase):
     def context(self, *, revision: int, backend_id: str) -> ReportContext:

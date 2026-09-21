@@ -2390,6 +2390,30 @@ export type ItemPageVlmCandidateView = {
 }
 
 /**
+ * ItemPage[dict[str, object]]
+ */
+export type ItemPageDictStrObject = {
+  /**
+   * Items
+   */
+  items: Array<{
+    [key: string]: unknown
+  }>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
  * ItemPage[str]
  */
 export type ItemPageStr = {
@@ -7028,9 +7052,13 @@ export type ListMonitorSopInstancesData = {
   path?: never
   query?: {
     /**
-     * Limit
+     * Page
      */
-    limit?: number
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
   }
   url: '/api/v1/monitor/instances'
 }
@@ -7051,13 +7079,9 @@ export type ListMonitorSopInstancesError =
 
 export type ListMonitorSopInstancesResponses = {
   /**
-   * Response Listmonitorsopinstances
-   *
    * Successful Response
    */
-  200: {
-    [key: string]: unknown
-  }
+  200: ItemPageDictStrObject
 }
 
 export type ListMonitorSopInstancesResponse =

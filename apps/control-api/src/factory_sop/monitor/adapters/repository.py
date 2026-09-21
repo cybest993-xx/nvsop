@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from sqlalchemy import Table, select, update
+from sqlalchemy import Table, func, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.orm import Session
 
@@ -130,13 +130,20 @@ class PostgresMonitorRepository(MonitorRepository):
         _ensure_same(existing.payload, row.payload, "instance", row.event_id)
         return False
 
-    def recent_instances(self, *, limit: int) -> tuple[MirroredSopInstance, ...]:
+    def page_instances(
+        self, *, page: int, page_size: int
+    ) -> tuple[tuple[MirroredSopInstance, ...], int]:
         rows = self._session.scalars(
             select(ReportedSopInstanceRow)
-            .order_by(ReportedSopInstanceRow.received_at.desc())
-            .limit(limit)
+            .order_by(
+                ReportedSopInstanceRow.received_at.desc(),
+                ReportedSopInstanceRow.event_id.desc(),
+            )
+            .offset((page - 1) * page_size)
+            .limit(page_size)
         ).all()
-        return tuple(row.to_domain() for row in rows)
+        total = self._session.scalar(select(func.count()).select_from(ReportedSopInstanceRow))
+        return tuple(row.to_domain() for row in rows), int(total or 0)
 
     def recent_decisions(self, *, limit: int) -> tuple[MirroredDecision, ...]:
         rows = self._session.scalars(

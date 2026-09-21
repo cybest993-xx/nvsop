@@ -151,15 +151,16 @@ def mirror_instance(
     return monitor.upsert_instance(MirroredSopInstance(report=report, received_at=received_at))
 
 
-def recent_instances(
+def list_instances(
     monitor: MonitorRepository,
     *,
     caller: Caller,
-    limit: int = 100,
-) -> tuple[MirroredSopInstance, ...]:
-    """返回授权用户可查看的 edge 实例生命周期镜像。"""
+    page: int,
+    page_size: int,
+) -> tuple[tuple[MirroredSopInstance, ...], int]:
+    """返回授权用户可查看的一页 edge 实例生命周期镜像及总数。"""
     authorize(caller, Permission.MONITOR_VIEW)
-    return monitor.recent_instances(limit=limit)
+    return monitor.page_instances(page=page, page_size=page_size)
 
 
 @dataclass(frozen=True, slots=True)
@@ -335,10 +336,10 @@ def _uuid(value: str, label: str) -> UUID:
 
 __all__ = [
     "SseSnapshot",
+    "list_instances",
     "mirror_decision",
     "mirror_health",
     "mirror_instance",
-    "recent_instances",
     "sse_snapshot",
     "sse_snapshot_state",
     "sse_stream",

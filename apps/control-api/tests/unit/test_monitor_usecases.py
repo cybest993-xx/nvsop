@@ -14,9 +14,9 @@ from factory_sop.identifiers import new_id
 from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.model import MirroredDecision, MirroredHealth, MirroredSopInstance
 from factory_sop.monitor.usecases import (
+    list_instances,
     mirror_decision,
     mirror_health,
-    recent_instances,
     sse_snapshot,
     sse_snapshot_state,
     sse_stream,
@@ -72,8 +72,12 @@ class MemoryMonitor:
         self.instances[value.report.event_id] = value
         return True
 
-    def recent_instances(self, *, limit: int) -> tuple[MirroredSopInstance, ...]:
-        return tuple(self.instances.values())[:limit]
+    def page_instances(
+        self, *, page: int, page_size: int
+    ) -> tuple[tuple[MirroredSopInstance, ...], int]:
+        values = tuple(self.instances.values())
+        start = (page - 1) * page_size
+        return values[start : start + page_size], len(values)
 
     def recent_health(self, *, limit: int) -> tuple[MirroredHealth, ...]:
         return tuple(self.health.values())[:limit]
@@ -346,9 +350,9 @@ def test_sse_snapshot_preserves_pass_fail_and_indeterminate_verdicts() -> None:
     assert actual == expected
 
 
-def test_recent_instances_rejects_a_caller_without_monitor_permission() -> None:
+def test_list_instances_rejects_a_caller_without_monitor_permission() -> None:
     with pytest.raises(AuthorizationRefusedError):
-        recent_instances(MemoryMonitor(), caller=caller())
+        list_instances(MemoryMonitor(), caller=caller(), page=1, page_size=50)
 
 
 def test_sse_usecase_rejects_a_caller_without_monitor_permission() -> None:

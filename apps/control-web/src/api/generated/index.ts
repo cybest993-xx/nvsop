@@ -398,6 +398,7 @@ export type {
   ItemPageConnectorView,
   ItemPageDatasetMemberView,
   ItemPageDatasetView,
+  ItemPageDictStrObject,
   ItemPageInferenceBackendView,
   ItemPageInferenceHostView,
   ItemPagePointView,

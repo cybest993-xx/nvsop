@@ -1042,6 +1042,9 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
     assert delayed_open.status_code == 200
     assert delayed_open.json()["duplicate"] is True
     assert instance_list.status_code == 200
+    assert instance_list.json()["page"] == 1
+    assert instance_list.json()["page_size"] == 50
+    assert instance_list.json()["total"] == 1
     assert instance_list.json()["items"][0] == closed_instance_body
     assert instance_list.json()["items"][0]["open_boundary_signal"] == long_open_boundary_signal
     assert instance_list.json()["items"][0]["close_boundary_signal"] == long_close_boundary_signal

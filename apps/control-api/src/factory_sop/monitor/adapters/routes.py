@@ -20,13 +20,14 @@ from factory_sop.monitor.adapters import dependencies
 from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.repository import MonitorRepository
 from factory_sop.monitor.usecases import (
+    list_instances,
     mirror_decision,
     mirror_health,
     mirror_instance,
-    recent_instances,
     sse_snapshot_state,
     sse_stream,
 )
+from factory_sop.responses import DEFAULT_PAGE_SIZE, MAXIMUM_PAGE_SIZE, ItemPage
 from nvsop_contracts import (
     ReportedDecision,
     ReportedHealth,
@@ -188,14 +189,16 @@ def report_monitor_instance(
 def list_monitor_instances(
     caller: Authorized,
     monitor: Annotated[MonitorRepository, Depends(dependencies.monitor)],
-    limit: int = Query(default=100, ge=1, le=500),
-) -> dict[str, object]:
-    return {
-        "items": [
-            reported_sop_instance_to_wire(item.report)
-            for item in recent_instances(monitor, caller=caller, limit=limit)
-        ]
-    }
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=MAXIMUM_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> ItemPage[dict[str, object]]:
+    items, total = list_instances(monitor, caller=caller, page=page, page_size=page_size)
+    return ItemPage(
+        items=[reported_sop_instance_to_wire(item.report) for item in items],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
 
 
 @router.get(

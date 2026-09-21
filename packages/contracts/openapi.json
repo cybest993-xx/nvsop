@@ -3874,6 +3874,41 @@
         "title": "ItemPage[VlmCandidateView]",
         "type": "object"
       },
+      "ItemPage_dict_str__object__": {
+        "properties": {
+          "items": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "minimum": 1.0,
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "minimum": 1.0,
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
+        "title": "ItemPage[dict[str, object]]",
+        "type": "object"
+      },
       "ItemPage_str_": {
         "properties": {
           "items": {
@@ -12504,13 +12539,24 @@
         "parameters": [
           {
             "in": "query",
-            "name": "limit",
+            "name": "page",
             "required": false,
             "schema": {
-              "default": 100,
-              "maximum": 500,
+              "default": 1,
               "minimum": 1,
-              "title": "Limit",
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
               "type": "integer"
             }
           }
@@ -12520,9 +12566,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Listmonitorsopinstances",
-                  "type": "object"
+                  "$ref": "#/components/schemas/ItemPage_dict_str__object__"
                 }
               }
             },

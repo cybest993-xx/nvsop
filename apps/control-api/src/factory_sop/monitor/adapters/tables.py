@@ -104,6 +104,8 @@ class ReportedSopInstanceRow(Table):
     opened_at: Mapped[float]
     closed_at: Mapped[float | None] = mapped_column(nullable=True)
     close_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    open_boundary_signal: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    close_boundary_signal: Mapped[str | None] = mapped_column(String(255), nullable=True)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
 
@@ -124,6 +126,8 @@ class ReportedSopInstanceRow(Table):
             opened_at=report.opened_at,
             closed_at=report.closed_at,
             close_reason=report.close_reason,
+            open_boundary_signal=report.open_boundary_signal,
+            close_boundary_signal=report.close_boundary_signal,
             received_at=value.received_at,
             payload=reported_sop_instance_to_wire(report),
         )

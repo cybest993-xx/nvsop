@@ -326,6 +326,10 @@ class Instance:
     """
     settled: frozenset[ViolationKey] = frozenset()
     """Violations already reported for this instance, so one fact is reported once."""
+    open_boundary_signal: StepSignal | None = None
+    """Actual declared signal that opened this pass; null only for migrated legacy state."""
+    close_boundary_signal: StepSignal | None = None
+    """Actual declared end signal on a closed snapshot; null for non-signal/legacy closure."""
 
 
 @dataclass(frozen=True, slots=True)

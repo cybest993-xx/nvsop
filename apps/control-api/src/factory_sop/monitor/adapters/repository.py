@@ -83,6 +83,8 @@ class PostgresMonitorRepository(MonitorRepository):
             opened_at=row.opened_at,
             closed_at=row.closed_at,
             close_reason=row.close_reason,
+            open_boundary_signal=row.open_boundary_signal,
+            close_boundary_signal=row.close_boundary_signal,
             received_at=row.received_at,
             payload=row.payload,
         )
@@ -109,6 +111,7 @@ class PostgresMonitorRepository(MonitorRepository):
                 .values(
                     closed_at=row.closed_at,
                     close_reason=row.close_reason,
+                    close_boundary_signal=row.close_boundary_signal,
                     received_at=row.received_at,
                     payload=row.payload,
                 )
@@ -205,6 +208,7 @@ def _ensure_instance_progression(opened: ReportedSopInstance, closed: ReportedSo
         opened.station_id,
         opened.instance_id,
         opened.opened_at,
+        opened.open_boundary_signal,
         opened.template_version_id,
         opened.template_sha256,
         opened.configuration_revision,
@@ -218,6 +222,7 @@ def _ensure_instance_progression(opened: ReportedSopInstance, closed: ReportedSo
         closed.station_id,
         closed.instance_id,
         closed.opened_at,
+        closed.open_boundary_signal,
         closed.template_version_id,
         closed.template_sha256,
         closed.configuration_revision,

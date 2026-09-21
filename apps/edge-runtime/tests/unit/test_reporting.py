@@ -42,6 +42,7 @@ class ReportingTests(unittest.TestCase):
                 queue_id=6,
                 instance_id=4,
                 opened_at=1.0,
+                open_boundary_signal="start-signal",
                 attempts=0,
                 last_error=None,
                 reported_at=None,
@@ -52,6 +53,8 @@ class ReportingTests(unittest.TestCase):
         self.assertEqual(report.event_id, "host-a:station-a:instance:4")
         self.assertIsNone(report.closed_at)
         self.assertIsNone(report.close_reason)
+        self.assertEqual(report.open_boundary_signal, "start-signal")
+        self.assertIsNone(report.close_boundary_signal)
 
     def test_closed_instance_reuses_frozen_event_time_provenance(self) -> None:
         pending = PendingReport(
@@ -61,14 +64,16 @@ class ReportingTests(unittest.TestCase):
                 verdict=Verdict.PASS,
                 reasons=(),
                 violations=(),
-                lifecycle=Lifecycle.CLOSED_BY_COMPLETE_SET,
+                lifecycle=Lifecycle.CLOSED_BY_END_SIGNAL,
                 evidence=EvidenceSpan.at(HostInstant(9.0)),
             ),
             attempts=0,
             last_error=None,
             opened_at=1.0,
             closed_at=9.0,
-            close_reason=Lifecycle.CLOSED_BY_COMPLETE_SET.value,
+            close_reason=Lifecycle.CLOSED_BY_END_SIGNAL.value,
+            open_boundary_signal="start-signal",
+            close_boundary_signal="end-signal-b",
             context=ReportContext(
                 host_id="host-a",
                 station_id="station-a",
@@ -84,7 +89,9 @@ class ReportingTests(unittest.TestCase):
         self.assertIsNotNone(report)
         assert report is not None
         self.assertEqual(report.event_id, "host-a:station-a:instance:4")
-        self.assertEqual(report.close_reason, "closed_by_complete_set")
+        self.assertEqual(report.close_reason, "closed_by_end_signal")
+        self.assertEqual(report.open_boundary_signal, "start-signal")
+        self.assertEqual(report.close_boundary_signal, "end-signal-b")
         self.assertEqual(report.backend_provenance[0].model_ids, ("model-a",))
 
     def test_event_and_trace_identity_are_stable_and_unknown_wire_data_is_preserved(self) -> None:

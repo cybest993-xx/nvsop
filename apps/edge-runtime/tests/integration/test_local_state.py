@@ -368,18 +368,20 @@ class HistoricalReportContextTest(unittest.TestCase):
         state = open_local_state(":memory:")
         self.addCleanup(state.close)
         station = state.station(STATION, report_context=context)
-        driver = supervisor(opening_state(), FakeClock(), station)
+        driver = supervisor(opening_state(end_signals=("end-a", "end-b")), FakeClock(), station)
         provenance = context.backends[0]
 
         driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=provenance)
         (opening,) = station.pending_instance_reports()
         self.assertEqual(opening.instance_id, 1)
+        self.assertEqual(opening.open_boundary_signal, STEPS[0])
         self.assertEqual(opening.context, context)
 
-        driver.receive(action(STEPS[1], at=ANCHOR + 1.0), report_provenance=provenance)
-        driver.receive(action(STEPS[2], at=ANCHOR + 2.0), report_provenance=provenance)
+        driver.receive(action("end-b", at=ANCHOR + 1.0), report_provenance=provenance)
         self.assertEqual(station.pending_instance_reports(), ())
-        self.assertEqual(len(station.pending_reports()), 1)
+        (closed,) = station.pending_reports()
+        self.assertEqual(closed.open_boundary_signal, STEPS[0])
+        self.assertEqual(closed.close_boundary_signal, "end-b")
 
     def test_pre_instance_impaired_backend_provenance_reaches_the_report_outbox(self) -> None:
         bundle = ConfigurationBundle(

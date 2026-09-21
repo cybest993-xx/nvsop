@@ -399,6 +399,8 @@ class ReportedSopInstance:
     opened_at: float
     closed_at: float | None
     close_reason: str | None
+    open_boundary_signal: str | None
+    close_boundary_signal: str | None
     template_version_id: str | None
     template_sha256: str | None
     backend_provenance: tuple[ReportBackendProvenance, ...]
@@ -431,6 +433,16 @@ class ReportedSopInstance:
                 raise ValueError("instance closed_at must not precede opened_at")
         if (self.closed_at is None) != (self.close_reason is None):
             raise ValueError("instance close time and reason must be supplied together")
+        for name, signal in (
+            ("open_boundary_signal", self.open_boundary_signal),
+            ("close_boundary_signal", self.close_boundary_signal),
+        ):
+            if signal is not None and (not isinstance(signal, str) or not signal):
+                raise ValueError(f"{name} must be non-empty or null")
+        if self.closed_at is None and self.close_boundary_signal is not None:
+            raise ValueError("open instance cannot carry a close boundary signal")
+        if self.close_boundary_signal is not None and self.close_reason != "closed_by_end_signal":
+            raise ValueError("close boundary signal requires end-signal closure")
         if (self.template_version_id is None) != (self.template_sha256 is None):
             raise ValueError("template version and digest must be supplied together")
         if self.template_sha256 is not None and not _is_sha256(self.template_sha256):
@@ -452,6 +464,8 @@ class ReportedSopInstance:
             "opened_at": self.opened_at,
             "closed_at": self.closed_at,
             "close_reason": self.close_reason,
+            "open_boundary_signal": self.open_boundary_signal,
+            "close_boundary_signal": self.close_boundary_signal,
             "template_version_id": self.template_version_id,
             "template_sha256": self.template_sha256,
             "backend_provenance": [item.to_wire() for item in self.backend_provenance],
@@ -474,6 +488,8 @@ class ReportedSopInstance:
                 "opened_at",
                 "closed_at",
                 "close_reason",
+                "open_boundary_signal",
+                "close_boundary_signal",
                 "template_version_id",
                 "template_sha256",
                 "backend_provenance",
@@ -484,10 +500,16 @@ class ReportedSopInstance:
             "reported SOP instance",
         )
         close_reason = value["close_reason"]
+        open_boundary_signal = value["open_boundary_signal"]
+        close_boundary_signal = value["close_boundary_signal"]
         template_id = value["template_version_id"]
         template_sha = value["template_sha256"]
         if close_reason is not None and not isinstance(close_reason, str):
             raise ValueError("instance close_reason is invalid")
+        if open_boundary_signal is not None and not isinstance(open_boundary_signal, str):
+            raise ValueError("instance open_boundary_signal is invalid")
+        if close_boundary_signal is not None and not isinstance(close_boundary_signal, str):
+            raise ValueError("instance close_boundary_signal is invalid")
         if template_id is not None and not isinstance(template_id, str):
             raise ValueError("instance template_version_id is invalid")
         if template_sha is not None and not isinstance(template_sha, str):
@@ -501,6 +523,8 @@ class ReportedSopInstance:
             opened_at=_finite_number(value["opened_at"], "opened_at"),
             closed_at=_optional_number(value["closed_at"], "closed_at"),
             close_reason=close_reason,
+            open_boundary_signal=open_boundary_signal,
+            close_boundary_signal=close_boundary_signal,
             template_version_id=template_id,
             template_sha256=template_sha,
             backend_provenance=tuple(

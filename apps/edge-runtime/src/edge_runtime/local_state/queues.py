@@ -105,6 +105,8 @@ class PendingReport:
     opened_at: float | None = None
     closed_at: float | None = None
     close_reason: str | None = None
+    open_boundary_signal: str | None = None
+    close_boundary_signal: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +116,7 @@ class PendingSopInstanceReport:
     queue_id: int
     instance_id: int
     opened_at: float
+    open_boundary_signal: str | None
     attempts: int
     last_error: str | None
     reported_at: str | None
@@ -165,7 +168,8 @@ class StationQueues:
                        q.configuration_revision, q.configuration_sha256,
                        d.decision_id, d.instance_id, d.verdict, d.reasons, d.lifecycle,
                        d.evidence_anchor, d.evidence_from, d.evidence_to,
-                       i.opened_at, i.closed_at, i.lifecycle AS instance_lifecycle
+                       i.opened_at, i.closed_at, i.lifecycle AS instance_lifecycle,
+                       i.open_boundary_signal, i.close_boundary_signal
                   FROM local_report_queue q
                   JOIN local_decision d ON d.decision_id = q.decision_id
                   JOIN local_sop_instance i
@@ -192,6 +196,8 @@ class StationQueues:
                     close_reason=(
                         row["instance_lifecycle"] if row["closed_at"] is not None else None
                     ),
+                    open_boundary_signal=row["open_boundary_signal"],
+                    close_boundary_signal=row["close_boundary_signal"],
                 )
                 for row in rows
             )
@@ -207,7 +213,8 @@ class StationQueues:
                        q.report_host_id, q.report_template_version_id,
                        q.report_template_sha256, q.report_backend_provenance,
                        q.report_configuration, q.configuration_revision,
-                       q.configuration_sha256, q.instance_id, i.opened_at
+                       q.configuration_sha256, q.instance_id, i.opened_at,
+                       i.open_boundary_signal
                   FROM local_report_queue q
                   JOIN local_sop_instance i
                     ON i.station_id = q.station_id AND i.instance_id = q.instance_id
@@ -226,6 +233,7 @@ class StationQueues:
                     queue_id=int(row["queue_id"]),
                     instance_id=int(row["instance_id"]),
                     opened_at=float(row["opened_at"]),
+                    open_boundary_signal=row["open_boundary_signal"],
                     attempts=int(row["attempts"]),
                     last_error=row["last_error"],
                     reported_at=row["report_reported_at"],

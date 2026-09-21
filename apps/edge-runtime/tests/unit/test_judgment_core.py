@@ -129,6 +129,20 @@ class InstanceBoundaryTest(unittest.TestCase):
             decisions[-1],
         )
 
+    def test_actual_open_and_end_boundary_signals_are_preserved(self) -> None:
+        alternate_end = "备用下料完成"
+        state = opening_state(Ordering.ORDERED, end_signals=(EXTERNAL_END, alternate_end))
+        state, _ = observe_each(state, STEPS[0], STEPS[1])
+
+        outcome = advance(
+            state,
+            Observation(signal=alternate_end, at=HostInstant(3.0), source_time=3.0),
+        )
+
+        (closed,) = outcome.closed_instances
+        self.assertEqual(closed.open_boundary_signal, STEPS[0])
+        self.assertEqual(closed.close_boundary_signal, alternate_end)
+
     def test_a_complete_step_set_closes_the_instance_immediately(self) -> None:
         # The base's `cycle_completed` fast path, kept: `len(seen) == N` (§5.1).
         state = opening_state(Ordering.UNORDERED)

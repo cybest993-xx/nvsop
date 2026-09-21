@@ -224,6 +224,7 @@ def _observe(state: JudgmentState, observation: Observation) -> Outcome:
             opened_at=observation.at,
             last_observation_at=observation.at,
             impairments=state.active_impairments,
+            open_boundary_signal=observation.signal,
         )
         state = replace(state, instance=instance, next_instance_id=state.next_instance_id + 1)
 
@@ -232,7 +233,13 @@ def _observe(state: JudgmentState, observation: Observation) -> Outcome:
 
     if index is None:
         if observation.signal in template.end_signals:
-            return _close(state, instance, observation.at, Lifecycle.CLOSED_BY_END_SIGNAL)
+            return _close(
+                state,
+                instance,
+                observation.at,
+                Lifecycle.CLOSED_BY_END_SIGNAL,
+                close_boundary_signal=observation.signal,
+            )
         if observation.signal == template.start_signal:
             # The start signal repeating inside an open instance is rework, not a new pass.
             return Outcome(state=replace(state, instance=instance))
@@ -340,6 +347,7 @@ def _close(
     at: HostInstant,
     lifecycle: Lifecycle,
     carried: tuple[Violation, ...] = (),
+    close_boundary_signal: StepSignal | None = None,
 ) -> Outcome:
     """Conclude the instance, after the validity gate (§5.1).
 
@@ -348,6 +356,7 @@ def _close(
     comparison and discarding its result would leave the next reader of this function one
     edit away from using it.
     """
+    closed_instance = replace(instance, close_boundary_signal=close_boundary_signal)
     evidence = EvidenceSpan.at(at)
     if instance.impairments:
         return Outcome(
@@ -362,7 +371,7 @@ def _close(
                     evidence=evidence,
                 ),
             ),
-            closed_instances=(instance,),
+            closed_instances=(closed_instance,),
         )
 
     missing = _unsettled(
@@ -387,7 +396,7 @@ def _close(
                 evidence=evidence,
             ),
         ),
-        closed_instances=(instance,),
+        closed_instances=(closed_instance,),
     )
 
 

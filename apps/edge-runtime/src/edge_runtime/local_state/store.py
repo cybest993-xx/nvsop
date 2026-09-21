@@ -142,15 +142,18 @@ class StationStore(StationQueues):
             """
             INSERT INTO local_sop_instance (
                 station_id, instance_id, opened_at, last_observation_at,
-                seen, expected_index, impairments, settled, report_backend_provenance
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                seen, expected_index, impairments, settled, report_backend_provenance,
+                open_boundary_signal, close_boundary_signal
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (station_id, instance_id) DO UPDATE SET
                 last_observation_at        = excluded.last_observation_at,
                 seen                       = excluded.seen,
                 expected_index             = excluded.expected_index,
                 impairments                = excluded.impairments,
                 settled                    = excluded.settled,
-                report_backend_provenance  = excluded.report_backend_provenance
+                report_backend_provenance  = excluded.report_backend_provenance,
+                open_boundary_signal       = excluded.open_boundary_signal,
+                close_boundary_signal      = excluded.close_boundary_signal
             """,
             (
                 self._station_id,
@@ -162,6 +165,8 @@ class StationStore(StationQueues):
                 dump_reasons(instance.impairments),
                 dump_settled(instance.settled),
                 encoded_provenance,
+                instance.open_boundary_signal,
+                instance.close_boundary_signal,
             ),
         )
         return created
@@ -427,7 +432,7 @@ class StationStore(StationQueues):
         row = self._connection.execute(
             """
             SELECT instance_id, opened_at, last_observation_at, seen, expected_index,
-                   impairments, settled
+                   impairments, settled, open_boundary_signal
               FROM local_sop_instance
              WHERE station_id = ? AND closed_at IS NULL
              ORDER BY instance_id DESC
@@ -445,6 +450,7 @@ class StationStore(StationQueues):
             expected_index=row["expected_index"],
             impairments=load_reasons(row["impairments"]),
             settled=load_settled(row["settled"]),
+            open_boundary_signal=row["open_boundary_signal"],
         )
 
     def _next_instance_id(self) -> int:

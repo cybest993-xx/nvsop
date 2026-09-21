@@ -289,6 +289,8 @@ def reported_instance_from_pending(
         opened_at=pending.opened_at,
         closed_at=pending.closed_at,
         close_reason=pending.close_reason,
+        open_boundary_signal=pending.open_boundary_signal,
+        close_boundary_signal=pending.close_boundary_signal,
         template_version_id=context.template_version_id,
         template_sha256=context.template_sha256,
         backend_provenance=tuple(
@@ -317,6 +319,8 @@ def reported_open_instance_from_pending(
         opened_at=pending.opened_at,
         closed_at=None,
         close_reason=None,
+        open_boundary_signal=pending.open_boundary_signal,
+        close_boundary_signal=None,
         template_version_id=context.template_version_id,
         template_sha256=context.template_sha256,
         backend_provenance=tuple(

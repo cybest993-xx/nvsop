@@ -296,7 +296,12 @@ _V7 = (
     """,
 )
 
-MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1, _V2, _V3, _V4, _V5, _V6, _V7)
+_V8 = (
+    "ALTER TABLE local_sop_instance ADD COLUMN open_boundary_signal TEXT",
+    "ALTER TABLE local_sop_instance ADD COLUMN close_boundary_signal TEXT",
+)
+
+MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1, _V2, _V3, _V4, _V5, _V6, _V7, _V8)
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 
 

@@ -22,7 +22,7 @@
 【目标】主机级上报对账（跨工位排空 local_report_queue 中的 typed pending facts → Center monitor）
 【目标】证据上传（专用大字节链路；生命周期见[证据与保留机制](evidence-and-retention.md)）
 MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU 转码、预览按需、录像窗口按主机配置）
-录像压缩归档任务（老化分段 H.264→H.265，NVDEC→NVENC，可限速可暂停，§5.19）
+【目标】录像压缩归档任务（老化分段重编码，可限速可暂停，具体编码与验证约束见 §5.19）
 连接器运行时（轮询或推送输入点位 → 观测；执行输出点位写入）
 本地状态存储（SQLite）
 ```

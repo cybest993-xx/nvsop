@@ -43,6 +43,8 @@ composition root -> runtime packages
 
 Storage may know domain types, never the orchestrator. Only the composition root should need all runtime packages.
 
+**【已定目标】** `local_state` 通过小型公共 interface 拥有 Edge 本地持久状态；SQLite connection、SQL、schema、codec 与表布局属于其 implementation。发往 Center `monitor` 的结构化事实通过主机级上报对账 interface 排空。证据上传、Center→Edge 配置同步和物理处置保持各自的 owner 与生命周期，不合并为通用同步框架。详细运行语义见[推理机自治机制](../design/mechanisms/edge-autonomy.md#57-推理机是自治判定单元)。
+
 ## Traffic boundaries
 
 Nginx serves Web and center control-plane HTTP. Runtime preview/signaling goes directly from browser to its assigned inference host's MediaMTX. The authorized annotation-derived-media gateway is the only recorded exception ([ADR-0011](../adr/0011-annotation-derived-media-gateway.md)), not a general video relay.

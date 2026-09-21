@@ -291,9 +291,10 @@ class RestartTest(unittest.TestCase):
                     reasons=(ReasonCode.RUN_INTERRUPTED,),
                     violations=(),
                     lifecycle=Lifecycle.CLOSED_BY_RUN_INTERRUPTION,
-                    evidence=EvidenceSpan.at(HostInstant(ANCHOR + 60.0)),
+                    evidence=EvidenceSpan.at(HostInstant(ANCHOR)),
                 ),
             )
+            self.assertEqual(station.pending_reports()[-1].closed_at, ANCHOR)
 
             # 重复启动和中断不能再次结案或重复入队。
             pending = station.pending_reports(), station.pending_evidence()

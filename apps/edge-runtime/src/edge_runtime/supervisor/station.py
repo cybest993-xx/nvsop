@@ -154,9 +154,9 @@ class StationSupervisor:
         """A configuration switch or a shutdown ended this run.
 
         The pass in flight is concluded as indeterminate rather than carried across, so one
-        maintenance action does not manufacture a violation (§5.2). Startup may supply the
-        last comparable instant when a persisted instance crossed a host reboot and the new
-        monotonic-clock epoch is lower than the persisted one.
+        maintenance action does not manufacture a violation (§5.2). Startup supplies the
+        last persisted observation instant for a recovered instance because a previous
+        process's monotonic-clock epoch cannot be assumed comparable with the current one.
         """
         return self._advance((RunInterrupted(at=at or HostInstant(self._clock())),))
 

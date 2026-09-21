@@ -10,7 +10,7 @@ from collections.abc import Callable
 from time import monotonic
 
 from edge_runtime.judgment.evidence import EvidenceMargins
-from edge_runtime.judgment.model import HostInstant, RuntimeParameters, Template
+from edge_runtime.judgment.model import RuntimeParameters, Template
 from edge_runtime.local_state.store import StationStore
 from edge_runtime.supervisor.station import StationSupervisor
 
@@ -32,14 +32,7 @@ def resume_station(
         clock=clock,
         initial_report_provenance=store.resume_report_provenance(),
     )
-    interruption_at: HostInstant | None = None
-    if state.instance is not None:
-        current = HostInstant(clock())
-        interruption_at = (
-            state.instance.last_observation_at
-            if current.seconds < state.instance.last_observation_at.seconds
-            else current
-        )
+    interruption_at = state.instance.last_observation_at if state.instance is not None else None
     supervisor.interrupt(at=interruption_at)
     return supervisor
 

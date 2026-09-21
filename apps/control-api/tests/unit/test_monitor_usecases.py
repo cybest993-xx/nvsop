@@ -16,6 +16,7 @@ from factory_sop.monitor.model import MirroredDecision, MirroredHealth, Mirrored
 from factory_sop.monitor.usecases import (
     mirror_decision,
     mirror_health,
+    recent_instances,
     sse_snapshot,
     sse_snapshot_state,
     sse_stream,
@@ -343,6 +344,11 @@ def test_sse_snapshot_preserves_pass_fail_and_indeterminate_verdicts() -> None:
     }
     expected = {value.event_id: reported_decision_to_wire(value) for value in reports}
     assert actual == expected
+
+
+def test_recent_instances_rejects_a_caller_without_monitor_permission() -> None:
+    with pytest.raises(AuthorizationRefusedError):
+        recent_instances(MemoryMonitor(), caller=caller())
 
 
 def test_sse_usecase_rejects_a_caller_without_monitor_permission() -> None:

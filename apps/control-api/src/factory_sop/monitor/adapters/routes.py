@@ -23,6 +23,7 @@ from factory_sop.monitor.usecases import (
     mirror_decision,
     mirror_health,
     mirror_instance,
+    recent_instances,
     sse_snapshot_state,
     sse_stream,
 )
@@ -189,11 +190,10 @@ def list_monitor_instances(
     monitor: Annotated[MonitorRepository, Depends(dependencies.monitor)],
     limit: int = Query(default=100, ge=1, le=500),
 ) -> dict[str, object]:
-    del caller
     return {
         "items": [
             reported_sop_instance_to_wire(item.report)
-            for item in monitor.recent_instances(limit=limit)
+            for item in recent_instances(monitor, caller=caller, limit=limit)
         ]
     }
 

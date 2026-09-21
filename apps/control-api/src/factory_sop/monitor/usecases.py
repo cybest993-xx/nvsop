@@ -151,6 +151,17 @@ def mirror_instance(
     return monitor.upsert_instance(MirroredSopInstance(report=report, received_at=received_at))
 
 
+def recent_instances(
+    monitor: MonitorRepository,
+    *,
+    caller: Caller,
+    limit: int = 100,
+) -> tuple[MirroredSopInstance, ...]:
+    """返回授权用户可查看的 edge 实例生命周期镜像。"""
+    authorize(caller, Permission.MONITOR_VIEW)
+    return monitor.recent_instances(limit=limit)
+
+
 @dataclass(frozen=True, slots=True)
 class SseSnapshot:
     """初始帧和两个镜像表各自的数据库高水位。"""
@@ -326,6 +337,8 @@ __all__ = [
     "SseSnapshot",
     "mirror_decision",
     "mirror_health",
+    "mirror_instance",
+    "recent_instances",
     "sse_snapshot",
     "sse_snapshot_state",
     "sse_stream",

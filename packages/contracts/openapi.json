@@ -12482,6 +12482,183 @@
         ]
       }
     },
+    "/api/v1/monitor/instances": {
+      "get": {
+        "operationId": "listMonitorSopInstances",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Listmonitorsopinstances",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "List Monitor Instances",
+        "tags": [
+          "monitor"
+        ],
+        "x-required-permission": "monitor.report.view"
+      },
+      "post": {
+        "operationId": "reportMonitorSopInstance",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Inference-Host-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Timestamp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Timestamp"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Nonce",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Nonce"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Signature"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Reportmonitorsopinstance",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Report Monitor Instance",
+        "tags": [
+          "monitor"
+        ]
+      }
+    },
     "/api/v1/monitor/reported-decisions": {
       "post": {
         "operationId": "reportMonitorDecision",

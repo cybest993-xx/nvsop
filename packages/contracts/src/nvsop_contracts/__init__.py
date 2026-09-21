@@ -57,12 +57,15 @@ from nvsop_contracts.reports import (
     ReportBackendProvenance,
     ReportedDecision,
     ReportedHealth,
+    ReportedSopInstance,
     ReportEvidence,
     ReportViolation,
     reported_decision_from_wire,
     reported_decision_to_wire,
     reported_health_from_wire,
     reported_health_to_wire,
+    reported_sop_instance_from_wire,
+    reported_sop_instance_to_wire,
 )
 
 __all__ = [
@@ -94,6 +97,7 @@ __all__ = [
     "ReportViolation",
     "ReportedDecision",
     "ReportedHealth",
+    "ReportedSopInstance",
     "ResolvedRuntimeParameters",
     "Sequencing",
     "TimestampSource",
@@ -115,6 +119,8 @@ __all__ = [
     "reported_decision_to_wire",
     "reported_health_from_wire",
     "reported_health_to_wire",
+    "reported_sop_instance_from_wire",
+    "reported_sop_instance_to_wire",
     "sign_host_identity_request",
     "unfit_for",
     "validate_host_identity_private_key",

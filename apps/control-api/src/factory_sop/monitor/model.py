@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from nvsop_contracts import ReportedDecision, ReportedHealth
+from nvsop_contracts import ReportedDecision, ReportedHealth, ReportedSopInstance
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,4 +22,10 @@ class MirroredHealth:
     stream_sequence: int | None = None
 
 
-__all__ = ["MirroredDecision", "MirroredHealth"]
+@dataclass(frozen=True, slots=True)
+class MirroredSopInstance:
+    report: ReportedSopInstance
+    received_at: datetime
+
+
+__all__ = ["MirroredDecision", "MirroredHealth", "MirroredSopInstance"]

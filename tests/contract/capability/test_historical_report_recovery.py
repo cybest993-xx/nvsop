@@ -23,12 +23,13 @@ from edge_runtime.local_state import open_local_state
 from edge_runtime.local_state.queues import BackendReportContext, ReportContext
 from edge_runtime.reporting import DecisionReporter
 
-from factory_sop.monitor.model import MirroredDecision
-from factory_sop.monitor.usecases import mirror_decision
+from factory_sop.monitor.model import MirroredDecision, MirroredSopInstance
+from factory_sop.monitor.usecases import mirror_decision, mirror_instance
 from nvsop_contracts import (
     ConfigurationBundle,
     ReportBackendProvenance,
     ReportedDecision,
+    ReportedSopInstance,
     configuration_to_wire,
 )
 
@@ -91,6 +92,7 @@ class HistoricalAssignmentGateway:
 class MonitorMirror:
     def __init__(self) -> None:
         self.decisions: dict[str, MirroredDecision] = {}
+        self.instances: dict[str, MirroredSopInstance] = {}
 
     def upsert_decision(self, value: MirroredDecision) -> bool:
         existing = self.decisions.get(value.report.event_id)
@@ -101,11 +103,21 @@ class MonitorMirror:
         self.decisions[value.report.event_id] = value
         return True
 
+    def upsert_instance(self, value: MirroredSopInstance) -> bool:
+        existing = self.instances.get(value.report.event_id)
+        if existing is not None:
+            if existing.report != value.report:
+                raise AssertionError("same instance event id changed payload")
+            return False
+        self.instances[value.report.event_id] = value
+        return True
+
 
 class MirrorTransport:
     def __init__(self, monitor: MonitorMirror) -> None:
         self.monitor = monitor
         self.accepted: list[ReportedDecision] = []
+        self.accepted_instances: list[ReportedSopInstance] = []
 
     def send_decision(
         self,
@@ -125,6 +137,17 @@ class MirrorTransport:
         if not inserted:
             raise AssertionError("first recovery delivery must insert the mirror")
         self.accepted.append(report)
+
+    def send_instance(self, report: ReportedSopInstance) -> None:
+        inserted = mirror_instance(
+            report,
+            received_at=datetime(2026, 9, 16, tzinfo=UTC),
+            monitor=self.monitor,  # type: ignore[arg-type]
+            assignment_gateway=HistoricalAssignmentGateway(),
+        )
+        if not inserted:
+            raise AssertionError("first instance recovery delivery must insert the mirror")
+        self.accepted_instances.append(report)
 
 
 class HistoricalRecoveryContractTest(unittest.TestCase):
@@ -199,6 +222,10 @@ class HistoricalRecoveryContractTest(unittest.TestCase):
             transport.accepted[0].backend_provenance,
             (ReportBackendProvenance(str(BACKEND_ID), ("model-7",)),),
         )
+        self.assertEqual(len(transport.accepted_instances), 1)
+        self.assertEqual(transport.accepted_instances[0].opened_at, 1.0)
+        self.assertEqual(transport.accepted_instances[0].closed_at, 2.0)
+        self.assertEqual(transport.accepted_instances[0].close_reason, "closed_by_end_signal")
         self.assertEqual(station.pending_reports(), ())
 
 

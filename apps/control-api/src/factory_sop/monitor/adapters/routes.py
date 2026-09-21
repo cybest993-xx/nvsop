@@ -22,14 +22,18 @@ from factory_sop.monitor.repository import MonitorRepository
 from factory_sop.monitor.usecases import (
     mirror_decision,
     mirror_health,
+    mirror_instance,
     sse_snapshot_state,
     sse_stream,
 )
 from nvsop_contracts import (
     ReportedDecision,
     ReportedHealth,
+    ReportedSopInstance,
     reported_decision_from_wire,
     reported_health_from_wire,
+    reported_sop_instance_from_wire,
+    reported_sop_instance_to_wire,
 )
 
 router = APIRouter(prefix="/monitor", tags=["monitor"])
@@ -126,6 +130,72 @@ def report_monitor_health(
     except MonitorRefusedError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     return {"accepted": True, "duplicate": not inserted, "event_id": report.event_id}
+
+
+@router.post("/instances", operation_id="reportMonitorSopInstance")
+def report_monitor_instance(
+    request: Request,
+    body: dict[str, object],
+    monitor: Annotated[MonitorRepository, Depends(dependencies.monitor)],
+    host_gateway: Annotated[DeviceHostGateway, Depends(dependencies.host_gateway)],
+    assignment_gateway: Annotated[
+        DeviceHistoricalAssignmentGateway, Depends(dependencies.historical_assignment_gateway)
+    ],
+    inference_host_id: Annotated[str | None, Header(alias="X-Inference-Host-ID")] = None,
+    inference_host_timestamp: Annotated[
+        str | None, Header(alias="X-Inference-Host-Timestamp")
+    ] = None,
+    inference_host_nonce: Annotated[str | None, Header(alias="X-Inference-Host-Nonce")] = None,
+    inference_host_signature: Annotated[
+        str | None, Header(alias="X-Inference-Host-Signature")
+    ] = None,
+) -> dict[str, object]:
+    try:
+        report: ReportedSopInstance = reported_sop_instance_from_wire(body)
+        host_id = UUID(report.host_id)
+    except (ValueError, TypeError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
+        ) from error
+    _authenticate_report_host(
+        request=request,
+        host_gateway=host_gateway,
+        body=body,
+        host_id=host_id,
+        inference_host_id=inference_host_id,
+        inference_host_timestamp=inference_host_timestamp,
+        inference_host_nonce=inference_host_nonce,
+        inference_host_signature=inference_host_signature,
+    )
+    try:
+        inserted = mirror_instance(
+            report,
+            received_at=datetime.now(UTC),
+            monitor=monitor,
+            assignment_gateway=assignment_gateway,
+        )
+    except MonitorRefusedError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    return {"accepted": True, "duplicate": not inserted, "event_id": report.event_id}
+
+
+@router.get(
+    "/instances",
+    operation_id="listMonitorSopInstances",
+    openapi_extra=needs(Permission.MONITOR_VIEW),
+)
+def list_monitor_instances(
+    caller: Authorized,
+    monitor: Annotated[MonitorRepository, Depends(dependencies.monitor)],
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, object]:
+    del caller
+    return {
+        "items": [
+            reported_sop_instance_to_wire(item.report)
+            for item in monitor.recent_instances(limit=limit)
+        ]
+    }
 
 
 @router.get(

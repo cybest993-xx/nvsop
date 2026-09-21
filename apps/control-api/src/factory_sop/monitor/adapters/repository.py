@@ -8,9 +8,13 @@ from sqlalchemy import Table, select
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.orm import Session
 
-from factory_sop.monitor.adapters.tables import ReportedDecisionRow, ReportedHealthRow
+from factory_sop.monitor.adapters.tables import (
+    ReportedDecisionRow,
+    ReportedHealthRow,
+    ReportedSopInstanceRow,
+)
 from factory_sop.monitor.errors import MonitorRefusedError
-from factory_sop.monitor.model import MirroredDecision, MirroredHealth
+from factory_sop.monitor.model import MirroredDecision, MirroredHealth, MirroredSopInstance
 from factory_sop.monitor.repository import MonitorRepository
 
 
@@ -66,6 +70,50 @@ class PostgresMonitorRepository(MonitorRepository):
             raise RuntimeError("health mirror insert conflicted without a visible row")
         _ensure_same(existing.payload, row.payload, "health", row.event_id)
         return False
+
+    def upsert_instance(self, value: MirroredSopInstance) -> bool:
+        row = ReportedSopInstanceRow.from_domain(value)
+        table = cast(Table, ReportedSopInstanceRow.__table__)
+        statement = postgres_insert(table).values(
+            event_id=row.event_id,
+            host_id=row.host_id,
+            station_id=row.station_id,
+            instance_id=row.instance_id,
+            opened_at=row.opened_at,
+            closed_at=row.closed_at,
+            close_reason=row.close_reason,
+            received_at=row.received_at,
+            payload=row.payload,
+        )
+        result = self._session.execute(
+            statement.on_conflict_do_update(
+                index_elements=[table.c.event_id],
+                set_={
+                    "closed_at": statement.excluded.closed_at,
+                    "close_reason": statement.excluded.close_reason,
+                    "received_at": statement.excluded.received_at,
+                    "payload": statement.excluded.payload,
+                },
+                where=table.c.closed_at.is_(None) & statement.excluded.closed_at.is_not(None),
+            ).returning(table.c.event_id)
+        )
+        if result.scalar_one_or_none() is not None:
+            return True
+        existing = self._session.get(ReportedSopInstanceRow, row.event_id)
+        if existing is None:
+            raise RuntimeError("instance mirror upsert completed without a visible row")
+        if existing.closed_at is not None and row.closed_at is None:
+            return False
+        _ensure_same(existing.payload, row.payload, "instance", row.event_id)
+        return False
+
+    def recent_instances(self, *, limit: int) -> tuple[MirroredSopInstance, ...]:
+        rows = self._session.scalars(
+            select(ReportedSopInstanceRow)
+            .order_by(ReportedSopInstanceRow.received_at.desc())
+            .limit(limit)
+        ).all()
+        return tuple(row.to_domain() for row in rows)
 
     def recent_decisions(self, *, limit: int) -> tuple[MirroredDecision, ...]:
         rows = self._session.scalars(

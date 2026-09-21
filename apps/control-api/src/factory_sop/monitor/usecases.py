@@ -12,12 +12,13 @@ from uuid import UUID
 from factory_sop.auth.api import Caller, Permission, authorize
 from factory_sop.monitor.api import HistoricalAssignmentGateway, HostOwnershipGateway
 from factory_sop.monitor.errors import MonitorRefusedError
-from factory_sop.monitor.model import MirroredDecision, MirroredHealth
+from factory_sop.monitor.model import MirroredDecision, MirroredHealth, MirroredSopInstance
 from factory_sop.monitor.repository import MonitorRepository
 from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
     ReportedDecision,
     ReportedHealth,
+    ReportedSopInstance,
     reported_decision_to_wire,
     reported_health_to_wire,
 )
@@ -110,6 +111,44 @@ def mirror_health(
         if not host_gateway.owns_station(host_id=host_id, station_id=station_id):
             raise MonitorRefusedError("reported health is outside the authenticated host topology")
     return monitor.upsert_health(MirroredHealth(report=report, received_at=received_at))
+
+
+def mirror_instance(
+    report: ReportedSopInstance,
+    *,
+    received_at: datetime,
+    monitor: MonitorRepository,
+    assignment_gateway: HistoricalAssignmentGateway,
+) -> bool:
+    """按事件时配置验证并镜像 edge 实例，不在中心重建生命周期。"""
+    host_id = _uuid(report.host_id, "instance host_id")
+    station_id = _uuid(report.station_id, "instance station_id")
+    if not assignment_gateway.has_configuration_station(
+        host_id=host_id,
+        configuration_revision=report.configuration_revision,
+        configuration_sha256=report.configuration_sha256,
+        station_id=station_id,
+        template_version_id=report.template_version_id,
+        template_sha256=report.template_sha256,
+    ):
+        raise MonitorRefusedError(
+            "reported instance station is outside the historical host assignment"
+        )
+    for backend in report.backend_provenance:
+        if not assignment_gateway.has_configuration_assignment(
+            host_id=host_id,
+            configuration_revision=report.configuration_revision,
+            configuration_sha256=report.configuration_sha256,
+            station_id=station_id,
+            backend_id=_uuid(backend.backend_id, "instance backend provenance id"),
+            template_version_id=report.template_version_id,
+            template_sha256=report.template_sha256,
+            model_ids=backend.model_ids,
+        ):
+            raise MonitorRefusedError(
+                "reported instance backend provenance is outside the historical host assignment"
+            )
+    return monitor.upsert_instance(MirroredSopInstance(report=report, received_at=received_at))
 
 
 @dataclass(frozen=True, slots=True)

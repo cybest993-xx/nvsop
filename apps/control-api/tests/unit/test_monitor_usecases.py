@@ -12,7 +12,7 @@ from factory_sop.auth.model import User, UserStatus
 from factory_sop.auth.permissions import Permission
 from factory_sop.identifiers import new_id
 from factory_sop.monitor.errors import MonitorRefusedError
-from factory_sop.monitor.model import MirroredDecision, MirroredHealth
+from factory_sop.monitor.model import MirroredDecision, MirroredHealth, MirroredSopInstance
 from factory_sop.monitor.usecases import (
     mirror_decision,
     mirror_health,
@@ -42,6 +42,7 @@ class MemoryMonitor:
     def __init__(self) -> None:
         self.decisions: dict[str, MirroredDecision] = {}
         self.health: dict[str, MirroredHealth] = {}
+        self.instances: dict[str, MirroredSopInstance] = {}
         self._decision_sequence = 0
         self._health_sequence = 0
 
@@ -63,6 +64,15 @@ class MemoryMonitor:
 
     def recent_decisions(self, *, limit: int) -> tuple[MirroredDecision, ...]:
         return tuple(self.decisions.values())[:limit]
+
+    def upsert_instance(self, value: MirroredSopInstance) -> bool:
+        if value.report.event_id in self.instances:
+            return False
+        self.instances[value.report.event_id] = value
+        return True
+
+    def recent_instances(self, *, limit: int) -> tuple[MirroredSopInstance, ...]:
+        return tuple(self.instances.values())[:limit]
 
     def recent_health(self, *, limit: int) -> tuple[MirroredHealth, ...]:
         return tuple(self.health.values())[:limit]

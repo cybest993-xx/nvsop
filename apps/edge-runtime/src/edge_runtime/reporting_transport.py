@@ -17,9 +17,11 @@ from nvsop_contracts import (
     HostIdentityRequest,
     ReportedDecision,
     ReportedHealth,
+    ReportedSopInstance,
     configuration_to_wire,
     reported_decision_to_wire,
     reported_health_to_wire,
+    reported_sop_instance_to_wire,
     sign_host_identity_request,
 )
 
@@ -99,6 +101,11 @@ class HttpDecisionReportTransport(DecisionReportTransport):
         if report.host_id != self._host_id:
             raise ValueError("a health report cannot be sent by a different host")
         self._post("/api/v1/monitor/health", reported_health_to_wire(report))
+
+    def send_instance(self, report: ReportedSopInstance) -> None:
+        if report.host_id != self._host_id:
+            raise ValueError("an instance report cannot be sent by a different host")
+        self._post("/api/v1/monitor/instances", reported_sop_instance_to_wire(report))
 
     def _post(self, path: str, body: dict[str, object]) -> None:
         payload = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from factory_sop.monitor.model import MirroredDecision, MirroredHealth
+from factory_sop.monitor.model import MirroredDecision, MirroredHealth, MirroredSopInstance
 
 
 class MonitorRepository(Protocol):
@@ -15,6 +15,10 @@ class MonitorRepository(Protocol):
     def upsert_health(self, value: MirroredHealth) -> bool:
         """只插入一次；相同重试返回 False。"""
         ...
+
+    def upsert_instance(self, value: MirroredSopInstance) -> bool: ...
+
+    def recent_instances(self, *, limit: int) -> tuple[MirroredSopInstance, ...]: ...
 
     def recent_decisions(self, *, limit: int) -> tuple[MirroredDecision, ...]: ...
 

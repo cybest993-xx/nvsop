@@ -13,10 +13,48 @@ from nvsop_contracts import (
 from edge_runtime.judgment.model import Decision, EvidenceSpan, HostInstant, Lifecycle, Violation
 from edge_runtime.judgment.reasons import ReasonCode, Verdict
 from edge_runtime.local_state.queues import BackendReportContext, PendingReport
-from edge_runtime.reporting import ReportContext, reported_decision_from_pending
+from edge_runtime.reporting import (
+    ReportContext,
+    reported_decision_from_pending,
+    reported_instance_from_pending,
+)
 
 
 class ReportingTests(unittest.TestCase):
+    def test_closed_instance_reuses_frozen_event_time_provenance(self) -> None:
+        pending = PendingReport(
+            queue_id=7,
+            decision=Decision(
+                instance_id=4,
+                verdict=Verdict.PASS,
+                reasons=(),
+                violations=(),
+                lifecycle=Lifecycle.CLOSED_BY_COMPLETE_SET,
+                evidence=EvidenceSpan.at(HostInstant(9.0)),
+            ),
+            attempts=0,
+            last_error=None,
+            opened_at=1.0,
+            closed_at=9.0,
+            close_reason=Lifecycle.CLOSED_BY_COMPLETE_SET.value,
+            context=ReportContext(
+                host_id="host-a",
+                station_id="station-a",
+                backends=(BackendReportContext("backend-a", ("model-a",)),),
+                template_version_id="template-a",
+                template_sha256="a" * 64,
+                configuration_revision=3,
+                configuration_sha256="b" * 64,
+                configuration_json="{}",
+            ),
+        )
+        report = reported_instance_from_pending(pending, reported_at="now")
+        self.assertIsNotNone(report)
+        assert report is not None
+        self.assertEqual(report.event_id, "host-a:station-a:instance:4")
+        self.assertEqual(report.close_reason, "closed_by_complete_set")
+        self.assertEqual(report.backend_provenance[0].model_ids, ("model-a",))
+
     def test_event_and_trace_identity_are_stable_and_unknown_wire_data_is_preserved(self) -> None:
         decision = Decision(
             instance_id=9,

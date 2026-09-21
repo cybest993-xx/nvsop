@@ -600,6 +600,9 @@ class HistoricalReportContextTest(unittest.TestCase):
                 if configuration is None:
                     raise AssertionError("v2 report must carry the frozen configuration")
 
+            def send_instance(self, report: object) -> None:
+                del report
+
         transport = Transport()
         attempts = DecisionReporter(queues=station, transport=transport).flush(
             now=HostInstant(ANCHOR + 2.0),
@@ -636,6 +639,9 @@ class HistoricalReportContextTest(unittest.TestCase):
                 if configuration is None:
                     raise AssertionError("confirmed decision must carry its frozen configuration")
                 self.sent.append(report)
+
+            def send_instance(self, report: object) -> None:
+                del report
 
         transport = Transport()
         attempts = DecisionReporter(queues=station, transport=transport).flush(
@@ -693,6 +699,9 @@ class HistoricalReportContextTest(unittest.TestCase):
             ) -> None:
                 del configuration
                 self.sent.append(report)
+
+            def send_instance(self, report: object) -> None:
+                del report
 
         transport = Transport()
         attempts = DecisionReporter(queues=station, transport=transport).flush(
@@ -776,6 +785,9 @@ class HistoricalReportContextTest(unittest.TestCase):
                 if len(self.sent) == 1:
                     raise OSError("center committed but acknowledgement was lost")
 
+            def send_instance(self, report: object) -> None:
+                del report
+
         transport = LostAckTransport()
         first = DecisionReporter(queues=station, transport=transport).flush(
             now=HostInstant(ANCHOR + 2.0),
@@ -815,6 +827,9 @@ class HistoricalReportContextTest(unittest.TestCase):
                 configuration: ConfigurationBundle | None,
             ) -> None:
                 self.sent.append((report, configuration))
+
+            def send_instance(self, report: object) -> None:
+                del report
 
         transport = Transport()
         attempts = DecisionReporter(queues=station, transport=transport).flush(

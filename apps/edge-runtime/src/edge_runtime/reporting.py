@@ -12,6 +12,7 @@ from nvsop_contracts import (
     ConfigurationBundle,
     ReportBackendProvenance,
     ReportedDecision,
+    ReportedSopInstance,
     ReportEvidence,
     ReportViolation,
     configuration_from_wire,
@@ -28,6 +29,8 @@ class DecisionReportTransport(Protocol):
         *,
         configuration: ConfigurationBundle | None,
     ) -> None: ...
+
+    def send_instance(self, report: ReportedSopInstance) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +90,11 @@ class DecisionReporter:
                     report,
                     configuration=_configuration_from_context(pending.context),
                 )
+                instance_report = reported_instance_from_pending(
+                    pending, reported_at=stable_reported_at or reported_at
+                )
+                if instance_report is not None:
+                    self._transport.send_instance(instance_report)
             except Exception as error:
                 message = f"{type(error).__name__}: {error}"[:255]
                 self._queues.record_report_failure(pending.queue_id, at=now, error=message)
@@ -204,10 +212,41 @@ def _configuration_from_context(context: ReportContext | None) -> ConfigurationB
     return bundle
 
 
+def reported_instance_from_pending(
+    pending: PendingReport, *, reported_at: str
+) -> ReportedSopInstance | None:
+    context = pending.context
+    if context is None or context.configuration_revision is None or pending.closed_at is None:
+        return None
+    if pending.opened_at is None or context.configuration_sha256 is None:
+        raise ValueError("pending report has incomplete SOP instance provenance")
+    event_id = f"{context.host_id}:{context.station_id}:instance:{pending.decision.instance_id}"
+    return ReportedSopInstance(
+        event_id=event_id,
+        trace_id=event_id,
+        host_id=context.host_id,
+        station_id=context.station_id,
+        instance_id=pending.decision.instance_id,
+        opened_at=pending.opened_at,
+        closed_at=pending.closed_at,
+        close_reason=pending.close_reason,
+        template_version_id=context.template_version_id,
+        template_sha256=context.template_sha256,
+        backend_provenance=tuple(
+            ReportBackendProvenance(backend_id=item.backend_id, model_ids=item.model_ids)
+            for item in context.backends
+        ),
+        configuration_revision=context.configuration_revision,
+        configuration_sha256=context.configuration_sha256,
+        reported_at=reported_at,
+    )
+
+
 __all__ = [
     "DecisionReportTransport",
     "DecisionReporter",
     "ReportAttempt",
     "ReportContext",
     "reported_decision_from_pending",
+    "reported_instance_from_pending",
 ]

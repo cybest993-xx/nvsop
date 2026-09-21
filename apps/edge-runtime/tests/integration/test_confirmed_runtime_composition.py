@@ -167,9 +167,14 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
             try:
                 self.assertEqual((), runtime.stations)
                 self.assertEqual(1, len(runtime._reporters))
-                with patch(
-                    "edge_runtime.reporting_transport.HttpDecisionReportTransport.send_decision"
-                ) as send_decision:
+                with (
+                    patch(
+                        "edge_runtime.reporting_transport.HttpDecisionReportTransport.send_decision"
+                    ) as send_decision,
+                    patch(
+                        "edge_runtime.reporting_transport.HttpDecisionReportTransport.send_instance"
+                    ) as send_instance,
+                ):
                     attempts = runtime._reporters[0].flush(
                         now=HostInstant(4.0),
                         reported_at="2026-09-14T00:10:00Z",
@@ -177,6 +182,7 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
                 self.assertEqual(1, len(attempts))
                 self.assertTrue(attempts[0].sent)
                 send_decision.assert_called_once()
+                send_instance.assert_called_once()
 
                 inspection = open_local_state(str(state_path))
                 try:

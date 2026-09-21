@@ -17,7 +17,7 @@ from edge_runtime.judgment.model import (
 )
 from edge_runtime.judgment.reasons import ReasonCode, Verdict
 from edge_runtime.local_state import open_local_state
-from edge_runtime.local_state.queues import PendingEvidence, PendingReport
+from edge_runtime.local_state.queues import PendingEvidence
 from edge_runtime.supervisor.evidence import clips_for
 
 STEPS = tuple(f"({i}) step {i}" for i in range(1, 6))
@@ -70,7 +70,11 @@ class JudgmentEffectsPersistenceTest(unittest.TestCase):
             closed_instances=(instance,),
             report_provenance={},
         )
-        self.assertEqual(self.store.pending_reports(), (PendingReport(1, decision, 0, None),))
+        (pending_report,) = self.store.pending_reports()
+        self.assertEqual(pending_report.queue_id, 1)
+        self.assertEqual(pending_report.decision, decision)
+        self.assertEqual(pending_report.attempts, 0)
+        self.assertIsNone(pending_report.last_error)
         return self.store.pending_evidence()
 
     def assert_clips(

@@ -150,6 +150,9 @@ import type {
   ListInferenceHostsData,
   ListInferenceHostsErrors,
   ListInferenceHostsResponses,
+  ListMonitorSopInstancesData,
+  ListMonitorSopInstancesErrors,
+  ListMonitorSopInstancesResponses,
   ListPermissionsData,
   ListPermissionsErrors,
   ListPermissionsResponses,
@@ -276,6 +279,9 @@ import type {
   ReportMonitorHealthData,
   ReportMonitorHealthErrors,
   ReportMonitorHealthResponses,
+  ReportMonitorSopInstanceData,
+  ReportMonitorSopInstanceErrors,
+  ReportMonitorSopInstanceResponses,
   ReportTemplateConfigurationData,
   ReportTemplateConfigurationErrors,
   ReportTemplateConfigurationResponses,
@@ -1290,6 +1296,37 @@ export const reportMonitorHealth = <ThrowOnError extends boolean = false>(
     ThrowOnError
   >({
     url: '/api/v1/monitor/health',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * List Monitor Instances
+ */
+export const listMonitorSopInstances = <ThrowOnError extends boolean = false>(
+  options?: Options<ListMonitorSopInstancesData, ThrowOnError>,
+): RequestResult<ListMonitorSopInstancesResponses, ListMonitorSopInstancesErrors, ThrowOnError> =>
+  (options?.client ?? client).get<
+    ListMonitorSopInstancesResponses,
+    ListMonitorSopInstancesErrors,
+    ThrowOnError
+  >({ url: '/api/v1/monitor/instances', ...options })
+
+/**
+ * Report Monitor Instance
+ */
+export const reportMonitorSopInstance = <ThrowOnError extends boolean = false>(
+  options: Options<ReportMonitorSopInstanceData, ThrowOnError>,
+): RequestResult<ReportMonitorSopInstanceResponses, ReportMonitorSopInstanceErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    ReportMonitorSopInstanceResponses,
+    ReportMonitorSopInstanceErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/monitor/instances',
     ...options,
     headers: {
       'Content-Type': 'application/json',

@@ -101,6 +101,9 @@ class PendingReport:
     last_error: str | None
     reported_at: str | None = None
     context: ReportContext | None = None
+    opened_at: float | None = None
+    closed_at: float | None = None
+    close_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,9 +150,12 @@ class StationQueues:
                        q.report_configuration,
                        q.configuration_revision, q.configuration_sha256,
                        d.decision_id, d.instance_id, d.verdict, d.reasons, d.lifecycle,
-                       d.evidence_anchor, d.evidence_from, d.evidence_to
+                       d.evidence_anchor, d.evidence_from, d.evidence_to,
+                       i.opened_at, i.closed_at, i.lifecycle AS instance_lifecycle
                   FROM local_report_queue q
                   JOIN local_decision d ON d.decision_id = q.decision_id
+                  JOIN local_sop_instance i
+                    ON i.station_id = q.station_id AND i.instance_id = d.instance_id
                  WHERE q.station_id = ? AND q.sent_at IS NULL
                  ORDER BY q.queue_id
                  LIMIT ?
@@ -164,6 +170,11 @@ class StationQueues:
                     last_error=row["last_error"],
                     reported_at=row["report_reported_at"],
                     context=self._report_context_of(row),
+                    opened_at=row["opened_at"] if row["closed_at"] is not None else None,
+                    closed_at=row["closed_at"],
+                    close_reason=(
+                        row["instance_lifecycle"] if row["closed_at"] is not None else None
+                    ),
                 )
                 for row in rows
             )

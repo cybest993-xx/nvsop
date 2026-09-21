@@ -53,6 +53,7 @@ from nvsop_contracts import (
     ReportBackendProvenance,
     ReportedDecision,
     ReportedHealth,
+    ReportedSopInstance,
     ReportEvidence,
     Unverified,
     configuration_from_wire,
@@ -60,6 +61,7 @@ from nvsop_contracts import (
     generate_host_identity_key_pair,
     reported_decision_to_wire,
     reported_health_to_wire,
+    reported_sop_instance_to_wire,
     sign_host_identity_request,
 )
 
@@ -215,6 +217,10 @@ def runtime_topology(engine: Engine) -> Iterator[RuntimeTopology]:
             )
             connection.execute(
                 text("DELETE FROM monitor_reported_health WHERE host_id = :host_id"),
+                {"host_id": str(host.id)},
+            )
+            connection.execute(
+                text("DELETE FROM monitor_sop_instance WHERE host_id = :host_id"),
                 {"host_id": str(host.id)},
             )
             connection.execute(
@@ -853,6 +859,12 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
     body = reported_decision_to_wire(report)
     path = f"{API_PREFIX}/monitor/reported-decisions"
     with client_for(engine, settings, permissions=permissions) as client:
+        config_path = f"{API_PREFIX}/inference-hosts/{runtime_topology.host.id}/configuration"
+        config = client.get(
+            config_path, headers=_host_headers(runtime_topology, method="GET", path=config_path)
+        )
+        assert config.status_code == 200
+        bundle = configuration_from_wire(config.json())
         first = client.post(
             path,
             json=body,
@@ -885,6 +897,43 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
                 body=health_body,
             ),
         )
+        station = bundle.stations[0]
+        assert station.template is not None
+        instance = ReportedSopInstance(
+            event_id=f"{runtime_topology.host.id}:{runtime_topology.station.id}:instance:7",
+            trace_id="trace-instance-integration-7",
+            host_id=str(runtime_topology.host.id),
+            station_id=str(runtime_topology.station.id),
+            instance_id=7,
+            opened_at=1.0,
+            closed_at=8.0,
+            close_reason="closed_by_complete_set",
+            template_version_id=station.template.version_id,
+            template_sha256=station.template.version_sha256,
+            backend_provenance=(
+                ReportBackendProvenance(str(runtime_topology.backend.id), station.model_ids),
+            ),
+            configuration_revision=bundle.config_revision,
+            configuration_sha256=bundle.effective_sha256,
+            reported_at="2026-09-14T01:00:00Z",
+        )
+        instance_body = reported_sop_instance_to_wire(instance)
+        instance_path = f"{API_PREFIX}/monitor/instances"
+        instance_first = client.post(
+            instance_path,
+            json=instance_body,
+            headers=_host_headers(
+                runtime_topology, method="POST", path=instance_path, body=instance_body
+            ),
+        )
+        instance_duplicate = client.post(
+            instance_path,
+            json=instance_body,
+            headers=_host_headers(
+                runtime_topology, method="POST", path=instance_path, body=instance_body
+            ),
+        )
+        instance_list = client.get(instance_path)
         stream = client.get(
             f"{API_PREFIX}/monitor/stream",
             params={"once": "true"},
@@ -900,6 +949,12 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
         "duplicate": False,
         "event_id": health.event_id,
     }
+    assert instance_first.status_code == 200
+    assert instance_first.json()["duplicate"] is False
+    assert instance_duplicate.status_code == 200
+    assert instance_duplicate.json()["duplicate"] is True
+    assert instance_list.status_code == 200
+    assert instance_list.json()["items"][0] == instance_body
     assert stream.status_code == 200
     assert "event: decision" in stream.text
     assert f"id: {report.event_id}" in stream.text

@@ -25,7 +25,7 @@ class StationGrantRow(Table):
     )
 
     station_id: Mapped[UUID] = mapped_column(
-        Uuid(), ForeignKey("device_station.id"), primary_key=True
+        Uuid(), ForeignKey("device_station.id", ondelete="CASCADE"), primary_key=True
     )
     grant_id: Mapped[UUID] = mapped_column(Uuid(), nullable=False)
     holder_host_id: Mapped[UUID] = mapped_column(

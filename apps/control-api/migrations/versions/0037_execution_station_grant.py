@@ -26,6 +26,7 @@ def upgrade() -> None:
             ["station_id"],
             ["device_station.id"],
             name=op.f("fk_execution_station_grant_station_id_device_station"),
+            ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(
             ["holder_host_id"],

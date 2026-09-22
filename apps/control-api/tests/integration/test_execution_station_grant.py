@@ -229,6 +229,45 @@ def test_expired_acquire_wins_concurrent_stale_renewal_without_overlap(engine: E
         _cleanup_targets(engine, station, host_a, host_b)
 
 
+def test_station_deletion_removes_its_owned_current_grant(engine: Engine) -> None:
+    station, host_a, host_b = _arrange_targets(engine)
+    try:
+        grant_session = DatabaseSession(engine)
+        try:
+            lease_gateway(grant_session).acquire(
+                station_id=station.id,
+                holder_host_id=host_a.id,
+                request_id=new_id(),
+                now=NOW,
+            )
+            grant_session.commit()
+        finally:
+            grant_session.close()
+
+        delete_session = DatabaseSession(engine)
+        try:
+            assert PostgresStationRepository(delete_session).remove(
+                station.id, expected_revision=station.revision
+            )
+            delete_session.commit()
+        finally:
+            delete_session.close()
+
+        with engine.connect() as connection:
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT grant_id FROM execution_station_grant "
+                        "WHERE station_id = :station_id"
+                    ),
+                    {"station_id": station.id},
+                ).one_or_none()
+                is None
+            )
+    finally:
+        _cleanup_targets(engine, station, host_a, host_b)
+
+
 def test_renewal_keeps_grant_identity_and_resets_exact_seven_day_expiry(engine: Engine) -> None:
     station, host_a, host_b = _arrange_targets(engine)
     try:

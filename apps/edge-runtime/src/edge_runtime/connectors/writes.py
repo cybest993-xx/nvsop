@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -29,6 +30,8 @@ from edge_runtime.judgment.model import HostInstant
 UNVERIFIED_DETAIL = "连接器能力声明未验证。不驱动物理执行器"
 TOO_SLOW_DETAIL = "连接器最大投递延迟超出安全输出预算。不驱动物理执行器"
 PERSISTENT_UNKNOWN_DETAIL = "持久化处置结果未知。不会自动重复驱动物理执行器"
+
+_logger = logging.getLogger("edge_runtime")
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +181,14 @@ class OutputDispatcher:
             # claim 已代表物理请求可能离开进程; 普通异常不能证明设备未执行。
             outcome = Failed(detail=PERSISTENT_UNKNOWN_DETAIL)
             self._ledger.record(request.key, outcome)
+            _logger.exception(
+                "connector write adapter raised key=%s actor=%s connector=%s point=%s state=%s",
+                request.key,
+                request.actor,
+                request.connector_id,
+                request.point.label,
+                request.state.value,
+            )
             return self._note(request, outcome, replayed=False)
         self._ledger.record(request.key, outcome)
         return self._note(request, outcome, replayed=False)

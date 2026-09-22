@@ -17,7 +17,7 @@ class NvidiaVlmReader:
     """调用 NVIDIA `CosmosSFTDataset` 消费冻结候选记录。"""
 
     def __init__(self, reader_path: Path | None = None) -> None:
-        self._reader_path = reader_path or _find_base_reader()
+        self._reader_path = reader_path
         self._module: ModuleType | None = None
 
     def available(self) -> bool:
@@ -62,7 +62,8 @@ class NvidiaVlmReader:
     def _load_module(self) -> ModuleType:
         if self._module is not None:
             return self._module
-        spec = importlib.util.spec_from_file_location("nvsop_nvidia_vlm_reader", self._reader_path)
+        reader_path = self._reader_path or _find_base_reader()
+        spec = importlib.util.spec_from_file_location("nvsop_nvidia_vlm_reader", reader_path)
         if spec is None or spec.loader is None:
             raise VlmReaderUnavailableError
         module = importlib.util.module_from_spec(spec)

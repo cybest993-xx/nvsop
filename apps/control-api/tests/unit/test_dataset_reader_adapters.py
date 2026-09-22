@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+import factory_sop.dataset.adapters.ddm as ddm_adapter
+import factory_sop.dataset.adapters.vlm as vlm_adapter
 from factory_sop.dataset.adapters.ddm import NvidiaDdmReader
 from factory_sop.dataset.adapters.vlm import NvidiaVlmReader
 from factory_sop.dataset.usage import (
@@ -75,6 +77,36 @@ def test_vlm_reader_preserves_failure_classification(
             workspace=workspace,
             annotation_filename="annotation.json",
         )
+
+
+def test_ddm_default_reader_missing_vendor_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def missing_reader() -> Path:
+        raise FileNotFoundError("reader missing")
+
+    monkeypatch.setattr(ddm_adapter, "_find_base_reader", missing_reader)
+    reader = NvidiaDdmReader()
+
+    with pytest.raises(DdmReaderUnavailableError):
+        reader.sample_counts(
+            workspace=tmp_path,
+            annotation_filename="annotation.json",
+            parameters=dict(DDM_CONSUMER_PARAMETERS),
+        )
+
+
+def test_vlm_default_reader_missing_vendor_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def missing_reader() -> Path:
+        raise FileNotFoundError("reader missing")
+
+    monkeypatch.setattr(vlm_adapter, "_find_base_reader", missing_reader)
+    reader = NvidiaVlmReader()
+
+    with pytest.raises(VlmReaderUnavailableError):
+        reader.validate(workspace=tmp_path, annotation_filename="annotation.json")
 
 
 def test_ddm_module_initialization_runtime_error_propagates(tmp_path: Path) -> None:

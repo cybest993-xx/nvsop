@@ -208,7 +208,13 @@ class EveryInputReachesTheCoreAndCommitsDecisionsTest(unittest.TestCase):
 
 class MultipleBackendSourcesStayIsolatedTest(unittest.TestCase):
     def test_one_backend_recovery_does_not_clear_another_backend_failure(self) -> None:
-        supervisor, _ = station(Ordering.ORDERED)
+        store = MemoryReactionStore()
+        supervisor = StationSupervisor(
+            state=opening_state(Ordering.ORDERED),
+            store=store,
+            margins=MARGINS,
+            clock=FakeClock(),
+        )
         failed = backend("a")
         healthy = backend("b")
         supervisor.receive(
@@ -244,6 +250,7 @@ class MultipleBackendSourcesStayIsolatedTest(unittest.TestCase):
         self.assertEqual(1, len(reaction.decisions))
         self.assertIs(Verdict.INDETERMINATE, reaction.decisions[0].verdict)
         self.assertEqual((ReasonCode.STREAM_LOST,), reaction.decisions[0].reasons)
+        self.assertEqual({1: (failed, healthy)}, store.report_provenance[-1])
 
     def test_source_anchors_are_compared_only_within_the_same_backend(self) -> None:
         supervisor, _ = station()

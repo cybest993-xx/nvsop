@@ -113,6 +113,7 @@ class StationSupervisor:
         self._deadline: HostInstant | None = None
         self._report_provenance: dict[int, dict[str, BackendReportContext] | None] = {}
         self._active_impaired_backend_provenance: dict[str, BackendReportContext] = {}
+        self._active_impaired_stream_provenance: dict[str, BackendReportContext] = {}
         if state.instance is not None:
             self._report_provenance[state.instance.instance_id] = (
                 None
@@ -151,6 +152,7 @@ class StationSupervisor:
         source_key = None if report_provenance is None else report_provenance.backend_id
         normalizer = normalizers.setdefault(source_key, Normalizer())
         active_impaired_backend_provenance = dict(self._active_impaired_backend_provenance)
+        active_impaired_stream_provenance = dict(self._active_impaired_stream_provenance)
         aggregate_transition = True
         if (
             isinstance(arriving, ValidityChanged)
@@ -172,9 +174,17 @@ class StationSupervisor:
                 *(ValidityRestored(reason=reason) for reason in before - after),
                 *(ValidityImpaired(reason=reason) for reason in after - before),
             )
+            if report_provenance is not None:
+                if normalizer.stream_impairment is None:
+                    active_impaired_stream_provenance.pop(report_provenance.backend_id, None)
+                else:
+                    active_impaired_stream_provenance[report_provenance.backend_id] = (
+                        report_provenance
+                    )
         reaction = self._advance(events, report_provenance=report_provenance)
         self._normalizers = normalizers
         self._active_impaired_backend_provenance = active_impaired_backend_provenance
+        self._active_impaired_stream_provenance = active_impaired_stream_provenance
         return reaction
 
     def wake(self, *, host: HostLiveness) -> Reaction:
@@ -252,6 +262,8 @@ class StationSupervisor:
                 existing[report_provenance.backend_id] = report_provenance
             if existing is not None and instance_id in opened_ids:
                 for provenance in self._active_impaired_backend_provenance.values():
+                    existing[provenance.backend_id] = provenance
+                for provenance in self._active_impaired_stream_provenance.values():
                     existing[provenance.backend_id] = provenance
         committed_provenance: dict[int, tuple[BackendReportContext, ...] | None] = {}
         for instance_id in touched_ids:

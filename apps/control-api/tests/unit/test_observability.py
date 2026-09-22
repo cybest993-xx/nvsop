@@ -87,5 +87,20 @@ def test_the_scope_is_restored_when_it_ends() -> None:
     assert json.loads(stream.getvalue())["correlation_id"] == NO_CORRELATION_ID
 
 
+def test_exception_logs_render_the_exception_and_traceback() -> None:
+    stream = io.StringIO()
+    configure_logging(log_level="info", stream=stream)
+    logger = get_logger("job")
+
+    try:
+        raise RuntimeError("reader internal failure")
+    except RuntimeError:
+        logger.exception("job.dataset_usage_check.unexpected_failure")
+
+    line = json.loads(stream.getvalue())
+    assert "RuntimeError: reader internal failure" in line["exception"]
+    assert "Traceback (most recent call last)" in line["exception"]
+
+
 def test_each_generated_correlation_id_is_distinct() -> None:
     assert new_correlation_id() != new_correlation_id()

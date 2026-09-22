@@ -137,7 +137,9 @@ type = "layers"
 # module's use cases call its `authorize` (§5.15), and `auth` calls no module back. `device`
 # sits above `auth` for the same reason today: its routes resolve the caller through `auth`'s
 # adapter dependency, and its use cases will call `auth.api` when #23 wires permissions. The
-# modules that will call `device`'s topology (`template`, `monitor`) will land above it.
+# modules that call `device` topology land above it. `execution` owns the cross-host physical
+# grant and may consume device identity only through its public seam; configuration remains
+# above it because host-scoped bundles later project execution facts.
 layers = [
     "factory_sop.entrypoint",
     "factory_sop.app",
@@ -146,6 +148,7 @@ layers = [
     "factory_sop.configuration",
     "factory_sop.monitor",
     "factory_sop.template",
+    "factory_sop.execution",
     "factory_sop.device",
     "factory_sop.auth",
     "factory_sop.persistence",
@@ -246,6 +249,24 @@ ignore_imports = [
     "factory_sop.auth.api -> factory_sop.auth.adapters.dependencies",
     "factory_sop.auth.api -> factory_sop.auth.authorization",
     "factory_sop.auth.api -> factory_sop.auth.permissions",
+]
+
+[[tool.importlinter.contracts]]
+name = "execution behavior does not depend on storage or transport adapters"
+type = "forbidden"
+source_modules = [
+    "factory_sop.execution.api",
+    "factory_sop.execution.model",
+    "factory_sop.execution.errors",
+    "factory_sop.execution.repository",
+    "factory_sop.execution.usecases",
+]
+forbidden_modules = [
+    "factory_sop.execution.adapters",
+    "factory_sop.device.adapters",
+    "factory_sop.auth.adapters",
+    "fastapi",
+    "sqlalchemy",
 ]
 
 [[tool.importlinter.contracts]]

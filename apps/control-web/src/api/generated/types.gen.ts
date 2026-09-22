@@ -421,6 +421,7 @@ export type ApiErrorCode =
   | 'INFERENCE_HOST_AUTHENTICATION_FAILED'
   | 'INFERENCE_HOST_CREDENTIALS_REMOVED'
   | 'INFERENCE_HOST_HAS_BACKENDS'
+  | 'INFERENCE_HOST_HAS_ACTIVE_EXECUTION_GRANT'
   | 'INFERENCE_HOST_HAS_PENDING_COMMANDS'
   | 'INFERENCE_HOST_NAME_TAKEN'
   | 'INFERENCE_HOST_NOT_FOUND'
@@ -450,6 +451,7 @@ export type ApiErrorCode =
   | 'STATION_HAS_TEMPLATES'
   | 'STATION_HAS_TEMPLATE_BINDING'
   | 'STATION_HAS_CONFIGURATION_REPORT'
+  | 'STATION_HAS_ACTIVE_EXECUTION_GRANT'
   | 'INTERNAL_ERROR'
   | 'PERMISSION_DENIED'
   | 'REQUEST_INVALID'
@@ -6437,7 +6439,7 @@ export type DeleteInferenceHostErrors = {
    */
   404: ProblemDocument
   /**
-   * Revision moved (STALE_REVISION), or the host still carries backends, connectors, pending commands, or template history
+   * Revision moved (STALE_REVISION), or the host still carries backends, connectors, pending commands, template history, or an active execution grant
    */
   409: ProblemDocument
   /**

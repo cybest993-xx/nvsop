@@ -46,6 +46,7 @@ def configure_logging(*, log_level: LogLevel, stream: TextIO) -> None:
             _add_correlation_id,
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso", utc=True, key="ts"),
+            structlog.processors.format_exc_info,
             structlog.processors.JSONRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(_LEVEL_NUMBER[log_level]),

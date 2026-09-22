@@ -29,7 +29,7 @@ class NvidiaDdmReader:
     """调用 NVIDIA DDM 训练读取器验证真实样本消费。"""
 
     def __init__(self, reader_path: Path | None = None) -> None:
-        self._reader_path = reader_path or _find_base_reader()
+        self._reader_path = reader_path
         self._module: ModuleType | None = None
 
     def available(self) -> bool:
@@ -57,7 +57,7 @@ class NvidiaDdmReader:
         """构造原读取器并实际读取边界与非边界样本。"""
         try:
             module = self._load_module()
-        except (FileNotFoundError, ImportError, OSError, RuntimeError) as error:
+        except (FileNotFoundError, ImportError, OSError) as error:
             raise DdmReaderUnavailableError from error
         reader = getattr(module, "DDMDataset", None)
         if not callable(reader):
@@ -113,21 +113,23 @@ class NvidiaDdmReader:
             raise DdmSampleClassEmptyError from error
         except (
             AssertionError,
+            FileNotFoundError,
             IndexError,
             KeyError,
             TypeError,
             ValueError,
         ) as error:
             raise DdmReaderInputError from error
-        except Exception as error:
+        except ImportError as error:
             raise DdmReaderUnavailableError from error
 
     def _load_module(self) -> ModuleType:
         if self._module is not None:
             return self._module
-        spec = importlib.util.spec_from_file_location("nvsop_nvidia_ddm_reader", self._reader_path)
+        reader_path = self._reader_path or _find_base_reader()
+        spec = importlib.util.spec_from_file_location("nvsop_nvidia_ddm_reader", reader_path)
         if spec is None or spec.loader is None:
-            raise RuntimeError(f"无法加载 NVIDIA DDM 读取器：{self._reader_path}")
+            raise DdmReaderUnavailableError
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         self._module = module

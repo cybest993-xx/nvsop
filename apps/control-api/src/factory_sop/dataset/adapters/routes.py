@@ -527,7 +527,11 @@ def _usage_check_view(
                 retryable=item.get("retryable") is True,
                 recovery_action=(
                     item.get("recovery_action")
-                    if isinstance(item.get("recovery_action"), str)
+                    if "recovery_action" in item
+                    and (
+                        item.get("recovery_action") is None
+                        or isinstance(item.get("recovery_action"), str)
+                    )
                     else ("retry_usage_check" if item.get("retryable") is True else "fix_input")
                 ),
             )

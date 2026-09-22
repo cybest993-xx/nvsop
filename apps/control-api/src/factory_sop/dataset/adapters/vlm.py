@@ -17,7 +17,7 @@ class NvidiaVlmReader:
     """调用 NVIDIA `CosmosSFTDataset` 消费冻结候选记录。"""
 
     def __init__(self, reader_path: Path | None = None) -> None:
-        self._reader_path = reader_path or _find_base_reader()
+        self._reader_path = reader_path
         self._module: ModuleType | None = None
 
     def available(self) -> bool:
@@ -31,7 +31,7 @@ class NvidiaVlmReader:
         """构造原读取器并读取全部候选记录。"""
         try:
             module = self._load_module()
-        except (FileNotFoundError, ImportError, OSError, RuntimeError) as error:
+        except (FileNotFoundError, ImportError, OSError) as error:
             raise VlmReaderUnavailableError from error
         reader = getattr(module, "CosmosSFTDataset", None)
         if not callable(reader):
@@ -56,15 +56,16 @@ class NvidiaVlmReader:
                 dataset[index]
         except (AssertionError, IndexError, KeyError, TypeError, ValueError) as error:
             raise VlmReaderInputError from error
-        except Exception as error:
+        except ImportError as error:
             raise VlmReaderUnavailableError from error
 
     def _load_module(self) -> ModuleType:
         if self._module is not None:
             return self._module
-        spec = importlib.util.spec_from_file_location("nvsop_nvidia_vlm_reader", self._reader_path)
+        reader_path = self._reader_path or _find_base_reader()
+        spec = importlib.util.spec_from_file_location("nvsop_nvidia_vlm_reader", reader_path)
         if spec is None or spec.loader is None:
-            raise RuntimeError(f"无法加载 NVIDIA VLM 读取器：{self._reader_path}")
+            raise VlmReaderUnavailableError
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         self._module = module

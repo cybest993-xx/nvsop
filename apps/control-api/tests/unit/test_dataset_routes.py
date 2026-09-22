@@ -44,7 +44,11 @@ from factory_sop.dataset.model import (
 )
 from factory_sop.dataset.repository import UsageDatasetRepository
 from factory_sop.dataset.usage import UsageValidationResult
-from factory_sop.dataset.usecases.usage import begin_usage_check, complete_usage_check
+from factory_sop.dataset.usecases.usage import (
+    begin_usage_check,
+    complete_usage_check,
+    fail_usage_check,
+)
 from factory_sop.job.adapters import dependencies as job_dependencies
 from factory_sop.job.adapters.routes import JobView as GenericJobView
 from factory_sop.settings import Settings
@@ -434,6 +438,41 @@ def test_usage_checks_and_artifacts_use_the_published_http_contract(
     assert generic_job_body == GenericJobView.model_validate(generic_job_body).model_dump(
         mode="json"
     )
+
+
+def test_usage_check_api_preserves_no_recovery_hint_for_execution_failure(
+    editor_backend: Backend,
+) -> None:
+    seed_registered_annotation(editor_backend)
+    requested = editor_backend.client.post(
+        f"{API_PREFIX}/training-datasets/{DATASET_ID}/usage-checks",
+        json={"kind": "ddm"},
+    )
+    assert requested.status_code == 202
+    requested_body = requested.json()
+    job = editor_backend.jobs.jobs[UUID(requested_body["job"]["id"])]
+    target = begin_usage_check(
+        job=job,
+        datasets=cast(UsageDatasetRepository, editor_backend.datasets),
+        now=NOW,
+    )
+    assert target is not None
+    fail_usage_check(
+        target=target,
+        code="USAGE_CHECK_EXECUTION_FAILED",
+        detail="用途检查执行失败",
+        now=NOW,
+        datasets=cast(UsageDatasetRepository, editor_backend.datasets),
+    )
+
+    response = editor_backend.client.get(
+        f"{API_PREFIX}/training-datasets/{DATASET_ID}/usage-checks/{target.check.id}"
+    )
+
+    assert response.status_code == 200
+    issue = response.json()["issues"][0]
+    assert issue["retryable"] is False
+    assert issue["recovery_action"] is None
 
 
 def test_import_only_caller_cannot_read_a_usage_job(editor_backend: Backend) -> None:

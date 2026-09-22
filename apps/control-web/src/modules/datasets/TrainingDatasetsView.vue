@@ -389,6 +389,11 @@ function usageRecoveryLabel(action: string | null): string {
   }
 }
 
+function usageIssueStateLabel(retryable: boolean, recoveryAction: string | null): string {
+  if (retryable) return '可重试'
+  return recoveryAction === 'fix_input' ? '需修正输入' : '需维护处理'
+}
+
 function artifactRecoveryLabel(code: string | null, action: string | null): string {
   switch (action) {
     case 'retry_artifact_cleanup':
@@ -1576,7 +1581,7 @@ onUnmounted(clearPolling)
                 >
                   {{ issue.code }}：{{ issue.detail }}（{{ issue.location }}）
                   <small>
-                    {{ issue.retryable ? '可重试' : '需修正输入' }}；
+                    {{ usageIssueStateLabel(issue.retryable, issue.recovery_action) }}；
                     {{ usageRecoveryLabel(issue.recovery_action) }}
                   </small>
                 </li>

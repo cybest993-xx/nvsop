@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from threading import Barrier, Thread
 
+import pytest
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session as DatabaseSession
 
@@ -264,5 +265,65 @@ def test_renewal_keeps_grant_identity_and_resets_exact_seven_day_expiry(engine: 
         assert renewed.request_id == renewal_request
         assert renewed.renewed_at == renewed_at
         assert renewed.lease_expires_at == renewed_at + SEVEN_DAYS
+    finally:
+        _cleanup_targets(engine, station, host_a, host_b)
+
+
+def test_stale_earlier_renewal_cannot_overwrite_newer_lease(engine: Engine) -> None:
+    station, host_a, host_b = _arrange_targets(engine)
+    try:
+        first_session = DatabaseSession(engine)
+        try:
+            first = lease_gateway(first_session).acquire(
+                station_id=station.id,
+                holder_host_id=host_a.id,
+                request_id=new_id(),
+                now=NOW,
+            )
+            first_session.commit()
+        finally:
+            first_session.close()
+
+        later_at = NOW + timedelta(days=2)
+        later_request = new_id()
+        later_session = DatabaseSession(engine)
+        try:
+            later = lease_gateway(later_session).renew(
+                station_id=station.id,
+                grant_id=first.grant_id,
+                holder_host_id=host_a.id,
+                request_id=later_request,
+                now=later_at,
+            )
+            later_session.commit()
+        finally:
+            later_session.close()
+
+        stale_session = DatabaseSession(engine)
+        try:
+            with pytest.raises(ExecutionRefusedError) as refused:
+                lease_gateway(stale_session).renew(
+                    station_id=station.id,
+                    grant_id=first.grant_id,
+                    holder_host_id=host_a.id,
+                    request_id=new_id(),
+                    now=NOW + timedelta(days=1),
+                )
+            assert refused.value.code is ExecutionRefusalCode.GRANT_NOT_RENEWABLE
+            stale_session.rollback()
+        finally:
+            stale_session.close()
+
+        with engine.connect() as connection:
+            stored = connection.execute(
+                text(
+                    "SELECT lease_expires_at, renewed_at, request_id "
+                    "FROM execution_station_grant WHERE station_id = :station_id"
+                ),
+                {"station_id": station.id},
+            ).one()
+        assert stored.renewed_at == later.renewed_at
+        assert stored.lease_expires_at == later.lease_expires_at
+        assert stored.request_id == later_request
     finally:
         _cleanup_targets(engine, station, host_a, host_b)

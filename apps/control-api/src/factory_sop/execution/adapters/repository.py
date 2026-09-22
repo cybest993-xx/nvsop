@@ -54,6 +54,7 @@ class PostgresExecutionGrantRepository(ExecutionGrantRepository):
                     table.c.grant_id == value.grant_id,
                     table.c.holder_host_id == value.holder_host_id,
                     table.c.lease_expires_at > value.renewed_at,
+                    table.c.renewed_at < value.renewed_at,
                 )
                 .values(
                     lease_expires_at=value.lease_expires_at,

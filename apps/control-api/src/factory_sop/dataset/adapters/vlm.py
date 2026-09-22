@@ -56,7 +56,7 @@ class NvidiaVlmReader:
                 dataset[index]
         except (AssertionError, IndexError, KeyError, TypeError, ValueError) as error:
             raise VlmReaderInputError from error
-        except Exception as error:
+        except ImportError as error:
             raise VlmReaderUnavailableError from error
 
     def _load_module(self) -> ModuleType:

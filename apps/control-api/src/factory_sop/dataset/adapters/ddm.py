@@ -119,7 +119,7 @@ class NvidiaDdmReader:
             ValueError,
         ) as error:
             raise DdmReaderInputError from error
-        except Exception as error:
+        except ImportError as error:
             raise DdmReaderUnavailableError from error
 
     def _load_module(self) -> ModuleType:

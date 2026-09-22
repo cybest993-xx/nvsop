@@ -42,18 +42,25 @@ from factory_sop.dataset.model import (
 )
 from factory_sop.dataset.repository import UsageDatasetRepository
 from factory_sop.dataset.storage import ObjectStorage
-from factory_sop.dataset.usage import UsageIssue, UsageValidationResult
+from factory_sop.dataset.usage import (
+    DdmReaderInputError,
+    DdmReaderUnavailableError,
+    UsageIssue,
+    UsageValidationResult,
+)
 from factory_sop.dataset.usecases.usage import (
     BASE_COMMIT,
     DDM_CONSUMER_PARAMETERS,
     DDM_CONTRACT_VERSION,
     VLM_CONTRACT_VERSION,
+    UsageCheckTarget,
     apply_usage_check_currentness,
     begin_artifact_generation,
     begin_usage_check,
     complete_artifact,
     complete_usage_check,
     fail_artifact,
+    fail_usage_check,
     register_vlm_candidate,
     render_ddm_artifact_with_base,
     request_artifact,
@@ -484,6 +491,44 @@ class RecordingDdmReader:
         return {"boundary_sample_count": 1, "non_boundary_sample_count": 1}
 
 
+class FailingDdmReader:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def sample_counts(
+        self,
+        *,
+        workspace: Path,
+        annotation_filename: str,
+        parameters: Mapping[str, object],
+    ) -> Mapping[str, int]:
+        del workspace, annotation_filename, parameters
+        raise self.error
+
+
+def _running_ddm_usage_target() -> tuple[FakeUsageDatasets, UsageCheckTarget]:
+    datasets = FakeUsageDatasets()
+    source_sha256 = hashlib.sha256(b"a" * 100).hexdigest()
+    datasets.member = replace(datasets.member, actual_sha256=source_sha256)
+    datasets.submission = replace(datasets.submission, source_sha256=source_sha256)
+    requested = request_usage_check(
+        dataset_id=DATASET_ID,
+        kind=UsageKind.DDM,
+        candidate_id=None,
+        caller=caller(Permission.DATASET_EDIT),
+        now=NOW,
+        datasets=cast(UsageDatasetRepository, datasets),
+        jobs=cast(UsageJobQueue, FakeUsageJobs()),
+    )
+    target = begin_usage_check(
+        job=requested.job,
+        datasets=cast(UsageDatasetRepository, datasets),
+        now=NOW + timedelta(seconds=1),
+    )
+    assert target is not None
+    return datasets, target
+
+
 class RecordingVlmReader:
     def __init__(self) -> None:
         self.calls: list[tuple[Path, str]] = []
@@ -593,6 +638,68 @@ def test_usage_check_reads_media_before_final_database_currentness_query() -> No
     assert datasets.events
     assert datasets.events[0] == "media"
     assert datasets.events[-1] == "database"
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_code", "expected_retryable"),
+    [
+        (DdmReaderInputError(), "DDM_READER_INPUT_INVALID", False),
+        (DdmReaderUnavailableError(), "DDM_READER_UNAVAILABLE", True),
+    ],
+)
+def test_ddm_reader_known_failures_keep_distinct_usage_semantics(
+    error: Exception, expected_code: str, expected_retryable: bool
+) -> None:
+    _, target = _running_ddm_usage_target()
+
+    result = run_usage_check(
+        target=target,
+        storage=cast(ObjectStorage, FakeStorage()),
+        media_probe=FakeMediaProbe(),
+        annotation_volume=FakeAnnotationVolume(),
+        ddm_reader=FailingDdmReader(error),
+    )
+
+    issue = next(item for item in result.issues if item.location == "reader")
+    assert (issue.code, issue.retryable) == (expected_code, expected_retryable)
+
+
+def test_ddm_reader_unknown_failure_propagates_from_usage_check() -> None:
+    _, target = _running_ddm_usage_target()
+
+    with pytest.raises(RuntimeError, match="reader internal failure"):
+        run_usage_check(
+            target=target,
+            storage=cast(ObjectStorage, FakeStorage()),
+            media_probe=FakeMediaProbe(),
+            annotation_volume=FakeAnnotationVolume(),
+            ddm_reader=FailingDdmReader(RuntimeError("reader internal failure")),
+        )
+
+
+def test_unknown_usage_execution_failure_is_persisted_without_retry_hint() -> None:
+    datasets, target = _running_ddm_usage_target()
+
+    failed = fail_usage_check(
+        target=target,
+        code="USAGE_CHECK_EXECUTION_FAILED",
+        detail="用途检查执行失败",
+        now=NOW + timedelta(seconds=2),
+        datasets=cast(UsageDatasetRepository, datasets),
+    )
+
+    persisted = datasets.usage_check_by_id(failed.id)
+    assert persisted is not None
+    assert persisted.status is UsageCheckStatus.FAILED
+    assert persisted.issues == (
+        {
+            "code": "USAGE_CHECK_EXECUTION_FAILED",
+            "detail": "用途检查执行失败",
+            "location": "worker",
+            "retryable": False,
+            "recovery_action": None,
+        },
+    )
 
 
 def test_ddm_currentness_includes_derived_annotation_facts() -> None:

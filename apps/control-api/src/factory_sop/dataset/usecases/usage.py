@@ -847,12 +847,18 @@ def fail_usage_check(
 ) -> UsageCheck:
     """把基础设施失败与输入不通过分开记录。"""
     retryable = code in {
-        "USAGE_CHECK_EXECUTION_FAILED",
         "USAGE_CHECK_DATABASE_FAILURE",
         "USAGE_STORAGE_UNAVAILABLE",
         "USAGE_ANNOTATION_VOLUME_UNAVAILABLE",
         "USAGE_MEDIA_PROBE_UNAVAILABLE",
     }
+    recovery_action = (
+        "retry_usage_check"
+        if retryable
+        else None
+        if code == "USAGE_CHECK_EXECUTION_FAILED"
+        else "fix_input"
+    )
     value = replace(
         target.check,
         status=UsageCheckStatus.FAILED,
@@ -862,7 +868,7 @@ def fail_usage_check(
                 "detail": detail,
                 "location": "worker",
                 "retryable": retryable,
-                "recovery_action": "retry_usage_check" if retryable else "fix_input",
+                "recovery_action": recovery_action,
             },
         ),
         updated_at=now,
@@ -2463,16 +2469,6 @@ def _validate_ddm_reader(
                 recovery_action="retry_usage_check",
             )
         )
-    except Exception:
-        issues.append(
-            UsageIssue(
-                "DDM_READER_UNAVAILABLE",
-                "NVIDIA DDM 训练读取器无法消费冻结工作区，请稍后重试",
-                "reader",
-                retryable=True,
-                recovery_action="retry_usage_check",
-            )
-        )
 
 
 def _validate_vlm_reader(
@@ -2519,16 +2515,6 @@ def _validate_vlm_reader(
             )
         )
     except VlmReaderUnavailableError:
-        issues.append(
-            UsageIssue(
-                "VLM_READER_UNAVAILABLE",
-                "NVIDIA VLM 训练读取器无法消费冻结候选，请稍后重试",
-                "reader",
-                retryable=True,
-                recovery_action="retry_usage_check",
-            )
-        )
-    except Exception:
         issues.append(
             UsageIssue(
                 "VLM_READER_UNAVAILABLE",

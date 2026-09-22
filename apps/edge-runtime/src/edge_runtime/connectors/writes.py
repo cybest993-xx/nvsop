@@ -180,7 +180,6 @@ class OutputDispatcher:
         except Exception:
             # claim 已代表物理请求可能离开进程; 普通异常不能证明设备未执行。
             outcome = Failed(detail=PERSISTENT_UNKNOWN_DETAIL)
-            self._ledger.record(request.key, outcome)
             _logger.exception(
                 "connector write adapter raised key=%s actor=%s connector=%s point=%s state=%s",
                 request.key,
@@ -189,6 +188,7 @@ class OutputDispatcher:
                 request.point.label,
                 request.state.value,
             )
+            self._ledger.record(request.key, outcome)
             return self._note(request, outcome, replayed=False)
         self._ledger.record(request.key, outcome)
         return self._note(request, outcome, replayed=False)

@@ -417,6 +417,24 @@ class DurableLocalDisposalLedgerTest(unittest.TestCase):
         self.assertEqual([], restarted_connector.writes)
         connection.close()
 
+    def test_adapter_exception_is_logged_even_when_unknown_persistence_fails(self) -> None:
+        class FailingRecordLedger(InMemoryWriteLedger):
+            def record(self, key: str, outcome: WriteOutcome, /) -> None:
+                raise RuntimeError("ledger unavailable")
+
+        dispatch = OutputDispatcher(
+            connector=RaisingConnector(RuntimeError("adapter crashed after send")),
+            ledger=FailingRecordLedger(),
+            diagnostics=lambda event: self.fail(f"unexpected diagnostic: {event!r}"),
+        )
+
+        with (
+            self.assertLogs("edge_runtime", level="ERROR") as logs,
+            self.assertRaisesRegex(RuntimeError, "ledger unavailable"),
+        ):
+            dispatch.write(request())
+        self.assertIn("RuntimeError: adapter crashed after send", logs.output[0])
+
     def test_control_flow_exit_is_not_recorded_as_unknown(self) -> None:
         import sqlite3
         from dataclasses import replace

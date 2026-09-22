@@ -23,6 +23,7 @@ from sqlalchemy import create_engine
 from factory_sop.auth.adapters import tables as auth_tables  # noqa: F401
 from factory_sop.dataset.adapters import tables as dataset_tables  # noqa: F401
 from factory_sop.device.adapters import tables as device_tables  # noqa: F401
+from factory_sop.execution.adapters import tables as execution_tables  # noqa: F401
 from factory_sop.job.adapters import tables as job_tables  # noqa: F401
 from factory_sop.monitor.adapters import tables as monitor_tables  # noqa: F401
 from factory_sop.persistence import Table, database_url

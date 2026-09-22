@@ -13,6 +13,7 @@ from factory_sop.device.adapters.repository import (
     PostgresInferenceHostRepository,
     PostgresStationRepository,
 )
+from factory_sop.device.errors import DeviceRefusalCode, DeviceRefusedError
 from factory_sop.device.model import DeviceStatus, InferenceHost, Station
 from factory_sop.execution.adapters.dependencies import lease_gateway
 from factory_sop.execution.api import ExecutionRefusalCode, ExecutionRefusedError
@@ -77,6 +78,19 @@ def _cleanup_targets(
     host_b: InferenceHost,
 ) -> None:
     with engine.begin() as connection:
+        expired_renewed_at = datetime(2000, 1, 1, tzinfo=UTC)
+        connection.execute(
+            text(
+                "UPDATE execution_station_grant "
+                "SET renewed_at = :renewed_at, lease_expires_at = :lease_expires_at "
+                "WHERE station_id = :station_id"
+            ),
+            {
+                "renewed_at": expired_renewed_at,
+                "lease_expires_at": expired_renewed_at + SEVEN_DAYS,
+                "station_id": station.id,
+            },
+        )
         connection.execute(
             text("DELETE FROM execution_station_grant WHERE station_id = :station_id"),
             {"station_id": station.id},
@@ -229,7 +243,7 @@ def test_expired_acquire_wins_concurrent_stale_renewal_without_overlap(engine: E
         _cleanup_targets(engine, station, host_a, host_b)
 
 
-def test_station_deletion_removes_its_owned_current_grant(engine: Engine) -> None:
+def test_active_station_grant_blocks_station_deletion(engine: Engine) -> None:
     station, host_a, host_b = _arrange_targets(engine)
     try:
         grant_session = DatabaseSession(engine)
@@ -238,7 +252,46 @@ def test_station_deletion_removes_its_owned_current_grant(engine: Engine) -> Non
                 station_id=station.id,
                 holder_host_id=host_a.id,
                 request_id=new_id(),
-                now=NOW,
+                now=datetime.now(UTC),
+            )
+            grant_session.commit()
+        finally:
+            grant_session.close()
+
+        delete_session = DatabaseSession(engine)
+        try:
+            with pytest.raises(DeviceRefusedError) as refused:
+                PostgresStationRepository(delete_session).remove(
+                    station.id, expected_revision=station.revision
+                )
+            assert refused.value.code is DeviceRefusalCode.STATION_HAS_ACTIVE_EXECUTION_GRANT
+            delete_session.rollback()
+        finally:
+            delete_session.close()
+
+        with engine.connect() as connection:
+            assert connection.execute(
+                text("SELECT id FROM device_station WHERE id = :station_id"),
+                {"station_id": station.id},
+            ).one()
+            assert connection.execute(
+                text("SELECT grant_id FROM execution_station_grant WHERE station_id = :station_id"),
+                {"station_id": station.id},
+            ).one()
+    finally:
+        _cleanup_targets(engine, station, host_a, host_b)
+
+
+def test_expired_station_grant_is_cleaned_when_station_is_deleted(engine: Engine) -> None:
+    station, host_a, host_b = _arrange_targets(engine)
+    try:
+        grant_session = DatabaseSession(engine)
+        try:
+            lease_gateway(grant_session).acquire(
+                station_id=station.id,
+                holder_host_id=host_a.id,
+                request_id=new_id(),
+                now=datetime.now(UTC) - timedelta(days=8),
             )
             grant_session.commit()
         finally:
@@ -256,6 +309,13 @@ def test_station_deletion_removes_its_owned_current_grant(engine: Engine) -> Non
         with engine.connect() as connection:
             assert (
                 connection.execute(
+                    text("SELECT id FROM device_station WHERE id = :station_id"),
+                    {"station_id": station.id},
+                ).one_or_none()
+                is None
+            )
+            assert (
+                connection.execute(
                     text(
                         "SELECT grant_id FROM execution_station_grant "
                         "WHERE station_id = :station_id"
@@ -264,6 +324,97 @@ def test_station_deletion_removes_its_owned_current_grant(engine: Engine) -> Non
                 ).one_or_none()
                 is None
             )
+    finally:
+        _cleanup_targets(engine, station, host_a, host_b)
+
+
+def test_active_holder_grant_blocks_host_deletion(engine: Engine) -> None:
+    station, host_a, host_b = _arrange_targets(engine)
+    try:
+        grant_session = DatabaseSession(engine)
+        try:
+            lease_gateway(grant_session).acquire(
+                station_id=station.id,
+                holder_host_id=host_a.id,
+                request_id=new_id(),
+                now=datetime.now(UTC),
+            )
+            grant_session.commit()
+        finally:
+            grant_session.close()
+
+        delete_session = DatabaseSession(engine)
+        try:
+            with pytest.raises(DeviceRefusedError) as refused:
+                PostgresInferenceHostRepository(delete_session).remove(
+                    host_a.id, expected_revision=host_a.revision
+                )
+            assert refused.value.code is DeviceRefusalCode.INFERENCE_HOST_HAS_ACTIVE_EXECUTION_GRANT
+            delete_session.rollback()
+        finally:
+            delete_session.close()
+
+        with engine.connect() as connection:
+            assert connection.execute(
+                text("SELECT id FROM device_inference_host WHERE id = :host_id"),
+                {"host_id": host_a.id},
+            ).one()
+            assert connection.execute(
+                text(
+                    "SELECT grant_id FROM execution_station_grant WHERE holder_host_id = :host_id"
+                ),
+                {"host_id": host_a.id},
+            ).one()
+    finally:
+        _cleanup_targets(engine, station, host_a, host_b)
+
+
+def test_expired_holder_grant_is_cleaned_when_host_is_deleted(engine: Engine) -> None:
+    station, host_a, host_b = _arrange_targets(engine)
+    try:
+        grant_session = DatabaseSession(engine)
+        try:
+            lease_gateway(grant_session).acquire(
+                station_id=station.id,
+                holder_host_id=host_a.id,
+                request_id=new_id(),
+                now=datetime.now(UTC) - timedelta(days=8),
+            )
+            grant_session.commit()
+        finally:
+            grant_session.close()
+
+        delete_session = DatabaseSession(engine)
+        try:
+            assert PostgresInferenceHostRepository(delete_session).remove(
+                host_a.id, expected_revision=host_a.revision
+            )
+            delete_session.commit()
+        finally:
+            delete_session.close()
+
+        with engine.connect() as connection:
+            assert (
+                connection.execute(
+                    text("SELECT id FROM device_inference_host WHERE id = :host_id"),
+                    {"host_id": host_a.id},
+                ).one_or_none()
+                is None
+            )
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT grant_id FROM execution_station_grant "
+                        "WHERE holder_host_id = :host_id"
+                    ),
+                    {"host_id": host_a.id},
+                ).one_or_none()
+                is None
+            )
+            assert connection.execute(
+                text("SELECT id FROM device_station WHERE id = :station_id"),
+                {"station_id": station.id},
+            ).one()
     finally:
         _cleanup_targets(engine, station, host_a, host_b)
 

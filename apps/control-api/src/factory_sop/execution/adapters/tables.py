@@ -29,7 +29,7 @@ class StationGrantRow(Table):
     )
     grant_id: Mapped[UUID] = mapped_column(Uuid(), nullable=False)
     holder_host_id: Mapped[UUID] = mapped_column(
-        Uuid(), ForeignKey("device_inference_host.id"), index=True
+        Uuid(), ForeignKey("device_inference_host.id", ondelete="CASCADE"), index=True
     )
     lease_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     renewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

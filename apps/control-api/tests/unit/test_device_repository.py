@@ -145,7 +145,7 @@ def test_topology_trigger_refusal_names_its_affected_fields(
         ),
     ],
 )
-def test_template_history_foreign_keys_become_stable_delete_refusals(
+def test_parent_foreign_keys_become_stable_delete_refusals(
     repository_type: RepositoryFactory, constraint_name: str, code: DeviceRefusalCode
 ) -> None:
     error = database_error(
@@ -153,6 +153,27 @@ def test_template_history_foreign_keys_become_stable_delete_refusals(
         message="violates a template history foreign key",
         constraint_name=constraint_name,
     )
+
+    with pytest.raises(DeviceRefusedError) as refused:
+        repository_for(error, repository_type).remove(cast(Any, "parent-id"), expected_revision=1)
+
+    assert refused.value.code is code
+
+
+@pytest.mark.parametrize(
+    ("repository_type", "code"),
+    [
+        (PostgresStationRepository, DeviceRefusalCode.STATION_HAS_ACTIVE_EXECUTION_GRANT),
+        (
+            PostgresInferenceHostRepository,
+            DeviceRefusalCode.INFERENCE_HOST_HAS_ACTIVE_EXECUTION_GRANT,
+        ),
+    ],
+)
+def test_active_execution_grant_trigger_becomes_stable_delete_refusal(
+    repository_type: RepositoryFactory, code: DeviceRefusalCode
+) -> None:
+    error = database_error(sqlstate="P0001", message="execution_active_grant_delete")
 
     with pytest.raises(DeviceRefusedError) as refused:
         repository_for(error, repository_type).remove(cast(Any, "parent-id"), expected_revision=1)

@@ -481,6 +481,9 @@ class PostgresInferenceHostRepository:
                 foreign_key_to_connector=DeviceRefusalCode.INFERENCE_HOST_HAS_CONNECTORS,
                 host_report_refusal=DeviceRefusalCode.INFERENCE_HOST_HAS_CONFIGURATION_REPORT,
                 pending_command_refusal=DeviceRefusalCode.INFERENCE_HOST_HAS_PENDING_COMMANDS,
+                active_execution_grant_refusal=(
+                    DeviceRefusalCode.INFERENCE_HOST_HAS_ACTIVE_EXECUTION_GRANT
+                ),
             )
         if result.rowcount == 0:
             _refuse_lost_race(
@@ -800,6 +803,7 @@ class PostgresStationRepository:
                 station_template_refusal=DeviceRefusalCode.STATION_HAS_TEMPLATES,
                 station_binding_refusal=DeviceRefusalCode.STATION_HAS_TEMPLATE_BINDING,
                 station_report_refusal=DeviceRefusalCode.STATION_HAS_CONFIGURATION_REPORT,
+                active_execution_grant_refusal=DeviceRefusalCode.STATION_HAS_ACTIVE_EXECUTION_GRANT,
             )
         if result.rowcount == 0:
             _refuse_lost_race(

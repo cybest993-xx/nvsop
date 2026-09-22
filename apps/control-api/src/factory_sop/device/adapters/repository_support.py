@@ -21,6 +21,7 @@ _CONSTRAINT_REFUSALS: dict[str, DeviceRefusalCode] = {
     "uq_device_point_connector_id_direction_identifier": (DeviceRefusalCode.POINT_IDENTITY_TAKEN),
 }
 _HOST_FOREIGN_KEY = "fk_device_inference_backend_host_id_device_inference_host"
+_ACTIVE_EXECUTION_GRANT_DELETE = "execution_active_grant_delete"
 _TRIGGERED_REFUSALS = {
     "device_backend_host_deactivated": DeviceRefusalCode.INFERENCE_HOST_DEACTIVATED,
     "device_camera_host_backend_mismatch": DeviceRefusalCode.CAMERA_HOST_BACKEND_MISMATCH,
@@ -54,12 +55,17 @@ def refuse_constraint_violation(
     backend_report_refusal: DeviceRefusalCode | None = None,
     host_report_refusal: DeviceRefusalCode | None = None,
     pending_command_refusal: DeviceRefusalCode | None = None,
+    active_execution_grant_refusal: DeviceRefusalCode | None = None,
 ) -> NoReturn:
     """将数据库约束或触发器拒绝转换为 device 错误。"""
     diagnostics = getattr(error.orig, "diag", None)
     constraint_name = getattr(diagnostics, "constraint_name", None)
     sqlstate = getattr(error.orig, "sqlstate", None)
     message = getattr(diagnostics, "message_primary", None)
+    if sqlstate == "P0001" and message == _ACTIVE_EXECUTION_GRANT_DELETE:
+        if active_execution_grant_refusal is None:
+            raise error
+        raise DeviceRefusedError(active_execution_grant_refusal) from error
     if sqlstate == "P0001" and message in _TRIGGERED_REFUSALS:
         raise DeviceRefusedError(_TRIGGERED_REFUSALS[message]) from error
     if constraint_name == "fk_template_sop_template_station_id_device_station":

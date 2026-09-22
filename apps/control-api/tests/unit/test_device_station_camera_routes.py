@@ -186,11 +186,13 @@ def center() -> Center:
     ("resource", "refusal"),
     [
         ("station", DeviceRefusalCode.STATION_HAS_TEMPLATE_BINDING),
+        ("station", DeviceRefusalCode.STATION_HAS_ACTIVE_EXECUTION_GRANT),
         ("backend", DeviceRefusalCode.INFERENCE_BACKEND_HAS_CONFIGURATION_REPORT),
         ("host", DeviceRefusalCode.INFERENCE_HOST_HAS_CONFIGURATION_REPORT),
+        ("host", DeviceRefusalCode.INFERENCE_HOST_HAS_ACTIVE_EXECUTION_GRANT),
     ],
 )
-def test_template_history_delete_refusals_are_stable_problem_responses(
+def test_delete_refusals_are_stable_problem_responses(
     center: Center, resource: str, refusal: DeviceRefusalCode
 ) -> None:
     if resource == "station":

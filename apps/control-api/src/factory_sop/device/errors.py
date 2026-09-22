@@ -21,6 +21,7 @@ class DeviceRefusalCode(StrEnum):
     INFERENCE_HOST_AUTHENTICATION_FAILED = "INFERENCE_HOST_AUTHENTICATION_FAILED"
     INFERENCE_HOST_CREDENTIALS_REMOVED = "INFERENCE_HOST_CREDENTIALS_REMOVED"
     INFERENCE_HOST_HAS_BACKENDS = "INFERENCE_HOST_HAS_BACKENDS"
+    INFERENCE_HOST_HAS_ACTIVE_EXECUTION_GRANT = "INFERENCE_HOST_HAS_ACTIVE_EXECUTION_GRANT"
     INFERENCE_HOST_HAS_PENDING_COMMANDS = "INFERENCE_HOST_HAS_PENDING_COMMANDS"
     INFERENCE_BACKEND_NOT_FOUND = "INFERENCE_BACKEND_NOT_FOUND"
     INFERENCE_BACKEND_DEACTIVATED = "INFERENCE_BACKEND_DEACTIVATED"
@@ -53,6 +54,7 @@ class DeviceRefusalCode(StrEnum):
     STATION_HAS_TEMPLATES = "STATION_HAS_TEMPLATES"
     STATION_HAS_TEMPLATE_BINDING = "STATION_HAS_TEMPLATE_BINDING"
     STATION_HAS_CONFIGURATION_REPORT = "STATION_HAS_CONFIGURATION_REPORT"
+    STATION_HAS_ACTIVE_EXECUTION_GRANT = "STATION_HAS_ACTIVE_EXECUTION_GRANT"
     STALE_REVISION = "STALE_REVISION"
     COMMAND_NOT_FOUND = "COMMAND_NOT_FOUND"
     COMMAND_HOST_MISMATCH = "COMMAND_HOST_MISMATCH"
@@ -139,6 +141,8 @@ def refusal_problem(code: DeviceRefusalCode) -> tuple[int, str]:
             return 410, "推理机 bearer 凭据接口已停用"
         case DeviceRefusalCode.INFERENCE_HOST_HAS_BACKENDS:
             return 409, "该推理机仍承载推理后端，请先删除它们"
+        case DeviceRefusalCode.INFERENCE_HOST_HAS_ACTIVE_EXECUTION_GRANT:
+            return 409, "该推理机仍持有未到期的工位物理执行权租约"
         case DeviceRefusalCode.INFERENCE_HOST_HAS_PENDING_COMMANDS:
             return 409, "该推理机仍有待处理设备命令"
         case DeviceRefusalCode.INFERENCE_BACKEND_NOT_FOUND:
@@ -201,6 +205,8 @@ def refusal_problem(code: DeviceRefusalCode) -> tuple[int, str]:
             return 409, "该工位仍有模板绑定"
         case DeviceRefusalCode.STATION_HAS_CONFIGURATION_REPORT:
             return 409, "该工位仍有模板配置报告"
+        case DeviceRefusalCode.STATION_HAS_ACTIVE_EXECUTION_GRANT:
+            return 409, "该工位仍有未到期的物理执行权租约"
         case DeviceRefusalCode.STALE_REVISION:
             return 409, "内容已被他人修改，请刷新后重试"
         case DeviceRefusalCode.COMMAND_NOT_FOUND:

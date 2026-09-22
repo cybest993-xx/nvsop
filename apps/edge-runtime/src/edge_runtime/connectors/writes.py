@@ -172,7 +172,13 @@ class OutputDispatcher:
         if held is not None:
             return self._note(request, held, replayed=True)
 
-        outcome = self._connector.write(request.point, request.state, timeout=request.timeout)
+        try:
+            outcome = self._connector.write(request.point, request.state, timeout=request.timeout)
+        except Exception:
+            # claim 已代表物理请求可能离开进程; 普通异常不能证明设备未执行。
+            outcome = Failed(detail=PERSISTENT_UNKNOWN_DETAIL)
+            self._ledger.record(request.key, outcome)
+            return self._note(request, outcome, replayed=False)
         self._ledger.record(request.key, outcome)
         return self._note(request, outcome, replayed=False)
 

@@ -57,7 +57,7 @@ class NvidiaDdmReader:
         """构造原读取器并实际读取边界与非边界样本。"""
         try:
             module = self._load_module()
-        except (FileNotFoundError, ImportError, OSError, RuntimeError) as error:
+        except (FileNotFoundError, ImportError, OSError) as error:
             raise DdmReaderUnavailableError from error
         reader = getattr(module, "DDMDataset", None)
         if not callable(reader):
@@ -128,7 +128,7 @@ class NvidiaDdmReader:
             return self._module
         spec = importlib.util.spec_from_file_location("nvsop_nvidia_ddm_reader", self._reader_path)
         if spec is None or spec.loader is None:
-            raise RuntimeError(f"无法加载 NVIDIA DDM 读取器：{self._reader_path}")
+            raise DdmReaderUnavailableError
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         self._module = module

@@ -75,3 +75,32 @@ def test_vlm_reader_preserves_failure_classification(
             workspace=workspace,
             annotation_filename="annotation.json",
         )
+
+
+def test_ddm_module_initialization_runtime_error_propagates(tmp_path: Path) -> None:
+    module_path = tmp_path / "ddm_reader.py"
+    module_path.write_text("raise RuntimeError('module init failure')\n", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    annotation_filename = "annotation.json"
+    (workspace / annotation_filename).write_text('{"video": []}', encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="module init failure"):
+        NvidiaDdmReader(module_path).sample_counts(
+            workspace=workspace,
+            annotation_filename=annotation_filename,
+            parameters=dict(DDM_CONSUMER_PARAMETERS),
+        )
+
+
+def test_vlm_module_initialization_runtime_error_propagates(tmp_path: Path) -> None:
+    module_path = tmp_path / "vlm_reader.py"
+    module_path.write_text("raise RuntimeError('module init failure')\n", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    with pytest.raises(RuntimeError, match="module init failure"):
+        NvidiaVlmReader(module_path).validate(
+            workspace=workspace,
+            annotation_filename="annotation.json",
+        )

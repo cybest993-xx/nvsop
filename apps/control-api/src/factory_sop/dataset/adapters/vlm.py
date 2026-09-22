@@ -31,7 +31,7 @@ class NvidiaVlmReader:
         """构造原读取器并读取全部候选记录。"""
         try:
             module = self._load_module()
-        except (FileNotFoundError, ImportError, OSError, RuntimeError) as error:
+        except (FileNotFoundError, ImportError, OSError) as error:
             raise VlmReaderUnavailableError from error
         reader = getattr(module, "CosmosSFTDataset", None)
         if not callable(reader):
@@ -64,7 +64,7 @@ class NvidiaVlmReader:
             return self._module
         spec = importlib.util.spec_from_file_location("nvsop_nvidia_vlm_reader", self._reader_path)
         if spec is None or spec.loader is None:
-            raise RuntimeError(f"无法加载 NVIDIA VLM 读取器：{self._reader_path}")
+            raise VlmReaderUnavailableError
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         self._module = module

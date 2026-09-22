@@ -23,7 +23,6 @@ import sqlite3
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from threading import RLock
-from typing import cast
 
 from edge_runtime.judgment.model import Decision, HostInstant, Lifecycle, Violation
 from edge_runtime.judgment.reasons import ReasonCode, Verdict
@@ -287,6 +286,9 @@ class StationQueues:
             return self._pending_instance_report_from_row(row)
 
     def _pending_instance_report_from_row(self, row: sqlite3.Row) -> PendingSopInstanceReport:
+        context = self._report_context_of(row)
+        if context is None:
+            raise ValueError("pending instance report has no event-time report context")
         return PendingSopInstanceReport(
             queue_id=int(row["queue_id"]),
             instance_id=int(row["instance_id"]),
@@ -295,7 +297,7 @@ class StationQueues:
             attempts=int(row["attempts"]),
             last_error=row["last_error"],
             reported_at=row["report_reported_at"],
-            context=cast(ReportContext, self._report_context_of(row)),
+            context=context,
         )
 
     def _report_context_of(self, row: sqlite3.Row) -> ReportContext | None:

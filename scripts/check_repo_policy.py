@@ -71,6 +71,14 @@ EDGE_SOURCE = EDGE_APP / "src"
 EDGE_RUNTIME_PACKAGES = frozenset(
     {"connectors", "judgment", "local_state", "stream_health", "supervisor"}
 )
+LOCAL_STATE_PRIVATE_MODULES = frozenset(
+    {
+        "edge_runtime.local_state.codec",
+        "edge_runtime.local_state.queues",
+        "edge_runtime.local_state.schema",
+        "edge_runtime.local_state.store",
+    }
+)
 CONTRACT_SOURCE = Path("packages/contracts/src/nvsop_contracts")
 CENTER_SOURCE = Path("apps/control-api/src/factory_sop")
 CENTER_COMPOSITION_ROOT = CENTER_SOURCE / "app.py"
@@ -355,12 +363,6 @@ def check_edge_dependency_directions(root: Path, files: list[Path]) -> list[str]
     composition_root = edge_root / "runtime.py"
     connector_root = edge_root / "connectors"
     local_state_root = edge_root / "local_state"
-    local_state_private_modules = {
-        "edge_runtime.local_state.codec",
-        "edge_runtime.local_state.queues",
-        "edge_runtime.local_state.schema",
-        "edge_runtime.local_state.store",
-    }
     violations: list[str] = []
 
     for path in sorted(files):
@@ -394,7 +396,7 @@ def check_edge_dependency_directions(root: Path, files: list[Path]) -> list[str]
                     continue
                 if not is_under(path, local_state_root) and any(
                     target == private or target.startswith(f"{private}.")
-                    for private in local_state_private_modules
+                    for private in LOCAL_STATE_PRIVATE_MODULES
                 ):
                     violations.append(
                         f"{path}:{line} imports {target}; LocalState persistence implementation "
@@ -447,6 +449,16 @@ def _edge_import_targets(path: Path, tree: ast.AST) -> list[tuple[int, str]]:
             if direct_packages:
                 imports.extend((node.lineno, target) for target in direct_packages)
                 if len(direct_packages) == len(node.names):
+                    continue
+        if base == "edge_runtime.local_state":
+            private_modules = [
+                f"{base}.{alias.name}"
+                for alias in node.names
+                if f"{base}.{alias.name}" in LOCAL_STATE_PRIVATE_MODULES
+            ]
+            if private_modules:
+                imports.extend((node.lineno, target) for target in private_modules)
+                if len(private_modules) == len(node.names):
                     continue
         if base == "edge_runtime.supervisor" and any(
             alias.name == "inputs" for alias in node.names

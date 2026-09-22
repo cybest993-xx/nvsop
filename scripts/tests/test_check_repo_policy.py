@@ -338,6 +338,19 @@ class RepositoryPolicyTest(unittest.TestCase):
             errors,
         )
 
+    def test_rejects_edge_module_importing_private_local_state_module_alias(self) -> None:
+        module = self.write(
+            "apps/edge-runtime/src/edge_runtime/reporting.py",
+            "from edge_runtime.local_state import store\n",
+        )
+        errors = self.check(str(module))
+        self.assertIn(
+            "apps/edge-runtime/src/edge_runtime/reporting.py:1 imports "
+            "edge_runtime.local_state.store; LocalState persistence implementation must stay "
+            "behind edge_runtime.local_state",
+            errors,
+        )
+
     def test_rejects_connector_importing_unowned_edge_state(self) -> None:
         module = self.write(
             "apps/edge-runtime/src/edge_runtime/connectors/future.py",

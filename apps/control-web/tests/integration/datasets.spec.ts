@@ -339,6 +339,39 @@ describe('训练数据集工作台', () => {
     wrapper.unmount()
   })
 
+  it('renders internal usage failures as maintenance work without an input-fix hint', async () => {
+    grant('dataset.dataset.view')
+    api.listDatasetUsageChecks.mockResolvedValue({
+      items: [
+        {
+          ...USAGE_CHECK,
+          status: 'failed',
+          is_current: true,
+          issues: [
+            {
+              code: 'USAGE_CHECK_EXECUTION_FAILED',
+              detail: '用途检查执行失败',
+              location: 'worker',
+              retryable: false,
+              recovery_action: null,
+            },
+          ],
+        },
+      ],
+      page: 1,
+      page_size: 50,
+      total: 1,
+    })
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('需维护处理')
+    expect(wrapper.text()).toContain('请联系维护者')
+    expect(wrapper.text()).not.toContain('需修正输入')
+    wrapper.unmount()
+  })
+
   it('shows an artifact failure code and recovery detail instead of a blank result', async () => {
     grant('dataset.dataset.view', 'dataset.dataset.edit')
     api.listDatasetUsageChecks.mockResolvedValue({

@@ -113,6 +113,7 @@ class NvidiaDdmReader:
             raise DdmSampleClassEmptyError from error
         except (
             AssertionError,
+            FileNotFoundError,
             IndexError,
             KeyError,
             TypeError,

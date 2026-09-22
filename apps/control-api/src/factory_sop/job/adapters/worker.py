@@ -245,6 +245,13 @@ async def check_dataset_usage_job(ctx: Mapping[str, Any], job_id: str) -> None:
         )
         return
     except Exception as error:  # pragma: no cover - worker 安全兜底
+        _logger.exception(
+            "job.dataset_usage_check.unexpected_failure",
+            job_id=str(target.job.id),
+            check_id=str(target.check.id),
+            usage_kind=target.check.kind.value,
+            error_type=type(error).__name__,
+        )
         _finish_usage_check_failure(
             factory=factory,
             runtime=runtime,

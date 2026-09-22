@@ -21,6 +21,7 @@ from factory_sop.dataset.usecases.usage import DDM_CONSUMER_PARAMETERS
     ("error_name", "expected_error"),
     [
         ("ValueError", DdmReaderInputError),
+        ("FileNotFoundError", DdmReaderInputError),
         ("ImportError", DdmReaderUnavailableError),
         ("RuntimeError", RuntimeError),
     ],

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from harness import (
     EXTERNAL_END,
@@ -30,6 +31,7 @@ from edge_runtime.judgment.model import (
     Ordering,
     Violation,
 )
+from edge_runtime.local_state import BackendReportContext
 from edge_runtime.stream_health import StreamFact, StreamHealthEvent
 from edge_runtime.supervisor.inputs import (
     ActionRecognized,
@@ -64,6 +66,10 @@ def station(
 
 def action(signal: str, at: float, *, anchor: float = ANCHOR) -> ActionRecognized:
     return ActionRecognized(signal=signal, at=HostInstant(at), source_time=at, source_anchor=anchor)
+
+
+def backend(name: str) -> BackendReportContext:
+    return BackendReportContext(name, (f"model-{name}",))
 
 
 class EveryInputReachesTheCoreAndCommitsDecisionsTest(unittest.TestCase):
@@ -198,6 +204,116 @@ class EveryInputReachesTheCoreAndCommitsDecisionsTest(unittest.TestCase):
         instance = supervisor.state.instance
         assert instance is not None
         self.assertEqual(1, instance.instance_id)
+
+
+class MultipleBackendSourcesStayIsolatedTest(unittest.TestCase):
+    def test_one_backend_recovery_does_not_clear_another_backend_failure(self) -> None:
+        supervisor, _ = station(Ordering.ORDERED)
+        failed = backend("a")
+        healthy = backend("b")
+        supervisor.receive(
+            StreamHealthObserved(
+                event=StreamHealthEvent(
+                    fact=StreamFact.SOURCE_ERROR,
+                    at_monotonic=90.0,
+                    source_anchor=ANCHOR,
+                )
+            ),
+            report_provenance=failed,
+        )
+        supervisor.receive(
+            StreamHealthObserved(
+                event=StreamHealthEvent(
+                    fact=StreamFact.DELIVERING,
+                    at_monotonic=91.0,
+                    source_anchor=ANCHOR + 100.0,
+                )
+            ),
+            report_provenance=healthy,
+        )
+        supervisor.receive(
+            action(STEPS[0], at=100.0, anchor=ANCHOR + 100.0),
+            report_provenance=healthy,
+        )
+
+        reaction = supervisor.receive(
+            action(STEPS[2], at=101.0, anchor=ANCHOR + 100.0),
+            report_provenance=healthy,
+        )
+
+        self.assertEqual(1, len(reaction.decisions))
+        self.assertIs(Verdict.INDETERMINATE, reaction.decisions[0].verdict)
+        self.assertEqual((ReasonCode.STREAM_LOST,), reaction.decisions[0].reasons)
+
+    def test_source_anchors_are_compared_only_within_the_same_backend(self) -> None:
+        supervisor, _ = station()
+        source_a = backend("a")
+        source_b = backend("b")
+        supervisor.receive(
+            action(STEPS[0], at=100.0, anchor=ANCHOR),
+            report_provenance=source_a,
+        )
+        supervisor.receive(
+            action(STEPS[1], at=101.0, anchor=ANCHOR + 100.0),
+            report_provenance=source_b,
+        )
+        instance = supervisor.state.instance
+        assert instance is not None
+        self.assertNotIn(ReasonCode.TIMESTAMP_DISCONTINUITY, instance.impairments)
+
+        supervisor.receive(
+            action(STEPS[2], at=102.0, anchor=ANCHOR + 1.0),
+            report_provenance=source_a,
+        )
+
+        instance = supervisor.state.instance
+        assert instance is not None
+        self.assertIn(ReasonCode.TIMESTAMP_DISCONTINUITY, instance.impairments)
+
+    def test_failed_commit_does_not_publish_source_health_state(self) -> None:
+        store = MemoryReactionStore()
+        supervisor = StationSupervisor(
+            state=opening_state(Ordering.UNORDERED),
+            store=store,
+            margins=MARGINS,
+            clock=FakeClock(),
+        )
+        source = backend("a")
+        arriving = StreamHealthObserved(
+            event=StreamHealthEvent(
+                fact=StreamFact.SOURCE_ERROR,
+                at_monotonic=90.0,
+                source_anchor=ANCHOR,
+            )
+        )
+
+        with patch.object(store, "commit", side_effect=(RuntimeError("commit failed"), None)):
+            with self.assertRaisesRegex(RuntimeError, "commit failed"):
+                supervisor.receive(arriving, report_provenance=source)
+            supervisor.receive(arriving, report_provenance=source)
+
+        self.assertIn(ReasonCode.STREAM_LOST, supervisor.state.active_impairments)
+
+    def test_failed_commit_does_not_publish_report_provenance(self) -> None:
+        store = MemoryReactionStore()
+        supervisor = StationSupervisor(
+            state=opening_state(Ordering.UNORDERED),
+            store=store,
+            margins=MARGINS,
+            clock=FakeClock(),
+        )
+        source_a = backend("a")
+        source_b = backend("b")
+
+        with (
+            patch.object(store, "commit", side_effect=RuntimeError("commit failed")),
+            self.assertRaisesRegex(RuntimeError, "commit failed"),
+        ):
+            supervisor.receive(action(STEPS[0], at=100.0), report_provenance=source_a)
+
+        supervisor.receive(action(STEPS[0], at=101.0), report_provenance=source_b)
+
+        self.assertEqual({1: (source_b,)}, store.report_provenance[-1])
 
 
 class TheTimerIsArmedFromWhatTheCoreDeclaredTest(unittest.TestCase):

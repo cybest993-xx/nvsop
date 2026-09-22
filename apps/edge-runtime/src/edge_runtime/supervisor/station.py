@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from copy import deepcopy
 from dataclasses import dataclass
 from time import monotonic
@@ -21,12 +21,57 @@ from edge_runtime.judgment.model import (
     Instance,
     JudgmentState,
     RunInterrupted,
+    StreamHealth,
     TimerFired,
+    ValidityImpaired,
+    ValidityRestored,
 )
 from edge_runtime.judgment.reasons import ReasonCode
 from edge_runtime.local_state import BackendReportContext, ReactionStore
 from edge_runtime.supervisor.evidence import clips_for
-from edge_runtime.supervisor.inputs import Normalizer, SupervisorInput, Validity, ValidityChanged
+from edge_runtime.supervisor.inputs import (
+    Normalizer,
+    StreamHealthObserved,
+    SupervisorInput,
+    Validity,
+    ValidityChanged,
+)
+
+_STREAM_VALIDITY_REASONS = frozenset(
+    {
+        ReasonCode.STREAM_LOST,
+        ReasonCode.INFERENCE_TIMEOUT,
+        ReasonCode.CHUNK_BACKLOG_EXCEEDED,
+    }
+)
+
+
+def _is_stream_validity(event: Event) -> bool:
+    return (
+        isinstance(event, (ValidityImpaired, ValidityRestored))
+        and event.reason in _STREAM_VALIDITY_REASONS
+    )
+
+
+def _stream_impairments(normalizers: Iterable[Normalizer]) -> frozenset[ReasonCode]:
+    reasons: set[ReasonCode] = set()
+    for normalizer in normalizers:
+        reason = normalizer.stream_impairment
+        if reason is not None:
+            reasons.add(reason)
+    return frozenset(reasons)
+
+
+def _aggregate_stream_health(normalizers: Iterable[Normalizer]) -> StreamHealth:
+    health = tuple(normalizer.stream_health for normalizer in normalizers)
+    for candidate in (
+        StreamHealth.LOST,
+        StreamHealth.INFERENCE_TIMEOUT,
+        StreamHealth.CHUNK_BACKLOG_EXCEEDED,
+    ):
+        if candidate in health:
+            return candidate
+    return StreamHealth.HEALTHY
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,7 +109,7 @@ class StationSupervisor:
         self._store = store
         self._margins = margins
         self._clock = clock
-        self._normalizer = Normalizer()
+        self._normalizers: dict[str | None, Normalizer] = {None: Normalizer()}
         self._deadline: HostInstant | None = None
         self._report_provenance: dict[int, dict[str, BackendReportContext] | None] = {}
         self._active_impaired_backend_provenance: dict[str, BackendReportContext] = {}
@@ -102,7 +147,9 @@ class StationSupervisor:
         report_provenance: BackendReportContext | None = None,
     ) -> Reaction:
         """One thing that arrived from outside; reporting provenance stays outside judgment core."""
-        normalizer = deepcopy(self._normalizer)
+        normalizers = deepcopy(self._normalizers)
+        source_key = None if report_provenance is None else report_provenance.backend_id
+        normalizer = normalizers.setdefault(source_key, Normalizer())
         active_impaired_backend_provenance = dict(self._active_impaired_backend_provenance)
         aggregate_transition = True
         if (
@@ -116,11 +163,17 @@ class StationSupervisor:
             else:
                 active_impaired_backend_provenance.pop(report_provenance.backend_id, None)
             aggregate_transition = was_impaired != bool(active_impaired_backend_provenance)
-        reaction = self._advance(
-            normalizer.events_for(arriving) if aggregate_transition else (),
-            report_provenance=report_provenance,
-        )
-        self._normalizer = normalizer
+        events = normalizer.events_for(arriving) if aggregate_transition else ()
+        if isinstance(arriving, StreamHealthObserved):
+            before = _stream_impairments(self._normalizers.values())
+            after = _stream_impairments(normalizers.values())
+            events = (
+                *(event for event in events if not _is_stream_validity(event)),
+                *(ValidityRestored(reason=reason) for reason in before - after),
+                *(ValidityImpaired(reason=reason) for reason in after - before),
+            )
+        reaction = self._advance(events, report_provenance=report_provenance)
+        self._normalizers = normalizers
         self._active_impaired_backend_provenance = active_impaired_backend_provenance
         return reaction
 
@@ -144,7 +197,7 @@ class StationSupervisor:
                 TimerFired(
                     at=HostInstant(now),
                     host=host,
-                    stream=self._normalizer.stream_health,
+                    stream=_aggregate_stream_health(self._normalizers.values()),
                 ),
             )
         )
@@ -167,6 +220,10 @@ class StationSupervisor:
     ) -> Reaction:
         """先收集全部事件的结果, 一次提交成功后才发布新状态、provenance 和计时器。"""
         state, deadline = self._state, self._deadline
+        report_provenance_by_instance = {
+            instance_id: None if values is None else dict(values)
+            for instance_id, values in self._report_provenance.items()
+        }
         decisions: list[Decision] = []
         closed_instances: list[Instance] = []
         touched_ids: set[int] = set()
@@ -190,7 +247,7 @@ class StationSupervisor:
             closed_instances.extend(outcome.closed_instances)
             decisions.extend(outcome.decisions)
         for instance_id in touched_ids:
-            existing = self._report_provenance.setdefault(instance_id, {})
+            existing = report_provenance_by_instance.setdefault(instance_id, {})
             if existing is not None and report_provenance is not None:
                 existing[report_provenance.backend_id] = report_provenance
             if existing is not None and instance_id in opened_ids:
@@ -198,7 +255,7 @@ class StationSupervisor:
                     existing[provenance.backend_id] = provenance
         committed_provenance: dict[int, tuple[BackendReportContext, ...] | None] = {}
         for instance_id in touched_ids:
-            values = self._report_provenance.get(instance_id)
+            values = report_provenance_by_instance.get(instance_id)
             committed_provenance[instance_id] = (
                 None if values is None else tuple(values[key] for key in sorted(values))
             )
@@ -214,7 +271,8 @@ class StationSupervisor:
             report_provenance=committed_provenance,
         )
         for instance in closed_instances:
-            self._report_provenance.pop(instance.instance_id, None)
+            report_provenance_by_instance.pop(instance.instance_id, None)
+        self._report_provenance = report_provenance_by_instance
         self._state, self._deadline = state, deadline
         return Reaction(
             decisions=tuple(decisions),

@@ -71,6 +71,14 @@ EDGE_SOURCE = EDGE_APP / "src"
 EDGE_RUNTIME_PACKAGES = frozenset(
     {"connectors", "judgment", "local_state", "stream_health", "supervisor"}
 )
+LOCAL_STATE_PRIVATE_MODULES = frozenset(
+    {
+        "edge_runtime.local_state.codec",
+        "edge_runtime.local_state.queues",
+        "edge_runtime.local_state.schema",
+        "edge_runtime.local_state.store",
+    }
+)
 CONTRACT_SOURCE = Path("packages/contracts/src/nvsop_contracts")
 CENTER_SOURCE = Path("apps/control-api/src/factory_sop")
 CENTER_COMPOSITION_ROOT = CENTER_SOURCE / "app.py"
@@ -354,6 +362,7 @@ def check_edge_dependency_directions(root: Path, files: list[Path]) -> list[str]
     stream_health_package = edge_root / "stream_health"
     composition_root = edge_root / "runtime.py"
     connector_root = edge_root / "connectors"
+    local_state_root = edge_root / "local_state"
     violations: list[str] = []
 
     for path in sorted(files):
@@ -385,6 +394,15 @@ def check_edge_dependency_directions(root: Path, files: list[Path]) -> list[str]
                         "boundary and must import no edge_runtime sibling"
                     )
                     continue
+                if not is_under(path, local_state_root) and any(
+                    target == private or target.startswith(f"{private}.")
+                    for private in LOCAL_STATE_PRIVATE_MODULES
+                ):
+                    violations.append(
+                        f"{path}:{line} imports {target}; LocalState persistence implementation "
+                        "must stay behind edge_runtime.local_state"
+                    )
+                    continue
                 if not is_under(path, connector_root):
                     continue
                 if (
@@ -408,20 +426,39 @@ def check_edge_dependency_directions(root: Path, files: list[Path]) -> list[str]
 def _edge_import_targets(path: Path, tree: ast.AST) -> list[tuple[int, str]]:
     package = ["edge_runtime", *path.relative_to(EDGE_SOURCE / "edge_runtime").parent.parts]
     imports: list[tuple[int, str]] = []
+
+    def import_from_base(node: ast.ImportFrom) -> str:
+        if not node.level:
+            return node.module or ""
+        keep = len(package) - node.level + 1
+        base_parts = package[: max(keep, 0)]
+        if node.module:
+            base_parts.extend(node.module.split("."))
+        return ".".join(base_parts)
+
+    local_state_aliases: set[str] = set()
+    edge_runtime_aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and import_from_base(node) == "edge_runtime":
+            local_state_aliases.update(
+                alias.asname or alias.name for alias in node.names if alias.name == "local_state"
+            )
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "edge_runtime":
+                    edge_runtime_aliases.add(alias.asname or "edge_runtime")
+                elif alias.name.startswith("edge_runtime.") and alias.asname is None:
+                    edge_runtime_aliases.add("edge_runtime")
+                if alias.name == "edge_runtime.local_state" and alias.asname is not None:
+                    local_state_aliases.add(alias.asname)
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             imports.extend((node.lineno, alias.name) for alias in node.names)
             continue
         if not isinstance(node, ast.ImportFrom):
             continue
-        if node.level:
-            keep = len(package) - node.level + 1
-            base_parts = package[: max(keep, 0)]
-            if node.module:
-                base_parts.extend(node.module.split("."))
-            base = ".".join(base_parts)
-        else:
-            base = node.module or ""
+        base = import_from_base(node)
         if base == "edge_runtime":
             direct_packages = [
                 f"edge_runtime.{alias.name}"
@@ -431,6 +468,16 @@ def _edge_import_targets(path: Path, tree: ast.AST) -> list[tuple[int, str]]:
             if direct_packages:
                 imports.extend((node.lineno, target) for target in direct_packages)
                 if len(direct_packages) == len(node.names):
+                    continue
+        if base == "edge_runtime.local_state":
+            private_modules = [
+                f"{base}.{alias.name}"
+                for alias in node.names
+                if f"{base}.{alias.name}" in LOCAL_STATE_PRIVATE_MODULES
+            ]
+            if private_modules:
+                imports.extend((node.lineno, target) for target in private_modules)
+                if len(private_modules) == len(node.names):
                     continue
         if base == "edge_runtime.supervisor" and any(
             alias.name == "inputs" for alias in node.names
@@ -444,7 +491,33 @@ def _edge_import_targets(path: Path, tree: ast.AST) -> list[tuple[int, str]]:
                 continue
         if base:
             imports.append((node.lineno, base))
-    return sorted(imports)
+
+    private_names = {private.rsplit(".", 1)[-1] for private in LOCAL_STATE_PRIVATE_MODULES}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Attribute):
+            continue
+        parts: list[str] = []
+        current: ast.expr = node
+        while isinstance(current, ast.Attribute):
+            parts.append(current.attr)
+            current = current.value
+        if not isinstance(current, ast.Name):
+            continue
+        parts.append(current.id)
+        parts.reverse()
+        private_name: str | None = None
+        if len(parts) >= 2 and parts[0] in local_state_aliases and parts[1] in private_names:
+            private_name = parts[1]
+        elif (
+            len(parts) >= 3
+            and parts[0] in edge_runtime_aliases
+            and parts[1] == "local_state"
+            and parts[2] in private_names
+        ):
+            private_name = parts[2]
+        if private_name is not None:
+            imports.append((node.lineno, f"edge_runtime.local_state.{private_name}"))
+    return sorted(set(imports))
 
 
 def check_shared_contract_isolation(root: Path, files: list[Path]) -> list[str]:

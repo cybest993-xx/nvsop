@@ -48,6 +48,12 @@ from edge_runtime.connectors.writes import (
     WriteRequest,
 )
 from edge_runtime.judgment.model import HostInstant, HostLiveness
+from edge_runtime.local_state import (
+    BackendReportContext,
+    LocalState,
+    ReportContext,
+    open_local_state,
+)
 from edge_runtime.local_state.disposal import (
     DISPOSAL_RESULT_UNKNOWN,
     DISPOSAL_RESULT_WRITTEN,
@@ -55,10 +61,8 @@ from edge_runtime.local_state.disposal import (
     LocalDisposalLedger,
     StoredDisposalResult,
 )
-from edge_runtime.local_state.queues import BackendReportContext
-from edge_runtime.local_state.store import LocalState, open_local_state
 from edge_runtime.media import MediaRuntime, validate_sop_camera_bindings
-from edge_runtime.reporting import DecisionReporter, ReportContext
+from edge_runtime.reporting import HostReportReconciler
 from edge_runtime.reporting_transport import HttpDecisionReportTransport
 from edge_runtime.runtime_configuration import (
     RuntimeConfiguration,
@@ -428,7 +432,7 @@ class RuntimeComposition:
     stations: tuple[AutonomousStation, ...]
     connector_runtimes: ConnectorRuntimeSet
     output_dispatchers: Mapping[str, OutputDispatcher]
-    reporters: tuple[DecisionReporter, ...] = ()
+    report_reconciler: HostReportReconciler | None = None
 
 
 class AutonomousRuntime:
@@ -441,7 +445,7 @@ class AutonomousRuntime:
         stations: tuple[AutonomousStation, ...],
         state: LocalState,
         media: MediaRuntime | None = None,
-        reporters: tuple[DecisionReporter, ...] = (),
+        report_reconciler: HostReportReconciler | None = None,
         configuration_sync: ConfigurationSynchronizer | None = None,
         maintenance_interval: float = 30.0,
         configuration: RuntimeConfiguration | None = None,
@@ -456,7 +460,7 @@ class AutonomousRuntime:
         self._stations = list(stations)
         self._state = state
         self._media = media
-        self._reporters = reporters
+        self._report_reconciler = report_reconciler
         self._configuration_sync = configuration_sync
         self._maintenance_interval = maintenance_interval
         self._configuration = configuration
@@ -497,13 +501,13 @@ class AutonomousRuntime:
                 stations=tuple(self._stations),
                 connector_runtimes=self._connector_runtimes,
                 output_dispatchers=dict(self._output_dispatchers),
-                reporters=self._reporters,
+                report_reconciler=self._report_reconciler,
             )
             self._stations = list(composition.stations)
             self._configuration = composition.configuration
             self._connector_runtimes = composition.connector_runtimes
             self._output_dispatchers = dict(composition.output_dispatchers)
-            self._reporters = composition.reporters
+            self._report_reconciler = composition.report_reconciler
         return previous
 
     @staticmethod
@@ -575,10 +579,12 @@ class AutonomousRuntime:
                 while not stop_requested():
                     now = HostInstant(monotonic())
                     reported_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-                    for reporter in self._reporters:
+                    if self._report_reconciler is not None:
                         # 上报失败不能阻塞判定,但必须留下可检索的诊断并等待下一轮重试。
                         try:
-                            attempts = reporter.flush(now=now, reported_at=reported_at)
+                            attempts = self._report_reconciler.flush(
+                                now=now, reported_at=reported_at
+                            )
                         except (OSError, sqlite3.Error, ValueError) as error:
                             _logger.warning(
                                 "edge.report_flush.failed error_type=%s",
@@ -705,7 +711,7 @@ class AutonomousRuntime:
                             daemon=True,
                         )
                     ]
-                    if self._reporters or self._configuration_sync is not None
+                    if self._report_reconciler is not None or self._configuration_sync is not None
                     else []
                 ),
             ]
@@ -881,8 +887,11 @@ def _build_runtime_composition(
         )
         for connector_id, adapter in adapters.items()
     }
-    reporters: list[DecisionReporter] = []
-    reporter_station_ids: set[str] = set()
+    report_reconciler = (
+        None
+        if report_transport is None
+        else HostReportReconciler(reports=state.reports(), transport=report_transport)
+    )
     stations: list[AutonomousStation] = []
     try:
         for station_binding in runtime_configuration.stations:
@@ -962,14 +971,6 @@ def _build_runtime_composition(
                 for connector_id in station_binding.connector_ids
                 if connector_id in output_dispatchers
             }
-            if report_context is not None and report_transport is not None:
-                reporters.append(
-                    DecisionReporter(
-                        queues=station_store,
-                        transport=report_transport,
-                    )
-                )
-                reporter_station_ids.add(station_config.station_id)
             stations.append(
                 AutonomousStation(
                     station_id=station_config.station_id,
@@ -988,17 +989,6 @@ def _build_runtime_composition(
                     },
                 )
             )
-        if report_transport is not None:
-            for station_id in state.pending_report_station_ids():
-                if station_id in reporter_station_ids:
-                    continue
-                reporters.append(
-                    DecisionReporter(
-                        queues=state.station(station_id),
-                        transport=report_transport,
-                    )
-                )
-                reporter_station_ids.add(station_id)
     except Exception:
         for built_station in stations:
             built_station.close()
@@ -1008,7 +998,7 @@ def _build_runtime_composition(
         stations=tuple(stations),
         connector_runtimes=connector_runtimes,
         output_dispatchers=output_dispatchers,
-        reporters=tuple(reporters),
+        report_reconciler=report_reconciler,
     )
 
 
@@ -1175,7 +1165,7 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
             stations=composition.stations,
             state=state,
             media=MediaRuntime(config.media) if config.media is not None else None,
-            reporters=composition.reporters,
+            report_reconciler=composition.report_reconciler,
             configuration_sync=configuration_sync,
             maintenance_interval=config.command_poll_interval,
             configuration=composition.configuration,

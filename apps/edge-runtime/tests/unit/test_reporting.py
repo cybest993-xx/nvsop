@@ -12,13 +12,13 @@ from nvsop_contracts import (
 
 from edge_runtime.judgment.model import Decision, EvidenceSpan, HostInstant, Lifecycle, Violation
 from edge_runtime.judgment.reasons import ReasonCode, Verdict
-from edge_runtime.local_state.queues import (
+from edge_runtime.local_state import (
     BackendReportContext,
     PendingReport,
     PendingSopInstanceReport,
+    ReportContext,
 )
 from edge_runtime.reporting import (
-    ReportContext,
     reported_decision_from_pending,
     reported_instance_from_pending,
     reported_open_instance_from_pending,

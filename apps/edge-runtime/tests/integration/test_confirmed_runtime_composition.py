@@ -152,7 +152,7 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
                 closed_instances=(instance,),
                 report_provenance={1: (provenance,)},
             )
-            self.assertEqual((station_n.station_id,), state.pending_report_station_ids())
+            self.assertTrue(state.reports().pending_ids())
             state.configuration().confirm(bundle_n1, confirmed_at=3.0)
             state.close()
 
@@ -166,7 +166,7 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
             runtime = build_autonomous_runtime_from_file(config_path)
             try:
                 self.assertEqual((), runtime.stations)
-                self.assertEqual(1, len(runtime._reporters))
+                self.assertIsNotNone(runtime._report_reconciler)
                 with (
                     patch(
                         "edge_runtime.reporting_transport.HttpDecisionReportTransport.send_decision"
@@ -175,7 +175,8 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
                         "edge_runtime.reporting_transport.HttpDecisionReportTransport.send_instance"
                     ) as send_instance,
                 ):
-                    attempts = runtime._reporters[0].flush(
+                    assert runtime._report_reconciler is not None
+                    attempts = runtime._report_reconciler.flush(
                         now=HostInstant(4.0),
                         reported_at="2026-09-14T00:10:00Z",
                     )
@@ -186,7 +187,7 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
 
                 inspection = open_local_state(str(state_path))
                 try:
-                    self.assertEqual((), inspection.pending_report_station_ids())
+                    self.assertEqual((), inspection.reports().pending_ids())
                 finally:
                     inspection.close()
             finally:

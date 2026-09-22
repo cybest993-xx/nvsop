@@ -23,7 +23,6 @@ import sqlite3
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from threading import RLock
-from typing import cast
 
 from edge_runtime.judgment.model import Decision, HostInstant, Lifecycle, Violation
 from edge_runtime.judgment.reasons import ReasonCode, Verdict
@@ -183,24 +182,53 @@ class StationQueues:
                 """,
                 (self._station_id, -1 if limit is None else limit),
             ).fetchall()
-            return tuple(
-                PendingReport(
-                    queue_id=row["queue_id"],
-                    decision=self._decision_of(row),
-                    attempts=row["attempts"],
-                    last_error=row["last_error"],
-                    reported_at=row["report_reported_at"],
-                    context=self._report_context_of(row),
-                    opened_at=row["opened_at"] if row["closed_at"] is not None else None,
-                    closed_at=row["closed_at"],
-                    close_reason=(
-                        row["instance_lifecycle"] if row["closed_at"] is not None else None
-                    ),
-                    open_boundary_signal=row["open_boundary_signal"],
-                    close_boundary_signal=row["close_boundary_signal"],
-                )
-                for row in rows
-            )
+            return tuple(self._pending_report_from_row(row) for row in rows)
+
+    def pending_report(self, queue_id: int) -> PendingReport:
+        """按队列身份读取一个仍待发送的判定。"""
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT q.queue_id, q.attempts, q.last_error,
+                       q.report_host_id, q.report_backend_id, q.report_template_version_id,
+                       q.report_template_sha256, q.report_model_ids, q.report_reported_at,
+                       q.report_backend_provenance,
+                       q.report_configuration,
+                       q.configuration_revision, q.configuration_sha256,
+                       d.decision_id, d.instance_id, d.verdict, d.reasons, d.lifecycle,
+                       d.evidence_anchor, d.evidence_from, d.evidence_to,
+                       i.opened_at, i.closed_at, i.lifecycle AS instance_lifecycle,
+                       i.open_boundary_signal, i.close_boundary_signal
+                  FROM local_report_queue q
+                  JOIN local_decision d ON d.decision_id = q.decision_id
+                  JOIN local_sop_instance i
+                    ON i.station_id = q.station_id AND i.instance_id = d.instance_id
+                 WHERE q.station_id = ?
+                   AND q.queue_id = ?
+                   AND q.report_kind = 'decision'
+                   AND q.sent_at IS NULL
+                   AND q.superseded_at IS NULL
+                """,
+                (self._station_id, queue_id),
+            ).fetchone()
+            if row is None:
+                raise ValueError("pending decision report does not exist")
+            return self._pending_report_from_row(row)
+
+    def _pending_report_from_row(self, row: sqlite3.Row) -> PendingReport:
+        return PendingReport(
+            queue_id=row["queue_id"],
+            decision=self._decision_of(row),
+            attempts=row["attempts"],
+            last_error=row["last_error"],
+            reported_at=row["report_reported_at"],
+            context=self._report_context_of(row),
+            opened_at=row["opened_at"] if row["closed_at"] is not None else None,
+            closed_at=row["closed_at"],
+            close_reason=row["instance_lifecycle"] if row["closed_at"] is not None else None,
+            open_boundary_signal=row["open_boundary_signal"],
+            close_boundary_signal=row["close_boundary_signal"],
+        )
 
     def pending_instance_reports(
         self, *, limit: int | None = None
@@ -228,19 +256,49 @@ class StationQueues:
                 """,
                 (self._station_id, -1 if limit is None else limit),
             ).fetchall()
-            return tuple(
-                PendingSopInstanceReport(
-                    queue_id=int(row["queue_id"]),
-                    instance_id=int(row["instance_id"]),
-                    opened_at=float(row["opened_at"]),
-                    open_boundary_signal=row["open_boundary_signal"],
-                    attempts=int(row["attempts"]),
-                    last_error=row["last_error"],
-                    reported_at=row["report_reported_at"],
-                    context=cast(ReportContext, self._report_context_of(row)),
-                )
-                for row in rows
-            )
+            return tuple(self._pending_instance_report_from_row(row) for row in rows)
+
+    def pending_instance_report(self, queue_id: int) -> PendingSopInstanceReport:
+        """按队列身份读取一个仍待发送的实例开放快照。"""
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT q.queue_id, q.attempts, q.last_error, q.report_reported_at,
+                       q.report_host_id, q.report_template_version_id,
+                       q.report_template_sha256, q.report_backend_provenance,
+                       q.report_configuration, q.configuration_revision,
+                       q.configuration_sha256, q.instance_id, i.opened_at,
+                       i.open_boundary_signal
+                  FROM local_report_queue q
+                  JOIN local_sop_instance i
+                    ON i.station_id = q.station_id AND i.instance_id = q.instance_id
+                 WHERE q.station_id = ?
+                   AND q.queue_id = ?
+                   AND q.report_kind = 'instance'
+                   AND q.sent_at IS NULL
+                   AND q.superseded_at IS NULL
+                   AND i.closed_at IS NULL
+                """,
+                (self._station_id, queue_id),
+            ).fetchone()
+            if row is None:
+                raise ValueError("pending instance report does not exist")
+            return self._pending_instance_report_from_row(row)
+
+    def _pending_instance_report_from_row(self, row: sqlite3.Row) -> PendingSopInstanceReport:
+        context = self._report_context_of(row)
+        if context is None:
+            raise ValueError("pending instance report has no event-time report context")
+        return PendingSopInstanceReport(
+            queue_id=int(row["queue_id"]),
+            instance_id=int(row["instance_id"]),
+            opened_at=float(row["opened_at"]),
+            open_boundary_signal=row["open_boundary_signal"],
+            attempts=int(row["attempts"]),
+            last_error=row["last_error"],
+            reported_at=row["report_reported_at"],
+            context=context,
+        )
 
     def _report_context_of(self, row: sqlite3.Row) -> ReportContext | None:
         raw_provenance = row["report_backend_provenance"]

@@ -24,8 +24,7 @@ from edge_runtime.judgment.model import (
     TimerFired,
 )
 from edge_runtime.judgment.reasons import ReasonCode
-from edge_runtime.local_state.queues import BackendReportContext
-from edge_runtime.local_state.store import ReactionStore
+from edge_runtime.local_state import BackendReportContext, ReactionStore
 from edge_runtime.supervisor.evidence import clips_for
 from edge_runtime.supervisor.inputs import Normalizer, SupervisorInput, Validity, ValidityChanged
 

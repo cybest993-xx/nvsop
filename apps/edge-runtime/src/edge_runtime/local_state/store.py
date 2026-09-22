@@ -42,7 +42,13 @@ from edge_runtime.local_state.codec import (
 from edge_runtime.local_state.codec import violation as decode_violation
 from edge_runtime.local_state.configuration import LocalConfigurationStore
 from edge_runtime.local_state.disposal import LocalDisposalLedger
-from edge_runtime.local_state.queues import BackendReportContext, ReportContext, StationQueues
+from edge_runtime.local_state.queues import (
+    BackendReportContext,
+    PendingReport,
+    PendingSopInstanceReport,
+    ReportContext,
+    StationQueues,
+)
 from edge_runtime.local_state.schema import migrate
 
 
@@ -58,6 +64,20 @@ class ReactionStore(Protocol):
         closed_instances: Sequence[Instance],
         report_provenance: Mapping[int, tuple[BackendReportContext, ...] | None],
     ) -> None: ...
+
+
+class ReportStore(Protocol):
+    """主机级结构化事实上报持久化接缝。"""
+
+    def pending_ids(self, *, limit: int | None = None) -> tuple[int, ...]: ...
+
+    def pending_item(self, queue_id: int) -> PendingReport | PendingSopInstanceReport: ...
+
+    def freeze_reported_at(self, queue_id: int, *, candidate: str) -> str: ...
+
+    def mark_reported(self, queue_id: int, *, at: HostInstant) -> None: ...
+
+    def record_report_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None: ...
 
 
 class StationStore(StationQueues):
@@ -479,18 +499,9 @@ class LocalState:
         """返回一个工位的行作用域; 所有工位共享连接和写入锁。"""
         return StationStore(self._connection, station_id, self._lock, report_context)
 
-    def pending_report_station_ids(self) -> tuple[str, ...]:
-        """返回仍欠 Center 报告的工位, 包括已从当前配置移除的历史工位。"""
-        with self._lock:
-            rows = self._connection.execute(
-                """
-                SELECT DISTINCT station_id
-                  FROM local_report_queue
-                 WHERE sent_at IS NULL AND superseded_at IS NULL
-                 ORDER BY station_id
-                """
-            ).fetchall()
-        return tuple(str(row["station_id"]) for row in rows)
+    def reports(self) -> ReportStore:
+        """返回该主机 decision/instance 待上报事实的持久接缝。"""
+        return _HostReportStore(self._connection, self._lock)
 
     def disposal(self) -> LocalDisposalLedger:
         """返回该主机唯一的持久连接器写入账本。"""
@@ -503,6 +514,70 @@ class LocalState:
     def close(self) -> None:
         with self._lock:
             self._connection.close()
+
+
+class _HostReportStore:
+    """隐藏 report queue 的 SQLite 布局与工位分片。"""
+
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        lock: AbstractContextManager[object],
+    ) -> None:
+        self._connection = connection
+        self._lock = lock
+
+    def pending_ids(self, *, limit: int | None = None) -> tuple[int, ...]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT queue_id
+                  FROM local_report_queue
+                 WHERE sent_at IS NULL AND superseded_at IS NULL
+                 ORDER BY queue_id
+                 LIMIT ?
+                """,
+                (-1 if limit is None else limit,),
+            ).fetchall()
+        return tuple(int(row["queue_id"]) for row in rows)
+
+    def pending_item(self, queue_id: int) -> PendingReport | PendingSopInstanceReport:
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT station_id, report_kind
+                  FROM local_report_queue
+                 WHERE queue_id = ? AND sent_at IS NULL AND superseded_at IS NULL
+                """,
+                (queue_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError("pending report queue item does not exist")
+        queues = StationQueues(self._connection, str(row["station_id"]), self._lock)
+        if row["report_kind"] == "decision":
+            return queues.pending_report(queue_id)
+        if row["report_kind"] == "instance":
+            return queues.pending_instance_report(queue_id)
+        raise ValueError("pending report kind is invalid")
+
+    def freeze_reported_at(self, queue_id: int, *, candidate: str) -> str:
+        return self._queue(queue_id).freeze_reported_at(queue_id, candidate=candidate)
+
+    def mark_reported(self, queue_id: int, *, at: HostInstant) -> None:
+        self._queue(queue_id).mark_reported(queue_id, at=at)
+
+    def record_report_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None:
+        self._queue(queue_id).record_report_failure(queue_id, at=at, error=error)
+
+    def _queue(self, queue_id: int) -> StationQueues:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT station_id FROM local_report_queue WHERE queue_id = ?",
+                (queue_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError("report queue item does not exist")
+        return StationQueues(self._connection, str(row["station_id"]), self._lock)
 
 
 def open_local_state(path: str) -> LocalState:

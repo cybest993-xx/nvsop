@@ -19,9 +19,8 @@ from edge_runtime.judgment.model import (
     Template,
 )
 from edge_runtime.judgment.reasons import Verdict
-from edge_runtime.local_state import open_local_state
-from edge_runtime.local_state.queues import BackendReportContext, ReportContext
-from edge_runtime.reporting import DecisionReporter
+from edge_runtime.local_state import BackendReportContext, ReportContext, open_local_state
+from edge_runtime.reporting import HostReportReconciler
 
 from factory_sop.monitor.model import MirroredDecision, MirroredSopInstance
 from factory_sop.monitor.usecases import mirror_decision, mirror_instance
@@ -215,7 +214,7 @@ class HistoricalRecoveryContractTest(unittest.TestCase):
 
         monitor = MonitorMirror()
         transport = MirrorTransport(monitor)
-        attempts = DecisionReporter(queues=station, transport=transport).flush(
+        attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(
             now=HostInstant(10.0),
             reported_at="2026-09-16T00:00:00Z",
         )

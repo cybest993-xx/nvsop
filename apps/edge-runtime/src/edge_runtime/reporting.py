@@ -19,11 +19,11 @@ from nvsop_contracts import (
 )
 
 from edge_runtime.judgment.model import Decision, HostInstant, Lifecycle
-from edge_runtime.local_state.queues import (
+from edge_runtime.local_state import (
     PendingReport,
     PendingSopInstanceReport,
     ReportContext,
-    StationQueues,
+    ReportStore,
 )
 
 
@@ -51,30 +51,37 @@ class ReportAttempt:
     error: str | None = None
 
 
-class DecisionReporter:
-    """排空一个工位的持久队列,但绝不阻塞判定持久化。"""
+class HostReportReconciler:
+    """排空本机结构化事实,但绝不阻塞判定持久化。"""
 
     def __init__(
         self,
         *,
-        queues: StationQueues,
+        reports: ReportStore,
         transport: DecisionReportTransport,
     ) -> None:
-        self._queues = queues
+        self._reports = reports
         self._transport = transport
 
     def flush(
         self, *, now: HostInstant, reported_at: str, limit: int | None = None
     ) -> tuple[ReportAttempt, ...]:
         attempts: list[ReportAttempt] = []
-        pending_items: list[PendingReport | PendingSopInstanceReport] = [
-            *self._queues.pending_reports(),
-            *self._queues.pending_instance_reports(),
-        ]
-        pending_items.sort(key=lambda item: item.queue_id)
-        if limit is not None:
-            pending_items = pending_items[:limit]
-        for pending in pending_items:
+        for queue_id in self._reports.pending_ids(limit=limit):
+            try:
+                pending = self._reports.pending_item(queue_id)
+            except Exception as error:
+                message = f"{type(error).__name__}: {error}"[:255]
+                self._reports.record_report_failure(queue_id, at=now, error=message)
+                attempts.append(
+                    ReportAttempt(
+                        queue_id=queue_id,
+                        sent=False,
+                        event_id=f"pending:{queue_id}",
+                        error=message,
+                    )
+                )
+                continue
             if isinstance(pending, PendingSopInstanceReport):
                 event_id = (
                     f"{pending.context.host_id}:{pending.context.station_id}:"
@@ -83,7 +90,7 @@ class DecisionReporter:
                 try:
                     stable_reported_at = pending.reported_at
                     if stable_reported_at is None:
-                        stable_reported_at = self._queues.freeze_reported_at(
+                        stable_reported_at = self._reports.freeze_reported_at(
                             pending.queue_id, candidate=reported_at
                         )
                     opening_report = reported_open_instance_from_pending(
@@ -95,7 +102,7 @@ class DecisionReporter:
                     )
                 except Exception as error:
                     message = f"{type(error).__name__}: {error}"[:255]
-                    self._queues.record_report_failure(pending.queue_id, at=now, error=message)
+                    self._reports.record_report_failure(pending.queue_id, at=now, error=message)
                     attempts.append(
                         ReportAttempt(
                             queue_id=pending.queue_id,
@@ -105,7 +112,7 @@ class DecisionReporter:
                         )
                     )
                     continue
-                self._queues.mark_reported(pending.queue_id, at=now)
+                self._reports.mark_reported(pending.queue_id, at=now)
                 attempts.append(
                     ReportAttempt(queue_id=pending.queue_id, sent=True, event_id=event_id)
                 )
@@ -118,7 +125,7 @@ class DecisionReporter:
             try:
                 stable_reported_at = pending.reported_at
                 if stable_reported_at is None and pending.context is not None:
-                    stable_reported_at = self._queues.freeze_reported_at(
+                    stable_reported_at = self._reports.freeze_reported_at(
                         pending.queue_id, candidate=reported_at
                     )
                 decision_report = reported_decision_from_pending(
@@ -127,7 +134,7 @@ class DecisionReporter:
                 )
             except Exception as error:
                 message = f"{type(error).__name__}: {error}"[:255]
-                self._queues.record_report_failure(pending.queue_id, at=now, error=message)
+                self._reports.record_report_failure(pending.queue_id, at=now, error=message)
                 attempts.append(
                     ReportAttempt(
                         queue_id=pending.queue_id,
@@ -152,7 +159,7 @@ class DecisionReporter:
                     )
             except Exception as error:
                 message = f"{type(error).__name__}: {error}"[:255]
-                self._queues.record_report_failure(pending.queue_id, at=now, error=message)
+                self._reports.record_report_failure(pending.queue_id, at=now, error=message)
                 attempts.append(
                     ReportAttempt(
                         queue_id=pending.queue_id,
@@ -162,7 +169,7 @@ class DecisionReporter:
                     )
                 )
                 continue
-            self._queues.mark_reported(pending.queue_id, at=now)
+            self._reports.mark_reported(pending.queue_id, at=now)
             attempts.append(
                 ReportAttempt(
                     queue_id=pending.queue_id,
@@ -340,9 +347,8 @@ def reported_open_instance_from_pending(
 
 __all__ = [
     "DecisionReportTransport",
-    "DecisionReporter",
+    "HostReportReconciler",
     "ReportAttempt",
-    "ReportContext",
     "reported_decision_from_pending",
     "reported_instance_from_pending",
     "reported_open_instance_from_pending",

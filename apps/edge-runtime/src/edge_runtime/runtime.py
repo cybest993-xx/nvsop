@@ -162,6 +162,8 @@ def _outcome_kind(outcome: WriteOutcome) -> str:
     if isinstance(outcome, TimedOut):
         return "timed_out"
     if isinstance(outcome, Failed):
+        if outcome.detail == PERSISTENT_UNKNOWN_DETAIL:
+            return DISPOSAL_RESULT_UNKNOWN
         return "failed"
     raise AssertionError(f"unsupported write outcome: {outcome!r}")
 

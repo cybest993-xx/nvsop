@@ -806,14 +806,24 @@ def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
                 now=datetime.now(UTC),
                 datasets=datasets,
             )
-            if not _commit_if_active(session, fence):
-                try:
-                    backend.discard_prepared_video(data_id=prepared.prepared.data_id)
-                except Exception:
-                    _logger.exception(
-                        "job.dataset_annotation.cancel_cleanup_failed",
-                        data_id=prepared.prepared.data_id,
-                    )
+            try:
+                if not _commit_if_active(session, fence):
+                    try:
+                        backend.discard_prepared_video(data_id=prepared.prepared.data_id)
+                    except Exception:
+                        _logger.exception(
+                            "job.dataset_annotation.cancel_cleanup_failed",
+                            data_id=prepared.prepared.data_id,
+                        )
+                    return
+            except Exception:
+                _logger.exception(
+                    "job.dataset_annotation.copy_commit_unknown",
+                    job_id=str(running.id),
+                    execution_id=str(target.execution.id),
+                    data_id=prepared.prepared.data_id,
+                    result="commit_unknown",
+                )
                 return
             copy_persisted = True
 

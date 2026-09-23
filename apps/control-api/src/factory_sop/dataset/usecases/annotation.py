@@ -49,6 +49,7 @@ from factory_sop.dataset.storage import (
 )
 from factory_sop.identifiers import new_id
 from factory_sop.job.api import AnnotationJobQueue, ApplicationJob
+from factory_sop.observability import get_logger
 
 _ACTION_RE = re.compile(r"^\((\d+)\).+")
 _ALLOWED_SEGMENT_FIELDS = frozenset(
@@ -56,6 +57,7 @@ _ALLOWED_SEGMENT_FIELDS = frozenset(
 )
 _TOKEN_VERSION = 2
 _MAX_IDEMPOTENCY_KEY_LENGTH = 255
+_logger = get_logger("dataset")
 
 
 class AnnotationRefusedError(DatasetRefusedError):
@@ -1355,6 +1357,7 @@ def _prepare_backend_copy(
             DatasetRefusalCode.ANNOTATION_CONTEXT_INVALID,
             detail="视频没有可读取的对象",
         )
+    prepared: PreparedAnnotationVideo | None = None
     try:
         with tempfile.NamedTemporaryFile(
             prefix="nvsop-annotation-", suffix=Path(member.original_filename).suffix
@@ -1391,34 +1394,49 @@ def _prepare_backend_copy(
                 derived_sha256 = _file_sha256(derived_path)
                 derived_metadata = media_probe.probe(str(derived_path))
     except ObjectNotFoundError as error:
+        if prepared is not None:
+            _discard_unpublished_backend_copy(backend=backend, prepared=prepared)
         raise AnnotationRefusedError(
             DatasetRefusalCode.OBJECT_NOT_FOUND,
             detail="标注源对象不存在",
         ) from error
     except ObjectStorageUnavailableError as error:
+        if prepared is not None:
+            _discard_unpublished_backend_copy(backend=backend, prepared=prepared)
         raise AnnotationRefusedError(
             DatasetRefusalCode.STORAGE_UNAVAILABLE,
             detail="标注源对象暂时不可读取",
         ) from error
     except (MediaProbeUnavailableError, InvalidMediaError) as error:
+        if prepared is not None:
+            _discard_unpublished_backend_copy(backend=backend, prepared=prepared)
         raise AnnotationRefusedError(
             DatasetRefusalCode.MEDIA_PROBE_UNAVAILABLE,
             detail="标注派生视频的媒体事实无法确认",
         ) from error
     except AnnotationBackendUnavailableError as error:
+        if prepared is not None:
+            _discard_unpublished_backend_copy(backend=backend, prepared=prepared)
         raise AnnotationRefusedError(
             DatasetRefusalCode.ANNOTATION_BACKEND_UNAVAILABLE,
             detail="标注基座暂时不可用",
         ) from error
     except AnnotationBackendExecutionError as error:
+        if prepared is not None:
+            _discard_unpublished_backend_copy(backend=backend, prepared=prepared)
         raise AnnotationRefusedError(
             DatasetRefusalCode.ANNOTATION_EXECUTION_FAILED,
             detail=str(error),
         ) from error
+    except Exception:
+        if prepared is not None:
+            _discard_unpublished_backend_copy(backend=backend, prepared=prepared)
+        raise
     if (
         not math.isfinite(derived_metadata.duration_seconds)
         or abs(derived_metadata.duration_seconds - (member.duration_seconds or 0.0)) > 0.1
     ):
+        _discard_unpublished_backend_copy(backend=backend, prepared=prepared)
         raise AnnotationRefusedError(
             DatasetRefusalCode.ANNOTATION_EXECUTION_FAILED,
             detail="基座转码后的视频时长无法与源视频坐标对应",
@@ -1429,6 +1447,19 @@ def _prepare_backend_copy(
         sha256=derived_sha256,
         duration_seconds=derived_metadata.duration_seconds,
     )
+
+
+def _discard_unpublished_backend_copy(
+    *, backend: AnnotationBackend, prepared: PreparedAnnotationVideo
+) -> None:
+    """清理尚未被 PostgreSQL 权威状态引用的基座副本。"""
+    try:
+        backend.discard_prepared_video(data_id=prepared.data_id)
+    except Exception:
+        _logger.exception(
+            "dataset.annotation.unpublished_copy_cleanup_failed",
+            data_id=prepared.data_id,
+        )
 
 
 def _require_dataset(*, dataset_id: UUID, datasets: DatasetRepository) -> None:

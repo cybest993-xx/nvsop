@@ -15,7 +15,7 @@ import pytest
 from factory_sop.auth.authorization import AuthorizationRefusedError, Caller
 from factory_sop.auth.model import User, UserStatus
 from factory_sop.auth.permissions import Permission
-from factory_sop.dataset.annotation import PreparedAnnotationVideo
+from factory_sop.dataset.annotation import AnnotationBackendExecutionError, PreparedAnnotationVideo
 from factory_sop.dataset.errors import DatasetFieldError
 from factory_sop.dataset.media import MediaMetadata
 from factory_sop.dataset.model import (
@@ -249,6 +249,8 @@ class FakeAnnotationCopyStorage(ObjectStorage):
 @dataclass
 class FakeAnnotationCopyBackend:
     calls: int = 0
+    discarded_data_ids: list[str] = field(default_factory=list)
+    fail_download: bool = False
 
     def prepare_video(
         self,
@@ -268,9 +270,12 @@ class FakeAnnotationCopyBackend:
 
     def discard_prepared_video(self, *, data_id: str) -> None:
         assert data_id.startswith("base-dataset-")
+        self.discarded_data_ids.append(data_id)
 
     def download_video(self, *, video_id: str, destination: BinaryIO) -> None:
         assert video_id.startswith("base-video-")
+        if self.fail_download:
+            raise AnnotationBackendExecutionError("derived download failed")
         destination.write(b"derived video")
 
     def split_video(
@@ -906,6 +911,49 @@ def test_retry_creates_new_execution_without_overwriting_old_candidate() -> None
         ({"id": "clip-old", "start_time": 0.0, "end_time": 3.5},),
         (),
     ]
+
+
+def test_prepare_execution_copy_discards_backend_copy_when_post_upload_step_fails() -> None:
+    value = store()
+    source = b"annotation source"
+    value.members[MEMBER_ID] = replace(
+        value.members[MEMBER_ID],
+        actual_size=len(source),
+        actual_sha256=sha256(source).hexdigest(),
+    )
+    token = context_for(value)
+    jobs = FakeAnnotationJobs()
+    submitted = submit_annotation(
+        dataset_id=DATASET_ID,
+        member_id=MEMBER_ID,
+        context_token=token,
+        raw_segments=segments(),
+        mode=AnnotationMode.SINGLE_OPERATOR,
+        idempotency_key="cleanup-post-upload-failure",
+        caller=caller(Permission.DATASET_IMPORT),
+        now=NOW,
+        datasets=value,
+        jobs=jobs,
+        secret=SECRET,
+    )
+    target = begin_annotation_execution(
+        job=jobs.jobs[submitted.job.id],
+        datasets=value,
+        now=NOW + timedelta(seconds=1),
+    )
+    assert target is not None
+    backend = FakeAnnotationCopyBackend(fail_download=True)
+
+    with pytest.raises(AnnotationRefusedError) as refused:
+        prepare_annotation_execution_copy(
+            target=target,
+            storage=FakeAnnotationCopyStorage(source),
+            backend=backend,
+            media_probe=FakeAnnotationCopyProbe(),
+        )
+
+    assert refused.value.code.value == "ANNOTATION_EXECUTION_FAILED"
+    assert backend.discarded_data_ids == ["base-dataset-1"]
 
 
 def test_each_execution_uses_a_distinct_prepared_base_copy() -> None:

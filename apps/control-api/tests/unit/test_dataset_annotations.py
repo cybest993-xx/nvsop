@@ -266,6 +266,9 @@ class FakeAnnotationCopyBackend:
             video_id=f"base-video-{self.calls}",
         )
 
+    def discard_prepared_video(self, *, data_id: str) -> None:
+        assert data_id.startswith("base-dataset-")
+
     def download_video(self, *, video_id: str, destination: BinaryIO) -> None:
         assert video_id.startswith("base-video-")
         destination.write(b"derived video")

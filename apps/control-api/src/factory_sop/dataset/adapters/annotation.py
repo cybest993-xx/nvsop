@@ -75,6 +75,28 @@ class HttpAnnotationBackend:
             video_id=_required_string(video_result, "file_id"),
         )
 
+    def discard_prepared_video(self, *, data_id: str) -> None:
+        """删除取消执行留下的未引用基座数据集。"""
+        connection = self._connection()
+        try:
+            connection.request(
+                "DELETE",
+                f"{self._base_path}/api/v1/videos/clear-dataset/{quote(data_id, safe='')}",
+                headers={"Connection": "close"},
+            )
+            response = connection.getresponse()
+            response.read()
+            if not 200 <= response.status < 300:
+                raise AnnotationBackendExecutionError(
+                    f"标注基座清理工作副本失败（HTTP {response.status}）"
+                )
+        except AnnotationBackendExecutionError:
+            raise
+        except (OSError, http.client.HTTPException) as error:
+            raise AnnotationBackendUnavailableError("无法清理标注基座工作副本") from error
+        finally:
+            connection.close()
+
     def download_video(self, *, video_id: str, destination: BinaryIO) -> None:
         """读取基座转码副本到服务端临时文件，不向浏览器中继字节。"""
         connection = self._connection()

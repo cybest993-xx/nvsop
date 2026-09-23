@@ -16,6 +16,7 @@ from factory_sop.dataset.api import (
     ArtifactExecutionOutcome,
     ArtifactExecutionResult,
     ArtifactJobFinisher,
+    ArtifactTransactionCommitter,
 )
 from factory_sop.dataset.errors import DatasetRefusalCode, DatasetRefusedError
 from factory_sop.dataset.model import ArtifactStatus
@@ -56,6 +57,7 @@ class PostgresDatasetArtifactExecutor:
         *,
         job: ApplicationJob,
         finish_job: ArtifactJobFinisher,
+        commit_transaction: ArtifactTransactionCommitter,
     ) -> ArtifactExecutionResult:
         """生成制品，并在同一事务内组合数据集与任务终态。"""
         stale_object_keys: tuple[str, ...] = ()
@@ -79,13 +81,15 @@ class PostgresDatasetArtifactExecutor:
                     datasets=datasets,
                     now=datetime.now(UTC),
                 )
-            session.commit()
+            if not commit_transaction(session):
+                return ArtifactExecutionResult(ArtifactExecutionOutcome.LEASE_LOST)
 
         if target is None:
             return self._finish_superseded(
                 job=job,
                 object_keys=stale_object_keys,
                 finish_job=finish_job,
+                commit_transaction=commit_transaction,
             )
 
         object_key = cast(str, target.artifact.object_key)
@@ -95,6 +99,7 @@ class PostgresDatasetArtifactExecutor:
             return self._finish_failure(
                 target=target,
                 finish_job=finish_job,
+                commit_transaction=commit_transaction,
                 code="STORAGE_UNAVAILABLE",
                 detail="训练素材存储暂时不可用，请稍后重试",
                 error=error,
@@ -161,6 +166,7 @@ class PostgresDatasetArtifactExecutor:
             return self._finish_failure(
                 target=target,
                 finish_job=finish_job,
+                commit_transaction=commit_transaction,
                 code=code,
                 detail=detail,
                 error=error,
@@ -172,6 +178,7 @@ class PostgresDatasetArtifactExecutor:
             manifest=manifest,
             storage=storage,
             finish_job=finish_job,
+            commit_transaction=commit_transaction,
         )
 
     def cleanup_candidates(self) -> None:
@@ -226,6 +233,7 @@ class PostgresDatasetArtifactExecutor:
         job: ApplicationJob,
         object_keys: tuple[str, ...],
         finish_job: ArtifactJobFinisher,
+        commit_transaction: ArtifactTransactionCommitter,
     ) -> ArtifactExecutionResult:
         if object_keys:
             try:
@@ -276,7 +284,8 @@ class PostgresDatasetArtifactExecutor:
                 if not finish_job(session, result):
                     session.rollback()
                     return ArtifactExecutionResult(ArtifactExecutionOutcome.LEASE_LOST)
-                session.commit()
+                if not commit_transaction(session):
+                    return ArtifactExecutionResult(ArtifactExecutionOutcome.LEASE_LOST)
             _logger.info(
                 "job.dataset_artifact.candidate_cleanup.finished",
                 job_id=str(job.id),
@@ -292,7 +301,8 @@ class PostgresDatasetArtifactExecutor:
             if not finish_job(session, result):
                 session.rollback()
                 return ArtifactExecutionResult(ArtifactExecutionOutcome.LEASE_LOST)
-            session.commit()
+            if not commit_transaction(session):
+                return ArtifactExecutionResult(ArtifactExecutionOutcome.LEASE_LOST)
         return result
 
     def _publish(
@@ -303,6 +313,7 @@ class PostgresDatasetArtifactExecutor:
         manifest: Mapping[str, Any],
         storage: ObjectStorage,
         finish_job: ArtifactJobFinisher,
+        commit_transaction: ArtifactTransactionCommitter,
     ) -> ArtifactExecutionResult:
         with self._factory() as session:
             datasets = PostgresDatasetRepository(session)
@@ -326,7 +337,13 @@ class PostgresDatasetArtifactExecutor:
                     )
                     return ArtifactExecutionResult(ArtifactExecutionOutcome.LEASE_LOST)
                 try:
-                    session.commit()
+                    if not commit_transaction(session):
+                        self._record_orphan(
+                            artifact_id=target.artifact.id,
+                            object_key=object_key,
+                            error=RuntimeError("artifact execution cancelled"),
+                        )
+                        return ArtifactExecutionResult(ArtifactExecutionOutcome.LEASE_LOST)
                 except Exception:  # pragma: no cover - 需要真实数据库故障注入
                     _logger.exception(
                         "job.dataset_artifact.commit_unknown",
@@ -351,6 +368,7 @@ class PostgresDatasetArtifactExecutor:
                 return self._finish_failure(
                     target=target,
                     finish_job=finish_job,
+                    commit_transaction=commit_transaction,
                     code=error.code.value,
                     detail=error.detail,
                     error=error,
@@ -366,6 +384,7 @@ class PostgresDatasetArtifactExecutor:
                 return self._finish_failure(
                     target=target,
                     finish_job=finish_job,
+                    commit_transaction=commit_transaction,
                     code="ARTIFACT_DATABASE_FAILURE",
                     detail="制品结果登记失败",
                     error=error,
@@ -388,6 +407,7 @@ class PostgresDatasetArtifactExecutor:
         *,
         target: ArtifactTarget,
         finish_job: ArtifactJobFinisher,
+        commit_transaction: ArtifactTransactionCommitter,
         code: str,
         detail: str,
         error: Exception,
@@ -416,7 +436,8 @@ class PostgresDatasetArtifactExecutor:
             if not finish_job(session, result):
                 session.rollback()
                 return ArtifactExecutionResult(ArtifactExecutionOutcome.LEASE_LOST)
-            session.commit()
+            if not commit_transaction(session):
+                return ArtifactExecutionResult(ArtifactExecutionOutcome.LEASE_LOST)
         _logger.warning(
             "job.dataset_artifact.failed",
             job_id=str(target.job.id),

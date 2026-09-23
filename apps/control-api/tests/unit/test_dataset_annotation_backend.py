@@ -32,6 +32,16 @@ class AnnotationBackendHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
+    def do_DELETE(self) -> None:
+        self.requests.append((self.path, b""))
+        response = {"deleted_count": 1, "files_deleted": 1}
+        encoded = json.dumps(response).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
     def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length)
@@ -126,6 +136,16 @@ def test_prepare_and_split_use_explicit_target_and_preserve_wire_mode() -> None:
         ],
         "twoOperatorMode": True,
     }
+
+
+def test_discard_prepared_video_uses_vendor_cleanup_endpoint() -> None:
+    with backend_server() as (origin, handler):
+        backend = HttpAnnotationBackend(base_url=origin, timeout_seconds=5)
+        backend.discard_prepared_video(data_id="base dataset")
+
+    assert handler.requests == [
+        ("/api/v1/videos/clear-dataset/base%20dataset", b""),
+    ]
 
 
 def test_multipart_filename_cannot_inject_a_header() -> None:

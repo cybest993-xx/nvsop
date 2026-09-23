@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from threading import RLock
 from typing import Protocol
@@ -93,10 +93,12 @@ class StationStore(StationQueues):
         station_id: str,
         lock: AbstractContextManager[object],
         report_context: ReportContext | None = None,
+        notify_report_pending: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(connection, station_id, lock)
         self._lock = lock
         self._report_context = report_context
+        self._notify_report_pending = notify_report_pending
 
     def commit(
         self,
@@ -108,23 +110,33 @@ class StationStore(StationQueues):
         report_provenance: Mapping[int, tuple[BackendReportContext, ...] | None],
     ) -> None:
         """持久化一次反应, 并串行化共享 SQLite 连接上的工位线程。"""
+        report_enqueued = False
         with self._lock:
             self._connection.execute("BEGIN IMMEDIATE")
             try:
                 if state.instance is not None:
                     provenance = report_provenance.get(state.instance.instance_id)
                     if self._write_instance(state.instance, provenance):
-                        self._enqueue_instance_open_report(state.instance.instance_id, provenance)
+                        report_enqueued = (
+                            self._enqueue_instance_open_report(
+                                state.instance.instance_id, provenance
+                            )
+                            or report_enqueued
+                        )
                 for instance in closed_instances:
                     provenance = report_provenance.get(instance.instance_id)
                     if self._write_instance(instance, provenance):
-                        self._enqueue_instance_open_report(instance.instance_id, provenance)
+                        report_enqueued = (
+                            self._enqueue_instance_open_report(instance.instance_id, provenance)
+                            or report_enqueued
+                        )
                 for decision in decisions:
                     decision_id = self._write_decision(decision)
                     self._enqueue_report(
                         decision_id,
                         report_provenance.get(decision.instance_id),
                     )
+                    report_enqueued = True
                     for violation in decision.violations:
                         self._latch(decision.instance_id, decision_id, violation)
                     if decision.lifecycle is not Lifecycle.STAYS_OPEN:
@@ -139,6 +151,8 @@ class StationStore(StationQueues):
                 if self._connection.in_transaction:
                     self._connection.execute("ROLLBACK")
                 raise
+        if report_enqueued and self._notify_report_pending is not None:
+            self._notify_report_pending()
 
     def _write_instance(
         self,
@@ -282,10 +296,10 @@ class StationStore(StationQueues):
         self,
         instance_id: int,
         provenance: tuple[BackendReportContext, ...] | None,
-    ) -> None:
+    ) -> bool:
         context = self._report_context
         if context is None or context.configuration_revision is None or provenance is None:
-            return
+            return False
         configured = {backend.backend_id: backend for backend in context.backends}
         for backend in provenance:
             if configured.get(backend.backend_id) != backend:
@@ -313,6 +327,7 @@ class StationStore(StationQueues):
                 context.configuration_sha256,
             ),
         )
+        return True
 
     def _supersede_instance_open_report(self, instance_id: int, *, at: HostInstant) -> None:
         """未送达的开放快照由同实例的闭合快照取代;已确认开放快照保留。"""
@@ -489,15 +504,19 @@ class LocalState:
         self,
         connection: sqlite3.Connection,
         lock: AbstractContextManager[object] | None = None,
+        notify_report_pending: Callable[[], None] | None = None,
     ) -> None:
         self._connection = connection
         self._lock = lock or RLock()
+        self._notify_report_pending = notify_report_pending
 
     def station(
         self, station_id: str, *, report_context: ReportContext | None = None
     ) -> StationStore:
         """返回一个工位的行作用域; 所有工位共享连接和写入锁。"""
-        return StationStore(self._connection, station_id, self._lock, report_context)
+        return StationStore(
+            self._connection, station_id, self._lock, report_context, self._notify_report_pending
+        )
 
     def reports(self) -> ReportStore:
         """返回该主机 decision/instance 待上报事实的持久接缝。"""
@@ -534,7 +553,7 @@ class _HostReportStore:
                 SELECT queue_id
                   FROM local_report_queue
                  WHERE sent_at IS NULL AND superseded_at IS NULL
-                 ORDER BY queue_id
+                 ORDER BY attempts, queue_id
                  LIMIT ?
                 """,
                 (-1 if limit is None else limit,),
@@ -580,7 +599,9 @@ class _HostReportStore:
         return StationQueues(self._connection, str(row["station_id"]), self._lock)
 
 
-def open_local_state(path: str) -> LocalState:
+def open_local_state(
+    path: str, *, notify_report_pending: Callable[[], None] | None = None
+) -> LocalState:
     """打开或创建推理机本地状态, 并迁移到当前 SQLite 模式。
 
     连接使用自动提交, `commit` 显式声明反应事务; 启用外键以保证判定记录不会脱离实例。
@@ -593,4 +614,4 @@ def open_local_state(path: str) -> LocalState:
     connection.execute("PRAGMA journal_mode = WAL")
     connection.execute("PRAGMA synchronous = FULL")
     migrate(connection)
-    return LocalState(connection)
+    return LocalState(connection, notify_report_pending=notify_report_pending)

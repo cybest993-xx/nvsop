@@ -20,6 +20,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Event
 
 from nvsop_contracts import (
     ConfigurationBundle,
@@ -83,6 +84,21 @@ class OneTransactionTest(unittest.TestCase):
             tuple(report.decision for report in station.pending_reports()),
             (decision_of(reaction),),
         )
+
+    def test_committed_report_notifies_pending_work(self) -> None:
+        report_pending = Event()
+        state = open_local_state(":memory:", notify_report_pending=report_pending.set)
+        self.addCleanup(state.close)
+        station = state.station(STATION)
+        driver = supervisor(opening_state(), FakeClock(), station)
+
+        driver.receive(action(STEPS[0], at=ANCHOR))
+        self.assertFalse(report_pending.is_set())
+
+        driver.receive(action(STEPS[2], at=ANCHOR + 1.0))
+
+        self.assertTrue(report_pending.is_set())
+        self.assertEqual(len(station.pending_reports()), 1)
 
     def test_decision_violations_and_report_event_are_stored_together(self) -> None:
         clock = FakeClock()
@@ -863,7 +879,7 @@ class HistoricalReportContextTest(unittest.TestCase):
         self.assertEqual(transport.sent[0], transport.sent[1])
         self.assertEqual(station.pending_reports(), ())
 
-    def test_host_reconciler_continues_after_one_station_report_fails(self) -> None:
+    def test_bounded_host_reconciler_moves_failed_station_behind_pending_work(self) -> None:
         context = self.context(revision=7, backend_id="backend-old")
         other_context = replace(context, station_id=OTHER_STATION)
         state = open_local_state(":memory:")
@@ -873,10 +889,11 @@ class HistoricalReportContextTest(unittest.TestCase):
             state.station(OTHER_STATION, report_context=other_context),
         )
         for station, report_context in zip(stations, (context, other_context), strict=True):
-            driver = supervisor(opening_state(), FakeClock(), station)
+            driver = supervisor(opening_state(end_signals=("end-a", "end-b")), FakeClock(), station)
             provenance = report_context.backends[0]
             driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=provenance)
-            driver.receive(action(STEPS[2], at=ANCHOR + 1.0), report_provenance=provenance)
+            driver.receive(action("end-b", at=ANCHOR + 1.0), report_provenance=provenance)
+            self.assertEqual(station.pending_instance_reports(), ())
 
         class Transport:
             def __init__(self) -> None:
@@ -899,15 +916,73 @@ class HistoricalReportContextTest(unittest.TestCase):
                 del report, configuration
 
         transport = Transport()
-        attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(
+        reconciler = HostReportReconciler(reports=state.reports(), transport=transport)
+        first = reconciler.flush(
             now=HostInstant(ANCHOR + 2.0),
             reported_at="2026-09-16T00:00:00Z",
+            limit=1,
+        )
+        second = reconciler.flush(
+            now=HostInstant(ANCHOR + 3.0),
+            reported_at="2026-09-16T00:00:01Z",
+            limit=1,
         )
 
         self.assertEqual(transport.attempted_decisions, [STATION, OTHER_STATION])
-        self.assertTrue(any(not attempt.sent for attempt in attempts))
+        self.assertFalse(first[0].sent)
+        self.assertTrue(second[0].sent)
         self.assertEqual(len(stations[0].pending_reports()), 1)
         self.assertEqual(stations[1].pending_reports(), ())
+
+    def test_host_reconciler_stops_bounded_batch_between_report_items(self) -> None:
+        context = self.context(revision=7, backend_id="backend-old")
+        other_context = replace(context, station_id=OTHER_STATION)
+        state = open_local_state(":memory:")
+        self.addCleanup(state.close)
+        stations = (
+            state.station(STATION, report_context=context),
+            state.station(OTHER_STATION, report_context=other_context),
+        )
+        for station, report_context in zip(stations, (context, other_context), strict=True):
+            driver = supervisor(opening_state(end_signals=("end-a", "end-b")), FakeClock(), station)
+            provenance = report_context.backends[0]
+            driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=provenance)
+            driver.receive(action("end-b", at=ANCHOR + 1.0), report_provenance=provenance)
+
+        stop = Event()
+
+        class Transport:
+            def __init__(self) -> None:
+                self.attempted_decisions: list[str] = []
+
+            def send_decision(
+                self,
+                report: ReportedDecision,
+                *,
+                configuration: ConfigurationBundle | None,
+            ) -> None:
+                del configuration
+                self.attempted_decisions.append(report.station_id)
+                stop.set()
+
+            def send_instance(
+                self, report: object, *, configuration: ConfigurationBundle | None
+            ) -> None:
+                del report, configuration
+
+        transport = Transport()
+        attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(
+            now=HostInstant(ANCHOR + 2.0),
+            reported_at="2026-09-16T00:00:00Z",
+            limit=32,
+            should_stop=stop.is_set,
+        )
+
+        self.assertEqual(transport.attempted_decisions, [STATION])
+        self.assertEqual(len(attempts), 1)
+        self.assertTrue(attempts[0].sent)
+        self.assertEqual(stations[0].pending_reports(), ())
+        self.assertEqual(len(stations[1].pending_reports()), 1)
 
     def test_host_reconciler_continues_after_one_station_report_cannot_decode(self) -> None:
         context = self.context(revision=7, backend_id="backend-old")

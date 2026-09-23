@@ -158,6 +158,13 @@ class Normalizer:
         """
         return self._stream
 
+    @property
+    def stream_impairment(self) -> ReasonCode | None:
+        """返回当前流健康对应的不可判定原因, 健康时返回 None."""
+        if self._stream is StreamHealth.HEALTHY:
+            return None
+        return _stream_reason(self._stream)
+
     def events_for(self, arriving: SupervisorInput) -> tuple[Event, ...]:
         """The core events this input becomes, in the order to send them."""
         match arriving:

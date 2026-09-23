@@ -80,13 +80,9 @@ class _ExecutionFence:
         return self._cancelled.is_set()
 
     def request_cancel(self) -> None:
-        """立即撤销后续发布权。"""
-        self._cancelled.set()
-
-    def wait_until_quiescent(self) -> None:
-        """等待已经进入发布临界区的提交完成。"""
+        """与事务提交共享临界区，确定取消和提交的唯一先后顺序。"""
         with self._publication_lock:
-            return
+            self._cancelled.set()
 
     def commit(self, session: Session) -> bool:
         """与取消请求共享临界区，避免检查与提交之间出现竞态。"""
@@ -121,8 +117,7 @@ async def _run_blocking_job(
     try:
         await asyncio.shield(physical)
     except asyncio.CancelledError:
-        fence.request_cancel()
-        await asyncio.shield(loop.run_in_executor(None, fence.wait_until_quiescent))
+        await asyncio.shield(loop.run_in_executor(None, fence.request_cancel))
         raise
 
 
@@ -731,11 +726,11 @@ def _prepare_annotation_context_job(
         if not _commit_if_active(session, fence):
             return
 
+    cleanup_data_id = (
+        target.context.upstream_data_id if target.context.upstream_video_id is None else None
+    )
     try:
         backend = runtime.backend()
-        cleanup_data_id = (
-            target.context.upstream_data_id if target.context.upstream_video_id is None else None
-        )
         if cleanup_data_id is not None:
             try:
                 backend.discard_prepared_video(data_id=cleanup_data_id)
@@ -818,6 +813,14 @@ def _prepare_annotation_context_job(
         )
         return
     except AnnotationBackendUnavailableError as error:
+        if cleanup_data_id is not None:
+            _logger.warning(
+                "job.dataset_annotation_preparation.cleanup_backend_unavailable",
+                job_id=str(running.id),
+                context_id=str(target.context.id),
+                data_id=cleanup_data_id,
+            )
+            return
         _finish_context_preparation_failure(
             factory=factory,
             runtime=runtime,
@@ -1028,13 +1031,11 @@ def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
 
     prepared = None
     copy_persisted = target.execution.upstream_video_id is not None
+    cleanup_data_id = (
+        target.execution.upstream_data_id if target.execution.upstream_video_id is None else None
+    )
     try:
         backend = runtime.backend()
-        cleanup_data_id = (
-            target.execution.upstream_data_id
-            if target.execution.upstream_video_id is None
-            else None
-        )
         if cleanup_data_id is not None:
             try:
                 backend.discard_prepared_video(data_id=cleanup_data_id)
@@ -1163,6 +1164,14 @@ def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
         )
         return
     except AnnotationBackendUnavailableError as error:
+        if cleanup_data_id is not None:
+            _logger.warning(
+                "job.dataset_annotation.cleanup_backend_unavailable",
+                job_id=str(running.id),
+                execution_id=str(target.execution.id),
+                data_id=cleanup_data_id,
+            )
+            return
         if (
             prepared is not None
             and not copy_persisted

@@ -379,14 +379,13 @@ def test_execution_fence_serializes_cancel_with_commit() -> None:
         committing = asyncio.create_task(asyncio.to_thread(fence.commit, cast(Any, session)))
         assert await asyncio.to_thread(commit_started.wait, 1.0)
 
-        fence.request_cancel()
-        quiescent = asyncio.create_task(asyncio.to_thread(fence.wait_until_quiescent))
+        cancelling = asyncio.create_task(asyncio.to_thread(fence.request_cancel))
         await asyncio.sleep(0)
-        assert not quiescent.done()
+        assert not cancelling.done()
 
         release_commit.set()
         assert await committing
-        await quiescent
+        await cancelling
         assert session.committed
 
         denied = BlockingSession()
@@ -932,6 +931,102 @@ def test_annotation_backend_construction_failure_is_classified(
     runner(ctx, str(job.id), worker_module._ExecutionFence())
 
     assert captured == ["ANNOTATION_BACKEND_UNAVAILABLE"]
+
+
+@pytest.mark.parametrize("kind", ["context", "execution"])
+def test_cleanup_candidate_survives_backend_construction_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+) -> None:
+    state = _WorkerState()
+    job_type = (
+        JobType.DATASET_ANNOTATION_PREPARATION if kind == "context" else JobType.DATASET_ANNOTATION
+    )
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=job_type,
+        status=JobStatus.RUNNING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=NOW,
+        updated_at=NOW,
+        failure_code=None,
+    )
+    finished: list[str] = []
+
+    class FakeJobRepository:
+        def __init__(self, session: object) -> None:
+            assert isinstance(session, _TrackingSession)
+
+        def mark_running(self, *, job_id: UUID, now: datetime) -> ApplicationJob | None:
+            del now
+            assert job_id == job.id
+            return job
+
+    class Runtime:
+        def repository(self, session: object) -> object:
+            assert isinstance(session, _TrackingSession)
+            return object()
+
+        def backend(self) -> object:
+            raise AnnotationBackendUnavailableError("not configured")
+
+    monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
+    if kind == "context":
+        target = SimpleNamespace(
+            job=job,
+            context=SimpleNamespace(
+                id=job.attempt_id,
+                upstream_data_id="cleanup-data",
+                upstream_video_id=None,
+                preparation_failure_code="ANNOTATION_EXECUTION_FAILED",
+                preparation_failure_detail="cleanup pending",
+            ),
+            member=object(),
+            actions=(),
+        )
+        monkeypatch.setattr(
+            worker_module,
+            "begin_annotation_context_preparation",
+            lambda **kwargs: target,
+        )
+        monkeypatch.setattr(
+            worker_module,
+            "_finish_context_preparation_failure",
+            lambda **kwargs: finished.append(cast(str, kwargs["code"])),
+        )
+        runner = worker_module._prepare_annotation_context_job
+    else:
+        target = SimpleNamespace(
+            job=job,
+            execution=SimpleNamespace(
+                id=job.attempt_id,
+                upstream_data_id="cleanup-data",
+                upstream_video_id=None,
+                failure_code="ANNOTATION_EXECUTION_FAILED",
+                failure_detail="cleanup pending",
+            ),
+            submission=SimpleNamespace(segments=(), mode="segment"),
+        )
+        monkeypatch.setattr(
+            worker_module,
+            "begin_annotation_execution",
+            lambda **kwargs: target,
+        )
+        monkeypatch.setattr(
+            worker_module,
+            "_finish_annotation_failure",
+            lambda **kwargs: finished.append(cast(str, kwargs["code"])),
+        )
+        runner = worker_module._annotate_dataset_job
+
+    ctx: Mapping[str, Any] = {
+        "session_factory": _TrackingSessionFactory(state),
+        "annotation_runtime": Runtime(),
+    }
+    runner(ctx, str(job.id), worker_module._ExecutionFence())
+
+    assert finished == []
 
 
 def test_annotation_cleanup_pending_is_persisted_for_retry(

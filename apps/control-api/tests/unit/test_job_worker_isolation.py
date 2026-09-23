@@ -13,7 +13,12 @@ from uuid import UUID, uuid4
 import pytest
 
 import factory_sop.job.adapters.worker as worker_module
-from factory_sop.dataset.api import ArtifactExecutionOutcome, ArtifactExecutionResult, MemberStatus
+from factory_sop.dataset.api import (
+    AnnotationBackendUnavailableError,
+    ArtifactExecutionOutcome,
+    ArtifactExecutionResult,
+    MemberStatus,
+)
 from factory_sop.job.api import ApplicationJob, JobStatus, JobType
 
 NOW = datetime(2026, 9, 23, 10, 0, tzinfo=UTC)
@@ -782,6 +787,90 @@ def test_annotation_preparation_lease_loss_discards_unpublished_backend_copy(
     assert state.sessions[-1].rollbacks == 1
 
 
+@pytest.mark.parametrize("kind", ["context", "execution"])
+def test_annotation_backend_construction_failure_is_classified(
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+) -> None:
+    state = _WorkerState()
+    job_type = (
+        JobType.DATASET_ANNOTATION_PREPARATION if kind == "context" else JobType.DATASET_ANNOTATION
+    )
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=job_type,
+        status=JobStatus.RUNNING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=NOW,
+        updated_at=NOW,
+        failure_code=None,
+    )
+    captured: list[str] = []
+
+    class FakeJobRepository:
+        def __init__(self, session: object) -> None:
+            assert isinstance(session, _TrackingSession)
+
+        def mark_running(self, *, job_id: UUID, now: datetime) -> ApplicationJob | None:
+            del now
+            assert job_id == job.id
+            return job
+
+    class Runtime:
+        def repository(self, session: object) -> object:
+            assert isinstance(session, _TrackingSession)
+            return object()
+
+        def backend(self) -> object:
+            raise AnnotationBackendUnavailableError("not configured")
+
+    monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
+    if kind == "context":
+        target = SimpleNamespace(
+            job=job,
+            context=SimpleNamespace(id=job.attempt_id),
+            member=object(),
+            actions=(),
+        )
+        monkeypatch.setattr(
+            worker_module,
+            "begin_annotation_context_preparation",
+            lambda **kwargs: target,
+        )
+        monkeypatch.setattr(
+            worker_module,
+            "_finish_context_preparation_failure",
+            lambda **kwargs: captured.append(cast(str, kwargs["code"])),
+        )
+        runner = worker_module._prepare_annotation_context_job
+    else:
+        target = SimpleNamespace(
+            job=job,
+            execution=SimpleNamespace(id=job.attempt_id, upstream_video_id=None),
+            submission=SimpleNamespace(segments=(), mode="segment"),
+        )
+        monkeypatch.setattr(
+            worker_module,
+            "begin_annotation_execution",
+            lambda **kwargs: target,
+        )
+        monkeypatch.setattr(
+            worker_module,
+            "_finish_annotation_failure",
+            lambda **kwargs: captured.append(cast(str, kwargs["code"])),
+        )
+        runner = worker_module._annotate_dataset_job
+
+    ctx: Mapping[str, Any] = {
+        "session_factory": _TrackingSessionFactory(state),
+        "annotation_runtime": Runtime(),
+    }
+    runner(ctx, str(job.id), worker_module._ExecutionFence())
+
+    assert captured == ["ANNOTATION_BACKEND_UNAVAILABLE"]
+
+
 def test_annotation_copy_commit_unknown_preserves_backend_copy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -904,6 +993,111 @@ def test_annotation_copy_commit_unknown_preserves_backend_copy(
     assert state.sessions[-1].commits == 1
     assert discarded == []
     assert split_calls == 0
+
+
+def test_annotation_retry_reuses_persisted_copy_after_uncertain_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _WorkerState()
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_ANNOTATION,
+        status=JobStatus.RUNNING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=NOW,
+        updated_at=NOW,
+        failure_code=None,
+    )
+    target = SimpleNamespace(
+        job=job,
+        execution=SimpleNamespace(id=job.attempt_id, upstream_video_id="persisted-video"),
+        submission=SimpleNamespace(segments=(), mode="segment"),
+    )
+    split_calls = 0
+
+    class FakeJobRepository:
+        def __init__(self, session: object) -> None:
+            assert isinstance(session, _TrackingSession)
+
+        def mark_running(self, *, job_id: UUID, now: datetime) -> ApplicationJob | None:
+            del now
+            assert job_id == job.id
+            return job
+
+        def finish(
+            self,
+            *,
+            job_id: UUID,
+            status: str,
+            failure_code: str | None,
+            now: datetime,
+            expected_updated_at: datetime,
+        ) -> bool:
+            del job_id, status, failure_code, now, expected_updated_at
+            state.finish_calls += 1
+            return True
+
+    class Backend:
+        def discard_prepared_video(self, *, data_id: str) -> None:
+            raise AssertionError(f"persisted copy must not be discarded: {data_id}")
+
+        def split_video(
+            self, *, video_id: object, segments: object, mode: object
+        ) -> tuple[dict[str, str], ...]:
+            nonlocal split_calls
+            assert video_id == "persisted-video"
+            del segments, mode
+            split_calls += 1
+            return ({"id": "clip-1"},)
+
+    backend = Backend()
+
+    class Runtime:
+        def repository(self, session: object) -> object:
+            assert isinstance(session, _TrackingSession)
+            return object()
+
+        def storage(self) -> object:
+            raise AssertionError("persisted copy retry must not read source storage")
+
+        def backend(self) -> Backend:
+            return backend
+
+        def media_probe(self) -> object:
+            raise AssertionError("persisted copy retry must not probe a new copy")
+
+    monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
+    monkeypatch.setattr(
+        worker_module,
+        "begin_annotation_execution",
+        lambda **kwargs: target,
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "prepare_annotation_execution_copy",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("persisted copy retry must not prepare a new copy")
+        ),
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "complete_annotation_execution",
+        lambda **kwargs: SimpleNamespace(id=job.attempt_id),
+    )
+    ctx: Mapping[str, Any] = {
+        "session_factory": _TrackingSessionFactory(state),
+        "annotation_runtime": Runtime(),
+    }
+
+    worker_module._annotate_dataset_job(
+        ctx,
+        str(job.id),
+        worker_module._ExecutionFence(),
+    )
+
+    assert split_calls == 1
+    assert state.finish_calls == 1
 
 
 def test_cancelled_annotation_discards_late_backend_result(

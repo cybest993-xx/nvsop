@@ -22,6 +22,7 @@ class AnnotationBackendHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     requests: ClassVar[list[tuple[str, bytes]]] = []
     fail_split: ClassVar[bool] = False
+    cleanup_files_deleted: ClassVar[int] = 1
 
     def do_GET(self) -> None:
         self.requests.append((self.path, b""))
@@ -34,7 +35,7 @@ class AnnotationBackendHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         self.requests.append((self.path, b""))
-        response = {"deleted_count": 1, "files_deleted": 1}
+        response = {"deleted_count": 1, "files_deleted": self.cleanup_files_deleted}
         encoded = json.dumps(response).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -80,6 +81,7 @@ class AnnotationBackendHandler(BaseHTTPRequestHandler):
 def backend_server() -> Iterator[tuple[str, type[AnnotationBackendHandler]]]:
     AnnotationBackendHandler.requests = []
     AnnotationBackendHandler.fail_split = False
+    AnnotationBackendHandler.cleanup_files_deleted = 1
     server = HTTPServer(("127.0.0.1", 0), AnnotationBackendHandler)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -146,6 +148,14 @@ def test_discard_prepared_video_uses_vendor_cleanup_endpoint() -> None:
     assert handler.requests == [
         ("/api/v1/videos/clear-dataset/base%20dataset", b""),
     ]
+
+
+def test_discard_prepared_video_requires_confirmed_file_deletion() -> None:
+    with backend_server() as (origin, handler):
+        handler.cleanup_files_deleted = 0
+        backend = HttpAnnotationBackend(base_url=origin, timeout_seconds=5)
+        with pytest.raises(AnnotationBackendExecutionError, match="未确认工作副本文件删除"):
+            backend.discard_prepared_video(data_id="base-dataset")
 
 
 def test_multipart_filename_cannot_inject_a_header() -> None:

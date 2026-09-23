@@ -666,6 +666,64 @@ describe('训练数据集工作台', () => {
     wrapper.unmount()
   })
 
+  it('clears annotation loading after preparation fails so the user can retry', async () => {
+    grant('dataset.dataset.view', 'dataset.dataset.edit')
+    api.createAnnotationContext
+      .mockRejectedValueOnce(new Error('标注准备请求失败'))
+      .mockResolvedValueOnce(ANNOTATION_CONTEXT)
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+
+    const enterAnnotation = wrapper.findAll('button').find((button) => button.text() === '进入标注')
+    expect(enterAnnotation).toBeDefined()
+    await enterAnnotation!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('标注准备请求失败')
+    expect(enterAnnotation!.attributes('disabled')).toBeUndefined()
+
+    await enterAnnotation!.trigger('click')
+    await flushPromises()
+
+    expect(api.createAnnotationContext).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('h2#annotation-editor-heading').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('stops annotation preparation when the upload selector changes datasets', async () => {
+    grant('dataset.dataset.view', 'dataset.dataset.edit', 'dataset.dataset.import')
+    const secondDataset = { ...DATASET, id: 'dataset-2', name: '第二个数据集' }
+    api.readTrainingDatasets.mockResolvedValue({
+      items: [DATASET, secondDataset],
+      page: 1,
+      page_size: 50,
+      total: 2,
+    })
+    api.createAnnotationContext.mockResolvedValue({
+      ...ANNOTATION_CONTEXT,
+      preparation_status: 'pending',
+    })
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+    vi.useFakeTimers()
+
+    const enterAnnotation = wrapper.findAll('button').find((button) => button.text() === '进入标注')
+    expect(enterAnnotation).toBeDefined()
+    await enterAnnotation!.trigger('click')
+    await flushPromises()
+
+    await wrapper.find('select#dataset-select').setValue(secondDataset.id)
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushPromises()
+
+    expect(api.readAnnotationContext).not.toHaveBeenCalled()
+    expect(wrapper.find('h2#annotation-editor-heading').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('stops annotation preparation polling when annotation is closed', async () => {
     grant('dataset.dataset.view', 'dataset.dataset.edit')
     api.createAnnotationContext.mockResolvedValue({

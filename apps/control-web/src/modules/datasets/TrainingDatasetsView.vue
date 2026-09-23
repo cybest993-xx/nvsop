@@ -545,6 +545,7 @@ function changeMemberPage(pageNumber: number): void {
 }
 
 function chooseDataset(): void {
+  leaveAnnotation()
   activeMemberId.value = ''
   activeAttemptId.value = ''
   activeIdempotencyKey.value = ''
@@ -558,7 +559,6 @@ function chooseDataset(): void {
 }
 
 function selectDataset(datasetId: string): void {
-  leaveAnnotation()
   selectedDatasetId.value = datasetId
   actionListHistory.value = null
   actionListInput.value = ''
@@ -784,6 +784,7 @@ async function createDataset(): Promise<void> {
     datasets.value = [created, ...datasets.value].slice(0, DATASET_PAGE_SIZE)
     datasetPageNumber.value = 1
     datasetTotal.value += 1
+    leaveAnnotation()
     selectedDatasetId.value = created.id
     knownDatasetId.value = created.id
     datasetName.value = ''
@@ -1068,6 +1069,7 @@ async function enterAnnotation(member: TrainingDatasetMember): Promise<void> {
     }
   } catch (error) {
     if (isCurrentAnnotationRequest(requestGeneration, datasetId, member.id)) {
+      loadingAnnotationContext.value = false
       annotationMemberId.value = ''
       recordFailure(error)
     }

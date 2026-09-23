@@ -1,8 +1,8 @@
 """`dataset` 对 HTTP 和 job adapter 暴露的最小跨模块契约。
 
-公开入口分三类：job adapter 用 `DatasetResourceLookup` 验证任务归属；校验 worker
-用 `DatasetValidationRuntime` 装配基础设施并完成视频校验；标注 worker 用
-`DatasetAnnotationRuntime` 装配基座、对象存储和媒体探测器，并推进上下文准备与切片执行。
+公开入口按 owner seam 划分：job adapter 用 `DatasetResourceLookup` 验证任务归属；
+校验、用途检查与标注 worker 分别通过各自 runtime 装配所需资源；制品 worker 只调用
+`DatasetArtifactExecutor`，生成、完整性校验、发布、失败与候选清理规则均留在 dataset owner。
 视频成员、仓储和上传存储类型留在 `dataset` 自己的模块边界内，不通过这里扩散。
 """
 
@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
@@ -49,22 +50,14 @@ from factory_sop.dataset.usecases.annotation import (
     save_annotation_execution_copy,
 )
 from factory_sop.dataset.usecases.usage import (
-    ArtifactTarget,
     UsageCheckTarget,
     apply_usage_check_currentness,
-    begin_artifact_generation,
     begin_usage_check,
-    complete_artifact,
-    complete_artifact_candidate_cleanup,
     complete_usage_check,
-    fail_artifact,
     fail_usage_check,
-    invalidate_artifact_for_job,
-    mark_artifact_cleanup_pending,
-    record_artifact_orphan_candidate,
-    render_ddm_artifact_with_base,
     run_usage_check,
 )
+from factory_sop.job.api import ApplicationJob
 
 
 def summary(*, caller: Caller, datasets: DatasetRepository) -> dict[str, object]:
@@ -72,6 +65,50 @@ def summary(*, caller: Caller, datasets: DatasetRepository) -> dict[str, object]
     from factory_sop.dataset.usecases.summary import summary as build_summary
 
     return build_summary(caller=caller, datasets=datasets)
+
+
+class ArtifactExecutionOutcome(StrEnum):
+    """通用 job owner 可理解的数据集制品执行结果。"""
+
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    SUPERSEDED = "superseded"
+    RETRY_PENDING = "retry_pending"
+    LEASE_LOST = "lease_lost"
+    COMMIT_UNKNOWN = "commit_unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactExecutionResult:
+    """数据集制品执行器返回的终态或延后结果。"""
+
+    outcome: ArtifactExecutionOutcome
+    failure_code: str | None = None
+
+
+class ArtifactJobFinisher(Protocol):
+    """由 job owner 提供、在执行器共享事务内调用的终态回调。"""
+
+    def __call__(self, session: object, result: ArtifactExecutionResult) -> bool:
+        """保存通用任务终态，但不提交共享事务。"""
+        ...
+
+
+class DatasetArtifactExecutor(Protocol):
+    """制品执行与候选清理的窄跨模块 seam。"""
+
+    def execute(
+        self,
+        *,
+        job: ApplicationJob,
+        finish_job: ArtifactJobFinisher,
+    ) -> ArtifactExecutionResult:
+        """执行一个已领取的制品任务。"""
+        ...
+
+    def cleanup_candidates(self) -> None:
+        """清理已持久化的未发布制品候选。"""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,14 +246,6 @@ class DatasetAnnotationRuntime(Protocol):
         ...
 
 
-class DdmAnnotationGenerator(Protocol):
-    """供用途制品 worker 调用 NVIDIA DDM 聚合函数的窄适配器。"""
-
-    def generate(self, workspace: Path, output_filename: str) -> bytes:
-        """在隔离工作区生成并读取 DDM annotation。"""
-        ...
-
-
 class DdmReader(Protocol):
     """调用 NVIDIA DDM 训练读取器并返回实际两类样本计数。"""
 
@@ -245,7 +274,7 @@ class VlmReader(Protocol):
 
 
 class DatasetUsageRuntime(Protocol):
-    """供用途检查和制品 worker 使用的真实资源工厂。"""
+    """供用途检查 worker 使用的真实资源工厂。"""
 
     def repository(self, session: object) -> UsageDatasetRepository:
         """为一个短事务创建用途仓储。"""
@@ -253,10 +282,6 @@ class DatasetUsageRuntime(Protocol):
 
     def storage(self) -> ObjectStorage:
         """创建对象存储客户端，调用发生在数据库事务外。"""
-        ...
-
-    def ddm_generator(self) -> DdmAnnotationGenerator:
-        """创建复用 NVIDIA DDM 聚合函数的适配器。"""
         ...
 
     def ddm_reader(self) -> DdmReader:
@@ -303,16 +328,18 @@ __all__ = [
     "AnnotationDataVolume",
     "AnnotationDataVolumeUnavailableError",
     "AnnotationExecutionTarget",
-    "ArtifactTarget",
+    "ArtifactExecutionOutcome",
+    "ArtifactExecutionResult",
+    "ArtifactJobFinisher",
     "CheckedDatasetInput",
     "DatasetAnnotationRuntime",
+    "DatasetArtifactExecutor",
     "DatasetCheckedInputReader",
     "DatasetRefusalCode",
     "DatasetRefusedError",
     "DatasetResourceLookup",
     "DatasetUsageRuntime",
     "DatasetValidationRuntime",
-    "DdmAnnotationGenerator",
     "DdmReader",
     "MediaProbeUnavailableError",
     "MemberStatus",
@@ -326,25 +353,17 @@ __all__ = [
     "apply_usage_check_currentness",
     "begin_annotation_context_preparation",
     "begin_annotation_execution",
-    "begin_artifact_generation",
     "begin_usage_check",
     "begin_video_validation",
     "checked_input_reader",
     "complete_annotation_context_preparation",
     "complete_annotation_execution",
-    "complete_artifact",
-    "complete_artifact_candidate_cleanup",
     "complete_usage_check",
     "fail_annotation_context_preparation",
     "fail_annotation_execution",
-    "fail_artifact",
     "fail_usage_check",
-    "invalidate_artifact_for_job",
-    "mark_artifact_cleanup_pending",
     "prepare_annotation_context_copy",
     "prepare_annotation_execution_copy",
-    "record_artifact_orphan_candidate",
-    "render_ddm_artifact_with_base",
     "run_usage_check",
     "save_annotation_execution_copy",
     "summary",

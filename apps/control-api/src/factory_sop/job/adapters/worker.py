@@ -5,8 +5,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
-from io import BytesIO
-from typing import Any, Protocol, assert_never, cast
+from typing import Any, assert_never, cast
 from uuid import UUID
 
 from arq import Worker, cron
@@ -19,9 +18,10 @@ from factory_sop.dataset.api import (
     AnnotationContextPreparationTarget,
     AnnotationDataVolumeUnavailableError,
     AnnotationExecutionTarget,
-    ArtifactTarget,
+    ArtifactExecutionOutcome,
+    ArtifactExecutionResult,
     DatasetAnnotationRuntime,
-    DatasetRefusalCode,
+    DatasetArtifactExecutor,
     DatasetRefusedError,
     DatasetUsageRuntime,
     DatasetValidationRuntime,
@@ -34,24 +34,16 @@ from factory_sop.dataset.api import (
     apply_usage_check_currentness,
     begin_annotation_context_preparation,
     begin_annotation_execution,
-    begin_artifact_generation,
     begin_usage_check,
     begin_video_validation,
     complete_annotation_context_preparation,
     complete_annotation_execution,
-    complete_artifact,
-    complete_artifact_candidate_cleanup,
     complete_usage_check,
     fail_annotation_context_preparation,
     fail_annotation_execution,
-    fail_artifact,
     fail_usage_check,
-    invalidate_artifact_for_job,
-    mark_artifact_cleanup_pending,
     prepare_annotation_context_copy,
     prepare_annotation_execution_copy,
-    record_artifact_orphan_candidate,
-    render_ddm_artifact_with_base,
     run_usage_check,
     save_annotation_execution_copy,
     validate_video_upload,
@@ -64,25 +56,6 @@ from factory_sop.persistence import create_database_engine, session_factory
 from factory_sop.settings import Settings
 
 _logger = get_logger("job")
-
-
-class _ArtifactCandidateStorage(Protocol):
-    """候选制品清理所需的最小对象存储契约。"""
-
-    def delete(self, *, object_key: str) -> None:
-        """删除未发布的候选对象。"""
-        ...
-
-
-def _artifact_candidate_keys(
-    *, object_key: str | None, manifest: Mapping[str, Any]
-) -> tuple[str, ...]:
-    """返回当前及持久化记录的未发布候选键，去重后稳定排序。"""
-    keys = [object_key] if object_key else []
-    keys.extend(
-        key for key in manifest.get("orphan_candidate_keys", []) if isinstance(key, str) and key
-    )
-    return tuple(sorted(set(keys)))
 
 
 def _usage_requires_annotation_volume(target: UsageCheckTarget) -> bool:
@@ -378,10 +351,9 @@ def _finish_usage_check_failure(
 
 
 async def generate_dataset_artifact_job(ctx: Mapping[str, Any], job_id: str) -> None:
-    """把通过的 DDM 检查转换为不可覆盖 annotation 制品。"""
+    """领取通用任务，并把完整制品生命周期委托给 dataset owner。"""
     identifier = UUID(job_id)
     factory = _session_factory(ctx)
-    runtime = _usage_runtime(ctx)
     with factory() as session:
         jobs = PostgresJobRepository(session)
         running = jobs.mark_running(job_id=identifier, now=datetime.now(UTC))
@@ -389,441 +361,25 @@ async def generate_dataset_artifact_job(ctx: Mapping[str, Any], job_id: str) -> 
     if running is None:
         return
 
-    stale_object_keys: tuple[str, ...] = ()
-    with factory() as session:
-        datasets = runtime.repository(session)
-        target = begin_artifact_generation(job=running, datasets=datasets, now=datetime.now(UTC))
-        if target is None:
-            stale_artifact = datasets.artifact_by_id(running.attempt_id)
-            if (
-                stale_artifact is not None
-                and stale_artifact.job_id == running.id
-                and stale_artifact.status.value in {"pending", "running", "failed"}
-            ):
-                stale_object_keys = _artifact_candidate_keys(
-                    object_key=stale_artifact.object_key,
-                    manifest=stale_artifact.manifest,
-                )
-            invalidate_artifact_for_job(
-                job=running,
-                datasets=datasets,
-                now=datetime.now(UTC),
-            )
-            session.commit()
-        else:
-            session.commit()
-    if target is None:
-        if stale_object_keys:
-            try:
-                storage = runtime.storage()
-                cleanup_succeeded = all(
-                    _discard_artifact_candidate(storage=storage, object_key=object_key)
-                    for object_key in stale_object_keys
-                )
-            except Exception:
-                cleanup_succeeded = False
-                _logger.exception(
-                    "job.dataset_artifact.candidate_cleanup_unavailable",
-                    job_id=str(running.id),
-                    dataset_id=str(running.dataset_id),
-                    artifact_id=str(running.attempt_id),
-                    object_keys=stale_object_keys,
-                    result="retry_pending",
-                )
-            if not cleanup_succeeded:
-                _logger.warning(
-                    "job.dataset_artifact.candidate_cleanup_retry",
-                    job_id=str(running.id),
-                    dataset_id=str(running.dataset_id),
-                    artifact_id=str(running.attempt_id),
-                    object_keys=stale_object_keys,
-                    result="retry_pending",
-                )
-                return
-            with factory() as cleanup_session:
-                datasets = runtime.repository(cleanup_session)
-                cleared = complete_artifact_candidate_cleanup(
-                    artifact_id=running.attempt_id,
-                    job_id=running.id,
-                    now=datetime.now(UTC),
-                    datasets=datasets,
-                )
-                if not cleared:
-                    cleanup_session.rollback()
-                    _logger.warning(
-                        "job.dataset_artifact.candidate_cleanup_lease_lost",
-                        job_id=str(running.id),
-                        dataset_id=str(running.dataset_id),
-                        artifact_id=str(running.attempt_id),
-                        object_keys=stale_object_keys,
-                        result="retry_pending",
-                    )
-                    return
-                jobs = PostgresJobRepository(cleanup_session)
-                finished = jobs.finish(
-                    job_id=running.id,
-                    status=JobStatus.SUPERSEDED.value,
-                    failure_code=None,
-                    now=datetime.now(UTC),
-                    expected_updated_at=running.updated_at,
-                )
-                if not finished:
-                    cleanup_session.rollback()
-                    return
-                cleanup_session.commit()
-            _logger.info(
-                "job.dataset_artifact.candidate_cleanup.finished",
-                job_id=str(running.id),
-                dataset_id=str(running.dataset_id),
-                artifact_id=str(running.attempt_id),
-                object_keys=stale_object_keys,
-                result="succeeded",
-            )
-            return
-        with factory() as finish_session:
-            jobs = PostgresJobRepository(finish_session)
-            finished = jobs.finish(
-                job_id=running.id,
-                status=JobStatus.SUPERSEDED.value,
-                failure_code=None,
-                now=datetime.now(UTC),
-                expected_updated_at=running.updated_at,
-            )
-            if not finished:
-                finish_session.rollback()
-                return
-            finish_session.commit()
-        return
-
-    object_key = target.artifact.object_key or (
-        f"training-datasets/{target.artifact.dataset_id}/artifacts/"
-        f"{target.artifact.id}/{target.job.id}/annotation.json"
-    )
-    try:
-        artifact_storage = runtime.storage()
-    except Exception as error:
-        _finish_artifact_failure(
-            factory=factory,
-            runtime=runtime,
-            target=target,
-            code="STORAGE_UNAVAILABLE",
-            detail="对象存储暂时不可用，请稍后重试",
-            error=error,
-        )
-        return
-    try:
-        # 重试先清理持久化记录的旧候选键和当前候选键。
-        for orphan_key in _artifact_candidate_keys(
-            object_key=None, manifest=target.artifact.manifest
-        ):
-            if not _discard_artifact_candidate(storage=artifact_storage, object_key=orphan_key):
-                raise DatasetRefusedError(
-                    DatasetRefusalCode.STORAGE_UNAVAILABLE,
-                    detail="旧制品候选清理失败，请稍后重试",
-                )
-        _discard_artifact_candidate(storage=artifact_storage, object_key=object_key)
-        content, manifest = render_ddm_artifact_with_base(
-            target,
-            storage=artifact_storage,
-            generate=runtime.ddm_generator().generate,
-        )
-        stored = artifact_storage.finalize_upload(
-            object_key=object_key,
-            source=BytesIO(content),
-            size=len(content),
-        )
-        if stored.size != len(content):
-            _discard_artifact_candidate(storage=artifact_storage, object_key=object_key)
-            raise DatasetRefusedError(
-                DatasetRefusalCode.ARTIFACT_INTEGRITY_FAILURE,
-                detail="制品对象大小与生成内容不一致",
-            )
-        readback = BytesIO()
-        artifact_storage.download_to(object_key=object_key, destination=readback)
-        if readback.getvalue() != content:
-            _discard_artifact_candidate(storage=artifact_storage, object_key=object_key)
-            raise DatasetRefusedError(
-                DatasetRefusalCode.ARTIFACT_INTEGRITY_FAILURE,
-                detail="制品对象回读摘要与生成内容不一致",
-            )
-    except Exception as error:  # pragma: no cover - worker 安全兜底
-        candidate_cleaned = _discard_artifact_candidate(
-            storage=artifact_storage, object_key=object_key
-        )
-        if not candidate_cleaned:
-            _finish_artifact_cleanup_failure(
-                factory=factory,
-                runtime=runtime,
-                target=target,
-                object_key=object_key,
-                error=error,
-            )
-            return
-        code = (
-            error.code.value
-            if isinstance(error, DatasetRefusedError)
-            else (
-                "STORAGE_UNAVAILABLE"
-                if isinstance(error, ObjectStorageUnavailableError)
-                else "ARTIFACT_GENERATION_FAILED"
-            )
-        )
-        detail = (
-            error.detail
-            if isinstance(error, DatasetRefusedError)
-            else (
-                "对象存储暂时不可用，请稍后重试"
-                if isinstance(error, ObjectStorageUnavailableError)
-                else "DDM annotation 制品生成失败"
-            )
-        )
-        _finish_artifact_failure(
-            factory=factory,
-            runtime=runtime,
-            target=target,
-            code=code,
-            detail=detail,
-            error=error,
-        )
-        return
-
-    with factory() as session:
-        datasets = runtime.repository(session)
-        try:
-            completed = complete_artifact(
-                target=target,
-                object_key=object_key,
-                artifact_sha256=str(manifest["artifact_sha256"]),
-                artifact_size=int(manifest["artifact_size"]),
-                manifest=manifest,
-                now=datetime.now(UTC),
-                datasets=datasets,
-            )
-            jobs = PostgresJobRepository(session)
-            finished = jobs.finish(
-                job_id=running.id,
-                status=JobStatus.SUCCEEDED.value,
-                failure_code=None,
-                now=datetime.now(UTC),
-                expected_updated_at=running.updated_at,
-            )
-            if not finished:
-                session.rollback()
-                _record_artifact_orphan(
-                    factory=factory,
-                    runtime=runtime,
-                    artifact_id=target.artifact.id,
-                    object_key=object_key,
-                    error=RuntimeError("artifact job lease lost"),
-                )
-                return
-            try:
-                session.commit()
-            except Exception:  # pragma: no cover - 提交结果需真实数据库故障注入验证
-                _logger.exception(
-                    "job.dataset_artifact.commit_unknown",
-                    job_id=str(running.id),
-                    dataset_id=str(completed.dataset_id),
-                    usage_kind=completed.kind.value,
-                    artifact_id=str(completed.id),
-                    usage_check_id=str(completed.usage_check_id),
-                    input_digest=completed.input_digest,
-                    actor_id=str(completed.created_by),
-                    result="commit_unknown",
-                )
-                return
-        except DatasetRefusedError as error:
-            session.rollback()
-            candidate_cleaned = _discard_artifact_candidate(
-                storage=artifact_storage, object_key=object_key
-            )
-            if not candidate_cleaned:
-                _finish_artifact_cleanup_failure(
-                    factory=factory,
-                    runtime=runtime,
-                    target=target,
-                    object_key=object_key,
-                    error=error,
-                )
-                return
-            _finish_artifact_failure(
-                factory=factory,
-                runtime=runtime,
-                target=target,
-                code=error.code.value,
-                detail=error.detail,
-                error=error,
-            )
-            return
-        except Exception as error:  # pragma: no cover - 数据库故障由真实集成测试覆盖
-            session.rollback()
-            candidate_cleaned = _discard_artifact_candidate(
-                storage=artifact_storage, object_key=object_key
-            )
-            if not candidate_cleaned:
-                _finish_artifact_cleanup_failure(
-                    factory=factory,
-                    runtime=runtime,
-                    target=target,
-                    object_key=object_key,
-                    error=error,
-                )
-                return
-            _finish_artifact_failure(
-                factory=factory,
-                runtime=runtime,
-                target=target,
-                code="ARTIFACT_DATABASE_FAILURE",
-                detail="制品结果登记失败",
-                error=error,
-            )
-            return
-    _logger.info(
-        "job.dataset_artifact.finished",
-        job_id=str(running.id),
-        dataset_id=str(completed.dataset_id),
-        usage_kind=completed.kind.value,
-        artifact_id=str(completed.id),
-        usage_check_id=str(completed.usage_check_id),
-        input_digest=completed.input_digest,
-        actor_id=str(completed.created_by),
-        result="succeeded" if finished else "lease_lost",
-    )
-
-
-def _discard_artifact_candidate(*, storage: _ArtifactCandidateStorage, object_key: str) -> bool:
-    """删除未被 PostgreSQL 权威记录引用的候选对象。"""
-    try:
-        storage.delete(object_key=object_key)
-    except Exception:
-        _logger.exception(
-            "job.dataset_artifact.orphan_candidate",
-            object_key=object_key,
-        )
-        return False
-    return True
-
-
-def _record_artifact_orphan(
-    *,
-    factory: sessionmaker[Session],
-    runtime: DatasetUsageRuntime,
-    artifact_id: UUID,
-    object_key: str,
-    error: Exception,
-) -> None:
-    """租约丢失后持久化候选键，避免直接删除未知归属对象。"""
-    with factory() as session:
-        datasets = runtime.repository(session)
-        if not record_artifact_orphan_candidate(
-            artifact_id=artifact_id,
-            object_key=object_key,
-            datasets=datasets,
-        ):
-            session.rollback()
-            _logger.warning(
-                "job.dataset_artifact.orphan_candidate_record_failed",
-                artifact_id=str(artifact_id),
-                object_key=object_key,
-                error_type=type(error).__name__,
-                result="retry_pending",
-            )
-            return
-        session.commit()
-    _logger.warning(
-        "job.dataset_artifact.orphan_candidate_recorded",
-        artifact_id=str(artifact_id),
-        object_key=object_key,
-        error_type=type(error).__name__,
-        result="retry_pending",
-    )
-
-
-def _finish_artifact_cleanup_failure(
-    *,
-    factory: sessionmaker[Session],
-    runtime: DatasetUsageRuntime,
-    target: ArtifactTarget,
-    object_key: str,
-    error: Exception,
-) -> None:
-    """候选清理失败时持久化可恢复状态并保留运行租约。"""
-    with factory() as session:
-        datasets = runtime.repository(session)
-        if not mark_artifact_cleanup_pending(
-            target=target,
-            object_key=object_key,
+    def finish_job(session: object, result: ArtifactExecutionResult) -> bool:
+        match result.outcome:
+            case ArtifactExecutionOutcome.SUCCEEDED:
+                status = JobStatus.SUCCEEDED.value
+            case ArtifactExecutionOutcome.FAILED:
+                status = JobStatus.FAILED.value
+            case ArtifactExecutionOutcome.SUPERSEDED:
+                status = JobStatus.SUPERSEDED.value
+            case _:
+                raise RuntimeError("dataset artifact executor requested a non-terminal job finish")
+        return PostgresJobRepository(cast(Session, session)).finish(
+            job_id=running.id,
+            status=status,
+            failure_code=result.failure_code,
             now=datetime.now(UTC),
-            datasets=datasets,
-        ):
-            session.rollback()
-            _logger.warning(
-                "job.dataset_artifact.cleanup_lease_lost",
-                job_id=str(target.job.id),
-                dataset_id=str(target.artifact.dataset_id),
-                artifact_id=str(target.artifact.id),
-                error_type=type(error).__name__,
-                result="retry_pending",
-            )
-            return
-        session.commit()
-    _logger.warning(
-        "job.dataset_artifact.cleanup_retry",
-        job_id=str(target.job.id),
-        dataset_id=str(target.artifact.dataset_id),
-        artifact_id=str(target.artifact.id),
-        error_type=type(error).__name__,
-        result="retry_pending",
-    )
-
-
-def _finish_artifact_failure(
-    *,
-    factory: sessionmaker[Session],
-    runtime: DatasetUsageRuntime,
-    target: ArtifactTarget,
-    code: str,
-    detail: str,
-    error: Exception,
-) -> None:
-    """在独立事务中记录制品生成失败。"""
-    with factory() as session:
-        datasets = runtime.repository(session)
-        try:
-            fail_artifact(
-                target=target,
-                code=code,
-                detail=detail,
-                now=datetime.now(UTC),
-                datasets=datasets,
-            )
-        except DatasetRefusedError:
-            _logger.warning(
-                "job.dataset_artifact.lease_lost",
-                job_id=str(target.job.id),
-                artifact_id=str(target.artifact.id),
-                error_type=type(error).__name__,
-            )
-            return
-        jobs = PostgresJobRepository(session)
-        finished = jobs.finish(
-            job_id=target.job.id,
-            status=JobStatus.FAILED.value,
-            failure_code=code,
-            now=datetime.now(UTC),
-            expected_updated_at=target.job.updated_at,
+            expected_updated_at=running.updated_at,
         )
-        if not finished:
-            session.rollback()
-            return
-        session.commit()
-    _logger.warning(
-        "job.dataset_artifact.failed",
-        job_id=str(target.job.id),
-        artifact_id=str(target.artifact.id),
-        failure_code=code,
-        error_type=type(error).__name__,
-    )
+
+    _artifact_executor(ctx).execute(job=running, finish_job=finish_job)
 
 
 async def prepare_annotation_context_job(ctx: Mapping[str, Any], job_id: str) -> None:
@@ -1204,55 +760,6 @@ def _finish_annotation_failure(
     )
 
 
-async def cleanup_dataset_artifact_candidates(ctx: Mapping[str, Any]) -> None:
-    """周期清理持久化记录的未发布候选对象。"""
-    factory = _session_factory(ctx)
-    runtime = _usage_runtime(ctx)
-    with factory() as session:
-        datasets = runtime.repository(session)
-        candidates = tuple(datasets.list_artifact_cleanup_candidates(limit=100))
-    if not candidates:
-        return
-    try:
-        storage = runtime.storage()
-    except Exception:
-        _logger.exception("job.dataset_artifact.cleanup_storage_unavailable")
-        return
-    for artifact in candidates:
-        keys = _artifact_candidate_keys(
-            object_key=(artifact.object_key if artifact.status.value != "available" else None),
-            manifest=artifact.manifest,
-        )
-        if not keys:
-            continue
-        if not all(
-            _discard_artifact_candidate(storage=storage, object_key=object_key)
-            for object_key in keys
-        ):
-            continue
-        with factory() as session:
-            datasets = runtime.repository(session)
-            cleared = complete_artifact_candidate_cleanup(
-                artifact_id=artifact.id,
-                job_id=None,
-                candidate_keys=keys,
-                expected_updated_at=artifact.updated_at,
-                now=datetime.now(UTC),
-                datasets=datasets,
-            )
-            if not cleared:
-                session.rollback()
-                continue
-            session.commit()
-        _logger.info(
-            "job.dataset_artifact.candidate_cleanup.finished",
-            dataset_id=str(artifact.dataset_id),
-            artifact_id=str(artifact.id),
-            object_keys=keys,
-            result="succeeded",
-        )
-
-
 async def dispatch_pending_jobs(ctx: Mapping[str, Any]) -> None:
     """先恢复过期执行租约，再补投 PostgreSQL outbox 中的任务。"""
     dispatcher = ctx["dispatcher"]
@@ -1272,8 +779,8 @@ async def dispatch_pending_jobs(ctx: Mapping[str, Any]) -> None:
         pending = PostgresJobRepository(session).pending(limit=100)
     for job in pending:
         await dispatcher.dispatch_async(job.id)
-    if "usage_runtime" in ctx:
-        await cleanup_dataset_artifact_candidates(ctx)
+    if "artifact_executor" in ctx:
+        _artifact_executor(ctx).cleanup_candidates()
 
 
 def build_worker(
@@ -1283,6 +790,7 @@ def build_worker(
     factory: sessionmaker[Session],
     runtime: DatasetValidationRuntime,
     usage_runtime: DatasetUsageRuntime,
+    artifact_executor: DatasetArtifactExecutor,
     annotation_runtime: DatasetAnnotationRuntime,
 ) -> Worker:
     """构造带数据库、Redis 和显式数据集运行时的 worker。"""
@@ -1313,6 +821,7 @@ def build_worker(
             "dispatcher": dispatcher,
             "dataset_runtime": runtime,
             "usage_runtime": usage_runtime,
+            "artifact_executor": artifact_executor,
             "annotation_runtime": annotation_runtime,
         },
         max_jobs=4,
@@ -1330,6 +839,10 @@ def _usage_runtime(ctx: Mapping[str, Any]) -> DatasetUsageRuntime:
     return cast(DatasetUsageRuntime, ctx["usage_runtime"])
 
 
+def _artifact_executor(ctx: Mapping[str, Any]) -> DatasetArtifactExecutor:
+    return cast(DatasetArtifactExecutor, ctx["artifact_executor"])
+
+
 def _annotation_runtime(ctx: Mapping[str, Any]) -> DatasetAnnotationRuntime:
     value = ctx.get("annotation_runtime")
     if value is None:
@@ -1345,6 +858,10 @@ def _session_factory(ctx: Mapping[str, Any]) -> sessionmaker[Session]:
 def run_worker(
     environment: Mapping[str, str],
     *,
+    artifact_executor_factory: Callable[
+        [Settings, sessionmaker[Session]],
+        DatasetArtifactExecutor,
+    ],
     runtime_factory: Callable[[Settings], DatasetValidationRuntime],
     usage_runtime_factory: Callable[[Settings], DatasetUsageRuntime],
     annotation_runtime_factory: Callable[[Settings], DatasetAnnotationRuntime],
@@ -1354,6 +871,7 @@ def run_worker(
     configure_logging(log_level=settings.log_level, stream=sys.stdout)
     engine = create_database_engine(settings)
     factory = session_factory(engine)
+    artifact_executor = artifact_executor_factory(settings, factory)
     runtime = runtime_factory(settings)
     usage_runtime = usage_runtime_factory(settings)
     annotation_runtime = annotation_runtime_factory(settings)
@@ -1363,6 +881,7 @@ def run_worker(
         factory=factory,
         runtime=runtime,
         usage_runtime=usage_runtime,
+        artifact_executor=artifact_executor,
         annotation_runtime=annotation_runtime,
     )
     try:

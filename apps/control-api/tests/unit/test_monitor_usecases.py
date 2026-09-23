@@ -108,6 +108,22 @@ class MemoryMonitor:
         value = self.health.get(event_id)
         return None if value is None else value.stream_sequence
 
+    def read_after_sequences(
+        self,
+        *,
+        decision_sequence: int,
+        health_sequence: int,
+        limit: int,
+    ) -> tuple[tuple[MirroredDecision, ...], tuple[MirroredHealth, ...]]:
+        return (
+            self.decisions_after_sequence(after_sequence=decision_sequence, limit=limit),
+            self.health_after_sequence(after_sequence=health_sequence, limit=limit),
+        )
+
+    def wait_for_wakeup(self, *, timeout: float) -> bool:
+        del timeout
+        return False
+
 
 def caller(*permissions: Permission) -> Caller:
     return Caller(
@@ -414,6 +430,40 @@ def test_sse_resume_consumes_last_event_id_without_replaying_it() -> None:
     assert snapshot.decision_sequence == 1
 
 
+def test_sse_preserves_stream_sequence_when_received_at_order_reverses() -> None:
+    monitor = MemoryMonitor()
+    earlier = datetime(2026, 9, 13, 0, 0, 0, tzinfo=UTC)
+    later = datetime(2026, 9, 13, 0, 0, 1, tzinfo=UTC)
+    mirror_decision(
+        report("host:event-1"),
+        received_at=later,
+        monitor=monitor,
+        host_gateway=HostGateway(),
+    )
+    mirror_decision(
+        report("host:event-2"),
+        received_at=earlier,
+        monitor=monitor,
+        host_gateway=HostGateway(),
+    )
+
+    snapshot = sse_snapshot_state(
+        monitor,
+        caller=caller(Permission.MONITOR_VIEW),
+        boundary=datetime(2026, 9, 12, tzinfo=UTC),
+    )
+    assert "id: host:event-1" in snapshot.frames[0]
+    assert "id: host:event-2" in snapshot.frames[1]
+
+    stream = sse_stream(
+        monitor,
+        caller=caller(Permission.MONITOR_VIEW),
+        wait_timeout=0,
+    )
+    assert "id: host:event-1" in next(stream)
+    assert "id: host:event-2" in next(stream)
+
+
 def test_sse_cursors_do_not_replay_snapshot_or_skip_same_timestamp_events() -> None:
     monitor = MemoryMonitor()
     received_at = datetime(2026, 9, 13, 0, 0, 0, tzinfo=UTC)
@@ -439,13 +489,9 @@ def test_sse_cursors_do_not_replay_snapshot_or_skip_same_timestamp_events() -> N
     stream = sse_stream(
         monitor,
         caller=caller(Permission.MONITOR_VIEW),
-        after=snapshot.decision_after,
-        decision_event_id=snapshot.decision_event_id,
-        health_after=snapshot.health_after,
-        health_event_id=snapshot.health_event_id,
         decision_sequence=snapshot.decision_sequence,
         health_sequence=snapshot.health_sequence,
-        sleep=0,
+        wait_timeout=0,
     )
     frame = next(stream)
     assert "id: host:event-2" in frame

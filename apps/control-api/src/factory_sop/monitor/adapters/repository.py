@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from sqlalchemy import Table, func, select, update
+from sqlalchemy import Table, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.orm import Session
 
@@ -18,12 +18,17 @@ from factory_sop.monitor.model import MirroredDecision, MirroredHealth, Mirrored
 from factory_sop.monitor.repository import MonitorRepository
 from nvsop_contracts import ReportedSopInstance
 
+MONITOR_STREAM_CHANNEL = "nvsop_monitor_stream"
+_DECISION_STREAM_LOCK_KEY = 0x4D4F4E444543  # "MONDEC"
+_HEALTH_STREAM_LOCK_KEY = 0x4D4F4E484C54  # "MONHLT"
+
 
 class PostgresMonitorRepository(MonitorRepository):
     def __init__(self, session: Session) -> None:
         self._session = session
 
     def upsert_decision(self, value: MirroredDecision) -> bool:
+        self._acquire_stream_lock(_DECISION_STREAM_LOCK_KEY)
         row = ReportedDecisionRow.from_domain(value)
         table = cast(Table, ReportedDecisionRow.__table__)
         statement = postgres_insert(table).values(
@@ -41,6 +46,7 @@ class PostgresMonitorRepository(MonitorRepository):
             )
         )
         if result.scalar_one_or_none() is not None:
+            self._notify_stream("decision")
             return True
         existing = self._session.get(ReportedDecisionRow, row.event_id)
         if existing is None:
@@ -49,6 +55,7 @@ class PostgresMonitorRepository(MonitorRepository):
         return False
 
     def upsert_health(self, value: MirroredHealth) -> bool:
+        self._acquire_stream_lock(_HEALTH_STREAM_LOCK_KEY)
         row = ReportedHealthRow.from_domain(value)
         table = cast(Table, ReportedHealthRow.__table__)
         statement = postgres_insert(table).values(
@@ -65,6 +72,7 @@ class PostgresMonitorRepository(MonitorRepository):
             )
         )
         if result.scalar_one_or_none() is not None:
+            self._notify_stream("health")
             return True
         existing = self._session.get(ReportedHealthRow, row.event_id)
         if existing is None:
@@ -195,6 +203,17 @@ class PostgresMonitorRepository(MonitorRepository):
             select(ReportedHealthRow.stream_sequence).where(ReportedHealthRow.event_id == event_id)
         )
 
+    def _acquire_stream_lock(self, key: int) -> None:
+        # Identity 在 INSERT 时取序号；先按流串行化事务，才能让序号顺序等于提交可见顺序。
+        self._session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
+
+    def _notify_stream(self, kind: str) -> None:
+        # pg_notify 是事务性的：只有本次镜像提交成功后 listener 才能收到提示。
+        self._session.execute(
+            text("SELECT pg_notify(:channel, :payload)"),
+            {"channel": MONITOR_STREAM_CHANNEL, "payload": kind},
+        )
+
 
 def _ensure_same(
     existing: dict[str, object], incoming: dict[str, object], kind: str, event_id: str
@@ -244,4 +263,4 @@ def _ensure_instance_progression(opened: ReportedSopInstance, closed: ReportedSo
         raise MonitorRefusedError("instance provenance cannot remove or rewrite observed sources")
 
 
-__all__ = ["PostgresMonitorRepository"]
+__all__ = ["MONITOR_STREAM_CHANNEL", "PostgresMonitorRepository"]

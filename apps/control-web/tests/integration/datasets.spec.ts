@@ -1,6 +1,6 @@
 import ElementPlus from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 
@@ -205,6 +205,16 @@ function grant(...permissions: string[]): void {
   }
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((next, fail) => {
+    resolve = next
+    reject = fail
+  })
+  return { promise, resolve, reject }
+}
+
 async function chooseFile(wrapper: ReturnType<typeof mount>, file: File): Promise<void> {
   const input = wrapper.find('input[name="dataset-video"]')
   Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
@@ -267,6 +277,10 @@ beforeEach(() => {
     randomUUID: () => 'idempotency-1',
     subtle: { digest: vi.fn().mockResolvedValue(new Uint8Array(32).fill(0xab).buffer) },
   })
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 describe('训练数据集工作台', () => {
@@ -431,6 +445,398 @@ describe('训练数据集工作台', () => {
     expect(wrapper.text()).toContain('line-2.mp4')
 
     wrapper.unmount()
+  })
+
+  it('keeps the newest dataset member request when an older response arrives last', async () => {
+    grant('dataset.dataset.view')
+    const secondDataset = { ...DATASET, id: 'dataset-2', name: '第二个数据集' }
+    const secondMember = {
+      ...MEMBER_REGISTERED,
+      id: 'member-2',
+      dataset_id: secondDataset.id,
+      original_filename: 'line-2.mp4',
+    }
+    api.readTrainingDatasets.mockResolvedValue({
+      items: [DATASET, secondDataset],
+      page: 1,
+      page_size: 50,
+      total: 2,
+    })
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+
+    const secondMemberPage = deferred<{
+      items: Array<typeof MEMBER_REGISTERED>
+      page: number
+      page_size: number
+      total: number
+    }>()
+    api.readDatasetMembers.mockReset()
+    api.readDatasetMembers
+      .mockImplementationOnce(() => secondMemberPage.promise)
+      .mockResolvedValueOnce({ items: [MEMBER_REGISTERED], page: 1, page_size: 50, total: 1 })
+
+    const chooseSecond = wrapper.findAll('button').find((button) => button.text() === '查看成员')
+    expect(chooseSecond).toBeDefined()
+    await chooseSecond!.trigger('click')
+    await flushPromises()
+
+    const chooseFirst = wrapper.findAll('button').find((button) => button.text() === '查看成员')
+    expect(chooseFirst).toBeDefined()
+    await chooseFirst!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('line-1.mp4')
+
+    secondMemberPage.resolve({ items: [secondMember], page: 1, page_size: 50, total: 1 })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('line-1.mp4')
+    expect(wrapper.text()).not.toContain('line-2.mp4')
+    wrapper.unmount()
+  })
+
+  it('keeps loading and error state owned by the newest member request', async () => {
+    grant('dataset.dataset.view')
+    const secondDataset = { ...DATASET, id: 'dataset-2', name: '第二个数据集' }
+    api.readTrainingDatasets.mockResolvedValue({
+      items: [DATASET, secondDataset],
+      page: 1,
+      page_size: 50,
+      total: 2,
+    })
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+
+    const staleMemberPage = deferred<{
+      items: Array<typeof MEMBER_REGISTERED>
+      page: number
+      page_size: number
+      total: number
+    }>()
+    const currentMemberPage = deferred<{
+      items: Array<typeof MEMBER_REGISTERED>
+      page: number
+      page_size: number
+      total: number
+    }>()
+    api.readDatasetMembers.mockReset()
+    api.readDatasetMembers
+      .mockImplementationOnce(() => staleMemberPage.promise)
+      .mockImplementationOnce(() => currentMemberPage.promise)
+
+    const chooseSecond = wrapper.findAll('button').find((button) => button.text() === '查看成员')
+    expect(chooseSecond).toBeDefined()
+    await chooseSecond!.trigger('click')
+    await flushPromises()
+
+    const chooseFirst = wrapper.findAll('button').find((button) => button.text() === '查看成员')
+    expect(chooseFirst).toBeDefined()
+    await chooseFirst!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('正在加载视频状态…')
+
+    staleMemberPage.reject(new Error('旧成员请求失败'))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('正在加载视频状态…')
+    expect(wrapper.text()).not.toContain('旧成员请求失败')
+
+    currentMemberPage.resolve({ items: [MEMBER_REGISTERED], page: 1, page_size: 50, total: 1 })
+    await flushPromises()
+    expect(wrapper.text()).toContain('line-1.mp4')
+    expect(wrapper.text()).not.toContain('旧成员请求失败')
+    wrapper.unmount()
+  })
+
+  it('keeps every usage pagination request bound to the dataset that started the load', async () => {
+    grant('dataset.dataset.view')
+    const secondDataset = { ...DATASET, id: 'dataset-2', name: '第二个数据集' }
+    api.readTrainingDatasets.mockResolvedValue({
+      items: [DATASET, secondDataset],
+      page: 1,
+      page_size: 50,
+      total: 2,
+    })
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+
+    const secondUsagePage = deferred<{
+      items: Array<typeof USAGE_CHECK>
+      page: number
+      page_size: number
+      total: number
+    }>()
+    const secondCandidatePage = deferred<{
+      items: []
+      page: number
+      page_size: number
+      total: number
+    }>()
+    const secondArtifactPage = deferred<{
+      items: []
+      page: number
+      page_size: number
+      total: number
+    }>()
+    api.listDatasetUsageChecks.mockReset()
+    api.listDatasetUsageChecks.mockImplementation((datasetId: string, page = 1, pageSize = 50) => {
+      if (datasetId === secondDataset.id && page === 1) return secondUsagePage.promise
+      return Promise.resolve({ items: [], page, page_size: pageSize, total: 0 })
+    })
+    api.listVlmCandidates.mockReset()
+    api.listVlmCandidates.mockImplementation((datasetId: string, page = 1, pageSize = 50) => {
+      if (datasetId === secondDataset.id && page === 1) return secondCandidatePage.promise
+      return Promise.resolve({ items: [], page, page_size: pageSize, total: 0 })
+    })
+    api.listDatasetArtifacts.mockReset()
+    api.listDatasetArtifacts.mockImplementation((datasetId: string, page = 1, pageSize = 50) => {
+      if (datasetId === secondDataset.id && page === 1) return secondArtifactPage.promise
+      return Promise.resolve({ items: [], page, page_size: pageSize, total: 0 })
+    })
+
+    const chooseSecond = wrapper.findAll('button').find((button) => button.text() === '查看成员')
+    expect(chooseSecond).toBeDefined()
+    await chooseSecond!.trigger('click')
+    await flushPromises()
+
+    const chooseFirst = wrapper.findAll('button').find((button) => button.text() === '查看成员')
+    expect(chooseFirst).toBeDefined()
+    await chooseFirst!.trigger('click')
+    await flushPromises()
+
+    secondUsagePage.resolve({
+      items: [{ ...USAGE_CHECK, dataset_id: secondDataset.id }],
+      page: 1,
+      page_size: 50,
+      total: 51,
+    })
+    secondCandidatePage.resolve({ items: [], page: 1, page_size: 50, total: 51 })
+    secondArtifactPage.resolve({ items: [], page: 1, page_size: 50, total: 51 })
+    await flushPromises()
+
+    expect(api.listDatasetUsageChecks).toHaveBeenCalledWith(secondDataset.id, 2, 50)
+    expect(api.listVlmCandidates).toHaveBeenCalledWith(secondDataset.id, 2, 50)
+    expect(api.listDatasetArtifacts).toHaveBeenCalledWith(secondDataset.id, 2, 50)
+    wrapper.unmount()
+  })
+
+  it('ignores an in-flight annotation response after the selected dataset changes', async () => {
+    grant('dataset.dataset.view', 'dataset.dataset.edit')
+    const secondDataset = { ...DATASET, id: 'dataset-2', name: '第二个数据集' }
+    const staleAnnotationContext = deferred<typeof ANNOTATION_CONTEXT>()
+    api.readTrainingDatasets.mockResolvedValue({
+      items: [DATASET, secondDataset],
+      page: 1,
+      page_size: 50,
+      total: 2,
+    })
+    api.createAnnotationContext.mockResolvedValue({
+      ...ANNOTATION_CONTEXT,
+      preparation_status: 'pending',
+    })
+    api.readAnnotationContext.mockImplementationOnce(() => staleAnnotationContext.promise)
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+    vi.useFakeTimers()
+
+    const enterAnnotation = wrapper.findAll('button').find((button) => button.text() === '进入标注')
+    expect(enterAnnotation).toBeDefined()
+    await enterAnnotation!.trigger('click')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushPromises()
+    expect(api.readAnnotationContext).toHaveBeenCalledOnce()
+
+    const chooseSecond = wrapper.findAll('button').find((button) => button.text() === '查看成员')
+    expect(chooseSecond).toBeDefined()
+    await chooseSecond!.trigger('click')
+    await flushPromises()
+
+    staleAnnotationContext.resolve(ANNOTATION_CONTEXT)
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushPromises()
+
+    expect(api.readAnnotationContext).toHaveBeenCalledOnce()
+    expect(wrapper.find('h2#annotation-editor-heading').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('clears annotation loading after preparation fails so the user can retry', async () => {
+    grant('dataset.dataset.view', 'dataset.dataset.edit')
+    api.createAnnotationContext
+      .mockRejectedValueOnce(new Error('标注准备请求失败'))
+      .mockResolvedValueOnce(ANNOTATION_CONTEXT)
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+
+    const enterAnnotation = wrapper.findAll('button').find((button) => button.text() === '进入标注')
+    expect(enterAnnotation).toBeDefined()
+    await enterAnnotation!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('标注准备请求失败')
+    expect(enterAnnotation!.attributes('disabled')).toBeUndefined()
+
+    await enterAnnotation!.trigger('click')
+    await flushPromises()
+
+    expect(api.createAnnotationContext).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('h2#annotation-editor-heading').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('stops annotation preparation when the upload selector changes datasets', async () => {
+    grant('dataset.dataset.view', 'dataset.dataset.edit', 'dataset.dataset.import')
+    const secondDataset = { ...DATASET, id: 'dataset-2', name: '第二个数据集' }
+    api.readTrainingDatasets.mockResolvedValue({
+      items: [DATASET, secondDataset],
+      page: 1,
+      page_size: 50,
+      total: 2,
+    })
+    api.createAnnotationContext.mockResolvedValue({
+      ...ANNOTATION_CONTEXT,
+      preparation_status: 'pending',
+    })
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+    vi.useFakeTimers()
+
+    const enterAnnotation = wrapper.findAll('button').find((button) => button.text() === '进入标注')
+    expect(enterAnnotation).toBeDefined()
+    await enterAnnotation!.trigger('click')
+    await flushPromises()
+
+    await wrapper.find('select#dataset-select').setValue(secondDataset.id)
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushPromises()
+
+    expect(api.readAnnotationContext).not.toHaveBeenCalled()
+    expect(wrapper.find('h2#annotation-editor-heading').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('routes a newly created dataset through selection so stale member loading settles', async () => {
+    grant('dataset.dataset.view', 'dataset.dataset.import')
+    const createdDataset = { ...DATASET, id: 'dataset-created', name: '新建数据集' }
+    const staleMembers = deferred<{
+      items: (typeof MEMBER_REGISTERED)[]
+      page: number
+      page_size: number
+      total: number
+    }>()
+    api.readDatasetMembers.mockImplementation((datasetId: string) => {
+      if (datasetId === DATASET.id) return staleMembers.promise
+      return Promise.resolve({ items: [], page: 1, page_size: 50, total: 0 })
+    })
+    api.createTrainingDataset.mockResolvedValue(createdDataset)
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+    expect(wrapper.text()).toContain('正在加载视频状态')
+
+    await wrapper.find('input[name="dataset-name"]').setValue(createdDataset.name)
+    await wrapper.find('form[aria-label="创建训练数据集"]').trigger('submit')
+    await flushPromises()
+
+    expect(api.readDatasetMembers).toHaveBeenCalledWith(createdDataset.id)
+    expect(wrapper.text()).not.toContain('正在加载视频状态')
+
+    staleMembers.resolve({
+      items: [MEMBER_REGISTERED],
+      page: 1,
+      page_size: 50,
+      total: 1,
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain(MEMBER_REGISTERED.original_filename)
+    wrapper.unmount()
+  })
+
+  it('clears previous members when a newly created dataset member load fails', async () => {
+    grant('dataset.dataset.view', 'dataset.dataset.import')
+    const createdDataset = { ...DATASET, id: 'dataset-created', name: '新建数据集' }
+    api.readDatasetMembers
+      .mockResolvedValueOnce({
+        items: [MEMBER_REGISTERED],
+        page: 1,
+        page_size: 50,
+        total: 1,
+      })
+      .mockRejectedValueOnce(new Error('新数据集成员读取失败'))
+    api.createTrainingDataset.mockResolvedValue(createdDataset)
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+    expect(wrapper.text()).toContain(MEMBER_REGISTERED.original_filename)
+
+    await wrapper.find('input[name="dataset-name"]').setValue(createdDataset.name)
+    await wrapper.find('form[aria-label="创建训练数据集"]').trigger('submit')
+    await flushPromises()
+
+    expect(api.readDatasetMembers).toHaveBeenCalledWith(createdDataset.id)
+    expect(wrapper.text()).not.toContain(MEMBER_REGISTERED.original_filename)
+    expect(wrapper.text()).toContain('新数据集成员读取失败')
+    wrapper.unmount()
+  })
+
+  it('stops annotation preparation polling when annotation is closed', async () => {
+    grant('dataset.dataset.view', 'dataset.dataset.edit')
+    api.createAnnotationContext.mockResolvedValue({
+      ...ANNOTATION_CONTEXT,
+      preparation_status: 'pending',
+    })
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+    vi.useFakeTimers()
+
+    const enterAnnotation = wrapper.findAll('button').find((button) => button.text() === '进入标注')
+    expect(enterAnnotation).toBeDefined()
+    await enterAnnotation!.trigger('click')
+    await flushPromises()
+
+    const closeAnnotation = wrapper.findAll('button').find((button) => button.text() === '关闭标注')
+    expect(closeAnnotation).toBeDefined()
+    await closeAnnotation!.trigger('click')
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushPromises()
+
+    expect(api.readAnnotationContext).not.toHaveBeenCalled()
+    expect(wrapper.find('h2#annotation-editor-heading').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('stops annotation preparation polling when the view unmounts', async () => {
+    grant('dataset.dataset.view', 'dataset.dataset.edit')
+    api.createAnnotationContext.mockResolvedValue({
+      ...ANNOTATION_CONTEXT,
+      preparation_status: 'pending',
+    })
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+    vi.useFakeTimers()
+
+    const enterAnnotation = wrapper.findAll('button').find((button) => button.text() === '进入标注')
+    expect(enterAnnotation).toBeDefined()
+    await enterAnnotation!.trigger('click')
+    await flushPromises()
+
+    wrapper.unmount()
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushPromises()
+
+    expect(api.readAnnotationContext).not.toHaveBeenCalled()
   })
 
   it('opens the independent annotation UI after a registered member is prepared', async () => {
@@ -760,6 +1166,131 @@ describe('训练数据集工作台', () => {
       await vi.advanceTimersByTimeAsync(4000)
       await flushPromises()
       expect(api.readJob).toHaveBeenCalledTimes(jobReads)
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not overlap a slow usage refresh with the next polling interval', async () => {
+    grant('dataset.dataset.view')
+    const pendingUsageCheck = { ...USAGE_CHECK, status: 'pending' }
+    const slowUsagePage = deferred<{
+      items: (typeof USAGE_CHECK)[]
+      page: number
+      page_size: number
+      total: number
+    }>()
+    api.listDatasetUsageChecks
+      .mockResolvedValueOnce({
+        items: [pendingUsageCheck],
+        page: 1,
+        page_size: 50,
+        total: 1,
+      })
+      .mockImplementationOnce(() => slowUsagePage.promise)
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+
+    try {
+      const { wrapper } = await mountDatasets()
+      await flushPromises()
+      expect(api.listDatasetUsageChecks).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(2000)
+      await flushPromises()
+      expect(api.listDatasetUsageChecks).toHaveBeenCalledTimes(2)
+
+      await vi.advanceTimersByTimeAsync(2000)
+      await flushPromises()
+      expect(api.listDatasetUsageChecks).toHaveBeenCalledTimes(2)
+
+      slowUsagePage.resolve({
+        items: [USAGE_CHECK],
+        page: 1,
+        page_size: 50,
+        total: 1,
+      })
+      await flushPromises()
+
+      await vi.advanceTimersByTimeAsync(4000)
+      await flushPromises()
+      expect(api.listDatasetUsageChecks).toHaveBeenCalledTimes(2)
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('allows the newly selected dataset to poll while the previous refresh is still pending', async () => {
+    grant('dataset.dataset.view')
+    const secondDataset = { ...DATASET, id: 'dataset-2', name: '第二个数据集' }
+    const pendingUsageCheck = { ...USAGE_CHECK, status: 'pending' }
+    const slowPreviousUsagePage = deferred<{
+      items: (typeof USAGE_CHECK)[]
+      page: number
+      page_size: number
+      total: number
+    }>()
+    api.readTrainingDatasets.mockResolvedValue({
+      items: [DATASET, secondDataset],
+      page: 1,
+      page_size: 50,
+      total: 2,
+    })
+    api.listDatasetUsageChecks
+      .mockResolvedValueOnce({
+        items: [pendingUsageCheck],
+        page: 1,
+        page_size: 50,
+        total: 1,
+      })
+      .mockImplementationOnce(() => slowPreviousUsagePage.promise)
+      .mockResolvedValueOnce({
+        items: [{ ...pendingUsageCheck, dataset_id: secondDataset.id }],
+        page: 1,
+        page_size: 50,
+        total: 1,
+      })
+      .mockResolvedValueOnce({
+        items: [{ ...USAGE_CHECK, dataset_id: secondDataset.id }],
+        page: 1,
+        page_size: 50,
+        total: 1,
+      })
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+
+    try {
+      const { wrapper } = await mountDatasets()
+      await flushPromises()
+
+      await vi.advanceTimersByTimeAsync(2000)
+      await flushPromises()
+      expect(api.listDatasetUsageChecks).toHaveBeenCalledTimes(2)
+
+      const chooseSecond = wrapper.findAll('button').find((button) => button.text() === '查看成员')
+      expect(chooseSecond).toBeDefined()
+      await chooseSecond!.trigger('click')
+      await flushPromises()
+
+      const secondDatasetReadsBeforePolling = api.readDatasetMembers.mock.calls.filter(
+        ([datasetId]) => datasetId === secondDataset.id,
+      ).length
+      expect(secondDatasetReadsBeforePolling).toBe(1)
+
+      await vi.advanceTimersByTimeAsync(2000)
+      await flushPromises()
+
+      expect(
+        api.readDatasetMembers.mock.calls.filter(([datasetId]) => datasetId === secondDataset.id),
+      ).toHaveLength(2)
+
+      slowPreviousUsagePage.resolve({
+        items: [USAGE_CHECK],
+        page: 1,
+        page_size: 50,
+        total: 1,
+      })
+      await flushPromises()
       wrapper.unmount()
     } finally {
       vi.useRealTimers()

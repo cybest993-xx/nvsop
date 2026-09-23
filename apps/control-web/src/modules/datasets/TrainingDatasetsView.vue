@@ -126,6 +126,7 @@ const activeJobId = ref('')
 const jobStatuses = ref<Record<string, string>>({})
 const jobFailures = ref<Record<string, string | null>>({})
 const pollingTimer = ref<number | null>(null)
+let pendingRefreshIdentity: { datasetId: string; memberGeneration: number } | null = null
 const annotationMemberId = ref('')
 const annotationContext = ref<AnnotationContextView | null>(null)
 const loadingAnnotationContext = ref(false)
@@ -147,6 +148,12 @@ const selectedCandidateId = ref('')
 const loadingCandidate = ref(false)
 const runningUsageKind = ref<'ddm' | 'vlm' | null>(null)
 const generatingArtifact = ref(false)
+let datasetRequestGeneration = 0
+let memberRequestGeneration = 0
+let usageRequestGeneration = 0
+let annotationRequestGeneration = 0
+let annotationPreparationTimer: number | null = null
+let annotationPreparationWake: (() => void) | null = null
 
 interface FailureNotice {
   message: string
@@ -454,6 +461,7 @@ function selectFile(event: Event): void {
 }
 
 async function loadDatasets(pageNumber = 1): Promise<void> {
+  const requestGeneration = ++datasetRequestGeneration
   if (!mayView.value) {
     loadingDatasets.value = false
     return
@@ -465,6 +473,7 @@ async function loadDatasets(pageNumber = 1): Promise<void> {
       pageNumber === 1
         ? await readTrainingDatasets()
         : await readTrainingDatasets(pageNumber, DATASET_PAGE_SIZE)
+    if (requestGeneration !== datasetRequestGeneration) return
     datasets.value = page.items
     datasetPageNumber.value = page.page
     datasetTotal.value = page.total
@@ -475,37 +484,54 @@ async function loadDatasets(pageNumber = 1): Promise<void> {
         : (datasets.value[0]?.id ?? '')
     }
     if (selectedDatasetId.value && selectedDatasetId.value !== previousSelectedId) {
+      const selectedId = selectedDatasetId.value
       memberPageNumber.value = 1
       await loadMembers(1)
+      if (
+        requestGeneration !== datasetRequestGeneration ||
+        selectedDatasetId.value !== selectedId
+      ) {
+        return
+      }
       await loadUsageData()
     }
   } catch (error) {
-    recordFailure(error)
+    if (requestGeneration === datasetRequestGeneration) recordFailure(error)
   } finally {
-    loadingDatasets.value = false
+    if (requestGeneration === datasetRequestGeneration) loadingDatasets.value = false
   }
 }
 
 async function loadMembers(pageNumber = 1): Promise<void> {
-  if (!mayView.value || !selectedDatasetId.value) {
+  const requestGeneration = ++memberRequestGeneration
+  const datasetId = selectedDatasetId.value
+  if (!mayView.value || !datasetId) {
     members.value = []
     memberTotal.value = 0
+    loadingMembers.value = false
     return
   }
   loadingMembers.value = true
   try {
     const page =
       pageNumber === 1
-        ? await readDatasetMembers(selectedDatasetId.value)
-        : await readDatasetMembers(selectedDatasetId.value, pageNumber, MEMBER_PAGE_SIZE)
+        ? await readDatasetMembers(datasetId)
+        : await readDatasetMembers(datasetId, pageNumber, MEMBER_PAGE_SIZE)
+    if (requestGeneration !== memberRequestGeneration || selectedDatasetId.value !== datasetId) {
+      return
+    }
     members.value = page.items
     memberPageNumber.value = page.page
     memberTotal.value = page.total
     syncPolling()
   } catch (error) {
-    recordFailure(error)
+    if (requestGeneration === memberRequestGeneration && selectedDatasetId.value === datasetId) {
+      recordFailure(error)
+    }
   } finally {
-    loadingMembers.value = false
+    if (requestGeneration === memberRequestGeneration && selectedDatasetId.value === datasetId) {
+      loadingMembers.value = false
+    }
   }
 }
 
@@ -520,6 +546,7 @@ function changeMemberPage(pageNumber: number): void {
 }
 
 function chooseDataset(): void {
+  leaveAnnotation()
   activeMemberId.value = ''
   activeAttemptId.value = ''
   activeIdempotencyKey.value = ''
@@ -527,6 +554,8 @@ function chooseDataset(): void {
   uploadRequest.value = null
   transferProgress.value = null
   transferPhase.value = 'idle'
+  members.value = []
+  memberTotal.value = 0
   memberPageNumber.value = 1
   void loadMembers(1)
   void loadUsageData()
@@ -562,33 +591,39 @@ async function loadAllPages<T>(
 }
 
 async function loadUsageData(): Promise<void> {
-  if (!mayView.value || !selectedDatasetId.value) {
+  const requestGeneration = ++usageRequestGeneration
+  const datasetId = selectedDatasetId.value
+  if (!mayView.value || !datasetId) {
     usageChecks.value = []
     candidates.value = []
     artifacts.value = []
+    loadingUsage.value = false
     return
   }
   loadingUsage.value = true
   try {
     const [checks, candidateValues, artifactValues] = await Promise.all([
-      loadAllPages((page, pageSize) =>
-        listDatasetUsageChecks(selectedDatasetId.value, page, pageSize),
-      ),
-      loadAllPages((page, pageSize) => listVlmCandidates(selectedDatasetId.value, page, pageSize)),
-      loadAllPages((page, pageSize) =>
-        listDatasetArtifacts(selectedDatasetId.value, page, pageSize),
-      ),
+      loadAllPages((page, pageSize) => listDatasetUsageChecks(datasetId, page, pageSize)),
+      loadAllPages((page, pageSize) => listVlmCandidates(datasetId, page, pageSize)),
+      loadAllPages((page, pageSize) => listDatasetArtifacts(datasetId, page, pageSize)),
     ])
+    if (requestGeneration !== usageRequestGeneration || selectedDatasetId.value !== datasetId) {
+      return
+    }
     usageChecks.value = checks
     candidates.value = candidateValues
     artifacts.value = artifactValues
     selectedCandidateId.value = candidateValues.at(-1)?.id ?? ''
     candidateActionListRevision.value = candidateValues.at(-1)?.action_list_revision ?? 1
   } catch (error) {
-    recordFailure(error)
+    if (requestGeneration === usageRequestGeneration && selectedDatasetId.value === datasetId) {
+      recordFailure(error)
+    }
   } finally {
-    loadingUsage.value = false
-    syncPolling()
+    if (requestGeneration === usageRequestGeneration && selectedDatasetId.value === datasetId) {
+      loadingUsage.value = false
+      syncPolling()
+    }
   }
 }
 
@@ -752,12 +787,9 @@ async function createDataset(): Promise<void> {
     datasets.value = [created, ...datasets.value].slice(0, DATASET_PAGE_SIZE)
     datasetPageNumber.value = 1
     datasetTotal.value += 1
-    selectedDatasetId.value = created.id
     knownDatasetId.value = created.id
     datasetName.value = ''
-    members.value = []
-    memberPageNumber.value = 1
-    memberTotal.value = 0
+    selectDataset(created.id)
     ElMessage.success('训练数据集已创建')
   } catch (error) {
     recordFailure(error)
@@ -1013,6 +1045,9 @@ function annotationStatusTag(status: string): 'success' | 'warning' | 'danger' |
 
 async function enterAnnotation(member: TrainingDatasetMember): Promise<void> {
   if (!mayAnnotate.value || member.status !== 'registered') return
+  cancelAnnotationPreparation()
+  const requestGeneration = annotationRequestGeneration
+  const datasetId = selectedDatasetId.value
   resetFailure()
   annotationHistoryMemberId.value = ''
   annotationHistory.value = null
@@ -1020,19 +1055,74 @@ async function enterAnnotation(member: TrainingDatasetMember): Promise<void> {
   annotationContext.value = null
   loadingAnnotationContext.value = true
   try {
-    const created = await createAnnotationContext(selectedDatasetId.value, member.id)
-    annotationContext.value = await waitForAnnotationContext(created)
+    const created = await createAnnotationContext(datasetId, member.id)
+    if (!isCurrentAnnotationRequest(requestGeneration, datasetId, member.id)) return
+    const prepared = await waitForAnnotationContext(
+      created,
+      requestGeneration,
+      datasetId,
+      member.id,
+    )
+    if (prepared !== null && isCurrentAnnotationRequest(requestGeneration, datasetId, member.id)) {
+      annotationContext.value = prepared
+    }
   } catch (error) {
-    annotationMemberId.value = ''
-    recordFailure(error)
+    if (isCurrentAnnotationRequest(requestGeneration, datasetId, member.id)) {
+      loadingAnnotationContext.value = false
+      annotationMemberId.value = ''
+      recordFailure(error)
+    }
   } finally {
-    loadingAnnotationContext.value = false
+    if (isCurrentAnnotationRequest(requestGeneration, datasetId, member.id)) {
+      loadingAnnotationContext.value = false
+    }
   }
+}
+
+function isCurrentAnnotationRequest(
+  requestGeneration: number,
+  datasetId: string,
+  memberId: string,
+): boolean {
+  return (
+    requestGeneration === annotationRequestGeneration &&
+    selectedDatasetId.value === datasetId &&
+    annotationMemberId.value === memberId
+  )
+}
+
+function cancelAnnotationPreparation(): void {
+  annotationRequestGeneration += 1
+  if (annotationPreparationTimer !== null) {
+    window.clearTimeout(annotationPreparationTimer)
+    annotationPreparationTimer = null
+  }
+  if (annotationPreparationWake !== null) {
+    const wake = annotationPreparationWake
+    annotationPreparationWake = null
+    wake()
+  }
+}
+
+async function waitForAnnotationPreparationDelay(requestGeneration: number): Promise<boolean> {
+  await new Promise<void>((resolve) => {
+    annotationPreparationWake = resolve
+    annotationPreparationTimer = window.setTimeout(() => {
+      annotationPreparationTimer = null
+      annotationPreparationWake = null
+      resolve()
+    }, ANNOTATION_PREPARATION_POLL_MS)
+  })
+  return requestGeneration === annotationRequestGeneration
 }
 
 async function waitForAnnotationContext(
   created: AnnotationContextView,
-): Promise<AnnotationContextView> {
+  requestGeneration: number,
+  datasetId: string,
+  memberId: string,
+): Promise<AnnotationContextView | null> {
+  if (!isCurrentAnnotationRequest(requestGeneration, datasetId, memberId)) return null
   if (created.preparation_status === 'succeeded') return created
   if (created.preparation_status === 'failed') {
     throw new Error(created.preparation_failure_detail ?? '标注媒体准备失败')
@@ -1041,8 +1131,10 @@ async function waitForAnnotationContext(
     throw new Error(`未知标注准备状态（${created.preparation_status}）`)
   }
   for (let poll = 0; poll < ANNOTATION_PREPARATION_MAX_POLLS; poll += 1) {
-    await new Promise<void>((resolve) => window.setTimeout(resolve, ANNOTATION_PREPARATION_POLL_MS))
+    if (!(await waitForAnnotationPreparationDelay(requestGeneration))) return null
+    if (!isCurrentAnnotationRequest(requestGeneration, datasetId, memberId)) return null
     const current = await readAnnotationContext(created.context_token)
+    if (!isCurrentAnnotationRequest(requestGeneration, datasetId, memberId)) return null
     if (current.preparation_status === 'succeeded') return current
     if (current.preparation_status === 'failed') {
       throw new Error(current.preparation_failure_detail ?? '标注媒体准备失败')
@@ -1055,8 +1147,10 @@ async function waitForAnnotationContext(
 }
 
 function leaveAnnotation(): void {
+  cancelAnnotationPreparation()
   annotationMemberId.value = ''
   annotationContext.value = null
+  loadingAnnotationContext.value = false
 }
 
 function annotationLaunchUrl(contextToken: string): string {
@@ -1184,7 +1278,17 @@ function syncPolling(): void {
 }
 
 async function refreshPendingMembers(): Promise<void> {
-  if ((!mayView.value && !mayImport.value) || !activeDatasetId()) return
+  const datasetId = activeDatasetId()
+  const requestGeneration = memberRequestGeneration
+  if ((!mayView.value && !mayImport.value) || !datasetId) return
+  if (
+    pendingRefreshIdentity?.datasetId === datasetId &&
+    pendingRefreshIdentity.memberGeneration === requestGeneration
+  ) {
+    return
+  }
+  const refreshIdentity = { datasetId, memberGeneration: requestGeneration }
+  pendingRefreshIdentity = refreshIdentity
   try {
     const jobIds = Array.from(
       new Set(
@@ -1196,6 +1300,9 @@ async function refreshPendingMembers(): Promise<void> {
     const jobs = await Promise.all(
       jobIds.map(async (jobId) => ({ jobId, job: await readJob(jobId) })),
     )
+    if (requestGeneration !== memberRequestGeneration || activeDatasetId() !== datasetId) {
+      return
+    }
     if (jobs.length > 0) {
       jobStatuses.value = {
         ...jobStatuses.value,
@@ -1215,12 +1322,11 @@ async function refreshPendingMembers(): Promise<void> {
     }
     const page =
       memberPageNumber.value === 1
-        ? await readDatasetMembers(selectedDatasetId.value)
-        : await readDatasetMembers(
-            selectedDatasetId.value,
-            memberPageNumber.value,
-            MEMBER_PAGE_SIZE,
-          )
+        ? await readDatasetMembers(datasetId)
+        : await readDatasetMembers(datasetId, memberPageNumber.value, MEMBER_PAGE_SIZE)
+    if (requestGeneration !== memberRequestGeneration || activeDatasetId() !== datasetId) {
+      return
+    }
     members.value = page.items
     memberPageNumber.value = page.page
     memberTotal.value = page.total
@@ -1229,17 +1335,28 @@ async function refreshPendingMembers(): Promise<void> {
     if (active?.validation_job_id) activeJobId.value = active.validation_job_id
     syncPolling()
   } catch (error) {
+    if (requestGeneration !== memberRequestGeneration || activeDatasetId() !== datasetId) {
+      return
+    }
     if (error instanceof ControlPlaneError && error.status === 401) {
       clearPolling()
     }
     recordFailure(error)
+  } finally {
+    if (pendingRefreshIdentity === refreshIdentity) pendingRefreshIdentity = null
   }
 }
 
 onMounted(() => {
   void loadDatasets()
 })
-onUnmounted(clearPolling)
+onUnmounted(() => {
+  datasetRequestGeneration += 1
+  memberRequestGeneration += 1
+  usageRequestGeneration += 1
+  clearPolling()
+  cancelAnnotationPreparation()
+})
 </script>
 
 <template>

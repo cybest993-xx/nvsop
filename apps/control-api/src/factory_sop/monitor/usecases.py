@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import json
-import time
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
@@ -13,7 +12,7 @@ from factory_sop.auth.api import Caller, Permission, authorize
 from factory_sop.monitor.api import HistoricalAssignmentGateway, HostOwnershipGateway
 from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.model import MirroredDecision, MirroredHealth, MirroredSopInstance
-from factory_sop.monitor.repository import MonitorRepository
+from factory_sop.monitor.repository import MonitorRepository, MonitorStreamSource
 from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
     ReportedDecision,
@@ -197,41 +196,61 @@ def sse_snapshot_state(
     """读取初始投影并记录数据库序号，避免墙上时钟造成丢事件窗口。"""
     authorize(caller, Permission.MONITOR_VIEW)
     boundary = boundary or datetime.now(UTC)
-    decisions = monitor.recent_decisions(limit=limit)
-    health = monitor.recent_health(limit=limit)
-    decision_sequence = max((value.stream_sequence or 0 for value in decisions), default=0)
-    health_sequence = max((value.stream_sequence or 0 for value in health), default=0)
     resume_decision = monitor.decision_sequence_for_event(last_event_id) if last_event_id else None
     resume_health = monitor.health_sequence_for_event(last_event_id) if last_event_id else None
+    if resume_decision is None:
+        decisions = monitor.recent_decisions(limit=limit)
+        decision_sequence = max((value.stream_sequence or 0 for value in decisions), default=0)
+    else:
+        decisions = monitor.decisions_after_sequence(
+            after_sequence=resume_decision,
+            limit=limit,
+        )
+        decision_sequence = max(
+            (value.stream_sequence or 0 for value in decisions),
+            default=resume_decision,
+        )
+    if resume_health is None:
+        health = monitor.recent_health(limit=limit)
+        health_sequence = max((value.stream_sequence or 0 for value in health), default=0)
+    else:
+        health = monitor.health_after_sequence(
+            after_sequence=resume_health,
+            limit=limit,
+        )
+        health_sequence = max(
+            (value.stream_sequence or 0 for value in health),
+            default=resume_health,
+        )
 
-    events: list[tuple[datetime, str, str, int, dict[str, object]]] = []
-    events.extend(
+    events = _merge_sse_events(
         (
-            value.received_at,
-            "decision",
-            value.report.event_id,
-            value.stream_sequence or 0,
-            reported_decision_to_wire(value.report),
-        )
-        for value in decisions
-        if resume_decision is None
-        or (value.stream_sequence or 0) > resume_decision
-        or ((value.stream_sequence or 0) == 0 and value.report.event_id != last_event_id)
-    )
-    events.extend(
+            (
+                value.received_at,
+                "decision",
+                value.report.event_id,
+                value.stream_sequence or 0,
+                reported_decision_to_wire(value.report),
+            )
+            for value in decisions
+            if resume_decision is None
+            or (value.stream_sequence or 0) > resume_decision
+            or ((value.stream_sequence or 0) == 0 and value.report.event_id != last_event_id)
+        ),
         (
-            value.received_at,
-            "health",
-            value.report.event_id,
-            value.stream_sequence or 0,
-            reported_health_to_wire(value.report),
-        )
-        for value in health
-        if resume_health is None
-        or (value.stream_sequence or 0) > resume_health
-        or ((value.stream_sequence or 0) == 0 and value.report.event_id != last_event_id)
+            (
+                value.received_at,
+                "health",
+                value.report.event_id,
+                value.stream_sequence or 0,
+                reported_health_to_wire(value.report),
+            )
+            for value in health
+            if resume_health is None
+            or (value.stream_sequence or 0) > resume_health
+            or ((value.stream_sequence or 0) == 0 and value.report.event_id != last_event_id)
+        ),
     )
-    events.sort(key=lambda item: (item[0], item[2]))
 
     decision_cursor = _snapshot_cursor(
         (value.received_at, value.report.event_id) for value in decisions
@@ -260,55 +279,46 @@ def sse_snapshot_state(
 
 
 def sse_stream(
-    monitor: MonitorRepository,
+    source: MonitorStreamSource,
     *,
     caller: Caller,
-    after: datetime | None = None,
-    sleep: float = 1.0,
-    decision_after: datetime | None = None,
-    decision_event_id: str = "",
-    health_after: datetime | None = None,
-    health_event_id: str = "",
     decision_sequence: int = 0,
     health_sequence: int = 0,
+    wait_timeout: float = 15.0,
 ) -> Iterator[str]:
-    """只轮询中心镜像，并以数据库序号推进两个独立游标。"""
+    """用 durable cursor 重放事实；LISTEN/NOTIFY 仅缩短下一轮读取的等待。"""
     authorize(caller, Permission.MONITOR_VIEW)
-    del after, decision_after, decision_event_id, health_after, health_event_id
     while True:
-        decisions = monitor.decisions_after_sequence(
-            after_sequence=decision_sequence,
+        decisions, health = source.read_after_sequences(
+            decision_sequence=decision_sequence,
+            health_sequence=health_sequence,
             limit=100,
         )
-        health = monitor.health_after_sequence(
-            after_sequence=health_sequence,
-            limit=100,
-        )
-        events: list[tuple[datetime, str, str, int, dict[str, object]]] = []
-        events.extend(
+        events = _merge_sse_events(
             (
-                value.received_at,
-                "decision",
-                value.report.event_id,
-                value.stream_sequence or 0,
-                reported_decision_to_wire(value.report),
-            )
-            for value in decisions
-        )
-        events.extend(
+                (
+                    value.received_at,
+                    "decision",
+                    value.report.event_id,
+                    value.stream_sequence or 0,
+                    reported_decision_to_wire(value.report),
+                )
+                for value in decisions
+            ),
             (
-                value.received_at,
-                "health",
-                value.report.event_id,
-                value.stream_sequence or 0,
-                reported_health_to_wire(value.report),
-            )
-            for value in health
+                (
+                    value.received_at,
+                    "health",
+                    value.report.event_id,
+                    value.stream_sequence or 0,
+                    reported_health_to_wire(value.report),
+                )
+                for value in health
+            ),
         )
-        events.sort(key=lambda item: (item[0], item[2]))
         if not events:
-            yield ": keep-alive\n\n"
-            time.sleep(sleep)
+            if not source.wait_for_wakeup(timeout=wait_timeout):
+                yield ": keep-alive\n\n"
             continue
         for _, kind, event_id, sequence, data in events:
             if kind == "decision":
@@ -316,6 +326,32 @@ def sse_stream(
             else:
                 health_sequence = max(health_sequence, sequence)
             yield _sse_frame(event=kind, event_id=event_id, data=data)
+
+
+SseEvent = tuple[datetime, str, str, int, dict[str, object]]
+
+
+def _merge_sse_events(
+    decision_events: Iterable[SseEvent], health_events: Iterable[SseEvent]
+) -> tuple[SseEvent, ...]:
+    """跨 stream 按时间交织，但绝不打乱任一 durable sequence。"""
+    decisions = sorted(decision_events, key=lambda item: item[3])
+    health = sorted(health_events, key=lambda item: item[3])
+    merged: list[SseEvent] = []
+    decision_index = 0
+    health_index = 0
+    while decision_index < len(decisions) and health_index < len(health):
+        decision = decisions[decision_index]
+        health_event = health[health_index]
+        if (decision[0], decision[2]) <= (health_event[0], health_event[2]):
+            merged.append(decision)
+            decision_index += 1
+        else:
+            merged.append(health_event)
+            health_index += 1
+    merged.extend(decisions[decision_index:])
+    merged.extend(health[health_index:])
+    return tuple(merged)
 
 
 def _snapshot_cursor(values: Iterator[tuple[datetime, str]]) -> tuple[datetime, str] | None:

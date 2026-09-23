@@ -69,6 +69,10 @@ class AnnotationBackend(Protocol):
         """把已确认源视频和一份动作清单放入基座工作区。"""
         ...
 
+    def discard_prepared_video(self, *, data_id: str) -> None:
+        """删除尚未持久化引用的基座工作副本。"""
+        ...
+
     def download_video(self, *, video_id: str, destination: BinaryIO) -> None:
         """把基座转码后的派生视频流入服务端临时文件。"""
         ...

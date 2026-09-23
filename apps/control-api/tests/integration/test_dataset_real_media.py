@@ -189,6 +189,7 @@ def _run_worker(engine: Engine, settings: Settings, job_id: UUID) -> None:
         "settings": settings,
         "session_factory": session_factory(engine),
         "dataset_runtime": validation_runtime(settings),
+        "blocking_job_slots": asyncio.Semaphore(1),
     }
     asyncio.run(validate_dataset_job(context, str(job_id)))
 
@@ -212,6 +213,9 @@ class _UsageAnnotationBackend:
         assert list(actions) == ["(1) 取料", "(2) 安装"]
         self.source = source.read()
         return PreparedAnnotationVideo(data_id=self.data_id, video_id=self.video_id)
+
+    def discard_prepared_video(self, *, data_id: str) -> None:
+        assert data_id == self.data_id
 
     def download_video(self, *, video_id: str, destination: BinaryIO) -> None:
         assert video_id == self.video_id
@@ -298,6 +302,7 @@ async def _run_annotation_arq_worker(
             "session_factory": session_factory(engine),
             "dataset_runtime": validation_runtime(settings),
             "annotation_runtime": runtime,
+            "blocking_job_slots": asyncio.Semaphore(1),
         },
         burst=True,
         max_burst_jobs=20,
@@ -329,6 +334,7 @@ async def _run_usage_arq_worker(engine: Engine, settings: Settings) -> None:
             "session_factory": factory,
             "usage_runtime": runtime,
             "artifact_executor": executor,
+            "blocking_job_slots": asyncio.Semaphore(1),
         },
         burst=True,
         max_burst_jobs=20,
@@ -385,6 +391,7 @@ async def _run_arq_worker(engine: Engine, settings: Settings) -> int:
             "settings": settings,
             "session_factory": session_factory(engine),
             "dataset_runtime": validation_runtime(settings),
+            "blocking_job_slots": asyncio.Semaphore(1),
         },
         burst=True,
         max_jobs=1,

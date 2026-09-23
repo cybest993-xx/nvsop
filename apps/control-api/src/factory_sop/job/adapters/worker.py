@@ -6,7 +6,7 @@ import asyncio
 import sys
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
-from threading import Event
+from threading import Event, Lock
 from typing import Any, assert_never, cast
 from uuid import UUID
 
@@ -59,19 +59,37 @@ from factory_sop.settings import Settings
 
 _logger = get_logger("job")
 
+_BLOCKING_JOB_LIMIT = 4
+
 
 class _ExecutionFence:
-    """ARQ 取消后撤销仍在物理运行的阻塞执行发布权。"""
+    """把取消请求与最终事务提交线性化到同一发布权边界。"""
 
     def __init__(self) -> None:
         self._cancelled = Event()
+        self._publication_lock = Lock()
 
     @property
     def cancelled(self) -> bool:
         return self._cancelled.is_set()
 
-    def cancel(self) -> None:
+    def request_cancel(self) -> None:
+        """立即撤销后续发布权。"""
         self._cancelled.set()
+
+    def wait_until_quiescent(self) -> None:
+        """等待已经进入发布临界区的提交完成。"""
+        with self._publication_lock:
+            return
+
+    def commit(self, session: Session) -> bool:
+        """与取消请求共享临界区，避免检查与提交之间出现竞态。"""
+        with self._publication_lock:
+            if self._cancelled.is_set():
+                session.rollback()
+                return False
+            session.commit()
+            return True
 
 
 async def _run_blocking_job(
@@ -79,22 +97,28 @@ async def _run_blocking_job(
     ctx: Mapping[str, Any],
     job_id: str,
 ) -> None:
-    """在线程中执行同步业务；取消只撤销该执行的结果发布权。"""
+    """在线程中执行同步业务，并以物理执行生命周期占用并发槽位。"""
+    slots = _blocking_job_slots(ctx)
+    await slots.acquire()
     fence = _ExecutionFence()
+    loop = asyncio.get_running_loop()
     try:
-        await asyncio.to_thread(job, ctx, job_id, fence)
+        physical = loop.run_in_executor(None, job, ctx, job_id, fence)
+    except BaseException:
+        slots.release()
+        raise
+    physical.add_done_callback(lambda _future: slots.release())
+    try:
+        await asyncio.shield(physical)
     except asyncio.CancelledError:
-        fence.cancel()
+        fence.request_cancel()
+        await asyncio.shield(loop.run_in_executor(None, fence.wait_until_quiescent))
         raise
 
 
 def _commit_if_active(session: Session, fence: _ExecutionFence) -> bool:
     """仅当当前逻辑执行仍有发布权时提交事务。"""
-    if fence.cancelled:
-        session.rollback()
-        return False
-    session.commit()
-    return True
+    return fence.commit(session)
 
 
 def _usage_requires_annotation_volume(target: UsageCheckTarget) -> bool:
@@ -475,7 +499,14 @@ def _generate_dataset_artifact_job(
             expected_updated_at=running.updated_at,
         )
 
-    _artifact_executor(ctx).execute(job=running, finish_job=finish_job)
+    def commit_transaction(session: object) -> bool:
+        return _commit_if_active(cast(Session, session), fence)
+
+    _artifact_executor(ctx).execute(
+        job=running,
+        finish_job=finish_job,
+        commit_transaction=commit_transaction,
+    )
 
 
 async def prepare_annotation_context_job(ctx: Mapping[str, Any], job_id: str) -> None:
@@ -522,16 +553,24 @@ def _prepare_annotation_context_job(
         if not _commit_if_active(session, fence):
             return
 
+    backend = runtime.backend()
     try:
         prepared = prepare_annotation_context_copy(
             context=target.context,
             member=target.member,
             actions=target.actions,
             storage=runtime.storage(),
-            backend=runtime.backend(),
+            backend=backend,
             media_probe=runtime.media_probe(),
         )
         if fence.cancelled:
+            try:
+                backend.discard_prepared_video(data_id=prepared.prepared.data_id)
+            except Exception:
+                _logger.exception(
+                    "job.dataset_annotation_preparation.cancel_cleanup_failed",
+                    data_id=prepared.prepared.data_id,
+                )
             return
     except AnnotationBackendUnavailableError as error:
         _finish_context_preparation_failure(
@@ -585,6 +624,13 @@ def _prepare_annotation_context_job(
             )
             if not finished:
                 session.rollback()
+                try:
+                    backend.discard_prepared_video(data_id=prepared.prepared.data_id)
+                except Exception:
+                    _logger.exception(
+                        "job.dataset_annotation_preparation.cancel_cleanup_failed",
+                        data_id=prepared.prepared.data_id,
+                    )
                 _logger.warning(
                     "job.dataset_annotation_preparation.lease_lost",
                     job_id=str(running.id),
@@ -592,8 +638,22 @@ def _prepare_annotation_context_job(
                 )
                 return
             if not _commit_if_active(session, fence):
+                try:
+                    backend.discard_prepared_video(data_id=prepared.prepared.data_id)
+                except Exception:
+                    _logger.exception(
+                        "job.dataset_annotation_preparation.cancel_cleanup_failed",
+                        data_id=prepared.prepared.data_id,
+                    )
                 return
     except DatasetRefusedError as error:
+        try:
+            backend.discard_prepared_video(data_id=prepared.prepared.data_id)
+        except Exception:
+            _logger.exception(
+                "job.dataset_annotation_preparation.cancel_cleanup_failed",
+                data_id=prepared.prepared.data_id,
+            )
         _finish_context_preparation_failure(
             factory=factory,
             runtime=runtime,
@@ -719,14 +779,24 @@ def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
         if not _commit_if_active(session, fence):
             return
 
+    backend = runtime.backend()
+    prepared = None
+    copy_persisted = False
     try:
         prepared = prepare_annotation_execution_copy(
             target=target,
             storage=runtime.storage(),
-            backend=runtime.backend(),
+            backend=backend,
             media_probe=runtime.media_probe(),
         )
         if fence.cancelled:
+            try:
+                backend.discard_prepared_video(data_id=prepared.prepared.data_id)
+            except Exception:
+                _logger.exception(
+                    "job.dataset_annotation.cancel_cleanup_failed",
+                    data_id=prepared.prepared.data_id,
+                )
             return
         with factory() as session:
             datasets = runtime.repository(session)
@@ -737,7 +807,15 @@ def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
                 datasets=datasets,
             )
             if not _commit_if_active(session, fence):
+                try:
+                    backend.discard_prepared_video(data_id=prepared.prepared.data_id)
+                except Exception:
+                    _logger.exception(
+                        "job.dataset_annotation.cancel_cleanup_failed",
+                        data_id=prepared.prepared.data_id,
+                    )
                 return
+            copy_persisted = True
 
         if target.execution.upstream_video_id is None:
             raise AnnotationBackendExecutionError("标注执行没有基座视频身份")
@@ -751,6 +829,14 @@ def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
         if not clips:
             raise AnnotationBackendExecutionError("标注基座没有返回切片结果")
     except AnnotationBackendUnavailableError as error:
+        if prepared is not None and not copy_persisted:
+            try:
+                backend.discard_prepared_video(data_id=prepared.prepared.data_id)
+            except Exception:
+                _logger.exception(
+                    "job.dataset_annotation.cancel_cleanup_failed",
+                    data_id=prepared.prepared.data_id,
+                )
         _finish_annotation_failure(
             factory=factory,
             runtime=runtime,
@@ -762,6 +848,14 @@ def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
         )
         return
     except AnnotationBackendExecutionError as error:
+        if prepared is not None and not copy_persisted:
+            try:
+                backend.discard_prepared_video(data_id=prepared.prepared.data_id)
+            except Exception:
+                _logger.exception(
+                    "job.dataset_annotation.cancel_cleanup_failed",
+                    data_id=prepared.prepared.data_id,
+                )
         _finish_annotation_failure(
             factory=factory,
             runtime=runtime,
@@ -773,6 +867,14 @@ def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
         )
         return
     except DatasetRefusedError as error:
+        if prepared is not None and not copy_persisted:
+            try:
+                backend.discard_prepared_video(data_id=prepared.prepared.data_id)
+            except Exception:
+                _logger.exception(
+                    "job.dataset_annotation.cancel_cleanup_failed",
+                    data_id=prepared.prepared.data_id,
+                )
         _finish_annotation_failure(
             factory=factory,
             runtime=runtime,
@@ -784,6 +886,14 @@ def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
         )
         return
     except Exception as error:  # pragma: no cover - worker 安全兜底
+        if prepared is not None and not copy_persisted:
+            try:
+                backend.discard_prepared_video(data_id=prepared.prepared.data_id)
+            except Exception:
+                _logger.exception(
+                    "job.dataset_annotation.cancel_cleanup_failed",
+                    data_id=prepared.prepared.data_id,
+                )
         _finish_annotation_failure(
             factory=factory,
             runtime=runtime,
@@ -965,12 +1075,17 @@ def build_worker(
             "usage_runtime": usage_runtime,
             "artifact_executor": artifact_executor,
             "annotation_runtime": annotation_runtime,
+            "blocking_job_slots": asyncio.Semaphore(_BLOCKING_JOB_LIMIT),
         },
-        max_jobs=4,
+        max_jobs=_BLOCKING_JOB_LIMIT,
         job_timeout=settings.media_probe_timeout_seconds + 300,
         max_tries=5,
         health_check_interval=settings.worker_health_check_interval_seconds,
     )
+
+
+def _blocking_job_slots(ctx: Mapping[str, Any]) -> asyncio.Semaphore:
+    return cast(asyncio.Semaphore, ctx["blocking_job_slots"])
 
 
 def _dataset_runtime(ctx: Mapping[str, Any]) -> DatasetValidationRuntime:

@@ -94,6 +94,14 @@ class ArtifactJobFinisher(Protocol):
         ...
 
 
+class ArtifactTransactionCommitter(Protocol):
+    """由组合层提供、在执行器指定提交点调用的事务提交回调。"""
+
+    def __call__(self, session: object) -> bool:
+        """提交共享事务；执行权已撤销时回滚并返回 false。"""
+        ...
+
+
 class DatasetArtifactExecutor(Protocol):
     """制品执行与候选清理的窄跨模块 seam。"""
 
@@ -102,6 +110,7 @@ class DatasetArtifactExecutor(Protocol):
         *,
         job: ApplicationJob,
         finish_job: ArtifactJobFinisher,
+        commit_transaction: ArtifactTransactionCommitter,
     ) -> ArtifactExecutionResult:
         """执行一个已领取的制品任务。"""
         ...
@@ -331,6 +340,7 @@ __all__ = [
     "ArtifactExecutionOutcome",
     "ArtifactExecutionResult",
     "ArtifactJobFinisher",
+    "ArtifactTransactionCommitter",
     "CheckedDatasetInput",
     "DatasetAnnotationRuntime",
     "DatasetArtifactExecutor",

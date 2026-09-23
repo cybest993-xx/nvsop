@@ -78,6 +78,9 @@ class FakeAnnotationBackend:
             video_id=video_id,
         )
 
+    def discard_prepared_video(self, *, data_id: str) -> None:
+        assert data_id.startswith("real-test-data-")
+
     def download_video(self, *, video_id: str, destination: BinaryIO) -> None:
         assert self.copies is not None
         assert video_id in self.copies
@@ -232,6 +235,7 @@ async def _run_actual_arq_worker(
             "dataset_runtime": _ValidationRuntime(engine, settings),
             "annotation_runtime": annotation_runtime
             or dataset_dependencies.annotation_runtime(settings),
+            "blocking_job_slots": asyncio.Semaphore(1),
         },
         burst=True,
         max_burst_jobs=20,

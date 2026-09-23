@@ -7,7 +7,7 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from threading import Event, get_ident
 from types import SimpleNamespace, TracebackType
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -169,6 +169,7 @@ def _install_validation_seams(
     return {
         "session_factory": _TrackingSessionFactory(state),
         "dataset_runtime": _ValidationRuntime(state, job),
+        "blocking_job_slots": asyncio.Semaphore(worker_module._BLOCKING_JOB_LIMIT),
     }
 
 
@@ -235,10 +236,13 @@ def test_blocking_jobs_leave_event_loop_responsive_and_cancel_promptly(
     monkeypatch.setattr(worker_module, "PostgresJobRepository", CronJobRepository)
 
     async def scenario() -> None:
-        slow = asyncio.create_task(worker_module.validate_dataset_job({}, str(uuid4())))
+        job_ctx: Mapping[str, Any] = {
+            "blocking_job_slots": asyncio.Semaphore(worker_module._BLOCKING_JOB_LIMIT)
+        }
+        slow = asyncio.create_task(worker_module.validate_dataset_job(job_ctx, str(uuid4())))
         assert await asyncio.to_thread(started.wait, 1.0)
 
-        await worker_module.check_dataset_usage_job({}, str(uuid4()))
+        await worker_module.check_dataset_usage_job(job_ctx, str(uuid4()))
         assert second_finished.is_set()
 
         await worker_module.dispatch_pending_jobs(cleanup_ctx)
@@ -254,6 +258,99 @@ def test_blocking_jobs_leave_event_loop_responsive_and_cancel_promptly(
 
     asyncio.run(scenario())
     assert cancelled_seen == [True]
+
+
+def test_cancelled_jobs_hold_slots_until_physical_threads_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = [Event() for _ in range(worker_module._BLOCKING_JOB_LIMIT)]
+    releases = [Event() for _ in range(worker_module._BLOCKING_JOB_LIMIT)]
+    fifth_started = Event()
+
+    def blocking_job(
+        ctx: Mapping[str, Any],
+        job_id: str,
+        fence: worker_module._ExecutionFence,
+    ) -> None:
+        del ctx, fence
+        if job_id == "fifth":
+            fifth_started.set()
+            return
+        index = int(job_id)
+        started[index].set()
+        releases[index].wait()
+
+    monkeypatch.setattr(worker_module, "_validate_dataset_job", blocking_job)
+
+    async def scenario() -> None:
+        ctx: Mapping[str, Any] = {
+            "blocking_job_slots": asyncio.Semaphore(worker_module._BLOCKING_JOB_LIMIT)
+        }
+        running = [
+            asyncio.create_task(worker_module.validate_dataset_job(ctx, str(index)))
+            for index in range(worker_module._BLOCKING_JOB_LIMIT)
+        ]
+        for event in started:
+            assert await asyncio.to_thread(event.wait, 1.0)
+
+        for task in running:
+            task.cancel()
+        for task in running:
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        fifth = asyncio.create_task(worker_module.validate_dataset_job(ctx, "fifth"))
+        await asyncio.sleep(0)
+        assert not fifth_started.is_set()
+
+        releases[0].set()
+        assert await asyncio.to_thread(fifth_started.wait, 1.0)
+        await fifth
+        for event in releases[1:]:
+            event.set()
+
+    asyncio.run(scenario())
+
+
+def test_execution_fence_serializes_cancel_with_commit() -> None:
+    commit_started = Event()
+    release_commit = Event()
+
+    class BlockingSession:
+        def __init__(self) -> None:
+            self.committed = False
+            self.rolled_back = False
+
+        def commit(self) -> None:
+            commit_started.set()
+            release_commit.wait()
+            self.committed = True
+
+        def rollback(self) -> None:
+            self.rolled_back = True
+
+    async def scenario() -> None:
+        fence = worker_module._ExecutionFence()
+        session = BlockingSession()
+        committing = asyncio.create_task(asyncio.to_thread(fence.commit, cast(Any, session)))
+        assert await asyncio.to_thread(commit_started.wait, 1.0)
+
+        fence.request_cancel()
+        quiescent = asyncio.create_task(asyncio.to_thread(fence.wait_until_quiescent))
+        await asyncio.sleep(0)
+        assert not quiescent.done()
+
+        release_commit.set()
+        assert await committing
+        await quiescent
+        assert session.committed
+
+        denied = BlockingSession()
+        assert not fence.commit(cast(Any, denied))
+        assert denied.rolled_back
+        assert not denied.committed
+
+    asyncio.run(scenario())
 
 
 def test_validation_sessions_stay_on_the_blocking_execution_thread(
@@ -434,14 +531,18 @@ def test_cancelled_artifact_generation_discards_late_candidate(
             *,
             job: ApplicationJob,
             finish_job: Callable[[object, ArtifactExecutionResult], bool],
+            commit_transaction: Callable[[object], bool],
         ) -> ArtifactExecutionResult:
             assert job.id == expected_job_id
             candidate_exists[0] = True
             started.set()
             release.wait()
             result = ArtifactExecutionResult(ArtifactExecutionOutcome.SUCCEEDED)
-            accepted = finish_job(_TrackingSessionFactory(state)(), result)
+            session = _TrackingSessionFactory(state)()
+            accepted = finish_job(session, result)
             finish_results.append(accepted)
+            if accepted:
+                accepted = commit_transaction(session)
             if not accepted:
                 candidate_exists[0] = False
                 candidate_deleted.set()
@@ -456,6 +557,7 @@ def test_cancelled_artifact_generation_discards_late_candidate(
     ctx: Mapping[str, Any] = {
         "session_factory": _TrackingSessionFactory(state),
         "artifact_executor": ArtifactExecutor(),
+        "blocking_job_slots": asyncio.Semaphore(worker_module._BLOCKING_JOB_LIMIT),
     }
 
     async def scenario() -> None:
@@ -475,6 +577,209 @@ def test_cancelled_artifact_generation_discards_late_candidate(
     assert not candidate_exists[0]
     assert finish_results == [False]
     assert state.finish_calls == 0
+
+
+def test_cancelled_annotation_preparation_discards_unpersisted_backend_copy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _WorkerState()
+    started = Event()
+    release = Event()
+    discarded = Event()
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_ANNOTATION_PREPARATION,
+        status=JobStatus.RUNNING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=NOW,
+        updated_at=NOW,
+        failure_code=None,
+    )
+    target = SimpleNamespace(
+        job=job,
+        context=SimpleNamespace(id=job.attempt_id),
+        member=object(),
+        actions=(),
+    )
+
+    class FakeJobRepository:
+        def __init__(self, session: object) -> None:
+            assert isinstance(session, _TrackingSession)
+
+        def mark_running(self, *, job_id: UUID, now: datetime) -> ApplicationJob | None:
+            del now
+            assert job_id == job.id
+            return job
+
+        def finish(
+            self,
+            *,
+            job_id: UUID,
+            status: str,
+            failure_code: str | None,
+            now: datetime,
+            expected_updated_at: datetime,
+        ) -> bool:
+            del job_id, status, failure_code, now, expected_updated_at
+            state.finish_calls += 1
+            return True
+
+    class Backend:
+        def discard_prepared_video(self, *, data_id: str) -> None:
+            assert data_id == "orphan-data"
+            discarded.set()
+
+    backend = Backend()
+
+    class Runtime:
+        def repository(self, session: object) -> object:
+            assert isinstance(session, _TrackingSession)
+            return object()
+
+        def storage(self) -> object:
+            return object()
+
+        def backend(self) -> Backend:
+            return backend
+
+        def media_probe(self) -> object:
+            return object()
+
+    def begin_preparation(*, job: object, datasets: object) -> object:
+        del job, datasets
+        return target
+
+    def prepare_copy(**kwargs: object) -> SimpleNamespace:
+        del kwargs
+        started.set()
+        release.wait()
+        return SimpleNamespace(prepared=SimpleNamespace(data_id="orphan-data"))
+
+    monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
+    monkeypatch.setattr(
+        worker_module,
+        "begin_annotation_context_preparation",
+        begin_preparation,
+    )
+    monkeypatch.setattr(worker_module, "prepare_annotation_context_copy", prepare_copy)
+    ctx: Mapping[str, Any] = {
+        "session_factory": _TrackingSessionFactory(state),
+        "annotation_runtime": Runtime(),
+        "blocking_job_slots": asyncio.Semaphore(worker_module._BLOCKING_JOB_LIMIT),
+    }
+
+    async def scenario() -> None:
+        running = asyncio.create_task(
+            worker_module.prepare_annotation_context_job(ctx, str(job.id))
+        )
+        assert await asyncio.to_thread(started.wait, 1.0)
+
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+
+        release.set()
+        assert await asyncio.to_thread(discarded.wait, 1.0)
+
+    asyncio.run(scenario())
+    assert state.finish_calls == 0
+
+
+def test_annotation_preparation_lease_loss_discards_unpublished_backend_copy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _WorkerState()
+    discarded: list[str] = []
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_ANNOTATION_PREPARATION,
+        status=JobStatus.RUNNING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=NOW,
+        updated_at=NOW,
+        failure_code=None,
+    )
+    target = SimpleNamespace(
+        job=job,
+        context=SimpleNamespace(id=job.attempt_id),
+        member=object(),
+        actions=(),
+    )
+
+    class FakeJobRepository:
+        def __init__(self, session: object) -> None:
+            assert isinstance(session, _TrackingSession)
+
+        def mark_running(self, *, job_id: UUID, now: datetime) -> ApplicationJob | None:
+            del now
+            assert job_id == job.id
+            return job
+
+        def finish(
+            self,
+            *,
+            job_id: UUID,
+            status: str,
+            failure_code: str | None,
+            now: datetime,
+            expected_updated_at: datetime,
+        ) -> bool:
+            del job_id, status, failure_code, now, expected_updated_at
+            state.finish_calls += 1
+            return False
+
+    class Backend:
+        def discard_prepared_video(self, *, data_id: str) -> None:
+            discarded.append(data_id)
+
+    backend = Backend()
+
+    class Runtime:
+        def repository(self, session: object) -> object:
+            assert isinstance(session, _TrackingSession)
+            return object()
+
+        def storage(self) -> object:
+            return object()
+
+        def backend(self) -> Backend:
+            return backend
+
+        def media_probe(self) -> object:
+            return object()
+
+    monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
+    monkeypatch.setattr(
+        worker_module,
+        "begin_annotation_context_preparation",
+        lambda **kwargs: target,
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "prepare_annotation_context_copy",
+        lambda **kwargs: SimpleNamespace(prepared=SimpleNamespace(data_id="lease-lost-data")),
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "complete_annotation_context_preparation",
+        lambda **kwargs: None,
+    )
+
+    ctx: Mapping[str, Any] = {
+        "session_factory": _TrackingSessionFactory(state),
+        "annotation_runtime": Runtime(),
+    }
+    worker_module._prepare_annotation_context_job(
+        ctx,
+        str(job.id),
+        worker_module._ExecutionFence(),
+    )
+
+    assert state.finish_calls == 1
+    assert discarded == ["lease-lost-data"]
+    assert state.sessions[-1].rollbacks == 1
 
 
 def test_cancelled_annotation_discards_late_backend_result(
@@ -524,6 +829,9 @@ def test_cancelled_annotation_discards_late_backend_result(
             return True
 
     class Backend:
+        def discard_prepared_video(self, *, data_id: str) -> None:
+            raise AssertionError(f"persisted annotation copy must not be discarded: {data_id}")
+
         def split_video(
             self, *, video_id: object, segments: object, mode: object
         ) -> tuple[dict[str, str], ...]:
@@ -555,9 +863,9 @@ def test_cancelled_annotation_discards_late_backend_result(
 
     def prepare_copy(
         *, target: object, storage: object, backend: object, media_probe: object
-    ) -> object:
+    ) -> SimpleNamespace:
         del target, storage, backend, media_probe
-        return object()
+        return SimpleNamespace(prepared=SimpleNamespace(data_id="persisted-data"))
 
     def save_copy(*, target: object, prepared: object, now: datetime, datasets: object) -> object:
         del prepared, now, datasets
@@ -575,6 +883,7 @@ def test_cancelled_annotation_discards_late_backend_result(
     ctx: Mapping[str, Any] = {
         "session_factory": _TrackingSessionFactory(state),
         "annotation_runtime": Runtime(),
+        "blocking_job_slots": asyncio.Semaphore(worker_module._BLOCKING_JOB_LIMIT),
     }
 
     async def scenario() -> None:

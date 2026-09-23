@@ -14,7 +14,9 @@ import pytest
 
 import factory_sop.job.adapters.worker as worker_module
 from factory_sop.dataset.api import (
+    AnnotationBackendExecutionError,
     AnnotationBackendUnavailableError,
+    AnnotationCleanupPendingError,
     ArtifactExecutionOutcome,
     ArtifactExecutionResult,
     MemberStatus,
@@ -603,7 +605,13 @@ def test_cancelled_annotation_preparation_discards_unpersisted_backend_copy(
     )
     target = SimpleNamespace(
         job=job,
-        context=SimpleNamespace(id=job.attempt_id),
+        context=SimpleNamespace(
+            id=job.attempt_id,
+            upstream_data_id=None,
+            upstream_video_id=None,
+            preparation_failure_code=None,
+            preparation_failure_detail=None,
+        ),
         member=object(),
         actions=(),
     )
@@ -708,7 +716,13 @@ def test_annotation_preparation_lease_loss_discards_unpublished_backend_copy(
     )
     target = SimpleNamespace(
         job=job,
-        context=SimpleNamespace(id=job.attempt_id),
+        context=SimpleNamespace(
+            id=job.attempt_id,
+            upstream_data_id=None,
+            upstream_video_id=None,
+            preparation_failure_code=None,
+            preparation_failure_detail=None,
+        ),
         member=object(),
         actions=(),
     )
@@ -829,7 +843,13 @@ def test_annotation_backend_construction_failure_is_classified(
     if kind == "context":
         target = SimpleNamespace(
             job=job,
-            context=SimpleNamespace(id=job.attempt_id),
+            context=SimpleNamespace(
+                id=job.attempt_id,
+                upstream_data_id=None,
+                upstream_video_id=None,
+                preparation_failure_code=None,
+                preparation_failure_detail=None,
+            ),
             member=object(),
             actions=(),
         )
@@ -847,7 +867,13 @@ def test_annotation_backend_construction_failure_is_classified(
     else:
         target = SimpleNamespace(
             job=job,
-            execution=SimpleNamespace(id=job.attempt_id, upstream_video_id=None),
+            execution=SimpleNamespace(
+                id=job.attempt_id,
+                upstream_data_id=None,
+                upstream_video_id=None,
+                failure_code=None,
+                failure_detail=None,
+            ),
             submission=SimpleNamespace(segments=(), mode="segment"),
         )
         monkeypatch.setattr(
@@ -871,6 +897,175 @@ def test_annotation_backend_construction_failure_is_classified(
     assert captured == ["ANNOTATION_BACKEND_UNAVAILABLE"]
 
 
+def test_annotation_cleanup_pending_is_persisted_for_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _WorkerState()
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_ANNOTATION,
+        status=JobStatus.RUNNING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=NOW,
+        updated_at=NOW,
+        failure_code=None,
+    )
+    target = SimpleNamespace(
+        job=job,
+        execution=SimpleNamespace(
+            id=job.attempt_id,
+            upstream_data_id=None,
+            upstream_video_id=None,
+            failure_code=None,
+            failure_detail=None,
+        ),
+        submission=SimpleNamespace(segments=(), mode="segment"),
+    )
+    recorded: list[tuple[str, str | None, str | None]] = []
+
+    class FakeJobRepository:
+        def __init__(self, session: object) -> None:
+            assert isinstance(session, _TrackingSession)
+
+        def mark_running(self, *, job_id: UUID, now: datetime) -> ApplicationJob | None:
+            del now
+            assert job_id == job.id
+            return job
+
+    class Runtime:
+        def repository(self, session: object) -> object:
+            assert isinstance(session, _TrackingSession)
+            return object()
+
+        def storage(self) -> object:
+            return object()
+
+        def backend(self) -> object:
+            return object()
+
+        def media_probe(self) -> object:
+            return object()
+
+    def record_candidate(**kwargs: object) -> object:
+        recorded.append(
+            (
+                cast(str, kwargs["data_id"]),
+                cast(str | None, kwargs["code"]),
+                cast(str | None, kwargs["detail"]),
+            )
+        )
+        return target
+
+    monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
+    monkeypatch.setattr(worker_module, "begin_annotation_execution", lambda **kwargs: target)
+    monkeypatch.setattr(
+        worker_module,
+        "prepare_annotation_execution_copy",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AnnotationCleanupPendingError(
+                data_id="cleanup-data",
+                failure=AnnotationBackendExecutionError("derived download failed"),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "record_annotation_execution_cleanup_candidate",
+        record_candidate,
+    )
+    ctx: Mapping[str, Any] = {
+        "session_factory": _TrackingSessionFactory(state),
+        "annotation_runtime": Runtime(),
+    }
+
+    worker_module._annotate_dataset_job(
+        ctx,
+        str(job.id),
+        worker_module._ExecutionFence(),
+    )
+
+    assert recorded == [("cleanup-data", "ANNOTATION_EXECUTION_FAILED", "derived download failed")]
+
+
+def test_annotation_cleanup_candidate_is_retried_before_new_copy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _WorkerState()
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_ANNOTATION,
+        status=JobStatus.RUNNING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=NOW,
+        updated_at=NOW,
+        failure_code=None,
+    )
+    target = SimpleNamespace(
+        job=job,
+        execution=SimpleNamespace(
+            id=job.attempt_id,
+            upstream_data_id="cleanup-data",
+            upstream_video_id=None,
+            failure_code="ANNOTATION_EXECUTION_FAILED",
+            failure_detail="derived download failed",
+        ),
+        submission=SimpleNamespace(segments=(), mode="segment"),
+    )
+    discarded: list[str] = []
+    failures: list[tuple[str, str]] = []
+
+    class FakeJobRepository:
+        def __init__(self, session: object) -> None:
+            assert isinstance(session, _TrackingSession)
+
+        def mark_running(self, *, job_id: UUID, now: datetime) -> ApplicationJob | None:
+            del now
+            assert job_id == job.id
+            return job
+
+    class Backend:
+        def discard_prepared_video(self, *, data_id: str) -> None:
+            discarded.append(data_id)
+
+    class Runtime:
+        def repository(self, session: object) -> object:
+            assert isinstance(session, _TrackingSession)
+            return object()
+
+        def backend(self) -> Backend:
+            return Backend()
+
+    monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
+    monkeypatch.setattr(worker_module, "begin_annotation_execution", lambda **kwargs: target)
+    monkeypatch.setattr(
+        worker_module,
+        "prepare_annotation_execution_copy",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("cleanup candidate retry must not prepare a second copy")
+        ),
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "_finish_annotation_failure",
+        lambda **kwargs: failures.append((cast(str, kwargs["code"]), cast(str, kwargs["detail"]))),
+    )
+    ctx: Mapping[str, Any] = {
+        "session_factory": _TrackingSessionFactory(state),
+        "annotation_runtime": Runtime(),
+    }
+
+    worker_module._annotate_dataset_job(
+        ctx,
+        str(job.id),
+        worker_module._ExecutionFence(),
+    )
+
+    assert discarded == ["cleanup-data"]
+    assert failures == [("ANNOTATION_EXECUTION_FAILED", "derived download failed")]
+
+
 def test_annotation_copy_commit_unknown_preserves_backend_copy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -889,7 +1084,13 @@ def test_annotation_copy_commit_unknown_preserves_backend_copy(
     )
     target = SimpleNamespace(
         job=job,
-        execution=SimpleNamespace(id=job.attempt_id, upstream_video_id=None),
+        execution=SimpleNamespace(
+            id=job.attempt_id,
+            upstream_data_id=None,
+            upstream_video_id=None,
+            failure_code=None,
+            failure_detail=None,
+        ),
         submission=SimpleNamespace(segments=(), mode="segment"),
     )
 

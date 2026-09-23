@@ -437,6 +437,276 @@ class RuntimeComposition:
     report_reconciler: HostReportReconciler | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _PendingConfigurationSwitch:
+    bundle: ConfigurationBundle
+    configuration: RuntimeConfiguration
+    confirmed_at: float
+
+
+@dataclass(frozen=True, slots=True)
+class _RuntimeCycleResult:
+    pending_switch: _PendingConfigurationSwitch | None
+    errors: tuple[BaseException, ...]
+
+
+class _ReportLifecycleRunner:
+    """独立驱动 durable report 排空, 并把致命失败交回运行时。"""
+
+    def __init__(
+        self,
+        *,
+        runtime: AutonomousRuntime,
+        runtime_stop: threading.Event,
+        should_stop: Callable[[], bool],
+    ) -> None:
+        self._runtime = runtime
+        self._runtime_stop = runtime_stop
+        self._should_stop = should_stop
+        self._errors: list[BaseException] = []
+        self._thread = threading.Thread(
+            target=self._run,
+            name="edge-report-reconciler",
+            daemon=True,
+        )
+
+    @property
+    def error(self) -> BaseException | None:
+        return self._errors[0] if self._errors else None
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop_and_join(self) -> None:
+        self._runtime_stop.set()
+        self._runtime._report_wake.set()
+        self._thread.join()
+
+    def _stop_requested(self) -> bool:
+        return self._runtime_stop.is_set() or self._should_stop()
+
+    def _run(self) -> None:
+        try:
+            while not self._stop_requested():
+                for _ in range(_REPORT_WORK_BUDGET):
+                    if self._stop_requested():
+                        return
+                    with self._runtime._lock:
+                        reconciler = self._runtime._report_reconciler
+                    if reconciler is None:
+                        break
+                    now = HostInstant(monotonic())
+                    reported_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+                    try:
+                        attempts = reconciler.flush(
+                            now=now,
+                            reported_at=reported_at,
+                            limit=1,
+                        )
+                    except (OSError, sqlite3.Error, ValueError) as error:
+                        _logger.warning(
+                            "edge.report_flush.failed error_type=%s",
+                            type(error).__name__,
+                        )
+                        break
+                    if not attempts:
+                        break
+                    failed_attempts = tuple(attempt for attempt in attempts if not attempt.sent)
+                    if failed_attempts:
+                        _logger.warning(
+                            "edge.report_flush.retry_pending failed_count=%s",
+                            len(failed_attempts),
+                        )
+                        break
+                if self._stop_requested():
+                    return
+                self._runtime._report_wake.wait(_REPORT_RETRY_INTERVAL_SECONDS)
+                self._runtime._report_wake.clear()
+        except BaseException as error:
+            self._errors.append(error)
+            self._runtime_stop.set()
+            self._runtime._report_wake.set()
+
+
+class _RuntimeCycleRunner:
+    """运行一轮命令、工位、媒体和配置同步生命周期。"""
+
+    def __init__(
+        self,
+        *,
+        runtime: AutonomousRuntime,
+        runtime_stop: threading.Event,
+        should_stop: Callable[[], bool],
+    ) -> None:
+        self._runtime = runtime
+        self._runtime_stop = runtime_stop
+        self._should_stop = should_stop
+        self._cycle_stop = threading.Event()
+        self._errors: list[BaseException] = []
+        self._pending_switch: _PendingConfigurationSwitch | None = None
+
+    def _stop_requested(self) -> bool:
+        return self._cycle_stop.is_set() or self._runtime_stop.is_set() or self._should_stop()
+
+    def _guard(self, target: Callable[[], None]) -> None:
+        try:
+            target()
+        except BaseException as error:
+            self._errors.append(error)
+            self._cycle_stop.set()
+            self._runtime._report_wake.set()
+
+    def _run_command(self) -> None:
+        self._runtime._command_loop.run_forever(should_stop=self._stop_requested)
+
+    def _run_station(self, station: AutonomousStation) -> None:
+        station.run_forever(should_stop=self._stop_requested)
+
+    def _run_media(self) -> None:
+        media = self._runtime._media
+        if media is None:
+            return
+        while not self._stop_requested():
+            try:
+                media.start()
+                return
+            except BaseException:
+                self._cycle_stop.wait(0.5)
+
+    def _run_configuration(self) -> None:
+        runtime = self._runtime
+        synchronizer = runtime._configuration_sync
+        if synchronizer is None:
+            return
+        while not self._stop_requested():
+            now = HostInstant(monotonic())
+            try:
+                result = synchronizer.synchronize(observed_at=now.seconds)
+            except (OSError, sqlite3.Error, ValueError) as error:
+                _logger.warning(
+                    "edge.configuration_sync.failed error_type=%s",
+                    type(error).__name__,
+                )
+            else:
+                if result.failure is not None:
+                    _logger.warning(
+                        "edge.configuration_sync.rejected failure_code=%s",
+                        result.failure.code,
+                    )
+                candidate = result.candidate
+                current = runtime.configuration
+                if (
+                    candidate is not None
+                    and (
+                        candidate.config_revision,
+                        candidate.effective_sha256,
+                    )
+                    != runtime._rejected_configuration_identity
+                ):
+                    current_confirmed = None if current is None else current.confirmed
+                    same_runtime_identity = (
+                        current_confirmed is not None
+                        and current_confirmed.config_revision == candidate.config_revision
+                        and current_confirmed.effective_sha256 == candidate.effective_sha256
+                    )
+                    if same_runtime_identity:
+                        try:
+                            synchronizer.confirm(candidate, confirmed_at=now.seconds)
+                        except (OSError, sqlite3.Error, ValueError) as error:
+                            _logger.warning(
+                                "edge.configuration_confirm.failed error_type=%s",
+                                type(error).__name__,
+                            )
+                    elif (
+                        runtime._configuration_resolver is None
+                        or runtime._configuration_factory is None
+                    ):
+                        synchronizer.reject_application(
+                            detail="runtime configuration replacement is not configured",
+                            observed_at=now.seconds,
+                        )
+                    else:
+                        try:
+                            runtime_configuration = runtime._configuration_resolver(candidate)
+                        except (OSError, sqlite3.Error, ValueError) as error:
+                            synchronizer.reject_application(
+                                detail=str(error),
+                                observed_at=now.seconds,
+                            )
+                            _logger.warning(
+                                "edge.configuration_apply.rejected error_type=%s",
+                                type(error).__name__,
+                            )
+                        else:
+                            self._pending_switch = _PendingConfigurationSwitch(
+                                bundle=candidate,
+                                configuration=runtime_configuration,
+                                confirmed_at=now.seconds,
+                            )
+                            self._cycle_stop.set()
+                            runtime._report_wake.set()
+            self._cycle_stop.wait(runtime._maintenance_interval)
+
+    def run(self) -> _RuntimeCycleResult:
+        runtime = self._runtime
+        with runtime._lock:
+            stations = tuple(runtime._stations)
+        threads = [
+            *(
+                [
+                    threading.Thread(
+                        target=self._run_media,
+                        name="edge-media-runtime",
+                        daemon=True,
+                    )
+                ]
+                if runtime._media is not None
+                else []
+            ),
+            threading.Thread(
+                target=self._guard,
+                args=(self._run_command,),
+                daemon=True,
+            ),
+            *[
+                threading.Thread(
+                    target=self._guard,
+                    args=(lambda station=station: self._run_station(station),),
+                    daemon=True,
+                )
+                for station in stations
+            ],
+            *(
+                [
+                    threading.Thread(
+                        target=self._guard,
+                        args=(self._run_configuration,),
+                        name="edge-configuration-sync",
+                        daemon=True,
+                    )
+                ]
+                if runtime._configuration_sync is not None
+                else []
+            ),
+        ]
+        for thread in threads:
+            thread.start()
+        while self._stop_requested() is False and any(thread.is_alive() for thread in threads):
+            sleep(0.05)
+        self._cycle_stop.set()
+        runtime._report_wake.set()
+        try:
+            runtime._close_stations(stations)
+        except BaseException as error:
+            self._errors.append(error)
+        for thread in threads:
+            thread.join()
+        return _RuntimeCycleResult(
+            pending_switch=self._pending_switch,
+            errors=tuple(self._errors),
+        )
+
+
 class AutonomousRuntime:
     """同时运行委托命令与各工位实时判定循环。"""
 
@@ -543,307 +813,80 @@ class AutonomousRuntime:
 
     def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
         """让命令循环和工位循环并行运行, 配置确认后安全重启本机运行周期。"""
-        pending_bundle: ConfigurationBundle | None = None
-        pending_configuration: RuntimeConfiguration | None = None
-        pending_confirmed_at: float | None = None
         runtime_stop = threading.Event()
-        report_errors: list[BaseException] = []
-
-        def runtime_stop_requested() -> bool:
-            return runtime_stop.is_set() or should_stop()
-
-        def run_reports() -> None:
-            """跨配置周期有界排空结构化事实; durable pending 可独立唤醒此循环。"""
-            try:
-                while not runtime_stop_requested():
-                    for _ in range(_REPORT_WORK_BUDGET):
-                        if runtime_stop_requested():
-                            return
-                        with self._lock:
-                            reconciler = self._report_reconciler
-                        if reconciler is None:
-                            break
-                        now = HostInstant(monotonic())
-                        reported_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-                        try:
-                            attempts = reconciler.flush(
-                                now=now,
-                                reported_at=reported_at,
-                                limit=1,
-                            )
-                        except (OSError, sqlite3.Error, ValueError) as error:
-                            _logger.warning(
-                                "edge.report_flush.failed error_type=%s",
-                                type(error).__name__,
-                            )
-                            break
-                        if not attempts:
-                            break
-                        failed_attempts = tuple(attempt for attempt in attempts if not attempt.sent)
-                        if failed_attempts:
-                            _logger.warning(
-                                "edge.report_flush.retry_pending failed_count=%s",
-                                len(failed_attempts),
-                            )
-                            break
-                    if runtime_stop_requested():
-                        return
-                    self._report_wake.wait(_REPORT_RETRY_INTERVAL_SECONDS)
-                    self._report_wake.clear()
-            except BaseException as error:
-                report_errors.append(error)
-                runtime_stop.set()
-                self._report_wake.set()
-
-        report_thread = threading.Thread(
-            target=run_reports,
-            name="edge-report-reconciler",
-            daemon=True,
+        reports = _ReportLifecycleRunner(
+            runtime=self,
+            runtime_stop=runtime_stop,
+            should_stop=should_stop,
         )
-        report_thread.start()
+        reports.start()
         try:
-            while not runtime_stop_requested():
-                cycle_stop = threading.Event()
-                errors: list[BaseException] = []
-                threads: list[threading.Thread] = []
-
-                def stop_requested(current_stop: threading.Event = cycle_stop) -> bool:
-                    return current_stop.is_set() or runtime_stop_requested()
-
-                def run(
-                    target: Callable[[], None],
-                    *,
-                    current_errors: list[BaseException] = errors,
-                    current_stop: threading.Event = cycle_stop,
-                ) -> None:
-                    try:
-                        target()
-                    except BaseException as error:
-                        current_errors.append(error)
-                        current_stop.set()
-                        self._report_wake.set()
-
-                def run_media(current_stop: threading.Event = cycle_stop) -> None:
-                    """让媒体故障重试, 不把媒体启动放到判定线程的前置路径。"""
-                    if self._media is None:
-                        return
-                    while not stop_requested():
-                        try:
-                            self._media.start()
-                            return
-                        except BaseException:
-                            current_stop.wait(0.5)
-
-                def run_configuration(current_stop: threading.Event = cycle_stop) -> None:
-                    """独立同步配置,不等待历史上报积压。"""
-                    nonlocal pending_bundle, pending_configuration, pending_confirmed_at
-                    while not stop_requested():
-                        now = HostInstant(monotonic())
-                        if self._configuration_sync is not None:
-                            try:
-                                result = self._configuration_sync.synchronize(
-                                    observed_at=now.seconds
-                                )
-                            except (OSError, sqlite3.Error, ValueError) as error:
-                                _logger.warning(
-                                    "edge.configuration_sync.failed error_type=%s",
-                                    type(error).__name__,
-                                )
-                            else:
-                                if result.failure is not None:
-                                    _logger.warning(
-                                        "edge.configuration_sync.rejected failure_code=%s",
-                                        result.failure.code,
-                                    )
-                                candidate = result.candidate
-                                current = self.configuration
-                                if (
-                                    candidate is not None
-                                    and (
-                                        candidate.config_revision,
-                                        candidate.effective_sha256,
-                                    )
-                                    != self._rejected_configuration_identity
-                                ):
-                                    current_confirmed = (
-                                        None if current is None else current.confirmed
-                                    )
-                                    same_runtime_identity = (
-                                        current_confirmed is not None
-                                        and current_confirmed.config_revision
-                                        == candidate.config_revision
-                                        and current_confirmed.effective_sha256
-                                        == candidate.effective_sha256
-                                    )
-                                    if same_runtime_identity:
-                                        try:
-                                            self._configuration_sync.confirm(
-                                                candidate,
-                                                confirmed_at=now.seconds,
-                                            )
-                                        except (OSError, sqlite3.Error, ValueError) as error:
-                                            _logger.warning(
-                                                "edge.configuration_confirm.failed error_type=%s",
-                                                type(error).__name__,
-                                            )
-                                    elif (
-                                        self._configuration_resolver is None
-                                        or self._configuration_factory is None
-                                    ):
-                                        self._configuration_sync.reject_application(
-                                            detail=(
-                                                "runtime configuration replacement "
-                                                "is not configured"
-                                            ),
-                                            observed_at=now.seconds,
-                                        )
-                                    else:
-                                        try:
-                                            runtime_configuration = self._configuration_resolver(
-                                                candidate
-                                            )
-                                        except (OSError, sqlite3.Error, ValueError) as error:
-                                            self._configuration_sync.reject_application(
-                                                detail=str(error),
-                                                observed_at=now.seconds,
-                                            )
-                                            _logger.warning(
-                                                "edge.configuration_apply.rejected error_type=%s",
-                                                type(error).__name__,
-                                            )
-                                        else:
-                                            pending_bundle = candidate
-                                            pending_configuration = runtime_configuration
-                                            pending_confirmed_at = now.seconds
-                                            current_stop.set()
-                                            self._report_wake.set()
-                        current_stop.wait(self._maintenance_interval)
-
-                with self._lock:
-                    stations = tuple(self._stations)
-                threads = [
-                    *(
-                        [
-                            threading.Thread(
-                                target=run_media,
-                                name="edge-media-runtime",
-                                daemon=True,
-                            )
-                        ]
-                        if self._media is not None
-                        else []
-                    ),
-                    threading.Thread(
-                        target=run,
-                        args=(lambda: self._command_loop.run_forever(should_stop=stop_requested),),
-                        daemon=True,
-                    ),
-                    *[
-                        threading.Thread(
-                            target=run,
-                            args=(
-                                lambda station=station: station.run_forever(
-                                    should_stop=stop_requested
-                                ),
-                            ),
-                            daemon=True,
-                        )
-                        for station in stations
-                    ],
-                    *(
-                        [
-                            threading.Thread(
-                                target=run,
-                                args=(run_configuration,),
-                                name="edge-configuration-sync",
-                                daemon=True,
-                            )
-                        ]
-                        if self._configuration_sync is not None
-                        else []
-                    ),
-                ]
-                for thread in threads:
-                    thread.start()
-                while not stop_requested() and any(thread.is_alive() for thread in threads):
-                    sleep(0.05)
-                cycle_stop.set()
-                self._report_wake.set()
-                try:
-                    self._close_stations(stations)
-                except BaseException as error:
-                    errors.append(error)
-                for thread in threads:
-                    thread.join()
-                if errors:
-                    runtime_stop.set()
-                    self._report_wake.set()
-                    report_thread.join()
+            while not runtime_stop.is_set() and not should_stop():
+                cycle = _RuntimeCycleRunner(
+                    runtime=self,
+                    runtime_stop=runtime_stop,
+                    should_stop=should_stop,
+                ).run()
+                if cycle.errors:
+                    reports.stop_and_join()
                     if self._media is not None:
-                        try:
+                        with suppress(BaseException):
                             self._media.close()
-                        except BaseException as error:
-                            errors.append(error)
-                    try:
+                    with suppress(BaseException):
                         self._state.close()
-                    except BaseException as error:
-                        errors.append(error)
-                    raise errors[0]
-                if report_errors:
+                    raise cycle.errors[0]
+                if reports.error is not None:
                     break
-                if pending_bundle is not None:
-                    bundle, pending_bundle = pending_bundle, None
-                    runtime_configuration, pending_configuration = pending_configuration, None
-                    confirmed_at, pending_confirmed_at = pending_confirmed_at, None
-                    current_configuration = self.configuration
-                    if (
-                        runtime_configuration is None
-                        or confirmed_at is None
-                        or self._configuration_sync is None
-                        or self._configuration_factory is None
-                        or current_configuration is None
-                    ):
-                        raise RuntimeError("pending configuration switch is incomplete")
-                    try:
-                        composition = self._configuration_factory(runtime_configuration)
-                    except (OSError, sqlite3.Error, ValueError) as error:
-                        self._configuration_sync.reject_application(
-                            detail=str(error),
-                            observed_at=confirmed_at,
-                        )
-                        self._rejected_configuration_identity = (
-                            bundle.config_revision,
-                            bundle.effective_sha256,
-                        )
-                        _logger.warning(
-                            "edge.configuration_apply.rejected error_type=%s",
-                            type(error).__name__,
-                        )
-                        restored = self._configuration_factory(current_configuration)
-                        stale = self._replace_composition(restored)
-                        self._close_stations(stale.stations)
-                        self._report_wake.set()
-                        continue
-                    previous = self._replace_composition(composition)
-                    self._report_wake.set()
-                    try:
-                        self._configuration_sync.confirm(bundle, confirmed_at=confirmed_at)
-                        self._rejected_configuration_identity = None
-                    except Exception:
-                        restored = self._configuration_factory(previous.configuration)
-                        rejected = self._replace_composition(restored)
-                        self._report_wake.set()
-                        self._close_stations(rejected.stations)
-                        raise
+                if cycle.pending_switch is not None:
+                    self._apply_configuration_switch(cycle.pending_switch)
         finally:
-            runtime_stop.set()
-            self._report_wake.set()
-            report_thread.join()
+            reports.stop_and_join()
 
-        if report_errors:
+        if reports.error is not None:
             self.close()
-            raise report_errors[0]
+            raise reports.error
         self.close()
+
+    def _apply_configuration_switch(self, pending: _PendingConfigurationSwitch) -> None:
+        synchronizer = self._configuration_sync
+        factory = self._configuration_factory
+        current_configuration = self.configuration
+        if synchronizer is None or factory is None or current_configuration is None:
+            raise RuntimeError("pending configuration switch is incomplete")
+        try:
+            composition = factory(pending.configuration)
+        except (OSError, sqlite3.Error, ValueError) as error:
+            synchronizer.reject_application(
+                detail=str(error),
+                observed_at=pending.confirmed_at,
+            )
+            self._rejected_configuration_identity = (
+                pending.bundle.config_revision,
+                pending.bundle.effective_sha256,
+            )
+            _logger.warning(
+                "edge.configuration_apply.rejected error_type=%s",
+                type(error).__name__,
+            )
+            restored = factory(current_configuration)
+            stale = self._replace_composition(restored)
+            self._close_stations(stale.stations)
+            self._report_wake.set()
+            return
+        previous = self._replace_composition(composition)
+        self._report_wake.set()
+        try:
+            synchronizer.confirm(
+                pending.bundle,
+                confirmed_at=pending.confirmed_at,
+            )
+            self._rejected_configuration_identity = None
+        except Exception:
+            restored = factory(previous.configuration)
+            rejected = self._replace_composition(restored)
+            self._report_wake.set()
+            self._close_stations(rejected.stations)
+            raise
 
     def close(self) -> None:
         """关闭全部运行资源, 完成清理后再传播首个关闭失败。"""

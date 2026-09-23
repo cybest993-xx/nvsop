@@ -784,13 +784,9 @@ async function createDataset(): Promise<void> {
     datasets.value = [created, ...datasets.value].slice(0, DATASET_PAGE_SIZE)
     datasetPageNumber.value = 1
     datasetTotal.value += 1
-    leaveAnnotation()
-    selectedDatasetId.value = created.id
     knownDatasetId.value = created.id
     datasetName.value = ''
-    members.value = []
-    memberPageNumber.value = 1
-    memberTotal.value = 0
+    selectDataset(created.id)
     ElMessage.success('训练数据集已创建')
   } catch (error) {
     recordFailure(error)

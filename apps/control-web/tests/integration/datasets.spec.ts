@@ -724,6 +724,44 @@ describe('训练数据集工作台', () => {
     wrapper.unmount()
   })
 
+  it('routes a newly created dataset through selection so stale member loading settles', async () => {
+    grant('dataset.dataset.view', 'dataset.dataset.import')
+    const createdDataset = { ...DATASET, id: 'dataset-created', name: '新建数据集' }
+    const staleMembers = deferred<{
+      items: (typeof MEMBER_REGISTERED)[]
+      page: number
+      page_size: number
+      total: number
+    }>()
+    api.readDatasetMembers.mockImplementation((datasetId: string) => {
+      if (datasetId === DATASET.id) return staleMembers.promise
+      return Promise.resolve({ items: [], page: 1, page_size: 50, total: 0 })
+    })
+    api.createTrainingDataset.mockResolvedValue(createdDataset)
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+    expect(wrapper.text()).toContain('正在加载视频状态')
+
+    await wrapper.find('input[name="dataset-name"]').setValue(createdDataset.name)
+    await wrapper.find('form[aria-label="创建训练数据集"]').trigger('submit')
+    await flushPromises()
+
+    expect(api.readDatasetMembers).toHaveBeenCalledWith(createdDataset.id)
+    expect(wrapper.text()).not.toContain('正在加载视频状态')
+
+    staleMembers.resolve({
+      items: [MEMBER_REGISTERED],
+      page: 1,
+      page_size: 50,
+      total: 1,
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain(MEMBER_REGISTERED.original_filename)
+    wrapper.unmount()
+  })
+
   it('stops annotation preparation polling when annotation is closed', async () => {
     grant('dataset.dataset.view', 'dataset.dataset.edit')
     api.createAnnotationContext.mockResolvedValue({

@@ -92,6 +92,7 @@ class _Synchronizer:
         self.confirm_error = confirm_error
         self.runtime: AutonomousRuntime | None = None
         self.confirmation_completed = False
+        self.confirmation = Event()
         self.rejected = False
         self.rejection_count = 0
         self.synchronize_calls = 0
@@ -115,6 +116,7 @@ class _Synchronizer:
         if self.confirm_error is not None:
             raise self.confirm_error
         self.confirmation_completed = True
+        self.confirmation.set()
 
     def reject_application(self, *, detail: str, observed_at: float) -> None:
         self.rejected = True
@@ -156,24 +158,30 @@ class _CountingReportReconciler:
         return ()
 
 
-class _ObservedSynchronizer:
-    def __init__(self) -> None:
-        self.called = Event()
-
-    def synchronize(self, *, observed_at: float) -> ConfigurationSyncResult:
-        del observed_at
-        self.called.set()
-        return ConfigurationSyncResult(candidate=None, confirmed=None, failure=None)
-
-
 class RuntimeConfigurationSwitchTest(unittest.TestCase):
-    def test_blocked_report_flush_does_not_block_configuration_and_is_bounded(self) -> None:
+    def test_blocked_report_flush_does_not_block_configuration_activation(self) -> None:
+        old = _bundle(1)
+        candidate = _bundle(2)
         release = Event()
         reporter = _BlockingReportReconciler(release=release)
-        synchronizer = _ObservedSynchronizer()
+        synchronizer = _Synchronizer(candidate=candidate, confirmed=old)
         stop = Event()
+        activated = Event()
         state = _State()
         errors: list[BaseException] = []
+        candidate_runtime = RuntimeConfiguration(stations=(), connectors=(), confirmed=candidate)
+
+        def compose(runtime_configuration: RuntimeConfiguration) -> RuntimeComposition:
+            self.assertIs(runtime_configuration, candidate_runtime)
+            activated.set()
+            return RuntimeComposition(
+                configuration=candidate_runtime,
+                stations=(),
+                connector_runtimes=cast(ConnectorRuntimeSet, object()),
+                output_dispatchers={},
+                report_reconciler=cast(HostReportReconciler, reporter),
+            )
+
         runtime = AutonomousRuntime(
             command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
             stations=(),
@@ -181,7 +189,12 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
             report_reconciler=cast(HostReportReconciler, reporter),
             configuration_sync=cast(ConfigurationSynchronizer, synchronizer),
             maintenance_interval=30.0,
+            configuration=RuntimeConfiguration(stations=(), connectors=(), confirmed=old),
+            configuration_resolver=lambda bundle: candidate_runtime,
+            configuration_factory=compose,
+            connector_runtimes=cast(ConnectorRuntimeSet, object()),
         )
+        synchronizer.runtime = runtime
 
         def run_runtime() -> None:
             try:
@@ -193,8 +206,9 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
         thread.start()
         try:
             self.assertTrue(reporter.started.wait(0.2))
-            self.assertTrue(synchronizer.called.wait(0.2))
-            self.assertEqual(reporter.limits, [32])
+            self.assertTrue(activated.wait(0.2))
+            self.assertEqual(reporter.limits, [1])
+            self.assertTrue(synchronizer.confirmation.wait(0.2))
         finally:
             stop.set()
             release.set()

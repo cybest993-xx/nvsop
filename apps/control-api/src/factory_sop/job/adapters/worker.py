@@ -294,6 +294,22 @@ def _discard_execution_copy_or_record(
     return True
 
 
+def _discard_prepared_video_or_log(
+    *,
+    backend: AnnotationBackend,
+    data_id: str,
+    event: str,
+    **log_context: object,
+) -> bool:
+    """重试删除 owner 工作副本；失败由当前 worker 路径记录并保留候选。"""
+    try:
+        backend.discard_prepared_video(data_id=data_id)
+    except Exception:
+        _logger.exception(event, data_id=data_id, **log_context)
+        return False
+    return True
+
+
 def _usage_requires_annotation_volume(target: UsageCheckTarget) -> bool:
     """仅在 DDM 或 VLM 引用已保存切片时创建标注卷 adapter。"""
     match target.check.kind:
@@ -732,15 +748,13 @@ def _prepare_annotation_context_job(
     try:
         backend = runtime.backend()
         if cleanup_data_id is not None:
-            try:
-                backend.discard_prepared_video(data_id=cleanup_data_id)
-            except Exception:
-                _logger.exception(
-                    "job.dataset_annotation_preparation.cleanup_retry_failed",
-                    job_id=str(running.id),
-                    context_id=str(target.context.id),
-                    data_id=cleanup_data_id,
-                )
+            if not _discard_prepared_video_or_log(
+                backend=backend,
+                data_id=cleanup_data_id,
+                event="job.dataset_annotation_preparation.cleanup_retry_failed",
+                job_id=str(running.id),
+                context_id=str(target.context.id),
+            ):
                 return
             if target.context.preparation_failure_code is not None:
                 try:
@@ -1037,15 +1051,13 @@ def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
     try:
         backend = runtime.backend()
         if cleanup_data_id is not None:
-            try:
-                backend.discard_prepared_video(data_id=cleanup_data_id)
-            except Exception:
-                _logger.exception(
-                    "job.dataset_annotation.cleanup_retry_failed",
-                    job_id=str(running.id),
-                    execution_id=str(target.execution.id),
-                    data_id=cleanup_data_id,
-                )
+            if not _discard_prepared_video_or_log(
+                backend=backend,
+                data_id=cleanup_data_id,
+                event="job.dataset_annotation.cleanup_retry_failed",
+                job_id=str(running.id),
+                execution_id=str(target.execution.id),
+            ):
                 return
             if target.execution.failure_code is not None:
                 try:

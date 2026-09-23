@@ -24,6 +24,7 @@ from factory_sop.dataset.api import (
 from factory_sop.job.api import ApplicationJob, JobStatus, JobType
 
 NOW = datetime(2026, 9, 23, 10, 0, tzinfo=UTC)
+_UNEXPECTED_FINISH = object()
 
 
 class _WorkerState:
@@ -133,6 +134,98 @@ def _running_job() -> ApplicationJob:
         updated_at=NOW,
         failure_code=None,
     )
+
+
+def _job(job_type: JobType) -> ApplicationJob:
+    return ApplicationJob(
+        id=uuid4(),
+        job_type=job_type,
+        status=JobStatus.RUNNING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=NOW,
+        updated_at=NOW,
+        failure_code=None,
+    )
+
+
+def _context_target(
+    job: ApplicationJob,
+    *,
+    upstream_data_id: str | None = None,
+    upstream_video_id: str | None = None,
+    failure_code: str | None = None,
+    failure_detail: str | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        job=job,
+        context=SimpleNamespace(
+            id=job.attempt_id,
+            upstream_data_id=upstream_data_id,
+            upstream_video_id=upstream_video_id,
+            preparation_failure_code=failure_code,
+            preparation_failure_detail=failure_detail,
+        ),
+        member=object(),
+        actions=(),
+    )
+
+
+def _execution_target(
+    job: ApplicationJob,
+    *,
+    upstream_data_id: str | None = None,
+    upstream_video_id: str | None = None,
+    failure_code: str | None = None,
+    failure_detail: str | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        job=job,
+        execution=SimpleNamespace(
+            id=job.attempt_id,
+            upstream_data_id=upstream_data_id,
+            upstream_video_id=upstream_video_id,
+            failure_code=failure_code,
+            failure_detail=failure_detail,
+        ),
+        submission=SimpleNamespace(segments=(), mode="segment"),
+    )
+
+
+def _install_running_job_repository(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    job: ApplicationJob,
+    state: _WorkerState,
+    finish_result: bool | object = _UNEXPECTED_FINISH,
+) -> None:
+    class FakeJobRepository:
+        def __init__(self, session: object) -> None:
+            assert isinstance(session, _TrackingSession)
+
+        def mark_running(self, *, job_id: UUID, now: datetime) -> ApplicationJob | None:
+            del now
+            assert job_id == job.id
+            return job
+
+        def finish(
+            self,
+            *,
+            job_id: UUID,
+            status: str,
+            failure_code: str | None,
+            now: datetime,
+            expected_updated_at: datetime,
+        ) -> bool:
+            del status, failure_code, now
+            assert job_id == job.id
+            assert expected_updated_at == job.updated_at
+            if finish_result is _UNEXPECTED_FINISH:
+                raise AssertionError("job finish must not be reached in this scenario")
+            state.finish_calls += 1
+            return cast(bool, finish_result)
+
+    monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
 
 
 def _install_validation_seams(
@@ -629,50 +722,8 @@ def test_cancelled_annotation_preparation_discards_unpersisted_backend_copy(
     started = Event()
     release = Event()
     discarded = Event()
-    job = ApplicationJob(
-        id=uuid4(),
-        job_type=JobType.DATASET_ANNOTATION_PREPARATION,
-        status=JobStatus.RUNNING,
-        member_id=uuid4(),
-        attempt_id=uuid4(),
-        created_at=NOW,
-        updated_at=NOW,
-        failure_code=None,
-    )
-    target = SimpleNamespace(
-        job=job,
-        context=SimpleNamespace(
-            id=job.attempt_id,
-            upstream_data_id=None,
-            upstream_video_id=None,
-            preparation_failure_code=None,
-            preparation_failure_detail=None,
-        ),
-        member=object(),
-        actions=(),
-    )
-
-    class FakeJobRepository:
-        def __init__(self, session: object) -> None:
-            assert isinstance(session, _TrackingSession)
-
-        def mark_running(self, *, job_id: UUID, now: datetime) -> ApplicationJob | None:
-            del now
-            assert job_id == job.id
-            return job
-
-        def finish(
-            self,
-            *,
-            job_id: UUID,
-            status: str,
-            failure_code: str | None,
-            now: datetime,
-            expected_updated_at: datetime,
-        ) -> bool:
-            del job_id, status, failure_code, now, expected_updated_at
-            state.finish_calls += 1
-            return True
+    job = _job(JobType.DATASET_ANNOTATION_PREPARATION)
+    target = _context_target(job)
 
     class Backend:
         def discard_prepared_video(self, *, data_id: str) -> None:
@@ -705,7 +756,7 @@ def test_cancelled_annotation_preparation_discards_unpersisted_backend_copy(
         release.wait()
         return SimpleNamespace(prepared=SimpleNamespace(data_id="orphan-data"))
 
-    monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
+    _install_running_job_repository(monkeypatch, job=job, state=state)
     monkeypatch.setattr(
         worker_module,
         "begin_annotation_context_preparation",
@@ -740,50 +791,8 @@ def test_annotation_preparation_lease_loss_discards_unpublished_backend_copy(
 ) -> None:
     state = _WorkerState()
     discarded: list[str] = []
-    job = ApplicationJob(
-        id=uuid4(),
-        job_type=JobType.DATASET_ANNOTATION_PREPARATION,
-        status=JobStatus.RUNNING,
-        member_id=uuid4(),
-        attempt_id=uuid4(),
-        created_at=NOW,
-        updated_at=NOW,
-        failure_code=None,
-    )
-    target = SimpleNamespace(
-        job=job,
-        context=SimpleNamespace(
-            id=job.attempt_id,
-            upstream_data_id=None,
-            upstream_video_id=None,
-            preparation_failure_code=None,
-            preparation_failure_detail=None,
-        ),
-        member=object(),
-        actions=(),
-    )
-
-    class FakeJobRepository:
-        def __init__(self, session: object) -> None:
-            assert isinstance(session, _TrackingSession)
-
-        def mark_running(self, *, job_id: UUID, now: datetime) -> ApplicationJob | None:
-            del now
-            assert job_id == job.id
-            return job
-
-        def finish(
-            self,
-            *,
-            job_id: UUID,
-            status: str,
-            failure_code: str | None,
-            now: datetime,
-            expected_updated_at: datetime,
-        ) -> bool:
-            del job_id, status, failure_code, now, expected_updated_at
-            state.finish_calls += 1
-            return False
+    job = _job(JobType.DATASET_ANNOTATION_PREPARATION)
+    target = _context_target(job)
 
     class Backend:
         def discard_prepared_video(self, *, data_id: str) -> None:
@@ -805,7 +814,7 @@ def test_annotation_preparation_lease_loss_discards_unpublished_backend_copy(
         def media_probe(self) -> object:
             return object()
 
-    monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
+    _install_running_job_repository(monkeypatch, job=job, state=state, finish_result=False)
     monkeypatch.setattr(
         worker_module,
         "begin_annotation_context_preparation",
@@ -846,26 +855,8 @@ def test_annotation_backend_construction_failure_is_classified(
     job_type = (
         JobType.DATASET_ANNOTATION_PREPARATION if kind == "context" else JobType.DATASET_ANNOTATION
     )
-    job = ApplicationJob(
-        id=uuid4(),
-        job_type=job_type,
-        status=JobStatus.RUNNING,
-        member_id=uuid4(),
-        attempt_id=uuid4(),
-        created_at=NOW,
-        updated_at=NOW,
-        failure_code=None,
-    )
+    job = _job(job_type)
     captured: list[str] = []
-
-    class FakeJobRepository:
-        def __init__(self, session: object) -> None:
-            assert isinstance(session, _TrackingSession)
-
-        def mark_running(self, *, job_id: UUID, now: datetime) -> ApplicationJob | None:
-            del now
-            assert job_id == job.id
-            return job
 
     class Runtime:
         def repository(self, session: object) -> object:
@@ -875,20 +866,9 @@ def test_annotation_backend_construction_failure_is_classified(
         def backend(self) -> object:
             raise AnnotationBackendUnavailableError("not configured")
 
-    monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
+    _install_running_job_repository(monkeypatch, job=job, state=state)
     if kind == "context":
-        target = SimpleNamespace(
-            job=job,
-            context=SimpleNamespace(
-                id=job.attempt_id,
-                upstream_data_id=None,
-                upstream_video_id=None,
-                preparation_failure_code=None,
-                preparation_failure_detail=None,
-            ),
-            member=object(),
-            actions=(),
-        )
+        target = _context_target(job)
         monkeypatch.setattr(
             worker_module,
             "begin_annotation_context_preparation",
@@ -901,17 +881,7 @@ def test_annotation_backend_construction_failure_is_classified(
         )
         runner = worker_module._prepare_annotation_context_job
     else:
-        target = SimpleNamespace(
-            job=job,
-            execution=SimpleNamespace(
-                id=job.attempt_id,
-                upstream_data_id=None,
-                upstream_video_id=None,
-                failure_code=None,
-                failure_detail=None,
-            ),
-            submission=SimpleNamespace(segments=(), mode="segment"),
-        )
+        target = _execution_target(job)
         monkeypatch.setattr(
             worker_module,
             "begin_annotation_execution",
@@ -942,26 +912,8 @@ def test_cleanup_candidate_survives_backend_construction_failure(
     job_type = (
         JobType.DATASET_ANNOTATION_PREPARATION if kind == "context" else JobType.DATASET_ANNOTATION
     )
-    job = ApplicationJob(
-        id=uuid4(),
-        job_type=job_type,
-        status=JobStatus.RUNNING,
-        member_id=uuid4(),
-        attempt_id=uuid4(),
-        created_at=NOW,
-        updated_at=NOW,
-        failure_code=None,
-    )
+    job = _job(job_type)
     finished: list[str] = []
-
-    class FakeJobRepository:
-        def __init__(self, session: object) -> None:
-            assert isinstance(session, _TrackingSession)
-
-        def mark_running(self, *, job_id: UUID, now: datetime) -> ApplicationJob | None:
-            del now
-            assert job_id == job.id
-            return job
 
     class Runtime:
         def repository(self, session: object) -> object:
@@ -971,19 +923,13 @@ def test_cleanup_candidate_survives_backend_construction_failure(
         def backend(self) -> object:
             raise AnnotationBackendUnavailableError("not configured")
 
-    monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
+    _install_running_job_repository(monkeypatch, job=job, state=state)
     if kind == "context":
-        target = SimpleNamespace(
-            job=job,
-            context=SimpleNamespace(
-                id=job.attempt_id,
-                upstream_data_id="cleanup-data",
-                upstream_video_id=None,
-                preparation_failure_code="ANNOTATION_EXECUTION_FAILED",
-                preparation_failure_detail="cleanup pending",
-            ),
-            member=object(),
-            actions=(),
+        target = _context_target(
+            job,
+            upstream_data_id="cleanup-data",
+            failure_code="ANNOTATION_EXECUTION_FAILED",
+            failure_detail="cleanup pending",
         )
         monkeypatch.setattr(
             worker_module,
@@ -997,16 +943,11 @@ def test_cleanup_candidate_survives_backend_construction_failure(
         )
         runner = worker_module._prepare_annotation_context_job
     else:
-        target = SimpleNamespace(
-            job=job,
-            execution=SimpleNamespace(
-                id=job.attempt_id,
-                upstream_data_id="cleanup-data",
-                upstream_video_id=None,
-                failure_code="ANNOTATION_EXECUTION_FAILED",
-                failure_detail="cleanup pending",
-            ),
-            submission=SimpleNamespace(segments=(), mode="segment"),
+        target = _execution_target(
+            job,
+            upstream_data_id="cleanup-data",
+            failure_code="ANNOTATION_EXECUTION_FAILED",
+            failure_detail="cleanup pending",
         )
         monkeypatch.setattr(
             worker_module,
@@ -1033,37 +974,9 @@ def test_annotation_cleanup_pending_is_persisted_for_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state = _WorkerState()
-    job = ApplicationJob(
-        id=uuid4(),
-        job_type=JobType.DATASET_ANNOTATION,
-        status=JobStatus.RUNNING,
-        member_id=uuid4(),
-        attempt_id=uuid4(),
-        created_at=NOW,
-        updated_at=NOW,
-        failure_code=None,
-    )
-    target = SimpleNamespace(
-        job=job,
-        execution=SimpleNamespace(
-            id=job.attempt_id,
-            upstream_data_id=None,
-            upstream_video_id=None,
-            failure_code=None,
-            failure_detail=None,
-        ),
-        submission=SimpleNamespace(segments=(), mode="segment"),
-    )
+    job = _job(JobType.DATASET_ANNOTATION)
+    target = _execution_target(job)
     recorded: list[tuple[str, str | None, str | None]] = []
-
-    class FakeJobRepository:
-        def __init__(self, session: object) -> None:
-            assert isinstance(session, _TrackingSession)
-
-        def mark_running(self, *, job_id: UUID, now: datetime) -> ApplicationJob | None:
-            del now
-            assert job_id == job.id
-            return job
 
     class Runtime:
         def repository(self, session: object) -> object:
@@ -1089,7 +1002,7 @@ def test_annotation_cleanup_pending_is_persisted_for_retry(
         )
         return target
 
-    monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
+    _install_running_job_repository(monkeypatch, job=job, state=state)
     monkeypatch.setattr(worker_module, "begin_annotation_execution", lambda **kwargs: target)
     monkeypatch.setattr(
         worker_module,
@@ -1124,38 +1037,15 @@ def test_annotation_cleanup_candidate_is_retried_before_new_copy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state = _WorkerState()
-    job = ApplicationJob(
-        id=uuid4(),
-        job_type=JobType.DATASET_ANNOTATION,
-        status=JobStatus.RUNNING,
-        member_id=uuid4(),
-        attempt_id=uuid4(),
-        created_at=NOW,
-        updated_at=NOW,
-        failure_code=None,
-    )
-    target = SimpleNamespace(
-        job=job,
-        execution=SimpleNamespace(
-            id=job.attempt_id,
-            upstream_data_id="cleanup-data",
-            upstream_video_id=None,
-            failure_code="ANNOTATION_EXECUTION_FAILED",
-            failure_detail="derived download failed",
-        ),
-        submission=SimpleNamespace(segments=(), mode="segment"),
+    job = _job(JobType.DATASET_ANNOTATION)
+    target = _execution_target(
+        job,
+        upstream_data_id="cleanup-data",
+        failure_code="ANNOTATION_EXECUTION_FAILED",
+        failure_detail="derived download failed",
     )
     discarded: list[str] = []
     failures: list[tuple[str, str]] = []
-
-    class FakeJobRepository:
-        def __init__(self, session: object) -> None:
-            assert isinstance(session, _TrackingSession)
-
-        def mark_running(self, *, job_id: UUID, now: datetime) -> ApplicationJob | None:
-            del now
-            assert job_id == job.id
-            return job
 
     class Backend:
         def discard_prepared_video(self, *, data_id: str) -> None:
@@ -1169,7 +1059,7 @@ def test_annotation_cleanup_candidate_is_retried_before_new_copy(
         def backend(self) -> Backend:
             return Backend()
 
-    monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
+    _install_running_job_repository(monkeypatch, job=job, state=state)
     monkeypatch.setattr(worker_module, "begin_annotation_execution", lambda **kwargs: target)
     monkeypatch.setattr(
         worker_module,
@@ -1204,27 +1094,8 @@ def test_annotation_copy_commit_unknown_preserves_backend_copy(
     state = _WorkerState()
     discarded: list[str] = []
     split_calls = 0
-    job = ApplicationJob(
-        id=uuid4(),
-        job_type=JobType.DATASET_ANNOTATION,
-        status=JobStatus.RUNNING,
-        member_id=uuid4(),
-        attempt_id=uuid4(),
-        created_at=NOW,
-        updated_at=NOW,
-        failure_code=None,
-    )
-    target = SimpleNamespace(
-        job=job,
-        execution=SimpleNamespace(
-            id=job.attempt_id,
-            upstream_data_id=None,
-            upstream_video_id=None,
-            failure_code=None,
-            failure_detail=None,
-        ),
-        submission=SimpleNamespace(segments=(), mode="segment"),
-    )
+    job = _job(JobType.DATASET_ANNOTATION)
+    target = _execution_target(job)
 
     class CommitUnknownSession(_TrackingSession):
         def __init__(self, state: _WorkerState, *, commit_unknown: bool) -> None:
@@ -1245,27 +1116,6 @@ def test_annotation_copy_commit_unknown_preserves_backend_copy(
             session = CommitUnknownSession(state, commit_unknown=self.calls == 3)
             state.sessions.append(session)
             return session
-
-    class FakeJobRepository:
-        def __init__(self, session: object) -> None:
-            assert isinstance(session, _TrackingSession)
-
-        def mark_running(self, *, job_id: UUID, now: datetime) -> ApplicationJob | None:
-            del now
-            assert job_id == job.id
-            return job
-
-        def finish(
-            self,
-            *,
-            job_id: UUID,
-            status: str,
-            failure_code: str | None,
-            now: datetime,
-            expected_updated_at: datetime,
-        ) -> bool:
-            del job_id, status, failure_code, now, expected_updated_at
-            raise AssertionError("commit-unknown copy must not reach final job publication")
 
     class Backend:
         def discard_prepared_video(self, *, data_id: str) -> None:
@@ -1295,7 +1145,7 @@ def test_annotation_copy_commit_unknown_preserves_backend_copy(
         def media_probe(self) -> object:
             return object()
 
-    monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
+    _install_running_job_repository(monkeypatch, job=job, state=state)
     monkeypatch.setattr(
         worker_module,
         "begin_annotation_execution",
@@ -1332,44 +1182,9 @@ def test_annotation_retry_reuses_persisted_copy_after_uncertain_commit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state = _WorkerState()
-    job = ApplicationJob(
-        id=uuid4(),
-        job_type=JobType.DATASET_ANNOTATION,
-        status=JobStatus.RUNNING,
-        member_id=uuid4(),
-        attempt_id=uuid4(),
-        created_at=NOW,
-        updated_at=NOW,
-        failure_code=None,
-    )
-    target = SimpleNamespace(
-        job=job,
-        execution=SimpleNamespace(id=job.attempt_id, upstream_video_id="persisted-video"),
-        submission=SimpleNamespace(segments=(), mode="segment"),
-    )
+    job = _job(JobType.DATASET_ANNOTATION)
+    target = _execution_target(job, upstream_video_id="persisted-video")
     split_calls = 0
-
-    class FakeJobRepository:
-        def __init__(self, session: object) -> None:
-            assert isinstance(session, _TrackingSession)
-
-        def mark_running(self, *, job_id: UUID, now: datetime) -> ApplicationJob | None:
-            del now
-            assert job_id == job.id
-            return job
-
-        def finish(
-            self,
-            *,
-            job_id: UUID,
-            status: str,
-            failure_code: str | None,
-            now: datetime,
-            expected_updated_at: datetime,
-        ) -> bool:
-            del job_id, status, failure_code, now, expected_updated_at
-            state.finish_calls += 1
-            return True
 
     class Backend:
         def discard_prepared_video(self, *, data_id: str) -> None:
@@ -1400,7 +1215,7 @@ def test_annotation_retry_reuses_persisted_copy_after_uncertain_commit(
         def media_probe(self) -> object:
             raise AssertionError("persisted copy retry must not probe a new copy")
 
-    monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
+    _install_running_job_repository(monkeypatch, job=job, state=state, finish_result=True)
     monkeypatch.setattr(
         worker_module,
         "begin_annotation_execution",
@@ -1440,44 +1255,9 @@ def test_cancelled_annotation_discards_late_backend_result(
     started = Event()
     release = Event()
     physical_finished = Event()
-    job = ApplicationJob(
-        id=uuid4(),
-        job_type=JobType.DATASET_ANNOTATION,
-        status=JobStatus.RUNNING,
-        member_id=uuid4(),
-        attempt_id=uuid4(),
-        created_at=NOW,
-        updated_at=NOW,
-        failure_code=None,
-    )
-    target = SimpleNamespace(
-        job=job,
-        execution=SimpleNamespace(id=job.attempt_id, upstream_video_id="video-1"),
-        submission=SimpleNamespace(segments=(), mode="segment"),
-    )
+    job = _job(JobType.DATASET_ANNOTATION)
+    target = _execution_target(job, upstream_video_id="video-1")
     completed_calls: list[object] = []
-
-    class FakeJobRepository:
-        def __init__(self, session: object) -> None:
-            assert isinstance(session, _TrackingSession)
-
-        def mark_running(self, *, job_id: UUID, now: datetime) -> ApplicationJob | None:
-            del now
-            assert job_id == job.id
-            return job
-
-        def finish(
-            self,
-            *,
-            job_id: UUID,
-            status: str,
-            failure_code: str | None,
-            now: datetime,
-            expected_updated_at: datetime,
-        ) -> bool:
-            del job_id, status, failure_code, now, expected_updated_at
-            state.finish_calls += 1
-            return True
 
     class Backend:
         def discard_prepared_video(self, *, data_id: str) -> None:
@@ -1526,7 +1306,7 @@ def test_cancelled_annotation_discards_late_backend_result(
         completed_calls.append((args, kwargs))
         return object()
 
-    monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
+    _install_running_job_repository(monkeypatch, job=job, state=state)
     monkeypatch.setattr(worker_module, "begin_annotation_execution", begin_annotation)
     monkeypatch.setattr(worker_module, "prepare_annotation_execution_copy", prepare_copy)
     monkeypatch.setattr(worker_module, "save_annotation_execution_copy", save_copy)

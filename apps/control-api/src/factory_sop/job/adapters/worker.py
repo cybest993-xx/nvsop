@@ -66,6 +66,17 @@ from factory_sop.settings import Settings
 _logger = get_logger("job")
 
 _BLOCKING_JOB_LIMIT = 4
+# 最长标注路径串行经过 cleanup、两次 upload、derived download 与 split。
+_ANNOTATION_HTTP_CALLS_PER_EXECUTION = 5
+
+
+def _blocking_execution_timeout_seconds(settings: Settings) -> int:
+    """覆盖一次 blocking execution 可串行消耗的既有外部 I/O 时限。"""
+    return (
+        settings.annotation_http_timeout_seconds * _ANNOTATION_HTTP_CALLS_PER_EXECUTION
+        + settings.media_probe_timeout_seconds
+        + 300
+    )
 
 
 class _ExecutionFence:
@@ -1398,7 +1409,7 @@ async def dispatch_pending_jobs(ctx: Mapping[str, Any]) -> None:
         return
     settings = cast(Settings, ctx["settings"])
     factory = _session_factory(ctx)
-    stale_after_seconds = settings.media_probe_timeout_seconds + 300
+    stale_after_seconds = _blocking_execution_timeout_seconds(settings)
     with factory() as session:
         repository = PostgresJobRepository(session)
         repository.recover_stale_running(
@@ -1457,7 +1468,7 @@ def build_worker(
             "blocking_job_slots": asyncio.Semaphore(_BLOCKING_JOB_LIMIT),
         },
         max_jobs=_BLOCKING_JOB_LIMIT,
-        job_timeout=settings.media_probe_timeout_seconds + 300,
+        job_timeout=_blocking_execution_timeout_seconds(settings),
         max_tries=5,
         health_check_interval=settings.worker_health_check_interval_seconds,
     )

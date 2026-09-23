@@ -282,6 +282,11 @@ def test_blocking_jobs_leave_event_loop_responsive_and_cancel_promptly(
     second_finished = Event()
     cron_finished = Event()
     cancelled_seen: list[bool] = []
+    settings = SimpleNamespace(
+        media_probe_timeout_seconds=30,
+        annotation_http_timeout_seconds=120,
+    )
+    assert worker_module._blocking_execution_timeout_seconds(cast(Any, settings)) == 930
 
     def slow_job(
         ctx: Mapping[str, Any],
@@ -309,7 +314,7 @@ def test_blocking_jobs_leave_event_loop_responsive_and_cancel_promptly(
 
         def recover_stale_running(self, *, now: datetime, stale_after_seconds: int) -> None:
             del now
-            assert stale_after_seconds == 330
+            assert stale_after_seconds == 930
 
         def pending(self, *, limit: int) -> tuple[object, ...]:
             assert limit == 100
@@ -325,7 +330,7 @@ def test_blocking_jobs_leave_event_loop_responsive_and_cancel_promptly(
 
     cleanup_ctx: Mapping[str, Any] = {
         "dispatcher": FakeDispatcher(),
-        "settings": SimpleNamespace(media_probe_timeout_seconds=30),
+        "settings": settings,
         "session_factory": _TrackingSessionFactory(_WorkerState()),
         "artifact_executor": CleanupExecutor(),
     }

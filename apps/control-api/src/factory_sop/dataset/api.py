@@ -21,6 +21,7 @@ from factory_sop.dataset.annotation import (
     AnnotationBackend,
     AnnotationBackendExecutionError,
     AnnotationBackendUnavailableError,
+    AnnotationCleanupPendingError,
     AnnotationDataVolume,
     AnnotationDataVolumeUnavailableError,
 )
@@ -41,12 +42,16 @@ from factory_sop.dataset.usecases.annotation import (
     PreparedAnnotationCopy,
     begin_annotation_context_preparation,
     begin_annotation_execution,
+    clear_annotation_context_cleanup_candidate,
+    clear_annotation_execution_cleanup_candidate,
     complete_annotation_context_preparation,
     complete_annotation_execution,
     fail_annotation_context_preparation,
     fail_annotation_execution,
     prepare_annotation_context_copy,
     prepare_annotation_execution_copy,
+    record_annotation_context_cleanup_candidate,
+    record_annotation_execution_cleanup_candidate,
     save_annotation_execution_copy,
 )
 from factory_sop.dataset.usecases.usage import (
@@ -331,8 +336,10 @@ class DatasetValidationRuntime(Protocol):
 
 
 __all__ = [
+    "AnnotationBackend",
     "AnnotationBackendExecutionError",
     "AnnotationBackendUnavailableError",
+    "AnnotationCleanupPendingError",
     "AnnotationContextPreparationTarget",
     "AnnotationDataVolume",
     "AnnotationDataVolumeUnavailableError",
@@ -366,6 +373,8 @@ __all__ = [
     "begin_usage_check",
     "begin_video_validation",
     "checked_input_reader",
+    "clear_annotation_context_cleanup_candidate",
+    "clear_annotation_execution_cleanup_candidate",
     "complete_annotation_context_preparation",
     "complete_annotation_execution",
     "complete_usage_check",
@@ -374,6 +383,8 @@ __all__ = [
     "fail_usage_check",
     "prepare_annotation_context_copy",
     "prepare_annotation_execution_copy",
+    "record_annotation_context_cleanup_candidate",
+    "record_annotation_execution_cleanup_candidate",
     "run_usage_check",
     "save_annotation_execution_copy",
     "summary",

@@ -25,6 +25,15 @@ class AnnotationBackendExecutionError(Exception):
     """基座已接受请求但切片执行失败。"""
 
 
+class AnnotationCleanupPendingError(Exception):
+    """工作副本清理未确认；携带必须持久化等待重试的基座身份。"""
+
+    def __init__(self, *, data_id: str, failure: Exception) -> None:
+        super().__init__(f"标注基座工作副本清理未确认：{data_id}")
+        self.data_id = data_id
+        self.failure = failure
+
+
 class AnnotationDataVolumeUnavailableError(Exception):
     """基座标注数据卷不可读取或映射不安全。"""
 

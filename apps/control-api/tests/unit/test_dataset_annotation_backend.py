@@ -7,6 +7,7 @@ import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from threading import Thread
 from typing import ClassVar
 from urllib.parse import parse_qs, urlsplit
@@ -14,7 +15,10 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from factory_sop.dataset.adapters.annotation import HttpAnnotationBackend
-from factory_sop.dataset.annotation import AnnotationBackendExecutionError
+from factory_sop.dataset.annotation import (
+    AnnotationBackendExecutionError,
+    AnnotationBackendUnavailableError,
+)
 from factory_sop.dataset.model import AnnotationMode, AnnotationSegment
 
 
@@ -93,9 +97,9 @@ def backend_server() -> Iterator[tuple[str, type[AnnotationBackendHandler]]]:
         server.server_close()
 
 
-def test_prepare_and_split_use_explicit_target_and_preserve_wire_mode() -> None:
+def test_prepare_and_split_use_explicit_target_and_preserve_wire_mode(tmp_path: Path) -> None:
     with backend_server() as (origin, handler):
-        backend = HttpAnnotationBackend(base_url=origin, timeout_seconds=5)
+        backend = HttpAnnotationBackend(base_url=origin, timeout_seconds=5, data_root=tmp_path)
         prepared = backend.prepare_video(
             source=io.BytesIO(b"synthetic video"),
             filename="line.mp4",
@@ -140,9 +144,9 @@ def test_prepare_and_split_use_explicit_target_and_preserve_wire_mode() -> None:
     }
 
 
-def test_discard_prepared_video_uses_vendor_cleanup_endpoint() -> None:
+def test_discard_prepared_video_uses_vendor_cleanup_endpoint(tmp_path: Path) -> None:
     with backend_server() as (origin, handler):
-        backend = HttpAnnotationBackend(base_url=origin, timeout_seconds=5)
+        backend = HttpAnnotationBackend(base_url=origin, timeout_seconds=5, data_root=tmp_path)
         backend.discard_prepared_video(data_id="base dataset")
 
     assert handler.requests == [
@@ -150,17 +154,34 @@ def test_discard_prepared_video_uses_vendor_cleanup_endpoint() -> None:
     ]
 
 
-def test_discard_prepared_video_requires_confirmed_file_deletion() -> None:
+def test_discard_prepared_video_requires_confirmed_file_deletion(tmp_path: Path) -> None:
+    (tmp_path / "base-dataset").mkdir()
     with backend_server() as (origin, handler):
         handler.cleanup_files_deleted = 0
-        backend = HttpAnnotationBackend(base_url=origin, timeout_seconds=5)
+        backend = HttpAnnotationBackend(base_url=origin, timeout_seconds=5, data_root=tmp_path)
         with pytest.raises(AnnotationBackendExecutionError, match="未确认工作副本文件删除"):
             backend.discard_prepared_video(data_id="base-dataset")
 
 
-def test_multipart_filename_cannot_inject_a_header() -> None:
+def test_discard_prepared_video_accepts_already_absent_directory(tmp_path: Path) -> None:
     with backend_server() as (origin, handler):
-        backend = HttpAnnotationBackend(base_url=origin, timeout_seconds=5)
+        handler.cleanup_files_deleted = 0
+        backend = HttpAnnotationBackend(base_url=origin, timeout_seconds=5, data_root=tmp_path)
+        backend.discard_prepared_video(data_id="base-dataset")
+
+
+def test_discard_prepared_video_requires_available_data_root(tmp_path: Path) -> None:
+    missing_root = tmp_path / "missing"
+    with backend_server() as (origin, handler):
+        handler.cleanup_files_deleted = 0
+        backend = HttpAnnotationBackend(base_url=origin, timeout_seconds=5, data_root=missing_root)
+        with pytest.raises(AnnotationBackendUnavailableError, match="清理结果"):
+            backend.discard_prepared_video(data_id="base-dataset")
+
+
+def test_multipart_filename_cannot_inject_a_header(tmp_path: Path) -> None:
+    with backend_server() as (origin, handler):
+        backend = HttpAnnotationBackend(base_url=origin, timeout_seconds=5, data_root=tmp_path)
         backend.prepare_video(
             source=io.BytesIO(b"synthetic video"),
             filename='unsafe"\r\nX-Injected: yes.mp4',
@@ -173,7 +194,7 @@ def test_multipart_filename_cannot_inject_a_header() -> None:
 
     with backend_server() as (origin, handler):
         handler.fail_split = True
-        backend = HttpAnnotationBackend(base_url=origin, timeout_seconds=5)
+        backend = HttpAnnotationBackend(base_url=origin, timeout_seconds=5, data_root=tmp_path)
         with pytest.raises(AnnotationBackendExecutionError, match="HTTP 500"):
             backend.split_video(
                 video_id="base-video",

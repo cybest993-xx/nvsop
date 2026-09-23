@@ -5,9 +5,10 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import stat
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
 from urllib.parse import quote, urlsplit
 
@@ -23,7 +24,7 @@ from factory_sop.settings import Settings
 class HttpAnnotationBackend:
     """把产品数据集映射到一个基座数据集，再复用基座上传和切片。"""
 
-    def __init__(self, *, base_url: str, timeout_seconds: int) -> None:
+    def __init__(self, *, base_url: str, timeout_seconds: int, data_root: Path) -> None:
         parsed = urlsplit(base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise AnnotationBackendUnavailableError("标注基座地址必须是 HTTP(S) 主机")
@@ -36,15 +37,19 @@ class HttpAnnotationBackend:
         self._port = parsed.port
         self._base_path = parsed.path.rstrip("/")
         self._timeout = timeout_seconds
+        self._data_root = data_root.resolve()
 
     @classmethod
     def from_settings(cls, settings: Settings) -> HttpAnnotationBackend:
         """从显式部署配置创建基座 adapter；缺配置不伪造成功。"""
         if settings.annotation_backend_url is None:
             raise AnnotationBackendUnavailableError("标注基座尚未配置")
+        if settings.annotation_data_root is None:
+            raise AnnotationBackendUnavailableError("标注基座数据卷尚未配置")
         return cls(
             base_url=settings.annotation_backend_url,
             timeout_seconds=settings.annotation_http_timeout_seconds,
+            data_root=Path(settings.annotation_data_root),
         )
 
     def prepare_video(
@@ -91,7 +96,7 @@ class HttpAnnotationBackend:
                     f"标注基座清理工作副本失败（HTTP {response.status}）"
                 )
             result = _json_object(body)
-            if result.get("files_deleted") != 1:
+            if result.get("files_deleted") != 1 and self._prepared_dataset_exists(data_id):
                 raise AnnotationBackendExecutionError("标注基座未确认工作副本文件删除")
         except AnnotationBackendExecutionError:
             raise
@@ -99,6 +104,35 @@ class HttpAnnotationBackend:
             raise AnnotationBackendUnavailableError("无法清理标注基座工作副本") from error
         finally:
             connection.close()
+
+    def _prepared_dataset_exists(self, data_id: str) -> bool:
+        """用部署的只读数据卷确认 HTTP 清理结果，区分已删除与 vendor 假成功。"""
+        if (
+            not data_id
+            or data_id in {".", ".."}
+            or "/" in data_id
+            or "\\" in data_id
+            or os.path.isabs(data_id)
+        ):
+            raise AnnotationBackendExecutionError("标注基座工作副本身份非法")
+        path = self._data_root / data_id
+        try:
+            resolved = path.resolve(strict=False)
+            resolved.relative_to(self._data_root)
+            root_stat = os.lstat(self._data_root)
+            if not stat.S_ISDIR(root_stat.st_mode):
+                raise AnnotationBackendUnavailableError("标注基座数据卷根路径不可用")
+            try:
+                path_stat = os.lstat(path)
+            except FileNotFoundError:
+                return False
+            if stat.S_ISLNK(path_stat.st_mode) or not stat.S_ISDIR(path_stat.st_mode):
+                raise AnnotationBackendExecutionError("标注基座工作副本路径不是普通目录")
+            return True
+        except (AnnotationBackendExecutionError, AnnotationBackendUnavailableError):
+            raise
+        except (OSError, ValueError) as error:
+            raise AnnotationBackendUnavailableError("无法确认标注基座工作副本清理结果") from error
 
     def download_video(self, *, video_id: str, destination: BinaryIO) -> None:
         """读取基座转码副本到服务端临时文件，不向浏览器中继字节。"""

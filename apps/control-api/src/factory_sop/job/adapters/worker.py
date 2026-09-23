@@ -15,8 +15,10 @@ from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from factory_sop.dataset.api import (
+    AnnotationBackend,
     AnnotationBackendExecutionError,
     AnnotationBackendUnavailableError,
+    AnnotationCleanupPendingError,
     AnnotationContextPreparationTarget,
     AnnotationDataVolumeUnavailableError,
     AnnotationExecutionTarget,
@@ -38,6 +40,8 @@ from factory_sop.dataset.api import (
     begin_annotation_execution,
     begin_usage_check,
     begin_video_validation,
+    clear_annotation_context_cleanup_candidate,
+    clear_annotation_execution_cleanup_candidate,
     complete_annotation_context_preparation,
     complete_annotation_execution,
     complete_usage_check,
@@ -46,6 +50,8 @@ from factory_sop.dataset.api import (
     fail_usage_check,
     prepare_annotation_context_copy,
     prepare_annotation_execution_copy,
+    record_annotation_context_cleanup_candidate,
+    record_annotation_execution_cleanup_candidate,
     run_usage_check,
     save_annotation_execution_copy,
     validate_video_upload,
@@ -119,6 +125,160 @@ async def _run_blocking_job(
 def _commit_if_active(session: Session, fence: _ExecutionFence) -> bool:
     """仅当当前逻辑执行仍有发布权时提交事务。"""
     return fence.commit(session)
+
+
+def _annotation_failure_details(
+    error: Exception,
+    *,
+    default_detail: str,
+) -> tuple[str, str]:
+    """保持标注准备阶段既有的失败分类。"""
+    if isinstance(error, DatasetRefusedError):
+        return error.code.value, error.detail
+    if isinstance(error, AnnotationBackendUnavailableError):
+        return "ANNOTATION_BACKEND_UNAVAILABLE", "标注基座暂时不可用"
+    if isinstance(error, AnnotationBackendExecutionError):
+        return "ANNOTATION_EXECUTION_FAILED", str(error)
+    return "ANNOTATION_EXECUTION_FAILED", default_detail
+
+
+def _record_context_cleanup_candidate(
+    *,
+    factory: sessionmaker[Session],
+    runtime: DatasetAnnotationRuntime,
+    target: AnnotationContextPreparationTarget,
+    data_id: str,
+    code: str | None,
+    detail: str | None,
+) -> bool:
+    """持久化清理维护元数据；它不发布标注业务结果，不受取消发布权约束。"""
+    try:
+        with factory() as session:
+            datasets = runtime.repository(session)
+            record_annotation_context_cleanup_candidate(
+                target=target,
+                data_id=data_id,
+                code=code,
+                detail=detail,
+                datasets=datasets,
+            )
+            session.commit()
+    except Exception:
+        _logger.exception(
+            "job.dataset_annotation_preparation.cleanup_candidate_record_failed",
+            job_id=str(target.job.id),
+            context_id=str(target.context.id),
+            data_id=data_id,
+        )
+        return False
+    _logger.warning(
+        "job.dataset_annotation_preparation.cleanup_candidate_recorded",
+        job_id=str(target.job.id),
+        context_id=str(target.context.id),
+        data_id=data_id,
+    )
+    return True
+
+
+def _record_execution_cleanup_candidate(
+    *,
+    factory: sessionmaker[Session],
+    runtime: DatasetAnnotationRuntime,
+    target: AnnotationExecutionTarget,
+    data_id: str,
+    code: str | None,
+    detail: str | None,
+) -> bool:
+    """持久化清理维护元数据；它不发布标注业务结果，不受取消发布权约束。"""
+    try:
+        with factory() as session:
+            datasets = runtime.repository(session)
+            record_annotation_execution_cleanup_candidate(
+                target=target,
+                data_id=data_id,
+                code=code,
+                detail=detail,
+                now=datetime.now(UTC),
+                datasets=datasets,
+            )
+            session.commit()
+    except Exception:
+        _logger.exception(
+            "job.dataset_annotation.cleanup_candidate_record_failed",
+            job_id=str(target.job.id),
+            execution_id=str(target.execution.id),
+            data_id=data_id,
+        )
+        return False
+    _logger.warning(
+        "job.dataset_annotation.cleanup_candidate_recorded",
+        job_id=str(target.job.id),
+        execution_id=str(target.execution.id),
+        data_id=data_id,
+    )
+    return True
+
+
+def _discard_context_copy_or_record(
+    *,
+    backend: AnnotationBackend,
+    factory: sessionmaker[Session],
+    runtime: DatasetAnnotationRuntime,
+    target: AnnotationContextPreparationTarget,
+    data_id: str,
+    code: str | None,
+    detail: str | None,
+) -> bool:
+    """删除上下文工作副本；未确认删除时把身份留给 stale recovery。"""
+    try:
+        backend.discard_prepared_video(data_id=data_id)
+    except Exception:
+        recorded = _record_context_cleanup_candidate(
+            factory=factory,
+            runtime=runtime,
+            target=target,
+            data_id=data_id,
+            code=code,
+            detail=detail,
+        )
+        _logger.exception(
+            "job.dataset_annotation_preparation.cleanup_failed",
+            data_id=data_id,
+            cleanup_candidate_recorded=recorded,
+        )
+        return False
+    return True
+
+
+def _discard_execution_copy_or_record(
+    *,
+    backend: AnnotationBackend,
+    factory: sessionmaker[Session],
+    runtime: DatasetAnnotationRuntime,
+    target: AnnotationExecutionTarget,
+    data_id: str,
+    code: str | None,
+    detail: str | None,
+) -> bool:
+    """删除执行工作副本；未确认删除时把身份留给 stale recovery。"""
+    try:
+        backend.discard_prepared_video(data_id=data_id)
+    except Exception:
+        recorded = _record_execution_cleanup_candidate(
+            factory=factory,
+            runtime=runtime,
+            target=target,
+            data_id=data_id,
+            code=code,
+            detail=detail,
+        )
+        _logger.exception(
+            "job.dataset_annotation.cleanup_failed",
+            data_id=data_id,
+            cleanup_candidate_recorded=recorded,
+        )
+        return False
+    return True
 
 
 def _usage_requires_annotation_volume(target: UsageCheckTarget) -> bool:
@@ -555,6 +715,57 @@ def _prepare_annotation_context_job(
 
     try:
         backend = runtime.backend()
+        cleanup_data_id = (
+            target.context.upstream_data_id if target.context.upstream_video_id is None else None
+        )
+        if cleanup_data_id is not None:
+            try:
+                backend.discard_prepared_video(data_id=cleanup_data_id)
+            except Exception:
+                _logger.exception(
+                    "job.dataset_annotation_preparation.cleanup_retry_failed",
+                    job_id=str(running.id),
+                    context_id=str(target.context.id),
+                    data_id=cleanup_data_id,
+                )
+                return
+            if target.context.preparation_failure_code is not None:
+                try:
+                    _finish_context_preparation_failure(
+                        factory=factory,
+                        runtime=runtime,
+                        target=target,
+                        code=target.context.preparation_failure_code,
+                        detail=target.context.preparation_failure_detail or "标注媒体准备失败",
+                        error=RuntimeError("annotation cleanup candidate resolved"),
+                        fence=fence,
+                    )
+                except Exception:
+                    _logger.exception(
+                        "job.dataset_annotation_preparation.cleanup_finalize_unknown",
+                        job_id=str(running.id),
+                        context_id=str(target.context.id),
+                        data_id=cleanup_data_id,
+                    )
+                return
+            try:
+                with factory() as session:
+                    datasets = runtime.repository(session)
+                    target = clear_annotation_context_cleanup_candidate(
+                        target=target,
+                        datasets=datasets,
+                    )
+                    if not _commit_if_active(session, fence):
+                        return
+            except Exception:
+                _logger.exception(
+                    "job.dataset_annotation_preparation.cleanup_clear_unknown",
+                    job_id=str(running.id),
+                    context_id=str(target.context.id),
+                    data_id=cleanup_data_id,
+                )
+                return
+
         prepared = prepare_annotation_context_copy(
             context=target.context,
             member=target.member,
@@ -564,14 +775,30 @@ def _prepare_annotation_context_job(
             media_probe=runtime.media_probe(),
         )
         if fence.cancelled:
-            try:
-                backend.discard_prepared_video(data_id=prepared.prepared.data_id)
-            except Exception:
-                _logger.exception(
-                    "job.dataset_annotation_preparation.cancel_cleanup_failed",
-                    data_id=prepared.prepared.data_id,
-                )
+            _discard_context_copy_or_record(
+                backend=backend,
+                factory=factory,
+                runtime=runtime,
+                target=target,
+                data_id=prepared.prepared.data_id,
+                code=None,
+                detail=None,
+            )
             return
+    except AnnotationCleanupPendingError as error:
+        code, detail = _annotation_failure_details(
+            error.failure,
+            default_detail="标注媒体准备失败",
+        )
+        _record_context_cleanup_candidate(
+            factory=factory,
+            runtime=runtime,
+            target=target,
+            data_id=error.data_id,
+            code=code,
+            detail=detail,
+        )
+        return
     except AnnotationBackendUnavailableError as error:
         _finish_context_preparation_failure(
             factory=factory,
@@ -607,6 +834,7 @@ def _prepare_annotation_context_job(
         return
 
     try:
+        cleanup_reason: str | None = None
         with factory() as session:
             datasets = runtime.repository(session)
             complete_annotation_context_preparation(
@@ -624,36 +852,37 @@ def _prepare_annotation_context_job(
             )
             if not finished:
                 session.rollback()
-                try:
-                    backend.discard_prepared_video(data_id=prepared.prepared.data_id)
-                except Exception:
-                    _logger.exception(
-                        "job.dataset_annotation_preparation.cancel_cleanup_failed",
-                        data_id=prepared.prepared.data_id,
-                    )
+                cleanup_reason = "lease_lost"
+            elif not _commit_if_active(session, fence):
+                cleanup_reason = "cancelled"
+        if cleanup_reason is not None:
+            _discard_context_copy_or_record(
+                backend=backend,
+                factory=factory,
+                runtime=runtime,
+                target=target,
+                data_id=prepared.prepared.data_id,
+                code=None,
+                detail=None,
+            )
+            if cleanup_reason == "lease_lost":
                 _logger.warning(
                     "job.dataset_annotation_preparation.lease_lost",
                     job_id=str(running.id),
                     context_id=str(target.context.id),
                 )
-                return
-            if not _commit_if_active(session, fence):
-                try:
-                    backend.discard_prepared_video(data_id=prepared.prepared.data_id)
-                except Exception:
-                    _logger.exception(
-                        "job.dataset_annotation_preparation.cancel_cleanup_failed",
-                        data_id=prepared.prepared.data_id,
-                    )
-                return
+            return
     except DatasetRefusedError as error:
-        try:
-            backend.discard_prepared_video(data_id=prepared.prepared.data_id)
-        except Exception:
-            _logger.exception(
-                "job.dataset_annotation_preparation.cancel_cleanup_failed",
-                data_id=prepared.prepared.data_id,
-            )
+        if not _discard_context_copy_or_record(
+            backend=backend,
+            factory=factory,
+            runtime=runtime,
+            target=target,
+            data_id=prepared.prepared.data_id,
+            code=error.code.value,
+            detail=error.detail,
+        ):
+            return
         _finish_context_preparation_failure(
             factory=factory,
             runtime=runtime,
@@ -783,7 +1012,62 @@ def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
     copy_persisted = target.execution.upstream_video_id is not None
     try:
         backend = runtime.backend()
+        cleanup_data_id = (
+            target.execution.upstream_data_id
+            if target.execution.upstream_video_id is None
+            else None
+        )
+        if cleanup_data_id is not None:
+            try:
+                backend.discard_prepared_video(data_id=cleanup_data_id)
+            except Exception:
+                _logger.exception(
+                    "job.dataset_annotation.cleanup_retry_failed",
+                    job_id=str(running.id),
+                    execution_id=str(target.execution.id),
+                    data_id=cleanup_data_id,
+                )
+                return
+            if target.execution.failure_code is not None:
+                try:
+                    _finish_annotation_failure(
+                        factory=factory,
+                        runtime=runtime,
+                        target=target,
+                        code=target.execution.failure_code,
+                        detail=target.execution.failure_detail or "标注切片执行失败",
+                        error=RuntimeError("annotation cleanup candidate resolved"),
+                        fence=fence,
+                    )
+                except Exception:
+                    _logger.exception(
+                        "job.dataset_annotation.cleanup_finalize_unknown",
+                        job_id=str(running.id),
+                        execution_id=str(target.execution.id),
+                        data_id=cleanup_data_id,
+                    )
+                return
+            try:
+                with factory() as session:
+                    datasets = runtime.repository(session)
+                    target = clear_annotation_execution_cleanup_candidate(
+                        target=target,
+                        now=datetime.now(UTC),
+                        datasets=datasets,
+                    )
+                    if not _commit_if_active(session, fence):
+                        return
+            except Exception:
+                _logger.exception(
+                    "job.dataset_annotation.cleanup_clear_unknown",
+                    job_id=str(running.id),
+                    execution_id=str(target.execution.id),
+                    data_id=cleanup_data_id,
+                )
+                return
+
         if not copy_persisted:
+            cleanup_target = target
             prepared = prepare_annotation_execution_copy(
                 target=target,
                 storage=runtime.storage(),
@@ -791,14 +1075,17 @@ def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
                 media_probe=runtime.media_probe(),
             )
             if fence.cancelled:
-                try:
-                    backend.discard_prepared_video(data_id=prepared.prepared.data_id)
-                except Exception:
-                    _logger.exception(
-                        "job.dataset_annotation.cancel_cleanup_failed",
-                        data_id=prepared.prepared.data_id,
-                    )
+                _discard_execution_copy_or_record(
+                    backend=backend,
+                    factory=factory,
+                    runtime=runtime,
+                    target=target,
+                    data_id=prepared.prepared.data_id,
+                    code=None,
+                    detail=None,
+                )
                 return
+            cleanup_after_save = False
             with factory() as session:
                 datasets = runtime.repository(session)
                 target = save_annotation_execution_copy(
@@ -809,14 +1096,7 @@ def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
                 )
                 try:
                     if not _commit_if_active(session, fence):
-                        try:
-                            backend.discard_prepared_video(data_id=prepared.prepared.data_id)
-                        except Exception:
-                            _logger.exception(
-                                "job.dataset_annotation.cancel_cleanup_failed",
-                                data_id=prepared.prepared.data_id,
-                            )
-                        return
+                        cleanup_after_save = True
                 except Exception:
                     _logger.exception(
                         "job.dataset_annotation.copy_commit_unknown",
@@ -826,7 +1106,18 @@ def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
                         result="commit_unknown",
                     )
                     return
-                copy_persisted = True
+            if cleanup_after_save:
+                _discard_execution_copy_or_record(
+                    backend=backend,
+                    factory=factory,
+                    runtime=runtime,
+                    target=cleanup_target,
+                    data_id=prepared.prepared.data_id,
+                    code=None,
+                    detail=None,
+                )
+                return
+            copy_persisted = True
 
         if target.execution.upstream_video_id is None:
             raise AnnotationBackendExecutionError("标注执行没有基座视频身份")
@@ -839,15 +1130,35 @@ def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
             return
         if not clips:
             raise AnnotationBackendExecutionError("标注基座没有返回切片结果")
+    except AnnotationCleanupPendingError as error:
+        code, detail = _annotation_failure_details(
+            error.failure,
+            default_detail="标注切片执行失败",
+        )
+        _record_execution_cleanup_candidate(
+            factory=factory,
+            runtime=runtime,
+            target=target,
+            data_id=error.data_id,
+            code=code,
+            detail=detail,
+        )
+        return
     except AnnotationBackendUnavailableError as error:
-        if prepared is not None and not copy_persisted:
-            try:
-                backend.discard_prepared_video(data_id=prepared.prepared.data_id)
-            except Exception:
-                _logger.exception(
-                    "job.dataset_annotation.cancel_cleanup_failed",
-                    data_id=prepared.prepared.data_id,
-                )
+        if (
+            prepared is not None
+            and not copy_persisted
+            and not _discard_execution_copy_or_record(
+                backend=backend,
+                factory=factory,
+                runtime=runtime,
+                target=target,
+                data_id=prepared.prepared.data_id,
+                code="ANNOTATION_BACKEND_UNAVAILABLE",
+                detail="标注基座暂时不可用",
+            )
+        ):
+            return
         _finish_annotation_failure(
             factory=factory,
             runtime=runtime,
@@ -859,14 +1170,20 @@ def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
         )
         return
     except AnnotationBackendExecutionError as error:
-        if prepared is not None and not copy_persisted:
-            try:
-                backend.discard_prepared_video(data_id=prepared.prepared.data_id)
-            except Exception:
-                _logger.exception(
-                    "job.dataset_annotation.cancel_cleanup_failed",
-                    data_id=prepared.prepared.data_id,
-                )
+        if (
+            prepared is not None
+            and not copy_persisted
+            and not _discard_execution_copy_or_record(
+                backend=backend,
+                factory=factory,
+                runtime=runtime,
+                target=target,
+                data_id=prepared.prepared.data_id,
+                code="ANNOTATION_EXECUTION_FAILED",
+                detail=str(error),
+            )
+        ):
+            return
         _finish_annotation_failure(
             factory=factory,
             runtime=runtime,
@@ -878,14 +1195,20 @@ def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
         )
         return
     except DatasetRefusedError as error:
-        if prepared is not None and not copy_persisted:
-            try:
-                backend.discard_prepared_video(data_id=prepared.prepared.data_id)
-            except Exception:
-                _logger.exception(
-                    "job.dataset_annotation.cancel_cleanup_failed",
-                    data_id=prepared.prepared.data_id,
-                )
+        if (
+            prepared is not None
+            and not copy_persisted
+            and not _discard_execution_copy_or_record(
+                backend=backend,
+                factory=factory,
+                runtime=runtime,
+                target=target,
+                data_id=prepared.prepared.data_id,
+                code=error.code.value,
+                detail=error.detail,
+            )
+        ):
+            return
         _finish_annotation_failure(
             factory=factory,
             runtime=runtime,
@@ -897,14 +1220,20 @@ def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
         )
         return
     except Exception as error:  # pragma: no cover - worker 安全兜底
-        if prepared is not None and not copy_persisted:
-            try:
-                backend.discard_prepared_video(data_id=prepared.prepared.data_id)
-            except Exception:
-                _logger.exception(
-                    "job.dataset_annotation.cancel_cleanup_failed",
-                    data_id=prepared.prepared.data_id,
-                )
+        if (
+            prepared is not None
+            and not copy_persisted
+            and not _discard_execution_copy_or_record(
+                backend=backend,
+                factory=factory,
+                runtime=runtime,
+                target=target,
+                data_id=prepared.prepared.data_id,
+                code="ANNOTATION_EXECUTION_FAILED",
+                detail="标注切片执行失败",
+            )
+        ):
+            return
         _finish_annotation_failure(
             factory=factory,
             runtime=runtime,

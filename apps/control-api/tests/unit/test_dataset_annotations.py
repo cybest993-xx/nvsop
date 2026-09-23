@@ -15,7 +15,11 @@ import pytest
 from factory_sop.auth.authorization import AuthorizationRefusedError, Caller
 from factory_sop.auth.model import User, UserStatus
 from factory_sop.auth.permissions import Permission
-from factory_sop.dataset.annotation import AnnotationBackendExecutionError, PreparedAnnotationVideo
+from factory_sop.dataset.annotation import (
+    AnnotationBackendExecutionError,
+    AnnotationCleanupPendingError,
+    PreparedAnnotationVideo,
+)
 from factory_sop.dataset.errors import DatasetFieldError
 from factory_sop.dataset.media import MediaMetadata
 from factory_sop.dataset.model import (
@@ -34,12 +38,17 @@ from factory_sop.dataset.model import (
 from factory_sop.dataset.storage import ObjectStorage
 from factory_sop.dataset.usecases.annotation import (
     AnnotationRefusedError,
+    PreparedAnnotationCopy,
     begin_annotation_context_preparation,
     begin_annotation_execution,
+    complete_annotation_context_preparation,
     complete_annotation_execution,
     create_annotation_context,
     decode_annotation_context_token,
+    fail_annotation_context_preparation,
     prepare_annotation_execution_copy,
+    record_annotation_context_cleanup_candidate,
+    record_annotation_execution_cleanup_candidate,
     register_action_list,
     retry_annotation,
     save_annotation_execution_copy,
@@ -251,6 +260,7 @@ class FakeAnnotationCopyBackend:
     calls: int = 0
     discarded_data_ids: list[str] = field(default_factory=list)
     fail_download: bool = False
+    fail_discard: bool = False
 
     def prepare_video(
         self,
@@ -271,6 +281,8 @@ class FakeAnnotationCopyBackend:
     def discard_prepared_video(self, *, data_id: str) -> None:
         assert data_id.startswith("base-dataset-")
         self.discarded_data_ids.append(data_id)
+        if self.fail_discard:
+            raise AnnotationBackendExecutionError("cleanup failed")
 
     def download_video(self, *, video_id: str, destination: BinaryIO) -> None:
         assert video_id.startswith("base-video-")
@@ -512,6 +524,69 @@ def test_stale_context_preparation_can_be_reclaimed_after_job_recovery() -> None
 
     mismatched_job = replace(job, member_id=UUID(int=999))
     assert begin_annotation_context_preparation(job=mismatched_job, datasets=value) is None
+
+
+def test_context_cleanup_candidate_fences_stale_completion_and_failure() -> None:
+    value = store()
+    register_action_list(
+        dataset_id=DATASET_ID,
+        actions=("(1)拿取工件", "(2)安装部件"),
+        caller=caller(Permission.DATASET_IMPORT),
+        now=NOW,
+        datasets=value,
+    )
+    context = create_annotation_context(
+        dataset_id=DATASET_ID,
+        member_id=MEMBER_ID,
+        caller=caller(Permission.DATASET_IMPORT),
+        now=NOW,
+        datasets=value,
+        secret=SECRET,
+        ttl_seconds=3600,
+    )
+    jobs = FakeAnnotationJobs()
+    job = jobs.get_or_create_annotation_preparation(
+        member_id=MEMBER_ID,
+        attempt_id=context.id,
+        now=NOW,
+    )
+    value.contexts[context.id] = replace(
+        context,
+        preparation_job_id=job.id,
+        preparation_status="running",
+    )
+    stale = begin_annotation_context_preparation(job=job, datasets=value)
+    assert stale is not None
+    candidate = record_annotation_context_cleanup_candidate(
+        target=stale,
+        data_id="orphan-data",
+        code=None,
+        detail=None,
+        datasets=value,
+    )
+    prepared = PreparedAnnotationCopy(
+        prepared=PreparedAnnotationVideo(data_id="new-data", video_id="new-video"),
+        size=123,
+        sha256="b" * 64,
+        duration_seconds=4.0,
+    )
+
+    with pytest.raises(AnnotationRefusedError) as completion:
+        complete_annotation_context_preparation(
+            target=stale,
+            prepared=prepared,
+            datasets=value,
+        )
+    assert completion.value.code.value == "ANNOTATION_STATE_CONFLICT"
+    with pytest.raises(AnnotationRefusedError) as failure:
+        fail_annotation_context_preparation(
+            target=stale,
+            code="ANNOTATION_EXECUTION_FAILED",
+            detail="stale result",
+            datasets=value,
+        )
+    assert failure.value.code.value == "ANNOTATION_STATE_CONFLICT"
+    assert value.contexts[context.id] == candidate.context
 
 
 def test_context_token_is_signed_and_binds_the_exact_registered_source() -> None:
@@ -913,6 +988,60 @@ def test_retry_creates_new_execution_without_overwriting_old_candidate() -> None
     ]
 
 
+def test_execution_cleanup_candidate_preempts_newer_unpublished_retry() -> None:
+    value = store()
+    token = context_for(value)
+    jobs = FakeAnnotationJobs()
+    submitted = submit_annotation(
+        dataset_id=DATASET_ID,
+        member_id=MEMBER_ID,
+        context_token=token,
+        raw_segments=segments(),
+        mode=AnnotationMode.SINGLE_OPERATOR,
+        idempotency_key="cleanup-preempts-retry",
+        caller=caller(Permission.DATASET_IMPORT),
+        now=NOW,
+        datasets=value,
+        jobs=jobs,
+        secret=SECRET,
+    )
+    stale = begin_annotation_execution(
+        job=jobs.jobs[submitted.job.id],
+        datasets=value,
+        now=NOW + timedelta(seconds=1),
+    )
+    assert stale is not None
+    newer_execution = replace(stale.execution, updated_at=NOW + timedelta(seconds=2))
+    value.executions[stale.execution.id] = newer_execution
+    newer = replace(stale, execution=newer_execution)
+
+    recorded = record_annotation_execution_cleanup_candidate(
+        target=stale,
+        data_id="orphan-data",
+        code=None,
+        detail=None,
+        now=NOW + timedelta(seconds=3),
+        datasets=value,
+    )
+    prepared = PreparedAnnotationCopy(
+        prepared=PreparedAnnotationVideo(data_id="new-data", video_id="new-video"),
+        size=123,
+        sha256="c" * 64,
+        duration_seconds=4.0,
+    )
+
+    assert recorded.execution.upstream_data_id == "orphan-data"
+    with pytest.raises(AnnotationRefusedError) as conflict:
+        save_annotation_execution_copy(
+            target=newer,
+            prepared=prepared,
+            now=NOW + timedelta(seconds=4),
+            datasets=value,
+        )
+    assert conflict.value.code.value == "ANNOTATION_STATE_CONFLICT"
+    assert value.executions[stale.execution.id].upstream_data_id == "orphan-data"
+
+
 def test_prepare_execution_copy_discards_backend_copy_when_post_upload_step_fails() -> None:
     value = store()
     source = b"annotation source"
@@ -953,6 +1082,51 @@ def test_prepare_execution_copy_discards_backend_copy_when_post_upload_step_fail
         )
 
     assert refused.value.code.value == "ANNOTATION_EXECUTION_FAILED"
+    assert backend.discarded_data_ids == ["base-dataset-1"]
+
+
+def test_failed_backend_copy_cleanup_retains_candidate_identity() -> None:
+    value = store()
+    source = b"annotation source"
+    value.members[MEMBER_ID] = replace(
+        value.members[MEMBER_ID],
+        actual_size=len(source),
+        actual_sha256=sha256(source).hexdigest(),
+    )
+    token = context_for(value)
+    jobs = FakeAnnotationJobs()
+    submitted = submit_annotation(
+        dataset_id=DATASET_ID,
+        member_id=MEMBER_ID,
+        context_token=token,
+        raw_segments=segments(),
+        mode=AnnotationMode.SINGLE_OPERATOR,
+        idempotency_key="cleanup-candidate",
+        caller=caller(Permission.DATASET_IMPORT),
+        now=NOW,
+        datasets=value,
+        jobs=jobs,
+        secret=SECRET,
+    )
+    target = begin_annotation_execution(
+        job=jobs.jobs[submitted.job.id],
+        datasets=value,
+        now=NOW + timedelta(seconds=1),
+    )
+    assert target is not None
+    backend = FakeAnnotationCopyBackend(fail_download=True, fail_discard=True)
+
+    with pytest.raises(AnnotationCleanupPendingError) as pending:
+        prepare_annotation_execution_copy(
+            target=target,
+            storage=FakeAnnotationCopyStorage(source),
+            backend=backend,
+            media_probe=FakeAnnotationCopyProbe(),
+        )
+
+    assert pending.value.data_id == "base-dataset-1"
+    assert isinstance(pending.value.failure, AnnotationRefusedError)
+    assert pending.value.failure.code.value == "ANNOTATION_EXECUTION_FAILED"
     assert backend.discarded_data_ids == ["base-dataset-1"]
 
 

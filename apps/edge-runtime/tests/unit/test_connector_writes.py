@@ -82,6 +82,16 @@ class RecordingConnector:
         return self._outcome
 
 
+class RaisingConnector(RecordingConnector):
+    def __init__(self, error: BaseException) -> None:
+        super().__init__()
+        self._error = error
+
+    def write(self, point: OutputPoint, state: PointState, /, *, timeout: float) -> WriteOutcome:
+        self.writes.append((point, state))
+        raise self._error
+
+
 def dispatcher(
     connector: RecordingConnector,
 ) -> tuple[OutputDispatcher, InMemoryWriteLedger, list[WriteAttempted]]:
@@ -341,6 +351,118 @@ class DurableLocalDisposalLedgerTest(unittest.TestCase):
             second_dispatch.write(replace(first_request, attempt_at=HostInstant(2.0))),
         )
         self.assertEqual(1, len(second_connector.writes))
+        connection.close()
+
+    def test_adapter_exception_closes_unknown_and_is_not_replayed_after_restart(self) -> None:
+        import sqlite3
+        from dataclasses import replace
+
+        from edge_runtime.connectors.writes import PERSISTENT_UNKNOWN_DETAIL
+        from edge_runtime.local_state.disposal import DISPOSAL_RESULT_UNKNOWN, LocalDisposalLedger
+        from edge_runtime.local_state.schema import migrate
+        from edge_runtime.runtime import SQLiteWriteLedger
+
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        connection.row_factory = sqlite3.Row
+        migrate(connection)
+        durable_request = replace(
+            request(),
+            station_id="station-unknown",
+            connector_id="connector-a",
+            attempt_at=HostInstant(1.0),
+            lease_seconds=5.0,
+        )
+        connector = RaisingConnector(RuntimeError("adapter crashed after send"))
+        events: list[WriteAttempted] = []
+        dispatch = OutputDispatcher(
+            connector=connector,
+            ledger=SQLiteWriteLedger(LocalDisposalLedger(connection)),
+            diagnostics=events.append,
+        )
+
+        expected = Failed(detail=PERSISTENT_UNKNOWN_DETAIL)
+        with self.assertLogs("edge_runtime", level="ERROR") as logs:
+            self.assertEqual(expected, dispatch.write(durable_request))
+        self.assertIn("RuntimeError: adapter crashed after send", logs.output[0])
+        stored = LocalDisposalLedger(connection).result_for("station-unknown", "disposal-7")
+        self.assertIsNotNone(stored)
+        assert stored is not None
+        self.assertEqual(DISPOSAL_RESULT_UNKNOWN, stored.kind)
+        self.assertEqual(
+            expected, dispatch.write(replace(durable_request, attempt_at=HostInstant(2.0)))
+        )
+        self.assertEqual(1, len(connector.writes))
+        self.assertEqual(
+            WriteAttempted(
+                point=INTERLOCK,
+                state=PointState.ACTIVE,
+                key="disposal-7",
+                actor="supervisor:station-3",
+                outcome=expected,
+                replayed=False,
+            ),
+            events[0],
+        )
+
+        restarted_connector = RecordingConnector()
+        restarted = OutputDispatcher(
+            connector=restarted_connector,
+            ledger=SQLiteWriteLedger(LocalDisposalLedger(connection)),
+            diagnostics=lambda event: None,
+        )
+        self.assertEqual(
+            expected,
+            restarted.write(replace(durable_request, attempt_at=HostInstant(3.0))),
+        )
+        self.assertEqual([], restarted_connector.writes)
+        connection.close()
+
+    def test_adapter_exception_is_logged_even_when_unknown_persistence_fails(self) -> None:
+        class FailingRecordLedger(InMemoryWriteLedger):
+            def record(self, key: str, outcome: WriteOutcome, /) -> None:
+                raise RuntimeError("ledger unavailable")
+
+        dispatch = OutputDispatcher(
+            connector=RaisingConnector(RuntimeError("adapter crashed after send")),
+            ledger=FailingRecordLedger(),
+            diagnostics=lambda event: self.fail(f"unexpected diagnostic: {event!r}"),
+        )
+
+        with (
+            self.assertLogs("edge_runtime", level="ERROR") as logs,
+            self.assertRaisesRegex(RuntimeError, "ledger unavailable"),
+        ):
+            dispatch.write(request())
+        self.assertIn("RuntimeError: adapter crashed after send", logs.output[0])
+
+    def test_control_flow_exit_is_not_recorded_as_unknown(self) -> None:
+        import sqlite3
+        from dataclasses import replace
+
+        from edge_runtime.local_state.disposal import LocalDisposalLedger
+        from edge_runtime.local_state.schema import migrate
+        from edge_runtime.runtime import SQLiteWriteLedger
+
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        connection.row_factory = sqlite3.Row
+        migrate(connection)
+        durable_request = replace(
+            request(),
+            station_id="station-cancelled",
+            connector_id="connector-a",
+            attempt_at=HostInstant(1.0),
+            lease_seconds=5.0,
+        )
+        ledger = LocalDisposalLedger(connection)
+        dispatch = OutputDispatcher(
+            connector=RaisingConnector(KeyboardInterrupt()),
+            ledger=SQLiteWriteLedger(ledger),
+            diagnostics=lambda event: self.fail(f"unexpected diagnostic: {event!r}"),
+        )
+
+        with self.assertRaises(KeyboardInterrupt):
+            dispatch.write(durable_request)
+        self.assertIsNone(ledger.result_for("station-cancelled", "disposal-7"))
         connection.close()
 
     def test_written_result_survives_restart_and_expired_attempt_is_not_replayed(self) -> None:

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
+from threading import Event
 from typing import Any, assert_never, cast
 from uuid import UUID
 
@@ -58,6 +60,43 @@ from factory_sop.settings import Settings
 _logger = get_logger("job")
 
 
+class _ExecutionFence:
+    """ARQ 取消后撤销仍在物理运行的阻塞执行发布权。"""
+
+    def __init__(self) -> None:
+        self._cancelled = Event()
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancelled.is_set()
+
+    def cancel(self) -> None:
+        self._cancelled.set()
+
+
+async def _run_blocking_job(
+    job: Callable[[Mapping[str, Any], str, _ExecutionFence], None],
+    ctx: Mapping[str, Any],
+    job_id: str,
+) -> None:
+    """在线程中执行同步业务；取消只撤销该执行的结果发布权。"""
+    fence = _ExecutionFence()
+    try:
+        await asyncio.to_thread(job, ctx, job_id, fence)
+    except asyncio.CancelledError:
+        fence.cancel()
+        raise
+
+
+def _commit_if_active(session: Session, fence: _ExecutionFence) -> bool:
+    """仅当当前逻辑执行仍有发布权时提交事务。"""
+    if fence.cancelled:
+        session.rollback()
+        return False
+    session.commit()
+    return True
+
+
 def _usage_requires_annotation_volume(target: UsageCheckTarget) -> bool:
     """仅在 DDM 或 VLM 引用已保存切片时创建标注卷 adapter。"""
     match target.check.kind:
@@ -74,7 +113,14 @@ def _usage_requires_annotation_volume(target: UsageCheckTarget) -> bool:
 
 
 async def validate_dataset_job(ctx: Mapping[str, Any], job_id: str) -> None:
+    """隔离同步视频校验，不阻塞 ARQ 事件循环。"""
+    await _run_blocking_job(_validate_dataset_job, ctx, job_id)
+
+
+def _validate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _ExecutionFence) -> None:
     """按 job id 幂等执行视频校验；Redis payload 不携带任何凭据或对象地址。"""
+    if fence.cancelled:
+        return
     identifier = UUID(job_id)
     factory = _session_factory(ctx)
     runtime = _dataset_runtime(ctx)
@@ -83,7 +129,8 @@ async def validate_dataset_job(ctx: Mapping[str, Any], job_id: str) -> None:
     with factory() as session:
         jobs = PostgresJobRepository(session)
         running = jobs.mark_running(job_id=identifier, now=now)
-        session.commit()
+        if not _commit_if_active(session, fence):
+            return
     if running is None:
         return
 
@@ -99,9 +146,10 @@ async def validate_dataset_job(ctx: Mapping[str, Any], job_id: str) -> None:
                 now=datetime.now(UTC),
                 expected_updated_at=running.updated_at,
             )
-            session.commit()
+            _commit_if_active(session, fence)
             return
-        session.commit()
+        if not _commit_if_active(session, fence):
+            return
 
     storage = runtime.storage()
     probe = runtime.media_probe()
@@ -118,6 +166,9 @@ async def validate_dataset_job(ctx: Mapping[str, Any], job_id: str) -> None:
             now=datetime.now(UTC),
             target=target,
         )
+        if fence.cancelled:
+            result_session.rollback()
+            return
         current = datasets.member_by_id(running.member_id)
         if current is not None and current.current_attempt_id != running.attempt_id:
             final_status = JobStatus.SUPERSEDED.value
@@ -135,27 +186,46 @@ async def validate_dataset_job(ctx: Mapping[str, Any], job_id: str) -> None:
             now=datetime.now(UTC),
             expected_updated_at=running.updated_at,
         )
-        result_session.commit()
+        if not finished:
+            result_session.rollback()
+            _logger.info(
+                "job.dataset_validation.lease_lost",
+                job_id=str(running.id),
+                member_id=str(running.member_id),
+                attempt_id=str(running.attempt_id),
+                status="lease_lost",
+            )
+            return
+        if not _commit_if_active(result_session, fence):
+            return
         _logger.info(
-            "job.dataset_validation.finished" if finished else "job.dataset_validation.lease_lost",
+            "job.dataset_validation.finished",
             job_id=str(running.id),
             member_id=str(running.member_id),
             attempt_id=str(running.attempt_id),
-            status=final_status if finished else "lease_lost",
+            status=final_status,
         )
     finally:
         result_session.close()
 
 
 async def check_dataset_usage_job(ctx: Mapping[str, Any], job_id: str) -> None:
+    """隔离同步用途检查，不阻塞 ARQ 事件循环。"""
+    await _run_blocking_job(_check_dataset_usage_job, ctx, job_id)
+
+
+def _check_dataset_usage_job(ctx: Mapping[str, Any], job_id: str, fence: _ExecutionFence) -> None:
     """在事务外复核冻结用途输入，并把检查结果写回中心。"""
+    if fence.cancelled:
+        return
     identifier = UUID(job_id)
     factory = _session_factory(ctx)
     runtime = _usage_runtime(ctx)
     with factory() as session:
         jobs = PostgresJobRepository(session)
         running = jobs.mark_running(job_id=identifier, now=datetime.now(UTC))
-        session.commit()
+        if not _commit_if_active(session, fence):
+            return
     if running is None:
         return
 
@@ -171,9 +241,10 @@ async def check_dataset_usage_job(ctx: Mapping[str, Any], job_id: str) -> None:
                 now=datetime.now(UTC),
                 expected_updated_at=running.updated_at,
             )
-            session.commit()
+            _commit_if_active(session, fence)
             return
-        session.commit()
+        if not _commit_if_active(session, fence):
+            return
 
     try:
         annotation_volume = (
@@ -187,6 +258,8 @@ async def check_dataset_usage_job(ctx: Mapping[str, Any], job_id: str) -> None:
             ddm_reader=runtime.ddm_reader(),
             vlm_reader=runtime.vlm_reader(),
         )
+        if fence.cancelled:
+            return
     except ObjectStorageUnavailableError as error:
         _finish_usage_check_failure(
             factory=factory,
@@ -195,6 +268,7 @@ async def check_dataset_usage_job(ctx: Mapping[str, Any], job_id: str) -> None:
             code="USAGE_STORAGE_UNAVAILABLE",
             detail="训练素材存储暂时不可用，请稍后重试",
             error=error,
+            fence=fence,
         )
         return
     except AnnotationDataVolumeUnavailableError as error:
@@ -205,6 +279,7 @@ async def check_dataset_usage_job(ctx: Mapping[str, Any], job_id: str) -> None:
             code="USAGE_ANNOTATION_VOLUME_UNAVAILABLE",
             detail="标注数据卷暂时不可用，请稍后重试",
             error=error,
+            fence=fence,
         )
         return
     except MediaProbeUnavailableError as error:
@@ -215,6 +290,7 @@ async def check_dataset_usage_job(ctx: Mapping[str, Any], job_id: str) -> None:
             code="USAGE_MEDIA_PROBE_UNAVAILABLE",
             detail="媒体探测工具暂时不可用，请稍后重试",
             error=error,
+            fence=fence,
         )
         return
     except Exception as error:  # pragma: no cover - worker 安全兜底
@@ -232,6 +308,7 @@ async def check_dataset_usage_job(ctx: Mapping[str, Any], job_id: str) -> None:
             code="USAGE_CHECK_EXECUTION_FAILED",
             detail="用途检查执行失败",
             error=error,
+            fence=fence,
         )
         return
 
@@ -270,7 +347,8 @@ async def check_dataset_usage_job(ctx: Mapping[str, Any], job_id: str) -> None:
             if not finished:
                 result_session.rollback()
                 return
-            result_session.commit()
+            if not _commit_if_active(result_session, fence):
+                return
     except DatasetRefusedError as error:
         _finish_usage_check_failure(
             factory=factory,
@@ -279,6 +357,7 @@ async def check_dataset_usage_job(ctx: Mapping[str, Any], job_id: str) -> None:
             code=error.code.value,
             detail=error.detail,
             error=error,
+            fence=fence,
         )
         return
     except Exception as error:  # pragma: no cover - 数据库故障由真实集成测试覆盖
@@ -289,6 +368,7 @@ async def check_dataset_usage_job(ctx: Mapping[str, Any], job_id: str) -> None:
             code="USAGE_CHECK_DATABASE_FAILURE",
             detail="用途检查结果登记失败",
             error=error,
+            fence=fence,
         )
         return
     _logger.info(
@@ -311,8 +391,11 @@ def _finish_usage_check_failure(
     code: str,
     detail: str,
     error: Exception,
+    fence: _ExecutionFence,
 ) -> None:
     """在独立事务中记录用途检查 worker 失败。"""
+    if fence.cancelled:
+        return
     with factory() as session:
         datasets = runtime.repository(session)
         try:
@@ -341,7 +424,8 @@ def _finish_usage_check_failure(
         if not finished:
             session.rollback()
             return
-        session.commit()
+        if not _commit_if_active(session, fence):
+            return
     _logger.warning(
         "job.dataset_usage_check.failed",
         job_id=str(target.job.id),
@@ -351,17 +435,29 @@ def _finish_usage_check_failure(
 
 
 async def generate_dataset_artifact_job(ctx: Mapping[str, Any], job_id: str) -> None:
+    """隔离同步制品执行，不阻塞 ARQ 事件循环。"""
+    await _run_blocking_job(_generate_dataset_artifact_job, ctx, job_id)
+
+
+def _generate_dataset_artifact_job(
+    ctx: Mapping[str, Any], job_id: str, fence: _ExecutionFence
+) -> None:
     """领取通用任务，并把完整制品生命周期委托给 dataset owner。"""
+    if fence.cancelled:
+        return
     identifier = UUID(job_id)
     factory = _session_factory(ctx)
     with factory() as session:
         jobs = PostgresJobRepository(session)
         running = jobs.mark_running(job_id=identifier, now=datetime.now(UTC))
-        session.commit()
+        if not _commit_if_active(session, fence):
+            return
     if running is None:
         return
 
     def finish_job(session: object, result: ArtifactExecutionResult) -> bool:
+        if fence.cancelled:
+            return False
         match result.outcome:
             case ArtifactExecutionOutcome.SUCCEEDED:
                 status = JobStatus.SUCCEEDED.value
@@ -383,7 +479,16 @@ async def generate_dataset_artifact_job(ctx: Mapping[str, Any], job_id: str) -> 
 
 
 async def prepare_annotation_context_job(ctx: Mapping[str, Any], job_id: str) -> None:
+    """隔离同步标注上下文准备，不阻塞 ARQ 事件循环。"""
+    await _run_blocking_job(_prepare_annotation_context_job, ctx, job_id)
+
+
+def _prepare_annotation_context_job(
+    ctx: Mapping[str, Any], job_id: str, fence: _ExecutionFence
+) -> None:
     """在事务外准备标注上下文基座副本，并短事务登记真实身份。"""
+    if fence.cancelled:
+        return
     identifier = UUID(job_id)
     factory = _session_factory(ctx)
     runtime = _annotation_runtime(ctx)
@@ -392,7 +497,8 @@ async def prepare_annotation_context_job(ctx: Mapping[str, Any], job_id: str) ->
     with factory() as session:
         jobs = PostgresJobRepository(session)
         running = jobs.mark_running(job_id=identifier, now=now)
-        session.commit()
+        if not _commit_if_active(session, fence):
+            return
     if running is None:
         return
 
@@ -411,9 +517,10 @@ async def prepare_annotation_context_job(ctx: Mapping[str, Any], job_id: str) ->
                 now=datetime.now(UTC),
                 expected_updated_at=running.updated_at,
             )
-            session.commit()
+            _commit_if_active(session, fence)
             return
-        session.commit()
+        if not _commit_if_active(session, fence):
+            return
 
     try:
         prepared = prepare_annotation_context_copy(
@@ -424,6 +531,8 @@ async def prepare_annotation_context_job(ctx: Mapping[str, Any], job_id: str) ->
             backend=runtime.backend(),
             media_probe=runtime.media_probe(),
         )
+        if fence.cancelled:
+            return
     except AnnotationBackendUnavailableError as error:
         _finish_context_preparation_failure(
             factory=factory,
@@ -432,6 +541,7 @@ async def prepare_annotation_context_job(ctx: Mapping[str, Any], job_id: str) ->
             code="ANNOTATION_BACKEND_UNAVAILABLE",
             detail="标注基座暂时不可用",
             error=error,
+            fence=fence,
         )
         return
     except DatasetRefusedError as error:
@@ -442,6 +552,7 @@ async def prepare_annotation_context_job(ctx: Mapping[str, Any], job_id: str) ->
             code=error.code.value,
             detail=error.detail,
             error=error,
+            fence=fence,
         )
         return
     except Exception as error:  # pragma: no cover - worker 安全兜底
@@ -452,6 +563,7 @@ async def prepare_annotation_context_job(ctx: Mapping[str, Any], job_id: str) ->
             code="ANNOTATION_EXECUTION_FAILED",
             detail="标注媒体准备失败",
             error=error,
+            fence=fence,
         )
         return
 
@@ -479,7 +591,8 @@ async def prepare_annotation_context_job(ctx: Mapping[str, Any], job_id: str) ->
                     context_id=str(target.context.id),
                 )
                 return
-            session.commit()
+            if not _commit_if_active(session, fence):
+                return
     except DatasetRefusedError as error:
         _finish_context_preparation_failure(
             factory=factory,
@@ -488,6 +601,7 @@ async def prepare_annotation_context_job(ctx: Mapping[str, Any], job_id: str) ->
             code=error.code.value,
             detail=error.detail,
             error=error,
+            fence=fence,
         )
         return
     _logger.info(
@@ -509,8 +623,11 @@ def _finish_context_preparation_failure(
     code: str,
     detail: str,
     error: Exception,
+    fence: _ExecutionFence,
 ) -> None:
     """在独立事务中保存上下文准备失败并结案任务。"""
+    if fence.cancelled:
+        return
     with factory() as session:
         datasets = runtime.repository(session)
         try:
@@ -546,7 +663,8 @@ def _finish_context_preparation_failure(
                 failure_code=code,
             )
             return
-        session.commit()
+        if not _commit_if_active(session, fence):
+            return
     _logger.warning(
         "job.dataset_annotation_preparation.failed"
         if finished
@@ -559,7 +677,14 @@ def _finish_context_preparation_failure(
 
 
 async def annotate_dataset_job(ctx: Mapping[str, Any], job_id: str) -> None:
+    """隔离同步标注执行，不阻塞 ARQ 事件循环。"""
+    await _run_blocking_job(_annotate_dataset_job, ctx, job_id)
+
+
+def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _ExecutionFence) -> None:
     """按执行代次调用复用的标注基座，并追加候选结果。"""
+    if fence.cancelled:
+        return
     identifier = UUID(job_id)
     factory = _session_factory(ctx)
     runtime = _annotation_runtime(ctx)
@@ -568,7 +693,8 @@ async def annotate_dataset_job(ctx: Mapping[str, Any], job_id: str) -> None:
     with factory() as session:
         jobs = PostgresJobRepository(session)
         running = jobs.mark_running(job_id=identifier, now=now)
-        session.commit()
+        if not _commit_if_active(session, fence):
+            return
     if running is None:
         return
 
@@ -588,9 +714,10 @@ async def annotate_dataset_job(ctx: Mapping[str, Any], job_id: str) -> None:
                 now=datetime.now(UTC),
                 expected_updated_at=running.updated_at,
             )
-            session.commit()
+            _commit_if_active(session, fence)
             return
-        session.commit()
+        if not _commit_if_active(session, fence):
+            return
 
     try:
         prepared = prepare_annotation_execution_copy(
@@ -599,6 +726,8 @@ async def annotate_dataset_job(ctx: Mapping[str, Any], job_id: str) -> None:
             backend=runtime.backend(),
             media_probe=runtime.media_probe(),
         )
+        if fence.cancelled:
+            return
         with factory() as session:
             datasets = runtime.repository(session)
             target = save_annotation_execution_copy(
@@ -607,7 +736,8 @@ async def annotate_dataset_job(ctx: Mapping[str, Any], job_id: str) -> None:
                 now=datetime.now(UTC),
                 datasets=datasets,
             )
-            session.commit()
+            if not _commit_if_active(session, fence):
+                return
 
         if target.execution.upstream_video_id is None:
             raise AnnotationBackendExecutionError("标注执行没有基座视频身份")
@@ -616,6 +746,8 @@ async def annotate_dataset_job(ctx: Mapping[str, Any], job_id: str) -> None:
             segments=target.submission.segments,
             mode=target.submission.mode,
         )
+        if fence.cancelled:
+            return
         if not clips:
             raise AnnotationBackendExecutionError("标注基座没有返回切片结果")
     except AnnotationBackendUnavailableError as error:
@@ -626,6 +758,7 @@ async def annotate_dataset_job(ctx: Mapping[str, Any], job_id: str) -> None:
             code="ANNOTATION_BACKEND_UNAVAILABLE",
             detail="标注基座暂时不可用",
             error=error,
+            fence=fence,
         )
         return
     except AnnotationBackendExecutionError as error:
@@ -636,6 +769,7 @@ async def annotate_dataset_job(ctx: Mapping[str, Any], job_id: str) -> None:
             code="ANNOTATION_EXECUTION_FAILED",
             detail=str(error),
             error=error,
+            fence=fence,
         )
         return
     except DatasetRefusedError as error:
@@ -646,6 +780,7 @@ async def annotate_dataset_job(ctx: Mapping[str, Any], job_id: str) -> None:
             code=error.code.value,
             detail=error.detail,
             error=error,
+            fence=fence,
         )
         return
     except Exception as error:  # pragma: no cover - worker 安全兜底
@@ -656,6 +791,7 @@ async def annotate_dataset_job(ctx: Mapping[str, Any], job_id: str) -> None:
             code="ANNOTATION_EXECUTION_FAILED",
             detail="标注切片执行失败",
             error=error,
+            fence=fence,
         )
         return
 
@@ -684,7 +820,8 @@ async def annotate_dataset_job(ctx: Mapping[str, Any], job_id: str) -> None:
                     execution_id=str(target.execution.id),
                 )
                 return
-            session.commit()
+            if not _commit_if_active(session, fence):
+                return
     except DatasetRefusedError as error:
         _finish_annotation_failure(
             factory=factory,
@@ -693,6 +830,7 @@ async def annotate_dataset_job(ctx: Mapping[str, Any], job_id: str) -> None:
             code=error.code.value,
             detail=error.detail,
             error=error,
+            fence=fence,
         )
         return
     _logger.info(
@@ -712,8 +850,11 @@ def _finish_annotation_failure(
     code: str,
     detail: str,
     error: Exception,
+    fence: _ExecutionFence,
 ) -> None:
     """在独立事务中保存失败候选并结案任务。"""
+    if fence.cancelled:
+        return
     with factory() as session:
         datasets = runtime.repository(session)
         try:
@@ -750,7 +891,8 @@ def _finish_annotation_failure(
                 failure_code=code,
             )
             return
-        session.commit()
+        if not _commit_if_active(session, fence):
+            return
     _logger.warning(
         "job.dataset_annotation.failed" if finished else "job.dataset_annotation.lease_lost",
         job_id=str(target.job.id),

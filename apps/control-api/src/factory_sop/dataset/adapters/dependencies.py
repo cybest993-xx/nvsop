@@ -264,11 +264,13 @@ def artifact_executor(
     factory: sessionmaker[DatabaseSession],
 ) -> DatasetArtifactExecutor:
     """构造 dataset owner 的制品执行 seam。"""
-    generator = NvidiaDdmAnnotationGenerator()
     return PostgresDatasetArtifactExecutor(
         factory=factory,
         storage_factory=lambda: MinioObjectStorage.from_settings(settings),
-        generate=generator.generate,
+        generate=lambda workspace, output_filename: NvidiaDdmAnnotationGenerator().generate(
+            workspace,
+            output_filename,
+        ),
     )
 
 

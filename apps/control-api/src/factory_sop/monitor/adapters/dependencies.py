@@ -1,14 +1,17 @@
 """绑定到请求工作单元的 monitor HTTP 依赖。"""
 
-from typing import Annotated
+from collections.abc import Iterator
+from typing import cast
 
-from fastapi import Depends
-from sqlalchemy.orm import Session
+from fastapi import Request
+from sqlalchemy import Engine
+from sqlalchemy.orm import Session, sessionmaker
 
 from factory_sop.device.api import DeviceHistoricalAssignmentGateway, DeviceHostGateway
 from factory_sop.monitor.adapters.repository import PostgresMonitorRepository
-from factory_sop.monitor.repository import MonitorRepository
-from factory_sop.persistence import RequestSession, request_session
+from factory_sop.monitor.adapters.streaming import PostgresMonitorStreamSource
+from factory_sop.monitor.repository import MonitorRepository, MonitorStreamSource
+from factory_sop.persistence import RequestSession
 
 
 def monitor(session: RequestSession) -> MonitorRepository:
@@ -25,9 +28,12 @@ def historical_assignment_gateway() -> DeviceHistoricalAssignmentGateway:
     raise RuntimeError("monitor historical assignment dependency was not wired")
 
 
-StreamingSession = Annotated[Session, Depends(request_session, scope="request")]
-
-
-def streaming_monitor(session: StreamingSession) -> MonitorRepository:
-    """为流式响应保留到响应结束的只读 monitor session。"""
-    return PostgresMonitorRepository(session)
+def monitor_stream_source(request: Request) -> Iterator[MonitorStreamSource]:
+    """为 SSE 保留独立 listener；每轮事实读取由 source 自己创建并释放短 Session。"""
+    factory = cast(sessionmaker[Session], request.app.state.session_factory)
+    engine = cast(Engine, factory.kw["bind"])
+    source = PostgresMonitorStreamSource(factory, engine)
+    try:
+        yield source
+    finally:
+        source.close()

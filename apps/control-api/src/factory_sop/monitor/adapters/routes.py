@@ -18,7 +18,7 @@ from factory_sop.device.api import (
 )
 from factory_sop.monitor.adapters import dependencies
 from factory_sop.monitor.errors import MonitorRefusedError
-from factory_sop.monitor.repository import MonitorRepository
+from factory_sop.monitor.repository import MonitorRepository, MonitorStreamSource
 from factory_sop.monitor.usecases import (
     list_instances,
     mirror_decision,
@@ -208,7 +208,11 @@ def list_monitor_instances(
 )
 def stream_monitor_events(
     caller: Authorized,
-    monitor: Annotated[MonitorRepository, Depends(dependencies.streaming_monitor)],
+    monitor: Annotated[MonitorRepository, Depends(dependencies.monitor)],
+    source: Annotated[
+        MonitorStreamSource,
+        Depends(dependencies.monitor_stream_source, scope="request"),
+    ],
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
     once: bool = Query(default=False),
 ) -> StreamingResponse:
@@ -218,12 +222,8 @@ def stream_monitor_events(
         yield from snapshot.frames
         if not once:
             yield from sse_stream(
-                monitor,
+                source,
                 caller=caller,
-                after=snapshot.decision_after,
-                decision_event_id=snapshot.decision_event_id,
-                health_after=snapshot.health_after,
-                health_event_id=snapshot.health_event_id,
                 decision_sequence=snapshot.decision_sequence,
                 health_sequence=snapshot.health_sequence,
             )

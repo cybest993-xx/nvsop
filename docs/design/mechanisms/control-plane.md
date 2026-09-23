@@ -84,7 +84,7 @@
 
 **停用与删除**：可变配置对象（工位、相机、推理后端、连接器、用户）用**停用**表达下线，可逆，历史记录与关联关系完整保留；**删除**是另一项按权限开放的操作。模板版本不适用停用——它是不可变记录，回滚即重新绑定历史版本。停用用户必须同时吊销其全部会话。
 
-**长任务进度**：REST 轮询 `GET /api/v1/jobs/{id}`。运行观测的 SSE 展示链路已经实现：中心 [monitor SSE 路由](../../../apps/control-api/src/factory_sop/monitor/adapters/routes.py)的 `/api/v1/monitor/stream` 投影已持久化的上报事实，Web [概览页](../../../apps/control-web/src/modules/overview/OverviewView.vue)订阅该流；这只表示现有展示链路可用，不代表 §九 P9 整体完成。P9 中 TimescaleDB/hypertable 原生压缩等剩余验收仍按原门禁追踪，SSE 本身也不进入实时防错链路。
+**长任务进度**：REST 轮询 `GET /api/v1/jobs/{id}`。运行观测的 SSE 展示链路已经实现：中心 [monitor SSE 路由](../../../apps/control-api/src/factory_sop/monitor/adapters/routes.py)的 `/api/v1/monitor/stream` 投影已持久化的上报事实，Web [概览页](../../../apps/control-web/src/modules/overview/OverviewView.vue)订阅该流。decision/health 各自以 PostgreSQL 提交顺序化的 `stream_sequence` 作为 durable replay cursor；浏览器的 `Last-Event-ID` 仍是事件 id，由短事务解析到该 cursor。SSE 的事实读取使用短 Session，独立 `LISTEN/NOTIFY` 连接只负责提交后唤醒，通知丢失后仍以 durable replay 为正确性来源，不引入第二消息权威。这只表示现有展示链路可用，不代表 §九 P9 整体完成。P9 中 TimescaleDB/hypertable 原生压缩等剩余验收仍按原门禁追踪，SSE 本身也不进入实时防错链路。
 
 **机器契约按已实现的公共格式维护**：共享包 [`nvsop_contracts`](../../../packages/contracts/src/nvsop_contracts/__init__.py) 已包含 `ConfigurationBundle`、`ReportedDecision`、`ReportedHealth` 与 delegated command wire。配置束采用单一当前模型，字段所有权、摘要身份、能力门禁、历史 SQLite 迁移和其他机器契约清单由[机器契约演进](machine-contract-evolution.md)统一说明；具体 wire 仍以 [`configuration.py`](../../../packages/contracts/src/nvsop_contracts/configuration.py)、[`reports.py`](../../../packages/contracts/src/nvsop_contracts/reports.py) 与 [`commands.py`](../../../packages/contracts/src/nvsop_contracts/commands.py) 为代码权威。历史判定 v2 及旧新组合见[升级兼容说明](../../deployment/upgrade.md#中心与边缘运行时)。原设计的模板/设备信息由当前配置束表达，不另建平行 DTO；局部能力门禁不代表 ADR-0003 的所有机器接口兼容协商已经完成。
 

@@ -37,3 +37,19 @@ class MonitorRepository(Protocol):
     def decision_sequence_for_event(self, event_id: str) -> int | None: ...
 
     def health_sequence_for_event(self, event_id: str) -> int | None: ...
+
+
+class MonitorStreamSource(Protocol):
+    """SSE 每轮短读和独立唤醒资源的 seam。"""
+
+    def read_after_sequences(
+        self,
+        *,
+        decision_sequence: int,
+        health_sequence: int,
+        limit: int,
+    ) -> tuple[tuple[MirroredDecision, ...], tuple[MirroredHealth, ...]]: ...
+
+    def wait_for_wakeup(self, *, timeout: float) -> bool:
+        """等待提交后提示；False 只表示本次等待超时。"""
+        ...

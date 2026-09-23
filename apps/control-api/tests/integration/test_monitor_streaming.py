@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -20,6 +21,27 @@ HOST_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f201")
 STATION_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f202")
 BACKEND_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f203")
 RECEIVED_AT = datetime(2026, 9, 23, tzinfo=UTC)
+
+
+def _clear_s143_monitor_rows(engine: Engine) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            text("DELETE FROM monitor_reported_decision WHERE host_id = :host_id"),
+            {"host_id": str(HOST_ID)},
+        )
+        connection.execute(
+            text("DELETE FROM monitor_reported_health WHERE host_id = :host_id"),
+            {"host_id": str(HOST_ID)},
+        )
+
+
+@pytest.fixture(autouse=True)
+def clean_s143_monitor_rows(engine: Engine) -> Iterator[None]:
+    _clear_s143_monitor_rows(engine)
+    try:
+        yield
+    finally:
+        _clear_s143_monitor_rows(engine)
 
 
 def _decision(event_id: str) -> MirroredDecision:
@@ -195,7 +217,7 @@ def test_commit_wakes_independent_listeners_and_reads_use_short_transactions(
     decision_sequence, health_sequence = _current_sequences(factory)
     source_a = PostgresMonitorStreamSource(factory, engine)
     source_b = PostgresMonitorStreamSource(factory, engine)
-    event_id = f"s143:wakeup:{uuid4()}"
+    event_ids = tuple(f"s143:wakeup:{uuid4()}" for _ in range(3))
 
     try:
         assert source_a.read_after_sequences(
@@ -220,12 +242,16 @@ def test_commit_wakes_independent_listeners_and_reads_use_short_transactions(
             )
         assert idle_in_transaction == 0
 
-        with factory() as session:
-            assert PostgresMonitorRepository(session).upsert_health(_health(event_id))
-            session.commit()
+        for event_id in event_ids:
+            with factory() as session:
+                assert PostgresMonitorRepository(session).upsert_health(_health(event_id))
+                session.commit()
+        time.sleep(0.05)
 
         assert source_a.wait_for_wakeup(timeout=1.0)
         assert source_b.wait_for_wakeup(timeout=1.0)
+        assert not source_a.wait_for_wakeup(timeout=0)
+        assert not source_b.wait_for_wakeup(timeout=0)
 
         _, health_a = source_a.read_after_sequences(
             decision_sequence=decision_sequence,
@@ -237,8 +263,8 @@ def test_commit_wakes_independent_listeners_and_reads_use_short_transactions(
             health_sequence=health_sequence,
             limit=20,
         )
-        assert event_id in {value.report.event_id for value in health_a}
-        assert event_id in {value.report.event_id for value in health_b}
+        assert set(event_ids) <= {value.report.event_id for value in health_a}
+        assert set(event_ids) <= {value.report.event_id for value in health_b}
     finally:
         source_a.close()
         source_b.close()

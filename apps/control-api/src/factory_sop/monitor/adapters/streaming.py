@@ -48,7 +48,12 @@ class PostgresMonitorStreamSource(MonitorStreamSource):
     def wait_for_wakeup(self, *, timeout: float) -> bool:
         listener = self._ensure_listener()
         driver = cast(PsycopgConnection[Any], listener.connection.driver_connection)
-        return next(driver.notifies(timeout=timeout, stop_after=1), None) is not None
+        if next(driver.notifies(timeout=timeout, stop_after=1), None) is None:
+            return False
+        # 通知只是边沿提示；一次被唤醒后合并当前已排队提示，下一轮只重放 durable cursor。
+        for _ in driver.notifies(timeout=0):
+            pass
+        return True
 
     def close(self) -> None:
         listener = self._listener

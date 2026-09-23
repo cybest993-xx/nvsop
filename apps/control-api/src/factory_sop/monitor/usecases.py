@@ -196,12 +196,32 @@ def sse_snapshot_state(
     """读取初始投影并记录数据库序号，避免墙上时钟造成丢事件窗口。"""
     authorize(caller, Permission.MONITOR_VIEW)
     boundary = boundary or datetime.now(UTC)
-    decisions = monitor.recent_decisions(limit=limit)
-    health = monitor.recent_health(limit=limit)
-    decision_sequence = max((value.stream_sequence or 0 for value in decisions), default=0)
-    health_sequence = max((value.stream_sequence or 0 for value in health), default=0)
     resume_decision = monitor.decision_sequence_for_event(last_event_id) if last_event_id else None
     resume_health = monitor.health_sequence_for_event(last_event_id) if last_event_id else None
+    if resume_decision is None:
+        decisions = monitor.recent_decisions(limit=limit)
+        decision_sequence = max((value.stream_sequence or 0 for value in decisions), default=0)
+    else:
+        decisions = monitor.decisions_after_sequence(
+            after_sequence=resume_decision,
+            limit=limit,
+        )
+        decision_sequence = max(
+            (value.stream_sequence or 0 for value in decisions),
+            default=resume_decision,
+        )
+    if resume_health is None:
+        health = monitor.recent_health(limit=limit)
+        health_sequence = max((value.stream_sequence or 0 for value in health), default=0)
+    else:
+        health = monitor.health_after_sequence(
+            after_sequence=resume_health,
+            limit=limit,
+        )
+        health_sequence = max(
+            (value.stream_sequence or 0 for value in health),
+            default=resume_health,
+        )
 
     events = _merge_sse_events(
         (

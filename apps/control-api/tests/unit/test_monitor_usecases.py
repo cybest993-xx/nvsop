@@ -430,6 +430,39 @@ def test_sse_resume_consumes_last_event_id_without_replaying_it() -> None:
     assert snapshot.decision_sequence == 1
 
 
+def test_sse_resume_replays_backlog_in_cursor_order_without_snapshot_gap() -> None:
+    monitor = MemoryMonitor()
+    received_at = datetime(2026, 9, 13, 0, 0, 0, tzinfo=UTC)
+    for index in range(1, 106):
+        mirror_decision(
+            report(f"host:event-{index}"),
+            received_at=received_at,
+            monitor=monitor,
+            host_gateway=HostGateway(),
+        )
+
+    snapshot = sse_snapshot_state(
+        monitor,
+        caller=caller(Permission.MONITOR_VIEW),
+        last_event_id="host:event-1",
+        limit=100,
+    )
+
+    assert len(snapshot.frames) == 100
+    assert "id: host:event-2" in snapshot.frames[0]
+    assert "id: host:event-101" in snapshot.frames[-1]
+    assert snapshot.decision_sequence == 101
+
+    stream = sse_stream(
+        monitor,
+        caller=caller(Permission.MONITOR_VIEW),
+        decision_sequence=snapshot.decision_sequence,
+        health_sequence=snapshot.health_sequence,
+        wait_timeout=0,
+    )
+    assert "id: host:event-102" in next(stream)
+
+
 def test_sse_preserves_stream_sequence_when_received_at_order_reverses() -> None:
     monitor = MemoryMonitor()
     earlier = datetime(2026, 9, 13, 0, 0, 0, tzinfo=UTC)

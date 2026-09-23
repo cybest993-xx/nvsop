@@ -105,9 +105,13 @@ async def _run_blocking_job(
 ) -> None:
     """在线程中执行同步业务，并以物理执行生命周期占用并发槽位。"""
     slots = _blocking_job_slots(ctx)
-    await slots.acquire()
-    fence = _ExecutionFence()
     loop = asyncio.get_running_loop()
+    try:
+        await slots.acquire()
+    except asyncio.CancelledError:
+        await asyncio.shield(loop.run_in_executor(None, _restore_unstarted_job, ctx, job_id))
+        raise
+    fence = _ExecutionFence()
     try:
         physical = loop.run_in_executor(None, job, ctx, job_id, fence)
     except BaseException:
@@ -120,6 +124,20 @@ async def _run_blocking_job(
         fence.request_cancel()
         await asyncio.shield(loop.run_in_executor(None, fence.wait_until_quiescent))
         raise
+
+
+def _restore_unstarted_job(ctx: Mapping[str, Any], job_id: str) -> None:
+    """恢复尚未进入 blocking execution 的投递；事务完整位于维护线程。"""
+    identifier = UUID(job_id)
+    factory = _session_factory(ctx)
+    with factory() as session:
+        restored = PostgresJobRepository(session).restore_unstarted(
+            job_id=identifier,
+            now=datetime.now(UTC),
+        )
+        session.commit()
+    if restored:
+        _logger.warning("job.execution_slot_wait_cancelled", job_id=job_id)
 
 
 def _commit_if_active(session: Session, fence: _ExecutionFence) -> bool:

@@ -319,6 +319,43 @@ def test_cancelled_jobs_hold_slots_until_physical_threads_exit(
     asyncio.run(scenario())
 
 
+def test_cancel_before_execution_slot_restores_dispatchable_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _WorkerState()
+    job_id = uuid4()
+    restored: list[UUID] = []
+
+    class FakeJobRepository:
+        def __init__(self, session: object) -> None:
+            assert isinstance(session, _TrackingSession)
+
+        def restore_unstarted(self, *, job_id: UUID, now: datetime) -> bool:
+            del now
+            restored.append(job_id)
+            return True
+
+    monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
+    ctx: Mapping[str, Any] = {
+        "blocking_job_slots": asyncio.Semaphore(0),
+        "session_factory": _TrackingSessionFactory(state),
+    }
+
+    async def scenario() -> None:
+        task = asyncio.create_task(worker_module.validate_dataset_job(ctx, str(job_id)))
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+
+    assert restored == [job_id]
+    assert len(state.sessions) == 1
+    assert state.sessions[0].commits == 1
+    assert state.sessions[0].closed.is_set()
+
+
 def test_execution_fence_serializes_cancel_with_commit() -> None:
     commit_started = Event()
     release_commit = Event()

@@ -762,6 +762,33 @@ describe('训练数据集工作台', () => {
     wrapper.unmount()
   })
 
+  it('clears previous members when a newly created dataset member load fails', async () => {
+    grant('dataset.dataset.view', 'dataset.dataset.import')
+    const createdDataset = { ...DATASET, id: 'dataset-created', name: '新建数据集' }
+    api.readDatasetMembers
+      .mockResolvedValueOnce({
+        items: [MEMBER_REGISTERED],
+        page: 1,
+        page_size: 50,
+        total: 1,
+      })
+      .mockRejectedValueOnce(new Error('新数据集成员读取失败'))
+    api.createTrainingDataset.mockResolvedValue(createdDataset)
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+    expect(wrapper.text()).toContain(MEMBER_REGISTERED.original_filename)
+
+    await wrapper.find('input[name="dataset-name"]').setValue(createdDataset.name)
+    await wrapper.find('form[aria-label="创建训练数据集"]').trigger('submit')
+    await flushPromises()
+
+    expect(api.readDatasetMembers).toHaveBeenCalledWith(createdDataset.id)
+    expect(wrapper.text()).not.toContain(MEMBER_REGISTERED.original_filename)
+    expect(wrapper.text()).toContain('新数据集成员读取失败')
+    wrapper.unmount()
+  })
+
   it('stops annotation preparation polling when annotation is closed', async () => {
     grant('dataset.dataset.view', 'dataset.dataset.edit')
     api.createAnnotationContext.mockResolvedValue({
@@ -1188,6 +1215,82 @@ describe('训练数据集工作台', () => {
       await vi.advanceTimersByTimeAsync(4000)
       await flushPromises()
       expect(api.listDatasetUsageChecks).toHaveBeenCalledTimes(2)
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('allows the newly selected dataset to poll while the previous refresh is still pending', async () => {
+    grant('dataset.dataset.view')
+    const secondDataset = { ...DATASET, id: 'dataset-2', name: '第二个数据集' }
+    const pendingUsageCheck = { ...USAGE_CHECK, status: 'pending' }
+    const slowPreviousUsagePage = deferred<{
+      items: (typeof USAGE_CHECK)[]
+      page: number
+      page_size: number
+      total: number
+    }>()
+    api.readTrainingDatasets.mockResolvedValue({
+      items: [DATASET, secondDataset],
+      page: 1,
+      page_size: 50,
+      total: 2,
+    })
+    api.listDatasetUsageChecks
+      .mockResolvedValueOnce({
+        items: [pendingUsageCheck],
+        page: 1,
+        page_size: 50,
+        total: 1,
+      })
+      .mockImplementationOnce(() => slowPreviousUsagePage.promise)
+      .mockResolvedValueOnce({
+        items: [{ ...pendingUsageCheck, dataset_id: secondDataset.id }],
+        page: 1,
+        page_size: 50,
+        total: 1,
+      })
+      .mockResolvedValueOnce({
+        items: [{ ...USAGE_CHECK, dataset_id: secondDataset.id }],
+        page: 1,
+        page_size: 50,
+        total: 1,
+      })
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+
+    try {
+      const { wrapper } = await mountDatasets()
+      await flushPromises()
+
+      await vi.advanceTimersByTimeAsync(2000)
+      await flushPromises()
+      expect(api.listDatasetUsageChecks).toHaveBeenCalledTimes(2)
+
+      const chooseSecond = wrapper.findAll('button').find((button) => button.text() === '查看成员')
+      expect(chooseSecond).toBeDefined()
+      await chooseSecond!.trigger('click')
+      await flushPromises()
+
+      const secondDatasetReadsBeforePolling = api.readDatasetMembers.mock.calls.filter(
+        ([datasetId]) => datasetId === secondDataset.id,
+      ).length
+      expect(secondDatasetReadsBeforePolling).toBe(1)
+
+      await vi.advanceTimersByTimeAsync(2000)
+      await flushPromises()
+
+      expect(
+        api.readDatasetMembers.mock.calls.filter(([datasetId]) => datasetId === secondDataset.id),
+      ).toHaveLength(2)
+
+      slowPreviousUsagePage.resolve({
+        items: [USAGE_CHECK],
+        page: 1,
+        page_size: 50,
+        total: 1,
+      })
+      await flushPromises()
       wrapper.unmount()
     } finally {
       vi.useRealTimers()

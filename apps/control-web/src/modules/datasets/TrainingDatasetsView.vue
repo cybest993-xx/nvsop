@@ -126,7 +126,7 @@ const activeJobId = ref('')
 const jobStatuses = ref<Record<string, string>>({})
 const jobFailures = ref<Record<string, string | null>>({})
 const pollingTimer = ref<number | null>(null)
-let pendingRefreshInFlight = false
+let pendingRefreshIdentity: { datasetId: string; memberGeneration: number } | null = null
 const annotationMemberId = ref('')
 const annotationContext = ref<AnnotationContextView | null>(null)
 const loadingAnnotationContext = ref(false)
@@ -554,6 +554,8 @@ function chooseDataset(): void {
   uploadRequest.value = null
   transferProgress.value = null
   transferPhase.value = 'idle'
+  members.value = []
+  memberTotal.value = 0
   memberPageNumber.value = 1
   void loadMembers(1)
   void loadUsageData()
@@ -1278,8 +1280,15 @@ function syncPolling(): void {
 async function refreshPendingMembers(): Promise<void> {
   const datasetId = activeDatasetId()
   const requestGeneration = memberRequestGeneration
-  if ((!mayView.value && !mayImport.value) || !datasetId || pendingRefreshInFlight) return
-  pendingRefreshInFlight = true
+  if ((!mayView.value && !mayImport.value) || !datasetId) return
+  if (
+    pendingRefreshIdentity?.datasetId === datasetId &&
+    pendingRefreshIdentity.memberGeneration === requestGeneration
+  ) {
+    return
+  }
+  const refreshIdentity = { datasetId, memberGeneration: requestGeneration }
+  pendingRefreshIdentity = refreshIdentity
   try {
     const jobIds = Array.from(
       new Set(
@@ -1334,7 +1343,7 @@ async function refreshPendingMembers(): Promise<void> {
     }
     recordFailure(error)
   } finally {
-    pendingRefreshInFlight = false
+    if (pendingRefreshIdentity === refreshIdentity) pendingRefreshIdentity = null
   }
 }
 

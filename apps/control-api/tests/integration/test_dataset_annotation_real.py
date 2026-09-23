@@ -188,6 +188,7 @@ async def _run_validation(engine: Engine, settings: Settings, job_id: UUID) -> N
             "settings": settings,
             "session_factory": session_factory(engine),
             "dataset_runtime": _ValidationRuntime(engine, settings),
+            "blocking_job_slots": asyncio.Semaphore(1),
         },
         str(job_id),
     )

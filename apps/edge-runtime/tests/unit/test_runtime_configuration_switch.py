@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 from collections.abc import Callable
-from threading import Event
+from threading import Event, Thread
 from time import sleep
 from typing import cast
 
@@ -12,6 +12,7 @@ from edge_runtime.configuration_sync import ConfigurationSynchronizer, Configura
 from edge_runtime.connectors.runtime import ConnectorRuntimeSet
 from edge_runtime.local_state.store import LocalState
 from edge_runtime.media import MediaRuntime
+from edge_runtime.reporting import HostReportReconciler
 from edge_runtime.runtime import (
     AutonomousRuntime,
     AutonomousStation,
@@ -120,7 +121,123 @@ class _Synchronizer:
         self.rejection_count += 1
 
 
+class _BlockingReportReconciler:
+    def __init__(self, *, release: Event) -> None:
+        self.started = Event()
+        self.release = release
+        self.limits: list[int | None] = []
+
+    def flush(
+        self, *, now: object, reported_at: str, limit: int | None = None
+    ) -> tuple[object, ...]:
+        del now, reported_at
+        self.limits.append(limit)
+        self.started.set()
+        if not self.release.wait(0.5):
+            raise RuntimeError("report flush was not released")
+        return ()
+
+
+class _CountingReportReconciler:
+    def __init__(self) -> None:
+        self.first = Event()
+        self.second = Event()
+        self.calls = 0
+
+    def flush(
+        self, *, now: object, reported_at: str, limit: int | None = None
+    ) -> tuple[object, ...]:
+        del now, reported_at, limit
+        self.calls += 1
+        if self.calls == 1:
+            self.first.set()
+        elif self.calls == 2:
+            self.second.set()
+        return ()
+
+
+class _ObservedSynchronizer:
+    def __init__(self) -> None:
+        self.called = Event()
+
+    def synchronize(self, *, observed_at: float) -> ConfigurationSyncResult:
+        del observed_at
+        self.called.set()
+        return ConfigurationSyncResult(candidate=None, confirmed=None, failure=None)
+
+
 class RuntimeConfigurationSwitchTest(unittest.TestCase):
+    def test_blocked_report_flush_does_not_block_configuration_and_is_bounded(self) -> None:
+        release = Event()
+        reporter = _BlockingReportReconciler(release=release)
+        synchronizer = _ObservedSynchronizer()
+        stop = Event()
+        state = _State()
+        errors: list[BaseException] = []
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            stations=(),
+            state=cast(LocalState, state),
+            report_reconciler=cast(HostReportReconciler, reporter),
+            configuration_sync=cast(ConfigurationSynchronizer, synchronizer),
+            maintenance_interval=30.0,
+        )
+
+        def run_runtime() -> None:
+            try:
+                runtime.run_forever(should_stop=stop.is_set)
+            except BaseException as error:
+                errors.append(error)
+
+        thread = Thread(target=run_runtime)
+        thread.start()
+        try:
+            self.assertTrue(reporter.started.wait(0.2))
+            self.assertTrue(synchronizer.called.wait(0.2))
+            self.assertEqual(reporter.limits, [32])
+        finally:
+            stop.set()
+            release.set()
+            thread.join(0.5)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertTrue(state.closed)
+
+    def test_report_wake_interrupts_retry_wait_and_stop_terminates_loop(self) -> None:
+        reporter = _CountingReportReconciler()
+        report_wake = Event()
+        stop = Event()
+        state = _State()
+        errors: list[BaseException] = []
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            stations=(),
+            state=cast(LocalState, state),
+            report_reconciler=cast(HostReportReconciler, reporter),
+            report_wake=report_wake,
+        )
+
+        def run_runtime() -> None:
+            try:
+                runtime.run_forever(should_stop=stop.is_set)
+            except BaseException as error:
+                errors.append(error)
+
+        thread = Thread(target=run_runtime)
+        thread.start()
+        try:
+            self.assertTrue(reporter.first.wait(0.2))
+            report_wake.set()
+            self.assertTrue(reporter.second.wait(0.2))
+        finally:
+            stop.set()
+            thread.join(0.5)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertTrue(state.closed)
+
     def test_close_finishes_runtime_cleanup_before_propagating_station_failure(self) -> None:
         failing = _Station(close_error=RuntimeError("synthetic station close failure"))
         later = _Station()

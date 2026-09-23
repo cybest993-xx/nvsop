@@ -51,6 +51,8 @@ MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU �
 
 **【已定目标】上报对账按主机而不是按当前工位对象组织。** 主机级 reconciler 从本机 durable backlog 跨工位取待办，因此工位从当前配置移除、runtime 重建或进程重启后，历史 pending 仍可继续发送；某一条待办的编码、兼容协商或网络失败只更新该待办的失败状态，不得阻塞同轮其他工位。发送所有权属于主机 durable backlog，不绑定当前工位对象的生命周期。
 
+运行时把上报对账与配置同步作为两个独立生命周期：结构化事实完成 SQLite 提交后只唤醒主机级 reporter，reporter 以有界批次排空 backlog 并独立重试；配置同步继续按自己的周期推进，停机信号同时唤醒并终止两者。该拆分属于 Edge 组合根的调度职责，不抽象成通用 scheduler。
+
 这个 reconciler 只承载发往 Center `monitor` 的小型结构化事实。证据上传保留独立的大字节/对象确认生命周期，配置同步保留 Center→Edge candidate/confirmed 生命周期，物理处置保留 `local_disposal` 幂等账本与本地执行路径；不引入通用事件总线、Event Sourcing 或 `kind + payload` 万能 outbox。
 
 **对账语义**：上报按事件 id 幂等 upsert，至少一次；处置记录带幂等键，恢复后不重复执行已执行的动作；证据上传失败可重试且不删除本地唯一副本。历史判定的事件时配置与 backend provenance 跟 decision/outbox 同事务冻结：多 backend 工位按实例累计实际参与输入的 backend/model 集合，重启和计时器结案沿用已持久化来源，不从当前配置选择任意 backend。带 historical proof 的判定走严格 report v2；发送前用主机签名确认冻结的旧 configuration，Center 只有在该 revision/effective digest 确实曾由自己签发时才建立不可变历史 assignment 并明确协商 v2。旧 Center 不支持握手时保留 outbox，不降级丢证明。其他尚未版本化的机器协议仍受 ADR-0003 的通用 runtime/version handshake 要求约束（[ADR-0003](../../adr/0003-api-v1-is-a-fixed-prefix.md)）。

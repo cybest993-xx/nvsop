@@ -448,6 +448,7 @@ class AutonomousRuntime:
         state: LocalState,
         media: MediaRuntime | None = None,
         report_reconciler: HostReportReconciler | None = None,
+        report_wake: threading.Event | None = None,
         configuration_sync: ConfigurationSynchronizer | None = None,
         maintenance_interval: float = 30.0,
         configuration: RuntimeConfiguration | None = None,
@@ -463,6 +464,7 @@ class AutonomousRuntime:
         self._state = state
         self._media = media
         self._report_reconciler = report_reconciler
+        self._report_wake = report_wake or threading.Event()
         self._configuration_sync = configuration_sync
         self._maintenance_interval = maintenance_interval
         self._configuration = configuration
@@ -563,6 +565,7 @@ class AutonomousRuntime:
                 except BaseException as error:
                     current_errors.append(error)
                     current_stop.set()
+                    self._report_wake.set()
 
             def run_media(current_stop: threading.Event = cycle_stop) -> None:
                 """让媒体故障重试, 不把媒体启动放到判定线程的前置路径。"""
@@ -575,17 +578,18 @@ class AutonomousRuntime:
                     except BaseException:
                         current_stop.wait(0.5)
 
-            def run_maintenance(current_stop: threading.Event = cycle_stop) -> None:
-                """重试中心辅助工作,但不把它放进判定进度。"""
-                nonlocal pending_bundle, pending_configuration, pending_confirmed_at
+            def run_reports(current_stop: threading.Event = cycle_stop) -> None:
+                """有界排空结构化事实; durable pending 可独立唤醒此循环。"""
                 while not stop_requested():
+                    self._report_wake.clear()
                     now = HostInstant(monotonic())
                     reported_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
                     if self._report_reconciler is not None:
-                        # 上报失败不能阻塞判定,但必须留下可检索的诊断并等待下一轮重试。
                         try:
                             attempts = self._report_reconciler.flush(
-                                now=now, reported_at=reported_at
+                                now=now,
+                                reported_at=reported_at,
+                                limit=_REPORT_BATCH_LIMIT,
                             )
                         except (OSError, sqlite3.Error, ValueError) as error:
                             _logger.warning(
@@ -601,6 +605,15 @@ class AutonomousRuntime:
                                     "edge.report_flush.retry_pending failed_count=%s",
                                     len(failed_attempts),
                                 )
+                    if stop_requested():
+                        return
+                    self._report_wake.wait(_REPORT_RETRY_INTERVAL_SECONDS)
+
+            def run_configuration(current_stop: threading.Event = cycle_stop) -> None:
+                """独立同步配置,不等待历史上报积压。"""
+                nonlocal pending_bundle, pending_configuration, pending_confirmed_at
+                while not stop_requested():
+                    now = HostInstant(monotonic())
                     if self._configuration_sync is not None:
                         try:
                             result = self._configuration_sync.synchronize(observed_at=now.seconds)
@@ -673,6 +686,7 @@ class AutonomousRuntime:
                                         pending_configuration = runtime_configuration
                                         pending_confirmed_at = now.seconds
                                         current_stop.set()
+                                        self._report_wake.set()
                     current_stop.wait(self._maintenance_interval)
 
             with self._lock:
@@ -708,12 +722,24 @@ class AutonomousRuntime:
                     [
                         threading.Thread(
                             target=run,
-                            args=(run_maintenance,),
-                            name="edge-maintenance",
+                            args=(run_reports,),
+                            name="edge-report-reconciler",
                             daemon=True,
                         )
                     ]
-                    if self._report_reconciler is not None or self._configuration_sync is not None
+                    if self._report_reconciler is not None
+                    else []
+                ),
+                *(
+                    [
+                        threading.Thread(
+                            target=run,
+                            args=(run_configuration,),
+                            name="edge-configuration-sync",
+                            daemon=True,
+                        )
+                    ]
+                    if self._configuration_sync is not None
                     else []
                 ),
             ]
@@ -722,6 +748,7 @@ class AutonomousRuntime:
             while not stop_requested() and any(thread.is_alive() for thread in threads):
                 sleep(0.05)
             cycle_stop.set()
+            self._report_wake.set()
             try:
                 self._close_stations(stations)
             except BaseException as error:
@@ -806,6 +833,8 @@ class AutonomousRuntime:
 
 
 _logger = logging.getLogger("edge_runtime")
+_REPORT_BATCH_LIMIT = 32
+_REPORT_RETRY_INTERVAL_SECONDS = 1.0
 
 
 def _log_write_attempt(event: WriteAttempted) -> None:
@@ -1080,7 +1109,11 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
     config = load_configuration(config_path, include_stations=True)
     if config.local_state_path is None:
         raise ValueError("local_state_path is required for autonomous runtime")
-    state = open_local_state(str(config.local_state_path))
+    report_wake = threading.Event()
+    state = open_local_state(
+        str(config.local_state_path),
+        notify_report_pending=report_wake.set,
+    )
     composition: RuntimeComposition | None = None
 
     def resolve_confirmed(bundle: ConfigurationBundle) -> RuntimeConfiguration:
@@ -1168,6 +1201,7 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
             state=state,
             media=MediaRuntime(config.media) if config.media is not None else None,
             report_reconciler=composition.report_reconciler,
+            report_wake=report_wake,
             configuration_sync=configuration_sync,
             maintenance_interval=config.command_poll_interval,
             configuration=composition.configuration,

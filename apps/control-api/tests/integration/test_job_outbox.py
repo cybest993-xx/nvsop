@@ -302,7 +302,11 @@ def test_unstarted_delivery_returns_to_pending_outbox(engine: Engine) -> None:
         with session_factory(engine).begin() as session:
             repository = PostgresJobRepository(session)
             repository.add(job)
-            repository.mark_enqueued(job_id=job.id, now=now + timedelta(seconds=1))
+            assert repository.mark_enqueued(
+                job_id=job.id,
+                expected_updated_at=now,
+                now=now + timedelta(seconds=1),
+            )
 
         with session_factory(engine).begin() as session:
             restored = PostgresJobRepository(session).restore_unstarted(
@@ -319,6 +323,66 @@ def test_unstarted_delivery_returns_to_pending_outbox(engine: Engine) -> None:
         )
         assert facts[0:2] == ("pending", "pending")
         assert facts[2] == "worker cancelled before acquiring execution slot"
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM job_application_job WHERE id = :job_id"),
+                {"job_id": job.id},
+            )
+
+
+def test_late_enqueue_ack_cannot_undo_unstarted_recovery(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 9, 9, 1, 0, tzinfo=UTC)
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_VALIDATION,
+        status=JobStatus.PENDING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=now,
+        updated_at=now,
+        failure_code=None,
+    )
+    with session_factory(engine).begin() as session:
+        PostgresJobRepository(session).add(job)
+
+    recovered_at = now + timedelta(seconds=1)
+
+    class RecoverBeforeAckPool:
+        async def enqueue_job(self, function: str, *args: str, **kwargs: str) -> object:
+            assert function == "validate_dataset_job"
+            assert args == (str(job.id),)
+            assert kwargs == {"_job_id": str(job.id)}
+            with session_factory(engine).begin() as session:
+                assert PostgresJobRepository(session).restore_unstarted(
+                    job_id=job.id,
+                    now=recovered_at,
+                )
+            return object()
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_create_pool(_: RedisSettings) -> RecoverBeforeAckPool:
+        return RecoverBeforeAckPool()
+
+    monkeypatch.setattr(dispatcher_module, "create_pool", fake_create_pool)
+    try:
+        dispatcher = ArqJobDispatcher(
+            RedisSettings(),
+            session_factory=session_factory(engine),
+        )
+        asyncio.run(dispatcher.dispatch_async(job.id))
+
+        assert row(
+            engine,
+            "SELECT status, outbox_status, last_dispatch_error "
+            "FROM job_application_job WHERE id = :job_id",
+            job_id=job.id,
+        ) == ("pending", "pending", "worker cancelled before acquiring execution slot")
     finally:
         with engine.begin() as connection:
             connection.execute(
@@ -518,10 +582,18 @@ def test_stale_running_job_returns_to_pending_and_pending_scan_keeps_fresh_job_r
             repository = PostgresJobRepository(session)
             repository.add(application_job(stale_id, stale_at))
             repository.add(application_job(fresh_id, fresh_at))
+            assert repository.mark_enqueued(
+                job_id=stale_id,
+                expected_updated_at=stale_at,
+                now=stale_at,
+            )
+            assert repository.mark_enqueued(
+                job_id=fresh_id,
+                expected_updated_at=fresh_at,
+                now=fresh_at,
+            )
             assert repository.mark_running(job_id=stale_id, now=stale_at) is not None
             assert repository.mark_running(job_id=fresh_id, now=fresh_at) is not None
-            repository.mark_enqueued(job_id=stale_id, now=stale_at)
-            repository.mark_enqueued(job_id=fresh_id, now=fresh_at)
 
         with session_factory(engine)() as session:
             recovered = PostgresJobRepository(session).recover_stale_running(
@@ -555,7 +627,11 @@ def test_stale_running_job_returns_to_pending_and_pending_scan_keeps_fresh_job_r
         renewed_at = now + timedelta(seconds=2)
         with session_factory(engine)() as session:
             repository = PostgresJobRepository(session)
-            repository.mark_enqueued(job_id=stale_id, now=now + timedelta(seconds=1))
+            assert repository.mark_enqueued(
+                job_id=stale_id,
+                expected_updated_at=now,
+                now=now + timedelta(seconds=1),
+            )
             assert repository.mark_running(job_id=stale_id, now=renewed_at) is not None
             assert not repository.finish(
                 job_id=stale_id,

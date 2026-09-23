@@ -782,6 +782,130 @@ def test_annotation_preparation_lease_loss_discards_unpublished_backend_copy(
     assert state.sessions[-1].rollbacks == 1
 
 
+def test_annotation_copy_commit_unknown_preserves_backend_copy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _WorkerState()
+    discarded: list[str] = []
+    split_calls = 0
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_ANNOTATION,
+        status=JobStatus.RUNNING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=NOW,
+        updated_at=NOW,
+        failure_code=None,
+    )
+    target = SimpleNamespace(
+        job=job,
+        execution=SimpleNamespace(id=job.attempt_id, upstream_video_id=None),
+        submission=SimpleNamespace(segments=(), mode="segment"),
+    )
+
+    class CommitUnknownSession(_TrackingSession):
+        def __init__(self, state: _WorkerState, *, commit_unknown: bool) -> None:
+            super().__init__(state)
+            self._commit_unknown = commit_unknown
+
+        def commit(self) -> None:
+            super().commit()
+            if self._commit_unknown:
+                raise RuntimeError("commit result unknown")
+
+    class CommitUnknownFactory:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def __call__(self) -> _TrackingSession:
+            self.calls += 1
+            session = CommitUnknownSession(state, commit_unknown=self.calls == 3)
+            state.sessions.append(session)
+            return session
+
+    class FakeJobRepository:
+        def __init__(self, session: object) -> None:
+            assert isinstance(session, _TrackingSession)
+
+        def mark_running(self, *, job_id: UUID, now: datetime) -> ApplicationJob | None:
+            del now
+            assert job_id == job.id
+            return job
+
+        def finish(
+            self,
+            *,
+            job_id: UUID,
+            status: str,
+            failure_code: str | None,
+            now: datetime,
+            expected_updated_at: datetime,
+        ) -> bool:
+            del job_id, status, failure_code, now, expected_updated_at
+            raise AssertionError("commit-unknown copy must not reach final job publication")
+
+    class Backend:
+        def discard_prepared_video(self, *, data_id: str) -> None:
+            discarded.append(data_id)
+
+        def split_video(
+            self, *, video_id: object, segments: object, mode: object
+        ) -> tuple[dict[str, str], ...]:
+            nonlocal split_calls
+            del video_id, segments, mode
+            split_calls += 1
+            return ({"id": "unexpected"},)
+
+    backend = Backend()
+
+    class Runtime:
+        def repository(self, session: object) -> object:
+            assert isinstance(session, _TrackingSession)
+            return object()
+
+        def storage(self) -> object:
+            return object()
+
+        def backend(self) -> Backend:
+            return backend
+
+        def media_probe(self) -> object:
+            return object()
+
+    monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
+    monkeypatch.setattr(
+        worker_module,
+        "begin_annotation_execution",
+        lambda **kwargs: target,
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "prepare_annotation_execution_copy",
+        lambda **kwargs: SimpleNamespace(prepared=SimpleNamespace(data_id="commit-unknown-data")),
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "save_annotation_execution_copy",
+        lambda **kwargs: target,
+    )
+    ctx: Mapping[str, Any] = {
+        "session_factory": CommitUnknownFactory(),
+        "annotation_runtime": Runtime(),
+    }
+
+    worker_module._annotate_dataset_job(
+        ctx,
+        str(job.id),
+        worker_module._ExecutionFence(),
+    )
+
+    assert len(state.sessions) == 3
+    assert state.sessions[-1].commits == 1
+    assert discarded == []
+    assert split_calls == 0
+
+
 def test_cancelled_annotation_discards_late_backend_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

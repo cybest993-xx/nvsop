@@ -321,7 +321,9 @@ class PostgresJobRepository:
                 update(ApplicationJobRow)
                 .where(
                     ApplicationJobRow.id == job_id,
-                    ApplicationJobRow.status == JobStatus.ENQUEUED.value,
+                    ApplicationJobRow.status.in_(
+                        (JobStatus.PENDING.value, JobStatus.ENQUEUED.value)
+                    ),
                 )
                 .values(
                     status=JobStatus.PENDING.value,
@@ -339,21 +341,33 @@ class PostgresJobRepository:
         )
         return result.rowcount == 1
 
-    def mark_enqueued(self, *, job_id: UUID, now: datetime) -> None:
-        self._session.execute(
-            update(ApplicationJobRow)
-            .where(ApplicationJobRow.id == job_id)
-            .values(
-                status=case(
-                    (ApplicationJobRow.status == JobStatus.PENDING.value, JobStatus.ENQUEUED.value),
-                    else_=ApplicationJobRow.status,
-                ),
-                outbox_status="dispatched",
-                dispatch_attempts=ApplicationJobRow.dispatch_attempts + 1,
-                last_dispatch_error=None,
-                updated_at=now,
-            )
+    def mark_enqueued(
+        self,
+        *,
+        job_id: UUID,
+        expected_updated_at: datetime,
+        now: datetime,
+    ) -> bool:
+        """仅确认未被 worker/recovery 改写过的 pending 投递。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(ApplicationJobRow)
+                .where(
+                    ApplicationJobRow.id == job_id,
+                    ApplicationJobRow.status == JobStatus.PENDING.value,
+                    ApplicationJobRow.updated_at == expected_updated_at,
+                )
+                .values(
+                    status=JobStatus.ENQUEUED.value,
+                    outbox_status="dispatched",
+                    dispatch_attempts=ApplicationJobRow.dispatch_attempts + 1,
+                    last_dispatch_error=None,
+                    updated_at=now,
+                )
+            ),
         )
+        return result.rowcount == 1
 
     def record_dispatch_failure(self, *, job_id: UUID, error: str, now: datetime) -> None:
         self._session.execute(

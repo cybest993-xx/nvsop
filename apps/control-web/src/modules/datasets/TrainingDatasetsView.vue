@@ -126,6 +126,7 @@ const activeJobId = ref('')
 const jobStatuses = ref<Record<string, string>>({})
 const jobFailures = ref<Record<string, string | null>>({})
 const pollingTimer = ref<number | null>(null)
+let pendingRefreshInFlight = false
 const annotationMemberId = ref('')
 const annotationContext = ref<AnnotationContextView | null>(null)
 const loadingAnnotationContext = ref(false)
@@ -1277,7 +1278,8 @@ function syncPolling(): void {
 async function refreshPendingMembers(): Promise<void> {
   const datasetId = activeDatasetId()
   const requestGeneration = memberRequestGeneration
-  if ((!mayView.value && !mayImport.value) || !datasetId) return
+  if ((!mayView.value && !mayImport.value) || !datasetId || pendingRefreshInFlight) return
+  pendingRefreshInFlight = true
   try {
     const jobIds = Array.from(
       new Set(
@@ -1331,6 +1333,8 @@ async function refreshPendingMembers(): Promise<void> {
       clearPolling()
     }
     recordFailure(error)
+  } finally {
+    pendingRefreshInFlight = false
   }
 }
 

@@ -1145,6 +1145,55 @@ describe('训练数据集工作台', () => {
     }
   })
 
+  it('does not overlap a slow usage refresh with the next polling interval', async () => {
+    grant('dataset.dataset.view')
+    const pendingUsageCheck = { ...USAGE_CHECK, status: 'pending' }
+    const slowUsagePage = deferred<{
+      items: (typeof USAGE_CHECK)[]
+      page: number
+      page_size: number
+      total: number
+    }>()
+    api.listDatasetUsageChecks
+      .mockResolvedValueOnce({
+        items: [pendingUsageCheck],
+        page: 1,
+        page_size: 50,
+        total: 1,
+      })
+      .mockImplementationOnce(() => slowUsagePage.promise)
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+
+    try {
+      const { wrapper } = await mountDatasets()
+      await flushPromises()
+      expect(api.listDatasetUsageChecks).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(2000)
+      await flushPromises()
+      expect(api.listDatasetUsageChecks).toHaveBeenCalledTimes(2)
+
+      await vi.advanceTimersByTimeAsync(2000)
+      await flushPromises()
+      expect(api.listDatasetUsageChecks).toHaveBeenCalledTimes(2)
+
+      slowUsagePage.resolve({
+        items: [USAGE_CHECK],
+        page: 1,
+        page_size: 50,
+        total: 1,
+      })
+      await flushPromises()
+
+      await vi.advanceTimersByTimeAsync(4000)
+      await flushPromises()
+      expect(api.listDatasetUsageChecks).toHaveBeenCalledTimes(2)
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('polls the submitted job with import permission without reading dataset members', async () => {
     grant('dataset.dataset.import')
     api.requestVideoUpload.mockResolvedValue({

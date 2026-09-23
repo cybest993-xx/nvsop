@@ -1,4 +1,4 @@
-"""`dataset` HTTP、校验与标注运行时的依赖装配；组合根可替换这些 seam。"""
+"""`dataset` HTTP 与 worker runtime/executor 的依赖装配；组合根可替换这些 seam。"""
 
 from __future__ import annotations
 
@@ -10,9 +10,11 @@ from uuid import UUID
 
 from fastapi import Depends, Request
 from sqlalchemy.orm import Session as DatabaseSession
+from sqlalchemy.orm import sessionmaker
 
 from factory_sop.dataset.adapters.annotation import HttpAnnotationBackend
 from factory_sop.dataset.adapters.annotation_volume import LocalAnnotationDataVolume
+from factory_sop.dataset.adapters.artifact_execution import PostgresDatasetArtifactExecutor
 from factory_sop.dataset.adapters.ddm import NvidiaDdmAnnotationGenerator, NvidiaDdmReader
 from factory_sop.dataset.adapters.media import FfprobeMediaProbe
 from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
@@ -21,6 +23,7 @@ from factory_sop.dataset.adapters.vlm import NvidiaVlmReader
 from factory_sop.dataset.annotation import AnnotationBackend
 from factory_sop.dataset.api import (
     DatasetAnnotationRuntime,
+    DatasetArtifactExecutor,
     DatasetResourceLookup,
     DatasetUsageRuntime,
     DatasetValidationRuntime,
@@ -173,10 +176,6 @@ class _PostgresDatasetUsageRuntime:
         """创建真实 MinIO 对象存储客户端。"""
         return MinioObjectStorage.from_settings(self._settings)
 
-    def ddm_generator(self) -> NvidiaDdmAnnotationGenerator:
-        """创建复用 NVIDIA DDM 聚合函数的适配器。"""
-        return NvidiaDdmAnnotationGenerator()
-
     def ddm_reader(self) -> NvidiaDdmReader:
         """创建调用 NVIDIA DDM 训练读取器的适配器。"""
         return NvidiaDdmReader()
@@ -258,6 +257,19 @@ class _PostgresDatasetAnnotationRuntime:
 def annotation_runtime(settings: Settings) -> DatasetAnnotationRuntime:
     """构造标注 worker 使用的真实运行时。"""
     return _PostgresDatasetAnnotationRuntime(settings)
+
+
+def artifact_executor(
+    settings: Settings,
+    factory: sessionmaker[DatabaseSession],
+) -> DatasetArtifactExecutor:
+    """构造 dataset owner 的制品执行 seam。"""
+    generator = NvidiaDdmAnnotationGenerator()
+    return PostgresDatasetArtifactExecutor(
+        factory=factory,
+        storage_factory=lambda: MinioObjectStorage.from_settings(settings),
+        generate=generator.generate,
+    )
 
 
 def usage_runtime(settings: Settings) -> DatasetUsageRuntime:

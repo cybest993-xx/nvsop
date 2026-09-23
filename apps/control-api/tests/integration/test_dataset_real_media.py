@@ -43,7 +43,11 @@ from factory_sop.auth.authorization import Caller
 from factory_sop.auth.model import Role, User, UserStatus
 from factory_sop.auth.passwords import hash_password
 from factory_sop.auth.permissions import Permission
-from factory_sop.dataset.adapters.dependencies import usage_runtime, validation_runtime
+from factory_sop.dataset.adapters.dependencies import (
+    artifact_executor,
+    usage_runtime,
+    validation_runtime,
+)
 from factory_sop.dataset.adapters.media import FfprobeMediaProbe
 from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
 from factory_sop.dataset.adapters.routes import ArtifactView, UsageCheckView
@@ -306,12 +310,14 @@ async def _run_annotation_arq_worker(
 
 
 async def _run_usage_arq_worker(engine: Engine, settings: Settings) -> None:
+    factory = session_factory(engine)
     dispatcher = ArqJobDispatcher.from_settings(
         settings,
-        session_factory=session_factory(engine),
+        session_factory=factory,
     )
     assert isinstance(dispatcher, ArqJobDispatcher)
     runtime = usage_runtime(settings)
+    executor = artifact_executor(settings, factory)
     test_runtime = cast(Any, runtime)
     if not test_runtime.ddm_reader().available():
         test_runtime.ddm_reader = lambda: _IntegrationDdmReader()
@@ -321,8 +327,9 @@ async def _run_usage_arq_worker(engine: Engine, settings: Settings) -> None:
         redis_settings=dispatcher.redis_settings,
         ctx={
             "settings": settings,
-            "session_factory": session_factory(engine),
+            "session_factory": factory,
             "usage_runtime": runtime,
+            "artifact_executor": executor,
         },
         burst=True,
         max_burst_jobs=20,
@@ -880,8 +887,17 @@ def test_real_usage_check_and_ddm_artifact_use_postgres_minio_and_workers(
             assert artifact_response.status_code == 202, artifact_response.text
             artifact_body = artifact_response.json()
             artifact_id = UUID(artifact_body["artifact"]["id"])
-            _requeue_stale_job(engine, settings, UUID(artifact_body["job"]["id"]))
+            artifact_job_id = UUID(artifact_body["job"]["id"])
+            _requeue_stale_job(engine, settings, artifact_job_id)
             asyncio.run(_run_usage_arq_worker(engine, settings))
+            assert (
+                row(
+                    engine,
+                    "SELECT status FROM job_application_job WHERE id = :job_id",
+                    job_id=artifact_job_id,
+                )[0]
+                == "succeeded"
+            )
             artifact_read = client.get(f"{DATASETS}/{dataset_id}/artifacts/{artifact_id}")
             assert artifact_read.status_code == 200, artifact_read.text
             artifact = artifact_read.json()

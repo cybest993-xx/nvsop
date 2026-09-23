@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -64,10 +64,17 @@ class HostReportReconciler:
         self._transport = transport
 
     def flush(
-        self, *, now: HostInstant, reported_at: str, limit: int | None = None
+        self,
+        *,
+        now: HostInstant,
+        reported_at: str,
+        limit: int | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> tuple[ReportAttempt, ...]:
         attempts: list[ReportAttempt] = []
         for queue_id in self._reports.pending_ids(limit=limit):
+            if should_stop is not None and should_stop():
+                break
             try:
                 pending = self._reports.pending_item(queue_id)
             except Exception as error:

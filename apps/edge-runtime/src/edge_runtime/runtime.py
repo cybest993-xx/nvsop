@@ -488,36 +488,30 @@ class _ReportLifecycleRunner:
     def _run(self) -> None:
         try:
             while not self._stop_requested():
-                for _ in range(_REPORT_WORK_BUDGET):
-                    if self._stop_requested():
-                        return
-                    with self._runtime._lock:
-                        reconciler = self._runtime._report_reconciler
-                    if reconciler is None:
-                        break
+                with self._runtime._lock:
+                    reconciler = self._runtime._report_reconciler
+                if reconciler is not None:
                     now = HostInstant(monotonic())
                     reported_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
                     try:
                         attempts = reconciler.flush(
                             now=now,
                             reported_at=reported_at,
-                            limit=1,
+                            limit=_REPORT_WORK_BUDGET,
+                            should_stop=self._stop_requested,
                         )
                     except (OSError, sqlite3.Error, ValueError) as error:
                         _logger.warning(
                             "edge.report_flush.failed error_type=%s",
                             type(error).__name__,
                         )
-                        break
-                    if not attempts:
-                        break
-                    failed_attempts = tuple(attempt for attempt in attempts if not attempt.sent)
-                    if failed_attempts:
-                        _logger.warning(
-                            "edge.report_flush.retry_pending failed_count=%s",
-                            len(failed_attempts),
-                        )
-                        break
+                    else:
+                        failed_attempts = tuple(attempt for attempt in attempts if not attempt.sent)
+                        if failed_attempts:
+                            _logger.warning(
+                                "edge.report_flush.retry_pending failed_count=%s",
+                                len(failed_attempts),
+                            )
                 if self._stop_requested():
                     return
                 self._runtime._report_wake.wait(_REPORT_RETRY_INTERVAL_SECONDS)

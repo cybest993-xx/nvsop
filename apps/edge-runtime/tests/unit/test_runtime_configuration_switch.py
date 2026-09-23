@@ -130,9 +130,14 @@ class _BlockingReportReconciler:
         self.limits: list[int | None] = []
 
     def flush(
-        self, *, now: object, reported_at: str, limit: int | None = None
+        self,
+        *,
+        now: object,
+        reported_at: str,
+        limit: int | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> tuple[object, ...]:
-        del now, reported_at
+        del now, reported_at, should_stop
         self.limits.append(limit)
         self.started.set()
         if not self.release.wait(0.5):
@@ -147,9 +152,14 @@ class _CountingReportReconciler:
         self.calls = 0
 
     def flush(
-        self, *, now: object, reported_at: str, limit: int | None = None
+        self,
+        *,
+        now: object,
+        reported_at: str,
+        limit: int | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> tuple[object, ...]:
-        del now, reported_at, limit
+        del now, reported_at, limit, should_stop
         self.calls += 1
         if self.calls == 1:
             self.first.set()
@@ -207,7 +217,7 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
         try:
             self.assertTrue(reporter.started.wait(0.2))
             self.assertTrue(activated.wait(0.2))
-            self.assertEqual(reporter.limits, [1])
+            self.assertEqual(reporter.limits, [32])
             self.assertTrue(synchronizer.confirmation.wait(0.2))
         finally:
             stop.set()

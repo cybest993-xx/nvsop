@@ -934,6 +934,56 @@ class HistoricalReportContextTest(unittest.TestCase):
         self.assertEqual(len(stations[0].pending_reports()), 1)
         self.assertEqual(stations[1].pending_reports(), ())
 
+    def test_host_reconciler_stops_bounded_batch_between_report_items(self) -> None:
+        context = self.context(revision=7, backend_id="backend-old")
+        other_context = replace(context, station_id=OTHER_STATION)
+        state = open_local_state(":memory:")
+        self.addCleanup(state.close)
+        stations = (
+            state.station(STATION, report_context=context),
+            state.station(OTHER_STATION, report_context=other_context),
+        )
+        for station, report_context in zip(stations, (context, other_context), strict=True):
+            driver = supervisor(opening_state(end_signals=("end-a", "end-b")), FakeClock(), station)
+            provenance = report_context.backends[0]
+            driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=provenance)
+            driver.receive(action("end-b", at=ANCHOR + 1.0), report_provenance=provenance)
+
+        stop = Event()
+
+        class Transport:
+            def __init__(self) -> None:
+                self.attempted_decisions: list[str] = []
+
+            def send_decision(
+                self,
+                report: ReportedDecision,
+                *,
+                configuration: ConfigurationBundle | None,
+            ) -> None:
+                del configuration
+                self.attempted_decisions.append(report.station_id)
+                stop.set()
+
+            def send_instance(
+                self, report: object, *, configuration: ConfigurationBundle | None
+            ) -> None:
+                del report, configuration
+
+        transport = Transport()
+        attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(
+            now=HostInstant(ANCHOR + 2.0),
+            reported_at="2026-09-16T00:00:00Z",
+            limit=32,
+            should_stop=stop.is_set,
+        )
+
+        self.assertEqual(transport.attempted_decisions, [STATION])
+        self.assertEqual(len(attempts), 1)
+        self.assertTrue(attempts[0].sent)
+        self.assertEqual(stations[0].pending_reports(), ())
+        self.assertEqual(len(stations[1].pending_reports()), 1)
+
     def test_host_reconciler_continues_after_one_station_report_cannot_decode(self) -> None:
         context = self.context(revision=7, backend_id="backend-old")
         other_context = replace(context, station_id=OTHER_STATION)

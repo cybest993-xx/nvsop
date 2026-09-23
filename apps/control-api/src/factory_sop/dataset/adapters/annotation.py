@@ -85,11 +85,14 @@ class HttpAnnotationBackend:
                 headers={"Connection": "close"},
             )
             response = connection.getresponse()
-            response.read()
+            body = response.read()
             if not 200 <= response.status < 300:
                 raise AnnotationBackendExecutionError(
                     f"标注基座清理工作副本失败（HTTP {response.status}）"
                 )
+            result = _json_object(body)
+            if result.get("files_deleted") != 1:
+                raise AnnotationBackendExecutionError("标注基座未确认工作副本文件删除")
         except AnnotationBackendExecutionError:
             raise
         except (OSError, http.client.HTTPException) as error:

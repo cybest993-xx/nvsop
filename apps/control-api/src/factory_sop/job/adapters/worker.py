@@ -553,8 +553,8 @@ def _prepare_annotation_context_job(
         if not _commit_if_active(session, fence):
             return
 
-    backend = runtime.backend()
     try:
+        backend = runtime.backend()
         prepared = prepare_annotation_context_copy(
             context=target.context,
             member=target.member,
@@ -779,57 +779,58 @@ def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
         if not _commit_if_active(session, fence):
             return
 
-    backend = runtime.backend()
     prepared = None
-    copy_persisted = False
+    copy_persisted = target.execution.upstream_video_id is not None
     try:
-        prepared = prepare_annotation_execution_copy(
-            target=target,
-            storage=runtime.storage(),
-            backend=backend,
-            media_probe=runtime.media_probe(),
-        )
-        if fence.cancelled:
-            try:
-                backend.discard_prepared_video(data_id=prepared.prepared.data_id)
-            except Exception:
-                _logger.exception(
-                    "job.dataset_annotation.cancel_cleanup_failed",
-                    data_id=prepared.prepared.data_id,
-                )
-            return
-        with factory() as session:
-            datasets = runtime.repository(session)
-            target = save_annotation_execution_copy(
+        backend = runtime.backend()
+        if not copy_persisted:
+            prepared = prepare_annotation_execution_copy(
                 target=target,
-                prepared=prepared,
-                now=datetime.now(UTC),
-                datasets=datasets,
+                storage=runtime.storage(),
+                backend=backend,
+                media_probe=runtime.media_probe(),
             )
-            try:
-                if not _commit_if_active(session, fence):
-                    try:
-                        backend.discard_prepared_video(data_id=prepared.prepared.data_id)
-                    except Exception:
-                        _logger.exception(
-                            "job.dataset_annotation.cancel_cleanup_failed",
-                            data_id=prepared.prepared.data_id,
-                        )
-                    return
-            except Exception:
-                _logger.exception(
-                    "job.dataset_annotation.copy_commit_unknown",
-                    job_id=str(running.id),
-                    execution_id=str(target.execution.id),
-                    data_id=prepared.prepared.data_id,
-                    result="commit_unknown",
-                )
+            if fence.cancelled:
+                try:
+                    backend.discard_prepared_video(data_id=prepared.prepared.data_id)
+                except Exception:
+                    _logger.exception(
+                        "job.dataset_annotation.cancel_cleanup_failed",
+                        data_id=prepared.prepared.data_id,
+                    )
                 return
-            copy_persisted = True
+            with factory() as session:
+                datasets = runtime.repository(session)
+                target = save_annotation_execution_copy(
+                    target=target,
+                    prepared=prepared,
+                    now=datetime.now(UTC),
+                    datasets=datasets,
+                )
+                try:
+                    if not _commit_if_active(session, fence):
+                        try:
+                            backend.discard_prepared_video(data_id=prepared.prepared.data_id)
+                        except Exception:
+                            _logger.exception(
+                                "job.dataset_annotation.cancel_cleanup_failed",
+                                data_id=prepared.prepared.data_id,
+                            )
+                        return
+                except Exception:
+                    _logger.exception(
+                        "job.dataset_annotation.copy_commit_unknown",
+                        job_id=str(running.id),
+                        execution_id=str(target.execution.id),
+                        data_id=prepared.prepared.data_id,
+                        result="commit_unknown",
+                    )
+                    return
+                copy_persisted = True
 
         if target.execution.upstream_video_id is None:
             raise AnnotationBackendExecutionError("标注执行没有基座视频身份")
-        clips = runtime.backend().split_video(
+        clips = backend.split_video(
             video_id=target.execution.upstream_video_id,
             segments=target.submission.segments,
             mode=target.submission.mode,

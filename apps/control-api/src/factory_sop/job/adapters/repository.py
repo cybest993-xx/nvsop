@@ -313,6 +313,32 @@ class PostgresJobRepository:
             return None
         return self.by_id(job_id)
 
+    def restore_unstarted(self, *, job_id: UUID, now: datetime) -> bool:
+        """仅恢复尚未领取的已投递任务，避免 worker admission 超时后永久搁置。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(ApplicationJobRow)
+                .where(
+                    ApplicationJobRow.id == job_id,
+                    ApplicationJobRow.status == JobStatus.ENQUEUED.value,
+                )
+                .values(
+                    status=JobStatus.PENDING.value,
+                    outbox_status="pending",
+                    updated_at=now,
+                    last_dispatch_error=case(
+                        (
+                            ApplicationJobRow.last_dispatch_error.is_(None),
+                            "worker cancelled before acquiring execution slot",
+                        ),
+                        else_=ApplicationJobRow.last_dispatch_error,
+                    ),
+                )
+            ),
+        )
+        return result.rowcount == 1
+
     def mark_enqueued(self, *, job_id: UUID, now: datetime) -> None:
         self._session.execute(
             update(ApplicationJobRow)

@@ -74,8 +74,9 @@ class ArqJobDispatcher:
     async def dispatch_async(self, job_id: UUID) -> None:
         """异步投递一个已提交任务；失败时保持 outbox pending。"""
         try:
-            await self._dispatch(job_id)
-            self._record_success(job_id)
+            accepted = await self._dispatch(job_id)
+            if accepted:
+                self._record_success(job_id)
         except Exception as error:
             self._record_failure(job_id, error)
             _logger.warning(
@@ -94,11 +95,12 @@ class ArqJobDispatcher:
         with ThreadPoolExecutor(max_workers=1) as executor:
             executor.submit(lambda: asyncio.run(self.dispatch_async(job_id))).result()
 
-    async def _dispatch(self, job_id: UUID) -> None:
+    async def _dispatch(self, job_id: UUID) -> bool:
         function = self._worker_function(job_id)
         pool = await create_pool(self._settings)
         try:
-            await pool.enqueue_job(function, str(job_id), _job_id=str(job_id))
+            job = await pool.enqueue_job(function, str(job_id), _job_id=str(job_id))
+            return job is not None
         finally:
             await pool.close()
 

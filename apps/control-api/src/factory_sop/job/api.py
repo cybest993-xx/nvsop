@@ -110,6 +110,10 @@ class JobRepository(Protocol):
         """以条件更新领取任务；重复投递只允许一个执行者前进。"""
         ...
 
+    def restore_unstarted(self, *, job_id: UUID, now: datetime) -> bool:
+        """把尚未进入业务执行的已投递任务恢复为待投递。"""
+        ...
+
     def mark_enqueued(self, *, job_id: UUID, now: datetime) -> None:
         """记录 outbox 已投递，不改变业务资源结果。"""
         ...

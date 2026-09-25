@@ -761,7 +761,7 @@ def validate_video_upload(
                     actual_sha256=actual_sha256,
                 )
 
-            final_object_key = _final_object_key(attempt)
+            final_object_key = _final_object_key(attempt, job=job)
             try:
                 stream.seek(0)
                 with storage.writing(object_key=final_object_key) as finalized_sink:
@@ -1011,11 +1011,12 @@ def _object_key(*, dataset_id: UUID, member_id: UUID, attempt_id: UUID) -> str:
     return f"training-datasets/{dataset_id}/members/{member_id}/attempts/{attempt_id}/video"
 
 
-def _final_object_key(attempt: UploadAttempt) -> str:
-    """生成按上传尝试隔离、只有服务端会写入的定稿键。"""
+def _final_object_key(attempt: UploadAttempt, *, job: ApplicationJob) -> str:
+    """按 PostgreSQL 领取 generation 隔离定稿候选，避免迟到 worker 删除获胜结果。"""
+    generation = job.updated_at.isoformat(timespec="microseconds")
     return (
         f"training-datasets/{attempt.dataset_id}/members/{attempt.member_id}/"
-        f"attempts/{attempt.id}/registered-video"
+        f"attempts/{attempt.id}/generations/{generation}/registered-video"
     )
 
 

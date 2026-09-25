@@ -33,4 +33,4 @@ State risk, test reuse/additions and intended checks in at most three lines. Imp
 
 Use the smallest affected checks while iterating; final code uses `make check`, documentation-only work `make check-docs`. Repository-policy and instruction changes still require the workflow's independent read-only review. One main session owns repairs and completion.
 
-Retain every acceptance criterion and report actual evidence/gaps. Stop optional tests/refactors once acceptance and required evidence are complete. Committed or pushed does not mean merge-ready; publication, merge and Issue closure require authorization.
+Retain every acceptance criterion and report actual evidence/gaps. Stop optional tests/refactors once acceptance and required evidence are complete. Committed or pushed does not mean merge-ready; downstream stages follow the task plan and gates defined by workflow.md without repeated stage confirmation.

@@ -2,6 +2,8 @@
 
 Status: **normative**. This is the home for task isolation, verification, review, PR/CI, Codex review, merge and local cleanup. Read the relevant section for the current step; product acceptance belongs to [the roadmap](../design/solution-and-roadmap.md), and Issue state to [issues.md](issues.md). The [Makefile](../../Makefile), [blocking CI workflow](../../.github/workflows/blocking-ci.yml) and [versioned hooks](../../scripts/githooks/) own executable repository behavior.
 
+At task start, derive the planned stages and terminal stage from the user's goal: implementation, review, publication, delivery observation/repair, merge, Issue closure and cleanup as applicable. This plan defines task scope; it is not an approval gate. For an end-to-end delivery request, continue through every required stage automatically. For a deliberately bounded request, stop at its stated terminal stage. If the goal does not express end-to-end delivery intent or another downstream terminal stage, default to completing the explicitly requested work with its required validation/review; do not infer publication, merge, Issue closure or cleanup. Within an active task/session, continue planned execution and required observation without waiting for another user `continue`, publication, merge or closure confirmation; stop only at the planned terminal stage or a real blocker. When [persistent continuity](#persistent-continuity) applies, transcribe the same task goal, planned stages and terminal stage into the handoff. Repository evidence, review, CI, server-side rules and exact-candidate checks remain mandatory gates: an unmet gate stops automatic progression and is reported as a blocker.
+
 ## 1. Establish the task workspace
 
 Inspect the actual branch, HEAD, worktree, existing changes and complete acceptance criteria. Continue an existing task in its existing worktree. New work starts from the accepted fetched `main` tip on one `agent/<agent-id>/<task-slug>` branch in its own worktree. Both variable parts start with a lowercase ASCII letter or digit and contain only lowercase letters, digits, `.`, `_` or `-`, with no further `/`.
@@ -80,7 +82,7 @@ The [Makefile](../../Makefile) is the local/CI command interface. During iterati
 | `make ci-plan BASE=<sha> HEAD=<sha>` | Read-only report of the same CI scope selector used by GitHub Actions |
 | `make ci-lint` | Offline GitHub Actions static lint after one explicit `make ci-tools` install of the pinned binary |
 | `make local-clean` | Delete only declared reproducible local artifacts; preserve `.nvsop/dev-main`, secrets and unknown ignored state |
-| `make pr-check PR=<number>` | Read-only machine-state preflight; never substitutes for independent review or merge authorization |
+| `make pr-check PR=<number>` | Read-only machine-state preflight; never substitutes for independent review or the task's planned delivery stages |
 | `make change-size` | Advisory size report from `BASE`, default `origin/main` |
 | `make contracts` | Generated OpenAPI compatibility and Web client; procedure in [maintenance.md](maintenance.md#generated-contracts) |
 
@@ -100,8 +102,8 @@ Repair concrete findings as one bounded batch, rerun affected checks and review 
 
 ## 4. Publish the candidate and evaluate CI
 
-Publication requires user authorization for the action and target. Publish only the task branch and open its PR directly against `main`; never push `HEAD:main`. Use the [PR template](../../.github/pull_request_template.md) to record outcome, scope, risks, actual evidence and documentation impact, not another full rulebook.
-Before merge, `make pr-check PR=<number>` may aggregate the PR head/base, `CI required`, branch-protection visibility and local candidate identity. Treat `unknown` or absent protection and a missing check as blocked. The exact PR head needs successful `CI required`, the required review evidence and explicit user authorization. `pr-check` deliberately leaves Codex and independent review as manual confirmation and never grants merge authorization.
+When publication is a planned stage, publish the verified task branch and open its PR directly against `main`; never push `HEAD:main`. Do not pause for another confirmation. Use the [PR template](../../.github/pull_request_template.md) to record outcome, scope, risks, actual evidence and documentation impact, not another full rulebook.
+Before a planned merge, `make pr-check PR=<number>` may aggregate the PR head/base, `CI required`, branch-protection visibility and local candidate identity. Treat `unknown` or absent protection and a missing check as blocked. The exact PR head needs successful `CI required` and the required review evidence. `pr-check` deliberately leaves Codex and independent review as manual evidence checks and never changes the task plan.
 For candidates that change architecture/Issue/mechanism/ADR authority, the module-registry manifest or shared machine contracts, the same preflight reports `dispatch_impact_review=required`. Record the actual open/ready Issue scan and dispositions in the PR template; this mechanical evidence does not replace semantic review of whether the affected set is complete.
 
 ```sh
@@ -135,13 +137,13 @@ If the candidate changes after the last Codex review, or a Codex finding is repa
 
 The active server-side `main` ruleset is the mechanical merge boundary. It requires a pull request, successful `CI required`, an up-to-date branch before merge and resolved review conversations; force pushes and branch deletion are blocked. Repository-policy, CI, architecture, shared-contract and other critical changes still require the consolidated independent read-only Spec + Standards review from section 3 in addition to Codex review.
 
-All accepted pull requests are merged manually with squash after the exact candidate satisfies the required CI and review evidence and the user explicitly authorizes merge. Do not enable a repository workflow that treats Codex output as merge authorization or races GitHub's branch rules.
+For tasks whose plan includes merge, use GitHub's squash merge after the exact candidate satisfies the required CI and review evidence. Do not ask again after those gates pass. Do not enable a repository workflow that treats Codex output as permission to bypass gates or races GitHub's branch rules.
 
-**Done:** the published branch names the verified candidate, PR base is `main`, the final candidate has green `CI required`, Codex review covers the current candidate with no unresolved concrete findings, required conversations are resolved, any required independent review is complete, and merge authorization is explicit. Earlier CI or review evidence does not transfer across candidate changes.
+**Done:** the published branch names the verified candidate, PR base is `main`, the final candidate has green `CI required`, Codex review covers the current candidate with no unresolved concrete findings, required conversations are resolved, any required independent review is complete, and the task can advance to its next planned stage. Earlier CI or review evidence does not transfer across candidate changes.
 
 ## 5. Merge and clean up
 
-Merges require explicit authorization and the required CI/review evidence. Use GitHub's squash merge path after the active `main` ruleset is satisfied; there is no repository-owned automatic AI merge path. Keep merge confirmation separate from local task retirement, and stop all task writers before starting cleanup.
+When merge is a planned stage and the required CI/review evidence is complete, use GitHub's squash merge path after the active `main` ruleset is satisfied. There is no repository-owned server-side automatic AI merge path; the task agent performs the planned merge after the gates pass without another human confirmation. Keep exact merge proof separate from local task retirement, and stop all task writers before starting cleanup.
 
 ### 5.1 Confirm the exact squash merge
 
@@ -191,7 +193,7 @@ All checks finish before the first cleanup command. The individual worktree remo
 
 ## Persistent continuity
 
-Ordinary bounded single-session work needs no handoff file. Maintain ignored `.tmp/task-handoff.md` across sessions/compaction, multiple agents/worktrees, cross-module/critical changes or unfinished required review/validation. Keep the user request and complete acceptance; Entry / Reuse / Allowed writes / Preserve; fixed base and current candidate; dirty/untracked paths; findings and resolutions; valid command/environment/input evidence; next concrete action. Update facts rather than copying conversation. Handoffs grant neither authority nor a passing result.
+Ordinary bounded single-session work needs no handoff file. Maintain ignored `.tmp/task-handoff.md` across sessions/compaction, multiple agents/worktrees, cross-module/critical changes or unfinished required review/validation. Keep the user request and complete acceptance; planned stages and terminal stage; Entry / Reuse / Allowed writes / Preserve; fixed base and current candidate; dirty/untracked paths; findings and resolutions; valid command/environment/input evidence; next concrete action. Update facts rather than copying conversation. A handoff preserves continuity; it does not expand the task plan or grant a passing result.
 
 ## Local enforcement
 

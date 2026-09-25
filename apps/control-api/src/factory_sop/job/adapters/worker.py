@@ -1163,10 +1163,20 @@ def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
                         data_id=prepared.prepared.data_id,
                         result="commit_unknown",
                     )
-                    with factory() as reconcile_session:
-                        current = runtime.repository(reconcile_session).annotation_execution_by_id(
-                            cleanup_target.execution.id
+                    try:
+                        with factory() as reconcile_session:
+                            current = runtime.repository(
+                                reconcile_session
+                            ).annotation_execution_by_id(cleanup_target.execution.id)
+                    except Exception:
+                        _logger.exception(
+                            "job.dataset_annotation.copy_commit_reconcile_unavailable",
+                            job_id=str(running.id),
+                            execution_id=str(target.execution.id),
+                            data_id=prepared.prepared.data_id,
+                            result="commit_unknown",
                         )
+                        return
                     if not (
                         current is not None
                         and current.upstream_data_id == prepared.prepared.data_id

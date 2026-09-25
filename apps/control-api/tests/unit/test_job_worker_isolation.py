@@ -1100,8 +1100,10 @@ def test_annotation_cleanup_candidate_is_retried_before_new_copy(
     assert failures == [("ANNOTATION_EXECUTION_FAILED", "derived download failed")]
 
 
+@pytest.mark.parametrize("reconcile_available", [True, False])
 def test_annotation_copy_commit_unknown_preserves_backend_copy(
     monkeypatch: pytest.MonkeyPatch,
+    reconcile_available: bool,
 ) -> None:
     state = _WorkerState()
     discarded: list[str] = []
@@ -1146,6 +1148,8 @@ def test_annotation_copy_commit_unknown_preserves_backend_copy(
     class Repository:
         def annotation_execution_by_id(self, execution_id: UUID) -> object:
             assert execution_id == target.execution.id
+            if not reconcile_available:
+                raise RuntimeError("reconcile unavailable")
             return SimpleNamespace(
                 upstream_data_id="commit-unknown-data",
                 upstream_video_id="persisted-video",

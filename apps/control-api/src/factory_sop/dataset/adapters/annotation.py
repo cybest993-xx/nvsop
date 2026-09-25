@@ -95,8 +95,11 @@ class HttpAnnotationBackend:
             )
             self._set_remaining_timeout(connection, deadline)
             response = connection.getresponse()
-            self._set_remaining_timeout(connection, deadline)
-            body = response.read()
+            body = self._read_response_body(
+                connection=connection,
+                response=response,
+                deadline=deadline,
+            )
             if not 200 <= response.status < 300:
                 raise AnnotationBackendExecutionError(
                     f"标注基座清理工作副本失败（HTTP {response.status}）"
@@ -156,17 +159,20 @@ class HttpAnnotationBackend:
             self._set_remaining_timeout(connection, deadline)
             response = connection.getresponse()
             if not 200 <= response.status < 300:
-                self._set_remaining_timeout(connection, deadline)
-                response.read()
+                self._read_response_body(
+                    connection=connection,
+                    response=response,
+                    deadline=deadline,
+                )
                 raise AnnotationBackendExecutionError(
                     f"标注基座读取视频失败（HTTP {response.status}）"
                 )
-            while True:
-                self._set_remaining_timeout(connection, deadline)
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                destination.write(chunk)
+            self._read_response_body(
+                connection=connection,
+                response=response,
+                deadline=deadline,
+                destination=destination,
+            )
         except AnnotationBackendExecutionError:
             raise
         except (OSError, http.client.HTTPException) as error:
@@ -210,6 +216,27 @@ class HttpAnnotationBackend:
         if connection.sock is None:
             raise AnnotationBackendUnavailableError("标注基座连接未建立")
         connection.sock.settimeout(remaining)
+
+    def _read_response_body(
+        self,
+        *,
+        connection: http.client.HTTPConnection,
+        response: http.client.HTTPResponse,
+        deadline: float,
+        destination: BinaryIO | None = None,
+    ) -> bytes:
+        """分段读取响应并在每次底层读取前重新收紧剩余 wall-clock 预算。"""
+        chunks: list[bytes] = []
+        while True:
+            self._set_remaining_timeout(connection, deadline)
+            chunk = response.read1(1024 * 1024)
+            if not chunk:
+                break
+            if destination is None:
+                chunks.append(chunk)
+            else:
+                destination.write(chunk)
+        return b"".join(chunks)
 
     def _post_json(self, *, path: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -321,8 +348,11 @@ class HttpAnnotationBackend:
             send_body(connection, deadline)
             self._set_remaining_timeout(connection, deadline)
             response = connection.getresponse()
-            self._set_remaining_timeout(connection, deadline)
-            body = response.read()
+            body = self._read_response_body(
+                connection=connection,
+                response=response,
+                deadline=deadline,
+            )
             if not 200 <= response.status < 300:
                 raise AnnotationBackendExecutionError(f"标注基座请求失败（HTTP {response.status}）")
             return body

@@ -309,7 +309,12 @@ class PostgresJobRepository:
                         (JobStatus.PENDING.value, JobStatus.ENQUEUED.value)
                     ),
                 )
-                .values(status=JobStatus.RUNNING, updated_at=now)
+                .values(
+                    status=JobStatus.RUNNING,
+                    outbox_status="dispatched",
+                    last_dispatch_error=None,
+                    updated_at=now,
+                )
             ),
         )
         if result.rowcount != 1:

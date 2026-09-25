@@ -674,6 +674,50 @@ def test_failed_real_redis_dispatch_stays_pending_and_is_retried_from_outbox(
             cleanup_dataset(engine, dataset_id)
 
 
+def test_worker_claim_clears_pending_outbox_before_fast_terminal_finish(engine: Engine) -> None:
+    now = datetime(2026, 9, 9, 1, 0, tzinfo=UTC)
+    running_at = now + timedelta(seconds=1)
+    finished_at = now + timedelta(seconds=2)
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_VALIDATION,
+        status=JobStatus.PENDING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=now,
+        updated_at=now,
+        failure_code=None,
+    )
+    try:
+        with session_factory(engine).begin() as session:
+            repository = PostgresJobRepository(session)
+            repository.add(job)
+            running = repository.mark_running(job_id=job.id, now=running_at)
+            assert running is not None
+            assert repository.finish(
+                job_id=job.id,
+                status=JobStatus.SUCCEEDED.value,
+                failure_code=None,
+                now=finished_at,
+                expected_updated_at=running.updated_at,
+            )
+
+        assert row(
+            engine,
+            "SELECT status, outbox_status FROM job_application_job WHERE id = :job_id",
+            job_id=job.id,
+        ) == ("succeeded", "dispatched")
+        with session_factory(engine)() as session:
+            pending = PostgresJobRepository(session).pending(limit=100)
+        assert job.id not in {candidate.id for candidate in pending}
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM job_application_job WHERE id = :job_id"),
+                {"job_id": job.id},
+            )
+
+
 def test_stale_running_job_returns_to_pending_and_pending_scan_keeps_fresh_job_running(
     engine: Engine,
 ) -> None:

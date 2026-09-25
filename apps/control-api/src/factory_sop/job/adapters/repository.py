@@ -372,6 +372,26 @@ class PostgresJobRepository:
         )
         return result.rowcount == 1
 
+    def mark_running_dispatched(self, *, job_id: UUID) -> bool:
+        """worker 已领取时仅确认投递事实，不改写运行租约时间戳。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(ApplicationJobRow)
+                .where(
+                    ApplicationJobRow.id == job_id,
+                    ApplicationJobRow.status == JobStatus.RUNNING.value,
+                    ApplicationJobRow.outbox_status == "pending",
+                )
+                .values(
+                    outbox_status="dispatched",
+                    dispatch_attempts=ApplicationJobRow.dispatch_attempts + 1,
+                    last_dispatch_error=None,
+                )
+            ),
+        )
+        return result.rowcount == 1
+
     def record_dispatch_failure(self, *, job_id: UUID, error: str, now: datetime) -> None:
         self._session.execute(
             update(ApplicationJobRow)

@@ -74,7 +74,7 @@ def test_dispatcher_routes_annotation_preparation_jobs_to_preparation_worker(
         assert calls == {
             "function": "prepare_annotation_context_job",
             "args": (str(job.id),),
-            "kwargs": {"_job_id": str(job.id)},
+            "kwargs": {"_job_id": dispatcher_module._delivery_id(job.id, job.updated_at)},
         }
     finally:
         with engine.begin() as connection:
@@ -124,7 +124,7 @@ def test_dispatcher_routes_annotation_jobs_to_annotation_worker(
         assert calls == {
             "function": "annotate_dataset_job",
             "args": (str(job.id),),
-            "kwargs": {"_job_id": str(job.id)},
+            "kwargs": {"_job_id": dispatcher_module._delivery_id(job.id, job.updated_at)},
         }
     finally:
         with engine.begin() as connection:
@@ -185,7 +185,7 @@ def test_dispatcher_routes_dataset_jobs_to_their_worker(
         assert calls == {
             "function": function,
             "args": (str(job.id),),
-            "kwargs": {"_job_id": str(job.id)},
+            "kwargs": {"_job_id": dispatcher_module._delivery_id(job.id, job.updated_at)},
         }
     finally:
         with engine.begin() as connection:
@@ -355,7 +355,7 @@ def test_late_enqueue_ack_cannot_undo_unstarted_recovery(
         async def enqueue_job(self, function: str, *args: str, **kwargs: str) -> object:
             assert function == "validate_dataset_job"
             assert args == (str(job.id),)
-            assert kwargs == {"_job_id": str(job.id)}
+            assert kwargs == {"_job_id": dispatcher_module._delivery_id(job.id, job.updated_at)}
             with session_factory(engine).begin() as session:
                 assert PostgresJobRepository(session).restore_unstarted(
                     job_id=job.id,
@@ -383,6 +383,125 @@ def test_late_enqueue_ack_cannot_undo_unstarted_recovery(
             "FROM job_application_job WHERE id = :job_id",
             job_id=job.id,
         ) == ("pending", "pending", "worker cancelled before acquiring execution slot")
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM job_application_job WHERE id = :job_id"),
+                {"job_id": job.id},
+            )
+
+
+def test_running_delivery_ack_marks_outbox_dispatched_without_renewing_lease(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 9, 9, 1, 0, tzinfo=UTC)
+    started_at = now + timedelta(seconds=1)
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_VALIDATION,
+        status=JobStatus.PENDING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=now,
+        updated_at=now,
+        failure_code=None,
+    )
+    with session_factory(engine).begin() as session:
+        PostgresJobRepository(session).add(job)
+
+    class StartBeforeAckPool:
+        async def enqueue_job(self, function: str, *args: str, **kwargs: str) -> object:
+            del function, args, kwargs
+            with session_factory(engine).begin() as session:
+                assert (
+                    PostgresJobRepository(session).mark_running(
+                        job_id=job.id,
+                        now=started_at,
+                    )
+                    is not None
+                )
+            return object()
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_create_pool(_: RedisSettings) -> StartBeforeAckPool:
+        return StartBeforeAckPool()
+
+    monkeypatch.setattr(dispatcher_module, "create_pool", fake_create_pool)
+    try:
+        dispatcher = ArqJobDispatcher(
+            RedisSettings(),
+            session_factory=session_factory(engine),
+        )
+        asyncio.run(dispatcher.dispatch_async(job.id))
+
+        assert row(
+            engine,
+            "SELECT status, outbox_status, updated_at FROM job_application_job WHERE id = :job_id",
+            job_id=job.id,
+        ) == ("running", "dispatched", started_at)
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM job_application_job WHERE id = :job_id"),
+                {"job_id": job.id},
+            )
+
+
+def test_recovered_delivery_uses_new_redis_generation(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 9, 9, 1, 0, tzinfo=UTC)
+    recovered_at = now + timedelta(seconds=2)
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_VALIDATION,
+        status=JobStatus.PENDING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=now,
+        updated_at=now,
+        failure_code=None,
+    )
+    with session_factory(engine).begin() as session:
+        PostgresJobRepository(session).add(job)
+
+    delivery_ids: list[str] = []
+
+    class RecordingPool:
+        async def enqueue_job(self, function: str, *args: str, **kwargs: str) -> object:
+            del function, args
+            delivery_ids.append(kwargs["_job_id"])
+            return object()
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_create_pool(_: RedisSettings) -> RecordingPool:
+        return RecordingPool()
+
+    monkeypatch.setattr(dispatcher_module, "create_pool", fake_create_pool)
+    try:
+        dispatcher = ArqJobDispatcher(
+            RedisSettings(),
+            session_factory=session_factory(engine),
+        )
+        asyncio.run(dispatcher.dispatch_async(job.id))
+        with session_factory(engine).begin() as session:
+            assert PostgresJobRepository(session).restore_unstarted(
+                job_id=job.id,
+                now=recovered_at,
+            )
+        asyncio.run(dispatcher.dispatch_async(job.id))
+
+        assert delivery_ids == [
+            dispatcher_module._delivery_id(job.id, now),
+            dispatcher_module._delivery_id(job.id, recovered_at),
+        ]
+        assert delivery_ids[0] != delivery_ids[1]
     finally:
         with engine.begin() as connection:
             connection.execute(

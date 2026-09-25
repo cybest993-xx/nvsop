@@ -126,6 +126,10 @@ class JobRepository(Protocol):
         """仅为仍属于本次投递 generation 的 pending 任务确认入队。"""
         ...
 
+    def mark_running_dispatched(self, *, job_id: UUID) -> bool:
+        """worker 已领取时确认投递事实，不改写执行租约。"""
+        ...
+
     def record_dispatch_failure(self, *, job_id: UUID, error: str, now: datetime) -> None:
         """保留投递失败，供后续 outbox 扫描再次投递。"""
         ...

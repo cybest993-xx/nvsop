@@ -1163,6 +1163,23 @@ def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
                         data_id=prepared.prepared.data_id,
                         result="commit_unknown",
                     )
+                    with factory() as reconcile_session:
+                        current = runtime.repository(reconcile_session).annotation_execution_by_id(
+                            cleanup_target.execution.id
+                        )
+                    if not (
+                        current is not None
+                        and current.upstream_data_id == prepared.prepared.data_id
+                        and current.upstream_video_id is not None
+                    ):
+                        _record_execution_cleanup_candidate(
+                            factory=factory,
+                            runtime=runtime,
+                            target=cleanup_target,
+                            data_id=prepared.prepared.data_id,
+                            code=None,
+                            detail=None,
+                        )
                     return
             if cleanup_after_save:
                 _discard_execution_copy_or_record(

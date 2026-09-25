@@ -20,6 +20,11 @@ from factory_sop.settings import ConfigurationError, Settings
 _logger = get_logger("job")
 
 
+def _delivery_id(job_id: UUID, updated_at: datetime) -> str:
+    """用 PostgreSQL generation 派生 ARQ 去重身份，避免旧 in-progress key 阻塞恢复。"""
+    return f"{job_id}:{updated_at.isoformat(timespec='microseconds')}"
+
+
 class ArqJobDispatcher:
     """提交后把 job id 投递到 Redis，并回写 outbox 的投递事实。"""
 
@@ -75,7 +80,11 @@ class ArqJobDispatcher:
         """异步投递一个已提交任务；失败时保持 outbox pending。"""
         try:
             function, expected_updated_at = self._worker_target(job_id)
-            accepted = await self._dispatch(job_id, function=function)
+            accepted = await self._dispatch(
+                job_id,
+                function=function,
+                delivery_id=_delivery_id(job_id, expected_updated_at),
+            )
             if accepted:
                 self._record_success(job_id, expected_updated_at=expected_updated_at)
         except Exception as error:
@@ -96,10 +105,10 @@ class ArqJobDispatcher:
         with ThreadPoolExecutor(max_workers=1) as executor:
             executor.submit(lambda: asyncio.run(self.dispatch_async(job_id))).result()
 
-    async def _dispatch(self, job_id: UUID, *, function: str) -> bool:
+    async def _dispatch(self, job_id: UUID, *, function: str, delivery_id: str) -> bool:
         pool = await create_pool(self._settings)
         try:
-            job = await pool.enqueue_job(function, str(job_id), _job_id=str(job_id))
+            job = await pool.enqueue_job(function, str(job_id), _job_id=delivery_id)
             return job is not None
         finally:
             await pool.close()
@@ -129,11 +138,12 @@ class ArqJobDispatcher:
             return
         with self._session_factory() as session:
             repository = PostgresJobRepository(session)
-            repository.mark_enqueued(
+            if not repository.mark_enqueued(
                 job_id=job_id,
                 expected_updated_at=expected_updated_at,
                 now=datetime.now(UTC),
-            )
+            ):
+                repository.mark_running_dispatched(job_id=job_id)
             session.commit()
 
     def _record_failure(self, job_id: UUID, error: Exception) -> None:

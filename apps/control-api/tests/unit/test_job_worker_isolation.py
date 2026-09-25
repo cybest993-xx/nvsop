@@ -105,22 +105,42 @@ class _Datasets:
 
 
 class _ValidationRuntime:
-    def __init__(self, state: _WorkerState, job: ApplicationJob) -> None:
+    def __init__(
+        self,
+        state: _WorkerState,
+        job: ApplicationJob,
+        *,
+        storage: object | None = None,
+    ) -> None:
         self._state = state
         self._job = job
+        self._storage = storage if storage is not None else object()
 
     def repository(self, session: object) -> _Datasets:
         assert isinstance(session, _TrackingSession)
         return _Datasets(self._state, session, self._job)
 
     def storage(self) -> object:
-        return object()
+        return self._storage
 
     def media_probe(self) -> object:
         return object()
 
     def supported_codecs(self) -> frozenset[str]:
         return frozenset({"h264"})
+
+
+class _ValidationStorage:
+    def __init__(self) -> None:
+        self.objects = {"attempt-object": b"source"}
+
+    def finalize_upload(self, *, object_key: str, source: object, size: int) -> object:
+        del source
+        self.objects[object_key] = b"x" * size
+        return SimpleNamespace(size=size, version_id="final-version")
+
+    def delete(self, *, object_key: str) -> None:
+        self.objects.pop(object_key, None)
 
 
 def _running_job() -> ApplicationJob:
@@ -234,6 +254,7 @@ def _install_validation_seams(
     state: _WorkerState,
     job: ApplicationJob,
     validate_upload: object,
+    storage: object | None = None,
 ) -> Mapping[str, Any]:
     class FakeJobRepository:
         def __init__(self, session: object) -> None:
@@ -261,14 +282,14 @@ def _install_validation_seams(
 
     def begin_validation(*, job: object, datasets: object, now: datetime) -> object:
         del job, datasets, now
-        return object()
+        return SimpleNamespace(attempt=SimpleNamespace(object_key="attempt-object"))
 
     monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
     monkeypatch.setattr(worker_module, "begin_video_validation", begin_validation)
     monkeypatch.setattr(worker_module, "validate_video_upload", validate_upload)
     return {
         "session_factory": _TrackingSessionFactory(state),
-        "dataset_runtime": _ValidationRuntime(state, job),
+        "dataset_runtime": _ValidationRuntime(state, job, storage=storage),
         "blocking_job_slots": asyncio.Semaphore(worker_module._BLOCKING_JOB_LIMIT),
     }
 
@@ -510,6 +531,7 @@ def test_validation_sessions_stay_on_the_blocking_execution_thread(
     caller_thread = get_ident()
     state = _WorkerState()
     job = _running_job()
+    object_storage = _ValidationStorage()
 
     def validate_upload(
         *,
@@ -521,7 +543,10 @@ def test_validation_sessions_stay_on_the_blocking_execution_thread(
         now: datetime,
         target: object,
     ) -> SimpleNamespace:
-        del job, storage, probe, supported_codecs, now, target
+        del job, probe, supported_codecs, now, target
+        fenced_storage = cast(Any, storage)
+        fenced_storage.finalize_upload(object_key="final-object", source=object(), size=5)
+        fenced_storage.delete(object_key="attempt-object")
         datasets.stage_publish()
         return SimpleNamespace(status=MemberStatus.REGISTERED.value, failure_code=None)
 
@@ -530,6 +555,7 @@ def test_validation_sessions_stay_on_the_blocking_execution_thread(
         state=state,
         job=job,
         validate_upload=validate_upload,
+        storage=object_storage,
     )
 
     asyncio.run(worker_module.validate_dataset_job(ctx, str(job.id)))
@@ -542,6 +568,8 @@ def test_validation_sessions_stay_on_the_blocking_execution_thread(
     assert caller_thread not in execution_threads
     assert all(session.used_threads == {session.creator_thread} for session in state.sessions)
     assert all(session.closed.is_set() for session in state.sessions)
+    assert "attempt-object" not in object_storage.objects
+    assert "final-object" in object_storage.objects
 
 
 def test_cancelled_validation_discards_late_result_without_finishing_job(
@@ -551,6 +579,7 @@ def test_cancelled_validation_discards_late_result_without_finishing_job(
     job = _running_job()
     started = Event()
     release = Event()
+    object_storage = _ValidationStorage()
 
     def validate_upload(
         *,
@@ -562,7 +591,10 @@ def test_cancelled_validation_discards_late_result_without_finishing_job(
         now: datetime,
         target: object,
     ) -> SimpleNamespace:
-        del job, storage, probe, supported_codecs, now, target
+        del job, probe, supported_codecs, now, target
+        fenced_storage = cast(Any, storage)
+        fenced_storage.finalize_upload(object_key="final-object", source=object(), size=5)
+        fenced_storage.delete(object_key="attempt-object")
         datasets.stage_publish()
         started.set()
         release.wait()
@@ -573,6 +605,7 @@ def test_cancelled_validation_discards_late_result_without_finishing_job(
         state=state,
         job=job,
         validate_upload=validate_upload,
+        storage=object_storage,
     )
 
     async def scenario() -> None:
@@ -592,6 +625,8 @@ def test_cancelled_validation_discards_late_result_without_finishing_job(
     assert state.finish_calls == 0
     assert not state.published
     assert state.sessions[-1].rollbacks == 1
+    assert "attempt-object" in object_storage.objects
+    assert "final-object" not in object_storage.objects
 
 
 def test_validation_job_cas_loss_rolls_back_business_result(

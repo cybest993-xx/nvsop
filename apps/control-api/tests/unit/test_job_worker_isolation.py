@@ -1143,10 +1143,18 @@ def test_annotation_copy_commit_unknown_preserves_backend_copy(
 
     backend = Backend()
 
+    class Repository:
+        def annotation_execution_by_id(self, execution_id: UUID) -> object:
+            assert execution_id == target.execution.id
+            return SimpleNamespace(
+                upstream_data_id="commit-unknown-data",
+                upstream_video_id="persisted-video",
+            )
+
     class Runtime:
         def repository(self, session: object) -> object:
             assert isinstance(session, _TrackingSession)
-            return object()
+            return Repository()
 
         def storage(self) -> object:
             return object()
@@ -1184,9 +1192,96 @@ def test_annotation_copy_commit_unknown_preserves_backend_copy(
         worker_module._ExecutionFence(),
     )
 
-    assert len(state.sessions) == 3
-    assert state.sessions[-1].commits == 1
+    assert len(state.sessions) == 4
+    assert state.sessions[2].commits == 1
     assert discarded == []
+    assert split_calls == 0
+
+
+def test_annotation_copy_commit_failure_records_cleanup_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _WorkerState()
+    recorded: list[str] = []
+    split_calls = 0
+    job = _job(JobType.DATASET_ANNOTATION)
+    target = _execution_target(job)
+
+    class CommitFailedSession(_TrackingSession):
+        def __init__(self, state: _WorkerState, *, fail_commit: bool) -> None:
+            super().__init__(state)
+            self._fail_commit = fail_commit
+
+        def commit(self) -> None:
+            if self._fail_commit:
+                self._touch()
+                raise RuntimeError("commit failed")
+            super().commit()
+
+    class CommitFailedFactory:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def __call__(self) -> _TrackingSession:
+            self.calls += 1
+            session = CommitFailedSession(state, fail_commit=self.calls == 3)
+            state.sessions.append(session)
+            return session
+
+    class Repository:
+        def annotation_execution_by_id(self, execution_id: UUID) -> object:
+            assert execution_id == target.execution.id
+            return SimpleNamespace(upstream_data_id=None, upstream_video_id=None)
+
+    class Backend:
+        def split_video(
+            self, *, video_id: object, segments: object, mode: object
+        ) -> tuple[dict[str, str], ...]:
+            nonlocal split_calls
+            del video_id, segments, mode
+            split_calls += 1
+            return ({"id": "unexpected"},)
+
+    class Runtime:
+        def repository(self, session: object) -> object:
+            assert isinstance(session, _TrackingSession)
+            return Repository()
+
+        def storage(self) -> object:
+            return object()
+
+        def backend(self) -> Backend:
+            return Backend()
+
+        def media_probe(self) -> object:
+            return object()
+
+    _install_running_job_repository(monkeypatch, job=job, state=state)
+    monkeypatch.setattr(worker_module, "begin_annotation_execution", lambda **kwargs: target)
+    monkeypatch.setattr(
+        worker_module,
+        "prepare_annotation_execution_copy",
+        lambda **kwargs: SimpleNamespace(prepared=SimpleNamespace(data_id="commit-failed-data")),
+    )
+    monkeypatch.setattr(worker_module, "save_annotation_execution_copy", lambda **kwargs: target)
+
+    def record_cleanup(**kwargs: object) -> bool:
+        recorded.append(cast(str, kwargs["data_id"]))
+        return True
+
+    monkeypatch.setattr(worker_module, "_record_execution_cleanup_candidate", record_cleanup)
+    ctx: Mapping[str, Any] = {
+        "session_factory": CommitFailedFactory(),
+        "annotation_runtime": Runtime(),
+    }
+
+    worker_module._annotate_dataset_job(
+        ctx,
+        str(job.id),
+        worker_module._ExecutionFence(),
+    )
+
+    assert recorded == ["commit-failed-data"]
     assert split_calls == 0
 
 

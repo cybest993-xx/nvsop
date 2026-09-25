@@ -268,8 +268,10 @@ class PostgresJobRepository:
         self._dispatch_ids.add(job_id)
         register_after_commit(self._session, lambda: dispatch(job_id))
 
-    def recover_stale_running(self, *, now: datetime, stale_after_seconds: int) -> int:
-        """恢复过期执行租约，并保留已有的投递诊断。"""
+    def recover_stale_running(
+        self, *, job_type: JobType, now: datetime, stale_after_seconds: int
+    ) -> int:
+        """按任务类型恢复过期执行租约，并保留已有的投递诊断。"""
         cutoff = now - timedelta(seconds=stale_after_seconds)
         result = cast(
             "CursorResult[Any]",
@@ -277,6 +279,7 @@ class PostgresJobRepository:
                 update(ApplicationJobRow)
                 .where(
                     ApplicationJobRow.status == JobStatus.RUNNING.value,
+                    ApplicationJobRow.job_type == job_type.value,
                     ApplicationJobRow.updated_at <= cutoff,
                 )
                 .values(

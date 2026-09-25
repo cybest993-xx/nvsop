@@ -102,8 +102,10 @@ class JobRepository(Protocol):
         """保存一条任务和待投递事实；不提交事务。"""
         ...
 
-    def recover_stale_running(self, *, now: datetime, stale_after_seconds: int) -> int:
-        """把超过执行租约的运行中任务恢复为待投递，并返回恢复数量。"""
+    def recover_stale_running(
+        self, *, job_type: JobType, now: datetime, stale_after_seconds: int
+    ) -> int:
+        """按任务类型恢复超过执行租约的运行中任务，并返回恢复数量。"""
         ...
 
     def mark_running(self, *, job_id: UUID, now: datetime) -> ApplicationJob | None:

@@ -143,6 +143,7 @@ class PostgresDatasetArtifactExecutor:
                 return self._mark_cleanup_pending(
                     target=target,
                     object_key=object_key,
+                    commit_transaction=commit_transaction,
                     error=error,
                 )
             code = (
@@ -363,6 +364,7 @@ class PostgresDatasetArtifactExecutor:
                     return self._mark_cleanup_pending(
                         target=target,
                         object_key=object_key,
+                        commit_transaction=commit_transaction,
                         error=error,
                     )
                 return self._finish_failure(
@@ -379,6 +381,7 @@ class PostgresDatasetArtifactExecutor:
                     return self._mark_cleanup_pending(
                         target=target,
                         object_key=object_key,
+                        commit_transaction=commit_transaction,
                         error=error,
                     )
                 return self._finish_failure(
@@ -453,6 +456,7 @@ class PostgresDatasetArtifactExecutor:
         *,
         target: ArtifactTarget,
         object_key: str,
+        commit_transaction: ArtifactTransactionCommitter,
         error: Exception,
     ) -> ArtifactExecutionResult:
         with self._factory() as session:
@@ -473,7 +477,8 @@ class PostgresDatasetArtifactExecutor:
                     result="retry_pending",
                 )
                 return ArtifactExecutionResult(ArtifactExecutionOutcome.LEASE_LOST)
-            session.commit()
+            if not commit_transaction(session):
+                return ArtifactExecutionResult(ArtifactExecutionOutcome.LEASE_LOST)
         _logger.warning(
             "job.dataset_artifact.cleanup_retry",
             job_id=str(target.job.id),

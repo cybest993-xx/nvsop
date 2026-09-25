@@ -597,6 +597,7 @@ def test_stale_running_job_returns_to_pending_and_pending_scan_keeps_fresh_job_r
 
         with session_factory(engine)() as session:
             recovered = PostgresJobRepository(session).recover_stale_running(
+                job_type=JobType.DATASET_VALIDATION,
                 now=now,
                 stale_after_seconds=360,
             )

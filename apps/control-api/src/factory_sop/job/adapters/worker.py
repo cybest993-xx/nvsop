@@ -58,7 +58,7 @@ from factory_sop.dataset.api import (
 )
 from factory_sop.job.adapters.dispatcher import ArqJobDispatcher
 from factory_sop.job.adapters.repository import PostgresJobRepository
-from factory_sop.job.api import JobStatus
+from factory_sop.job.api import JobStatus, JobType
 from factory_sop.observability import configure_logging, get_logger
 from factory_sop.persistence import create_database_engine, session_factory
 from factory_sop.settings import Settings
@@ -71,12 +71,23 @@ _ANNOTATION_HTTP_CALLS_PER_EXECUTION = 5
 
 
 def _blocking_execution_timeout_seconds(settings: Settings) -> int:
-    """覆盖一次 blocking execution 可串行消耗的既有外部 I/O 时限。"""
+    """覆盖一次 blocking execution 可串行消耗的最长既有外部 I/O 时限。"""
     return (
         settings.annotation_http_timeout_seconds * _ANNOTATION_HTTP_CALLS_PER_EXECUTION
         + settings.media_probe_timeout_seconds
         + 300
     )
+
+
+def _stale_recovery_timeout_seconds(settings: Settings, job_type: JobType) -> int:
+    """按任务实际同步路径选择 stale recovery 执行租约。"""
+    match job_type:
+        case JobType.DATASET_ANNOTATION | JobType.DATASET_ANNOTATION_PREPARATION:
+            return _blocking_execution_timeout_seconds(settings)
+        case JobType.DATASET_VALIDATION | JobType.DATASET_USAGE_CHECK | JobType.DATASET_ARTIFACT:
+            return settings.media_probe_timeout_seconds + 300
+        case _:
+            assert_never(job_type)
 
 
 class _ExecutionFence:
@@ -1409,13 +1420,15 @@ async def dispatch_pending_jobs(ctx: Mapping[str, Any]) -> None:
         return
     settings = cast(Settings, ctx["settings"])
     factory = _session_factory(ctx)
-    stale_after_seconds = _blocking_execution_timeout_seconds(settings)
+    now = datetime.now(UTC)
     with factory() as session:
         repository = PostgresJobRepository(session)
-        repository.recover_stale_running(
-            now=datetime.now(UTC),
-            stale_after_seconds=stale_after_seconds,
-        )
+        for job_type in JobType:
+            repository.recover_stale_running(
+                job_type=job_type,
+                now=now,
+                stale_after_seconds=_stale_recovery_timeout_seconds(settings, job_type),
+            )
         session.commit()
     with factory() as session:
         pending = PostgresJobRepository(session).pending(limit=100)

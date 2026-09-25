@@ -123,6 +123,19 @@ class _ValidationRuntime:
         return frozenset({"h264"})
 
 
+def _running_job() -> ApplicationJob:
+    return ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_VALIDATION,
+        status=JobStatus.RUNNING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=NOW,
+        updated_at=NOW,
+        failure_code=None,
+    )
+
+
 def _job(job_type: JobType) -> ApplicationJob:
     return ApplicationJob(
         id=uuid4(),
@@ -179,39 +192,6 @@ def _execution_target(
     )
 
 
-def _annotation_ctx(
-    *,
-    state: _WorkerState,
-    backend: Callable[[], object],
-    storage: Callable[[], object] = object,
-    media_probe: Callable[[], object] = object,
-    session_factory: object | None = None,
-    blocking: bool = False,
-) -> Mapping[str, Any]:
-    def repository(session: object) -> object:
-        assert isinstance(session, _TrackingSession)
-        return object()
-
-    ctx: dict[str, Any] = {
-        "session_factory": (
-            session_factory if session_factory is not None else _TrackingSessionFactory(state)
-        ),
-        "annotation_runtime": SimpleNamespace(
-            repository=repository,
-            storage=storage,
-            backend=backend,
-            media_probe=media_probe,
-        ),
-    }
-    if blocking:
-        ctx["blocking_job_slots"] = asyncio.Semaphore(worker_module._BLOCKING_JOB_LIMIT)
-    return ctx
-
-
-def _unavailable_annotation_backend() -> object:
-    raise AnnotationBackendUnavailableError("not configured")
-
-
 def _install_running_job_repository(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -255,16 +235,35 @@ def _install_validation_seams(
     job: ApplicationJob,
     validate_upload: object,
 ) -> Mapping[str, Any]:
+    class FakeJobRepository:
+        def __init__(self, session: object) -> None:
+            assert isinstance(session, _TrackingSession)
+
+        def mark_running(self, *, job_id: UUID, now: datetime) -> ApplicationJob | None:
+            del now
+            assert job_id == job.id
+            return job
+
+        def finish(
+            self,
+            *,
+            job_id: UUID,
+            status: str,
+            failure_code: str | None,
+            now: datetime,
+            expected_updated_at: datetime,
+        ) -> bool:
+            del status, failure_code, now
+            assert job_id == job.id
+            assert expected_updated_at == job.updated_at
+            state.finish_calls += 1
+            return state.finish_allowed
+
     def begin_validation(*, job: object, datasets: object, now: datetime) -> object:
         del job, datasets, now
         return object()
 
-    _install_running_job_repository(
-        monkeypatch,
-        job=job,
-        state=state,
-        finish_result=state.finish_allowed,
-    )
+    monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
     monkeypatch.setattr(worker_module, "begin_video_validation", begin_validation)
     monkeypatch.setattr(worker_module, "validate_video_upload", validate_upload)
     return {
@@ -313,9 +312,16 @@ def test_blocking_jobs_leave_event_loop_responsive_and_cancel_promptly(
         def __init__(self, session: object) -> None:
             assert isinstance(session, _TrackingSession)
 
-        def recover_stale_running(self, *, now: datetime, stale_after_seconds: int) -> None:
+        def recover_stale_running(
+            self, *, job_type: JobType, now: datetime, stale_after_seconds: int
+        ) -> None:
             del now
-            assert stale_after_seconds == 930
+            expected = (
+                930
+                if job_type in {JobType.DATASET_ANNOTATION, JobType.DATASET_ANNOTATION_PREPARATION}
+                else 330
+            )
+            assert stale_after_seconds == expected
 
         def pending(self, *, limit: int) -> tuple[object, ...]:
             assert limit == 100
@@ -500,7 +506,7 @@ def test_validation_sessions_stay_on_the_blocking_execution_thread(
 ) -> None:
     caller_thread = get_ident()
     state = _WorkerState()
-    job = _job(JobType.DATASET_VALIDATION)
+    job = _running_job()
 
     def validate_upload(
         *,
@@ -539,7 +545,7 @@ def test_cancelled_validation_discards_late_result_without_finishing_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state = _WorkerState()
-    job = _job(JobType.DATASET_VALIDATION)
+    job = _running_job()
     started = Event()
     release = Event()
 
@@ -589,7 +595,7 @@ def test_validation_job_cas_loss_rolls_back_business_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state = _WorkerState(finish_allowed=False)
-    job = _job(JobType.DATASET_VALIDATION)
+    job = _running_job()
 
     def validate_upload(
         *,
@@ -738,6 +744,20 @@ def test_cancelled_annotation_preparation_discards_unpersisted_backend_copy(
 
     backend = Backend()
 
+    class Runtime:
+        def repository(self, session: object) -> object:
+            assert isinstance(session, _TrackingSession)
+            return object()
+
+        def storage(self) -> object:
+            return object()
+
+        def backend(self) -> Backend:
+            return backend
+
+        def media_probe(self) -> object:
+            return object()
+
     def begin_preparation(*, job: object, datasets: object) -> object:
         del job, datasets
         return target
@@ -755,7 +775,11 @@ def test_cancelled_annotation_preparation_discards_unpersisted_backend_copy(
         begin_preparation,
     )
     monkeypatch.setattr(worker_module, "prepare_annotation_context_copy", prepare_copy)
-    ctx = _annotation_ctx(state=state, backend=lambda: backend, blocking=True)
+    ctx: Mapping[str, Any] = {
+        "session_factory": _TrackingSessionFactory(state),
+        "annotation_runtime": Runtime(),
+        "blocking_job_slots": asyncio.Semaphore(worker_module._BLOCKING_JOB_LIMIT),
+    }
 
     async def scenario() -> None:
         running = asyncio.create_task(
@@ -788,6 +812,20 @@ def test_annotation_preparation_lease_loss_discards_unpublished_backend_copy(
 
     backend = Backend()
 
+    class Runtime:
+        def repository(self, session: object) -> object:
+            assert isinstance(session, _TrackingSession)
+            return object()
+
+        def storage(self) -> object:
+            return object()
+
+        def backend(self) -> Backend:
+            return backend
+
+        def media_probe(self) -> object:
+            return object()
+
     _install_running_job_repository(monkeypatch, job=job, state=state, finish_result=False)
     monkeypatch.setattr(
         worker_module,
@@ -805,7 +843,10 @@ def test_annotation_preparation_lease_loss_discards_unpublished_backend_copy(
         lambda **kwargs: None,
     )
 
-    ctx = _annotation_ctx(state=state, backend=lambda: backend)
+    ctx: Mapping[str, Any] = {
+        "session_factory": _TrackingSessionFactory(state),
+        "annotation_runtime": Runtime(),
+    }
     worker_module._prepare_annotation_context_job(
         ctx,
         str(job.id),
@@ -828,6 +869,14 @@ def test_annotation_backend_construction_failure_is_classified(
     )
     job = _job(job_type)
     captured: list[str] = []
+
+    class Runtime:
+        def repository(self, session: object) -> object:
+            assert isinstance(session, _TrackingSession)
+            return object()
+
+        def backend(self) -> object:
+            raise AnnotationBackendUnavailableError("not configured")
 
     _install_running_job_repository(monkeypatch, job=job, state=state)
     if kind == "context":
@@ -857,7 +906,10 @@ def test_annotation_backend_construction_failure_is_classified(
         )
         runner = worker_module._annotate_dataset_job
 
-    ctx = _annotation_ctx(state=state, backend=_unavailable_annotation_backend)
+    ctx: Mapping[str, Any] = {
+        "session_factory": _TrackingSessionFactory(state),
+        "annotation_runtime": Runtime(),
+    }
     runner(ctx, str(job.id), worker_module._ExecutionFence())
 
     assert captured == ["ANNOTATION_BACKEND_UNAVAILABLE"]
@@ -874,6 +926,14 @@ def test_cleanup_candidate_survives_backend_construction_failure(
     )
     job = _job(job_type)
     finished: list[str] = []
+
+    class Runtime:
+        def repository(self, session: object) -> object:
+            assert isinstance(session, _TrackingSession)
+            return object()
+
+        def backend(self) -> object:
+            raise AnnotationBackendUnavailableError("not configured")
 
     _install_running_job_repository(monkeypatch, job=job, state=state)
     if kind == "context":
@@ -913,7 +973,10 @@ def test_cleanup_candidate_survives_backend_construction_failure(
         )
         runner = worker_module._annotate_dataset_job
 
-    ctx = _annotation_ctx(state=state, backend=_unavailable_annotation_backend)
+    ctx: Mapping[str, Any] = {
+        "session_factory": _TrackingSessionFactory(state),
+        "annotation_runtime": Runtime(),
+    }
     runner(ctx, str(job.id), worker_module._ExecutionFence())
 
     assert finished == []
@@ -926,6 +989,20 @@ def test_annotation_cleanup_pending_is_persisted_for_retry(
     job = _job(JobType.DATASET_ANNOTATION)
     target = _execution_target(job)
     recorded: list[tuple[str, str | None, str | None]] = []
+
+    class Runtime:
+        def repository(self, session: object) -> object:
+            assert isinstance(session, _TrackingSession)
+            return object()
+
+        def storage(self) -> object:
+            return object()
+
+        def backend(self) -> object:
+            return object()
+
+        def media_probe(self) -> object:
+            return object()
 
     def record_candidate(**kwargs: object) -> object:
         recorded.append(
@@ -954,7 +1031,10 @@ def test_annotation_cleanup_pending_is_persisted_for_retry(
         "record_annotation_execution_cleanup_candidate",
         record_candidate,
     )
-    ctx = _annotation_ctx(state=state, backend=object)
+    ctx: Mapping[str, Any] = {
+        "session_factory": _TrackingSessionFactory(state),
+        "annotation_runtime": Runtime(),
+    }
 
     worker_module._annotate_dataset_job(
         ctx,
@@ -983,7 +1063,14 @@ def test_annotation_cleanup_candidate_is_retried_before_new_copy(
         def discard_prepared_video(self, *, data_id: str) -> None:
             discarded.append(data_id)
 
-    backend = Backend()
+    class Runtime:
+        def repository(self, session: object) -> object:
+            assert isinstance(session, _TrackingSession)
+            return object()
+
+        def backend(self) -> Backend:
+            return Backend()
+
     _install_running_job_repository(monkeypatch, job=job, state=state)
     monkeypatch.setattr(worker_module, "begin_annotation_execution", lambda **kwargs: target)
     monkeypatch.setattr(
@@ -998,7 +1085,10 @@ def test_annotation_cleanup_candidate_is_retried_before_new_copy(
         "_finish_annotation_failure",
         lambda **kwargs: failures.append((cast(str, kwargs["code"]), cast(str, kwargs["detail"]))),
     )
-    ctx = _annotation_ctx(state=state, backend=lambda: backend)
+    ctx: Mapping[str, Any] = {
+        "session_factory": _TrackingSessionFactory(state),
+        "annotation_runtime": Runtime(),
+    }
 
     worker_module._annotate_dataset_job(
         ctx,
@@ -1053,6 +1143,20 @@ def test_annotation_copy_commit_unknown_preserves_backend_copy(
 
     backend = Backend()
 
+    class Runtime:
+        def repository(self, session: object) -> object:
+            assert isinstance(session, _TrackingSession)
+            return object()
+
+        def storage(self) -> object:
+            return object()
+
+        def backend(self) -> Backend:
+            return backend
+
+        def media_probe(self) -> object:
+            return object()
+
     _install_running_job_repository(monkeypatch, job=job, state=state)
     monkeypatch.setattr(
         worker_module,
@@ -1069,11 +1173,10 @@ def test_annotation_copy_commit_unknown_preserves_backend_copy(
         "save_annotation_execution_copy",
         lambda **kwargs: target,
     )
-    ctx = _annotation_ctx(
-        state=state,
-        backend=lambda: backend,
-        session_factory=CommitUnknownFactory(),
-    )
+    ctx: Mapping[str, Any] = {
+        "session_factory": CommitUnknownFactory(),
+        "annotation_runtime": Runtime(),
+    }
 
     worker_module._annotate_dataset_job(
         ctx,
@@ -1110,11 +1213,19 @@ def test_annotation_retry_reuses_persisted_copy_after_uncertain_commit(
 
     backend = Backend()
 
-    def unexpected_storage() -> object:
-        raise AssertionError("persisted copy retry must not read source storage")
+    class Runtime:
+        def repository(self, session: object) -> object:
+            assert isinstance(session, _TrackingSession)
+            return object()
 
-    def unexpected_media_probe() -> object:
-        raise AssertionError("persisted copy retry must not probe a new copy")
+        def storage(self) -> object:
+            raise AssertionError("persisted copy retry must not read source storage")
+
+        def backend(self) -> Backend:
+            return backend
+
+        def media_probe(self) -> object:
+            raise AssertionError("persisted copy retry must not probe a new copy")
 
     _install_running_job_repository(monkeypatch, job=job, state=state, finish_result=True)
     monkeypatch.setattr(
@@ -1134,12 +1245,10 @@ def test_annotation_retry_reuses_persisted_copy_after_uncertain_commit(
         "complete_annotation_execution",
         lambda **kwargs: SimpleNamespace(id=job.attempt_id),
     )
-    ctx = _annotation_ctx(
-        state=state,
-        backend=lambda: backend,
-        storage=unexpected_storage,
-        media_probe=unexpected_media_probe,
-    )
+    ctx: Mapping[str, Any] = {
+        "session_factory": _TrackingSessionFactory(state),
+        "annotation_runtime": Runtime(),
+    }
 
     worker_module._annotate_dataset_job(
         ctx,
@@ -1177,6 +1286,20 @@ def test_cancelled_annotation_discards_late_backend_result(
 
     backend = Backend()
 
+    class Runtime:
+        def repository(self, session: object) -> object:
+            assert isinstance(session, _TrackingSession)
+            return object()
+
+        def storage(self) -> object:
+            return object()
+
+        def backend(self) -> Backend:
+            return backend
+
+        def media_probe(self) -> object:
+            return object()
+
     def begin_annotation(*, job: object, datasets: object, now: datetime) -> object:
         del job, datasets, now
         return target
@@ -1200,7 +1323,11 @@ def test_cancelled_annotation_discards_late_backend_result(
     monkeypatch.setattr(worker_module, "prepare_annotation_execution_copy", prepare_copy)
     monkeypatch.setattr(worker_module, "save_annotation_execution_copy", save_copy)
     monkeypatch.setattr(worker_module, "complete_annotation_execution", complete_annotation)
-    ctx = _annotation_ctx(state=state, backend=lambda: backend, blocking=True)
+    ctx: Mapping[str, Any] = {
+        "session_factory": _TrackingSessionFactory(state),
+        "annotation_runtime": Runtime(),
+        "blocking_job_slots": asyncio.Semaphore(worker_module._BLOCKING_JOB_LIMIT),
+    }
 
     async def scenario() -> None:
         running = asyncio.create_task(worker_module.annotate_dataset_job(ctx, str(job.id)))

@@ -357,6 +357,7 @@ def _requeue_stale_job(engine: Engine, settings: Settings, job_id: UUID) -> None
         session.commit()
     with session_factory(engine)() as session:
         recovered = PostgresJobRepository(session).recover_stale_running(
+            job_type=job.job_type,
             now=now,
             stale_after_seconds=360,
         )

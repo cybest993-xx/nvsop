@@ -220,7 +220,7 @@ def test_download_video_enforces_end_to_end_timeout(
         def __init__(self) -> None:
             self.reads = 0
 
-        def read(self, _size: int = -1) -> bytes:
+        def read1(self, _size: int = -1) -> bytes:
             self.reads += 1
             if self.reads == 1:
                 clock[0] = 2.0

@@ -35,6 +35,7 @@ from factory_sop.dataset.api import (
     UsageCheckStatus,
     UsageCheckTarget,
     UsageKind,
+    ValidationObjectEffects,
     apply_usage_check_currentness,
     begin_annotation_context_preparation,
     begin_annotation_execution,
@@ -398,7 +399,12 @@ def _validate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
         if not _commit_if_active(session, fence):
             return
 
-    storage = runtime.storage()
+    object_effects = ValidationObjectEffects(
+        runtime.storage(),
+        source_object_key=target.attempt.object_key,
+        member_id=running.member_id,
+        attempt_id=running.attempt_id,
+    )
     probe = runtime.media_probe()
     result_session = factory()
     try:
@@ -407,7 +413,7 @@ def _validate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
         result = validate_video_upload(
             job=running,
             datasets=datasets,
-            storage=storage,
+            storage=object_effects.storage,
             probe=probe,
             supported_codecs=runtime.supported_codecs(),
             now=datetime.now(UTC),
@@ -415,6 +421,7 @@ def _validate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
         )
         if fence.cancelled:
             result_session.rollback()
+            object_effects.after_rollback()
             return
         current = datasets.member_by_id(running.member_id)
         if current is not None and current.current_attempt_id != running.attempt_id:
@@ -435,6 +442,7 @@ def _validate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
         )
         if not finished:
             result_session.rollback()
+            object_effects.after_rollback()
             _logger.info(
                 "job.dataset_validation.lease_lost",
                 job_id=str(running.id),
@@ -444,7 +452,9 @@ def _validate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
             )
             return
         if not _commit_if_active(result_session, fence):
+            object_effects.after_rollback()
             return
+        object_effects.after_commit()
         _logger.info(
             "job.dataset_validation.finished",
             job_id=str(running.id),

@@ -25,6 +25,7 @@ from factory_sop.dataset.model import (
     ConfirmationResult,
     DatasetMember,
     MemberStatus,
+    ObjectStat,
     RetryMode,
     RetryResult,
     TrainingDataset,
@@ -1069,6 +1070,106 @@ def _cleanup_objects(
                 attempt_id=str(attempt_id),
                 object_key=object_key,
             )
+
+
+class ValidationObjectEffects:
+    """协调 validation 数据库发布与对象存储不可逆副作用。"""
+
+    def __init__(
+        self,
+        storage: ObjectStorage,
+        *,
+        source_object_key: str,
+        member_id: UUID,
+        attempt_id: UUID,
+    ) -> None:
+        self._storage = storage
+        self._source_object_key = source_object_key
+        self._member_id = member_id
+        self._attempt_id = attempt_id
+        self._rollback_object_keys: list[str] = []
+        self._delete_source_after_commit = False
+
+    @property
+    def storage(self) -> ObjectStorage:
+        """返回延迟源对象删除、跟踪定稿候选的 validation 存储视图。"""
+        return self
+
+    def create_upload(
+        self,
+        *,
+        object_key: str,
+        declared_size: int,
+        max_bytes: int,
+        expires_at: datetime,
+    ) -> UploadInstructions:
+        return self._storage.create_upload(
+            object_key=object_key,
+            declared_size=declared_size,
+            max_bytes=max_bytes,
+            expires_at=expires_at,
+        )
+
+    def stat(self, *, object_key: str) -> ObjectStat:
+        return self._storage.stat(object_key=object_key)
+
+    def download_to(
+        self,
+        *,
+        object_key: str,
+        destination: BinaryIO,
+        version_id: str | None = None,
+    ) -> None:
+        self._storage.download_to(
+            object_key=object_key,
+            destination=destination,
+            version_id=version_id,
+        )
+
+    def finalize_upload(self, *, object_key: str, source: BinaryIO, size: int) -> ObjectStat:
+        stored = self._storage.finalize_upload(
+            object_key=object_key,
+            source=source,
+            size=size,
+        )
+        self._rollback_object_keys.append(object_key)
+        return stored
+
+    def delete(self, *, object_key: str) -> None:
+        if object_key == self._source_object_key:
+            self._delete_source_after_commit = True
+            return
+        try:
+            self._storage.delete(object_key=object_key)
+        finally:
+            self._rollback_object_keys = [
+                candidate for candidate in self._rollback_object_keys if candidate != object_key
+            ]
+
+    def after_commit(self) -> None:
+        """发布提交成功后保留定稿对象，再执行 use case 请求的源对象清理。"""
+        self._rollback_object_keys.clear()
+        if self._delete_source_after_commit:
+            _cleanup_objects(
+                storage=self._storage,
+                object_keys=(self._source_object_key,),
+                member_id=self._member_id,
+                attempt_id=self._attempt_id,
+                event="dataset.video_validation.temporary_cleanup_failed",
+            )
+        self._delete_source_after_commit = False
+
+    def after_rollback(self) -> None:
+        """发布失权后清理未引用定稿候选，并保留数据库仍引用的源对象。"""
+        _cleanup_objects(
+            storage=self._storage,
+            object_keys=tuple(self._rollback_object_keys),
+            member_id=self._member_id,
+            attempt_id=self._attempt_id,
+            event="dataset.video_validation.final_object_cleanup_failed",
+        )
+        self._rollback_object_keys.clear()
+        self._delete_source_after_commit = False
 
 
 def _fail_validation(

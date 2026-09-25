@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""只读汇总 PR 的机器可核实交付状态，不代替人工合并授权。"""
+"""只读汇总 PR 的机器可核实交付状态，不替代独立审查或仓库交付门禁。"""
 
 from __future__ import annotations
 
@@ -196,7 +196,7 @@ def evaluate(
     if protection == "protected":
         merge_guard = "server-protected"
     elif protection == "unsupported":
-        merge_guard = "manual-ci-confirmation-required"
+        merge_guard = "ci-proof-without-server-protection"
     else:
         merge_guard = "unverified"
 
@@ -213,7 +213,7 @@ def evaluate(
         f"architecture_review_evidence={architecture_evidence}",
         f"dispatch_impact_review={dispatch_impact}",
         f"dispatch_impact_evidence={dispatch_impact_evidence}",
-        "independent_review=manual-confirmation-required",
+        "independent_review=manual-evidence-check",
         f"automated_readiness={'ready' if not blockers else 'blocked'}",
         f"blockers={','.join(blockers) if blockers else 'none'}",
     )

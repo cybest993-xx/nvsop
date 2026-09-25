@@ -16,7 +16,7 @@ from scripts.check_pr_readiness import (
 
 
 class PrReadinessTest(unittest.TestCase):
-    def test_machine_ready_still_requires_manual_independent_review_confirmation(self) -> None:
+    def test_machine_ready_reports_manual_independent_review_evidence_check(self) -> None:
         result = evaluate(
             {
                 "state": "OPEN",
@@ -31,11 +31,11 @@ class PrReadinessTest(unittest.TestCase):
             "abc",
         )
         self.assertTrue(result.ready)
-        self.assertIn("independent_review=manual-confirmation-required", result.lines)
+        self.assertIn("independent_review=manual-evidence-check", result.lines)
         self.assertIn("automated_readiness=ready", result.lines)
         self.assertIn("merge_guard=server-protected", result.lines)
 
-    def test_plan_without_branch_protection_can_use_manual_ci_confirmation(self) -> None:
+    def test_plan_without_branch_protection_reports_local_ci_proof(self) -> None:
         result = evaluate(
             {
                 "state": "OPEN",
@@ -50,7 +50,7 @@ class PrReadinessTest(unittest.TestCase):
         )
         self.assertTrue(result.ready)
         self.assertIn("branch_protection=unsupported", result.lines)
-        self.assertIn("merge_guard=manual-ci-confirmation-required", result.lines)
+        self.assertIn("merge_guard=ci-proof-without-server-protection", result.lines)
 
     @patch("scripts.check_pr_readiness.run")
     def test_protection_state_only_classifies_the_plan_capability_error_as_unsupported(

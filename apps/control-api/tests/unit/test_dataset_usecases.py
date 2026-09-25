@@ -16,6 +16,7 @@ import pytest
 from factory_sop.auth.authorization import AuthorizationRefusedError, Caller
 from factory_sop.auth.model import User, UserStatus
 from factory_sop.auth.permissions import Permission
+from factory_sop.dataset import usecases as dataset_usecases
 from factory_sop.dataset.errors import DatasetRefusalCode, DatasetRefusedError
 from factory_sop.dataset.media import MediaMetadata, MediaProbeUnavailableError
 from factory_sop.dataset.model import (
@@ -682,6 +683,25 @@ def _prepared_validation(content: bytes) -> tuple[FakeDatasets, FakeStorage, App
     )
     assert confirmation.job is not None
     return datasets, storage, confirmation.job
+
+
+def test_final_object_key_isolated_by_job_generation() -> None:
+    datasets, _, job = _prepared_validation(b"generation-isolation")
+    target = begin_video_validation(job=job, datasets=datasets, now=NOW)
+    assert target is not None
+
+    first = dataset_usecases._final_object_key(
+        target.attempt,
+        job=replace(job, updated_at=NOW + timedelta(seconds=1)),
+    )
+    second = dataset_usecases._final_object_key(
+        target.attempt,
+        job=replace(job, updated_at=NOW + timedelta(seconds=2)),
+    )
+
+    assert first != second
+    assert first.endswith("/registered-video")
+    assert second.endswith("/registered-video")
 
 
 @pytest.mark.parametrize(

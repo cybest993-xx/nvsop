@@ -57,6 +57,7 @@ def test_stale_recovery_uses_job_type_specific_execution_lease(
     settings = SimpleNamespace(
         media_probe_timeout_seconds=30,
         annotation_http_timeout_seconds=120,
+        dataset_upload_ttl_seconds=900,
     )
     ctx = {
         "dispatcher": FakeDispatcher(),
@@ -67,7 +68,7 @@ def test_stale_recovery_uses_job_type_specific_execution_lease(
     asyncio.run(worker_module.dispatch_pending_jobs(ctx))
 
     assert dict(recovered) == {
-        JobType.DATASET_VALIDATION: 330,
+        JobType.DATASET_VALIDATION: 3030,
         JobType.DATASET_ANNOTATION: 930,
         JobType.DATASET_ANNOTATION_PREPARATION: 930,
         JobType.DATASET_USAGE_CHECK: 330,
@@ -81,6 +82,7 @@ def test_worker_timeouts_match_job_type_recovery_leases(
     settings = SimpleNamespace(
         media_probe_timeout_seconds=30,
         annotation_http_timeout_seconds=120,
+        dataset_upload_ttl_seconds=900,
         worker_health_check_interval_seconds=5,
     )
 
@@ -109,7 +111,7 @@ def test_worker_timeouts_match_job_type_recovery_leases(
     )
 
     expected = {
-        "validate_dataset_job": 330,
+        "validate_dataset_job": 3030,
         "check_dataset_usage_job": 330,
         "generate_dataset_artifact_job": 330,
         "prepare_annotation_context_job": 930,

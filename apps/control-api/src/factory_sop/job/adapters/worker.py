@@ -68,6 +68,7 @@ _logger = get_logger("job")
 _BLOCKING_JOB_LIMIT = 4
 # 最长标注路径串行经过 cleanup、两次 upload、derived download 与 split。
 _ANNOTATION_HTTP_CALLS_PER_EXECUTION = 5
+_VALIDATION_OBJECT_TRANSFERS = 3
 
 
 def _blocking_execution_timeout_seconds(settings: Settings) -> int:
@@ -84,7 +85,13 @@ def _job_execution_timeout_seconds(settings: Settings, job_type: JobType) -> int
     match job_type:
         case JobType.DATASET_ANNOTATION | JobType.DATASET_ANNOTATION_PREPARATION:
             return _blocking_execution_timeout_seconds(settings)
-        case JobType.DATASET_VALIDATION | JobType.DATASET_USAGE_CHECK | JobType.DATASET_ARTIFACT:
+        case JobType.DATASET_VALIDATION:
+            return (
+                settings.dataset_upload_ttl_seconds * _VALIDATION_OBJECT_TRANSFERS
+                + settings.media_probe_timeout_seconds
+                + 300
+            )
+        case JobType.DATASET_USAGE_CHECK | JobType.DATASET_ARTIFACT:
             return settings.media_probe_timeout_seconds + 300
         case _:
             assert_never(job_type)

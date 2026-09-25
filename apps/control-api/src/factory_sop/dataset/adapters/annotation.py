@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import socket
 import stat
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -94,9 +95,10 @@ class HttpAnnotationBackend:
                 headers={"Connection": "close"},
             )
             self._set_remaining_timeout(connection, deadline)
+            response_socket = self._connected_socket(connection)
             response = connection.getresponse()
             body = self._read_response_body(
-                connection=connection,
+                response_socket=response_socket,
                 response=response,
                 deadline=deadline,
             )
@@ -157,10 +159,11 @@ class HttpAnnotationBackend:
             connection.putheader("Connection", "close")
             connection.endheaders()
             self._set_remaining_timeout(connection, deadline)
+            response_socket = self._connected_socket(connection)
             response = connection.getresponse()
             if not 200 <= response.status < 300:
                 self._read_response_body(
-                    connection=connection,
+                    response_socket=response_socket,
                     response=response,
                     deadline=deadline,
                 )
@@ -168,7 +171,7 @@ class HttpAnnotationBackend:
                     f"标注基座读取视频失败（HTTP {response.status}）"
                 )
             self._read_response_body(
-                connection=connection,
+                response_socket=response_socket,
                 response=response,
                 deadline=deadline,
                 destination=destination,
@@ -204,23 +207,30 @@ class HttpAnnotationBackend:
             return http.client.HTTPSConnection(self._host, self._port, timeout=self._timeout)
         return http.client.HTTPConnection(self._host, self._port, timeout=self._timeout)
 
+    def _connected_socket(self, connection: http.client.HTTPConnection) -> socket.socket:
+        sock = connection.sock
+        if sock is None:
+            raise AnnotationBackendUnavailableError("标注基座连接未建立")
+        return sock
+
+    def _set_socket_remaining_timeout(self, sock: socket.socket, deadline: float) -> None:
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise AnnotationBackendUnavailableError("标注基座请求超过允许时限")
+        sock.settimeout(remaining)
+
     def _set_remaining_timeout(
         self,
         connection: http.client.HTTPConnection,
         deadline: float,
     ) -> None:
-        """把 socket timeout 收紧到本次 HTTP 操作剩余的端到端预算。"""
-        remaining = deadline - monotonic()
-        if remaining <= 0:
-            raise AnnotationBackendUnavailableError("标注基座请求超过允许时限")
-        if connection.sock is None:
-            raise AnnotationBackendUnavailableError("标注基座连接未建立")
-        connection.sock.settimeout(remaining)
+        """把已连接 socket timeout 收紧到本次 HTTP 操作剩余的端到端预算。"""
+        self._set_socket_remaining_timeout(self._connected_socket(connection), deadline)
 
     def _read_response_body(
         self,
         *,
-        connection: http.client.HTTPConnection,
+        response_socket: socket.socket,
         response: http.client.HTTPResponse,
         deadline: float,
         destination: BinaryIO | None = None,
@@ -228,7 +238,7 @@ class HttpAnnotationBackend:
         """分段读取响应并在每次底层读取前重新收紧剩余 wall-clock 预算。"""
         chunks: list[bytes] = []
         while True:
-            self._set_remaining_timeout(connection, deadline)
+            self._set_socket_remaining_timeout(response_socket, deadline)
             chunk = response.read1(1024 * 1024)
             if not chunk:
                 break
@@ -347,9 +357,10 @@ class HttpAnnotationBackend:
             connection.endheaders()
             send_body(connection, deadline)
             self._set_remaining_timeout(connection, deadline)
+            response_socket = self._connected_socket(connection)
             response = connection.getresponse()
             body = self._read_response_body(
-                connection=connection,
+                response_socket=response_socket,
                 response=response,
                 deadline=deadline,
             )

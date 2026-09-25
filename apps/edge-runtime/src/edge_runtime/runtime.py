@@ -564,7 +564,7 @@ class _RuntimeCycleRunner:
             try:
                 media.start()
                 return
-            except BaseException:
+            except Exception:
                 self._cycle_stop.wait(0.5)
 
     def _run_configuration(self) -> None:

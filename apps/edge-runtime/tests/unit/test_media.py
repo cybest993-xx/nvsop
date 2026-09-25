@@ -240,20 +240,31 @@ class MediaConfigurationTest(MediaFixture):
             media_path_mode=MediaPathMode.CPU_TRANSCODE,
         )
         mediamtx = Process()
-        calls = 0
+
+        class InterruptingProcess(Process):
+            def __init__(self) -> None:
+                super().__init__()
+                self._interrupt_pending = True
+
+            def poll(self) -> int | None:
+                if self._interrupt_pending:
+                    self._interrupt_pending = False
+                    raise KeyboardInterrupt
+                return super().poll()
+
+        ffmpeg = InterruptingProcess()
+        processes = iter((mediamtx, ffmpeg))
 
         def popen(args: list[str], **_kwargs: object) -> Process:
-            nonlocal calls
-            calls += 1
-            if calls == 1:
-                return mediamtx
-            raise KeyboardInterrupt
+            del args
+            return next(processes)
 
         runtime = MediaRuntime(replace(self.configuration, cameras=(camera,)), popen=popen)
 
         with self.assertRaises(KeyboardInterrupt):
             runtime.start()
 
+        self.assertTrue(ffmpeg.terminated)
         self.assertTrue(mediamtx.terminated)
         self.assertFalse(self.configuration.media_config_path.exists())
         self.assertEqual(

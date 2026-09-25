@@ -478,12 +478,12 @@ class MediaRuntime:
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                         )
+                        ffmpeg.append(ffmpeg_process)
                         _wait_started(ffmpeg_process, configuration.startup_timeout_seconds)
                     except Exception as error:
                         raise RuntimeError(
                             f"camera {camera.camera_id} CPU transcode failed: {error}"
                         ) from error
-                    ffmpeg.append(ffmpeg_process)
             _write_atomic(configuration.media_config_path, rendered, source=temporary)
             write_applied_window(
                 configuration.media_config_path, configuration.recording_window_seconds

@@ -129,7 +129,8 @@ class MediaFixture(unittest.TestCase):
 
 class MediaConfigurationTest(MediaFixture):
     def test_render_propagates_control_flow_exit_from_secret_reader(self) -> None:
-        def interrupt(_path: Path, _name: str) -> str:
+        def interrupt(path: Path, name: str) -> str:
+            del path, name
             raise KeyboardInterrupt
 
         with self.assertRaises(KeyboardInterrupt):

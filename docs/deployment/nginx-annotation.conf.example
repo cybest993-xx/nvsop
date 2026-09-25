@@ -198,7 +198,7 @@ server {
     }
 }
 
-# 媒体端口只转发已经由中心授权的派生资源；中心和 Nginx 不中继源视频字节。
+# 8444 媒体端口只转发已经由中心授权的标注派生资源；训练源视频上传走普通 443 控制面入口，不经本端口。
 server {
     listen 8444 ssl;
     server_name sop.example.internal;

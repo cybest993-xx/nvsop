@@ -85,8 +85,8 @@
 **Q25 AI 建模板做到哪一步**：(a) 只生成提示词与 `actions.json`；(b) 再加步骤对齐（调推理服务，给出每步在模板视频中的时间码供人工核对）；(c) 再加微调数据生成。
 ➡️ 建议 **(b)**，(c) 另行裁决后再排期。纯 (a) 太薄——客户无法在上线前判断模板可用。此处只是建议，不因软件 MVP 分期而自动确认，直接相关的步骤对齐切片在裁决后排期。
 
-**Q36 备份与恢复**：全仓库尚无备份/恢复要求。待定：中心 PG（含训练侧 schema）与 MinIO 的备份对象与周期；推理机本地 SQLite 是否纳入备份，及其内容可从中心重建到什么程度；恢复演练是否进发布门禁（当前 [`deployment/upgrade.md`](../deployment/upgrade.md) 只定义迁移/兼容升级证据，不替代恢复策略）；恢复后与推理机的对账语义，避免重放已执行的处置。
-➡️ 建议：中心 PG + MinIO 为备份权威；推理机 SQLite **不入备**——在飞实例按 §5.7 语义在重启后记为"运行中断"结案，已上报数据以中心为准，未上报的本地队列丢失即接受，不为它建第二套备份链路。恢复演练进发布门禁。**它是运维交付项，不阻塞编码。**
+**Q36 备份与恢复**：全仓库尚无备份/恢复要求。待定：中心 PG（含训练侧 schema）与中心训练素材持久卷的备份对象与周期；推理机本地 SQLite、证据媒体和仍在滚动窗口内的录像分别是否纳入备份，以及恢复后与中心镜像如何对账；恢复演练是否进发布门禁（当前 [`deployment/upgrade.md`](../deployment/upgrade.md) 只定义迁移/兼容升级证据，不替代恢复策略）；恢复后不得重放已执行的处置。
+➡️ 建议：中心 PG 与训练素材卷作为中心备份集合；推理机的 SQLite 与证据媒体是否备份必须由 Q36 明确裁决，不能因为中心已有元数据就推定媒体可重建，也不能默认允许丢失未上报事实或本地唯一证据。恢复演练进发布门禁。**它是运维交付项，不阻塞无关编码。**
 
 **硬件门禁不是开工前提**（见 §5.21）：GPU 档位、单节点路数、VLM 实时性、海康型号与编码、ISAPI 投递方式、时间同步精度的实测值属**部署期验证**，[`target-environment-validation-matrix.md`](../research/target-environment-validation-matrix.md) 是其验收清单与证据格式。未实测时不得标称对应门禁通过，但软件按泛化设计正常开发。
 
@@ -109,15 +109,15 @@
 
 ## 六、系统结构
 
-**【已定】技术与部署基线**：中心后台采用 FastAPI + SQLAlchemy 2.x + Alembic；基础 Web 采用 Vue 3 + TypeScript + Vite，并通过 OpenAPI 生成客户端。Nginx 是统一访问入口。Nginx、FastAPI、ARQ worker、PostgreSQL、MinIO、Redis 与原样复用的训练微服务由一份中心机 Compose 统一安装和运维。正式部署必须使用 HTTPS，并使用 `HttpOnly + Secure + SameSite` 会话 Cookie；固定 main 本地开发实例默认使用 HTTP，`allow_http` 仅限该部署模式，也可显式设置 `NVSOP_DEV_PROTOCOL=https` 验证本地 TLS 路径。修改请求仍执行 CSRF 校验，不在 `localStorage` 保存长期令牌。
+**【已定】技术与部署基线**：中心后台采用 FastAPI + SQLAlchemy 2.x + Alembic；基础 Web 采用 Vue 3 + TypeScript + Vite，并通过 OpenAPI 生成客户端。Nginx 是统一访问入口。Nginx、FastAPI、ARQ worker、PostgreSQL、Redis、`dataset` 拥有的训练素材持久卷与原样复用的训练微服务由一份中心机 Compose 统一安装和运维；MinIO/S3 不是首版必需运行组件。正式部署必须使用 HTTPS，并使用 `HttpOnly + Secure + SameSite` 会话 Cookie；固定 main 本地开发实例默认使用 HTTP，`allow_http` 仅限该部署模式，也可显式设置 `NVSOP_DEV_PROTOCOL=https` 验证本地 TLS 路径。修改请求仍执行 CSRF 校验，不在 `localStorage` 保存长期令牌。
 
 中心后台是**模块化单体**：业务模块在一个 FastAPI 部署单元内通过进程内接口协作，各自拥有行为、表和迁移；首版不引入内部 HTTP、服务网格、消息总线或分布式事务。
 
-首切片持久化只启用 PostgreSQL、MinIO 与 Redis；`monitor` 记录存储与压缩的当前实现状态见[证据与保留机制](mechanisms/evidence-and-retention.md)，TimescaleDB/hypertable 压缩仍是 §九 P9 的批准目标。推理机本地状态用 SQLite（§5.7）。
+首切片中心持久化只启用 PostgreSQL、Redis 与 `dataset` 训练素材持久卷；`monitor` 记录存储与压缩的当前实现状态见[证据与保留机制](mechanisms/evidence-and-retention.md)，TimescaleDB/hypertable 压缩仍是 §九 P9 的批准目标。推理机本地状态用 SQLite（§5.7），运行录像与证据媒体均留在拥有它们的推理机。
 
 **训练侧 `metadata_db` 与中心后台合并为一个 Postgres 实例、两个 schema**（Q35）：中心业务一个 schema，原样复用的训练微服务一个 schema。训练是低频活动，不值得为它单立一个实例与一套独立的备份、监控与升级流程；原样复用的训练服务只改连接串，不改代码。两个 schema 由不同的数据库角色持有，中心迁移不触碰训练 schema，训练服务也不读中心表——它们之间没有跨 schema 外键。
 
-**【已定】统一访问入口是控制面入口，不是全流量中继。** Nginx 只承载 Web 静态资源、中心后台 REST/JSON、会话、小数据实时更新，以及原样复用的标注 UI 与训练微服务（在网关补鉴权）。视频的 WebRTC 信令与媒体均由浏览器直连推理机 mediamtx。
+**【已定】统一访问入口是控制面入口，不是全流量中继。** Nginx 承载 Web 静态资源、中心后台 REST/JSON、会话、小数据实时更新、低频训练素材上传，以及原样复用的标注 UI 与训练微服务（在网关补鉴权）。运行态 WebRTC 与证据媒体仍由拥有它们的推理机提供；标注派生媒体只保留 ADR-0011 记录的有限网关例外。
 
 下图表达批准的目标部署结构，不表示其中每个 Edge 组件都已在当前 `main` 落地。
 
@@ -129,12 +129,13 @@
 │    └── 反代：标注 UI / 训练微服务       ├── supervisor（锁存/处置/    ├── supervisor
 ├── FastAPI 后台（单一入口点）            │    证据切片）                │
 ├── PostgreSQL（+Timescale 后置）         ├── 主机级上报对账            ├── 主机级上报对账
-├── Redis / MinIO / ARQ worker           ├── 连接器运行时              ├── 连接器运行时
+├── Redis / ARQ worker / 训练素材卷       ├── 连接器运行时              ├── 连接器运行时
 └── 训练微服务（原样复用）+ metadata_db   ├── mediamtx                 ├── mediamtx
-                                         └── SQLite 本地状态          └── SQLite
+                                         ├── SQLite 本地状态          ├── SQLite
+                                         └── 本地录像 / 证据媒体       └── 本地录像 / 证据媒体
                                                ↑                          ↑
-          ← 上报（幂等 upsert）                相机 1~8                  相机 9~16
-          → 拉取（模板/配置，推理机主动）  （视频不跨中心；中心离线现场继续判定与处置）
+          ← 上报（幂等 upsert / 证据引用）     相机 1~8                  相机 9~16
+          → 拉取（模板/配置，推理机主动）  （运行/证据视频不跨中心；中心离线现场继续判定与处置）
 ```
 
 **中心后台模块**（9 个）。**唯一的机器可读清单是根 `pyproject.toml` 的 `[tool.nvsop]` 表**：门禁脚本改为从它读之前，迁移所有权检查持有一份必须与它同步的副本；本表与 [仓库架构](../engineering/architecture.md) 只是它的解释，加减模块先改机器可读清单。
@@ -145,13 +146,13 @@
 | `device` | 推理主机、工位、相机、推理后端、连接器配置、凭据配置状态标志、健康聚合、工位运行参数覆盖、委托命令队列 |
 | `execution` | 工位物理执行权：归属、改绑握手、强制改绑的双人确认、物理执行租约与续期（§5.17） |
 | `template` | Excel 导入/校验/配置生成/版本/发布/绑定/desired-reported 对账 |
-| `dataset` | 训练数据集登记、用途检查、派生制品引用 |
+| `dataset` | 训练数据集登记、中心本地训练素材生命周期、用途检查、派生制品引用 |
 | `monitor` | 推理机上报的完整镜像：SOP 实例、判定、锁存违规、处置记录、流健康；看板状态（[ADR-0010](../adr/0010-alert-merges-into-monitor.md)） |
-| `evidence` | 证据引用、片段窗口与再切片请求、人工复核（§5.20） |
+| `evidence` | 推理机证据媒体的中心索引/引用、片段窗口与再切片请求、人工复核（§5.20） |
 | `retention` | 数据保留策略、判定类别解析、变更影响估算与引用保护（§5.19） |
 | `job` | 异步任务权威与投递（outbox；ADR-0004） |
 
-**`retention` 拥有策略、不拥有数据**：它解析"某实例属于哪个保留类别、该类别留多久、何时压缩"，删除由数据拥有者在自己的表上执行（`evidence` 删证据、`monitor` 删记录与处置归档、边缘运行时裁 SQLite 与录像）。它独立成模块的理由是有一条跨模块不变量需要单一所有者：**保留策略不得删除仍被开放违规、在审复核或未结案实例引用的数据**——该约束横跨 `monitor` 与 `evidence`，散在各模块无人能强制。反过来让它也持有数据就会变成一个跨界读写他人表的模块，违反所有权规则。
+**`retention` 拥有策略、不拥有数据**：它解析"某实例属于哪个保留类别、该类别留多久、何时压缩"。删除由数据拥有者执行：`monitor` 删除中心记录与处置归档，`evidence` 删除中心证据索引/复核记录，边缘运行时按已同步且受引用保护的策略删除本机证据媒体、裁 SQLite 与录像。它独立成模块的理由是有一条跨模块不变量需要单一所有者：**保留策略不得删除仍被开放违规、在审复核或未结案实例引用的数据**——该约束横跨 `monitor`、`evidence` 与边缘媒体删除边界，散在各处无人能强制。反过来让它也持有数据就会变成跨界读写他人状态的模块，违反所有权规则。
 
 **`execution` 与 `device` 分开的理由**：`device` 的变更驱动是"现场装了什么设备"，是可逆的配置 CRUD；`execution` 的变更驱动是"哪台机有权驱动这个工位的执行器"，是带 TTL 的跨机安全状态机，且承载全系统唯一的双人确认操作（§5.17）。把它混进 `device`，一次相机改名和一次可能同时驱动两套物理执行器的改绑会共用同一个模块接口与权限面。它有自己的不变量——**任一工位在任一时刻最多一台推理机持有未过期的物理执行权**——这条要在模块内可强制，不能靠调用方自觉。
 
@@ -163,7 +164,7 @@
 
 `dataset` 是独立模块而非 `template` 的一部分：`CONTEXT.md` 对「训练数据集」的定义明确写了它不定义 SOP 模板，并把「SOP 模板」列为 _Avoid_ 项，合并二者会在代码层重新粘合术语层刻意拆开的概念。
 
-**【已定目标】推理机侧组成**：判定核心、边界求解、本地状态（SQLite）、supervisor、主机级上报对账、配置同步、连接器运行时、mediamtx 看护，以及证据切片/上传与归档任务。运行机制与离线语义见[推理机自治机制](mechanisms/edge-autonomy.md)；包所有权、公共 seam 与依赖方向由[仓库架构](../engineering/architecture.md)统一定义，不在此重复。`vendor/` 的批准改造边界仍由 §5.11 定义。
+**【已定目标】推理机侧组成**：判定核心、边界求解、本地状态（SQLite）、supervisor、主机级上报对账、配置同步、连接器运行时、mediamtx 看护，以及证据切片/本地持有/引用上报与录像归档任务。运行机制与离线语义见[推理机自治机制](mechanisms/edge-autonomy.md)；包所有权、公共 seam 与依赖方向由[仓库架构](../engineering/architecture.md)统一定义，不在此重复。`vendor/` 的批准改造边界仍由 §5.11 定义。
 
 **依赖规则**：判定核心不依赖任何相机 SDK、推理框架或连接器实现，只消费归一化观测；中心各模块各自拥有数据表，不跨模块直接读写；前端只调后端用例，不承载判定规则。
 
@@ -209,9 +210,9 @@
 - **保留策略域**（`retention`）：`retention_policy`（全局默认与工位覆盖组：三个判定类别各自的证据保留时长、记录明细保留时长、压缩起始年龄、聚合归档年龄；覆盖为整组替换）、`retention_sweep`（每次回收任务的执行记录：范围、删除计数、跳过计数与跳过原因、起止时刻），使"上次删了什么、为什么跳过"可查。录像滚动窗口不在此表——它按推理机配置，属 `device_inference_host`（§5.19）。
 - **连接器域**（`device`，仅配置）：`device_connector`（类型 = `hikvision_isapi` / `board_card`、连接参数、健康状态、**该适配器的能力声明**：投递方式、最大投递延迟、是否保序、是否可能丢边沿、时间戳来源，§5.8）、`device_connector_point`（方向 in/out、点位号、语义标签如"工件到位"/"停线联锁"、外键 → connector 与 station）。模板按语义标签引用点位，不写死设备地址。**工位可以没有任何连接器。**
 - **模板域**（`template`）：`template_sop`、`template_version`（不可变，含 Excel 导入引用、actions.json、vlm_prompts、**运行参数默认值**、顺序性声明、sha256、发布者与发布时刻）、`template_draft`（可编辑，含 `revision` 乐观锁列）、`template_station_binding`（`desired_version` / `reported_version`，后者由推理机上报，§5.3）。
-- **训练数据域**（`dataset`）：`dataset_training_dataset`、`dataset_member`（**数据集内的视频**：MinIO key、来源、大小、sha256、时长、编码）、`dataset_action_list_revision`、`dataset_annotation_context`、`dataset_annotation_submission`、`dataset_annotation_execution`（动作时间段标注及其不可变执行候选）、`dataset_usage_check`（DDM/VLM 用途、状态、原因）、`dataset_artifact`（生成的 DDM `annotation.json` 等派生制品及摘要）。上传、标注、用途检查、转换和训练是不同状态，不合并成一个"成功"。
+- **训练数据域**（`dataset`）：`dataset_training_dataset`、`dataset_member`（**数据集内的视频**：dataset 本地文件引用、来源、大小、sha256、时长、编码）、`dataset_action_list_revision`、`dataset_annotation_context`、`dataset_annotation_submission`、`dataset_annotation_execution`（动作时间段标注及其不可变执行候选）、`dataset_usage_check`（DDM/VLM 用途、状态、原因）、`dataset_artifact`（生成的 DDM `annotation.json` 等派生制品及摘要）。上传、标注、用途检查、转换和训练是不同状态，不合并成一个"成功"。
 - **上报镜像域**（`monitor`）：`monitor_sop_instance`（起止、闭合原因、边界信号来源、上报时刻）、`monitor_decision`（判定结果 + 原因码 + 模板版本 + 推理机自报模型标识）、`monitor_observation`（动作编号与外部信号同表）、`monitor_stream_health`（含时间锚定偏移）、`monitor_violation`（kind、锁存标志、来源推理机）、`monitor_disposal`（action、执行状态、幂等键）。记录存储与压缩的当前实现状态见[证据与保留机制](mechanisms/evidence-and-retention.md)。全部按事件 id 幂等 upsert，权威在推理机本地；违规与处置的执行权威同样在推理机，这两张表是归档载体（[ADR-0010](../adr/0010-alert-merges-into-monitor.md)）。
-- **证据与复核域**（`evidence`）：`evidence_evidence`（MinIO key、类型、**锚点时刻、窗口前后余量、素材代次、发起来源=自动/再切片**）、`evidence_reclip_request`（新窗口参数、目标推理机、状态、发起人、失败原因如"素材已过期"）、`evidence_review`（复核结论、复核人、指向具体哪条证据）。
+- **证据与复核域**（`evidence`）：`evidence_evidence`（证据 ID、来源推理机、本机访问引用、sha256/大小、类型、**锚点时刻、窗口前后余量、素材代次、发起来源=自动/再切片**；不保存媒体字节）、`evidence_reclip_request`（新窗口参数、目标推理机、状态、发起人、失败原因如"素材已过期"）、`evidence_review`（复核结论、复核人、指向具体哪条证据）。
 - **基础域**（`auth`）：`auth_user`（含停用状态）、`auth_role`、`auth_permission`、`auth_role_permission`、`auth_session`。**不设 `auth_audit_log`**（§5.15）。
 - **作业域**（`job`）：`job_application_job`（异步任务权威与 outbox；ADR-0004）。
 
@@ -219,7 +220,7 @@
 
 ### 推理机（SQLite，每机一份）
 
-`local_config`（已确认的设备配置与凭据密文）、`local_template_version`（已确认模板版本 + sha256）、`local_sop_instance`、`local_decision`、`local_violation`（锁存）、`local_disposal`（处置记录与点位写入去重账本）、`local_report_queue`（发往 Center `monitor` 的结构化待办，至少一次）、`local_evidence_queue`（待上传证据）。具体对账、证据与处置生命周期由对应机制文档定义。
+`local_config`（已确认的设备配置与凭据密文）、`local_template_version`（已确认模板版本 + sha256）、`local_sop_instance`、`local_decision`、`local_violation`（锁存）、`local_disposal`（处置记录与点位写入去重账本）、`local_report_queue`（发往 Center `monitor` 的结构化待办，至少一次）、`local_evidence_queue`（待登记/对账的证据元数据与本机媒体引用；媒体文件不在队列内）。具体对账、证据与处置生命周期由对应机制文档定义。
 
 **关键不变量**：违规一经确认即锁存，不因后续补做或处置失败而消失；锁存发生在推理机本地，不依赖中心可达。
 
@@ -302,7 +303,7 @@ Q25（AI 建模板范围）与 Q36（备份恢复）仍是 §四的待确认项�
 
 **多机安全**（`execution`，§5.17）：任一工位在任一时刻最多一台推理机持有未过期物理执行权；交权握手未确认前新机不得写该工位输出点位；强制改绑必须记录两名确认人；租约过期后该机停止写点位且界面显式标注物理防错已失效。
 
-**数据保留与压缩**（§5.19）：**所有保留时长与窗口均可配置，回收与切片代码路径无时间字面量**（机械检查保证）；配置校验拒绝非法值（0、负数、明细保留期短于压缩起始年龄、再切片期望超过录像滚动窗口）；"永久"与"未设置"在界面上可区分；三个判定类别各自的保留时长独立生效，挂有已锁存违规的实例按不通过类保留；缩短保留期只对将来生效且提交前显示影响估算；**仍被开放违规、在审复核或未结案实例引用的数据不被删除**（回收任务须报跳过计数与原因）；上报队列与证据队列不因空间回收而删除；磁盘水位越阈值时该路进不可判定并告警，不静默写失败。录像压缩须验证：**压缩任务运行期间判定链路的 p99 与超预算计数不劣化**（NVENC 与推理的实际争用在目标 GPU 上实测，不假设互不影响）；重编码产物校验通过后才删原分段，校验失败保留原文件并告警；**扫一组 CRF 定档**——取复核可用性开始劣化前的那一档为默认值，据此复算 §5.5 容量表；压缩后分段仍可支撑人工复核判断与再切片（由人判断，不用客观指标代替）；证据默认不重编码，其 sha256 与上传时一致。
+**数据保留与压缩**（§5.19）：**所有保留时长与窗口均可配置，回收与切片代码路径无时间字面量**（机械检查保证）；配置校验拒绝非法值（0、负数、明细保留期短于压缩起始年龄、再切片期望超过录像滚动窗口）；"永久"与"未设置"在界面上可区分；三个判定类别各自的保留时长独立生效，挂有已锁存违规的实例按不通过类保留；缩短保留期只对将来生效且提交前显示影响估算；**仍被开放违规、在审复核或未结案实例引用的数据不被删除**（回收任务须报跳过计数与原因）；待上报事实与待登记证据元数据队列不因空间回收而删除，证据媒体也不能靠磁盘压力绕过保留/引用保护；磁盘水位越阈值时该路进不可判定并告警，不静默写失败。录像压缩须验证：**压缩任务运行期间判定链路的 p99 与超预算计数不劣化**（NVENC 与推理的实际争用在目标 GPU 上实测，不假设互不影响）；重编码产物校验通过后才删原分段，校验失败保留原文件并告警；**扫一组 CRF 定档**——取复核可用性开始劣化前的那一档为默认值，据此复算 §5.5 容量表；压缩后分段仍可支撑人工复核判断与再切片（由人判断，不用客观指标代替）；证据默认不重编码，其 sha256 与生成时一致。
 
 **证据与复核**（§5.20）：片段窗口的必需跨度不被余量配置截断（取并集）；再切片不改锚点、追加不覆盖、标注窗口参数与素材代次；**界面显示可再切片截止时刻**，过期后按钮置灰并说明原因；素材已过滚动窗口的再切片命令以明确原因失败结案，不静默丢弃；归档压缩后的分段再切片产物**可在复核界面直接播放**（§5.19 约束 2）；复核结论指向具体哪一条证据。
 

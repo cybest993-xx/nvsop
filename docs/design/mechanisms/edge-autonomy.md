@@ -20,7 +20,7 @@
   违规锁存 / 处置派发（含写输出点位）/ 证据切片指令
   chunk 静默计时器（空闲超时闭合 + 进程级失联兜底）
 【目标】主机级上报对账（跨工位排空 local_report_queue 中的 typed pending facts → Center monitor）
-【目标】证据上传（专用大字节链路；生命周期见[证据与保留机制](evidence-and-retention.md)）
+【目标】证据本地持有与引用上报（媒体留在本机；生命周期见[证据与保留机制](evidence-and-retention.md)）
 MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU 转码、预览按需、录像窗口按主机配置）
 【目标】录像压缩归档任务（老化分段重编码，可限速可暂停，具体编码与验证约束见 §5.19）
 连接器运行时（轮询或推送输入点位 → 观测；执行输出点位写入）
@@ -34,7 +34,7 @@ MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU �
 
 **为什么流租约不再需要**：租约（原 ADR-0001）存在的唯一理由是"中心多个进程可能重复订阅同一路相机，重复启 DeepStream pipeline 重复占显存"。判定回到推理机后，是本机 supervisor 驱动本机 pipeline，不存在跨机竞争者；"每路流有且仅有一个拥有者"退化为本机的进程管理问题。ADR-0001 因此作废。
 
-**本地状态存储用 SQLite**：嵌入式、单机、标准库自带，不给推理机再加一个数据库服务。存本地配置缓存、已确认模板版本、在飞与已闭合实例、判定、已锁存违规、处置记录、待上报队列、待上传证据队列。
+**本地状态存储用 SQLite**：嵌入式、单机、标准库自带，不给推理机再加一个数据库服务。存本地配置缓存、已确认模板版本、在飞与已闭合实例、判定、已锁存违规、处置记录、待上报队列、待登记证据元数据队列；证据媒体文件本身保存在本机证据目录。
 
 **中心不可达时的行为**：
 
@@ -53,9 +53,9 @@ MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU �
 
 运行时把上报对账与配置同步作为两个独立生命周期：结构化事实完成 SQLite 提交后只唤醒主机级 reporter，reporter 以有界批次排空 backlog 并独立重试；配置同步继续按自己的周期推进，停机信号同时唤醒并终止两者。该拆分属于 Edge 组合根的调度职责，不抽象成通用 scheduler。
 
-这个 reconciler 只承载发往 Center `monitor` 的小型结构化事实。证据上传保留独立的大字节/对象确认生命周期，配置同步保留 Center→Edge candidate/confirmed 生命周期，物理处置保留 `local_disposal` 幂等账本与本地执行路径；不引入通用事件总线、Event Sourcing 或 `kind + payload` 万能 outbox。
+这个 reconciler 只承载发往 Center `monitor` 的小型结构化事实。证据媒体始终留在本机，证据引用/元数据登记保留独立的生命周期；配置同步保留 Center→Edge candidate/confirmed 生命周期，物理处置保留 `local_disposal` 幂等账本与本地执行路径；不引入通用事件总线、Event Sourcing 或 `kind + payload` 万能 outbox。
 
-**对账语义**：上报按事件 id 幂等 upsert，至少一次；处置记录带幂等键，恢复后不重复执行已执行的动作；证据上传失败可重试且不删除本地唯一副本。历史判定的事件时配置与 backend provenance 跟 decision/outbox 同事务冻结：多 backend 工位按实例累计实际参与输入的 backend/model 集合，重启和计时器结案沿用已持久化来源，不从当前配置选择任意 backend。带 historical proof 的判定走严格 report v2；发送前用主机签名确认冻结的旧 configuration，Center 只有在该 revision/effective digest 确实曾由自己签发时才建立不可变历史 assignment 并明确协商 v2。旧 Center 不支持握手时保留 outbox，不降级丢证明。其他尚未版本化的机器协议仍受 ADR-0003 的通用 runtime/version handshake 要求约束（[ADR-0003](../../adr/0003-api-v1-is-a-fixed-prefix.md)）。
+**对账语义**：上报按事件 id 幂等 upsert，至少一次；处置记录带幂等键，恢复后不重复执行已执行的动作；证据元数据/引用登记失败可重试且不删除本机权威证据文件。历史判定的事件时配置与 backend provenance 跟 decision/outbox 同事务冻结：多 backend 工位按实例累计实际参与输入的 backend/model 集合，重启和计时器结案沿用已持久化来源，不从当前配置选择任意 backend。带 historical proof 的判定走严格 report v2；发送前用主机签名确认冻结的旧 configuration，Center 只有在该 revision/effective digest 确实曾由自己签发时才建立不可变历史 assignment 并明确协商 v2。旧 Center 不支持握手时保留 outbox，不降级丢证明。其他尚未版本化的机器协议仍受 ADR-0003 的通用 runtime/version handshake 要求约束（[ADR-0003](../../adr/0003-api-v1-is-a-fixed-prefix.md)）。
 
 **健康状态的两种语义与写入者**（避免 `device` 与 `monitor` 各存一份"健康"）：
 

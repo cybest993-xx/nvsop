@@ -7,7 +7,7 @@
 Nginx 与 NVIDIA 基座服务必须加入同一个内部 `sop-network`。只使用
 `docs/deployment/nginx-annotation.conf.example`，将其第一组上游连接到
 `control-api:8000`、`annotation-frontend:80` 和 `annotation-backend:8100`；标注 UI 和派生媒体客户端只访问
-HTTPS 网关的 443/8444 端口；源视频仍按 #30 通过预签名 URL 直传 MinIO。标注后端和前端不发布 `ports`，不能直接从
+HTTPS 网关的 443/8444 端口。批准目标已由 ADR-0012 / #350 改为源训练视频经中心正式 API 流式写入 `dataset` 本地持久卷；在 #350 合并前，当前 `main` 仍按 #30 的 MinIO 实现运行，因此本页现有集成命令仍需当前实现所要求的 MinIO。标注后端和前端不发布 `ports`，不能直接从
 厂区网络访问。训练服务的当前统一入口与配置见[运行配置](configuration.md)及实际 Nginx/Compose 资产，不再把 #33 当作未实施的部署步骤。标注 API 仅经中心适配器开放带产品上下文的调用，避免旧接口绕过数据集授权。
 
 标注页面由中心训练数据集入口创建并准备上下文后，打开
@@ -28,7 +28,7 @@ docker compose -f vendor/sop-monitoring-blueprints/microservices/sop-training-bp
 
 ## 真实 NVIDIA 基座 + ARQ worker
 
-准备一个可访问的 NVIDIA `video-annotator-ms` 实例、其 metadata PostgreSQL、真实 Redis 和当前测试 MinIO，然后运行：
+准备一个可访问的 NVIDIA `video-annotator-ms` 实例、其 metadata PostgreSQL、真实 Redis，以及**当前代码版本所要求的数据集媒体存储**后运行；在 #350 合并前这仍是测试 MinIO，#350 完成后应改为隔离的本地训练素材卷：
 
 ```sh
 export NVSOP_ANNOTATION_BACKEND_URL=http://annotation-backend:8100

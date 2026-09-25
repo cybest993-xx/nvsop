@@ -14,3 +14,4 @@
 | [0009](0009-single-channel-perception-limit.md) | 单通道感知的可观测性限制 |
 | [0010](0010-alert-merges-into-monitor.md) | 告警归档并入 monitor |
 | [0011](0011-annotation-derived-media-gateway.md) | 标注派生媒体的授权网关例外 |
+| [0012](0012-media-ownership-and-center-training-files.md) | 运行/证据媒体留在推理机，中心训练素材用本地文件 |

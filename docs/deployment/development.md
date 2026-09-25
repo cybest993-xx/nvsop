@@ -29,7 +29,7 @@
 |---|---|
 | 业务入口 | `http://localhost:8443`（默认） |
 | 标注派生媒体 | `http://localhost:8444` |
-| MinIO 上传入口 | `http://localhost:9443` |
+| MinIO 上传入口（#350 前当前实现） | `http://localhost:9443` |
 | Tilt | `http://localhost:10350` |
 | Playwright UI | `http://localhost:9323` |
 
@@ -49,7 +49,7 @@ make dev-setup
 - 校验工具、Docker daemon、Compose、Tilt 版本和固定端口；
 - 生成开发 secrets 和合成测试视频；显式 HTTPS 模式才生成开发 CA/服务端证书；
 - 执行 frozen `pnpm install` 与 `uv sync`；
-- 拉取 PostgreSQL、Redis、MinIO、annotation DB、Nginx 等基础镜像；
+- 拉取 PostgreSQL、Redis、annotation DB、Nginx 等基础镜像；在 #350 合并前的当前实现中还会拉取 MinIO，批准目标将其替换为本地训练素材卷；
 - 在 `.nvsop/dev-main/`（或 `--state-dir` 指定目录）写入状态、凭据路径和测试制品。
 
 开发账号信息写入 `.nvsop/dev-main/credentials.txt`，默认登录名为 `dev.admin`；密码本身保存在独立 secret 文件中。不要把状态目录、密码或证书私钥提交进 Git。旧工作树若仍有 `.tmp/dev-main/`，先停止旧实例；需要保留本地状态时显式移动到 `.nvsop/dev-main/`，否则重新执行 `make dev-setup`。脚本不会静默回退到旧目录。
@@ -90,7 +90,7 @@ make dev-down        # 停止实例
 make dev-logs SERVICE=worker TAIL=200
 ```
 
-`make dev-down` **不会删除 named volumes**；输出中的 `volumes_removed` 保持 `false`。数据库、Redis、MinIO 和 annotation media 的开发数据因此会保留。
+`make dev-down` **不会删除 named volumes**；输出中的 `volumes_removed` 保持 `false`。数据库、Redis 和 annotation media 的开发数据因此会保留；在 #350 合并前，当前 MinIO volume 同样保留，之后由 dataset 训练素材卷承担对应开发数据。
 
 ## 常见排障
 

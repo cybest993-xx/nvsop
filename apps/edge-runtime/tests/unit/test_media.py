@@ -128,6 +128,13 @@ class MediaFixture(unittest.TestCase):
 
 
 class MediaConfigurationTest(MediaFixture):
+    def test_render_propagates_control_flow_exit_from_secret_reader(self) -> None:
+        def interrupt(_path: Path, _name: str) -> str:
+            raise KeyboardInterrupt
+
+        with self.assertRaises(KeyboardInterrupt):
+            render_mediamtx_config(self.configuration, secret_reader=interrupt)
+
     def test_parser_preserves_missing_browser_addresses_as_unconfigured(self) -> None:
         configuration = load_media_runtime_configuration(
             {
@@ -225,6 +232,33 @@ class MediaConfigurationTest(MediaFixture):
         self.assertEqual("/usr/local/bin/mediamtx", factory.calls[0][0][0])
         self.assertEqual("/usr/bin/ffmpeg", factory.calls[1][0][0])
         runtime.close()
+
+    def test_control_flow_exit_during_ffmpeg_launch_cleans_candidate_resources(self) -> None:
+        camera = replace(
+            self.configuration.cameras[0],
+            media_path_mode=MediaPathMode.CPU_TRANSCODE,
+        )
+        mediamtx = Process()
+        calls = 0
+
+        def popen(args: list[str], **_kwargs: object) -> Process:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return mediamtx
+            raise KeyboardInterrupt
+
+        runtime = MediaRuntime(replace(self.configuration, cameras=(camera,)), popen=popen)
+
+        with self.assertRaises(KeyboardInterrupt):
+            runtime.start()
+
+        self.assertTrue(mediamtx.terminated)
+        self.assertFalse(self.configuration.media_config_path.exists())
+        self.assertEqual(
+            [],
+            list(self.configuration.media_config_path.parent.glob(".mediamtx.yml.*.tmp")),
+        )
 
     def test_parser_rejects_a_path_that_is_not_derived_from_the_camera_uuid(self) -> None:
         raw = {

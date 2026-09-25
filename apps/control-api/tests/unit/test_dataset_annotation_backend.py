@@ -229,7 +229,7 @@ def test_download_video_enforces_end_to_end_timeout(
 
     class Connection:
         def __init__(self) -> None:
-            self.sock = Socket()
+            self.sock: Socket | None = Socket()
             self.response = Response()
 
         def connect(self) -> None:
@@ -245,6 +245,7 @@ def test_download_video_enforces_end_to_end_timeout(
             return None
 
         def getresponse(self) -> Response:
+            self.sock = None
             return self.response
 
         def close(self) -> None:

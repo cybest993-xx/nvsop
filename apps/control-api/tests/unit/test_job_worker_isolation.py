@@ -285,6 +285,7 @@ def test_blocking_jobs_leave_event_loop_responsive_and_cancel_promptly(
     settings = SimpleNamespace(
         media_probe_timeout_seconds=30,
         annotation_http_timeout_seconds=120,
+        dataset_upload_ttl_seconds=900,
     )
     assert worker_module._blocking_execution_timeout_seconds(cast(Any, settings)) == 930
 
@@ -316,11 +317,13 @@ def test_blocking_jobs_leave_event_loop_responsive_and_cancel_promptly(
             self, *, job_type: JobType, now: datetime, stale_after_seconds: int
         ) -> None:
             del now
-            expected = (
-                930
-                if job_type in {JobType.DATASET_ANNOTATION, JobType.DATASET_ANNOTATION_PREPARATION}
-                else 330
-            )
+            expected = {
+                JobType.DATASET_VALIDATION: 3030,
+                JobType.DATASET_ANNOTATION: 930,
+                JobType.DATASET_ANNOTATION_PREPARATION: 930,
+                JobType.DATASET_USAGE_CHECK: 330,
+                JobType.DATASET_ARTIFACT: 330,
+            }[job_type]
             assert stale_after_seconds == expected
 
         def pending(self, *, limit: int) -> tuple[object, ...]:

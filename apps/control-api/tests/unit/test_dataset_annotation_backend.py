@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+import factory_sop.dataset.adapters.annotation as annotation_module
 from factory_sop.dataset.adapters.annotation import HttpAnnotationBackend
 from factory_sop.dataset.annotation import (
     AnnotationBackendExecutionError,
@@ -201,3 +202,62 @@ def test_multipart_filename_cannot_inject_a_header(tmp_path: Path) -> None:
                 segments=(),
                 mode=AnnotationMode.SINGLE_OPERATOR,
             )
+
+
+def test_download_video_enforces_end_to_end_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [0.0]
+
+    class Socket:
+        def settimeout(self, timeout: float) -> None:
+            assert timeout > 0
+
+    class Response:
+        status = 200
+
+        def __init__(self) -> None:
+            self.reads = 0
+
+        def read(self, _size: int = -1) -> bytes:
+            self.reads += 1
+            if self.reads == 1:
+                clock[0] = 2.0
+                return b"first chunk"
+            return b""
+
+    class Connection:
+        def __init__(self) -> None:
+            self.sock = Socket()
+            self.response = Response()
+
+        def connect(self) -> None:
+            return None
+
+        def putrequest(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        def putheader(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        def endheaders(self) -> None:
+            return None
+
+        def getresponse(self) -> Response:
+            return self.response
+
+        def close(self) -> None:
+            return None
+
+    backend = HttpAnnotationBackend(
+        base_url="http://annotation.invalid",
+        timeout_seconds=1,
+        data_root=tmp_path,
+    )
+    connection = Connection()
+    monkeypatch.setattr(annotation_module, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(backend, "_connection", lambda: connection)
+
+    with pytest.raises(AnnotationBackendUnavailableError, match="超过允许时限"):
+        backend.download_video(video_id="base-video", destination=io.BytesIO())

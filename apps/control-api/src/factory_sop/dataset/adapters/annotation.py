@@ -9,6 +9,7 @@ import stat
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
+from time import monotonic
 from typing import Any, BinaryIO
 from urllib.parse import quote, urlsplit
 
@@ -82,14 +83,19 @@ class HttpAnnotationBackend:
 
     def discard_prepared_video(self, *, data_id: str) -> None:
         """删除取消执行留下的未引用基座数据集。"""
+        deadline = monotonic() + self._timeout
         connection = self._connection()
         try:
+            connection.connect()
+            self._set_remaining_timeout(connection, deadline)
             connection.request(
                 "DELETE",
                 f"{self._base_path}/api/v1/videos/clear-dataset/{quote(data_id, safe='')}",
                 headers={"Connection": "close"},
             )
+            self._set_remaining_timeout(connection, deadline)
             response = connection.getresponse()
+            self._set_remaining_timeout(connection, deadline)
             body = response.read()
             if not 200 <= response.status < 300:
                 raise AnnotationBackendExecutionError(
@@ -136,21 +142,30 @@ class HttpAnnotationBackend:
 
     def download_video(self, *, video_id: str, destination: BinaryIO) -> None:
         """读取基座转码副本到服务端临时文件，不向浏览器中继字节。"""
+        deadline = monotonic() + self._timeout
         connection = self._connection()
         try:
+            connection.connect()
+            self._set_remaining_timeout(connection, deadline)
             connection.putrequest(
                 "GET",
                 f"{self._base_path}/api/v1/videos/{quote(video_id, safe='')}/download",
             )
             connection.putheader("Connection", "close")
             connection.endheaders()
+            self._set_remaining_timeout(connection, deadline)
             response = connection.getresponse()
             if not 200 <= response.status < 300:
+                self._set_remaining_timeout(connection, deadline)
                 response.read()
                 raise AnnotationBackendExecutionError(
                     f"标注基座读取视频失败（HTTP {response.status}）"
                 )
-            while chunk := response.read(1024 * 1024):
+            while True:
+                self._set_remaining_timeout(connection, deadline)
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
                 destination.write(chunk)
         except AnnotationBackendExecutionError:
             raise
@@ -183,13 +198,31 @@ class HttpAnnotationBackend:
             return http.client.HTTPSConnection(self._host, self._port, timeout=self._timeout)
         return http.client.HTTPConnection(self._host, self._port, timeout=self._timeout)
 
+    def _set_remaining_timeout(
+        self,
+        connection: http.client.HTTPConnection,
+        deadline: float,
+    ) -> None:
+        """把 socket timeout 收紧到本次 HTTP 操作剩余的端到端预算。"""
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise AnnotationBackendUnavailableError("标注基座请求超过允许时限")
+        if connection.sock is None:
+            raise AnnotationBackendUnavailableError("标注基座连接未建立")
+        connection.sock.settimeout(remaining)
+
     def _post_json(self, *, path: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+        def send(connection: http.client.HTTPConnection, deadline: float) -> None:
+            self._set_remaining_timeout(connection, deadline)
+            connection.send(body)
+
         response_body = self._request(
             path=path,
             content_type="application/json",
             content_length=len(body),
-            send_body=lambda connection: connection.send(body),
+            send_body=send,
         )
         return _json_object(response_body)
 
@@ -209,9 +242,12 @@ class HttpAnnotationBackend:
         )
         total = len(prefix) + len(content) + len(suffix)
 
-        def send(connection: http.client.HTTPConnection) -> None:
+        def send(connection: http.client.HTTPConnection, deadline: float) -> None:
+            self._set_remaining_timeout(connection, deadline)
             connection.send(prefix)
+            self._set_remaining_timeout(connection, deadline)
             connection.send(content)
+            self._set_remaining_timeout(connection, deadline)
             connection.send(suffix)
 
         response_body = self._request(
@@ -244,13 +280,16 @@ class HttpAnnotationBackend:
             raise AnnotationBackendUnavailableError("标注源文件不可读取") from error
         total = len(prefix) + size + len(suffix)
 
-        def send(connection: http.client.HTTPConnection) -> None:
+        def send(connection: http.client.HTTPConnection, deadline: float) -> None:
+            self._set_remaining_timeout(connection, deadline)
             connection.send(prefix)
             while True:
                 chunk = source.read(1024 * 1024)
                 if not chunk:
                     break
+                self._set_remaining_timeout(connection, deadline)
                 connection.send(chunk)
+            self._set_remaining_timeout(connection, deadline)
             connection.send(suffix)
 
         response_body = self._request(
@@ -267,17 +306,22 @@ class HttpAnnotationBackend:
         path: str,
         content_type: str,
         content_length: int,
-        send_body: Callable[[http.client.HTTPConnection], None],
+        send_body: Callable[[http.client.HTTPConnection, float], None],
     ) -> bytes:
+        deadline = monotonic() + self._timeout
         connection = self._connection()
         try:
+            connection.connect()
+            self._set_remaining_timeout(connection, deadline)
             connection.putrequest("POST", self._base_path + path)
             connection.putheader("Content-Type", content_type)
             connection.putheader("Content-Length", str(content_length))
             connection.putheader("Connection", "close")
             connection.endheaders()
-            send_body(connection)
+            send_body(connection, deadline)
+            self._set_remaining_timeout(connection, deadline)
             response = connection.getresponse()
+            self._set_remaining_timeout(connection, deadline)
             body = response.read()
             if not 200 <= response.status < 300:
                 raise AnnotationBackendExecutionError(f"标注基座请求失败（HTTP {response.status}）")

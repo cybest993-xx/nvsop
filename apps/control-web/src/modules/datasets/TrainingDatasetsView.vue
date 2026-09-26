@@ -2024,7 +2024,7 @@ onUnmounted(() => {
             动作列表修订：{{ submission.action_list_revision }} · 模式：{{ submission.mode }}
           </p>
           <p>
-            源文件身份：<code>{{ submission.source_object_version_id }}</code> · sha256：<code>{{
+            源文件身份：<code>{{ submission.source_object_key }}</code> · sha256：<code>{{
               submission.source_sha256
             }}</code>
           </p>

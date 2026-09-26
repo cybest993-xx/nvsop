@@ -279,8 +279,8 @@
             "title": "Source",
             "type": "string"
           },
-          "source_object_version_id": {
-            "title": "Source Object Version Id",
+          "source_object_key": {
+            "title": "Source Object Key",
             "type": "string"
           },
           "source_sha256": {
@@ -302,7 +302,7 @@
           "member_id",
           "action_list_revision",
           "annotation_revision",
-          "source_object_version_id",
+          "source_object_key",
           "source_sha256",
           "derived_video_size",
           "derived_video_sha256",
@@ -624,8 +624,8 @@
             "title": "Segments",
             "type": "array"
           },
-          "source_object_version_id": {
-            "title": "Source Object Version Id",
+          "source_object_key": {
+            "title": "Source Object Key",
             "type": "string"
           },
           "source_sha256": {
@@ -640,7 +640,7 @@
           "context_id",
           "revision",
           "action_list_revision",
-          "source_object_version_id",
+          "source_object_key",
           "source_sha256",
           "idempotency_key",
           "mode",
@@ -6197,6 +6197,17 @@
             "title": "Expires At",
             "type": "string"
           },
+          "final_object_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Object Key"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -6206,17 +6217,6 @@
             "format": "uuid",
             "title": "Member Id",
             "type": "string"
-          },
-          "object_version_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Object Version Id"
           },
           "status": {
             "title": "Status",
@@ -6230,7 +6230,7 @@
           "declared_size",
           "declared_sha256",
           "expires_at",
-          "object_version_id"
+          "final_object_key"
         ],
         "title": "UploadAttemptView",
         "type": "object"
@@ -6241,13 +6241,6 @@
           "expires_at": {
             "title": "Expires At",
             "type": "string"
-          },
-          "fields": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "title": "Fields",
-            "type": "object"
           },
           "headers": {
             "additionalProperties": {
@@ -6276,7 +6269,6 @@
         "required": [
           "method",
           "url",
-          "fields",
           "headers",
           "expires_at",
           "max_bytes",
@@ -6812,10 +6804,10 @@
             "title": "Member Id",
             "type": "string"
           },
-          "source_object_version_id": {
+          "source_object_key": {
             "maxLength": 255,
             "minLength": 1,
-            "title": "Source Object Version Id",
+            "title": "Source Object Key",
             "type": "string"
           },
           "source_sha256": {
@@ -6828,7 +6820,7 @@
         "required": [
           "key",
           "member_id",
-          "source_object_version_id",
+          "source_object_key",
           "source_sha256"
         ],
         "title": "VlmMediaInput",
@@ -6887,8 +6879,8 @@
             "title": "Member Id",
             "type": "string"
           },
-          "source_object_version_id": {
-            "title": "Source Object Version Id",
+          "source_object_key": {
+            "title": "Source Object Key",
             "type": "string"
           },
           "source_sha256": {
@@ -6899,7 +6891,7 @@
         "required": [
           "key",
           "member_id",
-          "source_object_version_id",
+          "source_object_key",
           "source_sha256",
           "annotation_submission_id",
           "annotation_execution_id",

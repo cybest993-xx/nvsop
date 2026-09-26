@@ -151,7 +151,7 @@ class VlmMediaInput(BaseModel):
 
     key: StrictStr = Field(min_length=1, max_length=512)
     member_id: UUID
-    source_object_version_id: StrictStr = Field(min_length=1, max_length=255)
+    source_object_key: StrictStr = Field(min_length=1, max_length=255)
     source_sha256: StrictStr = Field(min_length=64, max_length=64)
     annotation_submission_id: UUID | None = None
     annotation_execution_id: UUID | None = None
@@ -235,7 +235,7 @@ class UploadAttemptView(BaseModel):
     declared_size: int
     declared_sha256: str | None
     expires_at: datetime
-    object_version_id: str | None
+    final_object_key: str | None
 
     @field_serializer("expires_at")
     def serialize_expires_at(self, value: datetime) -> str:
@@ -247,7 +247,6 @@ class UploadInstructionsView(BaseModel):
 
     method: str
     url: str
-    fields: dict[str, str]
     headers: dict[str, str]
     expires_at: datetime
     max_bytes: int
@@ -294,7 +293,7 @@ class RetryView(BaseModel):
 class VlmMediaView(BaseModel):
     key: str
     member_id: UUID
-    source_object_version_id: str
+    source_object_key: str
     source_sha256: str
     annotation_submission_id: UUID | None
     annotation_execution_id: UUID | None
@@ -466,7 +465,7 @@ def _attempt_view(value: model.UploadAttempt) -> UploadAttemptView:
         declared_size=value.declared_size,
         declared_sha256=value.declared_sha256,
         expires_at=value.expires_at,
-        object_version_id=value.object_version_id,
+        final_object_key=value.final_object_key,
     )
 
 
@@ -476,7 +475,6 @@ def _upload_view(value: model.UploadInstructions | None) -> UploadInstructionsVi
     return UploadInstructionsView(
         method=value.method,
         url=value.url,
-        fields=value.fields,
         headers=value.headers,
         expires_at=value.expires_at,
         max_bytes=value.max_bytes,
@@ -524,7 +522,7 @@ def _vlm_candidate_view(value: model.VlmCandidate) -> VlmCandidateView:
             VlmMediaView(
                 key=item.key,
                 member_id=item.member_id,
-                source_object_version_id=item.source_object_version_id,
+                source_object_key=item.source_object_key,
                 source_sha256=item.source_sha256,
                 annotation_submission_id=item.annotation_submission_id,
                 annotation_execution_id=item.annotation_execution_id,

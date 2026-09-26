@@ -3,6 +3,9 @@
 ADR-0003 has no `/api/v2` escape hatch. This checker therefore protects the compatibility
 surface the decision names: paths, operations, requests, responses and parameters cannot lose
 accepted wire shapes, and inline or component schemas cannot be narrowed.
+
+ADR-0003 同时允许“所有受影响客户端协同发布”的显式破坏性变更；声明文件就是它的机械落点：
+只有逐条登记（含原因与 issue）的破坏项才被接受，未登记的破坏项仍然失败。
 """
 
 from __future__ import annotations
@@ -427,9 +430,35 @@ def previous_contract(reference: str, path: Path) -> JsonObject | None:
     return json.loads(result.stdout)
 
 
+def load_declarations(path: Path | None) -> dict[str, Mapping[str, object]]:
+    """读取已登记的破坏性契约变化；没有声明文件时视为没有声明。"""
+    if path is None or not path.exists():
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    changes = payload.get("changes") if isinstance(payload, Mapping) else None
+    if not isinstance(changes, list):
+        raise SystemExit(f"{path} 必须包含 changes 列表")
+    declared: dict[str, Mapping[str, object]] = {}
+    for entry in changes:
+        if not isinstance(entry, Mapping) or not isinstance(entry.get("change"), str):
+            raise SystemExit(f"{path} 的每条变化都必须带 change 字段")
+        if not entry.get("reason") or not entry.get("issue"):
+            raise SystemExit(f"{path} 的每条变化都必须带 reason 与 issue")
+        declared[str(entry["change"])] = entry
+    return declared
+
+
+def undeclared_errors(errors: list[str], declared: Mapping[str, Mapping[str, object]]) -> list[str]:
+    """返回未登记的破坏项；已登记的破坏项是显式协同发布的一部分。"""
+    return [error for error in errors if error not in declared]
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 3:
-        raise SystemExit("usage: check_openapi_compatibility.py BASE_REF CURRENT_OPENAPI")
+    if len(argv) not in (3, 4):
+        raise SystemExit(
+            "usage: check_openapi_compatibility.py BASE_REF CURRENT_OPENAPI "
+            "[DECLARED_BREAKING_CHANGES]"
+        )
     reference = argv[1]
     path = Path(argv[2])
     previous = previous_contract(reference, path)
@@ -438,9 +467,22 @@ def main(argv: list[str]) -> int:
         return 0
     current = json.loads(path.read_text(encoding="utf-8"))
     errors = compatibility_errors(previous, current)
-    if errors:
+    declarations_path = Path(argv[3]) if len(argv) > 3 else None
+    declared = load_declarations(declarations_path)
+    acknowledged = [error for error in errors if error in declared]
+    if acknowledged:
+        print(f"Acknowledged breaking changes ({declarations_path}):")
+        for error in acknowledged:
+            entry = declared[error]
+            print(
+                f"- {error} "
+                f"[{entry.get('issue', '?')} {entry.get('recorded', '?')}]: "
+                f"{entry.get('reason', '')}"
+            )
+    undeclared = undeclared_errors(errors, declared)
+    if undeclared:
         print("OpenAPI compatibility failed:", file=sys.stderr)
-        for error in errors:
+        for error in undeclared:
             print(f"- {error}", file=sys.stderr)
         return 1
     print("OpenAPI compatibility passed.")

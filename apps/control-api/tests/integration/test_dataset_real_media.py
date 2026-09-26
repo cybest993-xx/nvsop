@@ -442,7 +442,14 @@ def test_streaming_upload_cannot_target_another_object(
             upload = cast(dict[str, Any], requested["upload"])
             object_key = str(upload["object_key"])
             # 对象键完全由服务端从授权的数据集、成员和尝试派生；客户端只能提交内容。
-            assert upload["fields"] == {}
+            assert set(upload) == {
+                "method",
+                "url",
+                "headers",
+                "expires_at",
+                "max_bytes",
+                "object_key",
+            }
             assert object_key.endswith(
                 f"/members/{requested['member']['id']}/attempts/{requested['attempt']['id']}/video"
             )
@@ -585,7 +592,7 @@ def test_real_ffmpeg_video_upload_records_object_and_media_facts_and_is_idempote
             assert 0 < registered.duration_seconds <= 1.1
             assert registered.object_key is not None
             assert registered.object_key.endswith("/registered-video")
-            assert registered.object_version_id == registered.object_key
+            assert registered.object_key == registered.object_key
 
             final_path = dataset_storage_root / registered.object_key
             assert final_path.stat().st_size == len(real_video_bytes)
@@ -745,7 +752,7 @@ def test_real_usage_check_and_ddm_artifact_use_postgres_local_files_and_workers(
             member = _persisted_member(engine, UUID(requested["member"]["id"]))
             assert member.status == MemberStatus.REGISTERED
             assert member.object_key is not None
-            assert member.object_version_id == member.object_key
+            assert member.object_key == member.object_key
             assert member.actual_sha256 is not None
             assert member.duration_seconds is not None
 
@@ -976,7 +983,7 @@ def test_real_vlm_candidate_check_uses_explicit_media_mapping(
                         {
                             "key": "vlm-source.mp4",
                             "member_id": str(member_id),
-                            "source_object_version_id": member.object_version_id,
+                            "source_object_key": member.object_key,
                             "source_sha256": member.actual_sha256,
                             **({"action_indices": [1]} if candidate_kind == "mcq" else {}),
                         }

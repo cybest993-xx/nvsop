@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
 import unittest
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from check_openapi_compatibility import compatibility_errors
+from check_openapi_compatibility import (
+    compatibility_errors,
+    load_declarations,
+    undeclared_errors,
+)
 
 
 def contract() -> dict[str, Any]:
@@ -386,6 +392,60 @@ class OpenApiCompatibilityTest(unittest.TestCase):
             "enum narrowed at schema SessionView.display_name: unconstrained -> ['王丽']",
             compatibility_errors(previous, current),
         )
+
+
+class DeclaredBreakingChangesTest(unittest.TestCase):
+    """ADR-0003 允许协同发布的破坏性变更，但必须逐条显式登记。"""
+
+    def test_declared_breaks_are_acknowledged_and_undeclared_ones_still_fail(self) -> None:
+        declared = {"field removed: schema SessionView.user_id": {"change": "x"}}
+
+        self.assertEqual(
+            undeclared_errors(
+                [
+                    "field removed: schema SessionView.user_id",
+                    "field removed: schema SessionView.display_name",
+                ],
+                declared,
+            ),
+            ["field removed: schema SessionView.display_name"],
+        )
+
+    def test_a_missing_declaration_file_acknowledges_nothing(self) -> None:
+        self.assertEqual(load_declarations(None), {})
+
+    def test_each_declaration_needs_a_reason_and_an_issue(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "breaking-changes.json"
+            path.write_text(
+                json.dumps({"changes": [{"change": "field removed: schema X"}]}), encoding="utf-8"
+            )
+
+            with self.assertRaises(SystemExit):
+                load_declarations(path)
+
+    def test_declarations_are_indexed_by_the_exact_reported_change(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "breaking-changes.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "changes": [
+                            {
+                                "change": "field removed: schema X.y",
+                                "reason": "改为文件身份字段",
+                                "issue": "#350",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                list(load_declarations(path)),
+                ["field removed: schema X.y"],
+            )
 
 
 if __name__ == "__main__":

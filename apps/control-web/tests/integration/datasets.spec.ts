@@ -57,13 +57,12 @@ const ATTEMPT = {
   declared_size: 11,
   declared_sha256: 'a'.repeat(64),
   expires_at: '2026-09-08T09:00:00Z',
-  object_version_id: null,
+  final_object_key: null,
 }
 
 const UPLOAD = {
   method: 'PUT',
   url: '/api/v1/training-datasets/dataset-1/members/member-1/attempts/attempt-1/content',
-  fields: {},
   headers: { 'Content-Type': 'application/octet-stream' },
   expires_at: '2026-09-08T09:00:00Z',
   max_bytes: 1000,
@@ -122,7 +121,7 @@ const ANNOTATION_CONTEXT = {
   member_id: 'member-1',
   action_list_revision: 1,
   annotation_revision: 0,
-  source_object_version_id: 'object-version-1',
+  source_object_key: 'object-version-1',
   source_sha256: 'a'.repeat(64),
   derived_video_size: 11,
   derived_video_sha256: 'b'.repeat(64),

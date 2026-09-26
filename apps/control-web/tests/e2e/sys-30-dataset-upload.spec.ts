@@ -72,13 +72,12 @@ const ATTEMPT = {
   declared_size: VIDEO_BYTES.length,
   declared_sha256: null,
   expires_at: '2026-09-08T09:00:00Z',
-  object_version_id: null,
+  final_object_key: null,
 }
 
 const UPLOAD = {
   method: 'PUT',
   url: UPLOAD_PATH,
-  fields: {},
   headers: { 'Content-Type': 'application/octet-stream' },
   expires_at: '2026-09-08T09:00:00Z',
   max_bytes: 8 * 1024 ** 3,

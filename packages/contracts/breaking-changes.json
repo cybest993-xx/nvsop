@@ -1,0 +1,70 @@
+{
+  "changes": [
+    {
+      "change": "field removed: schema AnnotationContextView.source_object_version_id",
+      "reason": "标注上下文绑定的是中心定稿文件身份，不是 S3 对象代次；随字段改名一并删除。",
+      "issue": "#350",
+      "recorded": "2026-09-26"
+    },
+    {
+      "change": "required field added: schema AnnotationContextView.source_object_key",
+      "reason": "同上：以定稿文件身份字段替代被删除的对象代次字段。",
+      "issue": "#350",
+      "recorded": "2026-09-26"
+    },
+    {
+      "change": "field removed: schema AnnotationSubmissionView.source_object_version_id",
+      "reason": "标注提交绑定的是中心定稿文件身份，不是 S3 对象代次；随字段改名一并删除。",
+      "issue": "#350",
+      "recorded": "2026-09-26"
+    },
+    {
+      "change": "required field added: schema AnnotationSubmissionView.source_object_key",
+      "reason": "同上：以定稿文件身份字段替代被删除的对象代次字段。",
+      "issue": "#350",
+      "recorded": "2026-09-26"
+    },
+    {
+      "change": "field removed: schema UploadAttemptView.object_version_id",
+      "reason": "该字段保存中心本地定稿文件键，改为 final_object_key 以匹配实际语义。",
+      "issue": "#350",
+      "recorded": "2026-09-26"
+    },
+    {
+      "change": "required field added: schema UploadAttemptView.final_object_key",
+      "reason": "同上：以定稿文件键字段替代被删除的对象代次字段。",
+      "issue": "#350",
+      "recorded": "2026-09-26"
+    },
+    {
+      "change": "field removed: schema UploadInstructionsView.fields",
+      "reason": "恒为空对象的 presigned POST 表单面是 S3 专有语义，本地流式上传不使用。",
+      "issue": "#350",
+      "recorded": "2026-09-26"
+    },
+    {
+      "change": "field removed: schema VlmMediaInput.source_object_version_id",
+      "reason": "用途检查的媒体事实绑定中心定稿文件身份，不是 S3 对象代次；随字段改名一并删除。",
+      "issue": "#350",
+      "recorded": "2026-09-26"
+    },
+    {
+      "change": "required field added: schema VlmMediaInput.source_object_key",
+      "reason": "同上：以定稿文件身份字段替代被删除的对象代次字段。",
+      "issue": "#350",
+      "recorded": "2026-09-26"
+    },
+    {
+      "change": "field removed: schema VlmMediaView.source_object_version_id",
+      "reason": "用途检查的媒体事实绑定中心定稿文件身份，不是 S3 对象代次；随字段改名一并删除。",
+      "issue": "#350",
+      "recorded": "2026-09-26"
+    },
+    {
+      "change": "required field added: schema VlmMediaView.source_object_key",
+      "reason": "同上：以定稿文件身份字段替代被删除的对象代次字段。",
+      "issue": "#350",
+      "recorded": "2026-09-26"
+    }
+  ]
+}

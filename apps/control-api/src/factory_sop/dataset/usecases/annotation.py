@@ -71,7 +71,7 @@ class DecodedAnnotationContextToken:
     member_id: UUID
     action_list_revision: int
     annotation_revision: int
-    source_object_version_id: str
+    source_object_key: str
     source_sha256: str
     expires_at: datetime
 
@@ -174,7 +174,7 @@ def create_annotation_context(
             DatasetRefusalCode.ACTION_LIST_NOT_FOUND,
             detail="请先登记一份动作清单",
         )
-    source_version = member.object_version_id
+    source_version = member.object_key
     source_sha256 = member.actual_sha256
     previous_submissions = datasets.list_annotation_submissions(
         dataset_id=dataset_id,
@@ -195,7 +195,7 @@ def create_annotation_context(
         member_id=member_id,
         action_list_revision=actions.revision,
         annotation_revision=annotation_revision,
-        source_object_version_id=source_version,
+        source_object_key=source_version,
         source_sha256=source_sha256,
         created_by=caller.user.id,
         created_at=now,
@@ -566,7 +566,7 @@ def complete_annotation_context_preparation(
         or current.preparation_job_id != target.job.id
         or current.preparation_status != "running"
         or member.dataset_id != target.context.dataset_id
-        or member.object_version_id != target.context.source_object_version_id
+        or member.object_key != target.context.source_object_key
         or member.actual_sha256 != target.context.source_sha256
     ):
         raise AnnotationRefusedError(
@@ -631,7 +631,7 @@ def encode_annotation_context_token(context: AnnotationContext, *, secret: str) 
         "member_id": str(context.member_id),
         "action_list_revision": context.action_list_revision,
         "annotation_revision": context.annotation_revision,
-        "source_object_version_id": context.source_object_version_id,
+        "source_object_version_id": context.source_object_key,
         "source_sha256": context.source_sha256,
         "expires_at": context.expires_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
     }
@@ -665,7 +665,7 @@ def decode_annotation_context_token(
             member_id=UUID(str(raw["member_id"])),
             action_list_revision=int(raw["action_list_revision"]),
             annotation_revision=int(raw["annotation_revision"]),
-            source_object_version_id=str(raw["source_object_version_id"]),
+            source_object_key=str(raw["source_object_version_id"]),
             source_sha256=str(raw["source_sha256"]),
             expires_at=expires_at,
         )
@@ -712,7 +712,7 @@ def resolve_annotation_context(
         or stored.member_id != decoded.member_id
         or stored.action_list_revision != decoded.action_list_revision
         or stored.annotation_revision != decoded.annotation_revision
-        or stored.source_object_version_id != decoded.source_object_version_id
+        or stored.source_object_key != decoded.source_object_key
         or stored.source_sha256 != decoded.source_sha256
         or stored.expires_at != decoded.expires_at
     ):
@@ -781,7 +781,7 @@ def read_annotation_context(
         member is None
         or member.dataset_id != context.dataset_id
         or member.status != MemberStatus.REGISTERED
-        or member.object_version_id != context.source_object_version_id
+        or member.object_key != context.source_object_key
         or member.actual_sha256 != context.source_sha256
     ):
         raise AnnotationRefusedError(
@@ -915,7 +915,7 @@ def submit_annotation(
     member = locked_member
     _require_registered_member(member)
     if (
-        member.object_version_id != context.source_object_version_id
+        member.object_key != context.source_object_key
         or member.actual_sha256 != context.source_sha256
     ):
         raise AnnotationRefusedError(
@@ -990,7 +990,7 @@ def submit_annotation(
         context_id=context.id,
         revision=current_revision + 1,
         action_list_revision=action_list.revision,
-        source_object_version_id=context.source_object_version_id,
+        source_object_key=context.source_object_key,
         source_sha256=context.source_sha256,
         idempotency_key=idempotency_key,
         request_digest=digest,
@@ -1143,7 +1143,7 @@ def complete_annotation_execution(
         member is None
         or member.dataset_id != target.submission.dataset_id
         or member.status != MemberStatus.REGISTERED
-        or member.object_version_id != target.submission.source_object_version_id
+        or member.object_key != target.submission.source_object_key
         or member.actual_sha256 != target.submission.source_sha256
     ):
         raise AnnotationRefusedError(
@@ -1211,7 +1211,7 @@ def prepare_annotation_context_copy(
         raise AnnotationRefusedError(DatasetRefusalCode.ANNOTATION_CONTEXT_INVALID)
     _require_registered_member(member)
     if (
-        member.object_version_id != context.source_object_version_id
+        member.object_key != context.source_object_key
         or member.actual_sha256 != context.source_sha256
     ):
         raise AnnotationRefusedError(
@@ -1225,7 +1225,7 @@ def prepare_annotation_context_copy(
         )
     return _prepare_backend_copy(
         member=member,
-        source_version_id=context.source_object_version_id,
+        source_version_id=context.source_object_key,
         source_sha256=context.source_sha256,
         actions=actions.actions,
         storage=storage,
@@ -1246,7 +1246,7 @@ def prepare_annotation_execution_copy(
     if (
         target.context.dataset_id != target.submission.dataset_id
         or target.context.member_id != target.submission.member_id
-        or target.context.source_object_version_id != target.submission.source_object_version_id
+        or target.context.source_object_key != target.submission.source_object_key
         or target.context.source_sha256 != target.submission.source_sha256
         or any(
             segment.action_index < 0
@@ -1261,7 +1261,7 @@ def prepare_annotation_execution_copy(
         )
     return _prepare_backend_copy(
         member=target.member,
-        source_version_id=target.submission.source_object_version_id,
+        source_version_id=target.submission.source_object_key,
         source_sha256=target.submission.source_sha256,
         actions=target.actions.actions,
         storage=storage,
@@ -1288,11 +1288,11 @@ def save_annotation_execution_copy(
         raise AnnotationRefusedError(DatasetRefusalCode.ANNOTATION_CONTEXT_INVALID)
     if (
         member.dataset_id != target.submission.dataset_id
-        or member.object_version_id != target.submission.source_object_version_id
+        or member.object_key != target.submission.source_object_key
         or member.actual_sha256 != target.submission.source_sha256
         or context.dataset_id != target.submission.dataset_id
         or context.member_id != target.submission.member_id
-        or context.source_object_version_id != target.submission.source_object_version_id
+        or context.source_object_key != target.submission.source_object_key
         or context.source_sha256 != target.submission.source_sha256
         or actions.actions != target.actions.actions
         or any(
@@ -1345,7 +1345,7 @@ def _prepare_backend_copy(
     media_probe: MediaProbe,
 ) -> PreparedAnnotationCopy:
     """读取固定源对象并核对基座派生副本的媒体事实。"""
-    if member.object_version_id != source_version_id or member.actual_sha256 != source_sha256:
+    if member.object_key != source_version_id or member.actual_sha256 != source_sha256:
         raise AnnotationRefusedError(
             DatasetRefusalCode.ANNOTATION_CONTEXT_INVALID,
             detail="视频对象已变化，请重新打开标注上下文",
@@ -1458,7 +1458,7 @@ def _require_registered_member(member: DatasetMember) -> None:
         member.actual_size is None
         or member.actual_sha256 is None
         or member.duration_seconds is None
-        or not member.object_version_id
+        or not member.object_key
     ):
         raise AnnotationRefusedError(
             DatasetRefusalCode.ANNOTATION_MEMBER_NOT_REGISTERED,
@@ -1582,7 +1582,7 @@ def _request_digest(
         "dataset_id": str(context.dataset_id),
         "member_id": str(context.member_id),
         "action_list_revision": context.action_list_revision,
-        "source_object_version_id": context.source_object_version_id,
+        "source_object_version_id": context.source_object_key,
         "source_sha256": context.source_sha256,
         "mode": mode.value,
         "segments": [segment.as_wire() for segment in segments],

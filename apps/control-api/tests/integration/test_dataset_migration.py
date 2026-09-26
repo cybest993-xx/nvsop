@@ -148,7 +148,7 @@ def test_usage_records_round_trip_through_real_postgres(session: Session) -> Non
             VlmMediaReference(
                 key="video.mp4",
                 member_id=uuid4(),
-                source_object_version_id="version-1",
+                source_object_key="version-1",
                 source_sha256="a" * 64,
                 action_indices=(1, 2),
             ),
@@ -342,7 +342,7 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
         "expires_at",
         "status",
         "validation_job_id",
-        "object_version_id",
+        "final_object_key",
     } <= _columns(database_at_0023, "dataset_upload_attempt")
     assert {
         "annotation_revision",
@@ -419,15 +419,23 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
 
     with database_at_0023.connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0038"
+    assert version == "0039"
     # 客户端不再必须预读整段视频计算摘要：声明列可为空，权威摘要由中心登记。
     assert _nullable_columns(database_at_0023, "dataset_member")["declared_sha256"] is True
     assert _nullable_columns(database_at_0023, "dataset_upload_attempt")["declared_sha256"] is True
+    # 公开/业务契约不再携带 S3 对象代次语义：列名改为定稿文件身份。
+    assert "object_version_id" not in _columns(database_at_0023, "dataset_member")
+    assert "final_object_key" in _columns(database_at_0023, "dataset_upload_attempt")
+    assert "source_object_key" in _columns(database_at_0023, "dataset_annotation_submission")
+    assert "source_object_key" in _columns(database_at_0023, "dataset_annotation_context")
     assert "dataset.dataset.edit" in _permission_codes(database_at_0023)
 
     command.downgrade(configuration, "0025")
     assert "dataset.dataset.edit" not in _permission_codes(database_at_0023)
     assert _nullable_columns(database_at_0023, "dataset_member")["declared_sha256"] is False
+    assert "object_version_id" in _columns(database_at_0023, "dataset_member")
+    assert "final_object_key" not in _columns(database_at_0023, "dataset_upload_attempt")
+    assert "source_object_version_id" in _columns(database_at_0023, "dataset_annotation_submission")
     assert "mediamtx_playback_address" not in _columns(database_at_0023, "device_inference_host")
     assert not {
         "configuration_revision",

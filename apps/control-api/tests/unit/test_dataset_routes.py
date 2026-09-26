@@ -136,7 +136,6 @@ class Backend:
                 codec=None,
                 container=None,
                 object_key=None,
-                object_version_id=None,
                 validation_job_id=None,
                 failure_code=None,
                 failure_detail=None,
@@ -160,7 +159,7 @@ class Backend:
                 status=AttemptStatus.PENDING_UPLOAD,
                 created_at=NOW,
                 validation_job_id=None,
-                object_version_id=None,
+                final_object_key=None,
             )
         )
         self.storage = FakeStorage()
@@ -186,12 +185,11 @@ def seed_registered_annotation(backend: Backend) -> None:
         actual_sha256="a" * 64,
         duration_seconds=2.0,
         object_key=backend.datasets.attempts[ATTEMPT_ID].object_key,
-        object_version_id="version-1",
     )
     backend.datasets.attempts[ATTEMPT_ID] = replace(
         backend.datasets.attempts[ATTEMPT_ID],
         status=AttemptStatus.REGISTERED,
-        object_version_id="version-1",
+        final_object_key=backend.datasets.attempts[ATTEMPT_ID].object_key,
     )
     backend.datasets.add_action_list(
         ActionListRevision(
@@ -209,7 +207,7 @@ def seed_registered_annotation(backend: Backend) -> None:
         context_id=CONTEXT_ID,
         revision=1,
         action_list_revision=1,
-        source_object_version_id="version-1",
+        source_object_key="training-datasets/test/member/attempt/video",
         source_sha256="a" * 64,
         idempotency_key="route-annotation",
         request_digest="b" * 64,
@@ -320,7 +318,7 @@ def test_upload_request_returns_short_lived_instructions_but_member_read_does_no
         f"{API_PREFIX}/training-datasets/{DATASET_ID}/members/{member_id}"
         f"/attempts/{attempt_id}/content"
     )
-    assert upload["fields"] == {}
+    assert set(upload) == {"method", "url", "headers", "expires_at", "max_bytes", "object_key"}
     read = import_backend.client.get(
         f"{API_PREFIX}/training-datasets/{DATASET_ID}/members/{member_id}"
     )
@@ -633,7 +631,7 @@ def test_vlm_candidate_route_freezes_explicit_media_and_requires_revision(
                 {
                     "key": "line-a.mp4",
                     "member_id": str(MEMBER_ID),
-                    "source_object_version_id": "version-1",
+                    "source_object_key": "training-datasets/test/member/attempt/video",
                     "source_sha256": "a" * 64,
                 }
             ],

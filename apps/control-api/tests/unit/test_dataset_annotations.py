@@ -387,7 +387,6 @@ def store() -> FakeAnnotationStore:
         codec="h264",
         container="mp4",
         object_key="training-datasets/dataset/member/video",
-        object_version_id="version-1",
         validation_job_id=None,
         failure_code=None,
         failure_detail=None,
@@ -520,7 +519,9 @@ def test_context_token_is_signed_and_binds_the_exact_registered_source() -> None
             token[:-1] + ("A" if token[-1] != "A" else "B"), secret=SECRET, now=NOW
         )
 
-    changed = replace(value.members[MEMBER_ID], object_version_id="version-2")
+    changed = replace(
+        value.members[MEMBER_ID], object_key="training-datasets/dataset/member/video-2"
+    )
     value.members[MEMBER_ID] = changed
     with pytest.raises(AnnotationRefusedError):
         submit_annotation(

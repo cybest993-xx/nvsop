@@ -30,7 +30,11 @@ make contracts
 
 该命令从 FastAPI 导出 `packages/contracts/openapi.json`，相对 `OPENAPI_BASE_REF`（默认 `origin/main`）做兼容性检查，并重新生成 Web 客户端。生成结果与源变更一起提交。
 
-真正需要破坏性契约变化时，走“所有受影响客户端协同发布”的显式变更，而不是增加 `/api/v2` 并长期双轨维护。
+真正需要破坏性契约变化时，走“所有受影响客户端协同发布”的显式变更，而不是增加 `/api/v2` 并长期双轨维护。显式变更的机械落点是 `packages/contracts/breaking-changes.json`：`make openapi-compat` 只接受逐条登记（带 `reason` 与 `issue`）的破坏项，未登记的破坏项仍然失败；已登记的破坏项连同原因打印在门禁输出里，供评审核对。
+
+已登记的破坏性变化：
+
+- **#350（2026-09-26）**：训练素材本地化后，公开契约不再携带 S3 对象代次语义。`UploadAttemptView.object_version_id` 改为 `final_object_key`，`AnnotationContextView`、`AnnotationSubmissionView`、`VlmMediaInput`、`VlmMediaView` 的 `source_object_version_id` 改为 `source_object_key`，恒为空对象的 `UploadInstructionsView.fields`（presigned POST 表单面）删除。Web、脚本与生成 SDK 在同一变更内协同更新；`dataset` 迁移 0039 同步列名。
 
 ## 数据库迁移
 

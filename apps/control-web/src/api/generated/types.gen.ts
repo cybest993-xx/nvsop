@@ -167,9 +167,9 @@ export type AnnotationContextView = {
    */
   source: string
   /**
-   * Source Object Version Id
+   * Source Object Key
    */
-  source_object_version_id: string
+  source_object_key: string
   /**
    * Source Sha256
    */
@@ -387,9 +387,9 @@ export type AnnotationSubmissionView = {
    */
   segments: Array<AnnotationSegmentInput>
   /**
-   * Source Object Version Id
+   * Source Object Key
    */
-  source_object_version_id: string
+  source_object_key: string
   /**
    * Source Sha256
    */
@@ -3683,6 +3683,10 @@ export type UploadAttemptView = {
    */
   expires_at: string
   /**
+   * Final Object Key
+   */
+  final_object_key: string | null
+  /**
    * Id
    */
   id: string
@@ -3690,10 +3694,6 @@ export type UploadAttemptView = {
    * Member Id
    */
   member_id: string
-  /**
-   * Object Version Id
-   */
-  object_version_id: string | null
   /**
    * Status
    */
@@ -3710,12 +3710,6 @@ export type UploadInstructionsView = {
    * Expires At
    */
   expires_at: string
-  /**
-   * Fields
-   */
-  fields: {
-    [key: string]: string
-  }
   /**
    * Headers
    */
@@ -4065,9 +4059,9 @@ export type VlmMediaInput = {
    */
   member_id: string
   /**
-   * Source Object Version Id
+   * Source Object Key
    */
-  source_object_version_id: string
+  source_object_key: string
   /**
    * Source Sha256
    */
@@ -4103,9 +4097,9 @@ export type VlmMediaView = {
    */
   member_id: string
   /**
-   * Source Object Version Id
+   * Source Object Key
    */
-  source_object_version_id: string
+  source_object_key: string
   /**
    * Source Sha256
    */

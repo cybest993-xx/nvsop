@@ -122,7 +122,6 @@ def make_member() -> DatasetMember:
         codec="h264",
         container="mp4",
         object_key="datasets/source-a.mp4",
-        object_version_id="version-1",
         validation_job_id=None,
         failure_code=None,
         failure_detail=None,
@@ -142,7 +141,7 @@ def make_submission() -> AnnotationSubmission:
         context_id=UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f306"),
         revision=1,
         action_list_revision=1,
-        source_object_version_id="version-1",
+        source_object_key="datasets/source-a.mp4",
         source_sha256="a" * 64,
         idempotency_key="annotation-1",
         request_digest="b" * 64,
@@ -791,7 +790,7 @@ def _ddm_snapshot() -> dict[str, object]:
             {
                 "member_id": str(MEMBER_ID),
                 "status": "registered",
-                "object_version_id": "version-1",
+                "object_version_id": "datasets/source-a.mp4",
                 "source_sha256": "a" * 64,
                 "actual_size": 100,
                 "annotation_submission_id": str(SUBMISSION_ID),
@@ -804,7 +803,7 @@ def _ddm_snapshot() -> dict[str, object]:
         "videos": [
             {
                 "member_id": str(MEMBER_ID),
-                "object_version_id": "version-1",
+                "object_version_id": "datasets/source-a.mp4",
                 "source_sha256": "a" * 64,
                 "annotation_execution_id": str(EXECUTION_ID),
                 "upstream_data_id": "data-1",
@@ -971,7 +970,7 @@ def test_vlm_candidate_accepts_database_string_status_for_registered_media() -> 
         kind=VlmCandidateKind.GQA,
         action_list_revision=1,
         records=(),
-        media=(VlmMediaReference("line-a.mp4", MEMBER_ID, "version-1", "a" * 64),),
+        media=(VlmMediaReference("line-a.mp4", MEMBER_ID, "datasets/source-a.mp4", "a" * 64),),
         expected_revision=0,
         caller=caller(Permission.DATASET_EDIT),
         now=NOW,
@@ -982,7 +981,7 @@ def test_vlm_candidate_accepts_database_string_status_for_registered_media() -> 
 
 def test_vlm_candidate_revision_uses_if_match_and_binds_current_media() -> None:
     datasets = FakeUsageDatasets()
-    media = VlmMediaReference("line-a.mp4", MEMBER_ID, "version-1", "a" * 64)
+    media = VlmMediaReference("line-a.mp4", MEMBER_ID, "datasets/source-a.mp4", "a" * 64)
     value = register_vlm_candidate(
         dataset_id=DATASET_ID,
         kind=VlmCandidateKind.GQA,
@@ -1015,7 +1014,7 @@ def test_vlm_clip_rejects_a_superseded_annotation_execution() -> None:
     media = VlmMediaReference(
         key="clip-key.mp4",
         member_id=MEMBER_ID,
-        source_object_version_id="version-1",
+        source_object_key="datasets/source-a.mp4",
         source_sha256="a" * 64,
         annotation_submission_id=SUBMISSION_ID,
         annotation_execution_id=EXECUTION_ID,
@@ -1043,7 +1042,7 @@ def test_vlm_clip_requires_submission_identity_alongside_execution_identity() ->
     media = VlmMediaReference(
         key="clip-key.mp4",
         member_id=MEMBER_ID,
-        source_object_version_id="version-1",
+        source_object_key="datasets/source-a.mp4",
         source_sha256="a" * 64,
         annotation_execution_id=EXECUTION_ID,
         clip_index=0,
@@ -1075,7 +1074,7 @@ def test_vlm_check_reads_a_fixed_annotation_clip_instead_of_the_full_source() ->
     media = VlmMediaReference(
         key="clip-key.mp4",
         member_id=MEMBER_ID,
-        source_object_version_id="version-1",
+        source_object_key="datasets/source-a.mp4",
         source_sha256="a" * 64,
         annotation_submission_id=SUBMISSION_ID,
         annotation_execution_id=EXECUTION_ID,
@@ -1183,7 +1182,7 @@ def test_vlm_check_rejects_changed_annotation_clip_before_reader(
     media = VlmMediaReference(
         key="clip-key.mp4",
         member_id=MEMBER_ID,
-        source_object_version_id="version-1",
+        source_object_key="datasets/source-a.mp4",
         source_sha256="a" * 64,
         annotation_submission_id=SUBMISSION_ID,
         annotation_execution_id=EXECUTION_ID,

@@ -1,4 +1,9 @@
-"""训练数据 DDM/VLM 用途检查与不可变制品用例。"""
+"""训练数据 DDM/VLM 用途检查与不可变制品用例。
+
+持久化的 `input_snapshot` / `media` 是冻结且参与摘要计算的输入事实，其中仍然沿用历史
+键名 `object_version_id` / `source_object_version_id`；这些键保存的是定稿文件键，不是
+对象存储代次。重命名它们会改变已存快照的读取格式与摘要，故只在领域/公开契约层改名。
+"""
 
 from __future__ import annotations
 
@@ -221,7 +226,7 @@ def register_vlm_candidate(
             )
         if (
             member.status != MemberStatus.REGISTERED
-            or member.object_version_id != item.source_object_version_id
+            or member.object_key != item.source_object_key
             or member.actual_sha256 != item.source_sha256
         ):
             raise DatasetRefusedError(
@@ -249,7 +254,7 @@ def register_vlm_candidate(
             or latest_submission.id != submission.id
             or submission.dataset_id != dataset_id
             or submission.member_id != item.member_id
-            or submission.source_object_version_id != item.source_object_version_id
+            or submission.source_object_key != item.source_object_key
             or submission.source_sha256 != item.source_sha256
             or submission.action_list_revision != action_list_revision
         ):
@@ -280,7 +285,7 @@ def register_vlm_candidate(
             or latest_execution.id != execution.id
             or execution_submission.dataset_id != dataset_id
             or execution_submission.member_id != item.member_id
-            or execution_submission.source_object_version_id != item.source_object_version_id
+            or execution_submission.source_object_key != item.source_object_key
             or execution_submission.source_sha256 != item.source_sha256
             or execution_submission.action_list_revision != action_list_revision
             or execution.status is not AnnotationExecutionStatus.SUCCEEDED
@@ -505,7 +510,7 @@ def _freeze_vlm(
                 "member_id": str(item.member_id),
                 "status": MemberStatus.REGISTERED.value,
                 "object_key": member.object_key if member is not None else None,
-                "object_version_id": item.source_object_version_id,
+                "object_version_id": item.source_object_key,
                 "source_sha256": item.source_sha256,
                 "actual_size": member.actual_size if member is not None else None,
                 "duration_seconds": member.duration_seconds if member is not None else None,
@@ -954,7 +959,7 @@ def _snapshot_is_current(
             if (
                 current is None
                 or current.status != item.get("status")
-                or current.object_version_id != item.get("object_version_id")
+                or current.object_key != item.get("object_version_id")
                 or current.actual_sha256 != item.get("source_sha256")
                 or current.actual_size != item.get("actual_size")
             ):
@@ -995,7 +1000,7 @@ def _snapshot_is_current(
             if not _member_source_is_current(
                 dataset_id=dataset_uuid,
                 member_id=member_id,
-                object_version_id=raw.get("object_version_id"),
+                object_key=raw.get("object_version_id"),
                 source_sha256=raw.get("source_sha256"),
                 datasets=datasets,
             ):
@@ -1013,7 +1018,7 @@ def _snapshot_is_current(
                 or str(execution.id) != str(raw.get("annotation_execution_id"))
                 or submission.revision != annotation_revision
                 or submission.action_list_revision != action_list_revision
-                or submission.source_object_version_id != raw.get("object_version_id")
+                or submission.source_object_key != raw.get("object_version_id")
                 or submission.source_sha256 != raw.get("source_sha256")
                 or execution.upstream_data_id != raw.get("upstream_data_id")
                 or execution.upstream_video_id != raw.get("upstream_video_id")
@@ -1059,7 +1064,7 @@ def _snapshot_is_current(
         if not _member_source_is_current(
             dataset_id=dataset_uuid,
             member_id=media_member_id,
-            object_version_id=media.get("source_object_version_id"),
+            object_key=media.get("source_object_version_id"),
             source_sha256=media.get("source_sha256"),
             datasets=datasets,
         ):
@@ -1081,7 +1086,7 @@ def _snapshot_is_current(
                 or latest_submission.id != submission.id
                 or submission.dataset_id != dataset_uuid
                 or submission.member_id != media_member_id
-                or submission.source_object_version_id != media.get("source_object_version_id")
+                or submission.source_object_key != media.get("source_object_version_id")
                 or submission.source_sha256 != media.get("source_sha256")
                 or submission.action_list_revision != revision
             ):
@@ -1140,7 +1145,7 @@ def _member_source_is_current(
     *,
     dataset_id: UUID,
     member_id: UUID,
-    object_version_id: object,
+    object_key: object,
     source_sha256: object,
     datasets: DatasetRepository,
 ) -> bool:
@@ -1149,7 +1154,7 @@ def _member_source_is_current(
         member is not None
         and member.dataset_id == dataset_id
         and member.status == MemberStatus.REGISTERED
-        and member.object_version_id == object_version_id
+        and member.object_key == object_key
         and member.actual_sha256 == source_sha256
     )
 
@@ -1834,7 +1839,7 @@ def _freeze_ddm(
                 "member_id": str(member.id),
                 "status": member.status,
                 "object_key": member.object_key,
-                "object_version_id": member.object_version_id,
+                "object_version_id": member.object_key,
                 "source_sha256": member.actual_sha256,
                 "actual_size": member.actual_size,
                 "duration_seconds": member.duration_seconds,
@@ -1868,7 +1873,7 @@ def _freeze_ddm(
             continue
         if (
             submission.dataset_id != member.dataset_id
-            or submission.source_object_version_id != member.object_version_id
+            or submission.source_object_key != member.object_key
             or submission.source_sha256 != member.actual_sha256
             or execution.submission_id != submission.id
         ):
@@ -1901,7 +1906,7 @@ def _freeze_ddm(
         if (
             member.duration_seconds is None
             or member.actual_size is None
-            or member.object_version_id is None
+            or member.object_key is None
             or member.actual_sha256 is None
         ):
             pre_issues.append(
@@ -1911,7 +1916,7 @@ def _freeze_ddm(
         videos.append(
             DdmVideoInput(
                 member_id=member.id,
-                object_version_id=member.object_version_id,
+                object_key=member.object_key,
                 source_sha256=member.actual_sha256,
                 duration_seconds=member.duration_seconds,
                 action_list_revision=submission.action_list_revision,
@@ -1980,7 +1985,7 @@ def _validate_ddm_snapshot(snapshot: Mapping[str, Any]) -> UsageValidationResult
                 videos.append(
                     DdmVideoInput(
                         member_id=UUID(str(raw["member_id"])),
-                        object_version_id=str(raw["object_version_id"]),
+                        object_key=str(raw["object_version_id"]),
                         source_sha256=str(raw["source_sha256"]),
                         duration_seconds=float(raw["duration_seconds"]),
                         action_list_revision=int(raw["action_list_revision"]),
@@ -2151,7 +2156,7 @@ def _candidate_from_snapshot(snapshot: Mapping[str, Any], check: UsageCheck) -> 
                     VlmMediaReference(
                         key=str(item["key"]),
                         member_id=UUID(str(item["member_id"])),
-                        source_object_version_id=str(item["source_object_version_id"]),
+                        source_object_key=str(item["source_object_version_id"]),
                         source_sha256=str(item["source_sha256"]),
                         annotation_submission_id=(
                             UUID(str(item["annotation_submission_id"]))

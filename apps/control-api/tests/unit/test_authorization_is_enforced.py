@@ -632,7 +632,6 @@ class Backend:
                 codec=None,
                 container=None,
                 object_key=None,
-                object_version_id=None,
                 validation_job_id=None,
                 failure_code="SHA256_MISMATCH",
                 failure_detail="授权测试失败",
@@ -656,7 +655,7 @@ class Backend:
                 status=AttemptStatus.FAILED,
                 created_at=datetime(2026, 9, 9),
                 validation_job_id=None,
-                object_version_id=None,
+                final_object_key=None,
             )
         )
         self.dataset_storage = DatasetFakeStorage()

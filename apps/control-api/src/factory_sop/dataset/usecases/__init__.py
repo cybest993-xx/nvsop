@@ -312,7 +312,6 @@ def request_video_upload(
         codec=None,
         container=None,
         object_key=None,
-        object_version_id=None,
         validation_job_id=None,
         failure_code=None,
         failure_detail=None,
@@ -334,7 +333,7 @@ def request_video_upload(
         status=AttemptStatus.PENDING_UPLOAD,
         created_at=now,
         validation_job_id=None,
-        object_version_id=None,
+        final_object_key=None,
     )
     datasets.add_member(member)
     datasets.add_attempt(attempt)
@@ -490,7 +489,7 @@ def retry_video_upload(
         status=AttemptStatus.PENDING_UPLOAD,
         created_at=now,
         validation_job_id=None,
-        object_version_id=None,
+        final_object_key=None,
     )
     reset = replace(
         member,
@@ -502,7 +501,6 @@ def retry_video_upload(
         codec=None,
         container=None,
         object_key=None,
-        object_version_id=None,
         validation_job_id=None,
         failure_code=None,
         failure_detail=None,
@@ -883,7 +881,6 @@ def validate_video_upload(
         codec=metadata.codec,
         container=metadata.container,
         object_key=final_object_key,
-        object_version_id=final_object_key,
         failure_code=None,
         failure_detail=None,
         recovery_action=None,
@@ -909,7 +906,7 @@ def validate_video_upload(
             attempt,
             status=AttemptStatus.REGISTERED,
             validation_job_id=job.id,
-            object_version_id=final_object_key,
+            final_object_key=final_object_key,
         )
     )
     _cleanup_objects(
@@ -994,7 +991,6 @@ def _upload_instructions(
             f"{_API_PREFIX}/training-datasets/{dataset_id}/members/{member_id}"
             f"/attempts/{attempt_id}/content"
         ),
-        fields={},
         headers={"Content-Type": "application/octet-stream"},
         expires_at=expires_at,
         max_bytes=max_upload_bytes,
@@ -1097,7 +1093,6 @@ def _fail_validation(
         codec=None,
         container=None,
         object_key=None,
-        object_version_id=None,
         failure_code=code.value,
         failure_detail=detail,
         recovery_action=recovery_action,

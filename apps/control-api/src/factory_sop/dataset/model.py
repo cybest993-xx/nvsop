@@ -105,7 +105,7 @@ class DdmVideoInput:
     """一次 DDM 检查冻结的一段完整源视频和动作时间段。"""
 
     member_id: UUID
-    object_version_id: str
+    object_key: str
     source_sha256: str
     duration_seconds: float
     action_list_revision: int
@@ -121,7 +121,7 @@ class VlmMediaReference:
 
     key: str
     member_id: UUID
-    source_object_version_id: str
+    source_object_key: str
     source_sha256: str
     annotation_submission_id: UUID | None = None
     annotation_execution_id: UUID | None = None
@@ -209,7 +209,7 @@ class AnnotationContext:
     member_id: UUID
     action_list_revision: int
     annotation_revision: int
-    source_object_version_id: str
+    source_object_key: str
     source_sha256: str
     created_by: UUID
     created_at: datetime
@@ -255,7 +255,7 @@ class AnnotationSubmission:
     context_id: UUID
     revision: int
     action_list_revision: int
-    source_object_version_id: str
+    source_object_key: str
     source_sha256: str
     idempotency_key: str
     request_digest: str
@@ -317,7 +317,6 @@ class DatasetMember:
     codec: str | None
     container: str | None
     object_key: str | None
-    object_version_id: str | None
     validation_job_id: UUID | None
     failure_code: str | None
     failure_detail: str | None
@@ -343,16 +342,15 @@ class UploadAttempt:
     status: str
     created_at: datetime
     validation_job_id: UUID | None
-    object_version_id: str | None
+    final_object_key: str | None
 
 
 @dataclass(frozen=True, slots=True)
 class UploadInstructions:
-    """只在申请上传响应中返回的短期对象写说明。"""
+    """只在申请上传响应中返回的短期流式上传说明。"""
 
     method: str
     url: str
-    fields: dict[str, str]
     headers: dict[str, str]
     expires_at: datetime
     max_bytes: int

@@ -34,7 +34,7 @@ make contracts
 
 已登记的破坏性变化：
 
-- **#350（2026-09-26）**：训练素材本地化后，公开契约不再携带 S3 对象代次语义。`UploadAttemptView.object_version_id` 改为 `final_object_key`，`AnnotationContextView`、`AnnotationSubmissionView`、`VlmMediaInput`、`VlmMediaView` 的 `source_object_version_id` 改为 `source_object_key`，恒为空对象的 `UploadInstructionsView.fields`（presigned POST 表单面）删除。Web、脚本与生成 SDK 在同一变更内协同更新；`dataset` 迁移 0039 同步列名。
+- **#350（2026-09-26）**：训练素材本地化后，公开契约不再携带 S3 对象代次语义。`UploadAttemptView.object_version_id` 改为 `final_object_key`，`AnnotationContextView`、`AnnotationSubmissionView`、`VlmMediaInput`、`VlmMediaView` 的 `source_object_version_id` 改为 `source_object_key`，恒为空对象的 `UploadInstructionsView.fields`（presigned POST 表单面）删除。Web、脚本与生成 SDK 在同一变更内协同更新；`dataset` 迁移 0039 同步列名。迁移只改列名，不改写 MinIO 时代的既有行：这些行的源身份仍是旧值，需重新登记后才能通过 DDM/VLM 用途检查，本版本不做猜测性的 MinIO→文件数据迁移。
 
 ## 数据库迁移
 

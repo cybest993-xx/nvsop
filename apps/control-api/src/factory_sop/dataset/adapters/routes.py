@@ -37,7 +37,6 @@ from factory_sop.dataset.usecases import (
     begin_video_content_upload,
     confirm_video_upload,
     create_training_dataset,
-    finalize_video_content_upload,
     list_dataset_members,
     list_training_datasets,
     read_dataset_member,
@@ -884,16 +883,6 @@ async def upload_video_content(
             DatasetRefusalCode.STORAGE_UNAVAILABLE,
             detail="训练素材存储暂时不可用，请稍后重试",
         ) from error
-    # 定稿后重新确认尝试仍归本次上传：过期回收可能已经在写入期间接管了它。
-    await run_in_threadpool(
-        finalize_video_content_upload,
-        dataset_id=dataset_id,
-        member_id=member_id,
-        attempt_id=attempt_id,
-        object_key=target.object_key,
-        datasets=datasets,
-        storage=storage,
-    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

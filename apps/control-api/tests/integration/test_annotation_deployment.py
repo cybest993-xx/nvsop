@@ -90,6 +90,22 @@ def test_host_signed_machine_routes_bypass_only_browser_auth_and_preserve_signat
     )
 
 
+def test_streaming_upload_entry_is_open_in_both_nginx_templates() -> None:
+    """正式与开发入口都必须为流式上传放开请求体上限并关闭请求缓冲。"""
+    location = "location ~ ^/api/v1/training-datasets/[^/]+/members/[^/]+/attempts/[^/]+/content$ {"
+    for config in (CONFIG, DEV_CONFIG):
+        source = config.read_text()
+        start = source.index(location)
+        end = source.index("\n    }\n", start)
+        block = source[start:end]
+        assert "client_max_body_size 8192M;" in block
+        assert "proxy_request_buffering off;" in block
+        assert "auth_request /_nvsop_center_auth;" in block
+        assert "proxy_pass http://nvsop_center_api;" in block
+        # 通用 /api/v1/ 入口继承的默认 1 MiB 会拒绝真实训练视频，服务级必须显式放开。
+        assert "client_max_body_size 2048M;" in source
+
+
 def test_dataset_annotation_volume_wires_writer_and_read_only_worker() -> None:
     source = DATASET_VOLUME_COMPOSE.read_text()
     assert "annotation-backend:" in source

@@ -28,7 +28,6 @@ from factory_sop.dataset.model import (
     AnnotationContext,
     AnnotationExecution,
     AnnotationSubmission,
-    AttemptStatus,
     DatasetArtifact,
     DatasetMember,
     TrainingDataset,
@@ -131,18 +130,6 @@ class PostgresDatasetRepository:
             )
         )
         return row.to_domain() if row is not None else None
-
-    def expired_pending_attempts(self, *, now: datetime, limit: int) -> Sequence[UploadAttempt]:
-        rows = self._session.scalars(
-            select(UploadAttemptRow)
-            .where(
-                UploadAttemptRow.status == AttemptStatus.PENDING_UPLOAD.value,
-                UploadAttemptRow.expires_at <= now,
-            )
-            .order_by(UploadAttemptRow.expires_at, UploadAttemptRow.id)
-            .limit(limit)
-        ).all()
-        return [row.to_domain() for row in rows]
 
     def save_member(
         self,

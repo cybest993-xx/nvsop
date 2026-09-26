@@ -575,95 +575,6 @@ def begin_video_content_upload(
     )
 
 
-def cleanup_expired_uploads(
-    *,
-    datasets: DatasetRepository,
-    storage: ObjectStorage,
-    now: datetime,
-    limit: int,
-) -> int:
-    """回收过期上传尝试留下的本地媒体，避免放弃的上传长期占用持久卷。
-
-    先用成员行的 `updated_at` 认领，避免覆盖并发 confirm/retry 已经推进的状态；只有
-    当前尝试仍待上传时才认领。对象删除失败时保留尝试的待上传状态，下一轮继续回收。
-    """
-    cleaned = 0
-    for attempt in datasets.expired_pending_attempts(now=now, limit=limit):
-        member = datasets.member_by_id(attempt.member_id)
-        if member is None or member.current_attempt_id != attempt.id:
-            continue
-        if member.status == MemberStatus.PENDING_UPLOAD:
-            expired = replace(
-                member,
-                status=MemberStatus.FAILED,
-                failure_code=DatasetRefusalCode.UPLOAD_EXPIRED.value,
-                failure_detail="上传授权已过期，请重新上传",
-                recovery_action=RetryMode.UPLOAD.value,
-                updated_at=now,
-            )
-            if not datasets.save_member(
-                expired,
-                expected_attempt_id=attempt.id,
-                expected_updated_at=member.updated_at,
-            ):
-                continue
-        elif member.failure_code != DatasetRefusalCode.UPLOAD_EXPIRED.value:
-            # 成员已被 confirm/retry 推进到别处：对象归那条路径所有，不在这里删。
-            continue
-        if not _cleanup_objects(
-            storage=storage,
-            object_keys=(attempt.object_key,),
-            member_id=attempt.member_id,
-            attempt_id=attempt.id,
-            event="dataset.video_upload.expired_cleanup_failed",
-        ):
-            # 存储暂时不可用：对象还在，保留待上传状态让下一轮重试删除。
-            continue
-        datasets.save_attempt(replace(attempt, status=AttemptStatus.FAILED))
-        cleaned += 1
-    return cleaned
-
-
-def finalize_video_content_upload(
-    *,
-    dataset_id: UUID,
-    member_id: UUID,
-    attempt_id: UUID,
-    object_key: str,
-    datasets: DatasetRepository,
-    storage: ObjectStorage,
-) -> None:
-    """定稿后确认尝试仍归本次上传；已被回收或已被替换时删掉刚写入的对象。
-
-    回收与定稿可能重叠：过期回收把尝试标记为失败后，正在写入的请求可能才完成重命名。
-    此时对象已经不再属于任何有效尝试，必须删掉，否则会留下不会被再次选中的孤儿媒体。
-    """
-    member = datasets.member_by_id(member_id)
-    attempt = datasets.attempt_by_id(attempt_id)
-    still_current = (
-        member is not None
-        and attempt is not None
-        and member.dataset_id == dataset_id
-        and member.current_attempt_id == attempt_id
-        and member.status == MemberStatus.PENDING_UPLOAD
-        and attempt.status == AttemptStatus.PENDING_UPLOAD
-    )
-    if still_current:
-        return
-    _cleanup_objects(
-        storage=storage,
-        object_keys=(object_key,),
-        member_id=member_id,
-        attempt_id=attempt_id,
-        event="dataset.video_upload.finalize_reclaimed",
-    )
-    _refuse(
-        DatasetRefusalCode.UPLOAD_EXPIRED,
-        "上传授权已过期，请重新申请上传",
-        recovery_action=RetryMode.UPLOAD.value,
-    )
-
-
 def begin_video_validation(
     *,
     job: ApplicationJob,
@@ -1150,21 +1061,18 @@ def _cleanup_objects(
     member_id: UUID,
     attempt_id: UUID,
     event: str,
-) -> bool:
-    """在状态写回后清理对象，返回是否全部删除成功；失败不回滚已可查询的业务事实。"""
-    succeeded = True
+) -> None:
+    """在状态写回后清理对象；清理失败不回滚已经可查询的业务事实。"""
     for object_key in dict.fromkeys(object_keys):
         try:
             storage.delete(object_key=object_key)
         except (ObjectStorageUnavailableError, OSError):
-            succeeded = False
             _logger.warning(
                 event,
                 member_id=str(member_id),
                 attempt_id=str(attempt_id),
                 object_key=object_key,
             )
-    return succeeded
 
 
 def _fail_validation(

@@ -110,8 +110,8 @@ class Settings(BaseSettings):
                 raise ValueError("dataset_storage_root must not be empty")
             if not Path(self.dataset_storage_root).is_absolute():
                 raise ValueError("dataset_storage_root must be an absolute path")
-        if not self.dataset_supported_codecs.strip():
-            raise ValueError("dataset_supported_codecs must not be empty")
+        if not any(item.strip() for item in self.dataset_supported_codecs.split(",")):
+            raise ValueError("dataset_supported_codecs must contain at least one codec")
         if (self.annotation_backend_url is None) != (self.annotation_media_origin is None):
             raise ValueError(
                 "annotation_backend_url and annotation_media_origin must be configured together"
@@ -240,13 +240,12 @@ class Settings(BaseSettings):
 
 
 def _require_runtime_infrastructure(settings: Settings) -> None:
-    """拒绝缺失本地媒体存储或任务队列的可运行配置。"""
-    if settings.dataset_storage_root is None or not settings.dataset_storage_root.strip():
+    """拒绝缺失本地媒体存储或任务队列的可运行配置。
+
+    格式规则由 `Settings` 自身校验，这里只判定必需项是否存在。
+    """
+    if settings.dataset_storage_root is None:
         raise ConfigurationError("部署必须配置中心训练素材本地存储根目录")
-    if not Path(settings.dataset_storage_root).is_absolute():
-        raise ConfigurationError("dataset_storage_root 必须是绝对路径")
-    if not any(item.strip() for item in settings.dataset_supported_codecs.split(",")):
-        raise ConfigurationError("dataset_supported_codecs 不能为空")
     if settings.redis_url is None:
         raise ConfigurationError("部署必须配置 Redis 任务队列")
     redis_url = urlsplit(settings.redis_url.get_secret_value())

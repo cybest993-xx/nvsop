@@ -1,7 +1,4 @@
-import type { DatasetUploadInstructions } from '@/api/controlPlane'
-
-const CSRF_COOKIE = 'sop_csrf'
-const CSRF_HEADER = 'x-csrf-token'
+import { CSRF_HEADER, csrfToken, type DatasetUploadInstructions } from '@/api/controlPlane'
 
 export class ObjectUploadError extends Error {
   readonly status: number
@@ -14,11 +11,6 @@ export class ObjectUploadError extends Error {
 }
 
 export type UploadProgressHandler = (percentage: number) => void
-
-function csrfToken(): string | null {
-  const match = document.cookie.split('; ').find((entry) => entry.startsWith(`${CSRF_COOKIE}=`))
-  return match ? decodeURIComponent(match.slice(CSRF_COOKIE.length + 1)) : null
-}
 
 /**
  * 把浏览器选择的一个文件流式上传到中心正式入口。

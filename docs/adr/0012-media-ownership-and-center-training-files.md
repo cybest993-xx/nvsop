@@ -2,7 +2,7 @@
 
 ## 状态
 
-已采纳。该决定纠正此前“视频不跨中心”与“证据上传中心 MinIO”并存的冲突，并替代训练源视频必须使用 MinIO/S3 的首版假设。Issue #350 已按本决定完成迁移：中心训练素材使用 `dataset` 拥有的本地持久卷，presigned/bucket/versioning 等 S3 特有契约与运行依赖已移除。
+已采纳。该决定纠正此前“视频不跨中心”与“证据上传中心 MinIO”并存的冲突，并替代训练源视频必须使用 MinIO/S3 的首版假设。中心训练素材使用 `dataset` 拥有的本地持久卷；presigned/bucket/versioning 等 S3 特有契约与运行依赖按 Issue #350 移除。
 
 ## 背景
 

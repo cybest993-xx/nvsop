@@ -10,7 +10,6 @@ import shutil
 import time
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier
@@ -1039,62 +1038,6 @@ def test_real_arq_worker_consumes_validation_job_from_redis(
             member = _persisted_member(engine, UUID(requested["member"]["id"]))
             assert member.status == MemberStatus.REGISTERED
             assert member.actual_sha256 == hashlib.sha256(real_video_bytes).hexdigest()
-        finally:
-            cleanup_dataset(engine, dataset_id)
-
-
-def test_worker_cron_reclaims_expired_pending_upload_from_local_storage(
-    engine: Engine,
-    dataset_storage_root: Path,
-    real_video_bytes: bytes,
-) -> None:
-    settings = settings_for(engine, storage_root=dataset_storage_root)
-    with client_for(engine, settings) as client:
-        dataset_id = _create_dataset(client)
-        try:
-            requested = _request_upload(
-                client,
-                dataset_id,
-                real_video_bytes,
-                filename="abandoned.mp4",
-                idempotency_key="abandoned-1",
-            )
-            upload = cast(dict[str, Any], requested["upload"])
-            object_key = str(upload["object_key"])
-            assert upload_video_content(client, upload, real_video_bytes).status_code == 204
-            assert (dataset_storage_root / object_key).is_file()
-            with session_factory(engine)() as database:
-                repository = PostgresDatasetRepository(database)
-                attempt = repository.attempt_by_id(UUID(requested["attempt"]["id"]))
-                assert attempt is not None
-                repository.save_attempt(
-                    replace(attempt, expires_at=datetime.now(UTC) - timedelta(minutes=1))
-                )
-                database.commit()
-
-            dispatcher = ArqJobDispatcher.from_settings(
-                settings,
-                session_factory=session_factory(engine),
-            )
-            assert isinstance(dispatcher, ArqJobDispatcher)
-            asyncio.run(
-                dispatch_pending_jobs(
-                    {
-                        "dispatcher": dispatcher,
-                        "session_factory": session_factory(engine),
-                        "settings": settings,
-                        "dataset_runtime": validation_runtime(settings),
-                    }
-                )
-            )
-
-            assert not (dataset_storage_root / object_key).exists()
-            member = _persisted_member(engine, UUID(requested["member"]["id"]))
-            assert (
-                member.status,
-                member.failure_code,
-                member.recovery_action,
-            ) == (MemberStatus.FAILED, "UPLOAD_EXPIRED", RetryMode.UPLOAD)
         finally:
             cleanup_dataset(engine, dataset_id)
 

@@ -23,7 +23,6 @@ class DatasetRefusalCode(StrEnum):
     IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
     RESOURCE_MISMATCH = "RESOURCE_MISMATCH"
     STATE_CONFLICT = "STATE_CONFLICT"
-    UPLOAD_EXPIRED = "UPLOAD_EXPIRED"
     STORAGE_UNAVAILABLE = "STORAGE_UNAVAILABLE"
     OBJECT_NOT_FOUND = "OBJECT_NOT_FOUND"
     EMPTY_OBJECT = "EMPTY_OBJECT"
@@ -100,8 +99,6 @@ def refusal_problem(code: DatasetRefusalCode) -> tuple[int, str]:
             return 422, "视频上传声明不符合要求"
         case DatasetRefusalCode.IDEMPOTENCY_CONFLICT | DatasetRefusalCode.STATE_CONFLICT:
             return 409, "视频当前状态不允许该操作"
-        case DatasetRefusalCode.UPLOAD_EXPIRED:
-            return 409, "上传授权已过期"
         case DatasetRefusalCode.RESOURCE_MISMATCH:
             return 404, "请求的资源归属不匹配"
         case (

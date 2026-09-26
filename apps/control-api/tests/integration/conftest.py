@@ -13,11 +13,18 @@ under test uses and could never disagree with them.
 
 from __future__ import annotations
 
+import hashlib
+import os
+import platform
 import shutil
+import socket
 import subprocess
 import time
 from collections.abc import Iterator
+from contextlib import suppress
 from pathlib import Path
+from urllib.error import URLError
+from urllib.request import urlopen
 from uuid import uuid4
 
 import pytest
@@ -38,7 +45,20 @@ from testcontainers.core.container import DockerContainer
 POSTGRES_IMAGE = "postgres:17.6-alpine"
 
 CONTROL_API = Path(__file__).resolve().parents[2]
-MINIO_IMAGE = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
+MINIO_RELEASE = "RELEASE.2025-09-07T16-13-09Z"
+MINIO_RELEASE_URL = f"https://github.com/minio/minio/releases/download/{MINIO_RELEASE}"
+MINIO_BINARIES = {
+    "x86_64": (
+        f"minio.linux-amd64.{MINIO_RELEASE}",
+        "7c5bd8512c6e966455b1d198209358b2"  # pragma: allowlist secret
+        "d191c77a83ab377c4073281065fb855f",  # pragma: allowlist secret
+    ),
+    "aarch64": (
+        f"minio.linux-arm64.{MINIO_RELEASE}",
+        "5c83cd2cf151717ba0243f73e1c7802f"  # pragma: allowlist secret
+        "f36e272b67144bdd7f1f7d684fd6f03d",  # pragma: allowlist secret
+    ),
+}
 MINIO_CORS_ORIGIN = "*"
 REDIS_IMAGE = "redis:7.4-alpine"
 
@@ -66,6 +86,56 @@ def _wait_for_minio(client: Minio) -> None:
             if time.monotonic() >= deadline:
                 pytest.fail(f"MinIO 服务不可用：{type(error).__name__}")
             time.sleep(0.25)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _minio_binary() -> Path:
+    """下载并校验固定官方 release binary，避免依赖已下线的 Quay manifest。"""
+    architecture = platform.machine().lower()
+    specification = MINIO_BINARIES.get(architecture)
+    if specification is None:
+        pytest.fail(f"MinIO 集成测试不支持当前架构：{architecture}")
+    asset, expected_sha256 = specification
+    cache_dir = CONTROL_API.parents[1] / ".nvsop" / "cache" / "minio"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    binary = cache_dir / asset
+    if binary.exists() and _sha256(binary) == expected_sha256:
+        binary.chmod(0o755)
+        return binary
+    with suppress(FileNotFoundError):
+        binary.unlink()
+    temporary = binary.with_suffix(binary.suffix + ".tmp")
+    try:
+        with (
+            urlopen(f"{MINIO_RELEASE_URL}/{asset}", timeout=120) as response,
+            temporary.open("wb") as destination,
+        ):
+            shutil.copyfileobj(response, destination)
+        actual_sha256 = _sha256(temporary)
+        if actual_sha256 != expected_sha256:
+            pytest.fail(
+                f"MinIO release binary 校验失败：expected={expected_sha256}, actual={actual_sha256}"
+            )
+        temporary.chmod(0o755)
+        temporary.replace(binary)
+    except (OSError, URLError) as error:
+        with suppress(FileNotFoundError):
+            temporary.unlink()
+        pytest.fail(f"MinIO release binary 不可用：{type(error).__name__}")
+    return binary
+
+
+def _reserve_tcp_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
 
 
 def _wait_for_redis(client: Redis) -> None:
@@ -97,28 +167,48 @@ def engine() -> Iterator[Engine]:
 
 
 @pytest.fixture(scope="session")
-def minio_server() -> Iterator[MinioServer]:
-    """启动临时 MinIO，并只创建本会话使用的测试 bucket。"""
-    _require_docker()
+def minio_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[MinioServer]:
+    """启动固定官方 release binary，并只创建本会话使用的测试 bucket。"""
     access_key = f"nvsop{uuid4().hex[:15]}"
     secret_key = f"nvsop{uuid4().hex}{uuid4().hex[:8]}"
     bucket = f"datasets-{uuid4().hex[:12]}"
-    container = (
-        DockerContainer(MINIO_IMAGE)
-        .with_env("MINIO_ROOT_USER", access_key)
-        .with_env("MINIO_ROOT_PASSWORD", secret_key)
-        .with_env("MINIO_API_CORS_ALLOW_ORIGIN", MINIO_CORS_ORIGIN)
-        .with_command("server /data --address :9000 --console-address :9001")
-        .with_exposed_ports(9000)
+    binary = _minio_binary()
+    runtime_dir = tmp_path_factory.mktemp("minio")
+    data_dir = runtime_dir / "data"
+    data_dir.mkdir()
+    port = _reserve_tcp_port()
+    console_port = _reserve_tcp_port()
+    endpoint = f"http://127.0.0.1:{port}"
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "MINIO_ROOT_USER": access_key,
+            "MINIO_ROOT_PASSWORD": secret_key,
+            "MINIO_API_CORS_ALLOW_ORIGIN": MINIO_CORS_ORIGIN,
+        }
+    )
+    log_path = runtime_dir / "minio.log"
+    log = log_path.open("w", encoding="utf-8")
+    process = subprocess.Popen(
+        [
+            str(binary),
+            "server",
+            str(data_dir),
+            "--address",
+            f"127.0.0.1:{port}",
+            "--console-address",
+            f"127.0.0.1:{console_port}",
+        ],
+        env=environment,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        text=True,
     )
     try:
-        container.start()
-    except Exception as error:
-        pytest.fail(f"MinIO 镜像不可用：{type(error).__name__}")
-    try:
-        endpoint = f"http://{container.get_container_host_ip()}:{container.get_exposed_port(9000)}"
         client = Minio(endpoint.removeprefix("http://"), access_key, secret_key, secure=False)
         _wait_for_minio(client)
+        if process.poll() is not None:
+            pytest.fail(f"MinIO 进程提前退出：exit={process.returncode}")
         client.make_bucket(bucket)
         client.set_bucket_versioning(bucket, VersioningConfig("Enabled"))
         yield MinioServer(
@@ -128,7 +218,13 @@ def minio_server() -> Iterator[MinioServer]:
             secret_key=secret_key,
         )
     finally:
-        container.stop()
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=10)
+        log.close()
 
 
 @pytest.fixture(scope="session")

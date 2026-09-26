@@ -869,6 +869,44 @@ def test_validation_registers_a_video_without_a_client_declared_digest() -> None
     assert result.actual_sha256 == sha256(content).hexdigest()
 
 
+def test_idempotent_resume_without_a_declared_digest_keeps_the_original_declaration() -> None:
+    """客户端省略可选摘要时，同一幂等键仍能续期原有声明，而不是报冲突。"""
+    datasets = dataset_store()
+    content = b"resumable bytes"
+    digest = sha256(content).hexdigest()
+    first = request_video_upload(
+        dataset_id=DATASET_ID,
+        original_filename="resume.mp4",
+        source="产线相机",
+        declared_size=len(content),
+        declared_sha256=digest,
+        idempotency_key="resume-1",
+        caller=caller_with_import(),
+        now=NOW,
+        datasets=datasets,
+        max_upload_bytes=1024,
+        upload_ttl_seconds=900,
+    )
+
+    resumed = request_video_upload(
+        dataset_id=DATASET_ID,
+        original_filename="resume.mp4",
+        source="产线相机",
+        declared_size=len(content),
+        declared_sha256=None,
+        idempotency_key="resume-1",
+        caller=caller_with_import(),
+        now=NOW + timedelta(seconds=60),
+        datasets=datasets,
+        max_upload_bytes=1024,
+        upload_ttl_seconds=900,
+    )
+
+    assert resumed.attempt.id == first.attempt.id
+    assert resumed.attempt.declared_sha256 == digest
+    assert resumed.attempt.expires_at == NOW + timedelta(seconds=960)
+
+
 def test_expired_pending_upload_is_failed_and_its_object_is_deleted() -> None:
     """放弃的上传不能在本地持久卷上留下无主媒体。"""
     datasets = dataset_store()

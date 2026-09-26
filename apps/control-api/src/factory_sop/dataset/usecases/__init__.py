@@ -244,6 +244,10 @@ def request_video_upload(
                 _refuse(DatasetRefusalCode.RESOURCE_MISMATCH, "幂等上传尝试的成员不存在")
             if (
                 existing_attempt.declared_size != declared_size
+                or (
+                    declared_sha256 is not None
+                    and existing_attempt.declared_sha256 != declared_sha256
+                )
                 or existing_member.original_filename != original_filename
                 or existing_member.source != source
             ):
@@ -266,11 +270,6 @@ def request_video_upload(
             renewed = replace(
                 existing_attempt,
                 expires_at=now + timedelta(seconds=upload_ttl_seconds),
-                declared_sha256=(
-                    declared_sha256
-                    if declared_sha256 is not None
-                    else existing_attempt.declared_sha256
-                ),
             )
             datasets.save_attempt(renewed)
             return UploadRequestResult(

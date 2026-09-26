@@ -235,7 +235,7 @@ def render_mediamtx_config(
             try:
                 source = _source_url(camera, secret_reader=reader)
                 lines.extend(_render_camera_path(configuration, camera, source))
-            except BaseException as error:
+            except Exception as error:
                 raise ValueError(
                     f"camera {camera.camera_id} media source is invalid: {error}"
                 ) from error
@@ -379,7 +379,7 @@ class MediaRuntime:
     def start(self) -> None:
         try:
             self.apply(self._configuration)
-        except BaseException as error:
+        except Exception as error:
             self._last_error = str(error)
             raise
 
@@ -478,12 +478,12 @@ class MediaRuntime:
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                         )
+                        ffmpeg.append(ffmpeg_process)
                         _wait_started(ffmpeg_process, configuration.startup_timeout_seconds)
-                    except BaseException as error:
+                    except Exception as error:
                         raise RuntimeError(
                             f"camera {camera.camera_id} CPU transcode failed: {error}"
                         ) from error
-                    ffmpeg.append(ffmpeg_process)
             _write_atomic(configuration.media_config_path, rendered, source=temporary)
             write_applied_window(
                 configuration.media_config_path, configuration.recording_window_seconds
@@ -536,7 +536,7 @@ class MediaRuntime:
                     self._stop_processes()
                     self._launch(self._configuration, rendered)
                     self._last_error = None
-                except BaseException as error:
+                except Exception as error:
                     self._last_error = str(error)
 
     def _processes(self) -> tuple[_Process, ...]:

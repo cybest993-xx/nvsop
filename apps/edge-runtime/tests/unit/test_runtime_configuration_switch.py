@@ -18,6 +18,7 @@ from edge_runtime.runtime import (
     AutonomousStation,
     ConnectionTestCommandLoop,
     RuntimeComposition,
+    _RuntimeCycleRunner,
 )
 from edge_runtime.runtime_configuration import RuntimeConfiguration
 
@@ -67,12 +68,17 @@ class _CoordinatedStation(_Station):
 
 
 class _Media:
-    def __init__(self) -> None:
+    def __init__(self, *, start_error: BaseException | None = None) -> None:
         self.started = False
         self.closed = False
+        self.start_error = start_error
+        self.start_calls = 0
 
     def start(self) -> None:
+        self.start_calls += 1
         self.started = True
+        if self.start_error is not None:
+            raise self.start_error
 
     def close(self) -> None:
         self.closed = True
@@ -261,6 +267,26 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.assertEqual(errors, [])
         self.assertTrue(state.closed)
+
+    def test_media_control_flow_exit_is_not_retried(self) -> None:
+        state = _State()
+        media = _Media(start_error=KeyboardInterrupt())
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            stations=(),
+            state=cast(LocalState, state),
+            media=cast(MediaRuntime, media),
+        )
+        runner = _RuntimeCycleRunner(
+            runtime=runtime,
+            runtime_stop=Event(),
+            should_stop=lambda: False,
+        )
+
+        with self.assertRaises(KeyboardInterrupt):
+            runner._run_media()
+
+        self.assertEqual(1, media.start_calls)
 
     def test_close_finishes_runtime_cleanup_before_propagating_station_failure(self) -> None:
         failing = _Station(close_error=RuntimeError("synthetic station close failure"))

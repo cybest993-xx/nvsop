@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sys
 from collections.abc import Iterator, Mapping
@@ -492,7 +491,6 @@ def test_script_uses_formal_api_for_each_video_and_never_sends_media_to_fastapi(
         "original_filename": "line-1.mp4",
         "source": "camera-A12",
         "declared_size": len(first.read_bytes()),
-        "declared_sha256": hashlib.sha256(first.read_bytes()).hexdigest(),
     }
     assert records[1].headers == {
         **auth_headers,
@@ -512,7 +510,6 @@ def test_script_uses_formal_api_for_each_video_and_never_sends_media_to_fastapi(
         "original_filename": "line-2.mp4",
         "source": "camera-A12",
         "declared_size": len(second.read_bytes()),
-        "declared_sha256": hashlib.sha256(second.read_bytes()).hexdigest(),
     }
     assert records[4].headers == {
         **auth_headers,

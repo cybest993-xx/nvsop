@@ -110,6 +110,18 @@ def _columns(database: Engine, table: str) -> set[str]:
         )
 
 
+def _nullable_columns(database: Engine, table: str) -> dict[str, bool]:
+    with database.connect() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT column_name, is_nullable FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = :table"
+            ),
+            {"table": table},
+        ).all()
+    return {str(name): value == "YES" for name, value in rows}
+
+
 def test_usage_records_round_trip_through_real_postgres(session: Session) -> None:
     now = datetime(2026, 9, 12, tzinfo=UTC)
     actor_id, dataset_id = uuid4(), uuid4()
@@ -407,11 +419,15 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
 
     with database_at_0023.connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0037"
+    assert version == "0038"
+    # 客户端不再必须预读整段视频计算摘要：声明列可为空，权威摘要由中心登记。
+    assert _nullable_columns(database_at_0023, "dataset_member")["declared_sha256"] is True
+    assert _nullable_columns(database_at_0023, "dataset_upload_attempt")["declared_sha256"] is True
     assert "dataset.dataset.edit" in _permission_codes(database_at_0023)
 
     command.downgrade(configuration, "0025")
     assert "dataset.dataset.edit" not in _permission_codes(database_at_0023)
+    assert _nullable_columns(database_at_0023, "dataset_member")["declared_sha256"] is False
     assert "mediamtx_playback_address" not in _columns(database_at_0023, "device_inference_host")
     assert not {
         "configuration_revision",

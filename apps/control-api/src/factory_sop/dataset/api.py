@@ -34,7 +34,11 @@ from factory_sop.dataset.model import (
 )
 from factory_sop.dataset.repository import DatasetRepository, UsageDatasetRepository
 from factory_sop.dataset.storage import ObjectStorage, ObjectStorageUnavailableError
-from factory_sop.dataset.usecases import begin_video_validation, validate_video_upload
+from factory_sop.dataset.usecases import (
+    begin_video_validation,
+    cleanup_expired_uploads,
+    validate_video_upload,
+)
 from factory_sop.dataset.usecases.annotation import (
     AnnotationContextPreparationTarget,
     AnnotationExecutionTarget,
@@ -356,6 +360,7 @@ __all__ = [
     "begin_usage_check",
     "begin_video_validation",
     "checked_input_reader",
+    "cleanup_expired_uploads",
     "complete_annotation_context_preparation",
     "complete_annotation_execution",
     "complete_usage_check",

@@ -1464,7 +1464,7 @@ export type DatasetMemberView = {
   /**
    * Declared Sha256
    */
-  declared_sha256: string
+  declared_sha256: string | null
   /**
    * Declared Size
    */
@@ -2843,12 +2843,15 @@ export type RegisterVlmCandidateInput = {
  * RequestVideoUploadInput
  *
  * 申请上传时提交的声明；不接受对象 URL 或客户端媒体事实。
+ *
+ * `declared_sha256` 是可选期望；中心从流式字节计算并登记权威摘要，因此客户端不必
+ * 为申请上传而预读整段视频。
  */
 export type RequestVideoUploadInput = {
   /**
    * Declared Sha256
    */
-  declared_sha256: string
+  declared_sha256?: string | null
   /**
    * Declared Size
    */
@@ -3670,7 +3673,7 @@ export type UploadAttemptView = {
   /**
    * Declared Sha256
    */
-  declared_sha256: string
+  declared_sha256: string | null
   /**
    * Declared Size
    */

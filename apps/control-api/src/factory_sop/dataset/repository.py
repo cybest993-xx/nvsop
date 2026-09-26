@@ -69,6 +69,10 @@ class DatasetRepository(Protocol):
         """按数据集范围的幂等键读取已有尝试。"""
         ...
 
+    def expired_pending_attempts(self, *, now: datetime, limit: int) -> Sequence[UploadAttempt]:
+        """读取已过期且仍未上传完的尝试，供本地媒体回收。"""
+        ...
+
     def save_member(
         self,
         member: DatasetMember,

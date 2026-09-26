@@ -63,7 +63,11 @@ from factory_sop.dataset.model import (
     UsageCheckStatus,
     UsageKind,
 )
-from factory_sop.dataset.usecases import confirm_video_upload, request_video_upload
+from factory_sop.dataset.usecases import (
+    cleanup_expired_uploads,
+    confirm_video_upload,
+    request_video_upload,
+)
 from factory_sop.dataset.usecases.usage import (
     BASE_COMMIT,
     DDM_CONSUMER_PARAMETERS,
@@ -142,16 +146,19 @@ def _request_upload(
     *,
     filename: str,
     idempotency_key: str,
+    declared_sha256: str | None = None,
 ) -> dict[str, Any]:
+    declaration: dict[str, Any] = {
+        "original_filename": filename,
+        "source": "synthetic-camera",
+        "declared_size": len(content),
+    }
+    if declared_sha256 is not None:
+        declaration["declared_sha256"] = declared_sha256
     response = client.post(
         f"{DATASETS}/{dataset_id}/members",
         headers={"Idempotency-Key": idempotency_key},
-        json={
-            "original_filename": filename,
-            "source": "synthetic-camera",
-            "declared_size": len(content),
-            "declared_sha256": hashlib.sha256(content).hexdigest(),
-        },
+        json=declaration,
     )
     assert response.status_code == 201, response.text
     return cast(dict[str, Any], response.json())
@@ -1039,6 +1046,48 @@ def test_real_arq_worker_consumes_validation_job_from_redis(
             cleanup_dataset(engine, dataset_id)
 
 
+def test_expired_pending_upload_is_reclaimed_from_local_storage(
+    engine: Engine,
+    dataset_storage_root: Path,
+    real_video_bytes: bytes,
+) -> None:
+    settings = settings_for(engine, storage_root=dataset_storage_root)
+    with client_for(engine, settings) as client:
+        dataset_id = _create_dataset(client)
+        try:
+            requested = _request_upload(
+                client,
+                dataset_id,
+                real_video_bytes,
+                filename="abandoned.mp4",
+                idempotency_key="abandoned-1",
+            )
+            upload = cast(dict[str, Any], requested["upload"])
+            object_key = str(upload["object_key"])
+            assert upload_video_content(client, upload, real_video_bytes).status_code == 204
+            assert (dataset_storage_root / object_key).is_file()
+
+            with session_factory(engine)() as database:
+                cleaned = cleanup_expired_uploads(
+                    datasets=PostgresDatasetRepository(database),
+                    storage=LocalFileObjectStorage(dataset_storage_root),
+                    now=datetime.now(UTC) + timedelta(hours=1),
+                    limit=10,
+                )
+                database.commit()
+
+            assert cleaned >= 1
+            assert not (dataset_storage_root / object_key).exists()
+            member = _persisted_member(engine, UUID(requested["member"]["id"]))
+            assert (
+                member.status,
+                member.failure_code,
+                member.recovery_action,
+            ) == (MemberStatus.FAILED, "UPLOAD_EXPIRED", RetryMode.UPLOAD)
+        finally:
+            cleanup_dataset(engine, dataset_id)
+
+
 def test_archive_filename_is_rejected_before_local_storage(
     engine: Engine,
     dataset_storage_root: Path,
@@ -1159,6 +1208,7 @@ def test_real_object_sha256_mismatch_is_rejected_from_downloaded_content(
                 real_video_bytes,
                 filename="sha-mismatch.mp4",
                 idempotency_key="sha-mismatch-1",
+                declared_sha256=hashlib.sha256(real_video_bytes).hexdigest(),
             )
             _put_object(
                 dataset_storage_root,

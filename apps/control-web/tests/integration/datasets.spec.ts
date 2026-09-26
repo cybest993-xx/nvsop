@@ -275,7 +275,6 @@ beforeEach(() => {
   )
   vi.stubGlobal('crypto', {
     randomUUID: () => 'idempotency-1',
-    subtle: { digest: vi.fn().mockResolvedValue(new Uint8Array(32).fill(0xab).buffer) },
   })
 })
 
@@ -914,7 +913,6 @@ describe('训练数据集工作台', () => {
         original_filename: 'line-1.mp4',
         source: 'camera-A12',
         declared_size: 11,
-        declared_sha256: 'ab'.repeat(32),
       }),
       'idempotency-1',
     )
@@ -1038,7 +1036,6 @@ describe('训练数据集工作台', () => {
         original_filename: 'line-1.mp4',
         source: 'camera-A12',
         declared_size: 11,
-        declared_sha256: 'ab'.repeat(32),
       }),
       'idempotency-1',
     ])

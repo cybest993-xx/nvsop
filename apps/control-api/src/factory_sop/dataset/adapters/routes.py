@@ -114,14 +114,18 @@ class CreateDatasetInput(BaseModel):
 
 
 class RequestVideoUploadInput(BaseModel):
-    """申请上传时提交的声明；不接受对象 URL 或客户端媒体事实。"""
+    """申请上传时提交的声明；不接受对象 URL 或客户端媒体事实。
+
+    `declared_sha256` 是可选期望；中心从流式字节计算并登记权威摘要，因此客户端不必
+    为申请上传而预读整段视频。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     original_filename: StrictStr = Field(min_length=1, max_length=255)
     source: StrictStr = Field(min_length=1, max_length=255)
     declared_size: StrictInt = Field(gt=0)
-    declared_sha256: StrictStr = Field(min_length=64, max_length=64)
+    declared_sha256: StrictStr | None = Field(default=None, min_length=64, max_length=64)
 
 
 class ConfirmVideoUploadInput(BaseModel):
@@ -202,7 +206,7 @@ class DatasetMemberView(BaseModel):
     original_filename: str
     source: str
     declared_size: int
-    declared_sha256: str
+    declared_sha256: str | None
     current_attempt_id: UUID
     status: str
     actual_size: int | None
@@ -229,7 +233,7 @@ class UploadAttemptView(BaseModel):
     member_id: UUID
     status: str
     declared_size: int
-    declared_sha256: str
+    declared_sha256: str | None
     expires_at: datetime
     object_version_id: str | None
 

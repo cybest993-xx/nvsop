@@ -308,7 +308,7 @@ class DatasetMember:
     original_filename: str
     source: str
     declared_size: int
-    declared_sha256: str
+    declared_sha256: str | None
     current_attempt_id: UUID
     status: str
     actual_size: int | None
@@ -338,7 +338,7 @@ class UploadAttempt:
     idempotency_key: str | None
     object_key: str
     declared_size: int
-    declared_sha256: str
+    declared_sha256: str | None
     expires_at: datetime
     status: str
     created_at: datetime

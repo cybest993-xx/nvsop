@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import http.client
 import json
 import time
@@ -476,12 +475,11 @@ def import_training_dataset(
     dataset_id = _required_string(dataset, "id")
     imported: list[ImportedVideo] = []
     for index, path in enumerate(videos, start=1):
-        size, digest = _file_facts(path)
+        size = _file_size(path)
         declaration: JsonObject = {
             "original_filename": path.name,
             "source": source,
             "declared_size": size,
-            "declared_sha256": digest,
         }
         requested = client.request_video_upload(
             dataset_id=dataset_id,
@@ -531,15 +529,11 @@ def import_training_dataset(
     return DatasetImportResult(dataset=dataset, videos=tuple(imported))
 
 
-def _file_facts(path: Path) -> tuple[int, str]:
-    """流式读取视频大小和 SHA-256；不把媒体内容放进 API JSON。"""
+def _file_size(path: Path) -> int:
+    """读取视频大小；权威 sha256 由中心从流式字节计算，客户端不预读整段媒体。"""
     if not path.is_file():
         raise DatasetImportError(f"视频文件不存在：{path}")
     size = path.stat().st_size
     if size <= 0:
         raise DatasetImportError(f"视频文件为空：{path}")
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        while chunk := source.read(1024 * 1024):
-            digest.update(chunk)
-    return size, digest.hexdigest()
+    return size

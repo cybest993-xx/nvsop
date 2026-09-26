@@ -206,7 +206,7 @@ def request_video_upload(
     original_filename: str,
     source: str,
     declared_size: int,
-    declared_sha256: str,
+    declared_sha256: str | None,
     idempotency_key: str | None,
     caller: Caller,
     now: datetime,
@@ -217,7 +217,8 @@ def request_video_upload(
     """申请单个视频的短期流式上传说明，并保证同一幂等键不新增成员。
 
     授权是第一条语句；声明校验和对象键分配都在它之后。客户端只提交元数据，服务端
-    生成唯一对象键，故文件名既不能成为路径也不能覆盖另一条已登记素材。
+    生成唯一对象键，故文件名既不能成为路径也不能覆盖另一条已登记素材。客户端声明的
+    sha256 是可选期望；权威摘要由中心从流式字节计算并登记。
     """
     authorize(caller, Permission.DATASET_IMPORT)
     _validate_upload_declaration(
@@ -229,8 +230,8 @@ def request_video_upload(
         max_upload_bytes=max_upload_bytes,
         upload_ttl_seconds=upload_ttl_seconds,
     )
-    # 摘要十六进制大小写等价；持久化前统一小写，避免合法的大写声明在 worker 中被误拒。
-    declared_sha256 = declared_sha256.casefold()
+    # 摘要十六进制大小写等价；提供声明时统一小写，避免合法的大写声明在 worker 中被误拒。
+    declared_sha256 = declared_sha256.casefold() if declared_sha256 is not None else None
     _require_dataset(dataset_id=dataset_id, datasets=datasets)
 
     if idempotency_key is not None:
@@ -571,6 +572,43 @@ def begin_video_content_upload(
     )
 
 
+def cleanup_expired_uploads(
+    *,
+    datasets: DatasetRepository,
+    storage: ObjectStorage,
+    now: datetime,
+    limit: int,
+) -> int:
+    """回收过期上传尝试留下的本地媒体，避免放弃的上传长期占用持久卷。
+
+    只处理仍处于 `pending_upload` 且已过期的尝试：当前尝试会被标记为可恢复失败，其他
+    尝试只删除对象。删除幂等，重复运行不会碰已登记素材。
+    """
+    cleaned = 0
+    for attempt in datasets.expired_pending_attempts(now=now, limit=limit):
+        member = datasets.member_by_id(attempt.member_id)
+        if member is not None and member.current_attempt_id == attempt.id:
+            expired = replace(
+                member,
+                status=MemberStatus.FAILED,
+                failure_code=DatasetRefusalCode.UPLOAD_EXPIRED.value,
+                failure_detail="上传授权已过期，请重新上传",
+                recovery_action=RetryMode.UPLOAD.value,
+                updated_at=now,
+            )
+            if datasets.save_member(expired, expected_attempt_id=attempt.id):
+                datasets.save_attempt(replace(attempt, status=AttemptStatus.FAILED))
+        _cleanup_objects(
+            storage=storage,
+            object_keys=(attempt.object_key,),
+            member_id=attempt.member_id,
+            attempt_id=attempt.id,
+            event="dataset.video_upload.expired_cleanup_failed",
+        )
+        cleaned += 1
+    return cleaned
+
+
 def begin_video_validation(
     *,
     job: ApplicationJob,
@@ -701,7 +739,7 @@ def validate_video_upload(
                     actual_size=downloaded_size,
                     actual_sha256=actual_sha256,
                 )
-            if actual_sha256 != attempt.declared_sha256:
+            if attempt.declared_sha256 is not None and actual_sha256 != attempt.declared_sha256:
                 return _fail_validation(
                     member=validating,
                     attempt=attempt,
@@ -929,7 +967,7 @@ def _validate_upload_declaration(
     original_filename: str,
     source: str,
     declared_size: int,
-    declared_sha256: str,
+    declared_sha256: str | None,
     idempotency_key: str | None,
     max_upload_bytes: int,
     upload_ttl_seconds: int,
@@ -951,8 +989,9 @@ def _validate_upload_declaration(
         _refuse(DatasetRefusalCode.SIZE_INVALID, "声明大小必须大于零")
     if max_upload_bytes <= 0 or declared_size > max_upload_bytes:
         _refuse(DatasetRefusalCode.SIZE_EXCEEDED, "视频超过当前部署的单视频大小上限")
-    if len(declared_sha256) != 64 or any(
-        character not in "0123456789abcdefABCDEF" for character in declared_sha256
+    if declared_sha256 is not None and (
+        len(declared_sha256) != 64
+        or any(character not in "0123456789abcdefABCDEF" for character in declared_sha256)
     ):
         _refuse(DatasetRefusalCode.SHA256_INVALID, "sha256 必须是 64 位十六进制摘要")
     if original_filename.casefold().endswith(_ARCHIVE_SUFFIXES):

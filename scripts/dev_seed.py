@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 import time
@@ -261,12 +260,10 @@ def ensure_video(client: ControlPlaneClient, dataset_id: str, video: Path) -> st
                 video=video,
             )
         raise DatasetImportError(f"开发样例视频处于不可恢复状态：{status}")
-    content = video.read_bytes()
     declaration = {
         "original_filename": SAMPLE_VIDEO_FILENAME,
         "source": "synthetic-development",
-        "declared_size": len(content),
-        "declared_sha256": hashlib.sha256(content).hexdigest(),
+        "declared_size": video.stat().st_size,
     }
     requested = client.request_video_upload(
         dataset_id=dataset_id,

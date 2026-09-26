@@ -23,6 +23,7 @@ from factory_sop.dataset.model import (
     AnnotationContext,
     AnnotationExecution,
     AnnotationSubmission,
+    AttemptStatus,
     DatasetArtifact,
     DatasetMember,
     MemberStatus,
@@ -37,6 +38,7 @@ from factory_sop.dataset.storage import ObjectStorage
 from factory_sop.dataset.usecases import (
     ValidationResult,
     begin_video_validation,
+    cleanup_expired_uploads,
     confirm_video_upload,
     request_video_upload,
     retry_video_upload,
@@ -140,6 +142,17 @@ class FakeDatasets:
             ),
             None,
         )
+
+    def expired_pending_attempts(self, *, now: datetime, limit: int) -> list[UploadAttempt]:
+        matches = sorted(
+            (
+                attempt
+                for attempt in self.attempts.values()
+                if attempt.status == AttemptStatus.PENDING_UPLOAD and attempt.expires_at <= now
+            ),
+            key=lambda attempt: (attempt.expires_at, str(attempt.id)),
+        )
+        return matches[:limit]
 
     def save_member(
         self,
@@ -782,6 +795,125 @@ def test_validation_uses_object_facts_and_media_probe_to_register_video() -> Non
         recovery_action=None,
     )
     assert created.attempt.object_key not in storage.objects
+
+
+def test_validation_registers_a_video_without_a_client_declared_digest() -> None:
+    """客户端不声明摘要时，中心仍从已定稿字节计算并登记权威 sha256。"""
+    datasets = dataset_store()
+    content = b"synthetic video bytes without a declared digest"
+    storage = FakeStorage()
+    created = request_video_upload(
+        dataset_id=DATASET_ID,
+        original_filename="no-digest.mp4",
+        source="产线相机",
+        declared_size=len(content),
+        declared_sha256=None,
+        idempotency_key="no-digest-1",
+        caller=caller_with_import(),
+        now=NOW,
+        datasets=datasets,
+        max_upload_bytes=1024,
+        upload_ttl_seconds=900,
+    )
+    assert created.member.declared_sha256 is None
+    assert created.attempt.declared_sha256 is None
+    storage.objects[created.attempt.object_key] = content
+    jobs = FakeJobs()
+    confirm_video_upload(
+        dataset_id=DATASET_ID,
+        member_id=created.member.id,
+        attempt_id=created.attempt.id,
+        caller=caller_with_import(),
+        now=NOW,
+        datasets=datasets,
+        jobs=jobs,
+    )
+    target = begin_video_validation(
+        job=next(iter(jobs.jobs.values())),
+        datasets=datasets,
+        now=NOW,
+    )
+    assert target is not None
+
+    result = validate_video_upload(
+        job=next(iter(jobs.jobs.values())),
+        datasets=datasets,
+        storage=storage,
+        probe=FakeProbe(MediaMetadata(duration_seconds=12.5, codec="h264", container="mp4")),
+        supported_codecs=frozenset({"h264"}),
+        now=NOW,
+        target=target,
+    )
+
+    assert result.status is MemberStatus.REGISTERED
+    assert result.actual_sha256 == sha256(content).hexdigest()
+
+
+def test_expired_pending_upload_is_failed_and_its_object_is_deleted() -> None:
+    """放弃的上传不能在本地持久卷上留下无主媒体。"""
+    datasets = dataset_store()
+    storage = FakeStorage()
+    content = b"abandoned upload bytes"
+    created = request_video_upload(
+        dataset_id=DATASET_ID,
+        original_filename="abandoned.mp4",
+        source="产线相机",
+        declared_size=len(content),
+        declared_sha256=None,
+        idempotency_key="abandoned-1",
+        caller=caller_with_import(),
+        now=NOW,
+        datasets=datasets,
+        max_upload_bytes=1024,
+        upload_ttl_seconds=900,
+    )
+    storage.objects[created.attempt.object_key] = content
+
+    cleaned = cleanup_expired_uploads(
+        datasets=datasets,
+        storage=storage,
+        now=NOW + timedelta(seconds=901),
+        limit=10,
+    )
+
+    assert cleaned == 1
+    assert created.attempt.object_key not in storage.objects
+    assert datasets.attempts[created.attempt.id].status == AttemptStatus.FAILED
+    member = datasets.members[created.member.id]
+    assert member.status == MemberStatus.FAILED
+    assert member.failure_code == "UPLOAD_EXPIRED"
+    assert member.recovery_action == RetryMode.UPLOAD.value
+
+
+def test_cleanup_leaves_unexpired_uploads_alone() -> None:
+    """未到期的上传不能被回收，否则会删掉进行中的媒体。"""
+    datasets = dataset_store()
+    storage = FakeStorage()
+    created = request_video_upload(
+        dataset_id=DATASET_ID,
+        original_filename="in-flight.mp4",
+        source="产线相机",
+        declared_size=12,
+        declared_sha256=None,
+        idempotency_key="in-flight-1",
+        caller=caller_with_import(),
+        now=NOW,
+        datasets=datasets,
+        max_upload_bytes=1024,
+        upload_ttl_seconds=900,
+    )
+    storage.objects[created.attempt.object_key] = b"in flight"
+
+    cleaned = cleanup_expired_uploads(
+        datasets=datasets,
+        storage=storage,
+        now=NOW + timedelta(seconds=1),
+        limit=10,
+    )
+
+    assert cleaned == 0
+    assert created.attempt.object_key in storage.objects
+    assert datasets.members[created.member.id].status == MemberStatus.PENDING_UPLOAD
 
 
 def test_ffprobe_hevc_matches_the_h265_deployment_name() -> None:

@@ -2342,8 +2342,15 @@
             "type": "string"
           },
           "declared_sha256": {
-            "title": "Declared Sha256",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Declared Sha256"
           },
           "declared_size": {
             "title": "Declared Size",
@@ -4659,13 +4666,20 @@
       },
       "RequestVideoUploadInput": {
         "additionalProperties": false,
-        "description": "申请上传时提交的声明；不接受对象 URL 或客户端媒体事实。",
+        "description": "申请上传时提交的声明；不接受对象 URL 或客户端媒体事实。\n\n`declared_sha256` 是可选期望；中心从流式字节计算并登记权威摘要，因此客户端不必\n为申请上传而预读整段视频。",
         "properties": {
           "declared_sha256": {
-            "maxLength": 64,
-            "minLength": 64,
-            "title": "Declared Sha256",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Declared Sha256"
           },
           "declared_size": {
             "exclusiveMinimum": 0.0,
@@ -4688,8 +4702,7 @@
         "required": [
           "original_filename",
           "source",
-          "declared_size",
-          "declared_sha256"
+          "declared_size"
         ],
         "title": "RequestVideoUploadInput",
         "type": "object"
@@ -6166,8 +6179,15 @@
       "UploadAttemptView": {
         "properties": {
           "declared_sha256": {
-            "title": "Declared Sha256",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Declared Sha256"
           },
           "declared_size": {
             "title": "Declared Size",

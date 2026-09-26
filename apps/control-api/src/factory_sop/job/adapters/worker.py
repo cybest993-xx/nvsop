@@ -36,6 +36,7 @@ from factory_sop.dataset.api import (
     begin_annotation_execution,
     begin_usage_check,
     begin_video_validation,
+    cleanup_expired_uploads,
     complete_annotation_context_preparation,
     complete_annotation_execution,
     complete_usage_check,
@@ -781,6 +782,17 @@ async def dispatch_pending_jobs(ctx: Mapping[str, Any]) -> None:
         await dispatcher.dispatch_async(job.id)
     if "artifact_executor" in ctx:
         _artifact_executor(ctx).cleanup_candidates()
+    if "dataset_runtime" in ctx:
+        runtime = _dataset_runtime(ctx)
+        storage = runtime.storage()
+        with factory() as session:
+            cleanup_expired_uploads(
+                datasets=runtime.repository(session),
+                storage=storage,
+                now=datetime.now(UTC),
+                limit=100,
+            )
+            session.commit()
 
 
 def build_worker(

@@ -60,7 +60,6 @@ interface PendingUploadRecord {
   originalFilename: string
   source: string
   declaredSize: number
-  declaredSha256: string
 }
 
 function isPendingUploadRecord(value: unknown): value is PendingUploadRecord {
@@ -75,8 +74,7 @@ function isPendingUploadRecord(value: unknown): value is PendingUploadRecord {
     typeof record.source === 'string' &&
     typeof record.declaredSize === 'number' &&
     Number.isInteger(record.declaredSize) &&
-    record.declaredSize > 0 &&
-    typeof record.declaredSha256 === 'string'
+    record.declaredSize > 0
   )
 }
 
@@ -801,14 +799,6 @@ function activeDatasetId(): string {
   return (preferred || knownDatasetId.value || selectedDatasetId.value).trim()
 }
 
-async function sha256(file: File): Promise<string> {
-  if (globalThis.crypto?.subtle === undefined) {
-    throw new Error('当前浏览器不支持文件摘要计算，请使用支持 Web Crypto 的浏览器')
-  }
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', await file.arrayBuffer())
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
-}
-
 function newIdempotencyKey(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
@@ -817,7 +807,6 @@ function resumableIdempotencyKey(
   datasetId: string,
   file: File,
   sourceValue: string,
-  declaredSha256: string,
 ): string | null {
   const record = pendingUpload.value
   if (
@@ -825,8 +814,7 @@ function resumableIdempotencyKey(
     record.datasetId !== datasetId ||
     record.originalFilename !== file.name ||
     record.source !== sourceValue ||
-    record.declaredSize !== file.size ||
-    record.declaredSha256 !== declaredSha256
+    record.declaredSize !== file.size
   ) {
     return null
   }
@@ -850,7 +838,6 @@ function rememberPendingUpload(
     originalFilename: result.member.original_filename,
     source: result.member.source,
     declaredSize: result.member.declared_size,
-    declaredSha256: result.member.declared_sha256,
   }
   pendingUpload.value = record
   try {
@@ -936,9 +923,8 @@ async function requestAndUpload(): Promise<void> {
   transferPhase.value = 'requesting'
   try {
     const sourceValue = source.value.trim()
-    const declaredSha256 = await sha256(file)
     const idempotencyKey =
-      resumableIdempotencyKey(datasetId, file, sourceValue, declaredSha256) ?? newIdempotencyKey()
+      resumableIdempotencyKey(datasetId, file, sourceValue) ?? newIdempotencyKey()
     activeIdempotencyKey.value = idempotencyKey
     uploadNeedsRenewal.value = false
     const result = await requestVideoUpload(
@@ -947,7 +933,6 @@ async function requestAndUpload(): Promise<void> {
         original_filename: file.name,
         source: sourceValue,
         declared_size: file.size,
-        declared_sha256: declaredSha256,
       },
       idempotencyKey,
     )
@@ -1230,7 +1215,6 @@ async function uploadRetriedFile(): Promise<void> {
         original_filename: request.member.original_filename,
         source: request.member.source,
         declared_size: request.member.declared_size,
-        declared_sha256: request.member.declared_sha256,
       },
       activeIdempotencyKey.value,
     )
@@ -1899,7 +1883,7 @@ onUnmounted(() => {
               <small>实际：{{ formatBytes(member.actual_size) }}</small>
             </td>
             <td>
-              <code class="datasets__digest">声明：{{ member.declared_sha256 }}</code>
+              <code class="datasets__digest">声明：{{ member.declared_sha256 ?? '—' }}</code>
               <code v-if="member.actual_sha256" class="datasets__digest">
                 实际：{{ member.actual_sha256 }}
               </code>

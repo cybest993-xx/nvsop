@@ -1371,7 +1371,7 @@ def render_ddm_artifact_with_base(
             except ObjectStorageUnavailableError as error:
                 raise DatasetRefusedError(
                     DatasetRefusalCode.STORAGE_UNAVAILABLE,
-                    detail="对象存储暂时不可用，请稍后重试",
+                    detail="训练素材存储暂时不可用，请稍后重试",
                 ) from error
             _verify_downloaded_source(video_path, source)
             copy = raw_sources.get(member_id)
@@ -2290,7 +2290,7 @@ def _merge_storage_facts(
                     issues.append(
                         UsageIssue(
                             "USAGE_STORAGE_UNAVAILABLE",
-                            "对象存储暂时不可用",
+                            "训练素材存储暂时不可用",
                             str(member_id),
                             retryable=True,
                             recovery_action="retry_usage_check",
@@ -3010,7 +3010,7 @@ def _verify_frozen_media(
         issues.append(
             UsageIssue(
                 "USAGE_STORAGE_UNAVAILABLE",
-                "对象存储暂时不可用",
+                "训练素材存储暂时不可用",
                 str(member_id),
                 retryable=True,
                 recovery_action="retry_usage_check",
@@ -3121,7 +3121,7 @@ def _probe_frozen_video(
         issues.append(
             UsageIssue(
                 "USAGE_STORAGE_UNAVAILABLE",
-                "对象存储暂时不可用",
+                "训练素材存储暂时不可用",
                 str(member_id),
                 retryable=True,
                 recovery_action="retry_usage_check",

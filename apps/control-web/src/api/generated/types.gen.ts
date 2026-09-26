@@ -2842,7 +2842,7 @@ export type RegisterVlmCandidateInput = {
 /**
  * RequestVideoUploadInput
  *
- * 申请直传时提交的声明；不接受对象 URL 或客户端媒体事实。
+ * 申请上传时提交的声明；不接受对象 URL 或客户端媒体事实。
  */
 export type RequestVideoUploadInput = {
   /**
@@ -4229,7 +4229,7 @@ export type ReadAnnotationContextErrors = {
    */
   500: ProblemDocument
   /**
-   * 标注基座或对象存储暂时不可用
+   * 标注基座或训练素材存储暂时不可用
    */
   503: ProblemDocument
 }
@@ -8941,7 +8941,7 @@ export type ReadDatasetActionListErrors = {
    */
   500: ProblemDocument
   /**
-   * 标注基座或对象存储暂时不可用
+   * 标注基座或训练素材存储暂时不可用
    */
   503: ProblemDocument
 }
@@ -8997,7 +8997,7 @@ export type RegisterDatasetActionListErrors = {
    */
   500: ProblemDocument
   /**
-   * 标注基座或对象存储暂时不可用
+   * 标注基座或训练素材存储暂时不可用
    */
   503: ProblemDocument
 }
@@ -9053,7 +9053,7 @@ export type ListDatasetActionListVersionsErrors = {
    */
   500: ProblemDocument
   /**
-   * 标注基座或对象存储暂时不可用
+   * 标注基座或训练素材存储暂时不可用
    */
   503: ProblemDocument
 }
@@ -9535,7 +9535,7 @@ export type CreateAnnotationContextErrors = {
    */
   500: ProblemDocument
   /**
-   * 标注基座或对象存储暂时不可用
+   * 标注基座或训练素材存储暂时不可用
    */
   503: ProblemDocument
 }
@@ -9595,7 +9595,7 @@ export type ListAnnotationsErrors = {
    */
   500: ProblemDocument
   /**
-   * 标注基座或对象存储暂时不可用
+   * 标注基座或训练素材存储暂时不可用
    */
   503: ProblemDocument
 }
@@ -9663,7 +9663,7 @@ export type SubmitAnnotationErrors = {
    */
   500: ProblemDocument
   /**
-   * 标注基座或对象存储暂时不可用
+   * 标注基座或训练素材存储暂时不可用
    */
   503: ProblemDocument
 }
@@ -9725,7 +9725,7 @@ export type ReadAnnotationErrors = {
    */
   500: ProblemDocument
   /**
-   * 标注基座或对象存储暂时不可用
+   * 标注基座或训练素材存储暂时不可用
    */
   503: ProblemDocument
 }
@@ -9787,7 +9787,7 @@ export type RetryAnnotationErrors = {
    */
   500: ProblemDocument
   /**
-   * 标注基座或对象存储暂时不可用
+   * 标注基座或训练素材存储暂时不可用
    */
   503: ProblemDocument
 }

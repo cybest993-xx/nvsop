@@ -193,7 +193,7 @@ async def check_dataset_usage_job(ctx: Mapping[str, Any], job_id: str) -> None:
             runtime=runtime,
             target=target,
             code="USAGE_STORAGE_UNAVAILABLE",
-            detail="对象存储暂时不可用，请稍后重试",
+            detail="训练素材存储暂时不可用，请稍后重试",
             error=error,
         )
         return

@@ -1,4 +1,4 @@
-"""训练数据集 HTTP seam：权限、直传说明和任务幂等。"""
+"""训练数据集 HTTP seam：权限、上传说明和任务幂等。"""
 
 from __future__ import annotations
 

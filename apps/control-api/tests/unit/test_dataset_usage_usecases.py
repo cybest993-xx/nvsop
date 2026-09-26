@@ -1,4 +1,4 @@
-"""用途检查用例的数据库、任务和对象存储 seam。"""
+"""用途检查用例的数据库、任务和训练素材存储 seam。"""
 
 from __future__ import annotations
 
@@ -1261,7 +1261,7 @@ def test_complete_usage_check_persists_recovery_metadata() -> None:
     assert target is not None
     issue = UsageIssue(
         "USAGE_STORAGE_UNAVAILABLE",
-        "对象存储暂时不可用",
+        "训练素材存储暂时不可用",
         str(MEMBER_ID),
         retryable=True,
         recovery_action="retry_usage_check",
@@ -1281,7 +1281,7 @@ def test_complete_usage_check_persists_recovery_metadata() -> None:
     assert result.issues == (
         {
             "code": "USAGE_STORAGE_UNAVAILABLE",
-            "detail": "对象存储暂时不可用",
+            "detail": "训练素材存储暂时不可用",
             "location": str(MEMBER_ID),
             "retryable": True,
             "recovery_action": "retry_usage_check",

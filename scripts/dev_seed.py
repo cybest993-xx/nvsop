@@ -194,10 +194,10 @@ def complete_video_upload(
     upload: dict[str, object],
     video: Path,
 ) -> str:
-    """完成一次直传、确认和 worker 校验，供首次申请和失败重试共用。"""
+    """完成一次流式上传、确认和 worker 校验，供首次申请和失败重试共用。"""
     uploaded = client.upload_file(instructions=upload, path=video)
     if uploaded.status not in {200, 201, 204}:
-        raise DatasetImportError(f"开发样例视频直传失败：HTTP {uploaded.status}")
+        raise DatasetImportError(f"开发样例视频上传失败：HTTP {uploaded.status}")
     confirmed = client.confirm_video_upload(
         dataset_id=dataset_id,
         member_id=member_id,

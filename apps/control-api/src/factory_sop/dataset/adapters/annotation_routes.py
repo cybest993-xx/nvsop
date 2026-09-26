@@ -199,7 +199,7 @@ ProblemResponses: dict[int | str, dict[str, Any]] = {
     404: problem_openapi_response("训练数据集、视频或标注提交不存在"),
     409: problem_openapi_response("标注当前状态不允许该操作"),
     422: problem_openapi_response("标注输入无效"),
-    503: problem_openapi_response("标注基座或对象存储暂时不可用"),
+    503: problem_openapi_response("标注基座或训练素材存储暂时不可用"),
 }
 
 

@@ -4659,7 +4659,7 @@
       },
       "RequestVideoUploadInput": {
         "additionalProperties": false,
-        "description": "申请直传时提交的声明；不接受对象 URL 或客户端媒体事实。",
+        "description": "申请上传时提交的声明；不接受对象 URL 或客户端媒体事实。",
         "properties": {
           "declared_sha256": {
             "maxLength": 64,
@@ -7119,7 +7119,7 @@
                 }
               }
             },
-            "description": "标注基座或对象存储暂时不可用"
+            "description": "标注基座或训练素材存储暂时不可用"
           }
         },
         "summary": "Read A Context",
@@ -16189,7 +16189,7 @@
                 }
               }
             },
-            "description": "标注基座或对象存储暂时不可用"
+            "description": "标注基座或训练素材存储暂时不可用"
           }
         },
         "summary": "Read A Dataset Action List",
@@ -16301,7 +16301,7 @@
                 }
               }
             },
-            "description": "标注基座或对象存储暂时不可用"
+            "description": "标注基座或训练素材存储暂时不可用"
           }
         },
         "summary": "Register A Dataset Action List",
@@ -16405,7 +16405,7 @@
                 }
               }
             },
-            "description": "标注基座或对象存储暂时不可用"
+            "description": "标注基座或训练素材存储暂时不可用"
           }
         },
         "summary": "List Dataset Action List Versions",
@@ -17366,7 +17366,7 @@
                 }
               }
             },
-            "description": "标注基座或对象存储暂时不可用"
+            "description": "标注基座或训练素材存储暂时不可用"
           }
         },
         "summary": "Create A Context",
@@ -17483,7 +17483,7 @@
                 }
               }
             },
-            "description": "标注基座或对象存储暂时不可用"
+            "description": "标注基座或训练素材存储暂时不可用"
           }
         },
         "summary": "List The Annotations",
@@ -17630,7 +17630,7 @@
                 }
               }
             },
-            "description": "标注基座或对象存储暂时不可用"
+            "description": "标注基座或训练素材存储暂时不可用"
           }
         },
         "summary": "Submit An Annotation",
@@ -17754,7 +17754,7 @@
                 }
               }
             },
-            "description": "标注基座或对象存储暂时不可用"
+            "description": "标注基座或训练素材存储暂时不可用"
           }
         },
         "summary": "Read An Annotation",
@@ -17878,7 +17878,7 @@
                 }
               }
             },
-            "description": "标注基座或对象存储暂时不可用"
+            "description": "标注基座或训练素材存储暂时不可用"
           }
         },
         "summary": "Retry An Annotation",

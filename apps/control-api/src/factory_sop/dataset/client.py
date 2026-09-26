@@ -272,7 +272,7 @@ class ControlPlaneClient:
     def confirm_video_upload(
         self, *, dataset_id: str, member_id: str, attempt_id: str
     ) -> JsonObject:
-        """通知正式控制面某个直传尝试可以校验；请求体只含尝试身份。"""
+        """通知正式控制面某个上传尝试可以校验；请求体只含尝试身份。"""
         return _expect_json(
             self._send_json(
                 "POST",
@@ -464,7 +464,7 @@ def import_training_dataset(
     poll_interval_seconds: float = _DEFAULT_JOB_POLL_INTERVAL_SECONDS,
     poll_timeout_seconds: float = _DEFAULT_JOB_POLL_TIMEOUT_SECONDS,
 ) -> DatasetImportResult:
-    """创建数据集后逐个申请、直传、确认并轮询视频校验任务。"""
+    """创建数据集后逐个申请、上传、确认并轮询视频校验任务。"""
     if not dataset_name.strip():
         raise ValueError("dataset_name 不能为空")
     if not source.strip():

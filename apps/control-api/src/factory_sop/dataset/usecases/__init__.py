@@ -641,7 +641,7 @@ def validate_video_upload(
             storage=storage,
             now=now,
             code=DatasetRefusalCode.OBJECT_NOT_FOUND,
-            detail="对象存储中没有找到已分配的对象，请重新上传",
+            detail="训练素材存储中没有找到已分配的文件，请重新上传",
             recovery_action=RetryMode.UPLOAD.value,
         )
     except (ObjectStorageUnavailableError, OSError):
@@ -652,7 +652,7 @@ def validate_video_upload(
             storage=storage,
             now=now,
             code=DatasetRefusalCode.STORAGE_UNAVAILABLE,
-            detail="对象存储暂时不可用，请稍后重新校验",
+            detail="训练素材存储暂时不可用，请稍后重新校验",
             recovery_action=RetryMode.VALIDATION.value,
         )
 
@@ -696,7 +696,7 @@ def validate_video_upload(
                     storage=storage,
                     now=now,
                     code=DatasetRefusalCode.SIZE_MISMATCH,
-                    detail="对象读取到的实际大小与对象存储声明不一致",
+                    detail="对象读取到的实际大小与训练素材存储声明不一致",
                     recovery_action=RetryMode.UPLOAD.value,
                     actual_size=downloaded_size,
                     actual_sha256=actual_sha256,
@@ -840,7 +840,7 @@ def validate_video_upload(
             storage=storage,
             now=now,
             code=DatasetRefusalCode.STORAGE_UNAVAILABLE,
-            detail="对象存储暂时不可用，请稍后重新校验",
+            detail="训练素材存储暂时不可用，请稍后重新校验",
             recovery_action=RetryMode.VALIDATION.value,
         )
     except MediaProbeUnavailableError:

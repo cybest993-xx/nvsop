@@ -400,7 +400,7 @@ describe('训练数据集工作台', () => {
           ...USAGE_ARTIFACT,
           status: 'failed',
           failure_code: 'STORAGE_UNAVAILABLE',
-          failure_detail: '对象存储暂时不可用，请稍后重试',
+          failure_detail: '训练素材存储暂时不可用，请稍后重试',
         },
       ],
       page: 1,
@@ -413,7 +413,7 @@ describe('训练数据集工作台', () => {
 
     expect(wrapper.text()).toContain('生成失败')
     expect(wrapper.text()).toContain('STORAGE_UNAVAILABLE')
-    expect(wrapper.text()).toContain('对象存储暂时不可用，请稍后重试')
+    expect(wrapper.text()).toContain('训练素材存储暂时不可用，请稍后重试')
     expect(wrapper.text()).toContain('可重试制品生成')
     wrapper.unmount()
   })
@@ -964,7 +964,7 @@ describe('训练数据集工作台', () => {
   it('leaves a failed upload request retryable', async () => {
     grant('dataset.dataset.view', 'dataset.dataset.import')
     api.readDatasetMembers.mockResolvedValue({ items: [], page: 1, page_size: 50, total: 0 })
-    api.requestVideoUpload.mockRejectedValueOnce(new Error('申请直传失败')).mockResolvedValueOnce({
+    api.requestVideoUpload.mockRejectedValueOnce(new Error('申请上传失败')).mockResolvedValueOnce({
       member: { ...MEMBER_PENDING, status: 'pending_upload' },
       attempt: ATTEMPT,
       upload: UPLOAD,
@@ -978,7 +978,7 @@ describe('训练数据集工作台', () => {
     await wrapper.find('form[aria-label="上传训练视频"]').trigger('submit')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('申请直传失败')
+    expect(wrapper.text()).toContain('申请上传失败')
     expect(
       wrapper.find('form[aria-label="上传训练视频"] button').attributes('disabled'),
     ).toBeUndefined()

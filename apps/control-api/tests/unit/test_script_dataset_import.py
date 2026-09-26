@@ -87,7 +87,7 @@ class FakeJobRepository:
 
 
 class AsgiTransport:
-    """用真实 FastAPI 路由承载控制面，用独立直传 seam 承载视频。"""
+    """用真实 FastAPI 路由承载控制面，用独立上传 seam 承载视频。"""
 
     def __init__(self, client: TestClient) -> None:
         self.client = client

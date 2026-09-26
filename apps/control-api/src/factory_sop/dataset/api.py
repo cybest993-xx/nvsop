@@ -234,7 +234,7 @@ class DatasetAnnotationRuntime(Protocol):
         ...
 
     def storage(self) -> ObjectStorage:
-        """创建对象存储客户端，调用发生在数据库事务外。"""
+        """创建训练素材存储客户端，调用发生在数据库事务外。"""
         ...
 
     def backend(self) -> AnnotationBackend:
@@ -281,7 +281,7 @@ class DatasetUsageRuntime(Protocol):
         ...
 
     def storage(self) -> ObjectStorage:
-        """创建对象存储客户端，调用发生在数据库事务外。"""
+        """创建训练素材存储客户端，调用发生在数据库事务外。"""
         ...
 
     def ddm_reader(self) -> DdmReader:
@@ -309,7 +309,7 @@ class DatasetValidationRuntime(Protocol):
         ...
 
     def storage(self) -> ObjectStorage:
-        """创建对象存储客户端，调用发生在数据库事务外。"""
+        """创建训练素材存储客户端，调用发生在数据库事务外。"""
         ...
 
     def media_probe(self) -> MediaProbe:

@@ -90,7 +90,7 @@ class CreateDatasetInput(BaseModel):
 
 
 class RequestVideoUploadInput(BaseModel):
-    """申请直传时提交的声明；不接受对象 URL 或客户端媒体事实。"""
+    """申请上传时提交的声明；不接受对象 URL 或客户端媒体事实。"""
 
     model_config = ConfigDict(extra="forbid")
 

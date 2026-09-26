@@ -17,7 +17,6 @@ import pytest
 from factory_sop.auth.authorization import AuthorizationRefusedError, Caller
 from factory_sop.auth.model import User, UserStatus
 from factory_sop.auth.permissions import Permission
-from factory_sop.dataset import usecases as dataset_usecases
 from factory_sop.dataset.errors import DatasetRefusalCode, DatasetRefusedError
 from factory_sop.dataset.media import MediaMetadata, MediaProbeUnavailableError
 from factory_sop.dataset.model import (

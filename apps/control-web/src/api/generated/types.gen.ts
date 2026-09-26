@@ -9804,7 +9804,7 @@ export type RetryAnnotationResponses = {
 export type RetryAnnotationResponse = RetryAnnotationResponses[keyof RetryAnnotationResponses]
 
 export type UploadVideoContentData = {
-  body?: never
+  body: Blob | File
   path: {
     /**
      * Dataset Id

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import AbstractContextManager, asynccontextmanager
 from datetime import UTC, datetime
 from hashlib import sha256
 from tempfile import NamedTemporaryFile
@@ -68,6 +70,28 @@ ProblemResponses: dict[int | str, dict[str, Any]] = {
     422: problem_openapi_response("请求或视频校验无效"),
     503: problem_openapi_response("训练素材存储或媒体探测暂时不可用"),
 }
+# 流式上传的请求体不在 FastAPI 的参数模型中解析，但必须出现在公开契约里，否则生成的
+# 客户端只能发送空体。
+_UPLOAD_REQUEST_BODY: dict[str, Any] = {
+    "requestBody": {
+        "required": True,
+        "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}},
+    }
+}
+
+
+@asynccontextmanager
+async def _threaded_writing(storage: ObjectStorage, *, object_key: str) -> AsyncIterator[BinaryIO]:
+    """在线程中打开与定稿写入目标，避免大文件 fsync 阻塞事件循环。"""
+    manager: AbstractContextManager[BinaryIO] = storage.writing(object_key=object_key)
+    sink = await run_in_threadpool(manager.__enter__)
+    try:
+        yield sink
+    except BaseException as error:
+        await run_in_threadpool(manager.__exit__, type(error), error, error.__traceback__)
+        raise
+    else:
+        await run_in_threadpool(manager.__exit__, None, None, None)
 
 
 def _utc(value: datetime) -> str:
@@ -811,7 +835,7 @@ def retry_a_video_upload(
     "/{dataset_id}/members/{member_id}/attempts/{attempt_id}/content",
     status_code=status.HTTP_204_NO_CONTENT,
     operation_id="uploadVideoContent",
-    openapi_extra=needs(Permission.DATASET_IMPORT),
+    openapi_extra={**needs(Permission.DATASET_IMPORT), **_UPLOAD_REQUEST_BODY},
     responses=ProblemResponses,
 )
 async def upload_video_content(
@@ -840,7 +864,7 @@ async def upload_video_content(
     session.rollback()
     received = 0
     try:
-        with storage.writing(object_key=target.object_key) as sink:
+        async with _threaded_writing(storage, object_key=target.object_key) as sink:
             async for chunk in request.stream():
                 received += len(chunk)
                 if received > target.max_bytes:

@@ -399,6 +399,21 @@ def test_uploading_more_than_the_declared_size_leaves_no_finalized_object(
     assert import_backend.storage.objects == {}
 
 
+def test_upload_content_operation_declares_a_binary_request_body(
+    import_backend: Backend,
+) -> None:
+    operation = import_backend.app.openapi()["paths"][
+        f"{API_PREFIX}/training-datasets/{{dataset_id}}/members/{{member_id}}"
+        f"/attempts/{{attempt_id}}/content"
+    ]["put"]
+
+    assert operation["requestBody"]["required"] is True
+    assert operation["requestBody"]["content"]["application/octet-stream"]["schema"] == {
+        "type": "string",
+        "format": "binary",
+    }
+
+
 def test_uploading_video_content_requires_dataset_import(view_backend: Backend) -> None:
     response = view_backend.client.put(
         f"{API_PREFIX}/training-datasets/{DATASET_ID}/members/{MEMBER_ID}"

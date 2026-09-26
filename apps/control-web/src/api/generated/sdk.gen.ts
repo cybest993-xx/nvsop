@@ -2085,8 +2085,13 @@ export const uploadVideoContent = <ThrowOnError extends boolean = false>(
     UploadVideoContentErrors,
     ThrowOnError
   >({
+    bodySerializer: null,
     url: '/api/v1/training-datasets/{dataset_id}/members/{member_id}/attempts/{attempt_id}/content',
     ...options,
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      ...options.headers,
+    },
   })
 
 /**

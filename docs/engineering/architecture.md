@@ -43,13 +43,13 @@ composition root -> runtime packages
 
 Storage may know domain types, never the orchestrator. Only the composition root should need all runtime packages.
 
-**【已定目标】** `local_state` 通过小型公共 interface 拥有 Edge 本地持久状态；SQLite connection、SQL、schema、codec 与表布局属于其 implementation。发往 Center `monitor` 的结构化事实通过主机级上报对账 interface 排空。证据上传、Center→Edge 配置同步和物理处置保持各自的 owner 与生命周期，不合并为通用同步框架。详细运行语义见[推理机自治机制](../design/mechanisms/edge-autonomy.md#57-推理机是自治判定单元)。
+**【已定目标】** `local_state` 通过小型公共 interface 拥有 Edge 本地持久状态；SQLite connection、SQL、schema、codec 与表布局属于其 implementation。发往 Center `monitor` 的结构化事实通过主机级上报对账 interface 排空。证据媒体本地持有与证据元数据上报、Center→Edge 配置同步和物理处置保持各自的 owner 与生命周期，不合并为通用同步框架。详细运行语义见[推理机自治机制](../design/mechanisms/edge-autonomy.md#57-推理机是自治判定单元)和[ADR-0012](../adr/0012-media-ownership-and-center-training-files.md)。
 
 ## Traffic boundaries
 
-Nginx serves Web and center control-plane HTTP. Runtime preview/signaling goes directly from browser to its assigned inference host's MediaMTX. The authorized annotation-derived-media gateway is the only recorded exception ([ADR-0011](../adr/0011-annotation-derived-media-gateway.md)), not a general video relay.
+Nginx serves Web and center control-plane HTTP. Runtime preview/signaling and violation-evidence media stay with the owning inference host; browsers read runtime media from that host rather than from a center media store. The authorized annotation-derived-media gateway is the only recorded center byte-forwarding path for media reads ([ADR-0011](../adr/0011-annotation-derived-media-gateway.md)); media ownership is fixed by [ADR-0012](../adr/0012-media-ownership-and-center-training-files.md).
 
-Control-plane `/api/v1` is a fixed prefix, not a version axis ([ADR-0003](../adr/0003-api-v1-is-a-fixed-prefix.md)). Training videos upload individually through presigned MinIO URLs; the center accepts no archives or unpacking. Device credentials stay on the inference host; the center keeps configuration status, not reusable secrets ([ADR-0008](../adr/0008-credentials-stay-on-the-inference-host.md)).
+Control-plane `/api/v1` is a fixed prefix, not a version axis ([ADR-0003](../adr/0003-api-v1-is-a-fixed-prefix.md)). Training videos are low-frequency management assets: Web and scripts upload them individually through the authorized control-plane API, `dataset` streams them to a center-local persistent volume, and PostgreSQL stores metadata rather than media bytes. The center accepts no archives or unpacking. Device credentials stay on the inference host; the center keeps configuration status, not reusable secrets ([ADR-0008](../adr/0008-credentials-stay-on-the-inference-host.md)).
 
 ## Enforcement
 

@@ -6,7 +6,8 @@ import hashlib
 import math
 import shutil
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import BinaryIO, NoReturn, cast
@@ -1096,45 +1097,20 @@ class ValidationObjectEffects:
         """返回延迟源对象删除、跟踪定稿候选的 validation 存储视图。"""
         return self
 
-    def create_upload(
-        self,
-        *,
-        object_key: str,
-        declared_size: int,
-        max_bytes: int,
-        expires_at: datetime,
-    ) -> UploadInstructions:
-        return self._storage.create_upload(
-            object_key=object_key,
-            declared_size=declared_size,
-            max_bytes=max_bytes,
-            expires_at=expires_at,
-        )
+    @contextmanager
+    def writing(self, *, object_key: str) -> Iterator[BinaryIO]:
+        with self._storage.writing(object_key=object_key) as sink:
+            yield sink
+        self._rollback_object_keys.append(object_key)
 
     def stat(self, *, object_key: str) -> ObjectStat:
         return self._storage.stat(object_key=object_key)
 
-    def download_to(
-        self,
-        *,
-        object_key: str,
-        destination: BinaryIO,
-        version_id: str | None = None,
-    ) -> None:
+    def download_to(self, *, object_key: str, destination: BinaryIO) -> None:
         self._storage.download_to(
             object_key=object_key,
             destination=destination,
-            version_id=version_id,
         )
-
-    def finalize_upload(self, *, object_key: str, source: BinaryIO, size: int) -> ObjectStat:
-        stored = self._storage.finalize_upload(
-            object_key=object_key,
-            source=source,
-            size=size,
-        )
-        self._rollback_object_keys.append(object_key)
-        return stored
 
     def delete(self, *, object_key: str) -> None:
         if object_key == self._source_object_key:

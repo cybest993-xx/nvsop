@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from datetime import UTC, datetime
+from io import BytesIO
 from threading import Event, get_ident
 from types import SimpleNamespace, TracebackType
 from typing import Any, cast
@@ -134,10 +136,11 @@ class _ValidationStorage:
     def __init__(self) -> None:
         self.objects = {"attempt-object": b"source"}
 
-    def finalize_upload(self, *, object_key: str, source: object, size: int) -> object:
-        del source
-        self.objects[object_key] = b"x" * size
-        return SimpleNamespace(size=size, version_id="final-version")
+    @contextmanager
+    def writing(self, *, object_key: str) -> Iterator[BytesIO]:
+        sink = BytesIO()
+        yield sink
+        self.objects[object_key] = sink.getvalue()
 
     def delete(self, *, object_key: str) -> None:
         self.objects.pop(object_key, None)
@@ -545,7 +548,8 @@ def test_validation_sessions_stay_on_the_blocking_execution_thread(
     ) -> SimpleNamespace:
         del job, probe, supported_codecs, now, target
         fenced_storage = cast(Any, storage)
-        fenced_storage.finalize_upload(object_key="final-object", source=object(), size=5)
+        with fenced_storage.writing(object_key="final-object") as sink:
+            sink.write(b"x" * 5)
         fenced_storage.delete(object_key="attempt-object")
         datasets.stage_publish()
         return SimpleNamespace(status=MemberStatus.REGISTERED.value, failure_code=None)
@@ -593,7 +597,8 @@ def test_cancelled_validation_discards_late_result_without_finishing_job(
     ) -> SimpleNamespace:
         del job, probe, supported_codecs, now, target
         fenced_storage = cast(Any, storage)
-        fenced_storage.finalize_upload(object_key="final-object", source=object(), size=5)
+        with fenced_storage.writing(object_key="final-object") as sink:
+            sink.write(b"x" * 5)
         fenced_storage.delete(object_key="attempt-object")
         datasets.stage_publish()
         started.set()

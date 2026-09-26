@@ -43,7 +43,7 @@ composition root -> runtime packages
 
 Storage may know domain types, never the orchestrator. Only the composition root should need all runtime packages.
 
-**【已定目标】** `local_state` 通过小型公共 interface 拥有 Edge 本地持久状态；SQLite connection、SQL、schema、codec 与表布局属于其 implementation。发往 Center `monitor` 的结构化事实通过主机级上报对账 interface 排空。证据媒体本地持有与证据元数据上报、Center→Edge 配置同步和物理处置保持各自的 owner 与生命周期，不合并为通用同步框架。详细运行语义见[推理机自治机制](../design/mechanisms/edge-autonomy.md#57-推理机是自治判定单元)和[ADR-0012](../adr/0012-media-ownership-and-center-training-files.md)。
+**【已定目标】** `local_state` owns Edge durable state behind small public interfaces; SQLite connections, SQL, schema, codecs and table layout remain implementation details. The host-level `HostReportReconciler` drains structured facts for Center `monitor` through the `ReportStore` seam. Evidence media remain on the producing inference host; evidence metadata/reference registration, Center-to-Edge configuration sync and physical disposal retain separate owners and lifecycles rather than a generic synchronization framework. See the [Edge autonomy mechanism](../design/mechanisms/edge-autonomy.md#57-推理机是自治判定单元) and [ADR-0012](../adr/0012-media-ownership-and-center-training-files.md).
 
 ## Traffic boundaries
 

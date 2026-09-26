@@ -110,6 +110,10 @@ class FakeAnnotationStore:
             None,
         )
 
+    def expired_pending_attempts(self, *, now: datetime, limit: int) -> list[UploadAttempt]:
+        del now, limit
+        return []
+
     def save_member(
         self,
         member: DatasetMember,

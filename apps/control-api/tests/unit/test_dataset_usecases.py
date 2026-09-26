@@ -40,6 +40,7 @@ from factory_sop.dataset.usecases import (
     begin_video_validation,
     cleanup_expired_uploads,
     confirm_video_upload,
+    finalize_video_content_upload,
     request_video_upload,
     retry_video_upload,
     validate_video_upload,
@@ -341,6 +342,25 @@ class FakeStorage(ObjectStorage):
 
     def delete(self, *, object_key: str) -> None:
         self.objects.pop(object_key, None)
+
+
+@dataclass
+class UndeletableStorage(FakeStorage):
+    """让回收测试证明删除失败时尝试保持可重试，而不是留下孤儿。"""
+
+    def delete(self, *, object_key: str) -> None:
+        raise OSError("本地持久卷暂时不可写")
+
+
+@dataclass
+class StaleMemberDatasets(FakeDatasets):
+    """让回收读到并发 confirm/retry 之前的成员快照，模拟认领时的 CAS 冲突。"""
+
+    def member_by_id(self, member_id: UUID) -> DatasetMember | None:
+        member = super().member_by_id(member_id)
+        if member is None:
+            return member
+        return replace(member, updated_at=member.updated_at - timedelta(seconds=1))
 
 
 @dataclass
@@ -914,6 +934,146 @@ def test_cleanup_leaves_unexpired_uploads_alone() -> None:
     assert cleaned == 0
     assert created.attempt.object_key in storage.objects
     assert datasets.members[created.member.id].status == MemberStatus.PENDING_UPLOAD
+
+
+def test_expired_cleanup_keeps_the_attempt_retryable_when_deletion_fails() -> None:
+    """删除失败不能把对象变成再也不会被选中的孤儿。"""
+    datasets = dataset_store()
+    content = b"undeletable bytes"
+    created = request_video_upload(
+        dataset_id=DATASET_ID,
+        original_filename="undeletable.mp4",
+        source="产线相机",
+        declared_size=len(content),
+        declared_sha256=None,
+        idempotency_key="undeletable-1",
+        caller=caller_with_import(),
+        now=NOW,
+        datasets=datasets,
+        max_upload_bytes=1024,
+        upload_ttl_seconds=900,
+    )
+    objects = {created.attempt.object_key: content}
+
+    cleaned = cleanup_expired_uploads(
+        datasets=datasets,
+        storage=UndeletableStorage(objects=objects),
+        now=NOW + timedelta(seconds=901),
+        limit=10,
+    )
+
+    assert cleaned == 0
+    assert datasets.attempts[created.attempt.id].status == AttemptStatus.PENDING_UPLOAD
+
+    recovered = FakeStorage(objects=objects)
+    cleaned = cleanup_expired_uploads(
+        datasets=datasets,
+        storage=recovered,
+        now=NOW + timedelta(seconds=902),
+        limit=10,
+    )
+
+    assert cleaned == 1
+    assert datasets.attempts[created.attempt.id].status == AttemptStatus.FAILED
+    assert created.attempt.object_key not in recovered.objects
+
+
+def test_expired_cleanup_does_not_overwrite_a_concurrently_advanced_member() -> None:
+    """并发 confirm/retry 已推进成员行时，回收不能覆盖它或删掉它的对象。"""
+    base = dataset_store()
+    datasets = StaleMemberDatasets(datasets=base.datasets)
+    created = request_video_upload(
+        dataset_id=DATASET_ID,
+        original_filename="racing.mp4",
+        source="产线相机",
+        declared_size=12,
+        declared_sha256=None,
+        idempotency_key="racing-1",
+        caller=caller_with_import(),
+        now=NOW,
+        datasets=datasets,
+        max_upload_bytes=1024,
+        upload_ttl_seconds=900,
+    )
+    storage = FakeStorage(objects={created.attempt.object_key: b"racing bytes"})
+
+    cleaned = cleanup_expired_uploads(
+        datasets=datasets,
+        storage=storage,
+        now=NOW + timedelta(seconds=901),
+        limit=10,
+    )
+
+    assert cleaned == 0
+    assert created.attempt.object_key in storage.objects
+    assert datasets.attempts[created.attempt.id].status == AttemptStatus.PENDING_UPLOAD
+
+
+def test_finalize_deletes_the_object_when_the_attempt_was_reclaimed() -> None:
+    """回收在写入期间接管尝试后，定稿必须删掉刚写入的对象而不是留下孤儿。"""
+    datasets = dataset_store()
+    created = request_video_upload(
+        dataset_id=DATASET_ID,
+        original_filename="late.mp4",
+        source="产线相机",
+        declared_size=10,
+        declared_sha256=None,
+        idempotency_key="late-1",
+        caller=caller_with_import(),
+        now=NOW,
+        datasets=datasets,
+        max_upload_bytes=1024,
+        upload_ttl_seconds=900,
+    )
+    storage = FakeStorage(objects={created.attempt.object_key: b"late bytes"})
+    datasets.members[created.member.id] = replace(
+        datasets.members[created.member.id],
+        status=MemberStatus.FAILED,
+        failure_code=DatasetRefusalCode.UPLOAD_EXPIRED.value,
+        updated_at=NOW + timedelta(seconds=901),
+    )
+
+    with pytest.raises(DatasetRefusedError):
+        finalize_video_content_upload(
+            dataset_id=DATASET_ID,
+            member_id=created.member.id,
+            attempt_id=created.attempt.id,
+            object_key=created.attempt.object_key,
+            datasets=datasets,
+            storage=storage,
+        )
+
+    assert created.attempt.object_key not in storage.objects
+
+
+def test_finalize_keeps_the_object_for_a_live_attempt() -> None:
+    """未被回收的正常定稿不碰对象。"""
+    datasets = dataset_store()
+    created = request_video_upload(
+        dataset_id=DATASET_ID,
+        original_filename="live.mp4",
+        source="产线相机",
+        declared_size=10,
+        declared_sha256=None,
+        idempotency_key="live-1",
+        caller=caller_with_import(),
+        now=NOW,
+        datasets=datasets,
+        max_upload_bytes=1024,
+        upload_ttl_seconds=900,
+    )
+    storage = FakeStorage(objects={created.attempt.object_key: b"live bytes"})
+
+    finalize_video_content_upload(
+        dataset_id=DATASET_ID,
+        member_id=created.member.id,
+        attempt_id=created.attempt.id,
+        object_key=created.attempt.object_key,
+        datasets=datasets,
+        storage=storage,
+    )
+
+    assert created.attempt.object_key in storage.objects
 
 
 def test_ffprobe_hevc_matches_the_h265_deployment_name() -> None:

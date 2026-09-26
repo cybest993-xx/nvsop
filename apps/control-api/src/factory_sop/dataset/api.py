@@ -37,6 +37,7 @@ from factory_sop.dataset.storage import ObjectStorage, ObjectStorageUnavailableE
 from factory_sop.dataset.usecases import (
     begin_video_validation,
     cleanup_expired_uploads,
+    finalize_video_content_upload,
     validate_video_upload,
 )
 from factory_sop.dataset.usecases.annotation import (
@@ -367,6 +368,7 @@ __all__ = [
     "fail_annotation_context_preparation",
     "fail_annotation_execution",
     "fail_usage_check",
+    "finalize_video_content_upload",
     "prepare_annotation_context_copy",
     "prepare_annotation_execution_copy",
     "run_usage_check",

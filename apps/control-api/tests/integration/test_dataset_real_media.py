@@ -10,6 +10,7 @@ import shutil
 import time
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier
@@ -63,11 +64,7 @@ from factory_sop.dataset.model import (
     UsageCheckStatus,
     UsageKind,
 )
-from factory_sop.dataset.usecases import (
-    cleanup_expired_uploads,
-    confirm_video_upload,
-    request_video_upload,
-)
+from factory_sop.dataset.usecases import confirm_video_upload, request_video_upload
 from factory_sop.dataset.usecases.usage import (
     BASE_COMMIT,
     DDM_CONSUMER_PARAMETERS,
@@ -1046,7 +1043,7 @@ def test_real_arq_worker_consumes_validation_job_from_redis(
             cleanup_dataset(engine, dataset_id)
 
 
-def test_expired_pending_upload_is_reclaimed_from_local_storage(
+def test_worker_cron_reclaims_expired_pending_upload_from_local_storage(
     engine: Engine,
     dataset_storage_root: Path,
     real_video_bytes: bytes,
@@ -1066,17 +1063,31 @@ def test_expired_pending_upload_is_reclaimed_from_local_storage(
             object_key = str(upload["object_key"])
             assert upload_video_content(client, upload, real_video_bytes).status_code == 204
             assert (dataset_storage_root / object_key).is_file()
-
             with session_factory(engine)() as database:
-                cleaned = cleanup_expired_uploads(
-                    datasets=PostgresDatasetRepository(database),
-                    storage=LocalFileObjectStorage(dataset_storage_root),
-                    now=datetime.now(UTC) + timedelta(hours=1),
-                    limit=10,
+                repository = PostgresDatasetRepository(database)
+                attempt = repository.attempt_by_id(UUID(requested["attempt"]["id"]))
+                assert attempt is not None
+                repository.save_attempt(
+                    replace(attempt, expires_at=datetime.now(UTC) - timedelta(minutes=1))
                 )
                 database.commit()
 
-            assert cleaned >= 1
+            dispatcher = ArqJobDispatcher.from_settings(
+                settings,
+                session_factory=session_factory(engine),
+            )
+            assert isinstance(dispatcher, ArqJobDispatcher)
+            asyncio.run(
+                dispatch_pending_jobs(
+                    {
+                        "dispatcher": dispatcher,
+                        "session_factory": session_factory(engine),
+                        "settings": settings,
+                        "dataset_runtime": validation_runtime(settings),
+                    }
+                )
+            )
+
             assert not (dataset_storage_root / object_key).exists()
             member = _persisted_member(engine, UUID(requested["member"]["id"]))
             assert (

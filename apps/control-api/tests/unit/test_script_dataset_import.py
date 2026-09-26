@@ -67,12 +67,11 @@ class RequestRecord:
 
 @dataclass(frozen=True, slots=True)
 class DirectUploadRecord:
-    """发往预签名对象地址的一次直传。"""
+    """发往中心上传入口的一次流式上传。"""
 
     url: str
     method: str
     headers: dict[str, str]
-    fields: dict[str, str]
     path: Path
     content: bytes
 
@@ -134,15 +133,13 @@ class AsgiTransport:
         *,
         method: str,
         headers: Mapping[str, str],
-        fields: Mapping[str, str],
         path: Path,
     ) -> HttpResponse:
         self.direct_uploads.append(
             DirectUploadRecord(
                 url=url,
                 method=method,
-                headers=dict(headers),
-                fields=dict(fields),
+                headers={key.lower(): value for key, value in headers.items()},
                 path=path,
                 content=path.read_bytes(),
             )
@@ -182,10 +179,9 @@ class PollingTransport:
         *,
         method: str,
         headers: Mapping[str, str],
-        fields: Mapping[str, str],
         path: Path,
     ) -> HttpResponse:
-        del url, method, headers, fields, path
+        del url, method, headers, path
         raise AssertionError("任务轮询不应上传文件")
 
 
@@ -341,7 +337,14 @@ class StubImportClient:
         return {
             "member": {"id": "member-1"},
             "attempt": {"id": "attempt-1"},
-            "upload": {"method": "PUT", "url": "https://storage.example/video", "fields": {}},
+            "upload": {
+                "method": "PUT",
+                "url": (
+                    "/api/v1/training-datasets/dataset-1/members/member-1"
+                    "/attempts/attempt-1/content"
+                ),
+                "fields": {},
+            },
         }
 
     def upload_file(self, *, instructions: dict[str, object], path: Path) -> HttpResponse:
@@ -529,6 +532,14 @@ def test_script_uses_formal_api_for_each_video_and_never_sends_media_to_fastapi(
         first.read_bytes(),
         second.read_bytes(),
     ]
+    assert all(
+        "/api/v1/training-datasets/" in upload.url for upload in backend.transport.direct_uploads
+    )
+    assert all(
+        upload.headers["cookie"] == auth_headers["cookie"]
+        and upload.headers[CSRF_HEADER] == auth_headers[CSRF_HEADER]
+        for upload in backend.transport.direct_uploads
+    )
 
 
 def test_script_can_poll_with_dataset_import_permission_only(tmp_path: Path) -> None:

@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 from collections.abc import Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -381,22 +382,17 @@ class TracingDatasets(FakeUsageDatasets):
 
 
 class FakeStorage:
+    def writing(self, *, object_key: str) -> AbstractContextManager[BinaryIO]:
+        del object_key
+        raise AssertionError("测试不应写入对象")
+
     def stat(self, *, object_key: str) -> ObjectStat:
         assert object_key == "datasets/source-a.mp4"
-        return ObjectStat(size=100, version_id="version-1")
+        return ObjectStat(size=100)
 
-    def create_upload(self, **kwargs: object) -> object:
-        raise AssertionError(kwargs)
-
-    def download_to(
-        self, *, object_key: str, destination: BinaryIO, version_id: str | None = None
-    ) -> None:
+    def download_to(self, *, object_key: str, destination: BinaryIO) -> None:
         assert object_key == "datasets/source-a.mp4"
-        assert version_id == "version-1"
         destination.write(b"a" * 100)
-
-    def finalize_upload(self, *, object_key: str, source: BinaryIO, size: int) -> ObjectStat:
-        return ObjectStat(size=size, version_id="artifact-1")
 
     def delete(self, *, object_key: str) -> None:
         del object_key
@@ -410,11 +406,9 @@ class TracingStorage(FakeStorage):
         self.events.append("media")
         return super().stat(object_key=object_key)
 
-    def download_to(
-        self, *, object_key: str, destination: BinaryIO, version_id: str | None = None
-    ) -> None:
+    def download_to(self, *, object_key: str, destination: BinaryIO) -> None:
         self.events.append("media")
-        super().download_to(object_key=object_key, destination=destination, version_id=version_id)
+        super().download_to(object_key=object_key, destination=destination)
 
 
 class FakeMediaProbe:
@@ -560,11 +554,8 @@ class ConcurrentAnnotationVolume(FakeAnnotationVolume):
 
 
 class WrongDigestStorage(FakeStorage):
-    def download_to(
-        self, *, object_key: str, destination: BinaryIO, version_id: str | None = None
-    ) -> None:
+    def download_to(self, *, object_key: str, destination: BinaryIO) -> None:
         assert object_key == "datasets/source-a.mp4"
-        assert version_id == "version-1"
         destination.write(b"z" * 100)
 
 

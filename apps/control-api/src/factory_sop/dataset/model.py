@@ -361,10 +361,9 @@ class UploadInstructions:
 
 @dataclass(frozen=True, slots=True)
 class ObjectStat:
-    """服务端从对象存储读取的事实，而非客户端声明。"""
+    """服务端从媒体存储读取的事实，而非客户端声明。"""
 
     size: int
-    version_id: str | None
 
 
 @dataclass(frozen=True, slots=True)

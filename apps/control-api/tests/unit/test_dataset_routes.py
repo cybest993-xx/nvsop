@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import cast
 from uuid import UUID
 
@@ -51,6 +51,7 @@ from factory_sop.dataset.usecases.usage import (
 )
 from factory_sop.job.adapters import dependencies as job_dependencies
 from factory_sop.job.adapters.routes import JobView as GenericJobView
+from factory_sop.persistence import request_session
 from factory_sop.settings import Settings
 
 NOW = datetime(2026, 9, 9, 1, 0, tzinfo=UTC)
@@ -95,6 +96,13 @@ def actor() -> RestoredSession:
             status=UserStatus.ACTIVE,
         ),
     )
+
+
+class StubRequestSession:
+    """流式上传路由在读取请求体前结束事务；路由套件不需要真实数据库连接。"""
+
+    def rollback(self) -> None:
+        return None
 
 
 class Backend:
@@ -165,6 +173,7 @@ class Backend:
         self.app.dependency_overrides[dataset_dependencies.jobs] = lambda: self.jobs
         self.app.dependency_overrides[dataset_dependencies.usage_jobs] = lambda: self.jobs
         self.app.dependency_overrides[job_dependencies.job_repository] = lambda: self.jobs
+        self.app.dependency_overrides[request_session] = StubRequestSession
         self.client = TestClient(self.app, base_url="https://testserver")
 
 
@@ -285,7 +294,7 @@ def test_read_only_caller_cannot_request_an_upload(view_backend: Backend) -> Non
         "status": 403,
         "error_code": "PERMISSION_DENIED",
     }
-    assert view_backend.storage.requests == []
+    assert view_backend.storage.writes == []
 
 
 def test_upload_request_returns_short_lived_instructions_but_member_read_does_not(
@@ -303,8 +312,15 @@ def test_upload_request_returns_short_lived_instructions_but_member_read_does_no
     )
 
     assert requested.status_code == 201
-    assert requested.json()["upload"]["url"]
+    upload = requested.json()["upload"]
     member_id = requested.json()["member"]["id"]
+    attempt_id = requested.json()["attempt"]["id"]
+    assert upload["method"] == "PUT"
+    assert upload["url"] == (
+        f"{API_PREFIX}/training-datasets/{DATASET_ID}/members/{member_id}"
+        f"/attempts/{attempt_id}/content"
+    )
+    assert upload["fields"] == {}
     read = import_backend.client.get(
         f"{API_PREFIX}/training-datasets/{DATASET_ID}/members/{member_id}"
     )
@@ -334,7 +350,79 @@ def test_archive_request_is_rejected_before_storage_and_exposes_recovery_action(
         "detail": "压缩包不允许导入，请逐个选择视频文件",
         "recovery_action": "retry_upload",
     }
-    assert import_backend.storage.requests == []
+    assert import_backend.storage.writes == []
+
+
+def _make_attempt_uploadable(
+    backend: Backend, *, declared_size: int, expires_in: timedelta
+) -> None:
+    attempt = backend.datasets.attempts[ATTEMPT_ID]
+    backend.datasets.attempts[ATTEMPT_ID] = replace(
+        attempt,
+        declared_size=declared_size,
+        expires_at=datetime.now(UTC) + expires_in,
+    )
+
+
+def test_uploading_video_content_streams_the_body_into_dataset_storage(
+    import_backend: Backend,
+) -> None:
+    _make_attempt_uploadable(import_backend, declared_size=4, expires_in=timedelta(minutes=5))
+
+    response = import_backend.client.put(
+        f"{API_PREFIX}/training-datasets/{DATASET_ID}/members/{MEMBER_ID}"
+        f"/attempts/{ATTEMPT_ID}/content",
+        content=b"data",
+        headers={"Content-Type": "application/octet-stream"},
+    )
+
+    assert response.status_code == 204
+    object_key = import_backend.datasets.attempts[ATTEMPT_ID].object_key
+    assert import_backend.storage.writes == [object_key]
+    assert import_backend.storage.objects[object_key] == b"data"
+
+
+def test_uploading_more_than_the_declared_size_leaves_no_finalized_object(
+    import_backend: Backend,
+) -> None:
+    _make_attempt_uploadable(import_backend, declared_size=2, expires_in=timedelta(minutes=5))
+
+    response = import_backend.client.put(
+        f"{API_PREFIX}/training-datasets/{DATASET_ID}/members/{MEMBER_ID}"
+        f"/attempts/{ATTEMPT_ID}/content",
+        content=b"too much",
+        headers={"Content-Type": "application/octet-stream"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "SIZE_EXCEEDED"
+    assert import_backend.storage.objects == {}
+
+
+def test_uploading_video_content_requires_dataset_import(view_backend: Backend) -> None:
+    response = view_backend.client.put(
+        f"{API_PREFIX}/training-datasets/{DATASET_ID}/members/{MEMBER_ID}"
+        f"/attempts/{ATTEMPT_ID}/content",
+        content=b"data",
+        headers={"Content-Type": "application/octet-stream"},
+    )
+
+    assert response.status_code == 403
+    assert view_backend.storage.writes == []
+
+
+def test_uploading_an_expired_attempt_is_refused(import_backend: Backend) -> None:
+    _make_attempt_uploadable(import_backend, declared_size=4, expires_in=timedelta(seconds=-1))
+
+    response = import_backend.client.put(
+        f"{API_PREFIX}/training-datasets/{DATASET_ID}/members/{MEMBER_ID}"
+        f"/attempts/{ATTEMPT_ID}/content",
+        content=b"data",
+        headers={"Content-Type": "application/octet-stream"},
+    )
+
+    assert response.status_code == 409
+    assert import_backend.storage.writes == []
 
 
 def test_confirming_the_same_attempt_returns_the_same_validation_job(

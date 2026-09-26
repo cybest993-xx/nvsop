@@ -44,6 +44,15 @@ make contracts
 
 **当前仓库没有完成 Q36 备份/恢复策略。** 因此不要在本文声称中心数据库、中心训练素材卷、边缘 SQLite 或推理机证据媒体已有统一备份周期、自动灾备或经过演练的恢复目标；具体交付前必须完成适用的策略和验证。
 
+## 中心训练素材存储
+
+ADR-0012 / Issue #350 已把中心训练素材从 MinIO/S3 迁移到 `dataset` 拥有的本地持久卷：
+
+- 部署配置移除全部 `SOP_MINIO_*` 变量（未识别变量会拒绝启动），改为把 `SOP_DATASET_STORAGE_ROOT` 设为绝对路径；
+- `center-api` 与 `worker` 必须挂载同一个可写持久卷；Compose 的 `dataset-media` volume 是开发实例的参考；
+- 训练视频经 `PUT /api/v1/training-datasets/{dataset_id}/members/{member_id}/attempts/{attempt_id}/content` 流式写入该卷，不再有独立对象存储上传入口或浏览器直传地址；
+- 仓库没有实现 MinIO→本地文件的自动迁移契约；旧部署中的既有 MinIO 素材需要时另立有数据证据的任务处理，本版本不猜测迁移。
+
 ## 中心与边缘运行时
 
 边缘运行时/可下载部署包可能与中心非同步升级，因此架构要求它们最终不能依赖 URL 版本隔离，而应通过明确的兼容契约和启动/连接时版本握手管理差异。ADR-0003 规定的目标语义是：

@@ -1362,7 +1362,6 @@ def _prepare_backend_copy(
             binary_source = cast(BinaryIO, source)
             storage.download_to(
                 object_key=member.object_key,
-                version_id=source_version_id,
                 destination=binary_source,
             )
             source.flush()

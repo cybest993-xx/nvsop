@@ -1061,7 +1061,7 @@ export type CameraView = {
 /**
  * ConfirmVideoUploadInput
  *
- * 确认某个上传尝试已由客户端直传完成。
+ * 确认某个上传尝试已由客户端上传完成。
  */
 export type ConfirmVideoUploadInput = {
   /**
@@ -3700,7 +3700,7 @@ export type UploadAttemptView = {
 /**
  * UploadInstructionsView
  *
- * 仅随申请直传响应返回的短期签名说明。
+ * 仅随申请响应返回的短期流式上传说明。
  */
 export type UploadInstructionsView = {
   /**
@@ -8780,7 +8780,7 @@ export type ListTrainingDatasetsErrors = {
    */
   500: ProblemDocument
   /**
-   * 对象存储或媒体探测暂时不可用
+   * 训练素材存储或媒体探测暂时不可用
    */
   503: ProblemDocument
 }
@@ -8830,7 +8830,7 @@ export type CreateTrainingDatasetErrors = {
    */
   500: ProblemDocument
   /**
-   * 对象存储或媒体探测暂时不可用
+   * 训练素材存储或媒体探测暂时不可用
    */
   503: ProblemDocument
 }
@@ -8886,7 +8886,7 @@ export type ReadTrainingDatasetErrors = {
    */
   500: ProblemDocument
   /**
-   * 对象存储或媒体探测暂时不可用
+   * 训练素材存储或媒体探测暂时不可用
    */
   503: ProblemDocument
 }
@@ -9118,7 +9118,7 @@ export type ListDatasetArtifactsErrors = {
    */
   500: ProblemDocument
   /**
-   * 对象存储或媒体探测暂时不可用
+   * 训练素材存储或媒体探测暂时不可用
    */
   503: ProblemDocument
 }
@@ -9173,7 +9173,7 @@ export type RequestDatasetArtifactErrors = {
    */
   500: ProblemDocument
   /**
-   * 对象存储或媒体探测暂时不可用
+   * 训练素材存储或媒体探测暂时不可用
    */
   503: ProblemDocument
 }
@@ -9233,7 +9233,7 @@ export type ReadDatasetArtifactErrors = {
    */
   500: ProblemDocument
   /**
-   * 对象存储或媒体探测暂时不可用
+   * 训练素材存储或媒体探测暂时不可用
    */
   503: ProblemDocument
 }
@@ -9292,7 +9292,7 @@ export type DownloadDatasetArtifactErrors = {
    */
   500: ProblemDocument
   /**
-   * 对象存储或媒体探测暂时不可用
+   * 训练素材存储或媒体探测暂时不可用
    */
   503: ProblemDocument
 }
@@ -9357,7 +9357,7 @@ export type ListDatasetMembersErrors = {
    */
   500: ProblemDocument
   /**
-   * 对象存储或媒体探测暂时不可用
+   * 训练素材存储或媒体探测暂时不可用
    */
   503: ProblemDocument
 }
@@ -9418,7 +9418,7 @@ export type RequestVideoUploadErrors = {
    */
   500: ProblemDocument
   /**
-   * 对象存储或媒体探测暂时不可用
+   * 训练素材存储或媒体探测暂时不可用
    */
   503: ProblemDocument
 }
@@ -9477,7 +9477,7 @@ export type ReadDatasetMemberErrors = {
    */
   500: ProblemDocument
   /**
-   * 对象存储或媒体探测暂时不可用
+   * 训练素材存储或媒体探测暂时不可用
    */
   503: ProblemDocument
 }
@@ -9803,6 +9803,69 @@ export type RetryAnnotationResponses = {
 
 export type RetryAnnotationResponse = RetryAnnotationResponses[keyof RetryAnnotationResponses]
 
+export type UploadVideoContentData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Member Id
+     */
+    member_id: string
+    /**
+     * Attempt Id
+     */
+    attempt_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/members/{member_id}/attempts/{attempt_id}/content'
+}
+
+export type UploadVideoContentErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type UploadVideoContentError = UploadVideoContentErrors[keyof UploadVideoContentErrors]
+
+export type UploadVideoContentResponses = {
+  /**
+   * Successful Response
+   */
+  204: void
+}
+
+export type UploadVideoContentResponse =
+  UploadVideoContentResponses[keyof UploadVideoContentResponses]
+
 export type ConfirmVideoUploadData = {
   body: ConfirmVideoUploadInput
   path: {
@@ -9845,7 +9908,7 @@ export type ConfirmVideoUploadErrors = {
    */
   500: ProblemDocument
   /**
-   * 对象存储或媒体探测暂时不可用
+   * 训练素材存储或媒体探测暂时不可用
    */
   503: ProblemDocument
 }
@@ -9914,7 +9977,7 @@ export type RetryVideoUploadErrors = {
    */
   500: ProblemDocument
   /**
-   * 对象存储或媒体探测暂时不可用
+   * 训练素材存储或媒体探测暂时不可用
    */
   503: ProblemDocument
 }
@@ -9981,7 +10044,7 @@ export type ListDatasetUsageChecksErrors = {
    */
   500: ProblemDocument
   /**
-   * 对象存储或媒体探测暂时不可用
+   * 训练素材存储或媒体探测暂时不可用
    */
   503: ProblemDocument
 }
@@ -10037,7 +10100,7 @@ export type RequestDatasetUsageCheckErrors = {
    */
   500: ProblemDocument
   /**
-   * 对象存储或媒体探测暂时不可用
+   * 训练素材存储或媒体探测暂时不可用
    */
   503: ProblemDocument
 }
@@ -10097,7 +10160,7 @@ export type ReadDatasetUsageCheckErrors = {
    */
   500: ProblemDocument
   /**
-   * 对象存储或媒体探测暂时不可用
+   * 训练素材存储或媒体探测暂时不可用
    */
   503: ProblemDocument
 }
@@ -10162,7 +10225,7 @@ export type ListVlmCandidatesErrors = {
    */
   500: ProblemDocument
   /**
-   * 对象存储或媒体探测暂时不可用
+   * 训练素材存储或媒体探测暂时不可用
    */
   503: ProblemDocument
 }
@@ -10222,7 +10285,7 @@ export type RegisterVlmCandidateErrors = {
    */
   500: ProblemDocument
   /**
-   * 对象存储或媒体探测暂时不可用
+   * 训练素材存储或媒体探测暂时不可用
    */
   503: ProblemDocument
 }
@@ -10281,7 +10344,7 @@ export type ReadVlmCandidateErrors = {
    */
   500: ProblemDocument
   /**
-   * 对象存储或媒体探测暂时不可用
+   * 训练素材存储或媒体探测暂时不可用
    */
   503: ProblemDocument
 }

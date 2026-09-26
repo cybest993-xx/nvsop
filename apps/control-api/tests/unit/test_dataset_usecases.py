@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
+from io import BytesIO
 from typing import BinaryIO
 from uuid import UUID
 
@@ -27,7 +30,6 @@ from factory_sop.dataset.model import (
     RetryMode,
     TrainingDataset,
     UploadAttempt,
-    UploadInstructions,
     UsageCheck,
     VlmCandidate,
 )
@@ -45,43 +47,6 @@ from factory_sop.job.api import ApplicationJob, JobStatus, JobType
 NOW = datetime(2026, 9, 9, 1, 0, tzinfo=UTC)
 DATASET_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f001")
 ACTOR_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f002")
-
-
-class UnreachableStorage:
-    """若权限检查顺序错误，测试会在这里失败。"""
-
-    def finalize_upload(self, *, object_key: str, source: BinaryIO, size: int) -> ObjectStat:
-        del object_key, source, size
-        raise AssertionError("未授权请求不应写入定稿对象")
-
-    def create_upload(
-        self,
-        *,
-        object_key: str,
-        declared_size: int,
-        max_bytes: int,
-        expires_at: datetime,
-    ) -> UploadInstructions:
-        del object_key, declared_size, max_bytes, expires_at
-        raise AssertionError("未授权请求不应申请对象存储凭据")
-
-    def stat(self, *, object_key: str) -> ObjectStat:
-        del object_key
-        raise AssertionError("未授权请求不应读取对象")
-
-    def download_to(
-        self,
-        *,
-        object_key: str,
-        destination: BinaryIO,
-        version_id: str | None = None,
-    ) -> None:
-        del object_key, destination, version_id
-        raise AssertionError("未授权请求不应下载对象")
-
-    def delete(self, *, object_key: str) -> None:
-        del object_key
-        raise AssertionError("未授权请求不应删除对象")
 
 
 def caller_without_import() -> Caller:
@@ -109,7 +74,6 @@ def test_request_upload_requires_dataset_import_permission() -> None:
             caller=caller_without_import(),
             now=NOW,
             datasets=None,  # type: ignore[arg-type]
-            storage=UnreachableStorage(),
             max_upload_bytes=1024,
             upload_ttl_seconds=900,
         )
@@ -346,47 +310,21 @@ class FakeDatasets:
 @dataclass
 class FakeStorage(ObjectStorage):
     objects: dict[str, bytes] = field(default_factory=dict)
-    requests: list[tuple[str, int, datetime]] = field(default_factory=list)
     finalized_content: bytes | None = None
+    writes: list[str] = field(default_factory=list)
 
-    def create_upload(
-        self,
-        *,
-        object_key: str,
-        declared_size: int,
-        max_bytes: int,
-        expires_at: datetime,
-    ) -> UploadInstructions:
-        self.requests.append((object_key, max_bytes, expires_at))
-        return UploadInstructions(
-            method="PUT",
-            url=f"https://minio.test/{object_key}",
-            fields={},
-            headers={"Content-Length": str(max_bytes)},
-            expires_at=expires_at,
-            max_bytes=max_bytes,
-            object_key=object_key,
-        )
+    @contextmanager
+    def writing(self, *, object_key: str) -> Iterator[BinaryIO]:
+        self.writes.append(object_key)
+        buffer = BytesIO()
+        yield buffer
+        self.objects[object_key] = self.finalized_content or buffer.getvalue()
 
     def stat(self, *, object_key: str) -> ObjectStat:
-        content = self.objects[object_key]
-        return ObjectStat(size=len(content), version_id="version-1")
+        return ObjectStat(size=len(self.objects[object_key]))
 
-    def download_to(
-        self,
-        *,
-        object_key: str,
-        destination: BinaryIO,
-        version_id: str | None = None,
-    ) -> None:
-        del version_id
+    def download_to(self, *, object_key: str, destination: BinaryIO) -> None:
         destination.write(self.objects[object_key])
-
-    def finalize_upload(self, *, object_key: str, source: BinaryIO, size: int) -> ObjectStat:
-        source.seek(0)
-        content = source.read()
-        self.objects[object_key] = self.finalized_content or content
-        return ObjectStat(size=size, version_id="final-version")
 
     def delete(self, *, object_key: str) -> None:
         self.objects.pop(object_key, None)
@@ -588,7 +526,6 @@ def test_request_upload_rejects_header_control_chars_in_filename() -> None:
             caller=caller_with_import(),
             now=NOW,
             datasets=dataset_store(),
-            storage=FakeStorage(),
             max_upload_bytes=1024,
             upload_ttl_seconds=900,
         )
@@ -596,7 +533,6 @@ def test_request_upload_rejects_header_control_chars_in_filename() -> None:
     assert refused.value.code is DatasetRefusalCode.FILENAME_INVALID
 
     datasets = dataset_store()
-    storage = FakeStorage()
 
     with pytest.raises(DatasetRefusedError) as refused:
         request_video_upload(
@@ -609,18 +545,17 @@ def test_request_upload_rejects_header_control_chars_in_filename() -> None:
             caller=caller_with_import(),
             now=NOW,
             datasets=datasets,
-            storage=storage,
             max_upload_bytes=1024,
             upload_ttl_seconds=900,
         )
 
     assert refused.value.code.value == "ARCHIVE_REJECTED"
-    assert storage.requests == []
+    assert datasets.members == {}
+    assert datasets.attempts == {}
 
 
 def test_sha256_declaration_is_canonicalized_before_storage() -> None:
     datasets = dataset_store()
-    storage = FakeStorage()
 
     result = request_video_upload(
         dataset_id=DATASET_ID,
@@ -632,7 +567,6 @@ def test_sha256_declaration_is_canonicalized_before_storage() -> None:
         caller=caller_with_import(),
         now=NOW,
         datasets=datasets,
-        storage=storage,
         max_upload_bytes=1024,
         upload_ttl_seconds=900,
     )
@@ -643,7 +577,6 @@ def test_sha256_declaration_is_canonicalized_before_storage() -> None:
 
 def test_upload_request_is_idempotent_for_the_same_key() -> None:
     datasets = dataset_store()
-    storage = FakeStorage()
     first = request_video_upload(
         dataset_id=DATASET_ID,
         original_filename="sample.mp4",
@@ -654,7 +587,6 @@ def test_upload_request_is_idempotent_for_the_same_key() -> None:
         caller=caller_with_import(),
         now=NOW,
         datasets=datasets,
-        storage=storage,
         max_upload_bytes=1024,
         upload_ttl_seconds=900,
     )
@@ -668,7 +600,6 @@ def test_upload_request_is_idempotent_for_the_same_key() -> None:
         caller=caller_with_import(),
         now=NOW,
         datasets=datasets,
-        storage=storage,
         max_upload_bytes=1024,
         upload_ttl_seconds=900,
     )
@@ -681,7 +612,6 @@ def test_upload_request_is_idempotent_for_the_same_key() -> None:
 
 def test_confirming_one_attempt_twice_returns_one_validation_job() -> None:
     datasets = dataset_store()
-    storage = FakeStorage()
     jobs = FakeJobs()
     created = request_video_upload(
         dataset_id=DATASET_ID,
@@ -693,7 +623,6 @@ def test_confirming_one_attempt_twice_returns_one_validation_job() -> None:
         caller=caller_with_import(),
         now=NOW,
         datasets=datasets,
-        storage=storage,
         max_upload_bytes=1024,
         upload_ttl_seconds=900,
     )
@@ -737,7 +666,6 @@ def _prepared_validation(content: bytes) -> tuple[FakeDatasets, FakeStorage, App
         caller=caller_with_import(),
         now=NOW,
         datasets=datasets,
-        storage=storage,
         max_upload_bytes=1024,
         upload_ttl_seconds=900,
     )
@@ -811,7 +739,6 @@ def test_validation_uses_object_facts_and_media_probe_to_register_video() -> Non
         caller=caller_with_import(),
         now=NOW,
         datasets=datasets,
-        storage=storage,
         max_upload_bytes=1024,
         upload_ttl_seconds=900,
     )
@@ -899,7 +826,6 @@ def test_finalized_object_content_mismatch_is_not_registered() -> None:
         caller=caller_with_import(),
         now=NOW,
         datasets=datasets,
-        storage=storage,
         max_upload_bytes=1024,
         upload_ttl_seconds=900,
     )
@@ -960,7 +886,6 @@ def test_stale_validation_snapshot_cannot_write_after_lease_renewal() -> None:
         caller=caller_with_import(),
         now=NOW,
         datasets=datasets,
-        storage=storage,
         max_upload_bytes=1024,
         upload_ttl_seconds=900,
     )
@@ -1029,7 +954,6 @@ def test_validation_persists_digest_failure_with_upload_recovery() -> None:
         caller=caller_with_import(),
         now=NOW,
         datasets=datasets,
-        storage=storage,
         max_upload_bytes=1024,
         upload_ttl_seconds=900,
     )
@@ -1075,7 +999,6 @@ def test_validation_persists_digest_failure_with_upload_recovery() -> None:
 
 def test_failed_upload_retry_key_renews_the_same_attempt() -> None:
     datasets = dataset_store()
-    storage = FakeStorage()
     created = request_video_upload(
         dataset_id=DATASET_ID,
         original_filename="sample.mp4",
@@ -1086,7 +1009,6 @@ def test_failed_upload_retry_key_renews_the_same_attempt() -> None:
         caller=caller_with_import(),
         now=NOW,
         datasets=datasets,
-        storage=storage,
         max_upload_bytes=1024,
         upload_ttl_seconds=900,
     )
@@ -1107,7 +1029,6 @@ def test_failed_upload_retry_key_renews_the_same_attempt() -> None:
         caller=caller_with_import(),
         now=NOW + timedelta(seconds=2),
         datasets=datasets,
-        storage=storage,
         jobs=FakeJobs(),
         max_upload_bytes=1024,
         upload_ttl_seconds=900,
@@ -1125,7 +1046,6 @@ def test_failed_upload_retry_key_renews_the_same_attempt() -> None:
         caller=caller_with_import(),
         now=NOW + timedelta(seconds=3),
         datasets=datasets,
-        storage=storage,
         max_upload_bytes=1024,
         upload_ttl_seconds=900,
     )
@@ -1147,7 +1067,6 @@ def test_media_probe_failure_can_retry_validation_without_new_upload() -> None:
         caller=caller_with_import(),
         now=NOW,
         datasets=datasets,
-        storage=storage,
         max_upload_bytes=1024,
         upload_ttl_seconds=900,
     )
@@ -1191,7 +1110,6 @@ def test_media_probe_failure_can_retry_validation_without_new_upload() -> None:
         caller=caller_with_import(),
         now=NOW,
         datasets=datasets,
-        storage=storage,
         jobs=jobs,
         max_upload_bytes=1024,
         upload_ttl_seconds=900,

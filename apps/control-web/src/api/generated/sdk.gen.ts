@@ -345,6 +345,9 @@ import type {
   UpdateStationRuntimeParametersData,
   UpdateStationRuntimeParametersErrors,
   UpdateStationRuntimeParametersResponses,
+  UploadVideoContentData,
+  UploadVideoContentErrors,
+  UploadVideoContentResponses,
   ValidatePointBindingData,
   ValidatePointBindingErrors,
   ValidatePointBindingResponses,
@@ -2066,6 +2069,23 @@ export const retryAnnotation = <ThrowOnError extends boolean = false>(
 ): RequestResult<RetryAnnotationResponses, RetryAnnotationErrors, ThrowOnError> =>
   (options.client ?? client).post<RetryAnnotationResponses, RetryAnnotationErrors, ThrowOnError>({
     url: '/api/v1/training-datasets/{dataset_id}/members/{member_id}/annotations/{submission_id}/retry',
+    ...options,
+  })
+
+/**
+ * Upload Video Content
+ *
+ * 把已授权请求的视频体流式写入 dataset 本地持久卷，不整段读入内存。
+ */
+export const uploadVideoContent = <ThrowOnError extends boolean = false>(
+  options: Options<UploadVideoContentData, ThrowOnError>,
+): RequestResult<UploadVideoContentResponses, UploadVideoContentErrors, ThrowOnError> =>
+  (options.client ?? client).put<
+    UploadVideoContentResponses,
+    UploadVideoContentErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/members/{member_id}/attempts/{attempt_id}/content',
     ...options,
   })
 

@@ -67,10 +67,10 @@ describe('training-dataset control-plane calls', () => {
         member: { id: MEMBER_ID },
         attempt: { id: ATTEMPT_ID },
         upload: {
-          method: 'POST',
-          url: 'https://minio.example.test/upload',
+          method: 'PUT',
+          url: '/api/v1/training-datasets/dataset-1/members/member-1/attempts/attempt-1/content',
           fields: {},
-          headers: {},
+          headers: { 'Content-Type': 'application/octet-stream' },
           expires_at: '2026-09-08T09:00:00Z',
           max_bytes: 100,
           object_key: 'training-datasets/dataset-1/member-1/video',

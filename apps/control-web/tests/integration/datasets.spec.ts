@@ -61,10 +61,10 @@ const ATTEMPT = {
 }
 
 const UPLOAD = {
-  method: 'POST',
-  url: 'https://minio.example.test/factory-sop',
-  fields: { key: 'training-datasets/dataset-1/member-1/attempt-1/video', policy: 'signed' },
-  headers: {},
+  method: 'PUT',
+  url: '/api/v1/training-datasets/dataset-1/members/member-1/attempts/attempt-1/content',
+  fields: {},
+  headers: { 'Content-Type': 'application/octet-stream' },
   expires_at: '2026-09-08T09:00:00Z',
   max_bytes: 1000,
   object_key: 'training-datasets/dataset-1/member-1/attempt-1/video',
@@ -1004,7 +1004,7 @@ describe('训练数据集工作台', () => {
       upload: UPLOAD,
     })
     api.confirmVideoUpload.mockResolvedValue({ member: MEMBER_PENDING, job: null })
-    upload.mockRejectedValueOnce(new Error('对象存储网络中断'))
+    upload.mockRejectedValueOnce(new Error('上传网络中断'))
 
     const { wrapper } = await mountDatasets()
     await flushPromises()

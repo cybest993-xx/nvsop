@@ -1,4 +1,4 @@
-"""训练视频的真实 PostgreSQL、MinIO 和 ffprobe 生命周期。"""
+"""训练视频的真实 PostgreSQL、中心本地持久卷和 ffprobe 生命周期。"""
 
 from __future__ import annotations
 
@@ -14,25 +14,21 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier
 from typing import Any, BinaryIO, cast
-from urllib.request import Request, urlopen
 from uuid import UUID, uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 from _integration_support import (
-    MinioServer,
     RedisServer,
     caller,
     cleanup_dataset,
     client_for,
     row,
     settings_for,
-    upload_presigned,
+    upload_video_content,
 )
 from arq import Worker
 from fastapi.testclient import TestClient
-from minio import Minio
-from minio.error import S3Error
 from redis import Redis
 from sqlalchemy import Engine
 
@@ -51,7 +47,7 @@ from factory_sop.dataset.adapters.dependencies import (
 from factory_sop.dataset.adapters.media import FfprobeMediaProbe
 from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
 from factory_sop.dataset.adapters.routes import ArtifactView, UsageCheckView
-from factory_sop.dataset.adapters.storage import MinioObjectStorage
+from factory_sop.dataset.adapters.storage import LocalFileObjectStorage
 from factory_sop.dataset.annotation import AnnotationBackend, PreparedAnnotationVideo
 from factory_sop.dataset.model import (
     ActionListRevision,
@@ -270,8 +266,8 @@ class _UsageAnnotationRuntime:
     def repository(self, session: object) -> PostgresDatasetRepository:
         return PostgresDatasetRepository(cast(Any, session))
 
-    def storage(self) -> MinioObjectStorage:
-        return MinioObjectStorage.from_settings(self.settings)
+    def storage(self) -> LocalFileObjectStorage:
+        return LocalFileObjectStorage.from_settings(self.settings)
 
     def backend(self) -> AnnotationBackend:
         return self._backend
@@ -397,54 +393,18 @@ async def _run_arq_worker(engine: Engine, settings: Settings) -> int:
         await worker.close()
 
 
-def _minio_client(server: MinioServer) -> Minio:
-    return Minio(
-        server.endpoint.removeprefix("http://"),
-        access_key=server.access_key,
-        secret_key=server.secret_key,
-        secure=False,
-    )
+def _remove_object(root: Path, object_key: str) -> None:
+    (root / object_key).unlink(missing_ok=True)
 
 
-def _download(client: Minio, bucket: str, object_key: str) -> bytes:
-    response = client.get_object(bucket, object_key)
-    try:
-        return response.read()
-    finally:
-        response.close()
-        response.release_conn()
+def _download(root: Path, object_key: str) -> bytes:
+    return (root / object_key).read_bytes()
 
 
-def _put_object(client: Minio, bucket: str, object_key: str, content: bytes) -> None:
-    client.put_object(
-        bucket,
-        object_key,
-        io.BytesIO(content),
-        length=len(content),
-        content_type="video/mp4",
-    )
-
-
-def test_real_minio_upload_endpoint_allows_browser_cors_preflight(
-    minio_server: MinioServer,
-) -> None:
-    origin = "http://control-web.test"
-    request = Request(
-        f"{minio_server.endpoint}/{minio_server.bucket}",
-        method="OPTIONS",
-        headers={
-            "Origin": origin,
-            "Access-Control-Request-Method": "POST",
-            "Access-Control-Request-Headers": "content-type",
-        },
-    )
-
-    with urlopen(request, timeout=10) as response:
-        assert response.status in {200, 204}
-        assert response.headers.get("Access-Control-Allow-Origin") in {"*", origin}
-        allow_methods = response.headers.get("Access-Control-Allow-Methods")
-        assert allow_methods is not None
-        assert "POST" in allow_methods
+def _put_object(root: Path, object_key: str, content: bytes) -> None:
+    path = root / object_key
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
 
 
 def _zip_content() -> bytes:
@@ -460,12 +420,12 @@ def _assert_job_was_enqueued(redis_client: Redis, job_id: UUID) -> None:
     assert any(marker in key for key in keys)
 
 
-def test_real_presigned_upload_cannot_target_another_object(
+def test_streaming_upload_cannot_target_another_object(
     engine: Engine,
-    minio_server: MinioServer,
+    dataset_storage_root: Path,
     real_video_bytes: bytes,
 ) -> None:
-    settings = settings_for(engine, minio=minio_server)
+    settings = settings_for(engine, storage_root=dataset_storage_root)
     with client_for(engine, settings) as client:
         dataset_id = _create_dataset(client)
         try:
@@ -477,28 +437,37 @@ def test_real_presigned_upload_cannot_target_another_object(
                 idempotency_key="bound-object-1",
             )
             upload = cast(dict[str, Any], requested["upload"])
+            object_key = str(upload["object_key"])
+            # 对象键完全由服务端从授权的数据集、成员和尝试派生；客户端只能提交内容。
+            assert upload["fields"] == {}
+            assert object_key.endswith(
+                f"/members/{requested['member']['id']}/attempts/{requested['attempt']['id']}/video"
+            )
+
             tampered = dict(upload)
-            tampered_fields = dict(cast(dict[str, str], upload["fields"]))
-            tampered_key = f"{upload['object_key']}-other"
-            tampered_fields["key"] = tampered_key
-            tampered["fields"] = tampered_fields
+            tampered["url"] = str(upload["url"]).replace(
+                str(requested["attempt"]["id"]), str(uuid4())
+            )
+            refused = upload_video_content(client, tampered, real_video_bytes)
 
-            response = upload_presigned(tampered, real_video_bytes)
+            assert refused.status_code == 404
+            assert not (dataset_storage_root / object_key).exists()
 
-            assert response.status_code >= 400
-            with pytest.raises(S3Error) as missing:
-                _minio_client(minio_server).stat_object(minio_server.bucket, tampered_key)
-            assert missing.value.code in {"NoSuchKey", "NoSuchObject", "NotFound"}
+            accepted = upload_video_content(client, upload, real_video_bytes)
+            assert accepted.status_code == 204, accepted.text
+            stored = dataset_storage_root / object_key
+            assert stored.is_file()
+            assert stored.read_bytes() == real_video_bytes
         finally:
             cleanup_dataset(engine, dataset_id)
 
 
 def test_real_login_and_role_permissions_gate_dataset_upload(
     engine: Engine,
-    minio_server: MinioServer,
+    dataset_storage_root: Path,
     real_video_bytes: bytes,
 ) -> None:
-    settings = settings_for(engine, minio=minio_server)
+    settings = settings_for(engine, storage_root=dataset_storage_root)
     user_id, role_id, login_name, password = _seed_real_dataset_manager(engine)
     dataset_id: UUID | None = None
     object_key: str | None = None
@@ -537,7 +506,7 @@ def test_real_login_and_role_permissions_gate_dataset_upload(
             upload = requested.json()["upload"]
             assert isinstance(upload, dict)
             object_key = upload["object_key"]
-            uploaded = upload_presigned(upload, real_video_bytes)
+            uploaded = upload_video_content(client, upload, real_video_bytes)
             assert uploaded.status_code == 204, uploaded.text
 
             listed = client.get(f"{DATASETS}/{dataset_id}/members")
@@ -555,7 +524,7 @@ def test_real_login_and_role_permissions_gate_dataset_upload(
             assert denied.status_code == 403, denied.text
     finally:
         if object_key is not None:
-            _minio_client(minio_server).remove_object(minio_server.bucket, object_key)
+            _remove_object(dataset_storage_root, object_key)
         if dataset_id is not None:
             cleanup_dataset(engine, dataset_id)
         _remove_real_dataset_manager(engine, user_id=user_id, role_id=role_id)
@@ -563,13 +532,13 @@ def test_real_login_and_role_permissions_gate_dataset_upload(
 
 def test_real_ffmpeg_video_upload_records_object_and_media_facts_and_is_idempotent(
     engine: Engine,
-    minio_server: MinioServer,
+    dataset_storage_root: Path,
     redis_server: RedisServer,
     redis_client: Redis,
     real_video_bytes: bytes,
 ) -> None:
-    """真实直传、服务端校验、定稿和重复投递共同走生产实现。"""
-    settings = settings_for(engine, minio=minio_server, redis_url=redis_server.url)
+    """真实流式上传、服务端校验、定稿和重复投递共同走生产实现。"""
+    settings = settings_for(engine, storage_root=dataset_storage_root, redis_url=redis_server.url)
     with client_for(engine, settings) as client:
         dataset_id = _create_dataset(client)
         try:
@@ -580,7 +549,7 @@ def test_real_ffmpeg_video_upload_records_object_and_media_facts_and_is_idempote
                 filename="synthetic.mp4",
                 idempotency_key="real-video-1",
             )
-            upload_response = upload_presigned(requested["upload"], real_video_bytes)
+            upload_response = upload_video_content(client, requested["upload"], real_video_bytes)
             assert upload_response.status_code == 204, upload_response.text
 
             job_id = _confirm_upload(client, dataset_id, requested)
@@ -613,15 +582,14 @@ def test_real_ffmpeg_video_upload_records_object_and_media_facts_and_is_idempote
             assert 0 < registered.duration_seconds <= 1.1
             assert registered.object_key is not None
             assert registered.object_key.endswith("/registered-video")
+            assert registered.object_version_id == registered.object_key
 
-            storage = _minio_client(minio_server)
-            final_stat = storage.stat_object(minio_server.bucket, registered.object_key)
-            assert final_stat.size == len(real_video_bytes)
-            downloaded = _download(storage, minio_server.bucket, registered.object_key)
+            final_path = dataset_storage_root / registered.object_key
+            assert final_path.stat().st_size == len(real_video_bytes)
+            downloaded = _download(dataset_storage_root, registered.object_key)
             assert downloaded == real_video_bytes
-            with pytest.raises(S3Error) as missing_source:
-                storage.stat_object(minio_server.bucket, requested["upload"]["object_key"])
-            assert missing_source.value.code in {"NoSuchKey", "NoSuchObject", "NotFound"}
+            # 校验成功后临时上传对象被清理，只留下按尝试隔离的定稿文件。
+            assert not (dataset_storage_root / requested["upload"]["object_key"]).exists()
             before_duplicate = registered
 
             # ARQ 至少一次语义会再次传递同一 job id。
@@ -629,9 +597,7 @@ def test_real_ffmpeg_video_upload_records_object_and_media_facts_and_is_idempote
             _run_worker(engine, settings, job_id)
             after_duplicate = _persisted_member(engine, member_id)
             assert after_duplicate == before_duplicate
-            duplicate_stat = storage.stat_object(minio_server.bucket, registered.object_key)
-            assert duplicate_stat.size == final_stat.size
-            duplicate_download = _download(storage, minio_server.bucket, registered.object_key)
+            duplicate_download = _download(dataset_storage_root, registered.object_key)
             assert duplicate_download == real_video_bytes
         finally:
             cleanup_dataset(engine, dataset_id)
@@ -733,17 +699,17 @@ def test_concurrent_artifact_requests_reuse_one_postgres_artifact(engine: Engine
         cleanup_dataset(engine, dataset_id)
 
 
-def test_real_usage_check_and_ddm_artifact_use_postgres_minio_and_workers(
+def test_real_usage_check_and_ddm_artifact_use_postgres_local_files_and_workers(
     engine: Engine,
-    minio_server: MinioServer,
+    dataset_storage_root: Path,
     redis_server: RedisServer,
     real_video_bytes: bytes,
     tmp_path: Path,
 ) -> None:
-    """真实对象、标注入口、ARQ、PostgreSQL 和用途 worker 共同完成 DDM 闭环。"""
+    """真实本地文件、标注入口、ARQ、PostgreSQL 和用途 worker 共同完成 DDM 闭环。"""
     settings = settings_for(
         engine,
-        minio=minio_server,
+        storage_root=dataset_storage_root,
         redis_url=redis_server.url,
     ).model_copy(
         update={
@@ -769,13 +735,14 @@ def test_real_usage_check_and_ddm_artifact_use_postgres_minio_and_workers(
                 filename="usage-check.mp4",
                 idempotency_key="usage-check-1",
             )
-            uploaded = upload_presigned(requested["upload"], real_video_bytes)
+            uploaded = upload_video_content(client, requested["upload"], real_video_bytes)
             assert uploaded.status_code == 204, uploaded.text
             validation_job_id = _confirm_upload(client, dataset_id, requested)
             _run_worker(engine, settings, validation_job_id)
             member = _persisted_member(engine, UUID(requested["member"]["id"]))
             assert member.status == MemberStatus.REGISTERED
-            assert member.object_version_id is not None
+            assert member.object_key is not None
+            assert member.object_version_id == member.object_key
             assert member.actual_sha256 is not None
             assert member.duration_seconds is not None
 
@@ -909,9 +876,7 @@ def test_real_usage_check_and_ddm_artifact_use_postgres_minio_and_workers(
                 annotation_source_sha256
             )
             generated_object_key = artifact["object_key"]
-            content = _download(
-                _minio_client(minio_server), minio_server.bucket, artifact["object_key"]
-            )
+            content = _download(dataset_storage_root, artifact["object_key"])
             annotation = json.loads(content)
             assert annotation[str(member.id)][0]["description"] == "(1) 取料"
             assert artifact["artifact_sha256"] == hashlib.sha256(content).hexdigest()
@@ -924,7 +889,7 @@ def test_real_usage_check_and_ddm_artifact_use_postgres_minio_and_workers(
             )
         finally:
             if generated_object_key is not None:
-                _minio_client(minio_server).remove_object(minio_server.bucket, generated_object_key)
+                _remove_object(dataset_storage_root, generated_object_key)
             cleanup_dataset(engine, dataset_id)
 
 
@@ -932,7 +897,7 @@ def test_real_usage_check_and_ddm_artifact_use_postgres_minio_and_workers(
 def test_real_vlm_candidate_check_uses_explicit_media_mapping(
     candidate_kind: str,
     engine: Engine,
-    minio_server: MinioServer,
+    dataset_storage_root: Path,
     redis_server: RedisServer,
     redis_client: Redis,
     real_video_bytes: bytes,
@@ -940,7 +905,7 @@ def test_real_vlm_candidate_check_uses_explicit_media_mapping(
 ) -> None:
     settings = settings_for(
         engine,
-        minio=minio_server,
+        storage_root=dataset_storage_root,
         redis_url=redis_server.url,
     ).model_copy(update={"annotation_data_root": str(tmp_path)})
     with client_for(
@@ -959,7 +924,7 @@ def test_real_vlm_candidate_check_uses_explicit_media_mapping(
                 filename="vlm-source.mp4",
                 idempotency_key="vlm-source-1",
             )
-            uploaded = upload_presigned(requested["upload"], real_video_bytes)
+            uploaded = upload_video_content(client, requested["upload"], real_video_bytes)
             assert uploaded.status_code == 204, uploaded.text
             validation_job_id = _confirm_upload(client, dataset_id, requested)
             _run_worker(engine, settings, validation_job_id)
@@ -1045,12 +1010,12 @@ def test_real_vlm_candidate_check_uses_explicit_media_mapping(
 
 def test_real_arq_worker_consumes_validation_job_from_redis(
     engine: Engine,
-    minio_server: MinioServer,
+    dataset_storage_root: Path,
     redis_server: RedisServer,
     redis_client: Redis,
     real_video_bytes: bytes,
 ) -> None:
-    settings = settings_for(engine, minio=minio_server, redis_url=redis_server.url)
+    settings = settings_for(engine, storage_root=dataset_storage_root, redis_url=redis_server.url)
     with client_for(engine, settings) as client:
         dataset_id = _create_dataset(client)
         try:
@@ -1061,7 +1026,7 @@ def test_real_arq_worker_consumes_validation_job_from_redis(
                 filename="arq-worker.mp4",
                 idempotency_key="arq-worker-1",
             )
-            uploaded = upload_presigned(requested["upload"], real_video_bytes)
+            uploaded = upload_video_content(client, requested["upload"], real_video_bytes)
             assert uploaded.status_code == 204, uploaded.text
             job_id = _confirm_upload(client, dataset_id, requested)
             _assert_job_was_enqueued(redis_client, job_id)
@@ -1074,11 +1039,11 @@ def test_real_arq_worker_consumes_validation_job_from_redis(
             cleanup_dataset(engine, dataset_id)
 
 
-def test_archive_filename_is_rejected_before_real_object_storage(
+def test_archive_filename_is_rejected_before_local_storage(
     engine: Engine,
-    minio_server: MinioServer,
+    dataset_storage_root: Path,
 ) -> None:
-    settings = settings_for(engine, minio=minio_server)
+    settings = settings_for(engine, storage_root=dataset_storage_root)
     with client_for(engine, settings) as client:
         dataset_id = _create_dataset(client)
         try:
@@ -1100,9 +1065,9 @@ def test_archive_filename_is_rejected_before_real_object_storage(
 
 def test_archive_content_disguised_as_video_is_rejected_by_real_worker(
     engine: Engine,
-    minio_server: MinioServer,
+    dataset_storage_root: Path,
 ) -> None:
-    settings = settings_for(engine, minio=minio_server)
+    settings = settings_for(engine, storage_root=dataset_storage_root)
     content = _zip_content()
     with client_for(engine, settings) as client:
         dataset_id = _create_dataset(client)
@@ -1114,7 +1079,7 @@ def test_archive_content_disguised_as_video_is_rejected_by_real_worker(
                 filename="archive-disguised.mp4",
                 idempotency_key="archive-content-1",
             )
-            upload_response = upload_presigned(requested["upload"], content)
+            upload_response = upload_video_content(client, requested["upload"], content)
             assert upload_response.status_code == 204, upload_response.text
             job_id = _confirm_upload(client, dataset_id, requested)
             _run_worker(engine, settings, job_id)
@@ -1137,12 +1102,12 @@ def test_archive_content_disguised_as_video_is_rejected_by_real_worker(
             cleanup_dataset(engine, dataset_id)
 
 
-def test_real_object_size_mismatch_is_rejected_from_actual_minio_stat(
+def test_real_object_size_mismatch_is_rejected_from_actual_local_stat(
     engine: Engine,
-    minio_server: MinioServer,
+    dataset_storage_root: Path,
     real_video_bytes: bytes,
 ) -> None:
-    settings = settings_for(engine, minio=minio_server)
+    settings = settings_for(engine, storage_root=dataset_storage_root)
     with client_for(engine, settings) as client:
         dataset_id = _create_dataset(client)
         try:
@@ -1155,8 +1120,7 @@ def test_real_object_size_mismatch_is_rejected_from_actual_minio_stat(
             )
             object_key = requested["upload"]["object_key"]
             _put_object(
-                _minio_client(minio_server),
-                minio_server.bucket,
+                dataset_storage_root,
                 object_key,
                 real_video_bytes + b"unexpected-byte",
             )
@@ -1181,10 +1145,10 @@ def test_real_object_size_mismatch_is_rejected_from_actual_minio_stat(
 
 def test_real_object_sha256_mismatch_is_rejected_from_downloaded_content(
     engine: Engine,
-    minio_server: MinioServer,
+    dataset_storage_root: Path,
     real_video_bytes: bytes,
 ) -> None:
-    settings = settings_for(engine, minio=minio_server)
+    settings = settings_for(engine, storage_root=dataset_storage_root)
     wrong_content = bytes([real_video_bytes[0] ^ 1]) + real_video_bytes[1:]
     with client_for(engine, settings) as client:
         dataset_id = _create_dataset(client)
@@ -1197,8 +1161,7 @@ def test_real_object_sha256_mismatch_is_rejected_from_downloaded_content(
                 idempotency_key="sha-mismatch-1",
             )
             _put_object(
-                _minio_client(minio_server),
-                minio_server.bucket,
+                dataset_storage_root,
                 requested["upload"]["object_key"],
                 wrong_content,
             )
@@ -1225,10 +1188,10 @@ def test_real_object_sha256_mismatch_is_rejected_from_downloaded_content(
 
 def test_real_h264_is_rejected_when_deployment_does_not_allow_its_codec(
     engine: Engine,
-    minio_server: MinioServer,
+    dataset_storage_root: Path,
     real_video_bytes: bytes,
 ) -> None:
-    settings = settings_for(engine, minio=minio_server).model_copy(
+    settings = settings_for(engine, storage_root=dataset_storage_root).model_copy(
         update={"dataset_supported_codecs": "h265"}
     )
     with client_for(engine, settings) as client:
@@ -1241,7 +1204,7 @@ def test_real_h264_is_rejected_when_deployment_does_not_allow_its_codec(
                 filename="unsupported-codec.mp4",
                 idempotency_key="unsupported-codec-1",
             )
-            uploaded = upload_presigned(requested["upload"], real_video_bytes)
+            uploaded = upload_video_content(client, requested["upload"], real_video_bytes)
             assert uploaded.status_code == 204, uploaded.text
             job_id = _confirm_upload(client, dataset_id, requested)
             _run_worker(engine, settings, job_id)
@@ -1258,10 +1221,10 @@ def test_real_h264_is_rejected_when_deployment_does_not_allow_its_codec(
 
 def test_missing_object_failure_can_retry_upload_and_register_real_video(
     engine: Engine,
-    minio_server: MinioServer,
+    dataset_storage_root: Path,
     real_video_bytes: bytes,
 ) -> None:
-    settings = settings_for(engine, minio=minio_server)
+    settings = settings_for(engine, storage_root=dataset_storage_root)
     with client_for(engine, settings) as client:
         dataset_id = _create_dataset(client)
         try:
@@ -1295,7 +1258,7 @@ def test_missing_object_failure_can_retry_upload_and_register_real_video(
             old_attempt = _persisted_attempt(engine, old_attempt_id)
             assert old_attempt.status == AttemptStatus.SUPERSEDED
 
-            upload_response = upload_presigned(retried["upload"], real_video_bytes)
+            upload_response = upload_video_content(client, retried["upload"], real_video_bytes)
             assert upload_response.status_code == 204, upload_response.text
             new_job_id = _confirm_upload(client, dataset_id, retried)
             _run_worker(engine, settings, new_job_id)
@@ -1308,10 +1271,10 @@ def test_missing_object_failure_can_retry_upload_and_register_real_video(
 
 def test_expired_upload_authorization_fails_then_fresh_retry_succeeds(
     engine: Engine,
-    minio_server: MinioServer,
+    dataset_storage_root: Path,
     real_video_bytes: bytes,
 ) -> None:
-    settings = settings_for(engine, minio=minio_server, upload_ttl_seconds=1)
+    settings = settings_for(engine, storage_root=dataset_storage_root, upload_ttl_seconds=1)
     with client_for(engine, settings) as client:
         dataset_id = _create_dataset(client)
         try:
@@ -1323,8 +1286,8 @@ def test_expired_upload_authorization_fails_then_fresh_retry_succeeds(
                 idempotency_key="expired-upload-1",
             )
             time.sleep(2.1)
-            expired_response = upload_presigned(requested["upload"], real_video_bytes)
-            assert expired_response.status_code >= 400
+            expired_response = upload_video_content(client, requested["upload"], real_video_bytes)
+            assert expired_response.status_code == 409, expired_response.text
 
             old_member_id = UUID(requested["member"]["id"])
             old_job_id = _confirm_upload(client, dataset_id, requested)
@@ -1341,7 +1304,7 @@ def test_expired_upload_authorization_fails_then_fresh_retry_succeeds(
             )
             assert retried_response.status_code == 200, retried_response.text
             retried = retried_response.json()
-            fresh_response = upload_presigned(retried["upload"], real_video_bytes)
+            fresh_response = upload_video_content(client, retried["upload"], real_video_bytes)
             assert fresh_response.status_code == 204, fresh_response.text
             new_job_id = _confirm_upload(client, dataset_id, retried)
             _run_worker(engine, settings, new_job_id)
@@ -1353,10 +1316,10 @@ def test_expired_upload_authorization_fails_then_fresh_retry_succeeds(
 
 def test_media_probe_outage_can_retry_validation_without_reupload(
     engine: Engine,
-    minio_server: MinioServer,
+    dataset_storage_root: Path,
     real_video_bytes: bytes,
 ) -> None:
-    good_settings = settings_for(engine, minio=minio_server)
+    good_settings = settings_for(engine, storage_root=dataset_storage_root)
     unavailable_settings = good_settings.model_copy(
         update={"media_probe_binary": "ffprobe-not-installed-for-test"}
     )
@@ -1370,7 +1333,7 @@ def test_media_probe_outage_can_retry_validation_without_reupload(
                 filename="probe-outage.mp4",
                 idempotency_key="probe-outage-1",
             )
-            uploaded = upload_presigned(requested["upload"], real_video_bytes)
+            uploaded = upload_video_content(client, requested["upload"], real_video_bytes)
             assert uploaded.status_code == 204, uploaded.text
             first_job_id = _confirm_upload(client, dataset_id, requested)
             _run_worker(engine, unavailable_settings, first_job_id)
@@ -1404,9 +1367,9 @@ def test_media_probe_outage_can_retry_validation_without_reupload(
 
 def test_concurrent_upload_requests_reuse_one_postgres_idempotent_attempt(
     engine: Engine,
-    minio_server: MinioServer,
+    dataset_storage_root: Path,
 ) -> None:
-    settings = settings_for(engine, minio=minio_server)
+    settings = settings_for(engine, storage_root=dataset_storage_root)
     content = b"concurrent-idempotent-upload"
     declared_sha256 = hashlib.sha256(content).hexdigest()
     with client_for(engine, settings) as client:
@@ -1427,7 +1390,6 @@ def test_concurrent_upload_requests_reuse_one_postgres_idempotent_attempt(
                         caller=caller(),
                         now=datetime.now(UTC),
                         datasets=PostgresDatasetRepository(database),
-                        storage=MinioObjectStorage.from_settings(settings),
                         max_upload_bytes=settings.dataset_max_upload_bytes,
                         upload_ttl_seconds=settings.dataset_upload_ttl_seconds,
                     )
@@ -1459,9 +1421,9 @@ def test_concurrent_upload_requests_reuse_one_postgres_idempotent_attempt(
 
 def test_concurrent_confirmations_create_one_postgres_validation_job(
     engine: Engine,
-    minio_server: MinioServer,
+    dataset_storage_root: Path,
 ) -> None:
-    settings = settings_for(engine, minio=minio_server)
+    settings = settings_for(engine, storage_root=dataset_storage_root)
     with client_for(engine, settings) as client:
         dataset_id = _create_dataset(client)
         try:

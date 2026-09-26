@@ -73,6 +73,7 @@ from factory_sop.device.model import (
     PointDirection,
 )
 from factory_sop.identifiers import new_id
+from factory_sop.persistence import request_session
 from factory_sop.settings import Settings
 from factory_sop.template.adapters import dependencies as template_dependencies
 from factory_sop.template.model import TemplateImport
@@ -445,6 +446,11 @@ ROUTES = [
         {"mode": RetryMode.UPLOAD.value},
     ),
     Target(
+        "PUT",
+        "/training-datasets/{dataset_id}/members/{member_id}/attempts/{attempt_id}/content",
+        raw_body=b"",
+    ),
+    Target(
         "POST",
         "/training-datasets/{dataset_id}/vlm-candidates",
         {
@@ -536,6 +542,13 @@ class BindingGateway:
 
     def read_station_runtime_parameters(self, *_args: object, **_kwargs: object) -> None:
         raise DeviceRefusedError(DeviceRefusalCode.STATION_NOT_FOUND)
+
+
+class StubRequestSession:
+    """流式上传路由在读取请求体前结束事务；授权套件不需要真实数据库连接。"""
+
+    def rollback(self) -> None:
+        return None
 
 
 class Backend:
@@ -675,6 +688,7 @@ class Backend:
             self.dataset_jobs
         )
         self.app.dependency_overrides[dataset_dependencies.usage_jobs] = lambda: self.dataset_jobs
+        self.app.dependency_overrides[request_session] = StubRequestSession
         self.client = TestClient(self.app, base_url="https://testserver")
         assert (
             self.client.post(

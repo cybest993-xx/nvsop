@@ -7,8 +7,8 @@ login, and a reviewer cannot see a default in the diff.
 
 The values are RFC 9106's second recommended configuration (the low-memory one): 64 MiB,
 three passes, four lanes. It is the profile written for a server that also runs other work —
-the center backend shares its host with PostgreSQL, Redis, MinIO and the reused training
-microservices (§六).
+the center backend shares its host with PostgreSQL, Redis, the dataset training-media volume
+and the reused training microservices (§六).
 """
 
 from __future__ import annotations

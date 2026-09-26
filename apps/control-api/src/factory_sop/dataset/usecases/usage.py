@@ -1362,7 +1362,6 @@ def render_ddm_artifact_with_base(
                     storage.download_to(
                         object_key=source["object_key"],
                         destination=destination,
-                        version_id=str(source.get("object_version_id")),
                     )
             except ObjectNotFoundError as error:
                 raise DatasetRefusedError(
@@ -2254,18 +2253,6 @@ def _merge_storage_facts(
                     continue
                 try:
                     stat = storage.stat(object_key=object_key)
-                    if stat.version_id != object_version_id:
-                        issues.append(
-                            UsageIssue(
-                                "USAGE_OBJECT_VERSION_CHANGED"
-                                if stat.version_id is not None
-                                else "USAGE_OBJECT_VERSION_UNAVAILABLE",
-                                "对象代次已变化"
-                                if stat.version_id is not None
-                                else "对象存储未返回源对象代次",
-                                str(member_id),
-                            )
-                        )
                     expected_size = item.get("actual_size")
                     if isinstance(expected_size, int) and stat.size != expected_size:
                         issues.append(
@@ -2273,29 +2260,28 @@ def _merge_storage_facts(
                                 "USAGE_OBJECT_SIZE_CHANGED", "源对象大小已变化", str(member_id)
                             )
                         )
-                    if stat.version_id == object_version_id:
-                        match kind:
-                            case UsageKind.DDM:
-                                _probe_frozen_video(
-                                    member_id=member_id,
-                                    source=item,
-                                    storage=storage,
-                                    media_probe=media_probe,
-                                    directory=Path(temporary),
-                                    issues=issues,
-                                )
-                            case UsageKind.VLM:
-                                _verify_frozen_media(
-                                    member_id=member_id,
-                                    source=item,
-                                    storage=storage,
-                                    media_probe=media_probe,
-                                    annotation_volume=annotation_volume,
-                                    directory=Path(temporary),
-                                    issues=issues,
-                                )
-                            case _:
-                                assert_never(kind)
+                    match kind:
+                        case UsageKind.DDM:
+                            _probe_frozen_video(
+                                member_id=member_id,
+                                source=item,
+                                storage=storage,
+                                media_probe=media_probe,
+                                directory=Path(temporary),
+                                issues=issues,
+                            )
+                        case UsageKind.VLM:
+                            _verify_frozen_media(
+                                member_id=member_id,
+                                source=item,
+                                storage=storage,
+                                media_probe=media_probe,
+                                annotation_volume=annotation_volume,
+                                directory=Path(temporary),
+                                issues=issues,
+                            )
+                        case _:
+                            assert_never(kind)
                 except ObjectNotFoundError:
                     issues.append(
                         UsageIssue("USAGE_OBJECT_NOT_FOUND", "源对象不存在", str(member_id))
@@ -2938,7 +2924,6 @@ def _verify_frozen_media(
                 storage.download_to(
                     object_key=str(source["object_key"]),
                     destination=destination,
-                    version_id=str(source["object_version_id"]),
                 )
         if is_clip:
             expected_digest = source.get("derived_video_sha256")
@@ -3114,7 +3099,6 @@ def _probe_frozen_video(
             storage.download_to(
                 object_key=object_key,
                 destination=destination,
-                version_id=object_version_id,
             )
         actual_digest = _file_sha256(path)
         expected_digest = source.get("source_sha256")

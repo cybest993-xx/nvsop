@@ -14,10 +14,6 @@ dependencies = [
     # explicitly in `factory_sop/auth/passwords.py` rather than taken from its defaults.
     "argon2-cffi>=25.1.0",
     "alembic>=1.19.1",
-    # MinIO's SDK supplies native S3 presigning; the application never implements a signing
-    # algorithm or relays the video body through FastAPI.
-    "minio>=7.2.15",
-    "urllib3>=2.5.0",
     # ARQ uses Redis as transport while PostgreSQL remains the job authority (ADR-0004).
     "arq>=0.26.3",
     "fastapi>=0.121.2",

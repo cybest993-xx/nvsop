@@ -199,9 +199,7 @@ server { listen 9000; return 404; }
         upstream = (
             DockerContainer(NGINX_IMAGE)
             .with_network(network)
-            .with_network_aliases(
-                "center-api", "annotation-backend", "annotation-frontend", "web", "minio"
-            )
+            .with_network_aliases("center-api", "annotation-backend", "annotation-frontend", "web")
             .with_volume_mapping(upstream_config, "/etc/nginx/conf.d/default.conf")
             .with_exposed_ports(8100)
         )

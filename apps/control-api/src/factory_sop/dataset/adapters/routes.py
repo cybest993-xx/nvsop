@@ -1,4 +1,4 @@
-"""训练数据集、视频成员和直传生命周期的 HTTP adapter。"""
+"""训练数据集、视频成员和流式上传生命周期的 HTTP adapter。"""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from typing import Annotated, Any, BinaryIO, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Query, Request, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response
 from pydantic import (
     BaseModel,
@@ -31,6 +32,7 @@ from factory_sop.dataset.storage import (
     ObjectStorageUnavailableError,
 )
 from factory_sop.dataset.usecases import (
+    begin_video_content_upload,
     confirm_video_upload,
     create_training_dataset,
     list_dataset_members,
@@ -64,7 +66,7 @@ ProblemResponses: dict[int | str, dict[str, Any]] = {
     404: problem_openapi_response("训练数据集、视频或上传尝试不存在"),
     409: problem_openapi_response("视频当前状态不允许该操作"),
     422: problem_openapi_response("请求或视频校验无效"),
-    503: problem_openapi_response("对象存储或媒体探测暂时不可用"),
+    503: problem_openapi_response("训练素材存储或媒体探测暂时不可用"),
 }
 
 
@@ -99,7 +101,7 @@ class RequestVideoUploadInput(BaseModel):
 
 
 class ConfirmVideoUploadInput(BaseModel):
-    """确认某个上传尝试已由客户端直传完成。"""
+    """确认某个上传尝试已由客户端上传完成。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -213,7 +215,7 @@ class UploadAttemptView(BaseModel):
 
 
 class UploadInstructionsView(BaseModel):
-    """仅随申请直传响应返回的短期签名说明。"""
+    """仅随申请响应返回的短期流式上传说明。"""
 
     method: str
     url: str
@@ -705,7 +707,6 @@ def request_a_video_upload(
     caller: Authorized,
     request: Request,
     datasets: Annotated[DatasetRepository, Depends(dependencies.datasets)],
-    storage: Annotated[ObjectStorage, Depends(dependencies.storage)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> UploadRequestView:
     settings = request.app.state.settings
@@ -719,7 +720,6 @@ def request_a_video_upload(
         caller=caller,
         now=datetime.now(UTC),
         datasets=datasets,
-        storage=storage,
         max_upload_bytes=settings.dataset_max_upload_bytes,
         upload_ttl_seconds=settings.dataset_upload_ttl_seconds,
     )
@@ -777,7 +777,6 @@ def retry_a_video_upload(
     caller: Authorized,
     request: Request,
     datasets: Annotated[DatasetRepository, Depends(dependencies.datasets)],
-    storage: Annotated[ObjectStorage, Depends(dependencies.storage)],
     jobs: Annotated[ValidationJobQueue, Depends(dependencies.jobs)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> RetryView | JSONResponse:
@@ -790,7 +789,6 @@ def retry_a_video_upload(
         caller=caller,
         now=datetime.now(UTC),
         datasets=datasets,
-        storage=storage,
         jobs=jobs,
         max_upload_bytes=settings.dataset_max_upload_bytes,
         upload_ttl_seconds=settings.dataset_upload_ttl_seconds,
@@ -807,6 +805,57 @@ def retry_a_video_upload(
             content=view.model_dump(mode="json"),
         )
     return view
+
+
+@router.put(
+    "/{dataset_id}/members/{member_id}/attempts/{attempt_id}/content",
+    status_code=status.HTTP_204_NO_CONTENT,
+    operation_id="uploadVideoContent",
+    openapi_extra=needs(Permission.DATASET_IMPORT),
+    responses=ProblemResponses,
+)
+async def upload_video_content(
+    dataset_id: UUID,
+    member_id: UUID,
+    attempt_id: UUID,
+    request: Request,
+    caller: Authorized,
+    session: RequestSession,
+    datasets: Annotated[DatasetRepository, Depends(dependencies.datasets)],
+    storage: Annotated[ObjectStorage, Depends(dependencies.storage)],
+) -> Response:
+    """把已授权请求的视频体流式写入 dataset 本地持久卷，不整段读入内存。"""
+    settings = request.app.state.settings
+    target = await run_in_threadpool(
+        begin_video_content_upload,
+        dataset_id=dataset_id,
+        member_id=member_id,
+        attempt_id=attempt_id,
+        caller=caller,
+        now=datetime.now(UTC),
+        datasets=datasets,
+        max_upload_bytes=settings.dataset_max_upload_bytes,
+    )
+    # 授权与状态检查已完成；上传期间不再占用请求事务的连接池连接。
+    session.rollback()
+    received = 0
+    try:
+        with storage.writing(object_key=target.object_key) as sink:
+            async for chunk in request.stream():
+                received += len(chunk)
+                if received > target.max_bytes:
+                    raise DatasetRefusedError(
+                        DatasetRefusalCode.SIZE_EXCEEDED,
+                        detail="上传内容超过申请时声明的大小",
+                        recovery_action=model.RetryMode.UPLOAD.value,
+                    )
+                await run_in_threadpool(sink.write, chunk)
+    except (ObjectStorageUnavailableError, OSError) as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.STORAGE_UNAVAILABLE,
+            detail="训练素材存储暂时不可用，请稍后重试",
+        ) from error
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(

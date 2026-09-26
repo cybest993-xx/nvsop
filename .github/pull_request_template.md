@@ -25,11 +25,12 @@ Actions: `N/A`
 
 ## Readiness and remaining work
 
-<!-- Record the exact-head CI/review state. Codex review supplements CI and does not replace a required independent review or explicit merge authorization. Re-run @codex review after repairing findings or changing the candidate. Rules: docs/engineering/workflow.md. -->
+<!-- Record exact-head CI, any required independent review and merge authorization. Codex is optional, non-blocking feedback; record it only if requested or available. Follow docs/engineering/workflow.md. -->
 CI required: `pending`
-Codex review: `pending`
-Codex reviewed commit: `pending`
-Unresolved Codex findings: `pending`
+Independent Spec + Standards review (when required): `not-required`
+Codex review (optional): `not-requested`
+Codex reviewed commit (if available): `N/A`
+Codex feedback disposition (if any): `N/A`
 Merge authorization: `pending`
 
 <!-- Deferred original acceptance links, unverified target-environment evidence and blockers. Publication/CI status alone is not merge authorization. -->

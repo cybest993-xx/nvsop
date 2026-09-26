@@ -30,7 +30,11 @@ make contracts
 
 该命令从 FastAPI 导出 `packages/contracts/openapi.json`，相对 `OPENAPI_BASE_REF`（默认 `origin/main`）做兼容性检查，并重新生成 Web 客户端。生成结果与源变更一起提交。
 
-真正需要破坏性契约变化时，走“所有受影响客户端协同发布”的显式变更，而不是增加 `/api/v2` 并长期双轨维护。
+真正需要破坏性契约变化时，走“所有受影响客户端协同发布”的显式变更，而不是增加 `/api/v2` 并长期双轨维护。显式变更的机械落点是 `packages/contracts/breaking-changes.json`：`make openapi-compat` 只接受逐条登记（带 `reason` 与 `issue`）的破坏项，未登记的破坏项仍然失败；已登记的破坏项连同原因打印在门禁输出里，供评审核对。
+
+已登记的破坏性变化：
+
+- **#350（2026-09-26）**：训练素材本地化后，公开契约不再携带 S3 对象代次语义。`UploadAttemptView.object_version_id` 改为 `final_object_key`，`AnnotationContextView`、`AnnotationSubmissionView`、`VlmMediaInput`、`VlmMediaView` 的 `source_object_version_id` 改为 `source_object_key`，恒为空对象的 `UploadInstructionsView.fields`（presigned POST 表单面）删除。Web、脚本与生成 SDK 在同一变更内协同更新；`dataset` 迁移 0039 同步列名。迁移只改列名，不改写 MinIO 时代的既有行：这些行的源身份仍是旧值，需重新登记后才能通过 DDM/VLM 用途检查，本版本不做猜测性的 MinIO→文件数据迁移。
 
 ## 数据库迁移
 
@@ -43,6 +47,15 @@ make contracts
 - 若任务声明支持回滚，则回滚/重放语义有实际演练证据，而不是只因为 Alembic 文件存在就宣称可回滚。
 
 **当前仓库没有完成 Q36 备份/恢复策略。** 因此不要在本文声称中心数据库、中心训练素材卷、边缘 SQLite 或推理机证据媒体已有统一备份周期、自动灾备或经过演练的恢复目标；具体交付前必须完成适用的策略和验证。
+
+## 中心训练素材存储
+
+ADR-0012 / Issue #350 已把中心训练素材从 MinIO/S3 迁移到 `dataset` 拥有的本地持久卷：
+
+- 部署配置移除全部 `SOP_MINIO_*` 变量（未识别变量会拒绝启动），改为把 `SOP_DATASET_STORAGE_ROOT` 设为绝对路径；
+- `center-api` 与 `worker` 必须挂载同一个可写持久卷；Compose 的 `dataset-media` volume 是开发实例的参考；
+- 训练视频经 `PUT /api/v1/training-datasets/{dataset_id}/members/{member_id}/attempts/{attempt_id}/content` 流式写入该卷，不再有独立对象存储上传入口或浏览器直传地址；
+- 仓库没有实现 MinIO→本地文件的自动迁移契约；旧部署中的既有 MinIO 素材需要时另立有数据证据的任务处理，本版本不猜测迁移。
 
 ## 中心与边缘运行时
 

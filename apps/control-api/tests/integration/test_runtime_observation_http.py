@@ -433,9 +433,9 @@ def _remove_rebound_topology(
 
 
 def test_configuration_pull_is_host_scoped_and_contains_real_point_address(
-    engine: Engine, runtime_topology: RuntimeTopology
+    engine: Engine, runtime_topology: RuntimeTopology, dataset_storage_root: Path
 ) -> None:
-    settings = settings_for(engine)
+    settings = settings_for(engine, storage_root=dataset_storage_root)
     path = f"{API_PREFIX}/inference-hosts/{runtime_topology.host.id}/configuration"
     with client_for(engine, settings) as client:
         response = client.get(
@@ -452,7 +452,7 @@ def test_configuration_pull_is_host_scoped_and_contains_real_point_address(
 
 
 def test_edge_offline_decision_flushes_after_real_center_rebind(
-    engine: Engine, runtime_topology: RuntimeTopology
+    engine: Engine, runtime_topology: RuntimeTopology, dataset_storage_root: Path
 ) -> None:
     edge_source = str(Path(__file__).resolve().parents[4] / "apps/edge-runtime/src")
     sys.path.insert(0, edge_source)
@@ -464,7 +464,7 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
         edge_reporting = cast(Any, importlib.import_module("edge_runtime.reporting"))
     finally:
         sys.path.remove(edge_source)
-    settings = settings_for(engine)
+    settings = settings_for(engine, storage_root=dataset_storage_root)
     config_path = f"{API_PREFIX}/inference-hosts/{runtime_topology.host.id}/configuration"
     report_path = f"{API_PREFIX}/monitor/reported-decisions"
     rebound = _rebound_topology(engine, runtime_topology)
@@ -685,9 +685,9 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
 
 
 def test_historical_report_survives_rebind_and_rejects_forged_history(
-    engine: Engine, runtime_topology: RuntimeTopology
+    engine: Engine, runtime_topology: RuntimeTopology, dataset_storage_root: Path
 ) -> None:
-    settings = settings_for(engine)
+    settings = settings_for(engine, storage_root=dataset_storage_root)
     config_path = f"{API_PREFIX}/inference-hosts/{runtime_topology.host.id}/configuration"
     report_path = f"{API_PREFIX}/monitor/reported-decisions"
     rebound = _rebound_topology(engine, runtime_topology)
@@ -821,9 +821,9 @@ def test_historical_report_survives_rebind_and_rejects_forged_history(
 
 
 def test_historical_report_survives_station_and_backend_deactivation(
-    engine: Engine, runtime_topology: RuntimeTopology
+    engine: Engine, runtime_topology: RuntimeTopology, dataset_storage_root: Path
 ) -> None:
-    settings = settings_for(engine)
+    settings = settings_for(engine, storage_root=dataset_storage_root)
     config_path = f"{API_PREFIX}/inference-hosts/{runtime_topology.host.id}/configuration"
     report_path = f"{API_PREFIX}/monitor/reported-decisions"
     with client_for(engine, settings) as client:
@@ -870,9 +870,9 @@ def test_historical_report_survives_station_and_backend_deactivation(
 
 
 def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
-    engine: Engine, runtime_topology: RuntimeTopology
+    engine: Engine, runtime_topology: RuntimeTopology, dataset_storage_root: Path
 ) -> None:
-    settings = settings_for(engine)
+    settings = settings_for(engine, storage_root=dataset_storage_root)
     permissions = frozenset({Permission.MONITOR_VIEW})
     report = ReportedDecision(
         event_id=f"{runtime_topology.host.id}:decision-1",
@@ -1058,9 +1058,9 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
 
 
 def test_overview_returns_permission_scoped_real_sections(
-    engine: Engine, runtime_topology: RuntimeTopology
+    engine: Engine, runtime_topology: RuntimeTopology, dataset_storage_root: Path
 ) -> None:
-    settings = settings_for(engine)
+    settings = settings_for(engine, storage_root=dataset_storage_root)
     with client_for(
         engine,
         settings,

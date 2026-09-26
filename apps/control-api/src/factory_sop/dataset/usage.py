@@ -77,9 +77,9 @@ def validate_ddm_input(
         normalized_segments: list[dict[str, Any]] = []
         if not math.isfinite(video.duration_seconds) or video.duration_seconds <= 0:
             issues.append(UsageIssue("DDM_DURATION_INVALID", "视频时长必须是有限正数", location))
-        if not video.object_version_id:
+        if not video.object_key:
             issues.append(
-                UsageIssue("DDM_SOURCE_VERSION_INVALID", "源视频对象代次不能为空", location)
+                UsageIssue("DDM_SOURCE_VERSION_INVALID", "源视频定稿文件身份不能为空", location)
             )
         if not _valid_sha256(video.source_sha256):
             issues.append(UsageIssue("DDM_SOURCE_DIGEST_INVALID", "源视频摘要格式无效", location))
@@ -184,7 +184,7 @@ def validate_ddm_input(
         snapshot_videos.append(
             {
                 "member_id": location,
-                "object_version_id": video.object_version_id,
+                "object_version_id": video.object_key,
                 "source_sha256": video.source_sha256,
                 "duration_seconds": video.duration_seconds,
                 "action_list_revision": video.action_list_revision,
@@ -259,11 +259,11 @@ def validate_vlm_input(
                     f"media[{index}]",
                 )
             )
-        if not _valid_sha256(media.source_sha256) or not media.source_object_version_id:
+        if not _valid_sha256(media.source_sha256) or not media.source_object_key:
             issues.append(
                 UsageIssue(
                     "VLM_MEDIA_FACT_INVALID",
-                    "媒体必须保留已确认的对象代次和摘要",
+                    "媒体必须保留已确认的定稿文件身份和摘要",
                     f"media[{index}]",
                 )
             )
@@ -421,7 +421,7 @@ def validate_vlm_input(
             {
                 "key": media.key,
                 "member_id": str(media.member_id),
-                "source_object_version_id": media.source_object_version_id,
+                "source_object_version_id": media.source_object_key,
                 "source_sha256": media.source_sha256,
                 "action_indices": list(media.action_indices),
                 "annotation_submission_id": (

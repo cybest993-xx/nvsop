@@ -110,6 +110,18 @@ def _columns(database: Engine, table: str) -> set[str]:
         )
 
 
+def _nullable_columns(database: Engine, table: str) -> dict[str, bool]:
+    with database.connect() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT column_name, is_nullable FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = :table"
+            ),
+            {"table": table},
+        ).all()
+    return {str(name): value == "YES" for name, value in rows}
+
+
 def test_usage_records_round_trip_through_real_postgres(session: Session) -> None:
     now = datetime(2026, 9, 12, tzinfo=UTC)
     actor_id, dataset_id = uuid4(), uuid4()
@@ -136,7 +148,7 @@ def test_usage_records_round_trip_through_real_postgres(session: Session) -> Non
             VlmMediaReference(
                 key="video.mp4",
                 member_id=uuid4(),
-                source_object_version_id="version-1",
+                source_object_key="version-1",
                 source_sha256="a" * 64,
                 action_indices=(1, 2),
             ),
@@ -330,7 +342,7 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
         "expires_at",
         "status",
         "validation_job_id",
-        "object_version_id",
+        "final_object_key",
     } <= _columns(database_at_0023, "dataset_upload_attempt")
     assert {
         "annotation_revision",
@@ -407,11 +419,23 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
 
     with database_at_0023.connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0037"
+    assert version == "0039"
+    # 客户端不再必须预读整段视频计算摘要：声明列可为空，权威摘要由中心登记。
+    assert _nullable_columns(database_at_0023, "dataset_member")["declared_sha256"] is True
+    assert _nullable_columns(database_at_0023, "dataset_upload_attempt")["declared_sha256"] is True
+    # 公开/业务契约不再携带 S3 对象代次语义：列名改为定稿文件身份。
+    assert "object_version_id" not in _columns(database_at_0023, "dataset_member")
+    assert "final_object_key" in _columns(database_at_0023, "dataset_upload_attempt")
+    assert "source_object_key" in _columns(database_at_0023, "dataset_annotation_submission")
+    assert "source_object_key" in _columns(database_at_0023, "dataset_annotation_context")
     assert "dataset.dataset.edit" in _permission_codes(database_at_0023)
 
     command.downgrade(configuration, "0025")
     assert "dataset.dataset.edit" not in _permission_codes(database_at_0023)
+    assert _nullable_columns(database_at_0023, "dataset_member")["declared_sha256"] is False
+    assert "object_version_id" in _columns(database_at_0023, "dataset_member")
+    assert "final_object_key" not in _columns(database_at_0023, "dataset_upload_attempt")
+    assert "source_object_version_id" in _columns(database_at_0023, "dataset_annotation_submission")
     assert "mediamtx_playback_address" not in _columns(database_at_0023, "device_inference_host")
     assert not {
         "configuration_revision",
@@ -435,3 +459,75 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
     )
     command.downgrade(configuration, "0022")
     assert "job_application_job" not in _tables(database_at_0023)
+
+
+def test_file_identity_rename_keeps_registered_values_on_real_postgres(
+    database_at_0023: Engine,
+) -> None:
+    """0039 只改列名：已登记的文件身份保留，回滚时从 object_key 回填。"""
+    configuration = Config(str(CONTROL_API / "alembic.ini"))
+    configuration.set_main_option("script_location", str(CONTROL_API / "migrations"))
+    configuration.set_main_option(
+        "sqlalchemy.url", database_at_0023.url.render_as_string(hide_password=False)
+    )
+    command.upgrade(configuration, "head")
+
+    dataset_id, member_id, attempt_id, actor_id = uuid4(), uuid4(), uuid4(), uuid4()
+    long_member_id = uuid4()
+    object_key = "training-datasets/migration/member/attempt/registered-video"
+    overlong_key = "training-datasets/" + "x" * 300
+    with database_at_0023.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO dataset_training_dataset "
+                "(id, name, created_by, updated_by, created_at, updated_at) "
+                "VALUES (:id, 'migration-dataset', :actor, :actor, now(), now())"
+            ),
+            {"id": dataset_id, "actor": actor_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO dataset_member "
+                "(id, dataset_id, original_filename, source, declared_size, current_attempt_id, "
+                "status, object_key, created_by, updated_by, created_at, updated_at) "
+                "VALUES (:id, :dataset, 'line.mp4', 'camera', 100, :attempt, 'registered', "
+                ":object_key, :actor, :actor, now(), now())"
+            ),
+            {
+                "id": member_id,
+                "dataset": dataset_id,
+                "attempt": attempt_id,
+                "object_key": object_key,
+                "actor": actor_id,
+            },
+        )
+        # object_key 比回滚重建的 object_version_id（255）更宽：超长行不能截断，也不能让回滚失败。
+        connection.execute(
+            text(
+                "INSERT INTO dataset_member "
+                "(id, dataset_id, original_filename, source, declared_size, current_attempt_id, "
+                "status, object_key, created_by, updated_by, created_at, updated_at) "
+                "VALUES (:id, :dataset, 'long.mp4', 'camera', 100, :attempt, 'registered', "
+                ":object_key, :actor, :actor, now(), now())"
+            ),
+            {
+                "id": long_member_id,
+                "dataset": dataset_id,
+                "attempt": attempt_id,
+                "object_key": overlong_key,
+                "actor": actor_id,
+            },
+        )
+
+    command.downgrade(configuration, "0038")
+    with database_at_0023.connect() as connection:
+        restored = connection.execute(
+            text("SELECT object_version_id FROM dataset_member WHERE id = :id"),
+            {"id": member_id},
+        ).scalar_one()
+        overlong = connection.execute(
+            text("SELECT object_version_id FROM dataset_member WHERE id = :id"),
+            {"id": long_member_id},
+        ).scalar_one()
+    assert restored == object_key
+    assert overlong is None

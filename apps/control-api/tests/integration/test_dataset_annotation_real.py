@@ -1,4 +1,4 @@
-"""训练数据标注的真实 PostgreSQL、MinIO、HTTP 和 worker 事务边界。"""
+"""训练数据标注的真实 PostgreSQL、本地持久卷、HTTP 和 worker 事务边界。"""
 
 from __future__ import annotations
 
@@ -7,20 +7,19 @@ import hashlib
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, BinaryIO, cast
 from uuid import UUID, uuid4
 
 import pytest
 from _integration_support import (
-    MinioServer,
     RedisServer,
     cleanup_dataset,
     settings_for,
-    upload_presigned,
+    upload_video_content,
 )
 from arq import Worker
 from fastapi.testclient import TestClient
-from minio import Minio
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session as DatabaseSession
 
@@ -33,7 +32,7 @@ from factory_sop.auth.permissions import Permission
 from factory_sop.dataset.adapters import dependencies as dataset_dependencies
 from factory_sop.dataset.adapters.media import FfprobeMediaProbe
 from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
-from factory_sop.dataset.adapters.storage import MinioObjectStorage
+from factory_sop.dataset.adapters.storage import LocalFileObjectStorage
 from factory_sop.dataset.annotation import AnnotationBackend, PreparedAnnotationVideo
 from factory_sop.dataset.api import DatasetAnnotationRuntime
 from factory_sop.dataset.model import AnnotationMode, AnnotationSegment
@@ -79,6 +78,9 @@ class FakeAnnotationBackend:
             video_id=video_id,
         )
 
+    def discard_prepared_video(self, *, data_id: str) -> None:
+        assert data_id.startswith("real-test-data-")
+
     def download_video(self, *, video_id: str, destination: BinaryIO) -> None:
         assert self.copies is not None
         assert video_id in self.copies
@@ -115,8 +117,8 @@ class FakeAnnotationRuntime:
     def repository(self, session: object) -> PostgresDatasetRepository:
         return PostgresDatasetRepository(cast(DatabaseSession, session))
 
-    def storage(self) -> MinioObjectStorage:
-        return MinioObjectStorage.from_settings(self.settings)
+    def storage(self) -> LocalFileObjectStorage:
+        return LocalFileObjectStorage.from_settings(self.settings)
 
     def backend(self) -> AnnotationBackend:
         return self.annotation_backend
@@ -186,6 +188,7 @@ async def _run_validation(engine: Engine, settings: Settings, job_id: UUID) -> N
             "settings": settings,
             "session_factory": session_factory(engine),
             "dataset_runtime": _ValidationRuntime(engine, settings),
+            "blocking_job_slots": asyncio.Semaphore(1),
         },
         str(job_id),
     )
@@ -199,8 +202,8 @@ class _ValidationRuntime:
     def repository(self, session: object) -> PostgresDatasetRepository:
         return PostgresDatasetRepository(cast(DatabaseSession, session))
 
-    def storage(self) -> MinioObjectStorage:
-        return MinioObjectStorage.from_settings(self.settings)
+    def storage(self) -> LocalFileObjectStorage:
+        return LocalFileObjectStorage.from_settings(self.settings)
 
     def media_probe(self) -> FfprobeMediaProbe:
         return FfprobeMediaProbe(
@@ -233,6 +236,7 @@ async def _run_actual_arq_worker(
             "dataset_runtime": _ValidationRuntime(engine, settings),
             "annotation_runtime": annotation_runtime
             or dataset_dependencies.annotation_runtime(settings),
+            "blocking_job_slots": asyncio.Semaphore(1),
         },
         burst=True,
         max_burst_jobs=20,
@@ -272,26 +276,19 @@ def _persisted_duration(engine: Engine, member_id: UUID) -> float:
     return member.duration_seconds
 
 
-def _minio_client(server: MinioServer) -> Minio:
-    return Minio(
-        server.endpoint.removeprefix("http://"),
-        access_key=server.access_key,
-        secret_key=server.secret_key,
-        secure=False,
-    )
-
-
-def _remove_object(server: MinioServer, object_key: str) -> None:
-    _minio_client(server).remove_object(server.bucket, object_key)
+def _remove_object(root: Path, object_key: str) -> None:
+    (root / object_key).unlink(missing_ok=True)
 
 
 def test_real_http_annotation_persists_revisions_and_isolates_retry_copies(
     engine: Engine,
-    minio_server: MinioServer,
+    dataset_storage_root: Path,
     redis_server: RedisServer,
     real_video_bytes: bytes,
 ) -> None:
-    settings = settings_for(engine, minio=minio_server, redis_url=redis_server.url).model_copy(
+    settings = settings_for(
+        engine, storage_root=dataset_storage_root, redis_url=redis_server.url
+    ).model_copy(
         update={
             "annotation_backend_url": "http://annotation-backend.internal:8000",
             "annotation_media_origin": "https://sop.example.internal:8444",
@@ -324,7 +321,7 @@ def test_real_http_annotation_persists_revisions_and_isolates_retry_copies(
             assert requested.status_code == 201, requested.text
             upload = requested.json()["upload"]
             object_key = upload["object_key"]
-            assert upload_presigned(upload, real_video_bytes).status_code == 204
+            assert upload_video_content(client, upload, real_video_bytes).status_code == 204
             confirm = client.post(
                 f"{DATASETS}/{dataset_id}/members/{requested.json()['member']['id']}/confirm",
                 headers=csrf,
@@ -421,7 +418,7 @@ def test_real_http_annotation_persists_revisions_and_isolates_retry_copies(
             ]
     finally:
         if object_key is not None:
-            _remove_object(minio_server, object_key)
+            _remove_object(dataset_storage_root, object_key)
         if dataset_id is not None:
             cleanup_dataset(engine, dataset_id)
         _remove_manager(engine, user_id=user_id, role_id=role_id)
@@ -429,7 +426,7 @@ def test_real_http_annotation_persists_revisions_and_isolates_retry_copies(
 
 def test_real_nvidia_annotation_backend_and_arq_worker_complete_a_submission(
     engine: Engine,
-    minio_server: MinioServer,
+    dataset_storage_root: Path,
     redis_server: RedisServer,
     real_video_bytes: bytes,
 ) -> None:
@@ -442,7 +439,7 @@ def test_real_nvidia_annotation_backend_and_arq_worker_complete_a_submission(
         )
     settings = settings_for(
         engine,
-        minio=minio_server,
+        storage_root=dataset_storage_root,
         redis_url=redis_server.url,
     ).model_copy(
         update={
@@ -477,7 +474,10 @@ def test_real_nvidia_annotation_backend_and_arq_worker_complete_a_submission(
             assert requested.status_code == 201, requested.text
             request_body = requested.json()
             object_key = request_body["upload"]["object_key"]
-            assert upload_presigned(request_body["upload"], real_video_bytes).status_code == 204
+            assert (
+                upload_video_content(client, request_body["upload"], real_video_bytes).status_code
+                == 204
+            )
             confirm = client.post(
                 f"{DATASETS}/{dataset_id}/members/{request_body['member']['id']}/confirm",
                 headers=csrf,
@@ -532,7 +532,7 @@ def test_real_nvidia_annotation_backend_and_arq_worker_complete_a_submission(
             assert execution["clips"]
     finally:
         if object_key is not None:
-            _remove_object(minio_server, object_key)
+            _remove_object(dataset_storage_root, object_key)
         if dataset_id is not None:
             cleanup_dataset(engine, dataset_id)
         _remove_manager(engine, user_id=user_id, role_id=role_id)

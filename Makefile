@@ -110,7 +110,7 @@ openapi-export:
 	PYTHONPATH=$(CENTER)/src $(VENV)/python scripts/export_openapi.py $(OPENAPI)
 
 openapi-compat: openapi-export
-	$(VENV)/python scripts/check_openapi_compatibility.py $(OPENAPI_BASE_REF) $(OPENAPI)
+	$(VENV)/python scripts/check_openapi_compatibility.py $(OPENAPI_BASE_REF) $(OPENAPI) $(CONTRACT_PY)/breaking-changes.json
 
 openapi-generate: openapi-export web-install
 	# The generator does not promise to remove files for operations deleted from the schema.

@@ -268,8 +268,10 @@ class PostgresJobRepository:
         self._dispatch_ids.add(job_id)
         register_after_commit(self._session, lambda: dispatch(job_id))
 
-    def recover_stale_running(self, *, now: datetime, stale_after_seconds: int) -> int:
-        """恢复过期执行租约，并保留已有的投递诊断。"""
+    def recover_stale_running(
+        self, *, job_type: JobType, now: datetime, stale_after_seconds: int
+    ) -> int:
+        """按任务类型恢复过期执行租约，并保留已有的投递诊断。"""
         cutoff = now - timedelta(seconds=stale_after_seconds)
         result = cast(
             "CursorResult[Any]",
@@ -277,6 +279,7 @@ class PostgresJobRepository:
                 update(ApplicationJobRow)
                 .where(
                     ApplicationJobRow.status == JobStatus.RUNNING.value,
+                    ApplicationJobRow.job_type == job_type.value,
                     ApplicationJobRow.updated_at <= cutoff,
                 )
                 .values(
@@ -306,28 +309,93 @@ class PostgresJobRepository:
                         (JobStatus.PENDING.value, JobStatus.ENQUEUED.value)
                     ),
                 )
-                .values(status=JobStatus.RUNNING, updated_at=now)
+                .values(
+                    status=JobStatus.RUNNING,
+                    outbox_status="dispatched",
+                    last_dispatch_error=None,
+                    updated_at=now,
+                )
             ),
         )
         if result.rowcount != 1:
             return None
         return self.by_id(job_id)
 
-    def mark_enqueued(self, *, job_id: UUID, now: datetime) -> None:
-        self._session.execute(
-            update(ApplicationJobRow)
-            .where(ApplicationJobRow.id == job_id)
-            .values(
-                status=case(
-                    (ApplicationJobRow.status == JobStatus.PENDING.value, JobStatus.ENQUEUED.value),
-                    else_=ApplicationJobRow.status,
-                ),
-                outbox_status="dispatched",
-                dispatch_attempts=ApplicationJobRow.dispatch_attempts + 1,
-                last_dispatch_error=None,
-                updated_at=now,
-            )
+    def restore_unstarted(self, *, job_id: UUID, now: datetime) -> bool:
+        """仅恢复尚未领取的已投递任务，避免 worker admission 超时后永久搁置。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(ApplicationJobRow)
+                .where(
+                    ApplicationJobRow.id == job_id,
+                    ApplicationJobRow.status.in_(
+                        (JobStatus.PENDING.value, JobStatus.ENQUEUED.value)
+                    ),
+                )
+                .values(
+                    status=JobStatus.PENDING.value,
+                    outbox_status="pending",
+                    updated_at=now,
+                    last_dispatch_error=case(
+                        (
+                            ApplicationJobRow.last_dispatch_error.is_(None),
+                            "worker cancelled before acquiring execution slot",
+                        ),
+                        else_=ApplicationJobRow.last_dispatch_error,
+                    ),
+                )
+            ),
         )
+        return result.rowcount == 1
+
+    def mark_enqueued(
+        self,
+        *,
+        job_id: UUID,
+        expected_updated_at: datetime,
+        now: datetime,
+    ) -> bool:
+        """仅确认未被 worker/recovery 改写过的 pending 投递。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(ApplicationJobRow)
+                .where(
+                    ApplicationJobRow.id == job_id,
+                    ApplicationJobRow.status == JobStatus.PENDING.value,
+                    ApplicationJobRow.updated_at == expected_updated_at,
+                )
+                .values(
+                    status=JobStatus.ENQUEUED.value,
+                    outbox_status="dispatched",
+                    dispatch_attempts=ApplicationJobRow.dispatch_attempts + 1,
+                    last_dispatch_error=None,
+                    updated_at=now,
+                )
+            ),
+        )
+        return result.rowcount == 1
+
+    def mark_running_dispatched(self, *, job_id: UUID) -> bool:
+        """worker 已领取时仅确认投递事实，不改写运行租约时间戳。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(ApplicationJobRow)
+                .where(
+                    ApplicationJobRow.id == job_id,
+                    ApplicationJobRow.status == JobStatus.RUNNING.value,
+                    ApplicationJobRow.outbox_status == "pending",
+                )
+                .values(
+                    outbox_status="dispatched",
+                    dispatch_attempts=ApplicationJobRow.dispatch_attempts + 1,
+                    last_dispatch_error=None,
+                )
+            ),
+        )
+        return result.rowcount == 1
 
     def record_dispatch_failure(self, *, job_id: UUID, error: str, now: datetime) -> None:
         self._session.execute(

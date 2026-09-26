@@ -249,7 +249,8 @@ export type {
 export type AnnotationSegmentInput = GeneratedAnnotationSegmentInput
 
 const CSRF_COOKIE = 'sop_csrf'
-const CSRF_HEADER = 'x-csrf-token'
+/** 双提交 CSRF 头名；流式上传等非生成客户端复用同一常量。 */
+export const CSRF_HEADER = 'x-csrf-token'
 const MODIFYING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 const GENERIC_MESSAGE = '请求未能完成，请稍后重试'
 
@@ -312,7 +313,8 @@ client.interceptors.request.use((request) => {
   return new Request(request, { headers })
 })
 
-function csrfToken(): string | null {
+/** 从会话 Cookie 读出双提交 CSRF 令牌；没有会话时返回 null。 */
+export function csrfToken(): string | null {
   const match = document.cookie.split('; ').find((entry) => entry.startsWith(`${CSRF_COOKIE}=`))
   return match ? decodeURIComponent(match.slice(CSRF_COOKIE.length + 1)) : null
 }

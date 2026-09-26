@@ -60,7 +60,6 @@ interface PendingUploadRecord {
   originalFilename: string
   source: string
   declaredSize: number
-  declaredSha256: string
 }
 
 function isPendingUploadRecord(value: unknown): value is PendingUploadRecord {
@@ -75,8 +74,7 @@ function isPendingUploadRecord(value: unknown): value is PendingUploadRecord {
     typeof record.source === 'string' &&
     typeof record.declaredSize === 'number' &&
     Number.isInteger(record.declaredSize) &&
-    record.declaredSize > 0 &&
-    typeof record.declaredSha256 === 'string'
+    record.declaredSize > 0
   )
 }
 
@@ -424,7 +422,7 @@ function artifactRecoveryLabel(code: string | null, action: string | null): stri
 }
 
 function centerPhaseLabel(): string {
-  if (transferPhase.value === 'requesting') return '正在申请直传授权…'
+  if (transferPhase.value === 'requesting') return '正在申请上传授权…'
   if (transferPhase.value === 'uploading') return '尚未通知中心校验'
   if (transferPhase.value === 'awaiting_confirmation') return '等待通知中心校验'
   if (transferPhase.value === 'validating') return '校验任务已提交'
@@ -801,14 +799,6 @@ function activeDatasetId(): string {
   return (preferred || knownDatasetId.value || selectedDatasetId.value).trim()
 }
 
-async function sha256(file: File): Promise<string> {
-  if (globalThis.crypto?.subtle === undefined) {
-    throw new Error('当前浏览器不支持文件摘要计算，请使用支持 Web Crypto 的浏览器')
-  }
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', await file.arrayBuffer())
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
-}
-
 function newIdempotencyKey(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
@@ -817,7 +807,6 @@ function resumableIdempotencyKey(
   datasetId: string,
   file: File,
   sourceValue: string,
-  declaredSha256: string,
 ): string | null {
   const record = pendingUpload.value
   if (
@@ -825,8 +814,7 @@ function resumableIdempotencyKey(
     record.datasetId !== datasetId ||
     record.originalFilename !== file.name ||
     record.source !== sourceValue ||
-    record.declaredSize !== file.size ||
-    record.declaredSha256 !== declaredSha256
+    record.declaredSize !== file.size
   ) {
     return null
   }
@@ -850,7 +838,6 @@ function rememberPendingUpload(
     originalFilename: result.member.original_filename,
     source: result.member.source,
     declaredSize: result.member.declared_size,
-    declaredSha256: result.member.declared_sha256,
   }
   pendingUpload.value = record
   try {
@@ -902,7 +889,7 @@ function rememberUpload(result: DatasetUploadRequest): void {
 
 async function transferAndConfirm(file: File, result: DatasetUploadRequest): Promise<void> {
   if (result.upload === null) {
-    throw new Error('中心没有返回本次上传的直传说明')
+    throw new Error('中心没有返回本次上传说明')
   }
   transferProgress.value = 0
   transferPhase.value = 'uploading'
@@ -936,9 +923,8 @@ async function requestAndUpload(): Promise<void> {
   transferPhase.value = 'requesting'
   try {
     const sourceValue = source.value.trim()
-    const declaredSha256 = await sha256(file)
     const idempotencyKey =
-      resumableIdempotencyKey(datasetId, file, sourceValue, declaredSha256) ?? newIdempotencyKey()
+      resumableIdempotencyKey(datasetId, file, sourceValue) ?? newIdempotencyKey()
     activeIdempotencyKey.value = idempotencyKey
     uploadNeedsRenewal.value = false
     const result = await requestVideoUpload(
@@ -947,7 +933,6 @@ async function requestAndUpload(): Promise<void> {
         original_filename: file.name,
         source: sourceValue,
         declared_size: file.size,
-        declared_sha256: declaredSha256,
       },
       idempotencyKey,
     )
@@ -1230,7 +1215,6 @@ async function uploadRetriedFile(): Promise<void> {
         original_filename: request.member.original_filename,
         source: request.member.source,
         declared_size: request.member.declared_size,
-        declared_sha256: request.member.declared_sha256,
       },
       activeIdempotencyKey.value,
     )
@@ -1366,7 +1350,7 @@ onUnmounted(() => {
         <p class="datasets__eyebrow">资产中心 / 训练数据</p>
         <h1 id="datasets-heading" class="datasets__heading">训练数据集</h1>
         <p class="datasets__intro">
-          视频逐个直传对象存储。传输进度与中心校验分开显示；只有真实对象和媒体事实通过后才会登记。
+          视频逐个经中心授权入口流式上传。传输进度与中心校验分开显示；只有真实文件与媒体事实通过后才会登记。
         </p>
       </div>
       <div class="datasets__facts" aria-label="数据集规则">
@@ -1406,7 +1390,7 @@ onUnmounted(() => {
 
       <form class="datasets__card" aria-label="上传训练视频" @submit.prevent="submitUpload">
         <h2>加入一个视频</h2>
-        <p>文件先发往本次申请的 MinIO 目标，再通知中心校验。</p>
+        <p>文件经本次申请的授权入口流式写入中心训练素材卷，再通知中心校验。</p>
         <template v-if="mayView">
           <label for="dataset-select">
             目标训练数据集
@@ -1899,7 +1883,7 @@ onUnmounted(() => {
               <small>实际：{{ formatBytes(member.actual_size) }}</small>
             </td>
             <td>
-              <code class="datasets__digest">声明：{{ member.declared_sha256 }}</code>
+              <code class="datasets__digest">声明：{{ member.declared_sha256 ?? '—' }}</code>
               <code v-if="member.actual_sha256" class="datasets__digest">
                 实际：{{ member.actual_sha256 }}
               </code>
@@ -2040,7 +2024,7 @@ onUnmounted(() => {
             动作列表修订：{{ submission.action_list_revision }} · 模式：{{ submission.mode }}
           </p>
           <p>
-            源对象代次：<code>{{ submission.source_object_version_id }}</code> · sha256：<code>{{
+            源文件身份：<code>{{ submission.source_object_key }}</code> · sha256：<code>{{
               submission.source_sha256
             }}</code>
           </p>

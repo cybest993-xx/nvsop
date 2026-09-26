@@ -1,4 +1,4 @@
-"""用途检查用例的数据库、任务和对象存储 seam。"""
+"""用途检查用例的数据库、任务和训练素材存储 seam。"""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 from collections.abc import Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -121,7 +122,6 @@ def make_member() -> DatasetMember:
         codec="h264",
         container="mp4",
         object_key="datasets/source-a.mp4",
-        object_version_id="version-1",
         validation_job_id=None,
         failure_code=None,
         failure_detail=None,
@@ -141,7 +141,7 @@ def make_submission() -> AnnotationSubmission:
         context_id=UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f306"),
         revision=1,
         action_list_revision=1,
-        source_object_version_id="version-1",
+        source_object_key="datasets/source-a.mp4",
         source_sha256="a" * 64,
         idempotency_key="annotation-1",
         request_digest="b" * 64,
@@ -381,22 +381,17 @@ class TracingDatasets(FakeUsageDatasets):
 
 
 class FakeStorage:
+    def writing(self, *, object_key: str) -> AbstractContextManager[BinaryIO]:
+        del object_key
+        raise AssertionError("测试不应写入对象")
+
     def stat(self, *, object_key: str) -> ObjectStat:
         assert object_key == "datasets/source-a.mp4"
-        return ObjectStat(size=100, version_id="version-1")
+        return ObjectStat(size=100)
 
-    def create_upload(self, **kwargs: object) -> object:
-        raise AssertionError(kwargs)
-
-    def download_to(
-        self, *, object_key: str, destination: BinaryIO, version_id: str | None = None
-    ) -> None:
+    def download_to(self, *, object_key: str, destination: BinaryIO) -> None:
         assert object_key == "datasets/source-a.mp4"
-        assert version_id == "version-1"
         destination.write(b"a" * 100)
-
-    def finalize_upload(self, *, object_key: str, source: BinaryIO, size: int) -> ObjectStat:
-        return ObjectStat(size=size, version_id="artifact-1")
 
     def delete(self, *, object_key: str) -> None:
         del object_key
@@ -410,11 +405,9 @@ class TracingStorage(FakeStorage):
         self.events.append("media")
         return super().stat(object_key=object_key)
 
-    def download_to(
-        self, *, object_key: str, destination: BinaryIO, version_id: str | None = None
-    ) -> None:
+    def download_to(self, *, object_key: str, destination: BinaryIO) -> None:
         self.events.append("media")
-        super().download_to(object_key=object_key, destination=destination, version_id=version_id)
+        super().download_to(object_key=object_key, destination=destination)
 
 
 class FakeMediaProbe:
@@ -560,11 +553,8 @@ class ConcurrentAnnotationVolume(FakeAnnotationVolume):
 
 
 class WrongDigestStorage(FakeStorage):
-    def download_to(
-        self, *, object_key: str, destination: BinaryIO, version_id: str | None = None
-    ) -> None:
+    def download_to(self, *, object_key: str, destination: BinaryIO) -> None:
         assert object_key == "datasets/source-a.mp4"
-        assert version_id == "version-1"
         destination.write(b"z" * 100)
 
 
@@ -800,7 +790,7 @@ def _ddm_snapshot() -> dict[str, object]:
             {
                 "member_id": str(MEMBER_ID),
                 "status": "registered",
-                "object_version_id": "version-1",
+                "object_version_id": "datasets/source-a.mp4",
                 "source_sha256": "a" * 64,
                 "actual_size": 100,
                 "annotation_submission_id": str(SUBMISSION_ID),
@@ -813,7 +803,7 @@ def _ddm_snapshot() -> dict[str, object]:
         "videos": [
             {
                 "member_id": str(MEMBER_ID),
-                "object_version_id": "version-1",
+                "object_version_id": "datasets/source-a.mp4",
                 "source_sha256": "a" * 64,
                 "annotation_execution_id": str(EXECUTION_ID),
                 "upstream_data_id": "data-1",
@@ -980,7 +970,7 @@ def test_vlm_candidate_accepts_database_string_status_for_registered_media() -> 
         kind=VlmCandidateKind.GQA,
         action_list_revision=1,
         records=(),
-        media=(VlmMediaReference("line-a.mp4", MEMBER_ID, "version-1", "a" * 64),),
+        media=(VlmMediaReference("line-a.mp4", MEMBER_ID, "datasets/source-a.mp4", "a" * 64),),
         expected_revision=0,
         caller=caller(Permission.DATASET_EDIT),
         now=NOW,
@@ -991,7 +981,7 @@ def test_vlm_candidate_accepts_database_string_status_for_registered_media() -> 
 
 def test_vlm_candidate_revision_uses_if_match_and_binds_current_media() -> None:
     datasets = FakeUsageDatasets()
-    media = VlmMediaReference("line-a.mp4", MEMBER_ID, "version-1", "a" * 64)
+    media = VlmMediaReference("line-a.mp4", MEMBER_ID, "datasets/source-a.mp4", "a" * 64)
     value = register_vlm_candidate(
         dataset_id=DATASET_ID,
         kind=VlmCandidateKind.GQA,
@@ -1024,7 +1014,7 @@ def test_vlm_clip_rejects_a_superseded_annotation_execution() -> None:
     media = VlmMediaReference(
         key="clip-key.mp4",
         member_id=MEMBER_ID,
-        source_object_version_id="version-1",
+        source_object_key="datasets/source-a.mp4",
         source_sha256="a" * 64,
         annotation_submission_id=SUBMISSION_ID,
         annotation_execution_id=EXECUTION_ID,
@@ -1052,7 +1042,7 @@ def test_vlm_clip_requires_submission_identity_alongside_execution_identity() ->
     media = VlmMediaReference(
         key="clip-key.mp4",
         member_id=MEMBER_ID,
-        source_object_version_id="version-1",
+        source_object_key="datasets/source-a.mp4",
         source_sha256="a" * 64,
         annotation_execution_id=EXECUTION_ID,
         clip_index=0,
@@ -1084,7 +1074,7 @@ def test_vlm_check_reads_a_fixed_annotation_clip_instead_of_the_full_source() ->
     media = VlmMediaReference(
         key="clip-key.mp4",
         member_id=MEMBER_ID,
-        source_object_version_id="version-1",
+        source_object_key="datasets/source-a.mp4",
         source_sha256="a" * 64,
         annotation_submission_id=SUBMISSION_ID,
         annotation_execution_id=EXECUTION_ID,
@@ -1192,7 +1182,7 @@ def test_vlm_check_rejects_changed_annotation_clip_before_reader(
     media = VlmMediaReference(
         key="clip-key.mp4",
         member_id=MEMBER_ID,
-        source_object_version_id="version-1",
+        source_object_key="datasets/source-a.mp4",
         source_sha256="a" * 64,
         annotation_submission_id=SUBMISSION_ID,
         annotation_execution_id=EXECUTION_ID,
@@ -1270,7 +1260,7 @@ def test_complete_usage_check_persists_recovery_metadata() -> None:
     assert target is not None
     issue = UsageIssue(
         "USAGE_STORAGE_UNAVAILABLE",
-        "对象存储暂时不可用",
+        "训练素材存储暂时不可用",
         str(MEMBER_ID),
         retryable=True,
         recovery_action="retry_usage_check",
@@ -1290,7 +1280,7 @@ def test_complete_usage_check_persists_recovery_metadata() -> None:
     assert result.issues == (
         {
             "code": "USAGE_STORAGE_UNAVAILABLE",
-            "detail": "对象存储暂时不可用",
+            "detail": "训练素材存储暂时不可用",
             "location": str(MEMBER_ID),
             "retryable": True,
             "recovery_action": "retry_usage_check",

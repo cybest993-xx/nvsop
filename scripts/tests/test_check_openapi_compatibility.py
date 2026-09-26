@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
 import unittest
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from check_openapi_compatibility import compatibility_errors
+from check_openapi_compatibility import (
+    compatibility_errors,
+    load_declarations,
+    main,
+    undeclared_errors,
+)
 
 
 def contract() -> dict[str, Any]:
@@ -386,6 +393,131 @@ class OpenApiCompatibilityTest(unittest.TestCase):
             "enum narrowed at schema SessionView.display_name: unconstrained -> ['王丽']",
             compatibility_errors(previous, current),
         )
+
+
+class DeclaredBreakingChangesTest(unittest.TestCase):
+    """ADR-0003 允许协同发布的破坏性变更，但必须逐条显式登记。"""
+
+    def test_declared_breaks_are_acknowledged_and_undeclared_ones_still_fail(self) -> None:
+        declared = {"field removed: schema SessionView.user_id": {"change": "x"}}
+
+        self.assertEqual(
+            undeclared_errors(
+                [
+                    "field removed: schema SessionView.user_id",
+                    "field removed: schema SessionView.display_name",
+                ],
+                declared,
+            ),
+            ["field removed: schema SessionView.display_name"],
+        )
+
+    def test_a_missing_declaration_file_acknowledges_nothing(self) -> None:
+        self.assertEqual(load_declarations(None), {})
+
+    def test_each_declaration_needs_a_reason_and_an_issue(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "breaking-changes.json"
+            path.write_text(
+                json.dumps({"changes": [{"change": "field removed: schema X"}]}), encoding="utf-8"
+            )
+
+            with self.assertRaises(SystemExit):
+                load_declarations(path)
+
+    def test_declarations_are_indexed_by_the_exact_reported_change(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "breaking-changes.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "changes": [
+                            {
+                                "change": "field removed: schema X.y",
+                                "reason": "改为文件身份字段",
+                                "issue": "#350",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                list(load_declarations(path)),
+                ["field removed: schema X.y"],
+            )
+
+
+class MainEntryTest(unittest.TestCase):
+    """门禁入口本身必须按声明放过或拦截，而不只是辅助函数。"""
+
+    def _baseline(self) -> dict[str, Any]:
+        return {
+            "paths": {},
+            "components": {
+                "schemas": {
+                    "UploadAttemptView": {
+                        "type": "object",
+                        "required": ["object_version_id"],
+                        "properties": {"object_version_id": {"type": ["string", "null"]}},
+                    }
+                }
+            },
+        }
+
+    def _renamed(self) -> dict[str, Any]:
+        current = self._baseline()
+        schema = current["components"]["schemas"]["UploadAttemptView"]
+        schema["properties"]["final_object_key"] = schema["properties"].pop("object_version_id")
+        schema["required"] = ["final_object_key"]
+        return current
+
+    def _run(self, contract: dict[str, Any], declarations: dict[str, Any]) -> int:
+        with tempfile.TemporaryDirectory() as directory:
+            contract_path = Path(directory) / "openapi.json"
+            contract_path.write_text(json.dumps(contract), encoding="utf-8")
+            declarations_path = Path(directory) / "breaking-changes.json"
+            declarations_path.write_text(json.dumps(declarations), encoding="utf-8")
+            baseline = self._baseline()
+            return main(
+                ["check", "origin/main", str(contract_path), str(declarations_path)],
+                previous_loader=lambda reference, path: baseline,
+            )
+
+    def test_main_rejects_an_undeclared_break_and_accepts_the_declared_one(self) -> None:
+        self.assertEqual(self._run(self._renamed(), {"changes": []}), 1)
+
+        declared = {
+            "changes": [
+                {
+                    "change": "field removed: schema UploadAttemptView.object_version_id",
+                    "reason": "改为定稿文件身份",
+                    "issue": "#350",
+                },
+                {
+                    "change": "required field added: schema UploadAttemptView.final_object_key",
+                    "reason": "改为定稿文件身份",
+                    "issue": "#350",
+                },
+            ]
+        }
+
+        self.assertEqual(self._run(self._renamed(), declared), 0)
+
+    def test_main_rejects_a_declaration_whose_metadata_is_not_a_string(self) -> None:
+        declared = {
+            "changes": [
+                {
+                    "change": "field removed: schema UploadAttemptView.object_version_id",
+                    "reason": True,
+                    "issue": ["#350"],
+                }
+            ]
+        }
+
+        with self.assertRaises(SystemExit):
+            self._run(self._renamed(), declared)
 
 
 if __name__ == "__main__":

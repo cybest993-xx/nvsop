@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from datetime import datetime
 from pathlib import Path
-from typing import Annotated, BinaryIO, cast
+from typing import Annotated, cast
 from uuid import UUID
 
 from fastapi import Depends, Request
@@ -18,7 +16,7 @@ from factory_sop.dataset.adapters.artifact_execution import PostgresDatasetArtif
 from factory_sop.dataset.adapters.ddm import NvidiaDdmAnnotationGenerator, NvidiaDdmReader
 from factory_sop.dataset.adapters.media import FfprobeMediaProbe
 from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
-from factory_sop.dataset.adapters.storage import MinioObjectStorage
+from factory_sop.dataset.adapters.storage import LocalFileObjectStorage
 from factory_sop.dataset.adapters.vlm import NvidiaVlmReader
 from factory_sop.dataset.annotation import AnnotationBackend
 from factory_sop.dataset.api import (
@@ -29,7 +27,6 @@ from factory_sop.dataset.api import (
     DatasetValidationRuntime,
 )
 from factory_sop.dataset.media import MediaProbe
-from factory_sop.dataset.model import ObjectStat, UploadInstructions
 from factory_sop.dataset.repository import DatasetRepository, UsageDatasetRepository
 from factory_sop.dataset.storage import ObjectStorage
 from factory_sop.job.api import AnnotationJobQueue, UsageJobQueue, ValidationJobQueue
@@ -76,66 +73,10 @@ def dataset_resource(
     return _DatasetResourceLookup(datasets)
 
 
-class _DeferredObjectStorage:
-    """延迟创建 MinIO 客户端，避免未授权请求先触碰存储配置或网络。"""
-
-    def __init__(self, factory: Callable[[], ObjectStorage]) -> None:
-        self._factory = factory
-        self._value: ObjectStorage | None = None
-
-    def _storage(self) -> ObjectStorage:
-        if self._value is None:
-            self._value = self._factory()
-        return self._value
-
-    def create_upload(
-        self,
-        *,
-        object_key: str,
-        declared_size: int,
-        max_bytes: int,
-        expires_at: datetime,
-    ) -> UploadInstructions:
-        return self._storage().create_upload(
-            object_key=object_key,
-            declared_size=declared_size,
-            max_bytes=max_bytes,
-            expires_at=expires_at,
-        )
-
-    def stat(self, *, object_key: str) -> ObjectStat:
-        return self._storage().stat(object_key=object_key)
-
-    def download_to(
-        self,
-        *,
-        object_key: str,
-        destination: BinaryIO,
-        version_id: str | None = None,
-    ) -> None:
-        self._storage().download_to(
-            object_key=object_key,
-            destination=destination,
-            version_id=version_id,
-        )
-
-    def finalize_upload(
-        self,
-        *,
-        object_key: str,
-        source: BinaryIO,
-        size: int,
-    ) -> ObjectStat:
-        return self._storage().finalize_upload(object_key=object_key, source=source, size=size)
-
-    def delete(self, *, object_key: str) -> None:
-        self._storage().delete(object_key=object_key)
-
-
 def storage(request: Request) -> ObjectStorage:
-    """配置的 MinIO 对象存储；实际 SDK 连接按需创建且不提供本地回退。"""
+    """配置的中心本地媒体存储；构造只保存根目录，不提供第二套对象存储回退。"""
     settings = request.app.state.settings
-    return _DeferredObjectStorage(lambda: MinioObjectStorage.from_settings(settings))
+    return LocalFileObjectStorage.from_settings(settings)
 
 
 def media_probe(request: Request) -> MediaProbe:
@@ -163,7 +104,7 @@ def usage_jobs() -> UsageJobQueue:
 
 
 class _PostgresDatasetUsageRuntime:
-    """为用途 worker 创建真实 PostgreSQL 和 MinIO 资源。"""
+    """为用途 worker 创建真实 PostgreSQL 和中心本地媒体存储资源。"""
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -173,8 +114,8 @@ class _PostgresDatasetUsageRuntime:
         return PostgresDatasetRepository(cast(DatabaseSession, session))
 
     def storage(self) -> ObjectStorage:
-        """创建真实 MinIO 对象存储客户端。"""
-        return MinioObjectStorage.from_settings(self._settings)
+        """创建真实中心本地媒体存储。"""
+        return LocalFileObjectStorage.from_settings(self._settings)
 
     def ddm_reader(self) -> NvidiaDdmReader:
         """创建调用 NVIDIA DDM 训练读取器的适配器。"""
@@ -199,7 +140,7 @@ class _PostgresDatasetUsageRuntime:
 
 
 class _PostgresDatasetValidationRuntime:
-    """为 worker 创建真实 PostgreSQL、MinIO 和 ffprobe 资源。"""
+    """为 worker 创建真实 PostgreSQL、中心本地媒体存储和 ffprobe 资源。"""
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -209,8 +150,8 @@ class _PostgresDatasetValidationRuntime:
         return PostgresDatasetRepository(cast(DatabaseSession, session))
 
     def storage(self) -> ObjectStorage:
-        """创建真实 MinIO 对象存储客户端。"""
-        return MinioObjectStorage.from_settings(self._settings)
+        """创建真实中心本地媒体存储。"""
+        return LocalFileObjectStorage.from_settings(self._settings)
 
     def media_probe(self) -> MediaProbe:
         """创建真实 ffprobe 媒体探测器。"""
@@ -229,7 +170,7 @@ class _PostgresDatasetValidationRuntime:
 
 
 class _PostgresDatasetAnnotationRuntime:
-    """为标注 worker 创建真实 PostgreSQL、MinIO 和基座 HTTP 资源。"""
+    """为标注 worker 创建真实 PostgreSQL、中心本地媒体存储和基座 HTTP 资源。"""
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -239,8 +180,8 @@ class _PostgresDatasetAnnotationRuntime:
         return PostgresDatasetRepository(cast(DatabaseSession, session))
 
     def storage(self) -> ObjectStorage:
-        """创建真实 MinIO 对象存储客户端。"""
-        return MinioObjectStorage.from_settings(self._settings)
+        """创建真实中心本地媒体存储。"""
+        return LocalFileObjectStorage.from_settings(self._settings)
 
     def backend(self) -> AnnotationBackend:
         """创建复用 NVIDIA 标注基座的 HTTP adapter。"""
@@ -266,7 +207,7 @@ def artifact_executor(
     """构造 dataset owner 的制品执行 seam。"""
     return PostgresDatasetArtifactExecutor(
         factory=factory,
-        storage_factory=lambda: MinioObjectStorage.from_settings(settings),
+        storage_factory=lambda: LocalFileObjectStorage.from_settings(settings),
         generate=lambda workspace, output_filename: NvidiaDdmAnnotationGenerator().generate(
             workspace,
             output_filename,

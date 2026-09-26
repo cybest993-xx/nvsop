@@ -20,6 +20,11 @@ from factory_sop.settings import ConfigurationError, Settings
 _logger = get_logger("job")
 
 
+def _delivery_id(job_id: UUID, updated_at: datetime) -> str:
+    """用 PostgreSQL generation 派生 ARQ 去重身份，避免旧 in-progress key 阻塞恢复。"""
+    return f"{job_id}:{updated_at.isoformat(timespec='microseconds')}"
+
+
 class ArqJobDispatcher:
     """提交后把 job id 投递到 Redis，并回写 outbox 的投递事实。"""
 
@@ -74,8 +79,14 @@ class ArqJobDispatcher:
     async def dispatch_async(self, job_id: UUID) -> None:
         """异步投递一个已提交任务；失败时保持 outbox pending。"""
         try:
-            await self._dispatch(job_id)
-            self._record_success(job_id)
+            function, expected_updated_at = self._worker_target(job_id)
+            accepted = await self._dispatch(
+                job_id,
+                function=function,
+                delivery_id=_delivery_id(job_id, expected_updated_at),
+            )
+            if accepted:
+                self._record_success(job_id, expected_updated_at=expected_updated_at)
         except Exception as error:
             self._record_failure(job_id, error)
             _logger.warning(
@@ -94,16 +105,16 @@ class ArqJobDispatcher:
         with ThreadPoolExecutor(max_workers=1) as executor:
             executor.submit(lambda: asyncio.run(self.dispatch_async(job_id))).result()
 
-    async def _dispatch(self, job_id: UUID) -> None:
-        function = self._worker_function(job_id)
+    async def _dispatch(self, job_id: UUID, *, function: str, delivery_id: str) -> bool:
         pool = await create_pool(self._settings)
         try:
-            await pool.enqueue_job(function, str(job_id), _job_id=str(job_id))
+            job = await pool.enqueue_job(function, str(job_id), _job_id=delivery_id)
+            return job is not None
         finally:
             await pool.close()
 
-    def _worker_function(self, job_id: UUID) -> str:
-        """根据 PostgreSQL 任务类型选择唯一的 worker 入口。"""
+    def _worker_target(self, job_id: UUID) -> tuple[str, datetime]:
+        """读取投递入口及其 pending generation 的 CAS 时间戳。"""
         if self._session_factory is None:
             raise RuntimeError("任务 dispatcher 未配置数据库 session factory")
         with self._session_factory() as session:
@@ -111,23 +122,28 @@ class ArqJobDispatcher:
         if job is None:
             raise ValueError(f"任务不存在：{job_id}")
         if job.job_type is JobType.DATASET_ANNOTATION_PREPARATION:
-            return "prepare_annotation_context_job"
+            return "prepare_annotation_context_job", job.updated_at
         if job.job_type is JobType.DATASET_ANNOTATION:
-            return "annotate_dataset_job"
+            return "annotate_dataset_job", job.updated_at
         if job.job_type is JobType.DATASET_VALIDATION:
-            return "validate_dataset_job"
+            return "validate_dataset_job", job.updated_at
         if job.job_type is JobType.DATASET_USAGE_CHECK:
-            return "check_dataset_usage_job"
+            return "check_dataset_usage_job", job.updated_at
         if job.job_type is JobType.DATASET_ARTIFACT:
-            return "generate_dataset_artifact_job"
+            return "generate_dataset_artifact_job", job.updated_at
         raise ValueError(f"未知任务类型：{job.job_type}")
 
-    def _record_success(self, job_id: UUID) -> None:
+    def _record_success(self, job_id: UUID, *, expected_updated_at: datetime) -> None:
         if self._session_factory is None:
             return
         with self._session_factory() as session:
             repository = PostgresJobRepository(session)
-            repository.mark_enqueued(job_id=job_id, now=datetime.now(UTC))
+            if not repository.mark_enqueued(
+                job_id=job_id,
+                expected_updated_at=expected_updated_at,
+                now=datetime.now(UTC),
+            ):
+                repository.mark_running_dispatched(job_id=job_id)
             session.commit()
 
     def _record_failure(self, job_id: UUID, error: Exception) -> None:

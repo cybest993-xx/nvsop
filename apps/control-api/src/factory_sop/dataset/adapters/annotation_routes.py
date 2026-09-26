@@ -199,7 +199,7 @@ ProblemResponses: dict[int | str, dict[str, Any]] = {
     404: problem_openapi_response("训练数据集、视频或标注提交不存在"),
     409: problem_openapi_response("标注当前状态不允许该操作"),
     422: problem_openapi_response("标注输入无效"),
-    503: problem_openapi_response("标注基座或对象存储暂时不可用"),
+    503: problem_openapi_response("标注基座或训练素材存储暂时不可用"),
 }
 
 
@@ -295,7 +295,7 @@ class AnnotationSubmissionView(BaseModel):
     context_id: UUID
     revision: int
     action_list_revision: int
-    source_object_version_id: str
+    source_object_key: str
     source_sha256: str
     idempotency_key: str
     mode: str
@@ -322,7 +322,7 @@ class AnnotationContextView(BaseModel):
     member_id: UUID
     action_list_revision: int
     annotation_revision: int
-    source_object_version_id: str
+    source_object_key: str
     source_sha256: str
     derived_video_size: int | None
     derived_video_sha256: str | None
@@ -896,7 +896,7 @@ def _context_view(
         member_id=context.member_id,
         action_list_revision=actions.revision,
         annotation_revision=context.annotation_revision,
-        source_object_version_id=context.source_object_version_id,
+        source_object_key=context.source_object_key,
         source_sha256=context.source_sha256,
         derived_video_size=context.upstream_video_size,
         derived_video_sha256=context.upstream_video_sha256,
@@ -940,7 +940,7 @@ def _submission_view(
         context_id=value.context_id,
         revision=value.revision,
         action_list_revision=value.action_list_revision,
-        source_object_version_id=value.source_object_version_id,
+        source_object_key=value.source_object_key,
         source_sha256=value.source_sha256,
         idempotency_key=value.idempotency_key,
         mode=value.mode.value,

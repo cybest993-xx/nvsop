@@ -2,11 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ObjectUploadError, uploadVideoObject } from '@/modules/datasets/upload'
 
+const UPLOAD_PATH =
+  '/api/v1/training-datasets/dataset-1/members/member-1/attempts/attempt-1/content'
+
 const INSTRUCTIONS = {
-  method: 'POST',
-  url: 'https://minio.example.test/factory-sop',
-  fields: { key: 'training-datasets/dataset-1/video-1', policy: 'signed-policy' },
-  headers: { 'x-amz-meta-test': 'allowed' },
+  method: 'PUT',
+  url: UPLOAD_PATH,
+  fields: {},
+  headers: { 'Content-Type': 'application/octet-stream' },
   expires_at: '2026-09-08T09:00:00Z',
   max_bytes: 100,
   object_key: 'training-datasets/dataset-1/video-1',
@@ -37,9 +40,10 @@ class FakeXmlHttpRequest extends FakeUploadTarget {
   method = ''
   url = ''
   async = false
-  withCredentials = true
+  withCredentials = false
   status = 0
-  body: FormData | null = null
+  responseText = ''
+  body: File | FormData | null = null
 
   constructor() {
     super()
@@ -56,12 +60,13 @@ class FakeXmlHttpRequest extends FakeUploadTarget {
     this.headers.set(name, value)
   }
 
-  send(body: FormData): void {
+  send(body: File | FormData): void {
     this.body = body
   }
 
-  finish(status: number): void {
+  finish(status: number, responseText = ''): void {
     this.status = status
+    this.responseText = responseText
     this.emit('load', new Event('load'))
   }
 
@@ -73,25 +78,26 @@ class FakeXmlHttpRequest extends FakeUploadTarget {
 afterEach(() => {
   vi.unstubAllGlobals()
   FakeXmlHttpRequest.instances = []
+  document.cookie = 'sop_csrf=; Max-Age=0; path=/'
 })
 
-describe('direct object-store upload', () => {
-  it('posts only the signed form to MinIO and reports transfer progress', async () => {
+describe('authenticated center upload', () => {
+  it('puts the raw file to the control plane with session cookie and CSRF header', async () => {
     vi.stubGlobal('XMLHttpRequest', FakeXmlHttpRequest)
+    document.cookie = 'sop_csrf=csrf-token-1; path=/'
     const file = new File(['video bytes'], 'line-1.mp4', { type: 'video/mp4' })
     const progress: number[] = []
 
     const pending = uploadVideoObject(INSTRUCTIONS, file, (value) => progress.push(value))
     const request = FakeXmlHttpRequest.instances[0]!
 
-    expect(request.method).toBe('POST')
-    expect(request.url).toBe(INSTRUCTIONS.url)
+    expect(request.method).toBe('PUT')
+    expect(request.url).toBe(new URL(UPLOAD_PATH, window.location.origin).toString())
     expect(request.async).toBe(true)
-    expect(request.withCredentials).toBe(false)
-    expect(request.headers.get('x-amz-meta-test')).toBe('allowed')
-    expect(request.body?.get('key')).toBe(INSTRUCTIONS.fields.key)
-    expect(request.body?.get('policy')).toBe(INSTRUCTIONS.fields.policy)
-    expect(request.body?.get('file')).toBeInstanceOf(File)
+    expect(request.withCredentials).toBe(true)
+    expect(request.headers.get('content-type')).toBe('application/octet-stream')
+    expect(request.headers.get('x-csrf-token')).toBe('csrf-token-1')
+    expect(request.body).toBe(file)
 
     request.upload.emit(
       'progress',
@@ -107,25 +113,25 @@ describe('direct object-store upload', () => {
     expect(progress).toEqual([50, 100, 100])
   })
 
-  it('does not turn an object-store refusal into a successful transfer', async () => {
+  it('does not turn a control-plane refusal into a successful transfer', async () => {
     vi.stubGlobal('XMLHttpRequest', FakeXmlHttpRequest)
     const pending = uploadVideoObject(
       INSTRUCTIONS,
       new File(['video bytes'], 'line-1.mp4', { type: 'video/mp4' }),
       vi.fn(),
     )
-    FakeXmlHttpRequest.instances[0]!.finish(403)
+    FakeXmlHttpRequest.instances[0]!.finish(422, '{"error_code":"SIZE_EXCEEDED"}')
 
     await expect(pending).rejects.toMatchObject({
       name: 'ObjectUploadError',
-      status: 403,
+      status: 422,
     } satisfies Partial<ObjectUploadError>)
   })
 
   it('fails closed when the backend returns an unsupported method', async () => {
     await expect(
       uploadVideoObject(
-        { ...INSTRUCTIONS, method: 'PUT' },
+        { ...INSTRUCTIONS, method: 'POST' },
         new File(['video bytes'], 'line-1.mp4'),
         vi.fn(),
       ),

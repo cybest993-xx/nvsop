@@ -22,6 +22,7 @@ from factory_sop.dataset.annotation import (
     AnnotationBackend,
     AnnotationBackendExecutionError,
     AnnotationBackendUnavailableError,
+    AnnotationCleanupPendingError,
     PreparedAnnotationVideo,
 )
 from factory_sop.dataset.errors import (
@@ -49,6 +50,7 @@ from factory_sop.dataset.storage import (
 )
 from factory_sop.identifiers import new_id
 from factory_sop.job.api import AnnotationJobQueue, ApplicationJob
+from factory_sop.observability import get_logger
 
 _ACTION_RE = re.compile(r"^\((\d+)\).+")
 _ALLOWED_SEGMENT_FIELDS = frozenset(
@@ -56,6 +58,7 @@ _ALLOWED_SEGMENT_FIELDS = frozenset(
 )
 _TOKEN_VERSION = 2
 _MAX_IDEMPOTENCY_KEY_LENGTH = 255
+_logger = get_logger("dataset")
 
 
 class AnnotationRefusedError(DatasetRefusedError):
@@ -71,7 +74,7 @@ class DecodedAnnotationContextToken:
     member_id: UUID
     action_list_revision: int
     annotation_revision: int
-    source_object_version_id: str
+    source_object_key: str
     source_sha256: str
     expires_at: datetime
 
@@ -153,7 +156,7 @@ def create_annotation_context(
     ttl_seconds: int,
     action_list_revision: int | None = None,
 ) -> AnnotationContext:
-    """为已登记视频签发绑定源对象代次的短期上下文。"""
+    """为已登记视频签发绑定定稿文件身份的短期上下文。"""
     authorize(caller, Permission.DATASET_VIEW)
     authorize(caller, Permission.DATASET_EDIT)
     _member_for_dataset(dataset_id=dataset_id, member_id=member_id, datasets=datasets)
@@ -174,7 +177,7 @@ def create_annotation_context(
             DatasetRefusalCode.ACTION_LIST_NOT_FOUND,
             detail="请先登记一份动作清单",
         )
-    source_version = member.object_version_id
+    source_version = member.object_key
     source_sha256 = member.actual_sha256
     previous_submissions = datasets.list_annotation_submissions(
         dataset_id=dataset_id,
@@ -187,7 +190,7 @@ def create_annotation_context(
     if not source_version or not source_sha256:
         raise AnnotationRefusedError(
             DatasetRefusalCode.ANNOTATION_CONTEXT_INVALID,
-            detail="视频缺少已确认的对象代次或摘要",
+            detail="视频缺少已确认的定稿文件身份或摘要",
         )
     context = AnnotationContext(
         id=new_id(),
@@ -195,7 +198,7 @@ def create_annotation_context(
         member_id=member_id,
         action_list_revision=actions.revision,
         annotation_revision=annotation_revision,
-        source_object_version_id=source_version,
+        source_object_key=source_version,
         source_sha256=source_sha256,
         created_by=caller.user.id,
         created_at=now,
@@ -536,11 +539,14 @@ def begin_annotation_context_preparation(
     )
     if member is None or actions is None:
         return None
+    cleanup_pending = context.upstream_data_id is not None and context.upstream_video_id is None
     running = replace(
         context,
         preparation_status="running",
-        preparation_failure_code=None,
-        preparation_failure_detail=None,
+        preparation_failure_code=(context.preparation_failure_code if cleanup_pending else None),
+        preparation_failure_detail=(
+            context.preparation_failure_detail if cleanup_pending else None
+        ),
     )
     datasets.save_annotation_context(running)
     return AnnotationContextPreparationTarget(
@@ -548,6 +554,20 @@ def begin_annotation_context_preparation(
         context=running,
         member=member,
         actions=actions,
+    )
+
+
+def _context_preparation_state_matches(
+    *,
+    current: AnnotationContext,
+    target: AnnotationContextPreparationTarget,
+) -> bool:
+    """上下文无更新时间租约，因此用任务身份和工作副本身份组成发布/清理租约。"""
+    return (
+        current.preparation_job_id == target.job.id
+        and current.preparation_status == "running"
+        and current.upstream_data_id == target.context.upstream_data_id
+        and current.upstream_video_id == target.context.upstream_video_id
     )
 
 
@@ -563,10 +583,9 @@ def complete_annotation_context_preparation(
     if (
         current is None
         or member is None
-        or current.preparation_job_id != target.job.id
-        or current.preparation_status != "running"
+        or not _context_preparation_state_matches(current=current, target=target)
         or member.dataset_id != target.context.dataset_id
-        or member.object_version_id != target.context.source_object_version_id
+        or member.object_key != target.context.source_object_key
         or member.actual_sha256 != target.context.source_sha256
     ):
         raise AnnotationRefusedError(
@@ -598,11 +617,7 @@ def fail_annotation_context_preparation(
 ) -> AnnotationContext:
     """记录上下文准备失败，不伪造可播放的基座身份。"""
     current = datasets.annotation_context_by_id(target.context.id)
-    if (
-        current is None
-        or current.preparation_job_id != target.job.id
-        or current.preparation_status != "running"
-    ):
+    if current is None or not _context_preparation_state_matches(current=current, target=target):
         raise AnnotationRefusedError(
             DatasetRefusalCode.ANNOTATION_STATE_CONFLICT,
             detail="标注上下文准备租约已失效",
@@ -622,6 +637,65 @@ def fail_annotation_context_preparation(
     return updated
 
 
+def record_annotation_context_cleanup_candidate(
+    *,
+    target: AnnotationContextPreparationTarget,
+    data_id: str,
+    code: str | None,
+    detail: str | None,
+    datasets: DatasetRepository,
+) -> AnnotationContextPreparationTarget:
+    """保留未确认删除的上下文工作副本；它不是可播放的成功身份。"""
+    current = datasets.annotation_context_by_id(target.context.id)
+    if (
+        current is None
+        or not _context_preparation_state_matches(current=current, target=target)
+        or current.upstream_video_id is not None
+    ):
+        raise AnnotationRefusedError(
+            DatasetRefusalCode.ANNOTATION_STATE_CONFLICT,
+            detail="标注上下文清理候选租约已失效",
+        )
+    updated = replace(
+        current,
+        upstream_data_id=data_id,
+        upstream_video_id=None,
+        upstream_video_size=None,
+        upstream_video_sha256=None,
+        upstream_video_duration_seconds=None,
+        preparation_failure_code=code,
+        preparation_failure_detail=detail,
+    )
+    datasets.save_annotation_context(updated)
+    return replace(target, context=updated)
+
+
+def clear_annotation_context_cleanup_candidate(
+    *,
+    target: AnnotationContextPreparationTarget,
+    datasets: DatasetRepository,
+) -> AnnotationContextPreparationTarget:
+    """清除已经确认删除的上下文工作副本候选，允许同一任务继续准备。"""
+    current = datasets.annotation_context_by_id(target.context.id)
+    if (
+        current is None
+        or not _context_preparation_state_matches(current=current, target=target)
+        or current.upstream_video_id is not None
+    ):
+        raise AnnotationRefusedError(
+            DatasetRefusalCode.ANNOTATION_STATE_CONFLICT,
+            detail="标注上下文清理候选租约已失效",
+        )
+    updated = replace(
+        current,
+        upstream_data_id=None,
+        preparation_failure_code=None,
+        preparation_failure_detail=None,
+    )
+    datasets.save_annotation_context(updated)
+    return replace(target, context=updated)
+
+
 def encode_annotation_context_token(context: AnnotationContext, *, secret: str) -> str:
     """签发不可读上下文身份；签名载荷同时绑定精确源对象。"""
     payload = {
@@ -631,7 +705,7 @@ def encode_annotation_context_token(context: AnnotationContext, *, secret: str) 
         "member_id": str(context.member_id),
         "action_list_revision": context.action_list_revision,
         "annotation_revision": context.annotation_revision,
-        "source_object_version_id": context.source_object_version_id,
+        "source_object_version_id": context.source_object_key,
         "source_sha256": context.source_sha256,
         "expires_at": context.expires_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
     }
@@ -665,7 +739,7 @@ def decode_annotation_context_token(
             member_id=UUID(str(raw["member_id"])),
             action_list_revision=int(raw["action_list_revision"]),
             annotation_revision=int(raw["annotation_revision"]),
-            source_object_version_id=str(raw["source_object_version_id"]),
+            source_object_key=str(raw["source_object_version_id"]),
             source_sha256=str(raw["source_sha256"]),
             expires_at=expires_at,
         )
@@ -712,7 +786,7 @@ def resolve_annotation_context(
         or stored.member_id != decoded.member_id
         or stored.action_list_revision != decoded.action_list_revision
         or stored.annotation_revision != decoded.annotation_revision
-        or stored.source_object_version_id != decoded.source_object_version_id
+        or stored.source_object_key != decoded.source_object_key
         or stored.source_sha256 != decoded.source_sha256
         or stored.expires_at != decoded.expires_at
     ):
@@ -781,7 +855,7 @@ def read_annotation_context(
         member is None
         or member.dataset_id != context.dataset_id
         or member.status != MemberStatus.REGISTERED
-        or member.object_version_id != context.source_object_version_id
+        or member.object_key != context.source_object_key
         or member.actual_sha256 != context.source_sha256
     ):
         raise AnnotationRefusedError(
@@ -915,7 +989,7 @@ def submit_annotation(
     member = locked_member
     _require_registered_member(member)
     if (
-        member.object_version_id != context.source_object_version_id
+        member.object_key != context.source_object_key
         or member.actual_sha256 != context.source_sha256
     ):
         raise AnnotationRefusedError(
@@ -990,7 +1064,7 @@ def submit_annotation(
         context_id=context.id,
         revision=current_revision + 1,
         action_list_revision=action_list.revision,
-        source_object_version_id=context.source_object_version_id,
+        source_object_key=context.source_object_key,
         source_sha256=context.source_sha256,
         idempotency_key=idempotency_key,
         request_digest=digest,
@@ -1143,7 +1217,7 @@ def complete_annotation_execution(
         member is None
         or member.dataset_id != target.submission.dataset_id
         or member.status != MemberStatus.REGISTERED
-        or member.object_version_id != target.submission.source_object_version_id
+        or member.object_key != target.submission.source_object_key
         or member.actual_sha256 != target.submission.source_sha256
     ):
         raise AnnotationRefusedError(
@@ -1178,6 +1252,9 @@ def fail_annotation_execution(
     datasets: DatasetRepository,
 ) -> AnnotationExecution:
     """按执行租约保存失败原因，不删除已有候选。"""
+    cleanup_candidate = (
+        target.execution.upstream_data_id is not None and target.execution.upstream_video_id is None
+    )
     value = replace(
         target.execution,
         status=AnnotationExecutionStatus.FAILED,
@@ -1185,6 +1262,13 @@ def fail_annotation_execution(
         failure_code=code,
         failure_detail=detail,
         updated_at=now,
+        upstream_data_id=None if cleanup_candidate else target.execution.upstream_data_id,
+        upstream_video_id=None if cleanup_candidate else target.execution.upstream_video_id,
+        derived_video_size=None if cleanup_candidate else target.execution.derived_video_size,
+        derived_video_sha256=None if cleanup_candidate else target.execution.derived_video_sha256,
+        derived_video_duration_seconds=(
+            None if cleanup_candidate else target.execution.derived_video_duration_seconds
+        ),
     )
     if not datasets.save_annotation_execution(
         value,
@@ -1195,6 +1279,82 @@ def fail_annotation_execution(
             detail="标注执行租约已失效",
         )
     return value
+
+
+def record_annotation_execution_cleanup_candidate(
+    *,
+    target: AnnotationExecutionTarget,
+    data_id: str,
+    code: str | None,
+    detail: str | None,
+    now: datetime,
+    datasets: DatasetRepository,
+) -> AnnotationExecutionTarget:
+    """保留未确认删除的执行工作副本，阻止重试再创建第二份副本。"""
+    current = datasets.annotation_execution_by_id(target.execution.id)
+    if (
+        current is None
+        or current.job_id != target.job.id
+        or current.status is not AnnotationExecutionStatus.RUNNING
+        or current.upstream_data_id != target.execution.upstream_data_id
+        or current.upstream_video_id is not None
+    ):
+        raise AnnotationRefusedError(
+            DatasetRefusalCode.ANNOTATION_STATE_CONFLICT,
+            detail="标注执行清理候选租约已失效",
+        )
+    updated = replace(
+        current,
+        upstream_data_id=data_id,
+        upstream_video_id=None,
+        derived_video_size=None,
+        derived_video_sha256=None,
+        derived_video_duration_seconds=None,
+        failure_code=code,
+        failure_detail=detail,
+        updated_at=now,
+    )
+    if not datasets.save_annotation_execution(updated, expected_updated_at=current.updated_at):
+        raise AnnotationRefusedError(
+            DatasetRefusalCode.ANNOTATION_STATE_CONFLICT,
+            detail="标注执行清理候选租约已失效",
+        )
+    return replace(target, execution=updated)
+
+
+def clear_annotation_execution_cleanup_candidate(
+    *,
+    target: AnnotationExecutionTarget,
+    now: datetime,
+    datasets: DatasetRepository,
+) -> AnnotationExecutionTarget:
+    """清除已经确认删除的执行工作副本候选，允许同一任务继续准备。"""
+    current = datasets.annotation_execution_by_id(target.execution.id)
+    if (
+        current is None
+        or current.job_id != target.job.id
+        or current.status is not AnnotationExecutionStatus.RUNNING
+        or current.updated_at != target.execution.updated_at
+        or current.upstream_data_id != target.execution.upstream_data_id
+        or current.upstream_video_id is not None
+    ):
+        raise AnnotationRefusedError(
+            DatasetRefusalCode.ANNOTATION_STATE_CONFLICT,
+            detail="标注执行清理候选租约已失效",
+        )
+    updated = replace(
+        current,
+        upstream_data_id=None,
+        failure_code=None,
+        failure_detail=None,
+        updated_at=now,
+    )
+    if not datasets.save_annotation_execution(updated, expected_updated_at=current.updated_at):
+        raise AnnotationRefusedError(
+            DatasetRefusalCode.ANNOTATION_STATE_CONFLICT,
+            detail="标注执行清理候选租约已失效",
+        )
+    return replace(target, execution=updated)
 
 
 def prepare_annotation_context_copy(
@@ -1211,7 +1371,7 @@ def prepare_annotation_context_copy(
         raise AnnotationRefusedError(DatasetRefusalCode.ANNOTATION_CONTEXT_INVALID)
     _require_registered_member(member)
     if (
-        member.object_version_id != context.source_object_version_id
+        member.object_key != context.source_object_key
         or member.actual_sha256 != context.source_sha256
     ):
         raise AnnotationRefusedError(
@@ -1225,7 +1385,7 @@ def prepare_annotation_context_copy(
         )
     return _prepare_backend_copy(
         member=member,
-        source_version_id=context.source_object_version_id,
+        source_version_id=context.source_object_key,
         source_sha256=context.source_sha256,
         actions=actions.actions,
         storage=storage,
@@ -1246,7 +1406,7 @@ def prepare_annotation_execution_copy(
     if (
         target.context.dataset_id != target.submission.dataset_id
         or target.context.member_id != target.submission.member_id
-        or target.context.source_object_version_id != target.submission.source_object_version_id
+        or target.context.source_object_key != target.submission.source_object_key
         or target.context.source_sha256 != target.submission.source_sha256
         or any(
             segment.action_index < 0
@@ -1261,7 +1421,7 @@ def prepare_annotation_execution_copy(
         )
     return _prepare_backend_copy(
         member=target.member,
-        source_version_id=target.submission.source_object_version_id,
+        source_version_id=target.submission.source_object_key,
         source_sha256=target.submission.source_sha256,
         actions=target.actions.actions,
         storage=storage,
@@ -1288,11 +1448,11 @@ def save_annotation_execution_copy(
         raise AnnotationRefusedError(DatasetRefusalCode.ANNOTATION_CONTEXT_INVALID)
     if (
         member.dataset_id != target.submission.dataset_id
-        or member.object_version_id != target.submission.source_object_version_id
+        or member.object_key != target.submission.source_object_key
         or member.actual_sha256 != target.submission.source_sha256
         or context.dataset_id != target.submission.dataset_id
         or context.member_id != target.submission.member_id
-        or context.source_object_version_id != target.submission.source_object_version_id
+        or context.source_object_key != target.submission.source_object_key
         or context.source_sha256 != target.submission.source_sha256
         or actions.actions != target.actions.actions
         or any(
@@ -1345,7 +1505,7 @@ def _prepare_backend_copy(
     media_probe: MediaProbe,
 ) -> PreparedAnnotationCopy:
     """读取固定源对象并核对基座派生副本的媒体事实。"""
-    if member.object_version_id != source_version_id or member.actual_sha256 != source_sha256:
+    if member.object_key != source_version_id or member.actual_sha256 != source_sha256:
         raise AnnotationRefusedError(
             DatasetRefusalCode.ANNOTATION_CONTEXT_INVALID,
             detail="视频对象已变化，请重新打开标注上下文",
@@ -1355,6 +1515,7 @@ def _prepare_backend_copy(
             DatasetRefusalCode.ANNOTATION_CONTEXT_INVALID,
             detail="视频没有可读取的对象",
         )
+    prepared: PreparedAnnotationVideo | None = None
     try:
         with tempfile.NamedTemporaryFile(
             prefix="nvsop-annotation-", suffix=Path(member.original_filename).suffix
@@ -1362,7 +1523,6 @@ def _prepare_backend_copy(
             binary_source = cast(BinaryIO, source)
             storage.download_to(
                 object_key=member.object_key,
-                version_id=source_version_id,
                 destination=binary_source,
             )
             source.flush()
@@ -1392,44 +1552,85 @@ def _prepare_backend_copy(
                 derived_sha256 = _file_sha256(derived_path)
                 derived_metadata = media_probe.probe(str(derived_path))
     except ObjectNotFoundError as error:
-        raise AnnotationRefusedError(
+        failure = AnnotationRefusedError(
             DatasetRefusalCode.OBJECT_NOT_FOUND,
             detail="标注源对象不存在",
-        ) from error
+        )
+        if prepared is not None:
+            _discard_unpublished_backend_copy(backend=backend, prepared=prepared, failure=failure)
+        raise failure from error
     except ObjectStorageUnavailableError as error:
-        raise AnnotationRefusedError(
+        failure = AnnotationRefusedError(
             DatasetRefusalCode.STORAGE_UNAVAILABLE,
             detail="标注源对象暂时不可读取",
-        ) from error
+        )
+        if prepared is not None:
+            _discard_unpublished_backend_copy(backend=backend, prepared=prepared, failure=failure)
+        raise failure from error
     except (MediaProbeUnavailableError, InvalidMediaError) as error:
-        raise AnnotationRefusedError(
+        failure = AnnotationRefusedError(
             DatasetRefusalCode.MEDIA_PROBE_UNAVAILABLE,
             detail="标注派生视频的媒体事实无法确认",
-        ) from error
+        )
+        if prepared is not None:
+            _discard_unpublished_backend_copy(backend=backend, prepared=prepared, failure=failure)
+        raise failure from error
     except AnnotationBackendUnavailableError as error:
-        raise AnnotationRefusedError(
+        failure = AnnotationRefusedError(
             DatasetRefusalCode.ANNOTATION_BACKEND_UNAVAILABLE,
             detail="标注基座暂时不可用",
-        ) from error
+        )
+        if prepared is not None:
+            _discard_unpublished_backend_copy(backend=backend, prepared=prepared, failure=failure)
+        raise failure from error
     except AnnotationBackendExecutionError as error:
-        raise AnnotationRefusedError(
+        failure = AnnotationRefusedError(
             DatasetRefusalCode.ANNOTATION_EXECUTION_FAILED,
             detail=str(error),
-        ) from error
+        )
+        if prepared is not None:
+            _discard_unpublished_backend_copy(backend=backend, prepared=prepared, failure=failure)
+        raise failure from error
+    except Exception as error:
+        if prepared is not None:
+            _discard_unpublished_backend_copy(backend=backend, prepared=prepared, failure=error)
+        raise
     if (
         not math.isfinite(derived_metadata.duration_seconds)
         or abs(derived_metadata.duration_seconds - (member.duration_seconds or 0.0)) > 0.1
     ):
-        raise AnnotationRefusedError(
+        failure = AnnotationRefusedError(
             DatasetRefusalCode.ANNOTATION_EXECUTION_FAILED,
             detail="基座转码后的视频时长无法与源视频坐标对应",
         )
+        _discard_unpublished_backend_copy(backend=backend, prepared=prepared, failure=failure)
+        raise failure
     return PreparedAnnotationCopy(
         prepared=prepared,
         size=derived_size,
         sha256=derived_sha256,
         duration_seconds=derived_metadata.duration_seconds,
     )
+
+
+def _discard_unpublished_backend_copy(
+    *,
+    backend: AnnotationBackend,
+    prepared: PreparedAnnotationVideo,
+    failure: Exception,
+) -> None:
+    """清理未发布副本；失败时保留身份交给 worker 持久化重试。"""
+    try:
+        backend.discard_prepared_video(data_id=prepared.data_id)
+    except Exception as cleanup_error:
+        _logger.exception(
+            "dataset.annotation.unpublished_copy_cleanup_failed",
+            data_id=prepared.data_id,
+        )
+        raise AnnotationCleanupPendingError(
+            data_id=prepared.data_id,
+            failure=failure,
+        ) from cleanup_error
 
 
 def _require_dataset(*, dataset_id: UUID, datasets: DatasetRepository) -> None:
@@ -1459,7 +1660,7 @@ def _require_registered_member(member: DatasetMember) -> None:
         member.actual_size is None
         or member.actual_sha256 is None
         or member.duration_seconds is None
-        or not member.object_version_id
+        or not member.object_key
     ):
         raise AnnotationRefusedError(
             DatasetRefusalCode.ANNOTATION_MEMBER_NOT_REGISTERED,
@@ -1583,7 +1784,7 @@ def _request_digest(
         "dataset_id": str(context.dataset_id),
         "member_id": str(context.member_id),
         "action_list_revision": context.action_list_revision,
-        "source_object_version_id": context.source_object_version_id,
+        "source_object_version_id": context.source_object_key,
         "source_sha256": context.source_sha256,
         "mode": mode.value,
         "segments": [segment.as_wire() for segment in segments],

@@ -5,18 +5,18 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
 from _integration_support import (
-    MinioServer,
     RedisServer,
     cleanup_dataset,
     client_for,
     row,
     settings_for,
-    upload_presigned,
+    upload_video_content,
 )
 from arq.connections import RedisSettings
 from fastapi.testclient import TestClient
@@ -54,8 +54,9 @@ def test_dispatcher_routes_annotation_preparation_jobs_to_preparation_worker(
     calls: dict[str, Any] = {}
 
     class FakePool:
-        async def enqueue_job(self, function: str, *args: str, **kwargs: str) -> None:
+        async def enqueue_job(self, function: str, *args: str, **kwargs: str) -> object:
             calls.update(function=function, args=args, kwargs=kwargs)
+            return object()
 
         async def close(self) -> None:
             return None
@@ -73,7 +74,7 @@ def test_dispatcher_routes_annotation_preparation_jobs_to_preparation_worker(
         assert calls == {
             "function": "prepare_annotation_context_job",
             "args": (str(job.id),),
-            "kwargs": {"_job_id": str(job.id)},
+            "kwargs": {"_job_id": dispatcher_module._delivery_id(job.id, job.updated_at)},
         }
     finally:
         with engine.begin() as connection:
@@ -103,8 +104,9 @@ def test_dispatcher_routes_annotation_jobs_to_annotation_worker(
     calls: dict[str, Any] = {}
 
     class FakePool:
-        async def enqueue_job(self, function: str, *args: str, **kwargs: str) -> None:
+        async def enqueue_job(self, function: str, *args: str, **kwargs: str) -> object:
             calls.update(function=function, args=args, kwargs=kwargs)
+            return object()
 
         async def close(self) -> None:
             return None
@@ -122,7 +124,7 @@ def test_dispatcher_routes_annotation_jobs_to_annotation_worker(
         assert calls == {
             "function": "annotate_dataset_job",
             "args": (str(job.id),),
-            "kwargs": {"_job_id": str(job.id)},
+            "kwargs": {"_job_id": dispatcher_module._delivery_id(job.id, job.updated_at)},
         }
     finally:
         with engine.begin() as connection:
@@ -163,8 +165,9 @@ def test_dispatcher_routes_dataset_jobs_to_their_worker(
     calls: dict[str, Any] = {}
 
     class FakePool:
-        async def enqueue_job(self, function_name: str, *args: str, **kwargs: str) -> None:
+        async def enqueue_job(self, function_name: str, *args: str, **kwargs: str) -> object:
             calls.update(function=function_name, args=args, kwargs=kwargs)
+            return object()
 
         async def close(self) -> None:
             return None
@@ -182,7 +185,7 @@ def test_dispatcher_routes_dataset_jobs_to_their_worker(
         assert calls == {
             "function": function,
             "args": (str(job.id),),
-            "kwargs": {"_job_id": str(job.id)},
+            "kwargs": {"_job_id": dispatcher_module._delivery_id(job.id, job.updated_at)},
         }
     finally:
         with engine.begin() as connection:
@@ -229,6 +232,281 @@ def test_failed_dataset_usage_job_is_reopened_for_explicit_retry(engine: Engine)
             connection.execute(
                 text("DELETE FROM job_application_job WHERE id = :job_id"),
                 {"job_id": job_id},
+            )
+
+
+def test_duplicate_redis_enqueue_keeps_outbox_pending(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 9, 9, 1, 0, tzinfo=UTC)
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_VALIDATION,
+        status=JobStatus.PENDING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=now,
+        updated_at=now,
+        failure_code=None,
+    )
+    with session_factory(engine).begin() as session:
+        PostgresJobRepository(session).add(job)
+
+    class DuplicatePool:
+        async def enqueue_job(self, function: str, *args: str, **kwargs: str) -> None:
+            del function, args, kwargs
+            return None
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_create_pool(_: RedisSettings) -> DuplicatePool:
+        return DuplicatePool()
+
+    monkeypatch.setattr(dispatcher_module, "create_pool", fake_create_pool)
+    try:
+        dispatcher = ArqJobDispatcher(
+            RedisSettings(),
+            session_factory=session_factory(engine),
+        )
+        asyncio.run(dispatcher.dispatch_async(job.id))
+
+        assert row(
+            engine,
+            "SELECT status, outbox_status, dispatch_attempts "
+            "FROM job_application_job WHERE id = :job_id",
+            job_id=job.id,
+        ) == ("pending", "pending", 0)
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM job_application_job WHERE id = :job_id"),
+                {"job_id": job.id},
+            )
+
+
+def test_unstarted_delivery_returns_to_pending_outbox(engine: Engine) -> None:
+    now = datetime(2026, 9, 9, 1, 0, tzinfo=UTC)
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_VALIDATION,
+        status=JobStatus.PENDING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=now,
+        updated_at=now,
+        failure_code=None,
+    )
+    try:
+        with session_factory(engine).begin() as session:
+            repository = PostgresJobRepository(session)
+            repository.add(job)
+            assert repository.mark_enqueued(
+                job_id=job.id,
+                expected_updated_at=now,
+                now=now + timedelta(seconds=1),
+            )
+
+        with session_factory(engine).begin() as session:
+            restored = PostgresJobRepository(session).restore_unstarted(
+                job_id=job.id,
+                now=now + timedelta(seconds=2),
+            )
+
+        assert restored
+        facts = row(
+            engine,
+            "SELECT status, outbox_status, last_dispatch_error "
+            "FROM job_application_job WHERE id = :job_id",
+            job_id=job.id,
+        )
+        assert facts[0:2] == ("pending", "pending")
+        assert facts[2] == "worker cancelled before acquiring execution slot"
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM job_application_job WHERE id = :job_id"),
+                {"job_id": job.id},
+            )
+
+
+def test_late_enqueue_ack_cannot_undo_unstarted_recovery(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 9, 9, 1, 0, tzinfo=UTC)
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_VALIDATION,
+        status=JobStatus.PENDING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=now,
+        updated_at=now,
+        failure_code=None,
+    )
+    with session_factory(engine).begin() as session:
+        PostgresJobRepository(session).add(job)
+
+    recovered_at = now + timedelta(seconds=1)
+
+    class RecoverBeforeAckPool:
+        async def enqueue_job(self, function: str, *args: str, **kwargs: str) -> object:
+            assert function == "validate_dataset_job"
+            assert args == (str(job.id),)
+            assert kwargs == {"_job_id": dispatcher_module._delivery_id(job.id, job.updated_at)}
+            with session_factory(engine).begin() as session:
+                assert PostgresJobRepository(session).restore_unstarted(
+                    job_id=job.id,
+                    now=recovered_at,
+                )
+            return object()
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_create_pool(_: RedisSettings) -> RecoverBeforeAckPool:
+        return RecoverBeforeAckPool()
+
+    monkeypatch.setattr(dispatcher_module, "create_pool", fake_create_pool)
+    try:
+        dispatcher = ArqJobDispatcher(
+            RedisSettings(),
+            session_factory=session_factory(engine),
+        )
+        asyncio.run(dispatcher.dispatch_async(job.id))
+
+        assert row(
+            engine,
+            "SELECT status, outbox_status, last_dispatch_error "
+            "FROM job_application_job WHERE id = :job_id",
+            job_id=job.id,
+        ) == ("pending", "pending", "worker cancelled before acquiring execution slot")
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM job_application_job WHERE id = :job_id"),
+                {"job_id": job.id},
+            )
+
+
+def test_running_delivery_ack_marks_outbox_dispatched_without_renewing_lease(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 9, 9, 1, 0, tzinfo=UTC)
+    started_at = now + timedelta(seconds=1)
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_VALIDATION,
+        status=JobStatus.PENDING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=now,
+        updated_at=now,
+        failure_code=None,
+    )
+    with session_factory(engine).begin() as session:
+        PostgresJobRepository(session).add(job)
+
+    class StartBeforeAckPool:
+        async def enqueue_job(self, function: str, *args: str, **kwargs: str) -> object:
+            del function, args, kwargs
+            with session_factory(engine).begin() as session:
+                assert (
+                    PostgresJobRepository(session).mark_running(
+                        job_id=job.id,
+                        now=started_at,
+                    )
+                    is not None
+                )
+            return object()
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_create_pool(_: RedisSettings) -> StartBeforeAckPool:
+        return StartBeforeAckPool()
+
+    monkeypatch.setattr(dispatcher_module, "create_pool", fake_create_pool)
+    try:
+        dispatcher = ArqJobDispatcher(
+            RedisSettings(),
+            session_factory=session_factory(engine),
+        )
+        asyncio.run(dispatcher.dispatch_async(job.id))
+
+        assert row(
+            engine,
+            "SELECT status, outbox_status, updated_at FROM job_application_job WHERE id = :job_id",
+            job_id=job.id,
+        ) == ("running", "dispatched", started_at)
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM job_application_job WHERE id = :job_id"),
+                {"job_id": job.id},
+            )
+
+
+def test_recovered_delivery_uses_new_redis_generation(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 9, 9, 1, 0, tzinfo=UTC)
+    recovered_at = now + timedelta(seconds=2)
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_VALIDATION,
+        status=JobStatus.PENDING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=now,
+        updated_at=now,
+        failure_code=None,
+    )
+    with session_factory(engine).begin() as session:
+        PostgresJobRepository(session).add(job)
+
+    delivery_ids: list[str] = []
+
+    class RecordingPool:
+        async def enqueue_job(self, function: str, *args: str, **kwargs: str) -> object:
+            del function, args
+            delivery_ids.append(kwargs["_job_id"])
+            return object()
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_create_pool(_: RedisSettings) -> RecordingPool:
+        return RecordingPool()
+
+    monkeypatch.setattr(dispatcher_module, "create_pool", fake_create_pool)
+    try:
+        dispatcher = ArqJobDispatcher(
+            RedisSettings(),
+            session_factory=session_factory(engine),
+        )
+        asyncio.run(dispatcher.dispatch_async(job.id))
+        with session_factory(engine).begin() as session:
+            assert PostgresJobRepository(session).restore_unstarted(
+                job_id=job.id,
+                now=recovered_at,
+            )
+        asyncio.run(dispatcher.dispatch_async(job.id))
+
+        assert delivery_ids == [
+            dispatcher_module._delivery_id(job.id, now),
+            dispatcher_module._delivery_id(job.id, recovered_at),
+        ]
+        assert delivery_ids[0] != delivery_ids[1]
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM job_application_job WHERE id = :job_id"),
+                {"job_id": job.id},
             )
 
 
@@ -311,18 +589,18 @@ def _assert_redis_job(redis_client: Redis, job_id: UUID) -> None:
 
 def test_committed_confirmation_is_delivered_to_real_redis_after_postgres_commit(
     engine: Engine,
-    minio_server: MinioServer,
+    dataset_storage_root: Path,
     redis_server: RedisServer,
     redis_client: Redis,
 ) -> None:
-    settings = settings_for(engine, minio=minio_server, redis_url=redis_server.url)
+    settings = settings_for(engine, storage_root=dataset_storage_root, redis_url=redis_server.url)
     with client_for(engine, settings) as client:
         dataset_id = _create_dataset(client)
         try:
             requested = _request_upload(client, dataset_id)
             upload = requested["upload"]
             content = b"outbox-only-synthetic-object"
-            uploaded = upload_presigned(upload, content)
+            uploaded = upload_video_content(client, upload, content)
             assert uploaded.status_code == 204, uploaded.text
             job_id = _confirm(client, dataset_id, requested)
 
@@ -340,7 +618,7 @@ def test_committed_confirmation_is_delivered_to_real_redis_after_postgres_commit
 
 def test_failed_real_redis_dispatch_stays_pending_and_is_retried_from_outbox(
     engine: Engine,
-    minio_server: MinioServer,
+    dataset_storage_root: Path,
     redis_server: RedisServer,
     redis_client: Redis,
 ) -> None:
@@ -348,7 +626,7 @@ def test_failed_real_redis_dispatch_stays_pending_and_is_retried_from_outbox(
     # 测试仍使用生产 dispatcher，只让真实连接失败触发 outbox 保留。
     failed_settings = settings_for(
         engine,
-        minio=minio_server,
+        storage_root=dataset_storage_root,
         redis_url="redis://127.0.0.1:1/0",
     )
     with client_for(engine, failed_settings) as client:
@@ -370,7 +648,7 @@ def test_failed_real_redis_dispatch_stays_pending_and_is_retried_from_outbox(
 
             recovered_settings = settings_for(
                 engine,
-                minio=minio_server,
+                storage_root=dataset_storage_root,
                 redis_url=redis_server.url,
             )
             dispatcher = ArqJobDispatcher.from_settings(
@@ -394,6 +672,50 @@ def test_failed_real_redis_dispatch_stays_pending_and_is_retried_from_outbox(
             _assert_redis_job(redis_client, job_id)
         finally:
             cleanup_dataset(engine, dataset_id)
+
+
+def test_worker_claim_clears_pending_outbox_before_fast_terminal_finish(engine: Engine) -> None:
+    now = datetime(2026, 9, 9, 1, 0, tzinfo=UTC)
+    running_at = now + timedelta(seconds=1)
+    finished_at = now + timedelta(seconds=2)
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_VALIDATION,
+        status=JobStatus.PENDING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=now,
+        updated_at=now,
+        failure_code=None,
+    )
+    try:
+        with session_factory(engine).begin() as session:
+            repository = PostgresJobRepository(session)
+            repository.add(job)
+            running = repository.mark_running(job_id=job.id, now=running_at)
+            assert running is not None
+            assert repository.finish(
+                job_id=job.id,
+                status=JobStatus.SUCCEEDED.value,
+                failure_code=None,
+                now=finished_at,
+                expected_updated_at=running.updated_at,
+            )
+
+        assert row(
+            engine,
+            "SELECT status, outbox_status FROM job_application_job WHERE id = :job_id",
+            job_id=job.id,
+        ) == ("succeeded", "dispatched")
+        with session_factory(engine)() as session:
+            pending = PostgresJobRepository(session).pending(limit=100)
+        assert job.id not in {candidate.id for candidate in pending}
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM job_application_job WHERE id = :job_id"),
+                {"job_id": job.id},
+            )
 
 
 def test_stale_running_job_returns_to_pending_and_pending_scan_keeps_fresh_job_running(
@@ -423,13 +745,22 @@ def test_stale_running_job_returns_to_pending_and_pending_scan_keeps_fresh_job_r
             repository = PostgresJobRepository(session)
             repository.add(application_job(stale_id, stale_at))
             repository.add(application_job(fresh_id, fresh_at))
+            assert repository.mark_enqueued(
+                job_id=stale_id,
+                expected_updated_at=stale_at,
+                now=stale_at,
+            )
+            assert repository.mark_enqueued(
+                job_id=fresh_id,
+                expected_updated_at=fresh_at,
+                now=fresh_at,
+            )
             assert repository.mark_running(job_id=stale_id, now=stale_at) is not None
             assert repository.mark_running(job_id=fresh_id, now=fresh_at) is not None
-            repository.mark_enqueued(job_id=stale_id, now=stale_at)
-            repository.mark_enqueued(job_id=fresh_id, now=fresh_at)
 
         with session_factory(engine)() as session:
             recovered = PostgresJobRepository(session).recover_stale_running(
+                job_type=JobType.DATASET_VALIDATION,
                 now=now,
                 stale_after_seconds=360,
             )
@@ -460,7 +791,11 @@ def test_stale_running_job_returns_to_pending_and_pending_scan_keeps_fresh_job_r
         renewed_at = now + timedelta(seconds=2)
         with session_factory(engine)() as session:
             repository = PostgresJobRepository(session)
-            repository.mark_enqueued(job_id=stale_id, now=now + timedelta(seconds=1))
+            assert repository.mark_enqueued(
+                job_id=stale_id,
+                expected_updated_at=now,
+                now=now + timedelta(seconds=1),
+            )
             assert repository.mark_running(job_id=stale_id, now=renewed_at) is not None
             assert not repository.finish(
                 job_id=stale_id,

@@ -25,6 +25,15 @@ class AnnotationBackendExecutionError(Exception):
     """基座已接受请求但切片执行失败。"""
 
 
+class AnnotationCleanupPendingError(Exception):
+    """工作副本清理未确认；携带必须持久化等待重试的基座身份。"""
+
+    def __init__(self, *, data_id: str, failure: Exception) -> None:
+        super().__init__(f"标注基座工作副本清理未确认：{data_id}")
+        self.data_id = data_id
+        self.failure = failure
+
+
 class AnnotationDataVolumeUnavailableError(Exception):
     """基座标注数据卷不可读取或映射不安全。"""
 
@@ -67,6 +76,10 @@ class AnnotationBackend(Protocol):
         actions: Sequence[str],
     ) -> PreparedAnnotationVideo:
         """把已确认源视频和一份动作清单放入基座工作区。"""
+        ...
+
+    def discard_prepared_video(self, *, data_id: str) -> None:
+        """删除尚未持久化引用的基座工作副本。"""
         ...
 
     def download_video(self, *, video_id: str, destination: BinaryIO) -> None:

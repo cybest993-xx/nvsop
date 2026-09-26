@@ -57,14 +57,13 @@ const ATTEMPT = {
   declared_size: 11,
   declared_sha256: 'a'.repeat(64),
   expires_at: '2026-09-08T09:00:00Z',
-  object_version_id: null,
+  final_object_key: null,
 }
 
 const UPLOAD = {
-  method: 'POST',
-  url: 'https://minio.example.test/factory-sop',
-  fields: { key: 'training-datasets/dataset-1/member-1/attempt-1/video', policy: 'signed' },
-  headers: {},
+  method: 'PUT',
+  url: '/api/v1/training-datasets/dataset-1/members/member-1/attempts/attempt-1/content',
+  headers: { 'Content-Type': 'application/octet-stream' },
   expires_at: '2026-09-08T09:00:00Z',
   max_bytes: 1000,
   object_key: 'training-datasets/dataset-1/member-1/attempt-1/video',
@@ -122,7 +121,7 @@ const ANNOTATION_CONTEXT = {
   member_id: 'member-1',
   action_list_revision: 1,
   annotation_revision: 0,
-  source_object_version_id: 'object-version-1',
+  source_object_key: 'object-version-1',
   source_sha256: 'a'.repeat(64),
   derived_video_size: 11,
   derived_video_sha256: 'b'.repeat(64),
@@ -275,7 +274,6 @@ beforeEach(() => {
   )
   vi.stubGlobal('crypto', {
     randomUUID: () => 'idempotency-1',
-    subtle: { digest: vi.fn().mockResolvedValue(new Uint8Array(32).fill(0xab).buffer) },
   })
 })
 
@@ -400,7 +398,7 @@ describe('训练数据集工作台', () => {
           ...USAGE_ARTIFACT,
           status: 'failed',
           failure_code: 'STORAGE_UNAVAILABLE',
-          failure_detail: '对象存储暂时不可用，请稍后重试',
+          failure_detail: '训练素材存储暂时不可用，请稍后重试',
         },
       ],
       page: 1,
@@ -413,7 +411,7 @@ describe('训练数据集工作台', () => {
 
     expect(wrapper.text()).toContain('生成失败')
     expect(wrapper.text()).toContain('STORAGE_UNAVAILABLE')
-    expect(wrapper.text()).toContain('对象存储暂时不可用，请稍后重试')
+    expect(wrapper.text()).toContain('训练素材存储暂时不可用，请稍后重试')
     expect(wrapper.text()).toContain('可重试制品生成')
     wrapper.unmount()
   })
@@ -914,7 +912,6 @@ describe('训练数据集工作台', () => {
         original_filename: 'line-1.mp4',
         source: 'camera-A12',
         declared_size: 11,
-        declared_sha256: 'ab'.repeat(32),
       }),
       'idempotency-1',
     )
@@ -964,7 +961,7 @@ describe('训练数据集工作台', () => {
   it('leaves a failed upload request retryable', async () => {
     grant('dataset.dataset.view', 'dataset.dataset.import')
     api.readDatasetMembers.mockResolvedValue({ items: [], page: 1, page_size: 50, total: 0 })
-    api.requestVideoUpload.mockRejectedValueOnce(new Error('申请直传失败')).mockResolvedValueOnce({
+    api.requestVideoUpload.mockRejectedValueOnce(new Error('申请上传失败')).mockResolvedValueOnce({
       member: { ...MEMBER_PENDING, status: 'pending_upload' },
       attempt: ATTEMPT,
       upload: UPLOAD,
@@ -978,7 +975,7 @@ describe('训练数据集工作台', () => {
     await wrapper.find('form[aria-label="上传训练视频"]').trigger('submit')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('申请直传失败')
+    expect(wrapper.text()).toContain('申请上传失败')
     expect(
       wrapper.find('form[aria-label="上传训练视频"] button').attributes('disabled'),
     ).toBeUndefined()
@@ -1004,7 +1001,7 @@ describe('训练数据集工作台', () => {
       upload: UPLOAD,
     })
     api.confirmVideoUpload.mockResolvedValue({ member: MEMBER_PENDING, job: null })
-    upload.mockRejectedValueOnce(new Error('对象存储网络中断'))
+    upload.mockRejectedValueOnce(new Error('上传网络中断'))
 
     const { wrapper } = await mountDatasets()
     await flushPromises()
@@ -1038,7 +1035,6 @@ describe('训练数据集工作台', () => {
         original_filename: 'line-1.mp4',
         source: 'camera-A12',
         declared_size: 11,
-        declared_sha256: 'ab'.repeat(32),
       }),
       'idempotency-1',
     ])

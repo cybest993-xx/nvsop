@@ -3,6 +3,9 @@
 ADR-0003 has no `/api/v2` escape hatch. This checker therefore protects the compatibility
 surface the decision names: paths, operations, requests, responses and parameters cannot lose
 accepted wire shapes, and inline or component schemas cannot be narrowed.
+
+ADR-0003 同时允许“所有受影响客户端协同发布”的显式破坏性变更；声明文件就是它的机械落点：
+只有逐条登记（含原因与 issue）的破坏项才被接受，未登记的破坏项仍然失败。
 """
 
 from __future__ import annotations
@@ -10,7 +13,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 HTTP_METHODS = frozenset({"get", "put", "post", "delete", "options", "head", "patch", "trace"})
@@ -427,20 +430,68 @@ def previous_contract(reference: str, path: Path) -> JsonObject | None:
     return json.loads(result.stdout)
 
 
-def main(argv: list[str]) -> int:
-    if len(argv) != 3:
-        raise SystemExit("usage: check_openapi_compatibility.py BASE_REF CURRENT_OPENAPI")
+def load_declarations(path: Path | None) -> dict[str, Mapping[str, object]]:
+    """读取已登记的破坏性契约变化；没有声明文件时视为没有声明。"""
+    if path is None or not path.exists():
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    changes = payload.get("changes") if isinstance(payload, Mapping) else None
+    if not isinstance(changes, list):
+        raise SystemExit(f"{path} 必须包含 changes 列表")
+    declared: dict[str, Mapping[str, object]] = {}
+    for entry in changes:
+        if not isinstance(entry, Mapping) or not isinstance(entry.get("change"), str):
+            raise SystemExit(f"{path} 的每条变化都必须带 change 字段")
+        reason = entry.get("reason")
+        issue = entry.get("issue")
+        if not isinstance(reason, str) or not reason.strip():
+            raise SystemExit(f"{path} 的每条变化都必须带非空字符串 reason")
+        if not isinstance(issue, str) or not issue.strip():
+            raise SystemExit(f"{path} 的每条变化都必须带非空字符串 issue")
+        declared[str(entry["change"])] = entry
+    return declared
+
+
+def undeclared_errors(errors: list[str], declared: Mapping[str, Mapping[str, object]]) -> list[str]:
+    """返回未登记的破坏项；已登记的破坏项是显式协同发布的一部分。"""
+    return [error for error in errors if error not in declared]
+
+
+def main(
+    argv: list[str],
+    *,
+    previous_loader: Callable[[str, Path], JsonObject | None] = previous_contract,
+) -> int:
+    """门禁入口；`previous_loader` 是给测试注入基线契约的窄 seam。"""
+    if len(argv) not in (3, 4):
+        raise SystemExit(
+            "usage: check_openapi_compatibility.py BASE_REF CURRENT_OPENAPI "
+            "[DECLARED_BREAKING_CHANGES]"
+        )
     reference = argv[1]
     path = Path(argv[2])
-    previous = previous_contract(reference, path)
+    previous = previous_loader(reference, path)
     if previous is None:
         print(f"No OpenAPI contract at {reference}:{path}; accepting the initial contract.")
         return 0
     current = json.loads(path.read_text(encoding="utf-8"))
     errors = compatibility_errors(previous, current)
-    if errors:
+    declarations_path = Path(argv[3]) if len(argv) > 3 else None
+    declared = load_declarations(declarations_path)
+    acknowledged = [error for error in errors if error in declared]
+    if acknowledged:
+        print(f"Acknowledged breaking changes ({declarations_path}):")
+        for error in acknowledged:
+            entry = declared[error]
+            print(
+                f"- {error} "
+                f"[{entry.get('issue', '?')} {entry.get('recorded', '?')}]: "
+                f"{entry.get('reason', '')}"
+            )
+    undeclared = undeclared_errors(errors, declared)
+    if undeclared:
         print("OpenAPI compatibility failed:", file=sys.stderr)
-        for error in errors:
+        for error in undeclared:
             print(f"- {error}", file=sys.stderr)
         return 1
     print("OpenAPI compatibility passed.")

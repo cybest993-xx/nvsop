@@ -473,7 +473,9 @@ def test_file_identity_rename_keeps_registered_values_on_real_postgres(
     command.upgrade(configuration, "head")
 
     dataset_id, member_id, attempt_id, actor_id = uuid4(), uuid4(), uuid4(), uuid4()
+    long_member_id = uuid4()
     object_key = "training-datasets/migration/member/attempt/registered-video"
+    overlong_key = "training-datasets/" + "x" * 300
     with database_at_0023.begin() as connection:
         connection.execute(
             text(
@@ -499,6 +501,23 @@ def test_file_identity_rename_keeps_registered_values_on_real_postgres(
                 "actor": actor_id,
             },
         )
+        # object_key 比回滚重建的 object_version_id（255）更宽：超长行不能截断，也不能让回滚失败。
+        connection.execute(
+            text(
+                "INSERT INTO dataset_member "
+                "(id, dataset_id, original_filename, source, declared_size, current_attempt_id, "
+                "status, object_key, created_by, updated_by, created_at, updated_at) "
+                "VALUES (:id, :dataset, 'long.mp4', 'camera', 100, :attempt, 'registered', "
+                ":object_key, :actor, :actor, now(), now())"
+            ),
+            {
+                "id": long_member_id,
+                "dataset": dataset_id,
+                "attempt": attempt_id,
+                "object_key": overlong_key,
+                "actor": actor_id,
+            },
+        )
 
     command.downgrade(configuration, "0038")
     with database_at_0023.connect() as connection:
@@ -506,4 +525,9 @@ def test_file_identity_rename_keeps_registered_values_on_real_postgres(
             text("SELECT object_version_id FROM dataset_member WHERE id = :id"),
             {"id": member_id},
         ).scalar_one()
+        overlong = connection.execute(
+            text("SELECT object_version_id FROM dataset_member WHERE id = :id"),
+            {"id": long_member_id},
+        ).scalar_one()
     assert restored == object_key
+    assert overlong is None

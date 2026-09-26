@@ -69,4 +69,8 @@ def downgrade() -> None:
         sa.Column("object_version_id", sa.String(length=255), nullable=True),
     )
     # #350 之后该列保存的就是定稿文件身份；回滚时从 object_key 回填，避免已登记成员丢失源身份。
-    op.execute("UPDATE dataset_member SET object_version_id = object_key")
+    # 该列宽度（255）小于 object_key（512），超长键无法回填：保持 NULL 而不是截断或让回滚失败。
+    op.execute(
+        "UPDATE dataset_member SET object_version_id = object_key "
+        "WHERE object_key IS NOT NULL AND length(object_key) <= 255"
+    )

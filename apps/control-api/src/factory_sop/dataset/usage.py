@@ -79,7 +79,7 @@ def validate_ddm_input(
             issues.append(UsageIssue("DDM_DURATION_INVALID", "视频时长必须是有限正数", location))
         if not video.object_key:
             issues.append(
-                UsageIssue("DDM_SOURCE_VERSION_INVALID", "源视频对象代次不能为空", location)
+                UsageIssue("DDM_SOURCE_VERSION_INVALID", "源视频定稿文件身份不能为空", location)
             )
         if not _valid_sha256(video.source_sha256):
             issues.append(UsageIssue("DDM_SOURCE_DIGEST_INVALID", "源视频摘要格式无效", location))
@@ -263,7 +263,7 @@ def validate_vlm_input(
             issues.append(
                 UsageIssue(
                     "VLM_MEDIA_FACT_INVALID",
-                    "媒体必须保留已确认的对象代次和摘要",
+                    "媒体必须保留已确认的定稿文件身份和摘要",
                     f"media[{index}]",
                 )
             )

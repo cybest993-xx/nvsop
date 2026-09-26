@@ -202,7 +202,7 @@ class ActionListRevision:
 
 @dataclass(frozen=True, slots=True)
 class AnnotationContext:
-    """绑定数据集、视频、动作清单和源对象代次的短期标注上下文。"""
+    """绑定数据集、视频、动作清单和定稿文件身份的短期标注上下文。"""
 
     id: UUID
     dataset_id: UUID

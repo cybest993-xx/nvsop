@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from check_openapi_compatibility import (
     compatibility_errors,
     load_declarations,
+    main,
     undeclared_errors,
 )
 
@@ -446,6 +447,77 @@ class DeclaredBreakingChangesTest(unittest.TestCase):
                 list(load_declarations(path)),
                 ["field removed: schema X.y"],
             )
+
+
+class MainEntryTest(unittest.TestCase):
+    """门禁入口本身必须按声明放过或拦截，而不只是辅助函数。"""
+
+    def _baseline(self) -> dict[str, Any]:
+        return {
+            "paths": {},
+            "components": {
+                "schemas": {
+                    "UploadAttemptView": {
+                        "type": "object",
+                        "required": ["object_version_id"],
+                        "properties": {"object_version_id": {"type": ["string", "null"]}},
+                    }
+                }
+            },
+        }
+
+    def _renamed(self) -> dict[str, Any]:
+        current = self._baseline()
+        schema = current["components"]["schemas"]["UploadAttemptView"]
+        schema["properties"]["final_object_key"] = schema["properties"].pop("object_version_id")
+        schema["required"] = ["final_object_key"]
+        return current
+
+    def _run(self, contract: dict[str, Any], declarations: dict[str, Any]) -> int:
+        with tempfile.TemporaryDirectory() as directory:
+            contract_path = Path(directory) / "openapi.json"
+            contract_path.write_text(json.dumps(contract), encoding="utf-8")
+            declarations_path = Path(directory) / "breaking-changes.json"
+            declarations_path.write_text(json.dumps(declarations), encoding="utf-8")
+            baseline = self._baseline()
+            return main(
+                ["check", "origin/main", str(contract_path), str(declarations_path)],
+                previous_loader=lambda reference, path: baseline,
+            )
+
+    def test_main_rejects_an_undeclared_break_and_accepts_the_declared_one(self) -> None:
+        self.assertEqual(self._run(self._renamed(), {"changes": []}), 1)
+
+        declared = {
+            "changes": [
+                {
+                    "change": "field removed: schema UploadAttemptView.object_version_id",
+                    "reason": "改为定稿文件身份",
+                    "issue": "#350",
+                },
+                {
+                    "change": "required field added: schema UploadAttemptView.final_object_key",
+                    "reason": "改为定稿文件身份",
+                    "issue": "#350",
+                },
+            ]
+        }
+
+        self.assertEqual(self._run(self._renamed(), declared), 0)
+
+    def test_main_rejects_a_declaration_whose_metadata_is_not_a_string(self) -> None:
+        declared = {
+            "changes": [
+                {
+                    "change": "field removed: schema UploadAttemptView.object_version_id",
+                    "reason": True,
+                    "issue": ["#350"],
+                }
+            ]
+        }
+
+        with self.assertRaises(SystemExit):
+            self._run(self._renamed(), declared)
 
 
 if __name__ == "__main__":

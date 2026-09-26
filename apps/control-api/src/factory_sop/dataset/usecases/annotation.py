@@ -153,7 +153,7 @@ def create_annotation_context(
     ttl_seconds: int,
     action_list_revision: int | None = None,
 ) -> AnnotationContext:
-    """为已登记视频签发绑定源对象代次的短期上下文。"""
+    """为已登记视频签发绑定定稿文件身份的短期上下文。"""
     authorize(caller, Permission.DATASET_VIEW)
     authorize(caller, Permission.DATASET_EDIT)
     _member_for_dataset(dataset_id=dataset_id, member_id=member_id, datasets=datasets)
@@ -187,7 +187,7 @@ def create_annotation_context(
     if not source_version or not source_sha256:
         raise AnnotationRefusedError(
             DatasetRefusalCode.ANNOTATION_CONTEXT_INVALID,
-            detail="视频缺少已确认的对象代次或摘要",
+            detail="视频缺少已确认的定稿文件身份或摘要",
         )
     context = AnnotationContext(
         id=new_id(),

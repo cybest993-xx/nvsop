@@ -459,3 +459,51 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
     )
     command.downgrade(configuration, "0022")
     assert "job_application_job" not in _tables(database_at_0023)
+
+
+def test_file_identity_rename_keeps_registered_values_on_real_postgres(
+    database_at_0023: Engine,
+) -> None:
+    """0039 只改列名：已登记的文件身份保留，回滚时从 object_key 回填。"""
+    configuration = Config(str(CONTROL_API / "alembic.ini"))
+    configuration.set_main_option("script_location", str(CONTROL_API / "migrations"))
+    configuration.set_main_option(
+        "sqlalchemy.url", database_at_0023.url.render_as_string(hide_password=False)
+    )
+    command.upgrade(configuration, "head")
+
+    dataset_id, member_id, attempt_id, actor_id = uuid4(), uuid4(), uuid4(), uuid4()
+    object_key = "training-datasets/migration/member/attempt/registered-video"
+    with database_at_0023.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO dataset_training_dataset "
+                "(id, name, created_by, updated_by, created_at, updated_at) "
+                "VALUES (:id, 'migration-dataset', :actor, :actor, now(), now())"
+            ),
+            {"id": dataset_id, "actor": actor_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO dataset_member "
+                "(id, dataset_id, original_filename, source, declared_size, current_attempt_id, "
+                "status, object_key, created_by, updated_by, created_at, updated_at) "
+                "VALUES (:id, :dataset, 'line.mp4', 'camera', 100, :attempt, 'registered', "
+                ":object_key, :actor, :actor, now(), now())"
+            ),
+            {
+                "id": member_id,
+                "dataset": dataset_id,
+                "attempt": attempt_id,
+                "object_key": object_key,
+                "actor": actor_id,
+            },
+        )
+
+    command.downgrade(configuration, "0038")
+    with database_at_0023.connect() as connection:
+        restored = connection.execute(
+            text("SELECT object_version_id FROM dataset_member WHERE id = :id"),
+            {"id": member_id},
+        ).scalar_one()
+    assert restored == object_key

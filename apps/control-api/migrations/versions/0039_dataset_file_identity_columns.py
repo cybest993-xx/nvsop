@@ -13,6 +13,9 @@ from alembic import op
 revision: str = "0039"
 down_revision: str | None = "0038"
 
+# 回滚需要从 object_key 回填文件身份，raw SQL 触及的表按门禁要求显式声明。
+RAW_SQL_TABLES = frozenset({"dataset_member"})
+
 
 def upgrade() -> None:
     op.drop_column("dataset_member", "object_version_id")
@@ -65,3 +68,5 @@ def downgrade() -> None:
         "dataset_member",
         sa.Column("object_version_id", sa.String(length=255), nullable=True),
     )
+    # #350 之后该列保存的就是定稿文件身份；回滚时从 object_key 回填，避免已登记成员丢失源身份。
+    op.execute("UPDATE dataset_member SET object_version_id = object_key")

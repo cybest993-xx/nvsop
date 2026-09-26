@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 HTTP_METHODS = frozenset({"get", "put", "post", "delete", "options", "head", "patch", "trace"})
@@ -442,8 +442,12 @@ def load_declarations(path: Path | None) -> dict[str, Mapping[str, object]]:
     for entry in changes:
         if not isinstance(entry, Mapping) or not isinstance(entry.get("change"), str):
             raise SystemExit(f"{path} 的每条变化都必须带 change 字段")
-        if not entry.get("reason") or not entry.get("issue"):
-            raise SystemExit(f"{path} 的每条变化都必须带 reason 与 issue")
+        reason = entry.get("reason")
+        issue = entry.get("issue")
+        if not isinstance(reason, str) or not reason.strip():
+            raise SystemExit(f"{path} 的每条变化都必须带非空字符串 reason")
+        if not isinstance(issue, str) or not issue.strip():
+            raise SystemExit(f"{path} 的每条变化都必须带非空字符串 issue")
         declared[str(entry["change"])] = entry
     return declared
 
@@ -453,7 +457,12 @@ def undeclared_errors(errors: list[str], declared: Mapping[str, Mapping[str, obj
     return [error for error in errors if error not in declared]
 
 
-def main(argv: list[str]) -> int:
+def main(
+    argv: list[str],
+    *,
+    previous_loader: Callable[[str, Path], JsonObject | None] = previous_contract,
+) -> int:
+    """门禁入口；`previous_loader` 是给测试注入基线契约的窄 seam。"""
     if len(argv) not in (3, 4):
         raise SystemExit(
             "usage: check_openapi_compatibility.py BASE_REF CURRENT_OPENAPI "
@@ -461,7 +470,7 @@ def main(argv: list[str]) -> int:
         )
     reference = argv[1]
     path = Path(argv[2])
-    previous = previous_contract(reference, path)
+    previous = previous_loader(reference, path)
     if previous is None:
         print(f"No OpenAPI contract at {reference}:{path}; accepting the initial contract.")
         return 0

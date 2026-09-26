@@ -19,6 +19,7 @@ uvicorn --factory factory_sop.entrypoint:build
 - 未识别的 `SOP_*` 变量会拒绝启动，防止拼写错误被静默忽略。
 - 缺失、不可读、空 secret 或无效组合都会 fail-fast；没有“弱默认值继续运行”的降级路径。
 - Redis 是当前可运行中心实例的必需基础设施。训练素材由 `dataset` 拥有的中心本地持久卷保存（`SOP_DATASET_STORAGE_ROOT`），不需要独立对象存储服务（ADR-0012）。
+- 训练视频经业务网关流式上传：入口 `client_max_body_size` 必须不小于 `SOP_DATASET_MAX_UPLOAD_BYTES`（开发网关对上传路径为 8192M，对应默认 8 GiB），且上传路径不得由网关先缓冲整个请求体。
 
 主要配置组：
 

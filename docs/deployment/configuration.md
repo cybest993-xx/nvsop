@@ -66,7 +66,7 @@ NVSOP_EDGE_COMMAND_CONFIG_FILE=/etc/nvsop/edge.json \
   python -m edge_runtime
 ```
 
-环境变量缺失会直接退出。配置文件为本机 JSON；当前中心 URL 只接受 **HTTPS**。
+环境变量缺失会直接退出。配置文件为本机 JSON；当前中心 URL 只接受 **HTTPS**，且必须是最终地址：边缘不跟随 3xx 跳转，因为请求签名绑定原始路径。
 
 ### 顶层字段
 

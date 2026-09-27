@@ -19,7 +19,7 @@ INFERENCE_HOST_SIGNATURE_HEADER = "X-Inference-Host-Signature"
 
 
 class CenterUnreachableError(RuntimeError):
-    """连接、超时、断连或半截响应; 调用方按中心暂时不可达处理并留待下一轮。"""
+    """连接、超时、断连、半截或无法解码的响应; 调用方按中心暂时不可达处理并留待下一轮。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,7 +29,10 @@ class CenterResponse:
 
 
 class CenterClient:
-    """发送带主机身份签名的请求; 状态码由调用方按各自契约解释。"""
+    """发送带主机身份签名的请求; 状态码由调用方按各自契约解释。
+
+    不跟随 3xx: 签名绑定原始 path, 跳转后的请求无法通过中心验签, 故 center_url 必须是最终地址。
+    """
 
     def __init__(
         self,
@@ -91,7 +94,8 @@ class CenterClient:
                 response = client.request(
                     method, f"{self._base_url}{path}", content=content, headers=request_headers
                 )
-        except httpx2.TransportError as error:
+        # RequestError 覆盖连接/超时/协议 (TransportError)、正文解码失败与重定向过多。
+        except httpx2.RequestError as error:
             # 不携带底层异常文本, 避免把地址或响应片段写进日志。
             raise CenterUnreachableError("中心接口暂时不可达") from error
         return CenterResponse(status=response.status_code, body=response.content)

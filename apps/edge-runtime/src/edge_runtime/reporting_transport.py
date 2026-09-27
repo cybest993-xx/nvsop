@@ -135,11 +135,13 @@ class HttpDecisionReportTransport(DecisionReportTransport):
             response = self._client.post(path, body, headers=extra_headers)
         except CenterUnreachableError as error:
             raise ReportTransportError("中心兼容握手暂时不可达") from error
-        if response.status != 200:
+        if response.status >= 400:
             raise ReportTransportError(
                 "中心不支持当前 historical decision report compatibility handshake",
                 status=response.status,
             )
+        if response.status != 200:
+            raise ReportTransportError("中心兼容握手返回非成功状态", status=response.status)
         try:
             value = json.loads(response.body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:

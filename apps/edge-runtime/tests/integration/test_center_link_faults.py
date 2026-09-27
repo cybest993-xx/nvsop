@@ -11,6 +11,7 @@ import unittest
 from typing import ClassVar
 from unittest.mock import patch
 
+import httpx2
 from nvsop_contracts import ReportedHealth
 
 from edge_runtime.center_client import CenterClient, CenterUnreachableError
@@ -82,6 +83,24 @@ class CenterLinkFaultTest(unittest.TestCase):
                 _FaultyCenterHandler.response = response
                 with self.assertRaises(CenterUnreachableError):
                     self._client().get("/api/v1/device-commands/next")
+
+    def test_center_client_maps_undecodable_body_to_unreachable(self) -> None:
+        # 代理或中心返回损坏的压缩正文时, httpx2 抛出的不是 TransportError。
+        corrupt = httpx2.MockTransport(
+            lambda _: httpx2.Response(
+                200, headers={"Content-Encoding": "gzip"}, content=b"not gzip"
+            )
+        )
+        client = CenterClient(
+            center_url="http://center.invalid",
+            host_id="host-1",
+            host_private_key="unused",  # pragma: allowlist secret
+            timeout=2.0,
+            transport=corrupt,
+        )
+
+        with self.assertRaises(CenterUnreachableError):
+            client.get("/api/v1/device-commands/next")
 
     def test_every_center_adapter_turns_link_faults_into_its_retryable_error(self) -> None:
         _FaultyCenterHandler.response = _TRUNCATED_BODY

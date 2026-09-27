@@ -36,6 +36,26 @@ def test_writing_finalizes_content_atomically(tmp_path: Path) -> None:
     assert destination.getvalue() == b"first halfsecond half"
 
 
+def test_writing_fsyncs_both_directories_around_the_rename(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = _storage(tmp_path)
+    synced: list[Path] = []
+    monkeypatch.setattr(
+        "factory_sop.dataset.adapters.storage._fsync_directory",
+        lambda path: synced.append(path),
+    )
+
+    with storage.writing(object_key="training-datasets/a/video") as sink:
+        sink.write(b"content")
+
+    assert synced == [
+        tmp_path / "training-datasets" / "a",
+        tmp_path / ".incoming",
+    ]
+
+
 def test_writing_discards_the_object_when_the_caller_raises(tmp_path: Path) -> None:
     storage = _storage(tmp_path)
 

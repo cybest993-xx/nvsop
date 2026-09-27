@@ -102,16 +102,32 @@ class JobRepository(Protocol):
         """保存一条任务和待投递事实；不提交事务。"""
         ...
 
-    def recover_stale_running(self, *, now: datetime, stale_after_seconds: int) -> int:
-        """把超过执行租约的运行中任务恢复为待投递，并返回恢复数量。"""
+    def recover_stale_running(
+        self, *, job_type: JobType, now: datetime, stale_after_seconds: int
+    ) -> int:
+        """按任务类型恢复超过执行租约的运行中任务，并返回恢复数量。"""
         ...
 
     def mark_running(self, *, job_id: UUID, now: datetime) -> ApplicationJob | None:
         """以条件更新领取任务；重复投递只允许一个执行者前进。"""
         ...
 
-    def mark_enqueued(self, *, job_id: UUID, now: datetime) -> None:
-        """记录 outbox 已投递，不改变业务资源结果。"""
+    def restore_unstarted(self, *, job_id: UUID, now: datetime) -> bool:
+        """把尚未进入业务执行的已投递任务恢复为待投递。"""
+        ...
+
+    def mark_enqueued(
+        self,
+        *,
+        job_id: UUID,
+        expected_updated_at: datetime,
+        now: datetime,
+    ) -> bool:
+        """仅为仍属于本次投递 generation 的 pending 任务确认入队。"""
+        ...
+
+    def mark_running_dispatched(self, *, job_id: UUID) -> bool:
+        """worker 已领取时确认投递事实，不改写执行租约。"""
         ...
 
     def record_dispatch_failure(self, *, job_id: UUID, error: str, now: datetime) -> None:

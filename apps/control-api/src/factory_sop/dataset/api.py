@@ -21,6 +21,7 @@ from factory_sop.dataset.annotation import (
     AnnotationBackend,
     AnnotationBackendExecutionError,
     AnnotationBackendUnavailableError,
+    AnnotationCleanupPendingError,
     AnnotationDataVolume,
     AnnotationDataVolumeUnavailableError,
 )
@@ -34,19 +35,27 @@ from factory_sop.dataset.model import (
 )
 from factory_sop.dataset.repository import DatasetRepository, UsageDatasetRepository
 from factory_sop.dataset.storage import ObjectStorage, ObjectStorageUnavailableError
-from factory_sop.dataset.usecases import begin_video_validation, validate_video_upload
+from factory_sop.dataset.usecases import (
+    ValidationObjectEffects,
+    begin_video_validation,
+    validate_video_upload,
+)
 from factory_sop.dataset.usecases.annotation import (
     AnnotationContextPreparationTarget,
     AnnotationExecutionTarget,
     PreparedAnnotationCopy,
     begin_annotation_context_preparation,
     begin_annotation_execution,
+    clear_annotation_context_cleanup_candidate,
+    clear_annotation_execution_cleanup_candidate,
     complete_annotation_context_preparation,
     complete_annotation_execution,
     fail_annotation_context_preparation,
     fail_annotation_execution,
     prepare_annotation_context_copy,
     prepare_annotation_execution_copy,
+    record_annotation_context_cleanup_candidate,
+    record_annotation_execution_cleanup_candidate,
     save_annotation_execution_copy,
 )
 from factory_sop.dataset.usecases.usage import (
@@ -94,6 +103,14 @@ class ArtifactJobFinisher(Protocol):
         ...
 
 
+class ArtifactTransactionCommitter(Protocol):
+    """由组合层提供、在执行器指定提交点调用的事务提交回调。"""
+
+    def __call__(self, session: object) -> bool:
+        """提交共享事务；执行权已撤销时回滚并返回 false。"""
+        ...
+
+
 class DatasetArtifactExecutor(Protocol):
     """制品执行与候选清理的窄跨模块 seam。"""
 
@@ -102,6 +119,7 @@ class DatasetArtifactExecutor(Protocol):
         *,
         job: ApplicationJob,
         finish_job: ArtifactJobFinisher,
+        commit_transaction: ArtifactTransactionCommitter,
     ) -> ArtifactExecutionResult:
         """执行一个已领取的制品任务。"""
         ...
@@ -234,7 +252,7 @@ class DatasetAnnotationRuntime(Protocol):
         ...
 
     def storage(self) -> ObjectStorage:
-        """创建对象存储客户端，调用发生在数据库事务外。"""
+        """创建训练素材存储客户端，调用发生在数据库事务外。"""
         ...
 
     def backend(self) -> AnnotationBackend:
@@ -281,7 +299,7 @@ class DatasetUsageRuntime(Protocol):
         ...
 
     def storage(self) -> ObjectStorage:
-        """创建对象存储客户端，调用发生在数据库事务外。"""
+        """创建训练素材存储客户端，调用发生在数据库事务外。"""
         ...
 
     def ddm_reader(self) -> DdmReader:
@@ -309,7 +327,7 @@ class DatasetValidationRuntime(Protocol):
         ...
 
     def storage(self) -> ObjectStorage:
-        """创建对象存储客户端，调用发生在数据库事务外。"""
+        """创建训练素材存储客户端，调用发生在数据库事务外。"""
         ...
 
     def media_probe(self) -> MediaProbe:
@@ -322,8 +340,10 @@ class DatasetValidationRuntime(Protocol):
 
 
 __all__ = [
+    "AnnotationBackend",
     "AnnotationBackendExecutionError",
     "AnnotationBackendUnavailableError",
+    "AnnotationCleanupPendingError",
     "AnnotationContextPreparationTarget",
     "AnnotationDataVolume",
     "AnnotationDataVolumeUnavailableError",
@@ -331,6 +351,7 @@ __all__ = [
     "ArtifactExecutionOutcome",
     "ArtifactExecutionResult",
     "ArtifactJobFinisher",
+    "ArtifactTransactionCommitter",
     "CheckedDatasetInput",
     "DatasetAnnotationRuntime",
     "DatasetArtifactExecutor",
@@ -349,6 +370,7 @@ __all__ = [
     "UsageCheckStatus",
     "UsageCheckTarget",
     "UsageKind",
+    "ValidationObjectEffects",
     "VlmReader",
     "apply_usage_check_currentness",
     "begin_annotation_context_preparation",
@@ -356,6 +378,8 @@ __all__ = [
     "begin_usage_check",
     "begin_video_validation",
     "checked_input_reader",
+    "clear_annotation_context_cleanup_candidate",
+    "clear_annotation_execution_cleanup_candidate",
     "complete_annotation_context_preparation",
     "complete_annotation_execution",
     "complete_usage_check",
@@ -364,6 +388,8 @@ __all__ = [
     "fail_usage_check",
     "prepare_annotation_context_copy",
     "prepare_annotation_execution_copy",
+    "record_annotation_context_cleanup_candidate",
+    "record_annotation_execution_cleanup_candidate",
     "run_usage_check",
     "save_annotation_execution_copy",
     "summary",

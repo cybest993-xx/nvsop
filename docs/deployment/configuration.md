@@ -18,7 +18,8 @@ uvicorn --factory factory_sop.entrypoint:build
 - secret 不允许直接放在环境变量值中；必须使用对应的 `*_FILE` 变量，让值指向只读 secret 文件。
 - 未识别的 `SOP_*` 变量会拒绝启动，防止拼写错误被静默忽略。
 - 缺失、不可读、空 secret 或无效组合都会 fail-fast；没有“弱默认值继续运行”的降级路径。
-- Redis 是当前可运行中心实例的必需基础设施。**过渡说明**：当前 `main` 在 #350 合并前仍要求 MinIO 配置；批准目标已由 ADR-0012 改为 `dataset` 本地训练素材持久卷，#350 会移除这些 MinIO runtime settings。
+- Redis 是当前可运行中心实例的必需基础设施。训练素材由 `dataset` 拥有的中心本地持久卷保存（`SOP_DATASET_STORAGE_ROOT`），不需要独立对象存储服务（ADR-0012）。
+- 训练视频经业务网关流式上传：入口 `client_max_body_size` 必须不小于 `SOP_DATASET_MAX_UPLOAD_BYTES`（开发网关对上传路径为 8192M，对应默认 8 GiB），且上传路径不得由网关先缓冲整个请求体。
 
 主要配置组：
 
@@ -27,14 +28,14 @@ uvicorn --factory factory_sop.entrypoint:build
 | 日志 | `SOP_LOG_LEVEL` | `debug/info/warning/error` |
 | PostgreSQL | `SOP_DATABASE_HOST/PORT/NAME/USER`, `SOP_DATABASE_PASSWORD_FILE` | 密码只能来自文件 |
 | Session/CSRF | `SOP_SESSION_*`, `SOP_CSRF_SECRET_FILE` | absolute lifetime 不得短于 idle timeout |
-| MinIO（#350 前的当前实现） | `SOP_MINIO_ENDPOINT`, `SOP_MINIO_PUBLIC_ENDPOINT`, `SOP_MINIO_BUCKET`, access/secret `*_FILE` | 仅描述当前代码；批准目标将由 dataset 本地训练素材卷替代 |
+| 训练素材 | `SOP_DATASET_STORAGE_ROOT` | 必须是中心机上的绝对路径；写入经正式 API 流式完成 |
 | Redis | `SOP_REDIS_URL_FILE` | URL 必须是带主机的 `redis://` 或 `rediss://` |
 | Dataset | upload TTL、max bytes、supported codecs | codec 列表不能为空 |
 | Media probe | binary、timeout | 默认开发镜像使用 `ffprobe` |
 | Annotation | backend URL、media origin、data root、timeouts | backend + media origin 成组，data root 为绝对路径 |
 | Worker | health-check interval | 由 worker 运行环境提供 |
 
-开发 Compose 默认使用 `SOP_DEPLOYMENT_MODE=fixed_main` + `SOP_SESSION_COOKIE_TRANSPORT=allow_http`。在 #350 前的当前实现中，MinIO/annotation 本地入口分别是 `http://localhost:9443` 与 `http://localhost:8444`；#350 完成后不再保留 MinIO 上传入口。`allow_http` 仍只允许与 `fixed_main` 联用；生产部署使用 HTTPS 安全边界。
+开发 Compose 默认使用 `SOP_DEPLOYMENT_MODE=fixed_main` + `SOP_SESSION_COOKIE_TRANSPORT=allow_http`。annotation 本地入口是 `http://localhost:8444`；训练视频经同一个业务网关 `http://localhost:8443` 流式上传，不再有独立对象存储上传入口。`allow_http` 仍只允许与 `fixed_main` 联用；生产部署使用 HTTPS 安全边界。
 
 开发 Compose 中的完整当前变量集合见 [`../../deploy/dev/compose.yaml`](../../deploy/dev/compose.yaml)，不要把其中的开发值复制成生产默认值。
 

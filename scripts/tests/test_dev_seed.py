@@ -15,6 +15,8 @@ SEED = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = SEED
 SPEC.loader.exec_module(SEED)
 
+UPLOAD_URL = "/api/v1/training-datasets/dataset-1/members/member-1/attempts/attempt-1/content"
+
 
 class RetryClient:
     def __init__(self) -> None:
@@ -38,7 +40,10 @@ class RetryClient:
             return {
                 "member": {"id": "member-retried"},
                 "attempt": {"id": "attempt-retried"},
-                "upload": {"url": "http://minio/upload", "method": "PUT"},
+                "upload": {
+                    "url": UPLOAD_URL,
+                    "method": "PUT",
+                },
             }
         raise AssertionError(f"unexpected request: {method} {path}")
 
@@ -49,7 +54,10 @@ class RetryClient:
 
     @staticmethod
     def assert_upload(instructions: dict[str, object]) -> None:
-        if instructions != {"url": "http://minio/upload", "method": "PUT"}:
+        if instructions != {
+            "url": UPLOAD_URL,
+            "method": "PUT",
+        }:
             raise AssertionError(instructions)
 
     def confirm_video_upload(

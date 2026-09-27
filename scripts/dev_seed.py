@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 import time
@@ -194,10 +193,10 @@ def complete_video_upload(
     upload: dict[str, object],
     video: Path,
 ) -> str:
-    """完成一次直传、确认和 worker 校验，供首次申请和失败重试共用。"""
+    """完成一次流式上传、确认和 worker 校验，供首次申请和失败重试共用。"""
     uploaded = client.upload_file(instructions=upload, path=video)
     if uploaded.status not in {200, 201, 204}:
-        raise DatasetImportError(f"开发样例视频直传失败：HTTP {uploaded.status}")
+        raise DatasetImportError(f"开发样例视频上传失败：HTTP {uploaded.status}")
     confirmed = client.confirm_video_upload(
         dataset_id=dataset_id,
         member_id=member_id,
@@ -261,12 +260,10 @@ def ensure_video(client: ControlPlaneClient, dataset_id: str, video: Path) -> st
                 video=video,
             )
         raise DatasetImportError(f"开发样例视频处于不可恢复状态：{status}")
-    content = video.read_bytes()
     declaration = {
         "original_filename": SAMPLE_VIDEO_FILENAME,
         "source": "synthetic-development",
-        "declared_size": len(content),
-        "declared_sha256": hashlib.sha256(content).hexdigest(),
+        "declared_size": video.stat().st_size,
     }
     requested = client.request_video_upload(
         dataset_id=dataset_id,

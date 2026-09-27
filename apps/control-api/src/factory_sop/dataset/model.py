@@ -105,7 +105,7 @@ class DdmVideoInput:
     """一次 DDM 检查冻结的一段完整源视频和动作时间段。"""
 
     member_id: UUID
-    object_version_id: str
+    object_key: str
     source_sha256: str
     duration_seconds: float
     action_list_revision: int
@@ -121,7 +121,7 @@ class VlmMediaReference:
 
     key: str
     member_id: UUID
-    source_object_version_id: str
+    source_object_key: str
     source_sha256: str
     annotation_submission_id: UUID | None = None
     annotation_execution_id: UUID | None = None
@@ -202,14 +202,14 @@ class ActionListRevision:
 
 @dataclass(frozen=True, slots=True)
 class AnnotationContext:
-    """绑定数据集、视频、动作清单和源对象代次的短期标注上下文。"""
+    """绑定数据集、视频、动作清单和定稿文件身份的短期标注上下文。"""
 
     id: UUID
     dataset_id: UUID
     member_id: UUID
     action_list_revision: int
     annotation_revision: int
-    source_object_version_id: str
+    source_object_key: str
     source_sha256: str
     created_by: UUID
     created_at: datetime
@@ -255,7 +255,7 @@ class AnnotationSubmission:
     context_id: UUID
     revision: int
     action_list_revision: int
-    source_object_version_id: str
+    source_object_key: str
     source_sha256: str
     idempotency_key: str
     request_digest: str
@@ -308,7 +308,7 @@ class DatasetMember:
     original_filename: str
     source: str
     declared_size: int
-    declared_sha256: str
+    declared_sha256: str | None
     current_attempt_id: UUID
     status: str
     actual_size: int | None
@@ -317,7 +317,6 @@ class DatasetMember:
     codec: str | None
     container: str | None
     object_key: str | None
-    object_version_id: str | None
     validation_job_id: UUID | None
     failure_code: str | None
     failure_detail: str | None
@@ -338,21 +337,20 @@ class UploadAttempt:
     idempotency_key: str | None
     object_key: str
     declared_size: int
-    declared_sha256: str
+    declared_sha256: str | None
     expires_at: datetime
     status: str
     created_at: datetime
     validation_job_id: UUID | None
-    object_version_id: str | None
+    final_object_key: str | None
 
 
 @dataclass(frozen=True, slots=True)
 class UploadInstructions:
-    """只在申请上传响应中返回的短期对象写说明。"""
+    """只在申请上传响应中返回的短期流式上传说明。"""
 
     method: str
     url: str
-    fields: dict[str, str]
     headers: dict[str, str]
     expires_at: datetime
     max_bytes: int
@@ -361,10 +359,9 @@ class UploadInstructions:
 
 @dataclass(frozen=True, slots=True)
 class ObjectStat:
-    """服务端从对象存储读取的事实，而非客户端声明。"""
+    """服务端从媒体存储读取的事实，而非客户端声明。"""
 
     size: int
-    version_id: str | None
 
 
 @dataclass(frozen=True, slots=True)

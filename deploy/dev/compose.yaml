@@ -29,46 +29,6 @@ services:
       timeout: 3s
       retries: 30
 
-  minio:
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
-    command: ["server", "/data", "--address", ":9000", "--console-address", ":9001"]
-    secrets:
-      - minio-access-key
-      - minio-secret-key
-    entrypoint: ["/bin/sh", "/opt/nvsop/minio-entrypoint.sh"]
-    volumes:
-      - minio-data:/data
-      - ${NVSOP_SOURCE_DIR:-.}/deploy/dev/minio-entrypoint.sh:/opt/nvsop/minio-entrypoint.sh:ro
-    healthcheck:
-      test: ["CMD", "curl", "--noproxy", "*", "-fsS", "http://127.0.0.1:9000/minio/health/live"]
-      interval: 3s
-      timeout: 3s
-      retries: 30
-
-  minio-init:
-    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
-    depends_on:
-      minio:
-        condition: service_healthy
-    secrets:
-      - minio-access-key
-      - minio-secret-key
-    environment:
-      NO_PROXY: minio,center-db,annotation-db,redis,annotation-backend,localhost,127.0.0.1
-      no_proxy: minio,center-db,annotation-db,redis,annotation-backend,localhost,127.0.0.1
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - >-
-        set -eu;
-        access_key="$$(cat /run/secrets/minio-access-key)";
-        secret_key="$$(cat /run/secrets/minio-secret-key)";
-        for attempt in $$(seq 1 60); do
-          if mc alias set local http://minio:9000 "$$access_key" "$$secret_key"; then break; fi;
-          sleep 1;
-        done;
-        mc mb --ignore-existing local/training;
-        mc version enable local/training;
-
   annotation-db:
     image: postgres:17.2-bookworm
     environment:
@@ -98,11 +58,7 @@ services:
       SOP_DATABASE_USER: nvsop
       SOP_DATABASE_PASSWORD_FILE: /run/secrets/center-db-password
       SOP_REDIS_URL_FILE: /run/secrets/redis-url
-      SOP_MINIO_ENDPOINT: http://minio:9000
-      SOP_MINIO_PUBLIC_ENDPOINT: ${NVSOP_DEV_MINIO_URL:-http://localhost:9443}
-      SOP_MINIO_BUCKET: training
-      SOP_MINIO_ACCESS_KEY_FILE: /run/secrets/minio-access-key
-      SOP_MINIO_SECRET_KEY_FILE: /run/secrets/minio-secret-key
+      SOP_DATASET_STORAGE_ROOT: /var/lib/nvsop/dataset-files
       SOP_CSRF_SECRET_FILE: /run/secrets/csrf-secret
       SOP_DEPLOYMENT_MODE: fixed_main
       SOP_SESSION_COOKIE_TRANSPORT: ${NVSOP_DEV_COOKIE_TRANSPORT:-allow_http}
@@ -119,13 +75,11 @@ services:
       SOP_MEDIA_PROBE_BINARY: ffprobe
       SOP_WORKER_HEALTH_CHECK_INTERVAL_SECONDS: "5"
       SOP_LOG_LEVEL: info
-      NO_PROXY: minio,center-db,annotation-db,redis,annotation-backend,localhost,127.0.0.1
-      no_proxy: minio,center-db,annotation-db,redis,annotation-backend,localhost,127.0.0.1
+      NO_PROXY: center-db,annotation-db,redis,annotation-backend,localhost,127.0.0.1
+      no_proxy: center-db,annotation-db,redis,annotation-backend,localhost,127.0.0.1
     secrets:
       - center-db-password
       - redis-url
-      - minio-access-key
-      - minio-secret-key
       - csrf-secret
     command: ["alembic", "-c", "/app/apps/control-api/alembic.ini", "upgrade", "head"]
     restart: "no"
@@ -143,8 +97,6 @@ services:
     secrets:
       - center-db-password
       - redis-url
-      - minio-access-key
-      - minio-secret-key
       - csrf-secret
       - bootstrap-password
     command: ["python", "-m", "factory_sop.bootstrap", "--login-name", "${NVSOP_DEV_LOGIN_NAME:-dev.admin}", "--display-name", "开发环境管理员", "--password-file", "/run/secrets/bootstrap-password"]
@@ -163,16 +115,14 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
       annotation-db:
         condition: service_healthy
     environment: *center-environment
+    volumes:
+      - dataset-media:/var/lib/nvsop/dataset-files
     secrets:
       - center-db-password
       - redis-url
-      - minio-access-key
-      - minio-secret-key
       - csrf-secret
     command: ["uvicorn", "factory_sop.entrypoint:build", "--factory", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
@@ -188,18 +138,15 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
       annotation-backend:
         condition: service_healthy
     environment: *center-environment
     volumes:
+      - dataset-media:/var/lib/nvsop/dataset-files
       - annotation-media:/var/lib/nvsop/annotation-data:ro
     secrets:
       - center-db-password
       - redis-url
-      - minio-access-key
-      - minio-secret-key
       - csrf-secret
     command: ["python", "-m", "factory_sop.worker_entrypoint"]
     healthcheck:
@@ -296,8 +243,8 @@ volumes:
     name: nvsop-dev-main-center-db
   redis-data:
     name: nvsop-dev-main-redis
-  minio-data:
-    name: nvsop-dev-main-minio
+  dataset-media:
+    name: nvsop-dev-main-dataset-media
   annotation-db-data:
     name: nvsop-dev-main-annotation-db
   annotation-media:
@@ -312,9 +259,5 @@ secrets:
     file: ${NVSOP_DEV_STATE_DIR:-.nvsop/dev-main}/secrets/bootstrap-password
   csrf-secret:
     file: ${NVSOP_DEV_STATE_DIR:-.nvsop/dev-main}/secrets/csrf-secret
-  minio-access-key:
-    file: ${NVSOP_DEV_STATE_DIR:-.nvsop/dev-main}/secrets/minio-access-key
-  minio-secret-key:
-    file: ${NVSOP_DEV_STATE_DIR:-.nvsop/dev-main}/secrets/minio-secret-key
   redis-url:
     file: ${NVSOP_DEV_STATE_DIR:-.nvsop/dev-main}/secrets/redis-url

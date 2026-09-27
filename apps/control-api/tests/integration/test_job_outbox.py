@@ -5,18 +5,18 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
 from _integration_support import (
-    MinioServer,
     RedisServer,
     cleanup_dataset,
     client_for,
     row,
     settings_for,
-    upload_presigned,
+    upload_video_content,
 )
 from arq.connections import RedisSettings
 from fastapi.testclient import TestClient
@@ -311,18 +311,18 @@ def _assert_redis_job(redis_client: Redis, job_id: UUID) -> None:
 
 def test_committed_confirmation_is_delivered_to_real_redis_after_postgres_commit(
     engine: Engine,
-    minio_server: MinioServer,
+    dataset_storage_root: Path,
     redis_server: RedisServer,
     redis_client: Redis,
 ) -> None:
-    settings = settings_for(engine, minio=minio_server, redis_url=redis_server.url)
+    settings = settings_for(engine, storage_root=dataset_storage_root, redis_url=redis_server.url)
     with client_for(engine, settings) as client:
         dataset_id = _create_dataset(client)
         try:
             requested = _request_upload(client, dataset_id)
             upload = requested["upload"]
             content = b"outbox-only-synthetic-object"
-            uploaded = upload_presigned(upload, content)
+            uploaded = upload_video_content(client, upload, content)
             assert uploaded.status_code == 204, uploaded.text
             job_id = _confirm(client, dataset_id, requested)
 
@@ -340,7 +340,7 @@ def test_committed_confirmation_is_delivered_to_real_redis_after_postgres_commit
 
 def test_failed_real_redis_dispatch_stays_pending_and_is_retried_from_outbox(
     engine: Engine,
-    minio_server: MinioServer,
+    dataset_storage_root: Path,
     redis_server: RedisServer,
     redis_client: Redis,
 ) -> None:
@@ -348,7 +348,7 @@ def test_failed_real_redis_dispatch_stays_pending_and_is_retried_from_outbox(
     # 测试仍使用生产 dispatcher，只让真实连接失败触发 outbox 保留。
     failed_settings = settings_for(
         engine,
-        minio=minio_server,
+        storage_root=dataset_storage_root,
         redis_url="redis://127.0.0.1:1/0",
     )
     with client_for(engine, failed_settings) as client:
@@ -370,7 +370,7 @@ def test_failed_real_redis_dispatch_stays_pending_and_is_retried_from_outbox(
 
             recovered_settings = settings_for(
                 engine,
-                minio=minio_server,
+                storage_root=dataset_storage_root,
                 redis_url=redis_server.url,
             )
             dispatcher = ArqJobDispatcher.from_settings(

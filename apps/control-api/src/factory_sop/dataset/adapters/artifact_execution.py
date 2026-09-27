@@ -96,7 +96,7 @@ class PostgresDatasetArtifactExecutor:
                 target=target,
                 finish_job=finish_job,
                 code="STORAGE_UNAVAILABLE",
-                detail="对象存储暂时不可用，请稍后重试",
+                detail="训练素材存储暂时不可用，请稍后重试",
                 error=error,
             )
 
@@ -116,11 +116,9 @@ class PostgresDatasetArtifactExecutor:
                 storage=storage,
                 generate=self._generate,
             )
-            stored = storage.finalize_upload(
-                object_key=object_key,
-                source=BytesIO(content),
-                size=len(content),
-            )
+            with storage.writing(object_key=object_key) as sink:
+                sink.write(content)
+            stored = storage.stat(object_key=object_key)
             if stored.size != len(content):
                 self._discard_candidate(storage=storage, object_key=object_key)
                 raise DatasetRefusedError(
@@ -155,7 +153,7 @@ class PostgresDatasetArtifactExecutor:
                 error.detail
                 if isinstance(error, DatasetRefusedError)
                 else (
-                    "对象存储暂时不可用，请稍后重试"
+                    "训练素材存储暂时不可用，请稍后重试"
                     if isinstance(error, ObjectStorageUnavailableError)
                     else "DDM annotation 制品生成失败"
                 )

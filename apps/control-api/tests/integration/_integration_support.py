@@ -6,17 +6,19 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-import httpx2
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from httpx2 import Response
 from pydantic import SecretStr
 from sqlalchemy import Engine, text
 
 from factory_sop.app import create_app
 from factory_sop.auth.adapters import dependencies as auth_dependencies
+from factory_sop.auth.adapters.cookies import CSRF_COOKIE, CSRF_HEADER
 from factory_sop.auth.authorization import Caller
 from factory_sop.auth.model import Session, User, UserStatus
 from factory_sop.auth.permissions import Permission
@@ -24,16 +26,6 @@ from factory_sop.auth.usecases.sessions import RestoredSession
 from factory_sop.job.adapters.dispatcher import ArqJobDispatcher
 from factory_sop.persistence import session_factory
 from factory_sop.settings import Settings
-
-
-@dataclass(frozen=True, slots=True)
-class MinioServer:
-    """由测试容器提供的临时 MinIO 端点。"""
-
-    endpoint: str
-    bucket: str
-    access_key: str
-    secret_key: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +45,7 @@ NOW = datetime(2026, 9, 9, 1, 0, tzinfo=UTC)
 def settings_for(
     engine: Engine,
     *,
-    minio: MinioServer | None = None,
+    storage_root: Path,
     redis_url: str | None = None,
     upload_ttl_seconds: int = 900,
 ) -> Settings:
@@ -75,21 +67,13 @@ def settings_for(
         "session_absolute_lifetime_minutes": 43200,
         "session_cookie_transport": "require_https",
         "csrf_secret": SecretStr("integration-csrf-secret"),
+        "dataset_storage_root": str(storage_root),
         "dataset_upload_ttl_seconds": upload_ttl_seconds,
         "dataset_supported_codecs": "h264,h265",
         "media_probe_binary": "ffprobe",
         "media_probe_timeout_seconds": 60,
+        "redis_url": SecretStr(redis_url or "redis://127.0.0.1:1/0"),
     }
-    if minio is not None:
-        values.update(
-            {
-                "minio_endpoint": minio.endpoint,
-                "minio_bucket": minio.bucket,
-                "minio_access_key": SecretStr(minio.access_key),
-                "minio_secret_key": SecretStr(minio.secret_key),
-            }
-        )
-    values["redis_url"] = SecretStr(redis_url or "redis://127.0.0.1:1/0")
     return Settings.model_validate(values)
 
 
@@ -153,16 +137,13 @@ def client_for(
         yield client
 
 
-def upload_presigned(
-    upload: dict[str, Any], content: bytes, *, filename: str = "sample.mp4"
-) -> httpx2.Response:
-    """使用 API 返回的真实 POST policy 直传 MinIO，不绕过签名边界。"""
-    return httpx2.post(
-        upload["url"],
-        data=upload["fields"],
-        files={"file": (filename, content, "video/mp4")},
-        timeout=30,
-    )
+def upload_video_content(client: TestClient, upload: dict[str, Any], content: bytes) -> Response:
+    """通过正式中心入口流式上传视频体，不绕过授权、会话或 CSRF 边界。"""
+    headers = {str(name): str(value) for name, value in dict(upload["headers"]).items()}
+    csrf = client.cookies.get(CSRF_COOKIE)
+    if isinstance(csrf, str):
+        headers[CSRF_HEADER] = csrf
+    return client.put(str(upload["url"]), content=content, headers=headers)
 
 
 def cleanup_dataset(engine: Engine, dataset_id: UUID) -> None:

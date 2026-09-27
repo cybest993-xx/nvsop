@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -29,7 +30,6 @@ from factory_sop.dataset.model import (
     ObjectStat,
     TrainingDataset,
     UploadAttempt,
-    UploadInstructions,
 )
 from factory_sop.dataset.storage import ObjectStorage
 from factory_sop.dataset.usecases.annotation import (
@@ -230,41 +230,17 @@ _MISSING = type("Missing", (), {"submission_id": None})()
 class FakeAnnotationCopyStorage(ObjectStorage):
     source: bytes
 
-    def create_upload(
-        self,
-        *,
-        object_key: str,
-        declared_size: int,
-        max_bytes: int,
-        expires_at: datetime,
-    ) -> UploadInstructions:
-        del object_key, declared_size, max_bytes, expires_at
-        raise AssertionError("测试不应申请上传凭据")
+    def writing(self, *, object_key: str) -> AbstractContextManager[BinaryIO]:
+        del object_key
+        raise AssertionError("测试不应写入对象")
 
     def stat(self, *, object_key: str) -> ObjectStat:
         del object_key
         raise AssertionError("测试不应读取对象元数据")
 
-    def download_to(
-        self,
-        *,
-        object_key: str,
-        destination: BinaryIO,
-        version_id: str | None = None,
-    ) -> None:
+    def download_to(self, *, object_key: str, destination: BinaryIO) -> None:
         assert object_key
-        assert version_id == "version-1"
         destination.write(self.source)
-
-    def finalize_upload(
-        self,
-        *,
-        object_key: str,
-        source: BinaryIO,
-        size: int,
-    ) -> ObjectStat:
-        del object_key, source, size
-        raise AssertionError("测试不应定稿对象")
 
     def delete(self, *, object_key: str) -> None:
         del object_key
@@ -411,7 +387,6 @@ def store() -> FakeAnnotationStore:
         codec="h264",
         container="mp4",
         object_key="training-datasets/dataset/member/video",
-        object_version_id="version-1",
         validation_job_id=None,
         failure_code=None,
         failure_detail=None,
@@ -544,7 +519,9 @@ def test_context_token_is_signed_and_binds_the_exact_registered_source() -> None
             token[:-1] + ("A" if token[-1] != "A" else "B"), secret=SECRET, now=NOW
         )
 
-    changed = replace(value.members[MEMBER_ID], object_version_id="version-2")
+    changed = replace(
+        value.members[MEMBER_ID], object_key="training-datasets/dataset/member/video-2"
+    )
     value.members[MEMBER_ID] = changed
     with pytest.raises(AnnotationRefusedError):
         submit_annotation(

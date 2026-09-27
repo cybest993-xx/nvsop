@@ -164,7 +164,7 @@ class PostgresDatasetRepository:
                 expires_at=attempt.expires_at,
                 status=attempt.status,
                 validation_job_id=attempt.validation_job_id,
-                object_version_id=attempt.object_version_id,
+                final_object_key=attempt.final_object_key,
             )
         )
 
@@ -516,7 +516,6 @@ def _member_values(member: DatasetMember) -> dict[str, object]:
         "codec": member.codec,
         "container": member.container,
         "object_key": member.object_key,
-        "object_version_id": member.object_version_id,
         "validation_job_id": member.validation_job_id,
         "failure_code": member.failure_code,
         "failure_detail": member.failure_detail,

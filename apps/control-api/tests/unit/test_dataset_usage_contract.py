@@ -34,7 +34,7 @@ EXPECTED_DDM_INPUT_DIGEST = (
 def _video(*, mode: AnnotationMode = AnnotationMode.SINGLE_OPERATOR) -> DdmVideoInput:
     return DdmVideoInput(
         member_id=MEMBER_ID,
-        object_version_id="object-1",
+        object_key="object-1",
         source_sha256="a" * 64,
         duration_seconds=10.0,
         action_list_revision=1,
@@ -162,7 +162,7 @@ def test_vlm_requires_explicit_registered_media_and_exact_two_turn_conversation(
             VlmMediaReference(
                 key="line-a.mp4",
                 member_id=MEMBER_ID,
-                source_object_version_id="object-1",
+                source_object_key="object-1",
                 source_sha256="a" * 64,
             ),
         ),
@@ -239,7 +239,7 @@ def test_vlm_accepts_base_nested_sampling_metadata_and_mcq_answer_mapping() -> N
             VlmMediaReference(
                 key="01_line-a_1_1.mp4",
                 member_id=MEMBER_ID,
-                source_object_version_id="object-1",
+                source_object_key="object-1",
                 source_sha256="a" * 64,
                 action_indices=(1,),
             ),
@@ -278,7 +278,7 @@ def test_vlm_rejects_empty_frame_counts() -> None:
             VlmMediaReference(
                 key="line-a.mp4",
                 member_id=MEMBER_ID,
-                source_object_version_id="object-1",
+                source_object_key="object-1",
                 source_sha256="a" * 64,
             ),
         ),
@@ -316,7 +316,7 @@ def test_vlm_does_not_infer_action_indices_from_media_filename() -> None:
             VlmMediaReference(
                 key="01_Install_8_2_11.mp4",
                 member_id=MEMBER_ID,
-                source_object_version_id="object-1",
+                source_object_key="object-1",
                 source_sha256="a" * 64,
             ),
         ),
@@ -339,7 +339,7 @@ def test_vlm_rejects_duplicate_basenames_even_when_mapping_keys_differ() -> None
         VlmMediaReference(
             key=key,
             member_id=MEMBER_ID,
-            source_object_version_id="object-1",
+            source_object_key="object-1",
             source_sha256="a" * 64,
         )
         for key in ("videos/line-a.mp4", "clips/line-a.mp4")
@@ -421,7 +421,7 @@ def test_vlm_rejects_action_numbers_outside_the_frozen_action_list() -> None:
             VlmMediaReference(
                 key="line-a.mp4",
                 member_id=MEMBER_ID,
-                source_object_version_id="object-1",
+                source_object_key="object-1",
                 source_sha256="a" * 64,
             ),
         ),

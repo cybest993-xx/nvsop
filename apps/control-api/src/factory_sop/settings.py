@@ -27,10 +27,7 @@ LogLevel = Literal["debug", "info", "warning", "error"]
 CookieTransport = Literal["require_https", "allow_http"]
 DeploymentMode = Literal["production", "fixed_main"]
 _REQUIRED_RUNTIME_SETTINGS = (
-    "minio_endpoint",
-    "minio_bucket",
-    "minio_access_key",
-    "minio_secret_key",
+    "dataset_storage_root",
     "redis_url",
     "dataset_upload_ttl_seconds",
     "dataset_max_upload_bytes",
@@ -76,12 +73,8 @@ class Settings(BaseSettings):
     csrf_secret: SecretStr = Field(repr=False)
 
     # 直接构造 Settings 仍服务于不需要基础设施的 adapter 测试；from_environment 会要求
-    # 生产运行所需的完整数据集、对象存储和任务队列配置。
-    minio_endpoint: str | None = None
-    minio_public_endpoint: str | None = None
-    minio_bucket: str | None = None
-    minio_access_key: SecretStr | None = Field(default=None, repr=False)
-    minio_secret_key: SecretStr | None = Field(default=None, repr=False)
+    # 生产运行所需的完整数据集、本地媒体存储和任务队列配置。
+    dataset_storage_root: str | None = None
     redis_url: SecretStr | None = Field(default=None, repr=False)
     dataset_upload_ttl_seconds: int = Field(default=900, gt=0, le=86400)
     dataset_max_upload_bytes: int = Field(default=8 * 1024**3, gt=0)
@@ -107,30 +100,18 @@ class Settings(BaseSettings):
         if self.session_cookie_transport == "allow_http":
             if self.deployment_mode != "fixed_main":
                 raise ValueError("allow_http is only valid for the fixed_main local deployment")
-            if not _is_fixed_main_http_origin(self.minio_public_endpoint, port=9443):
-                raise ValueError(
-                    "allow_http fixed_main requires minio_public_endpoint at http://localhost:9443"
-                )
             if not _is_fixed_main_http_origin(self.annotation_media_origin, port=8444):
                 raise ValueError(
                     "allow_http fixed_main requires annotation_media_origin at "
                     "http://localhost:8444"
                 )
-        minio_values = (
-            self.minio_endpoint,
-            self.minio_bucket,
-            self.minio_access_key,
-            self.minio_secret_key,
-        )
-        if any(
-            value is not None for value in (*minio_values, self.minio_public_endpoint)
-        ) and not all(value is not None for value in minio_values):
-            raise ValueError(
-                "minio_endpoint, minio_bucket, minio_access_key and minio_secret_key "
-                "must be configured together"
-            )
-        if not self.dataset_supported_codecs.strip():
-            raise ValueError("dataset_supported_codecs must not be empty")
+        if self.dataset_storage_root is not None:
+            if not self.dataset_storage_root.strip():
+                raise ValueError("dataset_storage_root must not be empty")
+            if not Path(self.dataset_storage_root).is_absolute():
+                raise ValueError("dataset_storage_root must be an absolute path")
+        if not any(item.strip() for item in self.dataset_supported_codecs.split(",")):
+            raise ValueError("dataset_supported_codecs must contain at least one codec")
         if (self.annotation_backend_url is None) != (self.annotation_media_origin is None):
             raise ValueError(
                 "annotation_backend_url and annotation_media_origin must be configured together"
@@ -259,21 +240,12 @@ class Settings(BaseSettings):
 
 
 def _require_runtime_infrastructure(settings: Settings) -> None:
-    """拒绝缺失对象存储或任务队列的可运行配置。"""
-    if any(
-        value is None
-        for value in (
-            settings.minio_endpoint,
-            settings.minio_bucket,
-            settings.minio_access_key,
-            settings.minio_secret_key,
-        )
-    ):
-        raise ConfigurationError("部署必须完整配置 MinIO 对象存储")
-    if settings.minio_bucket is None or not settings.minio_bucket.strip():
-        raise ConfigurationError("MinIO bucket 不能为空")
-    if not any(item.strip() for item in settings.dataset_supported_codecs.split(",")):
-        raise ConfigurationError("dataset_supported_codecs 不能为空")
+    """拒绝缺失本地媒体存储或任务队列的可运行配置。
+
+    格式规则由 `Settings` 自身校验，这里只判定必需项是否存在。
+    """
+    if settings.dataset_storage_root is None:
+        raise ConfigurationError("部署必须配置中心训练素材本地存储根目录")
     if settings.redis_url is None:
         raise ConfigurationError("部署必须配置 Redis 任务队列")
     redis_url = urlsplit(settings.redis_url.get_secret_value())
@@ -291,28 +263,6 @@ def _require_runtime_infrastructure(settings: Settings) -> None:
         raise ConfigurationError("redis_url 数据库编号无效") from error
     if database < 0:
         raise ConfigurationError("redis_url 数据库编号无效")
-    for label, endpoint in (
-        ("minio_endpoint", settings.minio_endpoint),
-        ("minio_public_endpoint", settings.minio_public_endpoint),
-    ):
-        if endpoint is None:
-            continue
-        parsed = urlsplit(endpoint)
-        try:
-            port = parsed.port
-        except ValueError as error:
-            raise ConfigurationError(f"{label} 端口无效") from error
-        if (
-            parsed.scheme not in {"http", "https"}
-            or not parsed.netloc
-            or parsed.path
-            not in {
-                "",
-                "/",
-            }
-            or (port is not None and not 1 <= port <= 65535)
-        ):
-            raise ConfigurationError(f"{label} 必须是带主机的 HTTP(S) 地址")
 
 
 def _variable_name(field_name: str) -> str:

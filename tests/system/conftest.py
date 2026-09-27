@@ -130,10 +130,8 @@ def deployment_environ(engine: Engine, tmp_path: Path) -> dict[str, str]:
     csrf_secret = tmp_path / "csrf-secret"
     csrf_secret.write_text("csrf-secret\n", encoding="utf-8")
     # 与 bootstrap 集成夹具一致：这些场景只使用 PostgreSQL，启动配置仍须完整。
-    minio_access_key = tmp_path / "minio-access-key"
-    minio_access_key.write_text("minio-access\n", encoding="utf-8")
-    minio_secret_key = tmp_path / "minio-secret-key"
-    minio_secret_key.write_text("minio-secret\n", encoding="utf-8")
+    dataset_storage_root = tmp_path / "dataset-files"
+    dataset_storage_root.mkdir()
     redis_url = tmp_path / "redis-url"
     redis_url.write_text("redis://redis.internal:6379/0\n", encoding="utf-8")
     url = engine.url
@@ -152,10 +150,7 @@ def deployment_environ(engine: Engine, tmp_path: Path) -> dict[str, str]:
         "SOP_SESSION_ABSOLUTE_LIFETIME_MINUTES": "43200",
         "SOP_SESSION_COOKIE_TRANSPORT": "require_https",
         "SOP_CSRF_SECRET_FILE": str(csrf_secret),
-        "SOP_MINIO_ENDPOINT": "http://minio.internal:9000",
-        "SOP_MINIO_BUCKET": "training",
-        "SOP_MINIO_ACCESS_KEY_FILE": str(minio_access_key),
-        "SOP_MINIO_SECRET_KEY_FILE": str(minio_secret_key),
+        "SOP_DATASET_STORAGE_ROOT": str(dataset_storage_root),
         "SOP_REDIS_URL_FILE": str(redis_url),
         "SOP_DATASET_UPLOAD_TTL_SECONDS": "900",
         "SOP_DATASET_MAX_UPLOAD_BYTES": str(8 * 1024**3),

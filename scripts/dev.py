@@ -70,7 +70,6 @@ TILT_VERSION = "0.37.7"
 TILT_PORT = 10350
 BUSINESS_PORT = 8443
 MEDIA_PORT = 8444
-MINIO_PORT = 9443
 PLAYWRIGHT_UI_PORT = 9323
 PLAYWRIGHT_UI_URL = f"http://localhost:{PLAYWRIGHT_UI_PORT}"
 PROTOCOL_ENVIRONMENT = "NVSOP_DEV_PROTOCOL"
@@ -105,7 +104,6 @@ def public_urls(protocol: str) -> dict[str, str]:
     return {
         "business": f"{protocol}://localhost:{BUSINESS_PORT}",
         "annotation_media": f"{protocol}://localhost:{MEDIA_PORT}",
-        "minio_upload": f"{protocol}://localhost:{MINIO_PORT}",
         "tilt": f"http://localhost:{TILT_PORT}",
         "playwright_ui": PLAYWRIGHT_UI_URL,
     }
@@ -491,7 +489,6 @@ def require_instance_ports() -> None:
             "Tilt": TILT_PORT,
             "业务网关": BUSINESS_PORT,
             "媒体网关": MEDIA_PORT,
-            "MinIO": MINIO_PORT,
         }
     )
 
@@ -631,7 +628,6 @@ def runtime_environment(
             ),
             "NVSOP_DEV_BASE_URL": urls["business"],
             "NVSOP_DEV_MEDIA_URL": urls["annotation_media"],
-            "NVSOP_DEV_MINIO_URL": urls["minio_upload"],
             "PYTHONDONTWRITEBYTECODE": "1",
         }
     )
@@ -988,8 +984,6 @@ def ensure_credentials(item: DevPaths) -> None:
     write_secret(item.secrets / "annotation-db-password", "annotation-" + os.urandom(18).hex())
     write_secret(item.secrets / "bootstrap-password", "dev-" + os.urandom(24).hex())
     write_secret(item.secrets / "csrf-secret", os.urandom(32).hex())
-    write_secret(item.secrets / "minio-access-key", "nvsopdev")
-    write_secret(item.secrets / "minio-secret-key", os.urandom(32).hex())
     write_secret(item.secrets / "redis-url", "redis://redis:6379/0")
     if not item.credentials_file.exists():
         item.credentials_file.write_text(
@@ -1024,8 +1018,6 @@ def setup(item: DevPaths) -> None:
             "pull",
             "center-db",
             "redis",
-            "minio",
-            "minio-init",
             "annotation-db",
             "gateway",
         ),
@@ -1134,7 +1126,6 @@ _REQUIRED_READY_SERVICES = frozenset(
     {
         "center-db",
         "redis",
-        "minio",
         "annotation-db",
         "annotation-backend",
         "annotation-frontend",
@@ -1201,7 +1192,7 @@ def status(item: DevPaths) -> int:
             "health": details.get("health"),
         }
         for name, details in services.items()
-        if name in {"center-db", "redis", "minio", "annotation-db", "center-api", "worker"}
+        if name in {"center-db", "redis", "annotation-db", "center-api", "worker"}
     }
     if compose_error:
         value["compose_error"] = compose_error
@@ -1404,7 +1395,7 @@ def wait_until_ready(
             return False, "samples"
         if failed_service(statuses, "center-migrate"):
             return False, "migration"
-        if failed_service(statuses, "center-bootstrap") or failed_service(statuses, "minio-init"):
+        if failed_service(statuses, "center-bootstrap"):
             return False, "initialization"
         for name in required_running:
             if failed_service(statuses, name):

@@ -81,7 +81,7 @@ def _gateway_permission(original_uri: str, method: str) -> Permission | None:
     path = urlsplit(original_uri).path.rstrip("/")
     dataset_root = f"{_CONTROL_API_PREFIX}/training-datasets"
     if path == dataset_root or path.startswith(dataset_root + "/"):
-        if method == "POST" and _is_dataset_import_path(path, dataset_root):
+        if _is_dataset_import_path(path, dataset_root, method):
             return Permission.DATASET_IMPORT
         return (
             Permission.DATASET_EDIT
@@ -101,13 +101,23 @@ def _gateway_permission(original_uri: str, method: str) -> Permission | None:
     return None
 
 
-def _is_dataset_import_path(path: str, dataset_root: str) -> bool:
+def _is_dataset_import_path(path: str, dataset_root: str, method: str) -> bool:
+    """判断该控制面写请求是否属于数据集导入：登记、成员操作与流式上传正文。"""
     if path == dataset_root:
-        return True
+        return method == "POST"
     parts = path.split("/")
-    if len(parts) == 6 and parts[5] == "members":
-        return True
-    return len(parts) == 8 and parts[5] == "members" and parts[7] in {"confirm", "retry"}
+    if method == "POST":
+        if len(parts) == 6 and parts[5] == "members":
+            return True
+        return len(parts) == 8 and parts[5] == "members" and parts[7] in {"confirm", "retry"}
+    # 流式上传训练视频：PUT .../members/{member_id}/attempts/{attempt_id}/content
+    return (
+        method == "PUT"
+        and len(parts) == 10
+        and parts[5] == "members"
+        and parts[7] == "attempts"
+        and parts[9] == "content"
+    )
 
 
 def _gateway_resource_from_uri(original_uri: str) -> AnnotationGatewayResource:
@@ -199,7 +209,7 @@ ProblemResponses: dict[int | str, dict[str, Any]] = {
     404: problem_openapi_response("训练数据集、视频或标注提交不存在"),
     409: problem_openapi_response("标注当前状态不允许该操作"),
     422: problem_openapi_response("标注输入无效"),
-    503: problem_openapi_response("标注基座或对象存储暂时不可用"),
+    503: problem_openapi_response("标注基座或训练素材存储暂时不可用"),
 }
 
 
@@ -295,7 +305,7 @@ class AnnotationSubmissionView(BaseModel):
     context_id: UUID
     revision: int
     action_list_revision: int
-    source_object_version_id: str
+    source_object_key: str
     source_sha256: str
     idempotency_key: str
     mode: str
@@ -322,7 +332,7 @@ class AnnotationContextView(BaseModel):
     member_id: UUID
     action_list_revision: int
     annotation_revision: int
-    source_object_version_id: str
+    source_object_key: str
     source_sha256: str
     derived_video_size: int | None
     derived_video_sha256: str | None
@@ -896,7 +906,7 @@ def _context_view(
         member_id=context.member_id,
         action_list_revision=actions.revision,
         annotation_revision=context.annotation_revision,
-        source_object_version_id=context.source_object_version_id,
+        source_object_key=context.source_object_key,
         source_sha256=context.source_sha256,
         derived_video_size=context.upstream_video_size,
         derived_video_sha256=context.upstream_video_sha256,
@@ -940,7 +950,7 @@ def _submission_view(
         context_id=value.context_id,
         revision=value.revision,
         action_list_revision=value.action_list_revision,
-        source_object_version_id=value.source_object_version_id,
+        source_object_key=value.source_object_key,
         source_sha256=value.source_sha256,
         idempotency_key=value.idempotency_key,
         mode=value.mode.value,

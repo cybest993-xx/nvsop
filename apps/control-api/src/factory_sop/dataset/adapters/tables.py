@@ -90,7 +90,7 @@ class DatasetMemberRow(Table):
     original_filename: Mapped[str] = mapped_column(String(255))
     source: Mapped[str] = mapped_column(String(255))
     declared_size: Mapped[int] = mapped_column(BigInteger())
-    declared_sha256: Mapped[str] = mapped_column(String(64))
+    declared_sha256: Mapped[str | None] = mapped_column(String(64))
     current_attempt_id: Mapped[UUID] = mapped_column(Uuid(), index=True)
     status: Mapped[str] = mapped_column(String(32))
     actual_size: Mapped[int | None] = mapped_column(BigInteger())
@@ -99,7 +99,6 @@ class DatasetMemberRow(Table):
     codec: Mapped[str | None] = mapped_column(String(64))
     container: Mapped[str | None] = mapped_column(String(128))
     object_key: Mapped[str | None] = mapped_column(String(512))
-    object_version_id: Mapped[str | None] = mapped_column(String(255))
     validation_job_id: Mapped[UUID | None] = mapped_column(Uuid(), index=True)
     failure_code: Mapped[str | None] = mapped_column(String(64))
     failure_detail: Mapped[str | None] = mapped_column(String(1024))
@@ -125,7 +124,6 @@ class DatasetMemberRow(Table):
             codec=self.codec,
             container=self.container,
             object_key=self.object_key,
-            object_version_id=self.object_version_id,
             validation_job_id=self.validation_job_id,
             failure_code=self.failure_code,
             failure_detail=self.failure_detail,
@@ -153,7 +151,6 @@ class DatasetMemberRow(Table):
             codec=member.codec,
             container=member.container,
             object_key=member.object_key,
-            object_version_id=member.object_version_id,
             validation_job_id=member.validation_job_id,
             failure_code=member.failure_code,
             failure_detail=member.failure_detail,
@@ -181,12 +178,12 @@ class UploadAttemptRow(Table):
     idempotency_key: Mapped[str | None] = mapped_column(String(255))
     object_key: Mapped[str] = mapped_column(String(512), unique=True)
     declared_size: Mapped[int] = mapped_column(BigInteger())
-    declared_sha256: Mapped[str] = mapped_column(String(64))
+    declared_sha256: Mapped[str | None] = mapped_column(String(64))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     validation_job_id: Mapped[UUID | None] = mapped_column(Uuid())
-    object_version_id: Mapped[str | None] = mapped_column(String(255))
+    final_object_key: Mapped[str | None] = mapped_column(String(255))
 
     def to_domain(self) -> UploadAttempt:
         return UploadAttempt(
@@ -201,7 +198,7 @@ class UploadAttemptRow(Table):
             status=self.status,
             created_at=self.created_at,
             validation_job_id=self.validation_job_id,
-            object_version_id=self.object_version_id,
+            final_object_key=self.final_object_key,
         )
 
     @classmethod
@@ -218,7 +215,7 @@ class UploadAttemptRow(Table):
             status=attempt.status,
             created_at=attempt.created_at,
             validation_job_id=attempt.validation_job_id,
-            object_version_id=attempt.object_version_id,
+            final_object_key=attempt.final_object_key,
         )
 
 
@@ -270,7 +267,7 @@ class AnnotationContextRow(Table):
     )
     action_list_revision: Mapped[int] = mapped_column(Integer())
     annotation_revision: Mapped[int] = mapped_column(Integer())
-    source_object_version_id: Mapped[str] = mapped_column(String(255))
+    source_object_key: Mapped[str] = mapped_column(String(255))
     source_sha256: Mapped[str] = mapped_column(String(64))
     created_by: Mapped[UUID] = mapped_column(Uuid())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -294,7 +291,7 @@ class AnnotationContextRow(Table):
             member_id=self.member_id,
             action_list_revision=self.action_list_revision,
             annotation_revision=self.annotation_revision,
-            source_object_version_id=self.source_object_version_id,
+            source_object_key=self.source_object_key,
             source_sha256=self.source_sha256,
             created_by=self.created_by,
             created_at=self.created_at,
@@ -318,7 +315,7 @@ class AnnotationContextRow(Table):
             member_id=value.member_id,
             action_list_revision=value.action_list_revision,
             annotation_revision=value.annotation_revision,
-            source_object_version_id=value.source_object_version_id,
+            source_object_key=value.source_object_key,
             source_sha256=value.source_sha256,
             created_by=value.created_by,
             created_at=value.created_at,
@@ -356,7 +353,7 @@ class AnnotationSubmissionRow(Table):
     )
     revision: Mapped[int] = mapped_column(Integer())
     action_list_revision: Mapped[int] = mapped_column(Integer())
-    source_object_version_id: Mapped[str] = mapped_column(String(255))
+    source_object_key: Mapped[str] = mapped_column(String(255))
     source_sha256: Mapped[str] = mapped_column(String(64))
     idempotency_key: Mapped[str] = mapped_column(String(255))
     request_digest: Mapped[str] = mapped_column(String(64))
@@ -374,7 +371,7 @@ class AnnotationSubmissionRow(Table):
             context_id=self.context_id,
             revision=self.revision,
             action_list_revision=self.action_list_revision,
-            source_object_version_id=self.source_object_version_id,
+            source_object_key=self.source_object_key,
             source_sha256=self.source_sha256,
             idempotency_key=self.idempotency_key,
             request_digest=self.request_digest,
@@ -402,7 +399,7 @@ class AnnotationSubmissionRow(Table):
             context_id=value.context_id,
             revision=value.revision,
             action_list_revision=value.action_list_revision,
-            source_object_version_id=value.source_object_version_id,
+            source_object_key=value.source_object_key,
             source_sha256=value.source_sha256,
             idempotency_key=value.idempotency_key,
             request_digest=value.request_digest,
@@ -511,7 +508,7 @@ class VlmCandidateRow(Table):
                 VlmMediaReference(
                     key=str(item["key"]),
                     member_id=UUID(str(item["member_id"])),
-                    source_object_version_id=str(item["source_object_version_id"]),
+                    source_object_key=str(item["source_object_version_id"]),
                     source_sha256=str(item["source_sha256"]),
                     annotation_submission_id=(
                         UUID(str(item["annotation_submission_id"]))
@@ -549,7 +546,7 @@ class VlmCandidateRow(Table):
                 {
                     "key": item.key,
                     "member_id": str(item.member_id),
-                    "source_object_version_id": item.source_object_version_id,
+                    "source_object_version_id": item.source_object_key,
                     "source_sha256": item.source_sha256,
                     "annotation_submission_id": (
                         str(item.annotation_submission_id)

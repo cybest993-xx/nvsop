@@ -87,13 +87,13 @@ def _signed_headers(
     return headers
 
 
-def _free_gateway_ports() -> tuple[int, int, int]:
+def _free_gateway_ports() -> tuple[int, int]:
     ports: list[int] = []
-    while len(ports) < 3:
+    while len(ports) < 2:
         candidate = _free_port()
         if candidate not in ports:
             ports.append(candidate)
-    return ports[0], ports[1], ports[2]
+    return ports[0], ports[1]
 
 
 def _render_nginx_config(
@@ -102,7 +102,7 @@ def _render_nginx_config(
     parsed = urlsplit(str(center.base_url))
     assert parsed.hostname == "127.0.0.1"
     assert parsed.port is not None
-    gateway_port, media_port, minio_port = _free_gateway_ports()
+    gateway_port, media_port = _free_gateway_ports()
 
     source = (
         NGINX_CONFIG.read_text(encoding="utf-8")
@@ -110,7 +110,6 @@ def _render_nginx_config(
         .replace("web:8080", "127.0.0.1:9")
         .replace("annotation-backend:8100", "127.0.0.1:9")
         .replace("annotation-frontend:80", "127.0.0.1:9")
-        .replace("minio:9000", "127.0.0.1:9")
         .replace("proxy_pass http://nvsop_center_api", "proxy_pass https://nvsop_center_api")
     )
     tls: Path | None = None
@@ -121,7 +120,6 @@ def _render_nginx_config(
         source = (
             source.replace("8443__NVSOP_LISTEN_SUFFIX__", f"{gateway_port} ssl")
             .replace("8444__NVSOP_LISTEN_SUFFIX__", f"{media_port} ssl")
-            .replace("9443__NVSOP_LISTEN_SUFFIX__", f"{minio_port} ssl")
             .replace(
                 "    # __NVSOP_TLS_DIRECTIVES__\n",
                 "    ssl_certificate /nvsop-tls/uvicorn.crt;\n"
@@ -133,7 +131,6 @@ def _render_nginx_config(
         source = (
             source.replace("8443__NVSOP_LISTEN_SUFFIX__", str(gateway_port))
             .replace("8444__NVSOP_LISTEN_SUFFIX__", str(media_port))
-            .replace("9443__NVSOP_LISTEN_SUFFIX__", str(minio_port))
             .replace("    # __NVSOP_TLS_DIRECTIVES__\n", "")
         )
 

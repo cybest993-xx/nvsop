@@ -1,10 +1,10 @@
-import type { DatasetUploadInstructions } from '@/api/controlPlane'
+import { CSRF_HEADER, csrfToken, type DatasetUploadInstructions } from '@/api/controlPlane'
 
 export class ObjectUploadError extends Error {
   readonly status: number
 
-  constructor(status: number) {
-    super(`对象存储上传失败（HTTP ${status}）`)
+  constructor(status: number, detail?: string) {
+    super(detail ? `视频上传失败（HTTP ${status}）：${detail}` : `视频上传失败（HTTP ${status}）`)
     this.name = 'ObjectUploadError'
     this.status = status
   }
@@ -13,10 +13,10 @@ export class ObjectUploadError extends Error {
 export type UploadProgressHandler = (percentage: number) => void
 
 /**
- * 将浏览器选择的一个文件直接上传到对象存储。
+ * 把浏览器选择的一个文件流式上传到中心正式入口。
  *
- * 这不是控制面请求：URL 和表单字段来自短期上传说明，浏览器不会把会话 Cookie 或 CSRF
- * 令牌转发给 MinIO。
+ * URL 与请求头来自短期上传说明，指向同一控制面；请求携带会话 Cookie 和 CSRF 双提交头，
+ * 浏览器不再把视频直接发往独立对象存储，也不会把视频内容读进页面内存。
  */
 export function uploadVideoObject(
   instructions: DatasetUploadInstructions,
@@ -24,18 +24,23 @@ export function uploadVideoObject(
   onProgress: UploadProgressHandler,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    const request = new XMLHttpRequest()
     const method = instructions.method.toUpperCase()
-    if (method !== 'POST') {
+    if (method !== 'PUT') {
       reject(new ObjectUploadError(0))
       return
     }
 
-    request.open(method, instructions.url, true)
-    request.withCredentials = false
-    for (const [name, value] of Object.entries(instructions.headers)) {
-      request.setRequestHeader(name, value)
+    const request = new XMLHttpRequest()
+    const url = new URL(instructions.url, window.location.origin)
+    request.open(method, url.toString(), true)
+    request.withCredentials = true
+
+    const headers = new Headers(instructions.headers)
+    const token = csrfToken()
+    if (token !== null) {
+      headers.set(CSRF_HEADER, token)
     }
+    headers.forEach((value, name) => request.setRequestHeader(name, value))
 
     request.upload.addEventListener('progress', (event) => {
       if (!event.lengthComputable) {
@@ -50,16 +55,11 @@ export function uploadVideoObject(
         resolve()
         return
       }
-      reject(new ObjectUploadError(request.status))
+      reject(new ObjectUploadError(request.status, request.responseText))
     })
     request.addEventListener('error', () => reject(new ObjectUploadError(0)))
     request.addEventListener('abort', () => reject(new ObjectUploadError(0)))
 
-    const form = new FormData()
-    for (const [name, value] of Object.entries(instructions.fields)) {
-      form.append(name, value)
-    }
-    form.append('file', file, file.name)
-    request.send(form)
+    request.send(file)
   })
 }

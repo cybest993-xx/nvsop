@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import shutil
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -73,6 +74,9 @@ _MAX_FILENAME_LENGTH = 255
 _MAX_SOURCE_LENGTH = 255
 _MAX_IDEMPOTENCY_LENGTH = 255
 _CODEC_ALIASES = {"h265": "hevc"}
+# 流式上传说明指向中心正式入口；浏览器与脚本不再拿到对象存储直传地址。
+_API_PREFIX = "/api/v1"
+_STREAM_COPY_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +99,17 @@ class ValidationTarget:
 
     member: DatasetMember
     attempt: UploadAttempt
+
+
+@dataclass(frozen=True, slots=True)
+class VideoContentUploadTarget:
+    """一次经授权的流式上传目标：服务端生成的对象键与本次允许的字节上限。"""
+
+    dataset_id: UUID
+    member_id: UUID
+    attempt_id: UUID
+    object_key: str
+    max_bytes: int
 
 
 def create_training_dataset(
@@ -191,19 +206,19 @@ def request_video_upload(
     original_filename: str,
     source: str,
     declared_size: int,
-    declared_sha256: str,
+    declared_sha256: str | None,
     idempotency_key: str | None,
     caller: Caller,
     now: datetime,
     datasets: DatasetRepository,
-    storage: ObjectStorage,
     max_upload_bytes: int,
     upload_ttl_seconds: int,
 ) -> UploadRequestResult:
-    """申请单个视频的短期对象写说明，并保证同一幂等键不新增成员。
+    """申请单个视频的短期流式上传说明，并保证同一幂等键不新增成员。
 
     授权是第一条语句；声明校验和对象键分配都在它之后。客户端只提交元数据，服务端
-    生成唯一对象键，故文件名既不能成为路径也不能覆盖另一条已登记素材。
+    生成唯一对象键，故文件名既不能成为路径也不能覆盖另一条已登记素材。客户端声明的
+    sha256 是可选期望；权威摘要由中心从流式字节计算并登记。
     """
     authorize(caller, Permission.DATASET_IMPORT)
     _validate_upload_declaration(
@@ -215,8 +230,8 @@ def request_video_upload(
         max_upload_bytes=max_upload_bytes,
         upload_ttl_seconds=upload_ttl_seconds,
     )
-    # 摘要十六进制大小写等价；持久化前统一小写，避免合法的大写声明在 worker 中被误拒。
-    declared_sha256 = declared_sha256.casefold()
+    # 摘要十六进制大小写等价；提供声明时统一小写，避免合法的大写声明在 worker 中被误拒。
+    declared_sha256 = declared_sha256.casefold() if declared_sha256 is not None else None
     _require_dataset(dataset_id=dataset_id, datasets=datasets)
 
     if idempotency_key is not None:
@@ -229,7 +244,10 @@ def request_video_upload(
                 _refuse(DatasetRefusalCode.RESOURCE_MISMATCH, "幂等上传尝试的成员不存在")
             if (
                 existing_attempt.declared_size != declared_size
-                or existing_attempt.declared_sha256 != declared_sha256
+                or (
+                    declared_sha256 is not None
+                    and existing_attempt.declared_sha256 != declared_sha256
+                )
                 or existing_member.original_filename != original_filename
                 or existing_member.source != source
             ):
@@ -257,10 +275,11 @@ def request_video_upload(
             return UploadRequestResult(
                 member=existing_member,
                 attempt=renewed,
-                upload=_create_upload(
-                    storage=storage,
+                upload=_upload_instructions(
+                    dataset_id=dataset_id,
+                    member_id=existing_member.id,
+                    attempt_id=renewed.id,
                     object_key=renewed.object_key,
-                    declared_size=declared_size,
                     max_upload_bytes=max_upload_bytes,
                     expires_at=renewed.expires_at,
                 ),
@@ -270,10 +289,11 @@ def request_video_upload(
     attempt_id = new_id()
     expires_at = now + timedelta(seconds=upload_ttl_seconds)
     object_key = _object_key(dataset_id=dataset_id, member_id=member_id, attempt_id=attempt_id)
-    upload = _create_upload(
-        storage=storage,
+    upload = _upload_instructions(
+        dataset_id=dataset_id,
+        member_id=member_id,
+        attempt_id=attempt_id,
         object_key=object_key,
-        declared_size=declared_size,
         max_upload_bytes=max_upload_bytes,
         expires_at=expires_at,
     )
@@ -292,7 +312,6 @@ def request_video_upload(
         codec=None,
         container=None,
         object_key=None,
-        object_version_id=None,
         validation_job_id=None,
         failure_code=None,
         failure_detail=None,
@@ -314,7 +333,7 @@ def request_video_upload(
         status=AttemptStatus.PENDING_UPLOAD,
         created_at=now,
         validation_job_id=None,
-        object_version_id=None,
+        final_object_key=None,
     )
     datasets.add_member(member)
     datasets.add_attempt(attempt)
@@ -406,7 +425,6 @@ def retry_video_upload(
     caller: Caller,
     now: datetime,
     datasets: DatasetRepository,
-    storage: ObjectStorage,
     jobs: ValidationJobQueue,
     max_upload_bytes: int,
     upload_ttl_seconds: int,
@@ -451,10 +469,11 @@ def retry_video_upload(
     new_attempt_id = new_id()
     expires_at = now + timedelta(seconds=upload_ttl_seconds)
     object_key = _object_key(dataset_id=dataset_id, member_id=member.id, attempt_id=new_attempt_id)
-    upload = _create_upload(
-        storage=storage,
+    upload = _upload_instructions(
+        dataset_id=dataset_id,
+        member_id=member.id,
+        attempt_id=new_attempt_id,
         object_key=object_key,
-        declared_size=member.declared_size,
         max_upload_bytes=max_upload_bytes,
         expires_at=expires_at,
     )
@@ -470,7 +489,7 @@ def retry_video_upload(
         status=AttemptStatus.PENDING_UPLOAD,
         created_at=now,
         validation_job_id=None,
-        object_version_id=None,
+        final_object_key=None,
     )
     reset = replace(
         member,
@@ -482,7 +501,6 @@ def retry_video_upload(
         codec=None,
         container=None,
         object_key=None,
-        object_version_id=None,
         validation_job_id=None,
         failure_code=None,
         failure_detail=None,
@@ -503,6 +521,56 @@ def retry_video_upload(
         actor_id=str(caller.user.id),
     )
     return RetryResult(member=reset, attempt=new_attempt, upload=upload, job=None)
+
+
+def begin_video_content_upload(
+    *,
+    dataset_id: UUID,
+    member_id: UUID,
+    attempt_id: UUID,
+    caller: Caller,
+    now: datetime,
+    datasets: DatasetRepository,
+    max_upload_bytes: int,
+) -> VideoContentUploadTarget:
+    """在开始流式读取请求体前校验上传授权、当前尝试和字节上限。
+
+    流式上传只在通过该检查后才触碰磁盘；越权、尝试过期或非当前尝试都在写入前拒绝，
+    不会留下任何已定稿文件或业务记录。上限取部署单视频限制与声明大小的较小者，客户端
+    无法靠漏报声明大小绕过限制。
+    """
+    authorize(caller, Permission.DATASET_IMPORT)
+    _require_dataset(dataset_id=dataset_id, datasets=datasets)
+    member = datasets.member_by_id(member_id)
+    if member is None:
+        _refuse(DatasetRefusalCode.MEMBER_NOT_FOUND, "视频成员不存在")
+    if member.dataset_id != dataset_id:
+        _refuse(DatasetRefusalCode.RESOURCE_MISMATCH, "视频不属于所请求的训练数据集")
+    attempt = datasets.attempt_by_id(attempt_id)
+    if attempt is None:
+        _refuse(DatasetRefusalCode.ATTEMPT_NOT_FOUND, "上传尝试不存在")
+    if attempt.member_id != member_id:
+        _refuse(DatasetRefusalCode.RESOURCE_MISMATCH, "上传尝试与视频成员归属不一致")
+    if member.current_attempt_id != attempt_id:
+        _refuse(DatasetRefusalCode.VALIDATION_STALE, "上传尝试已不是当前尝试")
+    if (
+        member.status != MemberStatus.PENDING_UPLOAD
+        or attempt.status != AttemptStatus.PENDING_UPLOAD
+    ):
+        _refuse(DatasetRefusalCode.STATE_CONFLICT, "视频当前状态不允许上传")
+    if attempt.expires_at <= now:
+        _refuse(
+            DatasetRefusalCode.STATE_CONFLICT,
+            "上传授权已过期，请重新申请上传",
+            recovery_action=RetryMode.UPLOAD.value,
+        )
+    return VideoContentUploadTarget(
+        dataset_id=dataset_id,
+        member_id=member_id,
+        attempt_id=attempt_id,
+        object_key=attempt.object_key,
+        max_bytes=min(max_upload_bytes, attempt.declared_size),
+    )
 
 
 def begin_video_validation(
@@ -575,7 +643,7 @@ def validate_video_upload(
             storage=storage,
             now=now,
             code=DatasetRefusalCode.OBJECT_NOT_FOUND,
-            detail="对象存储中没有找到已分配的对象，请重新上传",
+            detail="训练素材存储中没有找到已分配的文件，请重新上传",
             recovery_action=RetryMode.UPLOAD.value,
         )
     except (ObjectStorageUnavailableError, OSError):
@@ -586,7 +654,7 @@ def validate_video_upload(
             storage=storage,
             now=now,
             code=DatasetRefusalCode.STORAGE_UNAVAILABLE,
-            detail="对象存储暂时不可用，请稍后重新校验",
+            detail="训练素材存储暂时不可用，请稍后重新校验",
             recovery_action=RetryMode.VALIDATION.value,
         )
 
@@ -630,12 +698,12 @@ def validate_video_upload(
                     storage=storage,
                     now=now,
                     code=DatasetRefusalCode.SIZE_MISMATCH,
-                    detail="对象读取到的实际大小与对象存储声明不一致",
+                    detail="对象读取到的实际大小与训练素材存储声明不一致",
                     recovery_action=RetryMode.UPLOAD.value,
                     actual_size=downloaded_size,
                     actual_sha256=actual_sha256,
                 )
-            if actual_sha256 != attempt.declared_sha256:
+            if attempt.declared_sha256 is not None and actual_sha256 != attempt.declared_sha256:
                 return _fail_validation(
                     member=validating,
                     attempt=attempt,
@@ -695,11 +763,9 @@ def validate_video_upload(
             final_object_key = _final_object_key(attempt)
             try:
                 stream.seek(0)
-                final_stat = storage.finalize_upload(
-                    object_key=final_object_key,
-                    source=stream,
-                    size=downloaded_size,
-                )
+                with storage.writing(object_key=final_object_key) as finalized_sink:
+                    shutil.copyfileobj(stream, finalized_sink, length=_STREAM_COPY_BYTES)
+                final_stat = storage.stat(object_key=final_object_key)
                 with tempfile.NamedTemporaryFile(
                     mode="w+b", suffix=".registered-video"
                 ) as finalized:
@@ -776,7 +842,7 @@ def validate_video_upload(
             storage=storage,
             now=now,
             code=DatasetRefusalCode.STORAGE_UNAVAILABLE,
-            detail="对象存储暂时不可用，请稍后重新校验",
+            detail="训练素材存储暂时不可用，请稍后重新校验",
             recovery_action=RetryMode.VALIDATION.value,
         )
     except MediaProbeUnavailableError:
@@ -815,7 +881,6 @@ def validate_video_upload(
         codec=metadata.codec,
         container=metadata.container,
         object_key=final_object_key,
-        object_version_id=final_stat.version_id,
         failure_code=None,
         failure_detail=None,
         recovery_action=None,
@@ -841,7 +906,7 @@ def validate_video_upload(
             attempt,
             status=AttemptStatus.REGISTERED,
             validation_job_id=job.id,
-            object_version_id=final_stat.version_id,
+            final_object_key=final_object_key,
         )
     )
     _cleanup_objects(
@@ -865,7 +930,7 @@ def _validate_upload_declaration(
     original_filename: str,
     source: str,
     declared_size: int,
-    declared_sha256: str,
+    declared_sha256: str | None,
     idempotency_key: str | None,
     max_upload_bytes: int,
     upload_ttl_seconds: int,
@@ -887,8 +952,9 @@ def _validate_upload_declaration(
         _refuse(DatasetRefusalCode.SIZE_INVALID, "声明大小必须大于零")
     if max_upload_bytes <= 0 or declared_size > max_upload_bytes:
         _refuse(DatasetRefusalCode.SIZE_EXCEEDED, "视频超过当前部署的单视频大小上限")
-    if len(declared_sha256) != 64 or any(
-        character not in "0123456789abcdefABCDEF" for character in declared_sha256
+    if declared_sha256 is not None and (
+        len(declared_sha256) != 64
+        or any(character not in "0123456789abcdefABCDEF" for character in declared_sha256)
     ):
         _refuse(DatasetRefusalCode.SHA256_INVALID, "sha256 必须是 64 位十六进制摘要")
     if original_filename.casefold().endswith(_ARCHIVE_SUFFIXES):
@@ -909,27 +975,27 @@ def _validate_idempotency_key(idempotency_key: str | None) -> None:
         _refuse(DatasetRefusalCode.IDEMPOTENCY_CONFLICT, "幂等键不能为空且不能超过 255 个字符")
 
 
-def _create_upload(
+def _upload_instructions(
     *,
-    storage: ObjectStorage,
+    dataset_id: UUID,
+    member_id: UUID,
+    attempt_id: UUID,
     object_key: str,
-    declared_size: int,
     max_upload_bytes: int,
     expires_at: datetime,
 ) -> UploadInstructions:
-    try:
-        return storage.create_upload(
-            object_key=object_key,
-            declared_size=declared_size,
-            max_bytes=max_upload_bytes,
-            expires_at=expires_at,
-        )
-    except (ObjectStorageUnavailableError, OSError) as error:
-        raise DatasetRefusedError(
-            DatasetRefusalCode.STORAGE_UNAVAILABLE,
-            detail="对象存储暂时不可用，未创建上传记录",
-            recovery_action=RetryMode.UPLOAD.value,
-        ) from error
+    """构造指向中心正式入口的流式上传说明；不签发对象存储直传地址。"""
+    return UploadInstructions(
+        method="PUT",
+        url=(
+            f"{_API_PREFIX}/training-datasets/{dataset_id}/members/{member_id}"
+            f"/attempts/{attempt_id}/content"
+        ),
+        headers={"Content-Type": "application/octet-stream"},
+        expires_at=expires_at,
+        max_bytes=max_upload_bytes,
+        object_key=object_key,
+    )
 
 
 def _require_dataset(*, dataset_id: UUID, datasets: DatasetRepository) -> TrainingDataset:
@@ -1027,7 +1093,6 @@ def _fail_validation(
         codec=None,
         container=None,
         object_key=None,
-        object_version_id=None,
         failure_code=code.value,
         failure_detail=detail,
         recovery_action=recovery_action,

@@ -1,22 +1,19 @@
-"""通过正式控制面 API 导入训练视频，并把视频直传到预签名对象地址。
+"""通过正式控制面 API 导入训练视频，并把视频体流式上传到中心入口。
 
-客户端只提交数据集和视频声明到 `/api/v1`。视频请求体只发往 API 返回的对象存储地址，
-不会经过 FastAPI，也不会直接写入数据库。
+客户端只提交数据集和视频声明到 `/api/v1`。视频请求体发往 API 返回的中心上传入口，
+不会直写数据库，也不会把整段视频读进内存。
 """
 
 from __future__ import annotations
 
-import hashlib
 import http.client
-import io
 import json
-import secrets
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from http.cookies import SimpleCookie
 from pathlib import Path
-from typing import BinaryIO, Protocol, cast
+from typing import Protocol, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
@@ -74,7 +71,7 @@ class HttpResponse:
 
 
 class HttpTransport(Protocol):
-    """控制面 JSON 请求和对象存储直传共用的 HTTP seam。"""
+    """控制面 JSON 请求和视频上传共用的 HTTP seam。"""
 
     def request(
         self,
@@ -93,15 +90,14 @@ class HttpTransport(Protocol):
         *,
         method: str,
         headers: Mapping[str, str],
-        fields: Mapping[str, str],
         path: Path,
     ) -> HttpResponse:
-        """把文件发往预签名地址；不得把文件改发给控制面。"""
+        """把视频文件体流式发往控制面上传入口。"""
         ...
 
 
 class UrllibTransport:
-    """标准库 HTTP 适配器；视频上传按文件流发送，不把内容交给 FastAPI。"""
+    """标准库 HTTP 适配器；视频上传按文件流发送，不把内容整体载入内存。"""
 
     def __init__(self, *, timeout_seconds: float = 60.0) -> None:
         self._timeout_seconds = timeout_seconds
@@ -130,15 +126,16 @@ class UrllibTransport:
         *,
         method: str,
         headers: Mapping[str, str],
-        fields: Mapping[str, str],
         path: Path,
     ) -> HttpResponse:
-        """按预签名说明直传文件；POST 使用表单，PUT 使用原始文件流。"""
+        """把视频文件体流式发往控制面上传入口，由请求头携带会话与 CSRF 凭据。"""
         if not path.is_file():
             raise DatasetImportError(f"视频文件不存在：{path}")
+        if method.upper() != "PUT":
+            raise DatasetImportError(f"不支持的上传方法：{method}")
         parsed = urlsplit(url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            raise DatasetImportError("预签名地址必须是 HTTP(S) 地址")
+            raise DatasetImportError("上传地址必须是 HTTP(S) 地址")
         request_target = urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
         connection_type: type[http.client.HTTPConnection]
         connection_type = (
@@ -146,22 +143,9 @@ class UrllibTransport:
         )
         connection = connection_type(parsed.hostname, parsed.port, timeout=self._timeout_seconds)
         request_headers = dict(headers)
-        body: _MultipartBody | BinaryIO
-        if method.upper() == "POST":
-            boundary = f"----nvsop-{secrets.token_hex(16)}"
-            prefix, suffix = _multipart_edges(boundary, fields, path.name)
-            body = _MultipartBody(prefix=prefix, path=path, suffix=suffix)
-            request_headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
-            request_headers["Content-Length"] = str(len(prefix) + path.stat().st_size + len(suffix))
-        elif method.upper() == "PUT":
-            if fields:
-                raise DatasetImportError("PUT 预签名地址不应携带表单字段")
-            body = path.open("rb")
-            request_headers.setdefault("Content-Type", "video/mp4")
-            request_headers["Content-Length"] = str(path.stat().st_size)
-        else:
-            raise DatasetImportError(f"不支持的预签名上传方法：{method}")
-
+        request_headers.setdefault("Content-Type", "application/octet-stream")
+        request_headers["Content-Length"] = str(path.stat().st_size)
+        body = path.open("rb")
         try:
             connection.request(method.upper(), request_target, body=body, headers=request_headers)
             response = connection.getresponse()
@@ -171,76 +155,10 @@ class UrllibTransport:
                 body=response.read(),
             )
         except OSError as error:
-            raise DatasetImportError(f"直传对象失败：{error}") from error
+            raise DatasetImportError(f"上传视频失败：{error}") from error
         finally:
             body.close()
             connection.close()
-
-
-class _MultipartBody:
-    """给 `http.client` 使用的流式 multipart 文件体。"""
-
-    def __init__(self, *, prefix: bytes, path: Path, suffix: bytes) -> None:
-        self._streams: list[BinaryIO] = [io.BytesIO(prefix), path.open("rb"), io.BytesIO(suffix)]
-        self._current = 0
-
-    def read(self, size: int = -1) -> bytes:
-        """按块读取 multipart 内容，避免把视频整体载入内存。"""
-        if size < 0:
-            all_chunks: list[bytes] = []
-            while True:
-                chunk = self.read(1024 * 1024)
-                if not chunk:
-                    return b"".join(all_chunks)
-                all_chunks.append(chunk)
-
-        chunks: list[bytes] = []
-        remaining = size
-        while remaining > 0 and self._current < len(self._streams):
-            stream = self._streams[self._current]
-            chunk = stream.read(remaining)
-            if chunk:
-                chunks.append(chunk)
-                remaining -= len(chunk)
-                continue
-            stream.close()
-            self._current += 1
-        return b"".join(chunks)
-
-    def close(self) -> None:
-        """关闭尚未读完的文件流。"""
-        for stream in self._streams[self._current :]:
-            stream.close()
-        self._current = len(self._streams)
-
-
-def _multipart_edges(
-    boundary: str, fields: Mapping[str, str], filename: str
-) -> tuple[bytes, bytes]:
-    """构造表单头尾；文件本身仍由 `_MultipartBody` 流式读取。"""
-    prefix = bytearray()
-    for name, value in fields.items():
-        prefix.extend(
-            (
-                f"--{boundary}\r\n"
-                f'Content-Disposition: form-data; name="{_header_value(name)}"\r\n\r\n'
-                f"{value}\r\n"
-            ).encode()
-        )
-    prefix.extend(
-        (
-            f"--{boundary}\r\n"
-            f'Content-Disposition: form-data; name="file"; filename="{_header_value(filename)}"\r\n'
-            "Content-Type: video/mp4\r\n\r\n"
-        ).encode()
-    )
-    suffix = f"\r\n--{boundary}--\r\n".encode("ascii")
-    return bytes(prefix), suffix
-
-
-def _header_value(value: str) -> str:
-    """阻止服务端返回的字段值破坏 multipart 头。"""
-    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\r", "").replace("\n", "")
 
 
 def _urllib_response(response: _RawHttpResponse) -> HttpResponse:
@@ -332,19 +250,28 @@ class ControlPlaneClient:
         )
 
     def upload_file(self, *, instructions: JsonObject, path: Path) -> HttpResponse:
-        """按 API 返回的说明把文件直传对象存储。"""
-        return self._transport.upload_file(
-            _required_string(instructions, "url"),
-            method=_required_string(instructions, "method"),
-            headers=_string_mapping(instructions.get("headers")),
-            fields=_string_mapping(instructions.get("fields")),
-            path=path,
-        )
+        """按 API 返回的说明把文件流式上传到中心正式入口。"""
+        if not path.is_file():
+            raise DatasetImportError(f"视频文件不存在：{path}")
+        url = _required_string(instructions, "url")
+        if url.startswith("/"):
+            url = f"{self._base_url}{url}"
+        method = _required_string(instructions, "method")
+        headers = {
+            "Accept": "application/json",
+            **_string_mapping(instructions.get("headers")),
+            "Cookie": self._cookie_header(),
+        }
+        if method.upper() in MODIFYING_METHODS:
+            if self.csrf_token is None:
+                raise DatasetImportError("上传控制面资源需要 CSRF token")
+            headers[CSRF_HEADER] = self.csrf_token
+        return self._transport.upload_file(url, method=method, headers=headers, path=path)
 
     def confirm_video_upload(
         self, *, dataset_id: str, member_id: str, attempt_id: str
     ) -> JsonObject:
-        """通知正式控制面某个直传尝试可以校验；请求体只含尝试身份。"""
+        """通知正式控制面某个上传尝试可以校验；请求体只含尝试身份。"""
         return _expect_json(
             self._send_json(
                 "POST",
@@ -536,7 +463,7 @@ def import_training_dataset(
     poll_interval_seconds: float = _DEFAULT_JOB_POLL_INTERVAL_SECONDS,
     poll_timeout_seconds: float = _DEFAULT_JOB_POLL_TIMEOUT_SECONDS,
 ) -> DatasetImportResult:
-    """创建数据集后逐个申请、直传、确认并轮询视频校验任务。"""
+    """创建数据集后逐个申请、上传、确认并轮询视频校验任务。"""
     if not dataset_name.strip():
         raise ValueError("dataset_name 不能为空")
     if not source.strip():
@@ -548,12 +475,11 @@ def import_training_dataset(
     dataset_id = _required_string(dataset, "id")
     imported: list[ImportedVideo] = []
     for index, path in enumerate(videos, start=1):
-        size, digest = _file_facts(path)
+        size = _file_size(path)
         declaration: JsonObject = {
             "original_filename": path.name,
             "source": source,
             "declared_size": size,
-            "declared_sha256": digest,
         }
         requested = client.request_video_upload(
             dataset_id=dataset_id,
@@ -567,7 +493,7 @@ def import_training_dataset(
         upload_response = client.upload_file(instructions=upload_instructions, path=path)
         if upload_response.status not in {200, 201, 204}:
             detail = upload_response.body.decode("utf-8", errors="replace")
-            raise DatasetImportError(f"对象存储返回 HTTP {upload_response.status}：{detail}")
+            raise DatasetImportError(f"中心上传入口返回 HTTP {upload_response.status}：{detail}")
 
         member = requested.get("member")
         attempt = requested.get("attempt")
@@ -603,15 +529,11 @@ def import_training_dataset(
     return DatasetImportResult(dataset=dataset, videos=tuple(imported))
 
 
-def _file_facts(path: Path) -> tuple[int, str]:
-    """流式读取视频大小和 SHA-256；不把媒体内容放进 API JSON。"""
+def _file_size(path: Path) -> int:
+    """读取视频大小；权威 sha256 由中心从流式字节计算，客户端不预读整段媒体。"""
     if not path.is_file():
         raise DatasetImportError(f"视频文件不存在：{path}")
     size = path.stat().st_size
     if size <= 0:
         raise DatasetImportError(f"视频文件为空：{path}")
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        while chunk := source.read(1024 * 1024):
-            digest.update(chunk)
-    return size, digest.hexdigest()
+    return size

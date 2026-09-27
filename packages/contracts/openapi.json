@@ -279,8 +279,8 @@
             "title": "Source",
             "type": "string"
           },
-          "source_object_version_id": {
-            "title": "Source Object Version Id",
+          "source_object_key": {
+            "title": "Source Object Key",
             "type": "string"
           },
           "source_sha256": {
@@ -302,7 +302,7 @@
           "member_id",
           "action_list_revision",
           "annotation_revision",
-          "source_object_version_id",
+          "source_object_key",
           "source_sha256",
           "derived_video_size",
           "derived_video_sha256",
@@ -624,8 +624,8 @@
             "title": "Segments",
             "type": "array"
           },
-          "source_object_version_id": {
-            "title": "Source Object Version Id",
+          "source_object_key": {
+            "title": "Source Object Key",
             "type": "string"
           },
           "source_sha256": {
@@ -640,7 +640,7 @@
           "context_id",
           "revision",
           "action_list_revision",
-          "source_object_version_id",
+          "source_object_key",
           "source_sha256",
           "idempotency_key",
           "mode",
@@ -1679,7 +1679,7 @@
       },
       "ConfirmVideoUploadInput": {
         "additionalProperties": false,
-        "description": "确认某个上传尝试已由客户端直传完成。",
+        "description": "确认某个上传尝试已由客户端上传完成。",
         "properties": {
           "attempt_id": {
             "format": "uuid",
@@ -2342,8 +2342,15 @@
             "type": "string"
           },
           "declared_sha256": {
-            "title": "Declared Sha256",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Declared Sha256"
           },
           "declared_size": {
             "title": "Declared Size",
@@ -4659,13 +4666,20 @@
       },
       "RequestVideoUploadInput": {
         "additionalProperties": false,
-        "description": "申请直传时提交的声明；不接受对象 URL 或客户端媒体事实。",
+        "description": "申请上传时提交的声明；不接受对象 URL 或客户端媒体事实。\n\n`declared_sha256` 是可选期望；中心从流式字节计算并登记权威摘要，因此客户端不必\n为申请上传而预读整段视频。",
         "properties": {
           "declared_sha256": {
-            "maxLength": 64,
-            "minLength": 64,
-            "title": "Declared Sha256",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Declared Sha256"
           },
           "declared_size": {
             "exclusiveMinimum": 0.0,
@@ -4688,8 +4702,7 @@
         "required": [
           "original_filename",
           "source",
-          "declared_size",
-          "declared_sha256"
+          "declared_size"
         ],
         "title": "RequestVideoUploadInput",
         "type": "object"
@@ -6166,8 +6179,15 @@
       "UploadAttemptView": {
         "properties": {
           "declared_sha256": {
-            "title": "Declared Sha256",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Declared Sha256"
           },
           "declared_size": {
             "title": "Declared Size",
@@ -6176,6 +6196,17 @@
           "expires_at": {
             "title": "Expires At",
             "type": "string"
+          },
+          "final_object_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Object Key"
           },
           "id": {
             "format": "uuid",
@@ -6186,17 +6217,6 @@
             "format": "uuid",
             "title": "Member Id",
             "type": "string"
-          },
-          "object_version_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Object Version Id"
           },
           "status": {
             "title": "Status",
@@ -6210,24 +6230,17 @@
           "declared_size",
           "declared_sha256",
           "expires_at",
-          "object_version_id"
+          "final_object_key"
         ],
         "title": "UploadAttemptView",
         "type": "object"
       },
       "UploadInstructionsView": {
-        "description": "仅随申请直传响应返回的短期签名说明。",
+        "description": "仅随申请响应返回的短期流式上传说明。",
         "properties": {
           "expires_at": {
             "title": "Expires At",
             "type": "string"
-          },
-          "fields": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "title": "Fields",
-            "type": "object"
           },
           "headers": {
             "additionalProperties": {
@@ -6256,7 +6269,6 @@
         "required": [
           "method",
           "url",
-          "fields",
           "headers",
           "expires_at",
           "max_bytes",
@@ -6792,10 +6804,10 @@
             "title": "Member Id",
             "type": "string"
           },
-          "source_object_version_id": {
+          "source_object_key": {
             "maxLength": 255,
             "minLength": 1,
-            "title": "Source Object Version Id",
+            "title": "Source Object Key",
             "type": "string"
           },
           "source_sha256": {
@@ -6808,7 +6820,7 @@
         "required": [
           "key",
           "member_id",
-          "source_object_version_id",
+          "source_object_key",
           "source_sha256"
         ],
         "title": "VlmMediaInput",
@@ -6867,8 +6879,8 @@
             "title": "Member Id",
             "type": "string"
           },
-          "source_object_version_id": {
-            "title": "Source Object Version Id",
+          "source_object_key": {
+            "title": "Source Object Key",
             "type": "string"
           },
           "source_sha256": {
@@ -6879,7 +6891,7 @@
         "required": [
           "key",
           "member_id",
-          "source_object_version_id",
+          "source_object_key",
           "source_sha256",
           "annotation_submission_id",
           "annotation_execution_id",
@@ -7119,7 +7131,7 @@
                 }
               }
             },
-            "description": "标注基座或对象存储暂时不可用"
+            "description": "标注基座或训练素材存储暂时不可用"
           }
         },
         "summary": "Read A Context",
@@ -15880,7 +15892,7 @@
                 }
               }
             },
-            "description": "对象存储或媒体探测暂时不可用"
+            "description": "训练素材存储或媒体探测暂时不可用"
           }
         },
         "summary": "List The Training Datasets",
@@ -15981,7 +15993,7 @@
                 }
               }
             },
-            "description": "对象存储或媒体探测暂时不可用"
+            "description": "训练素材存储或媒体探测暂时不可用"
           }
         },
         "summary": "Create A Training Dataset",
@@ -16085,7 +16097,7 @@
                 }
               }
             },
-            "description": "对象存储或媒体探测暂时不可用"
+            "description": "训练素材存储或媒体探测暂时不可用"
           }
         },
         "summary": "Read A Training Dataset",
@@ -16189,7 +16201,7 @@
                 }
               }
             },
-            "description": "标注基座或对象存储暂时不可用"
+            "description": "标注基座或训练素材存储暂时不可用"
           }
         },
         "summary": "Read A Dataset Action List",
@@ -16301,7 +16313,7 @@
                 }
               }
             },
-            "description": "标注基座或对象存储暂时不可用"
+            "description": "标注基座或训练素材存储暂时不可用"
           }
         },
         "summary": "Register A Dataset Action List",
@@ -16405,7 +16417,7 @@
                 }
               }
             },
-            "description": "标注基座或对象存储暂时不可用"
+            "description": "标注基座或训练素材存储暂时不可用"
           }
         },
         "summary": "List Dataset Action List Versions",
@@ -16532,7 +16544,7 @@
                 }
               }
             },
-            "description": "对象存储或媒体探测暂时不可用"
+            "description": "训练素材存储或媒体探测暂时不可用"
           }
         },
         "summary": "List The Dataset Artifacts",
@@ -16644,7 +16656,7 @@
                 }
               }
             },
-            "description": "对象存储或媒体探测暂时不可用"
+            "description": "训练素材存储或媒体探测暂时不可用"
           }
         },
         "summary": "Request A Dataset Artifact",
@@ -16758,7 +16770,7 @@
                 }
               }
             },
-            "description": "对象存储或媒体探测暂时不可用"
+            "description": "训练素材存储或媒体探测暂时不可用"
           }
         },
         "summary": "Read A Dataset Artifact",
@@ -16873,7 +16885,7 @@
                 }
               }
             },
-            "description": "对象存储或媒体探测暂时不可用"
+            "description": "训练素材存储或媒体探测暂时不可用"
           }
         },
         "summary": "Download A Dataset Artifact",
@@ -17000,7 +17012,7 @@
                 }
               }
             },
-            "description": "对象存储或媒体探测暂时不可用"
+            "description": "训练素材存储或媒体探测暂时不可用"
           }
         },
         "summary": "List The Dataset Members",
@@ -17128,7 +17140,7 @@
                 }
               }
             },
-            "description": "对象存储或媒体探测暂时不可用"
+            "description": "训练素材存储或媒体探测暂时不可用"
           }
         },
         "summary": "Request A Video Upload",
@@ -17242,7 +17254,7 @@
                 }
               }
             },
-            "description": "对象存储或媒体探测暂时不可用"
+            "description": "训练素材存储或媒体探测暂时不可用"
           }
         },
         "summary": "Read A Dataset Member",
@@ -17366,7 +17378,7 @@
                 }
               }
             },
-            "description": "标注基座或对象存储暂时不可用"
+            "description": "标注基座或训练素材存储暂时不可用"
           }
         },
         "summary": "Create A Context",
@@ -17483,7 +17495,7 @@
                 }
               }
             },
-            "description": "标注基座或对象存储暂时不可用"
+            "description": "标注基座或训练素材存储暂时不可用"
           }
         },
         "summary": "List The Annotations",
@@ -17630,7 +17642,7 @@
                 }
               }
             },
-            "description": "标注基座或对象存储暂时不可用"
+            "description": "标注基座或训练素材存储暂时不可用"
           }
         },
         "summary": "Submit An Annotation",
@@ -17754,7 +17766,7 @@
                 }
               }
             },
-            "description": "标注基座或对象存储暂时不可用"
+            "description": "标注基座或训练素材存储暂时不可用"
           }
         },
         "summary": "Read An Annotation",
@@ -17878,7 +17890,7 @@
                 }
               }
             },
-            "description": "标注基座或对象存储暂时不可用"
+            "description": "标注基座或训练素材存储暂时不可用"
           }
         },
         "summary": "Retry An Annotation",
@@ -17886,6 +17898,135 @@
           "dataset-annotation"
         ],
         "x-required-permission": "dataset.dataset.edit"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/members/{member_id}/attempts/{attempt_id}/content": {
+      "put": {
+        "description": "把已授权请求的视频体流式写入 dataset 本地持久卷，不整段读入内存。",
+        "operationId": "uploadVideoContent",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "member_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Member Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "attempt_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练素材存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "Upload Video Content",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.import"
       }
     },
     "/api/v1/training-datasets/{dataset_id}/members/{member_id}/confirm": {
@@ -18012,7 +18153,7 @@
                 }
               }
             },
-            "description": "对象存储或媒体探测暂时不可用"
+            "description": "训练素材存储或媒体探测暂时不可用"
           }
         },
         "summary": "Confirm A Video Upload",
@@ -18162,7 +18303,7 @@
                 }
               }
             },
-            "description": "对象存储或媒体探测暂时不可用"
+            "description": "训练素材存储或媒体探测暂时不可用"
           }
         },
         "summary": "Retry A Video Upload",
@@ -18289,7 +18430,7 @@
                 }
               }
             },
-            "description": "对象存储或媒体探测暂时不可用"
+            "description": "训练素材存储或媒体探测暂时不可用"
           }
         },
         "summary": "List The Usage Checks",
@@ -18401,7 +18542,7 @@
                 }
               }
             },
-            "description": "对象存储或媒体探测暂时不可用"
+            "description": "训练素材存储或媒体探测暂时不可用"
           }
         },
         "summary": "Request A Usage Check",
@@ -18515,7 +18656,7 @@
                 }
               }
             },
-            "description": "对象存储或媒体探测暂时不可用"
+            "description": "训练素材存储或媒体探测暂时不可用"
           }
         },
         "summary": "Read A Usage Check",
@@ -18642,7 +18783,7 @@
                 }
               }
             },
-            "description": "对象存储或媒体探测暂时不可用"
+            "description": "训练素材存储或媒体探测暂时不可用"
           }
         },
         "summary": "List The Vlm Candidates",
@@ -18763,7 +18904,7 @@
                 }
               }
             },
-            "description": "对象存储或媒体探测暂时不可用"
+            "description": "训练素材存储或媒体探测暂时不可用"
           }
         },
         "summary": "Register A Vlm Candidate",
@@ -18877,7 +19018,7 @@
                 }
               }
             },
-            "description": "对象存储或媒体探测暂时不可用"
+            "description": "训练素材存储或媒体探测暂时不可用"
           }
         },
         "summary": "Read A Vlm Candidate",

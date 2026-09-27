@@ -151,6 +151,32 @@ def _commit_if_active(session: Session, fence: _ExecutionFence) -> bool:
     return fence.commit(session)
 
 
+def _validation_commit_was_published(
+    *,
+    factory: sessionmaker[Session],
+    job_id: UUID,
+    status: str,
+    failure_code: str | None,
+    finished_at: datetime,
+) -> bool | None:
+    """提交结果不确定时，用新事务读取 PostgreSQL 权威终态。"""
+    try:
+        with factory() as session:
+            current = PostgresJobRepository(session).by_id(job_id)
+    except Exception:
+        _logger.exception(
+            "job.dataset_validation.commit_reconcile_failed",
+            job_id=str(job_id),
+        )
+        return None
+    return (
+        current is not None
+        and current.status == status
+        and current.failure_code == failure_code
+        and current.updated_at == finished_at
+    )
+
+
 def _annotation_failure_details(
     error: Exception,
     *,
@@ -409,11 +435,12 @@ def _validate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
         else:
             final_status = JobStatus.FAILED.value
             failure_code = result.failure_code
+        finished_at = datetime.now(UTC)
         finished = jobs.finish(
             job_id=running.id,
             status=final_status,
             failure_code=failure_code,
-            now=datetime.now(UTC),
+            now=finished_at,
             expected_updated_at=running.updated_at,
         )
         if not finished:
@@ -427,7 +454,30 @@ def _validate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
                 status="lease_lost",
             )
             return
-        if not _commit_if_active(result_session, fence):
+        try:
+            committed = _commit_if_active(result_session, fence)
+        except Exception:
+            published = _validation_commit_was_published(
+                factory=factory,
+                job_id=running.id,
+                status=final_status,
+                failure_code=failure_code,
+                finished_at=finished_at,
+            )
+            if published is True:
+                object_effects.after_commit()
+                _logger.warning(
+                    "job.dataset_validation.commit_reconciled",
+                    job_id=str(running.id),
+                    member_id=str(running.member_id),
+                    attempt_id=str(running.attempt_id),
+                    result="committed",
+                )
+                return
+            if published is False:
+                object_effects.after_rollback()
+            raise
+        if not committed:
             object_effects.after_rollback()
             return
         object_effects.after_commit()

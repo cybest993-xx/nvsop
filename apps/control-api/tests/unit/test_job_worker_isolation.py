@@ -657,6 +657,129 @@ def test_validation_job_cas_loss_rolls_back_business_result(
     assert state.sessions[-1].rollbacks == 1
 
 
+@pytest.mark.parametrize(
+    ("published", "expected_source", "expected_final", "raises"),
+    [
+        (True, False, True, False),
+        (False, True, False, True),
+    ],
+)
+def test_validation_reconciles_uncertain_commit_before_object_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    published: bool,
+    expected_source: bool,
+    expected_final: bool,
+    raises: bool,
+) -> None:
+    state = _WorkerState()
+    job = _running_job()
+    object_storage = _ValidationStorage()
+    commit_calls = 0
+    reconciled: list[tuple[UUID, str, str | None, datetime]] = []
+
+    def validate_upload(
+        *,
+        job: object,
+        datasets: _Datasets,
+        storage: object,
+        probe: object,
+        supported_codecs: frozenset[str],
+        now: datetime,
+        target: object,
+    ) -> SimpleNamespace:
+        del job, probe, supported_codecs, now, target
+        fenced_storage = cast(Any, storage)
+        with fenced_storage.writing(object_key="final-object") as sink:
+            sink.write(b"final")
+        fenced_storage.delete(object_key="attempt-object")
+        datasets.stage_publish()
+        return SimpleNamespace(status=MemberStatus.REGISTERED.value, failure_code=None)
+
+    original_commit_if_active = worker_module._commit_if_active
+
+    def commit_if_active(session: object, fence: worker_module._ExecutionFence) -> bool:
+        nonlocal commit_calls
+        commit_calls += 1
+        if commit_calls == 3:
+            raise RuntimeError("commit acknowledgement lost")
+        return original_commit_if_active(cast(Any, session), fence)
+
+    def reconcile(
+        *,
+        factory: object,
+        job_id: UUID,
+        status: str,
+        failure_code: str | None,
+        finished_at: datetime,
+    ) -> bool:
+        del factory
+        reconciled.append((job_id, status, failure_code, finished_at))
+        return published
+
+    ctx = _install_validation_seams(
+        monkeypatch,
+        state=state,
+        job=job,
+        validate_upload=validate_upload,
+        storage=object_storage,
+    )
+    monkeypatch.setattr(worker_module, "_commit_if_active", commit_if_active)
+    monkeypatch.setattr(worker_module, "_validation_commit_was_published", reconcile)
+
+    if raises:
+        with pytest.raises(RuntimeError, match="commit acknowledgement lost"):
+            asyncio.run(worker_module.validate_dataset_job(ctx, str(job.id)))
+    else:
+        asyncio.run(worker_module.validate_dataset_job(ctx, str(job.id)))
+
+    assert commit_calls == 3
+    assert len(reconciled) == 1
+    reconciled_job_id, status, failure_code, _ = reconciled[0]
+    assert reconciled_job_id == job.id
+    assert status == JobStatus.SUCCEEDED.value
+    assert failure_code is None
+    assert ("attempt-object" in object_storage.objects) is expected_source
+    assert ("final-object" in object_storage.objects) is expected_final
+
+
+@pytest.mark.parametrize(("matches", "expected"), [(True, True), (False, False)])
+def test_validation_commit_reconcile_reads_fresh_job_authority(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    matches: bool,
+    expected: bool,
+) -> None:
+    state = _WorkerState()
+    job_id = uuid4()
+    finished_at = NOW.replace(microsecond=123456)
+
+    class FakeJobRepository:
+        def __init__(self, session: object) -> None:
+            assert isinstance(session, _TrackingSession)
+
+        def by_id(self, queried_job_id: UUID) -> SimpleNamespace:
+            assert queried_job_id == job_id
+            return SimpleNamespace(
+                status=JobStatus.SUCCEEDED.value if matches else JobStatus.RUNNING.value,
+                failure_code=None,
+                updated_at=finished_at if matches else NOW,
+            )
+
+    monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
+
+    assert (
+        worker_module._validation_commit_was_published(
+            factory=cast(Any, _TrackingSessionFactory(state)),
+            job_id=job_id,
+            status=JobStatus.SUCCEEDED.value,
+            failure_code=None,
+            finished_at=finished_at,
+        )
+        is expected
+    )
+
+
 def test_cancelled_artifact_generation_discards_late_candidate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

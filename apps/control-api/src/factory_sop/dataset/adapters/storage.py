@@ -48,6 +48,7 @@ class LocalFileObjectStorage:
         """流式写入临时文件，正常退出时 fsync 并原子定稿；异常时丢弃。"""
         target = self._path(object_key)
         temporary = self._root / _INCOMING_DIRECTORY / uuid.uuid4().hex
+        replaced = False
         try:
             temporary.parent.mkdir(parents=True, exist_ok=True)
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -56,10 +57,14 @@ class LocalFileObjectStorage:
                 sink.flush()
                 os.fsync(sink.fileno())
             os.replace(temporary, target)
+            replaced = True
             _fsync_directory(target.parent)
             _fsync_directory(temporary.parent)
         except BaseException:
-            temporary.unlink(missing_ok=True)
+            if replaced:
+                target.unlink(missing_ok=True)
+            else:
+                temporary.unlink(missing_ok=True)
             raise
 
     def stat(self, *, object_key: str) -> ObjectStat:

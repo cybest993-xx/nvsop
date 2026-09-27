@@ -56,6 +56,37 @@ def test_writing_fsyncs_both_directories_around_the_rename(
     ]
 
 
+@pytest.mark.parametrize("fail_on_call", [1, 2])
+def test_writing_removes_finalized_file_when_directory_fsync_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fail_on_call: int,
+) -> None:
+    storage = _storage(tmp_path)
+    calls = 0
+
+    def fsync_directory(_path: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == fail_on_call:
+            raise OSError("directory fsync failed")
+
+    monkeypatch.setattr(
+        "factory_sop.dataset.adapters.storage._fsync_directory",
+        fsync_directory,
+    )
+
+    with (
+        pytest.raises(OSError, match="directory fsync failed"),
+        storage.writing(object_key="training-datasets/a/video") as sink,
+    ):
+        sink.write(b"content")
+
+    with pytest.raises(ObjectNotFoundError):
+        storage.stat(object_key="training-datasets/a/video")
+    assert list((tmp_path / ".incoming").glob("*")) == []
+
+
 def test_writing_discards_the_object_when_the_caller_raises(tmp_path: Path) -> None:
     storage = _storage(tmp_path)
 

@@ -234,29 +234,56 @@ function markRuntimeParametersEdited(): void {
   }
 }
 
-function runtimeParameters(): RuntimeParametersInput | null {
+function runtimeParametersFromDraft(): RuntimeParametersInput | null {
   if (runtimeMode.value === 'follow_template') {
     return null
   }
-  const idle = Number(runtimeDraft.idle_timeout_seconds.trim())
-  const deadline = Number(runtimeDraft.step_deadline_seconds.trim())
-  const policy = runtimeDraft.disposition_policy.trim()
-  if (!Number.isFinite(idle) || idle <= 0) {
+  return {
+    idle_timeout_seconds: Number(runtimeDraft.idle_timeout_seconds.trim()),
+    step_deadline_seconds: Number(runtimeDraft.step_deadline_seconds.trim()),
+    disposition_policy: runtimeDraft.disposition_policy.trim(),
+  }
+}
+
+function runtimeParameters(): RuntimeParametersInput | null {
+  const parameters = runtimeParametersFromDraft()
+  if (parameters === null) {
+    return null
+  }
+  if (!Number.isFinite(parameters.idle_timeout_seconds) || parameters.idle_timeout_seconds <= 0) {
     failure.value = '空闲时限必须是正数'
     return null
   }
-  if (!Number.isFinite(deadline) || deadline <= 0) {
+  if (!Number.isFinite(parameters.step_deadline_seconds) || parameters.step_deadline_seconds <= 0) {
     failure.value = '步骤时限必须是正数'
     return null
   }
-  if (!policy) {
+  if (!parameters.disposition_policy) {
     failure.value = '处置策略不能为空'
     return null
   }
+  return parameters
+}
+
+function buildBindingRequest(
+  currentTarget: StationTarget,
+  selectedVersion: string,
+  mode: RuntimeParameterMode,
+  parameters: RuntimeParametersInput | null,
+): TemplateBindingInput {
+  if (currentTarget.preserveRuntimeParameters) {
+    return {
+      station_id: currentTarget.stationId,
+      version_id: selectedVersion,
+      runtime_parameter_mode: null,
+      runtime_parameters: null,
+    }
+  }
   return {
-    idle_timeout_seconds: idle,
-    step_deadline_seconds: deadline,
-    disposition_policy: policy,
+    station_id: currentTarget.stationId,
+    version_id: selectedVersion,
+    runtime_parameter_mode: mode,
+    runtime_parameters: parameters,
   }
 }
 
@@ -266,28 +293,12 @@ function requestFromDraft(): TemplateBindingInput | null {
   if (currentTarget === null || !selectedVersion) {
     return null
   }
-  if (currentTarget.preserveRuntimeParameters) {
-    return {
-      station_id: currentTarget.stationId,
-      version_id: selectedVersion,
-      runtime_parameter_mode: null,
-      runtime_parameters: null,
-    }
-  }
-  const parameters =
-    runtimeMode.value === 'follow_template'
-      ? null
-      : {
-          idle_timeout_seconds: Number(runtimeDraft.idle_timeout_seconds.trim()),
-          step_deadline_seconds: Number(runtimeDraft.step_deadline_seconds.trim()),
-          disposition_policy: runtimeDraft.disposition_policy.trim(),
-        }
-  return {
-    station_id: currentTarget.stationId,
-    version_id: selectedVersion,
-    runtime_parameter_mode: runtimeMode.value,
-    runtime_parameters: parameters,
-  }
+  return buildBindingRequest(
+    currentTarget,
+    selectedVersion,
+    runtimeMode.value,
+    runtimeParametersFromDraft(),
+  )
 }
 
 function bindingRequest(): TemplateBindingInput | null {
@@ -301,23 +312,13 @@ function bindingRequest(): TemplateBindingInput | null {
     return null
   }
   if (currentTarget.preserveRuntimeParameters) {
-    return {
-      station_id: currentTarget.stationId,
-      version_id: selectedVersion,
-      runtime_parameter_mode: null,
-      runtime_parameters: null,
-    }
+    return buildBindingRequest(currentTarget, selectedVersion, runtimeMode.value, null)
   }
   const parameters = runtimeParameters()
   if (runtimeMode.value === 'custom' && parameters === null) {
     return null
   }
-  return {
-    station_id: currentTarget.stationId,
-    version_id: selectedVersion,
-    runtime_parameter_mode: runtimeMode.value,
-    runtime_parameters: parameters,
-  }
+  return buildBindingRequest(currentTarget, selectedVersion, runtimeMode.value, parameters)
 }
 
 function requestKey(request: TemplateBindingInput): string {

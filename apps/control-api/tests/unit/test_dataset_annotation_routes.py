@@ -9,18 +9,22 @@ from urllib.parse import quote
 from uuid import UUID
 
 import pytest
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from test_dataset_annotations import FakeAnnotationJobs, FakeAnnotationStore, context_for, store
 
 from factory_sop.app import API_PREFIX, create_app
 from factory_sop.auth.adapters import dependencies as auth_dependencies
+from factory_sop.auth.adapters.dependencies import DECLARED_PERMISSION
 from factory_sop.auth.errors import AuthenticationRefusedError, RefusalCode
 from factory_sop.auth.model import Session, User, UserStatus
 from factory_sop.auth.permissions import Permission
 from factory_sop.auth.usecases.sessions import RestoredSession
 from factory_sop.dataset.adapters import annotation_routes as annotation_route_module
 from factory_sop.dataset.adapters import dependencies as dataset_dependencies
+from factory_sop.dataset.adapters import routes as dataset_route_module
+from factory_sop.dataset.adapters.annotation_routes import _gateway_permission
 from factory_sop.dataset.model import (
     AnnotationExecution,
     AnnotationExecutionStatus,
@@ -510,12 +514,37 @@ def test_gateway_preserves_dataset_import_permission_for_streaming_upload_conten
     )
     assert allowed.status_code == 204, allowed.text
 
-    viewer, _, _ = backend(permissions=frozenset({Permission.DATASET_VIEW}))
-    refused = viewer.get(
-        f"{API_PREFIX}/annotation/gateway-authorize",
-        headers={"X-Original-URI": content_path, "X-Original-Method": "PUT"},
-    )
-    assert refused.status_code == 403
+    # 编辑权限不足以传正文：只持 DATASET_EDIT 的账号必须在网关被拦下，否则这个负例
+    # 在把该路径误判成 DATASET_EDIT 时也会通过。
+    for permissions in (
+        frozenset({Permission.DATASET_VIEW}),
+        frozenset({Permission.DATASET_EDIT}),
+    ):
+        refused_client, _, _ = backend(permissions=permissions)
+        refused = refused_client.get(
+            f"{API_PREFIX}/annotation/gateway-authorize",
+            headers={"X-Original-URI": content_path, "X-Original-Method": "PUT"},
+        )
+        assert refused.status_code == 403
+
+
+def test_every_route_declaring_dataset_import_is_classified_as_import() -> None:
+    """声明 DATASET_IMPORT 的路由必须被网关归类为导入。
+
+    网关的导入判定与路由的权限声明是两处独立表述；漏一处就会让最小权限账号在
+    Nginx `auth_request` 处被拦下、走不到 FastAPI，所以用机械检查锁住对应关系。
+    """
+    declared = [
+        (f"{API_PREFIX}{route.path}", method)
+        for route in dataset_route_module.router.routes
+        if isinstance(route, APIRoute)
+        and (route.openapi_extra or {}).get(DECLARED_PERMISSION) == Permission.DATASET_IMPORT.value
+        for method in (route.methods or set())
+    ]
+
+    assert declared
+    for path, method in declared:
+        assert _gateway_permission(path, method) is Permission.DATASET_IMPORT, (path, method)
 
 
 def test_gateway_does_not_assign_dataset_permissions_to_other_control_plane_writes() -> None:

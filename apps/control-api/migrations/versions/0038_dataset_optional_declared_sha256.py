@@ -15,6 +15,10 @@ down_revision: str | None = "0037"
 # 回滚需要按当前语义补齐声明列，raw SQL 触及的表按门禁要求显式声明。
 RAW_SQL_TABLES = frozenset({"dataset_member", "dataset_upload_attempt"})
 
+# 仍未定稿的上传没有可回填的权威摘要。旧契约要求声明必须存在，故回填这个全零哨兵值，
+# 让旧版校验按“声明与实测不一致”显式失败，而不是阻断回滚或删除数据。它不是任何真实摘要。
+PLACEHOLDER_DECLARED_SHA256 = "0" * 64
+
 
 def upgrade() -> None:
     op.alter_column(
@@ -46,13 +50,12 @@ def downgrade() -> None:
     )
     # 仍未定稿的上传没有可回填的权威摘要。旧契约要求声明必须存在，这里回填全零占位值，
     # 让旧版校验按“声明与实测不一致”显式失败，而不是阻断回滚或删除数据。
-    op.execute(
-        "UPDATE dataset_member SET declared_sha256 = repeat('0', 64) WHERE declared_sha256 IS NULL"
-    )
-    op.execute(
-        "UPDATE dataset_upload_attempt SET declared_sha256 = repeat('0', 64) "
-        "WHERE declared_sha256 IS NULL"
-    )
+    for table in ("dataset_member", "dataset_upload_attempt"):
+        op.execute(
+            sa.text(
+                f"UPDATE {table} SET declared_sha256 = :placeholder WHERE declared_sha256 IS NULL"
+            ).bindparams(placeholder=PLACEHOLDER_DECLARED_SHA256)
+        )
     op.alter_column(
         "dataset_upload_attempt",
         "declared_sha256",

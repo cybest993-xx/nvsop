@@ -34,7 +34,7 @@ make contracts
 
 已登记的破坏性变化：
 
-- **#350（2026-09-26）**：训练素材本地化后，公开契约不再携带 S3 对象代次语义。`UploadAttemptView.object_version_id` 改为 `final_object_key`，`AnnotationContextView`、`AnnotationSubmissionView`、`VlmMediaInput`、`VlmMediaView` 的 `source_object_version_id` 改为 `source_object_key`，恒为空对象的 `UploadInstructionsView.fields`（presigned POST 表单面）删除。Web、脚本与生成 SDK 在同一变更内协同更新；`dataset` 迁移 0039 同步列名（成员列`object_version_id` 删除，源身份由 `object_key` 承担；回滚会按当前语义重建该列，不能还原 MinIO 时代的 S3 版本号）。迁移不改写既有行：MinIO 时代行的源身份仍是旧值，需重新登记后才能通过 DDM/VLM 用途检查，本版本不做猜测性的 MinIO→文件数据迁移。
+- **#350（2026-09-26）**：训练素材本地化后，公开契约不再携带 S3 对象代次语义。`UploadAttemptView.object_version_id` 改为 `final_object_key`，`AnnotationContextView`、`AnnotationSubmissionView`、`VlmMediaInput`、`VlmMediaView` 的 `source_object_version_id` 改为 `source_object_key`，恒为空对象的 `UploadInstructionsView.fields`（presigned POST 表单面）删除。Web、脚本与生成 SDK 在同一变更内协同更新；`dataset` 迁移 0039 同步列名（成员列`object_version_id` 删除，源身份由 `object_key` 承担；回滚会按当前语义重建该列，不能还原 MinIO 时代的 S3 版本号）。迁移不改写既有行：MinIO 时代行的源身份仍是旧值，需重新登记后才能通过 DDM/VLM 用途检查，本版本不做猜测性的 MinIO→文件数据迁移。迁移 0038 的回滚会先用中心登记的权威摘要补齐 `declared_sha256`（仍未定稿的上传用全零哨兵值，让旧版校验显式失败），再恢复旧的非空约束，否则真实数据会让降级失败、阻断应用回滚。
 
 ## 数据库迁移
 

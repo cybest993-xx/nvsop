@@ -562,6 +562,9 @@ class _RuntimeCycleRunner:
             try:
                 target()
                 return
+            except sqlite3.Error:
+                # 本地状态故障不属于中心链路, 仍交给 `_guard` 快速失败。
+                raise
             except Exception as error:
                 failures += 1
                 _logger.error(
@@ -649,7 +652,8 @@ class _RuntimeCycleRunner:
                     else:
                         try:
                             runtime_configuration = runtime._configuration_resolver(candidate)
-                        except (OSError, sqlite3.Error, ValueError) as error:
+                        # 解析缺陷同样记录为应用失败, 让中心可见, 而不是在重启循环中静默重复。
+                        except Exception as error:
                             synchronizer.reject_application(
                                 detail=str(error),
                                 observed_at=now.seconds,

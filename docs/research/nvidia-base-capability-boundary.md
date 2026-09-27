@@ -1,17 +1,15 @@
 # NVIDIA SOP Monitoring Blueprint 能力与扩展边界核验
 
 日期：2026-08-29  
+状态：**历史研究快照**；不作为当前 NVSOP checkout 或 Vendor 实现的实时事实源。
 核验基准：[`NVIDIA/sop-monitoring-blueprints@69352021c2aae0ba071acd2629f5cff224d14ca6`](https://github.com/NVIDIA/sop-monitoring-blueprints/tree/69352021c2aae0ba071acd2629f5cff224d14ca6)  
-用途：为 Wayfinder 决策票“核验 NVIDIA 基座源码的能力与可扩展边界”提供事实依据。本文只分类事实，不替代后续“裁决基座复用、配置、适配与必要补丁清单”的产品决策。
+用途：为当时的基座能力与扩展边界决策提供证据。本文只分类该核验基准上的事实，不替代当前产品决策或当前 Vendor 代码核验。
 
-## 本地基座仓库
+## 研究基准与当前复核入口
 
-- Linux / WSL 路径：`/home/user/sop-monitoring-blueprints`
-- Windows 访问路径：`\\wsl.localhost\ubuntu-24\home\user\sop-monitoring-blueprints`
 - 已验证远端：`https://github.com/NVIDIA/sop-monitoring-blueprints.git`
 - 2026-08-29 验证的 `HEAD`：`69352021c2aae0ba071acd2629f5cff224d14ca6`
-
-后续基座源码核对优先读取该本地仓库；引用结论前仍需记录实际 `HEAD`，避免把工作区变化误当成固定基准事实。
+- 当前 NVSOP 复核先检查仓库内 `vendor/sop-monitoring-blueprints/` 的实际内容与 [`docs/base/verified-commits.md`](../base/verified-commits.md)；引用本文结论时保留上述历史 commit，不把旧本地 checkout 当作当前权威。
 
 ## 结论
 
@@ -172,9 +170,9 @@ keep_alive=False → final_missing=[1,3]
 
 并发测试证据：[`api_client_perf.py#L584-L625`](https://github.com/NVIDIA/sop-monitoring-blueprints/blob/69352021c2aae0ba071acd2629f5cff224d14ca6/microservices/sop-inference-bp/tests/api_client_perf.py#L584-L625)。
 
-## 改造范围已裁决
+## 当时的改造裁决
 
-“裁决基座复用、配置、适配与必要补丁清单”已由 [`edge-autonomy.md`](../design/mechanisms/edge-autonomy.md) §5.11 与 [ADR-0007](../adr/0007-base-is-the-trunk-not-a-dependency.md) 结案：推理侧就地改造限于两个批准 vendor 文件的同一登记 owner 补丁——`ds_sop_process.py` 统一 source transition、PTS reset、chunk emission、EOS 尾块排序与 active VLM wait，`ds_3d_action_pipeline.py` 仅在 DDM metadata producer 附加 epoch；健康事实再沿现有 chunk/VLM/SSE 链输出。
+该研究之后的产品裁决记录在 [`edge-autonomy.md`](../design/mechanisms/edge-autonomy.md) §5.11 与 [ADR-0007](../adr/0007-base-is-the-trunk-not-a-dependency.md)：推理侧只保留登记的最小 owner 补丁，健康事实沿现有 chunk/VLM/SSE 链输出。本文不维护当前精确 patch 文件或 owner-operation 库存；当前范围以 [`0001-stream-health-events.patch`](../base/patches/0001-stream-health-events.patch) 与 [`test_stream_health_patch.py`](../../tests/contract/base/test_stream_health_patch.py) 为准。
 
 以下门槛用于判断**将来新出现**的改造候选是否越界：
 

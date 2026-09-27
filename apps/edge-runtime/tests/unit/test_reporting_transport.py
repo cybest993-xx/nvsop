@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import io
 import json
 import unittest
-import urllib.error
-import urllib.request
-from email.message import Message
-from typing import cast
+from collections.abc import Callable
 from unittest.mock import patch
 
+import httpx2
 from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
     REPORT_CAPABILITIES_HEADER,
@@ -20,21 +17,13 @@ from nvsop_contracts import (
     ReportEvidence,
 )
 
+from edge_runtime.center_client import CenterClient
 from edge_runtime.reporting_transport import HttpDecisionReportTransport, ReportTransportError
 
-
-class JsonResponse:
-    status = 200
-
-    def __init__(self, body: dict[str, object] | None = None) -> None:
-        self._payload = json.dumps(body or {}).encode("utf-8")
-        self.closed = False
-
-    def read(self) -> bytes:
-        return self._payload
-
-    def close(self) -> None:
-        self.closed = True
+_HANDSHAKE_OK = {
+    "decision_report_contract_version": DECISION_REPORT_CONTRACT_VERSION,
+    "sop_instance_report_contract_version": SOP_INSTANCE_REPORT_CONTRACT_VERSION,
+}
 
 
 def configuration() -> ConfigurationBundle:
@@ -91,35 +80,38 @@ def v2_report(bundle: ConfigurationBundle) -> ReportedDecision:
 
 
 class ReportCompatibilityTests(unittest.TestCase):
-    def transport(self) -> HttpDecisionReportTransport:
-        return HttpDecisionReportTransport(
+    def setUp(self) -> None:
+        signing = patch(
+            "edge_runtime.center_client.sign_host_identity_request", return_value="signature"
+        )
+        signing.start()
+        self.addCleanup(signing.stop)
+        self.requests: list[httpx2.Request] = []
+
+    def transport(
+        self, respond: Callable[[httpx2.Request], httpx2.Response]
+    ) -> HttpDecisionReportTransport:
+        def record(request: httpx2.Request) -> httpx2.Response:
+            self.requests.append(request)
+            return respond(request)
+
+        client = CenterClient(
             center_url="http://center.example",
             host_id="host-a",
             host_private_key="unused",  # pragma: allowlist secret
             timeout=1.0,
+            transport=httpx2.MockTransport(record),
         )
+        return HttpDecisionReportTransport(client=client, host_id="host-a")
 
     def test_v1_report_keeps_old_wire_path_without_handshake(self) -> None:
-        requests: list[urllib.request.Request] = []
+        self.transport(lambda _: httpx2.Response(200, json={})).send_decision(
+            v1_report(), configuration=None
+        )
 
-        def open_request(request: urllib.request.Request, **_: object) -> JsonResponse:
-            requests.append(request)
-            return JsonResponse()
-
-        with (
-            patch(
-                "edge_runtime.reporting_transport.sign_host_identity_request",
-                return_value="signature",
-            ),
-            patch(
-                "edge_runtime.reporting_transport.urllib.request.urlopen", side_effect=open_request
-            ),
-        ):
-            self.transport().send_decision(v1_report(), configuration=None)
-
-        self.assertEqual(len(requests), 1)
-        self.assertTrue(requests[0].full_url.endswith("/api/v1/monitor/reported-decisions"))
-        body = json.loads(cast(bytes, requests[0].data or b"").decode("utf-8"))
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(self.requests[0].url.path, "/api/v1/monitor/reported-decisions")
+        body = json.loads(self.requests[0].content.decode("utf-8"))
         self.assertEqual(body["contract_version"], 1)
         self.assertNotIn("configuration_revision", body)
         self.assertNotIn("backend_provenance", body)
@@ -127,103 +119,50 @@ class ReportCompatibilityTests(unittest.TestCase):
     def test_v2_handshake_precedes_report_and_is_cached_for_same_revision(self) -> None:
         bundle = configuration()
         report = v2_report(bundle)
-        requests: list[urllib.request.Request] = []
         responses = iter(
             (
-                JsonResponse(
-                    {
-                        "decision_report_contract_version": DECISION_REPORT_CONTRACT_VERSION,
-                        "sop_instance_report_contract_version": (
-                            SOP_INSTANCE_REPORT_CONTRACT_VERSION
-                        ),
-                    }
-                ),
-                JsonResponse(),
-                JsonResponse(),
+                httpx2.Response(200, json=_HANDSHAKE_OK),
+                httpx2.Response(200, json={}),
+                httpx2.Response(200, json={}),
             )
         )
+        transport = self.transport(lambda _: next(responses))
 
-        def open_request(request: urllib.request.Request, **_: object) -> JsonResponse:
-            requests.append(request)
-            return next(responses)
+        transport.send_decision(report, configuration=bundle)
+        transport.send_decision(report, configuration=bundle)
 
-        transport = self.transport()
-        with (
-            patch(
-                "edge_runtime.reporting_transport.sign_host_identity_request",
-                return_value="signature",
-            ),
-            patch(
-                "edge_runtime.reporting_transport.urllib.request.urlopen", side_effect=open_request
-            ),
-        ):
-            transport.send_decision(report, configuration=bundle)
-            transport.send_decision(report, configuration=bundle)
-
-        self.assertEqual(len(requests), 3)
-        self.assertTrue(requests[0].full_url.endswith("/confirmed-configuration"))
-        handshake_headers = {key.lower(): value for key, value in requests[0].header_items()}
+        self.assertEqual(len(self.requests), 3)
+        self.assertTrue(self.requests[0].url.path.endswith("/confirmed-configuration"))
         self.assertEqual(
-            handshake_headers[REPORT_CAPABILITIES_HEADER.lower()],
+            self.requests[0].headers[REPORT_CAPABILITIES_HEADER],
             SOP_INSTANCE_REPORT_CAPABILITY,
         )
-        self.assertTrue(requests[1].full_url.endswith("/monitor/reported-decisions"))
-        self.assertTrue(requests[2].full_url.endswith("/monitor/reported-decisions"))
+        self.assertEqual(self.requests[1].url.path, "/api/v1/monitor/reported-decisions")
+        self.assertEqual(self.requests[2].url.path, "/api/v1/monitor/reported-decisions")
 
     def test_new_edge_does_not_downgrade_v2_when_old_center_lacks_handshake(self) -> None:
         bundle = configuration()
-        requests: list[urllib.request.Request] = []
 
-        def old_center(request: urllib.request.Request, **_: object) -> JsonResponse:
-            requests.append(request)
-            raise urllib.error.HTTPError(
-                request.full_url,
-                404,
-                "Not Found",
-                hdrs=Message(),
-                fp=io.BytesIO(b"{}"),
+        with self.assertRaises(ReportTransportError) as raised:
+            self.transport(lambda _: httpx2.Response(404, json={})).send_decision(
+                v2_report(bundle), configuration=bundle
             )
 
-        with (
-            patch(
-                "edge_runtime.reporting_transport.sign_host_identity_request",
-                return_value="signature",
-            ),
-            patch(
-                "edge_runtime.reporting_transport.urllib.request.urlopen", side_effect=old_center
-            ),
-            self.assertRaises(ReportTransportError) as raised,
-        ):
-            self.transport().send_decision(v2_report(bundle), configuration=bundle)
-
         self.assertEqual(raised.exception.status, 404)
-        self.assertEqual(len(requests), 1)
-        self.assertTrue(requests[0].full_url.endswith("/confirmed-configuration"))
+        self.assertEqual(len(self.requests), 1)
+        self.assertTrue(self.requests[0].url.path.endswith("/confirmed-configuration"))
 
     def test_v2_requires_center_to_advertise_instance_support_before_decision_post(self) -> None:
         bundle = configuration()
-        requests: list[urllib.request.Request] = []
+        incompatible = {"decision_report_contract_version": DECISION_REPORT_CONTRACT_VERSION}
 
-        def incompatible(request: urllib.request.Request, **_: object) -> JsonResponse:
-            requests.append(request)
-            return JsonResponse(
-                {"decision_report_contract_version": DECISION_REPORT_CONTRACT_VERSION}
+        with self.assertRaisesRegex(ReportTransportError, "不受支持"):
+            self.transport(lambda _: httpx2.Response(200, json=incompatible)).send_decision(
+                v2_report(bundle), configuration=bundle
             )
 
-        with (
-            patch(
-                "edge_runtime.reporting_transport.sign_host_identity_request",
-                return_value="signature",
-            ),
-            patch(
-                "edge_runtime.reporting_transport.urllib.request.urlopen", side_effect=incompatible
-            ),
-            self.assertRaisesRegex(ReportTransportError, "不受支持"),
-        ):
-            self.transport().send_decision(v2_report(bundle), configuration=bundle)
-
-        self.assertEqual(len(requests), 1)
-        self.assertTrue(requests[0].full_url.endswith("/confirmed-configuration"))
+        self.assertEqual(len(self.requests), 1)
+        self.assertTrue(self.requests[0].url.path.endswith("/confirmed-configuration"))
 
 
 if __name__ == "__main__":

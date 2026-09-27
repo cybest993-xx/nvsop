@@ -2,25 +2,17 @@
 
 from __future__ import annotations
 
-import http.client
 import json
-import secrets
-import ssl
-import time
-import urllib.error
-import urllib.request
 from collections.abc import Callable, Mapping
-from contextlib import suppress
 from dataclasses import dataclass
-from typing import Protocol, cast
+from typing import Protocol
 
 from nvsop_contracts import (
     ConfigurationBundle,
-    HostIdentityRequest,
     configuration_from_wire,
-    sign_host_identity_request,
 )
 
+from edge_runtime.center_client import CenterClient, CenterUnreachableError
 from edge_runtime.local_state.configuration import ConfigurationFailure, LocalConfigurationStore
 
 _SUPPORTED_CONFIGURATION_CAPABILITIES: frozenset[str] = frozenset()
@@ -49,68 +41,21 @@ class ConfigurationSyncResult:
 class HttpConfigurationPuller(ConfigurationPuller):
     """为一台指定推理机发送带签名的 GET 请求。"""
 
-    def __init__(
-        self,
-        *,
-        center_url: str,
-        host_id: str,
-        host_private_key: str,
-        timeout: float,
-        ssl_context: ssl.SSLContext | None = None,
-    ) -> None:
-        if not center_url or not host_id or not host_private_key:
-            raise ValueError("configuration pull identity and URL must not be empty")
-        if timeout <= 0:
-            raise ValueError("configuration pull timeout must be positive")
-        self._base_url = center_url.rstrip("/")
+    def __init__(self, *, client: CenterClient, host_id: str) -> None:
+        self._client = client
         self._host_id = host_id
-        self._host_private_key = host_private_key
-        self._timeout = timeout
-        self._ssl_context = ssl_context
 
     def pull(self) -> ConfigurationBundle:
-        path = f"/api/v1/inference-hosts/{self._host_id}/configuration"
-        request = urllib.request.Request(
-            f"{self._base_url}{path}",
-            headers={
-                "Accept": "application/json",
-                **self._signed_headers(path),
-            },
-            method="GET",
-        )
         try:
-            response = cast(
-                _HttpResponse,
-                urllib.request.urlopen(
-                    request,
-                    timeout=self._timeout,
-                    context=self._ssl_context,
-                ),
-            )
-        except urllib.error.HTTPError as error:
-            status = error.code
-            error.close()
-            raise ConfigurationPullError(
-                "http_rejected", "中心配置接口拒绝请求", status=status
-            ) from error
-        except (OSError, http.client.HTTPException) as error:
+            response = self._client.get(f"/api/v1/inference-hosts/{self._host_id}/configuration")
+        except CenterUnreachableError as error:
             raise ConfigurationPullError("center_unreachable", "中心配置接口暂时不可达") from error
+        if response.status != 200:
+            raise ConfigurationPullError(
+                "http_rejected", "中心配置接口返回非成功状态", status=response.status
+            )
         try:
-            if response.status != 200:
-                raise ConfigurationPullError(
-                    "http_rejected", "中心配置接口返回非成功状态", status=response.status
-                )
-            try:
-                raw = response.read()
-            except (OSError, http.client.HTTPException) as error:
-                raise ConfigurationPullError(
-                    "center_unreachable", "中心配置接口暂时不可达"
-                ) from error
-        finally:
-            with suppress(OSError):
-                response.close()
-        try:
-            value = json.loads(raw.decode("utf-8"))
+            value = json.loads(response.body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise ConfigurationPullError("invalid_json", "中心配置响应不是有效 JSON") from error
         if not isinstance(value, Mapping):
@@ -124,26 +69,6 @@ class HttpConfigurationPuller(ConfigurationPuller):
         if bundle.host_id != self._host_id:
             raise ConfigurationPullError("host_scope_mismatch", "配置响应不属于发起请求的推理机")
         return bundle
-
-    def _signed_headers(self, path: str) -> dict[str, str]:
-        timestamp = int(time.time())
-        nonce = secrets.token_urlsafe(18)
-        request = HostIdentityRequest(
-            method="GET",
-            path=path,
-            host_id=self._host_id,
-            timestamp=timestamp,
-            nonce=nonce,
-            body=None,
-        )
-        return {
-            "X-Inference-Host-ID": self._host_id,
-            "X-Inference-Host-Timestamp": str(timestamp),
-            "X-Inference-Host-Nonce": nonce,
-            "X-Inference-Host-Signature": sign_host_identity_request(
-                request, private_key=self._host_private_key
-            ),
-        }
 
 
 class ConfigurationSynchronizer:
@@ -235,14 +160,6 @@ class ConfigurationSynchronizer:
             confirmed=self._store.confirmed(),
             failure=self._store.failure(),
         )
-
-
-class _HttpResponse(Protocol):
-    status: int
-
-    def read(self) -> bytes: ...
-
-    def close(self) -> None: ...
 
 
 __all__ = [

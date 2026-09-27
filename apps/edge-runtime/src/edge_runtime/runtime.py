@@ -19,6 +19,7 @@ from types import FrameType
 
 from nvsop_contracts import ConfigurationBundle, ConnectionTestOutcome, configuration_to_wire
 
+from edge_runtime.center_client import CenterClient
 from edge_runtime.configuration import (
     EdgeRuntimeConfiguration,
     LocalIsapiConnectorConfiguration,
@@ -1117,11 +1118,13 @@ def build_connection_test_runner(
     """装配生产委托命令执行器及本机真实连接器适配器。"""
     return ConnectionTestCommandRunner(
         transport=HttpCommandTransport(
-            center_url=center_url,
-            host_id=host_id,
-            host_private_key=host_private_key,
-            timeout=command_timeout,
-            ssl_context=ssl_context,
+            client=CenterClient(
+                center_url=center_url,
+                host_id=host_id,
+                host_private_key=host_private_key,
+                timeout=command_timeout,
+                ssl_context=ssl_context,
+            )
         ),
         executor=ConnectionTestExecutor(
             registry=ConfiguredLocalConnectorRegistry(local_connectors),
@@ -1201,13 +1204,7 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
         resolve_confirmed(bundle)
 
     configuration_sync = ConfigurationSynchronizer(
-        puller=HttpConfigurationPuller(
-            center_url=config.center_url,
-            host_id=config.host_id,
-            host_private_key=config.host_private_key,
-            timeout=config.command_timeout,
-            ssl_context=config.ssl_context,
-        ),
+        puller=HttpConfigurationPuller(client=_center_client(config), host_id=config.host_id),
         store=state.configuration(),
         expected_host_id=config.host_id,
         validator=validate_confirmed,
@@ -1229,11 +1226,7 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
             runtime_configuration=active_configuration,
         )
         report_transport = HttpDecisionReportTransport(
-            center_url=config.center_url,
-            host_id=config.host_id,
-            host_private_key=config.host_private_key,
-            timeout=config.command_timeout,
-            ssl_context=config.ssl_context,
+            client=_center_client(config), host_id=config.host_id
         )
         composition = _build_runtime_composition(
             config=config,
@@ -1321,18 +1314,22 @@ def _station_input_source(binding: StationRuntimeBinding, *, timeout: float) -> 
     return sources[0] if len(sources) == 1 else MultiplexedStationInputSource(sources=sources)
 
 
+def _center_client(config: EdgeRuntimeConfiguration) -> CenterClient:
+    return CenterClient(
+        center_url=config.center_url,
+        host_id=config.host_id,
+        host_private_key=config.host_private_key,
+        timeout=config.command_timeout,
+        ssl_context=config.ssl_context,
+    )
+
+
 def _synchronize_runtime_configuration(
     config: EdgeRuntimeConfiguration, state: LocalState
 ) -> RuntimeConfiguration:
     """主动拉取一次; 失败时使用最后确认 bundle, 首次失败才使用 bootstrap."""
     synchronizer = ConfigurationSynchronizer(
-        puller=HttpConfigurationPuller(
-            center_url=config.center_url,
-            host_id=config.host_id,
-            host_private_key=config.host_private_key,
-            timeout=config.command_timeout,
-            ssl_context=config.ssl_context,
-        ),
+        puller=HttpConfigurationPuller(client=_center_client(config), host_id=config.host_id),
         store=state.configuration(),
         expected_host_id=config.host_id,
         validator=lambda bundle: validate_confirmed_runtime_configuration(

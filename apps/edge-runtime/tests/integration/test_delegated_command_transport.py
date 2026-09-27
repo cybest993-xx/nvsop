@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import io
 import json
 import threading
 import unittest
-import urllib.error
-from email.message import Message
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from random import Random
 from typing import ClassVar
 from unittest.mock import patch
 
+import httpx2
 from nvsop_contracts import (
     ConnectionTestClaim,
     ConnectionTestCommand,
@@ -26,6 +24,7 @@ from nvsop_contracts import (
     verify_host_identity_request,
 )
 
+from edge_runtime.center_client import CenterClient
 from edge_runtime.connectors.hikvision import CANDIDATE_PROFILE
 from edge_runtime.runtime import LocalIsapiConnectorConfiguration, build_connection_test_loop
 from edge_runtime.supervisor.delegated_transport import CommandTransportError, HttpCommandTransport
@@ -129,10 +128,12 @@ class HttpCommandTransportTest(unittest.TestCase):
 
     def _transport(self) -> HttpCommandTransport:
         return HttpCommandTransport(
-            center_url=f"http://127.0.0.1:{self.server.server_port}",
-            host_id="host-1",
-            host_private_key=HOST_IDENTITY.private_key,
-            timeout=2.0,
+            client=CenterClient(
+                center_url=f"http://127.0.0.1:{self.server.server_port}",
+                host_id="host-1",
+                host_private_key=HOST_IDENTITY.private_key,
+                timeout=2.0,
+            )
         )
 
     def test_claim_and_report_use_the_shared_wire_contract_and_host_identity(self) -> None:
@@ -253,23 +254,21 @@ class HttpCommandTransportTest(unittest.TestCase):
             device_thread.join(timeout=5)
             device_server.server_close()
 
-    def test_http_error_response_is_closed_before_transport_error_is_raised(self) -> None:
-        body = io.BytesIO(b"rejected")
-        error = urllib.error.HTTPError(
-            url="http://center.invalid/api/v1/device-commands/next",
-            code=401,
-            msg="Unauthorized",
-            hdrs=Message(),
-            fp=body,
+    def test_rejected_claim_raises_transport_error_with_status(self) -> None:
+        transport = HttpCommandTransport(
+            client=CenterClient(
+                center_url="http://center.invalid",
+                host_id="host-1",
+                host_private_key=HOST_IDENTITY.private_key,
+                timeout=2.0,
+                transport=httpx2.MockTransport(lambda _: httpx2.Response(401)),
+            )
         )
 
-        with (
-            patch("urllib.request.urlopen", side_effect=error),
-            self.assertRaises(CommandTransportError),
-        ):
-            self._transport().claim_next()
+        with self.assertRaises(CommandTransportError) as raised:
+            transport.claim_next()
 
-        self.assertTrue(body.closed)
+        self.assertEqual(raised.exception.status, 401)
 
 
 if __name__ == "__main__":

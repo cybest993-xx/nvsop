@@ -11,7 +11,11 @@ import unittest
 from typing import ClassVar
 from unittest.mock import patch
 
+from nvsop_contracts import ReportedHealth
+
+from edge_runtime.center_client import CenterClient, CenterUnreachableError
 from edge_runtime.configuration_sync import ConfigurationPullError, HttpConfigurationPuller
+from edge_runtime.reporting_transport import HttpDecisionReportTransport, ReportTransportError
 from edge_runtime.runtime import ConfiguredLocalConnectorRegistry, ConnectionTestCommandLoop
 from edge_runtime.supervisor.delegated_commands import (
     ConnectionTestCommandRunner,
@@ -59,55 +63,52 @@ class CenterLinkFaultTest(unittest.TestCase):
 
     def setUp(self) -> None:
         signing = patch(
-            "edge_runtime.supervisor.delegated_transport.sign_host_identity_request",
-            return_value="signature",
+            "edge_runtime.center_client.sign_host_identity_request", return_value="signature"
         )
         signing.start()
         self.addCleanup(signing.stop)
-        config_signing = patch(
-            "edge_runtime.configuration_sync.sign_host_identity_request",
-            return_value="signature",
-        )
-        config_signing.start()
-        self.addCleanup(config_signing.stop)
 
-    def _center_url(self) -> str:
-        return f"http://127.0.0.1:{self.server.server_address[1]}"
-
-    def _command_transport(self) -> HttpCommandTransport:
-        return HttpCommandTransport(
-            center_url=self._center_url(),
+    def _client(self) -> CenterClient:
+        return CenterClient(
+            center_url=f"http://127.0.0.1:{self.server.server_address[1]}",
             host_id="host-1",
             host_private_key="unused",  # pragma: allowlist secret
             timeout=2.0,
         )
 
-    def test_command_claim_maps_disconnect_and_truncated_body_to_transport_error(self) -> None:
+    def test_center_client_maps_disconnect_and_truncated_body_to_unreachable(self) -> None:
         for response in (_DISCONNECT, _TRUNCATED_BODY):
             with self.subTest(response=response[:12]):
                 _FaultyCenterHandler.response = response
-                with self.assertRaises(CommandTransportError):
-                    self._command_transport().claim_next()
+                with self.assertRaises(CenterUnreachableError):
+                    self._client().get("/api/v1/device-commands/next")
 
-    def test_configuration_pull_maps_disconnect_and_truncated_body_to_unreachable(self) -> None:
-        puller = HttpConfigurationPuller(
-            center_url=self._center_url(),
-            host_id="host-1",
-            host_private_key="unused",  # pragma: allowlist secret
-            timeout=2.0,
-        )
-        for response in (_DISCONNECT, _TRUNCATED_BODY):
-            with self.subTest(response=response[:12]):
-                _FaultyCenterHandler.response = response
-                with self.assertRaises(ConfigurationPullError) as raised:
-                    puller.pull()
-                self.assertEqual(raised.exception.code, "center_unreachable")
+    def test_every_center_adapter_turns_link_faults_into_its_retryable_error(self) -> None:
+        _FaultyCenterHandler.response = _TRUNCATED_BODY
+        with self.assertRaises(CommandTransportError):
+            HttpCommandTransport(client=self._client()).claim_next()
+        with self.assertRaises(ConfigurationPullError) as raised:
+            HttpConfigurationPuller(client=self._client(), host_id="host-1").pull()
+        self.assertEqual(raised.exception.code, "center_unreachable")
+        with self.assertRaises(ReportTransportError):
+            HttpDecisionReportTransport(client=self._client(), host_id="host-1").send_health(
+                ReportedHealth(
+                    event_id="host-1:health",
+                    trace_id="host-1:health",
+                    host_id="host-1",
+                    station_id="station-1",
+                    status="healthy",
+                    reason_code=None,
+                    detail=None,
+                    reported_at="2026-09-28T00:00:00Z",
+                )
+            )
 
     def test_command_loop_keeps_running_while_center_link_is_faulty(self) -> None:
         _FaultyCenterHandler.response = _TRUNCATED_BODY
         loop = ConnectionTestCommandLoop(
             runner=ConnectionTestCommandRunner(
-                transport=self._command_transport(),
+                transport=HttpCommandTransport(client=self._client()),
                 executor=ConnectionTestExecutor(
                     registry=ConfiguredLocalConnectorRegistry(()), timeout=1.0
                 ),

@@ -15,6 +15,7 @@ from typing import Any
 
 from fastapi import APIRouter, FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
+from sqlalchemy.orm import Session, sessionmaker
 
 from factory_sop.auth.adapters import role_administration as auth_role_administration
 from factory_sop.auth.adapters import routes as auth_routes
@@ -86,6 +87,8 @@ from factory_sop.observability import (
 )
 from factory_sop.overview import OverviewSources
 from factory_sop.overview import create_router as create_overview_router
+from factory_sop.persistence import create_database_engine
+from factory_sop.persistence import session_factory as make_session_factory
 from factory_sop.problem import (
     PROBLEM_MEDIA_TYPE,
     ApiErrorCode,
@@ -134,12 +137,19 @@ async def liveness() -> dict[str, str]:
     return {"status": "alive"}
 
 
-def create_app(settings: Settings) -> FastAPI:
+def create_app(
+    settings: Settings,
+    *,
+    session_factory: sessionmaker[Session] | None = None,
+) -> FastAPI:
     """Build the application from already-resolved settings.
 
     Settings are a parameter, not read here: the entrypoint resolves them once from the
     process environment and start-up fails there, before an application exists to serve a
     request with a half-valid configuration.
+
+    调用方可注入自己的 `session_factory`；未注入时由本组合根从 settings 建立 engine 与
+    factory，使 dispatcher 只装配一次且可执行，不必先建半装配实例再由调用方覆盖状态。
     """
     app = FastAPI(
         title="SOP compliance center backend",
@@ -147,7 +157,15 @@ def create_app(settings: Settings) -> FastAPI:
         responses={500: problem_openapi_response("Internal server error")},
     )
     app.state.settings = settings
-    app.state.job_dispatcher = ArqJobDispatcher.from_settings(settings)
+    factory = (
+        session_factory
+        if session_factory is not None
+        else make_session_factory(create_database_engine(settings))
+    )
+    app.state.session_factory = factory
+    # 一次性装入可执行投递器：`from_settings` 缺少 session_factory 时无法解析任务类型，
+    # 所以生产路径必须先有完整 factory，不能先建半装配实例再由调用方覆盖。
+    app.state.job_dispatcher = ArqJobDispatcher.from_settings(settings, session_factory=factory)
     # Built here rather than by `Settings`, which sits below the domain in the layering and so
     # carries the configured minutes rather than the type made from them.
     app.state.session_policy = SessionPolicy(

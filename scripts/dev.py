@@ -981,7 +981,6 @@ def ensure_sample_video(item: DevPaths) -> None:
 
 def ensure_credentials(item: DevPaths) -> None:
     write_secret(item.secrets / "center-db-password", "center-" + os.urandom(18).hex())
-    write_secret(item.secrets / "annotation-db-password", "annotation-" + os.urandom(18).hex())
     write_secret(item.secrets / "bootstrap-password", "dev-" + os.urandom(24).hex())
     write_secret(item.secrets / "csrf-secret", os.urandom(32).hex())
     write_secret(item.secrets / "redis-url", "redis://redis:6379/0")
@@ -1018,7 +1017,6 @@ def setup(item: DevPaths) -> None:
             "pull",
             "center-db",
             "redis",
-            "annotation-db",
             "gateway",
         ),
         cwd=item.root,
@@ -1126,7 +1124,6 @@ _REQUIRED_READY_SERVICES = frozenset(
     {
         "center-db",
         "redis",
-        "annotation-db",
         "annotation-backend",
         "annotation-frontend",
         "center-api",
@@ -1192,7 +1189,7 @@ def status(item: DevPaths) -> int:
             "health": details.get("health"),
         }
         for name, details in services.items()
-        if name in {"center-db", "redis", "annotation-db", "center-api", "worker"}
+        if name in {"center-db", "redis", "center-api", "worker"}
     }
     if compose_error:
         value["compose_error"] = compose_error

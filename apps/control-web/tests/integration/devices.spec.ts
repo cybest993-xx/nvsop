@@ -650,21 +650,35 @@ describe('工位与设备中的连接器', () => {
       runtime_parameter_mode: 'follow_template',
       runtime_parameters: null,
     })
+
+    await wrapper.find('input[value="custom"]').setValue()
+    await wrapper.find('input[name="idle-timeout-seconds"]').setValue('12')
+    await wrapper.find('input[name="step-deadline-seconds"]').setValue('44')
+    await wrapper.find('input[name="disposition-policy"]').setValue('hold')
+    await wrapper
+      .findAll('button')
+      .find((button) => button.text() === '预检绑定')!
+      .trigger('click')
+    await flushPromises()
+
+    const expectedRequest = {
+      station_id: 'station-1',
+      version_id: 'version-1',
+      runtime_parameter_mode: 'custom' as const,
+      runtime_parameters: {
+        idle_timeout_seconds: 12,
+        step_deadline_seconds: 44,
+        disposition_policy: 'hold',
+      },
+    }
+    expect(api.validateTemplateBinding).toHaveBeenCalledWith(expectedRequest)
     await wrapper
       .findAll('button')
       .find((button) => button.text() === '正式绑定')!
       .trigger('click')
     await flushPromises()
 
-    expect(api.bindTemplateVersion).toHaveBeenCalledWith(
-      {
-        station_id: 'station-1',
-        version_id: 'version-1',
-        runtime_parameter_mode: 'follow_template',
-        runtime_parameters: null,
-      },
-      4,
-    )
+    expect(api.bindTemplateVersion).toHaveBeenCalledWith(expectedRequest, 4)
   })
 
   it('preserves unknown runtime parameters in the known-ID edit flow', async () => {

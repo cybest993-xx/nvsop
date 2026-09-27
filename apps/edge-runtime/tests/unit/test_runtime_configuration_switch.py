@@ -4,7 +4,7 @@ import sqlite3
 import unittest
 from collections.abc import Callable
 from threading import Event, Thread
-from time import sleep
+from time import monotonic, sleep
 from typing import cast
 
 from nvsop_contracts import ConfigurationBundle
@@ -349,8 +349,10 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
             configuration=RuntimeConfiguration(stations=(), connectors=(), confirmed=old),
         )
 
+        # 回归时退避重试会让循环不再退出; 截止时间让测试失败而不是挂起。
+        deadline = monotonic() + 5.0
         with self.assertRaises(sqlite3.OperationalError):
-            runtime.run_forever(should_stop=lambda: False)
+            runtime.run_forever(should_stop=lambda: monotonic() > deadline)
         self.assertTrue(state.closed)
 
     def test_station_defect_still_stops_runtime(self) -> None:

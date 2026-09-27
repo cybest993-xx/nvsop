@@ -197,6 +197,7 @@ def test_dispatcher_routes_dataset_jobs_to_their_worker(
 
 def test_composition_root_builds_an_executable_dispatcher_from_settings_alone(
     engine: Engine,
+    dataset_storage_root: Path,
     redis_server: RedisServer,
     redis_client: Redis,
 ) -> None:
@@ -206,7 +207,7 @@ def test_composition_root_builds_an_executable_dispatcher_from_settings_alone(
     生产 settings-only 路径，证明它产出的 dispatcher 能读取 PostgreSQL 任务类型并投递
     到真实 Redis，而不是只被构造一次。
     """
-    settings = settings_for(engine, redis_url=redis_server.url)
+    settings = settings_for(engine, storage_root=dataset_storage_root, redis_url=redis_server.url)
     job = ApplicationJob(
         id=uuid4(),
         job_type=JobType.DATASET_VALIDATION,

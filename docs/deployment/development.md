@@ -48,10 +48,12 @@ make dev-setup
 - 校验工具、Docker daemon、Compose、Tilt 版本和固定端口；
 - 生成开发 secrets 和合成测试视频；显式 HTTPS 模式才生成开发 CA/服务端证书；
 - 执行 frozen `pnpm install` 与 `uv sync`；
-- 拉取 PostgreSQL、Redis、annotation DB、Nginx 等基础镜像；训练素材使用本地 named volume，不需要对象存储镜像；
+- 拉取 PostgreSQL、Redis、Nginx 等基础镜像；训练素材使用本地 named volume，不需要对象存储镜像；
 - 在 `.nvsop/dev-main/`（或 `--state-dir` 指定目录）写入状态、凭据路径和测试制品。
 
-开发账号信息写入 `.nvsop/dev-main/credentials.txt`，默认登录名为 `dev.admin`；密码本身保存在独立 secret 文件中。不要把状态目录、密码或证书私钥提交进 Git。旧工作树若仍有 `.tmp/dev-main/`，先停止旧实例；需要保留本地状态时显式移动到 `.nvsop/dev-main/`，否则重新执行 `make dev-setup`。脚本不会静默回退到旧目录。
+开发账号信息写入 `.nvsop/dev-main/credentials.txt`，默认登录名为 `dev.admin`；密码本身保存在独立 secret 文件中。不要把状态目录、密码或证书私钥提交进 Git。
+
+开发实例只运行一套 PostgreSQL（`center-db`），其中有两个独立 database：Center 使用 `nvsop`，原样复用的训练/标注进程使用 `training`（Q35）。`training` database 由 `training-db-init` 幂等创建，仅保证空库存在；训练对象安装（#224）与运行身份隔离（#223）是独立的部署步骤。在对象安装前标注后端仍可启动（`/health/ready` 不查询 `training`），但涉及训练表的请求会失败。原 `annotation-db` 服务及其 Compose 卷声明已从 `deploy/dev/compose.yaml` 删除，该卷 `nvsop-dev-main-annotation-db` 因此不再出现在 Compose 的卷清单中；但删除声明**不会**删除宿主机上既有的 named volume：`make dev-down` 从不删除卷，只有显式 `docker volume rm`（或 `docker compose down -v`）才会。该卷的数据迁移由 #225 负责，本开发实例不自动迁移。旧工作树若仍有 `.tmp/dev-main/`，先停止旧实例；需要保留本地状态时显式移动到 `.nvsop/dev-main/`，否则重新执行 `make dev-setup`。脚本不会静默回退到旧目录。
 
 ### 可选 HTTPS CA
 

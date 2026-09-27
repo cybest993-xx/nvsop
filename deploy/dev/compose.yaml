@@ -18,6 +18,32 @@ services:
       timeout: 3s
       retries: 30
 
+  # Q35：同一 PostgreSQL 实例内的第二个 database。训练/标注进程连接 `training`，
+  # Center 只连接 `nvsop`。幂等创建以兼容既有数据卷；training 对象安装由 #224(S066) 负责，
+  # 这里不执行 DDL，也不重建/清空中心数据卷。
+  training-db-init:
+    image: postgres:17.2-bookworm
+    depends_on:
+      center-db:
+        condition: service_healthy
+    environment:
+      PGHOST: center-db
+      PGUSER: nvsop
+      PGDATABASE: nvsop
+    secrets:
+      - center-db-password
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        export PGPASSWORD="$$(cat /run/secrets/center-db-password)"
+        if psql -tAc "SELECT 1 FROM pg_database WHERE datname = 'training'" | grep -qx 1; then
+          echo "training database already present"
+        else
+          psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE training"
+        fi
+    restart: "no"
+
   redis:
     image: redis:7.4.2-bookworm
     command: ["redis-server", "--appendonly", "yes"]
@@ -25,23 +51,6 @@ services:
       - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 3s
-      timeout: 3s
-      retries: 30
-
-  annotation-db:
-    image: postgres:17.2-bookworm
-    environment:
-      POSTGRES_DB: annotation
-      POSTGRES_USER: annotation
-      POSTGRES_PASSWORD_FILE: /run/secrets/annotation-db-password
-    secrets:
-      - annotation-db-password
-    volumes:
-      - annotation-db-data:/var/lib/postgresql/data
-      - ${NVSOP_SOURCE_DIR:-.}/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/video-annotator-ms/annotation_backend/db-init-scripts/01-init-tables.sql:/docker-entrypoint-initdb.d/01-init-tables.sql:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U annotation -d annotation"]
       interval: 3s
       timeout: 3s
       retries: 30
@@ -75,8 +84,8 @@ services:
       SOP_MEDIA_PROBE_BINARY: ffprobe
       SOP_WORKER_HEALTH_CHECK_INTERVAL_SECONDS: "5"
       SOP_LOG_LEVEL: info
-      NO_PROXY: center-db,annotation-db,redis,annotation-backend,localhost,127.0.0.1
-      no_proxy: center-db,annotation-db,redis,annotation-backend,localhost,127.0.0.1
+      NO_PROXY: center-db,redis,annotation-backend,localhost,127.0.0.1
+      no_proxy: center-db,redis,annotation-backend,localhost,127.0.0.1
     secrets:
       - center-db-password
       - redis-url
@@ -114,8 +123,6 @@ services:
       center-bootstrap:
         condition: service_completed_successfully
       redis:
-        condition: service_healthy
-      annotation-db:
         condition: service_healthy
     environment: *center-environment
     volumes:
@@ -163,23 +170,20 @@ services:
       context: ${NVSOP_SOURCE_DIR:-.}
       dockerfile: deploy/dev/annotation-backend.Dockerfile
     depends_on:
-      annotation-db:
-        condition: service_healthy
+      training-db-init:
+        condition: service_completed_successfully
     environment:
-      POSTGRES_HOST: annotation-db
+      # 训练/标注进程经 Vendor `POSTGRES_*` seam 连接同一实例的 `training` database（Q35）。
+      # 运行身份隔离由 #223(S065) 负责；本票复用安装身份。
+      POSTGRES_HOST: center-db
       POSTGRES_PORT: "5432"
-      POSTGRES_DB: annotation
-      POSTGRES_USER: annotation
-      POSTGRES_PASSWORD_FILE: /run/secrets/annotation-db-password
-      DB_HOST: annotation-db
-      DB_PORT: "5432"
-      DB_NAME: annotation
-      DB_USER: annotation
-      DB_PASSWORD_FILE: /run/secrets/annotation-db-password
+      POSTGRES_DB: training
+      POSTGRES_USER: nvsop
+      POSTGRES_PASSWORD_FILE: /run/secrets/center-db-password
       SERVICE_PORT: "8100"
       MAX_REQUEST_BODY_MB: "2048"
     secrets:
-      - annotation-db-password
+      - center-db-password
     volumes:
       - annotation-media:/app/assets/videos
     healthcheck:
@@ -244,16 +248,12 @@ volumes:
     name: nvsop-dev-main-redis
   dataset-media:
     name: nvsop-dev-main-dataset-media
-  annotation-db-data:
-    name: nvsop-dev-main-annotation-db
   annotation-media:
     name: nvsop-dev-main-annotation-media
 
 secrets:
   center-db-password:
     file: ${NVSOP_DEV_STATE_DIR:-.nvsop/dev-main}/secrets/center-db-password
-  annotation-db-password:
-    file: ${NVSOP_DEV_STATE_DIR:-.nvsop/dev-main}/secrets/annotation-db-password
   bootstrap-password:
     file: ${NVSOP_DEV_STATE_DIR:-.nvsop/dev-main}/secrets/bootstrap-password
   csrf-secret:

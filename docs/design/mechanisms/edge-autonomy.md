@@ -102,7 +102,7 @@ MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU �
 
 **该通道只在进程与 pipeline 存活时能投递。** source transition 会先推进 stream epoch，旧代际 pending chunk/frame/boundary/descriptor 不会在健康恢复后重新出现；active VLM wait 被立即唤醒，健康事实可继续向下游传播。EOS 则在有效尾块之后投递。若恢复同时发生 PTS 归零，下一正常 chunk 才带新 `source_anchor`。进程死亡由 **chunk 静默计时器**兜底。
 
-**代码放置**：`apps/edge-runtime/` 持有健康事件与判定逻辑；登记 vendor 补丁只触及 `ds_sop_process.py` 与 `ds_3d_action_pipeline.py`。前者持有健康/chunk/VLM 排序，后者只为 DDM metadata producer 附加 epoch。补丁维护为可重放 diff；纯 CPU 契约测试限定 15 条允许替换的 owner 行，并验证可逆性与工作树同步。
+**代码放置**：`apps/edge-runtime/` 持有健康事件与判定逻辑；登记 vendor 补丁只承担批准 owner seam 上的健康/chunk/VLM 排序与 DDM metadata 代际传播。精确 patch 面由 [`0001-stream-health-events.patch`](../../base/patches/0001-stream-health-events.patch) 与 [`test_stream_health_patch.py`](../../../tests/contract/base/test_stream_health_patch.py) 维护；纯 CPU 契约测试限制允许替换的 owner operations，并验证可逆性与工作树同步。
 
 **依赖约束（硬规则）**：判定核心只依赖 Python 标准库。判定核心运行在 supervisor 进程里，故这条不再由运行环境强制，而是为**可测试性与可移植性**保留：成本近零，且保证判定核心可纯 CPU 测试——基座那四个模块本来就是这样。`vendor/` 内那处 hook 仍受运行环境强制，因为它确实跑在 DeepStream 容器内（§2.10）。
 

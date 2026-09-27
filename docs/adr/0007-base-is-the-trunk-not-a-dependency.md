@@ -12,7 +12,7 @@ NVIDIA 仓库的代码是本系统的躯干，不是外部依赖。姿态分三�
 | 全新建设 | 账户权限、工位/相机/连接器配置、Excel→模板版本发布、聚合看板、违规复核、证据生命周期、上报与对账 |
 | 配置关闭（不打补丁） | 基座 checker（`DISABLE_SOP_CHECKER=true`）、基座处置（`ENABLE_ALERT_SOUND`/`ENABLE_MESSAGING` 保持默认 false） |
 
-这一处就地改造保持**登记且机械受限**：不复制 DeepStream / Triton / vLLM 算法，只在健康/分块 owner seam 增加 stream epoch barrier、旧 work 退休和合成事件旁路。最终登记 diff 只触及两个 vendor 文件：`ds_sop_process.py` 持有健康/chunk/VLM 排序，`ds_3d_action_pipeline.py` 只给 DDM metadata producer 附加代际；共 15 条基座 owner 行允许替换，并由可逆 patch 与契约测试固定。
+这一处就地改造保持**登记且机械受限**：不复制 DeepStream / Triton / vLLM 算法，只在健康/分块 owner seam 增加 stream epoch barrier、旧 work 退休和合成事件旁路。精确 touched files 与允许替换的 owner operations 由登记 patch 和可执行契约测试共同定义；本 ADR 只保存为什么允许这类改造以及它必须保持可逆、可机械核验。
 
 ## 为什么处置不再是一处改造
 
@@ -43,7 +43,7 @@ NVIDIA 仓库的代码是本系统的躯干，不是外部依赖。姿态分三�
 | `_vlm_response_future_queue` | 不直接注入：会越过尚在 `_chunk_queue`、还没提交 VLM future 的更早动作 chunk |
 | `_vlm_response_queue` | 不直接注入：会越过已经提交但仍在等待 `response_future.result()` 的更早动作 chunk |
 
-因此补丁只触及**两个登记 vendor 文件**：`ds_sop_process.py` 中 `INVALID` / `PLAYING` 先推进 stream epoch 并打开 barrier，旧 chunk/frame/active-VLM work 退休后才让健康事实继续；EOS 先记为 pending，待 uniform/DDM flush 尾部 chunk 后再入 `_chunk_queue`；`ds_3d_action_pipeline.py` 的 DDM metadata parser 在 callback 入口捕获 epoch，并把它随 boundary tuple 传给消费者，消除 drain 之后晚到旧 metadata 的竞态。
+因此补丁只落在登记的 source/chunk owner seam：`INVALID` / `PLAYING` 先推进 stream epoch 并打开 barrier，旧 chunk/frame/active-VLM work 退休后才让健康事实继续；EOS 先记为 pending，待 uniform/DDM flush 尾部 chunk 后再入 `_chunk_queue`；DDM metadata producer 在 callback 入口捕获 epoch，并把它随 boundary tuple 传给消费者，消除 drain 之后晚到旧 metadata 的竞态。精确文件集合以登记 patch 与契约测试为准。
 
 **E4 实施时的修正**（本 ADR 早期版本记为"两个触点、两个文件"）：早期版本把第二个文件用于错误的 pipeline health callback 落点；该理由经核实不成立。S010 最终再次触及 `ds_3d_action_pipeline.py`，但理由完全不同：仅在真实 DDM metadata producer 上附加 stream epoch。
 
@@ -66,11 +66,11 @@ E4 修正后健康 hook 收敛为一个服务路径回调；S010 最终确认 FI
 - **全量吸收（fork）**：低估 GPU 基础设施维护成本。`vss-engine:2.4.1` 与 DeepStream 9.0 的升级适配本身就是持续工作量，分叉意味着自建一个 DeepStream 维护团队，并放弃 NVIDIA 的安全补丁与性能改进。
 - **三处都打补丁**（最早方案）：其中序列比对那处必须侵入方法内部控制流，每次 `subtree pull` 都要在他人的状态机里解冲突。
 - **两处加输出 + 一处自己实现**（前一版）：把处置列为第二处改造。判定移入 supervisor 后该处失去必要性，见上节。
-- **一处登记补丁 + 一处自己实现 + 两处配置关闭（采纳）**：推理基座只保留同一登记补丁涉及的两个批准 vendor 文件：`ds_sop_process.py` 持有 stream epoch barrier、健康排序、EOS 尾块排序与 VLM stale work 退休，`ds_3d_action_pipeline.py` 只给 DDM metadata producer 附加 epoch；训练基座另登记一处兼容性补丁；最需要我们掌握的判定核心完全由我们拥有。
+- **一处登记补丁 + 一处自己实现 + 两处配置关闭（采纳）**：推理基座只保留同一登记补丁，在批准 owner seam 承担 stream epoch barrier、健康排序、EOS 尾块排序、VLM stale work 退休与 DDM metadata 代际传播；训练基座另登记一处兼容性补丁；最需要我们掌握的判定核心完全由我们拥有。精确 patch 面由登记 diff 与契约测试维护。
 
 ## 补丁纪律
 
-- 推理侧就地改造维护为可重放 diff；健康分类逻辑放 `apps/edge-runtime/`。登记 patch 仅触及 `ds_sop_process.py` 与 `ds_3d_action_pipeline.py`：前者持有 epoch barrier、EOS 尾块排序、active VLM wait 唤醒和 chunk/frame 退休；后者仅给 DDM boundary producer 附加 epoch。契约测试锁定 15 条允许替换的 owner 行，并验证 patch 可反向应用且与工作树同步。
+- 推理侧就地改造维护为可重放 diff；健康分类逻辑放 `apps/edge-runtime/`。精确 patch 面由 [`0001-stream-health-events.patch`](../base/patches/0001-stream-health-events.patch) 与 [`test_stream_health_patch.py`](../../tests/contract/base/test_stream_health_patch.py) 共同定义；契约测试限制允许替换的 owner operations，并验证 patch 可反向应用且与工作树同步。
 - 训练侧只登记一个兼容性补丁：为 `upload_video` 增加可选的显式 `target_data_id`（省略时保持 `current_data_id` 旧调用兼容），为复用的时间轴输入补上控件标签和可访问名称，增加已签发上下文的独立 React 入口并让标注服务不发布宿主机端口。它不改切片算法、模型路径或存储语义，diff 存于 [`docs/base/patches/0002-annotation-upload-target-and-accessibility.patch`](../base/patches/0002-annotation-upload-target-and-accessibility.patch)，由基座契约测试验证可重放、目标目录隔离、控件可访问性和独立入口。
 - **hook 在模块层 import**，不在调用点内 try/except 兜底：`edge_runtime` 不可导入的容器必须在启动时显式失败，而不是照常出流、静默不报健康。基座镜像里 `edge_runtime` 的可导入性属部署期事项（PYTHONPATH 或装包），与 E5 的容器编排一并落地。
 - `git subtree pull` 后必跑 `tests/contract/base/`：一类断言验证"我们依赖但不改的基座行为未变"，一类验证"已登记的可重放补丁仍可干净应用且各自约束成立"，一类验证"我们自己实现的序列比对仍与基座在**合规序列**上结论一致"（不含返工与漏步时机——那正是我们故意与基座不同的地方；可跳过步骤不在对比范围内，因为首版不生成该字段）。
@@ -79,7 +79,7 @@ E4 修正后健康 hook 收敛为一个服务路径回调；S010 最终确认 FI
 
 ## Consequences
 
-- `vendor/` 保留两处受控行为改造：推理侧是一处登记的最小 owner 补丁（两个文件、15 条登记替换行），训练侧是一处兼容性补丁；二者都不是并行重写基座能力。推理补丁以“仅登记 owner 行可替换 + 可逆 diff”限制冲突面。
+- `vendor/` 保留两处受控行为改造：推理侧是一处登记的最小 owner 补丁，训练侧是一处兼容性补丁；二者都不是并行重写基座能力。推理补丁以“仅登记 owner operations 可替换 + 可逆 diff + 可执行契约核验”限制冲突面。
 - 我们拥有序列比对这段核心算法的维护责任。这不是净增负担：边界求解、有效性门、三值判定本来就要我们写，而它们与序列比对共享同一份状态。
 - 基座 checker 与基座处置都靠既有环境变量关闭，不产生补丁。它们在我们的路径上不被调用，故不构成重复实现。
 - 仓库策略中"`vendor/` 只读"的表述作废，改为"`vendor/` 只经 subtree 更新或已登记的可重放补丁变更"。

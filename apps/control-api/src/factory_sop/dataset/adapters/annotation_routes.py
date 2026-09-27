@@ -81,7 +81,7 @@ def _gateway_permission(original_uri: str, method: str) -> Permission | None:
     path = urlsplit(original_uri).path.rstrip("/")
     dataset_root = f"{_CONTROL_API_PREFIX}/training-datasets"
     if path == dataset_root or path.startswith(dataset_root + "/"):
-        if method == "POST" and _is_dataset_import_path(path, dataset_root):
+        if _is_dataset_import_path(path, dataset_root, method):
             return Permission.DATASET_IMPORT
         return (
             Permission.DATASET_EDIT
@@ -101,13 +101,23 @@ def _gateway_permission(original_uri: str, method: str) -> Permission | None:
     return None
 
 
-def _is_dataset_import_path(path: str, dataset_root: str) -> bool:
+def _is_dataset_import_path(path: str, dataset_root: str, method: str) -> bool:
+    """判断该控制面写请求是否属于数据集导入：登记、成员操作与流式上传正文。"""
     if path == dataset_root:
-        return True
+        return method == "POST"
     parts = path.split("/")
-    if len(parts) == 6 and parts[5] == "members":
-        return True
-    return len(parts) == 8 and parts[5] == "members" and parts[7] in {"confirm", "retry"}
+    if method == "POST":
+        if len(parts) == 6 and parts[5] == "members":
+            return True
+        return len(parts) == 8 and parts[5] == "members" and parts[7] in {"confirm", "retry"}
+    # 流式上传训练视频：PUT .../members/{member_id}/attempts/{attempt_id}/content
+    return (
+        method == "PUT"
+        and len(parts) == 10
+        and parts[5] == "members"
+        and parts[7] == "attempts"
+        and parts[9] == "content"
+    )
 
 
 def _gateway_resource_from_uri(original_uri: str) -> AnnotationGatewayResource:

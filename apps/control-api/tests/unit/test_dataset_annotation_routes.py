@@ -496,6 +496,28 @@ def test_gateway_preserves_dataset_import_permission_for_upload_requests(path: s
     assert response.status_code == 204, response.text
 
 
+def test_gateway_preserves_dataset_import_permission_for_streaming_upload_content() -> None:
+    """流式上传正文声明并要求 DATASET_IMPORT，网关不能按数据集编辑处理。"""
+    content_path = (
+        f"{API_PREFIX}/training-datasets/{DATASET_ID}/members/{MEMBER_ID}"
+        "/attempts/019937d8-0d10-7b31-8d2d-4e60c8f4f103/content"
+    )
+    importer, _, _ = backend(permissions=frozenset({Permission.DATASET_IMPORT}))
+
+    allowed = importer.get(
+        f"{API_PREFIX}/annotation/gateway-authorize",
+        headers={"X-Original-URI": content_path, "X-Original-Method": "PUT"},
+    )
+    assert allowed.status_code == 204, allowed.text
+
+    viewer, _, _ = backend(permissions=frozenset({Permission.DATASET_VIEW}))
+    refused = viewer.get(
+        f"{API_PREFIX}/annotation/gateway-authorize",
+        headers={"X-Original-URI": content_path, "X-Original-Method": "PUT"},
+    )
+    assert refused.status_code == 403
+
+
 def test_gateway_does_not_assign_dataset_permissions_to_other_control_plane_writes() -> None:
     client, _, _ = backend(permissions=frozenset({Permission.TEMPLATE_DRAFT_EDIT}))
 

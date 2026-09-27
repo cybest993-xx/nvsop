@@ -531,3 +531,79 @@ def test_file_identity_rename_keeps_registered_values_on_real_postgres(
         ).scalar_one()
     assert restored == object_key
     assert overlong is None
+
+
+def test_declared_sha256_rollback_reconciles_rows_without_a_declaration(
+    database_at_0023: Engine,
+) -> None:
+    """0038 回滚恢复 NOT NULL 前必须补齐：否则真实数据会让降级失败。"""
+    configuration = Config(str(CONTROL_API / "alembic.ini"))
+    configuration.set_main_option("script_location", str(CONTROL_API / "migrations"))
+    configuration.set_main_option(
+        "sqlalchemy.url", database_at_0023.url.render_as_string(hide_password=False)
+    )
+    command.upgrade(configuration, "head")
+
+    dataset_id, actor_id = uuid4(), uuid4()
+    validated_id, pending_id = uuid4(), uuid4()
+    attempt_id = uuid4()
+    actual_digest = "a" * 64
+    with database_at_0023.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO dataset_training_dataset "
+                "(id, name, created_by, updated_by, created_at, updated_at) "
+                "VALUES (:id, 'rollback-dataset', :actor, :actor, now(), now())"
+            ),
+            {"id": dataset_id, "actor": actor_id},
+        )
+        for member_id, digest in ((validated_id, actual_digest), (pending_id, None)):
+            connection.execute(
+                text(
+                    "INSERT INTO dataset_member "
+                    "(id, dataset_id, original_filename, source, declared_size, "
+                    "current_attempt_id, status, declared_sha256, actual_sha256, "
+                    "created_by, updated_by, created_at, updated_at) "
+                    "VALUES (:id, :dataset, 'line.mp4', 'camera', 100, :attempt, "
+                    "'pending_upload', NULL, :digest, :actor, :actor, now(), now())"
+                ),
+                {
+                    "id": member_id,
+                    "dataset": dataset_id,
+                    "attempt": attempt_id,
+                    "digest": digest,
+                    "actor": actor_id,
+                },
+            )
+        connection.execute(
+            text(
+                "INSERT INTO dataset_upload_attempt "
+                "(id, dataset_id, member_id, idempotency_key, object_key, declared_size, "
+                "declared_sha256, expires_at, status, created_at) "
+                "VALUES (:id, :dataset, :member, 'idem-1', :object_key, 100, NULL, "
+                "now() + interval '1 hour', 'pending_upload', now())"
+            ),
+            {
+                "id": attempt_id,
+                "dataset": dataset_id,
+                "member": validated_id,
+                "object_key": "training-datasets/rollback/member/attempt/video",
+            },
+        )
+
+    command.downgrade(configuration, "0037")
+    with database_at_0023.connect() as connection:
+        restored = connection.execute(
+            text("SELECT id, declared_sha256 FROM dataset_member WHERE dataset_id = :dataset"),
+            {"dataset": dataset_id},
+        ).all()
+        attempt_digest = connection.execute(
+            text("SELECT declared_sha256 FROM dataset_upload_attempt WHERE id = :id"),
+            {"id": attempt_id},
+        ).scalar_one()
+
+    assert {row.id: row.declared_sha256 for row in restored} == {
+        validated_id: actual_digest,
+        pending_id: "0" * 64,
+    }
+    assert attempt_digest == actual_digest

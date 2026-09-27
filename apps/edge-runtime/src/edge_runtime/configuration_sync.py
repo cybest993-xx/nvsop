@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import secrets
 import ssl
@@ -92,7 +93,7 @@ class HttpConfigurationPuller(ConfigurationPuller):
             raise ConfigurationPullError(
                 "http_rejected", "中心配置接口拒绝请求", status=status
             ) from error
-        except (urllib.error.URLError, OSError, TimeoutError) as error:
+        except (OSError, http.client.HTTPException) as error:
             raise ConfigurationPullError("center_unreachable", "中心配置接口暂时不可达") from error
         try:
             if response.status != 200:
@@ -101,7 +102,7 @@ class HttpConfigurationPuller(ConfigurationPuller):
                 )
             try:
                 raw = response.read()
-            except (OSError, TimeoutError) as error:
+            except (OSError, http.client.HTTPException) as error:
                 raise ConfigurationPullError(
                     "center_unreachable", "中心配置接口暂时不可达"
                 ) from error

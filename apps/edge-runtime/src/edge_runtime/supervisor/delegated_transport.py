@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import secrets
 import ssl
@@ -94,6 +95,8 @@ class HttpCommandTransport(CommandTransport):
             raise CommandTransportError("中心领取命令失败", status=status)
         try:
             raw = response.read()
+        except (OSError, http.client.HTTPException) as error:
+            raise CommandTransportError("中心领取响应读取失败") from error
         finally:
             response.close()
         try:
@@ -167,7 +170,9 @@ class HttpCommandTransport(CommandTransport):
             status = error.code
             error.close()
             raise CommandTransportError("中心命令接口拒绝请求", status=status) from error
-        except (urllib.error.URLError, TimeoutError) as error:
+        # urlopen 只把发送阶段错误包装成 URLError; 读取状态行时的断连会以
+        # OSError 或 HTTPException 原样抛出, 同样属于中心暂时不可达。
+        except (OSError, http.client.HTTPException) as error:
             raise CommandTransportError("中心命令接口暂时不可达") from error
 
 

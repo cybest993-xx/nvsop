@@ -467,8 +467,13 @@ def create_a_context(
         attempt_id=context.id,
         now=datetime.now(UTC),
     )
+    pending_context = context
     context = replace(context, preparation_job_id=job.id)
-    datasets.save_annotation_context(context)
+    if not datasets.save_annotation_context(context, expected=pending_context):
+        raise AnnotationRefusedError(
+            DatasetRefusalCode.ANNOTATION_STATE_CONFLICT,
+            detail="标注上下文准备任务绑定失败",
+        )
     return _context_view(context=context, token=context.token, request=request, datasets=datasets)
 
 

@@ -105,8 +105,13 @@ class DatasetRepository(Protocol):
         """按内部上下文身份读取标注上下文。"""
         ...
 
-    def save_annotation_context(self, value: AnnotationContext) -> None:
-        """保存上下文准备好的基座资源身份；不提交事务。"""
+    def save_annotation_context(
+        self,
+        value: AnnotationContext,
+        *,
+        expected: AnnotationContext,
+    ) -> bool:
+        """按准备状态快照保存上下文，防止过期 worker 覆盖获胜结果。"""
         ...
 
     def annotation_submission_by_idempotency(

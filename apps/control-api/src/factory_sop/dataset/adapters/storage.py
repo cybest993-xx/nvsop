@@ -20,6 +20,15 @@ _INCOMING_DIRECTORY = ".incoming"
 _COPY_CHUNK_BYTES = 1024 * 1024
 
 
+def _fsync_directory(path: Path) -> None:
+    """持久化目录项，保证原子 rename 在掉电恢复后仍可见。"""
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 class LocalFileObjectStorage:
     """把训练素材存放在中心受控本地持久卷；不提供第二套对象存储路径。"""
 
@@ -47,6 +56,8 @@ class LocalFileObjectStorage:
                 sink.flush()
                 os.fsync(sink.fileno())
             os.replace(temporary, target)
+            _fsync_directory(target.parent)
+            _fsync_directory(temporary.parent)
         except BaseException:
             temporary.unlink(missing_ok=True)
             raise

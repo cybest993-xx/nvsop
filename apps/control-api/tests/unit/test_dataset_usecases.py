@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -177,8 +178,16 @@ class FakeDatasets:
     def annotation_context_by_id(self, context_id: UUID) -> AnnotationContext | None:
         return self.contexts.get(context_id)
 
-    def save_annotation_context(self, value: AnnotationContext) -> None:
+    def save_annotation_context(
+        self,
+        value: AnnotationContext,
+        *,
+        expected: AnnotationContext,
+    ) -> bool:
+        if self.contexts.get(value.id) != expected:
+            return False
         self.contexts[value.id] = value
+        return True
 
     def annotation_submission_by_idempotency(
         self, *, dataset_id: UUID, idempotency_key: str
@@ -682,6 +691,44 @@ def _prepared_validation(content: bytes) -> tuple[FakeDatasets, FakeStorage, App
     )
     assert confirmation.job is not None
     return datasets, storage, confirmation.job
+
+
+def test_finalized_object_isolated_by_job_generation() -> None:
+    content = b"generation-isolation"
+    datasets, storage, job = _prepared_validation(content)
+    target = begin_video_validation(job=job, datasets=datasets, now=NOW)
+    assert target is not None
+    first_datasets = deepcopy(datasets)
+    second_datasets = deepcopy(datasets)
+    first_storage = deepcopy(storage)
+    second_storage = deepcopy(storage)
+
+    validate_video_upload(
+        job=replace(job, updated_at=NOW + timedelta(seconds=1)),
+        datasets=first_datasets,
+        storage=first_storage,
+        probe=FakeProbe(MediaMetadata(duration_seconds=12.5, codec="h264", container="mp4")),
+        supported_codecs=frozenset({"h264"}),
+        now=NOW + timedelta(seconds=3),
+        target=target,
+    )
+    validate_video_upload(
+        job=replace(job, updated_at=NOW + timedelta(seconds=2)),
+        datasets=second_datasets,
+        storage=second_storage,
+        probe=FakeProbe(MediaMetadata(duration_seconds=12.5, codec="h264", container="mp4")),
+        supported_codecs=frozenset({"h264"}),
+        now=NOW + timedelta(seconds=3),
+        target=target,
+    )
+
+    first_key = first_datasets.members[job.member_id].object_key
+    second_key = second_datasets.members[job.member_id].object_key
+    assert first_key is not None
+    assert second_key is not None
+    assert first_key != second_key
+    assert first_key in first_storage.objects
+    assert second_key in second_storage.objects
 
 
 @pytest.mark.parametrize(

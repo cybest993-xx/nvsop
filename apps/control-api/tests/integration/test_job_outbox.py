@@ -24,7 +24,7 @@ from redis import Redis
 from sqlalchemy import Engine, text
 
 import factory_sop.job.adapters.dispatcher as dispatcher_module
-from factory_sop.app import API_PREFIX
+from factory_sop.app import API_PREFIX, create_app
 from factory_sop.job.adapters.dispatcher import ArqJobDispatcher
 from factory_sop.job.adapters.repository import PostgresJobRepository
 from factory_sop.job.adapters.worker import dispatch_pending_jobs
@@ -187,6 +187,43 @@ def test_dispatcher_routes_dataset_jobs_to_their_worker(
             "args": (str(job.id),),
             "kwargs": {"_job_id": dispatcher_module._delivery_id(job.id, job.updated_at)},
         }
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM job_application_job WHERE id = :job_id"),
+                {"job_id": job.id},
+            )
+
+
+def test_composition_root_builds_an_executable_dispatcher_from_settings_alone(
+    engine: Engine,
+    dataset_storage_root: Path,
+    redis_server: RedisServer,
+    redis_client: Redis,
+) -> None:
+    """生产组合根仅凭 settings 就装入完整可执行 dispatcher。
+
+    旧装配先建一个缺 session_factory 的 dispatcher，再由 entrypoint 覆盖；本测试直接走
+    生产 settings-only 路径，证明它产出的 dispatcher 能读取 PostgreSQL 任务类型并投递
+    到真实 Redis，而不是只被构造一次。
+    """
+    settings = settings_for(engine, storage_root=dataset_storage_root, redis_url=redis_server.url)
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_VALIDATION,
+        status=JobStatus.PENDING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=datetime(2026, 9, 9, 1, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 9, 9, 1, 0, tzinfo=UTC),
+        failure_code=None,
+    )
+    with session_factory(engine).begin() as session:
+        PostgresJobRepository(session).add(job)
+    try:
+        app = create_app(settings)
+        asyncio.run(app.state.job_dispatcher.dispatch_async(job.id))
+        _assert_redis_job(redis_client, job.id)
     finally:
         with engine.begin() as connection:
             connection.execute(

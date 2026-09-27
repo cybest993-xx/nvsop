@@ -63,8 +63,7 @@ def backend(engine: Engine) -> Iterator[FastAPI]:
     another. `TRUNCATE ... CASCADE` rather than the transaction-rollback fixture the repository
     suite uses: these requests commit, which is the property under test.
     """
-    app = create_app(settings())
-    app.state.session_factory = session_factory(engine)
+    app = create_app(settings(), session_factory=session_factory(engine))
     yield app
     with engine.begin() as connection:
         connection.execute(text("TRUNCATE auth_user CASCADE"))
@@ -197,8 +196,7 @@ def test_a_session_survives_the_process_that_opened_it(
     an_account(engine)
     client.post(SESSION_PATH, json=CREDENTIALS)
 
-    restarted = create_app(settings())
-    restarted.state.session_factory = session_factory(engine)
+    restarted = create_app(settings(), session_factory=session_factory(engine))
     with TestClient(restarted, base_url="https://testserver") as after:
         after.cookies.set(SESSION_COOKIE, client.cookies[SESSION_COOKIE])
         response = after.get(SESSION_PATH)

@@ -23,7 +23,6 @@ from factory_sop.auth.authorization import Caller
 from factory_sop.auth.model import Session, User, UserStatus
 from factory_sop.auth.permissions import Permission
 from factory_sop.auth.usecases.sessions import RestoredSession
-from factory_sop.job.adapters.dispatcher import ArqJobDispatcher
 from factory_sop.persistence import session_factory
 from factory_sop.settings import Settings
 
@@ -112,10 +111,7 @@ def build_app(
     permissions: frozenset[Permission] | None = None,
 ) -> FastAPI:
     """装配生产 app，仅把认证 caller 固定到测试 actor。"""
-    app = create_app(settings)
-    factory = session_factory(engine)
-    app.state.session_factory = factory
-    app.state.job_dispatcher = ArqJobDispatcher.from_settings(settings, session_factory=factory)
+    app = create_app(settings, session_factory=session_factory(engine))
     app.dependency_overrides[auth_dependencies.authenticated_caller] = restored_session
     app.dependency_overrides[auth_dependencies.granted_permissions] = lambda: (
         permissions or frozenset({Permission.DATASET_IMPORT, Permission.DATASET_VIEW})

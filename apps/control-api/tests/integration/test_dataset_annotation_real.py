@@ -183,10 +183,7 @@ def _remove_manager(engine: Engine, *, user_id: UUID, role_id: UUID) -> None:
 
 
 def _annotation_app(engine: Engine, settings: Settings) -> TestClient:
-    app = create_app(settings)
-    factory = session_factory(engine)
-    app.state.session_factory = factory
-    app.state.job_dispatcher = ArqJobDispatcher.from_settings(settings, session_factory=factory)
+    app = create_app(settings, session_factory=session_factory(engine))
     return TestClient(app, base_url="https://testserver")
 
 

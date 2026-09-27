@@ -16,8 +16,6 @@ _HEALTH_KEY = "arq:queue:health-check"
 
 async def _healthy(settings: Settings) -> bool:
     dispatcher = ArqJobDispatcher.from_settings(settings)
-    if not isinstance(dispatcher, ArqJobDispatcher):  # pragma: no cover - 配置已在上游校验
-        return False
     pool = await create_pool(dispatcher.redis_settings)
     try:
         value = await pool.get(_HEALTH_KEY)

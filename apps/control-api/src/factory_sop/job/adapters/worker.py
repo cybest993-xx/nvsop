@@ -10,7 +10,7 @@ from threading import Event, Lock
 from typing import Any, assert_never, cast
 from uuid import UUID
 
-from arq import Worker, cron, func
+from arq import Worker, cron
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -67,40 +67,16 @@ from factory_sop.settings import Settings
 _logger = get_logger("job")
 
 _BLOCKING_JOB_LIMIT = 4
-# 最长标注路径串行经过 cleanup、两次 upload、derived download 与 split。
-_ANNOTATION_HTTP_CALLS_PER_EXECUTION = 5
-_VALIDATION_OBJECT_TRANSFERS = 3
 
 
-def _blocking_execution_timeout_seconds(settings: Settings) -> int:
-    """覆盖一次 blocking execution 可串行消耗的最长既有外部 I/O 时限。"""
-    return (
-        settings.annotation_http_timeout_seconds * _ANNOTATION_HTTP_CALLS_PER_EXECUTION
-        + settings.media_probe_timeout_seconds
-        + 300
-    )
+def _job_timeout_seconds(settings: Settings) -> int:
+    """保持 S146 前 ARQ worker 的统一执行上限。"""
+    return settings.media_probe_timeout_seconds + 300
 
 
-def _job_execution_timeout_seconds(settings: Settings, job_type: JobType) -> int:
-    """按任务实际同步路径选择 ARQ 执行上限。"""
-    match job_type:
-        case JobType.DATASET_ANNOTATION | JobType.DATASET_ANNOTATION_PREPARATION:
-            return _blocking_execution_timeout_seconds(settings)
-        case JobType.DATASET_VALIDATION:
-            return (
-                settings.dataset_upload_ttl_seconds * _VALIDATION_OBJECT_TRANSFERS
-                + settings.media_probe_timeout_seconds
-                + 300
-            )
-        case JobType.DATASET_USAGE_CHECK | JobType.DATASET_ARTIFACT:
-            return settings.media_probe_timeout_seconds + 300
-        case _:
-            assert_never(job_type)
-
-
-def _stale_recovery_timeout_seconds(settings: Settings, job_type: JobType) -> int:
-    """让 stale recovery 租约与同类任务的 ARQ 取消上限保持一致。"""
-    return _job_execution_timeout_seconds(settings, job_type)
+def _stale_recovery_timeout_seconds(settings: Settings) -> int:
+    """stale recovery 使用与 ARQ worker 相同的既有执行上限。"""
+    return _job_timeout_seconds(settings)
 
 
 class _ExecutionFence:
@@ -1476,7 +1452,7 @@ async def dispatch_pending_jobs(ctx: Mapping[str, Any]) -> None:
             repository.recover_stale_running(
                 job_type=job_type,
                 now=now,
-                stale_after_seconds=_stale_recovery_timeout_seconds(settings, job_type),
+                stale_after_seconds=_stale_recovery_timeout_seconds(settings),
             )
         session.commit()
     with factory() as session:
@@ -1503,35 +1479,17 @@ def build_worker(
         raise RuntimeError("ARQ worker requires a valid Redis URL")
     return Worker(
         functions=[
-            func(
-                validate_dataset_job,
-                timeout=_job_execution_timeout_seconds(settings, JobType.DATASET_VALIDATION),
-            ),
-            func(
-                check_dataset_usage_job,
-                timeout=_job_execution_timeout_seconds(settings, JobType.DATASET_USAGE_CHECK),
-            ),
-            func(
-                generate_dataset_artifact_job,
-                timeout=_job_execution_timeout_seconds(settings, JobType.DATASET_ARTIFACT),
-            ),
-            func(
-                prepare_annotation_context_job,
-                timeout=_job_execution_timeout_seconds(
-                    settings, JobType.DATASET_ANNOTATION_PREPARATION
-                ),
-            ),
-            func(
-                annotate_dataset_job,
-                timeout=_job_execution_timeout_seconds(settings, JobType.DATASET_ANNOTATION),
-            ),
+            validate_dataset_job,
+            check_dataset_usage_job,
+            generate_dataset_artifact_job,
+            prepare_annotation_context_job,
+            annotate_dataset_job,
         ],
         cron_jobs=[
             cron(
                 dispatch_pending_jobs,
                 second={0, 30},
                 run_at_startup=True,
-                timeout=_job_execution_timeout_seconds(settings, JobType.DATASET_ARTIFACT),
                 max_tries=1,
             )
         ],
@@ -1548,7 +1506,7 @@ def build_worker(
             "blocking_job_slots": asyncio.Semaphore(_BLOCKING_JOB_LIMIT),
         },
         max_jobs=_BLOCKING_JOB_LIMIT,
-        job_timeout=_job_execution_timeout_seconds(settings, JobType.DATASET_ARTIFACT),
+        job_timeout=_job_timeout_seconds(settings),
         max_tries=5,
         health_check_interval=settings.worker_health_check_interval_seconds,
     )

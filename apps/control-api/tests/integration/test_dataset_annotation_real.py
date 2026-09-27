@@ -34,10 +34,18 @@ from factory_sop.dataset.adapters.media import FfprobeMediaProbe
 from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
 from factory_sop.dataset.adapters.storage import LocalFileObjectStorage
 from factory_sop.dataset.annotation import AnnotationBackend, PreparedAnnotationVideo
-from factory_sop.dataset.api import DatasetAnnotationRuntime
-from factory_sop.dataset.model import AnnotationMode, AnnotationSegment
+from factory_sop.dataset.api import (
+    DatasetAnnotationRuntime,
+    PreparedAnnotationCopy,
+    begin_annotation_context_preparation,
+    complete_annotation_context_preparation,
+    record_annotation_context_cleanup_candidate,
+)
+from factory_sop.dataset.errors import DatasetRefusalCode, DatasetRefusedError
+from factory_sop.dataset.model import AnnotationContext, AnnotationMode, AnnotationSegment
 from factory_sop.identifiers import new_id
 from factory_sop.job.adapters.dispatcher import ArqJobDispatcher
+from factory_sop.job.adapters.repository import PostgresJobRepository
 from factory_sop.job.adapters.worker import (
     annotate_dataset_job,
     prepare_annotation_context_job,
@@ -278,6 +286,136 @@ def _persisted_duration(engine: Engine, member_id: UUID) -> float:
 
 def _remove_object(root: Path, object_key: str) -> None:
     (root / object_key).unlink(missing_ok=True)
+
+
+def test_stale_context_cleanup_cannot_overwrite_winning_postgres_result(
+    engine: Engine,
+    dataset_storage_root: Path,
+    redis_server: RedisServer,
+    real_video_bytes: bytes,
+) -> None:
+    """旧 worker 在读取租约后迟到写回时，CAS 必须保住已成功的新结果。"""
+    settings = settings_for(
+        engine, storage_root=dataset_storage_root, redis_url=redis_server.url
+    ).model_copy(
+        update={
+            "annotation_backend_url": "http://annotation-backend.internal:8000",
+            "annotation_media_origin": "https://sop.example.internal:8444",
+        }
+    )
+    user_id, role_id, login_name, password = _seed_manager(engine)
+    dataset_id: UUID | None = None
+    object_key: str | None = None
+    try:
+        with _annotation_app(engine, settings) as client:
+            csrf = _login(client, login_name, password)
+            dataset_id = _create_dataset(client, csrf)
+            action_list = client.post(
+                f"{DATASETS}/{dataset_id}/action-list",
+                headers=csrf,
+                json={"actions": ["(1) 取料"]},
+            )
+            assert action_list.status_code == 201, action_list.text
+
+            requested = client.post(
+                f"{DATASETS}/{dataset_id}/members",
+                headers={**csrf, "Idempotency-Key": "annotation-cas-upload"},
+                json={
+                    "original_filename": "annotation-cas.mp4",
+                    "source": "synthetic-camera",
+                    "declared_size": len(real_video_bytes),
+                    "declared_sha256": hashlib.sha256(real_video_bytes).hexdigest(),
+                },
+            )
+            assert requested.status_code == 201, requested.text
+            body = requested.json()
+            object_key = body["upload"]["object_key"]
+            assert upload_video_content(client, body["upload"], real_video_bytes).status_code == 204
+            confirm = client.post(
+                f"{DATASETS}/{dataset_id}/members/{body['member']['id']}/confirm",
+                headers=csrf,
+                json={"attempt_id": body["attempt"]["id"]},
+            )
+            assert confirm.status_code == 202, confirm.text
+            asyncio.run(_run_validation(engine, settings, UUID(confirm.json()["job"]["id"])))
+
+            member_id = UUID(body["member"]["id"])
+            context_response = client.post(
+                f"{DATASETS}/{dataset_id}/members/{member_id}/annotation-context",
+                headers=csrf,
+                json={},
+            )
+            assert context_response.status_code == 201, context_response.text
+            preparation_job_id = UUID(context_response.json()["preparation_job_id"])
+
+        with session_factory(engine).begin() as database:
+            job = PostgresJobRepository(database).by_id(preparation_job_id)
+            assert job is not None
+            target = begin_annotation_context_preparation(
+                job=job,
+                datasets=PostgresDatasetRepository(database),
+            )
+            assert target is not None
+
+        winner = PreparedAnnotationCopy(
+            prepared=PreparedAnnotationVideo(
+                data_id="winner-data",
+                video_id="winner-video",
+            ),
+            size=len(real_video_bytes),
+            sha256=hashlib.sha256(real_video_bytes).hexdigest(),
+            duration_seconds=_persisted_duration(engine, member_id),
+        )
+        winner_committed = False
+
+        def commit_winner() -> None:
+            nonlocal winner_committed
+            if winner_committed:
+                return
+            with session_factory(engine).begin() as database:
+                completed = complete_annotation_context_preparation(
+                    target=target,
+                    prepared=winner,
+                    datasets=PostgresDatasetRepository(database),
+                )
+                assert completed.preparation_status == "succeeded"
+            winner_committed = True
+
+        class InterleavingRepository(PostgresDatasetRepository):
+            def save_annotation_context(
+                self,
+                value: AnnotationContext,
+                *,
+                expected: AnnotationContext,
+            ) -> bool:
+                commit_winner()
+                return super().save_annotation_context(value, expected=expected)
+
+        with session_factory(engine)() as database:
+            with pytest.raises(DatasetRefusedError) as rejected:
+                record_annotation_context_cleanup_candidate(
+                    target=target,
+                    data_id="stale-cleanup-data",
+                    code="ANNOTATION_EXECUTION_FAILED",
+                    detail="late cleanup",
+                    datasets=InterleavingRepository(database),
+                )
+            database.rollback()
+        assert rejected.value.code is DatasetRefusalCode.ANNOTATION_STATE_CONFLICT
+        assert winner_committed
+
+        with session_factory(engine)() as database:
+            persisted = PostgresDatasetRepository(database).annotation_context_by_id(job.attempt_id)
+        assert persisted is not None
+        assert persisted.preparation_status == "succeeded"
+        assert persisted.upstream_data_id == "winner-data"
+        assert persisted.upstream_video_id == "winner-video"
+    finally:
+        if object_key is not None:
+            _remove_object(dataset_storage_root, object_key)
+        if dataset_id is not None:
+            cleanup_dataset(engine, dataset_id)
+        _remove_manager(engine, user_id=user_id, role_id=role_id)
 
 
 def test_real_http_annotation_persists_revisions_and_isolates_retry_copies(

@@ -155,8 +155,16 @@ class FakeAnnotationStore:
     def annotation_context_by_id(self, context_id: UUID) -> AnnotationContext | None:
         return self.contexts.get(context_id)
 
-    def save_annotation_context(self, value: AnnotationContext) -> None:
+    def save_annotation_context(
+        self,
+        value: AnnotationContext,
+        *,
+        expected: AnnotationContext,
+    ) -> bool:
+        if self.contexts.get(value.id) != expected:
+            return False
         self.contexts[value.id] = value
+        return True
 
     def annotation_submission_by_idempotency(
         self, *, dataset_id: UUID, idempotency_key: str

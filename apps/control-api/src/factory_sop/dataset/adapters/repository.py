@@ -195,22 +195,45 @@ class PostgresDatasetRepository:
         row = self._session.get(AnnotationContextRow, context_id)
         return row.to_domain() if row is not None else None
 
-    def save_annotation_context(self, value: AnnotationContext) -> None:
-        self._session.execute(
-            update(AnnotationContextRow)
-            .where(AnnotationContextRow.id == value.id)
-            .values(
-                upstream_data_id=value.upstream_data_id,
-                upstream_video_id=value.upstream_video_id,
-                upstream_video_size=value.upstream_video_size,
-                upstream_video_sha256=value.upstream_video_sha256,
-                upstream_video_duration_seconds=value.upstream_video_duration_seconds,
-                preparation_job_id=value.preparation_job_id,
-                preparation_status=value.preparation_status,
-                preparation_failure_code=value.preparation_failure_code,
-                preparation_failure_detail=value.preparation_failure_detail,
-            )
+    def save_annotation_context(
+        self,
+        value: AnnotationContext,
+        *,
+        expected: AnnotationContext,
+    ) -> bool:
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(AnnotationContextRow)
+                .where(
+                    AnnotationContextRow.id == value.id,
+                    AnnotationContextRow.upstream_data_id == expected.upstream_data_id,
+                    AnnotationContextRow.upstream_video_id == expected.upstream_video_id,
+                    AnnotationContextRow.upstream_video_size == expected.upstream_video_size,
+                    AnnotationContextRow.upstream_video_sha256 == expected.upstream_video_sha256,
+                    AnnotationContextRow.upstream_video_duration_seconds
+                    == expected.upstream_video_duration_seconds,
+                    AnnotationContextRow.preparation_job_id == expected.preparation_job_id,
+                    AnnotationContextRow.preparation_status == expected.preparation_status,
+                    AnnotationContextRow.preparation_failure_code
+                    == expected.preparation_failure_code,
+                    AnnotationContextRow.preparation_failure_detail
+                    == expected.preparation_failure_detail,
+                )
+                .values(
+                    upstream_data_id=value.upstream_data_id,
+                    upstream_video_id=value.upstream_video_id,
+                    upstream_video_size=value.upstream_video_size,
+                    upstream_video_sha256=value.upstream_video_sha256,
+                    upstream_video_duration_seconds=value.upstream_video_duration_seconds,
+                    preparation_job_id=value.preparation_job_id,
+                    preparation_status=value.preparation_status,
+                    preparation_failure_code=value.preparation_failure_code,
+                    preparation_failure_detail=value.preparation_failure_detail,
+                )
+            ),
         )
+        return result.rowcount == 1
 
     def annotation_submission_by_idempotency(
         self, *, dataset_id: UUID, idempotency_key: str

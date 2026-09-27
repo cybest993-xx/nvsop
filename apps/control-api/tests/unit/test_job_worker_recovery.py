@@ -28,7 +28,7 @@ class _Factory:
         return _Session()
 
 
-def test_stale_recovery_uses_job_type_specific_execution_lease(
+def test_stale_recovery_preserves_existing_worker_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     recovered: list[tuple[JobType, int]] = []
@@ -54,11 +54,7 @@ def test_stale_recovery_uses_job_type_specific_execution_lease(
 
     monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeRepository)
     monkeypatch.setattr(worker_module, "ArqJobDispatcher", FakeDispatcher)
-    settings = SimpleNamespace(
-        media_probe_timeout_seconds=30,
-        annotation_http_timeout_seconds=120,
-        dataset_upload_ttl_seconds=900,
-    )
+    settings = SimpleNamespace(media_probe_timeout_seconds=30)
     ctx = {
         "dispatcher": FakeDispatcher(),
         "settings": settings,
@@ -67,22 +63,14 @@ def test_stale_recovery_uses_job_type_specific_execution_lease(
 
     asyncio.run(worker_module.dispatch_pending_jobs(ctx))
 
-    assert dict(recovered) == {
-        JobType.DATASET_VALIDATION: 3030,
-        JobType.DATASET_ANNOTATION: 930,
-        JobType.DATASET_ANNOTATION_PREPARATION: 930,
-        JobType.DATASET_USAGE_CHECK: 330,
-        JobType.DATASET_ARTIFACT: 330,
-    }
+    assert dict(recovered) == dict.fromkeys(JobType, 330)
 
 
-def test_worker_timeouts_match_job_type_recovery_leases(
+def test_worker_preserves_existing_uniform_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = SimpleNamespace(
         media_probe_timeout_seconds=30,
-        annotation_http_timeout_seconds=120,
-        dataset_upload_ttl_seconds=900,
         worker_health_check_interval_seconds=5,
     )
 
@@ -110,17 +98,14 @@ def test_worker_timeouts_match_job_type_recovery_leases(
         annotation_runtime=cast(Any, object()),
     )
 
-    expected = {
-        "validate_dataset_job": 3030,
-        "check_dataset_usage_job": 330,
-        "generate_dataset_artifact_job": 330,
-        "prepare_annotation_context_job": 930,
-        "annotate_dataset_job": 930,
-        "cron:dispatch_pending_jobs": 330,
+    assert set(worker.functions) == {
+        "validate_dataset_job",
+        "check_dataset_usage_job",
+        "generate_dataset_artifact_job",
+        "prepare_annotation_context_job",
+        "annotate_dataset_job",
+        "cron:dispatch_pending_jobs",
     }
-    assert {name: function.timeout_s for name, function in worker.functions.items()} == expected
+    assert all(function.timeout_s is None for function in worker.functions.values())
     assert worker.job_timeout_s == 330
-    for job_type in JobType:
-        assert worker_module._stale_recovery_timeout_seconds(
-            cast(Any, settings), job_type
-        ) == worker_module._job_execution_timeout_seconds(cast(Any, settings), job_type)
+    assert worker_module._stale_recovery_timeout_seconds(cast(Any, settings)) == 330

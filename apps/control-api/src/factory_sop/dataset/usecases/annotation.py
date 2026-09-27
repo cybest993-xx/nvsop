@@ -548,7 +548,8 @@ def begin_annotation_context_preparation(
             context.preparation_failure_detail if cleanup_pending else None
         ),
     )
-    datasets.save_annotation_context(running)
+    if not datasets.save_annotation_context(running, expected=context):
+        return None
     return AnnotationContextPreparationTarget(
         job=job,
         context=running,
@@ -604,7 +605,11 @@ def complete_annotation_context_preparation(
         preparation_failure_code=None,
         preparation_failure_detail=None,
     )
-    datasets.save_annotation_context(updated)
+    if not datasets.save_annotation_context(updated, expected=current):
+        raise AnnotationRefusedError(
+            DatasetRefusalCode.ANNOTATION_STATE_CONFLICT,
+            detail="标注上下文准备租约已失效",
+        )
     return updated
 
 
@@ -633,7 +638,11 @@ def fail_annotation_context_preparation(
         preparation_failure_code=code,
         preparation_failure_detail=detail,
     )
-    datasets.save_annotation_context(updated)
+    if not datasets.save_annotation_context(updated, expected=current):
+        raise AnnotationRefusedError(
+            DatasetRefusalCode.ANNOTATION_STATE_CONFLICT,
+            detail="标注上下文准备租约已失效",
+        )
     return updated
 
 
@@ -666,7 +675,11 @@ def record_annotation_context_cleanup_candidate(
         preparation_failure_code=code,
         preparation_failure_detail=detail,
     )
-    datasets.save_annotation_context(updated)
+    if not datasets.save_annotation_context(updated, expected=current):
+        raise AnnotationRefusedError(
+            DatasetRefusalCode.ANNOTATION_STATE_CONFLICT,
+            detail="标注上下文清理候选租约已失效",
+        )
     return replace(target, context=updated)
 
 
@@ -692,7 +705,11 @@ def clear_annotation_context_cleanup_candidate(
         preparation_failure_code=None,
         preparation_failure_detail=None,
     )
-    datasets.save_annotation_context(updated)
+    if not datasets.save_annotation_context(updated, expected=current):
+        raise AnnotationRefusedError(
+            DatasetRefusalCode.ANNOTATION_STATE_CONFLICT,
+            detail="标注上下文清理候选租约已失效",
+        )
     return replace(target, context=updated)
 
 

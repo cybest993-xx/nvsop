@@ -32,6 +32,8 @@ The Web workspace uses `package.json`, `pnpm-workspace.yaml`, `pnpm-lock.yaml` a
 
 Product responsibilities are defined once in [roadmap §6–7](../design/solution-and-roadmap.md#六系统结构). The module list comes from `[tool.nvsop]`; update it deliberately when changing membership. `api.py` exposes only the cross-module subset, not all HTTP use cases. Authorization belongs at use-case boundaries. Request-scoped Unit of Work can compose modules but does not transfer their table ownership ([ADR-0002](../adr/0002-request-scoped-unit-of-work.md)).
 
+The reused NVIDIA training stack is outside the Center module/UoW ownership seam. Per [roadmap Q35 and §6](../design/solution-and-roadmap.md#六系统结构), it shares the PostgreSQL instance operationally but owns a separate `training` database while Center modules use `nvsop`; Center migrations and transactions do not span into training storage, and training processes do not gain a database-level path into Center tables.
+
 Within the edge application, `judgment` owns pure transitions/reason codes, `stream_health` the vendor-hook wire shape, `supervisor` orchestration/timers/one-reaction transactions, `local_state` SQLite and queues, and `connectors` local adapter behavior. `runtime.py` is the composition root.
 
 ```text

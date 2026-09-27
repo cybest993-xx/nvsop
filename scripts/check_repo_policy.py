@@ -71,6 +71,12 @@ EDGE_SOURCE = EDGE_APP / "src"
 EDGE_RUNTIME_PACKAGES = frozenset(
     {"connectors", "judgment", "local_state", "stream_health", "supervisor"}
 )
+# 判定核心与 vendor hook 边界只用标准库; edge-runtime 其余部分可用清单声明的依赖。
+EDGE_STDLIB_BOUNDARIES = (
+    EDGE_SOURCE / "edge_runtime" / "judgment",
+    EDGE_SOURCE / "edge_runtime" / "stream_health.py",
+    EDGE_SOURCE / "edge_runtime" / "stream_health",
+)
 LOCAL_STATE_PRIVATE_MODULES = frozenset(
     {
         "edge_runtime.local_state.codec",
@@ -308,50 +314,45 @@ def check_web_toolchain(root: Path, files: list[Path]) -> list[str]:
 
 
 def check_edge_runtime_isolation(root: Path, files: list[Path]) -> list[str]:
-    """Keep the inference host's package standard-library-only, mechanically.
+    """Allow edge imports only from the stdlib, first-party packages and declared dependencies.
 
-    `edge-autonomy.md` §5.11 makes this a hard rule, and the harness keeps it for
-    testability: the judgment core has to stay runnable on a bare CPU inside the NVIDIA
-    base container, whose interpreter we do not choose. Two things could erode it
-    silently — the package joining the center's uv workspace, which would put every center
-    dependency on its import path, and a third-party import added while a developer's
-    environment happens to have that package. Both are checked here rather than left to
-    review.
+    edge-runtime is a uv workspace member, so every center dependency is importable from the
+    shared environment; an import that works locally therefore proves nothing. Its manifest's
+    `dependencies` are the one reviewed list of third-party packages it may use. The judgment
+    core and the vendor-hook boundary stay standard-library-only (ADR-0005, edge-autonomy.md
+    §5.11): the core for bare-CPU testability, the hook because it runs in the NVIDIA base
+    container whose interpreter we do not choose.
     """
-    errors: list[str] = []
-
-    workspace_members = (
-        read_toml(root / "pyproject.toml")
-        .get("tool", {})
-        .get("uv", {})
-        .get("workspace", {})
-        .get("members", [])
-    )
-    if any(str(EDGE_APP) == str(member).rstrip("/") for member in workspace_members):
-        errors.append(
-            f"{EDGE_APP} must stay out of the uv workspace; its judgment core is "
-            "standard-library-only (edge-autonomy.md §5.11)"
-        )
-
     edge_manifest = EDGE_APP / "pyproject.toml"
     declared = read_toml(root / edge_manifest).get("project", {}).get("dependencies", [])
-    if declared:
-        errors.append(
-            f"{edge_manifest} declares dependencies; the inference host's package is "
-            "standard-library-only (edge-autonomy.md §5.11)"
-        )
-
+    # Distribution names map to import names by PEP 503 normalization; a dependency whose
+    # import name differs must not be admitted without extending this mapping.
+    third_party = {
+        re.split(r"[\s<>=!~;\[]", str(requirement), maxsplit=1)[0].lower().replace("-", "_")
+        for requirement in declared
+    }
+    first_party = {"edge_runtime", "nvsop_contracts"}
+    errors: list[str] = []
     for path in sorted(files):
         if path.suffix != ".py" or not is_under(path, EDGE_SOURCE):
             continue
+        standard_library_only = any(
+            path == boundary or is_under(path, boundary) for boundary in EDGE_STDLIB_BOUNDARIES
+        )
         for name in sorted(top_level_imports(root / path)):
-            if name in STANDARD_LIBRARY or name in {"edge_runtime", "nvsop_contracts"}:
+            if name in STANDARD_LIBRARY or name in first_party:
                 continue
-            errors.append(
-                f"{path} imports {name}, which is not in the standard library; the "
-                "inference host's package is standard-library-only "
-                "(edge-autonomy.md §5.11)"
-            )
+            if standard_library_only:
+                errors.append(
+                    f"{path} imports {name}; the judgment core and vendor-hook boundary are "
+                    "standard-library-only (ADR-0005, edge-autonomy.md §5.11)"
+                )
+            elif name not in third_party:
+                errors.append(
+                    f"{path} imports {name}, which {edge_manifest} does not declare; add a "
+                    "lightweight dependency there (docs/engineering/maintenance.md) or use "
+                    "the standard library"
+                )
     return errors
 
 

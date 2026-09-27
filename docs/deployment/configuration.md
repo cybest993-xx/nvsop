@@ -51,6 +51,14 @@ SOP_BACKEND_ORIGIN
 
 ## 边缘运行时
 
+边缘运行时声明了少量第三方依赖（`apps/edge-runtime/pyproject.toml`），由根 `uv.lock` 冻结。推理机按锁文件安装，只装边缘包及其依赖：
+
+```sh
+uv sync --frozen --no-dev --package edge-runtime
+```
+
+离线主机需预先按同一锁文件准备 wheel，安装时不得联网下载（离线安装门禁见 [limitations.md](limitations.md)）。
+
 生产入口：
 
 ```sh

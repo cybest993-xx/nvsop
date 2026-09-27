@@ -24,7 +24,7 @@ Create directories with their first real content; empty scaffolding is not archi
 | `deploy/`, `vendor/`, `scripts/`, `.github/workflows/` | Deployment assets, NVIDIA subtree, thin repository automation, CI orchestration |
 | `docs/` | Indexed engineering, product design, deployment, ADR and evidence; ownership in [documentation.md](documentation.md) |
 
-Reserved production apps are `control-api`, `control-web`, `edge-runtime`; root `src/` is forbidden because it erases ownership. `pyproject.toml` owns Python tooling, workspace and `[tool.nvsop]` module membership; `.python-version` and `uv.lock` own interpreter/resolution. `edge-runtime` stays outside the uv workspace, with standard-library/shared-contract boundaries enforced by policy.
+Reserved production apps are `control-api`, `control-web`, `edge-runtime`; root `src/` is forbidden because it erases ownership. `pyproject.toml` owns Python tooling, workspace and `[tool.nvsop]` module membership; `.python-version` and `uv.lock` own interpreter/resolution. `edge-runtime` is a uv workspace member whose third-party imports are limited by policy to its manifest's declared dependencies; its judgment core and vendor-hook boundary stay standard-library-only.
 
 The Web workspace uses `package.json`, `pnpm-workspace.yaml`, `pnpm-lock.yaml` and `.nvmrc`; the root manifest owns the exact package-manager pin. Do not repeat version values in policy. Shared identity, layout and client routing stay outside Web feature slices only where genuinely shared.
 

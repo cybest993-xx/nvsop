@@ -230,33 +230,6 @@ class RepositoryPolicyTest(unittest.TestCase):
         errors = self.check()
         self.assertIn(".python-version must pin the center backend to 3.12, not 3.13", errors)
 
-    def test_rejects_edge_runtime_joining_the_center_workspace(self) -> None:
-        # Membership would give the judgment core a resolvable path to every center
-        # dependency, leaving "standard library only" as discipline rather than a fact.
-        self.write(
-            "pyproject.toml",
-            '[tool.uv.workspace]\nmembers = ["apps/control-api", "apps/edge-runtime"]\n'
-            '[tool.nvsop]\ncenter_modules = ["auth"]\n',
-        )
-        errors = self.check()
-        self.assertIn(
-            "apps/edge-runtime must stay out of the uv workspace; its judgment core is "
-            "standard-library-only (edge-autonomy.md §5.11)",
-            errors,
-        )
-
-    def test_rejects_dependency_declared_by_edge_runtime(self) -> None:
-        self.write(
-            "apps/edge-runtime/pyproject.toml",
-            '[project]\nname = "edge-runtime"\ndependencies = ["httpx"]\n',
-        )
-        errors = self.check()
-        self.assertIn(
-            "apps/edge-runtime/pyproject.toml declares dependencies; the inference host's "
-            "package is standard-library-only (edge-autonomy.md §5.11)",
-            errors,
-        )
-
     def test_accepts_standard_library_and_own_imports_inside_edge_runtime(self) -> None:
         module = self.write(
             "apps/edge-runtime/src/edge_runtime/judgment/core.py",
@@ -267,18 +240,47 @@ class RepositoryPolicyTest(unittest.TestCase):
         )
         self.assertEqual([], self.check(str(module)))
 
-    def test_rejects_third_party_import_inside_edge_runtime(self) -> None:
+    def test_accepts_dependency_declared_by_edge_manifest(self) -> None:
+        self.write(
+            "apps/edge-runtime/pyproject.toml",
+            '[project]\nname = "edge-runtime"\ndependencies = ["httpx2>=2.12.0"]\n',
+        )
+        module = self.write(
+            "apps/edge-runtime/src/edge_runtime/center_client.py",
+            "import httpx2\n",
+        )
+        self.assertEqual([], self.check(str(module)))
+
+    def test_rejects_undeclared_third_party_import_inside_edge_runtime(self) -> None:
+        # 中心依赖在共享工作区里可以导入; 只有清单声明才算准入。
         module = self.write(
             "apps/edge-runtime/src/edge_runtime/supervisor/station.py",
-            "import httpx\n",
+            "import sqlalchemy\n",
         )
         errors = self.check(str(module))
         self.assertIn(
-            "apps/edge-runtime/src/edge_runtime/supervisor/station.py imports httpx, which "
-            "is not in the standard library; the inference host's package is "
-            "standard-library-only (edge-autonomy.md §5.11)",
+            "apps/edge-runtime/src/edge_runtime/supervisor/station.py imports sqlalchemy, which "
+            "apps/edge-runtime/pyproject.toml does not declare; add a lightweight dependency "
+            "there (docs/engineering/maintenance.md) or use the standard library",
             errors,
         )
+
+    def test_rejects_declared_dependency_inside_standard_library_boundaries(self) -> None:
+        self.write(
+            "apps/edge-runtime/pyproject.toml",
+            '[project]\nname = "edge-runtime"\ndependencies = ["httpx2>=2.12.0"]\n',
+        )
+        for relative in (
+            "apps/edge-runtime/src/edge_runtime/judgment/core.py",
+            "apps/edge-runtime/src/edge_runtime/stream_health.py",
+        ):
+            with self.subTest(path=relative):
+                module = self.write(relative, "import httpx2\n")
+                self.assertIn(
+                    f"{relative} imports httpx2; the judgment core and vendor-hook boundary are "
+                    "standard-library-only (ADR-0005, edge-autonomy.md §5.11)",
+                    self.check(str(module)),
+                )
 
     def test_rejects_stream_health_importing_any_edge_sibling(self) -> None:
         module = self.write(

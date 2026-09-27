@@ -2,14 +2,14 @@
 # product monorepo, not a distribution. Only real workspaces are members
 # (docs/engineering/architecture.md, layout and manifests).
 #
-# `apps/edge-runtime/` is deliberately NOT a member. Its judgment core is standard-library
-# only (edge-autonomy.md §5.11); membership would give it a resolvable path to every
-# center dependency, and the rule would survive only as discipline. It is enforced instead
-# by `scripts/check_repo_policy.py`, which resolves every import under
-# `apps/edge-runtime/src/` against the standard library.
+# `apps/edge-runtime/` is a member so its few declared third-party dependencies resolve from
+# the same lock. Membership also puts center dependencies on its import path, so
+# `scripts/check_repo_policy.py` allows edge imports only from the standard library, first-party
+# packages and the edge manifest's own declared dependencies; the judgment core and the
+# vendor-hook boundary stay standard-library-only (ADR-0005, edge-autonomy.md §5.11).
 
 [tool.uv.workspace]
-members = ["apps/control-api", "packages/contracts"]
+members = ["apps/control-api", "apps/edge-runtime", "packages/contracts"]
 
 [tool.uv.sources]
 nvsop-contracts = { workspace = true }

@@ -2,7 +2,7 @@
 
 ## 状态
 
-已采纳，适用于 Issue #31 的标注 UI。源训练视频的存储/上传前提已由 [ADR-0012](0012-media-ownership-and-center-training-files.md) 调整；本 ADR 的派生媒体授权入口决策仍有效。
+已采纳。源训练视频的存储/上传前提已由 [ADR-0012](0012-media-ownership-and-center-training-files.md) 调整；本 ADR 的派生媒体授权入口决策仍有效。
 
 ## 背景
 
@@ -29,4 +29,4 @@
 
 Nginx 会为已授权的标注派生媒体承担一次低频字节转发，但不会改变运行态/证据媒体留在推理机的边界。源训练视频通过普通控制面上传入口流式进入 `dataset` 本地持久卷，不经过本 ADR 的 8444 派生媒体入口。`docs/deployment/nginx-annotation.conf.example`、[仓库架构](../engineering/architecture.md)、[ADR-0012](0012-media-ownership-and-center-training-files.md) 和控制面机制文档共同约束这些不同媒体路径，避免把任一例外误读为全局视频中继许可。
 
-真实 HTTPS、Nginx、基座服务和浏览器行为仍由后置验证票 #82 负责；静态接线和中心授权由 Issue #31 的配置、用例和契约测试负责。
+真实 HTTPS、Nginx、基座服务和浏览器行为的部署验证入口见[标注真实部署证据](../deployment/annotation-evidence.md)与[目标环境矩阵](../research/target-environment-validation-matrix.md)；静态接线和中心授权由当前配置、用例和契约测试共同验证。

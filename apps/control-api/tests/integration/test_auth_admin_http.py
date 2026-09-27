@@ -60,13 +60,12 @@ def client(engine: Engine) -> Iterator[tuple[TestClient, DatabaseSession]]:
         csrf_secret=SecretStr("csrf-secret"),
         redis_url=SecretStr("redis://127.0.0.1:1/0"),
     )
-    app = create_app(settings)
+    app = create_app(settings, session_factory=session_factory(engine))
     app.dependency_overrides[dependencies.users] = lambda: PostgresUserRepository(session)
     app.dependency_overrides[dependencies.roles] = lambda: PostgresRoleRepository(session)
     app.dependency_overrides[dependencies.granted_permissions] = lambda: frozenset(Permission)
     # The session routes keep the production path: their `request_session` draws on the app's
     # factory, so the login below commits against the container like a real request does.
-    app.state.session_factory = session_factory(engine)
     with TestClient(app, base_url="https://testserver") as test_client:
         yield test_client, session
     session.close()

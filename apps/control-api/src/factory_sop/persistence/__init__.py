@@ -65,7 +65,7 @@ def database_url(settings: Settings) -> str:
 
 
 def create_database_engine(settings: Settings) -> Engine:
-    """Open the connection pool. Once per process, at the entrypoint."""
+    """打开连接池。每进程一次，在组合根完成。"""
     return create_engine(database_url(settings), pool_pre_ping=True)
 
 

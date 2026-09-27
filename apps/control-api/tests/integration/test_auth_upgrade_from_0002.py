@@ -139,8 +139,7 @@ def test_the_upgraded_administrator_logs_in_with_every_registered_permission(
         csrf_secret=SecretStr("csrf-secret"),
         redis_url=SecretStr("redis://127.0.0.1:1/0"),
     )
-    app = create_app(settings)
-    app.state.session_factory = session_factory(upgraded_from_0002)
+    app = create_app(settings, session_factory=session_factory(upgraded_from_0002))
 
     with TestClient(app, base_url="https://testserver") as client:
         response = client.post(

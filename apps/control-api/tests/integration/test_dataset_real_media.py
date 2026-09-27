@@ -503,8 +503,7 @@ def test_real_login_and_role_permissions_gate_dataset_upload(
     dataset_id: UUID | None = None
     object_key: str | None = None
     try:
-        app = create_app(settings)
-        app.state.session_factory = session_factory(engine)
+        app = create_app(settings, session_factory=session_factory(engine))
         with TestClient(app, base_url="https://testserver") as client:
             login = client.post(
                 f"{API_PREFIX}/auth/session",

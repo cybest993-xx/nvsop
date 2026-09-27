@@ -1,7 +1,7 @@
-"""Export the center backend's canonical OpenAPI document.
+"""导出中心后端的规范 OpenAPI 文档。
 
-The application is built in-process: exporting a contract must not require a running server or
-PostgreSQL. The settings are synthetic and no engine is opened by ``create_app``.
+应用在进程内构建：导出契约不需要运行中的服务器或 PostgreSQL。settings 为合成值；
+`create_app` 只构造 engine 对象、不建立数据库连接。
 """
 
 from __future__ import annotations

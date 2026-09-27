@@ -13,7 +13,7 @@ from arq.connections import RedisSettings
 from sqlalchemy.orm import Session, sessionmaker
 
 from factory_sop.job.adapters.repository import PostgresJobRepository
-from factory_sop.job.api import JobDispatcher, JobType
+from factory_sop.job.api import JobType
 from factory_sop.observability import get_logger
 from factory_sop.settings import ConfigurationError, Settings
 
@@ -38,8 +38,8 @@ class ArqJobDispatcher:
         settings: Settings,
         *,
         session_factory: sessionmaker[Session] | None = None,
-    ) -> JobDispatcher:
-        """从已校验的 Redis URL 构造投递器。"""
+    ) -> ArqJobDispatcher:
+        """从已校验的 Redis URL 构造投递器；配置无效时显式抛出 `ConfigurationError`。"""
         if settings.redis_url is None:
             raise ConfigurationError("部署必须配置 Redis 任务队列")
         try:

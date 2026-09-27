@@ -129,8 +129,7 @@ def an_application(engine: Engine) -> FastAPI:
         csrf_secret=SecretStr("csrf-secret"),
         redis_url=SecretStr("redis://127.0.0.1:1/0"),
     )
-    app = create_app(settings)
-    app.state.session_factory = session_factory(engine)
+    app = create_app(settings, session_factory=session_factory(engine))
     return app
 
 

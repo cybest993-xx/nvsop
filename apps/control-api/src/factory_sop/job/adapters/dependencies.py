@@ -7,7 +7,6 @@ from typing import Annotated, cast
 from fastapi import Depends, Request
 
 from factory_sop.dataset.api import DatasetResourceLookup
-from factory_sop.job.adapters.dispatcher import ArqJobDispatcher
 from factory_sop.job.adapters.repository import (
     PostgresAnnotationJobQueue,
     PostgresJobRepository,
@@ -59,8 +58,5 @@ def annotation_jobs(
 
 
 def dispatcher(request: Request) -> JobDispatcher:
-    """提供提交后的 Redis/ARQ 投递器。"""
-    configured = getattr(request.app.state, "job_dispatcher", None)
-    if configured is not None:
-        return cast(JobDispatcher, configured)
-    return ArqJobDispatcher.from_settings(request.app.state.settings)
+    """提供组合根一次性装入的 Redis/ARQ 投递器；缺失即为装配错误，不静默降级。"""
+    return cast(JobDispatcher, request.app.state.job_dispatcher)

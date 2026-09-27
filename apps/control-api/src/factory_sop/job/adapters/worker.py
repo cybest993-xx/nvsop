@@ -762,9 +762,7 @@ def _finish_annotation_failure(
 
 async def dispatch_pending_jobs(ctx: Mapping[str, Any]) -> None:
     """先恢复过期执行租约，再补投 PostgreSQL outbox 中的任务。"""
-    dispatcher = ctx["dispatcher"]
-    if not isinstance(dispatcher, ArqJobDispatcher):
-        return
+    dispatcher = cast(ArqJobDispatcher, ctx["dispatcher"])
     settings = cast(Settings, ctx["settings"])
     factory = _session_factory(ctx)
     stale_after_seconds = settings.media_probe_timeout_seconds + 300
@@ -795,8 +793,6 @@ def build_worker(
 ) -> Worker:
     """构造带数据库、Redis 和显式数据集运行时的 worker。"""
     dispatcher = ArqJobDispatcher.from_settings(settings, session_factory=factory)
-    if not isinstance(dispatcher, ArqJobDispatcher):
-        raise RuntimeError("ARQ worker requires a valid Redis URL")
     return Worker(
         functions=[
             validate_dataset_job,

@@ -501,7 +501,8 @@ class _ReportLifecycleRunner:
                             limit=_REPORT_WORK_BUDGET,
                             should_stop=self._stop_requested,
                         )
-                    except (OSError, sqlite3.Error, ValueError) as error:
+                    # 上报属于中心链路: 任何普通异常只记录并在下一间隔重试, 不停止判定。
+                    except Exception as error:
                         _logger.warning(
                             "edge.report_flush.failed error_type=%s",
                             type(error).__name__,
@@ -550,6 +551,31 @@ class _RuntimeCycleRunner:
             self._errors.append(error)
             self._cycle_stop.set()
             self._runtime._report_wake.set()
+
+    def _isolate_center_worker(self, worker: str, target: Callable[[], None]) -> None:
+        """中心相关线程的普通异常只记录并退避重启, 不停止工位判定 (edge-autonomy.md §5.11)。
+
+        KeyboardInterrupt 等控制流异常仍交给 `_guard` 结束本轮。
+        """
+        failures = 0
+        while not self._stop_requested():
+            try:
+                target()
+                return
+            except Exception as error:
+                failures += 1
+                _logger.error(
+                    "edge.center_worker.failed worker=%s error_type=%s consecutive_failures=%s",
+                    worker,
+                    type(error).__name__,
+                    failures,
+                )
+                self._cycle_stop.wait(
+                    min(
+                        _CENTER_WORKER_RESTART_BASE_SECONDS * 2 ** (failures - 1),
+                        _CENTER_WORKER_RESTART_MAX_SECONDS,
+                    )
+                )
 
     def _run_command(self) -> None:
         self._runtime._command_loop.run_forever(should_stop=self._stop_requested)
@@ -660,7 +686,7 @@ class _RuntimeCycleRunner:
             ),
             threading.Thread(
                 target=self._guard,
-                args=(self._run_command,),
+                args=(lambda: self._isolate_center_worker("command", self._run_command),),
                 daemon=True,
             ),
             *[
@@ -675,7 +701,11 @@ class _RuntimeCycleRunner:
                 [
                     threading.Thread(
                         target=self._guard,
-                        args=(self._run_configuration,),
+                        args=(
+                            lambda: self._isolate_center_worker(
+                                "configuration", self._run_configuration
+                            ),
+                        ),
                         name="edge-configuration-sync",
                         daemon=True,
                     )
@@ -908,6 +938,8 @@ class AutonomousRuntime:
 _logger = logging.getLogger("edge_runtime")
 _REPORT_WORK_BUDGET = 32
 _REPORT_RETRY_INTERVAL_SECONDS = 1.0
+_CENTER_WORKER_RESTART_BASE_SECONDS = 0.5
+_CENTER_WORKER_RESTART_MAX_SECONDS = 30.0
 
 
 def _log_write_attempt(event: WriteAttempted) -> None:

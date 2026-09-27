@@ -174,7 +174,114 @@ class _CountingReportReconciler:
         return ()
 
 
+class _FailingOnceCommandLoop:
+    """首轮模拟中心相关代码缺陷, 之后正常运行。"""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.recovered = Event()
+
+    def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("synthetic command worker defect")
+        self.recovered.set()
+        while not should_stop():
+            sleep(0.001)
+
+
+class _FailingOnceReportReconciler:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.recovered = Event()
+
+    def flush(
+        self,
+        *,
+        now: object,
+        reported_at: str,
+        limit: int | None = None,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> tuple[object, ...]:
+        del now, reported_at, limit, should_stop
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("synthetic report worker defect")
+        self.recovered.set()
+        return ()
+
+
+class _FailingStation(_Station):
+    def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
+        del should_stop
+        raise RuntimeError("synthetic station defect")
+
+
 class RuntimeConfigurationSwitchTest(unittest.TestCase):
+    def _run_until(
+        self, runtime: AutonomousRuntime, ready: Event
+    ) -> tuple[bool, list[BaseException]]:
+        stop = Event()
+        errors: list[BaseException] = []
+
+        def run_runtime() -> None:
+            try:
+                runtime.run_forever(should_stop=stop.is_set)
+            except BaseException as error:
+                errors.append(error)
+
+        thread = Thread(target=run_runtime)
+        thread.start()
+        try:
+            reached = ready.wait(5.0)
+        finally:
+            stop.set()
+            thread.join(2.0)
+        self.assertFalse(thread.is_alive())
+        return reached, errors
+
+    def test_command_worker_defect_restarts_without_stopping_stations(self) -> None:
+        station = _Station()
+        command_loop = _FailingOnceCommandLoop()
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, command_loop),
+            stations=(cast(AutonomousStation, station),),
+            state=cast(LocalState, _State()),
+        )
+
+        reached, errors = self._run_until(runtime, command_loop.recovered)
+
+        self.assertTrue(reached)
+        self.assertEqual(errors, [])
+        self.assertEqual(command_loop.calls, 2)
+
+    def test_report_worker_defect_is_retried_without_stopping_runtime(self) -> None:
+        reporter = _FailingOnceReportReconciler()
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            stations=(cast(AutonomousStation, _Station()),),
+            state=cast(LocalState, _State()),
+            report_reconciler=cast(HostReportReconciler, reporter),
+        )
+
+        reached, errors = self._run_until(runtime, reporter.recovered)
+
+        self.assertTrue(reached)
+        self.assertEqual(errors, [])
+
+    def test_station_defect_still_stops_runtime(self) -> None:
+        # 工位失败意味着本地判定状态不可信, 仍按快速失败退出交给进程守护重启。
+        state = _State()
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            stations=(cast(AutonomousStation, _FailingStation()),),
+            state=cast(LocalState, state),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "synthetic station defect"):
+            runtime.run_forever(should_stop=lambda: False)
+        self.assertTrue(state.closed)
+
     def test_blocked_report_flush_does_not_block_configuration_activation(self) -> None:
         old = _bundle(1)
         candidate = _bundle(2)

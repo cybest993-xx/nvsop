@@ -168,7 +168,7 @@
 
 **依赖规则**：判定核心不依赖任何相机 SDK、推理框架或连接器实现，只消费归一化观测；中心各模块各自拥有数据表，不跨模块直接读写；前端只调后端用例，不承载判定规则。
 
-**【已定】边界靠机械检查，不靠评审。** 每个中心模块一个 Python 包，包内 `api.py` 是唯一允许的跨模块导入目标；`import-linter` 契约强制中心/边缘包间依赖方向，基座契约测试单独检查 **登记 patch 只触及 2 个批准 vendor 文件、只替换 15 条 owner 行、stream epoch barrier / DDM producer tag / EOS 尾块排序 / active VLM wait 唤醒均成立、patch 可反向应用且与工作树同步**（§5.11）。
+**【已定】边界靠机械检查，不靠评审。** 每个中心模块一个 Python 包，包内 `api.py` 是唯一允许的跨模块导入目标；`import-linter` 契约强制中心/边缘包间依赖方向，基座契约测试单独检查 **登记 patch 保持在批准 owner seam，stream epoch barrier / DDM producer tag / EOS 尾块排序 / active VLM wait 唤醒均成立，且 patch 可反向应用并与工作树同步**（§5.11）。精确 patch 文件与 owner operations 由登记 diff 和可执行契约维护，不在路线文档复制。
 
 **【已定】跨模块用例共享一个请求级事务**（[ADR-0002](../adr/0002-request-scoped-unit-of-work.md)）：HTTP 适配层开启并提交单个 Unit of Work，模块门面只参与、不自行提交，`Session` 经请求作用域注入。代价是事务边界不再兜底模块边界，故上述机械检查是本决定的前提而非可选增强。
 

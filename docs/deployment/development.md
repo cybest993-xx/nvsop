@@ -14,12 +14,12 @@
 
 ## 前置工具
 
-当前工具链权威版本来自仓库文件：
+当前工具链版本直接读取仓库的机器可读来源，本文不复制版本值：
 
-- Python：`.python-version`，当前为 **3.12**。
-- Node：`.nvmrc`，当前为 **22.23.2**。
-- pnpm：根 `package.json#packageManager`，当前为 **11.22.0**。
-- Tilt：开发编排器强制 **0.37.7**。
+- Python：根 [`.python-version`](../../.python-version)。
+- Node：根 [`.nvmrc`](../../.nvmrc)。
+- pnpm：根 [`package.json`](../../package.json) 的 `packageManager`。
+- Tilt：[`scripts/dev.py`](../../scripts/dev.py) 的 `TILT_VERSION`。
 
 还需要 `git`、`git-lfs`、Docker + Docker Compose、`ffmpeg`、`ffprobe`、`uv`。只有显式 HTTPS 模式需要 `openssl`。`make dev-setup` 默认也会校验 Node 和 Playwright UI 固定端口 9323；Docker daemon 必须可用。
 

@@ -4,8 +4,10 @@ import hashlib
 import json
 import sqlite3
 import unittest
+from collections.abc import Callable
 from unittest.mock import patch
 
+import httpx2
 from nvsop_contracts import (
     ConfigurationBundle,
     ConfiguredStation,
@@ -14,6 +16,7 @@ from nvsop_contracts import (
     configuration_to_wire,
 )
 
+from edge_runtime.center_client import CenterClient
 from edge_runtime.configuration_sync import (
     ConfigurationPullError,
     ConfigurationSynchronizer,
@@ -23,27 +26,15 @@ from edge_runtime.local_state.schema import migrate
 from edge_runtime.local_state.store import LocalState
 
 
-class BrokenResponse:
-    status = 200
-
-    def read(self) -> bytes:
-        raise OSError("password=must-not-leak")
-
-    def close(self) -> None:
-        pass
-
-
-class JsonResponse:
-    status = 200
-
-    def __init__(self, payload: bytes) -> None:
-        self.payload = payload
-
-    def read(self) -> bytes:
-        return self.payload
-
-    def close(self) -> None:
-        pass
+def http_puller(respond: Callable[[httpx2.Request], httpx2.Response]) -> HttpConfigurationPuller:
+    client = CenterClient(
+        center_url="https://center.example",
+        host_id="host-a",
+        host_private_key="unused",  # pragma: allowlist secret
+        timeout=1.0,
+        transport=httpx2.MockTransport(respond),
+    )
+    return HttpConfigurationPuller(client=client, host_id="host-a")
 
 
 class ScriptedPuller:
@@ -419,21 +410,9 @@ class ConfigurationSyncTests(unittest.TestCase):
             )
         )
         candidate["sha256"] = "0" * 64
-        puller = HttpConfigurationPuller(
-            center_url="https://center.example",
-            host_id="host-a",
-            host_private_key="unused",  # pragma: allowlist secret
-            timeout=1.0,
-        )
+        puller = http_puller(lambda _: httpx2.Response(200, json=candidate))
         with (
-            patch(
-                "edge_runtime.configuration_sync.sign_host_identity_request",
-                return_value="signature",
-            ),
-            patch(
-                "edge_runtime.configuration_sync.urllib.request.urlopen",
-                return_value=JsonResponse(json.dumps(candidate).encode()),
-            ),
+            patch("edge_runtime.center_client.sign_host_identity_request", return_value="sig"),
             self.assertRaises(ConfigurationPullError) as raised,
         ):
             puller.pull()
@@ -462,41 +441,22 @@ class ConfigurationSyncTests(unittest.TestCase):
         self.assertIn("future.behavior", result.failure.detail)
 
     def test_http_read_and_connection_failures_are_generic_and_do_not_leak_details(self) -> None:
-        puller = HttpConfigurationPuller(
-            center_url="https://center.example",
-            host_id="host-a",
-            host_private_key="unused",  # pragma: allowlist secret
-            timeout=1.0,
-        )
-        with (
-            patch(
-                "edge_runtime.configuration_sync.sign_host_identity_request",
-                return_value="signature",
-            ),
-            patch(
-                "edge_runtime.configuration_sync.urllib.request.urlopen",
-                return_value=BrokenResponse(),
-            ),
-            self.assertRaises(ConfigurationPullError) as raised,
+        for failure in (
+            httpx2.ReadError("password=must-not-leak"),
+            httpx2.ConnectError("password=must-not-leak"),
         ):
-            puller.pull()
-        self.assertEqual(raised.exception.code, "center_unreachable")
-        self.assertNotIn("password", str(raised.exception))
 
-        with (
-            patch(
-                "edge_runtime.configuration_sync.sign_host_identity_request",
-                return_value="signature",
-            ),
-            patch(
-                "edge_runtime.configuration_sync.urllib.request.urlopen",
-                side_effect=OSError("password=must-not-leak"),
-            ),
-            self.assertRaises(ConfigurationPullError) as raised,
-        ):
-            puller.pull()
-        self.assertEqual(raised.exception.code, "center_unreachable")
-        self.assertNotIn("password", str(raised.exception))
+            def fail(_: httpx2.Request, failure: Exception = failure) -> httpx2.Response:
+                raise failure
+
+            with (
+                self.subTest(failure=type(failure).__name__),
+                patch("edge_runtime.center_client.sign_host_identity_request", return_value="sig"),
+                self.assertRaises(ConfigurationPullError) as raised,
+            ):
+                http_puller(fail).pull()
+            self.assertEqual(raised.exception.code, "center_unreachable")
+            self.assertNotIn("password", str(raised.exception))
 
 
 if __name__ == "__main__":

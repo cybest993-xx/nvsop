@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import sqlite3
 import unittest
 from collections.abc import Callable
 from threading import Event, Thread
-from time import sleep
+from time import monotonic, sleep
 from typing import cast
 
 from nvsop_contracts import ConfigurationBundle
@@ -174,7 +175,199 @@ class _CountingReportReconciler:
         return ()
 
 
+class _FailingOnceCommandLoop:
+    """首轮模拟中心相关代码缺陷, 之后正常运行。"""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.recovered = Event()
+
+    def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("synthetic command worker defect")
+        self.recovered.set()
+        while not should_stop():
+            sleep(0.001)
+
+
+class _FailingOnceReportReconciler:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.recovered = Event()
+
+    def flush(
+        self,
+        *,
+        now: object,
+        reported_at: str,
+        limit: int | None = None,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> tuple[object, ...]:
+        del now, reported_at, limit, should_stop
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("synthetic report worker defect")
+        self.recovered.set()
+        return ()
+
+
+class _FailingStation(_Station):
+    def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
+        del should_stop
+        raise RuntimeError("synthetic station defect")
+
+
+class _FailingOnceSynchronizer:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.recovered = Event()
+
+    def synchronize(self, *, observed_at: float) -> ConfigurationSyncResult:
+        del observed_at
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("synthetic configuration worker defect")
+        self.recovered.set()
+        return ConfigurationSyncResult(candidate=None, confirmed=None, failure=None)
+
+
+class _BrokenStoreSynchronizer(_Synchronizer):
+    def reject_application(self, *, detail: str, observed_at: float) -> None:
+        raise sqlite3.OperationalError("synthetic local configuration store failure")
+
+
 class RuntimeConfigurationSwitchTest(unittest.TestCase):
+    def _run_until(
+        self, runtime: AutonomousRuntime, ready: Event
+    ) -> tuple[bool, list[BaseException]]:
+        stop = Event()
+        errors: list[BaseException] = []
+
+        def run_runtime() -> None:
+            try:
+                runtime.run_forever(should_stop=stop.is_set)
+            except BaseException as error:
+                errors.append(error)
+
+        thread = Thread(target=run_runtime)
+        thread.start()
+        try:
+            reached = ready.wait(5.0)
+        finally:
+            stop.set()
+            thread.join(2.0)
+        self.assertFalse(thread.is_alive())
+        return reached, errors
+
+    def test_command_worker_defect_restarts_without_stopping_stations(self) -> None:
+        station = _Station()
+        command_loop = _FailingOnceCommandLoop()
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, command_loop),
+            stations=(cast(AutonomousStation, station),),
+            state=cast(LocalState, _State()),
+        )
+
+        reached, errors = self._run_until(runtime, command_loop.recovered)
+
+        self.assertTrue(reached)
+        self.assertEqual(errors, [])
+        self.assertEqual(command_loop.calls, 2)
+
+    def test_report_worker_defect_is_retried_without_stopping_runtime(self) -> None:
+        reporter = _FailingOnceReportReconciler()
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            stations=(cast(AutonomousStation, _Station()),),
+            state=cast(LocalState, _State()),
+            report_reconciler=cast(HostReportReconciler, reporter),
+        )
+
+        reached, errors = self._run_until(runtime, reporter.recovered)
+
+        self.assertTrue(reached)
+        self.assertEqual(errors, [])
+
+    def test_configuration_worker_defect_restarts_without_stopping_stations(self) -> None:
+        synchronizer = _FailingOnceSynchronizer()
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            stations=(cast(AutonomousStation, _Station()),),
+            state=cast(LocalState, _State()),
+            configuration_sync=cast(ConfigurationSynchronizer, synchronizer),
+            maintenance_interval=0.01,
+        )
+
+        reached, errors = self._run_until(runtime, synchronizer.recovered)
+
+        self.assertTrue(reached)
+        self.assertEqual(errors, [])
+
+    def test_resolver_defect_is_recorded_as_application_rejection(self) -> None:
+        old = _bundle(1)
+        synchronizer = _Synchronizer(candidate=_bundle(2), confirmed=old)
+        rejected = Event()
+        original_reject = synchronizer.reject_application
+
+        def reject(*, detail: str, observed_at: float) -> None:
+            original_reject(detail=detail, observed_at=observed_at)
+            rejected.set()
+
+        synchronizer.reject_application = reject  # type: ignore[method-assign]
+
+        def resolve(bundle: ConfigurationBundle) -> RuntimeConfiguration:
+            raise KeyError(bundle.config_revision)
+
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            stations=(),
+            state=cast(LocalState, _State()),
+            configuration_sync=cast(ConfigurationSynchronizer, synchronizer),
+            maintenance_interval=0.01,
+            configuration=RuntimeConfiguration(stations=(), connectors=(), confirmed=old),
+            configuration_resolver=resolve,
+            configuration_factory=lambda _: self.fail("defective candidate must not compose"),
+            connector_runtimes=cast(ConnectorRuntimeSet, object()),
+        )
+
+        reached, errors = self._run_until(runtime, rejected)
+
+        self.assertTrue(reached)
+        self.assertEqual(errors, [])
+
+    def test_local_configuration_store_failure_still_stops_runtime(self) -> None:
+        old = _bundle(1)
+        synchronizer = _BrokenStoreSynchronizer(candidate=_bundle(2), confirmed=old)
+        state = _State()
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            stations=(),
+            state=cast(LocalState, state),
+            configuration_sync=cast(ConfigurationSynchronizer, synchronizer),
+            maintenance_interval=0.01,
+            configuration=RuntimeConfiguration(stations=(), connectors=(), confirmed=old),
+        )
+
+        # 回归时退避重试会让循环不再退出; 截止时间让测试失败而不是挂起。
+        deadline = monotonic() + 5.0
+        with self.assertRaises(sqlite3.OperationalError):
+            runtime.run_forever(should_stop=lambda: monotonic() > deadline)
+        self.assertTrue(state.closed)
+
+    def test_station_defect_still_stops_runtime(self) -> None:
+        # 工位失败意味着本地判定状态不可信, 仍按快速失败退出交给进程守护重启。
+        state = _State()
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            stations=(cast(AutonomousStation, _FailingStation()),),
+            state=cast(LocalState, state),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "synthetic station defect"):
+            runtime.run_forever(should_stop=lambda: False)
+        self.assertTrue(state.closed)
+
     def test_blocked_report_flush_does_not_block_configuration_activation(self) -> None:
         old = _bundle(1)
         candidate = _bundle(2)

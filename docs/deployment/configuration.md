@@ -51,6 +51,14 @@ SOP_BACKEND_ORIGIN
 
 ## 边缘运行时
 
+边缘运行时声明了少量第三方依赖（`apps/edge-runtime/pyproject.toml`），由根 `uv.lock` 冻结。推理机按锁文件安装，只装边缘包及其依赖：
+
+```sh
+uv sync --frozen --no-dev --package edge-runtime
+```
+
+离线主机需预先按同一锁文件准备 wheel，安装时不得联网下载（离线安装门禁见 [limitations.md](limitations.md)）。
+
 生产入口：
 
 ```sh
@@ -58,7 +66,17 @@ NVSOP_EDGE_COMMAND_CONFIG_FILE=/etc/nvsop/edge.json \
   python -m edge_runtime
 ```
 
-环境变量缺失会直接退出。配置文件为本机 JSON；当前中心 URL 只接受 **HTTPS**。
+环境变量缺失会直接退出。配置文件为本机 JSON；当前中心 URL 只接受 **HTTPS**，且必须是最终地址：边缘不跟随 3xx 跳转，因为请求签名绑定原始路径。
+
+**必须由进程守护自动重启。** 工位或本地状态出现未预期异常时，运行时按快速失败退出，重启后从本机 SQLite 恢复（在飞实例以 `RUN_INTERRUPTED` 结案）；中心相关线程的异常不会导致退出（见 [edge-autonomy.md](../design/mechanisms/edge-autonomy.md)）。例如 systemd：
+
+```ini
+[Service]
+Environment=NVSOP_EDGE_COMMAND_CONFIG_FILE=/etc/nvsop/edge.json
+ExecStart=<边缘虚拟环境>/bin/python -m edge_runtime
+Restart=always
+RestartSec=2
+```
 
 ### 顶层字段
 

@@ -3,11 +3,16 @@ name = "edge-runtime"
 version = "0.1.0"
 description = "Inference-host autonomous judgment unit: judgment core, boundary solver, supervisor."
 requires-python = ">=3.11"
-dependencies = []
+# 只声明轻量依赖（准入标准见 docs/engineering/maintenance.md）；判定核心与 vendor hook 边界
+# 仍只用标准库，由 scripts/check_repo_policy.py 按本清单检查每个导入。
+dependencies = [
+    "nvsop-contracts",
+    # 中心 HTTP 客户端: 网络故障统一归入 TransportError, 测试可用 MockTransport。
+    "httpx2>=2.12.0",
+]
 
 # Python 3.11 提供事件穷尽检查所需的 typing.assert_never（docs/engineering/coding.md）。
-# 判定核心运行在 supervisor，不在基座容器；标准库边界与 uv 工作区隔离见仓库架构和 ADR-0005。
-# 检查工具由根 uv.lock 冻结，Makefile 提供稳定命令入口；本包不另建锁文件。
+# 判定核心运行在 supervisor，不在基座容器（ADR-0005）；依赖由根 uv.lock 冻结，本包不另建锁文件。
 
 [build-system]
 requires = ["setuptools>=68"]

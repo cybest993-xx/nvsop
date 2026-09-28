@@ -19,6 +19,7 @@ from types import FrameType
 
 from nvsop_contracts import ConfigurationBundle, ConnectionTestOutcome, configuration_to_wire
 
+from edge_runtime.center_client import CenterClient
 from edge_runtime.configuration import (
     EdgeRuntimeConfiguration,
     LocalIsapiConnectorConfiguration,
@@ -500,7 +501,8 @@ class _ReportLifecycleRunner:
                             limit=_REPORT_WORK_BUDGET,
                             should_stop=self._stop_requested,
                         )
-                    except (OSError, sqlite3.Error, ValueError) as error:
+                    # 上报属于中心链路: 任何普通异常只记录并在下一间隔重试, 不停止判定。
+                    except Exception as error:
                         _logger.warning(
                             "edge.report_flush.failed error_type=%s",
                             type(error).__name__,
@@ -549,6 +551,34 @@ class _RuntimeCycleRunner:
             self._errors.append(error)
             self._cycle_stop.set()
             self._runtime._report_wake.set()
+
+    def _isolate_center_worker(self, worker: str, target: Callable[[], None]) -> None:
+        """中心相关线程的普通异常只记录并退避重启, 不停止工位判定 (edge-autonomy.md §5.11)。
+
+        KeyboardInterrupt 等控制流异常仍交给 `_guard` 结束本轮。
+        """
+        failures = 0
+        while not self._stop_requested():
+            try:
+                target()
+                return
+            except sqlite3.Error:
+                # 本地状态故障不属于中心链路, 仍交给 `_guard` 快速失败。
+                raise
+            except Exception as error:
+                failures += 1
+                _logger.error(
+                    "edge.center_worker.failed worker=%s error_type=%s consecutive_failures=%s",
+                    worker,
+                    type(error).__name__,
+                    failures,
+                )
+                self._cycle_stop.wait(
+                    min(
+                        _CENTER_WORKER_RESTART_BASE_SECONDS * 2 ** (failures - 1),
+                        _CENTER_WORKER_RESTART_MAX_SECONDS,
+                    )
+                )
 
     def _run_command(self) -> None:
         self._runtime._command_loop.run_forever(should_stop=self._stop_requested)
@@ -622,7 +652,8 @@ class _RuntimeCycleRunner:
                     else:
                         try:
                             runtime_configuration = runtime._configuration_resolver(candidate)
-                        except (OSError, sqlite3.Error, ValueError) as error:
+                        # 解析缺陷同样记录为应用失败, 让中心可见, 而不是在重启循环中静默重复。
+                        except Exception as error:
                             synchronizer.reject_application(
                                 detail=str(error),
                                 observed_at=now.seconds,
@@ -659,7 +690,7 @@ class _RuntimeCycleRunner:
             ),
             threading.Thread(
                 target=self._guard,
-                args=(self._run_command,),
+                args=(lambda: self._isolate_center_worker("command", self._run_command),),
                 daemon=True,
             ),
             *[
@@ -674,7 +705,11 @@ class _RuntimeCycleRunner:
                 [
                     threading.Thread(
                         target=self._guard,
-                        args=(self._run_configuration,),
+                        args=(
+                            lambda: self._isolate_center_worker(
+                                "configuration", self._run_configuration
+                            ),
+                        ),
                         name="edge-configuration-sync",
                         daemon=True,
                     )
@@ -907,6 +942,8 @@ class AutonomousRuntime:
 _logger = logging.getLogger("edge_runtime")
 _REPORT_WORK_BUDGET = 32
 _REPORT_RETRY_INTERVAL_SECONDS = 1.0
+_CENTER_WORKER_RESTART_BASE_SECONDS = 0.5
+_CENTER_WORKER_RESTART_MAX_SECONDS = 30.0
 
 
 def _log_write_attempt(event: WriteAttempted) -> None:
@@ -1117,11 +1154,13 @@ def build_connection_test_runner(
     """装配生产委托命令执行器及本机真实连接器适配器。"""
     return ConnectionTestCommandRunner(
         transport=HttpCommandTransport(
-            center_url=center_url,
-            host_id=host_id,
-            host_private_key=host_private_key,
-            timeout=command_timeout,
-            ssl_context=ssl_context,
+            client=CenterClient(
+                center_url=center_url,
+                host_id=host_id,
+                host_private_key=host_private_key,
+                timeout=command_timeout,
+                ssl_context=ssl_context,
+            )
         ),
         executor=ConnectionTestExecutor(
             registry=ConfiguredLocalConnectorRegistry(local_connectors),
@@ -1201,13 +1240,7 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
         resolve_confirmed(bundle)
 
     configuration_sync = ConfigurationSynchronizer(
-        puller=HttpConfigurationPuller(
-            center_url=config.center_url,
-            host_id=config.host_id,
-            host_private_key=config.host_private_key,
-            timeout=config.command_timeout,
-            ssl_context=config.ssl_context,
-        ),
+        puller=HttpConfigurationPuller(client=_center_client(config), host_id=config.host_id),
         store=state.configuration(),
         expected_host_id=config.host_id,
         validator=validate_confirmed,
@@ -1229,11 +1262,7 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
             runtime_configuration=active_configuration,
         )
         report_transport = HttpDecisionReportTransport(
-            center_url=config.center_url,
-            host_id=config.host_id,
-            host_private_key=config.host_private_key,
-            timeout=config.command_timeout,
-            ssl_context=config.ssl_context,
+            client=_center_client(config), host_id=config.host_id
         )
         composition = _build_runtime_composition(
             config=config,
@@ -1321,18 +1350,22 @@ def _station_input_source(binding: StationRuntimeBinding, *, timeout: float) -> 
     return sources[0] if len(sources) == 1 else MultiplexedStationInputSource(sources=sources)
 
 
+def _center_client(config: EdgeRuntimeConfiguration) -> CenterClient:
+    return CenterClient(
+        center_url=config.center_url,
+        host_id=config.host_id,
+        host_private_key=config.host_private_key,
+        timeout=config.command_timeout,
+        ssl_context=config.ssl_context,
+    )
+
+
 def _synchronize_runtime_configuration(
     config: EdgeRuntimeConfiguration, state: LocalState
 ) -> RuntimeConfiguration:
     """主动拉取一次; 失败时使用最后确认 bundle, 首次失败才使用 bootstrap."""
     synchronizer = ConfigurationSynchronizer(
-        puller=HttpConfigurationPuller(
-            center_url=config.center_url,
-            host_id=config.host_id,
-            host_private_key=config.host_private_key,
-            timeout=config.command_timeout,
-            ssl_context=config.ssl_context,
-        ),
+        puller=HttpConfigurationPuller(client=_center_client(config), host_id=config.host_id),
         store=state.configuration(),
         expected_host_id=config.host_id,
         validator=lambda bundle: validate_confirmed_runtime_configuration(

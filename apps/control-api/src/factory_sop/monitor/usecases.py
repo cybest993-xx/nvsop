@@ -14,6 +14,7 @@ from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.model import (
     MirroredDecision,
     MirroredHealth,
+    MirroredObservation,
     MirroredSopInstance,
     MirroredViolation,
 )
@@ -22,6 +23,7 @@ from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
     ReportedDecision,
     ReportedHealth,
+    ReportedObservation,
     ReportedSopInstance,
     reported_decision_to_wire,
     reported_health_to_wire,
@@ -201,6 +203,40 @@ def list_violations(
     """返回授权用户可查看的一页已锁存违规归档及总数；保留原实例与来源。"""
     authorize(caller, Permission.MONITOR_VIEW)
     return monitor.page_violations(page=page, page_size=page_size)
+
+
+def mirror_observation(
+    report: ReportedObservation,
+    *,
+    received_at: datetime,
+    monitor: MonitorRepository,
+    host_gateway: HostOwnershipGateway,
+) -> bool:
+    """只保存认证主机所属工位的归一化观测；中心不重新判定。"""
+    host_id = _uuid(report.host_id, "observation host_id")
+    station_id = _uuid(report.station_id, "observation station_id")
+    if not host_gateway.owns_station(host_id=host_id, station_id=station_id):
+        raise MonitorRefusedError("reported observation is outside the authenticated host topology")
+    return monitor.upsert_observation(MirroredObservation(report=report, received_at=received_at))
+
+
+def list_observations(
+    monitor: MonitorRepository,
+    *,
+    caller: Caller,
+    page: int,
+    page_size: int,
+    station_id: UUID | None = None,
+    instance_id: int | None = None,
+) -> tuple[tuple[MirroredObservation, ...], int]:
+    """返回授权用户可按工位/实例定位的一页产生时观测镜像及总数。"""
+    authorize(caller, Permission.MONITOR_VIEW)
+    return monitor.page_observations(
+        page=page,
+        page_size=page_size,
+        station_id=None if station_id is None else str(station_id),
+        instance_id=instance_id,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -414,10 +450,12 @@ def _uuid(value: str, label: str) -> UUID:
 __all__ = [
     "SseSnapshot",
     "list_instances",
+    "list_observations",
     "list_violations",
     "mirror_decision",
     "mirror_health",
     "mirror_instance",
+    "mirror_observation",
     "sse_snapshot",
     "sse_snapshot_state",
     "sse_stream",

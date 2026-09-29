@@ -20,6 +20,7 @@ from nvsop_contracts import (
     ReportBackendProvenance,
     ReportedDecision,
     ReportedHealth,
+    ReportedObservation,
     ReportEvidence,
     ResolvedRuntimeParameters,
     Unverified,
@@ -28,6 +29,8 @@ from nvsop_contracts import (
     configuration_to_wire,
     reported_decision_from_wire,
     reported_decision_to_wire,
+    reported_observation_from_wire,
+    reported_observation_to_wire,
 )
 
 
@@ -491,6 +494,55 @@ class ReportContractTests(unittest.TestCase):
             reported_at="2026-09-13T00:00:00Z",
         )
         self.assertEqual(ReportedHealth.from_wire(health.to_wire()), health)
+
+    def test_observation_round_trip_freezes_source_and_provenance(self) -> None:
+        observation = ReportedObservation(
+            event_id="host-a:observation:1",
+            trace_id="host-a:observation:1",
+            host_id="host-a",
+            station_id="station-a",
+            instance_id=4,
+            source="action",
+            signal="(1) step 1",
+            source_time=12.5,
+            source_anchor=100.0,
+            observed_at=7.5,
+            template_version_id="template-a",
+            template_sha256="a" * 64,
+            backend=ReportBackendProvenance("backend-a", ("model-a",)),
+            reported_at="2026-09-13T00:00:00Z",
+        )
+        wire = reported_observation_to_wire(observation)
+        self.assertEqual(wire["source"], "action")
+        self.assertEqual(wire["backend"], {"backend_id": "backend-a", "model_ids": ["model-a"]})
+        self.assertEqual(reported_observation_from_wire(wire), observation)
+
+    def test_observation_rejects_unknown_source_and_partial_stream_timeline(self) -> None:
+        observation = ReportedObservation(
+            event_id="host-a:observation:2",
+            trace_id="host-a:observation:2",
+            host_id="host-a",
+            station_id="station-a",
+            instance_id=4,
+            source="external_signal",
+            signal="工件到位",
+            source_time=None,
+            source_anchor=None,
+            observed_at=7.5,
+            template_version_id=None,
+            template_sha256=None,
+            backend=None,
+            reported_at="2026-09-13T00:00:00Z",
+        )
+        wire = reported_observation_to_wire(observation)
+        wire["source"] = "future_channel"
+        with self.assertRaises(ValueError):
+            reported_observation_from_wire(wire)
+        incomplete = reported_observation_to_wire(observation)
+        incomplete["source"] = "action"
+        incomplete["source_time"] = 3.0
+        with self.assertRaises(ValueError):
+            reported_observation_from_wire(incomplete)
 
 
 if __name__ == "__main__":

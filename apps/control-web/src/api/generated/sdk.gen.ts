@@ -150,6 +150,9 @@ import type {
   ListInferenceHostsData,
   ListInferenceHostsErrors,
   ListInferenceHostsResponses,
+  ListMonitorObservationsData,
+  ListMonitorObservationsErrors,
+  ListMonitorObservationsResponses,
   ListMonitorSopInstancesData,
   ListMonitorSopInstancesErrors,
   ListMonitorSopInstancesResponses,
@@ -282,6 +285,9 @@ import type {
   ReportMonitorHealthData,
   ReportMonitorHealthErrors,
   ReportMonitorHealthResponses,
+  ReportMonitorObservationData,
+  ReportMonitorObservationErrors,
+  ReportMonitorObservationResponses,
   ReportMonitorSopInstanceData,
   ReportMonitorSopInstanceErrors,
   ReportMonitorSopInstanceResponses,
@@ -1322,6 +1328,18 @@ export const listMonitorSopInstances = <ThrowOnError extends boolean = false>(
   >({ url: '/api/v1/monitor/instances', ...options })
 
 /**
+ * List Monitor Observations
+ */
+export const listMonitorObservations = <ThrowOnError extends boolean = false>(
+  options?: Options<ListMonitorObservationsData, ThrowOnError>,
+): RequestResult<ListMonitorObservationsResponses, ListMonitorObservationsErrors, ThrowOnError> =>
+  (options?.client ?? client).get<
+    ListMonitorObservationsResponses,
+    ListMonitorObservationsErrors,
+    ThrowOnError
+  >({ url: '/api/v1/monitor/observations', ...options })
+
+/**
  * Report Monitor Decision
  */
 export const reportMonitorDecision = <ThrowOnError extends boolean = false>(
@@ -1352,6 +1370,25 @@ export const reportMonitorSopInstance = <ThrowOnError extends boolean = false>(
     ThrowOnError
   >({
     url: '/api/v1/monitor/reported-instances',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Report Monitor Observation
+ */
+export const reportMonitorObservation = <ThrowOnError extends boolean = false>(
+  options: Options<ReportMonitorObservationData, ThrowOnError>,
+): RequestResult<ReportMonitorObservationResponses, ReportMonitorObservationErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    ReportMonitorObservationResponses,
+    ReportMonitorObservationErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/monitor/reported-observations',
     ...options,
     headers: {
       'Content-Type': 'application/json',

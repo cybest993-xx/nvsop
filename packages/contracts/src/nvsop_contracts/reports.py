@@ -14,8 +14,17 @@ from typing import cast
 REPORT_CONTRACT_VERSION = 1
 DECISION_REPORT_CONTRACT_VERSION = 2
 SOP_INSTANCE_REPORT_CONTRACT_VERSION = 1
+OBSERVATION_REPORT_CONTRACT_VERSION = 1
 REPORT_CAPABILITIES_HEADER = "X-NVSOP-Report-Capabilities"
 SOP_INSTANCE_REPORT_CAPABILITY = "sop-instance-report-v1"
+
+OBSERVATION_SOURCE_ACTION = "action"
+"""观测来自动作识别（VLM 输出的动作编号）。"""
+
+OBSERVATION_SOURCE_EXTERNAL_SIGNAL = "external_signal"
+"""观测来自连接器输入点位的外部信号。"""
+
+OBSERVATION_SOURCES = frozenset({OBSERVATION_SOURCE_ACTION, OBSERVATION_SOURCE_EXTERNAL_SIGNAL})
 
 
 @dataclass(frozen=True, slots=True)
@@ -540,6 +549,138 @@ class ReportedSopInstance:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ReportedObservation:
+    """一条归一化观测的至少一次镜像上报；它是观测，不是流健康，也不是判定。
+
+    观测关联稳定事件 ID、所属实例、来源和产生时模板/模型身份，自带源时间与主机锚。
+    中心按事件 id 幂等归档产生时内容，不据此重新判定，也不反写 edge。
+    它不携带配置证明：模板/模型身份是产生时的冻结事实，中心只保存，不重新归属。
+    """
+
+    event_id: str
+    trace_id: str
+    host_id: str
+    station_id: str
+    instance_id: int
+    source: str
+    signal: str
+    source_time: float | None
+    source_anchor: float | None
+    observed_at: float
+    template_version_id: str | None
+    template_sha256: str | None
+    backend: ReportBackendProvenance | None
+    reported_at: str
+    contract_version: int = OBSERVATION_REPORT_CONTRACT_VERSION
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("event_id", self.event_id),
+            ("trace_id", self.trace_id),
+            ("host_id", self.host_id),
+            ("station_id", self.station_id),
+            ("source", self.source),
+            ("signal", self.signal),
+            ("reported_at", self.reported_at),
+        ):
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{name} must not be empty")
+        if self.source not in OBSERVATION_SOURCES:
+            raise ValueError("reported observation source is unsupported")
+        if self.contract_version != OBSERVATION_REPORT_CONTRACT_VERSION:
+            raise ValueError("reported observation contract version is unsupported")
+        if self.instance_id < 0:
+            raise ValueError("reported observation instance_id must not be negative")
+        _finite_number(self.observed_at, "observed_at")
+        for label, amount in (
+            ("source_time", self.source_time),
+            ("source_anchor", self.source_anchor),
+        ):
+            if amount is not None:
+                _finite_number(amount, f"reported observation {label}")
+        if (self.source_time is None) != (self.source_anchor is None):
+            raise ValueError("observation source time and source anchor must be supplied together")
+        if (self.template_version_id is None) != (self.template_sha256 is None):
+            raise ValueError("observation template version and digest must be supplied together")
+        if self.template_sha256 is not None and not _is_sha256(self.template_sha256):
+            raise ValueError("observation template_sha256 is invalid")
+        if self.backend is not None and not isinstance(self.backend, ReportBackendProvenance):
+            raise ValueError("observation backend must be backend provenance or null")
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "contract_version": self.contract_version,
+            "event_id": self.event_id,
+            "trace_id": self.trace_id,
+            "host_id": self.host_id,
+            "station_id": self.station_id,
+            "instance_id": self.instance_id,
+            "source": self.source,
+            "signal": self.signal,
+            "source_time": self.source_time,
+            "source_anchor": self.source_anchor,
+            "observed_at": self.observed_at,
+            "template_version_id": self.template_version_id,
+            "template_sha256": self.template_sha256,
+            "backend": None if self.backend is None else self.backend.to_wire(),
+            "reported_at": self.reported_at,
+        }
+
+    @classmethod
+    def from_wire(cls, value: Mapping[str, object]) -> ReportedObservation:
+        _require_keys(
+            value,
+            {
+                "contract_version",
+                "event_id",
+                "trace_id",
+                "host_id",
+                "station_id",
+                "instance_id",
+                "source",
+                "signal",
+                "source_time",
+                "source_anchor",
+                "observed_at",
+                "template_version_id",
+                "template_sha256",
+                "backend",
+                "reported_at",
+            },
+            "reported observation",
+        )
+        template_id = value["template_version_id"]
+        template_sha = value["template_sha256"]
+        if template_id is not None and not isinstance(template_id, str):
+            raise ValueError("observation template_version_id is invalid")
+        if template_sha is not None and not isinstance(template_sha, str):
+            raise ValueError("observation template_sha256 is invalid")
+        backend_raw = value["backend"]
+        backend: ReportBackendProvenance | None
+        if backend_raw is None:
+            backend = None
+        else:
+            backend = ReportBackendProvenance.from_wire(_object(backend_raw, "observation backend"))
+        return cls(
+            event_id=_string(value["event_id"], "event_id"),
+            trace_id=_string(value["trace_id"], "trace_id"),
+            host_id=_string(value["host_id"], "host_id"),
+            station_id=_string(value["station_id"], "station_id"),
+            instance_id=_nonnegative_int(value["instance_id"], "instance_id"),
+            source=_string(value["source"], "source"),
+            signal=_string(value["signal"], "signal"),
+            source_time=_optional_number(value["source_time"], "source_time"),
+            source_anchor=_optional_number(value["source_anchor"], "source_anchor"),
+            observed_at=_finite_number(value["observed_at"], "observed_at"),
+            template_version_id=template_id,
+            template_sha256=template_sha,
+            backend=backend,
+            reported_at=_string(value["reported_at"], "reported_at"),
+            contract_version=_positive_int(value["contract_version"], "contract_version"),
+        )
+
+
 def reported_decision_to_wire(report: ReportedDecision) -> dict[str, object]:
     return report.to_wire()
 
@@ -562,6 +703,14 @@ def reported_sop_instance_to_wire(report: ReportedSopInstance) -> dict[str, obje
 
 def reported_sop_instance_from_wire(value: Mapping[str, object]) -> ReportedSopInstance:
     return ReportedSopInstance.from_wire(value)
+
+
+def reported_observation_to_wire(report: ReportedObservation) -> dict[str, object]:
+    return report.to_wire()
+
+
+def reported_observation_from_wire(value: Mapping[str, object]) -> ReportedObservation:
+    return ReportedObservation.from_wire(value)
 
 
 def _require_keys(value: Mapping[str, object], expected: set[str], label: str) -> None:
@@ -630,14 +779,21 @@ def _is_sha256(value: str) -> bool:
 
 __all__ = [
     "DECISION_REPORT_CONTRACT_VERSION",
+    "OBSERVATION_REPORT_CONTRACT_VERSION",
+    "OBSERVATION_SOURCES",
+    "OBSERVATION_SOURCE_ACTION",
+    "OBSERVATION_SOURCE_EXTERNAL_SIGNAL",
     "REPORT_CONTRACT_VERSION",
     "ReportBackendProvenance",
     "ReportEvidence",
     "ReportViolation",
     "ReportedDecision",
     "ReportedHealth",
+    "ReportedObservation",
     "reported_decision_from_wire",
     "reported_decision_to_wire",
     "reported_health_from_wire",
     "reported_health_to_wire",
+    "reported_observation_from_wire",
+    "reported_observation_to_wire",
 ]

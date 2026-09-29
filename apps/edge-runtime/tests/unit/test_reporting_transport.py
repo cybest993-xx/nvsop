@@ -14,6 +14,7 @@ from nvsop_contracts import (
     ConfigurationBundle,
     ReportBackendProvenance,
     ReportedDecision,
+    ReportedObservation,
     ReportEvidence,
 )
 
@@ -103,6 +104,32 @@ class ReportCompatibilityTests(unittest.TestCase):
             transport=httpx2.MockTransport(record),
         )
         return HttpDecisionReportTransport(client=client, host_id="host-a")
+
+    def test_observation_report_posts_without_a_handshake(self) -> None:
+        report = ReportedObservation(
+            event_id="host-a:observation:1",
+            trace_id="host-a:observation:1",
+            host_id="host-a",
+            station_id="station-a",
+            instance_id=1,
+            source="action",
+            signal="(1) step 1",
+            source_time=0.5,
+            source_anchor=100.0,
+            observed_at=12.0,
+            template_version_id=None,
+            template_sha256=None,
+            backend=None,
+            reported_at="2026-09-16T00:00:00Z",
+        )
+
+        self.transport(lambda _: httpx2.Response(200, json={})).send_observation(report)
+
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(self.requests[0].url.path, "/api/v1/monitor/reported-observations")
+        body = json.loads(self.requests[0].content.decode("utf-8"))
+        self.assertEqual(body["event_id"], report.event_id)
+        self.assertEqual(body["source"], "action")
 
     def test_v1_report_keeps_old_wire_path_without_handshake(self) -> None:
         self.transport(lambda _: httpx2.Response(200, json={})).send_decision(

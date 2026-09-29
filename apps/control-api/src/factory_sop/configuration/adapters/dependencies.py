@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from factory_sop.device.api import DeviceConfigurationGateway
+from factory_sop.execution.api import ExecutionLeaseGateway
 from factory_sop.template.api import TemplateConfigurationGateway
 
 
@@ -16,4 +17,9 @@ def template_gateway() -> TemplateConfigurationGateway:
     raise RuntimeError("configuration template gateway dependency was not wired")
 
 
-__all__ = ["device_gateway", "template_gateway"]
+def execution_gateway() -> ExecutionLeaseGateway:
+    """由 composition root 注入 execution owner 的租约 seam。"""
+    raise RuntimeError("configuration execution gateway dependency was not wired")
+
+
+__all__ = ["device_gateway", "execution_gateway", "template_gateway"]

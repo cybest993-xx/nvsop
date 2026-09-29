@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
@@ -9,6 +9,7 @@ import pytest
 from factory_sop.configuration.composition import (
     ConfigurationAssemblyError,
     configuration_for_host,
+    host_configuration_pull,
     register_confirmed_configuration,
 )
 from factory_sop.device.api import (
@@ -16,12 +17,19 @@ from factory_sop.device.api import (
     DeviceConfigurationTarget,
     DeviceConfigurationTopology,
 )
+from factory_sop.execution.api import StationGrant
 from factory_sop.template.api import TemplateConfigurationProjection
-from nvsop_contracts import ConfigurationBundle, ConfiguredStation, ResolvedRuntimeParameters
+from nvsop_contracts import (
+    ConfigurationBundle,
+    ConfiguredStation,
+    ExecutionLease,
+    ResolvedRuntimeParameters,
+)
 
 HOST_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f101")
 STATION_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f103")
 BACKEND_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f104")
+GRANT_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f105")
 
 
 class DeviceGateway:
@@ -101,6 +109,51 @@ class TemplateGateway:
         )
 
 
+class ExecutionGateway:
+    def __init__(self) -> None:
+        self.host_id: UUID | None = None
+        self.now: datetime | None = None
+        self.request_id: UUID | None = None
+
+    def acquire(
+        self,
+        *,
+        station_id: UUID,
+        holder_host_id: UUID,
+        request_id: UUID,
+        now: datetime,
+    ) -> StationGrant:
+        raise AssertionError("host configuration pull must not acquire leases")
+
+    def renew(
+        self,
+        *,
+        station_id: UUID,
+        grant_id: UUID,
+        holder_host_id: UUID,
+        request_id: UUID,
+        now: datetime,
+    ) -> StationGrant:
+        raise AssertionError("host configuration pull must not renew a single lease")
+
+    def renew_host_leases(
+        self, *, host_id: UUID, now: datetime, request_id: UUID
+    ) -> tuple[StationGrant, ...]:
+        self.host_id = host_id
+        self.now = now
+        self.request_id = request_id
+        return (
+            StationGrant(
+                grant_id=GRANT_ID,
+                station_id=STATION_ID,
+                holder_host_id=HOST_ID,
+                lease_expires_at=now + timedelta(days=7),
+                renewed_at=now,
+                request_id=request_id,
+            ),
+        )
+
+
 def test_configuration_composition_uses_only_owner_projections() -> None:
     device = DeviceGateway()
 
@@ -153,3 +206,37 @@ def test_confirmed_configuration_stays_behind_device_owner_seam() -> None:
     )
     with pytest.raises(ConfigurationAssemblyError, match="not issued"):
         register_confirmed_configuration(host_id=HOST_ID, bundle=bundle, device=device)
+
+
+def test_host_configuration_pull_renews_only_the_hosts_leases() -> None:
+    device = DeviceGateway()
+    execution = ExecutionGateway()
+    now = datetime(2026, 9, 13, tzinfo=UTC)
+
+    bundle = host_configuration_pull(
+        host_id=HOST_ID,
+        now=now,
+        device=device,
+        templates=TemplateGateway(),
+        execution=execution,
+    )
+
+    assert execution.host_id == HOST_ID
+    assert execution.now == now
+    assert execution.request_id is not None
+    assert bundle.execution_grants == (
+        ExecutionLease(
+            station_id=str(STATION_ID),
+            grant_id=str(GRANT_ID),
+            holder_host_id=str(HOST_ID),
+            lease_expires_at=(now + timedelta(days=7)).isoformat().replace("+00:00", "Z"),
+        ),
+    )
+    without_grants = configuration_for_host(
+        host_id=HOST_ID,
+        generated_at=now,
+        device=DeviceGateway(),
+        templates=TemplateGateway(),
+    )
+    assert bundle.effective_sha256 == without_grants.effective_sha256
+    assert bundle.stable_content_wire() == without_grants.stable_content_wire()

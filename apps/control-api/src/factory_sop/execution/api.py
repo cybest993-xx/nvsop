@@ -32,6 +32,16 @@ class ExecutionLeaseGateway(Protocol):
         now: datetime,
     ) -> StationGrant: ...
 
+    def renew_host_leases(
+        self,
+        *,
+        host_id: UUID,
+        now: datetime,
+        request_id: UUID,
+    ) -> tuple[StationGrant, ...]:
+        """在主机成功拉取配置的边界续期其持有且仍可续期的租约。"""
+        ...
+
 
 __all__ = [
     "ExecutionLeaseGateway",

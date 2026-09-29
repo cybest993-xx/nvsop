@@ -454,6 +454,48 @@ class ConfiguredStation:
 
 
 @dataclass(frozen=True, slots=True)
+class ExecutionLease:
+    """主机拉取配置时下发的、该主机自己的当前工位物理执行权租约事实。
+
+    这是随 host-scoped 配置信封下发的授权元数据：它不参与配置的稳定内容或运行语义身份，
+    也不改变配置的应用；中心在同一次成功拉取的请求内续期该主机持有的租约。凭据与签发材料
+    仍只在推理机本机（§5.12），本对象因此不含秘密。
+    """
+
+    station_id: str
+    grant_id: str
+    holder_host_id: str
+    lease_expires_at: str
+
+    def __post_init__(self) -> None:
+        if not self.station_id or not self.grant_id or not self.holder_host_id:
+            raise ValueError("execution lease identity must not be empty")
+        _parse_utc_timestamp(self.lease_expires_at, "execution lease lease_expires_at")
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "station_id": self.station_id,
+            "grant_id": self.grant_id,
+            "holder_host_id": self.holder_host_id,
+            "lease_expires_at": self.lease_expires_at,
+        }
+
+    @classmethod
+    def from_wire(cls, value: Mapping[str, object]) -> ExecutionLease:
+        _require_keys(
+            value,
+            {"station_id", "grant_id", "holder_host_id", "lease_expires_at"},
+            "execution lease",
+        )
+        return cls(
+            station_id=_string(value["station_id"], "execution lease station_id"),
+            grant_id=_string(value["grant_id"], "execution lease grant_id"),
+            holder_host_id=_string(value["holder_host_id"], "execution lease holder_host_id"),
+            lease_expires_at=_string(value["lease_expires_at"], "execution lease lease_expires_at"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ConfigurationBundle:
     """完整且按主机裁剪的配置确认信封。"""
 
@@ -464,6 +506,7 @@ class ConfigurationBundle:
     contract_version: int = CONFIGURATION_CONTRACT_VERSION
     producer: str | None = None
     required_capabilities: tuple[str, ...] = ()
+    execution_grants: tuple[ExecutionLease, ...] = ()
 
     def __post_init__(self) -> None:
         if self.contract_version != CONFIGURATION_CONTRACT_VERSION:
@@ -485,6 +528,9 @@ class ConfigurationBundle:
         station_keys = {(station.station_id, station.backend_id) for station in self.stations}
         if len(station_keys) != len(self.stations):
             raise ValueError("configuration station/backend slices must be unique")
+        grant_stations = [grant.station_id for grant in self.execution_grants]
+        if len(set(grant_stations)) != len(grant_stations):
+            raise ValueError("configuration execution grants must be unique per station")
 
     def content_wire(self) -> dict[str, object]:
         content: dict[str, object] = {
@@ -498,13 +544,16 @@ class ConfigurationBundle:
             content["producer"] = self.producer
         if self.required_capabilities:
             content["required_capabilities"] = list(self.required_capabilities)
+        if self.execution_grants:
+            content["execution_grants"] = [grant.to_wire() for grant in self.execution_grants]
         return content
 
     def stable_content_wire(self) -> dict[str, object]:
-        """返回忽略生成时刻后的配置内容，用于同修订原子确认比较。"""
+        """返回忽略生成时刻和主机执行权租约后的配置内容，用于同修订原子确认比较。"""
         content = self.content_wire()
         content.pop("generated_at")
         content.pop("producer", None)
+        content.pop("execution_grants", None)
         return content
 
     @property
@@ -514,11 +563,12 @@ class ConfigurationBundle:
 
     @property
     def effective_sha256(self) -> str:
-        """返回忽略生成时刻和版本信封字段的有效配置摘要。"""
+        """返回忽略生成时刻、版本信封字段和主机执行权租约的有效配置摘要。"""
         content = self.content_wire()
         content.pop("config_revision")
         content.pop("generated_at")
         content.pop("producer", None)
+        content.pop("execution_grants", None)
         return hashlib.sha256(_canonical_json(content).encode("utf-8")).hexdigest()
 
     def to_wire(self) -> dict[str, object]:
@@ -539,7 +589,7 @@ class ConfigurationBundle:
                 "sha256",
             },
             "configuration bundle",
-            optional={"producer", "required_capabilities"},
+            optional={"producer", "required_capabilities", "execution_grants"},
         )
         supplied_digest = _string(value["sha256"], "configuration sha256")
         _validate_digest(supplied_digest, "configuration sha256")
@@ -560,6 +610,9 @@ class ConfigurationBundle:
             value.get("required_capabilities", ()),
             "configuration required_capabilities",
         )
+        raw_execution_grants = _array(
+            value.get("execution_grants", ()), "configuration execution_grants"
+        )
         return cls(
             host_id=_string(value["host_id"], "configuration host_id"),
             config_revision=_positive_int(value["config_revision"], "configuration revision"),
@@ -571,6 +624,10 @@ class ConfigurationBundle:
             contract_version=contract_version,
             producer=producer,
             required_capabilities=required_capabilities,
+            execution_grants=tuple(
+                ExecutionLease.from_wire(_object(item, "execution lease"))
+                for item in raw_execution_grants
+            ),
         )
 
 
@@ -723,6 +780,7 @@ __all__ = [
     "ConfiguredConnector",
     "ConfiguredPoint",
     "ConfiguredStation",
+    "ExecutionLease",
     "ResolvedRuntimeParameters",
     "canonical_json",
     "configuration_from_wire",

@@ -8,18 +8,25 @@ import sys
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
+from uuid import UUID
 
 import pytest
-from _integration_support import client_for, settings_for
+from _integration_support import build_app, client_for, settings_for
+from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session as DatabaseSession
 from template_fixtures import TemplateFixture, add_template_version, remove_template_versions
 
 from factory_sop.app import API_PREFIX
 from factory_sop.auth.permissions import Permission
+from factory_sop.configuration.adapters import dependencies as configuration_dependencies
+from factory_sop.device.adapters.repository import (
+    PostgresInferenceHostRepository,
+    PostgresStationRepository,
+)
 from factory_sop.device.adapters.tables import (
     CameraRow,
     ConnectorRow,
@@ -42,7 +49,10 @@ from factory_sop.device.model import (
     PointDirection,
     Station,
 )
+from factory_sop.execution.adapters.dependencies import lease_gateway
+from factory_sop.execution.api import ExecutionLeaseGateway, StationGrant
 from factory_sop.identifiers import new_id
+from factory_sop.persistence import RequestSession
 from factory_sop.template.adapters.tables import TemplateStationBindingRow, TemplateVersionRow
 from factory_sop.template.model import TemplateStationBinding
 from nvsop_contracts import (
@@ -1198,3 +1208,198 @@ def test_overview_returns_permission_scoped_real_sections(
             "runtime_status": "reported_observations_only",
         },
     }
+
+
+def _add_foreign_grant_owner(engine: Engine) -> tuple[InferenceHost, Station]:
+    actor = new_id()
+    host = InferenceHost(
+        id=new_id(),
+        name=f"HTTP 他机-{new_id().hex[:8]}",
+        address="10.0.8.221",
+        mediamtx_address=None,
+        recording_window_seconds=604800,
+        disk_watermark_percent=85,
+        status=DeviceStatus.ACTIVE,
+        revision=1,
+        created_by=actor,
+        updated_by=actor,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    station = Station(
+        id=new_id(),
+        code=f"HTTP-OTHER-{new_id().hex[:8]}",
+        name="HTTP 他机工位",
+        tags=(),
+        status=DeviceStatus.ACTIVE,
+        revision=1,
+        created_by=actor,
+        updated_by=actor,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    session = DatabaseSession(engine)
+    try:
+        PostgresInferenceHostRepository(session).add(host)
+        PostgresStationRepository(session).add(station)
+        session.commit()
+    finally:
+        session.close()
+    return host, station
+
+
+def _clear_execution_grants(engine: Engine, station_ids: tuple[UUID, ...]) -> None:
+    with engine.begin() as connection:
+        expired = datetime(2000, 1, 1, tzinfo=UTC)
+        connection.execute(
+            text(
+                "UPDATE execution_station_grant SET renewed_at = :renewed_at, "
+                "lease_expires_at = :lease_expires_at WHERE station_id = ANY(:station_ids)"
+            ),
+            {
+                "renewed_at": expired,
+                "lease_expires_at": expired + timedelta(days=7),
+                "station_ids": list(station_ids),
+            },
+        )
+        connection.execute(
+            text("DELETE FROM execution_station_grant WHERE station_id = ANY(:station_ids)"),
+            {"station_ids": list(station_ids)},
+        )
+
+
+def test_configuration_pull_delivers_and_renews_only_the_calling_host_lease(
+    engine: Engine, runtime_topology: RuntimeTopology, dataset_storage_root: Path
+) -> None:
+    settings = settings_for(engine, storage_root=dataset_storage_root)
+    path = f"{API_PREFIX}/inference-hosts/{runtime_topology.host.id}/configuration"
+    foreign_host, foreign_station = _add_foreign_grant_owner(engine)
+    started = datetime.now(UTC)
+    try:
+        with DatabaseSession(engine) as session:
+            gateway = lease_gateway(session)
+            gateway.acquire(
+                station_id=runtime_topology.station.id,
+                holder_host_id=runtime_topology.host.id,
+                request_id=new_id(),
+                now=started,
+            )
+            gateway.acquire(
+                station_id=foreign_station.id,
+                holder_host_id=foreign_host.id,
+                request_id=new_id(),
+                now=started,
+            )
+            session.commit()
+
+        with client_for(engine, settings) as client:
+            first = client.get(
+                path, headers=_host_headers(runtime_topology, method="GET", path=path)
+            )
+            second = client.get(
+                path, headers=_host_headers(runtime_topology, method="GET", path=path)
+            )
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        bundle = configuration_from_wire(first.json())
+        refreshed = configuration_from_wire(second.json())
+
+        assert len(bundle.execution_grants) == 1
+        grant = bundle.execution_grants[0]
+        assert grant.station_id == str(runtime_topology.station.id)
+        assert grant.holder_host_id == str(runtime_topology.host.id)
+        grant_expires_at = datetime.fromisoformat(grant.lease_expires_at.replace("Z", "+00:00"))
+        # 成功拉取的边界立即续期：下发的期限晚于请求前签发的七天。
+        assert grant_expires_at > started + timedelta(days=7)
+        # 同 revision/effective identity 的第二次拉取沿用同一租约身份，不伪造第二份授权。
+        refreshed_grant = refreshed.execution_grants[0]
+        assert refreshed_grant.grant_id == grant.grant_id
+        assert refreshed.effective_sha256 == bundle.effective_sha256
+        assert refreshed.config_revision == bundle.config_revision
+
+        with engine.connect() as connection:
+            stored = connection.execute(
+                text(
+                    "SELECT lease_expires_at, renewed_at, holder_host_id "
+                    "FROM execution_station_grant WHERE station_id = :station_id"
+                ),
+                {"station_id": runtime_topology.station.id},
+            ).one()
+        assert stored.holder_host_id == runtime_topology.host.id
+        assert stored.lease_expires_at == datetime.fromisoformat(
+            refreshed_grant.lease_expires_at.replace("Z", "+00:00")
+        )
+        assert stored.lease_expires_at - stored.renewed_at == timedelta(days=7)
+    finally:
+        _clear_execution_grants(engine, (runtime_topology.station.id, foreign_station.id))
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM device_station WHERE id = :station_id"),
+                {"station_id": foreign_station.id},
+            )
+            connection.execute(
+                text("DELETE FROM device_inference_host WHERE id = :host_id"),
+                {"host_id": foreign_host.id},
+            )
+
+
+class _RenewalThenFailure:
+    """在真实续期写入之后抛错，用来验证拉取边界的事务回滚。"""
+
+    def __init__(self, delegate: ExecutionLeaseGateway) -> None:
+        self._delegate = delegate
+
+    def renew_host_leases(
+        self, *, host_id: UUID, now: datetime, request_id: UUID
+    ) -> tuple[StationGrant, ...]:
+        self._delegate.renew_host_leases(host_id=host_id, now=now, request_id=request_id)
+        raise RuntimeError("injected failure after lease renewal")
+
+
+def _faulting_execution_gateway(session: RequestSession) -> ExecutionLeaseGateway:
+    return cast(ExecutionLeaseGateway, _RenewalThenFailure(lease_gateway(session)))
+
+
+def test_configuration_pull_rolls_back_lease_renewal_when_request_fails(
+    engine: Engine, runtime_topology: RuntimeTopology, dataset_storage_root: Path
+) -> None:
+    settings = settings_for(engine, storage_root=dataset_storage_root)
+    path = f"{API_PREFIX}/inference-hosts/{runtime_topology.host.id}/configuration"
+    started = datetime.now(UTC)
+    acquisition_request = new_id()
+    with DatabaseSession(engine) as session:
+        lease_gateway(session).acquire(
+            station_id=runtime_topology.station.id,
+            holder_host_id=runtime_topology.host.id,
+            request_id=acquisition_request,
+            now=started,
+        )
+        session.commit()
+    try:
+        app = build_app(engine, settings)
+        app.dependency_overrides[configuration_dependencies.execution_gateway] = (
+            _faulting_execution_gateway
+        )
+        with TestClient(
+            app, base_url="https://testserver", raise_server_exceptions=False
+        ) as client:
+            response = client.get(
+                path, headers=_host_headers(runtime_topology, method="GET", path=path)
+            )
+        assert response.status_code == 500
+
+        with engine.connect() as connection:
+            stored = connection.execute(
+                text(
+                    "SELECT renewed_at, lease_expires_at, request_id "
+                    "FROM execution_station_grant WHERE station_id = :station_id"
+                ),
+                {"station_id": runtime_topology.station.id},
+            ).one()
+        # 续期先写入随后失败：请求事务整体回滚，授权事实保持请求前状态，不落盘成功期限。
+        assert stored.renewed_at == started
+        assert stored.lease_expires_at == started + timedelta(days=7)
+        assert stored.request_id == acquisition_request
+    finally:
+        _clear_execution_grants(engine, (runtime_topology.station.id,))

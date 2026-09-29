@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from threading import Barrier, Thread
+from uuid import UUID
 
 import pytest
 from sqlalchemy import Engine, text
@@ -515,5 +516,206 @@ def test_stale_earlier_renewal_cannot_overwrite_newer_lease(engine: Engine) -> N
         assert stored.renewed_at == later.renewed_at
         assert stored.lease_expires_at == later.lease_expires_at
         assert stored.request_id == later_request
+    finally:
+        _cleanup_targets(engine, station, host_a, host_b)
+
+
+def _add_station(engine: Engine) -> Station:
+    station = Station(
+        id=new_id(),
+        code=f"EXEC-{new_id().hex}",
+        name="执行权测试工位",
+        tags=(),
+        status=DeviceStatus.ACTIVE,
+        revision=1,
+        created_by=new_id(),
+        updated_by=new_id(),
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    session = DatabaseSession(engine)
+    try:
+        PostgresStationRepository(session).add(station)
+        session.commit()
+    finally:
+        session.close()
+    return station
+
+
+def _cleanup_execution_rows(
+    engine: Engine, *, station_ids: tuple[UUID, ...], host_ids: tuple[UUID, ...]
+) -> None:
+    with engine.begin() as connection:
+        expired_renewed_at = datetime(2000, 1, 1, tzinfo=UTC)
+        connection.execute(
+            text(
+                "UPDATE execution_station_grant "
+                "SET renewed_at = :renewed_at, lease_expires_at = :lease_expires_at "
+                "WHERE station_id = ANY(:station_ids)"
+            ),
+            {
+                "renewed_at": expired_renewed_at,
+                "lease_expires_at": expired_renewed_at + SEVEN_DAYS,
+                "station_ids": list(station_ids),
+            },
+        )
+        connection.execute(
+            text("DELETE FROM execution_station_grant WHERE station_id = ANY(:station_ids)"),
+            {"station_ids": list(station_ids)},
+        )
+        connection.execute(
+            text("DELETE FROM device_station WHERE id = ANY(:station_ids)"),
+            {"station_ids": list(station_ids)},
+        )
+        connection.execute(
+            text("DELETE FROM device_inference_host WHERE id = ANY(:host_ids)"),
+            {"host_ids": list(host_ids)},
+        )
+
+
+def test_renew_host_leases_only_renews_callers_live_grants(engine: Engine) -> None:
+    station_a, host_a, host_b = _arrange_targets(engine)
+    station_b = _add_station(engine)
+    try:
+        setup = DatabaseSession(engine)
+        try:
+            gateway = lease_gateway(setup)
+            gateway.acquire(
+                station_id=station_a.id,
+                holder_host_id=host_a.id,
+                request_id=new_id(),
+                now=NOW,
+            )
+            gateway.acquire(
+                station_id=station_b.id,
+                holder_host_id=host_b.id,
+                request_id=new_id(),
+                now=NOW,
+            )
+            setup.commit()
+        finally:
+            setup.close()
+
+        renewed_at = NOW + timedelta(days=1)
+        session = DatabaseSession(engine)
+        try:
+            renewed = lease_gateway(session).renew_host_leases(
+                host_id=host_a.id, now=renewed_at, request_id=new_id()
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        assert tuple(grant.station_id for grant in renewed) == (station_a.id,)
+        assert renewed[0].holder_host_id == host_a.id
+        assert renewed[0].renewed_at == renewed_at
+        assert renewed[0].lease_expires_at == renewed_at + SEVEN_DAYS
+
+        repeat = DatabaseSession(engine)
+        try:
+            again = lease_gateway(repeat).renew_host_leases(
+                host_id=host_a.id, now=renewed_at, request_id=new_id()
+            )
+            repeat.commit()
+        finally:
+            repeat.close()
+        assert again == renewed
+
+        with engine.connect() as connection:
+            untouched = connection.execute(
+                text(
+                    "SELECT lease_expires_at, renewed_at FROM execution_station_grant "
+                    "WHERE station_id = :station_id"
+                ),
+                {"station_id": station_b.id},
+            ).one()
+        assert untouched.lease_expires_at == NOW + SEVEN_DAYS
+        assert untouched.renewed_at == NOW
+    finally:
+        _cleanup_execution_rows(
+            engine,
+            station_ids=(station_a.id, station_b.id),
+            host_ids=(host_a.id, host_b.id),
+        )
+
+
+def test_handover_blocks_old_holder_from_extending(engine: Engine) -> None:
+    station, host_a, host_b = _arrange_targets(engine)
+    try:
+        session = DatabaseSession(engine)
+        try:
+            grant = lease_gateway(session).acquire(
+                station_id=station.id,
+                holder_host_id=host_a.id,
+                request_id=new_id(),
+                now=NOW,
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE execution_station_grant SET holder_host_id = :host_id "
+                    "WHERE station_id = :station_id"
+                ),
+                {"host_id": host_b.id, "station_id": station.id},
+            )
+
+        old_holder = DatabaseSession(engine)
+        try:
+            assert (
+                lease_gateway(old_holder).renew_host_leases(
+                    host_id=host_a.id, now=NOW + timedelta(days=1), request_id=new_id()
+                )
+                == ()
+            )
+            old_holder.commit()
+        finally:
+            old_holder.close()
+
+        new_holder = DatabaseSession(engine)
+        try:
+            leases = lease_gateway(new_holder).renew_host_leases(
+                host_id=host_b.id, now=NOW + timedelta(days=1), request_id=new_id()
+            )
+            new_holder.commit()
+        finally:
+            new_holder.close()
+        assert len(leases) == 1
+        assert leases[0].grant_id == grant.grant_id
+        assert leases[0].holder_host_id == host_b.id
+        assert leases[0].lease_expires_at == NOW + timedelta(days=1) + SEVEN_DAYS
+    finally:
+        _cleanup_targets(engine, station, host_a, host_b)
+
+
+def test_expired_holder_lease_is_reported_without_extension(engine: Engine) -> None:
+    station, host_a, host_b = _arrange_targets(engine)
+    try:
+        expired_at = NOW - timedelta(days=8)
+        session = DatabaseSession(engine)
+        try:
+            grant = lease_gateway(session).acquire(
+                station_id=station.id,
+                holder_host_id=host_a.id,
+                request_id=new_id(),
+                now=expired_at,
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        renew = DatabaseSession(engine)
+        try:
+            leases = lease_gateway(renew).renew_host_leases(
+                host_id=host_a.id, now=NOW, request_id=new_id()
+            )
+            renew.commit()
+        finally:
+            renew.close()
+        assert leases == (grant,)
+        assert leases[0].lease_expires_at == expired_at + SEVEN_DAYS
     finally:
         _cleanup_targets(engine, station, host_a, host_b)

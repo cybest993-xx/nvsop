@@ -72,6 +72,7 @@ from factory_sop.device.adapters.routes_stations import router as stations_route
 from factory_sop.device.api import summary as device_summary
 from factory_sop.device.errors import DeviceRefusedError
 from factory_sop.device.errors import refusal_problem as device_refusal_problem
+from factory_sop.execution.adapters import dependencies as execution_dependencies
 from factory_sop.job.adapters import dependencies as job_dependencies
 from factory_sop.job.adapters.dispatcher import ArqJobDispatcher
 from factory_sop.job.adapters.routes import router as job_router
@@ -225,6 +226,9 @@ def create_app(
     # 组合根把跨模块查询和任务依赖接到各自模块的真实适配器。
     app.dependency_overrides[configuration_dependencies.device_gateway] = (
         device_dependencies.configuration_gateway
+    )
+    app.dependency_overrides[configuration_dependencies.execution_gateway] = (
+        execution_dependencies.lease_gateway
     )
     app.dependency_overrides[configuration_dependencies.template_gateway] = (
         template_dependencies.configuration_gateway

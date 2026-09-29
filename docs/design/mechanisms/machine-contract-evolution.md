@@ -13,11 +13,12 @@
 | `config_revision` | Center 对该 host 签发的单调 assignment revision；只表达 assignment 次序，不代替运行语义摘要 |
 | `generated_at` | 信封生成时刻；诊断元数据，不参与稳定内容或运行语义身份，也不用于同 revision 的先后裁决 |
 | `sha256` | 完整 wire 信封的 canonical SHA-256，保护传输/持久化完整性 |
-| `effective_sha256` | 运行语义身份；排除 `config_revision`、`generated_at` 和非行为 `producer`，包含会改变 Edge 行为的配置与 capability requirement |
+| `effective_sha256` | 运行语义身份；排除 `config_revision`、`generated_at`、非行为 `producer` 与主机执行权租约 `execution_grants`，包含会改变 Edge 行为的配置与 capability requirement |
 | `station.revision` | `device` 拥有的工位配置修订，不替代 bundle assignment revision |
 | 模板 `version_id` / `version_sha256` | `template` 拥有的不可变模板版本身份；artifact 各自保留内容 SHA-256 |
 | `model_ids` | Center 签发 bundle 时冻结的推理后端模型事实；历史判定继续使用事件时冻结的 provenance，不用当前配置回填 |
 | `producer` | 已知、可选、非行为诊断元数据；不进入 stable/effective identity |
+| `execution_grants` | 主机自己的当前工位物理执行权租约事实（`station_id`/`grant_id`/`holder_host_id`/`lease_expires_at`）；Center 在每次成功拉取配置时于同一请求内只续期该主机持有的租约。host-scoped 授权元数据：不进入 stable/effective identity，也不进入配置运行时的组合与切换；它服务 `execution` 自己的物理写入门禁机制（§5.17），不属于配置行为扩展 |
 | `required_capabilities` | 行为兼容门禁；排序且去重。Edge 不支持任一声明时显式拒绝整个候选 |
 
 历史 assignment 不再发明第二个 identity。Center 的 issued-configuration 历史以 host + `config_revision` + `effective_sha256` 固定一次签发，并冻结 station/backend、模板版本/摘要和 model facts；历史上报必须指向这份实际签发事实。
@@ -28,6 +29,8 @@
 
 1. **已知非行为元数据**：先让消费者识别为可选字段，再让生产者发送；不得改变 `effective_sha256`。`producer` 是当前示例。
 2. **显式能力门禁的行为扩展**：行为数据必须同时声明对应 `required_capabilities`。不支持的 Edge 明确拒绝，不能忽略字段、猜默认值或走 fallback。
+
+配置 bundle 同时携带一条 host-scoped 授权通道：`execution_grants` 由 Center 在成功拉取边界续期并随信封下发，但不参与配置的 stable/effective identity，也不进入配置运行时的组合或切换，因此归入第 1 类而非第 2 类；它改变的是 `execution` 拥有的物理写入门禁，而不是 Edge 的配置行为。隐藏或未知的配置行为字段仍必须走第 2 类。
 
 配置契约不提供 `extensions`、任意 JSON bag、插件字典或“未知字段照单全收”。核心字段仍严格必填，未知字段仍拒绝。
 
@@ -44,7 +47,7 @@
 5. 候选 composition 构造成功后切换内存 runtime，`LocalConfigurationStore.confirm()` 才原子持久确认同一候选。确认失败会关闭候选工位资源，不启动新 runtime 循环；随后失败退出，重启仍以最后 durable confirmed 为恢复事实。
 6. 判定 outbox 的 Center 确认/上报失败沿既有重试路径重发，不触发配置重复应用。
 
-同 revision + 同 effective identity 的 `generated_at`/`producer` 更新可以直接刷新 durable envelope，不重组 runtime；revision 改变即使 effective identity 相同，仍是新的 assignment，必须按新的 revision 确认并用于后续历史归属。
+同 revision + 同 effective identity 的 `generated_at`/`producer`/`execution_grants` 更新可以直接刷新 durable envelope，不重组 runtime；revision 改变即使 effective identity 相同，仍是新的 assignment，必须按新的 revision 确认并用于后续历史归属。Center 在每次成功拉取时只续期认证主机自己持有的租约，不建立独立租约服务或额外轮询。
 
 ## 历史 Edge SQLite
 

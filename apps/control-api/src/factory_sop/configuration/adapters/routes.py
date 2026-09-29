@@ -11,10 +11,11 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from factory_sop.configuration.adapters import dependencies
 from factory_sop.configuration.composition import (
     ConfigurationAssemblyError,
-    configuration_for_host,
+    host_configuration_pull,
     register_confirmed_configuration,
 )
 from factory_sop.device.api import DeviceConfigurationGateway, host_identity_from_headers
+from factory_sop.execution.api import ExecutionLeaseGateway
 from factory_sop.template.api import TemplateConfigurationGateway
 from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
@@ -38,6 +39,7 @@ def pull_inference_host_configuration(
     host_id: UUID,
     device: Annotated[DeviceConfigurationGateway, Depends(dependencies.device_gateway)],
     templates: Annotated[TemplateConfigurationGateway, Depends(dependencies.template_gateway)],
+    execution: Annotated[ExecutionLeaseGateway, Depends(dependencies.execution_gateway)],
     inference_host_id: Annotated[str | None, Header(alias="X-Inference-Host-ID")] = None,
     inference_host_timestamp: Annotated[
         str | None, Header(alias="X-Inference-Host-Timestamp")
@@ -61,13 +63,15 @@ def pull_inference_host_configuration(
         nonce=inference_host_nonce,
         signature=inference_host_signature,
     )
+    now = datetime.now(UTC)
     try:
-        device.authenticate(host=identity, now=datetime.now(UTC))
-        bundle = configuration_for_host(
+        device.authenticate(host=identity, now=now)
+        bundle = host_configuration_pull(
             host_id=host_id,
-            generated_at=datetime.now(UTC),
+            now=now,
             device=device,
             templates=templates,
+            execution=execution,
         )
     except ConfigurationAssemblyError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error

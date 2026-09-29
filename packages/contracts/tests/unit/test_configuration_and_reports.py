@@ -14,6 +14,7 @@ from nvsop_contracts import (
     ConfiguredConnector,
     ConfiguredPoint,
     ConfiguredStation,
+    ExecutionLease,
     Measured,
     Polled,
     ReportBackendProvenance,
@@ -186,6 +187,70 @@ class ConfigurationContractTests(unittest.TestCase):
         tampered["host_id"] = "host-b"
         with self.assertRaises(ValueError):
             configuration_from_wire(tampered)
+
+    def test_execution_grants_travel_without_changing_config_identity(self) -> None:
+        bundle = ConfigurationBundle(
+            host_id="host-a",
+            config_revision=3,
+            generated_at="2026-09-13T00:00:00Z",
+            stations=(
+                ConfiguredStation(
+                    station_id="station-a",
+                    backend_id="backend-a",
+                    code="S-A",
+                    name="Station A",
+                    revision=1,
+                    runtime_parameters=ResolvedRuntimeParameters(1, 1, "stop"),
+                    connectors=(),
+                    points=(),
+                    template=None,
+                ),
+            ),
+        )
+        granted = replace(
+            bundle,
+            execution_grants=(
+                ExecutionLease(
+                    station_id="station-a",
+                    grant_id="grant-a",
+                    holder_host_id="host-a",
+                    lease_expires_at="2026-09-20T00:00:00Z",
+                ),
+            ),
+        )
+        wire = configuration_to_wire(granted)
+        self.assertEqual(configuration_from_wire(wire), granted)
+        self.assertEqual(granted.effective_sha256, bundle.effective_sha256)
+        self.assertEqual(granted.stable_content_wire(), bundle.stable_content_wire())
+        self.assertNotEqual(granted.sha256, bundle.sha256)
+        grants_wire = wire["execution_grants"]
+        assert isinstance(grants_wire, list)
+        self.assertEqual(grants_wire[0]["lease_expires_at"], "2026-09-20T00:00:00Z")
+
+        renewed = replace(
+            granted,
+            execution_grants=(
+                ExecutionLease(
+                    station_id="station-a",
+                    grant_id="grant-a",
+                    holder_host_id="host-a",
+                    lease_expires_at="2026-09-27T00:00:00Z",
+                ),
+            ),
+        )
+        self.assertEqual(renewed.effective_sha256, bundle.effective_sha256)
+        self.assertEqual(renewed.stable_content_wire(), bundle.stable_content_wire())
+
+        with self.assertRaisesRegex(ValueError, "unique per station"):
+            replace(
+                granted,
+                execution_grants=(
+                    ExecutionLease("station-a", "g1", "host-a", "2026-09-20T00:00:00Z"),
+                    ExecutionLease("station-a", "g2", "host-a", "2026-09-20T00:00:00Z"),
+                ),
+            )
+        with self.assertRaisesRegex(ValueError, "lease_expires_at"):
+            ExecutionLease("station-a", "g1", "host-a", "not-a-timestamp")
 
     def test_template_manifest_digest_must_match_the_template_version(self) -> None:
         value = template()

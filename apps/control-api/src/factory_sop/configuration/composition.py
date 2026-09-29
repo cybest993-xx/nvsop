@@ -7,11 +7,13 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from factory_sop.device.api import DeviceConfigurationError, DeviceConfigurationGateway
+from factory_sop.execution.api import ExecutionLeaseGateway, StationGrant
+from factory_sop.identifiers import new_id
 from factory_sop.template.api import (
     TemplateConfigurationError,
     TemplateConfigurationGateway,
 )
-from nvsop_contracts import ConfigurationBundle
+from nvsop_contracts import ConfigurationBundle, ExecutionLease
 
 
 class ConfigurationAssemblyError(ValueError):
@@ -77,8 +79,48 @@ def configuration_for_host(
         raise ConfigurationAssemblyError(str(error)) from error
 
 
+def host_configuration_pull(
+    *,
+    host_id: UUID,
+    now: datetime,
+    device: DeviceConfigurationGateway,
+    templates: TemplateConfigurationGateway,
+    execution: ExecutionLeaseGateway,
+) -> ConfigurationBundle:
+    """主机成功拉取配置的边界：组装主机切片并在同一请求内续期其执行权租约。
+
+    续期只作用于认证主机自己持有的租约；租约随同一信封下发，但不进入配置稳定内容或运行
+    语义身份。组装失败时组合抛错，请求事务回滚，不留下未随成功响应返回的续期。
+    """
+    bundle = configuration_for_host(
+        host_id=host_id,
+        generated_at=now,
+        device=device,
+        templates=templates,
+    )
+    leases = execution.renew_host_leases(
+        host_id=host_id,
+        now=now,
+        request_id=new_id(),
+    )
+    return replace(
+        bundle,
+        execution_grants=tuple(_execution_lease(lease) for lease in leases),
+    )
+
+
+def _execution_lease(grant: StationGrant) -> ExecutionLease:
+    return ExecutionLease(
+        station_id=str(grant.station_id),
+        grant_id=str(grant.grant_id),
+        holder_host_id=str(grant.holder_host_id),
+        lease_expires_at=grant.lease_expires_at.isoformat().replace("+00:00", "Z"),
+    )
+
+
 __all__ = [
     "ConfigurationAssemblyError",
     "configuration_for_host",
+    "host_configuration_pull",
     "register_confirmed_configuration",
 ]

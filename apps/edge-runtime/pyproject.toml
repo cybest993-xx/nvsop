@@ -29,7 +29,7 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 # No `PT`: that family argues for pytest-style bare asserts, and this package has no
 # pytest — it is standard-library-only, so its tests are stdlib `unittest`.
-select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "T20", "ANN"]
+select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "T20", "ANN", "S110", "PGH004"]
 
 [tool.mypy]
 python_version = "3.11"

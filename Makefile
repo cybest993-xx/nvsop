@@ -1,4 +1,4 @@
-.PHONY: check check-docs docs-check check-integration media-system change-size ci-plan ci-tools ci-lint pr-check issue-check hooks local-clean lockfile sync policy policy-test migrations contract-base \
+.PHONY: check check-docs docs-check check-integration media-system change-size task-check ci-plan ci-tools ci-lint pr-check issue-check hooks local-clean lockfile sync policy policy-test migrations contract-base \
 	contract-capability \
 	contracts contracts-python-check contracts-python-format contracts-python-lint \
 	contracts-python-type contracts-python-unit openapi-export openapi-compat openapi-generate \
@@ -58,6 +58,18 @@ BASE ?= origin/main
 HEAD ?=
 change-size:
 	python3 scripts/check_change_size.py "$(BASE)" $(if $(HEAD),"$(HEAD)")
+
+# 固定任务基线的范围与规模门禁（阶段 A）：--check 要求完整 40hex base 且为 HEAD 祖先。
+# ALLOW 与 MAX_LINES 由主调度按真实用户授权确定，worker 不得自行扩大或移动基线。
+# 可信入口：脚本路径取自当前 Makefile 同目录，而非候选 cwd 的相对路径。主调度以
+# `make -C <candidate> -f <trusted-checkout>/Makefile task-check ...` 运行：cwd 是候选、
+# 脚本来自可信 checkout，候选内同名伪造脚本不会被执行，也不会误查可信目录的空 diff。
+MAX_LINES ?= 800
+TASK_CHECK ?= $(dir $(abspath $(firstword $(MAKEFILE_LIST))))scripts/check_change_size.py
+task-check:
+	python3 "$(TASK_CHECK)" --check \
+		$(foreach path,$(ALLOW),--allow "$(path)") \
+		--max-lines $(MAX_LINES) "$(BASE)" $(if $(HEAD),"$(HEAD)")
 
 # 与 CI 使用同一个路径选择器，只读说明固定 base/candidate 会运行哪些 lane。
 ci-plan:

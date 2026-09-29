@@ -89,6 +89,11 @@ CONTRACT_SOURCE = Path("packages/contracts/src/nvsop_contracts")
 CENTER_SOURCE = Path("apps/control-api/src/factory_sop")
 CENTER_COMPOSITION_ROOT = CENTER_SOURCE / "app.py"
 CENTER_OWNER_SHAPE_FILES = frozenset({"api.py", "model.py", "repository.py", "usecases.py"})
+# import-linter 契约只有在真实 type 下才约束模块。`source_modules`/`modules`/`layers` 是
+# 模块被放进受约束一侧的字段；`name`、`forbidden_modules`、`ignore_imports` 单独出现不保护模块。
+# 单个 layer 内 `|` 表示独立、`:` 表示同层可依赖，两者都只是把模块列入该层。
+SUPPORTED_CONTRACT_TYPES = frozenset({"forbidden", "independence", "layers"})
+LAYER_DELIMITERS = re.compile(r"[|:]")
 WEB_APP = Path("apps/control-web")
 # What the web workspace's frozen toolchain is made of (harness §2). Each is required only
 # once `apps/control-web/` exists, because §2 equally forbids adding them before it does.
@@ -537,6 +542,41 @@ def check_shared_contract_isolation(root: Path, files: list[Path]) -> list[str]:
     return errors
 
 
+def _contract_constrained_modules(contract: object) -> list[str]:
+    """返回契约真正约束的模块名；无 type 或不支持的 type 不贡献任何模块。
+
+    `forbidden` 取 `source_modules`，`independence` 取 `modules`，`layers` 取每个 layer 条目。
+    `name`、`forbidden_modules`、`ignore_imports` 只是描述、被禁目标或例外，不能证明模块边界。
+    """
+    if not isinstance(contract, dict):
+        return []
+    contract_type = contract.get("type")
+    if contract_type not in SUPPORTED_CONTRACT_TYPES:
+        return []
+    if contract_type == "layers":
+        raw_layers = contract.get("layers", [])
+        if not isinstance(raw_layers, list):
+            return []
+        return [
+            entry.strip()
+            for layer in raw_layers
+            if isinstance(layer, str)
+            for entry in LAYER_DELIMITERS.split(layer)
+            if entry.strip()
+        ]
+    field = "source_modules" if contract_type == "forbidden" else "modules"
+    raw_modules = contract.get(field, [])
+    if not isinstance(raw_modules, list):
+        return []
+    return [entry for entry in raw_modules if isinstance(entry, str)]
+
+
+def _contract_names_module(entry: str, module: str) -> bool:
+    """`factory_sop.<module>` 必须按包分段精确匹配；`auth` 不被 `auth_extra` 冒名。"""
+    target = f"factory_sop.{module}"
+    return entry == target or entry.startswith(f"{target}.")
+
+
 def check_center_modules_are_contracted(root: Path, files: list[Path]) -> list[str]:
     """要求已有生产文件的注册 Center 模块都被 import-linter 契约命名。"""
     registered = load_center_modules(root / "pyproject.toml")
@@ -555,15 +595,21 @@ def check_center_modules_are_contracted(root: Path, files: list[Path]) -> list[s
         .get("importlinter", {})
         .get("contracts", [])
     )
+    if not isinstance(contracts, list):
+        contracts = []
+    constrained = [
+        entry for contract in contracts for entry in _contract_constrained_modules(contract)
+    ]
     contracted = {
         module
         for module in modules
-        for contract in contracts
-        if f"factory_sop.{module}" in repr(contract)
+        if any(_contract_names_module(entry, module) for entry in constrained)
     }
     return [
         f"center module {module} has no import-linter contract in pyproject.toml; "
-        "a module whose boundary is not named by a contract is unenforced"
+        "a module whose boundary is not named by a contract is unenforced; "
+        f"add a forbidden or layers contract that constrains factory_sop.{module} "
+        "(docs/engineering/architecture.md#enforcement)"
         for module in sorted(modules - contracted)
     ]
 

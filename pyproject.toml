@@ -69,7 +69,7 @@ src = [
 ]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "T20", "ANN", "PT", "TID"]
+select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "T20", "ANN", "PT", "TID", "S110", "PGH004"]
 # User-facing text in this product is Simplified Chinese (Q32), so CJK punctuation appears in
 # every `problem+json` title and in the comments explaining them. RUF001/RUF003 flag these as
 # ASCII look-alikes, which they are not: full-width forms are the correct characters here, and
@@ -81,7 +81,7 @@ allowed-confusables = ["，", "。", "：", "；", "！", "？", "（", "）", "
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 # §5.15: diagnostics are structlog JSON with five mandatory fields. A bare `logging` call
 # produces a line with none of them, and `print` bypasses log routing entirely (T20).
-"logging".msg = "use factory_sop.observability.get_logger; §5.15 requires structlog JSON"
+"logging".msg = "use factory_sop.observability.get_logger; §5.15 requires structlog JSON (docs/design/mechanisms/control-plane.md#515-控制面契约基线)"
 
 [tool.ruff.lint.per-file-ignores]
 # `scripts/` and `tests/contract/` are standard-library-only by design: the policy checks run
@@ -140,6 +140,8 @@ type = "layers"
 # modules that call `device` topology land above it. `execution` owns the cross-host physical
 # grant and may consume device identity only through its public seam; configuration remains
 # above it because host-scoped bundles later project execution facts.
+# `dataset` 与 `job` 排在 `device` 之下、`auth` 之上: dataset 经 `job.api` 消费作业事实,
+# 反向仅允许 job 的 3 个 adapter 经 `dataset.api` 调用 (见下方 ignore_imports)。
 layers = [
     "factory_sop.entrypoint",
     "factory_sop.app",
@@ -150,10 +152,20 @@ layers = [
     "factory_sop.template",
     "factory_sop.execution",
     "factory_sop.device",
+    "factory_sop.dataset",
+    "factory_sop.job",
     "factory_sop.auth",
     "factory_sop.persistence",
     "factory_sop.observability",
-    "factory_sop.settings : factory_sop.identifiers",
+    "factory_sop.settings | factory_sop.identifiers",
+]
+# `job` 在 `dataset` 之下，但它的适配器需要读取数据集事实：只允许通过 `dataset.api` 这一公开
+# seam 反向调用，逐条列出精确路径，不使用通配符。import-linter 默认在 ignore 未匹配时报错，
+# 因此新增真实边必须显式登记，而不是放宽规则。
+ignore_imports = [
+    "factory_sop.job.adapters.dependencies -> factory_sop.dataset.api",
+    "factory_sop.job.adapters.routes -> factory_sop.dataset.api",
+    "factory_sop.job.adapters.worker -> factory_sop.dataset.api",
 ]
 
 [[tool.importlinter.contracts]]

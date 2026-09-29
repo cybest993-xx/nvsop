@@ -480,7 +480,9 @@ class RepositoryPolicyTest(unittest.TestCase):
         self.assertEqual(
             [
                 "center module auth has no import-linter contract in pyproject.toml; "
-                "a module whose boundary is not named by a contract is unenforced"
+                "a module whose boundary is not named by a contract is unenforced; "
+                "add a forbidden or layers contract that constrains factory_sop.auth "
+                "(docs/engineering/architecture.md#enforcement)"
             ],
             errors,
         )
@@ -499,10 +501,73 @@ class RepositoryPolicyTest(unittest.TestCase):
             '[tool.nvsop]\ncenter_modules = ["auth"]\n\n'
             "[[tool.importlinter.contracts]]\n"
             'name = "auth is reached only through its api"\n'
+            'type = "forbidden"\n'
             'source_modules = ["factory_sop.auth"]\n',
         )
         module = self.write("apps/control-api/src/factory_sop/auth/usecases/open_session.py", "")
         self.assertEqual([], self.check(str(module)))
+
+    def test_center_module_contract_requires_a_constraining_type_and_field(self) -> None:
+        # 只有真实 type 的受约束字段能证明模块边界；描述、被禁目标、例外和近似前缀都不算。
+        module = "apps/control-api/src/factory_sop/auth/usecases/open_session.py"
+        base = (
+            '[tool.uv.workspace]\nmembers = ["apps/control-api"]\n\n'
+            '[tool.nvsop]\ncenter_modules = ["auth"]\n\n'
+        )
+        unenforced = (
+            "center module auth has no import-linter contract in pyproject.toml; "
+            "a module whose boundary is not named by a contract is unenforced; "
+            "add a forbidden or layers contract that constrains factory_sop.auth "
+            "(docs/engineering/architecture.md#enforcement)"
+        )
+        rejected = {
+            "name only": 'type = "forbidden"\nname = "factory_sop.auth boundary"\n',
+            "forbidden_modules only": (
+                'type = "forbidden"\nforbidden_modules = ["factory_sop.auth"]\n'
+            ),
+            "ignore_imports only": (
+                'type = "forbidden"\nignore_imports = ["factory_sop.auth -> factory_sop.beta"]\n'
+            ),
+            "prefix collision": 'type = "forbidden"\nsource_modules = ["factory_sop.auth_extra"]\n',
+            "no type": 'source_modules = ["factory_sop.auth"]\n',
+            "unsupported type": 'type = "mystery"\nsource_modules = ["factory_sop.auth"]\n',
+        }
+        for label, contract in rejected.items():
+            with self.subTest(contract=label):
+                self.write(
+                    "pyproject.toml",
+                    base + "[[tool.importlinter.contracts]]\n" + contract,
+                )
+                path = self.write(module, "")
+                self.assertEqual([unenforced], self.check(str(path)))
+
+    def test_center_module_contract_accepts_real_constraining_fields(self) -> None:
+        module = "apps/control-api/src/factory_sop/auth/usecases/open_session.py"
+        base = (
+            '[tool.uv.workspace]\nmembers = ["apps/control-api"]\n\n'
+            '[tool.nvsop]\ncenter_modules = ["auth"]\n\n'
+        )
+        accepted = {
+            "forbidden submodule": (
+                'type = "forbidden"\nsource_modules = ["factory_sop.auth.model"]\n'
+            ),
+            "independence modules": 'type = "independence"\nmodules = ["factory_sop.auth"]\n',
+            "layers entry": 'type = "layers"\nlayers = ["factory_sop.auth"]\n',
+            "layers independent pair": (
+                'type = "layers"\nlayers = ["factory_sop.settings | factory_sop.auth"]\n'
+            ),
+            "layers non-independent pair": (
+                'type = "layers"\nlayers = ["factory_sop.settings : factory_sop.auth"]\n'
+            ),
+        }
+        for label, contract in accepted.items():
+            with self.subTest(contract=label):
+                self.write(
+                    "pyproject.toml",
+                    base + "[[tool.importlinter.contracts]]\n" + contract,
+                )
+                path = self.write(module, "")
+                self.assertEqual([], self.check(str(path)))
 
     def test_center_boundary_evaluator_rejects_cross_owner_internal_imports(self) -> None:
         self.write(
@@ -532,6 +597,7 @@ class RepositoryPolicyTest(unittest.TestCase):
             '[tool.nvsop]\ncenter_modules = ["alpha", "beta"]\n\n'
             "[[tool.importlinter.contracts]]\n"
             'name = "registered owners"\n'
+            'type = "forbidden"\n'
             'source_modules = ["factory_sop.alpha", "factory_sop.beta"]\n',
         )
         module = self.write(

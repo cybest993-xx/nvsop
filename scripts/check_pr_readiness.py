@@ -46,6 +46,43 @@ CENTER_STATE_OWNER = re.compile(
 )
 CENTER_MIGRATIONS = "apps/control-api/migrations/versions/"
 EDGE_STATE_OWNER_PREFIX = "apps/edge-runtime/src/edge_runtime/local_state/"
+# 真实门禁/策略/清单入口: 改动它们需要独立的人工 Spec+Standards 审查。按整文件精确匹配,
+# 不按扩展名把普通业务实现或普通新测试一概标记, 也不做配置 diff 解析。
+HARNESS_REVIEW_ROOT_FILES = frozenset(
+    {
+        "Makefile",
+        "AGENTS.md",
+        "CLAUDE.md",
+        ".gitignore",
+        ".secrets.baseline",
+        ".python-version",
+        ".nvmrc",
+        "packages/contracts/breaking-changes.json",
+        # web-format 经 prettier --check 生效; 该配置可弱化格式门禁。
+        "apps/control-web/.prettierrc.json",
+    }
+)
+HARNESS_REVIEW_PREFIXES = (
+    "scripts/",
+    ".github/",
+    "docs/engineering/",
+)
+HARNESS_REVIEW_BASENAMES = frozenset(
+    {
+        "pyproject.toml",
+        "package.json",
+        "pnpm-workspace.yaml",
+        "uv.lock",
+        "pnpm-lock.yaml",
+        "conftest.py",
+        "pytest.ini",
+        "AGENTS.md",
+    }
+)
+HARNESS_REVIEW_NAME_PATTERNS = (
+    re.compile(r"^tsconfig(?:\.[^/]+)?\.json$"),
+    re.compile(r"^(?:eslint|vite|vitest|playwright|openapi-ts)\.config\.[cm]?[jt]s$"),
+)
 
 
 @dataclass(frozen=True)
@@ -103,6 +140,21 @@ def requires_architecture_review(changed_files: list[str] | tuple[str, ...]) -> 
         or any(path.startswith(prefix) for prefix in ARCHITECTURE_AUTHORITY_PREFIXES)
         for path in changed_files
     )
+
+
+def requires_harness_review(changed_files: list[str] | tuple[str, ...]) -> bool:
+    """识别改动真实门禁/策略/清单的路径; 只做整文件精确匹配, 不解析配置 diff。"""
+    for path in changed_files:
+        if path in HARNESS_REVIEW_ROOT_FILES:
+            return True
+        if any(path.startswith(prefix) for prefix in HARNESS_REVIEW_PREFIXES):
+            return True
+        name = path.rsplit("/", 1)[-1]
+        if name in HARNESS_REVIEW_BASENAMES:
+            return True
+        if any(pattern.fullmatch(name) for pattern in HARNESS_REVIEW_NAME_PATTERNS):
+            return True
+    return False
 
 
 def body_field(body: str, name: str) -> str:
@@ -193,6 +245,18 @@ def evaluate(
             architecture_review = "not-required"
             architecture_evidence = "not-required"
 
+    if changed_files is None:
+        harness_review = "unknown"
+        harness_confirmation = "unknown"
+    elif requires_harness_review(changed_files):
+        # 仅风险提示: 不读 PR 正文, 也不阻塞 automated_readiness; 人工 Spec+Standards 审查
+        # 与合并授权仍由人负责, 这里不宣称服务端已强制。
+        harness_review = "required"
+        harness_confirmation = "manual-required"
+    else:
+        harness_review = "not-required"
+        harness_confirmation = "not-required"
+
     if protection == "protected":
         merge_guard = "server-protected"
     elif protection == "unsupported":
@@ -213,6 +277,8 @@ def evaluate(
         f"architecture_review_evidence={architecture_evidence}",
         f"dispatch_impact_review={dispatch_impact}",
         f"dispatch_impact_evidence={dispatch_impact_evidence}",
+        f"harness_review={harness_review}",
+        f"harness_review_confirmation={harness_confirmation}",
         "independent_review=manual-confirmation-required",
         f"automated_readiness={'ready' if not blockers else 'blocked'}",
         f"blockers={','.join(blockers) if blockers else 'none'}",
@@ -305,13 +371,19 @@ def pr_files(repository: str, number: str) -> list[str] | None:
     files: list[str] = []
     for page in pages:
         for item in page:
+            # 非 dict、缺/空 filename、rename 缺旧路径都是真实异常, 返回 unknown 而不是静默少算。
             if not isinstance(item, dict):
-                continue
+                return None
             filename = item.get("filename")
+            if not isinstance(filename, str) or not filename:
+                return None
+            files.append(filename)
             previous_filename = item.get("previous_filename")
-            if isinstance(filename, str):
-                files.append(filename)
-            if isinstance(previous_filename, str):
+            if item.get("status") == "renamed":
+                if not isinstance(previous_filename, str) or not previous_filename:
+                    return None
+                files.append(previous_filename)
+            elif isinstance(previous_filename, str) and previous_filename:
                 files.append(previous_filename)
     return list(dict.fromkeys(files))
 

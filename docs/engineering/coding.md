@@ -17,7 +17,7 @@ Record these once per task, updating only when scope changes: **Entry** (public 
 
 ## Size and decomposition
 
-Size is a diagnostic signal, never a design threshold. Use `make change-size` to notice broad changes, then decide whether to split by responsibility, change driver, coupling, interface depth and independent landability. A small fix in a large file does not authorize unrelated refactoring, and a large mechanical migration does not become new logic merely because the diff is large.
+Size is a diagnostic signal, never a design threshold. Use `make change-size` to notice broad changes, then decide whether to split by responsibility, change driver, coupling, interface depth and independent landability. A small fix in a large file does not authorize unrelated refactoring, and a large mechanical migration does not become new logic merely because the diff is large. The `make task-check` guardrail in [workflow.md](workflow.md) bounds one task's authorized path set and cumulative added+deleted lines; it is a mechanical scope bound and does not turn file or change size into a design threshold or force a split.
 
 Extract only to reduce mixed responsibilities or coupling. Keep public interfaces/state owners stable, orchestration at its existing entry and related tests/explanations beside the behavior. A separately landed stage must be valid and observable on its own; splitting commits does not make an incoherent change smaller.
 

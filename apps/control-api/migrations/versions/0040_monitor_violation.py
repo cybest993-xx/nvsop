@@ -17,12 +17,12 @@ down_revision: str | None = "0039"
 def upgrade() -> None:
     op.create_table(
         "monitor_violation",
-        sa.Column("event_id", sa.String(length=255), nullable=False),
+        sa.Column("event_id", sa.Text(), nullable=False),
         sa.Column("decision_event_id", sa.String(length=255), nullable=False),
         sa.Column("host_id", sa.String(length=128), nullable=False),
         sa.Column("station_id", sa.String(length=128), nullable=False),
         sa.Column("instance_id", sa.BigInteger(), nullable=False),
-        sa.Column("reason_code", sa.String(length=64), nullable=False),
+        sa.Column("reason_code", sa.Text(), nullable=False),
         sa.Column("received_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("payload", JSONB(), nullable=False),
         sa.PrimaryKeyConstraint("event_id", name=op.f("pk_monitor_violation")),

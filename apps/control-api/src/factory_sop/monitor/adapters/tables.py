@@ -142,12 +142,13 @@ class ReportedSopInstanceRow(Table):
 class ReportedViolationRow(Table):
     __tablename__ = "monitor_violation"
 
-    event_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    event_id: Mapped[str] = mapped_column(Text(), primary_key=True)
     decision_event_id: Mapped[str] = mapped_column(String(255), index=True)
     host_id: Mapped[str] = mapped_column(String(128), index=True)
     station_id: Mapped[str] = mapped_column(String(128), index=True)
     instance_id: Mapped[int] = mapped_column(BigInteger(), index=True)
-    reason_code: Mapped[str] = mapped_column(String(64))
+    # 原因码在契约边界是开放字符串 (ADR-0003), 不能收窄成定长列。
+    reason_code: Mapped[str] = mapped_column(Text())
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
 

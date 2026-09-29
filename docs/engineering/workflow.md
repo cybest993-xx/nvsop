@@ -18,16 +18,10 @@ git worktree list --porcelain
 git fetch origin main
 ```
 
-The hook path must resolve to `scripts/githooks` or its configured equivalent. Locate the dedicated primary `main` worktree from the actual list. Synchronize it only when it is on `main` and has no tracked/untracked change or unknown ignored state; otherwise preserve it and stop that synchronization. The only ignored paths allowed to remain are the policy-reserved `.nvsop/` root and the current pnpm/setuptools layout exceptions listed below. Never reset a task worktree to obtain a clean base. `.nvsop/` is policy-enforced as untracked local state, so preserving it cannot overwrite a committed path.
+The hook path must resolve to `scripts/githooks` or its configured equivalent. A new task starts from the accepted fetched `origin/main` tip and does not require synchronizing the primary `main` worktree. Never reset a task worktree to obtain a clean base. `.nvsop/` is policy-enforced as untracked local state, so preserving it cannot overwrite a committed path. Synchronizing the dedicated primary `main` worktree is a separate authorized operation owned by [§5.1](#51-confirm-the-exact-squash-merge).
 
 ```sh
-MAIN_WORKTREE=<primary-main-worktree>
-test "$(git -C "$MAIN_WORKTREE" branch --show-current)" = main
-MAIN_STATUS="$(git -C "$MAIN_WORKTREE" status --porcelain=v1 --untracked-files=all --ignored=matching)"
-MAIN_BLOCKERS="$(printf '%s\n' "$MAIN_STATUS" | grep -Ev '^!! (\.nvsop/|node_modules/|apps/control-web/node_modules/|apps/control-api/src/control_api\.egg-info/|apps/edge-runtime/src/edge_runtime\.egg-info/|packages/contracts/src/nvsop_contracts\.egg-info/)$' || true)"
-test -z "$MAIN_BLOCKERS"
-git -C "$MAIN_WORKTREE" reset --hard origin/main
-git -C "$MAIN_WORKTREE" worktree add ../nvsop-task -b agent/a/<task-slug> main
+git worktree add ../nvsop-task -b agent/a/<task-slug> origin/main
 ```
 
 These are conditional operation examples, not a script to paste without checking each result. If `main` moves after the task starts, keep the task's fixed base; an integration update is a separate explicit decision with affected evidence rechecked.
@@ -170,22 +164,24 @@ git merge-base --is-ancestor <merge-commit-oid> origin/main
 
 Continue only when the response is `MERGED`, its `baseRefName` is `main`, its `headRefName` and `headRefOid` equal the reviewed branch and candidate SHA, its `mergeCommit.oid` is present, and that recorded commit is retained by `origin/main`. A squash merge does not make the pre-squash candidate an ancestor of `main`; do not substitute that check. This confirmation is read-only evidence for the operator, not shared state consumed by the cleanup command.
 
-If the primary checkout must be synchronized, identify it from `git worktree list --porcelain`. Only when that checkout is on `main`, has no tracked/untracked change and has no ignored entry except the policy-reserved `.nvsop/` root plus the current pnpm/setuptools layout exceptions may it be synchronized:
+If the primary checkout must be synchronized, identify the dedicated primary `main` worktree from `git worktree list --porcelain` and record the accepted `origin/main` commit as `ACCEPTED_ORIGIN_MAIN`. Tracked, staged and ordinary untracked changes block synchronization; ignored personal configuration and caches that the update does not touch are preserved as they are and do not block it. Synchronize only by fast-forwarding that exact target:
 
 ```bash
 MAIN_WORKTREE=<primary-main-worktree>
+ACCEPTED_ORIGIN_MAIN=<accepted-origin-main-sha>
 (
     set -eu
     test "$(git -C "$MAIN_WORKTREE" branch --show-current)" = main
-    MAIN_STATUS="$(git -C "$MAIN_WORKTREE" status --porcelain=v1 --untracked-files=all --ignored=matching)"
-    MAIN_BLOCKERS="$(printf '%s\n' "$MAIN_STATUS" | grep -Ev '^!! (\.nvsop/|node_modules/|apps/control-web/node_modules/|apps/control-api/src/control_api\.egg-info/|apps/edge-runtime/src/edge_runtime\.egg-info/|packages/contracts/src/nvsop_contracts\.egg-info/)$' || true)"
-    test -z "$MAIN_BLOCKERS"
-    git -C "$MAIN_WORKTREE" reset --hard origin/main
-    test "$(git -C "$MAIN_WORKTREE" rev-parse HEAD)" = "$(git rev-parse origin/main)"
+    MAIN_STATUS="$(git -C "$MAIN_WORKTREE" status --porcelain=v1 --untracked-files=all)"
+    test -z "$MAIN_STATUS"
+    git -C "$MAIN_WORKTREE" fetch origin main
+    test "$(git -C "$MAIN_WORKTREE" rev-parse origin/main)" = "$ACCEPTED_ORIGIN_MAIN"
+    git -C "$MAIN_WORKTREE" merge --ff-only --no-overwrite-ignore "$ACCEPTED_ORIGIN_MAIN"
+    test "$(git -C "$MAIN_WORKTREE" rev-parse HEAD)" = "$ACCEPTED_ORIGIN_MAIN"
 )
 ```
 
-Do not reset a task or a primary checkout with state outside that exact allowlist. This synchronization is a separate manual operation; `retire_task.py` never performs it. Use `make local-clean` when a task worktree must remove reproducible artifacts before retirement; the command deliberately preserves fixed-instance state and unknown ignored files.
+Stop when the target branch is not `main`, when any scoped Git read fails, when the histories have diverged, when `origin/main` is not `ACCEPTED_ORIGIN_MAIN`, or when the update would overwrite an ignored path; never fall back to merge, rebase, reset or stash. Never reset a task worktree. This synchronization is a separate manual operation with its own authorization, not implied by implementation or merge work; `retire_task.py` never performs it. Use `make local-clean` when a task worktree must remove reproducible artifacts before retirement; the command deliberately preserves fixed-instance state and unknown ignored files.
 
 ### 5.2 Retire one verified task
 

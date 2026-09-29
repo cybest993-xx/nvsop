@@ -13,6 +13,8 @@ from threading import RLock
 
 from nvsop_contracts import ConfigurationBundle, configuration_from_wire, configuration_to_wire
 
+from edge_runtime.local_state.execution import LocalExecutionLeaseStore
+
 
 @dataclass(frozen=True, slots=True)
 class ConfigurationFailure:
@@ -22,15 +24,22 @@ class ConfigurationFailure:
 
 
 class LocalConfigurationStore:
-    """拥有 ``local_config``,绝不使用未验证响应替换它。"""
+    """拥有 ``local_config``,绝不使用未验证响应替换它。
+
+    提供 ``leases`` 时, 同一事务内把确认 bundle 的 host-scoped 执行权租约事实替换到
+    ``local_execution_lease``, 使配置确认与租约事实不会分裂。
+    """
 
     def __init__(
         self,
         connection: sqlite3.Connection,
         lock: AbstractContextManager[object] | None = None,
+        *,
+        leases: LocalExecutionLeaseStore | None = None,
     ) -> None:
         self._connection = connection
         self._lock = lock or RLock()
+        self._leases = leases
 
     def confirmed(self) -> ConfigurationBundle | None:
         with self._lock:
@@ -97,6 +106,9 @@ class LocalConfigurationStore:
                     ),
                 )
                 self._connection.execute("DELETE FROM local_config_failure WHERE slot = 1")
+                if self._leases is not None:
+                    # 加入同一事务: 配置与它携带的租约事实要么一起生效, 要么都不生效。
+                    self._leases.apply(bundle.execution_grants, observed_at=confirmed_at)
             except Exception:
                 self._connection.execute("ROLLBACK")
                 raise

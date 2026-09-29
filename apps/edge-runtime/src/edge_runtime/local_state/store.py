@@ -42,6 +42,7 @@ from edge_runtime.local_state.codec import (
 from edge_runtime.local_state.codec import violation as decode_violation
 from edge_runtime.local_state.configuration import LocalConfigurationStore
 from edge_runtime.local_state.disposal import LocalDisposalLedger
+from edge_runtime.local_state.execution import LocalExecutionLeaseStore
 from edge_runtime.local_state.queues import (
     BackendReportContext,
     PendingObservationReport,
@@ -604,9 +605,13 @@ class LocalState:
         """返回该主机唯一的持久连接器写入账本。"""
         return LocalDisposalLedger(self._connection, self._lock)
 
+    def execution_leases(self) -> LocalExecutionLeaseStore:
+        """返回该主机唯一的持久工位物理执行权事实存储。"""
+        return LocalExecutionLeaseStore(self._connection, self._lock)
+
     def configuration(self) -> LocalConfigurationStore:
-        """返回该主机的原子最后确认配置存储。"""
-        return LocalConfigurationStore(self._connection, self._lock)
+        """返回该主机的原子最后确认配置存储, 确认时一并替换执行权租约事实。"""
+        return LocalConfigurationStore(self._connection, self._lock, leases=self.execution_leases())
 
     def close(self) -> None:
         with self._lock:

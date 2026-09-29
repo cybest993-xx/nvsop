@@ -9,9 +9,15 @@ from sqlalchemy import BigInteger, DateTime, Identity, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from factory_sop.monitor.model import MirroredDecision, MirroredHealth, MirroredSopInstance
+from factory_sop.monitor.model import (
+    MirroredDecision,
+    MirroredHealth,
+    MirroredSopInstance,
+    MirroredViolation,
+)
 from factory_sop.persistence import Table
 from nvsop_contracts import (
+    ReportViolation,
     reported_decision_from_wire,
     reported_decision_to_wire,
     reported_health_from_wire,
@@ -130,4 +136,43 @@ class ReportedSopInstanceRow(Table):
             close_boundary_signal=report.close_boundary_signal,
             received_at=value.received_at,
             payload=reported_sop_instance_to_wire(report),
+        )
+
+
+class ReportedViolationRow(Table):
+    __tablename__ = "monitor_violation"
+
+    event_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    decision_event_id: Mapped[str] = mapped_column(String(255), index=True)
+    host_id: Mapped[str] = mapped_column(String(128), index=True)
+    station_id: Mapped[str] = mapped_column(String(128), index=True)
+    instance_id: Mapped[int] = mapped_column(BigInteger(), index=True)
+    reason_code: Mapped[str] = mapped_column(String(64))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+    def to_domain(self) -> MirroredViolation:
+        payload = cast(dict[str, object], self.payload)
+        return MirroredViolation(
+            event_id=self.event_id,
+            decision_event_id=self.decision_event_id,
+            host_id=self.host_id,
+            station_id=self.station_id,
+            instance_id=self.instance_id,
+            report=ReportViolation.from_wire(cast(dict[str, object], payload["violation"])),
+            decision_reported_at=cast(str, payload["reported_at"]),
+            received_at=self.received_at,
+        )
+
+    @classmethod
+    def from_domain(cls, value: MirroredViolation) -> ReportedViolationRow:
+        return cls(
+            event_id=value.event_id,
+            decision_event_id=value.decision_event_id,
+            host_id=value.host_id,
+            station_id=value.station_id,
+            instance_id=value.instance_id,
+            reason_code=value.report.reason_code,
+            received_at=value.received_at,
+            payload=value.payload(),
         )

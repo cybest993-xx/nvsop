@@ -330,7 +330,22 @@ _V9 = (
     """,
 )
 
-MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1, _V2, _V3, _V4, _V5, _V6, _V7, _V8, _V9)
+_V10 = (
+    # 本机唯一的工位物理执行权事实。只存中心在成功拉取时签发的绝对到期时刻, 不存本地倒计时,
+    # 所以重启和重复/延迟到达的同一租约都不会复活一个已失效的授权 (S053)。写入边界和 S029
+    # 都读这张表, 不另建有效期。
+    """
+    CREATE TABLE local_execution_lease (
+        station_id        TEXT    PRIMARY KEY,
+        grant_id          TEXT    NOT NULL,
+        holder_host_id    TEXT    NOT NULL,
+        lease_expires_at  REAL    NOT NULL,
+        renewed_at        REAL    NOT NULL
+    )
+    """,
+)
+
+MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1, _V2, _V3, _V4, _V5, _V6, _V7, _V8, _V9, _V10)
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 
 

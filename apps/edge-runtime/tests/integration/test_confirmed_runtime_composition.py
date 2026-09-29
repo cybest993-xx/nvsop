@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from nvsop_contracts import (
     ConfigurationBundle,
+    ExecutionLease,
     HostIdentityKeyPair,
     Unverified,
     capability_to_wire,
@@ -18,7 +19,7 @@ from nvsop_contracts import (
 )
 
 from edge_runtime.connectors.hikvision import CANDIDATE_PROFILE
-from edge_runtime.connectors.port import OutputPoint, PointState, Written
+from edge_runtime.connectors.port import OutputPoint, PointState, Refused, WriteRefusal, Written
 from edge_runtime.connectors.writes import WriteRequest
 from edge_runtime.judgment.model import (
     Decision,
@@ -305,6 +306,60 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
             finally:
                 restarted.close()
 
+    def test_expired_execution_lease_refuses_the_physical_write(self) -> None:
+        bundle = replace(
+            _bundle(),
+            execution_grants=(
+                ExecutionLease(
+                    station_id="station-a",
+                    grant_id="grant-a",
+                    holder_host_id="host-a",
+                    lease_expires_at="2000-01-01T00:00:00Z",
+                ),
+            ),
+        )
+        identity = _fixture_host_identity(47)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            state = open_local_state(str(directory / "state.sqlite"))
+            state.configuration().confirm(bundle, confirmed_at=1.0)
+            state.close()
+
+            private_key_file = directory / "host-private-key"
+            private_key_file.write_text(identity.private_key, encoding="utf-8")
+            config_path = directory / "edge.json"
+            config_path.write_text(
+                json.dumps(_local_config(directory, private_key_file)), encoding="utf-8"
+            )
+
+            runtime = build_autonomous_runtime_from_file(config_path)
+            try:
+                request = WriteRequest(
+                    point=OutputPoint(label="停线联锁", address="2"),
+                    state=PointState.ACTIVE,
+                    key="station-a:disposal-expired",
+                    actor="supervisor",
+                    timeout=1.0,
+                    capability_budget=1.0,
+                    station_id="station-a",
+                    connector_id="connector-a",
+                    attempt_at=HostInstant(1.0),
+                    lease_seconds=5.0,
+                )
+                with patch(
+                    "edge_runtime.connectors.hikvision.IsapiConnector.write"
+                ) as physical_write:
+                    self.assertEqual(
+                        Refused(
+                            reason=WriteRefusal.EXECUTION_LEASE_EXPIRED,
+                            detail="物理执行权租约已于 2000-01-01T00:00:00Z 到期",
+                        ),
+                        runtime.stations[0].write_output(request),
+                    )
+                    physical_write.assert_not_called()
+            finally:
+                runtime.close()
+
 
 def _local_config(directory: Path, private_key_file: Path) -> dict[str, object]:
     profile = {
@@ -433,6 +488,14 @@ def _bundle() -> ConfigurationBundle:
         host_id="host-a",
         config_revision=7,
         generated_at="2026-09-14T00:00:00Z",
+        execution_grants=(
+            ExecutionLease(
+                station_id="station-a",
+                grant_id="grant-a",
+                holder_host_id="host-a",
+                lease_expires_at="2099-01-01T00:00:00Z",
+            ),
+        ),
         stations=(
             ConfiguredStation(
                 station_id="station-a",

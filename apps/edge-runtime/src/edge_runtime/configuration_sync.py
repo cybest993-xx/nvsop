@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from nvsop_contracts import (
+    EXECUTION_LEASE_WRITE_GATE_CAPABILITY,
     ConfigurationBundle,
     configuration_from_wire,
 )
@@ -15,7 +16,9 @@ from nvsop_contracts import (
 from edge_runtime.center_client import CenterClient, CenterUnreachableError
 from edge_runtime.local_state.configuration import ConfigurationFailure, LocalConfigurationStore
 
-_SUPPORTED_CONFIGURATION_CAPABILITIES: frozenset[str] = frozenset()
+_SUPPORTED_CONFIGURATION_CAPABILITIES: frozenset[str] = frozenset(
+    {EXECUTION_LEASE_WRITE_GATE_CAPABILITY}
+)
 
 
 class ConfigurationPullError(RuntimeError):

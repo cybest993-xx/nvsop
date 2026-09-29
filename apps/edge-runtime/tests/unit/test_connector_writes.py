@@ -104,6 +104,75 @@ def dispatcher(
     )
 
 
+class RecordingGate:
+    """授权接缝上的替身: 它记录自己被询问了几次。"""
+
+    def __init__(self, refusal: Refused | None) -> None:
+        self.refusal_value = refusal
+        self.checked: list[str] = []
+
+    def refusal(self, request: WriteRequest, /) -> Refused | None:
+        self.checked.append(request.key)
+        return self.refusal_value
+
+
+class TheExecutionLeaseGatePrecedesTheDeviceTest(unittest.TestCase):
+    """§5.17: 到期/缺失的执行权先于物理写入生效, 且拒绝不占用幂等键。"""
+
+    def test_a_gate_refusal_does_not_touch_the_device(self) -> None:
+        connector = RecordingConnector()
+        ledger = InMemoryWriteLedger()
+        gate = RecordingGate(Refused(reason=WriteRefusal.EXECUTION_LEASE_EXPIRED, detail="expired"))
+        events: list[WriteAttempted] = []
+        dispatch = OutputDispatcher(
+            connector=connector, ledger=ledger, diagnostics=events.append, gate=gate
+        )
+
+        self.assertEqual(
+            Refused(reason=WriteRefusal.EXECUTION_LEASE_EXPIRED, detail="expired"),
+            dispatch.write(request()),
+        )
+        self.assertEqual([], connector.writes)
+        self.assertEqual(["disposal-7"], gate.checked)
+        self.assertIsNone(
+            ledger.outcome_for("disposal-7"),
+            "nothing was sent to the device, so authority returning must be free to proceed",
+        )
+
+    def test_authority_returning_lets_the_same_key_proceed(self) -> None:
+        connector = RecordingConnector()
+        gate = RecordingGate(Refused(reason=WriteRefusal.EXECUTION_LEASE_MISSING, detail="missing"))
+        dispatch = OutputDispatcher(
+            connector=connector,
+            ledger=InMemoryWriteLedger(),
+            diagnostics=lambda event: None,
+            gate=gate,
+        )
+        dispatch.write(request())
+
+        gate.refusal_value = None
+
+        self.assertEqual(ACCEPTED, dispatch.write(request()))
+        self.assertEqual([(INTERLOCK, PointState.ACTIVE)], connector.writes)
+
+    def test_a_terminal_recorded_outcome_is_replayed_without_asking_the_gate(self) -> None:
+        connector = RecordingConnector()
+        gate = RecordingGate(None)
+        dispatch = OutputDispatcher(
+            connector=connector,
+            ledger=InMemoryWriteLedger(),
+            diagnostics=lambda event: None,
+            gate=gate,
+        )
+        dispatch.write(request())
+
+        gate.refusal_value = Refused(reason=WriteRefusal.EXECUTION_LEASE_EXPIRED, detail="expired")
+
+        self.assertEqual(ACCEPTED, dispatch.write(request()))
+        self.assertEqual(["disposal-7"], gate.checked)
+        self.assertEqual([(INTERLOCK, PointState.ACTIVE)], connector.writes)
+
+
 class TheSameKeyDrivesTheDeviceOnceTest(unittest.TestCase):
     """#41: 相同幂等键重试不会重复产生物理写入意图.
 

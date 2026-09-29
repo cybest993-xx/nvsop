@@ -132,6 +132,12 @@ class WriteRefusal(Enum):
 
     POINT_UNREACHABLE = "point_unreachable"
 
+    EXECUTION_LEASE_EXPIRED = "execution_lease_expired"
+    """§5.17: 中心确认的工位物理执行权租约已到期。判定继续, 但不再驱动物理执行器。"""
+
+    EXECUTION_LEASE_MISSING = "execution_lease_missing"
+    """该工位没有中心确认的执行权租约, 因此没有可用的物理写入授权。"""
+
 
 @dataclass(frozen=True, slots=True)
 class Written:

@@ -58,6 +58,7 @@ from nvsop_contracts import (
     ReportedHealth,
     ReportedSopInstance,
     ReportEvidence,
+    ReportViolation,
     Unverified,
     configuration_from_wire,
     configuration_to_wire,
@@ -224,6 +225,10 @@ def runtime_topology(engine: Engine) -> Iterator[RuntimeTopology]:
             )
             connection.execute(
                 text("DELETE FROM monitor_sop_instance WHERE host_id = :host_id"),
+                {"host_id": str(host.id)},
+            )
+            connection.execute(
+                text("DELETE FROM monitor_violation WHERE host_id = :host_id"),
                 {"host_id": str(host.id)},
             )
             connection.execute(
@@ -1055,6 +1060,118 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
     assert "event: health" in stream.text
     assert health.event_id in stream.text
     assert "FUTURE_HEALTH_REASON" in stream.text
+
+
+def test_reported_violation_is_archived_idempotently_and_queryable(
+    engine: Engine, runtime_topology: RuntimeTopology, dataset_storage_root: Path
+) -> None:
+    settings = settings_for(engine, storage_root=dataset_storage_root)
+    path = f"{API_PREFIX}/monitor/reported-decisions"
+    violation = ReportViolation(
+        reason_code="MISSED_STEP",
+        detail="步骤 2 缺失",
+        step_ids=("step-2",),
+        evidence=ReportEvidence(anchor=12.0, start=11.0, end=12.0),
+    )
+    report = ReportedDecision(
+        event_id=f"{runtime_topology.host.id}:violating-decision",
+        trace_id="trace-violation-integration",
+        host_id=str(runtime_topology.host.id),
+        station_id=str(runtime_topology.station.id),
+        backend_id=str(runtime_topology.backend.id),
+        instance_id=11,
+        verdict="fail",
+        reason_codes=("MISSED_STEP",),
+        violations=(violation,),
+        lifecycle="closed_by_complete_set",
+        evidence=ReportEvidence(None, None, None),
+        template_version_id=str(runtime_topology.template.version_id),
+        template_sha256="a" * 64,
+        model_ids=("model-integration",),
+        reported_at="2026-09-14T01:00:00Z",
+    )
+    body = reported_decision_to_wire(report)
+    with client_for(engine, settings, permissions=frozenset({Permission.MONITOR_VIEW})) as client:
+        first = client.post(
+            path,
+            json=body,
+            headers=_host_headers(runtime_topology, method="POST", path=path, body=body),
+        )
+        duplicate = client.post(
+            path,
+            json=body,
+            headers=_host_headers(runtime_topology, method="POST", path=path, body=body),
+        )
+        listed = client.get(f"{API_PREFIX}/monitor/violations")
+
+    assert first.status_code == 200
+    assert first.json()["duplicate"] is False
+    assert duplicate.status_code == 200
+    assert duplicate.json()["duplicate"] is True
+    assert listed.status_code == 200
+    document = listed.json()
+    assert document["total"] == 1
+    item = document["items"][0]
+    assert item == {
+        "event_id": f"{report.event_id}#0",
+        "decision_event_id": report.event_id,
+        "host_id": str(runtime_topology.host.id),
+        "station_id": str(runtime_topology.station.id),
+        "instance_id": 11,
+        "reported_at": report.reported_at,
+        "received_at": item["received_at"],
+        "violation": violation.to_wire(),
+    }
+    assert datetime.fromisoformat(item["received_at"]).tzinfo is not None
+
+
+def test_violation_archive_preserves_open_reason_and_derived_identity(
+    engine: Engine, runtime_topology: RuntimeTopology, dataset_storage_root: Path
+) -> None:
+    """未知长原因码与超过 255 字符的派生事件 id 不得让判定上报失败 (ADR-0003)。"""
+    settings = settings_for(engine, storage_root=dataset_storage_root)
+    path = f"{API_PREFIX}/monitor/reported-decisions"
+    long_reason = "UNKNOWN_" + "R" * 100
+    event_id = "e" * 255
+    report = ReportedDecision(
+        event_id=event_id,
+        trace_id=event_id,
+        host_id=str(runtime_topology.host.id),
+        station_id=str(runtime_topology.station.id),
+        backend_id=str(runtime_topology.backend.id),
+        instance_id=3,
+        verdict="fail",
+        reason_codes=(long_reason,),
+        violations=(
+            ReportViolation(
+                reason_code=long_reason,
+                detail=None,
+                step_ids=("step-9",),
+                evidence=ReportEvidence(None, None, None),
+            ),
+        ),
+        lifecycle="closed_by_complete_set",
+        evidence=ReportEvidence(None, None, None),
+        template_version_id=str(runtime_topology.template.version_id),
+        template_sha256="a" * 64,
+        model_ids=("model-integration",),
+        reported_at="2026-09-14T01:00:00Z",
+    )
+    body = reported_decision_to_wire(report)
+    with client_for(engine, settings, permissions=frozenset({Permission.MONITOR_VIEW})) as client:
+        response = client.post(
+            path,
+            json=body,
+            headers=_host_headers(runtime_topology, method="POST", path=path, body=body),
+        )
+        listed = client.get(f"{API_PREFIX}/monitor/violations")
+
+    assert response.status_code == 200
+    assert response.json()["duplicate"] is False
+    assert listed.status_code == 200
+    (item,) = listed.json()["items"]
+    assert item["event_id"] == f"{event_id}#0"
+    assert item["violation"]["reason_code"] == long_reason
 
 
 def test_overview_returns_permission_scoped_real_sections(

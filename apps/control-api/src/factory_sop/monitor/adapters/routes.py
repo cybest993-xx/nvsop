@@ -21,6 +21,7 @@ from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.repository import MonitorRepository, MonitorStreamSource
 from factory_sop.monitor.usecases import (
     list_instances,
+    list_violations,
     mirror_decision,
     mirror_health,
     mirror_instance,
@@ -195,6 +196,26 @@ def list_monitor_instances(
     items, total = list_instances(monitor, caller=caller, page=page, page_size=page_size)
     return ItemPage(
         items=[reported_sop_instance_to_wire(item.report) for item in items],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@router.get(
+    "/violations",
+    operation_id="listMonitorViolations",
+    openapi_extra=needs(Permission.MONITOR_VIEW),
+)
+def list_monitor_violations(
+    caller: Authorized,
+    monitor: Annotated[MonitorRepository, Depends(dependencies.monitor)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=MAXIMUM_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> ItemPage[dict[str, object]]:
+    items, total = list_violations(monitor, caller=caller, page=page, page_size=page_size)
+    return ItemPage(
+        items=[item.to_wire() for item in items],
         page=page,
         page_size=page_size,
         total=total,

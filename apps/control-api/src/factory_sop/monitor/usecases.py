@@ -11,7 +11,12 @@ from uuid import UUID
 from factory_sop.auth.api import Caller, Permission, authorize
 from factory_sop.monitor.api import HistoricalAssignmentGateway, HostOwnershipGateway
 from factory_sop.monitor.errors import MonitorRefusedError
-from factory_sop.monitor.model import MirroredDecision, MirroredHealth, MirroredSopInstance
+from factory_sop.monitor.model import (
+    MirroredDecision,
+    MirroredHealth,
+    MirroredSopInstance,
+    MirroredViolation,
+)
 from factory_sop.monitor.repository import MonitorRepository, MonitorStreamSource
 from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
@@ -93,7 +98,31 @@ def mirror_decision(
                 raise MonitorRefusedError(
                     "reported decision backend provenance is outside the historical host assignment"
                 )
-    return monitor.upsert_decision(MirroredDecision(report=report, received_at=received_at))
+    inserted = monitor.upsert_decision(MirroredDecision(report=report, received_at=received_at))
+    _archive_violations(report, received_at=received_at, monitor=monitor)
+    return inserted
+
+
+def _archive_violations(
+    report: ReportedDecision,
+    *,
+    received_at: datetime,
+    monitor: MonitorRepository,
+) -> None:
+    """把判定随附的已锁存违规投影为独立归档；只保存事实，不重新判定。"""
+    for index, violation in enumerate(report.violations):
+        monitor.upsert_violation(
+            MirroredViolation(
+                event_id=f"{report.event_id}#{index}",
+                decision_event_id=report.event_id,
+                host_id=report.host_id,
+                station_id=report.station_id,
+                instance_id=report.instance_id,
+                report=violation,
+                decision_reported_at=report.reported_at,
+                received_at=received_at,
+            )
+        )
 
 
 def mirror_health(
@@ -160,6 +189,18 @@ def list_instances(
     """返回授权用户可查看的一页 edge 实例生命周期镜像及总数。"""
     authorize(caller, Permission.MONITOR_VIEW)
     return monitor.page_instances(page=page, page_size=page_size)
+
+
+def list_violations(
+    monitor: MonitorRepository,
+    *,
+    caller: Caller,
+    page: int,
+    page_size: int,
+) -> tuple[tuple[MirroredViolation, ...], int]:
+    """返回授权用户可查看的一页已锁存违规归档及总数；保留原实例与来源。"""
+    authorize(caller, Permission.MONITOR_VIEW)
+    return monitor.page_violations(page=page, page_size=page_size)
 
 
 @dataclass(frozen=True, slots=True)
@@ -373,6 +414,7 @@ def _uuid(value: str, label: str) -> UUID:
 __all__ = [
     "SseSnapshot",
     "list_instances",
+    "list_violations",
     "mirror_decision",
     "mirror_health",
     "mirror_instance",

@@ -12924,6 +12924,73 @@
         "x-required-permission": "monitor.report.view"
       }
     },
+    "/api/v1/monitor/violations": {
+      "get": {
+        "operationId": "listMonitorViolations",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPage_dict_str__object__"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "List Monitor Violations",
+        "tags": [
+          "monitor"
+        ],
+        "x-required-permission": "monitor.report.view"
+      }
+    },
     "/api/v1/overview": {
       "get": {
         "description": "通过请求唯一的 SQLAlchemy session 组合所有者摘要。",

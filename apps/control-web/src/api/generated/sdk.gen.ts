@@ -153,6 +153,9 @@ import type {
   ListMonitorSopInstancesData,
   ListMonitorSopInstancesErrors,
   ListMonitorSopInstancesResponses,
+  ListMonitorViolationsData,
+  ListMonitorViolationsErrors,
+  ListMonitorViolationsResponses,
   ListPermissionsData,
   ListPermissionsErrors,
   ListPermissionsResponses,
@@ -1367,6 +1370,18 @@ export const streamMonitorEvents = <ThrowOnError extends boolean = false>(
     StreamMonitorEventsErrors,
     ThrowOnError
   >({ url: '/api/v1/monitor/stream', ...options })
+
+/**
+ * List Monitor Violations
+ */
+export const listMonitorViolations = <ThrowOnError extends boolean = false>(
+  options?: Options<ListMonitorViolationsData, ThrowOnError>,
+): RequestResult<ListMonitorViolationsResponses, ListMonitorViolationsErrors, ThrowOnError> =>
+  (options?.client ?? client).get<
+    ListMonitorViolationsResponses,
+    ListMonitorViolationsErrors,
+    ThrowOnError
+  >({ url: '/api/v1/monitor/violations', ...options })
 
 /**
  * Read Overview

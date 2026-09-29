@@ -12,9 +12,15 @@ from factory_sop.auth.model import User, UserStatus
 from factory_sop.auth.permissions import Permission
 from factory_sop.identifiers import new_id
 from factory_sop.monitor.errors import MonitorRefusedError
-from factory_sop.monitor.model import MirroredDecision, MirroredHealth, MirroredSopInstance
+from factory_sop.monitor.model import (
+    MirroredDecision,
+    MirroredHealth,
+    MirroredSopInstance,
+    MirroredViolation,
+)
 from factory_sop.monitor.usecases import (
     list_instances,
+    list_violations,
     mirror_decision,
     mirror_health,
     sse_snapshot,
@@ -44,6 +50,7 @@ class MemoryMonitor:
         self.decisions: dict[str, MirroredDecision] = {}
         self.health: dict[str, MirroredHealth] = {}
         self.instances: dict[str, MirroredSopInstance] = {}
+        self.violations: dict[str, MirroredViolation] = {}
         self._decision_sequence = 0
         self._health_sequence = 0
 
@@ -76,6 +83,19 @@ class MemoryMonitor:
         self, *, page: int, page_size: int
     ) -> tuple[tuple[MirroredSopInstance, ...], int]:
         values = tuple(self.instances.values())
+        start = (page - 1) * page_size
+        return values[start : start + page_size], len(values)
+
+    def upsert_violation(self, value: MirroredViolation) -> bool:
+        if value.event_id in self.violations:
+            return False
+        self.violations[value.event_id] = value
+        return True
+
+    def page_violations(
+        self, *, page: int, page_size: int
+    ) -> tuple[tuple[MirroredViolation, ...], int]:
+        values = tuple(self.violations.values())
         start = (page - 1) * page_size
         return values[start : start + page_size], len(values)
 
@@ -213,6 +233,24 @@ def report(event_id: str = "host:event-1") -> ReportedDecision:
         template_sha256=None,
         model_ids=("model-1",),
         reported_at="2026-09-13T00:00:00Z",
+    )
+
+
+def violation(reason_code: str = "MISSED_STEP", step: str = "step-2") -> ReportViolation:
+    return ReportViolation(
+        reason_code=reason_code,
+        detail=None,
+        step_ids=(step,),
+        evidence=ReportEvidence(anchor=12.0, start=11.0, end=12.0),
+    )
+
+
+def failing_report(event_id: str = "host:fail-1") -> ReportedDecision:
+    return replace(
+        report(event_id),
+        verdict="fail",
+        reason_codes=("MISSED_STEP",),
+        violations=(violation(),),
     )
 
 
@@ -529,3 +567,85 @@ def test_sse_cursors_do_not_replay_snapshot_or_skip_same_timestamp_events() -> N
     frame = next(stream)
     assert "id: host:event-2" in frame
     assert "host:event-1" not in frame
+
+
+def test_decision_mirror_archives_latched_violations_idempotently() -> None:
+    monitor = MemoryMonitor()
+    received_at = datetime(2026, 9, 13, 0, 0, 0, tzinfo=UTC)
+    original = failing_report()
+
+    assert mirror_decision(
+        original,
+        received_at=received_at,
+        monitor=monitor,
+        host_gateway=HostGateway(),
+    )
+    assert not mirror_decision(
+        original,
+        received_at=datetime(2026, 9, 13, 1, 0, 0, tzinfo=UTC),
+        monitor=monitor,
+        host_gateway=HostGateway(),
+    )
+
+    assert set(monitor.violations) == {"host:fail-1#0"}
+    archived = monitor.violations["host:fail-1#0"]
+    assert archived.event_id == "host:fail-1#0"
+    assert archived.decision_event_id == "host:fail-1"
+    assert archived.host_id == str(HOST_ID)
+    assert archived.station_id == str(STATION_ID)
+    assert archived.instance_id == 7
+    assert archived.report == violation()
+    # 原发生时刻停留在首次归档, 不被重报时的接收时刻改写 (§AC2)
+    assert archived.decision_reported_at == original.reported_at
+    assert archived.received_at == received_at
+
+
+def test_violation_query_retains_instance_and_source_for_the_authorized_caller() -> None:
+    monitor = MemoryMonitor()
+    mirror_decision(
+        failing_report(),
+        received_at=datetime(2026, 9, 13, 0, 0, 0, tzinfo=UTC),
+        monitor=monitor,
+        host_gateway=HostGateway(),
+    )
+
+    items, total = list_violations(
+        monitor, caller=caller(Permission.MONITOR_VIEW), page=1, page_size=50
+    )
+
+    assert total == 1
+    assert items[0].to_wire() == {
+        "event_id": "host:fail-1#0",
+        "decision_event_id": "host:fail-1",
+        "host_id": str(HOST_ID),
+        "station_id": str(STATION_ID),
+        "instance_id": 7,
+        "reported_at": "2026-09-13T00:00:00Z",
+        "received_at": "2026-09-13T00:00:00+00:00",
+        "violation": violation().to_wire(),
+    }
+
+
+def test_list_violations_rejects_a_caller_without_monitor_permission() -> None:
+    with pytest.raises(AuthorizationRefusedError):
+        list_violations(MemoryMonitor(), caller=caller(), page=1, page_size=50)
+
+
+def test_indeterminate_decision_does_not_remove_an_existing_violation() -> None:
+    monitor = MemoryMonitor()
+    mirror_decision(
+        failing_report(),
+        received_at=datetime(2026, 9, 13, 0, 0, 0, tzinfo=UTC),
+        monitor=monitor,
+        host_gateway=HostGateway(),
+    )
+
+    # 同一实例随后整体不可判定, 既有已锁存违规必须保留 (§5.2, §AC3)
+    mirror_decision(
+        report("host:fail-1-later"),
+        received_at=datetime(2026, 9, 13, 0, 5, 0, tzinfo=UTC),
+        monitor=monitor,
+        host_gateway=HostGateway(),
+    )
+
+    assert set(monitor.violations) == {"host:fail-1#0"}

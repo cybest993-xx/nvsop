@@ -12,9 +12,15 @@ from factory_sop.monitor.adapters.tables import (
     ReportedDecisionRow,
     ReportedHealthRow,
     ReportedSopInstanceRow,
+    ReportedViolationRow,
 )
 from factory_sop.monitor.errors import MonitorRefusedError
-from factory_sop.monitor.model import MirroredDecision, MirroredHealth, MirroredSopInstance
+from factory_sop.monitor.model import (
+    MirroredDecision,
+    MirroredHealth,
+    MirroredSopInstance,
+    MirroredViolation,
+)
 from factory_sop.monitor.repository import MonitorRepository
 from nvsop_contracts import ReportedSopInstance
 
@@ -151,6 +157,47 @@ class PostgresMonitorRepository(MonitorRepository):
             .limit(page_size)
         ).all()
         total = self._session.scalar(select(func.count()).select_from(ReportedSopInstanceRow))
+        return tuple(row.to_domain() for row in rows), int(total or 0)
+
+    def upsert_violation(self, value: MirroredViolation) -> bool:
+        row = ReportedViolationRow.from_domain(value)
+        table = cast(Table, ReportedViolationRow.__table__)
+        statement = postgres_insert(table).values(
+            event_id=row.event_id,
+            decision_event_id=row.decision_event_id,
+            host_id=row.host_id,
+            station_id=row.station_id,
+            instance_id=row.instance_id,
+            reason_code=row.reason_code,
+            received_at=row.received_at,
+            payload=row.payload,
+        )
+        result = self._session.execute(
+            statement.on_conflict_do_nothing(index_elements=[table.c.event_id]).returning(
+                table.c.event_id
+            )
+        )
+        if result.scalar_one_or_none() is not None:
+            return True
+        existing = self._session.get(ReportedViolationRow, row.event_id)
+        if existing is None:
+            raise RuntimeError("violation mirror insert conflicted without a visible row")
+        _ensure_same(existing.payload, row.payload, "violation", row.event_id)
+        return False
+
+    def page_violations(
+        self, *, page: int, page_size: int
+    ) -> tuple[tuple[MirroredViolation, ...], int]:
+        rows = self._session.scalars(
+            select(ReportedViolationRow)
+            .order_by(
+                ReportedViolationRow.received_at.desc(),
+                ReportedViolationRow.event_id.desc(),
+            )
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        ).all()
+        total = self._session.scalar(select(func.count()).select_from(ReportedViolationRow))
         return tuple(row.to_domain() for row in rows), int(total or 0)
 
     def recent_decisions(self, *, limit: int) -> tuple[MirroredDecision, ...]:

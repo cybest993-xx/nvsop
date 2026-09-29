@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import cast
 
 from sqlalchemy import Table, func, select, text, update
@@ -71,6 +72,7 @@ class PostgresMonitorRepository(MonitorRepository):
             trace_id=row.trace_id,
             host_id=row.host_id,
             station_id=row.station_id,
+            stream_id=row.stream_id,
             received_at=row.received_at,
             payload=row.payload,
         )
@@ -273,6 +275,35 @@ class PostgresMonitorRepository(MonitorRepository):
             .limit(limit)
         ).all()
         return tuple(row.to_domain() for row in rows)
+
+    def recent_health_for_station(
+        self, *, station_id: str, limit: int
+    ) -> tuple[MirroredHealth, ...]:
+        rows = self._session.scalars(
+            select(ReportedHealthRow)
+            .where(ReportedHealthRow.station_id == station_id)
+            .order_by(ReportedHealthRow.stream_sequence.desc())
+            .limit(limit)
+        ).all()
+        return tuple(row.to_domain() for row in rows)
+
+    def last_report_at_by_host(self) -> tuple[tuple[str, datetime], ...]:
+        """跨全部镜像事实汇总每个主机最近一次被中心接收的时刻。"""
+        latest: dict[str, datetime] = {}
+        for host_column, received_column in (
+            (ReportedDecisionRow.host_id, ReportedDecisionRow.received_at),
+            (ReportedHealthRow.host_id, ReportedHealthRow.received_at),
+            (ReportedObservationRow.host_id, ReportedObservationRow.received_at),
+            (ReportedSopInstanceRow.host_id, ReportedSopInstanceRow.received_at),
+        ):
+            rows = self._session.execute(
+                select(host_column, func.max(received_column)).group_by(host_column)
+            ).all()
+            for host_id, received_at in rows:
+                current = latest.get(host_id)
+                if current is None or received_at > current:
+                    latest[host_id] = received_at
+        return tuple(sorted(latest.items()))
 
     def decisions_after_sequence(
         self, *, after_sequence: int, limit: int

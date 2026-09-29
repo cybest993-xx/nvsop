@@ -74,9 +74,13 @@ def _health(event_id: str) -> MirroredHealth:
             trace_id=event_id,
             host_id=str(HOST_ID),
             station_id=str(STATION_ID),
+            stream_id="camera-main",
             status="available",
             reason_code="S143_TEST",
             detail="synthetic",
+            occurred_at="2026-09-23T00:00:00Z",
+            source_anchor=1.0,
+            anchor_offset=0.5,
             reported_at="2026-09-23T00:00:00Z",
         ),
         received_at=RECEIVED_AT,
@@ -299,3 +303,28 @@ def test_durable_replay_does_not_require_a_prior_wakeup(engine: Engine) -> None:
         assert event_id in {value.report.event_id for value in health}
     finally:
         source.close()
+
+
+def test_health_mirror_is_idempotent_and_persists_stream_identity(engine: Engine) -> None:
+    """AC1: 同一稳定事件身份重报只归档一次，且流身份随镜像行落库供看板定位。"""
+    factory = sessionmaker(bind=engine)
+    event_id = f"s018:health:{uuid4()}"
+
+    with factory() as session:
+        repository = PostgresMonitorRepository(session)
+        assert repository.upsert_health(_health(event_id)) is True
+        assert repository.upsert_health(_health(event_id)) is False
+        session.commit()
+
+    with engine.connect() as connection:
+        rows = [
+            tuple(row)
+            for row in connection.execute(
+                text(
+                    "SELECT stream_id, station_id FROM monitor_reported_health"
+                    " WHERE event_id = :event_id"
+                ),
+                {"event_id": event_id},
+            )
+        ]
+    assert rows == [("camera-main", str(STATION_ID))]

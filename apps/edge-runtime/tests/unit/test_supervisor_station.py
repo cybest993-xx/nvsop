@@ -192,6 +192,58 @@ class EveryInputReachesTheCoreAndCommitsDecisionsTest(unittest.TestCase):
             "read when something does conclude (§5.1)",
         )
 
+    def test_a_stream_health_fact_is_queued_for_the_center(self) -> None:
+        store = MemoryReactionStore()
+        supervisor = StationSupervisor(
+            state=opening_state(Ordering.UNORDERED),
+            store=store,
+            margins=MARGINS,
+            clock=FakeClock(),
+        )
+
+        supervisor.receive(
+            StreamHealthObserved(
+                event=StreamHealthEvent(
+                    fact=StreamFact.SOURCE_ERROR,
+                    at_monotonic=110.0,
+                    source_anchor=ANCHOR,
+                    stream_id="camera-a",
+                    detail="lost",
+                )
+            )
+        )
+
+        self.assertEqual(1, len(store.health))
+        queued = store.health[0]
+        self.assertEqual("source_error", queued["status"])
+        self.assertEqual("STREAM_LOST", queued["reason_code"])
+        self.assertEqual("camera-a", queued["stream_id"])
+        self.assertEqual("lost", queued["detail"])
+        self.assertEqual(ANCHOR, queued["source_anchor"])
+        self.assertIsNotNone(queued["occurred_at"])
+        self.assertIsNotNone(queued["anchor_offset"])
+
+    def test_an_unknown_stream_fact_is_queued_by_its_raw_value(self) -> None:
+        store = MemoryReactionStore()
+        supervisor = StationSupervisor(
+            state=opening_state(Ordering.UNORDERED),
+            store=store,
+            margins=MARGINS,
+            clock=FakeClock(),
+        )
+
+        supervisor.receive(
+            StreamHealthObserved(
+                event=StreamHealthEvent(
+                    fact="sensor_on_fire", at_monotonic=110.0, source_anchor=ANCHOR
+                )
+            )
+        )
+
+        self.assertEqual("sensor_on_fire", store.health[0]["status"])
+        self.assertIsNone(store.health[0]["reason_code"])
+        self.assertIsNone(store.health[0]["stream_id"])
+
     def test_the_returned_state_is_already_committed_once(self) -> None:
         store = MemoryReactionStore()
         supervisor = StationSupervisor(

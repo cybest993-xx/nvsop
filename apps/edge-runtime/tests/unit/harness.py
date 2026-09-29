@@ -126,6 +126,7 @@ class MemoryReactionStore:
         ] = []
         self.report_provenance: list[Mapping[int, tuple[BackendReportContext, ...] | None]] = []
         self.observations: list[dict[str, object]] = []
+        self.health: list[dict[str, object]] = []
 
     def commit(
         self,
@@ -159,6 +160,29 @@ class MemoryReactionStore:
                 "source_anchor": source_anchor,
                 "observed_at": observed_at,
                 "backend": backend,
+            }
+        )
+
+    def enqueue_health(
+        self,
+        *,
+        stream_id: str | None,
+        status: str,
+        reason_code: str | None,
+        detail: str | None,
+        occurred_at: str,
+        source_anchor: float | None,
+        anchor_offset: float | None,
+    ) -> None:
+        self.health.append(
+            {
+                "stream_id": stream_id,
+                "status": status,
+                "reason_code": reason_code,
+                "detail": detail,
+                "occurred_at": occurred_at,
+                "source_anchor": source_anchor,
+                "anchor_offset": anchor_offset,
             }
         )
 

@@ -12,9 +12,10 @@ one. `apply_migrations` is that rule as a function and holds no knowledge of thi
 unrelated — nothing here is shared with it, because this schema belongs to the edge and
 outlives an unreachable center.
 
-**What this ticket delivers, and what it leaves to each table's writer.** The five tables
-below are the ones whose behaviour E5.2 owns: instances, decisions, latched violations, and
-the two queues. `local_config` and `local_template_version` remain owned by the configuration
+**What this ticket delivers, and what it leaves to each table's writer.** The six tables
+below are the ones whose behaviour E5.2 and S018 own: instances, decisions, latched
+violations, the two reaction queues (reports and evidence), and the independent
+stream-health backlog. `local_config` and `local_template_version` remain owned by the configuration
 landing code. `local_disposal` is created here because connector writes and supervisor
 disposal share one durable deduplication ledger; no connector adapter may create a second
 write ledger.
@@ -345,7 +346,46 @@ _V10 = (
     """,
 )
 
-MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1, _V2, _V3, _V4, _V5, _V6, _V7, _V8, _V9, _V10)
+_V11 = (
+    # Stream health is observation validity, not an observation (CONTEXT.md). It gets its own
+    # durable backlog so the center mirror is at-least-once without entering the decision
+    # outbox or the observation path; a sent row is kept so a retry's event identity stays
+    # stable, exactly as the decision queue does. The frozen configuration lets the flush
+    # negotiate the health contract without waiting for a decision to do it first.
+    """
+    CREATE TABLE local_health_queue (
+        queue_id               INTEGER PRIMARY KEY,
+        station_id             TEXT    NOT NULL,
+        stream_id              TEXT,
+        status                 TEXT    NOT NULL,
+        reason_code            TEXT,
+        detail                 TEXT,
+        occurred_at            TEXT    NOT NULL,
+        source_anchor          REAL,
+        anchor_offset          REAL,
+        report_host_id         TEXT    NOT NULL,
+        report_configuration   TEXT,
+        attempts               INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at        REAL,
+        last_error             TEXT,
+        sent_at                REAL
+    )
+    """,
+)
+
+MIGRATIONS: tuple[tuple[str, ...], ...] = (
+    _V1,
+    _V2,
+    _V3,
+    _V4,
+    _V5,
+    _V6,
+    _V7,
+    _V8,
+    _V9,
+    _V10,
+    _V11,
+)
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 
 

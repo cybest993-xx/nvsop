@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 
 from factory_sop.monitor.model import (
@@ -50,6 +51,12 @@ class MonitorRepository(Protocol):
     def recent_decisions(self, *, limit: int) -> tuple[MirroredDecision, ...]: ...
 
     def recent_health(self, *, limit: int) -> tuple[MirroredHealth, ...]: ...
+
+    def recent_health_for_station(
+        self, *, station_id: str, limit: int
+    ) -> tuple[MirroredHealth, ...]: ...
+
+    def last_report_at_by_host(self) -> tuple[tuple[str, datetime], ...]: ...
 
     def decisions_after_sequence(
         self, *, after_sequence: int, limit: int

@@ -14,9 +14,11 @@ from typing import cast
 REPORT_CONTRACT_VERSION = 1
 DECISION_REPORT_CONTRACT_VERSION = 2
 SOP_INSTANCE_REPORT_CONTRACT_VERSION = 1
+HEALTH_REPORT_CONTRACT_VERSION = 2
 OBSERVATION_REPORT_CONTRACT_VERSION = 1
 REPORT_CAPABILITIES_HEADER = "X-NVSOP-Report-Capabilities"
 SOP_INSTANCE_REPORT_CAPABILITY = "sop-instance-report-v1"
+HEALTH_REPORT_CAPABILITY = "stream-health-report-v2"
 
 OBSERVATION_SOURCE_ACTION = "action"
 """观测来自动作识别（VLM 输出的动作编号）。"""
@@ -313,36 +315,52 @@ class ReportedDecision:
 
 @dataclass(frozen=True, slots=True)
 class ReportedHealth:
-    """主机健康/流观测；status 保留原值以兼容未来版本。"""
+    """一路流健康事实的至少一次上报；它是观测有效性，不是观测，也不是判定。
+
+    每路流用自己的稳定事件身份上报，携带事实发生时间、工位/流身份和源时间锚及偏移。
+    中心只按事件 id 幂等归档，不据此重新判定，也不反写 edge。
+    """
 
     event_id: str
     trace_id: str
     host_id: str
-    station_id: str | None
+    station_id: str
+    stream_id: str | None
     status: str
     reason_code: str | None
     detail: str | None
+    occurred_at: str
+    source_anchor: float | None
+    anchor_offset: float | None
     reported_at: str
-    contract_version: int = REPORT_CONTRACT_VERSION
+    contract_version: int = HEALTH_REPORT_CONTRACT_VERSION
 
     def __post_init__(self) -> None:
         for name, value in (
             ("event_id", self.event_id),
             ("trace_id", self.trace_id),
             ("host_id", self.host_id),
+            ("station_id", self.station_id),
             ("status", self.status),
+            ("occurred_at", self.occurred_at),
             ("reported_at", self.reported_at),
         ):
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{name} must not be empty")
-        if self.station_id is not None and not self.station_id:
-            raise ValueError("station_id must be non-empty or null")
+        if self.stream_id is not None and not self.stream_id:
+            raise ValueError("stream_id must be non-empty or null")
         if self.reason_code is not None and not self.reason_code:
             raise ValueError("reason_code must be non-empty or null")
         if self.detail is not None and not isinstance(self.detail, str):
             raise ValueError("health detail must be a string or null")
-        if self.contract_version != REPORT_CONTRACT_VERSION:
+        if self.contract_version != HEALTH_REPORT_CONTRACT_VERSION:
             raise ValueError("reported health contract version is unsupported")
+        for label, numeric in (
+            ("source_anchor", self.source_anchor),
+            ("anchor_offset", self.anchor_offset),
+        ):
+            if numeric is not None:
+                _finite_number(numeric, f"reported health {label}")
 
     def to_wire(self) -> dict[str, object]:
         return {
@@ -351,9 +369,13 @@ class ReportedHealth:
             "trace_id": self.trace_id,
             "host_id": self.host_id,
             "station_id": self.station_id,
+            "stream_id": self.stream_id,
             "status": self.status,
             "reason_code": self.reason_code,
             "detail": self.detail,
+            "occurred_at": self.occurred_at,
+            "source_anchor": self.source_anchor,
+            "anchor_offset": self.anchor_offset,
             "reported_at": self.reported_at,
         }
 
@@ -367,30 +389,38 @@ class ReportedHealth:
                 "trace_id",
                 "host_id",
                 "station_id",
+                "stream_id",
                 "status",
                 "reason_code",
                 "detail",
+                "occurred_at",
+                "source_anchor",
+                "anchor_offset",
                 "reported_at",
             },
             "reported health",
         )
-        station_id = value["station_id"]
         reason = value["reason_code"]
         detail = value["detail"]
-        if station_id is not None and not isinstance(station_id, str):
-            raise ValueError("health station_id is invalid")
+        stream_id = value["stream_id"]
         if reason is not None and not isinstance(reason, str):
             raise ValueError("health reason_code is invalid")
         if detail is not None and not isinstance(detail, str):
             raise ValueError("health detail is invalid")
+        if stream_id is not None and not isinstance(stream_id, str):
+            raise ValueError("health stream_id is invalid")
         return cls(
             event_id=_string(value["event_id"], "event_id"),
             trace_id=_string(value["trace_id"], "trace_id"),
             host_id=_string(value["host_id"], "host_id"),
-            station_id=station_id,
+            station_id=_string(value["station_id"], "station_id"),
+            stream_id=stream_id,
             status=_string(value["status"], "status"),
             reason_code=reason,
             detail=detail,
+            occurred_at=_string(value["occurred_at"], "occurred_at"),
+            source_anchor=_optional_number(value["source_anchor"], "source_anchor"),
+            anchor_offset=_optional_number(value["anchor_offset"], "anchor_offset"),
             reported_at=_string(value["reported_at"], "reported_at"),
             contract_version=_positive_int(value["contract_version"], "contract_version"),
         )
@@ -779,21 +809,28 @@ def _is_sha256(value: str) -> bool:
 
 __all__ = [
     "DECISION_REPORT_CONTRACT_VERSION",
+    "HEALTH_REPORT_CAPABILITY",
+    "HEALTH_REPORT_CONTRACT_VERSION",
     "OBSERVATION_REPORT_CONTRACT_VERSION",
     "OBSERVATION_SOURCES",
     "OBSERVATION_SOURCE_ACTION",
     "OBSERVATION_SOURCE_EXTERNAL_SIGNAL",
     "REPORT_CONTRACT_VERSION",
+    "SOP_INSTANCE_REPORT_CAPABILITY",
+    "SOP_INSTANCE_REPORT_CONTRACT_VERSION",
     "ReportBackendProvenance",
     "ReportEvidence",
     "ReportViolation",
     "ReportedDecision",
     "ReportedHealth",
     "ReportedObservation",
+    "ReportedSopInstance",
     "reported_decision_from_wire",
     "reported_decision_to_wire",
     "reported_health_from_wire",
     "reported_health_to_wire",
     "reported_observation_from_wire",
     "reported_observation_to_wire",
+    "reported_sop_instance_from_wire",
+    "reported_sop_instance_to_wire",
 ]

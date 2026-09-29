@@ -7046,6 +7046,37 @@ export type ReportMonitorHealthResponses = {
 export type ReportMonitorHealthResponse =
   ReportMonitorHealthResponses[keyof ReportMonitorHealthResponses]
 
+export type GetMonitorHostLivenessData = {
+  body?: never
+  path?: never
+  query?: never
+  url: '/api/v1/monitor/host-liveness'
+}
+
+export type GetMonitorHostLivenessErrors = {
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type GetMonitorHostLivenessError =
+  GetMonitorHostLivenessErrors[keyof GetMonitorHostLivenessErrors]
+
+export type GetMonitorHostLivenessResponses = {
+  /**
+   * Response Getmonitorhostliveness
+   *
+   * Successful Response
+   */
+  200: {
+    [key: string]: unknown
+  }
+}
+
+export type GetMonitorHostLivenessResponse =
+  GetMonitorHostLivenessResponses[keyof GetMonitorHostLivenessResponses]
+
 export type ListMonitorSopInstancesData = {
   body?: never
   path?: never
@@ -7345,6 +7376,50 @@ export type StreamMonitorEventsResponses = {
    */
   200: unknown
 }
+
+export type GetMonitorStreamHealthData = {
+  body?: never
+  path?: never
+  query: {
+    /**
+     * Station Id
+     */
+    station_id: string
+    /**
+     * Limit
+     */
+    limit?: number
+  }
+  url: '/api/v1/monitor/stream-health'
+}
+
+export type GetMonitorStreamHealthErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type GetMonitorStreamHealthError =
+  GetMonitorStreamHealthErrors[keyof GetMonitorStreamHealthErrors]
+
+export type GetMonitorStreamHealthResponses = {
+  /**
+   * Response Getmonitorstreamhealth
+   *
+   * Successful Response
+   */
+  200: {
+    [key: string]: unknown
+  }
+}
+
+export type GetMonitorStreamHealthResponse =
+  GetMonitorStreamHealthResponses[keyof GetMonitorStreamHealthResponses]
 
 export type ListMonitorViolationsData = {
   body?: never

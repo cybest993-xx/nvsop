@@ -20,6 +20,7 @@ from factory_sop.monitor.model import (
     MirroredViolation,
 )
 from factory_sop.monitor.usecases import (
+    host_liveness,
     list_instances,
     list_observations,
     list_violations,
@@ -29,6 +30,7 @@ from factory_sop.monitor.usecases import (
     sse_snapshot,
     sse_snapshot_state,
     sse_stream,
+    stream_health_view,
 )
 from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
@@ -129,6 +131,25 @@ class MemoryMonitor:
 
     def recent_health(self, *, limit: int) -> tuple[MirroredHealth, ...]:
         return tuple(self.health.values())[:limit]
+
+    def recent_health_for_station(
+        self, *, station_id: str, limit: int
+    ) -> tuple[MirroredHealth, ...]:
+        return tuple(
+            value for value in self.health.values() if value.report.station_id == station_id
+        )[:limit]
+
+    def last_report_at_by_host(self) -> tuple[tuple[str, datetime], ...]:
+        latest: dict[str, datetime] = {}
+        for host_id, received_at in (
+            *((value.report.host_id, value.received_at) for value in self.decisions.values()),
+            *((value.report.host_id, value.received_at) for value in self.health.values()),
+            *((value.report.host_id, value.received_at) for value in self.instances.values()),
+        ):
+            current = latest.get(host_id)
+            if current is None or received_at > current:
+                latest[host_id] = received_at
+        return tuple(sorted(latest.items()))
 
     def decisions_after_sequence(
         self, *, after_sequence: int, limit: int
@@ -449,9 +470,13 @@ def test_health_mirror_rejects_a_station_outside_the_host_topology() -> None:
         trace_id="trace-health-1",
         host_id=str(HOST_ID),
         station_id=str(UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f199")),
+        stream_id="camera-main",
         status="unavailable",
         reason_code="STREAM_LOST",
         detail="stream unavailable",
+        occurred_at="2026-09-13T00:00:00Z",
+        source_anchor=None,
+        anchor_offset=None,
         reported_at="2026-09-13T00:00:00Z",
     )
     with pytest.raises(MonitorRefusedError, match="outside"):
@@ -746,3 +771,129 @@ def test_observation_mirror_rejects_a_station_outside_the_host_topology() -> Non
 def test_list_observations_rejects_a_caller_without_monitor_permission() -> None:
     with pytest.raises(AuthorizationRefusedError):
         list_observations(MemoryMonitor(), caller=caller(), page=1, page_size=50)
+
+
+def health(
+    event_id: str,
+    *,
+    stream_id: str | None,
+    status: str,
+    received_at: datetime,
+) -> MirroredHealth:
+    return MirroredHealth(
+        report=ReportedHealth(
+            event_id=event_id,
+            trace_id=event_id,
+            host_id=str(HOST_ID),
+            station_id=str(STATION_ID),
+            stream_id=stream_id,
+            status=status,
+            reason_code=None,
+            detail=None,
+            occurred_at="2026-09-13T00:00:00Z",
+            source_anchor=None,
+            anchor_offset=None,
+            reported_at="2026-09-13T00:00:00Z",
+        ),
+        received_at=received_at,
+    )
+
+
+def test_stream_health_view_reports_no_runtime_data_without_facts() -> None:
+    view = stream_health_view(
+        MemoryMonitor(), caller=caller(Permission.MONITOR_VIEW), station_id=str(STATION_ID)
+    )
+    assert view.validity == "no_data"
+    assert view.streams == ()
+
+
+def test_stream_health_view_keeps_latest_per_stream_and_classifies() -> None:
+    monitor = MemoryMonitor()
+    monitor.upsert_health(
+        health(
+            "h1",
+            stream_id="cam-a",
+            status="source_error",
+            received_at=datetime(2026, 9, 13, 0, 0, tzinfo=UTC),
+        )
+    )
+    monitor.upsert_health(
+        health(
+            "h2",
+            stream_id="cam-a",
+            status="delivering",
+            received_at=datetime(2026, 9, 13, 0, 1, tzinfo=UTC),
+        )
+    )
+    monitor.upsert_health(
+        health(
+            "h3",
+            stream_id="cam-b",
+            status="inference_timeout",
+            received_at=datetime(2026, 9, 13, 0, 2, tzinfo=UTC),
+        )
+    )
+    view = stream_health_view(
+        monitor, caller=caller(Permission.MONITOR_VIEW), station_id=str(STATION_ID)
+    )
+    assert view.validity == "impaired"
+    assert {item.report.stream_id: item.report.status for item in view.streams} == {
+        "cam-a": "delivering",
+        "cam-b": "inference_timeout",
+    }
+
+
+def test_stream_health_view_rejects_a_caller_without_monitor_permission() -> None:
+    with pytest.raises(AuthorizationRefusedError):
+        stream_health_view(MemoryMonitor(), caller=caller(), station_id=str(STATION_ID))
+
+
+def test_host_liveness_marks_a_silent_host_suspicious_without_faking_health() -> None:
+    monitor = MemoryMonitor()
+    monitor.upsert_health(
+        health(
+            "h1",
+            stream_id="cam-a",
+            status="delivering",
+            received_at=datetime(2026, 9, 13, 0, 0, tzinfo=UTC),
+        )
+    )
+    values = host_liveness(
+        monitor,
+        caller=caller(Permission.MONITOR_VIEW),
+        now=datetime(2026, 9, 13, 0, 10, tzinfo=UTC),
+        stale_after_seconds=300.0,
+    )
+    assert len(values) == 1
+    assert values[0].host_id == str(HOST_ID)
+    assert values[0].age_seconds == 600.0
+    assert values[0].suspicious is True
+
+
+def test_host_liveness_treats_a_recent_report_as_alive() -> None:
+    monitor = MemoryMonitor()
+    monitor.upsert_health(
+        health(
+            "h1",
+            stream_id="cam-a",
+            status="delivering",
+            received_at=datetime(2026, 9, 13, 0, 9, tzinfo=UTC),
+        )
+    )
+    values = host_liveness(
+        monitor,
+        caller=caller(Permission.MONITOR_VIEW),
+        now=datetime(2026, 9, 13, 0, 10, tzinfo=UTC),
+        stale_after_seconds=300.0,
+    )
+    assert values[0].suspicious is False
+
+
+def test_host_liveness_rejects_a_caller_without_monitor_permission() -> None:
+    with pytest.raises(AuthorizationRefusedError):
+        host_liveness(
+            MemoryMonitor(),
+            caller=caller(),
+            now=datetime(2026, 9, 13, 0, 10, tzinfo=UTC),
+            stale_after_seconds=300.0,
+        )

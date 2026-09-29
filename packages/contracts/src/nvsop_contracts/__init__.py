@@ -30,6 +30,7 @@ from nvsop_contracts.commands import (
 )
 from nvsop_contracts.configuration import (
     CONFIGURATION_CONTRACT_VERSION,
+    EXECUTION_LEASE_WRITE_GATE_CAPABILITY,
     ConfigurationArtifact,
     ConfigurationBundle,
     ConfigurationTemplate,
@@ -75,6 +76,7 @@ from nvsop_contracts.reports import (
 __all__ = [
     "CONFIGURATION_CONTRACT_VERSION",
     "DECISION_REPORT_CONTRACT_VERSION",
+    "EXECUTION_LEASE_WRITE_GATE_CAPABILITY",
     "REPORT_CAPABILITIES_HEADER",
     "REPORT_CONTRACT_VERSION",
     "SOP_INSTANCE_REPORT_CAPABILITY",

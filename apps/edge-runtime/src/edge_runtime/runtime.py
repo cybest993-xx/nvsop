@@ -46,11 +46,14 @@ from edge_runtime.connectors.writes import (
     PERSISTENT_UNKNOWN_DETAIL,
     OutputDispatcher,
     WriteAttempted,
+    WriteGate,
     WriteRequest,
 )
 from edge_runtime.judgment.model import HostInstant, HostLiveness
 from edge_runtime.local_state import (
     BackendReportContext,
+    ExecutionLeaseState,
+    LocalExecutionLeaseStore,
     LocalState,
     ReportContext,
     open_local_state,
@@ -200,6 +203,34 @@ def _outcome_from_storage(kind: str, detail: str | None, at: float) -> WriteOutc
         reason = WriteRefusal(kind.removeprefix("refused:"))
         return Refused(reason=reason, detail=detail or "")
     return Failed(detail=detail or f"unknown persistent write result: {kind}")
+
+
+class ExecutionLeaseWriteGate:
+    """按本机持久执行权事实在写入边界拒绝过期或缺失的物理写入。
+
+    它只读 ``LocalExecutionLeaseStore`` 这一份事实, 每次写入都按本机墙钟重新判定到期, 因此
+    不需要等待下一次中心请求, 也不维护第二份有效期 (§5.17)。
+    """
+
+    def __init__(
+        self,
+        leases: LocalExecutionLeaseStore,
+        *,
+        clock: Callable[[], float] = time,
+    ) -> None:
+        self._leases = leases
+        self._clock = clock
+
+    def refusal(self, request: WriteRequest, /) -> Refused | None:
+        authority = self._leases.status(request.station_id, now=self._clock())
+        if authority.authorized:
+            return None
+        reason = (
+            WriteRefusal.EXECUTION_LEASE_EXPIRED
+            if authority.state is ExecutionLeaseState.EXPIRED
+            else WriteRefusal.EXECUTION_LEASE_MISSING
+        )
+        return Refused(reason=reason, detail=authority.detail)
 
 
 class _IsapiConnectionTestProbe:
@@ -1019,11 +1050,13 @@ def _build_runtime_composition(
         timeout=config.command_timeout,
     )
     disposal_ledger = state.disposal()
+    execution_gate: WriteGate = ExecutionLeaseWriteGate(state.execution_leases())
     output_dispatchers = {
         connector_id: OutputDispatcher(
             connector=adapter,
             ledger=SQLiteWriteLedger(disposal_ledger),
             diagnostics=_log_write_attempt,
+            gate=execution_gate,
         )
         for connector_id, adapter in adapters.items()
     }

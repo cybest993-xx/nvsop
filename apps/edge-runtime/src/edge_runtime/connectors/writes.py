@@ -100,6 +100,16 @@ class WriteLedger(Protocol):
     def record(self, key: str, outcome: WriteOutcome, /) -> None: ...
 
 
+class WriteGate(Protocol):
+    """物理写入前必须通过的授权检查接缝。
+
+    返回 ``Refused`` 表示本次没有向设备发送任何请求, 因此不占用幂等键; 返回 None 表示放行。
+    能力声明在适配器上, 而工位级执行权事实在 local_state, 所以组合根把后者的适配器注入这里。
+    """
+
+    def refusal(self, request: WriteRequest, /) -> Refused | None: ...
+
+
 class InMemoryWriteLedger:
     """只覆盖一个进程生命周期的测试账本。
 
@@ -134,10 +144,12 @@ class OutputDispatcher:
         connector: Connector,
         ledger: WriteLedger,
         diagnostics: Callable[[WriteAttempted], None],
+        gate: WriteGate | None = None,
     ) -> None:
         self._connector = connector
         self._ledger = ledger
         self._diagnostics = diagnostics
+        self._gate = gate
 
     def write(self, request: WriteRequest) -> WriteOutcome:
         """驱动点位,或返回拒绝原因;结果本身就是回答,不用异常表示物理结果。
@@ -148,6 +160,13 @@ class OutputDispatcher:
         held = self._ledger.outcome_for(request.key)
         if held is not None and not _replayable(held):
             return self._note(request, held, replayed=True)
+
+        # 执行权先于能力与实际写入生效 (§5.17)。到期/缺失在每次写入时按本机墙钟重新判定,
+        # 不依赖下一次中心请求; 拒绝不占用幂等键, 授权恢复后可重试。
+        if self._gate is not None:
+            refusal = self._gate.refusal(request)
+            if refusal is not None:
+                return self._note(request, refusal, replayed=False)
 
         unfitness = unfit_for(
             self._connector.capability,

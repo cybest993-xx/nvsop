@@ -12,6 +12,12 @@ error-proofing path waits for the center to agree.
 
 from __future__ import annotations
 
+from edge_runtime.local_state.execution import (
+    ExecutionAuthority,
+    ExecutionLeaseFact,
+    ExecutionLeaseState,
+    LocalExecutionLeaseStore,
+)
 from edge_runtime.local_state.queues import (
     BackendReportContext,
     PendingEvidence,
@@ -29,6 +35,10 @@ from edge_runtime.local_state.store import (
 
 __all__ = [
     "BackendReportContext",
+    "ExecutionAuthority",
+    "ExecutionLeaseFact",
+    "ExecutionLeaseState",
+    "LocalExecutionLeaseStore",
     "LocalState",
     "PendingEvidence",
     "PendingReport",

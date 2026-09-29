@@ -14,13 +14,15 @@ from typing import Any, cast
 from uuid import UUID
 
 import pytest
-from _integration_support import client_for, settings_for
+from _integration_support import build_app, client_for, settings_for
+from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session as DatabaseSession
 from template_fixtures import TemplateFixture, add_template_version, remove_template_versions
 
 from factory_sop.app import API_PREFIX
 from factory_sop.auth.permissions import Permission
+from factory_sop.configuration.adapters import dependencies as configuration_dependencies
 from factory_sop.device.adapters.repository import (
     PostgresInferenceHostRepository,
     PostgresStationRepository,
@@ -48,7 +50,9 @@ from factory_sop.device.model import (
     Station,
 )
 from factory_sop.execution.adapters.dependencies import lease_gateway
+from factory_sop.execution.api import ExecutionLeaseGateway, StationGrant
 from factory_sop.identifiers import new_id
+from factory_sop.persistence import RequestSession
 from factory_sop.template.adapters.tables import TemplateStationBindingRow, TemplateVersionRow
 from factory_sop.template.model import TemplateStationBinding
 from nvsop_contracts import (
@@ -1338,3 +1342,64 @@ def test_configuration_pull_delivers_and_renews_only_the_calling_host_lease(
                 text("DELETE FROM device_inference_host WHERE id = :host_id"),
                 {"host_id": foreign_host.id},
             )
+
+
+class _RenewalThenFailure:
+    """在真实续期写入之后抛错，用来验证拉取边界的事务回滚。"""
+
+    def __init__(self, delegate: ExecutionLeaseGateway) -> None:
+        self._delegate = delegate
+
+    def renew_host_leases(
+        self, *, host_id: UUID, now: datetime, request_id: UUID
+    ) -> tuple[StationGrant, ...]:
+        self._delegate.renew_host_leases(host_id=host_id, now=now, request_id=request_id)
+        raise RuntimeError("injected failure after lease renewal")
+
+
+def _faulting_execution_gateway(session: RequestSession) -> ExecutionLeaseGateway:
+    return cast(ExecutionLeaseGateway, _RenewalThenFailure(lease_gateway(session)))
+
+
+def test_configuration_pull_rolls_back_lease_renewal_when_request_fails(
+    engine: Engine, runtime_topology: RuntimeTopology, dataset_storage_root: Path
+) -> None:
+    settings = settings_for(engine, storage_root=dataset_storage_root)
+    path = f"{API_PREFIX}/inference-hosts/{runtime_topology.host.id}/configuration"
+    started = datetime.now(UTC)
+    acquisition_request = new_id()
+    with DatabaseSession(engine) as session:
+        lease_gateway(session).acquire(
+            station_id=runtime_topology.station.id,
+            holder_host_id=runtime_topology.host.id,
+            request_id=acquisition_request,
+            now=started,
+        )
+        session.commit()
+    try:
+        app = build_app(engine, settings)
+        app.dependency_overrides[configuration_dependencies.execution_gateway] = (
+            _faulting_execution_gateway
+        )
+        with TestClient(
+            app, base_url="https://testserver", raise_server_exceptions=False
+        ) as client:
+            response = client.get(
+                path, headers=_host_headers(runtime_topology, method="GET", path=path)
+            )
+        assert response.status_code == 500
+
+        with engine.connect() as connection:
+            stored = connection.execute(
+                text(
+                    "SELECT renewed_at, lease_expires_at, request_id "
+                    "FROM execution_station_grant WHERE station_id = :station_id"
+                ),
+                {"station_id": runtime_topology.station.id},
+            ).one()
+        # 续期先写入随后失败：请求事务整体回滚，授权事实保持请求前状态，不落盘成功期限。
+        assert stored.renewed_at == started
+        assert stored.lease_expires_at == started + timedelta(days=7)
+        assert stored.request_id == acquisition_request
+    finally:
+        _clear_execution_grants(engine, (runtime_topology.station.id,))

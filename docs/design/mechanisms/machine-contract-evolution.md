@@ -18,7 +18,7 @@
 | 模板 `version_id` / `version_sha256` | `template` 拥有的不可变模板版本身份；artifact 各自保留内容 SHA-256 |
 | `model_ids` | Center 签发 bundle 时冻结的推理后端模型事实；历史判定继续使用事件时冻结的 provenance，不用当前配置回填 |
 | `producer` | 已知、可选、非行为诊断元数据；不进入 stable/effective identity |
-| `execution_grants` | 主机自己的当前工位物理执行权租约事实（`station_id`/`grant_id`/`holder_host_id`/`lease_expires_at`）；Center 在每次成功拉取配置时于同一请求内只续期该主机持有的租约。host-scoped 授权元数据：不进入 stable/effective identity，也不进入配置运行时的组合与切换；它服务 `execution` 自己的物理写入门禁机制（§5.17），不属于配置行为扩展 |
+| `execution_grants` | 主机自己的当前工位物理执行权租约事实（`station_id`/`grant_id`/`holder_host_id`/`lease_expires_at`）；Center 在每次成功拉取配置时于同一请求内只续期该主机持有的租约。host-scoped 授权元数据：不进入 stable/effective identity，也不进入配置运行时的组合与切换；它自身还不是已生效的写入门禁，后续把它用于物理写入门禁的行为扩展需单独声明 capability 门禁 |
 | `required_capabilities` | 行为兼容门禁；排序且去重。Edge 不支持任一声明时显式拒绝整个候选 |
 
 历史 assignment 不再发明第二个 identity。Center 的 issued-configuration 历史以 host + `config_revision` + `effective_sha256` 固定一次签发，并冻结 station/backend、模板版本/摘要和 model facts；历史上报必须指向这份实际签发事实。
@@ -30,7 +30,7 @@
 1. **已知非行为元数据**：先让消费者识别为可选字段，再让生产者发送；不得改变 `effective_sha256`。`producer` 是当前示例。
 2. **显式能力门禁的行为扩展**：行为数据必须同时声明对应 `required_capabilities`。不支持的 Edge 明确拒绝，不能忽略字段、猜默认值或走 fallback。
 
-配置 bundle 同时携带一条 host-scoped 授权通道：`execution_grants` 由 Center 在成功拉取边界续期并随信封下发，但不参与配置的 stable/effective identity，也不进入配置运行时的组合或切换，因此归入第 1 类而非第 2 类；它改变的是 `execution` 拥有的物理写入门禁，而不是 Edge 的配置行为。隐藏或未知的配置行为字段仍必须走第 2 类。
+配置 bundle 的 `execution_grants` 是 host-scoped 授权元数据：Center 在成功拉取边界只续期认证主机自己持有的租约并随信封下发，该字段不参与配置的 stable/effective identity，也不进入配置运行时的组合或切换，因此当前按第 1 类（已知非行为元数据）投递。它不是已生效的物理写入授权：把该字段用于物理写入门禁属于独立的行为扩展，必须由该门禁的所有者在引入时声明对应 `required_capabilities` 并在本表登记；在那之前 Edge 只将它作为可持久化数据保留，不改变既有配置或判定行为。隐藏或未知的配置行为字段仍必须走第 2 类。
 
 配置契约不提供 `extensions`、任意 JSON bag、插件字典或“未知字段照单全收”。核心字段仍严格必填，未知字段仍拒绝。
 

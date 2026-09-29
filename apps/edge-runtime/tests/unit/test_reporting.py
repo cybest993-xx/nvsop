@@ -14,6 +14,7 @@ from edge_runtime.judgment.model import Decision, EvidenceSpan, HostInstant, Lif
 from edge_runtime.judgment.reasons import ReasonCode, Verdict
 from edge_runtime.local_state import (
     BackendReportContext,
+    PendingObservationReport,
     PendingReport,
     PendingSopInstanceReport,
     ReportContext,
@@ -21,6 +22,7 @@ from edge_runtime.local_state import (
 from edge_runtime.reporting import (
     reported_decision_from_pending,
     reported_instance_from_pending,
+    reported_observation_from_pending,
     reported_open_instance_from_pending,
 )
 
@@ -262,6 +264,59 @@ class ReportingTests(unittest.TestCase):
                 PendingReport(queue_id=3, decision=decision, attempts=0, last_error=None),
                 reported_at="now",
             )
+
+    def test_observation_report_carries_frozen_source_and_instance(self) -> None:
+        pending = PendingObservationReport(
+            queue_id=11,
+            station_id="station-a",
+            instance_id=4,
+            source="action",
+            signal="(1) step 1",
+            source_time=12.5,
+            source_anchor=100.0,
+            observed_at=7.5,
+            host_id="host-a",
+            template_version_id="template-a",
+            template_sha256="a" * 64,
+            backend=BackendReportContext("backend-a", ("model-a",)),
+            reported_at=None,
+            attempts=0,
+            last_error=None,
+        )
+        report = reported_observation_from_pending(pending, reported_at="now")
+        self.assertEqual(report.event_id, "host-a:observation:11")
+        self.assertEqual(report.instance_id, 4)
+        self.assertEqual(report.source, "action")
+        self.assertEqual(report.backend, ReportBackendProvenance("backend-a", ("model-a",)))
+        self.assertEqual(report.source_time, 12.5)
+        self.assertEqual(report.source_anchor, 100.0)
+        self.assertEqual(report.observed_at, 7.5)
+        self.assertEqual(report.reported_at, "now")
+
+    def test_external_signal_observation_has_no_stream_timeline_or_backend(self) -> None:
+        pending = PendingObservationReport(
+            queue_id=12,
+            station_id="station-a",
+            instance_id=4,
+            source="external_signal",
+            signal="工件到位",
+            source_time=None,
+            source_anchor=None,
+            observed_at=8.5,
+            host_id="host-a",
+            template_version_id=None,
+            template_sha256=None,
+            backend=None,
+            reported_at="frozen",
+            attempts=0,
+            last_error=None,
+        )
+        report = reported_observation_from_pending(pending, reported_at="frozen")
+        self.assertIsNone(report.backend)
+        self.assertIsNone(report.source_time)
+        self.assertIsNone(report.source_anchor)
+        self.assertIsNone(report.template_version_id)
+        self.assertEqual(report.reported_at, "frozen")
 
 
 if __name__ == "__main__":

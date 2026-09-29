@@ -15,6 +15,7 @@ from __future__ import annotations
 from edge_runtime.local_state.queues import (
     BackendReportContext,
     PendingEvidence,
+    PendingObservationReport,
     PendingReport,
     PendingSopInstanceReport,
     ReportContext,
@@ -31,6 +32,7 @@ __all__ = [
     "BackendReportContext",
     "LocalState",
     "PendingEvidence",
+    "PendingObservationReport",
     "PendingReport",
     "PendingSopInstanceReport",
     "ReactionStore",

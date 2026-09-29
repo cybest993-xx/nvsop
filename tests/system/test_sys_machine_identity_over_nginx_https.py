@@ -632,6 +632,22 @@ def test_host_signed_machine_api_crosses_real_nginx_gateway_without_browser_sess
             assert instance_route.status_code == 422, instance_route.text
             assert edge.get("/api/v1/monitor/instances").status_code == 401
 
+            observation_report_path = "/api/v1/monitor/reported-observations"
+            malformed_observation: dict[str, object] = {}
+            observation_route = edge.post(
+                observation_report_path,
+                json=malformed_observation,
+                headers=_signed_headers(
+                    host_id=host_id,
+                    private_key=private_key,
+                    method="POST",
+                    path=observation_report_path,
+                    body=malformed_observation,
+                ),
+            )
+            # 白名单未覆盖时会被 session auth_request 拒绝于 401；422 证明确实到达主机签名路由。
+            assert observation_route.status_code == 422, observation_route.text
+
             claim_path = f"{COMMANDS}/next"
             _assert_signature_rejection_matrix(
                 edge,

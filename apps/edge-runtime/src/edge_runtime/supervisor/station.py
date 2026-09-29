@@ -11,6 +11,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from time import monotonic
 
+from nvsop_contracts import OBSERVATION_SOURCE_ACTION, OBSERVATION_SOURCE_EXTERNAL_SIGNAL
+
 from edge_runtime.judgment.core import advance
 from edge_runtime.judgment.evidence import EvidenceMargins
 from edge_runtime.judgment.model import (
@@ -30,6 +32,8 @@ from edge_runtime.judgment.reasons import ReasonCode
 from edge_runtime.local_state import BackendReportContext, ReactionStore
 from edge_runtime.supervisor.evidence import clips_for
 from edge_runtime.supervisor.inputs import (
+    ActionRecognized,
+    ExternalSignal,
     Normalizer,
     StreamHealthObserved,
     SupervisorInput,
@@ -181,11 +185,49 @@ class StationSupervisor:
                     active_impaired_stream_provenance[report_provenance.backend_id] = (
                         report_provenance
                     )
+        if isinstance(arriving, (ActionRecognized, ExternalSignal)):
+            self._record_observation(arriving, report_provenance=report_provenance)
         reaction = self._advance(events, report_provenance=report_provenance)
         self._normalizers = normalizers
         self._active_impaired_backend_provenance = active_impaired_backend_provenance
         self._active_impaired_stream_provenance = active_impaired_stream_provenance
         return reaction
+
+    def _record_observation(
+        self,
+        arriving: ActionRecognized | ExternalSignal,
+        *,
+        report_provenance: BackendReportContext | None,
+    ) -> None:
+        """把一条归一化观测持久化到它自己的上报积压; 它不进入判定 outbox。
+
+        观测必须归属于一个 SOP 实例: 尚未开实例且不是模板开始信号的那条被判定核心丢弃,
+        这里也不镜像, 避免为不属于任何实例的输入虚构归属。实例编号取到达时的核心状态。
+        """
+        instance = self._state.instance
+        if instance is None:
+            if arriving.signal != self._state.template.start_signal:
+                return
+            instance_id = self._state.next_instance_id
+        else:
+            instance_id = instance.instance_id
+        if isinstance(arriving, ActionRecognized):
+            source = OBSERVATION_SOURCE_ACTION
+            source_time: float | None = arriving.source_time
+            source_anchor: float | None = arriving.source_anchor
+        else:
+            source = OBSERVATION_SOURCE_EXTERNAL_SIGNAL
+            source_time = None
+            source_anchor = None
+        self._store.enqueue_observation(
+            instance_id=instance_id,
+            source=source,
+            signal=arriving.signal,
+            source_time=source_time,
+            source_anchor=source_anchor,
+            observed_at=arriving.at.seconds,
+            backend=report_provenance,
+        )
 
     def wake(self, *, host: HostLiveness) -> Reaction:
         """The timer the core asked for, if it is in fact due.

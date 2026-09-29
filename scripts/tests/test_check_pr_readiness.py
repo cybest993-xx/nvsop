@@ -12,6 +12,7 @@ from scripts.check_pr_readiness import (
     protection_state,
     requires_architecture_review,
     requires_dispatch_impact,
+    requires_harness_review,
 )
 
 
@@ -263,6 +264,148 @@ class PrReadinessTest(unittest.TestCase):
         assert files is not None
         self.assertIn("docs/engineering/architecture.md", files)
         self.assertTrue(requires_dispatch_impact(files))
+
+    def test_harness_review_matches_real_control_entries_not_ordinary_code(self) -> None:
+        sensitive = (
+            "Makefile",
+            "AGENTS.md",
+            "CLAUDE.md",
+            ".gitignore",
+            ".secrets.baseline",
+            ".python-version",
+            ".nvmrc",
+            "pyproject.toml",
+            "apps/edge-runtime/pyproject.toml",
+            "packages/contracts/pyproject.toml",
+            "package.json",
+            "apps/control-web/package.json",
+            "uv.lock",
+            "pnpm-lock.yaml",
+            "pnpm-workspace.yaml",
+            "packages/contracts/breaking-changes.json",
+            "apps/control-web/.prettierrc.json",
+            "scripts/check_repo_policy.py",
+            ".github/workflows/blocking-ci.yml",
+            "docs/engineering/workflow.md",
+            "apps/control-web/eslint.config.ts",
+            "apps/control-web/tsconfig.app.json",
+            "apps/control-web/vite.config.ts",
+            "apps/control-web/playwright.config.ts",
+            "apps/control-web/openapi-ts.config.ts",
+            "tests/system/conftest.py",
+            "apps/control-api/tests/integration/conftest.py",
+        )
+        ordinary = (
+            "apps/control-api/src/factory_sop/overview.py",
+            "apps/control-api/tests/unit/test_overview.py",
+            "apps/control-web/src/modules/devices/CameraMediaPanel.vue",
+            "apps/control-web/tests/integration/devices.spec.ts",
+            "docs/design/mechanisms/control-plane.md",
+            "README.md",
+        )
+        for path in sensitive:
+            with self.subTest(path=path):
+                self.assertTrue(requires_harness_review([path]))
+        for path in ordinary:
+            with self.subTest(path=path):
+                self.assertFalse(requires_harness_review([path]))
+
+    def test_harness_review_output_requires_manual_confirmation_for_control_paths(self) -> None:
+        pr = {
+            "state": "OPEN",
+            "baseRefName": "main",
+            "headRefName": "agent/test/task",
+            "headRefOid": "abc",
+            "statusCheckRollup": [{"name": "CI required", "conclusion": "SUCCESS"}],
+        }
+        required = evaluate(
+            pr, "protected", "agent/test/task", "abc", ["scripts/check_repo_policy.py"]
+        )
+        self.assertIn("harness_review=required", required.lines)
+        self.assertIn("harness_review_confirmation=manual-required", required.lines)
+
+        not_required = evaluate(
+            pr,
+            "protected",
+            "agent/test/task",
+            "abc",
+            ["apps/control-api/src/factory_sop/overview.py"],
+        )
+        self.assertIn("harness_review=not-required", not_required.lines)
+        self.assertIn("harness_review_confirmation=not-required", not_required.lines)
+
+    def test_body_self_report_does_not_cancel_harness_review(self) -> None:
+        # 预检不读正文: 正文自报不能把门禁改动降级为免审查, 也不阻塞机器状态。
+        result = evaluate(
+            {
+                "state": "OPEN",
+                "baseRefName": "main",
+                "headRefName": "agent/test/task",
+                "headRefOid": "abc",
+                "statusCheckRollup": [{"name": "CI required", "conclusion": "SUCCESS"}],
+                "body": "Harness review: reviewed\nHarness authority checked: reviewed",
+            },
+            "protected",
+            "agent/test/task",
+            "abc",
+            ["Makefile"],
+        )
+        self.assertTrue(result.ready)
+        self.assertIn("harness_review=required", result.lines)
+        self.assertIn("harness_review_confirmation=manual-required", result.lines)
+        self.assertNotIn("harness_review=not-required", result.lines)
+        self.assertIn("automated_readiness=ready", result.lines)
+
+    @patch("scripts.check_pr_readiness.run")
+    def test_renamed_control_file_keeps_previous_path_for_harness_review(
+        self, run_mock: Mock
+    ) -> None:
+        run_mock.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                '[[{"filename":"scripts/renamed.py",'
+                '"previous_filename":"scripts/check_repo_policy.py",'
+                '"status":"renamed"}]]'
+            ),
+            stderr="",
+        )
+        files = pr_files("owner/repo", "123")
+        self.assertIsNotNone(files)
+        assert files is not None
+        self.assertIn("scripts/check_repo_policy.py", files)
+        self.assertTrue(requires_harness_review(files))
+
+    @patch("scripts.check_pr_readiness.run")
+    def test_malformed_file_enumeration_is_unknown_not_a_short_list(self, run_mock: Mock) -> None:
+        for payload in (
+            '[[{"filename":"a.py"}, "not-a-dict"]]',
+            '[[{"previous_filename":"old.py"}]]',
+            '[[{"filename":"new.py","status":"renamed"}]]',
+            '[[{"filename":""}]]',
+        ):
+            with self.subTest(payload=payload):
+                run_mock.return_value = subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout=payload, stderr=""
+                )
+                self.assertIsNone(pr_files("owner/repo", "123"))
+
+    def test_unknown_file_enumeration_reports_unknown_harness_review(self) -> None:
+        result = evaluate(
+            {
+                "state": "OPEN",
+                "baseRefName": "main",
+                "headRefName": "agent/test/task",
+                "headRefOid": "abc",
+                "statusCheckRollup": [{"name": "CI required", "conclusion": "SUCCESS"}],
+            },
+            "protected",
+            "agent/test/task",
+            "abc",
+            None,
+        )
+        self.assertIn("harness_review=unknown", result.lines)
+        self.assertIn("harness_review_confirmation=unknown", result.lines)
 
     def test_missing_ci_or_unreadable_protection_never_claims_automated_readiness(self) -> None:
         result = evaluate(

@@ -8,7 +8,7 @@
 
 ## Review
 
-<!-- Fixed base and candidate; self-review; independent Spec + Standards review when workflow.md requires it; unresolved findings. A tool/session id alone is not a review result. -->
+<!-- Fixed base and candidate; self-review; independent Spec + Standards review when workflow.md requires it; unresolved findings. A tool/session id alone is not a review result. When pr-check reports harness_review=required, the independent reviewer must read the actual gate/policy/manifest diff; that flag is a risk hint, not an approval, and must not be recorded here as one. When human approval is claimed, record the user's real confirmation reference, the confirmed candidate and the authorized scope; §3 of workflow.md defines what counts. -->
 Architecture review: `not-required`
 Architecture authority checked: `N/A`
 
@@ -25,7 +25,7 @@ Actions: `N/A`
 
 ## Readiness and remaining work
 
-<!-- Record exact-head CI, any required independent review and merge authorization. Codex is optional, non-blocking feedback; record it only if requested or available. Follow docs/engineering/workflow.md. -->
+<!-- Record exact-head CI, any required independent review and merge authorization (the user's explicit authorization of the merge action for the exact candidate per workflow.md §3; confirming a candidate alone is not merge authorization). Codex is optional, non-blocking feedback; record it only if requested or available. Follow docs/engineering/workflow.md. -->
 CI required: `pending`
 Independent Spec + Standards review (when required): `not-required`
 Codex review (optional): `not-requested`

@@ -363,6 +363,7 @@ async function startPreview(camera: CameraMediaView, attempt = 0): Promise<void>
     await waitForIceGathering(peer, controller.signal)
     if (!isCurrentPlayer(camera.camera_id, generation)) return
     const endpoint = whepUrl(camera.mediamtx_address, camera.media_path)
+    // eslint-disable-next-line no-restricted-globals -- ADR-0012: 浏览器直连推理机 MediaMTX 的 WHEP 信令, 不经中心控制面 API
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/sdp', Accept: 'application/sdp' },
@@ -591,6 +592,7 @@ async function queryPlayback(camera: CameraMediaView): Promise<void> {
     url.searchParams.set('path', camera.media_path)
     url.searchParams.set('start', range.start)
     url.searchParams.set('end', range.end)
+    // eslint-disable-next-line no-restricted-globals -- ADR-0012: 浏览器直连推理机 MediaMTX 的回放片段列表, 不经中心控制面 API
     const response = await fetch(url, {
       credentials: 'omit',
       cache: 'no-store',

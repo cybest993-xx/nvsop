@@ -65,7 +65,10 @@ class ArqJobDispatcher:
 
     @property
     def redis_settings(self) -> RedisSettings:
-        """返回 worker 使用的 Redis 连接配置。"""
+        """返回 worker 使用的 Redis 连接配置。
+
+        `arq.RedisSettings.__repr__` 会打印 password，因此本属性不得进入日志或错误信息。
+        """
         return self._settings
 
     async def dispatch_async(self, job_id: UUID) -> None:

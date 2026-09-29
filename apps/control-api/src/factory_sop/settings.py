@@ -291,9 +291,11 @@ def parse_redis_url(value: str) -> RedisConnection:
 
 
 def _require_runtime_infrastructure(settings: Settings) -> None:
-    """拒绝缺失本地媒体存储或任务队列的可运行配置。
+    """拒绝缺失本地媒体存储或不可用任务队列的可运行配置。
 
-    格式规则由 `Settings` 自身校验，这里只判定必需项是否存在。
+    必需项的“存在性”在这里判定；字段格式由 `Settings` 自身校验，Redis URL 的可用性由
+    共享的 `parse_redis_url` 判定，使环境路径与直接构造 Settings 的 dispatcher 装配
+    使用同一规则。
     """
     if settings.dataset_storage_root is None:
         raise ConfigurationError("部署必须配置中心训练素材本地存储根目录")

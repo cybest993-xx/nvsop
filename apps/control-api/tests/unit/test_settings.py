@@ -183,6 +183,17 @@ def test_parse_redis_url_returns_the_supported_connection_facts() -> None:
     )
 
 
+def test_parse_redis_url_defaults_port_and_database() -> None:
+    assert parse_redis_url("redis://redis.internal") == RedisConnection(
+        host="redis.internal",
+        port=6379,
+        database=0,
+        username=None,
+        password=None,
+        ssl=False,
+    )
+
+
 def test_parse_redis_url_hides_the_password_in_its_repr() -> None:
     parsed = parse_redis_url("redis://operator:secret@redis.internal:6379/0")
 

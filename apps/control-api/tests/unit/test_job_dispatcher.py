@@ -26,7 +26,14 @@ def settings(redis_url: str | None) -> Settings:
 
 @pytest.mark.parametrize(
     "redis_url",
-    ["redis://127.0.0.1:0/0", "redis://127.0.0.1/-1", "http://127.0.0.1:6379/0", "redis://[::1/0"],
+    [
+        "redis://127.0.0.1:0/0",
+        "redis://127.0.0.1/-1",
+        "redis://127.0.0.1/not-a-number",
+        "redis://127.0.0.1:70000/0",
+        "http://127.0.0.1:6379/0",
+        "redis://[::1/0",
+    ],
 )
 def test_dispatcher_rejects_invalid_redis_configuration(redis_url: str) -> None:
     with pytest.raises(ConfigurationError):

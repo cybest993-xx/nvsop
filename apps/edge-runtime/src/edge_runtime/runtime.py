@@ -1112,29 +1112,7 @@ def _build_runtime_composition(
                 station_config.station_id,
                 report_context=report_context,
             )
-            sources = tuple(
-                ProvenancedStationInputSource(
-                    source=SseStationInputSource(
-                        inference_url=station_configuration.inference_url,
-                        request_body=station_configuration.request_body,
-                        timeout=config.command_timeout,
-                    ),
-                    provenance=BackendReportContext(
-                        backend_id=station_configuration.backend_id,
-                        model_ids=station_configuration.model_ids,
-                    ),
-                )
-                if station_configuration.backend_id is not None
-                else SseStationInputSource(
-                    inference_url=station_configuration.inference_url,
-                    request_body=station_configuration.request_body,
-                    timeout=config.command_timeout,
-                )
-                for station_configuration in station_configurations
-            )
-            source: StationInputSource = (
-                sources[0] if len(sources) == 1 else MultiplexedStationInputSource(sources=sources)
-            )
+            source = _station_input_source(station_binding, timeout=config.command_timeout)
             runtimes = tuple(
                 connector_runtimes.runtime(connector_id)
                 for connector_id in station_binding.connector_ids
@@ -1233,10 +1211,6 @@ def build_connection_test_loop_from_file(
 ) -> ConnectionTestCommandLoop:
     """从推理机本地配置文件装配生产命令循环。"""
     config = load_configuration(config_path)
-    return _build_connection_test_loop(config)
-
-
-def _build_connection_test_loop(config: EdgeRuntimeConfiguration) -> ConnectionTestCommandLoop:
     return build_connection_test_loop(
         center_url=config.center_url,
         host_id=config.host_id,

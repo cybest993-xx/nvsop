@@ -487,9 +487,11 @@ def test_deployment_never_inlines_runtime_passwords(
             str(entry["target"]) if isinstance(entry, dict) else f"/run/secrets/{entry}"
             for entry in cast("list[object]", service.get("secrets") or [])
         }
-        # 每个指向 /run/secrets/ 的 *_FILE 都必须在同一服务的 secrets 声明里，否则容器启动才失败。
+        # 每个 *_FILE 都必须指向 /run/secrets/，且该 secret 在同一服务的 secrets 声明里，
+        # 否则容器启动才失败。
         for key, value in environment.items():
-            if key.endswith("_FILE") and value.startswith("/run/secrets/"):
+            if key.endswith("_FILE"):
+                assert value.startswith("/run/secrets/"), (name, key, value)
                 assert value in declared, (name, key, value, sorted(declared))
 
     passwords = (

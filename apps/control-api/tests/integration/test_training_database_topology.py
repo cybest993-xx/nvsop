@@ -3,7 +3,8 @@
 证据分三层：开发 Compose 只启动一套 PostgreSQL，并把训练/标注进程指向同一实例的 `training`
 database；`training-db-init` 的真实命令在隔离实例上首次建库、二次幂等且不删已有内容；真实
 PostgreSQL 上 Center Alembic 只落 `nvsop`，训练连接实际落在 `training`，且没有 `dblink` / FDW
-等跨 database 直连路径。训练对象安装与角色隔离不在本票（见 #224 / #223）。
+等跨 database 直连路径。训练对象安装不在本票（见 #224）；角色权限隔离由 S065 覆盖，证据在
+`test_database_role_isolation.py`。
 """
 
 from __future__ import annotations
@@ -92,6 +93,9 @@ def test_dev_compose_runs_one_postgres_instance_for_center_and_training() -> Non
     assert postgres_services == {
         "center-db": POSTGRES_IMAGE,
         "training-db-init": POSTGRES_IMAGE,
+        # S065 的角色初始化也是同镜像的一次性服务，不是第二个运行实例。
+        "center-role-init": POSTGRES_IMAGE,
+        "training-role-init": POSTGRES_IMAGE,
     }
 
     center_environment = cast("dict[str, str]", services["center-db"]["environment"])
@@ -99,17 +103,26 @@ def test_dev_compose_runs_one_postgres_instance_for_center_and_training() -> Non
     assert center_environment["POSTGRES_USER"] == "nvsop"
 
     # Center 进程（含 Alembic）只连接 nvsop，且不依赖 training 初始化。
-    for name in ("center-migrate", "center-api", "center-bootstrap", "worker"):
+    # 迁移/安装用超级用户 nvsop，长期运行进程用非超级用户 nvsop_runtime（S065）。
+    runtime_services = ("center-api", "center-bootstrap", "worker")
+    for name in ("center-migrate", *runtime_services):
         environment = cast("dict[str, str]", services[name]["environment"])
         assert environment["SOP_DATABASE_NAME"] == "nvsop"
         assert "training-db-init" not in (services[name].get("depends_on") or {})
+    migrate_environment = cast("dict[str, str]", services["center-migrate"]["environment"])
+    assert migrate_environment["SOP_DATABASE_USER"] == "nvsop"
+    assert migrate_environment["SOP_DATABASE_PASSWORD_FILE"] == "/run/secrets/center-db-password"
+    for name in runtime_services:
+        environment = cast("dict[str, str]", services[name]["environment"])
+        assert environment["SOP_DATABASE_USER"] == "nvsop_runtime"
+        assert environment["SOP_DATABASE_PASSWORD_FILE"] == "/run/secrets/nvsop-runtime-password"
 
     # 训练/标注进程经 Vendor POSTGRES_* seam 连接同一实例的 training database。
     backend_environment = cast("dict[str, str]", services["annotation-backend"]["environment"])
     assert backend_environment["POSTGRES_HOST"] == "center-db"
     assert backend_environment["POSTGRES_DB"] == "training"
-    assert backend_environment["POSTGRES_USER"] == "nvsop"
-    assert services["annotation-backend"]["depends_on"]["training-db-init"]["condition"] == (
+    assert backend_environment["POSTGRES_USER"] == "training_runtime"
+    assert services["annotation-backend"]["depends_on"]["training-role-init"]["condition"] == (
         "service_completed_successfully"
     )
 

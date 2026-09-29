@@ -3,7 +3,8 @@
 证据分三层：开发 Compose 只启动一套 PostgreSQL，并把训练/标注进程指向同一实例的 `training`
 database；`training-db-init` 的真实命令在隔离实例上首次建库、二次幂等且不删已有内容；真实
 PostgreSQL 上 Center Alembic 只落 `nvsop`，训练连接实际落在 `training`，且没有 `dblink` / FDW
-等跨 database 直连路径。训练对象安装与角色隔离不在本票（见 #224 / #223）。
+等跨 database 直连路径。训练对象安装不在本票（见 #224）；角色权限隔离由 S065 覆盖，证据在
+`test_database_role_isolation.py`。
 """
 
 from __future__ import annotations

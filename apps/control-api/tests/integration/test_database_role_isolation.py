@@ -1,6 +1,6 @@
 """S065：单 PostgreSQL 实例上 `nvsop` / `training` 的真实角色权限隔离。
 
-证据使用真实新连接验证双向允许/拒绝，再验证各自 database 内的对象操作、禁止操作与
+证据使用真实新连接验证双向允许/拒绝，再验证两个 database 各自的对象操作、禁止操作与
 未来对象 default privileges；不使用 `SET ROLE`、HTTP mock 或 `search_path` 代替真实登录。
 """
 
@@ -31,10 +31,23 @@ COMPOSE = REPO_ROOT / "deploy" / "dev" / "compose.yaml"
 ROLE_SQL = REPO_ROOT / "deploy" / "dev" / "db-roles.sql"
 ANNOTATION_ENTRYPOINT = REPO_ROOT / "deploy" / "dev" / "annotation-entrypoint.sh"
 POSTGRES_IMAGE = "postgres:17.2-bookworm"
+INSTALL_ROLE = "nvsop"
+CENTER_DATABASE = "nvsop"
+TRAINING_DATABASE = "training"
 CENTER_RUNTIME_ROLE = "nvsop_runtime"
 TRAINING_RUNTIME_ROLE = "training_runtime"
 ROLE_INIT_SERVICES = ("center-role-init", "training-role-init")
 PERMISSION_DENIED = "permission denied"
+NON_SUPERUSER_ATTRIBUTES = (False, False, False, False)
+
+
+@dataclass(frozen=True, slots=True)
+class Runtime:
+    """一个 database 及其专属非超级用户运行身份。"""
+
+    database: str
+    role: str
+    password: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,10 +56,12 @@ class IsolatedInstance:
 
     base_url: URL
     install_password: str
-    center_runtime_password: str
-    training_runtime_password: str
+    runtimes: tuple[Runtime, ...]
     init_outputs: dict[str, bytes]
     reinit: Callable[[], dict[str, Any]]
+
+    def runtime(self, database: str) -> Runtime:
+        return next(item for item in self.runtimes if item.database == database)
 
 
 def _require_docker() -> None:
@@ -89,22 +104,20 @@ def _migrate(base: URL) -> None:
     configuration = Config(str(CONTROL_API / "alembic.ini"))
     configuration.set_main_option("script_location", str(CONTROL_API / "migrations"))
     configuration.set_main_option(
-        "sqlalchemy.url", base.set(database="nvsop").render_as_string(hide_password=False)
+        "sqlalchemy.url", base.set(database=CENTER_DATABASE).render_as_string(hide_password=False)
     )
     command.upgrade(configuration, "head")
 
 
-def _engine(instance: IsolatedInstance, *, user: str, password: str) -> Engine:
-    return create_engine(instance.base_url.set(username=user, password=password))
+def _engine(instance: IsolatedInstance, *, database: str, user: str, password: str) -> Engine:
+    return create_engine(instance.base_url.set(database=database, username=user, password=password))
 
 
 def _attempt_login(
     instance: IsolatedInstance, *, database: str, user: str, password: str
 ) -> str | None:
     """发起一次真实登录；成功返回 None，被拒绝返回 PostgreSQL 的拒绝信息。"""
-    engine = create_engine(
-        instance.base_url.set(database=database, username=user, password=password)
-    )
+    engine = _engine(instance, database=database, user=user, password=password)
     try:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
@@ -115,14 +128,71 @@ def _attempt_login(
         engine.dispose()
 
 
-def _expect_denied(instance: IsolatedInstance, statement: str, match: str) -> None:
+def _role_attributes(instance: IsolatedInstance, role: str) -> tuple[object, ...]:
+    """读全局角色属性；角色是实例级的，从任一 database 都可查。"""
+    install = _engine(
+        instance,
+        database=CENTER_DATABASE,
+        user=INSTALL_ROLE,
+        password=instance.install_password,
+    )
+    try:
+        with install.connect() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT rolsuper, rolcreatedb, rolcreaterole, rolinherit "
+                    "FROM pg_roles WHERE rolname = :role"
+                ),
+                {"role": role},
+            ).one()
+        return tuple(row)
+    finally:
+        install.dispose()
+
+
+def _expect_denied(
+    instance: IsolatedInstance, runtime: Runtime, statement: str, match: str
+) -> None:
     """runtime 执行一条被拒绝的语句：每个断言用独立连接，避免事务中止互相污染。"""
-    engine = _engine(instance, user=CENTER_RUNTIME_ROLE, password=instance.center_runtime_password)
+    engine = _engine(
+        instance, database=runtime.database, user=runtime.role, password=runtime.password
+    )
     try:
         with pytest.raises(ProgrammingError, match=match), engine.begin() as connection:
             connection.execute(text(statement))
     finally:
         engine.dispose()
+
+
+def _assert_runtime_can_use_future_objects(instance: IsolatedInstance, runtime: Runtime) -> None:
+    """安装身份在初始化之后建表/序列，runtime 仅凭 default privileges 即可 DML。"""
+    probe = f"s065_default_privilege_probe_{runtime.database}"
+    install = _engine(
+        instance,
+        database=runtime.database,
+        user=INSTALL_ROLE,
+        password=instance.install_password,
+    )
+    try:
+        with install.begin() as connection:
+            connection.execute(text(f"DROP TABLE IF EXISTS {probe}"))
+            # `bigserial` 同时验证未来序列的 default privileges，而不只是表。
+            connection.execute(text(f"CREATE TABLE {probe} (id bigserial primary key, note text)"))
+        engine = _engine(
+            instance, database=runtime.database, user=runtime.role, password=runtime.password
+        )
+        try:
+            with engine.begin() as connection:
+                connection.execute(text(f"INSERT INTO {probe} (note) VALUES ('a')"))
+                connection.execute(text(f"UPDATE {probe} SET note = 'b' WHERE id = 1"))
+                assert connection.execute(text(f"SELECT note FROM {probe}")).scalar_one() == "b"
+                connection.execute(text(f"DELETE FROM {probe} WHERE id = 1"))
+        finally:
+            engine.dispose()
+    finally:
+        with install.begin() as connection:
+            connection.execute(text(f"DROP TABLE IF EXISTS {probe}"))
+        install.dispose()
 
 
 @pytest.fixture(scope="module")
@@ -151,9 +221,9 @@ def isolated_instance(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Isol
             PostgresContainer(
                 POSTGRES_IMAGE,
                 driver="psycopg",
-                username="nvsop",
+                username=INSTALL_ROLE,
                 password=install_password,
-                dbname="nvsop",
+                dbname=CENTER_DATABASE,
             )
             .with_network(network)
             .with_network_aliases("center-db")
@@ -162,7 +232,7 @@ def isolated_instance(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Isol
             DockerContainer(POSTGRES_IMAGE)
             .with_network(network)
             .with_env("PGHOST", "center-db")
-            .with_env("PGUSER", "nvsop")
+            .with_env("PGUSER", INSTALL_ROLE)
             .with_volume_mapping(ROLE_SQL, "/opt/nvsop/db-roles.sql")
             .with_volume_mapping(secrets / "center-db-password", "/run/secrets/center-db-password")
             .with_volume_mapping(
@@ -179,7 +249,8 @@ def isolated_instance(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Isol
                     "/bin/sh",
                     "-c",
                     'PGPASSWORD="$(cat /run/secrets/center-db-password)" '
-                    'psql -v ON_ERROR_STOP=1 -d nvsop -c "CREATE DATABASE training"',
+                    f"psql -v ON_ERROR_STOP=1 -d {CENTER_DATABASE} "
+                    f'-c "CREATE DATABASE {TRAINING_DATABASE}"',
                 ]
             )
             assert created.exit_code == 0, created.output
@@ -203,8 +274,10 @@ def isolated_instance(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Isol
             yield IsolatedInstance(
                 base_url=base,
                 install_password=install_password,
-                center_runtime_password=center_runtime_password,
-                training_runtime_password=training_runtime_password,
+                runtimes=(
+                    Runtime(CENTER_DATABASE, CENTER_RUNTIME_ROLE, center_runtime_password),
+                    Runtime(TRAINING_DATABASE, TRAINING_RUNTIME_ROLE, training_runtime_password),
+                ),
                 init_outputs=init_outputs,
                 reinit=reinit,
             )
@@ -215,61 +288,70 @@ def test_runtime_roles_connect_only_their_own_database(
 ) -> None:
     instance = isolated_instance
 
-    assert (
-        _attempt_login(
-            instance,
-            database="nvsop",
-            user=CENTER_RUNTIME_ROLE,
-            password=instance.center_runtime_password,
+    for runtime in instance.runtimes:
+        assert (
+            _attempt_login(
+                instance,
+                database=runtime.database,
+                user=runtime.role,
+                password=runtime.password,
+            )
+            is None
         )
-        is None
-    )
-    assert (
-        _attempt_login(
-            instance,
-            database="training",
-            user=TRAINING_RUNTIME_ROLE,
-            password=instance.training_runtime_password,
+        other = TRAINING_DATABASE if runtime.database == CENTER_DATABASE else CENTER_DATABASE
+        denied = _attempt_login(
+            instance, database=other, user=runtime.role, password=runtime.password
         )
-        is None
-    )
+        assert denied is not None
+        assert PERMISSION_DENIED in denied
 
-    center_crossed = _attempt_login(
-        instance,
-        database="training",
-        user=CENTER_RUNTIME_ROLE,
-        password=instance.center_runtime_password,
-    )
-    assert center_crossed is not None
-    assert PERMISSION_DENIED in center_crossed
-    training_crossed = _attempt_login(
-        instance,
-        database="nvsop",
-        user=TRAINING_RUNTIME_ROLE,
-        password=instance.training_runtime_password,
-    )
-    assert training_crossed is not None
-    assert PERMISSION_DENIED in training_crossed
+    # 安装身份与两个 runtime 分离，且仍能进入两个 database（迁移与对象安装需要）。
+    assert INSTALL_ROLE not in {runtime.role for runtime in instance.runtimes}
+    for database in (CENTER_DATABASE, TRAINING_DATABASE):
+        assert (
+            _attempt_login(
+                instance, database=database, user=INSTALL_ROLE, password=instance.install_password
+            )
+            is None
+        )
 
 
-def test_public_cannot_bypass_connect(isolated_instance: IsolatedInstance) -> None:
-    """没有显式 CONNECT 的角色（等价于只依赖 PUBLIC 默认权限）必须被拒绝。"""
+def test_public_cannot_bypass_connect_or_object_privileges(
+    isolated_instance: IsolatedInstance,
+) -> None:
+    """只依赖 PUBLIC 默认权限的角色既不能 CONNECT，也拿不到 schema / 表对象权限。"""
     instance = isolated_instance
     probe = "public_probe_" + uuid4().hex[:8]
     probe_password = "probe-" + uuid4().hex  # pragma: allowlist secret
-    install = create_engine(instance.base_url)
+    install = _engine(
+        instance,
+        database=CENTER_DATABASE,
+        user=INSTALL_ROLE,
+        password=instance.install_password,
+    )
     try:
         with install.begin() as connection:
             # DDL 不接受绑定参数；密码是测试内生成的十六进制串。
             connection.execute(text(f"CREATE ROLE \"{probe}\" LOGIN PASSWORD '{probe_password}'"))
+            for query, parameters in (
+                (
+                    "SELECT has_database_privilege(:role, :database, 'CONNECT')",
+                    {"role": probe, "database": CENTER_DATABASE},
+                ),
+                ("SELECT has_schema_privilege(:role, 'public', 'USAGE')", {"role": probe}),
+                ("SELECT has_table_privilege(:role, 'auth_user', 'SELECT')", {"role": probe}),
+            ):
+                assert connection.execute(text(query), parameters).scalar_one() is False
             assert (
                 connection.execute(
-                    text("SELECT has_database_privilege(:role, 'nvsop', 'CONNECT')"),
-                    {"role": probe},
+                    text("SELECT has_table_privilege(:role, 'auth_user', 'SELECT')"),
+                    {"role": CENTER_RUNTIME_ROLE},
                 ).scalar_one()
-                is False
+                is True
             )
-        denied = _attempt_login(instance, database="nvsop", user=probe, password=probe_password)
+        denied = _attempt_login(
+            instance, database=CENTER_DATABASE, user=probe, password=probe_password
+        )
         assert denied is not None
         assert PERMISSION_DENIED in denied
     finally:
@@ -282,61 +364,34 @@ def test_runtime_is_non_superuser_and_cannot_use_ddl(
     isolated_instance: IsolatedInstance,
 ) -> None:
     instance = isolated_instance
-    install = create_engine(instance.base_url)
-    try:
-        with install.connect() as connection:
-            attributes = connection.execute(
-                text(
-                    "SELECT rolsuper, rolcreatedb, rolcreaterole, rolinherit "
-                    "FROM pg_roles WHERE rolname = :role"
-                ),
-                {"role": CENTER_RUNTIME_ROLE},
-            ).one()
-        assert tuple(attributes) == (False, False, False, False)
-    finally:
-        install.dispose()
+    for runtime in instance.runtimes:
+        assert _role_attributes(instance, runtime.role) == NON_SUPERUSER_ATTRIBUTES
+        _expect_denied(
+            instance,
+            runtime,
+            "CREATE TABLE forbidden_probe (id int)",
+            "permission denied for schema",
+        )
 
-    # runtime 能读安装身份创建的真实中心表。
-    engine = _engine(instance, user=CENTER_RUNTIME_ROLE, password=instance.center_runtime_password)
+    # Center runtime 能读安装身份迁移出的真实表，但不能改其结构。
+    center = instance.runtime(CENTER_DATABASE)
+    engine = _engine(instance, database=center.database, user=center.role, password=center.password)
     try:
         with engine.connect() as connection:
             assert connection.execute(text("SELECT count(*) FROM auth_user")).scalar_one() == 0
     finally:
         engine.dispose()
-
+    _expect_denied(instance, center, "DROP TABLE auth_user", "must be owner")
     _expect_denied(
-        instance, "CREATE TABLE forbidden_probe (id int)", "permission denied for schema"
+        instance, center, "ALTER TABLE auth_user ADD COLUMN forbidden int", "must be owner"
     )
-    _expect_denied(instance, "DROP TABLE auth_user", "must be owner")
-    _expect_denied(instance, "ALTER TABLE auth_user ADD COLUMN forbidden int", "must be owner")
 
 
 def test_default_privileges_cover_objects_created_after_init(
     isolated_instance: IsolatedInstance,
 ) -> None:
-    instance = isolated_instance
-    probe = "default_privilege_probe"
-    install = create_engine(instance.base_url)
-    try:
-        with install.begin() as connection:
-            connection.execute(text(f"DROP TABLE IF EXISTS {probe}"))
-            # `bigserial` 同时验证未来序列的 default privileges，而不只是表。
-            connection.execute(text(f"CREATE TABLE {probe} (id bigserial primary key, note text)"))
-        engine = _engine(
-            instance, user=CENTER_RUNTIME_ROLE, password=instance.center_runtime_password
-        )
-        try:
-            with engine.begin() as connection:
-                connection.execute(text(f"INSERT INTO {probe} (note) VALUES ('a')"))
-                connection.execute(text(f"UPDATE {probe} SET note = 'b' WHERE id = 1"))
-                assert connection.execute(text(f"SELECT note FROM {probe}")).scalar_one() == "b"
-                connection.execute(text(f"DELETE FROM {probe} WHERE id = 1"))
-        finally:
-            engine.dispose()
-    finally:
-        with install.begin() as connection:
-            connection.execute(text(f"DROP TABLE IF EXISTS {probe}"))
-        install.dispose()
+    for runtime in isolated_instance.runtimes:
+        _assert_runtime_can_use_future_objects(isolated_instance, runtime)
 
 
 def test_role_init_is_idempotent(isolated_instance: IsolatedInstance) -> None:
@@ -362,14 +417,12 @@ def test_deployment_never_inlines_runtime_passwords(
 
     passwords = (
         instance.install_password,
-        instance.center_runtime_password,
-        instance.training_runtime_password,
+        *(runtime.password for runtime in instance.runtimes),
     )
     for name in ROLE_INIT_SERVICES:
         command = _rendered_command(document["services"][name])
         assert "cat /run/secrets/" in command
-        for password in passwords:
-            assert password not in command, name
+    # 真实初始化输出会把代入后的密码交给 psql；日志/输出里不能出现它。
     for output in instance.init_outputs.values():
         for password in passwords:
             assert password.encode() not in output

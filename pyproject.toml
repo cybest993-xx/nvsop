@@ -149,6 +149,7 @@ layers = [
     "factory_sop.overview",
     "factory_sop.configuration",
     "factory_sop.monitor",
+    "factory_sop.evidence",
     "factory_sop.template",
     "factory_sop.execution",
     "factory_sop.device",
@@ -301,6 +302,12 @@ ignore_imports = [
     "factory_sop.auth.api -> factory_sop.auth.authorization",
     "factory_sop.auth.api -> factory_sop.auth.permissions",
 ]
+
+[[tool.importlinter.contracts]]
+name = "evidence behavior does not depend on adapters"
+type = "forbidden"
+source_modules = ["factory_sop.evidence.api", "factory_sop.evidence.model", "factory_sop.evidence.errors", "factory_sop.evidence.repository", "factory_sop.evidence.usecases"]
+forbidden_modules = ["factory_sop.evidence.adapters", "factory_sop.device.adapters", "factory_sop.auth.adapters", "fastapi", "sqlalchemy"]
 
 [[tool.importlinter.contracts]]
 name = "dataset's behavior does not depend on how it is stored or reached"

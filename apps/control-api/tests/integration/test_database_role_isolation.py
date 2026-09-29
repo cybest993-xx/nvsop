@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import subprocess
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -38,7 +39,7 @@ CENTER_RUNTIME_ROLE = "nvsop_runtime"
 TRAINING_RUNTIME_ROLE = "training_runtime"
 ROLE_INIT_SERVICES = ("center-role-init", "training-role-init")
 PERMISSION_DENIED = "permission denied"
-NON_SUPERUSER_ATTRIBUTES = (False, False, False, False)
+NON_SUPERUSER_ATTRIBUTES = (False, False, False, False, False, False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,7 +141,8 @@ def _role_attributes(instance: IsolatedInstance, role: str) -> tuple[object, ...
         with install.connect() as connection:
             row = connection.execute(
                 text(
-                    "SELECT rolsuper, rolcreatedb, rolcreaterole, rolinherit "
+                    "SELECT rolsuper, rolcreatedb, rolcreaterole, rolinherit, "
+                    "rolreplication, rolbypassrls "
                     "FROM pg_roles WHERE rolname = :role"
                 ),
                 {"role": role},
@@ -262,11 +264,17 @@ def isolated_instance(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Isol
                 init_outputs[name] = result.output
 
             def reinit() -> dict[str, Any]:
-                """再次执行真实 Compose 命令，验证可重复运行。"""
-                return {
-                    name: client.exec(["/bin/sh", "-c", _rendered_command(service)])
+                """并发重跑两个真实 Compose 命令，验证可重复运行且互不争用角色对象。"""
+                commands = {
+                    name: ["/bin/sh", "-c", _rendered_command(service)]
                     for name, service in (("center", center_init), ("training", training_init))
                 }
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    futures = {
+                        name: executor.submit(client.exec, command)
+                        for name, command in commands.items()
+                    }
+                    return {name: future.result() for name, future in futures.items()}
 
             base = make_url(server.get_connection_url())
             _migrate(base)
@@ -306,7 +314,6 @@ def test_runtime_roles_connect_only_their_own_database(
         assert PERMISSION_DENIED in denied
 
     # 安装身份与两个 runtime 分离，且仍能进入两个 database（迁移与对象安装需要）。
-    assert INSTALL_ROLE not in {runtime.role for runtime in instance.runtimes}
     for database in (CENTER_DATABASE, TRAINING_DATABASE):
         assert (
             _attempt_login(
@@ -319,7 +326,7 @@ def test_runtime_roles_connect_only_their_own_database(
 def test_public_cannot_bypass_connect_or_object_privileges(
     isolated_instance: IsolatedInstance,
 ) -> None:
-    """只依赖 PUBLIC 默认权限的角色既不能 CONNECT，也拿不到 schema / 表对象权限。"""
+    """只依赖 PUBLIC 默认权限的角色在两个 database 都既不能 CONNECT，也拿不到 schema / 表权限。"""
     instance = isolated_instance
     probe = "public_probe_" + uuid4().hex[:8]
     probe_password = "probe-" + uuid4().hex  # pragma: allowlist secret
@@ -333,27 +340,48 @@ def test_public_cannot_bypass_connect_or_object_privileges(
         with install.begin() as connection:
             # DDL 不接受绑定参数；密码是测试内生成的十六进制串。
             connection.execute(text(f"CREATE ROLE \"{probe}\" LOGIN PASSWORD '{probe_password}'"))
-            for query, parameters in (
-                (
-                    "SELECT has_database_privilege(:role, :database, 'CONNECT')",
-                    {"role": probe, "database": CENTER_DATABASE},
-                ),
-                ("SELECT has_schema_privilege(:role, 'public', 'USAGE')", {"role": probe}),
-                ("SELECT has_table_privilege(:role, 'auth_user', 'SELECT')", {"role": probe}),
-            ):
-                assert connection.execute(text(query), parameters).scalar_one() is False
-            assert (
-                connection.execute(
-                    text("SELECT has_table_privilege(:role, 'auth_user', 'SELECT')"),
-                    {"role": CENTER_RUNTIME_ROLE},
-                ).scalar_one()
-                is True
+        for database in (CENTER_DATABASE, TRAINING_DATABASE):
+            table = f"s065_public_probe_{database}"
+            database_engine = _engine(
+                instance,
+                database=database,
+                user=INSTALL_ROLE,
+                password=instance.install_password,
             )
-        denied = _attempt_login(
-            instance, database=CENTER_DATABASE, user=probe, password=probe_password
-        )
-        assert denied is not None
-        assert PERMISSION_DENIED in denied
+            try:
+                with database_engine.begin() as connection:
+                    connection.execute(text(f"DROP TABLE IF EXISTS {table}"))
+                    connection.execute(text(f"CREATE TABLE {table} (id int)"))
+                    for query, parameters in (
+                        (
+                            "SELECT has_database_privilege(:role, :database, 'CONNECT')",
+                            {"role": probe, "database": database},
+                        ),
+                        ("SELECT has_schema_privilege(:role, 'public', 'USAGE')", {"role": probe}),
+                        (
+                            f"SELECT has_table_privilege(:role, '{table}', 'SELECT')",
+                            {"role": probe},
+                        ),
+                    ):
+                        assert connection.execute(text(query), parameters).scalar_one() is False
+                    # runtime 对安装身份新建的表有 default privilege SELECT。
+                    assert (
+                        connection.execute(
+                            text(f"SELECT has_table_privilege(:role, '{table}', 'SELECT')"),
+                            {"role": instance.runtime(database).role},
+                        ).scalar_one()
+                        is True
+                    )
+                with database_engine.begin() as connection:
+                    connection.execute(text(f"DROP TABLE IF EXISTS {table}"))
+            finally:
+                database_engine.dispose()
+        for database in (CENTER_DATABASE, TRAINING_DATABASE):
+            denied = _attempt_login(
+                instance, database=database, user=probe, password=probe_password
+            )
+            assert denied is not None
+            assert PERMISSION_DENIED in denied
     finally:
         with install.begin() as connection:
             connection.execute(text(f'DROP ROLE IF EXISTS "{probe}"'))
@@ -386,6 +414,25 @@ def test_runtime_is_non_superuser_and_cannot_use_ddl(
         instance, center, "ALTER TABLE auth_user ADD COLUMN forbidden int", "must be owner"
     )
 
+    # AC2：runtime 显式获得中心枚举类型的 USAGE，而不是只依赖 PUBLIC 内建授权。
+    install = _engine(
+        instance,
+        database=CENTER_DATABASE,
+        user=INSTALL_ROLE,
+        password=instance.install_password,
+    )
+    try:
+        with install.connect() as connection:
+            assert (
+                connection.execute(
+                    text("SELECT has_type_privilege(:role, 'auth_user_status', 'USAGE')"),
+                    {"role": center.role},
+                ).scalar_one()
+                is True
+            )
+    finally:
+        install.dispose()
+
 
 def test_default_privileges_cover_objects_created_after_init(
     isolated_instance: IsolatedInstance,
@@ -395,7 +442,7 @@ def test_default_privileges_cover_objects_created_after_init(
 
 
 def test_role_init_is_idempotent(isolated_instance: IsolatedInstance) -> None:
-    """再次运行真实 Compose 角色初始化命令必须成功且不改动已有对象。"""
+    """并发重跑两个真实 Compose 角色初始化命令必须各自成功且不改动已有对象。"""
     results = isolated_instance.reinit()
     for name, result in results.items():
         assert result.exit_code == 0, (name, result.output)

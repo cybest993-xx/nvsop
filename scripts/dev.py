@@ -981,6 +981,11 @@ def ensure_sample_video(item: DevPaths) -> None:
 
 def ensure_credentials(item: DevPaths) -> None:
     write_secret(item.secrets / "center-db-password", "center-" + os.urandom(18).hex())
+    write_secret(item.secrets / "nvsop-runtime-password", "nvsop-runtime-" + os.urandom(18).hex())
+    write_secret(
+        item.secrets / "training-runtime-password",
+        "training-runtime-" + os.urandom(18).hex(),
+    )
     write_secret(item.secrets / "bootstrap-password", "dev-" + os.urandom(24).hex())
     write_secret(item.secrets / "csrf-secret", os.urandom(32).hex())
     write_secret(item.secrets / "redis-url", "redis://redis:6379/0")
@@ -1056,6 +1061,8 @@ def require_setup(item: DevPaths) -> None:
         raise DevError(f"请先运行 make dev-setup；未找到 {item.setup_file}")
     required = [
         item.secrets / "bootstrap-password",
+        item.secrets / "nvsop-runtime-password",
+        item.secrets / "training-runtime-password",
         item.state / "nginx.conf",
         item.samples / "dev-sample.mp4",
     ]

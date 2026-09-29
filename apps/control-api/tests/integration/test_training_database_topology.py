@@ -92,6 +92,9 @@ def test_dev_compose_runs_one_postgres_instance_for_center_and_training() -> Non
     assert postgres_services == {
         "center-db": POSTGRES_IMAGE,
         "training-db-init": POSTGRES_IMAGE,
+        # S065 的角色初始化也是同镜像的一次性服务，不是第二个运行实例。
+        "center-role-init": POSTGRES_IMAGE,
+        "training-role-init": POSTGRES_IMAGE,
     }
 
     center_environment = cast("dict[str, str]", services["center-db"]["environment"])
@@ -108,8 +111,8 @@ def test_dev_compose_runs_one_postgres_instance_for_center_and_training() -> Non
     backend_environment = cast("dict[str, str]", services["annotation-backend"]["environment"])
     assert backend_environment["POSTGRES_HOST"] == "center-db"
     assert backend_environment["POSTGRES_DB"] == "training"
-    assert backend_environment["POSTGRES_USER"] == "nvsop"
-    assert services["annotation-backend"]["depends_on"]["training-db-init"]["condition"] == (
+    assert backend_environment["POSTGRES_USER"] == "training_runtime"
+    assert services["annotation-backend"]["depends_on"]["training-role-init"]["condition"] == (
         "service_completed_successfully"
     )
 

@@ -1,6 +1,36 @@
 name: nvsop-dev-main
 
 # 本地网关默认由 scripts/dev.py 渲染为 HTTP；显式设置 NVSOP_DEV_PROTOCOL=https 才启用固定 main 本地 TLS。
+#
+# 中心 runtime（API / worker / bootstrap）共用环境。数据库运行身份是 `nvsop_runtime`，
+# 与 `center-migrate` 的安装身份 `nvsop` 分离；密码只经独立 secret 文件注入（S065）。
+x-center-environment: &center-environment
+  SOP_DATABASE_HOST: center-db
+  SOP_DATABASE_PORT: "5432"
+  SOP_DATABASE_NAME: nvsop
+  SOP_DATABASE_USER: nvsop_runtime
+  SOP_DATABASE_PASSWORD_FILE: /run/secrets/nvsop-runtime-password
+  SOP_REDIS_URL_FILE: /run/secrets/redis-url
+  SOP_DATASET_STORAGE_ROOT: /var/lib/nvsop/dataset-files
+  SOP_CSRF_SECRET_FILE: /run/secrets/csrf-secret
+  SOP_DEPLOYMENT_MODE: fixed_main
+  SOP_SESSION_COOKIE_TRANSPORT: ${NVSOP_DEV_COOKIE_TRANSPORT:-allow_http}
+  SOP_SESSION_IDLE_TIMEOUT_MINUTES: "30"
+  SOP_SESSION_ABSOLUTE_LIFETIME_MINUTES: "480"
+  SOP_DATASET_UPLOAD_TTL_SECONDS: "900"
+  SOP_DATASET_MAX_UPLOAD_BYTES: "8589934592"
+  SOP_DATASET_SUPPORTED_CODECS: h264,h265
+  SOP_MEDIA_PROBE_TIMEOUT_SECONDS: "60"
+  SOP_ANNOTATION_BACKEND_URL: http://annotation-backend:8100
+  SOP_ANNOTATION_MEDIA_ORIGIN: ${NVSOP_DEV_MEDIA_URL:-http://localhost:8444}
+  SOP_ANNOTATION_DATA_ROOT: /var/lib/nvsop/annotation-data
+  SOP_ANNOTATION_HTTP_TIMEOUT_SECONDS: "120"
+  SOP_MEDIA_PROBE_BINARY: ffprobe
+  SOP_WORKER_HEALTH_CHECK_INTERVAL_SECONDS: "5"
+  SOP_LOG_LEVEL: info
+  NO_PROXY: center-db,redis,annotation-backend,localhost,127.0.0.1
+  no_proxy: center-db,redis,annotation-backend,localhost,127.0.0.1
+
 services:
   center-db:
     image: postgres:17.2-bookworm
@@ -44,6 +74,54 @@ services:
         fi
     restart: "no"
 
+  # S065：用安装身份在 `nvsop` 上建立 Center runtime 的非超级用户权限。
+  # 幂等：可重复运行；密码只从 secret 文件读入环境，不进入命令行或日志。
+  # 不依赖 `training-db-init`，Center 启动不等训练库。
+  center-role-init:
+    image: postgres:17.2-bookworm
+    depends_on:
+      center-db:
+        condition: service_healthy
+    environment:
+      PGHOST: center-db
+      PGUSER: nvsop
+    secrets:
+      - center-db-password
+      - nvsop-runtime-password
+    volumes:
+      - ./db-roles.sql:/opt/nvsop/db-roles.sql:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        export PGPASSWORD="$$(cat /run/secrets/center-db-password)"
+        export RUNTIME_PASSWORD="$$(cat /run/secrets/nvsop-runtime-password)"
+        psql -v ON_ERROR_STOP=1 -v database=nvsop -v runtime_role=nvsop_runtime -d nvsop -f /opt/nvsop/db-roles.sql
+    restart: "no"
+
+  # S065：在 `training` database 上建立训练 runtime 的非超级用户权限。
+  training-role-init:
+    image: postgres:17.2-bookworm
+    depends_on:
+      training-db-init:
+        condition: service_completed_successfully
+    environment:
+      PGHOST: center-db
+      PGUSER: nvsop
+    secrets:
+      - center-db-password
+      - training-runtime-password
+    volumes:
+      - ./db-roles.sql:/opt/nvsop/db-roles.sql:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        export PGPASSWORD="$$(cat /run/secrets/center-db-password)"
+        export RUNTIME_PASSWORD="$$(cat /run/secrets/training-runtime-password)"
+        psql -v ON_ERROR_STOP=1 -v database=training -v runtime_role=training_runtime -d training -f /opt/nvsop/db-roles.sql
+    restart: "no"
+
   redis:
     image: redis:7.4.2-bookworm
     command: ["redis-server", "--appendonly", "yes"]
@@ -60,32 +138,13 @@ services:
     depends_on:
       center-db:
         condition: service_healthy
-    environment: &center-environment
-      SOP_DATABASE_HOST: center-db
-      SOP_DATABASE_PORT: "5432"
-      SOP_DATABASE_NAME: nvsop
+      center-role-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *center-environment
+      # Alembic 以安装身份迁移；runtime 没有 DDL 权限。
       SOP_DATABASE_USER: nvsop
       SOP_DATABASE_PASSWORD_FILE: /run/secrets/center-db-password
-      SOP_REDIS_URL_FILE: /run/secrets/redis-url
-      SOP_DATASET_STORAGE_ROOT: /var/lib/nvsop/dataset-files
-      SOP_CSRF_SECRET_FILE: /run/secrets/csrf-secret
-      SOP_DEPLOYMENT_MODE: fixed_main
-      SOP_SESSION_COOKIE_TRANSPORT: ${NVSOP_DEV_COOKIE_TRANSPORT:-allow_http}
-      SOP_SESSION_IDLE_TIMEOUT_MINUTES: "30"
-      SOP_SESSION_ABSOLUTE_LIFETIME_MINUTES: "480"
-      SOP_DATASET_UPLOAD_TTL_SECONDS: "900"
-      SOP_DATASET_MAX_UPLOAD_BYTES: "8589934592"
-      SOP_DATASET_SUPPORTED_CODECS: h264,h265
-      SOP_MEDIA_PROBE_TIMEOUT_SECONDS: "60"
-      SOP_ANNOTATION_BACKEND_URL: http://annotation-backend:8100
-      SOP_ANNOTATION_MEDIA_ORIGIN: ${NVSOP_DEV_MEDIA_URL:-http://localhost:8444}
-      SOP_ANNOTATION_DATA_ROOT: /var/lib/nvsop/annotation-data
-      SOP_ANNOTATION_HTTP_TIMEOUT_SECONDS: "120"
-      SOP_MEDIA_PROBE_BINARY: ffprobe
-      SOP_WORKER_HEALTH_CHECK_INTERVAL_SECONDS: "5"
-      SOP_LOG_LEVEL: info
-      NO_PROXY: center-db,redis,annotation-backend,localhost,127.0.0.1
-      no_proxy: center-db,redis,annotation-backend,localhost,127.0.0.1
     secrets:
       - center-db-password
       - redis-url
@@ -104,7 +163,7 @@ services:
       NVSOP_BOOTSTRAP_DISPLAY_NAME: 开发环境管理员
       NVSOP_BOOTSTRAP_PASSWORD_FILE: /run/secrets/bootstrap-password
     secrets:
-      - center-db-password
+      - nvsop-runtime-password
       - redis-url
       - csrf-secret
       - bootstrap-password
@@ -128,7 +187,7 @@ services:
     volumes:
       - dataset-media:/var/lib/nvsop/dataset-files
     secrets:
-      - center-db-password
+      - nvsop-runtime-password
       - redis-url
       - csrf-secret
     command: ["uvicorn", "factory_sop.entrypoint:build", "--factory", "--host", "0.0.0.0", "--port", "8000"]
@@ -152,7 +211,7 @@ services:
       - dataset-media:/var/lib/nvsop/dataset-files
       - annotation-media:/var/lib/nvsop/annotation-data:ro
     secrets:
-      - center-db-password
+      - nvsop-runtime-password
       - redis-url
       - csrf-secret
     command: ["python", "-m", "factory_sop.worker_entrypoint"]
@@ -170,20 +229,19 @@ services:
       context: ${NVSOP_SOURCE_DIR:-.}
       dockerfile: deploy/dev/annotation-backend.Dockerfile
     depends_on:
-      training-db-init:
+      training-role-init:
         condition: service_completed_successfully
     environment:
-      # 训练/标注进程经 Vendor `POSTGRES_*` seam 连接同一实例的 `training` database（Q35）。
-      # 运行身份隔离由 #223(S065) 负责；本票复用安装身份。
+      # 训练/标注进程经 Vendor `POSTGRES_*` seam 以 `training_runtime` 非超级用户连接 `training`。
       POSTGRES_HOST: center-db
       POSTGRES_PORT: "5432"
       POSTGRES_DB: training
-      POSTGRES_USER: nvsop
-      POSTGRES_PASSWORD_FILE: /run/secrets/center-db-password
+      POSTGRES_USER: training_runtime
+      POSTGRES_PASSWORD_FILE: /run/secrets/training-runtime-password
       SERVICE_PORT: "8100"
       MAX_REQUEST_BODY_MB: "2048"
     secrets:
-      - center-db-password
+      - training-runtime-password
     volumes:
       - annotation-media:/app/assets/videos
     healthcheck:
@@ -254,6 +312,10 @@ volumes:
 secrets:
   center-db-password:
     file: ${NVSOP_DEV_STATE_DIR:-.nvsop/dev-main}/secrets/center-db-password
+  nvsop-runtime-password:
+    file: ${NVSOP_DEV_STATE_DIR:-.nvsop/dev-main}/secrets/nvsop-runtime-password
+  training-runtime-password:
+    file: ${NVSOP_DEV_STATE_DIR:-.nvsop/dev-main}/secrets/training-runtime-password
   bootstrap-password:
     file: ${NVSOP_DEV_STATE_DIR:-.nvsop/dev-main}/secrets/bootstrap-password
   csrf-secret:

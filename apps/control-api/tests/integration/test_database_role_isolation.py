@@ -313,7 +313,7 @@ def test_runtime_roles_connect_only_their_own_database(
         assert denied is not None
         assert PERMISSION_DENIED in denied
 
-    # 安装身份与两个 runtime 分离，且仍能进入两个 database（迁移与对象安装需要）。
+    # 安装身份仍能进入两个 database（迁移与对象安装需要）；服务到身份的接线由部署契约测试断言。
     for database in (CENTER_DATABASE, TRAINING_DATABASE):
         assert (
             _attempt_login(
@@ -414,7 +414,8 @@ def test_runtime_is_non_superuser_and_cannot_use_ddl(
         instance, center, "ALTER TABLE auth_user ADD COLUMN forbidden int", "must be owner"
     )
 
-    # AC2：runtime 显式获得中心枚举类型的 USAGE，而不是只依赖 PUBLIC 内建授权。
+    # AC2：安装身份迁移出的枚举类型带 runtime 的显式 USAGE（来自 default privileges），
+    # 不是只依赖 PUBLIC 内建授权；PUBLIC 的内建 USAGE 无法经 default privileges 撤销。
     install = _engine(
         instance,
         database=CENTER_DATABASE,
@@ -423,13 +424,14 @@ def test_runtime_is_non_superuser_and_cannot_use_ddl(
     )
     try:
         with install.connect() as connection:
-            assert (
-                connection.execute(
-                    text("SELECT has_type_privilege(:role, 'auth_user_status', 'USAGE')"),
-                    {"role": center.role},
-                ).scalar_one()
-                is True
-            )
+            typacl = connection.execute(
+                text(
+                    "SELECT typacl::text FROM pg_type t "
+                    "JOIN pg_namespace n ON n.oid = t.typnamespace "
+                    "WHERE n.nspname = 'public' AND t.typname = 'auth_user_status'"
+                )
+            ).scalar_one()
+            assert f"{CENTER_RUNTIME_ROLE}=U" in typacl, typacl
     finally:
         install.dispose()
 
@@ -442,7 +444,7 @@ def test_default_privileges_cover_objects_created_after_init(
 
 
 def test_role_init_is_idempotent(isolated_instance: IsolatedInstance) -> None:
-    """并发重跑两个真实 Compose 角色初始化命令必须各自成功且不改动已有对象。"""
+    """并发重跑两个真实 Compose 角色初始化命令必须各自成功（不争用同一角色对象）。"""
     results = isolated_instance.reinit()
     for name, result in results.items():
         assert result.exit_code == 0, (name, result.output)

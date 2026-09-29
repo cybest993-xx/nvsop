@@ -32,7 +32,8 @@ GRANT USAGE ON SCHEMA public TO :"runtime_role";
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO :"runtime_role";
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO :"runtime_role";
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO :"runtime_role";
--- `GRANT ... ON ALL TYPES IN SCHEMA` 不是 PostgreSQL 语法，用 `\gexec` 逐类型授权。
+-- `GRANT ... ON ALL TYPES IN SCHEMA` 不是 PostgreSQL 语法，用 `\gexec` 逐类型授权：覆盖本次
+-- 初始化前已存在的类型；迁移等后续新建的类型由下面的 default privileges 覆盖。
 SELECT format('GRANT USAGE ON TYPE %I TO %I', typname, :'runtime_role')
 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
 WHERE n.nspname = 'public' AND t.typtype = 'e'

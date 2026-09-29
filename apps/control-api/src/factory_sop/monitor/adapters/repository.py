@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from factory_sop.monitor.adapters.tables import (
     ReportedDecisionRow,
     ReportedHealthRow,
+    ReportedObservationRow,
     ReportedSopInstanceRow,
     ReportedViolationRow,
 )
@@ -18,6 +19,7 @@ from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.model import (
     MirroredDecision,
     MirroredHealth,
+    MirroredObservation,
     MirroredSopInstance,
     MirroredViolation,
 )
@@ -198,6 +200,62 @@ class PostgresMonitorRepository(MonitorRepository):
             .limit(page_size)
         ).all()
         total = self._session.scalar(select(func.count()).select_from(ReportedViolationRow))
+        return tuple(row.to_domain() for row in rows), int(total or 0)
+
+    def upsert_observation(self, value: MirroredObservation) -> bool:
+        row = ReportedObservationRow.from_domain(value)
+        table = cast(Table, ReportedObservationRow.__table__)
+        statement = postgres_insert(table).values(
+            event_id=row.event_id,
+            trace_id=row.trace_id,
+            host_id=row.host_id,
+            station_id=row.station_id,
+            instance_id=row.instance_id,
+            source=row.source,
+            signal=row.signal,
+            observed_at=row.observed_at,
+            received_at=row.received_at,
+            payload=row.payload,
+        )
+        result = self._session.execute(
+            statement.on_conflict_do_nothing(index_elements=[table.c.event_id]).returning(
+                table.c.event_id
+            )
+        )
+        if result.scalar_one_or_none() is not None:
+            return True
+        existing = self._session.get(ReportedObservationRow, row.event_id)
+        if existing is None:
+            raise RuntimeError("observation mirror insert conflicted without a visible row")
+        _ensure_same(existing.payload, row.payload, "observation", row.event_id)
+        return False
+
+    def page_observations(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        station_id: str | None = None,
+        instance_id: int | None = None,
+    ) -> tuple[tuple[MirroredObservation, ...], int]:
+        filters = []
+        if station_id is not None:
+            filters.append(ReportedObservationRow.station_id == station_id)
+        if instance_id is not None:
+            filters.append(ReportedObservationRow.instance_id == instance_id)
+        rows = self._session.scalars(
+            select(ReportedObservationRow)
+            .where(*filters)
+            .order_by(
+                ReportedObservationRow.received_at.desc(),
+                ReportedObservationRow.event_id.desc(),
+            )
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        ).all()
+        total = self._session.scalar(
+            select(func.count()).select_from(ReportedObservationRow).where(*filters)
+        )
         return tuple(row.to_domain() for row in rows), int(total or 0)
 
     def recent_decisions(self, *, limit: int) -> tuple[MirroredDecision, ...]:

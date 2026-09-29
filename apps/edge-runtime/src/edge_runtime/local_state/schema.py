@@ -302,6 +302,35 @@ _V8 = (
 )
 
 _V9 = (
+    # An observation the center has not confirmed yet. It is neither stream health nor a
+    # decision: it records what happened at the station, so it gets its own durable backlog
+    # instead of entering the decision outbox. `local_sop_instance` may not exist yet for the
+    # opening observation, so there is no foreign key; a sent row is kept so a retry's event
+    # identity stays stable, exactly as the decision queue does.
+    """
+    CREATE TABLE local_observation_queue (
+        queue_id                   INTEGER PRIMARY KEY,
+        station_id                 TEXT    NOT NULL,
+        instance_id                INTEGER NOT NULL,
+        source                     TEXT    NOT NULL,
+        signal                     TEXT    NOT NULL,
+        source_time                REAL,
+        source_anchor              REAL,
+        observed_at                REAL    NOT NULL,
+        report_host_id             TEXT    NOT NULL,
+        report_template_version_id TEXT,
+        report_template_sha256     TEXT,
+        report_backend_provenance  TEXT,
+        report_reported_at         TEXT,
+        attempts                   INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at            REAL,
+        last_error                 TEXT,
+        sent_at                    REAL
+    )
+    """,
+)
+
+_V10 = (
     # 本机唯一的工位物理执行权事实。只存中心在成功拉取时签发的绝对到期时刻, 不存本地倒计时,
     # 所以重启和重复/延迟到达的同一租约都不会复活一个已失效的授权 (S053)。写入边界和 S029
     # 都读这张表, 不另建有效期。
@@ -316,7 +345,7 @@ _V9 = (
     """,
 )
 
-MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1, _V2, _V3, _V4, _V5, _V6, _V7, _V8, _V9)
+MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1, _V2, _V3, _V4, _V5, _V6, _V7, _V8, _V9, _V10)
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 
 

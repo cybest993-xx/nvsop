@@ -62,6 +62,7 @@
 | Host configuration | `ConfigurationBundle` 当前单一严格模型；行为扩展用 `required_capabilities` | 本文规则适用；历史 v1/v2 仅 Edge local-state 迁移 |
 | Decision report | `ReportedDecision` 明确维护严格 v1 与历史证明/复数 provenance 的 v2，并在发送 v2 前通过 confirmed-configuration 握手 | 这是已存在的跨异步升级兼容协议，不由配置契约重构删除；后续演进归 monitor/reporting owner |
 | Health report | `ReportedHealth` 严格 `REPORT_CONTRACT_VERSION=1`，status/reason 文本保留可扩展值语义 | 当前无并行 generation；若新增行为语义，先定义对应兼容门禁，归 monitor/reporting owner |
+| Observation report | `ReportedObservation` 严格 `OBSERVATION_REPORT_CONTRACT_VERSION=1`，只归档产生时内容 | 当前无并行 generation；主机签名上报按当前拓扑归属校验（与 Health report 同），归 monitor/reporting owner |
 | Delegated connection-test command | 无数字 generation；以严格 `command_type` + 固定字段解析，未知字段拒绝 | 当前单一 shape；需要新命令行为时新增显式 command type/协商，不把任意字段塞入现有 payload，归 delegated-command owner |
 
 Decision report 的 v1/v2 是已有、已握手的报告协议例外，不构成继续给 configuration 增加 v3/v4 的先例。仓库目前也没有覆盖全部 Center↔Edge 机器接口的软件版本握手；每个未来行为扩展必须在自己的协议 owner 处给出明确兼容边界。

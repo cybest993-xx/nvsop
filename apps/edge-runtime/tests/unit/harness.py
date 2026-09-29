@@ -125,6 +125,7 @@ class MemoryReactionStore:
             ]
         ] = []
         self.report_provenance: list[Mapping[int, tuple[BackendReportContext, ...] | None]] = []
+        self.observations: list[dict[str, object]] = []
 
     def commit(
         self,
@@ -137,6 +138,29 @@ class MemoryReactionStore:
     ) -> None:
         self.reactions.append((state, tuple(decisions), tuple(evidence), tuple(closed_instances)))
         self.report_provenance.append(dict(report_provenance))
+
+    def enqueue_observation(
+        self,
+        *,
+        instance_id: int,
+        source: str,
+        signal: str,
+        source_time: float | None,
+        source_anchor: float | None,
+        observed_at: float,
+        backend: BackendReportContext | None,
+    ) -> None:
+        self.observations.append(
+            {
+                "instance_id": instance_id,
+                "source": source,
+                "signal": signal,
+                "source_time": source_time,
+                "source_anchor": source_anchor,
+                "observed_at": observed_at,
+                "backend": backend,
+            }
+        )
 
 
 class FakeClock:

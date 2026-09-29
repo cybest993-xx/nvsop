@@ -981,6 +981,11 @@ def ensure_sample_video(item: DevPaths) -> None:
 
 def ensure_credentials(item: DevPaths) -> None:
     write_secret(item.secrets / "center-db-password", "center-" + os.urandom(18).hex())
+    write_secret(item.secrets / "nvsop-runtime-password", "nvsop-runtime-" + os.urandom(18).hex())
+    write_secret(
+        item.secrets / "training-runtime-password",
+        "training-runtime-" + os.urandom(18).hex(),
+    )
     write_secret(item.secrets / "bootstrap-password", "dev-" + os.urandom(24).hex())
     write_secret(item.secrets / "csrf-secret", os.urandom(32).hex())
     write_secret(item.secrets / "redis-url", "redis://redis:6379/0")
@@ -1050,15 +1055,18 @@ def setup(item: DevPaths) -> None:
         print(f"请先把 CA 导入浏览器，说明见：{item.tls / 'TRUST-CA.txt'}")
 
 
-def require_setup(item: DevPaths) -> None:
+def require_setup(item: DevPaths, *, runtime_credentials: bool = True) -> None:
     protocol = configured_protocol()
     if not item.setup_file.is_file():
         raise DevError(f"请先运行 make dev-setup；未找到 {item.setup_file}")
-    required = [
-        item.secrets / "bootstrap-password",
-        item.state / "nginx.conf",
-        item.samples / "dev-sample.mp4",
-    ]
+    required = [item.secrets / "bootstrap-password"]
+    if runtime_credentials:
+        # S065 的 runtime 密码只在启动/运行路径需要；`logs`/`down` 不该因既有实例缺少它们而失败。
+        required += [
+            item.secrets / "nvsop-runtime-password",
+            item.secrets / "training-runtime-password",
+        ]
+    required += [item.state / "nginx.conf", item.samples / "dev-sample.mp4"]
     if protocol == "https":
         required.extend((item.tls / "ca.crt", item.tls / "dev.crt", item.tls / "dev.key"))
     for path in required:
@@ -2042,7 +2050,7 @@ def run_ui(item: DevPaths) -> None:
 
 
 def logs(item: DevPaths, *, service: str | None, tail: str) -> None:
-    require_setup(item)
+    require_setup(item, runtime_credentials=False)
     if service == "tilt":
         if not (item.logs / "tilt.log").exists():
             raise DevError("尚无 Tilt 日志")
@@ -2080,7 +2088,7 @@ def acquire_operation_lock(
 
 
 def down(item: DevPaths) -> None:
-    require_setup(item)
+    require_setup(item, runtime_credentials=False)
     # 测试命令本身可能持有 operation_lock；先取消它，launcher 才能完成收尾。
     cancel_test(item)
     pid = read_pid(item.launcher_pid)

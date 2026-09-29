@@ -7,6 +7,7 @@ from typing import Protocol
 from factory_sop.monitor.model import (
     MirroredDecision,
     MirroredHealth,
+    MirroredObservation,
     MirroredSopInstance,
     MirroredViolation,
 )
@@ -25,6 +26,10 @@ class MonitorRepository(Protocol):
 
     def upsert_violation(self, value: MirroredViolation) -> bool: ...
 
+    def upsert_observation(self, value: MirroredObservation) -> bool:
+        """只插入一次；相同重试返回 False。"""
+        ...
+
     def page_instances(
         self, *, page: int, page_size: int
     ) -> tuple[tuple[MirroredSopInstance, ...], int]: ...
@@ -32,6 +37,15 @@ class MonitorRepository(Protocol):
     def page_violations(
         self, *, page: int, page_size: int
     ) -> tuple[tuple[MirroredViolation, ...], int]: ...
+
+    def page_observations(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        station_id: str | None = None,
+        instance_id: int | None = None,
+    ) -> tuple[tuple[MirroredObservation, ...], int]: ...
 
     def recent_decisions(self, *, limit: int) -> tuple[MirroredDecision, ...]: ...
 

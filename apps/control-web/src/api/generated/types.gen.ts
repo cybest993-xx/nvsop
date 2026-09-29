@@ -7240,6 +7240,46 @@ export type StreamMonitorEventsResponses = {
   200: unknown
 }
 
+export type ListMonitorViolationsData = {
+  body?: never
+  path?: never
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/monitor/violations'
+}
+
+export type ListMonitorViolationsErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ListMonitorViolationsError =
+  ListMonitorViolationsErrors[keyof ListMonitorViolationsErrors]
+
+export type ListMonitorViolationsResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageDictStrObject
+}
+
+export type ListMonitorViolationsResponse =
+  ListMonitorViolationsResponses[keyof ListMonitorViolationsResponses]
+
 export type ReadOverviewData = {
   body?: never
   path?: never

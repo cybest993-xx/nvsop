@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import Table, update
+from sqlalchemy import Table, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.orm import Session
@@ -67,6 +67,19 @@ class PostgresExecutionGrantRepository(ExecutionGrantRepository):
             .one_or_none()
         )
         return _from_mapping(result) if result is not None else None
+
+    def for_holder(self, host_id: UUID) -> tuple[StationGrant, ...]:
+        table = cast(Table, StationGrantRow.__table__)
+        rows = (
+            self._session.execute(
+                select(*table.c)
+                .where(table.c.holder_host_id == host_id)
+                .order_by(table.c.station_id)
+            )
+            .mappings()
+            .all()
+        )
+        return tuple(_from_mapping(row) for row in rows)
 
 
 def _values(value: StationGrant) -> dict[str, object]:

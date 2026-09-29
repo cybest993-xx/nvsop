@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from factory_sop.monitor.model import MirroredDecision, MirroredHealth, MirroredSopInstance
+from factory_sop.monitor.model import (
+    MirroredDecision,
+    MirroredHealth,
+    MirroredSopInstance,
+    MirroredViolation,
+)
 
 
 class MonitorRepository(Protocol):
@@ -18,9 +23,15 @@ class MonitorRepository(Protocol):
 
     def upsert_instance(self, value: MirroredSopInstance) -> bool: ...
 
+    def upsert_violation(self, value: MirroredViolation) -> bool: ...
+
     def page_instances(
         self, *, page: int, page_size: int
     ) -> tuple[tuple[MirroredSopInstance, ...], int]: ...
+
+    def page_violations(
+        self, *, page: int, page_size: int
+    ) -> tuple[tuple[MirroredViolation, ...], int]: ...
 
     def recent_decisions(self, *, limit: int) -> tuple[MirroredDecision, ...]: ...
 

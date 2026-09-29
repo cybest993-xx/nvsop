@@ -48,7 +48,9 @@ from edge_runtime.judgment.model import (
     EvidenceSpan,
     HostInstant,
     HostLiveness,
+    Instance,
     Lifecycle,
+    Violation,
 )
 from edge_runtime.judgment.reasons import ReasonCode, Verdict
 from edge_runtime.local_state import BackendReportContext, ReportContext, open_local_state
@@ -116,6 +118,49 @@ class OneTransactionTest(unittest.TestCase):
         self.assertEqual(
             station.latched_violations(instance_id=decision.instance_id), decision.violations
         )
+
+    def test_replayed_violation_identity_is_latched_once(self) -> None:
+        """同一实例内同身份的违规重放只保留一条锁存记录 (AC1)。"""
+        state = open_local_state(":memory:")
+        self.addCleanup(state.close)
+        station = state.station(STATION)
+        base = opening_state()
+        instance = Instance(
+            instance_id=1,
+            opened_at=HostInstant(ANCHOR),
+            last_observation_at=HostInstant(ANCHOR),
+        )
+        violation = Violation(
+            reason=ReasonCode.MISSED_STEP,
+            steps=(STEPS[1],),
+            evidence=EvidenceSpan.at(HostInstant(ANCHOR)),
+        )
+        decision = Decision(
+            instance_id=1,
+            verdict=Verdict.FAIL,
+            reasons=(ReasonCode.MISSED_STEP,),
+            violations=(violation,),
+            lifecycle=Lifecycle.STAYS_OPEN,
+            evidence=EvidenceSpan.at(HostInstant(ANCHOR)),
+        )
+        station.commit(
+            state=replace(base, instance=instance, next_instance_id=2),
+            decisions=(decision,),
+            evidence=(),
+            closed_instances=(),
+            report_provenance={},
+        )
+        # 第二次提交用同一身份再次锁存相同事实: 不得新增第二条。
+        station.commit(
+            state=base,
+            decisions=(decision,),
+            evidence=(),
+            closed_instances=(),
+            report_provenance={},
+        )
+
+        self.assertEqual(station.latched_violations(instance_id=1), (violation,))
+        self.assertEqual(len(station.pending_reports()), 2)
 
     def test_a_reaction_that_fails_part_way_through_leaves_none_of_itself_behind(self) -> None:
         """证据队列写入失败时, 已写入的实例、判定、锁存和报告全部回滚。"""

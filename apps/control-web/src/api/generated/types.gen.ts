@@ -7086,6 +7086,54 @@ export type ListMonitorSopInstancesResponses = {
 export type ListMonitorSopInstancesResponse =
   ListMonitorSopInstancesResponses[keyof ListMonitorSopInstancesResponses]
 
+export type ListMonitorObservationsData = {
+  body?: never
+  path?: never
+  query?: {
+    /**
+     * Station Id
+     */
+    station_id?: string | null
+    /**
+     * Instance Id
+     */
+    instance_id?: number | null
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/monitor/observations'
+}
+
+export type ListMonitorObservationsErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ListMonitorObservationsError =
+  ListMonitorObservationsErrors[keyof ListMonitorObservationsErrors]
+
+export type ListMonitorObservationsResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageDictStrObject
+}
+
+export type ListMonitorObservationsResponse =
+  ListMonitorObservationsResponses[keyof ListMonitorObservationsResponses]
+
 export type ReportMonitorDecisionData = {
   /**
    * Body
@@ -7201,6 +7249,64 @@ export type ReportMonitorSopInstanceResponses = {
 
 export type ReportMonitorSopInstanceResponse =
   ReportMonitorSopInstanceResponses[keyof ReportMonitorSopInstanceResponses]
+
+export type ReportMonitorObservationData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  headers?: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID'?: string | null
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/monitor/reported-observations'
+}
+
+export type ReportMonitorObservationErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReportMonitorObservationError =
+  ReportMonitorObservationErrors[keyof ReportMonitorObservationErrors]
+
+export type ReportMonitorObservationResponses = {
+  /**
+   * Response Reportmonitorobservation
+   *
+   * Successful Response
+   */
+  200: {
+    [key: string]: unknown
+  }
+}
+
+export type ReportMonitorObservationResponse =
+  ReportMonitorObservationResponses[keyof ReportMonitorObservationResponses]
 
 export type StreamMonitorEventsData = {
   body?: never

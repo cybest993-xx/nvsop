@@ -44,6 +44,7 @@ from edge_runtime.local_state.configuration import LocalConfigurationStore
 from edge_runtime.local_state.disposal import LocalDisposalLedger
 from edge_runtime.local_state.queues import (
     BackendReportContext,
+    PendingObservationReport,
     PendingReport,
     PendingSopInstanceReport,
     ReportContext,
@@ -53,7 +54,10 @@ from edge_runtime.local_state.schema import migrate
 
 
 class ReactionStore(Protocol):
-    """supervisor 提交一次完整反应的接缝; 实现必须全部提交或全部回滚。"""
+    """supervisor 提交一次完整反应的接缝; 实现必须全部提交或全部回滚。
+
+    归一化观测不属于反应: 它在同一工位作用域下独立持久化, 因此单独的方法。
+    """
 
     def commit(
         self,
@@ -63,6 +67,18 @@ class ReactionStore(Protocol):
         evidence: Sequence[EvidenceClip],
         closed_instances: Sequence[Instance],
         report_provenance: Mapping[int, tuple[BackendReportContext, ...] | None],
+    ) -> None: ...
+
+    def enqueue_observation(
+        self,
+        *,
+        instance_id: int,
+        source: str,
+        signal: str,
+        source_time: float | None,
+        source_anchor: float | None,
+        observed_at: float,
+        backend: BackendReportContext | None,
     ) -> None: ...
 
 
@@ -78,6 +94,16 @@ class ReportStore(Protocol):
     def mark_reported(self, queue_id: int, *, at: HostInstant) -> None: ...
 
     def record_report_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None: ...
+
+    def pending_observation_ids(self, *, limit: int | None = None) -> tuple[int, ...]: ...
+
+    def pending_observation_item(self, queue_id: int) -> PendingObservationReport: ...
+
+    def freeze_observation_reported_at(self, queue_id: int, *, candidate: str) -> str: ...
+
+    def mark_observation_reported(self, queue_id: int, *, at: HostInstant) -> None: ...
+
+    def record_observation_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None: ...
 
 
 class StationStore(StationQueues):
@@ -357,6 +383,58 @@ class StationStore(StationQueues):
             separators=(",", ":"),
         )
 
+    @staticmethod
+    def _encode_backend(backend: BackendReportContext) -> str:
+        return json.dumps(
+            {"backend_id": backend.backend_id, "model_ids": list(backend.model_ids)},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+    def enqueue_observation(
+        self,
+        *,
+        instance_id: int,
+        source: str,
+        signal: str,
+        source_time: float | None,
+        source_anchor: float | None,
+        observed_at: float,
+        backend: BackendReportContext | None,
+    ) -> None:
+        """持久化一条归一化观测; 它不进入判定 outbox, 也不进入流健康路径。
+
+        没有事件时主机身份时不写; 观测上报需要稳定的主机身份, 没有它时宁可不写也不虚构一个身份。
+        """
+        context = self._report_context
+        if context is None:
+            return
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO local_observation_queue (
+                    station_id, instance_id, source, signal, source_time, source_anchor,
+                    observed_at, report_host_id, report_template_version_id,
+                    report_template_sha256, report_backend_provenance
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    self._station_id,
+                    instance_id,
+                    source,
+                    signal,
+                    source_time,
+                    source_anchor,
+                    observed_at,
+                    context.host_id,
+                    context.template_version_id,
+                    context.template_sha256,
+                    None if backend is None else self._encode_backend(backend),
+                ),
+            )
+        if self._notify_report_pending is not None:
+            self._notify_report_pending()
+
     def _enqueue_evidence(self, clip: EvidenceClip) -> None:
         """每个实例锚点一条证据; 第二次判定需要更大窗口时只扩大、不缩小 (§5.20)。"""
         self._connection.execute(
@@ -587,6 +665,44 @@ class _HostReportStore:
 
     def record_report_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None:
         self._queue(queue_id).record_report_failure(queue_id, at=at, error=error)
+
+    def pending_observation_ids(self, *, limit: int | None = None) -> tuple[int, ...]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT queue_id
+                  FROM local_observation_queue
+                 WHERE sent_at IS NULL
+                 ORDER BY attempts, queue_id
+                 LIMIT ?
+                """,
+                (-1 if limit is None else limit,),
+            ).fetchall()
+        return tuple(int(row["queue_id"]) for row in rows)
+
+    def pending_observation_item(self, queue_id: int) -> PendingObservationReport:
+        return self._observation_queue(queue_id).pending_observation_report(queue_id)
+
+    def freeze_observation_reported_at(self, queue_id: int, *, candidate: str) -> str:
+        return self._observation_queue(queue_id).freeze_observation_reported_at(
+            queue_id, candidate=candidate
+        )
+
+    def mark_observation_reported(self, queue_id: int, *, at: HostInstant) -> None:
+        self._observation_queue(queue_id).mark_observation_reported(queue_id, at=at)
+
+    def record_observation_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None:
+        self._observation_queue(queue_id).record_observation_failure(queue_id, at=at, error=error)
+
+    def _observation_queue(self, queue_id: int) -> StationQueues:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT station_id FROM local_observation_queue WHERE queue_id = ?",
+                (queue_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError("observation queue item does not exist")
+        return StationQueues(self._connection, str(row["station_id"]), self._lock)
 
     def _queue(self, queue_id: int) -> StationQueues:
         with self._lock:

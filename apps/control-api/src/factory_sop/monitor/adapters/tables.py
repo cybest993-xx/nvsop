@@ -12,6 +12,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from factory_sop.monitor.model import (
     MirroredDecision,
     MirroredHealth,
+    MirroredObservation,
     MirroredSopInstance,
     MirroredViolation,
 )
@@ -22,6 +23,8 @@ from nvsop_contracts import (
     reported_decision_to_wire,
     reported_health_from_wire,
     reported_health_to_wire,
+    reported_observation_from_wire,
+    reported_observation_to_wire,
     reported_sop_instance_from_wire,
     reported_sop_instance_to_wire,
 )
@@ -136,6 +139,45 @@ class ReportedSopInstanceRow(Table):
             close_boundary_signal=report.close_boundary_signal,
             received_at=value.received_at,
             payload=reported_sop_instance_to_wire(report),
+        )
+
+
+class ReportedObservationRow(Table):
+    """产生时冻结的归一化观测镜像; 按事件 id 幂等, 不参与 SSE 投影。"""
+
+    __tablename__ = "monitor_observation"
+
+    event_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    trace_id: Mapped[str] = mapped_column(String(255))
+    host_id: Mapped[str] = mapped_column(String(128), index=True)
+    station_id: Mapped[str] = mapped_column(String(128), index=True)
+    instance_id: Mapped[int] = mapped_column(BigInteger(), index=True)
+    source: Mapped[str] = mapped_column(String(64))
+    signal: Mapped[str] = mapped_column(Text())
+    observed_at: Mapped[float]
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+    def to_domain(self) -> MirroredObservation:
+        return MirroredObservation(
+            report=reported_observation_from_wire(cast(dict[str, object], self.payload)),
+            received_at=self.received_at,
+        )
+
+    @classmethod
+    def from_domain(cls, value: MirroredObservation) -> ReportedObservationRow:
+        report = value.report
+        return cls(
+            event_id=report.event_id,
+            trace_id=report.trace_id,
+            host_id=report.host_id,
+            station_id=report.station_id,
+            instance_id=report.instance_id,
+            source=report.source,
+            signal=report.signal,
+            observed_at=report.observed_at,
+            received_at=value.received_at,
+            payload=reported_observation_to_wire(report),
         )
 
 

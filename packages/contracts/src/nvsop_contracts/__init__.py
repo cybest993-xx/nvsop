@@ -54,6 +54,9 @@ from nvsop_contracts.host_identity import (
 )
 from nvsop_contracts.reports import (
     DECISION_REPORT_CONTRACT_VERSION,
+    OBSERVATION_REPORT_CONTRACT_VERSION,
+    OBSERVATION_SOURCE_ACTION,
+    OBSERVATION_SOURCE_EXTERNAL_SIGNAL,
     REPORT_CAPABILITIES_HEADER,
     REPORT_CONTRACT_VERSION,
     SOP_INSTANCE_REPORT_CAPABILITY,
@@ -61,6 +64,7 @@ from nvsop_contracts.reports import (
     ReportBackendProvenance,
     ReportedDecision,
     ReportedHealth,
+    ReportedObservation,
     ReportedSopInstance,
     ReportEvidence,
     ReportViolation,
@@ -68,6 +72,8 @@ from nvsop_contracts.reports import (
     reported_decision_to_wire,
     reported_health_from_wire,
     reported_health_to_wire,
+    reported_observation_from_wire,
+    reported_observation_to_wire,
     reported_sop_instance_from_wire,
     reported_sop_instance_to_wire,
 )
@@ -75,6 +81,9 @@ from nvsop_contracts.reports import (
 __all__ = [
     "CONFIGURATION_CONTRACT_VERSION",
     "DECISION_REPORT_CONTRACT_VERSION",
+    "OBSERVATION_REPORT_CONTRACT_VERSION",
+    "OBSERVATION_SOURCE_ACTION",
+    "OBSERVATION_SOURCE_EXTERNAL_SIGNAL",
     "REPORT_CAPABILITIES_HEADER",
     "REPORT_CONTRACT_VERSION",
     "SOP_INSTANCE_REPORT_CAPABILITY",
@@ -105,6 +114,7 @@ __all__ = [
     "ReportViolation",
     "ReportedDecision",
     "ReportedHealth",
+    "ReportedObservation",
     "ReportedSopInstance",
     "ResolvedRuntimeParameters",
     "Sequencing",
@@ -127,6 +137,8 @@ __all__ = [
     "reported_decision_to_wire",
     "reported_health_from_wire",
     "reported_health_to_wire",
+    "reported_observation_from_wire",
+    "reported_observation_to_wire",
     "reported_sop_instance_from_wire",
     "reported_sop_instance_to_wire",
     "sign_host_identity_request",

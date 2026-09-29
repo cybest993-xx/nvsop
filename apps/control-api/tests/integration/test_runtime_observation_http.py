@@ -66,6 +66,7 @@ from nvsop_contracts import (
     ReportBackendProvenance,
     ReportedDecision,
     ReportedHealth,
+    ReportedObservation,
     ReportedSopInstance,
     ReportEvidence,
     ReportViolation,
@@ -75,6 +76,7 @@ from nvsop_contracts import (
     generate_host_identity_key_pair,
     reported_decision_to_wire,
     reported_health_to_wire,
+    reported_observation_to_wire,
     reported_sop_instance_to_wire,
     sign_host_identity_request,
 )
@@ -239,6 +241,10 @@ def runtime_topology(engine: Engine) -> Iterator[RuntimeTopology]:
             )
             connection.execute(
                 text("DELETE FROM monitor_violation WHERE host_id = :host_id"),
+                {"host_id": str(host.id)},
+            )
+            connection.execute(
+                text("DELETE FROM monitor_observation WHERE host_id = :host_id"),
                 {"host_id": str(host.id)},
             )
             connection.execute(
@@ -1133,6 +1139,70 @@ def test_reported_violation_is_archived_idempotently_and_queryable(
         "violation": violation.to_wire(),
     }
     assert datetime.fromisoformat(item["received_at"]).tzinfo is not None
+
+
+def test_reported_observation_is_mirrored_idempotently_and_queryable(
+    engine: Engine, runtime_topology: RuntimeTopology, dataset_storage_root: Path
+) -> None:
+    settings = settings_for(engine, storage_root=dataset_storage_root)
+    path = f"{API_PREFIX}/monitor/reported-observations"
+    observation = ReportedObservation(
+        event_id=f"{runtime_topology.host.id}:observation:1",
+        trace_id=f"{runtime_topology.host.id}:observation:1",
+        host_id=str(runtime_topology.host.id),
+        station_id=str(runtime_topology.station.id),
+        instance_id=41,
+        source="action",
+        signal="(1) step 1",
+        source_time=0.5,
+        source_anchor=1000.0,
+        observed_at=12.0,
+        template_version_id=str(runtime_topology.template.version_id),
+        template_sha256="a" * 64,
+        backend=ReportBackendProvenance(str(runtime_topology.backend.id), ("model-integration",)),
+        reported_at="2026-09-14T01:00:00Z",
+    )
+    body = reported_observation_to_wire(observation)
+    with client_for(engine, settings, permissions=frozenset({Permission.MONITOR_VIEW})) as client:
+        first = client.post(
+            path,
+            json=body,
+            headers=_host_headers(runtime_topology, method="POST", path=path, body=body),
+        )
+        duplicate = client.post(
+            path,
+            json=body,
+            headers=_host_headers(runtime_topology, method="POST", path=path, body=body),
+        )
+        listed = client.get(
+            f"{API_PREFIX}/monitor/observations",
+            params={
+                "station_id": str(runtime_topology.station.id),
+                "instance_id": 41,
+            },
+        )
+        other_instance = client.get(
+            f"{API_PREFIX}/monitor/observations",
+            params={
+                "station_id": str(runtime_topology.station.id),
+                "instance_id": 42,
+            },
+        )
+
+    assert first.status_code == 200
+    assert first.json() == {
+        "accepted": True,
+        "duplicate": False,
+        "event_id": observation.event_id,
+    }
+    assert duplicate.status_code == 200
+    assert duplicate.json()["duplicate"] is True
+    assert listed.status_code == 200
+    document = listed.json()
+    assert document["total"] == 1
+    assert document["items"][0] == body
+    assert other_instance.status_code == 200
+    assert other_instance.json()["total"] == 0
 
 
 def test_violation_archive_preserves_open_reason_and_derived_identity(

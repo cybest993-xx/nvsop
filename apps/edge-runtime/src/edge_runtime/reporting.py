@@ -12,6 +12,7 @@ from nvsop_contracts import (
     ConfigurationBundle,
     ReportBackendProvenance,
     ReportedDecision,
+    ReportedObservation,
     ReportedSopInstance,
     ReportEvidence,
     ReportViolation,
@@ -20,6 +21,7 @@ from nvsop_contracts import (
 
 from edge_runtime.judgment.model import Decision, HostInstant, Lifecycle
 from edge_runtime.local_state import (
+    PendingObservationReport,
     PendingReport,
     PendingSopInstanceReport,
     ReportContext,
@@ -34,6 +36,8 @@ class DecisionReportTransport(Protocol):
         *,
         configuration: ConfigurationBundle | None,
     ) -> None: ...
+
+    def send_observation(self, report: ReportedObservation) -> None: ...
 
     def send_instance(
         self,
@@ -72,6 +76,11 @@ class HostReportReconciler:
         should_stop: Callable[[], bool] | None = None,
     ) -> tuple[ReportAttempt, ...]:
         attempts: list[ReportAttempt] = []
+        attempts.extend(
+            self._flush_observations(
+                now=now, reported_at=reported_at, limit=limit, should_stop=should_stop
+            )
+        )
         for queue_id in self._reports.pending_ids(limit=limit):
             if should_stop is not None and should_stop():
                 break
@@ -185,6 +194,100 @@ class HostReportReconciler:
                 )
             )
         return tuple(attempts)
+
+    def _flush_observations(
+        self,
+        *,
+        now: HostInstant,
+        reported_at: str,
+        limit: int | None,
+        should_stop: Callable[[], bool] | None,
+    ) -> list[ReportAttempt]:
+        """排空观测积压; 它不是判定, 失败只影响本条并继续重试。"""
+        attempts: list[ReportAttempt] = []
+        for queue_id in self._reports.pending_observation_ids(limit=limit):
+            if should_stop is not None and should_stop():
+                break
+            try:
+                pending = self._reports.pending_observation_item(queue_id)
+            except Exception as error:
+                message = f"{type(error).__name__}: {error}"[:255]
+                self._reports.record_observation_failure(queue_id, at=now, error=message)
+                attempts.append(
+                    ReportAttempt(
+                        queue_id=queue_id,
+                        sent=False,
+                        event_id=f"observation:{queue_id}",
+                        error=message,
+                    )
+                )
+                continue
+            try:
+                stable_reported_at = pending.reported_at
+                if stable_reported_at is None:
+                    stable_reported_at = self._reports.freeze_observation_reported_at(
+                        pending.queue_id, candidate=reported_at
+                    )
+                report = reported_observation_from_pending(pending, reported_at=stable_reported_at)
+            except Exception as error:
+                message = f"{type(error).__name__}: {error}"[:255]
+                self._reports.record_observation_failure(pending.queue_id, at=now, error=message)
+                attempts.append(
+                    ReportAttempt(
+                        queue_id=pending.queue_id,
+                        sent=False,
+                        event_id=f"observation:{pending.queue_id}",
+                        error=message,
+                    )
+                )
+                continue
+            try:
+                self._transport.send_observation(report)
+            except Exception as error:
+                message = f"{type(error).__name__}: {error}"[:255]
+                self._reports.record_observation_failure(pending.queue_id, at=now, error=message)
+                attempts.append(
+                    ReportAttempt(
+                        queue_id=pending.queue_id,
+                        sent=False,
+                        event_id=report.event_id,
+                        error=message,
+                    )
+                )
+                continue
+            self._reports.mark_observation_reported(pending.queue_id, at=now)
+            attempts.append(
+                ReportAttempt(queue_id=pending.queue_id, sent=True, event_id=report.event_id)
+            )
+        return attempts
+
+
+def reported_observation_from_pending(
+    pending: PendingObservationReport, *, reported_at: str
+) -> ReportedObservation:
+    """映射一条本地持久观测; 中心只归档产生时内容, 不重新判定。"""
+    event_id = f"{pending.host_id}:observation:{pending.queue_id}"
+    backend = pending.backend
+    return ReportedObservation(
+        event_id=event_id,
+        trace_id=event_id,
+        host_id=pending.host_id,
+        station_id=pending.station_id,
+        instance_id=pending.instance_id,
+        source=pending.source,
+        signal=pending.signal,
+        source_time=pending.source_time,
+        source_anchor=pending.source_anchor,
+        observed_at=pending.observed_at,
+        template_version_id=pending.template_version_id,
+        template_sha256=pending.template_sha256,
+        backend=(
+            None
+            if backend is None
+            else ReportBackendProvenance(backend_id=backend.backend_id, model_ids=backend.model_ids)
+        ),
+        reported_at=reported_at,
+    )
 
 
 def reported_decision_from_pending(
@@ -358,5 +461,6 @@ __all__ = [
     "ReportAttempt",
     "reported_decision_from_pending",
     "reported_instance_from_pending",
+    "reported_observation_from_pending",
     "reported_open_instance_from_pending",
 ]

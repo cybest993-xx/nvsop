@@ -26,12 +26,14 @@ from nvsop_contracts import (
     ConfigurationBundle,
     ReportBackendProvenance,
     ReportedDecision,
+    ReportedObservation,
     configuration_to_wire,
 )
 from store_harness import (
     ANCHOR,
     MARGINS,
     OTHER_STATION,
+    SOURCE_ANCHOR,
     STATION,
     STEP_DEADLINE,
     STEPS,
@@ -56,9 +58,14 @@ from edge_runtime.judgment.reasons import ReasonCode, Verdict
 from edge_runtime.local_state import BackendReportContext, ReportContext, open_local_state
 from edge_runtime.local_state.schema import MIGRATIONS, apply_migrations, migrate
 from edge_runtime.local_state.store import LocalState
-from edge_runtime.reporting import HostReportReconciler
+from edge_runtime.reporting import HostReportReconciler, ReportAttempt
 from edge_runtime.supervisor.inputs import StreamHealthObserved, Validity, ValidityChanged
 from edge_runtime.supervisor.startup import resume_station
+
+
+def _report_attempts(attempts: tuple[ReportAttempt, ...]) -> tuple[ReportAttempt, ...]:
+    """只保留判定/实例上报尝试; 归一化观测有独立积压, 单独验证。"""
+    return tuple(attempt for attempt in attempts if "observation:" not in attempt.event_id)
 
 
 class OneTransactionTest(unittest.TestCase):
@@ -713,12 +720,15 @@ class HistoricalReportContextTest(unittest.TestCase):
             ) -> None:
                 del report, configuration
 
+            def send_observation(self, report: object) -> None:
+                del report
+
         transport = Transport()
         attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(
             now=HostInstant(ANCHOR + 2.0),
             reported_at="2026-09-16T00:00:00Z",
         )
-        self.assertTrue(attempts[0].sent)
+        self.assertTrue(_report_attempts(attempts)[0].sent)
         self.assertEqual(
             transport.sent[0].backend_provenance,
             (ReportBackendProvenance("backend-b", ("model-b",)),),
@@ -755,12 +765,15 @@ class HistoricalReportContextTest(unittest.TestCase):
             ) -> None:
                 del report, configuration
 
+            def send_observation(self, report: object) -> None:
+                del report
+
         transport = Transport()
         attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(
             now=HostInstant(ANCHOR + 2.0),
             reported_at="2026-09-16T00:00:00Z",
         )
-        self.assertTrue(attempts[0].sent)
+        self.assertTrue(_report_attempts(attempts)[0].sent)
         self.assertEqual(transport.sent[0].backend_provenance, ())
 
     def test_event_time_context_without_history_is_not_confused_with_legacy_pending(self) -> None:
@@ -816,6 +829,9 @@ class HistoricalReportContextTest(unittest.TestCase):
                 self, report: object, *, configuration: ConfigurationBundle | None
             ) -> None:
                 del report, configuration
+
+            def send_observation(self, report: object) -> None:
+                del report
 
         transport = Transport()
         attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(
@@ -904,14 +920,18 @@ class HistoricalReportContextTest(unittest.TestCase):
             ) -> None:
                 del report, configuration
 
+            def send_observation(self, report: object) -> None:
+                del report
+
         transport = LostAckTransport()
         first = HostReportReconciler(reports=state.reports(), transport=transport).flush(
             now=HostInstant(ANCHOR + 2.0),
             reported_at="2026-09-16T00:00:00Z",
         )
-        self.assertEqual(len(first), 2)
-        self.assertTrue(first[0].sent)
-        self.assertFalse(first[1].sent)
+        first_reports = _report_attempts(first)
+        self.assertEqual(len(first_reports), 2)
+        self.assertTrue(first_reports[0].sent)
+        self.assertFalse(first_reports[1].sent)
         self.assertEqual(station.pending_instance_reports(), ())
         (pending_after_loss,) = station.pending_reports()
         self.assertEqual(pending_after_loss.reported_at, "2026-09-16T00:00:00Z")
@@ -920,9 +940,157 @@ class HistoricalReportContextTest(unittest.TestCase):
             now=HostInstant(ANCHOR + 3.0),
             reported_at="2026-09-16T00:05:00Z",
         )
-        self.assertTrue(second[0].sent)
+        self.assertTrue(_report_attempts(second)[0].sent)
         self.assertEqual(transport.sent[0], transport.sent[1])
         self.assertEqual(station.pending_reports(), ())
+
+    def test_observation_queue_persists_and_flushes_with_stable_identity(self) -> None:
+        context = self.context(revision=7, backend_id="backend-old")
+        state = open_local_state(":memory:")
+        self.addCleanup(state.close)
+        station = state.station(STATION, report_context=context)
+        driver = supervisor(opening_state(), FakeClock(), station)
+        provenance = context.backends[0]
+        driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=provenance)
+        driver.receive(action(STEPS[2], at=ANCHOR + 1.0), report_provenance=provenance)
+
+        first_obs, second_obs = station.pending_observation_reports()
+        self.assertEqual(first_obs.instance_id, 1)
+        self.assertEqual(first_obs.source, "action")
+        self.assertEqual(first_obs.signal, STEPS[0])
+        self.assertEqual(first_obs.source_time, 0.0)
+        self.assertEqual(first_obs.source_anchor, SOURCE_ANCHOR)
+        self.assertEqual(first_obs.observed_at, ANCHOR)
+        self.assertEqual(first_obs.host_id, "host-a")
+        self.assertEqual(first_obs.backend, provenance)
+        self.assertEqual(second_obs.signal, STEPS[2])
+
+        class Transport:
+            def __init__(self) -> None:
+                self.observations: list[ReportedObservation] = []
+
+            def send_decision(
+                self,
+                report: ReportedDecision,
+                *,
+                configuration: ConfigurationBundle | None,
+            ) -> None:
+                del report, configuration
+
+            def send_instance(
+                self, report: object, *, configuration: ConfigurationBundle | None
+            ) -> None:
+                del report, configuration
+
+            def send_observation(self, report: ReportedObservation) -> None:
+                self.observations.append(report)
+
+        transport = Transport()
+        attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(
+            now=HostInstant(ANCHOR + 2.0),
+            reported_at="2026-09-16T00:00:00Z",
+        )
+        observation_attempts = tuple(
+            attempt for attempt in attempts if "observation:" in attempt.event_id
+        )
+        self.assertEqual([attempt.sent for attempt in observation_attempts], [True, True])
+        self.assertEqual(
+            [report.event_id for report in transport.observations],
+            ["host-a:observation:1", "host-a:observation:2"],
+        )
+        self.assertEqual(transport.observations[0].signal, STEPS[0])
+        self.assertEqual(
+            transport.observations[0].backend,
+            ReportBackendProvenance(provenance.backend_id, provenance.model_ids),
+        )
+        self.assertEqual(transport.observations[1].instance_id, 1)
+        self.assertEqual(station.pending_observation_reports(), ())
+
+        retried = HostReportReconciler(reports=state.reports(), transport=transport).flush(
+            now=HostInstant(ANCHOR + 3.0),
+            reported_at="2026-09-16T00:05:00Z",
+        )
+        self.assertEqual(
+            tuple(attempt for attempt in retried if "observation:" in attempt.event_id), ()
+        )
+        self.assertEqual(len(transport.observations), 2)
+
+    def test_observation_keeps_production_identity_across_reconfiguration(self) -> None:
+        context_n = self.context(revision=7, backend_id="backend-old")
+        context_n1 = self.context(revision=8, backend_id="backend-new")
+        with TemporaryDirectory() as temporary:
+            database = str(Path(temporary) / "observation.sqlite")
+            first = open_local_state(database)
+            station = first.station(STATION, report_context=context_n)
+            driver = supervisor(opening_state(), FakeClock(), station)
+            driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=context_n.backends[0])
+            first.close()
+
+            # 当前配置改为 revision 8/backend-new 后重开, 已有观测仍按产生时身份保留。
+            second = open_local_state(database)
+            rebound = second.station(STATION, report_context=context_n1)
+            (observation,) = rebound.pending_observation_reports()
+            self.assertEqual(observation.backend, context_n.backends[0])
+            self.assertEqual(observation.template_version_id, "template-a")
+            self.assertEqual(observation.template_sha256, "a" * 64)
+            self.assertEqual(observation.signal, STEPS[0])
+            second.close()
+
+    def test_observation_retry_reuses_the_exact_frozen_payload(self) -> None:
+        context = self.context(revision=7, backend_id="backend-old")
+        state = open_local_state(":memory:")
+        self.addCleanup(state.close)
+        station = state.station(STATION, report_context=context)
+        driver = supervisor(opening_state(), FakeClock(), station)
+        driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=context.backends[0])
+
+        class LostAckTransport:
+            def __init__(self) -> None:
+                self.observations: list[ReportedObservation] = []
+                self.fail_first = True
+
+            def send_decision(
+                self,
+                report: ReportedDecision,
+                *,
+                configuration: ConfigurationBundle | None,
+            ) -> None:
+                del report, configuration
+
+            def send_instance(
+                self, report: object, *, configuration: ConfigurationBundle | None
+            ) -> None:
+                del report, configuration
+
+            def send_observation(self, report: ReportedObservation) -> None:
+                self.observations.append(report)
+                if self.fail_first:
+                    self.fail_first = False
+                    raise OSError("center committed but acknowledgement was lost")
+
+        transport = LostAckTransport()
+        first = HostReportReconciler(reports=state.reports(), transport=transport).flush(
+            now=HostInstant(ANCHOR + 2.0),
+            reported_at="2026-09-16T00:00:00Z",
+        )
+        first_observations = tuple(
+            attempt for attempt in first if "observation:" in attempt.event_id
+        )
+        self.assertEqual([attempt.sent for attempt in first_observations], [False])
+        (pending,) = station.pending_observation_reports()
+        self.assertEqual(pending.attempts, 1)
+        self.assertEqual(pending.reported_at, "2026-09-16T00:00:00Z")
+
+        second = HostReportReconciler(reports=state.reports(), transport=transport).flush(
+            now=HostInstant(ANCHOR + 3.0),
+            reported_at="2026-09-16T00:05:00Z",
+        )
+        second_observations = tuple(
+            attempt for attempt in second if "observation:" in attempt.event_id
+        )
+        self.assertEqual([attempt.sent for attempt in second_observations], [True])
+        self.assertEqual(transport.observations[0], transport.observations[1])
+        self.assertEqual(station.pending_observation_reports(), ())
 
     def test_bounded_host_reconciler_moves_failed_station_behind_pending_work(self) -> None:
         context = self.context(revision=7, backend_id="backend-old")
@@ -960,6 +1128,9 @@ class HistoricalReportContextTest(unittest.TestCase):
             ) -> None:
                 del report, configuration
 
+            def send_observation(self, report: object) -> None:
+                del report
+
         transport = Transport()
         reconciler = HostReportReconciler(reports=state.reports(), transport=transport)
         first = reconciler.flush(
@@ -974,8 +1145,8 @@ class HistoricalReportContextTest(unittest.TestCase):
         )
 
         self.assertEqual(transport.attempted_decisions, [STATION, OTHER_STATION])
-        self.assertFalse(first[0].sent)
-        self.assertTrue(second[0].sent)
+        self.assertFalse(_report_attempts(first)[0].sent)
+        self.assertTrue(_report_attempts(second)[0].sent)
         self.assertEqual(len(stations[0].pending_reports()), 1)
         self.assertEqual(stations[1].pending_reports(), ())
 
@@ -1015,6 +1186,9 @@ class HistoricalReportContextTest(unittest.TestCase):
             ) -> None:
                 del report, configuration
 
+            def send_observation(self, report: object) -> None:
+                del report
+
         transport = Transport()
         attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(
             now=HostInstant(ANCHOR + 2.0),
@@ -1024,8 +1198,9 @@ class HistoricalReportContextTest(unittest.TestCase):
         )
 
         self.assertEqual(transport.attempted_decisions, [STATION])
-        self.assertEqual(len(attempts), 1)
-        self.assertTrue(attempts[0].sent)
+        reports = _report_attempts(attempts)
+        self.assertEqual(len(reports), 1)
+        self.assertTrue(reports[0].sent)
         self.assertEqual(stations[0].pending_reports(), ())
         self.assertEqual(len(stations[1].pending_reports()), 1)
 
@@ -1080,6 +1255,9 @@ class HistoricalReportContextTest(unittest.TestCase):
                 ) -> None:
                     del report, configuration
 
+                def send_observation(self, report: object) -> None:
+                    del report
+
             transport = Transport()
             try:
                 attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(
@@ -1090,8 +1268,9 @@ class HistoricalReportContextTest(unittest.TestCase):
                 state.close()
 
             self.assertEqual(transport.attempted_decisions, [OTHER_STATION])
-            self.assertEqual(len(attempts), 4)
-            failures = tuple(attempt for attempt in attempts if not attempt.sent)
+            reports = _report_attempts(attempts)
+            self.assertEqual(len(reports), 4)
+            failures = tuple(attempt for attempt in reports if not attempt.sent)
             self.assertEqual(len(failures), 1)
             self.assertIn("JSONDecodeError", failures[0].error or "")
 
@@ -1171,6 +1350,9 @@ class HistoricalReportContextTest(unittest.TestCase):
                 ) -> None:
                     del report, configuration
 
+                def send_observation(self, report: object) -> None:
+                    del report
+
             transport = Transport()
             try:
                 attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(
@@ -1181,8 +1363,9 @@ class HistoricalReportContextTest(unittest.TestCase):
                 state.close()
 
             self.assertEqual(transport.attempted_decisions, [STATION, OTHER_STATION])
-            self.assertEqual(len(attempts), 4)
-            failures = tuple(attempt for attempt in attempts if not attempt.sent)
+            reports = _report_attempts(attempts)
+            self.assertEqual(len(reports), 4)
+            failures = tuple(attempt for attempt in reports if not attempt.sent)
             self.assertEqual(len(failures), 1)
             self.assertIn("event-time report context", failures[0].error or "")
 
@@ -1239,13 +1422,16 @@ class HistoricalReportContextTest(unittest.TestCase):
             ) -> None:
                 del report, configuration
 
+            def send_observation(self, report: object) -> None:
+                del report
+
         transport = Transport()
         attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(
             now=HostInstant(ANCHOR + 2.0),
             reported_at="2026-09-16T00:00:00Z",
         )
         self.assertEqual(len(transport.sent), 1)
-        self.assertTrue(attempts[0].sent)
+        self.assertTrue(_report_attempts(attempts)[0].sent)
         self.assertEqual(station.pending_reports(), ())
         self.assertEqual(
             station.latched_violations(instance_id=pending.decision.instance_id),

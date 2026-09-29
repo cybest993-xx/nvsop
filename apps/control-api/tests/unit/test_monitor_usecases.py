@@ -15,14 +15,17 @@ from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.model import (
     MirroredDecision,
     MirroredHealth,
+    MirroredObservation,
     MirroredSopInstance,
     MirroredViolation,
 )
 from factory_sop.monitor.usecases import (
     list_instances,
+    list_observations,
     list_violations,
     mirror_decision,
     mirror_health,
+    mirror_observation,
     sse_snapshot,
     sse_snapshot_state,
     sse_stream,
@@ -32,6 +35,7 @@ from nvsop_contracts import (
     ReportBackendProvenance,
     ReportedDecision,
     ReportedHealth,
+    ReportedObservation,
     ReportEvidence,
     ReportViolation,
     reported_decision_to_wire,
@@ -51,6 +55,7 @@ class MemoryMonitor:
         self.health: dict[str, MirroredHealth] = {}
         self.instances: dict[str, MirroredSopInstance] = {}
         self.violations: dict[str, MirroredViolation] = {}
+        self.observations: dict[str, MirroredObservation] = {}
         self._decision_sequence = 0
         self._health_sequence = 0
 
@@ -96,6 +101,29 @@ class MemoryMonitor:
         self, *, page: int, page_size: int
     ) -> tuple[tuple[MirroredViolation, ...], int]:
         values = tuple(self.violations.values())
+        start = (page - 1) * page_size
+        return values[start : start + page_size], len(values)
+
+    def upsert_observation(self, value: MirroredObservation) -> bool:
+        if value.report.event_id in self.observations:
+            return False
+        self.observations[value.report.event_id] = value
+        return True
+
+    def page_observations(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        station_id: str | None = None,
+        instance_id: int | None = None,
+    ) -> tuple[tuple[MirroredObservation, ...], int]:
+        values = tuple(
+            value
+            for value in self.observations.values()
+            if (station_id is None or value.report.station_id == station_id)
+            and (instance_id is None or value.report.instance_id == instance_id)
+        )
         start = (page - 1) * page_size
         return values[start : start + page_size], len(values)
 
@@ -649,3 +677,72 @@ def test_indeterminate_decision_does_not_remove_an_existing_violation() -> None:
     )
 
     assert set(monitor.violations) == {"host:fail-1#0"}
+
+
+def observation(
+    event_id: str = "host:observation:1", *, instance_id: int = 7
+) -> ReportedObservation:
+    return ReportedObservation(
+        event_id=event_id,
+        trace_id=event_id,
+        host_id=str(HOST_ID),
+        station_id=str(STATION_ID),
+        instance_id=instance_id,
+        source="action",
+        signal="(1) step 1",
+        source_time=12.5,
+        source_anchor=100.0,
+        observed_at=7.5,
+        template_version_id="template-a",
+        template_sha256="a" * 64,
+        backend=ReportBackendProvenance(str(BACKEND_ID), ("model-1",)),
+        reported_at="2026-09-13T00:00:00Z",
+    )
+
+
+def test_observation_mirror_is_idempotent_and_queryable_by_station_and_instance() -> None:
+    monitor = MemoryMonitor()
+    received_at = datetime(2026, 9, 13, 0, 0, 0, tzinfo=UTC)
+
+    assert mirror_observation(
+        observation(), received_at=received_at, monitor=monitor, host_gateway=HostGateway()
+    )
+    assert not mirror_observation(
+        observation(), received_at=received_at, monitor=monitor, host_gateway=HostGateway()
+    )
+
+    items, total = list_observations(
+        monitor,
+        caller=caller(Permission.MONITOR_VIEW),
+        page=1,
+        page_size=50,
+        station_id=STATION_ID,
+        instance_id=7,
+    )
+    assert total == 1
+    assert items[0].report == observation()
+
+    other, nothing = list_observations(
+        monitor,
+        caller=caller(Permission.MONITOR_VIEW),
+        page=1,
+        page_size=50,
+        station_id=STATION_ID,
+        instance_id=8,
+    )
+    assert (other, nothing) == ((), 0)
+
+
+def test_observation_mirror_rejects_a_station_outside_the_host_topology() -> None:
+    with pytest.raises(MonitorRefusedError):
+        mirror_observation(
+            replace(observation(), station_id=str(SECOND_BACKEND_ID)),
+            received_at=datetime(2026, 9, 13, 0, 0, 0, tzinfo=UTC),
+            monitor=MemoryMonitor(),
+            host_gateway=HostGateway(),
+        )
+
+
+def test_list_observations_rejects_a_caller_without_monitor_permission() -> None:
+    with pytest.raises(AuthorizationRefusedError):
+        list_observations(MemoryMonitor(), caller=caller(), page=1, page_size=50)

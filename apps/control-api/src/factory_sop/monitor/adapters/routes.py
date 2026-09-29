@@ -21,10 +21,12 @@ from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.repository import MonitorRepository, MonitorStreamSource
 from factory_sop.monitor.usecases import (
     list_instances,
+    list_observations,
     list_violations,
     mirror_decision,
     mirror_health,
     mirror_instance,
+    mirror_observation,
     sse_snapshot_state,
     sse_stream,
 )
@@ -32,9 +34,12 @@ from factory_sop.responses import DEFAULT_PAGE_SIZE, MAXIMUM_PAGE_SIZE, ItemPage
 from nvsop_contracts import (
     ReportedDecision,
     ReportedHealth,
+    ReportedObservation,
     ReportedSopInstance,
     reported_decision_from_wire,
     reported_health_from_wire,
+    reported_observation_from_wire,
+    reported_observation_to_wire,
     reported_sop_instance_from_wire,
     reported_sop_instance_to_wire,
 )
@@ -182,6 +187,50 @@ def report_monitor_instance(
     return {"accepted": True, "duplicate": not inserted, "event_id": report.event_id}
 
 
+@router.post("/reported-observations", operation_id="reportMonitorObservation")
+def report_monitor_observation(
+    request: Request,
+    body: dict[str, object],
+    monitor: Annotated[MonitorRepository, Depends(dependencies.monitor)],
+    host_gateway: Annotated[DeviceHostGateway, Depends(dependencies.host_gateway)],
+    inference_host_id: Annotated[str | None, Header(alias="X-Inference-Host-ID")] = None,
+    inference_host_timestamp: Annotated[
+        str | None, Header(alias="X-Inference-Host-Timestamp")
+    ] = None,
+    inference_host_nonce: Annotated[str | None, Header(alias="X-Inference-Host-Nonce")] = None,
+    inference_host_signature: Annotated[
+        str | None, Header(alias="X-Inference-Host-Signature")
+    ] = None,
+) -> dict[str, object]:
+    try:
+        report: ReportedObservation = reported_observation_from_wire(body)
+        host_id = UUID(report.host_id)
+    except (ValueError, TypeError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
+        ) from error
+    _authenticate_report_host(
+        request=request,
+        host_gateway=host_gateway,
+        body=body,
+        host_id=host_id,
+        inference_host_id=inference_host_id,
+        inference_host_timestamp=inference_host_timestamp,
+        inference_host_nonce=inference_host_nonce,
+        inference_host_signature=inference_host_signature,
+    )
+    try:
+        inserted = mirror_observation(
+            report,
+            received_at=datetime.now(UTC),
+            monitor=monitor,
+            host_gateway=host_gateway,
+        )
+    except MonitorRefusedError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    return {"accepted": True, "duplicate": not inserted, "event_id": report.event_id}
+
+
 @router.get(
     "/instances",
     operation_id="listMonitorSopInstances",
@@ -216,6 +265,35 @@ def list_monitor_violations(
     items, total = list_violations(monitor, caller=caller, page=page, page_size=page_size)
     return ItemPage(
         items=[item.to_wire() for item in items],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@router.get(
+    "/observations",
+    operation_id="listMonitorObservations",
+    openapi_extra=needs(Permission.MONITOR_VIEW),
+)
+def list_monitor_observations(
+    caller: Authorized,
+    monitor: Annotated[MonitorRepository, Depends(dependencies.monitor)],
+    station_id: Annotated[UUID | None, Query()] = None,
+    instance_id: Annotated[int | None, Query(ge=0)] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=MAXIMUM_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> ItemPage[dict[str, object]]:
+    items, total = list_observations(
+        monitor,
+        caller=caller,
+        page=page,
+        page_size=page_size,
+        station_id=station_id,
+        instance_id=instance_id,
+    )
+    return ItemPage(
+        items=[reported_observation_to_wire(item.report) for item in items],
         page=page,
         page_size=page_size,
         total=total,

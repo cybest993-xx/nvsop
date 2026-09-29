@@ -13,10 +13,12 @@ from nvsop_contracts import (
     ConfigurationBundle,
     ReportedDecision,
     ReportedHealth,
+    ReportedObservation,
     ReportedSopInstance,
     configuration_to_wire,
     reported_decision_to_wire,
     reported_health_to_wire,
+    reported_observation_to_wire,
     reported_sop_instance_to_wire,
 )
 
@@ -115,6 +117,11 @@ class HttpDecisionReportTransport(DecisionReportTransport):
             configuration=configuration,
         )
         self._post("/api/v1/monitor/reported-instances", reported_sop_instance_to_wire(report))
+
+    def send_observation(self, report: ReportedObservation) -> None:
+        if report.host_id != self._host_id:
+            raise ValueError("an observation report cannot be sent by a different host")
+        self._post("/api/v1/monitor/reported-observations", reported_observation_to_wire(report))
 
     def _post(self, path: str, body: dict[str, object]) -> None:
         try:

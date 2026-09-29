@@ -123,6 +123,30 @@ class PendingSopInstanceReport:
 
 
 @dataclass(frozen=True, slots=True)
+class PendingObservationReport:
+    """该工位尚未确认的一条归一化观测; ``queue_id`` 是事件身份的本地半边。
+
+    它不是判定, 也不是流健康: 观测陈述作业发生了什么, 中心只归档, 不据此重新判定。
+    """
+
+    queue_id: int
+    station_id: str
+    instance_id: int
+    source: str
+    signal: str
+    source_time: float | None
+    source_anchor: float | None
+    observed_at: float
+    host_id: str
+    template_version_id: str | None
+    template_sha256: str | None
+    backend: BackendReportContext | None
+    reported_at: str | None
+    attempts: int
+    last_error: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class PendingEvidence:
     """One clip that exists nowhere but this host.
 
@@ -299,6 +323,129 @@ class StationQueues:
             reported_at=row["report_reported_at"],
             context=context,
         )
+
+    def pending_observation_reports(
+        self, *, limit: int | None = None
+    ) -> tuple[PendingObservationReport, ...]:
+        """该工位尚未确认的观测, 按最早优先返回。"""
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT queue_id, station_id, instance_id, source, signal,
+                       source_time, source_anchor, observed_at, report_host_id,
+                       report_template_version_id, report_template_sha256,
+                       report_backend_provenance, report_reported_at,
+                       attempts, last_error
+                  FROM local_observation_queue
+                 WHERE station_id = ? AND sent_at IS NULL
+                 ORDER BY queue_id
+                 LIMIT ?
+                """,
+                (self._station_id, -1 if limit is None else limit),
+            ).fetchall()
+            return tuple(self._pending_observation_from_row(row) for row in rows)
+
+    def pending_observation_report(self, queue_id: int) -> PendingObservationReport:
+        """按队列身份读取一条仍待发送的观测。"""
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT queue_id, station_id, instance_id, source, signal,
+                       source_time, source_anchor, observed_at, report_host_id,
+                       report_template_version_id, report_template_sha256,
+                       report_backend_provenance, report_reported_at,
+                       attempts, last_error
+                  FROM local_observation_queue
+                 WHERE station_id = ? AND queue_id = ? AND sent_at IS NULL
+                """,
+                (self._station_id, queue_id),
+            ).fetchone()
+        if row is None:
+            raise ValueError("pending observation report does not exist")
+        return self._pending_observation_from_row(row)
+
+    def _pending_observation_from_row(self, row: sqlite3.Row) -> PendingObservationReport:
+        raw_backend = row["report_backend_provenance"]
+        backend: BackendReportContext | None = None
+        if raw_backend is not None:
+            decoded = json.loads(raw_backend)
+            if not isinstance(decoded, dict) or set(decoded) != {"backend_id", "model_ids"}:
+                raise ValueError("pending observation backend provenance is invalid")
+            backend_id = decoded["backend_id"]
+            model_ids = decoded["model_ids"]
+            if (
+                not isinstance(backend_id, str)
+                or not isinstance(model_ids, list)
+                or any(not isinstance(model_id, str) for model_id in model_ids)
+            ):
+                raise ValueError("pending observation backend provenance is invalid")
+            backend = BackendReportContext(backend_id=backend_id, model_ids=tuple(model_ids))
+        return PendingObservationReport(
+            queue_id=int(row["queue_id"]),
+            station_id=str(row["station_id"]),
+            instance_id=int(row["instance_id"]),
+            source=str(row["source"]),
+            signal=str(row["signal"]),
+            source_time=None if row["source_time"] is None else float(row["source_time"]),
+            source_anchor=None if row["source_anchor"] is None else float(row["source_anchor"]),
+            observed_at=float(row["observed_at"]),
+            host_id=str(row["report_host_id"]),
+            template_version_id=row["report_template_version_id"],
+            template_sha256=row["report_template_sha256"],
+            backend=backend,
+            reported_at=row["report_reported_at"],
+            attempts=int(row["attempts"]),
+            last_error=row["last_error"],
+        )
+
+    def freeze_observation_reported_at(self, queue_id: int, *, candidate: str) -> str:
+        """持久化首个 wire 上报时刻, 保证同一观测重试保持完全相同的 payload。"""
+        if not candidate:
+            raise ValueError("reported_at candidate must not be empty")
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_observation_queue
+                   SET report_reported_at = ?
+                 WHERE station_id = ? AND queue_id = ? AND report_reported_at IS NULL
+                """,
+                (candidate, self._station_id, queue_id),
+            )
+            row = self._connection.execute(
+                """
+                SELECT report_reported_at
+                  FROM local_observation_queue
+                 WHERE station_id = ? AND queue_id = ? AND sent_at IS NULL
+                """,
+                (self._station_id, queue_id),
+            ).fetchone()
+        if row is None or row["report_reported_at"] is None:
+            raise ValueError("pending observation report could not freeze its wire timestamp")
+        return str(row["report_reported_at"])
+
+    def mark_observation_reported(self, queue_id: int, *, at: HostInstant) -> None:
+        """中心已确认该观测; 行继续保留以保持事件身份稳定。"""
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_observation_queue
+                   SET sent_at = ?
+                 WHERE station_id = ? AND queue_id = ?
+                """,
+                (at.seconds, self._station_id, queue_id),
+            )
+
+    def record_observation_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None:
+        """发送失败; 行继续待发送并增加一次尝试。"""
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_observation_queue
+                   SET attempts = attempts + 1, last_attempt_at = ?, last_error = ?
+                 WHERE station_id = ? AND queue_id = ?
+                """,
+                (at.seconds, error, self._station_id, queue_id),
+            )
 
     def _report_context_of(self, row: sqlite3.Row) -> ReportContext | None:
         raw_provenance = row["report_backend_provenance"]

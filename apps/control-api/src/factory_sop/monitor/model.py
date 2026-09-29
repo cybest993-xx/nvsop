@@ -5,7 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from nvsop_contracts import ReportedDecision, ReportedHealth, ReportedSopInstance, ReportViolation
+from nvsop_contracts import (
+    ReportedDecision,
+    ReportedHealth,
+    ReportedObservation,
+    ReportedSopInstance,
+    ReportViolation,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +31,14 @@ class MirroredHealth:
 @dataclass(frozen=True, slots=True)
 class MirroredSopInstance:
     report: ReportedSopInstance
+    received_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class MirroredObservation:
+    """一条归一化观测的产生时冻结镜像；中心不据此重新判定。"""
+
+    report: ReportedObservation
     received_at: datetime
 
 
@@ -66,6 +80,7 @@ class MirroredViolation:
 __all__ = [
     "MirroredDecision",
     "MirroredHealth",
+    "MirroredObservation",
     "MirroredSopInstance",
     "MirroredViolation",
 ]

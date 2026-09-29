@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from arq.connections import RedisSettings
 from pydantic import SecretStr
 
 from factory_sop.job.adapters.dispatcher import ArqJobDispatcher
@@ -25,7 +26,7 @@ def settings(redis_url: str | None) -> Settings:
 
 @pytest.mark.parametrize(
     "redis_url",
-    ["redis://127.0.0.1:0/0", "redis://127.0.0.1/-1", "http://127.0.0.1:6379/0"],
+    ["redis://127.0.0.1:0/0", "redis://127.0.0.1/-1", "http://127.0.0.1:6379/0", "redis://[::1/0"],
 )
 def test_dispatcher_rejects_invalid_redis_configuration(redis_url: str) -> None:
     with pytest.raises(ConfigurationError):
@@ -35,3 +36,18 @@ def test_dispatcher_rejects_invalid_redis_configuration(redis_url: str) -> None:
 def test_dispatcher_rejects_missing_redis_configuration() -> None:
     with pytest.raises(ConfigurationError):
         ArqJobDispatcher.from_settings(settings(None))
+
+
+def test_dispatcher_builds_redis_settings_from_the_shared_parse_rule() -> None:
+    dispatcher = ArqJobDispatcher.from_settings(
+        settings("redis://operator:secret@redis.internal:6380/3")  # pragma: allowlist secret
+    )
+
+    assert dispatcher.redis_settings == RedisSettings(
+        host="redis.internal",
+        port=6380,
+        database=3,
+        username="operator",
+        password="secret",  # pragma: allowlist secret
+        ssl=False,
+    )

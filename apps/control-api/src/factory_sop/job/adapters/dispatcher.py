@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from urllib.parse import urlsplit
 from uuid import UUID
 
 from arq import create_pool
@@ -15,7 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from factory_sop.job.adapters.repository import PostgresJobRepository
 from factory_sop.job.api import JobType
 from factory_sop.observability import get_logger
-from factory_sop.settings import ConfigurationError, Settings
+from factory_sop.settings import ConfigurationError, Settings, parse_redis_url
 
 _logger = get_logger("job")
 
@@ -44,32 +43,25 @@ class ArqJobDispatcher:
         *,
         session_factory: sessionmaker[Session] | None = None,
     ) -> ArqJobDispatcher:
-        """从已校验的 Redis URL 构造投递器；配置无效时显式抛出 `ConfigurationError`。"""
+        """从 Settings 中的 Redis URL 构造投递器；配置无效时显式抛出 `ConfigurationError`。
+
+        直接构造的 Settings 未经过 `from_environment`，所以这里复用同一解析规则，只消费
+        完整解析出的连接事实，不假设配置已被校验。
+        """
         if settings.redis_url is None:
             raise ConfigurationError("部署必须配置 Redis 任务队列")
-        try:
-            parsed = urlsplit(settings.redis_url.get_secret_value())
-            if parsed.scheme not in {"redis", "rediss"} or not parsed.hostname:
-                raise ValueError("Redis URL 必须使用 redis(s) scheme")
-            port = parsed.port
-            if port is not None and not 1 <= port <= 65535:
-                raise ValueError("Redis port must be between 1 and 65535")
-            database = int(parsed.path.strip("/") or "0")
-            if database < 0:
-                raise ValueError("Redis database must not be negative")
-            return cls(
-                RedisSettings(
-                    host=parsed.hostname,
-                    port=port or 6379,
-                    database=database,
-                    username=parsed.username,
-                    password=parsed.password,
-                    ssl=parsed.scheme == "rediss",
-                ),
-                session_factory=session_factory,
-            )
-        except (TypeError, ValueError) as error:
-            raise ConfigurationError("redis_url 无效") from error
+        connection = parse_redis_url(settings.redis_url.get_secret_value())
+        return cls(
+            RedisSettings(
+                host=connection.host,
+                port=connection.port,
+                database=connection.database,
+                username=connection.username,
+                password=connection.password,
+                ssl=connection.ssl,
+            ),
+            session_factory=session_factory,
+        )
 
     @property
     def redis_settings(self) -> RedisSettings:

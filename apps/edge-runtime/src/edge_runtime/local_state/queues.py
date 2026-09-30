@@ -147,6 +147,28 @@ class PendingObservationReport:
 
 
 @dataclass(frozen=True, slots=True)
+class PendingHealthReport:
+    """一路流健康事实的待上报行; ``queue_id`` 是事件身份的本地半边。
+
+    它不是观测: 观测陈述作业发生了什么, 它陈述我们当时能否可靠观察。中心只归档, 不据此判定。
+    """
+
+    queue_id: int
+    station_id: str
+    stream_id: str | None
+    status: str
+    reason_code: str | None
+    detail: str | None
+    occurred_at: str
+    source_anchor: float | None
+    anchor_offset: float | None
+    host_id: str
+    configuration_json: str | None
+    attempts: int
+    last_error: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class PendingEvidence:
     """One clip that exists nowhere but this host.
 
@@ -345,6 +367,25 @@ class StationQueues:
             ).fetchall()
             return tuple(self._pending_observation_from_row(row) for row in rows)
 
+    def pending_health_reports(
+        self, *, limit: int | None = None
+    ) -> tuple[PendingHealthReport, ...]:
+        """该工位尚未确认的流健康事实, 按最早优先返回。"""
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT queue_id, station_id, stream_id, status, reason_code, detail,
+                       occurred_at, source_anchor, anchor_offset, report_host_id,
+                       report_configuration, attempts, last_error
+                  FROM local_health_queue
+                 WHERE station_id = ? AND sent_at IS NULL
+                 ORDER BY queue_id
+                 LIMIT ?
+                """,
+                (self._station_id, -1 if limit is None else limit),
+            ).fetchall()
+            return tuple(self._pending_health_from_row(row) for row in rows)
+
     def pending_observation_report(self, queue_id: int) -> PendingObservationReport:
         """按队列身份读取一条仍待发送的观测。"""
         with self._lock:
@@ -363,6 +404,23 @@ class StationQueues:
         if row is None:
             raise ValueError("pending observation report does not exist")
         return self._pending_observation_from_row(row)
+
+    def pending_health_report(self, queue_id: int) -> PendingHealthReport:
+        """按队列身份读取一条仍待发送的流健康事实。"""
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT queue_id, station_id, stream_id, status, reason_code, detail,
+                       occurred_at, source_anchor, anchor_offset, report_host_id,
+                       report_configuration, attempts, last_error
+                  FROM local_health_queue
+                 WHERE station_id = ? AND queue_id = ? AND sent_at IS NULL
+                """,
+                (self._station_id, queue_id),
+            ).fetchone()
+        if row is None:
+            raise ValueError("pending health report does not exist")
+        return self._pending_health_from_row(row)
 
     def _pending_observation_from_row(self, row: sqlite3.Row) -> PendingObservationReport:
         raw_backend = row["report_backend_provenance"]
@@ -394,6 +452,23 @@ class StationQueues:
             template_sha256=row["report_template_sha256"],
             backend=backend,
             reported_at=row["report_reported_at"],
+            attempts=int(row["attempts"]),
+            last_error=row["last_error"],
+        )
+
+    def _pending_health_from_row(self, row: sqlite3.Row) -> PendingHealthReport:
+        return PendingHealthReport(
+            queue_id=int(row["queue_id"]),
+            station_id=str(row["station_id"]),
+            stream_id=row["stream_id"],
+            status=str(row["status"]),
+            reason_code=row["reason_code"],
+            detail=row["detail"],
+            occurred_at=str(row["occurred_at"]),
+            source_anchor=None if row["source_anchor"] is None else float(row["source_anchor"]),
+            anchor_offset=None if row["anchor_offset"] is None else float(row["anchor_offset"]),
+            host_id=str(row["report_host_id"]),
+            configuration_json=row["report_configuration"],
             attempts=int(row["attempts"]),
             last_error=row["last_error"],
         )
@@ -441,6 +516,26 @@ class StationQueues:
             self._connection.execute(
                 """
                 UPDATE local_observation_queue
+                   SET attempts = attempts + 1, last_attempt_at = ?, last_error = ?
+                 WHERE station_id = ? AND queue_id = ?
+                """,
+                (at.seconds, error, self._station_id, queue_id),
+            )
+
+    def mark_health_reported(self, queue_id: int, *, at: HostInstant) -> None:
+        """中心已确认该事实;行继续保留以保持事件身份稳定。"""
+        with self._lock:
+            self._connection.execute(
+                "UPDATE local_health_queue SET sent_at = ? WHERE station_id = ? AND queue_id = ?",
+                (at.seconds, self._station_id, queue_id),
+            )
+
+    def record_health_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None:
+        """发送失败;行继续待发送并增加一次尝试。"""
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_health_queue
                    SET attempts = attempts + 1, last_attempt_at = ?, last_error = ?
                  WHERE station_id = ? AND queue_id = ?
                 """,

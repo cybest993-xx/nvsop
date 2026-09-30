@@ -483,17 +483,35 @@ class ReportContractTests(unittest.TestCase):
             reported_decision_from_wire(wire)
 
     def test_health_keeps_raw_status_and_reason(self) -> None:
-        health = ReportedHealth(
+        health = self._health()
+        self.assertEqual(ReportedHealth.from_wire(health.to_wire()), health)
+
+    def test_health_allows_an_unknown_stream_identity(self) -> None:
+        health = replace(self._health(), stream_id=None)
+        self.assertEqual(ReportedHealth.from_wire(health.to_wire()), health)
+
+    def test_health_rejects_an_unsupported_contract_version(self) -> None:
+        wire = self._health().to_wire()
+        wire["contract_version"] = 1
+        with self.assertRaises(ValueError):
+            ReportedHealth.from_wire(wire)
+
+    @staticmethod
+    def _health() -> ReportedHealth:
+        return ReportedHealth(
             event_id="host-a:health:1",
             trace_id="trace-health-1",
             host_id="host-a",
             station_id="station-a",
+            stream_id="camera-a",
             status="future_status",
             reason_code="FUTURE_REASON",
             detail="preserve me",
+            occurred_at="2026-09-13T00:00:00Z",
+            source_anchor=12.5,
+            anchor_offset=0.5,
             reported_at="2026-09-13T00:00:00Z",
         )
-        self.assertEqual(ReportedHealth.from_wire(health.to_wire()), health)
 
     def test_observation_round_trip_freezes_source_and_provenance(self) -> None:
         observation = ReportedObservation(

@@ -461,6 +461,41 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertTrue(state.closed)
 
+    def test_media_start_failure_is_logged_before_existing_retry(self) -> None:
+        state = _State()
+        stop = Event()
+
+        class FailingMedia(_Media):
+            def start(self) -> None:
+                super().start()
+                stop.set()
+                raise RuntimeError("synthetic media startup failure")
+
+        media = FailingMedia()
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            stations=(),
+            state=cast(LocalState, state),
+            media=cast(MediaRuntime, media),
+        )
+        runner = _RuntimeCycleRunner(
+            runtime=runtime,
+            runtime_stop=Event(),
+            should_stop=stop.is_set,
+        )
+
+        with self.assertLogs("edge_runtime", level="ERROR") as logs:
+            runner._run_media()
+
+        self.assertEqual(1, media.start_calls)
+        self.assertTrue(
+            any(
+                "edge.media.start.failed error_type=RuntimeError" in message
+                and "synthetic media startup failure" in message
+                for message in logs.output
+            )
+        )
+
     def test_media_control_flow_exit_is_not_retried(self) -> None:
         state = _State()
         media = _Media(start_error=KeyboardInterrupt())

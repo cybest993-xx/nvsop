@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shlex
 import subprocess
@@ -33,6 +34,8 @@ from edge_runtime.media_retention import (
     same_impact,
     write_applied_window,
 )
+
+_logger = logging.getLogger("edge_runtime")
 
 
 class MediaPathMode(StrEnum):
@@ -538,6 +541,11 @@ class MediaRuntime:
                     self._last_error = None
                 except Exception as error:
                     self._last_error = str(error)
+                    _logger.error(
+                        "edge.media.recovery.failed error_type=%s error=%s",
+                        type(error).__name__,
+                        error,
+                    )
 
     def _processes(self) -> tuple[_Process, ...]:
         return tuple(process for process in (self._mediamtx, *self._ffmpeg) if process is not None)

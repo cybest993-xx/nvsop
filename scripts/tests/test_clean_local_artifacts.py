@@ -23,6 +23,29 @@ class CleanLocalArtifactsTest(unittest.TestCase):
         path.write_text(content)
         return path
 
+    def test_daily_clean_preserves_environment_and_caches(self) -> None:
+        output = self.write(".nvsop/artifacts/pytest/center-unit.xml")
+        preserved = [
+            self.write(".nvsop/venv/bin/python"),
+            self.write(".nvsop/cache/uv/wheel"),
+            self.write(".nvsop/tools/actionlint"),
+            self.write("node_modules/.pnpm/state"),
+            self.write("apps/control-api/src/control_api.egg-info/PKG-INFO"),
+            self.write(".nvsop/dev-main/secrets/password"),
+        ]
+        clean(self.root)
+        self.assertFalse(output.exists())
+        self.assertTrue(all(path.exists() for path in preserved))
+
+    def test_purge_unlinks_legacy_cache_without_deleting_shared_content(self) -> None:
+        shared = self.write("shared-cache/wheel", "keep")
+        cache = self.root / ".nvsop/cache"
+        cache.parent.mkdir()
+        cache.symlink_to(shared.parent, target_is_directory=True)
+        clean(self.root, purge=True)
+        self.assertFalse(cache.is_symlink())
+        self.assertEqual("keep", shared.read_text())
+
     def test_removes_only_declared_reproducible_artifacts(self) -> None:
         disposable = [
             ".nvsop/cache/ruff/cache",
@@ -53,7 +76,7 @@ class CleanLocalArtifactsTest(unittest.TestCase):
         for path in preserved:
             self.write(path, "keep")
 
-        removed = clean(self.root)
+        removed = clean(self.root, purge=True)
 
         self.assertTrue(removed)
         for path in disposable:

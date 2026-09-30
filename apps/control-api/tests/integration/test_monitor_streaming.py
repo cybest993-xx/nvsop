@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import cast
 from uuid import UUID, uuid4
@@ -502,6 +503,47 @@ def test_runtime_observation_notify_is_transactional_and_projection_has_no_globa
         assert {value["station_id"] for value in projection} == set(station_ids)
     finally:
         source.close()
+
+
+def test_runtime_projection_health_uses_event_time_not_ingestion_sequence(engine: Engine) -> None:
+    """#384: 迟到旧健康报告不得因更大的 Center 序号覆盖较新的业务事实。"""
+    factory = sessionmaker(bind=engine)
+    station_id, stream_id = str(uuid4()), f"s019:health:{uuid4()}"
+
+    def sample(event_id: str, status: str, occurred_at: str) -> MirroredHealth:
+        base = _health(event_id)
+        return replace(
+            base,
+            report=replace(
+                base.report,
+                station_id=station_id,
+                stream_id=stream_id,
+                status=status,
+                occurred_at=occurred_at,
+                source_anchor=None,
+                anchor_offset=None,
+            ),
+        )
+
+    with factory() as session:
+        assert PostgresMonitorRepository(session).upsert_health(
+            sample(f"{stream_id}:newer", "source_error", "2026-09-23T00:01:00Z")
+        )
+        session.commit()
+    # 事件时间更早但中心接收更晚：ingestion sequence 更大，旧实现会据此覆盖较新事实。
+    with factory() as session:
+        assert PostgresMonitorRepository(session).upsert_health(
+            sample(f"{stream_id}:older-late", "delivering", "2026-09-23T00:00:00Z")
+        )
+        session.commit()
+    with factory() as session:
+        projection = PostgresMonitorRepository(session).runtime_projection()
+    health = cast(
+        list[dict[str, object]],
+        next(value["health"] for value in projection if value["station_id"] == station_id),
+    )
+    assert [value["event_id"] for value in health] == [f"{stream_id}:newer"]
+    assert health[0]["status"] == "source_error"
 
 
 def test_health_mirror_is_idempotent_and_persists_stream_identity(engine: Engine) -> None:

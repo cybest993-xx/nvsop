@@ -8,6 +8,7 @@ from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import CursorResult, func, select, update
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DatabaseSession
 
@@ -168,9 +169,25 @@ class PostgresDatasetRepository:
             )
         )
 
-    def add_action_list(self, value: ActionListRevision) -> None:
-        self._session.add(ActionListRevisionRow.from_domain(value))
-        self._session.flush()
+    def add_action_list(self, value: ActionListRevision) -> bool:
+        statement = (
+            postgres_insert(ActionListRevisionRow)
+            .values(
+                dataset_id=value.dataset_id,
+                revision=value.revision,
+                actions=list(value.actions),
+                created_by=value.created_by,
+                created_at=value.created_at,
+            )
+            .on_conflict_do_nothing(
+                index_elements=[
+                    ActionListRevisionRow.dataset_id,
+                    ActionListRevisionRow.revision,
+                ]
+            )
+            .returning(ActionListRevisionRow.revision)
+        )
+        return self._session.execute(statement).scalar_one_or_none() is not None
 
     def latest_action_list(self, dataset_id: UUID) -> ActionListRevision | None:
         row = self._session.scalars(

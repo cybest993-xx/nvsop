@@ -57,6 +57,7 @@ const stations = ref<StationView[]>([])
 const loading = ref(true)
 const failure = ref('')
 const fieldErrors = ref<FieldError[]>([])
+const loadSequence = ref(0)
 
 const mayViewConnectors = computed(() => session.may('device.connector.view'))
 const mayViewHosts = computed(() => session.may('device.inference_host.view'))
@@ -118,6 +119,8 @@ interface LoadOptions {
 }
 
 async function load({ showLoading }: LoadOptions = { showLoading: true }): Promise<void> {
+  const sequence = loadSequence.value + 1
+  loadSequence.value = sequence
   if (showLoading) {
     loading.value = true
   }
@@ -128,13 +131,18 @@ async function load({ showLoading }: LoadOptions = { showLoading: true }): Promi
       mayViewHosts.value ? readInferenceHosts() : Promise.resolve(null),
       mayViewStations.value ? readStations() : Promise.resolve(null),
     ])
+    if (sequence !== loadSequence.value) {
+      return
+    }
     connectors.value = connectorPage?.items ?? []
     hosts.value = hostPage?.items ?? []
     stations.value = stationPage?.items ?? []
   } catch (error) {
-    recordFailure(error)
+    if (sequence === loadSequence.value) {
+      recordFailure(error)
+    }
   } finally {
-    if (showLoading) {
+    if (sequence === loadSequence.value) {
       loading.value = false
     }
   }
@@ -312,6 +320,7 @@ const detailDialog = ref(false)
 const detailLoading = ref(false)
 const detailFailure = ref('')
 const detailConnector = ref<ConnectorView | null>(null)
+const detailSequence = ref(0)
 const detailRows = computed(() => {
   const connector = detailConnector.value
   if (connector === null) {
@@ -334,19 +343,30 @@ const detailRows = computed(() => {
 })
 
 async function openDetail(connector: ConnectorView): Promise<void> {
+  const sequence = detailSequence.value + 1
+  detailSequence.value = sequence
   detailDialog.value = true
   detailLoading.value = true
   detailFailure.value = ''
   detailConnector.value = null
   try {
-    detailConnector.value = await readConnector(connector.id)
+    const loaded = await readConnector(connector.id)
+    if (sequence !== detailSequence.value) {
+      return
+    }
+    detailConnector.value = loaded
   } catch (error) {
+    if (sequence !== detailSequence.value) {
+      return
+    }
     if (!(error instanceof ControlPlaneError)) {
       throw error
     }
     detailFailure.value = error.detail ?? error.message
   } finally {
-    detailLoading.value = false
+    if (sequence === detailSequence.value) {
+      detailLoading.value = false
+    }
   }
 }
 

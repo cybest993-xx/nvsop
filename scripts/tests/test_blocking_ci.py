@@ -103,6 +103,23 @@ class BlockingCiTest(unittest.TestCase):
         self.assertNotIn("git diff --name-only --no-renames -z", workflow)
         self.assertNotIn("steps.relevant.outputs.run", workflow)
 
+    def test_integration_matrix_runs_both_suites_and_media_only_once(self) -> None:
+        workflow = WORKFLOW.read_text()
+        integration = workflow.split("\n  integration-gate:\n", 1)[1].split(
+            "\n  browser-gate:\n", 1
+        )[0]
+        self.assertIn("suite: [center-integration, center-system]", integration)
+        self.assertIn("fail-fast: false", integration)
+        self.assertIn('run: make sync "$TEST_SUITE"', integration)
+        self.assertIn("TEST_SUITE: ${{ matrix.suite }}", integration)
+        self.assertIn(
+            "if: needs.scope.outputs.media == 'true' && matrix.suite == 'center-system'",
+            integration,
+        )
+        self.assertIn(
+            "needs: [scope, lockfile, merge-gate, integration-gate, browser-gate]", workflow
+        )
+
     def test_browser_failure_upload_is_pinned_and_limited_to_playwright_output(self) -> None:
         workflow = WORKFLOW.read_text()
         self.assertIn(

@@ -487,6 +487,76 @@ def test_running_delivery_ack_marks_outbox_dispatched_without_renewing_lease(
             )
 
 
+def test_late_dispatch_failure_cannot_mutate_running_execution_generation(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 9, 9, 1, 0, tzinfo=UTC)
+    started_at = now + timedelta(seconds=1)
+    finished_at = now + timedelta(seconds=2)
+    job = ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_VALIDATION,
+        status=JobStatus.PENDING,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=now,
+        updated_at=now,
+        failure_code=None,
+    )
+    with session_factory(engine).begin() as session:
+        PostgresJobRepository(session).add(job)
+
+    class StartThenFailPool:
+        async def enqueue_job(self, function: str, *args: str, **kwargs: str) -> object:
+            del function, args, kwargs
+            with session_factory(engine).begin() as session:
+                assert (
+                    PostgresJobRepository(session).mark_running(
+                        job_id=job.id,
+                        now=started_at,
+                    )
+                    is not None
+                )
+            raise RuntimeError("synthetic late dispatch failure")
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_create_pool(_: RedisSettings) -> StartThenFailPool:
+        return StartThenFailPool()
+
+    monkeypatch.setattr(dispatcher_module, "create_pool", fake_create_pool)
+    try:
+        dispatcher = ArqJobDispatcher(
+            RedisSettings(),
+            session_factory=session_factory(engine),
+        )
+        asyncio.run(dispatcher.dispatch_async(job.id))
+
+        assert row(
+            engine,
+            "SELECT status, outbox_status, updated_at, dispatch_attempts, last_dispatch_error "
+            "FROM job_application_job WHERE id = :job_id",
+            job_id=job.id,
+        ) == ("running", "dispatched", started_at, 0, None)
+
+        with session_factory(engine).begin() as session:
+            assert PostgresJobRepository(session).finish(
+                job_id=job.id,
+                status=JobStatus.SUCCEEDED.value,
+                failure_code=None,
+                now=finished_at,
+                expected_updated_at=started_at,
+            )
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM job_application_job WHERE id = :job_id"),
+                {"job_id": job.id},
+            )
+
+
 def test_recovered_delivery_uses_new_redis_generation(
     engine: Engine,
     monkeypatch: pytest.MonkeyPatch,
@@ -544,6 +614,60 @@ def test_recovered_delivery_uses_new_redis_generation(
             connection.execute(
                 text("DELETE FROM job_application_job WHERE id = :job_id"),
                 {"job_id": job.id},
+            )
+
+
+def test_stale_failed_reopen_cannot_downgrade_newer_running_generation(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failed_at = datetime(2026, 9, 9, 1, 0, tzinfo=UTC)
+    reopened_at = failed_at + timedelta(seconds=1)
+    running_at = failed_at + timedelta(seconds=2)
+    stale = ApplicationJob(
+        id=uuid4(),
+        job_type=JobType.DATASET_VALIDATION,
+        status=JobStatus.FAILED,
+        member_id=uuid4(),
+        attempt_id=uuid4(),
+        created_at=failed_at,
+        updated_at=failed_at,
+        failure_code="VALIDATION_FAILED",
+    )
+    try:
+        with session_factory(engine).begin() as session:
+            PostgresJobRepository(session).add(stale)
+        with session_factory(engine).begin() as session:
+            repository = PostgresJobRepository(session)
+            reopened = repository.get_or_create_validation(
+                member_id=stale.member_id,
+                attempt_id=stale.attempt_id,
+                now=reopened_at,
+            )
+            assert reopened.status == JobStatus.PENDING
+            assert repository.mark_running(job_id=stale.id, now=running_at) is not None
+
+        with session_factory(engine).begin() as session:
+            repository = PostgresJobRepository(session)
+            monkeypatch.setattr(repository, "by_attempt", lambda attempt_id: stale)
+            replay = repository.get_or_create_validation(
+                member_id=stale.member_id,
+                attempt_id=stale.attempt_id,
+                now=running_at + timedelta(seconds=1),
+            )
+            assert replay.status == JobStatus.RUNNING
+            assert replay.updated_at == running_at
+
+        assert row(
+            engine,
+            "SELECT status, updated_at, failure_code FROM job_application_job WHERE id = :job_id",
+            job_id=stale.id,
+        ) == ("running", running_at, None)
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM job_application_job WHERE id = :job_id"),
+                {"job_id": stale.id},
             )
 
 

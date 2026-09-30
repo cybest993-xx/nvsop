@@ -162,6 +162,38 @@ class DeviceHostGateway(Protocol):
         ...
 
 
+class DeviceMonitorGateway(Protocol):
+    """monitor 读取设备 owner 持有的历史归属与主机清单。"""
+
+    def has_historical_station(
+        self,
+        *,
+        host_id: UUID,
+        station_id: UUID,
+        template_version_id: str | None = None,
+        template_sha256: str | None = None,
+    ) -> bool:
+        """仅在不可变配置历史证明主机曾拥有该工位/模板时返回真。"""
+        ...
+
+    def has_historical_assignment(
+        self,
+        *,
+        host_id: UUID,
+        station_id: UUID,
+        backend_id: UUID,
+        template_version_id: str | None,
+        template_sha256: str | None,
+        model_ids: tuple[str, ...],
+    ) -> bool:
+        """仅在不可变历史中存在精确的产生时 assignment 时返回真。"""
+        ...
+
+    def registered_host_ids(self) -> tuple[UUID, ...]:
+        """返回当前已登记主机身份，供 Center 外部存活见证使用。"""
+        ...
+
+
 class DeviceHistoricalAssignmentGateway(Protocol):
     """供监控上报入口验证 Center 已下发历史配置归属的设备接缝。"""
 
@@ -355,6 +387,7 @@ __all__ = [
     "DeviceConfigurationTopology",
     "DeviceHistoricalAssignmentGateway",
     "DeviceHostGateway",
+    "DeviceMonitorGateway",
     "DeviceTemplateBindingGateway",
     "InferenceHostIdentity",
     "RuntimeParameterMode",

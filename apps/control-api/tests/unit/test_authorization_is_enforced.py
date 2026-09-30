@@ -25,7 +25,7 @@ from datetime import datetime
 from uuid import UUID
 
 import pytest
-from auth_fakes import FakeRoles, FakeSessions, FakeUsers
+from auth_fakes import FakeRoles, FakeSessions, FakeUsers, prepared_password_hash
 from device_fakes import (
     DEFAULT_HOST_IDENTITY,
     FakeCameras,
@@ -54,7 +54,6 @@ from factory_sop.auth.adapters import dependencies
 from factory_sop.auth.adapters.cookies import CSRF_COOKIE, CSRF_HEADER
 from factory_sop.auth.adapters.dependencies import DECLARED_PERMISSION
 from factory_sop.auth.model import Role, User, UserStatus
-from factory_sop.auth.passwords import hash_password
 from factory_sop.auth.permissions import Permission
 from factory_sop.dataset.adapters import dependencies as dataset_dependencies
 from factory_sop.dataset.model import (
@@ -568,7 +567,7 @@ class Backend:
             id=new_id(),
             login_name="administrator",
             display_name="系统管理员",
-            password_hash=hash_password(PASSWORD),
+            password_hash=prepared_password_hash(PASSWORD),
             status=UserStatus.ACTIVE,
         )
         self.users.add(self.actor)

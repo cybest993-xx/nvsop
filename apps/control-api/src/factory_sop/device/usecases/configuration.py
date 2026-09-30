@@ -76,9 +76,8 @@ class RepositoryDeviceConfigurationGateway(DeviceConfigurationGateway):
         host = self._hosts.by_id(host_id)
         if host is None:
             raise DeviceConfigurationError("inference host was not found")
-        backend_values, _ = self._backends.page_of(page=1, page_size=10_000, host_id=host_id)
         active_backends = []
-        for backend in backend_values:
+        for backend in self._backends.for_host(host_id):
             if backend.status.value != "active":
                 continue
             if backend.host_id != host.id:

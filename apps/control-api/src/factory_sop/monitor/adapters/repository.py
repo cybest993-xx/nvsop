@@ -25,6 +25,7 @@ from factory_sop.monitor.model import (
     MirroredViolation,
 )
 from factory_sop.monitor.repository import MonitorRepository
+from factory_sop.monitor.usecases import latest_health_per_stream
 from nvsop_contracts import (
     ReportedSopInstance,
     reported_decision_to_wire,
@@ -285,14 +286,9 @@ class PostgresMonitorRepository(MonitorRepository):
         ).all()
         return tuple(row.to_domain() for row in rows)
 
-    def recent_health_for_station(
-        self, *, station_id: str, limit: int
-    ) -> tuple[MirroredHealth, ...]:
+    def health_for_station(self, *, station_id: str) -> tuple[MirroredHealth, ...]:
         rows = self._session.scalars(
-            select(ReportedHealthRow)
-            .where(ReportedHealthRow.station_id == station_id)
-            .order_by(ReportedHealthRow.stream_sequence.desc())
-            .limit(limit)
+            select(ReportedHealthRow).where(ReportedHealthRow.station_id == station_id)
         ).all()
         return tuple(row.to_domain() for row in rows)
 
@@ -349,7 +345,11 @@ class PostgresMonitorRepository(MonitorRepository):
         )
 
     def runtime_projection(self) -> tuple[dict[str, object], ...]:
-        """从 durable mirror 按工位读取当前事实，不限制全局行数。"""
+        """从 durable mirror 按工位读取当前事实，不限制全局行数。
+
+        每路流健康复用 monitor owner 的事件时间分类，避免 Center ingestion 序号在
+        迟到旧报告时覆盖较新的业务事实。
+        """
         decisions = self._session.scalars(
             select(ReportedDecisionRow)
             .distinct(ReportedDecisionRow.station_id)
@@ -358,12 +358,7 @@ class PostgresMonitorRepository(MonitorRepository):
         health = self._session.scalars(
             select(ReportedHealthRow)
             .where(ReportedHealthRow.station_id.is_not(None))
-            .distinct(ReportedHealthRow.station_id, ReportedHealthRow.stream_id)
-            .order_by(
-                ReportedHealthRow.station_id,
-                ReportedHealthRow.stream_id,
-                ReportedHealthRow.stream_sequence.desc(),
-            )
+            .order_by(ReportedHealthRow.station_id, ReportedHealthRow.stream_id)
         ).all()
         latest_hosts = (
             select(ReportedSopInstanceRow.station_id, ReportedSopInstanceRow.host_id)
@@ -401,14 +396,20 @@ class PostgresMonitorRepository(MonitorRepository):
             )
         ).all()
         by_station: dict[str, dict[str, object]] = {}
+        health_by_station: dict[str, list[MirroredHealth]] = {}
         for decision_row in decisions:
             by_station.setdefault(decision_row.station_id, {})["decision"] = (
                 reported_decision_to_wire(decision_row.to_domain().report)
             )
         for health_row in health:
-            fields = by_station.setdefault(health_row.station_id or "", {})
-            streams = cast(list[dict[str, object]], fields.setdefault("health", []))
-            streams.append(reported_health_to_wire(health_row.to_domain().report))
+            health_by_station.setdefault(health_row.station_id or "", []).append(
+                health_row.to_domain()
+            )
+        for station_id, reports in health_by_station.items():
+            by_station.setdefault(station_id, {})["health"] = [
+                reported_health_to_wire(value.report)
+                for value in latest_health_per_stream(tuple(reports))
+            ]
         for instance_row in instances:
             by_station.setdefault(instance_row.station_id, {})["instance"] = (
                 reported_sop_instance_to_wire(instance_row.to_domain().report)

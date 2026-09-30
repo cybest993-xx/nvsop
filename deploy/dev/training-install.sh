@@ -29,8 +29,8 @@ if [ "$actual_sha" != "$EXPECTED_SHA" ]; then
 fi
 
 # 只读探测：版本表缺失时按 database 内是否已有非系统对象区分空库与未知状态；版本表存在时
-# 比对已记录的提交与摘要。输出单个词供 shell 决策。
-# 分两步是因为直接在 CASE 分支里引用可能不存在的版本表会在解析期报错。
+# 比对已记录的提交与摘要；匹配时再只读核对锁定 Vendor DDL 明确拥有的对象。
+# 分步是因为直接引用可能不存在的版本表会在解析期报错。
 state="$(
   psql -v ON_ERROR_STOP=1 -d "$INSTALL_DATABASE" -tA <<'SQL'
 SELECT CASE
@@ -59,11 +59,52 @@ if [ "$state" = "present" ]; then
     psql -v ON_ERROR_STOP=1 -d "$INSTALL_DATABASE" -tA \
       -v commit="$EXPECTED_COMMIT" -v sha="$EXPECTED_SHA" <<'SQL'
 SELECT CASE
-  WHEN EXISTS (
+  WHEN NOT EXISTS (
     SELECT 1 FROM nvsop_training_install
     WHERE vendor_commit = :'commit' AND ddl_sha256 = :'sha'
-  ) THEN 'installed'
-  ELSE 'mismatch'
+  ) THEN 'mismatch'
+  WHEN (
+    SELECT count(*)
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relkind IN ('r', 'p')
+      AND c.relname IN (
+        'dataset', 'video', 'chunk', 'annotation', 'augmented_data',
+        'augmentation_stages', 'training_job', 'ddm_training_job',
+        'evaluation_job', 'e2e_evaluation_job'
+      )
+  ) <> 10 THEN 'drifted'
+  WHEN (
+    SELECT count(*)
+    FROM pg_type t
+    JOIN pg_namespace n ON n.oid = t.typnamespace
+    WHERE n.nspname = 'public'
+      AND t.typtype = 'e'
+      AND t.typname IN ('status_enum', 'training_status_enum')
+  ) <> 2 THEN 'drifted'
+  WHEN (
+    SELECT count(*)
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relkind = 'i'
+      AND c.relname IN (
+        'idx_augmentation_stages_augmentation_id',
+        'idx_augmentation_stages_stage_name'
+      )
+  ) <> 2 THEN 'drifted'
+  WHEN NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint con
+    JOIN pg_class rel ON rel.oid = con.conrelid
+    JOIN pg_namespace n ON n.oid = rel.relnamespace
+    WHERE n.nspname = 'public'
+      AND rel.relname = 'augmentation_stages'
+      AND con.conname = 'unique_augmentation_stage'
+      AND con.contype = 'u'
+  ) THEN 'drifted'
+  ELSE 'installed'
 END;
 SQL
   )"
@@ -78,6 +119,10 @@ case "$state" in
     ;;
   mismatch)
     echo "training 已记录不同的安装版本，拒绝覆盖；增量升级由 S067 负责" >&2
+    exit 1
+    ;;
+  drifted)
+    echo "training 安装标记匹配，但锁定 Vendor DDL 的必需对象缺失或类型不符，拒绝自动修复" >&2
     exit 1
     ;;
   *)

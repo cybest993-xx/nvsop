@@ -169,8 +169,12 @@ class FakeDatasets:
     ) -> ActionListRevision | None:
         return self.action_lists.get((dataset_id, revision))
 
-    def add_action_list(self, value: ActionListRevision) -> None:
-        self.action_lists[(value.dataset_id, value.revision)] = value
+    def add_action_list(self, value: ActionListRevision) -> bool:
+        key = (value.dataset_id, value.revision)
+        if key in self.action_lists:
+            return False
+        self.action_lists[key] = value
+        return True
 
     def add_annotation_context(self, value: AnnotationContext) -> None:
         self.contexts[value.id] = value

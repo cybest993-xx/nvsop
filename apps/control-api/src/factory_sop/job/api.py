@@ -130,8 +130,15 @@ class JobRepository(Protocol):
         """worker 已领取时确认投递事实，不改写执行租约。"""
         ...
 
-    def record_dispatch_failure(self, *, job_id: UUID, error: str, now: datetime) -> None:
-        """保留投递失败，供后续 outbox 扫描再次投递。"""
+    def record_dispatch_failure(
+        self,
+        *,
+        job_id: UUID,
+        expected_updated_at: datetime,
+        error: str,
+        now: datetime,
+    ) -> bool:
+        """仅在 pending generation 仍匹配时保留投递失败。"""
         ...
 
     def finish(

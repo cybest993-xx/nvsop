@@ -190,6 +190,7 @@ def training_install(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Train
                         "training_unknown",
                         "training_mismatch",
                         "training_broken",
+                        "training_drifted",
                         REINSTALL_DATABASE,
                     ):
                         connection.execute(text(f'CREATE DATABASE "{name}"'))
@@ -309,6 +310,29 @@ def test_install_skips_second_startup_and_preserves_data(training_install: Train
             )
     finally:
         install_engine.dispose()
+
+
+def test_matching_marker_refuses_missing_vendor_owned_object(
+    training_install: TrainingInstall,
+) -> None:
+    """安装标记不能替代必需 Vendor 对象的只读完整性证明。"""
+    instance = training_install
+    first = instance.run_install(database="training_drifted")
+    assert first.exit_code == 0, first.output
+
+    engine = instance.engine(
+        database="training_drifted", role=INSTALL_ROLE, password=instance.install_password
+    )
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("DROP INDEX idx_augmentation_stages_stage_name"))
+    finally:
+        engine.dispose()
+
+    result = instance.run_install(database="training_drifted")
+    assert result.exit_code != 0
+    assert "必需对象缺失或类型不符" in result.output.decode("utf-8")
+    assert VERSION_TABLE in instance.public_tables(database="training_drifted")
 
 
 def test_install_refuses_unknown_non_empty_state(training_install: TrainingInstall) -> None:

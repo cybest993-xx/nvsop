@@ -145,6 +145,19 @@ RestartSec=2
 
 能力声明是现场实测事实，不是从型号名猜出的能力。模板绑定和判定依赖能力数据；详见 [`../design/mechanisms/edge-autonomy.md`](../design/mechanisms/edge-autonomy.md)。
 
+### 本机证据切片
+
+可选 `evidence` 段启用本机证据切片；缺少它时运行时照常判定，证据待办保持 pending 而不声称成功。它复用 `media` 的录像目录与 ffmpeg：
+
+| 字段 | 含义 |
+|---|---|
+| `evidence_directory` | 本机证据目录；每个证据一个目录，含片段/关键帧/元数据并整体原子定稿 |
+| `ffprobe_binary` | 读取分段真实时长的 ffprobe |
+| `slice_timeout_seconds` | 单次 ffmpeg/ffprobe 超时 |
+| `recording_timezone`（可选） | 解析分段文件名的 IANA 时区；省略时按本机时区 |
+
+分段文件名来自 MediaMTX `recordPath`，其时间戳是 MediaMTX 进程的本机时区。**部署必须保证 MediaMTX 与边缘运行时同一时区，或用 `recording_timezone` 显式声明 MediaMTX 的时区**，否则证据窗口会错位。入队时冻结录像墙钟映射与当时参与 SOP 的连续录像相机路径，重启或改绑后历史待办仍按当时来源切片。
+
 ## 当前配置变更与同步机制
 
 `python -m edge_runtime` 仍先读取 `NVSOP_EDGE_COMMAND_CONFIG_FILE` 指向的本地 JSON。这份文件是**已实现的 bootstrap 与主机本地配置入口**：它提供中心地址、主机身份/私钥、本地推理端点与请求体、adapter profile、设备凭据、本地 SQLite 路径，以及首次无法取得中心确认配置时的自治起点；它不是中心拥有的拓扑、模板和运行参数的第二份权威。

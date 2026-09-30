@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from factory_sop.monitor.adapters.tables import (
     ReportedDecisionRow,
+    ReportedDisposalRow,
     ReportedHealthRow,
     ReportedObservationRow,
     ReportedSopInstanceRow,
@@ -27,6 +28,7 @@ from factory_sop.monitor.model import (
 from factory_sop.monitor.repository import MonitorRepository
 from factory_sop.monitor.usecases import latest_health_per_stream
 from nvsop_contracts import (
+    ReportedDisposal,
     ReportedSopInstance,
     reported_decision_to_wire,
     reported_health_to_wire,
@@ -213,6 +215,42 @@ class PostgresMonitorRepository(MonitorRepository):
         total = self._session.scalar(select(func.count()).select_from(ReportedViolationRow))
         return tuple(row.to_domain() for row in rows), int(total or 0)
 
+    def upsert_disposal(self, report: ReportedDisposal, *, received_at: datetime) -> bool:
+        payload = report.to_wire()
+        table = cast(Table, ReportedDisposalRow.__table__)
+        result = self._session.execute(
+            postgres_insert(table)
+            .values(
+                event_id=report.event_id,
+                host_id=report.host_id,
+                received_at=received_at,
+                payload=payload,
+            )
+            .on_conflict_do_nothing(index_elements=[table.c.event_id])
+            .returning(table.c.event_id)
+        )
+        if result.scalar_one_or_none() is not None:
+            return True
+        existing = self._session.get(ReportedDisposalRow, report.event_id)
+        if existing is None:
+            raise RuntimeError("disposal mirror insert conflicted without a visible row")
+        _ensure_same(existing.payload, payload, "disposal", report.event_id)
+        return False
+
+    def page_disposals(
+        self, *, page: int, page_size: int
+    ) -> tuple[tuple[ReportedDisposal, ...], int]:
+        rows = self._session.scalars(
+            select(ReportedDisposalRow)
+            .order_by(ReportedDisposalRow.received_at.desc(), ReportedDisposalRow.event_id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        ).all()
+        total = self._session.scalar(select(func.count()).select_from(ReportedDisposalRow))
+        return tuple(
+            ReportedDisposal.from_wire(cast(dict[str, object], row.payload)) for row in rows
+        ), int(total or 0)
+
     def upsert_observation(self, value: MirroredObservation) -> bool:
         row = ReportedObservationRow.from_domain(value)
         table = cast(Table, ReportedObservationRow.__table__)
@@ -297,6 +335,7 @@ class PostgresMonitorRepository(MonitorRepository):
         latest: dict[str, datetime] = {}
         for host_column, received_column in (
             (ReportedDecisionRow.host_id, ReportedDecisionRow.received_at),
+            (ReportedDisposalRow.host_id, ReportedDisposalRow.received_at),
             (ReportedHealthRow.host_id, ReportedHealthRow.received_at),
             (ReportedObservationRow.host_id, ReportedObservationRow.received_at),
             (ReportedSopInstanceRow.host_id, ReportedSopInstanceRow.received_at),

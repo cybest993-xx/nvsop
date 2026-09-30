@@ -12,12 +12,15 @@ from factory_sop.monitor.model import (
     MirroredSopInstance,
     MirroredViolation,
 )
+from nvsop_contracts import ReportedDisposal
 
 
 class MonitorRepository(Protocol):
     def upsert_decision(self, value: MirroredDecision) -> bool:
         """只插入一次；相同重试返回 False。"""
         ...
+
+    def upsert_disposal(self, report: ReportedDisposal, *, received_at: datetime) -> bool: ...
 
     def upsert_health(self, value: MirroredHealth) -> bool:
         """只插入一次；相同重试返回 False。"""
@@ -47,6 +50,10 @@ class MonitorRepository(Protocol):
         station_id: str | None = None,
         instance_id: int | None = None,
     ) -> tuple[tuple[MirroredObservation, ...], int]: ...
+
+    def page_disposals(
+        self, *, page: int, page_size: int
+    ) -> tuple[tuple[ReportedDisposal, ...], int]: ...
 
     def recent_decisions(self, *, limit: int) -> tuple[MirroredDecision, ...]: ...
 

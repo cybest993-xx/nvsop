@@ -24,6 +24,7 @@ from factory_sop.monitor.repository import MonitorRepository, MonitorStreamSourc
 from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
     ReportedDecision,
+    ReportedDisposal,
     ReportedHealth,
     ReportedObservation,
     ReportedSopInstance,
@@ -210,6 +211,35 @@ def list_violations(
     """返回授权用户可查看的一页已锁存违规归档及总数；保留原实例与来源。"""
     authorize(caller, Permission.MONITOR_VIEW)
     return monitor.page_violations(page=page, page_size=page_size)
+
+
+def mirror_disposal(
+    report: ReportedDisposal,
+    *,
+    received_at: datetime,
+    monitor: MonitorRepository,
+    host_gateway: HostOwnershipGateway,
+    device_gateway: DeviceMonitorGateway,
+) -> bool:
+    """只镜像 edge 已完成的处置；中心不执行、不补偿。"""
+    host_id, station_id = (
+        _uuid(report.host_id, "disposal host_id"),
+        _uuid(report.station_id, "disposal station_id"),
+    )
+    if not host_gateway.owns_station(
+        host_id=host_id, station_id=station_id
+    ) and not device_gateway.has_historical_station(host_id=host_id, station_id=station_id):
+        raise MonitorRefusedError(
+            "reported disposal is outside current and historical host assignment"
+        )
+    return monitor.upsert_disposal(report, received_at=received_at)
+
+
+def list_disposals(
+    monitor: MonitorRepository, *, caller: Caller, page: int, page_size: int
+) -> tuple[tuple[ReportedDisposal, ...], int]:
+    authorize(caller, Permission.MONITOR_VIEW)
+    return monitor.page_disposals(page=page, page_size=page_size)
 
 
 def mirror_observation(

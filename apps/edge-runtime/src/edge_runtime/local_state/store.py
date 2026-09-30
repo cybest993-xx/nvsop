@@ -45,6 +45,7 @@ from edge_runtime.local_state.disposal import LocalDisposalLedger
 from edge_runtime.local_state.execution import LocalExecutionLeaseStore
 from edge_runtime.local_state.queues import (
     BackendReportContext,
+    EvidenceSource,
     PendingHealthReport,
     PendingObservationReport,
     PendingReport,
@@ -143,11 +144,13 @@ class StationStore(StationQueues):
         lock: AbstractContextManager[object],
         report_context: ReportContext | None = None,
         notify_report_pending: Callable[[], None] | None = None,
+        evidence_source: Callable[[str], EvidenceSource | None] | None = None,
     ) -> None:
         super().__init__(connection, station_id, lock)
         self._lock = lock
         self._report_context = report_context
         self._notify_report_pending = notify_report_pending
+        self._evidence_source = evidence_source
 
     def commit(
         self,
@@ -503,12 +506,17 @@ class StationStore(StationQueues):
             self._notify_report_pending()
 
     def _enqueue_evidence(self, clip: EvidenceClip) -> None:
-        """每个实例锚点一条证据; 第二次判定需要更大窗口时只扩大、不缩小 (§5.20)。"""
+        """每个实例锚点一条证据; 第二次判定需要更大窗口时只扩大、不缩小 (§5.20)。
+
+        入队时在同一反应事务里冻结录像墙钟映射与来源相机路径 (S033)。冲突扩窗只改请求窗口,
+        不重绑来源、不重算映射、不清旧结果: 旧较小片段不会被当作新窗口已完成。
+        """
+        source = None if self._evidence_source is None else self._evidence_source(self._station_id)
         self._connection.execute(
             """
             INSERT INTO local_evidence_queue (
-                station_id, instance_id, anchor, window_from, window_to
-            ) VALUES (?, ?, ?, ?, ?)
+                station_id, instance_id, anchor, window_from, window_to, wall_offset, sources
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (station_id, instance_id, anchor) DO UPDATE SET
                 window_from = min(window_from, excluded.window_from),
                 window_to   = max(window_to,   excluded.window_to)
@@ -519,6 +527,8 @@ class StationStore(StationQueues):
                 clip.anchor.seconds,
                 clip.start.seconds,
                 clip.end.seconds,
+                None if source is None else source.wall_offset,
+                None if source is None else json.dumps(list(source.media_paths)),
             ),
         )
 
@@ -650,18 +660,39 @@ class LocalState:
         connection: sqlite3.Connection,
         lock: AbstractContextManager[object] | None = None,
         notify_report_pending: Callable[[], None] | None = None,
+        evidence_source: Callable[[str], EvidenceSource | None] | None = None,
     ) -> None:
         self._connection = connection
         self._lock = lock or RLock()
         self._notify_report_pending = notify_report_pending
+        self._evidence_source = evidence_source
 
     def station(
         self, station_id: str, *, report_context: ReportContext | None = None
     ) -> StationStore:
         """返回一个工位的行作用域; 所有工位共享连接和写入锁。"""
         return StationStore(
-            self._connection, station_id, self._lock, report_context, self._notify_report_pending
+            self._connection,
+            station_id,
+            self._lock,
+            report_context,
+            self._notify_report_pending,
+            self._evidence_source,
         )
+
+    def pending_evidence_stations(self) -> tuple[str, ...]:
+        """跨工位返回仍有待切片证据的工位; 工位已从当前配置移除也要返回 (S033)。"""
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT DISTINCT station_id
+                  FROM local_evidence_queue
+                 WHERE uploaded_at IS NULL
+                   AND (sliced_at IS NULL OR covered_from > window_from OR covered_to < window_to)
+                 ORDER BY station_id
+                """
+            ).fetchall()
+        return tuple(str(row["station_id"]) for row in rows)
 
     def reports(self) -> ReportStore:
         """返回该主机 decision/instance 待上报事实的持久接缝。"""
@@ -823,7 +854,10 @@ class _HostReportStore:
 
 
 def open_local_state(
-    path: str, *, notify_report_pending: Callable[[], None] | None = None
+    path: str,
+    *,
+    notify_report_pending: Callable[[], None] | None = None,
+    evidence_source: Callable[[str], EvidenceSource | None] | None = None,
 ) -> LocalState:
     """打开或创建推理机本地状态, 并迁移到当前 SQLite 模式。
 
@@ -837,4 +871,8 @@ def open_local_state(
     connection.execute("PRAGMA journal_mode = WAL")
     connection.execute("PRAGMA synchronous = FULL")
     migrate(connection)
-    return LocalState(connection, notify_report_pending=notify_report_pending)
+    return LocalState(
+        connection,
+        notify_report_pending=notify_report_pending,
+        evidence_source=evidence_source,
+    )

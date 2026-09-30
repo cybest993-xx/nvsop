@@ -22,6 +22,7 @@ import json
 import sqlite3
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from math import isfinite
 from threading import RLock
 
 from edge_runtime.judgment.model import Decision, HostInstant, Lifecycle, Violation
@@ -170,10 +171,34 @@ class PendingHealthReport:
 
 
 @dataclass(frozen=True, slots=True)
+class EvidenceSource:
+    """入队时冻结的本机证据来源: 录像墙钟映射与本工位连续录像相机路径 (S033)。
+
+    ``wall_offset`` = 录像墙钟 - 主机 monotonic, 在判定反应事务里随待办一起冻结; 机器重启或墙钟
+    跳变后用当前偏移解释旧 HostInstant 会切错录像。``media_paths`` 是入队时参与 SOP 的连续录像相机
+    路径, 冻结后重绑/删相机不改变历史判定的来源。
+    """
+
+    wall_offset: float
+    media_paths: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not isfinite(self.wall_offset):
+            raise ValueError("evidence source wall clock offset must be finite")
+        if not self.media_paths or any(not path for path in self.media_paths):
+            raise ValueError("evidence source must name at least one recording path")
+        if len(set(self.media_paths)) != len(self.media_paths):
+            raise ValueError("evidence source recording paths must be unique")
+
+
+@dataclass(frozen=True, slots=True)
 class PendingEvidence:
     """One clip that exists nowhere but this host.
 
     窗口已由 supervisor 按工位余量加宽 (§5.20), 上传方直接使用, 不再次推导。
+    ``wall_offset``/``sources`` 是入队事务里冻结的录像墙钟映射与来源相机路径 (S033);
+    为 NULL 的旧行无法安全重建映射。``media_results`` 是已完成产物的 typed 每媒体元数据
+    JSON, 与证据目录内 metadata.json 同源。
     """
 
     queue_id: int
@@ -183,6 +208,12 @@ class PendingEvidence:
     end: HostInstant
     attempts: int
     last_error: str | None
+    wall_offset: float | None = None
+    sources: tuple[str, ...] = ()
+    media_results: str | None = None
+    covered_from: float | None = None
+    covered_to: float | None = None
+    sliced_at: float | None = None
 
 
 class StationQueues:
@@ -695,7 +726,8 @@ class StationQueues:
         with self._lock:
             rows = self._connection.execute(
                 """
-                SELECT queue_id, instance_id, anchor, window_from, window_to, attempts, last_error
+                SELECT queue_id, instance_id, anchor, window_from, window_to, attempts, last_error,
+                       wall_offset, sources, media_results, covered_from, covered_to, sliced_at
                   FROM local_evidence_queue
                  WHERE station_id = ? AND uploaded_at IS NULL
                  ORDER BY queue_id
@@ -703,17 +735,68 @@ class StationQueues:
                 """,
                 (self._station_id, -1 if limit is None else limit),
             ).fetchall()
-            return tuple(
-                PendingEvidence(
-                    queue_id=row["queue_id"],
-                    instance_id=row["instance_id"],
-                    anchor=HostInstant(row["anchor"]),
-                    start=HostInstant(row["window_from"]),
-                    end=HostInstant(row["window_to"]),
-                    attempts=row["attempts"],
-                    last_error=row["last_error"],
-                )
-                for row in rows
+            return tuple(self._pending_evidence_from_row(row) for row in rows)
+
+    def evidence_awaiting_slice(self, *, limit: int | None = None) -> tuple[PendingEvidence, ...]:
+        """本机尚未产出媒体、或已有产物不再覆盖当前请求窗口的证据待办。
+
+        请求窗口后来扩大时保留旧结果直到新覆盖切片成功, 因此这里包含 ``covered_*``
+        不再覆盖 ``window_*`` 的已完成行; 调用方不能把旧较小片段当作新窗口已完成 (S033)。
+        """
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT queue_id, instance_id, anchor, window_from, window_to, attempts, last_error,
+                       wall_offset, sources, media_results, covered_from, covered_to, sliced_at
+                  FROM local_evidence_queue
+                 WHERE station_id = ? AND uploaded_at IS NULL
+                   AND (sliced_at IS NULL OR covered_from > window_from OR covered_to < window_to)
+                 ORDER BY queue_id
+                 LIMIT ?
+                """,
+                (self._station_id, -1 if limit is None else limit),
+            ).fetchall()
+            return tuple(self._pending_evidence_from_row(row) for row in rows)
+
+    def _pending_evidence_from_row(self, row: sqlite3.Row) -> PendingEvidence:
+        raw_sources = row["sources"]
+        return PendingEvidence(
+            queue_id=row["queue_id"],
+            instance_id=row["instance_id"],
+            anchor=HostInstant(row["anchor"]),
+            start=HostInstant(row["window_from"]),
+            end=HostInstant(row["window_to"]),
+            attempts=row["attempts"],
+            last_error=row["last_error"],
+            wall_offset=None if row["wall_offset"] is None else float(row["wall_offset"]),
+            sources=() if raw_sources is None else tuple(json.loads(raw_sources)),
+            media_results=row["media_results"],
+            covered_from=None if row["covered_from"] is None else float(row["covered_from"]),
+            covered_to=None if row["covered_to"] is None else float(row["covered_to"]),
+            sliced_at=None if row["sliced_at"] is None else float(row["sliced_at"]),
+        )
+
+    def record_evidence_slice(
+        self,
+        queue_id: int,
+        *,
+        at: HostInstant,
+        media_results: str,
+        covered_from: float,
+        covered_to: float,
+    ) -> None:
+        """原子记录一次成功切片: 覆盖窗口 (monotonic) 与每媒体 typed 元数据 JSON。
+
+        只写本机产物索引, 不删任何旧媒体文件; 旧较小窗口的产物与元数据保留在磁盘上。
+        """
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_evidence_queue
+                   SET sliced_at = ?, media_results = ?, covered_from = ?, covered_to = ?
+                 WHERE station_id = ? AND queue_id = ?
+                """,
+                (at.seconds, media_results, covered_from, covered_to, self._station_id, queue_id),
             )
 
     def mark_evidence_uploaded(

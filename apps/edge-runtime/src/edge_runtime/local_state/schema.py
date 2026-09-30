@@ -386,6 +386,19 @@ _V12 = (
     """,
 )
 
+_V13 = (
+    # 证据入队时冻结“录像墙钟映射”和来源相机路径, 使重启/重绑/删相机后仍能按当时来源切片;
+    # 纯判定窗口仍是 monotonic, 映射只属于本机媒体切片 seam。旧行这些列为 NULL, 无法安全重建,
+    # 保持待办并记录 mapping missing, 不猜成功。covered_* 是已完成产物实际覆盖窗口的交集,
+    # 用来判断请求窗口后来扩大时是否需要重切; 旧结果元数据不被清除, 直到新覆盖切片成功。
+    "ALTER TABLE local_evidence_queue ADD COLUMN wall_offset REAL",
+    "ALTER TABLE local_evidence_queue ADD COLUMN sources TEXT",
+    "ALTER TABLE local_evidence_queue ADD COLUMN media_results TEXT",
+    "ALTER TABLE local_evidence_queue ADD COLUMN covered_from REAL",
+    "ALTER TABLE local_evidence_queue ADD COLUMN covered_to REAL",
+    "ALTER TABLE local_evidence_queue ADD COLUMN sliced_at REAL",
+)
+
 MIGRATIONS: tuple[tuple[str, ...], ...] = (
     _V1,
     _V2,
@@ -399,6 +412,7 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
     _V10,
     _V11,
     _V12,
+    _V13,
 )
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 

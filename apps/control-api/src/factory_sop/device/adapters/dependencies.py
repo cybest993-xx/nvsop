@@ -21,6 +21,7 @@ from factory_sop.device.api import (
     DeviceConfigurationGateway,
     DeviceHistoricalAssignmentGateway,
     DeviceHostGateway,
+    DeviceMonitorGateway,
     DeviceTemplateBindingGateway,
 )
 from factory_sop.device.probing import ConnectionProbe
@@ -112,6 +113,11 @@ def configuration_gateway(session: RequestSession) -> DeviceConfigurationGateway
         connectors=PostgresConnectorRepository(session),
         points=PostgresPointRepository(session),
     )
+
+
+def monitor_gateway(session: RequestSession) -> DeviceMonitorGateway:
+    """monitor 使用的历史归属与当前登记主机 owner seam。"""
+    return PostgresInferenceHostRepository(session)
 
 
 def historical_assignments(session: RequestSession) -> DeviceHistoricalAssignmentGateway:

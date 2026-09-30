@@ -18,8 +18,8 @@ class EvidenceRepository(Protocol):
         """仅在证据 ID 尚未登记时插入；已有行时返回 ``False``，不覆盖。"""
         ...
 
-    def replace(self, value: EvidenceReference) -> None:
-        """覆盖同证据 ID 的登记状态或补齐媒体身份；身份本身不在此改变。"""
+    def replace_if_current(self, *, expected: EvidenceReference, value: EvidenceReference) -> bool:
+        """仅在状态/材料仍等于 expected 时原子更新；CAS 失败返回 ``False``。"""
         ...
 
     def page(

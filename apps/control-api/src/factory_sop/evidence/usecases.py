@@ -119,8 +119,36 @@ def _reconcile(
         and existing.failure_reason == incoming.failure_reason
     )
     if incoming.status is EvidenceStatus.AVAILABLE or not unchanged:
-        evidence.replace(incoming)
-        return incoming
+        if evidence.replace_if_current(expected=existing, value=incoming):
+            return incoming
+        current = evidence.find(existing.evidence_id)
+        if current is None:
+            raise RuntimeError("evidence transition conflicted without a visible row")
+        if current.registration.identity() != incoming.registration.identity():
+            raise EvidenceRefusedError(
+                EvidenceRefusal.IDENTITY_CONFLICT,
+                "evidence identity conflicts with the registered reference",
+            )
+        if current.status is EvidenceStatus.AVAILABLE:
+            if (
+                incoming.status is EvidenceStatus.AVAILABLE
+                and current.registration.material() == incoming.registration.material()
+            ):
+                return current
+            raise EvidenceRefusedError(
+                EvidenceRefusal.IDENTITY_CONFLICT,
+                "evidence digest or material lost a concurrent transition",
+            )
+        if (
+            current.status is incoming.status
+            and current.registration == incoming.registration
+            and current.failure_reason == incoming.failure_reason
+        ):
+            return current
+        raise EvidenceRefusedError(
+            EvidenceRefusal.IDENTITY_CONFLICT,
+            "evidence state changed concurrently",
+        )
     return existing
 
 

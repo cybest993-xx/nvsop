@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from factory_sop.auth.api import Caller, Permission, authorize
+from factory_sop.device.api import DeviceMonitorGateway
 from factory_sop.monitor.api import HistoricalAssignmentGateway, HostOwnershipGateway
 from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.model import (
@@ -133,15 +134,18 @@ def mirror_health(
     received_at: datetime,
     monitor: MonitorRepository,
     host_gateway: HostOwnershipGateway,
+    device_gateway: DeviceMonitorGateway,
 ) -> bool:
-    """只保存认证主机所属工位的一路流健康事实。
-
-    它是运行有效性观测，不是配置可达性；中心不把它写回 edge，也不据此重新判定。
-    """
+    """保存当前归属或不可变历史归属能够证明的一路流健康事实。"""
+    _health_occurred_at(report)
     host_id = _uuid(report.host_id, "health host_id")
     station_id = _uuid(report.station_id, "health station_id")
-    if not host_gateway.owns_station(host_id=host_id, station_id=station_id):
-        raise MonitorRefusedError("reported health is outside the authenticated host topology")
+    if not host_gateway.owns_station(
+        host_id=host_id, station_id=station_id
+    ) and not device_gateway.has_historical_station(host_id=host_id, station_id=station_id):
+        raise MonitorRefusedError(
+            "reported health is outside current and historical host assignment"
+        )
     return monitor.upsert_health(MirroredHealth(report=report, received_at=received_at))
 
 
@@ -213,12 +217,36 @@ def mirror_observation(
     received_at: datetime,
     monitor: MonitorRepository,
     host_gateway: HostOwnershipGateway,
+    device_gateway: DeviceMonitorGateway,
 ) -> bool:
-    """只保存认证主机所属工位的归一化观测；中心不重新判定。"""
+    """保存当前归属或产生时 provenance 的历史归属能够证明的观测。"""
     host_id = _uuid(report.host_id, "observation host_id")
     station_id = _uuid(report.station_id, "observation station_id")
-    if not host_gateway.owns_station(host_id=host_id, station_id=station_id):
-        raise MonitorRefusedError("reported observation is outside the authenticated host topology")
+    if host_gateway.owns_station(host_id=host_id, station_id=station_id):
+        return monitor.upsert_observation(
+            MirroredObservation(report=report, received_at=received_at)
+        )
+    backend = report.backend
+    if backend is None:
+        assigned = device_gateway.has_historical_station(
+            host_id=host_id,
+            station_id=station_id,
+            template_version_id=report.template_version_id,
+            template_sha256=report.template_sha256,
+        )
+    else:
+        assigned = device_gateway.has_historical_assignment(
+            host_id=host_id,
+            station_id=station_id,
+            backend_id=_uuid(backend.backend_id, "observation backend_id"),
+            template_version_id=report.template_version_id,
+            template_sha256=report.template_sha256,
+            model_ids=backend.model_ids,
+        )
+    if not assigned:
+        raise MonitorRefusedError(
+            "reported observation is outside current and historical assignment"
+        )
     return monitor.upsert_observation(MirroredObservation(report=report, received_at=received_at))
 
 
@@ -265,7 +293,7 @@ def stream_health_view(
     ``no_data`` 表示中心尚无该工位任何流健康事实；这不是"健康"，也不是"失联"。
     """
     authorize(caller, Permission.MONITOR_VIEW)
-    reports = monitor.recent_health_for_station(station_id=station_id, limit=limit)
+    reports = monitor.health_for_station(station_id=station_id)
     latest = _latest_health_per_stream(reports)
     if not latest:
         return StreamHealthView(station_id=station_id, validity="no_data", streams=())
@@ -274,18 +302,37 @@ def stream_health_view(
         if all(_health_is_healthy(report.report.status) for report in latest)
         else "impaired"
     )
-    return StreamHealthView(station_id=station_id, validity=validity, streams=latest)
+    ordered = tuple(sorted(latest, key=_health_event_order, reverse=True))
+    return StreamHealthView(station_id=station_id, validity=validity, streams=ordered[:limit])
 
 
 def _latest_health_per_stream(reports: tuple[MirroredHealth, ...]) -> tuple[MirroredHealth, ...]:
-    """每路流只保留最新一条；无流身份的事实单独归为一类。"""
+    """每路流按 edge 事件时间保留最新事实；Center ingestion sequence 只服务 SSE。"""
     latest: dict[str | None, MirroredHealth] = {}
     for report in reports:
         key = report.report.stream_id
         current = latest.get(key)
-        if current is None or (report.stream_sequence or 0) > (current.stream_sequence or 0):
+        if current is None or _health_event_order(report) > _health_event_order(current):
             latest[key] = report
     return tuple(latest.values())
+
+
+def _health_event_order(value: MirroredHealth) -> tuple[float, str]:
+    """使用冻结的事件时间锚排序；event_id 仅为相同时刻提供稳定次序。"""
+    return _health_occurred_at(value.report), value.report.event_id
+
+
+def _health_occurred_at(report: ReportedHealth) -> float:
+    """验证健康发生时间，并优先用冻结源锚给事件排序。"""
+    try:
+        occurred_at = datetime.fromisoformat(report.occurred_at.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("health occurred_at must be an ISO-8601 timestamp") from error
+    if occurred_at.tzinfo is None:
+        raise ValueError("health occurred_at must include a timezone")
+    if report.source_anchor is not None and report.anchor_offset is not None:
+        return report.source_anchor + report.anchor_offset
+    return occurred_at.timestamp()
 
 
 def _health_is_healthy(status: str) -> bool:
@@ -309,20 +356,33 @@ class HostLiveness:
 def host_liveness(
     monitor: MonitorRepository,
     *,
+    device_gateway: DeviceMonitorGateway,
     caller: Caller,
     now: datetime,
     stale_after_seconds: float,
 ) -> tuple[HostLiveness, ...]:
-    """按"该机多久没上报"标记可疑，作为不依赖被评估者自述的外部证人。"""
+    """按 device 登记主机集合和 Center 接收事实计算独立外部见证。"""
     authorize(caller, Permission.MONITOR_VIEW)
     if stale_after_seconds <= 0:
         raise ValueError("host liveness threshold must be positive")
+    last_by_host = dict(monitor.last_report_at_by_host())
     values: list[HostLiveness] = []
-    for host_id, last_reported_at in monitor.last_report_at_by_host():
+    for host_id in device_gateway.registered_host_ids():
+        last_reported_at = last_by_host.get(str(host_id))
+        if last_reported_at is None:
+            values.append(
+                HostLiveness(
+                    host_id=str(host_id),
+                    last_reported_at=None,
+                    age_seconds=None,
+                    suspicious=True,
+                )
+            )
+            continue
         age = (now - last_reported_at).total_seconds()
         values.append(
             HostLiveness(
-                host_id=host_id,
+                host_id=str(host_id),
                 last_reported_at=last_reported_at,
                 age_seconds=age,
                 suspicious=age > stale_after_seconds,

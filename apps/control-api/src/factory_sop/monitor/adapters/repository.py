@@ -276,14 +276,9 @@ class PostgresMonitorRepository(MonitorRepository):
         ).all()
         return tuple(row.to_domain() for row in rows)
 
-    def recent_health_for_station(
-        self, *, station_id: str, limit: int
-    ) -> tuple[MirroredHealth, ...]:
+    def health_for_station(self, *, station_id: str) -> tuple[MirroredHealth, ...]:
         rows = self._session.scalars(
-            select(ReportedHealthRow)
-            .where(ReportedHealthRow.station_id == station_id)
-            .order_by(ReportedHealthRow.stream_sequence.desc())
-            .limit(limit)
+            select(ReportedHealthRow).where(ReportedHealthRow.station_id == station_id)
         ).all()
         return tuple(row.to_domain() for row in rows)
 

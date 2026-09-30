@@ -141,7 +141,11 @@ def register_action_list(
         created_by=caller.user.id,
         created_at=now,
     )
-    datasets.add_action_list(value)
+    if not datasets.add_action_list(value):
+        raise AnnotationRefusedError(
+            DatasetRefusalCode.STATE_CONFLICT,
+            detail="动作清单修订已被并发更新，请基于最新修订重试",
+        )
     return value
 
 

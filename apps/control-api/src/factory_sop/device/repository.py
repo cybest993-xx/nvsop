@@ -95,6 +95,10 @@ class InferenceBackendRepository(Protocol):
         """报告推理机是否仍承载后端。"""
         ...
 
+    def for_host(self, host_id: UUID) -> list[InferenceBackend]:
+        """返回主机的完整后端集合，供机器配置等非分页 owner 逻辑使用。"""
+        ...
+
     def page_of(
         self, *, page: int, page_size: int, host_id: UUID | None
     ) -> tuple[list[InferenceBackend], int]:

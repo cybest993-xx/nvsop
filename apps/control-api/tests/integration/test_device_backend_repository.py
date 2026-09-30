@@ -109,6 +109,28 @@ def test_a_backend_round_trips_with_its_jsonb_and_timezone_fields(
     assert backends.by_id(stored.id) == stored
 
 
+def test_for_host_returns_the_complete_backend_set_without_pagination(
+    session: DatabaseSession,
+) -> None:
+    hosts = PostgresInferenceHostRepository(session)
+    backends = PostgresInferenceBackendRepository(session)
+    host_a = a_host(name="完整拓扑-A")
+    host_b = a_host(name="完整拓扑-B")
+    hosts.add(host_a)
+    hosts.add(host_b)
+    backend_a1 = a_backend(host_a.id, base_url="http://10.0.8.11:8000")
+    backend_a2 = a_backend(host_a.id, base_url="http://10.0.8.11:8001")
+    backend_b = a_backend(host_b.id, base_url="http://10.0.8.12:8000")
+    backends.add(backend_a1)
+    backends.add(backend_a2)
+    backends.add(backend_b)
+
+    assert {item.id for item in backends.for_host(host_a.id)} == {
+        backend_a1.id,
+        backend_a2.id,
+    }
+
+
 def test_a_duplicate_endpoint_on_one_host_is_refused_by_the_real_constraint(
     session: DatabaseSession,
 ) -> None:

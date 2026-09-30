@@ -6,6 +6,7 @@ import json
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import cast
 from uuid import UUID
 
 from factory_sop.auth.api import Caller, Permission, authorize
@@ -294,7 +295,7 @@ def stream_health_view(
     """
     authorize(caller, Permission.MONITOR_VIEW)
     reports = monitor.health_for_station(station_id=station_id)
-    latest = _latest_health_per_stream(reports)
+    latest = latest_health_per_stream(reports)
     if not latest:
         return StreamHealthView(station_id=station_id, validity="no_data", streams=())
     validity = (
@@ -306,8 +307,11 @@ def stream_health_view(
     return StreamHealthView(station_id=station_id, validity=validity, streams=ordered[:limit])
 
 
-def _latest_health_per_stream(reports: tuple[MirroredHealth, ...]) -> tuple[MirroredHealth, ...]:
-    """每路流按 edge 事件时间保留最新事实；Center ingestion sequence 只服务 SSE。"""
+def latest_health_per_stream(reports: tuple[MirroredHealth, ...]) -> tuple[MirroredHealth, ...]:
+    """每路流按 edge 事件时间保留最新事实；Center ingestion sequence 只服务 SSE。
+
+    monitor owner 唯一的健康业务分类：SSE 投影与工位视图都复用它，不另造排序。
+    """
     latest: dict[str | None, MirroredHealth] = {}
     for report in reports:
         key = report.report.stream_id
@@ -402,6 +406,7 @@ class SseSnapshot:
     health_event_id: str
     decision_sequence: int = 0
     health_sequence: int = 0
+    runtime_projection: tuple[dict[str, object], ...] = ()
 
 
 def sse_snapshot(
@@ -493,17 +498,20 @@ def sse_snapshot_state(
         health_after, health_event_id = boundary, ""
     else:
         health_after, health_event_id = health_cursor
+    runtime_projection = monitor.runtime_projection()
+    frames = tuple(
+        _sse_frame(event=kind, event_id=event_id, data=data)
+        for _, kind, event_id, _, data in events
+    ) + tuple(_runtime_frame(value) for value in runtime_projection)
     return SseSnapshot(
-        frames=tuple(
-            _sse_frame(event=kind, event_id=event_id, data=data)
-            for _, kind, event_id, _, data in events
-        ),
+        frames=frames,
         decision_after=decision_after,
         decision_event_id=decision_event_id,
         health_after=health_after,
         health_event_id=health_event_id,
         decision_sequence=decision_sequence,
         health_sequence=health_sequence,
+        runtime_projection=runtime_projection,
     )
 
 
@@ -513,6 +521,7 @@ def sse_stream(
     caller: Caller,
     decision_sequence: int = 0,
     health_sequence: int = 0,
+    runtime_projection: tuple[dict[str, object], ...] = (),
     wait_timeout: float = 15.0,
 ) -> Iterator[str]:
     """用 durable cursor 重放事实；LISTEN/NOTIFY 仅缩短下一轮读取的等待。"""
@@ -545,6 +554,16 @@ def sse_stream(
                 for value in health
             ),
         )
+        current_runtime = source.read_runtime_projection()
+        previous_by_station = {
+            cast(str, value["station_id"]): value for value in runtime_projection
+        }
+        current_by_station = {cast(str, value["station_id"]): value for value in current_runtime}
+        for station_id in sorted(current_by_station):
+            value = current_by_station[station_id]
+            if previous_by_station.get(station_id) != value:
+                yield _runtime_frame(value)
+        runtime_projection = current_runtime
         if not events:
             if not source.wait_for_wakeup(timeout=wait_timeout):
                 yield ": keep-alive\n\n"
@@ -587,6 +606,11 @@ def _snapshot_cursor(values: Iterator[tuple[datetime, str]]) -> tuple[datetime, 
     return max(values, default=None)
 
 
+def _runtime_frame(data: dict[str, object]) -> str:
+    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    return f"event: runtime\ndata: {payload}\n\n"
+
+
 def _sse_frame(*, event: str, event_id: str, data: dict[str, object]) -> str:
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     return f"id: {event_id}\nevent: {event}\ndata: {payload}\n\n"
@@ -604,6 +628,7 @@ __all__ = [
     "SseSnapshot",
     "StreamHealthView",
     "host_liveness",
+    "latest_health_per_stream",
     "list_instances",
     "list_observations",
     "list_violations",

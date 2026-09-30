@@ -45,6 +45,11 @@ class PostgresMonitorStreamSource(MonitorStreamSource):
             )
         return decisions, health
 
+    def read_runtime_projection(self) -> tuple[dict[str, object], ...]:
+        self._ensure_listener()
+        with self._factory() as session:
+            return PostgresMonitorRepository(session).runtime_projection()
+
     def wait_for_wakeup(self, *, timeout: float) -> bool:
         listener = self._ensure_listener()
         driver = cast(PsycopgConnection[Any], listener.connection.driver_connection)

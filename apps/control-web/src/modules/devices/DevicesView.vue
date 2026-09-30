@@ -38,6 +38,7 @@ import {
 import CameraMediaPanel from './CameraMediaPanel.vue'
 import ConnectionTestControl from './ConnectionTestControl.vue'
 import PointManagement from './PointManagement.vue'
+import StationRuntimePanel from './StationRuntimePanel.vue'
 import StationTemplateConfiguration from './StationTemplateConfiguration.vue'
 
 interface ConnectorDraft {
@@ -384,6 +385,8 @@ onMounted(load)
         新建连接器
       </ElButton>
     </header>
+
+    <StationRuntimePanel :stations="stations" />
 
     <p v-if="failure" class="devices__failure" role="alert">{{ failure }}</p>
     <p v-if="loading" class="devices__loading">正在加载连接器…</p>

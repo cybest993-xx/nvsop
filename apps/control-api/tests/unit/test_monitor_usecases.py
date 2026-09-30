@@ -60,6 +60,7 @@ class MemoryMonitor:
         self.observations: dict[str, MirroredObservation] = {}
         self._decision_sequence = 0
         self._health_sequence = 0
+        self.runtime: tuple[dict[str, object], ...] = ()
 
     def upsert_decision(self, value: MirroredDecision) -> bool:
         if value.report.event_id in self.decisions:
@@ -186,6 +187,11 @@ class MemoryMonitor:
             self.decisions_after_sequence(after_sequence=decision_sequence, limit=limit),
             self.health_after_sequence(after_sequence=health_sequence, limit=limit),
         )
+
+    def runtime_projection(self) -> tuple[dict[str, object], ...]:
+        return self.runtime
+
+    read_runtime_projection = runtime_projection
 
     def wait_for_wakeup(self, *, timeout: float) -> bool:
         del timeout
@@ -557,6 +563,27 @@ def test_health_mirror_rejects_a_station_without_current_or_historical_assignmen
             host_gateway=HostGateway(),
             device_gateway=HistoricalAssignments(),
         )
+
+
+def test_runtime_projection_snapshot_and_stream_are_idless_and_emit_only_changes() -> None:
+    monitor = MemoryMonitor()
+    station = str(STATION_ID)
+    monitor.runtime = ({"station_id": station, "decision": {"verdict": "pass"}},)
+    snapshot = sse_snapshot_state(monitor, caller=caller(Permission.MONITOR_VIEW))
+    assert snapshot.frames[0].startswith("event: runtime\n")
+    assert "id:" not in snapshot.frames[0]
+
+    monitor.runtime = ({"station_id": station, "decision": {"verdict": "fail"}},)
+    stream = sse_stream(
+        monitor,
+        caller=caller(Permission.MONITOR_VIEW),
+        runtime_projection=snapshot.runtime_projection,
+        wait_timeout=0,
+    )
+    changed = next(stream)
+    assert '"verdict":"fail"' in changed
+    assert "id:" not in changed
+    assert next(stream) == ": keep-alive\n\n"
 
 
 def test_health_mirror_accepts_current_assignment_without_history() -> None:

@@ -72,7 +72,8 @@ class ArqJobDispatcher:
         return self._settings
 
     async def dispatch_async(self, job_id: UUID) -> None:
-        """异步投递一个已提交任务；失败时保持 outbox pending。"""
+        """异步投递一个已提交任务；失败时保持本次 pending generation 可补投。"""
+        expected_updated_at: datetime | None = None
         try:
             function, expected_updated_at = self._worker_target(job_id)
             accepted = await self._dispatch(
@@ -83,7 +84,12 @@ class ArqJobDispatcher:
             if accepted:
                 self._record_success(job_id, expected_updated_at=expected_updated_at)
         except Exception as error:
-            self._record_failure(job_id, error)
+            if expected_updated_at is not None:
+                self._record_failure(
+                    job_id,
+                    error,
+                    expected_updated_at=expected_updated_at,
+                )
             _logger.warning(
                 "job.dispatch.failed",
                 job_id=str(job_id),
@@ -141,13 +147,20 @@ class ArqJobDispatcher:
                 repository.mark_running_dispatched(job_id=job_id)
             session.commit()
 
-    def _record_failure(self, job_id: UUID, error: Exception) -> None:
+    def _record_failure(
+        self,
+        job_id: UUID,
+        error: Exception,
+        *,
+        expected_updated_at: datetime,
+    ) -> None:
         if self._session_factory is None:
             return
         with self._session_factory() as session:
             repository = PostgresJobRepository(session)
             repository.record_dispatch_failure(
                 job_id=job_id,
+                expected_updated_at=expected_updated_at,
                 error=f"{type(error).__name__}: {error}",
                 now=datetime.now(UTC),
             )

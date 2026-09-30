@@ -54,28 +54,48 @@ class PostgresJobRepository:
         self._session.add(ApplicationJobRow.from_domain(job))
         self._session.flush()
 
+    def _reopen_failed(self, existing: ApplicationJob, *, now: datetime) -> ApplicationJob:
+        """只把仍属于读取 generation 的失败任务原子重开。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(ApplicationJobRow)
+                .where(
+                    ApplicationJobRow.id == existing.id,
+                    ApplicationJobRow.status == JobStatus.FAILED.value,
+                    ApplicationJobRow.updated_at == existing.updated_at,
+                )
+                .values(
+                    status=JobStatus.PENDING.value,
+                    failure_code=None,
+                    updated_at=now,
+                    outbox_status="pending",
+                )
+            ),
+        )
+        if result.rowcount == 1:
+            return replace(
+                existing,
+                status=JobStatus.PENDING,
+                updated_at=now,
+                failure_code=None,
+            )
+        row = self._session.scalar(
+            select(ApplicationJobRow)
+            .where(ApplicationJobRow.id == existing.id)
+            .execution_options(populate_existing=True)
+        )
+        if row is None:
+            raise RuntimeError("job disappeared while reopening failed generation")
+        return row.to_domain()
+
     def get_or_create_validation(
         self, *, member_id: UUID, attempt_id: UUID, now: datetime
     ) -> ApplicationJob:
         existing = self.by_attempt(attempt_id)
         if existing is not None:
             if existing.status == JobStatus.FAILED:
-                self._session.execute(
-                    update(ApplicationJobRow)
-                    .where(ApplicationJobRow.id == existing.id)
-                    .values(
-                        status=JobStatus.PENDING,
-                        failure_code=None,
-                        updated_at=now,
-                        outbox_status="pending",
-                    )
-                )
-                existing = replace(
-                    existing,
-                    status=JobStatus.PENDING,
-                    updated_at=now,
-                    failure_code=None,
-                )
+                existing = self._reopen_failed(existing, now=now)
             self._remember_for_dispatch(existing.id)
             return existing
         candidate = ApplicationJob(
@@ -146,22 +166,7 @@ class PostgresJobRepository:
         existing = self._by_attempt_type(attempt_id=attempt_id, job_type=job_type)
         if existing is not None:
             if existing.status == JobStatus.FAILED:
-                self._session.execute(
-                    update(ApplicationJobRow)
-                    .where(ApplicationJobRow.id == existing.id)
-                    .values(
-                        status=JobStatus.PENDING,
-                        failure_code=None,
-                        updated_at=now,
-                        outbox_status="pending",
-                    )
-                )
-                existing = replace(
-                    existing,
-                    status=JobStatus.PENDING,
-                    updated_at=now,
-                    failure_code=None,
-                )
+                existing = self._reopen_failed(existing, now=now)
             self._remember_for_dispatch(existing.id)
             return existing
         candidate = ApplicationJob(
@@ -219,22 +224,7 @@ class PostgresJobRepository:
         existing = self._by_attempt_type(attempt_id=resource_id, job_type=job_type)
         if existing is not None:
             if existing.status == JobStatus.FAILED:
-                self._session.execute(
-                    update(ApplicationJobRow)
-                    .where(ApplicationJobRow.id == existing.id)
-                    .values(
-                        status=JobStatus.PENDING.value,
-                        failure_code=None,
-                        updated_at=now,
-                        outbox_status="pending",
-                    )
-                )
-                existing = replace(
-                    existing,
-                    status=JobStatus.PENDING,
-                    failure_code=None,
-                    updated_at=now,
-                )
+                existing = self._reopen_failed(existing, now=now)
             self._remember_for_dispatch(existing.id)
             return existing
         candidate = ApplicationJob(
@@ -397,17 +387,33 @@ class PostgresJobRepository:
         )
         return result.rowcount == 1
 
-    def record_dispatch_failure(self, *, job_id: UUID, error: str, now: datetime) -> None:
-        self._session.execute(
-            update(ApplicationJobRow)
-            .where(ApplicationJobRow.id == job_id)
-            .values(
-                outbox_status="pending",
-                dispatch_attempts=ApplicationJobRow.dispatch_attempts + 1,
-                last_dispatch_error=error[:1024],
-                updated_at=now,
-            )
+    def record_dispatch_failure(
+        self,
+        *,
+        job_id: UUID,
+        expected_updated_at: datetime,
+        error: str,
+        now: datetime,
+    ) -> bool:
+        """只记录仍属于本次 pending generation 的投递失败。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(ApplicationJobRow)
+                .where(
+                    ApplicationJobRow.id == job_id,
+                    ApplicationJobRow.status == JobStatus.PENDING.value,
+                    ApplicationJobRow.updated_at == expected_updated_at,
+                )
+                .values(
+                    outbox_status="pending",
+                    dispatch_attempts=ApplicationJobRow.dispatch_attempts + 1,
+                    last_dispatch_error=error[:1024],
+                    updated_at=now,
+                )
+            ),
         )
+        return result.rowcount == 1
 
     def finish(
         self,

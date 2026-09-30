@@ -3,8 +3,9 @@
 证据分三层：开发 Compose 只启动一套 PostgreSQL，并把训练/标注进程指向同一实例的 `training`
 database；`training-db-init` 的真实命令在隔离实例上首次建库、二次幂等且不删已有内容；真实
 PostgreSQL 上 Center Alembic 只落 `nvsop`，训练连接实际落在 `training`，且没有 `dblink` / FDW
-等跨 database 直连路径。训练对象安装不在本票（见 #224）；角色权限隔离由 S065 覆盖，证据在
-`test_database_role_isolation.py`。
+等跨 database 直连路径。角色权限隔离由 S065 覆盖，证据在
+`test_database_role_isolation.py`；`training` 对象安装由 S066 覆盖，证据在
+`test_training_objects_install.py`。
 """
 
 from __future__ import annotations
@@ -93,9 +94,10 @@ def test_dev_compose_runs_one_postgres_instance_for_center_and_training() -> Non
     assert postgres_services == {
         "center-db": POSTGRES_IMAGE,
         "training-db-init": POSTGRES_IMAGE,
-        # S065 的角色初始化也是同镜像的一次性服务，不是第二个运行实例。
+        # S065 的角色初始化与 S066 的对象安装也是同镜像的一次性服务，不是第二个运行实例。
         "center-role-init": POSTGRES_IMAGE,
         "training-role-init": POSTGRES_IMAGE,
+        "training-objects-install": POSTGRES_IMAGE,
     }
 
     center_environment = cast("dict[str, str]", services["center-db"]["environment"])
@@ -122,9 +124,9 @@ def test_dev_compose_runs_one_postgres_instance_for_center_and_training() -> Non
     assert backend_environment["POSTGRES_HOST"] == "center-db"
     assert backend_environment["POSTGRES_DB"] == "training"
     assert backend_environment["POSTGRES_USER"] == "training_runtime"
-    assert services["annotation-backend"]["depends_on"]["training-role-init"]["condition"] == (
-        "service_completed_successfully"
-    )
+    assert services["annotation-backend"]["depends_on"]["training-objects-install"][
+        "condition"
+    ] == ("service_completed_successfully")
 
     # training database 在同一实例上幂等创建，而不是启动第二套运行数据库。
     init = services["training-db-init"]
@@ -132,6 +134,21 @@ def test_dev_compose_runs_one_postgres_instance_for_center_and_training() -> Non
     init_command = " ".join(cast("list[str]", init["command"]))
     assert "pg_database" in init_command
     assert "CREATE DATABASE training" in init_command
+
+    # S066 的对象安装在角色初始化之后、以安装身份执行，并复用 Vendor 合并 DDL。
+    install = services["training-objects-install"]
+    assert install["depends_on"]["training-role-init"]["condition"] == (
+        "service_completed_successfully"
+    )
+    assert cast("dict[str, str]", install["environment"])["PGUSER"] == "nvsop"
+    assert cast("dict[str, str]", install["environment"])["PGDATABASE"] == "training"
+    mounted = {
+        volume["target"]: volume["source"]
+        for volume in cast("list[dict[str, str]]", install["volumes"])
+    }
+    assert mounted["/opt/nvsop/training-ddl/01-init-tables.sql"].endswith(
+        "vendor/sop-monitoring-blueprints/microservices/sop-training-bp/db-init-scripts/01-init-tables.sql"
+    )
 
     # 本票只部署 annotation-backend；其余四类训练进程与第二套 metadata_db/adminer 不在此启动。
     assert "annotation-backend" in services

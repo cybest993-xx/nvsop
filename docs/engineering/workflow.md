@@ -70,6 +70,10 @@ Fixtures are minimal, deterministic, synthetic or sanitized and provenance-docum
 
 The [Makefile](../../Makefile) is the local/CI command interface. During iteration use the smallest affected targets and their prerequisites; inspect their definitions rather than assuming every target installs dependencies.
 
+`make check` completes frozen environment setup and contract generation before running its internal `check-suite` stage with two Make jobs by default. `make check-integration` completes setup before running the two independent pytest sessions with the same limit; use `CHECK_JOBS=1` for a serial comparison or a constrained host. Do not run two separate Make processes that synchronize and consume the same worktree environment concurrently. Standalone targets still require their prerequisites; `check-suite` is an internal stage, not an alternative final gate.
+
+pytest targets report the slowest setup/call/teardown phases and write JUnit results under `.nvsop/artifacts/pytest/<target>.xml`. Override `PYTEST_ARGS` for a focused iteration, for example `make center-unit PYTEST_ARGS='-k password --durations=20'` after `make sync`. Clear selection overrides for final gates. Compare the same test set and record environment, base/candidate and cold/warm state; reuse normal gate runs for timing rather than repeating full suites just to collect numbers. Optimize immutable setup data first, never production security parameters or required real-infrastructure evidence. Final evidence must cover the final candidate; reviewers consume still-valid evidence instead of repeating every gate.
+
 | Command | Use |
 |---|---|
 | `make docs-check` | Offline, standard-library documentation links and index check; not the final documentation gate |
@@ -81,7 +85,8 @@ The [Makefile](../../Makefile) is the local/CI command interface. During iterati
 | `make web-e2e-whep` | Real MediaMTX WHEP browser evidence for media-owned changes |
 | `make ci-plan BASE=<sha> HEAD=<sha>` | Read-only report of the same CI scope selector used by GitHub Actions |
 | `make ci-lint` | Offline GitHub Actions static lint after one explicit `make ci-tools` install of the pinned binary |
-| `make local-clean` | Delete only declared reproducible local artifacts; preserve `.nvsop/dev-main`, secrets and unknown ignored state |
+| `make local-clean` | Delete declared build/test outputs while preserving installed environments and caches |
+| `make local-purge` | Before authorized retirement, also remove task-local environments, tools, caches and legacy generated paths; preserve shared caches, fixed-instance state, secrets and unknown files |
 | `make pr-check PR=<number>` | Read-only machine-state preflight; never substitutes for independent review or merge authorization |
 | `make change-size` | Advisory size report from `BASE`, default `origin/main`; also prints diff review hints; never a bound |
 | `make task-check BASE=<40hex> ALLOW='<paths>' [MAX_LINES=<N>]` | Fixed-base scope and cumulative added+deleted budget; also prints diff review hints; reports `task_check=within-bounds` or `task_check=pause` (script exits 3 on pause); not acceptance |
@@ -134,6 +139,8 @@ The sole aggregate required PR status is `CI required` from [blocking-ci.yml](..
 | Media deployment/test inputs | `make check` plus real-infrastructure, playback and WHEP browser evidence |
 | `.github/`, `Makefile`, the selector/actionlint installer, or unusable baseline | All blocking families |
 
+The real-infrastructure lane uses a two-entry matrix: `center-integration` and `center-system` run on separate hosted runners after frozen setup. The matrix keeps `fail-fast: false`; both entries must succeed for its existing `CI required` dependency to succeed. Each entry owns its containers, while real MediaMTX playback runs only in the system entry when selected. No-change success remains explicit in both entries.
+
 Filtering is an optimization, not an exemption. Lockfiles are always checked; applicable code gates regenerate artifacts and verify tracked and untracked cleanliness. Keep immutable action pins, least-privilege permissions, frozen installs, job timeouts and cancellation of superseded PR runs. Do not relax this selection merely because a script change accompanies documentation. Workflow changes additionally install the pinned `actionlint` release through the checksum-verifying repository installer and run `make ci-lint`. Browser failures upload only `.nvsop/artifacts/web/test-results/` with a pinned upload action and short retention; do not upload `.nvsop/dev-main`, environment files or broader workspaces as diagnostic artifacts.
 
 ### Codex review and merge
@@ -181,11 +188,11 @@ ACCEPTED_ORIGIN_MAIN=<accepted-origin-main-sha>
 )
 ```
 
-Stop when the target branch is not `main`, when any scoped Git read fails, when the histories have diverged, when `origin/main` is not `ACCEPTED_ORIGIN_MAIN`, or when the update would overwrite an ignored path; never fall back to merge, rebase, reset or stash. Never reset a task worktree. This synchronization is a separate manual operation with its own authorization, not implied by implementation or merge work; `retire_task.py` never performs it. Use `make local-clean` when a task worktree must remove reproducible artifacts before retirement; the command deliberately preserves fixed-instance state and unknown ignored files.
+Stop when the target branch is not `main`, when any scoped Git read fails, when the histories have diverged, when `origin/main` is not `ACCEPTED_ORIGIN_MAIN`, or when the update would overwrite an ignored path; never fall back to merge, rebase, reset or stash. Never reset a task worktree. This synchronization is a separate manual operation with its own authorization, not implied by implementation or merge work; `retire_task.py` never performs it. Use `make local-purge` when a task worktree must remove reproducible artifacts before retirement; the command deliberately preserves shared external caches, fixed-instance state and unknown ignored files.
 
 ### 5.2 Retire one verified task
 
-With writers stopped, run the versioned single-task command from a different worktree and provide the exact reviewed head SHA:
+With writers stopped, run the versioned single-task command from a different worktree and provide the exact reviewed head SHA. A task with no unique commit, or whose tip still equals its starting main commit, is not a retirement candidate on that basis; never use a progress commit as a substitute for writer coordination or exact merge proof.
 
 ```bash
 python3 scripts/retire_task.py \

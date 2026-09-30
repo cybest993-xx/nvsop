@@ -752,12 +752,6 @@ def _runtime_view(parameters: StationRuntimeParameters | None) -> RuntimeParamet
     )
 
 
-def _optional_runtime_view(
-    parameters: StationRuntimeParameters | None,
-) -> RuntimeParametersView | None:
-    return _runtime_view(parameters)
-
-
 class BindingValidationIssueView(BaseModel):
     code: str
     field: str

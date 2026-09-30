@@ -326,7 +326,7 @@ def test_runtime_roles_connect_only_their_own_database(
 def test_public_cannot_bypass_connect_or_object_privileges(
     isolated_instance: IsolatedInstance,
 ) -> None:
-    """只依赖 PUBLIC 默认权限的角色在两个 database 都既不能 CONNECT，也拿不到 schema / 表权限。"""
+    """只依赖 PUBLIC 默认权限的角色在两个 database 都拿不到 CONNECT、schema、表或序列权限。"""
     instance = isolated_instance
     probe = "public_probe_" + uuid4().hex[:8]
     probe_password = "probe-" + uuid4().hex  # pragma: allowlist secret
@@ -342,6 +342,7 @@ def test_public_cannot_bypass_connect_or_object_privileges(
             connection.execute(text(f"CREATE ROLE \"{probe}\" LOGIN PASSWORD '{probe_password}'"))
         for database in (CENTER_DATABASE, TRAINING_DATABASE):
             table = f"s065_public_probe_{database}"
+            sequence = f"{table}_seq"
             database_engine = _engine(
                 instance,
                 database=database,
@@ -351,7 +352,9 @@ def test_public_cannot_bypass_connect_or_object_privileges(
             try:
                 with database_engine.begin() as connection:
                     connection.execute(text(f"DROP TABLE IF EXISTS {table}"))
+                    connection.execute(text(f"DROP SEQUENCE IF EXISTS {sequence}"))
                     connection.execute(text(f"CREATE TABLE {table} (id int)"))
+                    connection.execute(text(f"CREATE SEQUENCE {sequence}"))
                     for query, parameters in (
                         (
                             "SELECT has_database_privilege(:role, :database, 'CONNECT')",
@@ -362,17 +365,30 @@ def test_public_cannot_bypass_connect_or_object_privileges(
                             f"SELECT has_table_privilege(:role, '{table}', 'SELECT')",
                             {"role": probe},
                         ),
+                        (
+                            f"SELECT has_sequence_privilege(:role, '{sequence}', 'SELECT')",
+                            {"role": probe},
+                        ),
                     ):
                         assert connection.execute(text(query), parameters).scalar_one() is False
-                    # runtime 对安装身份新建的表有 default privilege SELECT。
+                    # runtime 对安装身份新建的表/序列有 default privilege。
+                    runtime_role = instance.runtime(database).role
                     assert (
                         connection.execute(
                             text(f"SELECT has_table_privilege(:role, '{table}', 'SELECT')"),
-                            {"role": instance.runtime(database).role},
+                            {"role": runtime_role},
+                        ).scalar_one()
+                        is True
+                    )
+                    assert (
+                        connection.execute(
+                            text(f"SELECT has_sequence_privilege(:role, '{sequence}', 'USAGE')"),
+                            {"role": runtime_role},
                         ).scalar_one()
                         is True
                     )
                 with database_engine.begin() as connection:
+                    connection.execute(text(f"DROP SEQUENCE IF EXISTS {sequence}"))
                     connection.execute(text(f"DROP TABLE IF EXISTS {table}"))
             finally:
                 database_engine.dispose()
@@ -414,25 +430,32 @@ def test_runtime_is_non_superuser_and_cannot_use_ddl(
         instance, center, "ALTER TABLE auth_user ADD COLUMN forbidden int", "must be owner"
     )
 
-    # AC2：安装身份迁移出的枚举类型带 runtime 的显式 USAGE（来自 default privileges），
+    # AC2：安装身份新建的枚举类型带 runtime 的显式 USAGE（default privileges 生效），
     # 不是只依赖 PUBLIC 内建授权；PUBLIC 的内建 USAGE 无法经 default privileges 撤销。
+    # 类型在测试内新建，保证 ACL 只能来自 default privileges，而不是某次重跑的 `\gexec` 补授。
     install = _engine(
         instance,
         database=CENTER_DATABASE,
         user=INSTALL_ROLE,
         password=instance.install_password,
     )
+    enum = "s065_type_probe_" + uuid4().hex[:8]
     try:
-        with install.connect() as connection:
+        with install.begin() as connection:
+            connection.execute(text(f"CREATE TYPE {enum} AS ENUM ('a', 'b')"))
             typacl = connection.execute(
                 text(
                     "SELECT typacl::text FROM pg_type t "
                     "JOIN pg_namespace n ON n.oid = t.typnamespace "
-                    "WHERE n.nspname = 'public' AND t.typname = 'auth_user_status'"
-                )
+                    "WHERE n.nspname = 'public' AND t.typname = :name"
+                ),
+                {"name": enum},
             ).scalar_one()
-            assert f"{CENTER_RUNTIME_ROLE}=U" in typacl, typacl
+        assert typacl is not None, typacl
+        assert f"{CENTER_RUNTIME_ROLE}=U" in typacl, typacl
     finally:
+        with install.begin() as connection:
+            connection.execute(text(f"DROP TYPE IF EXISTS {enum}"))
         install.dispose()
 
 
@@ -460,9 +483,16 @@ def test_deployment_never_inlines_runtime_passwords(
         environment = cast("dict[str, str]", service.get("environment") or {})
         assert "SOP_DATABASE_PASSWORD" not in environment, name
         assert "POSTGRES_PASSWORD" not in environment, name
-        for key in ("SOP_DATABASE_PASSWORD_FILE", "POSTGRES_PASSWORD_FILE"):
-            if key in environment:
-                assert environment[key].startswith("/run/secrets/"), (name, key)
+        declared = {
+            str(entry["target"]) if isinstance(entry, dict) else f"/run/secrets/{entry}"
+            for entry in cast("list[object]", service.get("secrets") or [])
+        }
+        # 每个 *_FILE 都必须指向 /run/secrets/，且该 secret 在同一服务的 secrets 声明里，
+        # 否则容器启动才失败。
+        for key, value in environment.items():
+            if key.endswith("_FILE"):
+                assert value.startswith("/run/secrets/"), (name, key, value)
+                assert value in declared, (name, key, value, sorted(declared))
 
     passwords = (
         instance.install_password,

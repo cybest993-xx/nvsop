@@ -338,6 +338,101 @@ export interface OverviewDocument {
   monitor: OverviewSection
 }
 
+export interface RuntimeProvenance {
+  backend_id: string
+  model_ids: string[]
+}
+
+export interface RuntimeStationProjection {
+  station_id: string
+  instance?: {
+    event_id: string
+    trace_id: string
+    host_id: string
+    instance_id: number
+    opened_at: number
+    closed_at: number | null
+    close_reason: string | null
+    open_boundary_signal: string | null
+    close_boundary_signal: string | null
+    contract_version: number
+    template_version_id: string | null
+    template_sha256: string | null
+    backend_provenance: RuntimeProvenance[]
+    configuration_revision: number
+    configuration_sha256: string
+    reported_at: string
+  }
+  observation?: {
+    event_id: string
+    instance_id: number
+    source: string
+    signal: string
+    source_time: number | null
+    source_anchor: number | null
+    observed_at: number
+    contract_version: number
+    template_version_id: string | null
+    template_sha256: string | null
+    backend: RuntimeProvenance | null
+    reported_at: string
+  }
+  decision?: {
+    event_id: string
+    trace_id: string
+    host_id: string
+    instance_id: number
+    verdict: string
+    backend_id?: string
+    reason_codes: string[]
+    lifecycle: string
+    evidence: Record<string, unknown>
+    template_version_id: string | null
+    template_sha256: string | null
+    model_ids?: string[]
+    backend_provenance?: RuntimeProvenance[]
+    configuration_revision?: number
+    configuration_sha256?: string
+    contract_version: number
+    violations: {
+      reason_code: string
+      detail: string | null
+      step_ids: string[]
+      evidence: Record<string, unknown>
+    }[]
+    reported_at: string
+  }
+  health?: {
+    event_id: string
+    trace_id: string
+    host_id: string
+    station_id: string
+    contract_version: number
+    stream_id: string | null
+    status: string
+    reason_code: string | null
+    detail: string | null
+    occurred_at: string
+    source_anchor: number | null
+    anchor_offset: number | null
+    reported_at: string
+  }[]
+}
+
+/** 订阅当前工位运行镜像；原生 EventSource 负责 Last-Event-ID 增量重连。 */
+export function openRuntimeProjection(
+  onProjection: (projection: RuntimeStationProjection) => void,
+  onConnection: (connected: boolean) => void,
+): () => void {
+  const source = new EventSource('/api/v1/monitor/stream')
+  source.addEventListener('runtime', (event) => {
+    onProjection(JSON.parse((event as MessageEvent<string>).data) as RuntimeStationProjection)
+  })
+  source.onopen = () => onConnection(true)
+  source.onerror = () => onConnection(false)
+  return () => source.close()
+}
+
 export async function readOverview(): Promise<OverviewDocument> {
   let response: Response
   try {

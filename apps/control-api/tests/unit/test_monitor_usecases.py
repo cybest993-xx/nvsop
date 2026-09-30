@@ -60,6 +60,7 @@ class MemoryMonitor:
         self.observations: dict[str, MirroredObservation] = {}
         self._decision_sequence = 0
         self._health_sequence = 0
+        self.runtime: tuple[dict[str, object], ...] = ()
 
     def upsert_decision(self, value: MirroredDecision) -> bool:
         if value.report.event_id in self.decisions:
@@ -188,6 +189,12 @@ class MemoryMonitor:
             self.decisions_after_sequence(after_sequence=decision_sequence, limit=limit),
             self.health_after_sequence(after_sequence=health_sequence, limit=limit),
         )
+
+    def read_runtime_projection(self) -> tuple[dict[str, object], ...]:
+        return self.runtime_projection()
+
+    def runtime_projection(self) -> tuple[dict[str, object], ...]:
+        return self.runtime
 
     def wait_for_wakeup(self, *, timeout: float) -> bool:
         del timeout
@@ -486,6 +493,29 @@ def test_health_mirror_rejects_a_station_outside_the_host_topology() -> None:
             monitor=monitor,
             host_gateway=HostGateway(),
         )
+
+
+def test_runtime_projection_snapshot_and_stream_are_idless_and_emit_only_changes() -> None:
+    monitor = MemoryMonitor()
+    initial: dict[str, object] = {"station_id": str(STATION_ID), "decision": {"verdict": "pass"}}
+    monitor.runtime = (initial,)
+    snapshot = sse_snapshot_state(monitor, caller=caller(Permission.MONITOR_VIEW))
+    assert snapshot.frames == (
+        'event: runtime\ndata: {"station_id":"019937d8-0d10-7b31-8d2d-4e60c8f4f102",'
+        '"decision":{"verdict":"pass"}}\n\n',
+    )
+    monitor.runtime = ({**initial, "decision": {"verdict": "fail"}},)
+    stream = sse_stream(
+        monitor,
+        caller=caller(Permission.MONITOR_VIEW),
+        runtime_projection=snapshot.runtime_projection,
+        wait_timeout=0,
+    )
+    changed = next(stream)
+    assert "event: runtime" in changed
+    assert "id:" not in changed
+    assert '"verdict":"fail"' in changed
+    assert next(stream) == ": keep-alive\n\n"
 
 
 def test_sse_snapshot_contains_event_id_and_raw_reason() -> None:

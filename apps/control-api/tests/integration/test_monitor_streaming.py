@@ -14,8 +14,20 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from factory_sop.monitor.adapters.repository import PostgresMonitorRepository
 from factory_sop.monitor.adapters.streaming import PostgresMonitorStreamSource
-from factory_sop.monitor.model import MirroredDecision, MirroredHealth
-from nvsop_contracts import ReportedDecision, ReportedHealth, ReportEvidence
+from factory_sop.monitor.model import (
+    MirroredDecision,
+    MirroredHealth,
+    MirroredObservation,
+    MirroredSopInstance,
+)
+from nvsop_contracts import (
+    ReportBackendProvenance,
+    ReportedDecision,
+    ReportedHealth,
+    ReportedObservation,
+    ReportedSopInstance,
+    ReportEvidence,
+)
 
 HOST_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f201")
 STATION_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f202")
@@ -31,6 +43,14 @@ def _clear_s143_monitor_rows(engine: Engine) -> None:
         )
         connection.execute(
             text("DELETE FROM monitor_reported_health WHERE host_id = :host_id"),
+            {"host_id": str(HOST_ID)},
+        )
+        connection.execute(
+            text("DELETE FROM monitor_observation WHERE host_id = :host_id"),
+            {"host_id": str(HOST_ID)},
+        )
+        connection.execute(
+            text("DELETE FROM monitor_sop_instance WHERE host_id = :host_id"),
             {"host_id": str(HOST_ID)},
         )
 
@@ -301,6 +321,134 @@ def test_durable_replay_does_not_require_a_prior_wakeup(engine: Engine) -> None:
             limit=20,
         )
         assert event_id in {value.report.event_id for value in health}
+    finally:
+        source.close()
+
+
+def _instance(event_id: str, station_id: str, *, closed: bool = False) -> MirroredSopInstance:
+    report = ReportedSopInstance(
+        event_id=event_id,
+        trace_id=event_id,
+        host_id=str(HOST_ID),
+        station_id=station_id,
+        instance_id=1,
+        opened_at=1.0,
+        closed_at=2.0 if closed else None,
+        close_reason="closed_by_idle_timeout" if closed else None,
+        open_boundary_signal="start",
+        close_boundary_signal=None,
+        template_version_id="actual-template",
+        template_sha256="a" * 64,
+        backend_provenance=(ReportBackendProvenance(str(BACKEND_ID), ("actual-model",)),),
+        configuration_revision=1,
+        configuration_sha256="b" * 64,
+        reported_at="2026-09-23T00:00:00Z",
+    )
+    return MirroredSopInstance(report=report, received_at=RECEIVED_AT)
+
+
+def _observation(event_id: str, station_id: str = str(STATION_ID)) -> MirroredObservation:
+    return MirroredObservation(
+        report=ReportedObservation(
+            event_id=event_id,
+            trace_id=event_id,
+            host_id=str(HOST_ID),
+            station_id=station_id,
+            instance_id=1,
+            source="action",
+            signal="(1) synthetic action",
+            source_time=1.0,
+            source_anchor=10.0,
+            observed_at=2.0,
+            template_version_id="actual-template",
+            template_sha256="a" * 64,
+            backend=ReportBackendProvenance(str(BACKEND_ID), ("actual-model",)),
+            reported_at="2026-09-23T00:00:00Z",
+        ),
+        received_at=RECEIVED_AT,
+    )
+
+
+def test_runtime_projection_wakes_on_commit_keeps_closed_instance_and_recovers_missed_notify(
+    engine: Engine,
+) -> None:
+    factory = sessionmaker(bind=engine)
+    source = PostgresMonitorStreamSource(factory, engine)
+    event_id, station_id = f"s019:instance:{uuid4()}", str(uuid4())
+    try:
+        assert station_id not in {value["station_id"] for value in source.read_runtime_projection()}
+        with factory() as session:
+            repository = PostgresMonitorRepository(session)
+            assert repository.upsert_instance(_instance(event_id, station_id))
+            session.commit()
+        assert source.wait_for_wakeup(timeout=1)
+        opened = next(
+            value["instance"]
+            for value in source.read_runtime_projection()
+            if value["station_id"] == station_id
+        )
+        assert isinstance(opened, dict)
+        assert opened["closed_at"] is None
+
+        with factory() as session:
+            repository = PostgresMonitorRepository(session)
+            assert repository.upsert_instance(_instance(event_id, station_id, closed=True))
+            session.commit()
+        assert source.wait_for_wakeup(timeout=1)
+        closed = next(
+            value["instance"]
+            for value in source.read_runtime_projection()
+            if value["station_id"] == station_id
+        )
+        assert isinstance(closed, dict)
+        assert closed["close_reason"] == "closed_by_idle_timeout"
+    finally:
+        source.close()
+
+    reconnect = PostgresMonitorStreamSource(factory, engine)
+    try:
+        current = reconnect.read_runtime_projection()
+        assert (
+            next(value["instance"] for value in current if value["station_id"] == station_id)
+            == closed
+        )
+    finally:
+        reconnect.close()
+
+
+def test_runtime_observation_notify_is_transactional_and_projection_has_no_global_100_cap(
+    engine: Engine,
+) -> None:
+    factory = sessionmaker(bind=engine)
+    source = PostgresMonitorStreamSource(factory, engine)
+    try:
+        existing_stations = {value["station_id"] for value in source.read_runtime_projection()}
+        rollback_station = str(uuid4())
+        assert rollback_station not in existing_stations
+        with factory() as session:
+            assert PostgresMonitorRepository(session).upsert_observation(
+                _observation(f"s019:rollback:{uuid4()}", rollback_station),
+            )
+            session.rollback()
+        assert not source.wait_for_wakeup(timeout=0.05)
+
+        station_ids = tuple(str(uuid4()) for _ in range(101))
+        assert not set(station_ids) & existing_stations
+        with factory() as session:
+            repository = PostgresMonitorRepository(session)
+            for station_id in station_ids:
+                assert repository.upsert_observation(
+                    _observation(f"s019:observation:{uuid4()}", station_id),
+                )
+            session.commit()
+        assert source.wait_for_wakeup(timeout=1)
+        projection = [
+            value
+            for value in source.read_runtime_projection()
+            if value["station_id"] in station_ids
+        ]
+        assert len(projection) == 101
+        assert {value["station_id"] for value in projection} == set(station_ids)
     finally:
         source.close()
 

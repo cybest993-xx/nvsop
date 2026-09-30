@@ -383,6 +383,7 @@ def stream_monitor_events(
                 caller=caller,
                 decision_sequence=snapshot.decision_sequence,
                 health_sequence=snapshot.health_sequence,
+                runtime_projection=snapshot.runtime_projection,
             )
 
     return StreamingResponse(events(), media_type="text/event-stream")

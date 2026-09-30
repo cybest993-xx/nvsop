@@ -37,6 +37,17 @@ MATERIAL_GENERATION_ORIGINAL = "original"
 _SEGMENT_TIME_FORMAT = "%Y-%m-%d_%H-%M-%S-%f"
 _GAP_TOLERANCE = 0.5
 """分段名时间戳与 ffprobe 时长之间的取整误差容限, 不是可配置的保留时长。"""
+_FFMPEG_PREFIX = ("-hide_banner", "-loglevel", "error")
+_FFPROBE_ENTRIES = (
+    "-v",
+    "error",
+    "-show_entries",
+    "format=duration",
+    "-show_entries",
+    "stream=codec_type",
+    "-of",
+    "json",
+)
 
 
 class EvidenceMediaError(RuntimeError):
@@ -130,39 +141,42 @@ def slice_evidence(pending: PendingEvidence, *, context: _SliceContext) -> Evide
         raise EvidenceMediaError(
             "mapping_missing", "pending evidence has no frozen recording source"
         )
-    wall_from = pending.start.seconds + wall_offset
-    wall_to = pending.end.seconds + wall_offset
-    anchor_wall = pending.anchor.seconds + wall_offset
     evidence_id = _evidence_id(context.host_id, pending.queue_id)
     context.evidence_directory.mkdir(parents=True, exist_ok=True)
-    work = Path(tempfile.mkdtemp(prefix=f".{evidence_id}.", dir=context.evidence_directory))
+    try:
+        work = Path(tempfile.mkdtemp(prefix=f".{evidence_id}.", dir=context.evidence_directory))
+    except OSError as error:
+        raise EvidenceMediaError("finalize_failed", str(error)) from error
     try:
         media = [
             _slice_source(
-                media_path,
-                context=context,
-                work=work,
-                wall_from=wall_from,
-                wall_to=wall_to,
-                anchor_wall=anchor_wall,
-                wall_offset=wall_offset,
+                media_path, context=context, work=work, pending=pending, wall_offset=wall_offset
             )
             for media_path in pending.sources
         ]
         covered_from = max(_number(item["actual_from"]) for item in media)
         covered_to = min(_number(item["actual_to"]) for item in media)
         final = context.evidence_directory / _artifact_name(evidence_id, covered_from, covered_to)
-        _write_metadata(
-            work,
-            context.host_id,
-            evidence_id,
-            pending,
-            wall_offset,
-            covered_from,
-            covered_to,
-            media,
-        )
-        _finalize(work, final)  # 同名完整产物已存在时保留旧权威, 本次内存元数据与它同源
+        metadata = {
+            "evidence_id": evidence_id,
+            "host_id": context.host_id,
+            "anchor": pending.anchor.seconds,
+            "window_from": pending.start.seconds,
+            "window_to": pending.end.seconds,
+            "wall_offset": wall_offset,
+            "covered_from": covered_from,
+            "covered_to": covered_to,
+            "media": media,
+        }
+        metadata_path = work / "metadata.json"
+        try:
+            metadata_path.write_text(
+                json.dumps(metadata, separators=(",", ":")) + "\n", encoding="utf-8"
+            )
+            _fsync(metadata_path)
+            _finalize(work, final)  # 同名完整产物已存在时保留旧权威, 本次内存元数据与它同源
+        except OSError as error:
+            raise EvidenceMediaError("finalize_failed", str(error)) from error
         return EvidenceClipSet(
             evidence_id=evidence_id,
             directory=final,
@@ -180,11 +194,12 @@ def _slice_source(
     *,
     context: _SliceContext,
     work: Path,
-    wall_from: float,
-    wall_to: float,
-    anchor_wall: float,
+    pending: PendingEvidence,
     wall_offset: float,
 ) -> dict[str, object]:
+    wall_from = pending.start.seconds + wall_offset
+    wall_to = pending.end.seconds + wall_offset
+    anchor_wall = pending.anchor.seconds + wall_offset
     directory = context.recording_directory / media_path
     if not directory.is_dir():
         raise EvidenceMediaError("material_missing", f"recording directory absent for {media_path}")
@@ -255,78 +270,27 @@ def _concat(
     listing.write_text(
         "".join(f"file '{segment.path.as_posix()}'\n" for segment in segments), encoding="utf-8"
     )
-    _run(
-        [
-            str(ffmpeg_binary),
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            str(listing),
-            "-c",
-            "copy",
-            "-movflags",
-            "+faststart",
-            "-y",
-            str(destination),
-        ],
-        timeout,
-    )
+    command = [
+        str(ffmpeg_binary),
+        *_FFMPEG_PREFIX,
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(listing),
+    ]
+    command += ["-c", "copy", "-movflags", "+faststart", "-y", str(destination)]
+    _run(command, timeout)
     listing.unlink(missing_ok=True)
 
 
 def _extract_keyframe(
     ffmpeg_binary: Path, clip: Path, offset: float, destination: Path, timeout: float
 ) -> None:
-    _run(
-        [
-            str(ffmpeg_binary),
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-ss",
-            f"{offset:.3f}",
-            "-i",
-            str(clip),
-            "-frames:v",
-            "1",
-            "-q:v",
-            "2",
-            "-y",
-            str(destination),
-        ],
-        timeout,
-    )
-
-
-def _write_metadata(
-    work: Path,
-    host_id: str,
-    evidence_id: str,
-    pending: PendingEvidence,
-    wall_offset: float,
-    covered_from: float,
-    covered_to: float,
-    media: list[dict[str, object]],
-) -> None:
-    metadata = {
-        "evidence_id": evidence_id,
-        "host_id": host_id,
-        "anchor": pending.anchor.seconds,
-        "window_from": pending.start.seconds,
-        "window_to": pending.end.seconds,
-        "wall_offset": wall_offset,
-        "covered_from": covered_from,
-        "covered_to": covered_to,
-        "media": media,
-    }
-    path = work / "metadata.json"
-    path.write_text(json.dumps(metadata, separators=(",", ":")) + "\n", encoding="utf-8")
-    _fsync(path)
+    command = [str(ffmpeg_binary), *_FFMPEG_PREFIX, "-ss", f"{offset:.3f}", "-i", str(clip)]
+    command += ["-frames:v", "1", "-q:v", "2", "-y", str(destination)]
+    _run(command, timeout)
 
 
 def _finalize(work: Path, final: Path) -> None:
@@ -360,18 +324,7 @@ def _probe_duration(ffprobe_binary: Path, path: Path, timeout: float) -> float |
     """读取分段真实时长; 不可解码/正在写入返回 None, 由覆盖检查判定素材缺口。"""
     try:
         completed = subprocess.run(
-            [
-                str(ffprobe_binary),
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-show_entries",
-                "stream=codec_type",
-                "-of",
-                "json",
-                str(path),
-            ],
+            [str(ffprobe_binary), *_FFPROBE_ENTRIES, str(path)],
             capture_output=True,
             timeout=timeout,
             check=False,

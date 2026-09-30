@@ -1,4 +1,4 @@
-.PHONY: check check-docs docs-check check-integration media-system change-size task-check ci-plan ci-tools ci-lint pr-check issue-check hooks local-clean lockfile sync policy policy-test migrations contract-base \
+.PHONY: check check-suite check-docs docs-check check-integration media-system change-size task-check ci-plan ci-tools ci-lint pr-check issue-check hooks local-clean local-purge lockfile sync policy policy-test migrations contract-base \
 	contract-capability \
 	contracts contracts-python-check contracts-python-format contracts-python-lint \
 	contracts-python-type contracts-python-unit openapi-export openapi-compat openapi-generate \
@@ -12,17 +12,23 @@ LOCAL_CACHE := $(LOCAL_STATE)/cache
 LOCAL_ARTIFACTS := $(LOCAL_STATE)/artifacts
 LOCAL_TOOLS := $(LOCAL_STATE)/tools
 UV_PROJECT_ENVIRONMENT := $(LOCAL_STATE)/venv
-UV_CACHE_DIR := $(LOCAL_CACHE)/uv
+# 包缓存跨 worktree 复用；已安装的 editable 环境仍由当前 worktree 独占。
+UV_CACHE_DIR ?= $(or $(XDG_CACHE_HOME),$(HOME)/.cache)/uv
 export UV_PROJECT_ENVIRONMENT UV_CACHE_DIR
 export PYTHONDONTWRITEBYTECODE := 1
 export RUFF_CACHE_DIR := $(LOCAL_CACHE)/ruff
+CHECK_JOBS ?= 2
 
-# The CPU-only, Docker-free merge gate (harness §6). CI calls this exact target.
-check: lockfile sync hooks policy-test policy migrations contract-base contract-capability \
+# 安装与生成先完成，再由同一个 Make jobserver 限制检查并发。
+check: sync hooks contracts
+	+$(MAKE) --jobs=$(CHECK_JOBS) --output-sync=target check-suite
+
+# check 的内部执行阶段；单项检查继续保留自己的最小入口。
+check-suite: policy-test policy migrations contract-base contract-capability \
 	contracts-python-check \
 	boundaries secret-scan center-format center-lint center-type center-unit \
 	edge-format edge-lint edge-type edge-unit edge-integration \
-	contracts web-format web-lint web-type web-unit web-build
+	web-format web-lint web-type web-unit web-build
 
 # 文档内循环只需本机 Python 标准库和 Git；最终门禁仍使用 check-docs/check。
 docs-check:
@@ -30,7 +36,8 @@ docs-check:
 
 # 文档快线复用冻结工具、仓库政策（含 Markdown 链接）与敏感信息扫描。
 # 本地省略 HEAD 时检查从 BASE 到工作区的差异；CI 传入实际比较提交。
-check-docs: lockfile sync hooks policy secret-scan
+check-docs: sync hooks
+	+$(MAKE) policy secret-scan
 	git diff --check "$(BASE)" $(if $(HEAD),"$(HEAD)") --
 
 # Git hooks that hold for whichever agent or person commits (harness §6): the local main/dev
@@ -40,13 +47,16 @@ check-docs: lockfile sync hooks policy secret-scan
 hooks:
 	git config core.hooksPath scripts/githooks
 
-# 删除仓库明确拥有的可再生本地产物；保留 .nvsop/dev-main、本地 secrets 和未知 ignored 文件。
+# 日常只清输出；任务退休时才清除独占环境、工具和旧缓存。
 local-clean:
 	python3 scripts/clean_local_artifacts.py
 
-# The second required target (harness §6): one application plus real local infrastructure,
-# started as containers via testcontainers. `center-system` runs §5.15's acceptance scenarios.
-check-integration: sync center-integration center-system
+local-purge:
+	python3 scripts/clean_local_artifacts.py --purge
+
+# 两个 pytest 会话分别拥有容器和缓存，不在同一数据库上并发清表。
+check-integration: sync
+	+$(MAKE) --jobs=$(CHECK_JOBS) --output-sync=target center-integration center-system
 
 # 固定 digest 的真实 MediaMTX 录像/回放证据；夹具使用独立 Compose project 并在结束时清理。
 media-system: sync
@@ -101,14 +111,16 @@ lockfile:
 	$(UV) lock --check
 
 # One frozen environment for the whole gate.
-sync:
+sync: lockfile
 	$(UV) sync --frozen --all-packages
 
 VENV := $(UV_PROJECT_ENVIRONMENT)/bin
 PYTHON := $(VENV)/python
 RUFF := $(VENV)/ruff
 MYPY := $(VENV)/mypy
-PYTEST := $(VENV)/pytest -o cache_dir=$(LOCAL_CACHE)/pytest
+PYTEST_ARGS ?= --durations=20
+PYTEST = $(VENV)/pytest -o cache_dir=$(LOCAL_CACHE)/pytest/$@ \
+	--junitxml=$(LOCAL_ARTIFACTS)/pytest/$@.xml $(PYTEST_ARGS)
 CONTRACT_PY := packages/contracts
 OPENAPI := $(CONTRACT_PY)/openapi.json
 OPENAPI_BASE_REF ?= origin/main
@@ -118,7 +130,7 @@ OPENAPI_BASE_REF ?= origin/main
 # complete worktree after this target, including untracked output.
 contracts: openapi-compat openapi-generate
 
-openapi-export:
+openapi-export: sync
 	PYTHONPATH=$(CENTER)/src $(VENV)/python scripts/export_openapi.py $(OPENAPI)
 
 openapi-compat: openapi-export
@@ -158,7 +170,7 @@ contracts-python-lint:
 	$(RUFF) check --target-version py311 $(CONTRACT_PY)/src $(CONTRACT_PY)/tests
 
 contracts-python-type:
-	MYPYPATH=$(CONTRACT_PY)/src $(MYPY) --cache-dir $(LOCAL_CACHE)/mypy \
+	MYPYPATH=$(CONTRACT_PY)/src $(MYPY) --cache-dir $(LOCAL_CACHE)/mypy/$@ \
 		--python-version 3.11 --strict \
 		$(CONTRACT_PY)/src $(CONTRACT_PY)/tests
 
@@ -188,7 +200,7 @@ center-lint:
 	$(RUFF) check $(CENTER_PATHS)
 
 center-type:
-	MYPYPATH=$(CENTER)/src $(MYPY) --cache-dir $(LOCAL_CACHE)/mypy $(CENTER)/src $(CENTER)/tests
+	MYPYPATH=$(CENTER)/src $(MYPY) --cache-dir $(LOCAL_CACHE)/mypy/$@ $(CENTER)/src $(CENTER)/tests
 
 center-unit:
 	cd $(CENTER) && PYTHONPATH=src $(PYTEST) tests/unit -q
@@ -209,7 +221,7 @@ edge-lint:
 
 edge-type:
 	cd $(EDGE) && MYPYPATH=$(CURDIR)/$(CONTRACT_PY)/src $(MYPY) \
-		--cache-dir $(LOCAL_CACHE)/mypy --strict src tests
+		--cache-dir $(LOCAL_CACHE)/mypy/$@ --strict src tests
 
 edge-unit:
 	cd $(EDGE) && PYTHONPATH=$(CURDIR)/$(CONTRACT_PY)/src:src $(PYTHON) -m unittest \

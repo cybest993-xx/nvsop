@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
+from functools import cache
 from uuid import UUID
 
 from factory_sop.auth.authorization import Caller
@@ -24,6 +25,12 @@ from factory_sop.auth.repository import (
     UserNotFoundError,
 )
 from factory_sop.identifiers import new_id
+
+
+@cache
+def prepared_password_hash(password: str) -> str:
+    """只缓存合成账号的准备数据；生产哈希与密码验证始终使用真实 Argon2。"""
+    return hash_password(password)
 
 
 def caller_holding(*granted: Permission, user: User | None = None) -> Caller:
@@ -71,7 +78,7 @@ class FakeUsers:
             id=new_id(),
             login_name=login_name,
             display_name=login_name.title(),
-            password_hash=hash_password(password),
+            password_hash=prepared_password_hash(password),
             status=status,
         )
         self.add(user)

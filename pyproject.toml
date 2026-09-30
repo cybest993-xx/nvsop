@@ -28,7 +28,6 @@ center_modules = [
     "execution",
     "job",
     "monitor",
-    "retention",
     "template",
 ]
 

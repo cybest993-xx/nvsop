@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 
 from factory_sop.monitor.model import (
@@ -51,6 +52,12 @@ class MonitorRepository(Protocol):
 
     def recent_health(self, *, limit: int) -> tuple[MirroredHealth, ...]: ...
 
+    def health_for_station(self, *, station_id: str) -> tuple[MirroredHealth, ...]:
+        """返回工位全部健康事实；展示 limit 不得改变业务分类。"""
+        ...
+
+    def last_report_at_by_host(self) -> tuple[tuple[str, datetime], ...]: ...
+
     def decisions_after_sequence(
         self, *, after_sequence: int, limit: int
     ) -> tuple[MirroredDecision, ...]: ...
@@ -63,6 +70,8 @@ class MonitorRepository(Protocol):
 
     def health_sequence_for_event(self, event_id: str) -> int | None: ...
 
+    def runtime_projection(self) -> tuple[dict[str, object], ...]: ...
+
 
 class MonitorStreamSource(Protocol):
     """SSE 每轮短读和独立唤醒资源的 seam。"""
@@ -74,6 +83,8 @@ class MonitorStreamSource(Protocol):
         health_sequence: int,
         limit: int,
     ) -> tuple[tuple[MirroredDecision, ...], tuple[MirroredHealth, ...]]: ...
+
+    def read_runtime_projection(self) -> tuple[dict[str, object], ...]: ...
 
     def wait_for_wakeup(self, *, timeout: float) -> bool:
         """等待提交后提示；False 只表示本次等待超时。"""

@@ -5,6 +5,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 
 import { ControlPlaneError } from '@/api/controlPlane'
 import DevicesView from '@/modules/devices/DevicesView.vue'
+import ConnectionTestControl from '@/modules/devices/ConnectionTestControl.vue'
 import { useSessionStore } from '@/session/store'
 
 const api = vi.hoisted(() => ({
@@ -41,6 +42,23 @@ const CONNECTOR = {
   health_detail: null,
   status: 'active' as const,
   revision: 3,
+}
+
+const SECOND_CONNECTOR = {
+  ...CONNECTOR,
+  id: 'connector-2',
+  name: '包装线输入',
+  revision: 4,
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve
+    reject = promiseReject
+  })
+  return { promise, resolve, reject }
 }
 
 const STATION_CONFIGURATION = {
@@ -332,6 +350,52 @@ describe('工位与设备中的连接器', () => {
     })
   })
 
+  it('ignores an older connection-test refresh after a newer CRUD refresh', async () => {
+    api.setConnectorStatus.mockResolvedValue({ ...CONNECTOR, status: 'deactivated', revision: 4 })
+    const session = useSessionStore()
+    session.current = {
+      user_id: 'admin-1',
+      login_name: 'administrator',
+      display_name: '系统管理员',
+      expires_at: '2026-09-07T13:00:00Z',
+      permissions: ['device.connector.view', 'device.connector.edit'],
+    }
+    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const stalePage = deferred<{
+      items: Array<typeof CONNECTOR>
+      page: number
+      page_size: number
+      total: number
+    }>()
+    const currentConnector = { ...CONNECTOR, name: '最新连接器', status: 'deactivated' as const }
+    api.readConnectors.mockReset()
+    api.readConnectors
+      .mockImplementationOnce(() => stalePage.promise)
+      .mockResolvedValueOnce({ items: [currentConnector], page: 1, page_size: 50, total: 1 })
+
+    wrapper.findComponent(ConnectionTestControl).vm.$emit('completed')
+    await flushPromises()
+    await wrapper
+      .findAll('button')
+      .find((button) => button.text() === '停用')!
+      .trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('最新连接器')
+    stalePage.resolve({
+      items: [{ ...CONNECTOR, name: '过期连接器' }],
+      page: 1,
+      page_size: 50,
+      total: 1,
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('最新连接器')
+    expect(wrapper.text()).not.toContain('过期连接器')
+  })
+
   it('opens a detail view from the real connector resource', async () => {
     api.readConnector.mockResolvedValue(CONNECTOR)
     const session = useSessionStore()
@@ -357,6 +421,44 @@ describe('工位与设备中的连接器', () => {
     expect(wrapper.text()).toContain('推理机 A')
     expect(wrapper.text()).toContain('192.168.10.21:80')
     expect(wrapper.text()).toContain('未验证')
+  })
+
+  it('ignores an older detail response after a newer connector is selected', async () => {
+    api.readConnectors.mockResolvedValue({
+      items: [CONNECTOR, SECOND_CONNECTOR],
+      page: 1,
+      page_size: 50,
+      total: 2,
+    })
+    const staleDetail = deferred<typeof CONNECTOR>()
+    const currentDetail = deferred<typeof SECOND_CONNECTOR>()
+    api.readConnector
+      .mockImplementationOnce(() => staleDetail.promise)
+      .mockImplementationOnce(() => currentDetail.promise)
+    const session = useSessionStore()
+    session.current = {
+      user_id: 'admin-1',
+      login_name: 'administrator',
+      display_name: '系统管理员',
+      expires_at: '2026-09-07T13:00:00Z',
+      permissions: ['device.connector.view', 'device.inference_host.view', 'device.station.view'],
+    }
+
+    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    const detailButtons = wrapper.findAll('button').filter((button) => button.text() === '详情')
+    await detailButtons[0]!.trigger('click')
+    await flushPromises()
+    await detailButtons[1]!.trigger('click')
+    currentDetail.resolve(SECOND_CONNECTOR)
+    await flushPromises()
+
+    expect(wrapper.find('.devices__details').text()).toContain('包装线输入')
+    staleDetail.resolve(CONNECTOR)
+    await flushPromises()
+
+    expect(wrapper.find('.devices__details').text()).toContain('包装线输入')
+    expect(wrapper.find('.devices__details').text()).not.toContain('装配线输入')
   })
 
   it('edits the whole placement with the revision it read', async () => {

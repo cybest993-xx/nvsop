@@ -83,8 +83,8 @@ class DatasetRepository(Protocol):
         """更新上传尝试状态；不提交事务。"""
         ...
 
-    def add_action_list(self, value: ActionListRevision) -> None:
-        """追加一份动作清单修订；历史修订不修改。"""
+    def add_action_list(self, value: ActionListRevision) -> bool:
+        """条件追加动作清单修订；目标 revision 已被并发占用时返回 ``False``。"""
         ...
 
     def latest_action_list(self, dataset_id: UUID) -> ActionListRevision | None:

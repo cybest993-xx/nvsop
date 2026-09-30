@@ -189,13 +189,16 @@ jobs:
             exit 1
           fi
 
-  # Real local infrastructure: center integration/system flows plus MediaMTX when its owning
-  # inputs changed. The shared selector decides applicability once; skipped suites are explicit.
+  # 独立 runner 并行验证两个套件；matrix 的汇总仍是 CI required 的必需依赖。
   integration-gate:
-    name: Center and cross-app system evidence
+    name: ${{ matrix.suite }} evidence
     needs: scope
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [center-integration, center-system]
     steps:
       - name: Checkout candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -217,12 +220,14 @@ jobs:
         # Docker is present on the GitHub-hosted runner, which is what testcontainers uses to
         # start PostgreSQL. No service container is declared here: the suite owns the image
         # tag and the lifecycle, so a developer runs the same database CI does.
-        run: make check-integration
+        env:
+          TEST_SUITE: ${{ matrix.suite }}
+        run: make sync "$TEST_SUITE"
       - name: Verify frozen annotation image and real media operations
-        if: needs.scope.outputs.annotation == 'true'
+        if: needs.scope.outputs.annotation == 'true' && matrix.suite == 'center-system'
         run: make annotation-image
       - name: Run real MediaMTX recording and playback evidence
-        if: needs.scope.outputs.media == 'true'
+        if: needs.scope.outputs.media == 'true' && matrix.suite == 'center-system'
         run: make media-system
       - name: Explicit success with nothing to check
         if: needs.scope.outputs.integration == 'false'

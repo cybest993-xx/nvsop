@@ -625,7 +625,12 @@ class _RuntimeCycleRunner:
             try:
                 media.start()
                 return
-            except Exception:
+            except Exception as error:
+                _logger.error(
+                    "edge.media.start.failed error_type=%s error=%s",
+                    type(error).__name__,
+                    error,
+                )
                 self._cycle_stop.wait(0.5)
 
     def _run_configuration(self) -> None:

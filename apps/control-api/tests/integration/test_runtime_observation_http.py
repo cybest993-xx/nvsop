@@ -57,6 +57,8 @@ from factory_sop.template.adapters.tables import TemplateStationBindingRow, Temp
 from factory_sop.template.model import TemplateStationBinding
 from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
+    HEALTH_REPORT_CAPABILITY,
+    HEALTH_REPORT_CONTRACT_VERSION,
     REPORT_CAPABILITIES_HEADER,
     SOP_INSTANCE_REPORT_CAPABILITY,
     SOP_INSTANCE_REPORT_CONTRACT_VERSION,
@@ -616,7 +618,9 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
                         path=confirm_path,
                         body=confirmed_body,
                     )
-                    confirm_headers[REPORT_CAPABILITIES_HEADER] = SOP_INSTANCE_REPORT_CAPABILITY
+                    confirm_headers[REPORT_CAPABILITIES_HEADER] = (
+                        f"{SOP_INSTANCE_REPORT_CAPABILITY},{HEALTH_REPORT_CAPABILITY}"
+                    )
                     confirmed = client.post(
                         confirm_path,
                         json=confirmed_body,
@@ -628,6 +632,7 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
                         "sop_instance_report_contract_version": (
                             SOP_INSTANCE_REPORT_CONTRACT_VERSION
                         ),
+                        "health_report_contract_version": HEALTH_REPORT_CONTRACT_VERSION,
                     }
                     body = reported_decision_to_wire(report)
                     response = client.post(
@@ -936,9 +941,13 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
             trace_id="trace-health-integration-1",
             host_id=str(runtime_topology.host.id),
             station_id=str(runtime_topology.station.id),
+            stream_id="camera-main",
             status="future_status",
             reason_code="FUTURE_HEALTH_REASON",
             detail="synthetic health detail",
+            occurred_at="2026-09-14T01:00:00Z",
+            source_anchor=1.5,
+            anchor_offset=0.25,
             reported_at="2026-09-14T01:00:00Z",
         )
         health_body = reported_health_to_wire(health)
@@ -951,6 +960,25 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
                 method="POST",
                 path=health_path,
                 body=health_body,
+            ),
+        )
+        invalid_health = replace(
+            health,
+            event_id=f"{runtime_topology.host.id}:health-invalid-time",
+            trace_id="trace-health-invalid-time",
+            occurred_at="invalid",
+            source_anchor=None,
+            anchor_offset=None,
+        )
+        invalid_health_body = reported_health_to_wire(invalid_health)
+        invalid_health_response = client.post(
+            health_path,
+            json=invalid_health_body,
+            headers=_host_headers(
+                runtime_topology,
+                method="POST",
+                path=health_path,
+                body=invalid_health_body,
             ),
         )
         station = bundle.stations[0]
@@ -1042,6 +1070,11 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
             f"{API_PREFIX}/monitor/stream",
             params={"once": "true"},
         )
+        stream_health = client.get(
+            f"{API_PREFIX}/monitor/stream-health",
+            params={"station_id": str(runtime_topology.station.id)},
+        )
+        host_liveness = client.get(f"{API_PREFIX}/monitor/host-liveness")
 
     assert first.status_code == 200
     assert first.json() == {"accepted": True, "duplicate": False, "event_id": report.event_id}
@@ -1053,6 +1086,7 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
         "duplicate": False,
         "event_id": health.event_id,
     }
+    assert invalid_health_response.status_code == 422
     assert instance_first.status_code == 200
     assert instance_first.json()["duplicate"] is False
     assert instance_duplicate.status_code == 200
@@ -1075,6 +1109,15 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
     assert "FUTURE_REASON" in stream.text
     assert "event: health" in stream.text
     assert health.event_id in stream.text
+    assert stream_health.status_code == 200
+    assert stream_health.json()["station_id"] == str(runtime_topology.station.id)
+    assert stream_health.json()["validity"] == "impaired"
+    assert [item["stream_id"] for item in stream_health.json()["streams"]] == ["camera-main"]
+    assert host_liveness.status_code == 200
+    assert host_liveness.json()["status"] == "available"
+    assert [item["host_id"] for item in host_liveness.json()["hosts"]] == [
+        str(runtime_topology.host.id)
+    ]
     assert "FUTURE_HEALTH_REASON" in stream.text
 
 

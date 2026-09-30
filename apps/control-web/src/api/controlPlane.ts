@@ -338,6 +338,57 @@ export interface OverviewDocument {
   monitor: OverviewSection
 }
 
+export interface RuntimeProvenance {
+  backend_id: string
+  model_ids: string[]
+}
+
+type RuntimeFact = Record<string, unknown>
+type RuntimeDecision = RuntimeFact & {
+  verdict: string
+  reason_codes: string[]
+  instance_id: number
+  lifecycle: string
+  reported_at: string
+  template_version_id: string | null
+  template_sha256: string | null
+  backend_id?: string
+  model_ids?: string[]
+  backend_provenance?: RuntimeProvenance[]
+}
+type RuntimeHealth = RuntimeFact & {
+  event_id: string
+  stream_id: string | null
+  status: string
+  reason_code: string | null
+  detail: string | null
+  occurred_at: string
+  source_anchor: number | null
+  anchor_offset: number | null
+}
+
+export interface RuntimeStationProjection extends RuntimeFact {
+  station_id: string
+  instance?: RuntimeFact
+  observation?: RuntimeFact
+  decision?: RuntimeDecision
+  health?: RuntimeHealth[]
+}
+
+/** 订阅当前工位运行镜像；原生 EventSource 负责 Last-Event-ID 增量重连。 */
+export function openRuntimeProjection(
+  onProjection: (projection: RuntimeStationProjection) => void,
+  onConnection: (connected: boolean) => void,
+): () => void {
+  const source = new EventSource('/api/v1/monitor/stream')
+  source.addEventListener('runtime', (event) => {
+    onProjection(JSON.parse((event as MessageEvent<string>).data) as RuntimeStationProjection)
+  })
+  source.onopen = () => onConnection(true)
+  source.onerror = () => onConnection(false)
+  return () => source.close()
+}
+
 export async function readOverview(): Promise<OverviewDocument> {
   let response: Response
   try {

@@ -45,8 +45,11 @@ class MemoryEvidence:
         self.rows[value.evidence_id] = value
         return True
 
-    def replace(self, value: EvidenceReference) -> None:
+    def replace_if_current(self, *, expected: EvidenceReference, value: EvidenceReference) -> bool:
+        if self.rows.get(value.evidence_id) != expected:
+            return False
         self.rows[value.evidence_id] = value
+        return True
 
     def page(
         self,

@@ -117,6 +117,12 @@ import type {
   ExportInferenceHostMediaConfigurationData,
   ExportInferenceHostMediaConfigurationErrors,
   ExportInferenceHostMediaConfigurationResponses,
+  GetMonitorHostLivenessData,
+  GetMonitorHostLivenessErrors,
+  GetMonitorHostLivenessResponses,
+  GetMonitorStreamHealthData,
+  GetMonitorStreamHealthErrors,
+  GetMonitorStreamHealthResponses,
   ImportTemplateDraftData,
   ImportTemplateDraftErrors,
   ImportTemplateDraftResponses,
@@ -1316,6 +1322,20 @@ export const reportMonitorHealth = <ThrowOnError extends boolean = false>(
   })
 
 /**
+ * Get Monitor Host Liveness
+ *
+ * 中心自己的外部证人判据：该机多久没上报，而不是流健康。
+ */
+export const getMonitorHostLiveness = <ThrowOnError extends boolean = false>(
+  options?: Options<GetMonitorHostLivenessData, ThrowOnError>,
+): RequestResult<GetMonitorHostLivenessResponses, GetMonitorHostLivenessErrors, ThrowOnError> =>
+  (options?.client ?? client).get<
+    GetMonitorHostLivenessResponses,
+    GetMonitorHostLivenessErrors,
+    ThrowOnError
+  >({ url: '/api/v1/monitor/host-liveness', ...options })
+
+/**
  * List Monitor Instances
  */
 export const listMonitorSopInstances = <ThrowOnError extends boolean = false>(
@@ -1407,6 +1427,20 @@ export const streamMonitorEvents = <ThrowOnError extends boolean = false>(
     StreamMonitorEventsErrors,
     ThrowOnError
   >({ url: '/api/v1/monitor/stream', ...options })
+
+/**
+ * Get Monitor Stream Health
+ *
+ * 一个工位的运行有效性投影；与 device 的配置/可达性并列而不混同。
+ */
+export const getMonitorStreamHealth = <ThrowOnError extends boolean = false>(
+  options: Options<GetMonitorStreamHealthData, ThrowOnError>,
+): RequestResult<GetMonitorStreamHealthResponses, GetMonitorStreamHealthErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    GetMonitorStreamHealthResponses,
+    GetMonitorStreamHealthErrors,
+    ThrowOnError
+  >({ url: '/api/v1/monitor/stream-health', ...options })
 
 /**
  * List Monitor Violations

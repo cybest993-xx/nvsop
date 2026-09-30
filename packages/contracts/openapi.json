@@ -12547,6 +12547,41 @@
         ]
       }
     },
+    "/api/v1/monitor/host-liveness": {
+      "get": {
+        "description": "中心自己的外部证人判据：该机多久没上报，而不是流健康。",
+        "operationId": "getMonitorHostLiveness",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Getmonitorhostliveness",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Get Monitor Host Liveness",
+        "tags": [
+          "monitor"
+        ],
+        "x-required-permission": "monitor.report.view"
+      }
+    },
     "/api/v1/monitor/instances": {
       "get": {
         "operationId": "listMonitorSopInstances",
@@ -13140,6 +13175,75 @@
           }
         },
         "summary": "Stream Monitor Events",
+        "tags": [
+          "monitor"
+        ],
+        "x-required-permission": "monitor.report.view"
+      }
+    },
+    "/api/v1/monitor/stream-health": {
+      "get": {
+        "description": "一个工位的运行有效性投影；与 device 的配置/可达性并列而不混同。",
+        "operationId": "getMonitorStreamHealth",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "station_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Station Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Getmonitorstreamhealth",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Get Monitor Stream Health",
         "tags": [
           "monitor"
         ],

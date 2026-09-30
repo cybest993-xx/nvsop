@@ -21,6 +21,7 @@ from edge_runtime.local_state.execution import (
 from edge_runtime.local_state.queues import (
     BackendReportContext,
     PendingEvidence,
+    PendingHealthReport,
     PendingObservationReport,
     PendingReport,
     PendingSopInstanceReport,
@@ -42,6 +43,7 @@ __all__ = [
     "LocalExecutionLeaseStore",
     "LocalState",
     "PendingEvidence",
+    "PendingHealthReport",
     "PendingObservationReport",
     "PendingReport",
     "PendingSopInstanceReport",

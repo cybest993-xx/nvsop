@@ -90,7 +90,11 @@ class HostReportReconciler:
                 now=now, reported_at=reported_at, limit=limit, should_stop=should_stop
             )
         )
-        attempts.extend(self._flush_health(now=now, limit=limit, should_stop=should_stop))
+        attempts.extend(
+            self._flush_health(
+                now=now, reported_at=reported_at, limit=limit, should_stop=should_stop
+            )
+        )
         for queue_id in self._reports.pending_ids(limit=limit):
             if should_stop is not None and should_stop():
                 break
@@ -275,6 +279,7 @@ class HostReportReconciler:
         self,
         *,
         now: HostInstant,
+        reported_at: str,
         limit: int | None,
         should_stop: Callable[[], bool] | None,
     ) -> list[ReportAttempt]:
@@ -285,7 +290,12 @@ class HostReportReconciler:
                 break
             try:
                 pending = self._reports.pending_health_item(queue_id)
-                report = reported_health_from_pending(pending)
+                stable_reported_at = pending.reported_at
+                if stable_reported_at is None:
+                    stable_reported_at = self._reports.freeze_health_reported_at(
+                        pending.queue_id, candidate=reported_at
+                    )
+                report = reported_health_from_pending(pending, reported_at=stable_reported_at)
             except Exception as error:
                 message = f"{type(error).__name__}: {error}"[:255]
                 self._reports.record_health_failure(queue_id, at=now, error=message)
@@ -348,8 +358,10 @@ def reported_observation_from_pending(
     )
 
 
-def reported_health_from_pending(pending: PendingHealthReport) -> ReportedHealth:
-    """映射一条本地持久流健康事实; 中心只归档, 不重新判定。"""
+def reported_health_from_pending(
+    pending: PendingHealthReport, *, reported_at: str
+) -> ReportedHealth:
+    """映射本地持久健康事实; 发生时刻与首次发送时刻各保留其原义。"""
     event_id = f"{pending.host_id}:health:{pending.queue_id}"
     return ReportedHealth(
         event_id=event_id,
@@ -363,7 +375,7 @@ def reported_health_from_pending(pending: PendingHealthReport) -> ReportedHealth
         occurred_at=pending.occurred_at,
         source_anchor=pending.source_anchor,
         anchor_offset=pending.anchor_offset,
-        reported_at=pending.occurred_at,
+        reported_at=reported_at,
     )
 
 

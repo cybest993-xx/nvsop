@@ -14,6 +14,7 @@ from factory_sop.auth.api import Authorized, Permission, needs
 from factory_sop.device.api import (
     DeviceHistoricalAssignmentGateway,
     DeviceHostGateway,
+    DeviceMonitorGateway,
     host_identity_from_headers,
 )
 from factory_sop.monitor.adapters import dependencies
@@ -107,6 +108,7 @@ def report_monitor_health(
     request: Request,
     body: dict[str, object],
     monitor: Annotated[MonitorRepository, Depends(dependencies.monitor)],
+    device_gateway: Annotated[DeviceMonitorGateway, Depends(dependencies.device_monitor_gateway)],
     host_gateway: Annotated[DeviceHostGateway, Depends(dependencies.host_gateway)],
     inference_host_id: Annotated[str | None, Header(alias="X-Inference-Host-ID")] = None,
     inference_host_timestamp: Annotated[
@@ -139,7 +141,7 @@ def report_monitor_health(
             report,
             received_at=datetime.now(UTC),
             monitor=monitor,
-            host_gateway=host_gateway,
+            device_gateway=device_gateway,
         )
     except MonitorRefusedError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
@@ -198,6 +200,7 @@ def report_monitor_observation(
     request: Request,
     body: dict[str, object],
     monitor: Annotated[MonitorRepository, Depends(dependencies.monitor)],
+    device_gateway: Annotated[DeviceMonitorGateway, Depends(dependencies.device_monitor_gateway)],
     host_gateway: Annotated[DeviceHostGateway, Depends(dependencies.host_gateway)],
     inference_host_id: Annotated[str | None, Header(alias="X-Inference-Host-ID")] = None,
     inference_host_timestamp: Annotated[
@@ -230,7 +233,7 @@ def report_monitor_observation(
             report,
             received_at=datetime.now(UTC),
             monitor=monitor,
-            host_gateway=host_gateway,
+            device_gateway=device_gateway,
         )
     except MonitorRefusedError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
@@ -334,10 +337,12 @@ def get_monitor_stream_health(
 def get_monitor_host_liveness(
     caller: Authorized,
     monitor: Annotated[MonitorRepository, Depends(dependencies.monitor)],
+    device_gateway: Annotated[DeviceMonitorGateway, Depends(dependencies.device_monitor_gateway)],
 ) -> dict[str, object]:
     """中心自己的外部证人判据：该机多久没上报，而不是流健康。"""
     values = host_liveness(
         monitor,
+        device_gateway=device_gateway,
         caller=caller,
         now=datetime.now(UTC),
         stale_after_seconds=HOST_SILENCE_THRESHOLD_SECONDS,

@@ -373,6 +373,12 @@ _V11 = (
     """,
 )
 
+_V12 = (
+    # occurrence time belongs to the health fact; first send time is frozen independently so
+    # a retry preserves one exact wire payload without relabelling when the fact occurred.
+    "ALTER TABLE local_health_queue ADD COLUMN report_reported_at TEXT",
+)
+
 MIGRATIONS: tuple[tuple[str, ...], ...] = (
     _V1,
     _V2,
@@ -385,6 +391,7 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
     _V9,
     _V10,
     _V11,
+    _V12,
 )
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 

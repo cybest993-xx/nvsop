@@ -123,6 +123,7 @@ class ReportStore(Protocol):
 
     def pending_health_item(self, queue_id: int) -> PendingHealthReport: ...
 
+    def freeze_health_reported_at(self, queue_id: int, *, candidate: str) -> str: ...
     def mark_health_reported(self, queue_id: int, *, at: HostInstant) -> None: ...
 
     def record_health_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None: ...
@@ -790,6 +791,9 @@ class _HostReportStore:
 
     def pending_health_item(self, queue_id: int) -> PendingHealthReport:
         return self._health_queue(queue_id).pending_health_report(queue_id)
+
+    def freeze_health_reported_at(self, queue_id: int, *, candidate: str) -> str:
+        return self._health_queue(queue_id).freeze_health_reported_at(queue_id, candidate=candidate)
 
     def mark_health_reported(self, queue_id: int, *, at: HostInstant) -> None:
         self._health_queue(queue_id).mark_health_reported(queue_id, at=at)

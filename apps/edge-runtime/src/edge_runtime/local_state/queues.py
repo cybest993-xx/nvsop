@@ -164,6 +164,7 @@ class PendingHealthReport:
     anchor_offset: float | None
     host_id: str
     configuration_json: str | None
+    reported_at: str | None
     attempts: int
     last_error: str | None
 
@@ -376,7 +377,7 @@ class StationQueues:
                 """
                 SELECT queue_id, station_id, stream_id, status, reason_code, detail,
                        occurred_at, source_anchor, anchor_offset, report_host_id,
-                       report_configuration, attempts, last_error
+                       report_configuration, report_reported_at, attempts, last_error
                   FROM local_health_queue
                  WHERE station_id = ? AND sent_at IS NULL
                  ORDER BY queue_id
@@ -412,7 +413,7 @@ class StationQueues:
                 """
                 SELECT queue_id, station_id, stream_id, status, reason_code, detail,
                        occurred_at, source_anchor, anchor_offset, report_host_id,
-                       report_configuration, attempts, last_error
+                       report_configuration, report_reported_at, attempts, last_error
                   FROM local_health_queue
                  WHERE station_id = ? AND queue_id = ? AND sent_at IS NULL
                 """,
@@ -469,6 +470,7 @@ class StationQueues:
             anchor_offset=None if row["anchor_offset"] is None else float(row["anchor_offset"]),
             host_id=str(row["report_host_id"]),
             configuration_json=row["report_configuration"],
+            reported_at=row["report_reported_at"],
             attempts=int(row["attempts"]),
             last_error=row["last_error"],
         )
@@ -521,6 +523,31 @@ class StationQueues:
                 """,
                 (at.seconds, error, self._station_id, queue_id),
             )
+
+    def freeze_health_reported_at(self, queue_id: int, *, candidate: str) -> str:
+        """持久化首个健康 wire 上报时刻, 保证重试 payload 不变。"""
+        if not candidate:
+            raise ValueError("reported_at candidate must not be empty")
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_health_queue
+                   SET report_reported_at = ?
+                 WHERE station_id = ? AND queue_id = ? AND report_reported_at IS NULL
+                """,
+                (candidate, self._station_id, queue_id),
+            )
+            row = self._connection.execute(
+                """
+                SELECT report_reported_at
+                  FROM local_health_queue
+                 WHERE station_id = ? AND queue_id = ? AND sent_at IS NULL
+                """,
+                (self._station_id, queue_id),
+            ).fetchone()
+        if row is None or row["report_reported_at"] is None:
+            raise ValueError("pending health report could not freeze its wire timestamp")
+        return str(row["report_reported_at"])
 
     def mark_health_reported(self, queue_id: int, *, at: HostInstant) -> None:
         """中心已确认该事实;行继续保留以保持事件身份稳定。"""

@@ -384,6 +384,62 @@ class PostgresInferenceHostRepository:
                     "configuration assignment revision conflicts with immutable history"
                 )
 
+    def has_historical_station(
+        self,
+        *,
+        host_id: UUID,
+        station_id: UUID,
+        template_version_id: str | None = None,
+        template_sha256: str | None = None,
+    ) -> bool:
+        """验证主机/工位及可用的模板证明是否存在于不可变配置历史。"""
+        rows = self._session.scalars(
+            select(ConfigurationAssignmentRow).where(
+                ConfigurationAssignmentRow.host_id == host_id,
+                ConfigurationAssignmentRow.station_id == station_id,
+            )
+        ).all()
+        if template_version_id is None and template_sha256 is None:
+            return bool(rows)
+        return any(
+            (None if row.template_version_id is None else str(row.template_version_id))
+            == template_version_id
+            and row.template_sha256 == template_sha256
+            for row in rows
+        )
+
+    def has_historical_assignment(
+        self,
+        *,
+        host_id: UUID,
+        station_id: UUID,
+        backend_id: UUID,
+        template_version_id: str | None,
+        template_sha256: str | None,
+        model_ids: tuple[str, ...],
+    ) -> bool:
+        """验证产生时 provenance 是否存在于任一不可变历史 assignment。"""
+        rows = self._session.scalars(
+            select(ConfigurationAssignmentRow).where(
+                ConfigurationAssignmentRow.host_id == host_id,
+                ConfigurationAssignmentRow.station_id == station_id,
+                ConfigurationAssignmentRow.backend_id == backend_id,
+            )
+        ).all()
+        return any(
+            (None if row.template_version_id is None else str(row.template_version_id))
+            == template_version_id
+            and row.template_sha256 == template_sha256
+            and tuple(row.model_ids) == model_ids
+            for row in rows
+        )
+
+    def registered_host_ids(self) -> tuple[UUID, ...]:
+        """返回 device owner 当前登记的主机集合。"""
+        return tuple(
+            self._session.scalars(select(InferenceHostRow.id).order_by(InferenceHostRow.id)).all()
+        )
+
     def has_configuration_station(
         self,
         *,

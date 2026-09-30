@@ -1777,6 +1777,7 @@ class HealthQueueTest(unittest.TestCase):
         self.assertEqual("STREAM_LOST", pending.reason_code)
         self.assertEqual(ANCHOR, pending.source_anchor)
         self.assertEqual(self._context().configuration_json, pending.configuration_json)
+        self.assertIsNone(pending.reported_at)
 
         class Transport:
             def __init__(self) -> None:
@@ -1800,7 +1801,9 @@ class HealthQueueTest(unittest.TestCase):
 
         transport = Transport()
         reconciler = HostReportReconciler(reports=state.reports(), transport=transport)
-        attempts = reconciler.flush(now=HostInstant(ANCHOR + 1.0), reported_at="ignored")
+        attempts = reconciler.flush(
+            now=HostInstant(ANCHOR + 1.0), reported_at="2026-09-16T00:00:05Z"
+        )
 
         self.assertTrue(attempts[0].sent)
         self.assertEqual("host-a:health:1", transport.sent[0].event_id)
@@ -1810,6 +1813,8 @@ class HealthQueueTest(unittest.TestCase):
         self.assertEqual("source_error", transport.sent[0].status)
         self.assertEqual(ANCHOR, transport.sent[0].source_anchor)
         self.assertEqual(0.5, transport.sent[0].anchor_offset)
+        self.assertEqual("2026-09-16T00:00:00Z", transport.sent[0].occurred_at)
+        self.assertEqual("2026-09-16T00:00:05Z", transport.sent[0].reported_at)
         sent_configuration = transport.configurations[0]
         assert sent_configuration is not None
         self.assertEqual(9, sent_configuration.config_revision)
@@ -1853,13 +1858,15 @@ class HealthQueueTest(unittest.TestCase):
 
         transport = Transport()
         reconciler = HostReportReconciler(reports=state.reports(), transport=transport)
-        first = reconciler.flush(now=HostInstant(ANCHOR + 1.0), reported_at="ignored")
+        first = reconciler.flush(now=HostInstant(ANCHOR + 1.0), reported_at="2026-09-16T00:00:05Z")
         self.assertFalse(first[0].sent)
         self.assertEqual(1, len(station.pending_health_reports()))
 
-        second = reconciler.flush(now=HostInstant(ANCHOR + 2.0), reported_at="ignored")
+        second = reconciler.flush(now=HostInstant(ANCHOR + 2.0), reported_at="2026-09-16T00:00:06Z")
         self.assertTrue(second[0].sent)
         self.assertEqual("host-a:health:1", transport.sent[0].event_id)
+        self.assertEqual("2026-09-16T00:00:00Z", transport.sent[0].occurred_at)
+        self.assertEqual("2026-09-16T00:00:05Z", transport.sent[0].reported_at)
         self.assertEqual((), station.pending_health_reports())
 
 

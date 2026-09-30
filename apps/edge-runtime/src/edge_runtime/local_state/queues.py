@@ -723,19 +723,7 @@ class StationQueues:
 
     def pending_evidence(self, *, limit: int | None = None) -> tuple[PendingEvidence, ...]:
         """只存在于本机的证据片段,按最早优先返回。"""
-        with self._lock:
-            rows = self._connection.execute(
-                """
-                SELECT queue_id, instance_id, anchor, window_from, window_to, attempts, last_error,
-                       wall_offset, sources, media_results, covered_from, covered_to, sliced_at
-                  FROM local_evidence_queue
-                 WHERE station_id = ? AND uploaded_at IS NULL
-                 ORDER BY queue_id
-                 LIMIT ?
-                """,
-                (self._station_id, -1 if limit is None else limit),
-            ).fetchall()
-            return tuple(self._pending_evidence_from_row(row) for row in rows)
+        return self._evidence_rows("", limit=limit)
 
     def evidence_awaiting_slice(self, *, limit: int | None = None) -> tuple[PendingEvidence, ...]:
         """本机尚未产出媒体、或已有产物不再覆盖当前请求窗口的证据待办。
@@ -743,20 +731,26 @@ class StationQueues:
         请求窗口后来扩大时保留旧结果直到新覆盖切片成功, 因此这里包含 ``covered_*``
         不再覆盖 ``window_*`` 的已完成行; 调用方不能把旧较小片段当作新窗口已完成 (S033)。
         """
+        return self._evidence_rows(
+            "AND (sliced_at IS NULL OR covered_from > window_from OR covered_to < window_to)",
+            limit=limit,
+        )
+
+    def _evidence_rows(self, clause: str, *, limit: int | None) -> tuple[PendingEvidence, ...]:
+        # clause 是本模块的字面量, 不是外部输入; 列名与 where 在此一处维护。
         with self._lock:
             rows = self._connection.execute(
-                """
+                f"""
                 SELECT queue_id, instance_id, anchor, window_from, window_to, attempts, last_error,
                        wall_offset, sources, media_results, covered_from, covered_to, sliced_at
                   FROM local_evidence_queue
-                 WHERE station_id = ? AND uploaded_at IS NULL
-                   AND (sliced_at IS NULL OR covered_from > window_from OR covered_to < window_to)
+                 WHERE station_id = ? AND uploaded_at IS NULL {clause}
                  ORDER BY queue_id
                  LIMIT ?
                 """,
                 (self._station_id, -1 if limit is None else limit),
             ).fetchall()
-            return tuple(self._pending_evidence_from_row(row) for row in rows)
+        return tuple(self._pending_evidence_from_row(row) for row in rows)
 
     def _pending_evidence_from_row(self, row: sqlite3.Row) -> PendingEvidence:
         raw_sources = row["sources"]

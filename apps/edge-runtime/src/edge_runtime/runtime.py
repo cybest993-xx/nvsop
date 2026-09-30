@@ -1257,14 +1257,14 @@ def build_connection_test_loop_from_file(
 def _evidence_source_factory(
     media: MediaRuntimeConfiguration | None,
 ) -> Callable[[str], EvidenceSource | None] | None:
-    """从本机媒体配置装配工位→连续录像相机路径的入队时冻结来源 (S033)。
+    """从本机媒体配置按相机真实工位绑定装配入队时冻结来源 (S033)。
 
-    只纳入当前启用且参与 SOP 的连续录像相机; 工位未映射时返回 None, 待办保持 pending 并记录
-    mapping missing, 不用当前配置给历史判定猜来源。
+    只纳入本机启用且参与 SOP 的连续录像相机; 工位未映射返回 None, 待办保持 pending 并记录
+    mapping missing, 不按当前中心重绑给历史判定猜来源。
     """
     if media is None:
         return None
-    paths_by_station: dict[str, list[str]] = {}
+    paths: dict[str, list[str]] = {}
     for camera in media.cameras:
         enabled = (
             media.host_status == "active"
@@ -1272,17 +1272,16 @@ def _evidence_source_factory(
             and camera.station_status == "active"
         )
         if enabled and camera.sop_execution and camera.recording_mode is RecordingMode.CONTINUOUS:
-            paths_by_station.setdefault(camera.station_id, []).append(camera.media_path)
-    if not paths_by_station:
+            paths.setdefault(camera.station_id, []).append(camera.media_path)
+    if not paths:
         return None
 
     def source(station_id: str) -> EvidenceSource | None:
-        paths = paths_by_station.get(station_id)
-        if not paths:
-            return None
-        return EvidenceSource(
-            wall_offset=time() - monotonic(),
-            media_paths=tuple(sorted(paths)),
+        frozen = paths.get(station_id)
+        return (
+            None
+            if not frozen
+            else EvidenceSource(wall_offset=time() - monotonic(), media_paths=tuple(sorted(frozen)))
         )
 
     return source

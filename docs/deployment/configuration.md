@@ -91,7 +91,7 @@ RestartSec=2
 - `local_state_path`
 - `stations`（非空）
 
-可选：`center_ca_file`、`media`。
+可选：`center_ca_file`、`media`、`evidence`。
 
 主机私钥从文件读取并校验；连接器凭据同样留在本机 secret 文件。**当前生产入口以这份本地 JSON 作为 bootstrap/本机部署配置**。设计上的权威分工是中心拥有拓扑、模板、版本和期望运行参数，本机文件拥有本机连接信息、adapter profile 和设备秘密；不要把本机 secret 反向写入中心配置或 Git。
 

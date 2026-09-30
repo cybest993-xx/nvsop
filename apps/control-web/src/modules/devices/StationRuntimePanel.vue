@@ -7,7 +7,6 @@ import {
 } from '@/api/controlPlane'
 import { useSessionStore } from '@/session/store'
 
-type DetailRow = [string, string]
 const props = defineProps<{ stations: StationView[] }>()
 const session = useSessionStore()
 const projections = ref(new Map<string, RuntimeStationProjection>())
@@ -50,74 +49,10 @@ const time = (value: string | number | null) =>
     : typeof value === 'number'
       ? `${value}（推理机时间轴）`
       : new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
-const models = (sources: { backend_id: string; model_ids: string[] }[]) =>
-  sources
+const models = (sources: unknown) =>
+  ((sources ?? []) as { backend_id: string; model_ids: string[] }[])
     .map((source) => `${source.backend_id}：${source.model_ids.join('、') || '无模型标识'}`)
     .join('；') || '未提供'
-const instanceRows = (p: RuntimeStationProjection): DetailRow[] => {
-  const v = p.instance
-  return v
-    ? [
-        ['状态 / 关闭原因', v.closed_at === null ? '运行中' : `已结束：${v.close_reason}`],
-        ['推理机 / 实例', `${v.host_id} / ${v.instance_id}`],
-        ['事件 / 轨迹', `${v.event_id} / ${v.trace_id}`],
-        ['开始 / 结束', `${time(v.opened_at)} / ${time(v.closed_at)}`],
-        ['边界信号', `${v.open_boundary_signal ?? '无'} → ${v.close_boundary_signal ?? '无'}`],
-        ['实际模板 / 摘要', `${v.template_version_id ?? '未提供'} / ${v.template_sha256 ?? '无'}`],
-        ['实际后端 / 模型', models(v.backend_provenance)],
-        ['配置证明', `${v.configuration_revision} / ${v.configuration_sha256}`],
-        ['契约 / 上报', `${v.contract_version} / ${time(v.reported_at)}`],
-      ]
-    : []
-}
-const observationRows = (p: RuntimeStationProjection): DetailRow[] => {
-  const v = p.observation
-  return v
-    ? [
-        ['事件 / 实例', `${v.event_id} / ${v.instance_id}`],
-        ['来源 / 信号', `${v.source} / ${v.signal}`],
-        ['源时间 / 时间锚', `${time(v.source_time)} / ${time(v.source_anchor)}`],
-        ['观测 / 上报', `${time(v.observed_at)} / ${time(v.reported_at)}`],
-        ['实际模板 / 摘要', `${v.template_version_id ?? '未提供'} / ${v.template_sha256 ?? '无'}`],
-        [
-          '实际后端 / 模型 / 契约',
-          `${v.backend ? models([v.backend]) : '未提供'} / ${v.contract_version}`,
-        ],
-      ]
-    : []
-}
-const decisionRows = (p: RuntimeStationProjection): DetailRow[] => {
-  const v = p.decision
-  return v
-    ? [
-        ['三值结论', verdicts[v.verdict] ?? `未知结论（${v.verdict}）`],
-        ['原因码', v.reason_codes.map(reasonLabel).join('；') || '无（通过）'],
-        ['事件 / 轨迹 / 推理机', `${v.event_id} / ${v.trace_id} / ${v.host_id}`],
-        ['实例 / 生命周期 / 上报', `${v.instance_id} / ${v.lifecycle} / ${time(v.reported_at)}`],
-        ['实际模板 / 摘要', `${v.template_version_id ?? '未提供'} / ${v.template_sha256 ?? '无'}`],
-        [
-          '实际后端 / 模型',
-          v.backend_provenance
-            ? models(v.backend_provenance)
-            : `${v.backend_id ?? '未提供'}：${v.model_ids?.join('、') || '无模型标识'}`,
-        ],
-        [
-          '配置证明 / 契约',
-          `${v.configuration_revision ?? '无'} / ${v.configuration_sha256 ?? '无'} · ${v.contract_version}`,
-        ],
-      ]
-    : []
-}
-const healthRows = (v: NonNullable<RuntimeStationProjection['health']>[number]): DetailRow[] => [
-  ['事件 / 推理机', `${v.event_id} / ${v.host_id}`],
-  ['轨迹 / 发生', `${v.trace_id} / ${time(v.occurred_at)}`],
-  [
-    '原因 / 说明',
-    `${v.reason_code ? reasonLabel(v.reason_code) : '未提供'} / ${v.detail ?? '无补充说明'}`,
-  ],
-  ['时间锚 / 偏移', `${time(v.source_anchor)} / ${time(v.anchor_offset)}`],
-  ['上报 / 契约', `${time(v.reported_at)} / ${v.contract_version}`],
-]
 function update(value: RuntimeStationProjection): void {
   const current = projections.value.get(value.station_id)
   if (current && JSON.stringify(current) === JSON.stringify(value)) return
@@ -154,31 +89,58 @@ onUnmounted(() => closeStream?.())
       <div class="runtime__grid">
         <section aria-label="SOP 实例与实际来源">
           <h4>SOP 实例与实际来源</h4>
-          <dl v-if="p.instance">
-            <template v-for="[label, value] in instanceRows(p)" :key="label"
-              ><dt>{{ label }}</dt>
-              <dd>{{ value }}</dd></template
-            >
-          </dl>
-          <p v-else class="muted">尚无实例镜像</p>
+          <template v-if="p.instance">
+            <p>状态：{{ p.instance.closed_at === null ? '运行中' : '已结束' }}</p>
+            <p v-if="p.instance.close_reason">关闭原因：{{ p.instance.close_reason }}</p>
+            <p>推理机 / 实例：{{ p.instance.host_id }} / {{ p.instance.instance_id }}</p>
+            <p>实际模板：{{ p.instance.template_version_id }}</p>
+            <p>实际模型：{{ models(p.instance.backend_provenance) }}</p>
+            <details>
+              <summary>实例完整上报</summary>
+              <pre>{{ JSON.stringify(p.instance, null, 2) }}</pre>
+            </details>
+          </template>
+          <p v-if="!p.instance" class="muted">尚无实例镜像</p>
         </section>
         <section aria-label="最新观测">
           <h4>最新观测</h4>
-          <dl v-if="p.observation">
-            <template v-for="[label, value] in observationRows(p)" :key="label"
-              ><dt>{{ label }}</dt>
-              <dd>{{ value }}</dd></template
-            >
-          </dl>
-          <p v-else class="muted">尚无观测镜像</p>
+          <template v-if="p.observation">
+            <p>来源 / 信号：{{ p.observation.source }} / {{ p.observation.signal }}</p>
+            <p>实例 / 时间：{{ p.observation.instance_id }} / {{ p.observation.observed_at }}</p>
+            <p>实际模板：{{ p.observation.template_version_id }}</p>
+            <p>实际来源：{{ models(p.observation.backend ? [p.observation.backend] : []) }}</p>
+            <details>
+              <summary>观测完整上报</summary>
+              <pre>{{ JSON.stringify(p.observation, null, 2) }}</pre>
+            </details>
+          </template>
+          <p v-if="!p.observation" class="muted">尚无观测镜像</p>
         </section>
         <section aria-label="最新判定">
           <h4>最新判定</h4>
           <dl v-if="p.decision">
-            <template v-for="[label, value] in decisionRows(p)" :key="label"
-              ><dt>{{ label }}</dt>
-              <dd>{{ value }}</dd></template
-            >
+            <dt>三值结论</dt>
+            <dd>{{ verdicts[p.decision.verdict] ?? `未知结论（${p.decision.verdict}）` }}</dd>
+            <dt>原因码</dt>
+            <dd>{{ p.decision.reason_codes.map(reasonLabel).join('；') || '无（通过）' }}</dd>
+            <dt>实例 / 生命周期 / 上报</dt>
+            <dd>
+              {{ p.decision.instance_id }} / {{ p.decision.lifecycle }} /
+              {{ time(p.decision.reported_at) }}
+            </dd>
+            <dt>实际模板 / 摘要</dt>
+            <dd>
+              {{ p.decision.template_version_id ?? '未提供' }} /
+              {{ p.decision.template_sha256 ?? '无' }}
+            </dd>
+            <dt>实际后端 / 模型</dt>
+            <dd>
+              {{
+                p.decision.backend_provenance
+                  ? models(p.decision.backend_provenance)
+                  : `${p.decision.backend_id ?? '未提供'}：${p.decision.model_ids?.join('、') || '无模型标识'}`
+              }}
+            </dd>
           </dl>
           <details v-if="p.decision">
             <summary>判定完整上报（含证据及锁存违规）</summary>
@@ -190,12 +152,14 @@ onUnmounted(() => closeStream?.())
           <h4>各路观测健康</h4>
           <article v-for="v in p.health ?? []" :key="v.event_id">
             <strong>{{ v.stream_id ?? '未标识流' }}：{{ v.status }}</strong>
-            <dl>
-              <template v-for="[label, value] in healthRows(v)" :key="label"
-                ><dt>{{ label }}</dt>
-                <dd>{{ value }}</dd></template
-              >
-            </dl>
+            <p>
+              原因 / 说明：{{ v.reason_code ? reasonLabel(v.reason_code) : '未提供' }} /
+              {{ v.detail ?? '无补充说明' }}
+            </p>
+            <p>
+              发生 / 时间锚 / 偏移：{{ time(v.occurred_at) }} / {{ time(v.source_anchor) }} /
+              {{ time(v.anchor_offset) }}
+            </p>
           </article>
           <p v-if="!p.health?.length" class="muted">尚无流健康事实；不推断为健康。</p>
         </section>

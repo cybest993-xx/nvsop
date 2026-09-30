@@ -66,7 +66,7 @@ async function standardRoutes(
   })
 }
 
-test('SYS-19 — reconnect retains projection, preserves Last-Event-ID and ignores duplicate runtime/legacy decision frames', async ({
+test('SYS-19 — reconnect retains projection and native MessageEvent.lastEventId while ignoring duplicate/legacy frames', async ({
   page,
 }) => {
   let requests = 0
@@ -121,9 +121,11 @@ test('SYS-19 — reconnect retains projection, preserves Last-Event-ID and ignor
   await expect(page.getByRole('region', { name: 'SOP 实例与实际来源' })).toContainText(
     'actual-instance-template',
   )
+  await expect(page.getByRole('region', { name: 'SOP 实例与实际来源' })).toContainText('运行中')
   await expect(page.getByRole('region', { name: '最新观测' })).toContainText(
     'actual-observation-template',
   )
+  await expect(page.getByRole('region', { name: '最新观测' })).toContainText('(2) 拧紧螺栓')
   await expect(page.getByText(/undefined|NaN/)).toHaveCount(0)
   await expect(page.getByRole('alert')).toHaveCount(0)
   expect(requests).toBeGreaterThanOrEqual(5)

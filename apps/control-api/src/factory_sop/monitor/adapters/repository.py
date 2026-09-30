@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import cast
 
-from sqlalchemy import Table, func, select, text, update
+from sqlalchemy import Table, and_, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.orm import Session
 
@@ -365,12 +365,29 @@ class PostgresMonitorRepository(MonitorRepository):
                 ReportedHealthRow.stream_sequence.desc(),
             )
         ).all()
-        instances = self._session.scalars(
-            select(ReportedSopInstanceRow)
+        latest_hosts = (
+            select(ReportedSopInstanceRow.station_id, ReportedSopInstanceRow.host_id)
             .distinct(ReportedSopInstanceRow.station_id)
             .order_by(
                 ReportedSopInstanceRow.station_id,
                 ReportedSopInstanceRow.received_at.desc(),
+                ReportedSopInstanceRow.event_id.desc(),
+            )
+            .subquery()
+        )
+        instances = self._session.scalars(
+            select(ReportedSopInstanceRow)
+            .join(
+                latest_hosts,
+                and_(
+                    ReportedSopInstanceRow.station_id == latest_hosts.c.station_id,
+                    ReportedSopInstanceRow.host_id == latest_hosts.c.host_id,
+                ),
+            )
+            .distinct(ReportedSopInstanceRow.station_id)
+            .order_by(
+                ReportedSopInstanceRow.station_id,
+                ReportedSopInstanceRow.instance_id.desc(),
                 ReportedSopInstanceRow.event_id.desc(),
             )
         ).all()

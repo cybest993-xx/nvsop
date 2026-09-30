@@ -5,7 +5,8 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -30,6 +31,7 @@ from nvsop_contracts import (
 )
 
 HOST_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f201")
+SECOND_HOST_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f205")
 STATION_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f202")
 BACKEND_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f203")
 RECEIVED_AT = datetime(2026, 9, 23, tzinfo=UTC)
@@ -50,8 +52,8 @@ def _clear_s143_monitor_rows(engine: Engine) -> None:
             {"host_id": str(HOST_ID)},
         )
         connection.execute(
-            text("DELETE FROM monitor_sop_instance WHERE host_id = :host_id"),
-            {"host_id": str(HOST_ID)},
+            text("DELETE FROM monitor_sop_instance WHERE host_id IN (:host_id, :second_host_id)"),
+            {"host_id": str(HOST_ID), "second_host_id": str(SECOND_HOST_ID)},
         )
 
 
@@ -325,13 +327,21 @@ def test_durable_replay_does_not_require_a_prior_wakeup(engine: Engine) -> None:
         source.close()
 
 
-def _instance(event_id: str, station_id: str, *, closed: bool = False) -> MirroredSopInstance:
+def _instance(
+    event_id: str,
+    station_id: str,
+    *,
+    host_id: UUID = HOST_ID,
+    instance_id: int = 1,
+    received_at: datetime = RECEIVED_AT,
+    closed: bool = False,
+) -> MirroredSopInstance:
     report = ReportedSopInstance(
         event_id=event_id,
         trace_id=event_id,
-        host_id=str(HOST_ID),
+        host_id=str(host_id),
         station_id=station_id,
-        instance_id=1,
+        instance_id=instance_id,
         opened_at=1.0,
         closed_at=2.0 if closed else None,
         close_reason="closed_by_idle_timeout" if closed else None,
@@ -344,7 +354,7 @@ def _instance(event_id: str, station_id: str, *, closed: bool = False) -> Mirror
         configuration_sha256="b" * 64,
         reported_at="2026-09-23T00:00:00Z",
     )
-    return MirroredSopInstance(report=report, received_at=RECEIVED_AT)
+    return MirroredSopInstance(report=report, received_at=received_at)
 
 
 def _observation(event_id: str, station_id: str = str(STATION_ID)) -> MirroredObservation:
@@ -369,51 +379,92 @@ def _observation(event_id: str, station_id: str = str(STATION_ID)) -> MirroredOb
     )
 
 
-def test_runtime_projection_wakes_on_commit_keeps_closed_instance_and_recovers_missed_notify(
-    engine: Engine,
-) -> None:
+def _station_instance(rows: tuple[dict[str, object], ...], station_id: str) -> dict[str, object]:
+    return cast(
+        dict[str, object],
+        next(value["instance"] for value in rows if value["station_id"] == station_id),
+    )
+
+
+def test_runtime_projection_keeps_new_instance_when_old_close_arrives_late(engine: Engine) -> None:
     factory = sessionmaker(bind=engine)
     source = PostgresMonitorStreamSource(factory, engine)
-    event_id, station_id = f"s019:instance:{uuid4()}", str(uuid4())
+    station_id, first, second = str(uuid4()), f"s019:instance:{uuid4()}", f"s019:instance:{uuid4()}"
     try:
         assert station_id not in {value["station_id"] for value in source.read_runtime_projection()}
         with factory() as session:
             repository = PostgresMonitorRepository(session)
-            assert repository.upsert_instance(_instance(event_id, station_id))
+            for event_id, instance_id in ((first, 1), (second, 2)):
+                assert repository.upsert_instance(
+                    _instance(
+                        event_id,
+                        station_id,
+                        instance_id=instance_id,
+                        received_at=RECEIVED_AT + timedelta(seconds=instance_id - 1),
+                    ),
+                )
             session.commit()
         assert source.wait_for_wakeup(timeout=1)
-        opened = next(
-            value["instance"]
-            for value in source.read_runtime_projection()
-            if value["station_id"] == station_id
-        )
-        assert isinstance(opened, dict)
-        assert opened["closed_at"] is None
+        assert _station_instance(source.read_runtime_projection(), station_id)["instance_id"] == 2
 
         with factory() as session:
-            repository = PostgresMonitorRepository(session)
-            assert repository.upsert_instance(_instance(event_id, station_id, closed=True))
+            assert PostgresMonitorRepository(session).upsert_instance(
+                _instance(
+                    first, station_id, received_at=RECEIVED_AT + timedelta(seconds=2), closed=True
+                ),
+            )
             session.commit()
         assert source.wait_for_wakeup(timeout=1)
-        closed = next(
-            value["instance"]
-            for value in source.read_runtime_projection()
-            if value["station_id"] == station_id
-        )
-        assert isinstance(closed, dict)
-        assert closed["close_reason"] == "closed_by_idle_timeout"
+        latest = _station_instance(source.read_runtime_projection(), station_id)
+        assert latest["instance_id"] == 2
+        assert latest["closed_at"] is None
     finally:
         source.close()
-
     reconnect = PostgresMonitorStreamSource(factory, engine)
     try:
-        current = reconnect.read_runtime_projection()
-        assert (
-            next(value["instance"] for value in current if value["station_id"] == station_id)
-            == closed
-        )
+        assert _station_instance(reconnect.read_runtime_projection(), station_id) == latest
+        with factory() as session:
+            assert PostgresMonitorRepository(session).upsert_instance(
+                _instance(
+                    second,
+                    station_id,
+                    instance_id=2,
+                    received_at=RECEIVED_AT + timedelta(seconds=3),
+                    closed=True,
+                )
+            )
+            session.commit()
+        closed = _station_instance(reconnect.read_runtime_projection(), station_id)
+        assert closed["instance_id"] == 2
+        assert closed["close_reason"] == "closed_by_idle_timeout"
     finally:
         reconnect.close()
+
+
+def test_runtime_projection_chooses_latest_host_before_host_local_instance_id(
+    engine: Engine,
+) -> None:
+    factory = sessionmaker(bind=engine)
+    station_id = str(uuid4())
+    with factory() as session:
+        repo = PostgresMonitorRepository(session)
+        for host_id, instance_id, second in ((HOST_ID, 99, 0), (SECOND_HOST_ID, 1, 1)):
+            assert repo.upsert_instance(
+                _instance(
+                    f"s019:host-choice:{uuid4()}",
+                    station_id,
+                    host_id=host_id,
+                    instance_id=instance_id,
+                    received_at=RECEIVED_AT + timedelta(seconds=second),
+                )
+            )
+        session.commit()
+    with factory() as session:
+        latest = _station_instance(
+            PostgresMonitorRepository(session).runtime_projection(), station_id
+        )
+    assert latest["host_id"] == str(SECOND_HOST_ID)
+    assert latest["instance_id"] == 1
 
 
 def test_runtime_observation_notify_is_transactional_and_projection_has_no_global_100_cap(

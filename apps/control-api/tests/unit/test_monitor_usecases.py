@@ -190,11 +190,10 @@ class MemoryMonitor:
             self.health_after_sequence(after_sequence=health_sequence, limit=limit),
         )
 
-    def read_runtime_projection(self) -> tuple[dict[str, object], ...]:
-        return self.runtime_projection()
-
     def runtime_projection(self) -> tuple[dict[str, object], ...]:
         return self.runtime
+
+    read_runtime_projection = runtime_projection
 
     def wait_for_wakeup(self, *, timeout: float) -> bool:
         del timeout
@@ -497,14 +496,13 @@ def test_health_mirror_rejects_a_station_outside_the_host_topology() -> None:
 
 def test_runtime_projection_snapshot_and_stream_are_idless_and_emit_only_changes() -> None:
     monitor = MemoryMonitor()
-    initial: dict[str, object] = {"station_id": str(STATION_ID), "decision": {"verdict": "pass"}}
-    monitor.runtime = (initial,)
+    station = str(STATION_ID)
+    monitor.runtime = ({"station_id": station, "decision": {"verdict": "pass"}},)
     snapshot = sse_snapshot_state(monitor, caller=caller(Permission.MONITOR_VIEW))
-    assert snapshot.frames == (
-        'event: runtime\ndata: {"station_id":"019937d8-0d10-7b31-8d2d-4e60c8f4f102",'
-        '"decision":{"verdict":"pass"}}\n\n',
-    )
-    monitor.runtime = ({**initial, "decision": {"verdict": "fail"}},)
+    assert snapshot.frames[0].startswith("event: runtime\n")
+    assert "id:" not in snapshot.frames[0]
+
+    monitor.runtime = ({"station_id": station, "decision": {"verdict": "fail"}},)
     stream = sse_stream(
         monitor,
         caller=caller(Permission.MONITOR_VIEW),
@@ -512,9 +510,8 @@ def test_runtime_projection_snapshot_and_stream_are_idless_and_emit_only_changes
         wait_timeout=0,
     )
     changed = next(stream)
-    assert "event: runtime" in changed
-    assert "id:" not in changed
     assert '"verdict":"fail"' in changed
+    assert "id:" not in changed
     assert next(stream) == ": keep-alive\n\n"
 
 

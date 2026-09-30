@@ -1,10 +1,9 @@
 """从本机 MediaMTX 滚动录像提取证据片段与锚点关键帧, 原子定稿到本机证据目录 (§5.5/§5.20)。
 
-判定窗口在主机 monotonic 上, 分段名是录像墙钟。入队事务已冻结两者映射与来源相机路径
-(`EvidenceSource`), 本模块只按冻结映射定位分段, 绝不读当前时钟重新解释旧 HostInstant,
-也不按当前配置给历史判定重绑来源。片段/关键帧/typed 元数据先在临时目录写完再整体原子
-rename, 之后才写 SQLite; 任一步失败都在此处翻译为具体原因并保持待办, 从不删除本机已有媒体。
-标准库 + 本机 ffmpeg/ffprobe。
+入队事务已冻结判定窗口与录像墙钟的映射及来源相机路径 (`EvidenceSource`), 本模块只按冻结映射
+定位分段, 绝不读当前时钟重新解释旧 HostInstant, 也不按当前配置给历史判定重绑来源。片段/关键帧/
+typed 元数据先在临时目录写完再整体原子 rename, 之后才写 SQLite; 任一步失败都在此处翻译为具体原因
+并保持待办, 从不删除本机已有媒体。标准库 + 本机 ffmpeg/ffprobe。
 """
 
 from __future__ import annotations
@@ -37,18 +36,10 @@ from edge_runtime.local_state import LocalState, PendingEvidence, StationStore
 MATERIAL_GENERATION_ORIGINAL = "original"
 _SEGMENT_TIME_FORMAT = "%Y-%m-%d_%H-%M-%S-%f"
 _BOUNDARY_TOLERANCE = 1e-3
-"""实测 13 对真实 MediaMTX fmp4 相邻分段边界抖动 ≤11µs; 1ms 远小于一帧, 真实缺口不会漏检。"""
+"""相邻分段边界抖动容限。实测多数真实 MediaMTX fmp4 边界抖动 ≤11µs, 但首段可与次段重叠约 0.5s;
+重叠无法证明时间对应, 不得静默 concat 重复内容, 见 `_select_segments`。"""
 _FFMPEG_HEAD = ("-hide_banner", "-loglevel", "error")
-_FFPROBE_ARGS = (
-    "-v",
-    "error",
-    "-show_entries",
-    "format=duration",
-    "-show_entries",
-    "stream=codec_type",
-    "-of",
-    "json",
-)
+_FFPROBE_ARGS = ("-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json")
 
 
 class EvidenceMediaError(RuntimeError):
@@ -86,12 +77,10 @@ def load_evidence_media_configuration(value: object) -> EvidenceMediaConfigurati
         except (ZoneInfoNotFoundError, ValueError) as error:
             raise ValueError(f"recording_timezone is unknown: {timezone_name}") from error
     return EvidenceMediaConfiguration(
-        evidence_directory=_path(config["evidence_directory"], "evidence_directory"),
-        ffprobe_binary=_path(config["ffprobe_binary"], "ffprobe_binary"),
-        slice_timeout_seconds=_positive_number(
-            config["slice_timeout_seconds"], "slice_timeout_seconds"
-        ),
-        recording_timezone=timezone_name,
+        _path(config["evidence_directory"], "evidence_directory"),
+        _path(config["ffprobe_binary"], "ffprobe_binary"),
+        _positive_number(config["slice_timeout_seconds"], "slice_timeout_seconds"),
+        timezone_name,
     )
 
 
@@ -128,13 +117,9 @@ def slice_evidence(
     ``mapping_missing`` 表示入队时没有冻结录像墙钟映射或来源路径 (旧行/无媒体配置), 不能猜成功。
     """
     wall_offset = pending.wall_offset
-    if wall_offset is None:
+    if wall_offset is None or not pending.sources:
         raise EvidenceMediaError(
-            "mapping_missing", "pending evidence has no frozen recording wall clock mapping"
-        )
-    if not pending.sources:
-        raise EvidenceMediaError(
-            "mapping_missing", "pending evidence has no frozen recording source"
+            "mapping_missing", "pending evidence has no frozen recording source mapping"
         )
     evidence_id = _evidence_id(host_id, pending.queue_id)
     try:
@@ -216,44 +201,15 @@ def _slice_source(
     selected = _select_segments(_list_segments(directory, configuration), wall_from, wall_to)
     actual_from, actual_to = selected[0].start, selected[-1].end
     clip = work / f"{source}.mp4"
-    _ffmpeg(
-        [
-            str(ffmpeg_binary),
-            *_FFMPEG_HEAD,
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            str(_segment_list(work, selected)),
-            "-c",
-            "copy",
-            "-movflags",
-            "+faststart",
-            "-y",
-            str(clip),
-        ],
-        configuration.slice_timeout_seconds,
-    )
+    timeout = configuration.slice_timeout_seconds
+    inputs = ["-f", "concat", "-safe", "0", "-i", str(_segment_list(work, selected))]
+    outputs = ["-c", "copy", "-movflags", "+faststart", "-y", str(clip)]
+    _ffmpeg([str(ffmpeg_binary), *_FFMPEG_HEAD, *inputs, *outputs], timeout)
     keyframe = work / f"{source}.jpg"
     anchor_offset = max(0.0, pending.anchor.seconds + wall_offset - actual_from)
-    _ffmpeg(
-        [
-            str(ffmpeg_binary),
-            *_FFMPEG_HEAD,
-            "-ss",
-            f"{anchor_offset:.3f}",
-            "-i",
-            str(clip),
-            "-frames:v",
-            "1",
-            "-q:v",
-            "2",
-            "-y",
-            str(keyframe),
-        ],
-        configuration.slice_timeout_seconds,
-    )
+    seek = ["-ss", f"{anchor_offset:.3f}", "-i", str(clip)]
+    still = ["-frames:v", "1", "-q:v", "2", "-y", str(keyframe)]
+    _ffmpeg([str(ffmpeg_binary), *_FFMPEG_HEAD, *seek, *still], timeout)
     if not keyframe.is_file() or keyframe.stat().st_size == 0:
         raise EvidenceMediaError("ffmpeg_failed", "anchor keyframe was not produced")
     _fsync(clip)
@@ -301,14 +257,25 @@ def _select_segments(segments: list[_Segment], wall_from: float, wall_to: float)
         raise EvidenceMediaError("material_missing", "no recording segment overlaps the window")
     if selected[0].start > wall_from:
         raise EvidenceMediaError("material_missing", "recording starts after the window begins")
+    chosen = [selected[0]]
     covered = selected[0].end
     for segment in selected[1:]:
         if segment.start > covered + _BOUNDARY_TOLERANCE:
             raise EvidenceMediaError("material_missing", "recording has a gap inside the window")
+        if covered - segment.start > _BOUNDARY_TOLERANCE:
+            # 大重叠无法证明两段在时间上对应, concat 会重复内容并错位锚点; 窗口不依赖旧分段
+            # (它从本段起已被覆盖) 时丢弃旧分段, 否则显式失败保持待办。
+            if wall_from < segment.start:
+                raise EvidenceMediaError(
+                    "material_overlap", "adjacent recording segments overlap beyond tolerance"
+                )
+            chosen, covered = [segment], segment.end
+            continue
         covered = max(covered, segment.end)
+        chosen.append(segment)
     if covered < wall_to:
         raise EvidenceMediaError("material_missing", "recording ends before the window ends")
-    return selected
+    return chosen
 
 
 def _publish(work: Path, final: Path) -> bool:

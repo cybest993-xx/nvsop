@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import cast
 
-from sqlalchemy import Table, func, select, text, update
+from sqlalchemy import Table, and_, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.orm import Session
 
@@ -25,7 +25,14 @@ from factory_sop.monitor.model import (
     MirroredViolation,
 )
 from factory_sop.monitor.repository import MonitorRepository
-from nvsop_contracts import ReportedSopInstance
+from factory_sop.monitor.usecases import latest_health_per_stream
+from nvsop_contracts import (
+    ReportedSopInstance,
+    reported_decision_to_wire,
+    reported_health_to_wire,
+    reported_observation_to_wire,
+    reported_sop_instance_to_wire,
+)
 
 MONITOR_STREAM_CHANNEL = "nvsop_monitor_stream"
 _DECISION_STREAM_LOCK_KEY = 0x4D4F4E444543  # "MONDEC"
@@ -112,6 +119,7 @@ class PostgresMonitorRepository(MonitorRepository):
             )
         )
         if result.scalar_one_or_none() is not None:
+            self._notify_stream("runtime")
             return True
         existing = self._session.get(ReportedSopInstanceRow, row.event_id)
         if existing is None:
@@ -136,6 +144,7 @@ class PostgresMonitorRepository(MonitorRepository):
                 .returning(ReportedSopInstanceRow.event_id)
             )
             if closed.scalar_one_or_none() is not None:
+                self._notify_stream("runtime")
                 return True
             current = self._session.get(ReportedSopInstanceRow, row.event_id)
             if current is None:
@@ -225,6 +234,7 @@ class PostgresMonitorRepository(MonitorRepository):
             )
         )
         if result.scalar_one_or_none() is not None:
+            self._notify_stream("runtime")
             return True
         existing = self._session.get(ReportedObservationRow, row.event_id)
         if existing is None:
@@ -332,6 +342,85 @@ class PostgresMonitorRepository(MonitorRepository):
     def health_sequence_for_event(self, event_id: str) -> int | None:
         return self._session.scalar(
             select(ReportedHealthRow.stream_sequence).where(ReportedHealthRow.event_id == event_id)
+        )
+
+    def runtime_projection(self) -> tuple[dict[str, object], ...]:
+        """从 durable mirror 按工位读取当前事实，不限制全局行数。
+
+        每路流健康复用 monitor owner 的事件时间分类，避免 Center ingestion 序号在
+        迟到旧报告时覆盖较新的业务事实。
+        """
+        decisions = self._session.scalars(
+            select(ReportedDecisionRow)
+            .distinct(ReportedDecisionRow.station_id)
+            .order_by(ReportedDecisionRow.station_id, ReportedDecisionRow.stream_sequence.desc())
+        ).all()
+        health = self._session.scalars(
+            select(ReportedHealthRow)
+            .where(ReportedHealthRow.station_id.is_not(None))
+            .order_by(ReportedHealthRow.station_id, ReportedHealthRow.stream_id)
+        ).all()
+        latest_hosts = (
+            select(ReportedSopInstanceRow.station_id, ReportedSopInstanceRow.host_id)
+            .distinct(ReportedSopInstanceRow.station_id)
+            .order_by(
+                ReportedSopInstanceRow.station_id,
+                ReportedSopInstanceRow.received_at.desc(),
+                ReportedSopInstanceRow.event_id.desc(),
+            )
+            .subquery()
+        )
+        instances = self._session.scalars(
+            select(ReportedSopInstanceRow)
+            .join(
+                latest_hosts,
+                and_(
+                    ReportedSopInstanceRow.station_id == latest_hosts.c.station_id,
+                    ReportedSopInstanceRow.host_id == latest_hosts.c.host_id,
+                ),
+            )
+            .distinct(ReportedSopInstanceRow.station_id)
+            .order_by(
+                ReportedSopInstanceRow.station_id,
+                ReportedSopInstanceRow.instance_id.desc(),
+                ReportedSopInstanceRow.event_id.desc(),
+            )
+        ).all()
+        observations = self._session.scalars(
+            select(ReportedObservationRow)
+            .distinct(ReportedObservationRow.station_id)
+            .order_by(
+                ReportedObservationRow.station_id,
+                ReportedObservationRow.received_at.desc(),
+                ReportedObservationRow.event_id.desc(),
+            )
+        ).all()
+        by_station: dict[str, dict[str, object]] = {}
+        health_by_station: dict[str, list[MirroredHealth]] = {}
+        for decision_row in decisions:
+            by_station.setdefault(decision_row.station_id, {})["decision"] = (
+                reported_decision_to_wire(decision_row.to_domain().report)
+            )
+        for health_row in health:
+            health_by_station.setdefault(health_row.station_id or "", []).append(
+                health_row.to_domain()
+            )
+        for station_id, reports in health_by_station.items():
+            by_station.setdefault(station_id, {})["health"] = [
+                reported_health_to_wire(value.report)
+                for value in latest_health_per_stream(tuple(reports))
+            ]
+        for instance_row in instances:
+            by_station.setdefault(instance_row.station_id, {})["instance"] = (
+                reported_sop_instance_to_wire(instance_row.to_domain().report)
+            )
+        for observation_row in observations:
+            by_station.setdefault(observation_row.station_id, {})["observation"] = (
+                reported_observation_to_wire(observation_row.to_domain().report)
+            )
+        return tuple(
+            {"station_id": station_id, **by_station[station_id]}
+            for station_id in sorted(by_station)
         )
 
     def _acquire_stream_lock(self, key: int) -> None:

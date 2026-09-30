@@ -1869,6 +1869,61 @@ class HealthQueueTest(unittest.TestCase):
         self.assertEqual("2026-09-16T00:00:05Z", transport.sent[0].reported_at)
         self.assertEqual((), station.pending_health_reports())
 
+    def test_v11_pending_health_keeps_legacy_payload_after_v12_upgrade(self) -> None:
+        occurred_at = "2026-09-16T00:00:00Z"
+        with TemporaryDirectory() as temporary:
+            database = str(Path(temporary) / "health-v11.sqlite")
+            connection = sqlite3.connect(database)
+            apply_migrations(connection, MIGRATIONS[:11])
+            connection.execute(
+                """
+                INSERT INTO local_health_queue (
+                    station_id, stream_id, status, reason_code, detail,
+                    occurred_at, source_anchor, anchor_offset, report_host_id,
+                    report_configuration, attempts
+                ) VALUES (?, 'camera-a', 'source_error', 'STREAM_LOST', 'lost', ?, ?, 0.5,
+                          'host-a', NULL, 1)
+                """,
+                (STATION, occurred_at, ANCHOR),
+            )
+            connection.commit()
+            connection.close()
+
+            state = open_local_state(database)
+            self.addCleanup(state.close)
+            (pending,) = state.station(STATION).pending_health_reports()
+            self.assertEqual(occurred_at, pending.reported_at)
+
+            class Transport:
+                def __init__(self) -> None:
+                    self.sent: list[ReportedHealth] = []
+
+                def send_health(
+                    self, report: ReportedHealth, *, configuration: ConfigurationBundle | None
+                ) -> None:
+                    del configuration
+                    self.sent.append(report)
+
+                def send_observation(self, report: object) -> None:
+                    del report
+
+                def send_decision(self, report: object, *, configuration: object) -> None:
+                    del report, configuration
+
+                def send_instance(self, report: object, *, configuration: object) -> None:
+                    del report, configuration
+
+            transport = Transport()
+            attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(
+                now=HostInstant(ANCHOR + 2.0),
+                reported_at="2026-09-16T00:00:05Z",
+            )
+
+            self.assertTrue(attempts[0].sent)
+            self.assertEqual("host-a:health:1", transport.sent[0].event_id)
+            self.assertEqual(occurred_at, transport.sent[0].occurred_at)
+            self.assertEqual(occurred_at, transport.sent[0].reported_at)
+
 
 if __name__ == "__main__":
     unittest.main()

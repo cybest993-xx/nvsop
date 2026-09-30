@@ -133,13 +133,19 @@ def mirror_health(
     *,
     received_at: datetime,
     monitor: MonitorRepository,
+    host_gateway: HostOwnershipGateway,
     device_gateway: DeviceMonitorGateway,
 ) -> bool:
-    """按不可变历史归属保存一路流健康事实，而不是按当前拓扑重新归属。"""
+    """保存当前归属或不可变历史归属能够证明的一路流健康事实。"""
+    _health_occurred_at(report)
     host_id = _uuid(report.host_id, "health host_id")
     station_id = _uuid(report.station_id, "health station_id")
-    if not device_gateway.has_historical_station(host_id=host_id, station_id=station_id):
-        raise MonitorRefusedError("reported health has no historical host assignment")
+    if not host_gateway.owns_station(
+        host_id=host_id, station_id=station_id
+    ) and not device_gateway.has_historical_station(host_id=host_id, station_id=station_id):
+        raise MonitorRefusedError(
+            "reported health is outside current and historical host assignment"
+        )
     return monitor.upsert_health(MirroredHealth(report=report, received_at=received_at))
 
 
@@ -210,11 +216,16 @@ def mirror_observation(
     *,
     received_at: datetime,
     monitor: MonitorRepository,
+    host_gateway: HostOwnershipGateway,
     device_gateway: DeviceMonitorGateway,
 ) -> bool:
-    """按产生时冻结 provenance 的历史归属保存观测；中心不重新归属或判定。"""
+    """保存当前归属或产生时 provenance 的历史归属能够证明的观测。"""
     host_id = _uuid(report.host_id, "observation host_id")
     station_id = _uuid(report.station_id, "observation station_id")
+    if host_gateway.owns_station(host_id=host_id, station_id=station_id):
+        return monitor.upsert_observation(
+            MirroredObservation(report=report, received_at=received_at)
+        )
     backend = report.backend
     if backend is None:
         assigned = device_gateway.has_historical_station(
@@ -233,7 +244,9 @@ def mirror_observation(
             model_ids=backend.model_ids,
         )
     if not assigned:
-        raise MonitorRefusedError("reported observation has no matching historical assignment")
+        raise MonitorRefusedError(
+            "reported observation is outside current and historical assignment"
+        )
     return monitor.upsert_observation(MirroredObservation(report=report, received_at=received_at))
 
 
@@ -306,12 +319,20 @@ def _latest_health_per_stream(reports: tuple[MirroredHealth, ...]) -> tuple[Mirr
 
 def _health_event_order(value: MirroredHealth) -> tuple[float, str]:
     """使用冻结的事件时间锚排序；event_id 仅为相同时刻提供稳定次序。"""
-    report = value.report
+    return _health_occurred_at(value.report), value.report.event_id
+
+
+def _health_occurred_at(report: ReportedHealth) -> float:
+    """验证健康发生时间，并优先用冻结源锚给事件排序。"""
+    try:
+        occurred_at = datetime.fromisoformat(report.occurred_at.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("health occurred_at must be an ISO-8601 timestamp") from error
+    if occurred_at.tzinfo is None:
+        raise ValueError("health occurred_at must include a timezone")
     if report.source_anchor is not None and report.anchor_offset is not None:
-        occurred = report.source_anchor + report.anchor_offset
-    else:
-        occurred = datetime.fromisoformat(report.occurred_at.replace("Z", "+00:00")).timestamp()
-    return occurred, report.event_id
+        return report.source_anchor + report.anchor_offset
+    return occurred_at.timestamp()
 
 
 def _health_is_healthy(status: str) -> bool:

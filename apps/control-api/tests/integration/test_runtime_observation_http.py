@@ -962,6 +962,25 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
                 body=health_body,
             ),
         )
+        invalid_health = replace(
+            health,
+            event_id=f"{runtime_topology.host.id}:health-invalid-time",
+            trace_id="trace-health-invalid-time",
+            occurred_at="invalid",
+            source_anchor=None,
+            anchor_offset=None,
+        )
+        invalid_health_body = reported_health_to_wire(invalid_health)
+        invalid_health_response = client.post(
+            health_path,
+            json=invalid_health_body,
+            headers=_host_headers(
+                runtime_topology,
+                method="POST",
+                path=health_path,
+                body=invalid_health_body,
+            ),
+        )
         station = bundle.stations[0]
         assert station.template is not None
         long_open_boundary_signal = "s" * 1024
@@ -1067,6 +1086,7 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
         "duplicate": False,
         "event_id": health.event_id,
     }
+    assert invalid_health_response.status_code == 422
     assert instance_first.status_code == 200
     assert instance_first.json()["duplicate"] is False
     assert instance_duplicate.status_code == 200

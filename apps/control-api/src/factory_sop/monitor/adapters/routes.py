@@ -141,10 +141,15 @@ def report_monitor_health(
             report,
             received_at=datetime.now(UTC),
             monitor=monitor,
+            host_gateway=host_gateway,
             device_gateway=device_gateway,
         )
     except MonitorRefusedError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
+        ) from error
     return {"accepted": True, "duplicate": not inserted, "event_id": report.event_id}
 
 
@@ -233,6 +238,7 @@ def report_monitor_observation(
             report,
             received_at=datetime.now(UTC),
             monitor=monitor,
+            host_gateway=host_gateway,
             device_gateway=device_gateway,
         )
     except MonitorRefusedError as error:

@@ -216,6 +216,16 @@ class HostGateway:
         return host_id == HOST_ID and station_id == STATION_ID and backend_id == BACKEND_ID
 
 
+class ReboundHostGateway(HostGateway):
+    def owns_station(self, *, host_id: UUID, station_id: UUID) -> bool:
+        del host_id, station_id
+        return False
+
+    def owns_station_backend(self, *, host_id: UUID, station_id: UUID, backend_id: UUID) -> bool:
+        del host_id, station_id, backend_id
+        return False
+
+
 class HistoricalAssignments:
     def has_historical_station(
         self,
@@ -297,6 +307,32 @@ class HistoricalAssignments:
             and template_version_id is None
             and template_sha256 is None
         )
+
+
+class NoHistoricalAssignments(HistoricalAssignments):
+    def has_historical_station(
+        self,
+        *,
+        host_id: UUID,
+        station_id: UUID,
+        template_version_id: str | None = None,
+        template_sha256: str | None = None,
+    ) -> bool:
+        del host_id, station_id, template_version_id, template_sha256
+        return False
+
+    def has_historical_assignment(
+        self,
+        *,
+        host_id: UUID,
+        station_id: UUID,
+        backend_id: UUID,
+        template_version_id: str | None,
+        template_sha256: str | None,
+        model_ids: tuple[str, ...],
+    ) -> bool:
+        del host_id, station_id, backend_id, template_version_id, template_sha256, model_ids
+        return False
 
 
 def report(event_id: str = "host:event-1") -> ReportedDecision:
@@ -497,7 +533,7 @@ def test_sse_usecase_rejects_a_caller_without_monitor_permission() -> None:
         sse_snapshot(MemoryMonitor(), caller=caller())
 
 
-def test_health_mirror_rejects_a_station_without_historical_assignment() -> None:
+def test_health_mirror_rejects_a_station_without_current_or_historical_assignment() -> None:
     monitor = MemoryMonitor()
     health = ReportedHealth(
         event_id="host:health-1",
@@ -513,13 +549,38 @@ def test_health_mirror_rejects_a_station_without_historical_assignment() -> None
         anchor_offset=None,
         reported_at="2026-09-13T00:00:00Z",
     )
-    with pytest.raises(MonitorRefusedError, match="historical"):
+    with pytest.raises(MonitorRefusedError, match="assignment"):
         mirror_health(
             health,
             received_at=datetime.now(UTC),
             monitor=monitor,
+            host_gateway=HostGateway(),
             device_gateway=HistoricalAssignments(),
         )
+
+
+def test_health_mirror_accepts_current_assignment_without_history() -> None:
+    report_value = ReportedHealth(
+        event_id="host:health-current",
+        trace_id="trace-health-current",
+        host_id=str(HOST_ID),
+        station_id=str(STATION_ID),
+        stream_id="camera-main",
+        status="delivering",
+        reason_code=None,
+        detail=None,
+        occurred_at="2026-09-13T00:00:00Z",
+        source_anchor=None,
+        anchor_offset=None,
+        reported_at="2026-09-13T00:00:01Z",
+    )
+    assert mirror_health(
+        report_value,
+        received_at=datetime(2026, 9, 13, 0, 0, 1, tzinfo=UTC),
+        monitor=MemoryMonitor(),
+        host_gateway=HostGateway(),
+        device_gateway=NoHistoricalAssignments(),
+    )
 
 
 def test_health_mirror_accepts_a_historical_assignment_after_topology_change() -> None:
@@ -543,6 +604,7 @@ def test_health_mirror_accepts_a_historical_assignment_after_topology_change() -
         report_value,
         received_at=datetime(2026, 9, 13, 1, 0, tzinfo=UTC),
         monitor=monitor,
+        host_gateway=ReboundHostGateway(),
         device_gateway=HistoricalAssignments(),
     )
 
@@ -792,13 +854,15 @@ def test_observation_mirror_is_idempotent_and_queryable_by_station_and_instance(
         observation(),
         received_at=received_at,
         monitor=monitor,
-        device_gateway=HistoricalAssignments(),
+        host_gateway=HostGateway(),
+        device_gateway=NoHistoricalAssignments(),
     )
     assert not mirror_observation(
         observation(),
         received_at=received_at,
         monitor=monitor,
-        device_gateway=HistoricalAssignments(),
+        host_gateway=HostGateway(),
+        device_gateway=NoHistoricalAssignments(),
     )
 
     items, total = list_observations(
@@ -823,12 +887,23 @@ def test_observation_mirror_is_idempotent_and_queryable_by_station_and_instance(
     assert (other, nothing) == ((), 0)
 
 
+def test_observation_mirror_accepts_historical_assignment_after_topology_change() -> None:
+    assert mirror_observation(
+        observation("host:observation:historical"),
+        received_at=datetime(2026, 9, 13, 1, 0, 0, tzinfo=UTC),
+        monitor=MemoryMonitor(),
+        host_gateway=ReboundHostGateway(),
+        device_gateway=HistoricalAssignments(),
+    )
+
+
 def test_observation_mirror_rejects_a_station_without_matching_history() -> None:
     with pytest.raises(MonitorRefusedError):
         mirror_observation(
             replace(observation(), station_id=str(SECOND_BACKEND_ID)),
             received_at=datetime(2026, 9, 13, 0, 0, 0, tzinfo=UTC),
             monitor=MemoryMonitor(),
+            host_gateway=HostGateway(),
             device_gateway=HistoricalAssignments(),
         )
 

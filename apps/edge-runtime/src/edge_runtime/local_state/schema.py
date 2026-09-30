@@ -377,6 +377,13 @@ _V12 = (
     # occurrence time belongs to the health fact; first send time is frozen independently so
     # a retry preserves one exact wire payload without relabelling when the fact occurred.
     "ALTER TABLE local_health_queue ADD COLUMN report_reported_at TEXT",
+    # V11 already sent health with reported_at=occurred_at. Preserve that exact payload for
+    # pending rows whose Center acknowledgement may have been lost before this upgrade.
+    """
+    UPDATE local_health_queue
+       SET report_reported_at = occurred_at
+     WHERE report_reported_at IS NULL
+    """,
 )
 
 MIGRATIONS: tuple[tuple[str, ...], ...] = (

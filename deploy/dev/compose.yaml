@@ -122,6 +122,29 @@ services:
         psql -v ON_ERROR_STOP=1 -v database=training -v runtime_role=training_runtime -d training -f /opt/nvsop/db-roles.sql
     restart: "no"
 
+  # S066：在空 `training` database 上安装五类训练/标注进程所需对象。
+  # DDL 复用 Vendor 合并脚本并锁定其提交/摘要；重复启动跳过，未知非空/部分状态明确拒绝。
+  training-objects-install:
+    image: postgres:17.2-bookworm
+    depends_on:
+      training-role-init:
+        condition: service_completed_successfully
+    environment:
+      PGHOST: center-db
+      PGUSER: nvsop
+      PGDATABASE: training
+      NVSOP_TRAINING_VENDOR_COMMIT: "69352021c2aae0ba071acd2629f5cff224d14ca6"  # pragma: allowlist secret
+      NVSOP_TRAINING_DDL_PATH: vendor/sop-monitoring-blueprints/microservices/sop-training-bp/db-init-scripts/01-init-tables.sql
+      NVSOP_TRAINING_DDL_SHA256: "df3e518f7becfad1adb3f785e75cf4a254d8e82faccb76513c03d6af9b7c3d12"  # pragma: allowlist secret
+    secrets:
+      - center-db-password
+    volumes:
+      - ./training-install.sh:/opt/nvsop/training-install.sh:ro
+      - ./training-install-version.sql:/opt/nvsop/training-install-version.sql:ro
+      - ../../vendor/sop-monitoring-blueprints/microservices/sop-training-bp/db-init-scripts/01-init-tables.sql:/opt/nvsop/training-ddl/01-init-tables.sql:ro
+    entrypoint: ["/bin/sh", "/opt/nvsop/training-install.sh"]
+    restart: "no"
+
   redis:
     image: redis:7.4.2-bookworm
     command: ["redis-server", "--appendonly", "yes"]
@@ -229,7 +252,7 @@ services:
       context: ${NVSOP_SOURCE_DIR:-.}
       dockerfile: deploy/dev/annotation-backend.Dockerfile
     depends_on:
-      training-role-init:
+      training-objects-install:
         condition: service_completed_successfully
     environment:
       # 训练/标注进程经 Vendor `POSTGRES_*` seam 以 `training_runtime` 非超级用户连接 `training`。

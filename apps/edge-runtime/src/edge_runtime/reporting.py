@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Protocol, cast
+from typing import Protocol, runtime_checkable
 
 from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
@@ -57,6 +57,7 @@ class DecisionReportTransport(Protocol):
     ) -> None: ...
 
 
+@runtime_checkable
 class DisposalReportTransport(Protocol):
     def send_disposal(self, report: ReportedDisposal) -> None: ...
 
@@ -297,11 +298,13 @@ class HostReportReconciler:
         for disposal_id in self._reports.pending_disposal_ids(limit=limit):
             if should_stop is not None and should_stop():
                 break
+            if not isinstance(self._transport, DisposalReportTransport):
+                raise TypeError("report transport does not support disposal reporting")
             event_id = f"disposal:{disposal_id}"
             try:
                 report = self._reports.disposal_report(disposal_id, reported_at=reported_at)
                 event_id = report.event_id
-                cast(DisposalReportTransport, self._transport).send_disposal(report)
+                self._transport.send_disposal(report)
             except Exception as error:
                 message = f"{type(error).__name__}: {error}"[:255]
                 self._reports.record_disposal_failure(disposal_id, at=now, error=message)

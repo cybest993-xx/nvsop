@@ -550,6 +550,7 @@ def test_runtime_projection_health_uses_event_time_not_ingestion_sequence(engine
     assert [value["event_id"] for value in health] == [f"{stream_id}:newer"]
     assert health[0]["status"] == "source_error"
 
+
 def test_disposal_mirror_is_idempotent_in_real_postgres(engine: Engine) -> None:
     event_id = f"s024:disposal:{uuid4()}"
     tail = ("key", "violation", "alert", "actor", "source", "result", None, 1.0, 1, "at")
@@ -560,8 +561,7 @@ def test_disposal_mirror_is_idempotent_in_real_postgres(engine: Engine) -> None:
         assert repository.upsert_disposal(report, received_at=RECEIVED_AT) is True
         assert repository.upsert_disposal(report, received_at=RECEIVED_AT) is False
         session.commit()
-    with factory() as session:
-        values, _ = PostgresMonitorRepository(session).page_disposals(page=1, page_size=100)
+        values, _ = repository.page_disposals(page=1, page_size=100)
     assert [value for value in values if value.event_id == event_id] == [report]
 
 

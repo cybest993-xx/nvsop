@@ -1,5 +1,3 @@
-"""monitor：镜像推理机本地处置结果，不取得处置执行权。"""
-
 from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op

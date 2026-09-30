@@ -221,7 +221,6 @@ def mirror_disposal(
     host_gateway: HostOwnershipGateway,
     device_gateway: DeviceMonitorGateway,
 ) -> bool:
-    """只镜像 edge 已完成的处置；中心不执行、不补偿。"""
     host_id, station_id = (
         _uuid(report.host_id, "disposal host_id"),
         _uuid(report.station_id, "disposal station_id"),

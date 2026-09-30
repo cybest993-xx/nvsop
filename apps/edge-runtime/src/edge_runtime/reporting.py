@@ -293,7 +293,6 @@ class HostReportReconciler:
         limit: int | None,
         should_stop: Callable[[], bool] | None,
     ) -> list[ReportAttempt]:
-        """镜像本地处置结果;中心失败只保留积压,绝不反向再次执行处置。"""
         attempts: list[ReportAttempt] = []
         for disposal_id in self._reports.pending_disposal_ids(limit=limit):
             if should_stop is not None and should_stop():

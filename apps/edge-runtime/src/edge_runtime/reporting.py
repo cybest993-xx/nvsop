@@ -298,10 +298,10 @@ class HostReportReconciler:
         for disposal_id in self._reports.pending_disposal_ids(limit=limit):
             if should_stop is not None and should_stop():
                 break
-            if not isinstance(self._transport, DisposalReportTransport):
-                raise TypeError("report transport does not support disposal reporting")
             event_id = f"disposal:{disposal_id}"
             try:
+                if not isinstance(self._transport, DisposalReportTransport):
+                    raise TypeError("report transport does not support disposal reporting")
                 report = self._reports.disposal_report(disposal_id, reported_at=reported_at)
                 event_id = report.event_id
                 self._transport.send_disposal(report)

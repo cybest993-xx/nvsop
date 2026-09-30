@@ -116,11 +116,16 @@ class CenterLinkFaultTest(unittest.TestCase):
                     trace_id="host-1:health",
                     host_id="host-1",
                     station_id="station-1",
+                    stream_id="camera-1",
                     status="healthy",
                     reason_code=None,
                     detail=None,
+                    occurred_at="2026-09-28T00:00:00Z",
+                    source_anchor=None,
+                    anchor_offset=None,
                     reported_at="2026-09-28T00:00:00Z",
-                )
+                ),
+                configuration=None,
             )
 
     def test_command_loop_keeps_running_while_center_link_is_faulty(self) -> None:

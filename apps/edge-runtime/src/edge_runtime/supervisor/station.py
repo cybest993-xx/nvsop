@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from time import monotonic
 
 from nvsop_contracts import OBSERVATION_SOURCE_ACTION, OBSERVATION_SOURCE_EXTERNAL_SIGNAL
@@ -30,6 +31,7 @@ from edge_runtime.judgment.model import (
 )
 from edge_runtime.judgment.reasons import ReasonCode
 from edge_runtime.local_state import BackendReportContext, ReactionStore
+from edge_runtime.stream_health import StreamFact, StreamHealthEvent
 from edge_runtime.supervisor.evidence import clips_for
 from edge_runtime.supervisor.inputs import (
     ActionRecognized,
@@ -48,6 +50,15 @@ _STREAM_VALIDITY_REASONS = frozenset(
         ReasonCode.CHUNK_BACKLOG_EXCEEDED,
     }
 )
+
+_FACT_REASONS: dict[StreamFact, ReasonCode | None] = {
+    StreamFact.SOURCE_ERROR: ReasonCode.STREAM_LOST,
+    StreamFact.STREAM_ENDED: ReasonCode.STREAM_LOST,
+    StreamFact.INFERENCE_TIMEOUT: ReasonCode.INFERENCE_TIMEOUT,
+    StreamFact.CHUNK_BACKLOG_EXCEEDED: ReasonCode.CHUNK_BACKLOG_EXCEEDED,
+    StreamFact.DELIVERING: None,
+}
+"""每个流事实对应的不可判定原因; `delivering` 是恢复事实, 没有原因码。"""
 
 
 def _is_stream_validity(event: Event) -> bool:
@@ -171,6 +182,7 @@ class StationSupervisor:
             aggregate_transition = was_impaired != bool(active_impaired_backend_provenance)
         events = normalizer.events_for(arriving) if aggregate_transition else ()
         if isinstance(arriving, StreamHealthObserved):
+            self._report_stream_health(arriving.event)
             before = _stream_impairments(self._normalizers.values())
             after = _stream_impairments(normalizers.values())
             events = (
@@ -227,6 +239,29 @@ class StationSupervisor:
             source_anchor=source_anchor,
             observed_at=arriving.at.seconds,
             backend=report_provenance,
+        )
+
+    def _report_stream_health(self, event: StreamHealthEvent) -> None:
+        """把一条流健康事实持久化到它自己的上报积压; 它不进入判定或观测路径。
+
+        未知事实按原始值保留 (ADR-0003), 原因码留空而不是猜测。事实发生时间取本机墙上时钟, 源锚为
+        基座的 `first_timestamp`; 偏移是该墙上时钟相对源锚的秒数。
+        """
+        fact = event.fact
+        status = fact.value if isinstance(fact, StreamFact) else fact
+        reason = _FACT_REASONS.get(fact) if isinstance(fact, StreamFact) else None
+        occurred = datetime.now(UTC)
+        anchor_offset = (
+            None if event.source_anchor is None else occurred.timestamp() - event.source_anchor
+        )
+        self._store.enqueue_health(
+            stream_id=event.stream_id or None,
+            status=status,
+            reason_code=None if reason is None else reason.value,
+            detail=event.detail or None,
+            occurred_at=occurred.isoformat(),
+            source_anchor=event.source_anchor,
+            anchor_offset=anchor_offset,
         )
 
     def wake(self, *, host: HostLiveness) -> Reaction:

@@ -134,12 +134,14 @@ def mirror_health(
     monitor: MonitorRepository,
     host_gateway: HostOwnershipGateway,
 ) -> bool:
-    """只保存认证主机所属的健康观测。"""
+    """只保存认证主机所属工位的一路流健康事实。
+
+    它是运行有效性观测，不是配置可达性；中心不把它写回 edge，也不据此重新判定。
+    """
     host_id = _uuid(report.host_id, "health host_id")
-    if report.station_id is not None:
-        station_id = _uuid(report.station_id, "health station_id")
-        if not host_gateway.owns_station(host_id=host_id, station_id=station_id):
-            raise MonitorRefusedError("reported health is outside the authenticated host topology")
+    station_id = _uuid(report.station_id, "health station_id")
+    if not host_gateway.owns_station(host_id=host_id, station_id=station_id):
+        raise MonitorRefusedError("reported health is outside the authenticated host topology")
     return monitor.upsert_health(MirroredHealth(report=report, received_at=received_at))
 
 
@@ -237,6 +239,96 @@ def list_observations(
         station_id=None if station_id is None else str(station_id),
         instance_id=instance_id,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class StreamHealthView:
+    """一个工位的运行有效性投影：每路流的最新事实与工位级分类。
+
+    它只陈述"这段时间的观测能不能用于判定"；配置验证与主机可达性属于 device，不在此重复。
+    """
+
+    station_id: str
+    validity: str
+    streams: tuple[MirroredHealth, ...]
+
+
+def stream_health_view(
+    monitor: MonitorRepository,
+    *,
+    caller: Caller,
+    station_id: str,
+    limit: int = 50,
+) -> StreamHealthView:
+    """返回授权用户可查看的工位运行有效性；不反写 edge，也不虚构健康。
+
+    ``no_data`` 表示中心尚无该工位任何流健康事实；这不是"健康"，也不是"失联"。
+    """
+    authorize(caller, Permission.MONITOR_VIEW)
+    reports = monitor.recent_health_for_station(station_id=station_id, limit=limit)
+    latest = _latest_health_per_stream(reports)
+    if not latest:
+        return StreamHealthView(station_id=station_id, validity="no_data", streams=())
+    validity = (
+        "healthy"
+        if all(_health_is_healthy(report.report.status) for report in latest)
+        else "impaired"
+    )
+    return StreamHealthView(station_id=station_id, validity=validity, streams=latest)
+
+
+def _latest_health_per_stream(reports: tuple[MirroredHealth, ...]) -> tuple[MirroredHealth, ...]:
+    """每路流只保留最新一条；无流身份的事实单独归为一类。"""
+    latest: dict[str | None, MirroredHealth] = {}
+    for report in reports:
+        key = report.report.stream_id
+        current = latest.get(key)
+        if current is None or (report.stream_sequence or 0) > (current.stream_sequence or 0):
+            latest[key] = report
+    return tuple(latest.values())
+
+
+def _health_is_healthy(status: str) -> bool:
+    """只有明确的"正在投递"算健康；未知状态保守地按受损处理 (§5.21)。"""
+    return status == "delivering"
+
+
+@dataclass(frozen=True, slots=True)
+class HostLiveness:
+    """中心对一台推理机的独立存活判据（外部证人，§5.7）。
+
+    它判的是"这台机还活着吗"，不是流健康；因此不反写 edge 判定，也不虚构健康。
+    """
+
+    host_id: str
+    last_reported_at: datetime | None
+    age_seconds: float | None
+    suspicious: bool
+
+
+def host_liveness(
+    monitor: MonitorRepository,
+    *,
+    caller: Caller,
+    now: datetime,
+    stale_after_seconds: float,
+) -> tuple[HostLiveness, ...]:
+    """按"该机多久没上报"标记可疑，作为不依赖被评估者自述的外部证人。"""
+    authorize(caller, Permission.MONITOR_VIEW)
+    if stale_after_seconds <= 0:
+        raise ValueError("host liveness threshold must be positive")
+    values: list[HostLiveness] = []
+    for host_id, last_reported_at in monitor.last_report_at_by_host():
+        age = (now - last_reported_at).total_seconds()
+        values.append(
+            HostLiveness(
+                host_id=host_id,
+                last_reported_at=last_reported_at,
+                age_seconds=age,
+                suspicious=age > stale_after_seconds,
+            )
+        )
+    return tuple(values)
 
 
 @dataclass(frozen=True, slots=True)
@@ -448,7 +540,10 @@ def _uuid(value: str, label: str) -> UUID:
 
 
 __all__ = [
+    "HostLiveness",
     "SseSnapshot",
+    "StreamHealthView",
+    "host_liveness",
     "list_instances",
     "list_observations",
     "list_violations",
@@ -459,4 +554,5 @@ __all__ = [
     "sse_snapshot",
     "sse_snapshot_state",
     "sse_stream",
+    "stream_health_view",
 ]

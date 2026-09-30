@@ -567,14 +567,18 @@ def test_host_signed_machine_api_crosses_real_nginx_gateway_without_browser_sess
 
             health_path = "/api/v1/monitor/health"
             health: dict[str, object] = {
-                "contract_version": 1,
+                "contract_version": 2,
                 "event_id": f"sys-nginx-health-{gateway_scheme}",
                 "trace_id": f"sys-nginx-trace-health-{gateway_scheme}",
                 "host_id": host_id,
-                "station_id": None,
+                "station_id": station_id,
+                "stream_id": "camera-main",
                 "status": "healthy",
                 "reason_code": None,
                 "detail": None,
+                "occurred_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                "source_anchor": None,
+                "anchor_offset": None,
                 "reported_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             }
             _assert_signature_rejection_matrix(

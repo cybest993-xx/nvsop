@@ -19,6 +19,8 @@ from factory_sop.execution.api import ExecutionLeaseGateway
 from factory_sop.template.api import TemplateConfigurationGateway
 from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
+    HEALTH_REPORT_CAPABILITY,
+    HEALTH_REPORT_CONTRACT_VERSION,
     REPORT_CAPABILITIES_HEADER,
     SOP_INSTANCE_REPORT_CAPABILITY,
     SOP_INSTANCE_REPORT_CONTRACT_VERSION,
@@ -129,8 +131,11 @@ def confirm_inference_host_configuration_history(
     response: dict[str, object] = {
         "decision_report_contract_version": DECISION_REPORT_CONTRACT_VERSION
     }
-    if report_capabilities == SOP_INSTANCE_REPORT_CAPABILITY:
+    declared = {token.strip() for token in (report_capabilities or "").split(",") if token.strip()}
+    if SOP_INSTANCE_REPORT_CAPABILITY in declared:
         response["sop_instance_report_contract_version"] = SOP_INSTANCE_REPORT_CONTRACT_VERSION
+    if HEALTH_REPORT_CAPABILITY in declared:
+        response["health_report_contract_version"] = HEALTH_REPORT_CONTRACT_VERSION
     return response
 
 

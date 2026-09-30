@@ -61,7 +61,7 @@
 |---|---|---|
 | Host configuration | `ConfigurationBundle` 当前单一严格模型；行为扩展用 `required_capabilities` | 本文规则适用；历史 v1/v2 仅 Edge local-state 迁移 |
 | Decision report | `ReportedDecision` 明确维护严格 v1 与历史证明/复数 provenance 的 v2，并在发送 v2 前通过 confirmed-configuration 握手 | 这是已存在的跨异步升级兼容协议，不由配置契约重构删除；后续演进归 monitor/reporting owner |
-| Health report | `ReportedHealth` 严格 `REPORT_CONTRACT_VERSION=1`，status/reason 文本保留可扩展值语义 | 当前无并行 generation；若新增行为语义，先定义对应兼容门禁，归 monitor/reporting owner |
+| Health report | `ReportedHealth` 严格 `HEALTH_REPORT_CONTRACT_VERSION=2`，携带每路流身份、发生时间与源锚/偏移；status/reason 文本保留可扩展值语义 | v1 从未有生产发送方（旧 Edge 只定义了 `send_health`，没有任何调用点），没有需要迁移的历史数据，因此不保留 v1 解码；有冻结 confirmed 配置的上报在发送前经 confirmed-configuration 握手协商 `stream-health-report-v2`，无配置的上报沿用既有直接发送路径（与 bootstrap 判定只表达当前归属同一边界），归 monitor/reporting owner |
 | Observation report | `ReportedObservation` 严格 `OBSERVATION_REPORT_CONTRACT_VERSION=1`，只归档产生时内容 | 当前无并行 generation；主机签名上报按当前拓扑归属校验（与 Health report 同），归 monitor/reporting owner |
 | Delegated connection-test command | 无数字 generation；以严格 `command_type` + 固定字段解析，未知字段拒绝 | 当前单一 shape；需要新命令行为时新增显式 command type/协商，不把任意字段塞入现有 payload，归 delegated-command owner |
 

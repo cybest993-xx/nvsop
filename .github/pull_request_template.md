@@ -25,7 +25,7 @@ Actions: `N/A`
 
 ## Readiness and remaining work
 
-<!-- Record exact-head CI, any required independent review and merge authorization (the user's explicit authorization of the merge action for the exact candidate per workflow.md §3; confirming a candidate alone is not merge authorization). Codex is optional, non-blocking feedback; record it only if requested or available. Follow docs/engineering/workflow.md. -->
+<!-- Record exact-head CI, any required independent review and merge authorization. Merge authorization is the user's explicit authorization of the merge for the exact candidate per workflow.md §3; a full PR lifecycle approval that names this merge satisfies it, and confirming a candidate alone is not merge authorization. Codex is optional, non-blocking feedback; record it only if requested or available. Follow docs/engineering/workflow.md. -->
 CI required: `pending`
 Independent Spec + Standards review (when required): `not-required`
 Codex review (optional): `not-requested`

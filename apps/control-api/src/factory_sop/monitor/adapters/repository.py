@@ -10,6 +10,9 @@ from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.orm import Session
 
 from factory_sop.monitor.adapters.tables import (
+    DecisionIdentityRow,
+    HealthIdentityRow,
+    ObservationIdentityRow,
     ReportedDecisionRow,
     ReportedDisposalRow,
     ReportedHealthRow,
@@ -48,54 +51,69 @@ class PostgresMonitorRepository(MonitorRepository):
     def upsert_decision(self, value: MirroredDecision) -> bool:
         self._acquire_stream_lock(_DECISION_STREAM_LOCK_KEY)
         row = ReportedDecisionRow.from_domain(value)
+        identity = cast(Table, DecisionIdentityRow.__table__)
+        # 先按事件 id 预约全局唯一身份并取流内序号，再写分区事实；重复上报不写事实。
+        sequence = self._session.execute(
+            postgres_insert(identity)
+            .values(event_id=row.event_id, received_at=row.received_at)
+            .on_conflict_do_nothing(index_elements=[identity.c.event_id])
+            .returning(identity.c.stream_sequence)
+        ).scalar_one_or_none()
         table = cast(Table, ReportedDecisionRow.__table__)
-        statement = postgres_insert(table).values(
-            event_id=row.event_id,
-            trace_id=row.trace_id,
-            host_id=row.host_id,
-            station_id=row.station_id,
-            backend_id=row.backend_id,
-            received_at=row.received_at,
-            payload=row.payload,
-        )
-        result = self._session.execute(
-            statement.on_conflict_do_nothing(index_elements=[table.c.event_id]).returning(
-                table.c.event_id
+        if sequence is not None:
+            self._session.execute(
+                postgres_insert(table).values(
+                    event_id=row.event_id,
+                    received_at=row.received_at,
+                    stream_sequence=sequence,
+                    trace_id=row.trace_id,
+                    host_id=row.host_id,
+                    station_id=row.station_id,
+                    backend_id=row.backend_id,
+                    payload=row.payload,
+                )
             )
-        )
-        if result.scalar_one_or_none() is not None:
             self._notify_stream("decision")
             return True
-        existing = self._session.get(ReportedDecisionRow, row.event_id)
+        existing = self._session.scalars(
+            select(ReportedDecisionRow).where(ReportedDecisionRow.event_id == row.event_id)
+        ).one_or_none()
         if existing is None:
-            raise RuntimeError("decision mirror insert conflicted without a visible row")
+            raise RuntimeError("decision mirror conflicted without a visible row")
         _ensure_same(existing.payload, row.payload, "decision", row.event_id)
         return False
 
     def upsert_health(self, value: MirroredHealth) -> bool:
         self._acquire_stream_lock(_HEALTH_STREAM_LOCK_KEY)
         row = ReportedHealthRow.from_domain(value)
+        identity = cast(Table, HealthIdentityRow.__table__)
+        sequence = self._session.execute(
+            postgres_insert(identity)
+            .values(event_id=row.event_id, received_at=row.received_at)
+            .on_conflict_do_nothing(index_elements=[identity.c.event_id])
+            .returning(identity.c.stream_sequence)
+        ).scalar_one_or_none()
         table = cast(Table, ReportedHealthRow.__table__)
-        statement = postgres_insert(table).values(
-            event_id=row.event_id,
-            trace_id=row.trace_id,
-            host_id=row.host_id,
-            station_id=row.station_id,
-            stream_id=row.stream_id,
-            received_at=row.received_at,
-            payload=row.payload,
-        )
-        result = self._session.execute(
-            statement.on_conflict_do_nothing(index_elements=[table.c.event_id]).returning(
-                table.c.event_id
+        if sequence is not None:
+            self._session.execute(
+                postgres_insert(table).values(
+                    event_id=row.event_id,
+                    received_at=row.received_at,
+                    stream_sequence=sequence,
+                    trace_id=row.trace_id,
+                    host_id=row.host_id,
+                    station_id=row.station_id,
+                    stream_id=row.stream_id,
+                    payload=row.payload,
+                )
             )
-        )
-        if result.scalar_one_or_none() is not None:
             self._notify_stream("health")
             return True
-        existing = self._session.get(ReportedHealthRow, row.event_id)
+        existing = self._session.scalars(
+            select(ReportedHealthRow).where(ReportedHealthRow.event_id == row.event_id)
+        ).one_or_none()
         if existing is None:
-            raise RuntimeError("health mirror insert conflicted without a visible row")
+            raise RuntimeError("health mirror conflicted without a visible row")
         _ensure_same(existing.payload, row.payload, "health", row.event_id)
         return False
 
@@ -253,30 +271,36 @@ class PostgresMonitorRepository(MonitorRepository):
 
     def upsert_observation(self, value: MirroredObservation) -> bool:
         row = ReportedObservationRow.from_domain(value)
+        identity = cast(Table, ObservationIdentityRow.__table__)
+        reserved = self._session.execute(
+            postgres_insert(identity)
+            .values(event_id=row.event_id, received_at=row.received_at)
+            .on_conflict_do_nothing(index_elements=[identity.c.event_id])
+            .returning(identity.c.event_id)
+        ).scalar_one_or_none()
         table = cast(Table, ReportedObservationRow.__table__)
-        statement = postgres_insert(table).values(
-            event_id=row.event_id,
-            trace_id=row.trace_id,
-            host_id=row.host_id,
-            station_id=row.station_id,
-            instance_id=row.instance_id,
-            source=row.source,
-            signal=row.signal,
-            observed_at=row.observed_at,
-            received_at=row.received_at,
-            payload=row.payload,
-        )
-        result = self._session.execute(
-            statement.on_conflict_do_nothing(index_elements=[table.c.event_id]).returning(
-                table.c.event_id
+        if reserved is not None:
+            self._session.execute(
+                postgres_insert(table).values(
+                    event_id=row.event_id,
+                    received_at=row.received_at,
+                    trace_id=row.trace_id,
+                    host_id=row.host_id,
+                    station_id=row.station_id,
+                    instance_id=row.instance_id,
+                    source=row.source,
+                    signal=row.signal,
+                    observed_at=row.observed_at,
+                    payload=row.payload,
+                )
             )
-        )
-        if result.scalar_one_or_none() is not None:
             self._notify_stream("runtime")
             return True
-        existing = self._session.get(ReportedObservationRow, row.event_id)
+        existing = self._session.scalars(
+            select(ReportedObservationRow).where(ReportedObservationRow.event_id == row.event_id)
+        ).one_or_none()
         if existing is None:
-            raise RuntimeError("observation mirror insert conflicted without a visible row")
+            raise RuntimeError("observation mirror conflicted without a visible row")
         _ensure_same(existing.payload, row.payload, "observation", row.event_id)
         return False
 

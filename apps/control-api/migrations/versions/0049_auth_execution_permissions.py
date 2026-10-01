@@ -5,8 +5,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0048"
-down_revision: str | None = "0047"
+revision: str = "0049"
+down_revision: str | None = "0048"
 
 HANDOVER_PERMISSIONS = ("execution.handover.edit",)
 RAW_SQL_TABLES = frozenset({"auth_permission", "auth_role_permission"})

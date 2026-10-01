@@ -36,6 +36,7 @@ CHECKS = [
     "web-build",
 ]
 PREPARATION = [
+    "annotation-lock-check",
     "lockfile",
     "sync",
     "hooks",
@@ -56,6 +57,7 @@ name = sys.argv[1]
 trace = Path('trace')
 finished = trace.read_text().splitlines() if trace.exists() else []
 required = {
+    'lockfile': ['annotation-lock-check'],
     'sync': ['lockfile'],
     'openapi-export': ['sync'],
     'openapi-compat': ['openapi-export'],
@@ -120,6 +122,9 @@ class MakeWorkflowTest(unittest.TestCase):
 
     def test_setup_and_child_failures_propagate_to_each_gate(self) -> None:
         for target, failure in (
+            ("check", "annotation-lock-check"),
+            ("check-docs", "annotation-lock-check"),
+            ("check-integration", "annotation-lock-check"),
             ("check", "sync"),
             ("check", "openapi-generate"),
             ("check", "center-unit"),
@@ -128,14 +133,14 @@ class MakeWorkflowTest(unittest.TestCase):
             with self.subTest(target=target, failure=failure):
                 result, events = self.run_gate(target, failure=failure)
                 self.assertNotEqual(0, result.returncode, result.stdout)
-                if failure in ("sync", "openapi-generate"):
+                if failure in ("annotation-lock-check", "sync", "openapi-generate"):
                     self.assertFalse(
                         any(line == f"start {name}" for name in CHECKS for line in events)
                     )
         result, events = self.run_gate("check-integration")
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertCountEqual(
-            ["lockfile", "sync", "center-integration", "center-system"],
+            ["annotation-lock-check", "lockfile", "sync", "center-integration", "center-system"],
             [line.removeprefix("end ") for line in events if line.startswith("end ")],
         )
 

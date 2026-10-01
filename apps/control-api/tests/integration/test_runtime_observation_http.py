@@ -97,6 +97,20 @@ class RuntimeTopology:
     identity: HostIdentityKeyPair
 
 
+@dataclass(frozen=True, slots=True)
+class IndependentTopology:
+    """另一台独立推理机的完整拓扑，用于证明主机裁剪不会串入他机身份。"""
+
+    host: InferenceHost
+    station: Station
+    backend: InferenceBackend
+    connector: Connector
+    point: Point
+    camera: Camera
+    template: TemplateFixture
+    identity: HostIdentityKeyPair
+
+
 @pytest.fixture
 def runtime_topology(engine: Engine) -> Iterator[RuntimeTopology]:
     identity = generate_host_identity_key_pair()
@@ -285,7 +299,7 @@ def runtime_topology(engine: Engine) -> Iterator[RuntimeTopology]:
 
 
 def _host_headers(
-    topology: RuntimeTopology,
+    topology: RuntimeTopology | IndependentTopology,
     *,
     method: str,
     path: str,
@@ -455,6 +469,182 @@ def _remove_rebound_topology(
         )
 
 
+def _register_independent_topology(engine: Engine) -> IndependentTopology:
+    """插入另一台主机及其独立工位/后端/连接器/点位/相机，供主机裁剪排除断言。"""
+    identity = generate_host_identity_key_pair()
+    actor = new_id()
+    host = InferenceHost(
+        id=new_id(),
+        name=f"HTTP 独立推理机-{new_id().hex[:8]}",
+        address="10.0.8.221",
+        mediamtx_address=None,
+        recording_window_seconds=604800,
+        disk_watermark_percent=85,
+        status=DeviceStatus.ACTIVE,
+        revision=1,
+        created_by=actor,
+        updated_by=actor,
+        created_at=NOW,
+        updated_at=NOW,
+        identity_public_key=identity.public_key,
+    )
+    station = Station(
+        id=new_id(),
+        code=f"HTTP-IND-{new_id().hex[:8]}",
+        name="HTTP 独立验收工位",
+        tags=(),
+        status=DeviceStatus.ACTIVE,
+        revision=1,
+        created_by=actor,
+        updated_by=actor,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    connector = Connector(
+        id=new_id(),
+        station_id=station.id,
+        host_id=host.id,
+        name="HTTP 独立连接器",
+        connector_type=ConnectorType.HIKVISION_ISAPI,
+        configuration=ConnectorConfiguration(address="10.0.8.222", port=80),
+        credentials_configured=False,
+        reachability=ConnectorReachability.UNVERIFIED,
+        health_detail=None,
+        capability=Unverified(),
+        status=DeviceStatus.ACTIVE,
+        revision=1,
+        created_by=actor,
+        updated_by=actor,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    point = Point(
+        id=new_id(),
+        station_id=station.id,
+        connector_id=connector.id,
+        direction=PointDirection.INPUT,
+        identifier="DI-99",
+        semantic_label="独立工件到位",
+        status=DeviceStatus.ACTIVE,
+        revision=1,
+        created_by=actor,
+        updated_by=actor,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    with DatabaseSession(engine) as session:
+        session.add(InferenceHostRow.from_domain(host))
+        session.add(StationRow.from_domain(station))
+        session.flush()
+        template = add_template_version(session, station_id=station.id, now=NOW)
+        version = session.get(TemplateVersionRow, template.version_id)
+        assert version is not None
+        session.add(
+            TemplateStationBindingRow.from_domain(
+                TemplateStationBinding(
+                    id=new_id(),
+                    station_id=station.id,
+                    desired_version_id=template.version_id,
+                    desired_sha256=version.sha256,
+                    desired_config_revision=1,
+                    revision=1,
+                    created_by=actor,
+                    updated_by=actor,
+                    created_at=NOW,
+                    updated_at=NOW,
+                )
+            )
+        )
+        backend = InferenceBackend(
+            id=new_id(),
+            host_id=host.id,
+            base_url="http://10.0.8.221:8000",
+            template_version_id=template.version_id,
+            status=DeviceStatus.ACTIVE,
+            connection_state=ConnectionState.UNVERIFIED,
+            connection_checked_at=None,
+            connection_detail=None,
+            self_reported_model_ids=("independent-model",),
+            self_reported_at=None,
+            revision=1,
+            created_by=actor,
+            updated_by=actor,
+            created_at=NOW,
+            updated_at=NOW,
+        )
+        camera = Camera(
+            id=new_id(),
+            name="HTTP 独立相机",
+            address="10.0.8.223",
+            main_stream_path="/Streaming/Channels/101",
+            sub_stream_path="/Streaming/Channels/102",
+            credentials_configured=False,
+            station_id=station.id,
+            host_id=host.id,
+            backend_id=backend.id,
+            status=DeviceStatus.ACTIVE,
+            revision=1,
+            created_by=actor,
+            updated_by=actor,
+            created_at=NOW,
+            updated_at=NOW,
+        )
+        session.add(InferenceBackendRow.from_domain(backend))
+        session.flush()
+        session.add(CameraRow.from_domain(camera))
+        session.add(ConnectorRow.from_domain(connector))
+        session.flush()
+        session.add(PointRow.from_domain(point))
+        session.commit()
+    return IndependentTopology(host, station, backend, connector, point, camera, template, identity)
+
+
+def _remove_independent_topology(engine: Engine, topology: IndependentTopology) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            text("DELETE FROM device_point WHERE station_id = :station_id"),
+            {"station_id": topology.station.id},
+        )
+        connection.execute(
+            text("DELETE FROM device_camera WHERE station_id = :station_id"),
+            {"station_id": topology.station.id},
+        )
+        connection.execute(
+            text("DELETE FROM device_connector WHERE station_id = :station_id"),
+            {"station_id": topology.station.id},
+        )
+        connection.execute(
+            text("DELETE FROM template_station_binding WHERE station_id = :station_id"),
+            {"station_id": topology.station.id},
+        )
+        connection.execute(
+            text("DELETE FROM device_inference_backend WHERE id = :backend_id"),
+            {"backend_id": topology.backend.id},
+        )
+        remove_template_versions(connection, (topology.template,))
+        connection.execute(
+            text("DELETE FROM device_station WHERE id = :station_id"),
+            {"station_id": topology.station.id},
+        )
+        connection.execute(
+            text("DELETE FROM device_configuration_assignment WHERE host_id = :host_id"),
+            {"host_id": topology.host.id},
+        )
+        connection.execute(
+            text("DELETE FROM device_inference_host WHERE id = :host_id"),
+            {"host_id": topology.host.id},
+        )
+
+
+@pytest.fixture
+def independent_topology(engine: Engine) -> Iterator[IndependentTopology]:
+    topology = _register_independent_topology(engine)
+    try:
+        yield topology
+    finally:
+        _remove_independent_topology(engine, topology)
+
+
 def test_configuration_pull_is_host_scoped_and_contains_real_point_address(
     engine: Engine, runtime_topology: RuntimeTopology, dataset_storage_root: Path
 ) -> None:
@@ -472,6 +662,71 @@ def test_configuration_pull_is_host_scoped_and_contains_real_point_address(
     assert bundle.stations[0].model_ids == ("reported-model", "reported-model-2")
     assert bundle.stations[0].points[0].address == "DI-01"
     assert bundle.stations[0].connectors[0].connector_id == str(runtime_topology.connector.id)
+
+
+def test_configuration_pull_excludes_another_host_topology(
+    engine: Engine,
+    runtime_topology: RuntimeTopology,
+    independent_topology: IndependentTopology,
+    dataset_storage_root: Path,
+) -> None:
+    settings = settings_for(engine, storage_root=dataset_storage_root)
+    own_path = f"{API_PREFIX}/inference-hosts/{runtime_topology.host.id}/configuration"
+    other_path = f"{API_PREFIX}/inference-hosts/{independent_topology.host.id}/configuration"
+    with client_for(engine, settings) as client:
+        own_response = client.get(
+            own_path, headers=_host_headers(runtime_topology, method="GET", path=own_path)
+        )
+        other_response = client.get(
+            other_path, headers=_host_headers(independent_topology, method="GET", path=other_path)
+        )
+        # 主机身份绑定路径：另一台主机的签名不能拉本机配置。
+        forged_response = client.get(
+            own_path, headers=_host_headers(independent_topology, method="GET", path=own_path)
+        )
+
+    assert own_response.status_code == 200
+    assert other_response.status_code == 200
+    assert forged_response.status_code == 401
+
+    own = configuration_from_wire(own_response.json())
+    other = configuration_from_wire(other_response.json())
+    assert own.host_id == str(runtime_topology.host.id)
+    assert other.host_id == str(independent_topology.host.id)
+
+    own_stations = {station.station_id for station in own.stations}
+    own_backends = {station.backend_id for station in own.stations}
+    own_connectors = {
+        connector.connector_id for station in own.stations for connector in station.connectors
+    }
+    own_points = {point.point_id for station in own.stations for point in station.points}
+    own_cameras = {camera.camera_id for station in own.stations for camera in station.cameras}
+
+    other_stations = {station.station_id for station in other.stations}
+    other_backends = {station.backend_id for station in other.stations}
+    other_connectors = {
+        connector.connector_id for station in other.stations for connector in station.connectors
+    }
+    other_points = {point.point_id for station in other.stations for point in station.points}
+    other_cameras = {camera.camera_id for station in other.stations for camera in station.cameras}
+
+    assert own_stations == {str(runtime_topology.station.id)}
+    assert own_backends == {str(runtime_topology.backend.id)}
+    assert own_connectors == {str(runtime_topology.connector.id)}
+    assert own_points == {str(runtime_topology.point.id)}
+    assert len(own_cameras) == 1
+
+    assert other_stations == {str(independent_topology.station.id)}
+    assert other_backends == {str(independent_topology.backend.id)}
+    assert other_connectors == {str(independent_topology.connector.id)}
+    assert other_points == {str(independent_topology.point.id)}
+    assert other_cameras == {str(independent_topology.camera.id)}
+
+    assert own_stations.isdisjoint(other_stations)
+    assert own_backends.isdisjoint(other_backends)
+    assert own_connectors.isdisjoint(other_connectors)
+    assert own_points.isdisjoint(other_points)
+    assert own_cameras.isdisjoint(other_cameras)
 
 
 def test_edge_offline_decision_flushes_after_real_center_rebind(

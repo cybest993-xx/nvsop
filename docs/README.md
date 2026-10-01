@@ -39,6 +39,7 @@
 | [升级与兼容](deployment/upgrade.md) | 协同升级、迁移、回滚和发布证据 |
 | [标注部署证据](deployment/annotation-evidence.md) | 真实 NVIDIA 标注服务、网关和浏览器专项验证 |
 | [媒体部署说明](../deploy/media/README.md) | 合成 RTSP、MediaMTX、CPU 转码和本机媒体配置应用 |
+| [推理机推理服务部署](../deploy/edge/README.md) | 每主机/每后端的推理服务 Compose 身份、资源端口与只读 secret 边界 |
 | [目标环境验证矩阵](research/target-environment-validation-matrix.md) | GPU、真相机、连接器、离线、多机、容量和长稳门禁 |
 
 ## 事实与来源

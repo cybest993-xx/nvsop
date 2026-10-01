@@ -54,7 +54,7 @@ make contracts
 
 ### 受支持的来源版本
 
-升级只识别显式的已知 Vendor 标注结构，按实际结构（四张表的列集与主键）判定，而不只是表名：
+升级只识别显式的已知 Vendor 标注结构，按实际结构（四张表的列名+类型、无 `varchar` 长度上限、主键 `id`、以及四条级联外键 `video.dataset_id→dataset.id`、`chunk.video_id→video.id`、`annotation.video_id→video.id`、`annotation.chunk_id→chunk.id`）判定，而不只是表名或列名：
 
 - **原始 standalone 标注结构**：`dataset` / `video` / `chunk` / `annotation` 四表，`dataset` 没有 `two_operator_mode`；
 - **同形四表 + `two_operator_mode`**：同样的四表结构，但 `dataset` 已含 `two_operator_mode`。
@@ -66,12 +66,14 @@ make contracts
 仓库不实现通用 migration framework，也不自动恢复客户备份。受支持的历史数据迁移是手工 `pg_dump`/`pg_restore` 流程，原库保持不变：
 
 1. 停用写来源的标注进程，从历史独立标注数据库或受支持备份 `pg_dump`（`-Fc`）。
-2. 在同一 PostgreSQL 实例保留/创建空的 `training` database。
-3. `pg_restore` 到空的 `training`。
+2. 在**同一 PostgreSQL 实例**保留/创建**空**的 `training` database（restore 前提；非空目标会被拒绝，不做破坏性重建）。来源与目标各用 `-d` 指定；连接身份固定为安装身份 `nvsop`。
+3. 用安装身份 `nvsop` 恢复：`pg_restore --no-owner --no-privileges --single-transaction --exit-on-error -d training <dump>`。`--no-owner`/`--no-privileges` 让恢复对象归安装身份所有、不保留历史 owner 角色与 ACL（否则目标 owner 会被历史角色固定成错误身份）；`--single-transaction`/`--exit-on-error` 保证整库原子恢复，失败即回滚。恢复脚本必须 `set -eu`，dump 失败不能继续执行后续步骤。
 4. 用安装身份执行 `training-role-init`（S065）收敛 `training_runtime` 权限。
 5. 用安装身份执行 `training-objects-install`（S066/S067）。
 
 顺序固定为 restore → role-init → installer：role-init 的 default privileges 让 runtime 拿到安装身份后续创建对象的权限，安装入口自身依赖 `training-role-init` 完成。
+
+**恢复失败与回滚**：restore 在空目标上以单事务执行，失败时目标回滚为空（即原始空状态），来源库始终不被改动；不要为了重试而删除/重建目标 database。
 
 ### 升级内容与恢复
 

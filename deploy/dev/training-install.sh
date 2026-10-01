@@ -33,47 +33,58 @@ fi
 # 版本表存在时比对已记录的提交与摘要；匹配时再只读核对锁定 Vendor DDL 明确拥有的对象。
 # 分步是因为直接引用可能不存在的版本表会在解析期报错。
 #
-# 已知标注来源按实际结构（四张 Vendor 标注表的列集与主键）识别，而不只是表名；来源中若已存在
-# 任一训练/增强对象（表或枚举）则视为部分安装而拒绝，避免把半升级状态当成合法来源。
+# 已知标注来源按实际结构（四张 Vendor 标注表的列名+类型、无 varchar 长度上限、主键 id、四条级联
+# 外键）识别，而不只是表名或列名；来源中若已存在任一训练/增强对象（表或枚举）则视为部分安装而
+# 拒绝，避免把半升级状态当成合法来源。
 state="$(
   psql -v ON_ERROR_STOP=1 -d "$INSTALL_DATABASE" -tA <<'SQL'
-WITH known_columns AS (
-  SELECT table_name, array_agg(column_name::text ORDER BY column_name) AS columns
+WITH known AS (
+  SELECT table_name,
+         string_agg(column_name::text || ':' || udt_name::text
+                    || coalesce('(' || character_maximum_length || ')', ''),
+                    ',' ORDER BY column_name) AS sig
   FROM information_schema.columns
   WHERE table_schema = 'public'
     AND table_name IN ('dataset', 'video', 'chunk', 'annotation')
   GROUP BY table_name
+),
+pk AS (
+  SELECT c.relname AS table_name, string_agg(a.attname::text, ',' ORDER BY a.attname) AS cols
+  FROM pg_index i
+  JOIN pg_class c ON c.oid = i.indrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+  WHERE n.nspname = 'public' AND i.indisprimary
+    AND c.relname IN ('dataset', 'video', 'chunk', 'annotation')
+  GROUP BY c.relname
+),
+fk AS (
+  SELECT string_agg(
+           cr.relname::text || '.' || a.attname::text || '->' || pr.relname::text || '.'
+             || af.attname::text || ':' || con.confdeltype::text,
+           ',' ORDER BY cr.relname, a.attname) AS sig
+  FROM pg_constraint con
+  JOIN pg_class cr ON cr.oid = con.conrelid
+  JOIN pg_class pr ON pr.oid = con.confrelid
+  JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey)
+  JOIN pg_attribute af ON af.attrelid = con.confrelid AND af.attnum = ANY(con.confkey)
+  WHERE con.contype = 'f' AND cr.relname IN ('video', 'chunk', 'annotation')
 )
 SELECT CASE
   WHEN to_regclass('public.nvsop_training_install') IS NOT NULL THEN 'present'
-  WHEN (
-    (SELECT columns FROM known_columns WHERE table_name = 'dataset')
-      IN (
-        ARRAY['actions', 'created_at', 'id', 'updated_at'],
-        ARRAY['actions', 'created_at', 'id', 'two_operator_mode', 'updated_at']
-      )
-    AND (SELECT columns FROM known_columns WHERE table_name = 'video')
-      = ARRAY['created_at', 'dataset_id', 'file_size', 'id', 'mime_type', 'name', 'updated_at']
-    AND (SELECT columns FROM known_columns WHERE table_name = 'chunk')
-      = ARRAY['action', 'created_at', 'file_size', 'id', 'mime_type', 'name', 'updated_at', 'video_id']
-    AND (SELECT columns FROM known_columns WHERE table_name = 'annotation')
-      = ARRAY['action_description', 'action_index', 'chunk_id', 'created_at', 'end_time', 'id', 'start_time', 'updated_at', 'video_id']
-    AND (SELECT array_agg(a.attname::text ORDER BY a.attname)
-         FROM pg_index i
-         JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
-         WHERE i.indrelid = to_regclass('public.dataset') AND i.indisprimary) = ARRAY['id']
-    AND (SELECT array_agg(a.attname::text ORDER BY a.attname)
-         FROM pg_index i
-         JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
-         WHERE i.indrelid = to_regclass('public.video') AND i.indisprimary) = ARRAY['id']
-    AND (SELECT array_agg(a.attname::text ORDER BY a.attname)
-         FROM pg_index i
-         JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
-         WHERE i.indrelid = to_regclass('public.chunk') AND i.indisprimary) = ARRAY['id']
-    AND (SELECT array_agg(a.attname::text ORDER BY a.attname)
-         FROM pg_index i
-         JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
-         WHERE i.indrelid = to_regclass('public.annotation') AND i.indisprimary) = ARRAY['id']
+  WHEN (SELECT sig FROM known WHERE table_name = 'dataset') IN (
+         'actions:_varchar,created_at:timestamp,id:varchar,updated_at:timestamp',
+         'actions:_varchar,created_at:timestamp,id:varchar,two_operator_mode:bool,updated_at:timestamp'
+       )
+    AND (SELECT sig FROM known WHERE table_name = 'video')
+      = 'created_at:timestamp,dataset_id:varchar,file_size:int4,id:varchar,mime_type:varchar,name:varchar,updated_at:timestamp'
+    AND (SELECT sig FROM known WHERE table_name = 'chunk')
+      = 'action:varchar,created_at:timestamp,file_size:int4,id:varchar,mime_type:varchar,name:varchar,updated_at:timestamp,video_id:varchar'
+    AND (SELECT sig FROM known WHERE table_name = 'annotation')
+      = 'action_description:varchar,action_index:int4,chunk_id:varchar,created_at:timestamp,end_time:float8,id:varchar,start_time:float8,updated_at:timestamp,video_id:varchar'
+    AND (SELECT count(*) FROM pk WHERE cols = 'id') = 4
+    AND (SELECT sig FROM fk)
+      = 'annotation.chunk_id->chunk.id:c,annotation.video_id->video.id:c,chunk.video_id->video.id:c,video.dataset_id->dataset.id:c'
     AND NOT EXISTS (
       SELECT 1 FROM pg_class c
       JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -90,14 +101,11 @@ SELECT CASE
       WHERE n.nspname = 'public'
         AND t.typtype = 'e'
         AND t.typname IN ('status_enum', 'training_status_enum')
-    )
-  ) THEN
+    ) THEN
     CASE
-      WHEN EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'dataset'
-          AND column_name = 'two_operator_mode'
-      ) THEN 'annotation-two-operator'
+      WHEN (SELECT sig FROM known WHERE table_name = 'dataset')
+             = 'actions:_varchar,created_at:timestamp,id:varchar,two_operator_mode:bool,updated_at:timestamp'
+      THEN 'annotation-two-operator'
       ELSE 'annotation-standalone'
     END
   WHEN NOT EXISTS (

@@ -57,6 +57,8 @@ SERVICE_MODELS = {
 }
 LEGACY_DATABASE = "legacy_annotation"
 CENTER_DATABASE = "nvsop"
+# 合成历史 owner 角色：来源对象不归安装身份所有，用于验证 restore 归一化。
+LEGACY_OWNER = "legacy_annotation_owner"
 # 合成旧用户关联附加表：Vendor 四表没有用户字段，用这张非 Vendor 拥有的表表达历史用户关联。
 # provenance 明确为 S067 fixture，不是生产 user 模型；升级不得改动或删除它。
 USER_TABLE = "historic_annotation_user"
@@ -182,21 +184,56 @@ def _table_oids(engine: Engine, tables: tuple[str, ...]) -> dict[str, int]:
     return {str(row[0]): int(row[1]) for row in rows}
 
 
-def _seed_legacy_source(instance: TrainingInstall, database: str) -> None:
-    """在 `database` 里创建 Vendor 原始 standalone 标注结构与合成历史数据。"""
+def _table_owners(engine: Engine) -> set[str]:
+    with engine.connect() as connection:
+        return set(
+            connection.execute(
+                text(
+                    "SELECT DISTINCT pg_get_userbyid(relowner) FROM pg_class "
+                    "WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p')"
+                )
+            ).scalars()
+        )
+
+
+def _seed_legacy_source(
+    instance: TrainingInstall, database: str, *, two_operator_mode: bool = False
+) -> None:
+    """在 `database` 里创建 Vendor 原始 standalone 标注结构与合成历史数据。
+
+    来源对象由独立合成历史 owner 角色拥有；`two_operator_mode` 为真时使用同形四表 +
+    `dataset.two_operator_mode` 形态并把历史行设为 true。
+    """
     _create_database(instance, database)
-    sql = STANDALONE_DDL.read_text(encoding="utf-8") + SYNTHETIC_ROWS
+    ddl = STANDALONE_DDL.read_text(encoding="utf-8")
+    if two_operator_mode:
+        ddl += "ALTER TABLE dataset ADD COLUMN two_operator_mode BOOLEAN DEFAULT FALSE;\n"
+    sql = (
+        f"DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{LEGACY_OWNER}') "
+        f"THEN CREATE ROLE {LEGACY_OWNER}; END IF; END $$;\n"
+        f"ALTER SCHEMA public OWNER TO {LEGACY_OWNER};\n"
+        f"SET ROLE {LEGACY_OWNER};\n{ddl}{SYNTHETIC_ROWS}\nRESET ROLE;\n"
+    )
     result = _run_sql(instance, database, sql)
     assert result.exit_code == 0, result.output
+    if two_operator_mode:
+        updated = _run_sql(
+            instance,
+            database,
+            "UPDATE dataset SET two_operator_mode = TRUE WHERE id = 'ds-historic-1';",
+        )
+        assert updated.exit_code == 0, updated.output
 
 
 def _restore_backup(instance: TrainingInstall, source: str, target: str) -> None:
-    """按文档化工作流 `pg_dump`/`pg_restore` 把来源备份恢复到空目标，原库保留。"""
+    """按文档化工作流把来源备份原子恢复到空目标，归安装身份所有，原库保留。"""
     result = _shell(
         instance,
+        "set -eu\n"
         'export PGPASSWORD="$(cat /run/secrets/center-db-password)"\n'
         f"pg_dump -Fc -d {source} > /tmp/nvsop-s067.dump\n"
-        f"pg_restore -d {target} /tmp/nvsop-s067.dump\n",
+        f"pg_restore --no-owner --no-privileges --single-transaction --exit-on-error "
+        f"-d {target} /tmp/nvsop-s067.dump\n",
     )
     assert result.exit_code == 0, result.output
 
@@ -294,6 +331,9 @@ def test_backup_restore_upgrade_preserves_historic_data_and_enables_five_service
     target = _admin_engine(instance, "training")
     restored = _snapshot(target)
     assert restored == legacy_before
+    # 来源归合成历史 owner，restore 归一化到安装身份（--no-owner），runtime 才能读写。
+    assert _table_owners(legacy_engine) == {LEGACY_OWNER}
+    assert _table_owners(target) == {INSTALL_ROLE}
     before_oids = _table_oids(target, SOURCE_TABLES)
 
     result = _upgrade(instance, "training")
@@ -353,24 +393,30 @@ def test_backup_restore_upgrade_preserves_historic_data_and_enables_five_service
     _exercise_five_services(runtime)
 
 
+@pytest.mark.parametrize(
+    ("two_operator_mode", "expected_version"),
+    [(False, "annotation-standalone"), (True, "annotation-two-operator")],
+)
 def test_repeat_startup_is_idempotent_and_preserves_oids_version_and_data(
-    training_install: TrainingInstall,
+    training_install: TrainingInstall, two_operator_mode: bool, expected_version: str
 ) -> None:
-    """AC2：重复启动不重跑 DDL，OID、版本行与数据均不变。"""
+    """AC2：两种受支持来源形态重复启动不重跑 DDL，OID、版本行与数据均不变。"""
     instance = training_install
-    _seed_legacy_source(instance, "training_idempotent")
-    first = _upgrade(instance, "training_idempotent")
+    database = "training_idempotent" if not two_operator_mode else "training_idempotent_two_op"
+    _seed_legacy_source(instance, database, two_operator_mode=two_operator_mode)
+    first = _upgrade(instance, database)
     assert first.exit_code == 0, first.output
 
-    engine = _admin_engine(instance, "training_idempotent")
+    engine = _admin_engine(instance, database)
     before = _snapshot(engine)
     before_oids = _table_oids(engine, ALL_TABLES)
     with engine.connect() as connection:
         before_version = connection.execute(
             text(f"SELECT vendor_commit, ddl_sha256, source_version FROM {VERSION_TABLE}")
         ).all()
+        assert before_version[0][2] == expected_version
 
-    second = instance.run_install(database="training_idempotent")
+    second = instance.run_install(database=database)
     assert second.exit_code == 0, second.output
     assert "跳过安装" in second.output.decode("utf-8")
 
@@ -383,6 +429,13 @@ def test_repeat_startup_is_idempotent_and_preserves_oids_version_and_data(
             ).all()
             == before_version
         )
+        if two_operator_mode:
+            assert (
+                connection.execute(
+                    text("SELECT two_operator_mode FROM dataset WHERE id = 'ds-historic-1'")
+                ).scalar_one()
+                is True
+            )
 
 
 def test_upgrade_failure_rolls_back_without_version_or_partial_objects(
@@ -424,7 +477,7 @@ def test_upgrade_failure_rolls_back_without_version_or_partial_objects(
 def test_unknown_partial_and_incompatible_sources_are_rejected(
     training_install: TrainingInstall,
 ) -> None:
-    """AC2：未知来源、部分训练对象、结构不符的标注来源都明确拒绝且不写版本。"""
+    """AC2：未知来源、部分训练对象、结构/类型/外键不符的标注来源都拒绝且不写版本。"""
     instance = training_install
     _create_database(instance, "training_upgrade_unknown")
     unknown = _run_sql(instance, "training_upgrade_unknown", "CREATE TABLE random_legacy (id int);")
@@ -444,10 +497,49 @@ def test_unknown_partial_and_incompatible_sources_are_rejected(
     )
     assert incompatible.exit_code == 0, incompatible.output
 
+    # 已知列名但类型/外键不符的来源必须按未知形态拒绝，不能只比对列名与主键。
+    _seed_legacy_source(instance, "training_upgrade_wrong_type")
+    wrong_type = _run_sql(
+        instance,
+        "training_upgrade_wrong_type",
+        "ALTER TABLE dataset ALTER COLUMN actions TYPE text USING actions::text;",
+    )
+    assert wrong_type.exit_code == 0, wrong_type.output
+
+    _seed_legacy_source(instance, "training_upgrade_bool_type", two_operator_mode=True)
+    bool_type = _run_sql(
+        instance,
+        "training_upgrade_bool_type",
+        "ALTER TABLE dataset ALTER COLUMN two_operator_mode TYPE text "
+        "USING two_operator_mode::text;",
+    )
+    assert bool_type.exit_code == 0, bool_type.output
+
+    _seed_legacy_source(instance, "training_upgrade_missing_fk")
+    missing_fk = _run_sql(
+        instance,
+        "training_upgrade_missing_fk",
+        "ALTER TABLE annotation DROP CONSTRAINT annotation_video_id_fkey;",
+    )
+    assert missing_fk.exit_code == 0, missing_fk.output
+
+    _seed_legacy_source(instance, "training_upgrade_wrong_fk")
+    wrong_fk = _run_sql(
+        instance,
+        "training_upgrade_wrong_fk",
+        "ALTER TABLE video DROP CONSTRAINT video_dataset_id_fkey, "
+        "ADD FOREIGN KEY (dataset_id) REFERENCES dataset(id);",
+    )
+    assert wrong_fk.exit_code == 0, wrong_fk.output
+
     for database in (
         "training_upgrade_unknown",
         "training_upgrade_partial",
         "training_upgrade_incompatible",
+        "training_upgrade_wrong_type",
+        "training_upgrade_bool_type",
+        "training_upgrade_missing_fk",
+        "training_upgrade_wrong_fk",
     ):
         result = instance.run_install(database=database)
         assert result.exit_code != 0, database

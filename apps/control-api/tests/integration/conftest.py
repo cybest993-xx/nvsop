@@ -34,8 +34,9 @@ from testcontainers.community.postgres import PostgresContainer
 from testcontainers.core.container import DockerContainer
 
 # The version the center machine's Compose runs (§六). Pinned rather than `latest`, so a
-# release upstream cannot change what the suite proved.
-POSTGRES_IMAGE = "postgres:17.6-alpine"
+# release upstream cannot change what the suite proved. The center image ships TimescaleDB
+# (S020), so the owner migration can create the extension the deployment preloads.
+POSTGRES_IMAGE = "timescale/timescaledb:2.22.1-pg17"
 
 CONTROL_API = Path(__file__).resolve().parents[2]
 REDIS_IMAGE = "redis:7.4-alpine"

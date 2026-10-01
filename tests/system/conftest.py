@@ -27,7 +27,8 @@ from alembic.config import Config
 from sqlalchemy import Engine, create_engine, text
 from testcontainers.community.postgres import PostgresContainer
 
-POSTGRES_IMAGE = "postgres:17.6-alpine"
+# 中心部署镜像自带 TimescaleDB 扩展（S020），固定具体标签以便迁移能创建部署预加载的扩展。
+POSTGRES_IMAGE = "timescale/timescaledb:2.22.1-pg17"
 SERVER_HOST = "127.0.0.1"
 SERVER_START_TIMEOUT_SECONDS = 30.0
 

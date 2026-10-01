@@ -66,16 +66,20 @@ class RecordingConnector:
         *,
         capability: Capability | None = None,
         outcome: WriteOutcome = ACCEPTED,
+        health: ConnectorHealth | None = None,
     ) -> None:
         self.capability: Capability = measured_capability() if capability is None else capability
         self.writes: list[tuple[OutputPoint, PointState]] = []
+        self.probes = 0
+        self.health = health or ConnectorHealth(reachability=Reachability.REACHABLE)
         self._outcome = outcome
 
     def read(self, point: InputPoint, /, *, timeout: float) -> ReadResult:
         return Unreachable(detail="not under test")
 
     def probe(self, /, *, timeout: float) -> ConnectorHealth:
-        return ConnectorHealth(reachability=Reachability.REACHABLE)
+        self.probes += 1
+        return self.health
 
     def write(self, point: OutputPoint, state: PointState, /, *, timeout: float) -> WriteOutcome:
         self.writes.append((point, state))
@@ -114,6 +118,18 @@ class RecordingGate:
     def refusal(self, request: WriteRequest, /) -> Refused | None:
         self.checked.append(request.key)
         return self.refusal_value
+
+
+class SequencedGate:
+    """按调用次序返回预设拒绝, 用于证明实际发送前的重新判定。"""
+
+    def __init__(self, *refusals: Refused | None) -> None:
+        self._refusals = list(refusals)
+        self.checked: list[str] = []
+
+    def refusal(self, request: WriteRequest, /) -> Refused | None:
+        self.checked.append(request.key)
+        return self._refusals.pop(0) if self._refusals else None
 
 
 class TheExecutionLeaseGatePrecedesTheDeviceTest(unittest.TestCase):
@@ -165,11 +181,16 @@ class TheExecutionLeaseGatePrecedesTheDeviceTest(unittest.TestCase):
             gate=gate,
         )
         dispatch.write(request())
+        checks_after_first_write = len(gate.checked)
 
         gate.refusal_value = Refused(reason=WriteRefusal.EXECUTION_LEASE_EXPIRED, detail="expired")
 
         self.assertEqual(ACCEPTED, dispatch.write(request()))
-        self.assertEqual(["disposal-7"], gate.checked)
+        self.assertEqual(
+            checks_after_first_write,
+            len(gate.checked),
+            "the recorded terminal outcome short-circuits before the gate is consulted again",
+        )
         self.assertEqual([(INTERLOCK, PointState.ACTIVE)], connector.writes)
 
 
@@ -258,6 +279,11 @@ class AnUnverifiedConnectorIsNotDrivenTest(unittest.TestCase):
             dispatch.write(request()),
         )
         self.assertEqual([], connector.writes)
+        self.assertEqual(
+            0,
+            connector.probes,
+            "an unverified connector is not even probed: the capability refusal precedes the GET",
+        )
 
     def test_a_refusal_is_not_remembered_as_the_action_having_happened(self) -> None:
         connector = RecordingConnector(capability=Unverified())
@@ -284,6 +310,94 @@ class ASlowConnectorIsNotUsedForSafetyOutputTest(unittest.TestCase):
             dispatch.write(request()),
         )
         self.assertEqual([], connector.writes)
+
+
+class TheConnectionIsConfirmedBeforeTheDeviceIsDrivenTest(unittest.TestCase):
+    """S029 AC1: 断连在写入前拒绝, 探测只是安全 GET, 不占用幂等键。"""
+
+    def test_an_unreachable_probe_refuses_without_a_physical_write(self) -> None:
+        connector = RecordingConnector(
+            health=ConnectorHealth(
+                reachability=Reachability.UNREACHABLE, detail="connection refused"
+            )
+        )
+        dispatch, ledger, events = dispatcher(connector)
+
+        self.assertEqual(
+            Refused(reason=WriteRefusal.CONNECTOR_UNREACHABLE, detail="connection refused"),
+            dispatch.write(request()),
+        )
+        self.assertEqual([], connector.writes)
+        self.assertEqual(1, connector.probes)
+        self.assertIsNone(
+            ledger.outcome_for("disposal-7"),
+            "the probe refusal happens before the ledger claim, so nothing occupies the key",
+        )
+        self.assertIsInstance(events[-1].outcome, Refused)
+        assert isinstance(events[-1].outcome, Refused)
+        self.assertEqual(WriteRefusal.CONNECTOR_UNREACHABLE, events[-1].outcome.reason)
+        self.assertFalse(events[-1].replayed)
+
+    def test_a_recovered_connection_lets_the_same_key_proceed(self) -> None:
+        connector = RecordingConnector(
+            health=ConnectorHealth(reachability=Reachability.UNREACHABLE)
+        )
+        dispatch, _, _ = dispatcher(connector)
+        dispatch.write(request())
+
+        connector.health = ConnectorHealth(reachability=Reachability.REACHABLE)
+
+        self.assertEqual(ACCEPTED, dispatch.write(request()))
+        self.assertEqual([(INTERLOCK, PointState.ACTIVE)], connector.writes)
+
+    def test_a_reachable_probe_lets_the_write_through(self) -> None:
+        connector = RecordingConnector()
+        dispatch, _, _ = dispatcher(connector)
+
+        self.assertEqual(ACCEPTED, dispatch.write(request()))
+        self.assertEqual(1, connector.probes)
+        self.assertEqual([(INTERLOCK, PointState.ACTIVE)], connector.writes)
+
+
+class AuthorizationIsRecheckedImmediatelyBeforeTheSendTest(unittest.TestCase):
+    """S029 AC2: 探测与账本占用后、实际发送前重新判定执行权/停写。
+
+    The probe and the durable claim can take time, and a lease can expire or a station can be
+    closed while they run. A single check at request start would cover the whole execution with
+    a stale answer; the send therefore re-checks against the local fact and, if refused, leaves
+    the claim as a retryable refusal instead of an attempt that later expires into `unknown`.
+    """
+
+    def test_authority_lost_during_the_attempt_refuses_before_the_send(self) -> None:
+        connector = RecordingConnector()
+        gate = SequencedGate(
+            None,
+            Refused(reason=WriteRefusal.EXECUTION_LEASE_EXPIRED, detail="expired"),
+        )
+        ledger = InMemoryWriteLedger()
+        events: list[WriteAttempted] = []
+        dispatch = OutputDispatcher(
+            connector=connector, ledger=ledger, diagnostics=events.append, gate=gate
+        )
+
+        expected = Refused(reason=WriteRefusal.EXECUTION_LEASE_EXPIRED, detail="expired")
+        self.assertEqual(expected, dispatch.write(request()))
+        self.assertEqual([], connector.writes)
+        self.assertEqual(
+            ["disposal-7", "disposal-7"],
+            gate.checked,
+            "the gate is consulted once before the probe/claim and once before the send",
+        )
+        self.assertEqual(
+            expected,
+            ledger.outcome_for("disposal-7"),
+            "the claim is released as a retryable refusal, never left to expire into unknown",
+        )
+        self.assertEqual(expected, events[-1].outcome)
+        self.assertFalse(events[-1].replayed)
+
+        self.assertEqual(ACCEPTED, dispatch.write(request()))
+        self.assertEqual([(INTERLOCK, PointState.ACTIVE)], connector.writes)
 
 
 class TheAdaptersOwnRefusalIsPassedThroughTest(unittest.TestCase):

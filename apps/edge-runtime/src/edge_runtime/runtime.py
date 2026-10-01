@@ -46,7 +46,6 @@ from edge_runtime.connectors.writes import (
     PERSISTENT_UNKNOWN_DETAIL,
     OutputDispatcher,
     WriteAttempted,
-    WriteGate,
     WriteRequest,
 )
 from edge_runtime.evidence_media import EvidenceMediaWorker
@@ -212,24 +211,67 @@ def _outcome_from_storage(kind: str, detail: str | None, at: float) -> WriteOutc
     return Failed(detail=detail or f"unknown persistent write result: {kind}")
 
 
-class ExecutionLeaseWriteGate:
-    """按本机持久执行权事实在写入边界拒绝过期或缺失的物理写入。
+class StationWriteLifecycle:
+    """工位物理写入生命周期: 关闭或配置切换后置为停止, 写入边界据此拒绝新写入。
+
+    组合根为每个工位创建一个, 同时交给该工位的输出写入门禁与 ``AutonomousStation``。
+    ``AutonomousStation.close()`` 在关闭输入源前先置位, 因此旧 runtime/station 关闭或切换后
+    无法再驱动执行器 (S029 AC2)。
+    """
+
+    def __init__(self) -> None:
+        self._stopped = threading.Event()
+
+    def stop(self) -> None:
+        self._stopped.set()
+
+    @property
+    def stopped(self) -> bool:
+        return self._stopped.is_set()
+
+
+class StationOutputWriteGate:
+    """把物理写入授权绑定到真实工位、连接器、输出点位与生命周期。
 
     它只读 ``LocalExecutionLeaseStore`` 这一份事实, 每次写入都按本机墙钟重新判定到期, 因此
     不需要等待下一次中心请求, 也不维护第二份有效期 (§5.17)。
+
+    工位身份来自组合根而非 ``request.station_id``: 请求无法借另一工位的租约放行。目标点位必须
+    属于本工位在该连接器上已配置的输出点位, 且工位生命周期未停止 (S029 AC1/AC2)。
     """
 
     def __init__(
         self,
-        leases: LocalExecutionLeaseStore,
         *,
+        station_id: str,
+        connector_id: str,
+        output_points: tuple[OutputPoint, ...],
+        leases: LocalExecutionLeaseStore,
+        lifecycle: StationWriteLifecycle,
         clock: Callable[[], float] = time,
     ) -> None:
+        self._station_id = station_id
+        self._connector_id = connector_id
+        self._output_points = frozenset(output_points)
         self._leases = leases
+        self._lifecycle = lifecycle
         self._clock = clock
 
     def refusal(self, request: WriteRequest, /) -> Refused | None:
-        authority = self._leases.status(request.station_id, now=self._clock())
+        if self._lifecycle.stopped:
+            return Refused(
+                reason=WriteRefusal.WRITE_STOPPED,
+                detail=f"工位 {self._station_id} 已停止写入",
+            )
+        if request.connector_id != self._connector_id or request.point not in self._output_points:
+            return Refused(
+                reason=WriteRefusal.TARGET_NOT_IN_STATION,
+                detail=(
+                    f"输出点位 {request.point.label}@{request.point.address} "
+                    f"不属于工位 {self._station_id} 的连接器 {self._connector_id}"
+                ),
+            )
+        authority = self._leases.status(self._station_id, now=self._clock())
         if authority.authorized:
             return None
         reason = (
@@ -348,6 +390,7 @@ class AutonomousStation:
         connector_runtimes: tuple[ConnectorRuntime, ...] = (),
         output_dispatchers: Mapping[str, OutputDispatcher] | None = None,
         output_points: Mapping[str, tuple[OutputPoint, ...]] | None = None,
+        write_lifecycle: StationWriteLifecycle | None = None,
     ) -> None:
         self._supervisor = supervisor
         self._source = source
@@ -355,6 +398,7 @@ class AutonomousStation:
         self._connector_runtimes = connector_runtimes
         self._output_dispatchers = dict(output_dispatchers or {})
         self._output_points = dict(output_points or {})
+        self._write_lifecycle = write_lifecycle or StationWriteLifecycle()
 
     @property
     def station_id(self) -> str | None:
@@ -377,14 +421,24 @@ class AutonomousStation:
         return {connector_id: tuple(points) for connector_id, points in self._output_points.items()}
 
     def write_output(self, request: WriteRequest) -> WriteOutcome:
-        """通过本工位已组合的连接器派发一个输出点写入。"""
+        """通过本工位已组合的连接器派发一个输出点写入。
+
+        连接器不属于本工位时返回结构化拒绝, 不尝试任何设备请求。
+        """
         dispatcher = self._output_dispatchers.get(request.connector_id)
         if dispatcher is None:
-            raise KeyError(f"output connector is not configured: {request.connector_id}")
+            return Refused(
+                reason=WriteRefusal.TARGET_NOT_IN_STATION,
+                detail=(
+                    f"连接器 {request.connector_id} 未配置到工位 {self._station_id}, "
+                    "不驱动物理执行器"
+                ),
+            )
         return dispatcher.write(request)
 
     def close(self) -> None:
-        """关闭当前工位输入源。"""
+        """先停写再关闭当前工位输入源。"""
+        self._write_lifecycle.stop()
         self._source.close()
 
     def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
@@ -1082,15 +1136,37 @@ def _build_runtime_composition(
         timeout=config.command_timeout,
     )
     disposal_ledger = state.disposal()
-    execution_gate: WriteGate = ExecutionLeaseWriteGate(state.execution_leases())
+    leases = state.execution_leases()
+    station_bindings = {
+        binding.configuration.station_id: binding for binding in runtime_configuration.stations
+    }
+    write_lifecycles = {station_id: StationWriteLifecycle() for station_id in station_bindings}
+    output_points_by_station_connector = {
+        station_id: {
+            connector_id: binding.output_points_for(connector_id)
+            for connector_id in binding.connector_ids
+        }
+        for station_id, binding in station_bindings.items()
+    }
+    # 只为已归属工位的连接器建 dispatcher: 门禁绑定真实工位/连接器/目标点位/生命周期,
+    # 不读取请求自报的 station_id。
     output_dispatchers = {
         connector_id: OutputDispatcher(
             connector=adapter,
             ledger=SQLiteWriteLedger(disposal_ledger),
             diagnostics=_log_write_attempt,
-            gate=execution_gate,
+            gate=StationOutputWriteGate(
+                station_id=connector_owners[connector_id],
+                connector_id=connector_id,
+                output_points=output_points_by_station_connector[connector_owners[connector_id]][
+                    connector_id
+                ],
+                leases=leases,
+                lifecycle=write_lifecycles[connector_owners[connector_id]],
+            ),
         )
         for connector_id, adapter in adapters.items()
+        if connector_id in connector_owners
     }
     report_reconciler = (
         None
@@ -1170,6 +1246,7 @@ def _build_runtime_composition(
                         connector_id: station_binding.output_points_for(connector_id)
                         for connector_id in station_binding.connector_ids
                     },
+                    write_lifecycle=write_lifecycles[station_config.station_id],
                 )
             )
     except Exception:

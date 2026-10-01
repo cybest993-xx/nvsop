@@ -11,7 +11,7 @@
 | 层 | 入口 | 负责 |
 |---|---|---|
 | 本机运行时（主机进程） | `NVSOP_EDGE_COMMAND_CONFIG_FILE=<edge.json> python -m edge_runtime` | 判定核心、违规锁存、处置、证据切片、连接器、中心配置同步，以及**唯一的 MediaMTX 预览/录像** |
-| 推理服务（本文件 Compose） | `docker compose -p <身份> -f deploy/edge/compose.yaml up -d` | 一份模板配置的 DeepStream + DDM + vLLM 推理端点，供本机 supervisor 通过 `API_SERVER_PORT` 消费 |
+| 推理服务（本文件 Compose） | `docker compose -p <身份> -f deploy/edge/compose.yaml up -d --no-build --pull never` | 一份模板配置的 DeepStream + DDM + vLLM 推理端点，供本机 supervisor 通过 `API_SERVER_PORT` 消费 |
 
 推理服务不负责判定与处置：基座 checker、声光、messaging 在此显式关闭。MediaMTX 只由主机
 运行时启动；**不要**在本 Compose 里再起第二个 MediaMTX 或第二套录像，否则会出现两个录制者。
@@ -19,16 +19,23 @@
 ## 启动
 
 每台主机、每个推理后端一个独立 Compose project。项目身份用 Compose 原生
-`-p/--project-name`（或 `COMPOSE_PROJECT_NAME`）指定，例如 `host-01-backend-a`；
-同一主机上的多个后端必须错开 `API_SERVER_PORT` 与 `NVIDIA_VISIBLE_DEVICES`：
+`-p/--project-name`（或 `COMPOSE_PROJECT_NAME`）指定，例如 `host-01-backend-a`。
+**同一主机上的多个后端必须错开 `API_SERVER_PORT`**；GPU 由 `NVIDIA_VISIBLE_DEVICES` 按主机容量
+分配，可多后端共享同一张卡，也可按显存/算力分卡，不要求每后端独占一张。
+
+镜像由部署流程在本机预先构建或 `docker load` 载入，**本仓库不发布可直接拉取的默认镜像**。
+启动时显式给出操作者已载入的 `NV_DS_SOP_IMAGE`，并加 `--no-build --pull never`，避免部署命令
+隐式在线构建或拉取：
 
 ```sh
-# 主机 host-01 上的后端 A
+# 主机 host-01 上的后端 A；NV_DS_SOP_IMAGE 与 VLLM_MODEL_PATH 由部署流程预先确定
+NV_DS_SOP_IMAGE="${NV_DS_SOP_IMAGE:?请先配置已载入镜像}" \
 API_SERVER_PORT=8301 NVIDIA_VISIBLE_DEVICES=0 \
 MODEL_ROOT_DIR=/srv/nvsop/models \
+VLLM_MODEL_PATH=/models/vlm \
 NVSOP_EDGE_ACTION_CONFIG=/srv/nvsop/edge/actions.json \
 NVSOP_EDGE_VLM_PROMPT=/srv/nvsop/edge/vlm_prompts.txt \
-  docker compose -p host-01-backend-a -f deploy/edge/compose.yaml up -d
+  docker compose -p host-01-backend-a -f deploy/edge/compose.yaml up -d --no-build --pull never
 ```
 
 随后按[运行配置](../../docs/deployment/configuration.md)在本机启动 `python -m edge_runtime`。
@@ -38,8 +45,8 @@ NVSOP_EDGE_VLM_PROMPT=/srv/nvsop/edge/vlm_prompts.txt \
 
 | 项 | 部署变量 | 说明 |
 |---|---|---|
-| 镜像 | `NV_DS_SOP_IMAGE` | 复用 vendor 基座镜像；生产由部署流程构建并固定 digest，本仓库不发布镜像标签 |
-| GPU | `NVIDIA_VISIBLE_DEVICES` | 每个后端可见的 GPU；同机多后端按容量分配，不做型号分支 |
+| 镜像 | `NV_DS_SOP_IMAGE` | 复用 vendor 基座镜像；部署流程在本机构建/载入并固定 digest，本仓库不发布可拉取的默认镜像 |
+| GPU | `NVIDIA_VISIBLE_DEVICES` | 每个后端可见的 GPU；同机多后端按容量共享或分卡，不做型号分支 |
 | 内网端口 | `API_SERVER_PORT` | supervisor 访问的推理端点；同机多后端唯一 |
 | 模型根 | `MODEL_ROOT_DIR` | 只读挂到容器 `/models`，与基座 `DDM_MODEL_PATH`/`VLLM_MODEL_PATH` 默认前缀一致 |
 | 模板/提示词 | `NVSOP_EDGE_ACTION_CONFIG`、`NVSOP_EDGE_VLM_PROMPT` | 本机只读文件，挂到基座默认 `ACTION_CONFIG_PATH`/`VLM_PROMPT_PATH` |

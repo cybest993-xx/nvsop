@@ -1,8 +1,9 @@
 # NVSOP 推理机（Edge）推理服务部署入口：每「主机 × 推理后端」一个独立 Compose project。
-# 部署者用原生 -p/--project-name（或 COMPOSE_PROJECT_NAME）指定身份；同机多后端错开
-# API_SERVER_PORT 与 NVIDIA_VISIBLE_DEVICES。判定与处置由本机 `python -m edge_runtime`
-# supervisor 承担，故关闭基座 checker 与声光/messaging，且不引入 Kafka。主机私钥与设备
-# 凭据留在 edge_runtime 的本机只读 secret 文件，不出现在本文件、Git、日志、API 或导出。
+# 部署者用原生 -p/--project-name（或 COMPOSE_PROJECT_NAME）指定身份；同机多后端必须错开
+# API_SERVER_PORT，GPU 由 NVIDIA_VISIBLE_DEVICES 按容量共享或分卡（不强制每后端独卡）。
+# 判定与处置由本机 `python -m edge_runtime` supervisor 承担，故关闭基座 checker 与声光/
+# messaging，且不引入 Kafka。主机私钥与设备凭据留在 edge_runtime 的本机只读 secret 文件，
+# 不出现在本文件、Git、日志、API 或导出。
 services:
   inference:
     extends:

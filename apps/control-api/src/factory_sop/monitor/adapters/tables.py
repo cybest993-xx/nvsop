@@ -184,6 +184,15 @@ class ReportedObservationRow(Table):
         )
 
 
+class ReportedDisposalRow(Table):
+    __tablename__ = "monitor_disposal"
+
+    event_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    host_id: Mapped[str] = mapped_column(String(128), index=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+
 class ReportedViolationRow(Table):
     __tablename__ = "monitor_violation"
 

@@ -156,6 +156,9 @@ import type {
   ListInferenceHostsData,
   ListInferenceHostsErrors,
   ListInferenceHostsResponses,
+  ListMonitorDisposalsData,
+  ListMonitorDisposalsErrors,
+  ListMonitorDisposalsResponses,
   ListMonitorObservationsData,
   ListMonitorObservationsErrors,
   ListMonitorObservationsResponses,
@@ -288,6 +291,9 @@ import type {
   ReportMonitorDecisionData,
   ReportMonitorDecisionErrors,
   ReportMonitorDecisionResponses,
+  ReportMonitorDisposalData,
+  ReportMonitorDisposalErrors,
+  ReportMonitorDisposalResponses,
   ReportMonitorHealthData,
   ReportMonitorHealthErrors,
   ReportMonitorHealthResponses,
@@ -1303,6 +1309,18 @@ export const readLiveness = <ThrowOnError extends boolean = false>(
   })
 
 /**
+ * List Monitor Disposals
+ */
+export const listMonitorDisposals = <ThrowOnError extends boolean = false>(
+  options?: Options<ListMonitorDisposalsData, ThrowOnError>,
+): RequestResult<ListMonitorDisposalsResponses, ListMonitorDisposalsErrors, ThrowOnError> =>
+  (options?.client ?? client).get<
+    ListMonitorDisposalsResponses,
+    ListMonitorDisposalsErrors,
+    ThrowOnError
+  >({ url: '/api/v1/monitor/disposals', ...options })
+
+/**
  * Report Monitor Health
  */
 export const reportMonitorHealth = <ThrowOnError extends boolean = false>(
@@ -1371,6 +1389,25 @@ export const reportMonitorDecision = <ThrowOnError extends boolean = false>(
     ThrowOnError
   >({
     url: '/api/v1/monitor/reported-decisions',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Report Monitor Disposal
+ */
+export const reportMonitorDisposal = <ThrowOnError extends boolean = false>(
+  options: Options<ReportMonitorDisposalData, ThrowOnError>,
+): RequestResult<ReportMonitorDisposalResponses, ReportMonitorDisposalErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    ReportMonitorDisposalResponses,
+    ReportMonitorDisposalErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/monitor/reported-disposals',
     ...options,
     headers: {
       'Content-Type': 'application/json',

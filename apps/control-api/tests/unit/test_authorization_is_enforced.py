@@ -485,6 +485,7 @@ EXEMPT = {
     ("POST", f"{API_PREFIX}/monitor/reported-decisions"),
     ("POST", f"{API_PREFIX}/monitor/health"),
     ("POST", f"{API_PREFIX}/monitor/reported-instances"),
+    ("POST", f"{API_PREFIX}/monitor/reported-disposals"),
     ("POST", f"{API_PREFIX}/monitor/reported-observations"),
 }
 

@@ -91,7 +91,7 @@ RestartSec=2
 - `local_state_path`
 - `stations`（非空）
 
-可选：`center_ca_file`、`media`。
+可选：`center_ca_file`、`media`、`evidence`。
 
 主机私钥从文件读取并校验；连接器凭据同样留在本机 secret 文件。**当前生产入口以这份本地 JSON 作为 bootstrap/本机部署配置**。设计上的权威分工是中心拥有拓扑、模板、版本和期望运行参数，本机文件拥有本机连接信息、adapter profile 和设备秘密；不要把本机 secret 反向写入中心配置或 Git。
 
@@ -144,6 +144,19 @@ RestartSec=2
 当前本机配置解析器支持的生产 connector type 是 `hikvision_isapi`。每个连接器配置包含 ID、revision、`credentials_configured`、`base_url`、ISAPI profile 和能力声明。若 `credentials_configured=true`，必须提供 `username_file` 与 `password_file`；秘密文件不得为空。
 
 能力声明是现场实测事实，不是从型号名猜出的能力。模板绑定和判定依赖能力数据；详见 [`../design/mechanisms/edge-autonomy.md`](../design/mechanisms/edge-autonomy.md)。
+
+### 本机证据切片
+
+可选 `evidence` 段启用本机证据切片；缺少它时运行时照常判定，证据待办保持 pending 而不声称成功。它复用 `media` 的录像目录与 ffmpeg：
+
+| 字段 | 含义 |
+|---|---|
+| `evidence_directory` | 本机证据目录；每个证据一个目录，含片段/关键帧/元数据并整体原子定稿 |
+| `ffprobe_binary` | 读取分段真实时长的 ffprobe |
+| `slice_timeout_seconds` | 单次 ffmpeg/ffprobe 超时 |
+| `recording_timezone`（可选） | 解析分段文件名的 IANA 时区；省略时按本机时区 |
+
+分段文件名来自 MediaMTX `recordPath`，其时间戳是 MediaMTX 进程的本机时区。**部署必须保证 MediaMTX 与边缘运行时同一时区，或用 `recording_timezone` 显式声明 MediaMTX 的时区**，否则证据窗口会错位。入队时冻结录像墙钟映射与当时参与 SOP 的连续录像相机路径，重启或改绑后历史待办仍按当时来源切片。
 
 ## 当前配置变更与同步机制
 

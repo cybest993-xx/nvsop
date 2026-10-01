@@ -36,6 +36,7 @@ from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
     ReportBackendProvenance,
     ReportedDecision,
+    ReportedDisposal,
     ReportedHealth,
     ReportedObservation,
     ReportEvidence,
@@ -54,6 +55,7 @@ CONFIGURATION_SHA256 = "c" * 64
 class MemoryMonitor:
     def __init__(self) -> None:
         self.decisions: dict[str, MirroredDecision] = {}
+        self.disposals: dict[str, ReportedDisposal] = {}
         self.health: dict[str, MirroredHealth] = {}
         self.instances: dict[str, MirroredSopInstance] = {}
         self.violations: dict[str, MirroredViolation] = {}
@@ -70,6 +72,20 @@ class MemoryMonitor:
             value, stream_sequence=self._decision_sequence
         )
         return True
+
+    def upsert_disposal(self, report: ReportedDisposal, *, received_at: datetime) -> bool:
+        del received_at
+        if report.event_id in self.disposals:
+            return False
+        self.disposals[report.event_id] = report
+        return True
+
+    def page_disposals(
+        self, *, page: int, page_size: int
+    ) -> tuple[tuple[ReportedDisposal, ...], int]:
+        values = tuple(self.disposals.values())
+        start = (page - 1) * page_size
+        return values[start : start + page_size], len(values)
 
     def upsert_health(self, value: MirroredHealth) -> bool:
         if value.report.event_id in self.health:

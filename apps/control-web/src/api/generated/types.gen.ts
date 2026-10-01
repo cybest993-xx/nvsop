@@ -6989,6 +6989,45 @@ export type ReadLivenessResponses = {
 
 export type ReadLivenessResponse = ReadLivenessResponses[keyof ReadLivenessResponses]
 
+export type ListMonitorDisposalsData = {
+  body?: never
+  path?: never
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/monitor/disposals'
+}
+
+export type ListMonitorDisposalsErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ListMonitorDisposalsError = ListMonitorDisposalsErrors[keyof ListMonitorDisposalsErrors]
+
+export type ListMonitorDisposalsResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageDictStrObject
+}
+
+export type ListMonitorDisposalsResponse =
+  ListMonitorDisposalsResponses[keyof ListMonitorDisposalsResponses]
+
 export type ReportMonitorHealthData = {
   /**
    * Body
@@ -7222,6 +7261,64 @@ export type ReportMonitorDecisionResponses = {
 
 export type ReportMonitorDecisionResponse =
   ReportMonitorDecisionResponses[keyof ReportMonitorDecisionResponses]
+
+export type ReportMonitorDisposalData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  headers?: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID'?: string | null
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/monitor/reported-disposals'
+}
+
+export type ReportMonitorDisposalErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReportMonitorDisposalError =
+  ReportMonitorDisposalErrors[keyof ReportMonitorDisposalErrors]
+
+export type ReportMonitorDisposalResponses = {
+  /**
+   * Response Reportmonitordisposal
+   *
+   * Successful Response
+   */
+  200: {
+    [key: string]: unknown
+  }
+}
+
+export type ReportMonitorDisposalResponse =
+  ReportMonitorDisposalResponses[keyof ReportMonitorDisposalResponses]
 
 export type ReportMonitorSopInstanceData = {
   /**

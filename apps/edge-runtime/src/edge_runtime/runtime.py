@@ -49,9 +49,11 @@ from edge_runtime.connectors.writes import (
     WriteGate,
     WriteRequest,
 )
+from edge_runtime.evidence_media import EvidenceMediaWorker
 from edge_runtime.judgment.model import HostInstant, HostLiveness
 from edge_runtime.local_state import (
     BackendReportContext,
+    EvidenceSource,
     ExecutionLeaseState,
     LocalExecutionLeaseStore,
     LocalState,
@@ -65,7 +67,12 @@ from edge_runtime.local_state.disposal import (
     LocalDisposalLedger,
     StoredDisposalResult,
 )
-from edge_runtime.media import MediaRuntime, validate_sop_camera_bindings
+from edge_runtime.media import (
+    MediaRuntime,
+    MediaRuntimeConfiguration,
+    RecordingMode,
+    validate_sop_camera_bindings,
+)
 from edge_runtime.reporting import HostReportReconciler
 from edge_runtime.reporting_transport import HttpDecisionReportTransport
 from edge_runtime.runtime_configuration import (
@@ -633,6 +640,12 @@ class _RuntimeCycleRunner:
                 )
                 self._cycle_stop.wait(0.5)
 
+    def _run_evidence(self) -> None:
+        evidence = self._runtime._evidence
+        if evidence is None:
+            return
+        evidence.run_forever(should_stop=self._stop_requested)
+
     def _run_configuration(self) -> None:
         runtime = self._runtime
         synchronizer = runtime._configuration_sync
@@ -724,6 +737,18 @@ class _RuntimeCycleRunner:
                 if runtime._media is not None
                 else []
             ),
+            *(
+                [
+                    threading.Thread(
+                        target=self._guard,
+                        args=(self._run_evidence,),
+                        name="edge-evidence-media",
+                        daemon=True,
+                    )
+                ]
+                if runtime._evidence is not None
+                else []
+            ),
             threading.Thread(
                 target=self._guard,
                 args=(lambda: self._isolate_center_worker("command", self._run_command),),
@@ -782,6 +807,7 @@ class AutonomousRuntime:
         stations: tuple[AutonomousStation, ...],
         state: LocalState,
         media: MediaRuntime | None = None,
+        evidence: EvidenceMediaWorker | None = None,
         report_reconciler: HostReportReconciler | None = None,
         report_wake: threading.Event | None = None,
         configuration_sync: ConfigurationSynchronizer | None = None,
@@ -798,6 +824,7 @@ class AutonomousRuntime:
         self._stations = list(stations)
         self._state = state
         self._media = media
+        self._evidence = evidence
         self._report_reconciler = report_reconciler
         self._report_wake = report_wake or threading.Event()
         self._configuration_sync = configuration_sync
@@ -1135,6 +1162,7 @@ def _build_runtime_composition(
                         template=station_config.template,
                         parameters=station_config.parameters,
                         margins=station_config.margins,
+                        disposition_policy=station_config.disposition_policy,
                     ),
                     source=source,
                     connector_runtimes=runtimes,
@@ -1227,6 +1255,39 @@ def build_connection_test_loop_from_file(
     )
 
 
+def _evidence_source_factory(
+    media: MediaRuntimeConfiguration | None,
+) -> Callable[[str], EvidenceSource | None] | None:
+    """从本机媒体配置按相机真实工位绑定装配入队时冻结来源 (S033)。
+
+    只纳入本机启用且参与 SOP 的连续录像相机; 工位未映射返回 None, 待办保持 pending 并记录
+    mapping missing, 不按当前中心重绑给历史判定猜来源。
+    """
+    if media is None:
+        return None
+    paths: dict[str, list[str]] = {}
+    for camera in media.cameras:
+        enabled = (
+            media.host_status == "active"
+            and camera.camera_status == "active"
+            and camera.station_status == "active"
+        )
+        if enabled and camera.sop_execution and camera.recording_mode is RecordingMode.CONTINUOUS:
+            paths.setdefault(camera.station_id, []).append(camera.media_path)
+    if not paths:
+        return None
+
+    def source(station_id: str) -> EvidenceSource | None:
+        frozen = paths.get(station_id)
+        return (
+            None
+            if not frozen
+            else EvidenceSource(wall_offset=time() - monotonic(), media_paths=tuple(sorted(frozen)))
+        )
+
+    return source
+
+
 def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRuntime:
     """从中心确认配置、真实连接器和 SQLite 状态装配自治运行时。"""
     config = load_configuration(config_path, include_stations=True)
@@ -1236,6 +1297,7 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
     state = open_local_state(
         str(config.local_state_path),
         notify_report_pending=report_wake.set,
+        evidence_source=_evidence_source_factory(config.media),
     )
     composition: RuntimeComposition | None = None
 
@@ -1308,11 +1370,26 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
                 report_transport=report_transport,
             )
 
+        media_configuration = config.media
+        evidence_configuration = config.evidence
+        evidence_worker = (
+            EvidenceMediaWorker(
+                state=state,
+                host_id=config.host_id,
+                recording_directory=media_configuration.recording_directory,
+                ffmpeg_binary=media_configuration.ffmpeg_binary,
+                configuration=evidence_configuration,
+                interval=config.command_poll_interval,
+            )
+            if media_configuration is not None and evidence_configuration is not None
+            else None
+        )
         runtime = AutonomousRuntime(
             command_loop=command_loop,
             stations=composition.stations,
             state=state,
             media=MediaRuntime(config.media) if config.media is not None else None,
+            evidence=evidence_worker,
             report_reconciler=composition.report_reconciler,
             report_wake=report_wake,
             configuration_sync=configuration_sync,

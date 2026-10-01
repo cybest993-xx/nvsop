@@ -11,6 +11,7 @@ from pathlib import Path
 from random import Random
 from threading import Event, Thread
 from time import monotonic
+from types import SimpleNamespace
 from typing import cast
 from unittest.mock import patch
 
@@ -24,10 +25,12 @@ from nvsop_contracts import (
 from edge_runtime.connectors.hikvision import CANDIDATE_PROFILE
 from edge_runtime.judgment.model import HostInstant
 from edge_runtime.judgment.reasons import ReasonCode
+from edge_runtime.media import MediaRuntimeConfiguration, RecordingMode
 from edge_runtime.runtime import (
     ConnectionTestCommandLoop,
     InputWaitExpired,
     SseStationInputSource,
+    _evidence_source_factory,
     build_connection_test_loop_from_file,
 )
 from edge_runtime.stream_health import StreamFact, StreamHealthEvent
@@ -641,6 +644,42 @@ class RuntimeConfigurationTest(unittest.TestCase):
                 self.assertIn(label, str(raised.exception))
                 self.assertNotIn("edge-password", str(raised.exception))
                 self.assertIsNone(raised.exception.__cause__)
+
+
+class EvidenceSourceFactoryTest(unittest.TestCase):
+    """证据来源按相机真实工位绑定冻结, 不按当前中心重绑猜历史来源 (S033)。"""
+
+    @staticmethod
+    def _camera(
+        path: str, *, status: str = "active", mode: RecordingMode = RecordingMode.CONTINUOUS
+    ) -> SimpleNamespace:
+        fields = {
+            "station_id": "station-1",
+            "media_path": path,
+            "camera_status": status,
+            "station_status": "active",
+            "sop_execution": True,
+            "recording_mode": mode,
+        }
+        return SimpleNamespace(**fields)
+
+    def test_factory_maps_only_enabled_continuous_sop_cameras_by_station(self) -> None:
+        cameras = (
+            self._camera("camera-a"),
+            self._camera("camera-b"),
+            self._camera("camera-c", status="inactive"),
+            self._camera("camera-d", mode=RecordingMode.PREVIEW_ONLY),
+        )
+        media = cast(
+            MediaRuntimeConfiguration,
+            SimpleNamespace(host_status="active", cameras=cameras),
+        )
+        factory = _evidence_source_factory(media)
+        assert factory is not None
+        source = factory("station-1")
+        assert source is not None
+        self.assertEqual(source.media_paths, ("camera-a", "camera-b"))
+        self.assertIsNone(factory("station-2"))
 
 
 if __name__ == "__main__":

@@ -27,6 +27,7 @@ from factory_sop.evidence.adapters import tables as evidence_tables  # noqa: F40
 from factory_sop.execution.adapters import tables as execution_tables  # noqa: F401
 from factory_sop.job.adapters import tables as job_tables  # noqa: F401
 from factory_sop.monitor.adapters import tables as monitor_tables  # noqa: F401
+from factory_sop.retention.adapters import tables as retention_tables  # noqa: F401
 from factory_sop.persistence import Table, database_url
 from factory_sop.settings import Settings
 from factory_sop.template.adapters import tables as template_tables  # noqa: F401

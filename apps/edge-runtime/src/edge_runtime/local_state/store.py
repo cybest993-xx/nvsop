@@ -19,6 +19,8 @@ from contextlib import AbstractContextManager
 from threading import RLock
 from typing import Protocol
 
+from nvsop_contracts import ReportedDisposal
+
 from edge_runtime.judgment.evidence import EvidenceClip
 from edge_runtime.judgment.model import (
     Decision,
@@ -41,10 +43,16 @@ from edge_runtime.local_state.codec import (
 )
 from edge_runtime.local_state.codec import violation as decode_violation
 from edge_runtime.local_state.configuration import LocalConfigurationStore
-from edge_runtime.local_state.disposal import LocalDisposalLedger
+from edge_runtime.local_state.disposal import (
+    LocalDisposalIntent,
+    LocalDisposalLedger,
+    LocalDisposalRequest,
+    StoredDisposalResult,
+)
 from edge_runtime.local_state.execution import LocalExecutionLeaseStore
 from edge_runtime.local_state.queues import (
     BackendReportContext,
+    EvidenceSource,
     PendingHealthReport,
     PendingObservationReport,
     PendingReport,
@@ -69,6 +77,13 @@ class ReactionStore(Protocol):
         evidence: Sequence[EvidenceClip],
         closed_instances: Sequence[Instance],
         report_provenance: Mapping[int, tuple[BackendReportContext, ...] | None],
+        disposals: Sequence[LocalDisposalRequest] = (),
+    ) -> tuple[LocalDisposalIntent, ...]: ...
+
+    def pending_disposals(self) -> tuple[LocalDisposalIntent, ...]: ...
+    def claim_disposal(self, intent: LocalDisposalIntent, *, at: HostInstant) -> bool: ...
+    def record_disposal(
+        self, intent: LocalDisposalIntent, result: StoredDisposalResult
     ) -> None: ...
 
     def enqueue_observation(
@@ -128,6 +143,11 @@ class ReportStore(Protocol):
 
     def record_health_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None: ...
 
+    def pending_disposal_ids(self, *, limit: int | None = None) -> tuple[int, ...]: ...
+    def disposal_report(self, disposal_id: int, *, reported_at: str) -> ReportedDisposal: ...
+    def mark_disposal_reported(self, disposal_id: int, *, at: HostInstant) -> None: ...
+    def record_disposal_failure(self, disposal_id: int, *, at: HostInstant, error: str) -> None: ...
+
 
 class StationStore(StationQueues):
     """推理机数据库中的一个工位作用域。
@@ -143,11 +163,13 @@ class StationStore(StationQueues):
         lock: AbstractContextManager[object],
         report_context: ReportContext | None = None,
         notify_report_pending: Callable[[], None] | None = None,
+        evidence_source: Callable[[str], EvidenceSource | None] | None = None,
     ) -> None:
         super().__init__(connection, station_id, lock)
         self._lock = lock
         self._report_context = report_context
         self._notify_report_pending = notify_report_pending
+        self._evidence_source = evidence_source
 
     def commit(
         self,
@@ -157,9 +179,11 @@ class StationStore(StationQueues):
         evidence: Sequence[EvidenceClip],
         closed_instances: Sequence[Instance],
         report_provenance: Mapping[int, tuple[BackendReportContext, ...] | None],
-    ) -> None:
-        """持久化一次反应, 并串行化共享 SQLite 连接上的工位线程。"""
+        disposals: Sequence[LocalDisposalRequest] = (),
+    ) -> tuple[LocalDisposalIntent, ...]:
+        """持久化一次反应及其处置意图;副作用在提交后执行。"""
         report_enqueued = False
+        created: list[LocalDisposalIntent] = []
         with self._lock:
             self._connection.execute("BEGIN IMMEDIATE")
             try:
@@ -193,6 +217,12 @@ class StationStore(StationQueues):
                         self._supersede_instance_open_report(
                             decision.instance_id, at=decision.evidence.anchor
                         )
+                ledger = LocalDisposalLedger(self._connection, self._lock)
+                host_id = None if self._report_context is None else self._report_context.host_id
+                for request in disposals:
+                    intent = ledger.ensure_local(self._station_id, request, host_id=host_id)
+                    if intent is not None:
+                        created.append(intent)
                 for clip in evidence:
                     self._enqueue_evidence(clip)
                 self._connection.execute("COMMIT")
@@ -201,6 +231,20 @@ class StationStore(StationQueues):
                     self._connection.execute("ROLLBACK")
                 raise
         if report_enqueued and self._notify_report_pending is not None:
+            self._notify_report_pending()
+        return tuple(created)
+
+    def pending_disposals(self) -> tuple[LocalDisposalIntent, ...]:
+        return LocalDisposalLedger(self._connection, self._lock).pending_local(self._station_id)
+
+    def claim_disposal(self, intent: LocalDisposalIntent, *, at: HostInstant) -> bool:
+        return LocalDisposalLedger(self._connection, self._lock).claim_local(intent, now=at.seconds)
+
+    def record_disposal(self, intent: LocalDisposalIntent, result: StoredDisposalResult) -> None:
+        if (
+            LocalDisposalLedger(self._connection, self._lock).record_local_result(intent, result)
+            and self._notify_report_pending is not None
+        ):
             self._notify_report_pending()
 
     def enqueue_health(
@@ -503,12 +547,17 @@ class StationStore(StationQueues):
             self._notify_report_pending()
 
     def _enqueue_evidence(self, clip: EvidenceClip) -> None:
-        """每个实例锚点一条证据; 第二次判定需要更大窗口时只扩大、不缩小 (§5.20)。"""
+        """每个实例锚点一条证据; 第二次判定需要更大窗口时只扩大、不缩小 (§5.20)。
+
+        入队时在同一反应事务里冻结录像墙钟映射与来源相机路径 (S033)。冲突扩窗只改请求窗口,
+        不重绑来源、不重算映射、不清旧结果: 旧较小片段不会被当作新窗口已完成。
+        """
+        source = None if self._evidence_source is None else self._evidence_source(self._station_id)
         self._connection.execute(
             """
             INSERT INTO local_evidence_queue (
-                station_id, instance_id, anchor, window_from, window_to
-            ) VALUES (?, ?, ?, ?, ?)
+                station_id, instance_id, anchor, window_from, window_to, wall_offset, sources
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (station_id, instance_id, anchor) DO UPDATE SET
                 window_from = min(window_from, excluded.window_from),
                 window_to   = max(window_to,   excluded.window_to)
@@ -519,6 +568,8 @@ class StationStore(StationQueues):
                 clip.anchor.seconds,
                 clip.start.seconds,
                 clip.end.seconds,
+                None if source is None else source.wall_offset,
+                None if source is None else json.dumps(list(source.media_paths)),
             ),
         )
 
@@ -650,25 +701,46 @@ class LocalState:
         connection: sqlite3.Connection,
         lock: AbstractContextManager[object] | None = None,
         notify_report_pending: Callable[[], None] | None = None,
+        evidence_source: Callable[[str], EvidenceSource | None] | None = None,
     ) -> None:
         self._connection = connection
         self._lock = lock or RLock()
         self._notify_report_pending = notify_report_pending
+        self._evidence_source = evidence_source
 
     def station(
         self, station_id: str, *, report_context: ReportContext | None = None
     ) -> StationStore:
         """返回一个工位的行作用域; 所有工位共享连接和写入锁。"""
         return StationStore(
-            self._connection, station_id, self._lock, report_context, self._notify_report_pending
+            self._connection,
+            station_id,
+            self._lock,
+            report_context,
+            self._notify_report_pending,
+            self._evidence_source,
         )
+
+    def pending_evidence_stations(self) -> tuple[str, ...]:
+        """跨工位返回仍有待切片证据的工位; 工位已从当前配置移除也要返回 (S033)。"""
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT DISTINCT station_id
+                  FROM local_evidence_queue
+                 WHERE uploaded_at IS NULL
+                   AND (sliced_at IS NULL OR covered_from > window_from OR covered_to < window_to)
+                 ORDER BY station_id
+                """
+            ).fetchall()
+        return tuple(str(row["station_id"]) for row in rows)
 
     def reports(self) -> ReportStore:
         """返回该主机 decision/instance 待上报事实的持久接缝。"""
         return _HostReportStore(self._connection, self._lock)
 
     def disposal(self) -> LocalDisposalLedger:
-        """返回该主机唯一的持久连接器写入账本。"""
+        """返回该主机唯一的持久处置账本。"""
         return LocalDisposalLedger(self._connection, self._lock)
 
     def execution_leases(self) -> LocalExecutionLeaseStore:
@@ -811,6 +883,22 @@ class _HostReportStore:
             raise ValueError("health queue item does not exist")
         return StationQueues(self._connection, str(row["station_id"]), self._lock)
 
+    def pending_disposal_ids(self, *, limit: int | None = None) -> tuple[int, ...]:
+        return LocalDisposalLedger(self._connection, self._lock).pending_report_ids(limit=limit)
+
+    def disposal_report(self, disposal_id: int, *, reported_at: str) -> ReportedDisposal:
+        return LocalDisposalLedger(self._connection, self._lock).report(
+            disposal_id, reported_at=reported_at
+        )
+
+    def mark_disposal_reported(self, disposal_id: int, *, at: HostInstant) -> None:
+        LocalDisposalLedger(self._connection, self._lock).mark_reported(disposal_id, at=at.seconds)
+
+    def record_disposal_failure(self, disposal_id: int, *, at: HostInstant, error: str) -> None:
+        LocalDisposalLedger(self._connection, self._lock).record_report_failure(
+            disposal_id, at=at.seconds, error=error
+        )
+
     def _queue(self, queue_id: int) -> StationQueues:
         with self._lock:
             row = self._connection.execute(
@@ -823,7 +911,10 @@ class _HostReportStore:
 
 
 def open_local_state(
-    path: str, *, notify_report_pending: Callable[[], None] | None = None
+    path: str,
+    *,
+    notify_report_pending: Callable[[], None] | None = None,
+    evidence_source: Callable[[str], EvidenceSource | None] | None = None,
 ) -> LocalState:
     """打开或创建推理机本地状态, 并迁移到当前 SQLite 模式。
 
@@ -837,4 +928,8 @@ def open_local_state(
     connection.execute("PRAGMA journal_mode = WAL")
     connection.execute("PRAGMA synchronous = FULL")
     migrate(connection)
-    return LocalState(connection, notify_report_pending=notify_report_pending)
+    return LocalState(
+        connection,
+        notify_report_pending=notify_report_pending,
+        evidence_source=evidence_source,
+    )

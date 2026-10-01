@@ -9,6 +9,7 @@ from edge_runtime.local_state.disposal import (
     DisposalClaim,
     DisposalIntent,
     LocalDisposalLedger,
+    LocalDisposalRequest,
     StoredDisposalResult,
 )
 from edge_runtime.local_state.schema import migrate
@@ -83,6 +84,13 @@ class DisposalLedgerTests(unittest.TestCase):
                     requested_state="inactive",
                 )
             )
+
+    def test_local_key_reuse_for_another_action_is_rejected(self) -> None:
+        request = LocalDisposalRequest("k", "v", 1, "record", "a", "s")
+        self.ledger.ensure_local("station-a", request, host_id="host-a")
+        other = LocalDisposalRequest("k", "v", 1, "frontend_alert", "a", "s")
+        with self.assertRaises(ValueError):
+            self.ledger.ensure_local("station-a", other, host_id="host-a")
 
     def test_concurrent_claims_reserve_one_physical_attempt(self) -> None:
         connection = sqlite3.connect(":memory:", isolation_level=None, check_same_thread=False)

@@ -14,6 +14,7 @@ from nvsop_contracts import (
     SOP_INSTANCE_REPORT_CONTRACT_VERSION,
     ConfigurationBundle,
     ReportedDecision,
+    ReportedDisposal,
     ReportedHealth,
     ReportedObservation,
     ReportedSopInstance,
@@ -141,6 +142,11 @@ class HttpDecisionReportTransport(DecisionReportTransport):
         if report.host_id != self._host_id:
             raise ValueError("an observation report cannot be sent by a different host")
         self._post("/api/v1/monitor/reported-observations", reported_observation_to_wire(report))
+
+    def send_disposal(self, report: ReportedDisposal) -> None:
+        if report.host_id != self._host_id:
+            raise ValueError("a disposal report cannot be sent by a different host")
+        self._post("/api/v1/monitor/reported-disposals", report.to_wire())
 
     def _post(self, path: str, body: dict[str, object]) -> None:
         try:

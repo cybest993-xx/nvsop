@@ -91,6 +91,10 @@ class Permission(StrEnum):
     # configuration authority and is therefore the only monitor permission in this slice.
     MONITOR_VIEW = "monitor.report.view"
 
+    # 强制改绑双人确认（§5.17）：登记权限本身，默认由部署把设备管理员角色授予它。
+    # 这是全系统唯一要求双人的操作，不推广成通用审批。
+    HANDOVER_EDIT = "execution.handover.edit"
+
 
 class UnregisteredPermissionError(Exception):
     """A string that is not a member of `Permission`.

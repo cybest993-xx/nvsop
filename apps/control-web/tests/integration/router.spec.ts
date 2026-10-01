@@ -165,6 +165,18 @@ describe('a page that names required permissions', () => {
     },
   )
 
+  it('reaches the device page for a caller holding only the force-handover permission', async () => {
+    // 强制改绑双人确认挂在设备页；只有该权限的用户（没有 device.* 查看/编辑）也必须能按已知
+    // ID 到达该页，否则第二人无法确认。后端仍对每个调用独立鉴权。
+    readSession.mockResolvedValue({ ...SESSION, permissions: ['execution.handover.edit'] })
+    const router = createAppRouter()
+
+    await router.push('/devices')
+    await router.isReady()
+
+    expect(router.currentRoute.value.name).toBe('devices')
+  })
+
   it('sends a caller without any connector permission away from the device page', async () => {
     readSession.mockResolvedValue({ ...SESSION, permissions: [] })
     const router = createAppRouter()

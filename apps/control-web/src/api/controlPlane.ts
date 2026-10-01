@@ -17,10 +17,14 @@ import {
   exportInferenceHostMediaConfiguration as generatedExportInferenceHostMediaConfiguration,
   listCameraMedia as generatedListCameraMedia,
   readCameraMedia as generatedReadCameraMedia,
+  readHandover as generatedReadHandover,
+  readHandoverRisk as generatedReadHandoverRisk,
   createPoint as generatedCreatePoint,
   createRole as generatedCreateRole,
   createTrainingDataset as generatedCreateTrainingDataset,
   createUser as generatedCreateUser,
+  confirmHandover as generatedConfirmHandover,
+  createHandover as generatedCreateHandover,
   deleteConnector as generatedDeleteConnector,
   downloadTemplateImport as generatedDownloadTemplateImport,
   downloadTemplateVersionArtifact as generatedDownloadTemplateVersionArtifact,
@@ -114,6 +118,10 @@ import {
   type ConfirmationView,
   type ConnectorPlacement,
   type ConnectorView,
+  type HandoverConfirmationInput,
+  type HandoverCreation,
+  type HandoverRiskView,
+  type HandoverView,
   type CreateRoleData,
   type CreateTrainingDatasetData,
   type CreateUserData,
@@ -205,6 +213,10 @@ export type {
   DatasetView,
   DeviceStatus,
   DownloadTemplateVersionArtifactResponse,
+  HandoverConfirmationInput,
+  HandoverCreation,
+  HandoverRiskView,
+  HandoverView,
   InferenceHostView,
   ItemPageCameraMediaView,
   ItemPageConnectorView,
@@ -939,6 +951,30 @@ export function exportInferenceHostMediaConfiguration(
 
 export function readStations(): Promise<ItemPageStationView> {
   return execute(generatedListStations())
+}
+
+// ——— 强制改绑双人确认：创建/读取/第二确认与服务器权威风险原文。 ———
+
+export function readHandoverRisk(): Promise<HandoverRiskView> {
+  return execute(generatedReadHandoverRisk())
+}
+
+/** 建立强制改绑请求；操作者同时完成第一确认。内容建立后冻结，改内容必须新建。 */
+export function createHandover(input: HandoverCreation): Promise<HandoverView> {
+  return execute(generatedCreateHandover({ body: input }))
+}
+
+/** 按请求 id 读取被冻结的同一内容与风险原文，供第二名有权用户查看。 */
+export function readHandover(handoverId: string): Promise<HandoverView> {
+  return execute(generatedReadHandover({ path: { handover_id: handoverId } }))
+}
+
+/** 由另一名当前有权的用户确认被展示的同一请求内容。 */
+export function confirmHandover(
+  handoverId: string,
+  input: HandoverConfirmationInput,
+): Promise<HandoverView> {
+  return execute(generatedConfirmHandover({ path: { handover_id: handoverId }, body: input }))
 }
 
 export function validateTemplateBinding(

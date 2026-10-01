@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Protocol
 from uuid import UUID
 
-from factory_sop.execution.model import StationGrant
+from factory_sop.execution.model import HandoverConfirmation, StationGrant
 
 
 class ExecutionGrantRepository(Protocol):
@@ -24,4 +24,23 @@ class ExecutionGrantRepository(Protocol):
         ...
 
 
-__all__ = ["ExecutionGrantRepository"]
+class HandoverRepository(Protocol):
+    """强制改绑确认记录的持久化 seam；内容建立后不可变。"""
+
+    def add(self, value: HandoverConfirmation) -> None:
+        """写入一条新请求，操作者首确认随记录一起落库。"""
+        ...
+
+    def by_identifier(self, handover_id: UUID) -> HandoverConfirmation | None:
+        """按请求 id 读取，未找到返回 None。"""
+        ...
+
+    def confirm_second(self, value: HandoverConfirmation) -> HandoverConfirmation | None:
+        """仅当仍未第二确认且内容完全一致时原子记录第二人确认，否则返回 None。
+
+        条件更新是并发防线：同一请求的重复确认只能有一个赢家，内容不符不会确认旧内容。
+        """
+        ...
+
+
+__all__ = ["ExecutionGrantRepository", "HandoverRepository"]

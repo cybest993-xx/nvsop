@@ -37,6 +37,7 @@ import {
 } from './devicesPresentation'
 import CameraMediaPanel from './CameraMediaPanel.vue'
 import ConnectionTestControl from './ConnectionTestControl.vue'
+import ForceHandoverPanel from './ForceHandoverPanel.vue'
 import PointManagement from './PointManagement.vue'
 import StationRuntimePanel from './StationRuntimePanel.vue'
 import StationTemplateConfiguration from './StationTemplateConfiguration.vue'
@@ -62,6 +63,9 @@ const loadSequence = ref(0)
 const mayViewConnectors = computed(() => session.may('device.connector.view'))
 const mayViewHosts = computed(() => session.may('device.inference_host.view'))
 const mayViewStations = computed(() => session.may('device.station.view'))
+const mayForceHandover = computed(() => session.may('execution.handover.edit'))
+// 以空数组 v-for 挂载：无权限时不产生占位注释，设备页既有 markup 快照不变。
+const forceHandoverPanels = computed(() => (mayForceHandover.value ? ['force-handover'] : []))
 const mayEditConnectors = computed(() => session.may('device.connector.edit'))
 const mayDeleteConnectors = computed(() => session.may('device.connector.delete'))
 const hostNames = computed(() => new Map(hosts.value.map((host) => [host.id, host.name])))
@@ -387,6 +391,13 @@ onMounted(load)
     </header>
 
     <StationRuntimePanel :stations="stations" />
+
+    <ForceHandoverPanel
+      v-for="panel in forceHandoverPanels"
+      :key="panel"
+      :stations="stations"
+      :hosts="hosts"
+    />
 
     <p v-if="failure" class="devices__failure" role="alert">{{ failure }}</p>
     <p v-if="loading" class="devices__loading">正在加载连接器…</p>

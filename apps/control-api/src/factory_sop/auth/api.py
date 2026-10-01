@@ -12,10 +12,34 @@ layer builds the `Caller` (see `auth/adapters/dependencies.py`); an ARQ worker o
 script builds the same value the same way. The last two entries serve the caller side of
 other modules' HTTP adapters: the annotated dependency that resolves a request into a
 `Caller`, and the OpenAPI metadata a route declares its permission with.
+
+`HandoverAuthority` is the one entry for a decision a `Caller` snapshot cannot make: whether
+an account still holds the handover permission *now*, after an administration change that may
+have landed between two confirmations. It is re-exported here so `execution`'s use cases reach
+it through the same seam as `authorize`, never through `auth.handover` or an adapter.
+
+`handover_authority` is that same decision as an HTTP dependency: other modules' HTTP adapters
+declare `Depends(handover_authority)` rather than importing `auth.adapters.dependencies`
+directly, so the one permitted cross-owner import target stays `auth.api`.
 """
 
-from factory_sop.auth.adapters.dependencies import Authorized, needs, needs_any
+from factory_sop.auth.adapters.dependencies import (
+    Authorized,
+    handover_authority,
+    needs,
+    needs_any,
+)
 from factory_sop.auth.authorization import Caller, authorize
+from factory_sop.auth.handover import HandoverAuthority
 from factory_sop.auth.permissions import Permission
 
-__all__ = ["Authorized", "Caller", "Permission", "authorize", "needs", "needs_any"]
+__all__ = [
+    "Authorized",
+    "Caller",
+    "HandoverAuthority",
+    "Permission",
+    "authorize",
+    "handover_authority",
+    "needs",
+    "needs_any",
+]

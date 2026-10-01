@@ -53,6 +53,7 @@ from factory_sop.app import API_PREFIX, MODIFYING_METHODS, create_app
 from factory_sop.auth.adapters import dependencies
 from factory_sop.auth.adapters.cookies import CSRF_COOKIE, CSRF_HEADER
 from factory_sop.auth.adapters.dependencies import DECLARED_PERMISSION
+from factory_sop.auth.adapters.dependencies import handover_authority as auth_handover_authority
 from factory_sop.auth.model import Role, User, UserStatus
 from factory_sop.auth.permissions import Permission
 from factory_sop.dataset.adapters import dependencies as dataset_dependencies
@@ -71,6 +72,8 @@ from factory_sop.device.model import (
     PendingCommandCompletion,
     PointDirection,
 )
+from factory_sop.execution.adapters import dependencies as execution_dependencies
+from factory_sop.execution.model import HANDOVER_RISK_STATEMENT, HandoverConfirmation
 from factory_sop.identifiers import new_id
 from factory_sop.persistence import request_session
 from factory_sop.settings import Settings
@@ -470,6 +473,26 @@ ROUTES = [
         "/training-datasets/{dataset_id}/artifacts",
         {"check_id": "{attempt_id}"},
     ),
+    Target(
+        "POST",
+        "/execution/handovers",
+        {
+            "station_id": "{station_id}",
+            "from_host_id": "{host_id}",
+            "to_host_id": "{host_id}",
+            "risk_acknowledgement": HANDOVER_RISK_STATEMENT,
+        },
+    ),
+    Target(
+        "POST",
+        "/execution/handovers/{handover_id}/confirmation",
+        {
+            "station_id": "{station_id}",
+            "from_host_id": "{host_id}",
+            "to_host_id": "{host_id}",
+            "risk_acknowledgement": HANDOVER_RISK_STATEMENT,
+        },
+    ),
 ]
 
 # The session resource: no permission, by design, and therefore not part of the check above.
@@ -549,6 +572,33 @@ class StubRequestSession:
     """流式上传路由在读取请求体前结束事务；授权套件不需要真实数据库连接。"""
 
     def rollback(self) -> None:
+        return None
+
+
+class FakeHandoverAuthority:
+    """授权机械测试的持有者集合，不触碰真实管理锁。"""
+
+    def __init__(self, holders: frozenset[UUID]) -> None:
+        self._holders = holders
+
+    def lock_and_read_holders(self) -> frozenset[UUID]:
+        return self._holders
+
+
+class FakeHandovers:
+    """内存确认记录，让创建路由在授权通过后走完 use case。"""
+
+    def __init__(self) -> None:
+        self.records: dict[UUID, HandoverConfirmation] = {}
+
+    def add(self, value: HandoverConfirmation) -> None:
+        self.records[value.handover_id] = value
+
+    def by_identifier(self, handover_id: UUID) -> HandoverConfirmation | None:
+        return self.records.get(handover_id)
+
+    def confirm_second(self, value: HandoverConfirmation) -> HandoverConfirmation | None:
+        del value
         return None
 
 
@@ -661,6 +711,8 @@ class Backend:
         )
         self.dataset_storage = DatasetFakeStorage()
         self.dataset_jobs = DatasetFakeJobs()
+        self.handover_authority = FakeHandoverAuthority(frozenset({self.actor.id}))
+        self.handovers = FakeHandovers()
 
         self.app.dependency_overrides[dependencies.users] = lambda: self.users
         self.app.dependency_overrides[dependencies.sessions] = lambda: self.sessions
@@ -688,6 +740,8 @@ class Backend:
             self.dataset_jobs
         )
         self.app.dependency_overrides[dataset_dependencies.usage_jobs] = lambda: self.dataset_jobs
+        self.app.dependency_overrides[execution_dependencies.handovers] = lambda: self.handovers
+        self.app.dependency_overrides[auth_handover_authority] = lambda: self.handover_authority
         self.app.dependency_overrides[request_session] = StubRequestSession
         self.client = TestClient(self.app, base_url="https://testserver")
         assert (
@@ -714,6 +768,7 @@ class Backend:
             "member_id": DATASET_MEMBER_ID,
             "attempt_id": DATASET_ATTEMPT_ID,
             "submission_id": DATASET_ATTEMPT_ID,
+            "handover_id": UUID(int=2),
         }
         path = target.template.format(**identifiers)
 

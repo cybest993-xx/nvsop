@@ -12,6 +12,9 @@ import type {
   CompleteDeviceCommandData,
   CompleteDeviceCommandErrors,
   CompleteDeviceCommandResponses,
+  ConfirmHandoverData,
+  ConfirmHandoverErrors,
+  ConfirmHandoverResponses,
   ConfirmInferenceHostConfigurationHistoryData,
   ConfirmInferenceHostConfigurationHistoryErrors,
   ConfirmInferenceHostConfigurationHistoryResponses,
@@ -27,6 +30,9 @@ import type {
   CreateConnectorData,
   CreateConnectorErrors,
   CreateConnectorResponses,
+  CreateHandoverData,
+  CreateHandoverErrors,
+  CreateHandoverResponses,
   CreateInferenceBackendData,
   CreateInferenceBackendErrors,
   CreateInferenceBackendResponses,
@@ -237,6 +243,12 @@ import type {
   ReadDeviceCommandData,
   ReadDeviceCommandErrors,
   ReadDeviceCommandResponses,
+  ReadHandoverData,
+  ReadHandoverErrors,
+  ReadHandoverResponses,
+  ReadHandoverRiskData,
+  ReadHandoverRiskErrors,
+  ReadHandoverRiskResponses,
   ReadInferenceBackendData,
   ReadInferenceBackendErrors,
   ReadInferenceBackendResponses,
@@ -935,6 +947,66 @@ export const completeDeviceCommand = <ThrowOnError extends boolean = false>(
     ThrowOnError
   >({
     url: '/api/v1/device-commands/{command_id}/result',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Create
+ *
+ * 建立强制改绑请求，操作者同时完成第一确认。
+ */
+export const createHandover = <ThrowOnError extends boolean = false>(
+  options: Options<CreateHandoverData, ThrowOnError>,
+): RequestResult<CreateHandoverResponses, CreateHandoverErrors, ThrowOnError> =>
+  (options.client ?? client).post<CreateHandoverResponses, CreateHandoverErrors, ThrowOnError>({
+    url: '/api/v1/execution/handovers',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read Risk
+ *
+ * 只读返回服务器权威风险原文。
+ */
+export const readHandoverRisk = <ThrowOnError extends boolean = false>(
+  options?: Options<ReadHandoverRiskData, ThrowOnError>,
+): RequestResult<ReadHandoverRiskResponses, ReadHandoverRiskErrors, ThrowOnError> =>
+  (options?.client ?? client).get<ReadHandoverRiskResponses, ReadHandoverRiskErrors, ThrowOnError>({
+    url: '/api/v1/execution/handovers/risk',
+    ...options,
+  })
+
+/**
+ * Read
+ *
+ * 按请求 id 读取冻结内容与风险原文，供第二名用户查看。
+ */
+export const readHandover = <ThrowOnError extends boolean = false>(
+  options: Options<ReadHandoverData, ThrowOnError>,
+): RequestResult<ReadHandoverResponses, ReadHandoverErrors, ThrowOnError> =>
+  (options.client ?? client).get<ReadHandoverResponses, ReadHandoverErrors, ThrowOnError>({
+    url: '/api/v1/execution/handovers/{handover_id}',
+    ...options,
+  })
+
+/**
+ * Confirm
+ *
+ * 由另一名当前有权的用户确认被展示的同一请求内容。
+ */
+export const confirmHandover = <ThrowOnError extends boolean = false>(
+  options: Options<ConfirmHandoverData, ThrowOnError>,
+): RequestResult<ConfirmHandoverResponses, ConfirmHandoverErrors, ThrowOnError> =>
+  (options.client ?? client).post<ConfirmHandoverResponses, ConfirmHandoverErrors, ThrowOnError>({
+    url: '/api/v1/execution/handovers/{handover_id}/confirmation',
     ...options,
     headers: {
       'Content-Type': 'application/json',

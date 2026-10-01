@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -102,6 +102,25 @@ def caller() -> Caller:
         user=restored_session().user,
         granted=frozenset({Permission.DATASET_IMPORT, Permission.DATASET_VIEW}),
     )
+
+
+def worker_caller_resolver(*permissions: Permission) -> Callable[[UUID], Caller]:
+    """真实集成测试的合成操作者解析器：固定权限，不读 auth 表。"""
+    granted = frozenset(permissions)
+
+    def resolve(user_id: UUID) -> Caller:
+        return Caller(
+            user=User(
+                id=user_id,
+                login_name="worker-integration",
+                display_name="worker-integration",
+                password_hash="integration-only",  # pragma: allowlist secret
+                status=UserStatus.ACTIVE,
+            ),
+            granted=granted,
+        )
+
+    return resolve
 
 
 def build_app(

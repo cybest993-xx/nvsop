@@ -32,6 +32,8 @@ COMPOSE = REPO_ROOT / "deploy" / "dev" / "compose.yaml"
 ROLE_SQL = REPO_ROOT / "deploy" / "dev" / "db-roles.sql"
 ANNOTATION_ENTRYPOINT = REPO_ROOT / "deploy" / "dev" / "annotation-entrypoint.sh"
 POSTGRES_IMAGE = "postgres:17.2-bookworm"
+# 中心服务端实例自带 TimescaleDB（S020），迁移会在 nvsop 安装扩展；客户端容器仍是普通镜像。
+TIMESCALE_IMAGE = "timescale/timescaledb:2.22.1-pg17"
 INSTALL_ROLE = "nvsop"
 CENTER_DATABASE = "nvsop"
 TRAINING_DATABASE = "training"
@@ -221,7 +223,7 @@ def isolated_instance(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Isol
     with Network() as network:
         server = (
             PostgresContainer(
-                POSTGRES_IMAGE,
+                TIMESCALE_IMAGE,
                 driver="psycopg",
                 username=INSTALL_ROLE,
                 password=install_password,

@@ -656,8 +656,10 @@ def test_cancelled_validation_discards_late_result_without_finishing_job(
     assert "final-object" not in object_storage.objects
 
 
+@pytest.mark.parametrize("denied", [False, True])
 def test_validation_job_cas_loss_rolls_back_business_result(
     monkeypatch: pytest.MonkeyPatch,
+    denied: bool,
 ) -> None:
     state = _WorkerState(finish_allowed=False)
     job = _running_job()
@@ -682,6 +684,15 @@ def test_validation_job_cas_loss_rolls_back_business_result(
         job=job,
         validate_upload=validate_upload,
     )
+    if denied:
+        ctx = {**ctx, "current_caller_resolver": lambda user_id: None}
+
+        def refuse_video_validation(*, job: object, datasets: _Datasets, **kwargs: object) -> bool:
+            del job, kwargs
+            datasets.stage_publish()
+            return True
+
+        monkeypatch.setattr(worker_module, "refuse_video_validation", refuse_video_validation)
 
     asyncio.run(worker_module.validate_dataset_job(ctx, str(job.id)))
 

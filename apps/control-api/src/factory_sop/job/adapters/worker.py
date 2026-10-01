@@ -409,13 +409,16 @@ def _validate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
                     failure_code=error.code.value,
                     detail="执行者已无权校验该视频",
                 )
-                PostgresJobRepository(session).finish(
+                finished = PostgresJobRepository(session).finish(
                     job_id=running.id,
                     status=(JobStatus.FAILED.value if refused else JobStatus.SUPERSEDED.value),
                     failure_code=error.code.value if refused else None,
                     now=datetime.now(UTC),
                     expected_updated_at=running.updated_at,
                 )
+                if not finished:
+                    session.rollback()
+                    return
                 _commit_if_active(session, fence)
                 _logger.warning(
                     "job.dataset_validation.authorization_refused",

@@ -48,6 +48,52 @@ make contracts
 
 **当前仓库没有完成 Q36 备份/恢复策略。** 因此不要在本文声称中心数据库、中心训练素材卷、边缘 SQLite 或推理机证据媒体已有统一备份周期、自动灾备或经过演练的恢复目标；具体交付前必须完成适用的策略和验证。
 
+## training database 增量升级
+
+`training` database 承载原样复用的五类训练/标注进程对象，由安装身份 `nvsop` 安装/升级，Center Alembic 从不接管它（Q35/S066/S067）。空库首次安装与已知历史来源的增量升级都由 `deploy/dev/training-install.sh` 处理，定义来源是锁定的 Vendor 合并 DDL `vendor/sop-monitoring-blueprints/microservices/sop-training-bp/db-init-scripts/01-init-tables.sql`（当前基座提交 `69352021…`、内容摘要 `df3e518f…`，见[基座验证台账](../base/verified-commits.md)）。
+
+### 受支持的来源版本
+
+升级只识别显式的已知 Vendor 标注结构，按实际结构（四张表的列名+类型、无 `varchar` 长度上限、主键 `id`、以及四条级联外键 `video.dataset_id→dataset.id`、`chunk.video_id→video.id`、`annotation.video_id→video.id`、`annotation.chunk_id→chunk.id`）判定，而不只是表名或列名：
+
+- **原始 standalone 标注结构**：`dataset` / `video` / `chunk` / `annotation` 四表，`dataset` 没有 `two_operator_mode`；
+- **同形四表 + `two_operator_mode`**：同样的四表结构，但 `dataset` 已含 `two_operator_mode`。
+
+来源里可以包含合法的历史附加数据（例如旧用户关联表），这些非 Vendor 拥有的对象不会被改动或删除。若来源里已存在任一训练/增强对象（`augmented_data`、`augmentation_stages`、`training_job`、`ddm_training_job`、`evaluation_job`、`e2e_evaluation_job` 或 `status_enum`、`training_status_enum`），或四表结构与上述不符，则视为未知/部分/不兼容来源并明确拒绝。
+
+### 受支持的迁移/升级步骤
+
+仓库不实现通用 migration framework，也不自动恢复客户备份。受支持的历史数据迁移是手工 `pg_dump`/`pg_restore` 流程，原库保持不变：
+
+1. 停用写来源的标注进程，从历史独立标注数据库或受支持备份 `pg_dump`（`-Fc`）。
+2. 在**同一 PostgreSQL 实例**保留/创建**空**的 `training` database（restore 前提；不得向非空目标恢复；流程不自动清库重建）。来源与目标各用 `-d` 指定；连接身份固定为安装身份 `nvsop`。
+3. 用安装身份 `nvsop` 恢复：`pg_restore --no-owner --no-privileges --single-transaction --exit-on-error -d training <dump>`。`--no-owner`/`--no-privileges` 让恢复对象归安装身份所有、不保留历史 owner 角色与 ACL（否则目标 owner 会被历史角色固定成错误身份）；`--single-transaction`/`--exit-on-error` 保证整库原子恢复，失败即回滚。恢复脚本必须 `set -eu`，dump 失败不能继续执行后续步骤。
+4. 用安装身份执行 `training-role-init`（S065）收敛 `training_runtime` 权限。
+5. 用安装身份执行 `training-objects-install`（S066/S067）。
+
+顺序固定为 restore → role-init → installer：role-init 的 default privileges 让 runtime 拿到安装身份后续创建对象的权限，安装入口自身依赖 `training-role-init` 完成。
+
+**恢复失败与回滚**：restore 在空目标上以单事务执行，失败时目标回滚为空（即原始空状态），来源库始终不被改动；不要为了重试而删除/重建目标 database。
+
+### 升级内容与恢复
+
+入口在同一事务里只补缺失对象并写版本记录：从锁定的 Vendor 合并 DDL 提取标注表之外的定义（`status_enum`、`training_status_enum`、`augmented_data`、`augmentation_stages` 及其两个索引与 `unique_augmentation_stage` 约束、`training_job`、`ddm_training_job`、`evaluation_job`、`e2e_evaluation_job`），并按需补 `dataset.two_operator_mode`。它不重跑空库整体 DDL，也不在本仓库复制定义；升级后 `training` 的最终结构与锁定的 Vendor 合并 DDL 一致：10 张表、2 个枚举、2 个索引、1 个唯一约束。
+
+版本记录写入 `nvsop_training_install`（`vendor_commit`、`ddl_path`、`ddl_sha256`、`source_version`、`installed_at`），其中 `source_version` 为 `empty`（空库安装）或识别到的来源形态。重复启动读到匹配版本即跳过，不重建对象。
+
+**失败与恢复**：DDL 或版本写入失败时整事务回滚，不写版本行、不留半升级对象，已恢复的标注数据与附加历史表保持不变；修复输入后重跑同一入口即可。未知/部分/不兼容来源直接拒绝，不做自动修复或删除。
+
+**Center 隔离**：Center Alembic `upgrade`/`downgrade` 只连 `nvsop`，不修改 `training` 对象；该隔离由 S067 的真实 PostgreSQL 证据覆盖（`apps/control-api/tests/integration/test_training_objects_upgrade.py`）。
+
+## 中心 PostgreSQL 与 TimescaleDB
+
+中心 `center-db` 服务端镜像为 `timescale/timescaledb:2.22.1-pg17`（精确版本以 `deploy/dev/compose.yaml` 为准），镜像预装并以 `shared_preload_libraries` 预加载 TimescaleDB，`pg_extension.extversion` 应为 `2.22.1`。`monitor` 迁移 0047 用 `CREATE EXTENSION IF NOT EXISTS` 在 `nvsop` 安装扩展，并把三张镜像事实表转为按 `received_at` 分区的 hypertable（全局 `event_id`/`stream_sequence` 唯一由普通身份表保留，不启用原生压缩）。一次性 client-only 服务（`training-db-init`、`center-role-init`、`training-role-init`、`training-objects-install`）仍用普通 `postgres` 镜像，只做客户端。
+
+- 安装/迁移身份 `nvsop` 需要 `CREATE EXTENSION` 权限；长期运行的中心/训练 runtime 角色不安装扩展。
+- **从 `postgres:17.2-bookworm`（Debian PG17.2）迁到 Alpine PG17 不能直接复用旧数据卷换镜像。** 顺序：先停业务写入（旧库仍可读），逻辑导出 `nvsop` 与 `training` 两库及 roles；停旧实例并**保留旧卷不覆盖**，在新卷启动 TimescalePG17 实例；恢复/收敛安装身份与 runtime roles，逻辑导入两库；核对 collation、数据与训练对象后执行迁移 0047，再切回业务。验证完成前不得删除旧卷；失败时保留旧环境以便回退。旧数据卷不保证可直接挂载，本文不宣称可直接替换。
+- 降级（`alembic downgrade`）把三张 hypertable 还原为普通表，但**不卸载** `timescaledb` 扩展（镜像预装于 template1，卸载会破坏同库其它对象）。
+- Q36 备份/恢复仍未解决；本文不宣称已有自动灾备或演练过的恢复目标。
+
 ## 中心训练素材存储
 
 ADR-0012 / Issue #350 已把中心训练素材从 MinIO/S3 迁移到 `dataset` 拥有的本地持久卷：

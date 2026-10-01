@@ -23,6 +23,7 @@ jobs:
       integration: ${{ steps.scope.outputs.integration }}
       browser: ${{ steps.scope.outputs.browser }}
       media: ${{ steps.scope.outputs.media }}
+      annotation: ${{ steps.scope.outputs.annotation }}
     steps:
       - name: Checkout candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -43,17 +44,22 @@ jobs:
           INTEGRATION: ${{ steps.scope.outputs.integration }}
           BROWSER: ${{ steps.scope.outputs.browser }}
           MEDIA: ${{ steps.scope.outputs.media }}
+          ANNOTATION: ${{ steps.scope.outputs.annotation }}
         run: |
           set -euo pipefail
-          for value in "$DOCS_ONLY" "$FORCE_ALL" "$INTEGRATION" "$BROWSER" "$MEDIA"; do
+          for value in "$DOCS_ONLY" "$FORCE_ALL" "$INTEGRATION" "$BROWSER" "$MEDIA" "$ANNOTATION"; do
             case "$value" in true|false) ;; *) echo "Invalid CI scope output: $value" >&2; exit 1 ;; esac
           done
-          if [ "$DOCS_ONLY" = true ] && [ "$FORCE_ALL:$INTEGRATION:$BROWSER:$MEDIA" != false:false:false:false ]; then
+          if [ "$DOCS_ONLY" = true ] && [ "$FORCE_ALL:$INTEGRATION:$BROWSER:$MEDIA:$ANNOTATION" != false:false:false:false:false ]; then
             echo "Documentation fast lane cannot select another gate." >&2
             exit 1
           fi
-          if [ "$FORCE_ALL" = true ] && [ "$DOCS_ONLY:$INTEGRATION:$BROWSER:$MEDIA" != false:true:true:true ]; then
+          if [ "$FORCE_ALL" = true ] && [ "$DOCS_ONLY:$INTEGRATION:$BROWSER:$MEDIA:$ANNOTATION" != false:true:true:true:true ]; then
             echo "force_all must select every blocking family." >&2
+            exit 1
+          fi
+          if [ "$ANNOTATION" = true ] && [ "$INTEGRATION" != true ]; then
+            echo "Annotation changes require integration evidence." >&2
             exit 1
           fi
           if [ "$MEDIA" = true ] && { [ "$INTEGRATION" != true ] || [ "$BROWSER" != true ]; }; then
@@ -225,6 +231,9 @@ jobs:
         env:
           TEST_SUITE: ${{ matrix.suite }}
         run: make sync "$TEST_SUITE"
+      - name: Verify frozen annotation image and real media operations
+        if: needs.scope.outputs.annotation == 'true' && matrix.suite == 'center-system'
+        run: make annotation-image
       - name: Run real MediaMTX recording and playback evidence
         if: needs.scope.outputs.media == 'true' && matrix.suite == 'center-system'
         run: make media-system

@@ -33,7 +33,9 @@ x-center-environment: &center-environment
 
 services:
   center-db:
-    image: postgres:17.2-bookworm
+    # 中心实例自带 TimescaleDB（S020）。固定具体标签，扩展由迁移中的 CREATE EXTENSION 安装；
+    # 一次性 client-only 服务（建库/角色/对象安装）仍用普通 postgres 镜像，只做客户端。
+    image: timescale/timescaledb:2.22.1-pg17
     environment:
       POSTGRES_DB: nvsop
       POSTGRES_USER: nvsop
@@ -50,7 +52,8 @@ services:
 
   # Q35：同一 PostgreSQL 实例内的第二个 database。训练/标注进程连接 `training`，
   # Center 只连接 `nvsop`。幂等创建以兼容既有数据卷；training 对象安装由 #224(S066) 负责，
-  # 这里不执行 DDL，也不重建/清空中心数据卷。
+  # 这里不执行 DDL，也不重建/清空中心数据卷。用 `TEMPLATE template0` 建库：TimescaleDB
+  # 镜像会把扩展装进 template1 与默认库，若照抄 template1，training 会继承扩展而不再是普通库。
   training-db-init:
     image: postgres:17.2-bookworm
     depends_on:
@@ -70,7 +73,7 @@ services:
         if psql -tAc "SELECT 1 FROM pg_database WHERE datname = 'training'" | grep -qx 1; then
           echo "training database already present"
         else
-          psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE training"
+          psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE training TEMPLATE template0"
         fi
     restart: "no"
 

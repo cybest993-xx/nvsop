@@ -110,10 +110,10 @@ After the user has seen the explicit candidate, the actual diff, the applicable 
 
 ### PR lifecycle approval
 
-Publication, integration refresh, merge, cleanup and Issue closure are one bounded delivery, not one approval per action. One explicit user confirmation of a presented **PR lifecycle plan** authorizes every action the plan names, in one pass. The plan is bounded and names:
+Publication, integration refresh, merge, Issue closure and task cleanup are one bounded delivery, not one approval per action. One explicit user confirmation of a presented **PR lifecycle plan** authorizes every action the plan names, in one pass. The plan is bounded and names:
 
 - the confirmed task candidate SHA, the task branch and worktree, and the target `main`;
-- the action scope: push the task branch, create or update its PR against `main`, perform a controlled conflict-free base refresh when `main` advances, observe `CI required` on each landing head, perform the manual squash merge, clean the exact task worktree and local branch, and close the named Issue(s) — or `none`;
+- the action scope: push the task branch, create or update its PR against `main`, perform a controlled conflict-free base refresh when `main` advances, observe `CI required` on each landing head, perform the manual squash merge, close the named Issue(s) when their closure criteria are satisfied — or `none` — and then clean the exact task worktree and local branch;
 - the exact cleanup targets: only task-generated reproducible artifacts and the verified merged task's local branch and worktree.
 
 Remote branch deletion and primary `main` synchronization are excluded unless the plan names them explicitly. The user may authorize a subset instead; every excluded action remains unauthorized. A mere implementation or "continue" request and an agent-authored plan are not lifecycle approval.
@@ -204,7 +204,7 @@ ACCEPTED_ORIGIN_MAIN=<accepted-origin-main-sha>
 )
 ```
 
-Stop when the target branch is not `main`, when any scoped Git read fails, when the histories have diverged, when `origin/main` is not `ACCEPTED_ORIGIN_MAIN`, or when the update would overwrite an ignored path; never fall back to merge, rebase, reset or stash. Never reset a task worktree. This synchronization is a separate manual operation with its own authorization, not implied by implementation, merge or cleanup work and not covered by a [PR lifecycle plan](#pr-lifecycle-approval) that does not name it; the current `retire_task.py` cleanup command never performs it. Use `make local-purge` when a task worktree must remove reproducible artifacts before cleanup; the command deliberately preserves shared external caches, fixed-instance state and unknown ignored files.
+Stop when the target branch is not `main`, when any scoped Git read fails, when the histories have diverged, when `origin/main` is not `ACCEPTED_ORIGIN_MAIN`, or when the update would overwrite an ignored path; never fall back to merge, rebase, reset or stash. Never reset a task worktree. This synchronization is a separate manual operation with its own authorization, not implied by implementation, merge or cleanup work and not covered by a [PR lifecycle plan](#pr-lifecycle-approval) that does not name it; the versioned `retire_task.py` cleanup command never performs it. Use `make local-purge` when a task worktree must remove reproducible artifacts before cleanup; the command deliberately preserves shared external caches, fixed-instance state and unknown ignored files.
 
 ### 5.2 Clean one verified task worktree and local branch
 

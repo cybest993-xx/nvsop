@@ -9,10 +9,12 @@ from dataclasses import replace
 from pathlib import Path
 from threading import Event
 from time import time
+from typing import cast
 from unittest.mock import patch
 from uuid import UUID
 
 from edge_runtime.media import (
+    DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS,
     LocalMediaCamera,
     MediaPathMode,
     MediaRuntime,
@@ -159,12 +161,29 @@ class MediaConfigurationTest(MediaFixture):
                 "preview_release_delay_seconds": 5,
                 "startup_timeout_seconds": 2,
                 "transcode_threads": 2,
+                "recording_compression_age_seconds": 7200,
                 "cameras": [],
             }
         )
 
         self.assertIsNone(configuration.mediamtx_address)
         self.assertIsNone(configuration.mediamtx_playback_address)
+        self.assertEqual(7200, configuration.recording_compression_age_seconds)
+
+    def test_recording_compression_age_defaults_and_rejects_non_positive(self) -> None:
+        # 旧短窗口配置没有该字段: 默认 24h 不要求 <= 录像窗口, 不因新字段失败。
+        self.assertEqual(
+            DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS,
+            self.configuration.recording_compression_age_seconds,
+        )
+        for value in (0, -1, True, 1.5, float("nan")):
+            with self.assertRaises(ValueError):
+                MediaRuntime(
+                    replace(
+                        self.configuration,
+                        recording_compression_age_seconds=cast(int, value),
+                    )
+                )
 
     def test_render_uses_one_stable_path_for_passthrough_and_transcode_modes(self) -> None:
         transcoded = replace(

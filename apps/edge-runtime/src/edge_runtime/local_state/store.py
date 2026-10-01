@@ -19,6 +19,8 @@ from contextlib import AbstractContextManager
 from threading import RLock
 from typing import Protocol
 
+from nvsop_contracts import ReportedDisposal
+
 from edge_runtime.judgment.evidence import EvidenceClip
 from edge_runtime.judgment.model import (
     Decision,
@@ -41,7 +43,12 @@ from edge_runtime.local_state.codec import (
 )
 from edge_runtime.local_state.codec import violation as decode_violation
 from edge_runtime.local_state.configuration import LocalConfigurationStore
-from edge_runtime.local_state.disposal import LocalDisposalLedger
+from edge_runtime.local_state.disposal import (
+    LocalDisposalIntent,
+    LocalDisposalLedger,
+    LocalDisposalRequest,
+    StoredDisposalResult,
+)
 from edge_runtime.local_state.execution import LocalExecutionLeaseStore
 from edge_runtime.local_state.queues import (
     BackendReportContext,
@@ -70,6 +77,13 @@ class ReactionStore(Protocol):
         evidence: Sequence[EvidenceClip],
         closed_instances: Sequence[Instance],
         report_provenance: Mapping[int, tuple[BackendReportContext, ...] | None],
+        disposals: Sequence[LocalDisposalRequest] = (),
+    ) -> tuple[LocalDisposalIntent, ...]: ...
+
+    def pending_disposals(self) -> tuple[LocalDisposalIntent, ...]: ...
+    def claim_disposal(self, intent: LocalDisposalIntent, *, at: HostInstant) -> bool: ...
+    def record_disposal(
+        self, intent: LocalDisposalIntent, result: StoredDisposalResult
     ) -> None: ...
 
     def enqueue_observation(
@@ -129,6 +143,11 @@ class ReportStore(Protocol):
 
     def record_health_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None: ...
 
+    def pending_disposal_ids(self, *, limit: int | None = None) -> tuple[int, ...]: ...
+    def disposal_report(self, disposal_id: int, *, reported_at: str) -> ReportedDisposal: ...
+    def mark_disposal_reported(self, disposal_id: int, *, at: HostInstant) -> None: ...
+    def record_disposal_failure(self, disposal_id: int, *, at: HostInstant, error: str) -> None: ...
+
 
 class StationStore(StationQueues):
     """推理机数据库中的一个工位作用域。
@@ -160,9 +179,11 @@ class StationStore(StationQueues):
         evidence: Sequence[EvidenceClip],
         closed_instances: Sequence[Instance],
         report_provenance: Mapping[int, tuple[BackendReportContext, ...] | None],
-    ) -> None:
-        """持久化一次反应, 并串行化共享 SQLite 连接上的工位线程。"""
+        disposals: Sequence[LocalDisposalRequest] = (),
+    ) -> tuple[LocalDisposalIntent, ...]:
+        """持久化一次反应及其处置意图;副作用在提交后执行。"""
         report_enqueued = False
+        created: list[LocalDisposalIntent] = []
         with self._lock:
             self._connection.execute("BEGIN IMMEDIATE")
             try:
@@ -196,6 +217,12 @@ class StationStore(StationQueues):
                         self._supersede_instance_open_report(
                             decision.instance_id, at=decision.evidence.anchor
                         )
+                ledger = LocalDisposalLedger(self._connection, self._lock)
+                host_id = None if self._report_context is None else self._report_context.host_id
+                for request in disposals:
+                    intent = ledger.ensure_local(self._station_id, request, host_id=host_id)
+                    if intent is not None:
+                        created.append(intent)
                 for clip in evidence:
                     self._enqueue_evidence(clip)
                 self._connection.execute("COMMIT")
@@ -204,6 +231,20 @@ class StationStore(StationQueues):
                     self._connection.execute("ROLLBACK")
                 raise
         if report_enqueued and self._notify_report_pending is not None:
+            self._notify_report_pending()
+        return tuple(created)
+
+    def pending_disposals(self) -> tuple[LocalDisposalIntent, ...]:
+        return LocalDisposalLedger(self._connection, self._lock).pending_local(self._station_id)
+
+    def claim_disposal(self, intent: LocalDisposalIntent, *, at: HostInstant) -> bool:
+        return LocalDisposalLedger(self._connection, self._lock).claim_local(intent, now=at.seconds)
+
+    def record_disposal(self, intent: LocalDisposalIntent, result: StoredDisposalResult) -> None:
+        if (
+            LocalDisposalLedger(self._connection, self._lock).record_local_result(intent, result)
+            and self._notify_report_pending is not None
+        ):
             self._notify_report_pending()
 
     def enqueue_health(
@@ -699,7 +740,7 @@ class LocalState:
         return _HostReportStore(self._connection, self._lock)
 
     def disposal(self) -> LocalDisposalLedger:
-        """返回该主机唯一的持久连接器写入账本。"""
+        """返回该主机唯一的持久处置账本。"""
         return LocalDisposalLedger(self._connection, self._lock)
 
     def execution_leases(self) -> LocalExecutionLeaseStore:
@@ -841,6 +882,22 @@ class _HostReportStore:
         if row is None:
             raise ValueError("health queue item does not exist")
         return StationQueues(self._connection, str(row["station_id"]), self._lock)
+
+    def pending_disposal_ids(self, *, limit: int | None = None) -> tuple[int, ...]:
+        return LocalDisposalLedger(self._connection, self._lock).pending_report_ids(limit=limit)
+
+    def disposal_report(self, disposal_id: int, *, reported_at: str) -> ReportedDisposal:
+        return LocalDisposalLedger(self._connection, self._lock).report(
+            disposal_id, reported_at=reported_at
+        )
+
+    def mark_disposal_reported(self, disposal_id: int, *, at: HostInstant) -> None:
+        LocalDisposalLedger(self._connection, self._lock).mark_reported(disposal_id, at=at.seconds)
+
+    def record_disposal_failure(self, disposal_id: int, *, at: HostInstant, error: str) -> None:
+        LocalDisposalLedger(self._connection, self._lock).record_report_failure(
+            disposal_id, at=at.seconds, error=error
+        )
 
     def _queue(self, queue_id: int) -> StationQueues:
         with self._lock:

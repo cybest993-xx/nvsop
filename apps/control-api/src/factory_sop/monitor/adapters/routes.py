@@ -22,10 +22,12 @@ from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.repository import MonitorRepository, MonitorStreamSource
 from factory_sop.monitor.usecases import (
     host_liveness,
+    list_disposals,
     list_instances,
     list_observations,
     list_violations,
     mirror_decision,
+    mirror_disposal,
     mirror_health,
     mirror_instance,
     mirror_observation,
@@ -36,6 +38,7 @@ from factory_sop.monitor.usecases import (
 from factory_sop.responses import DEFAULT_PAGE_SIZE, MAXIMUM_PAGE_SIZE, ItemPage
 from nvsop_contracts import (
     ReportedDecision,
+    ReportedDisposal,
     ReportedHealth,
     ReportedObservation,
     ReportedSopInstance,
@@ -200,6 +203,52 @@ def report_monitor_instance(
     return {"accepted": True, "duplicate": not inserted, "event_id": report.event_id}
 
 
+@router.post("/reported-disposals", operation_id="reportMonitorDisposal")
+def report_monitor_disposal(
+    request: Request,
+    body: dict[str, object],
+    monitor: Annotated[MonitorRepository, Depends(dependencies.monitor)],
+    device_gateway: Annotated[DeviceMonitorGateway, Depends(dependencies.device_monitor_gateway)],
+    host_gateway: Annotated[DeviceHostGateway, Depends(dependencies.host_gateway)],
+    inference_host_id: Annotated[str | None, Header(alias="X-Inference-Host-ID")] = None,
+    inference_host_timestamp: Annotated[
+        str | None, Header(alias="X-Inference-Host-Timestamp")
+    ] = None,
+    inference_host_nonce: Annotated[str | None, Header(alias="X-Inference-Host-Nonce")] = None,
+    inference_host_signature: Annotated[
+        str | None, Header(alias="X-Inference-Host-Signature")
+    ] = None,
+) -> dict[str, object]:
+    try:
+        report = ReportedDisposal.from_wire(body)
+        host_id = UUID(report.host_id)
+    except (ValueError, TypeError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
+        ) from error
+    _authenticate_report_host(
+        request=request,
+        host_gateway=host_gateway,
+        body=body,
+        host_id=host_id,
+        inference_host_id=inference_host_id,
+        inference_host_timestamp=inference_host_timestamp,
+        inference_host_nonce=inference_host_nonce,
+        inference_host_signature=inference_host_signature,
+    )
+    try:
+        inserted = mirror_disposal(
+            report,
+            received_at=datetime.now(UTC),
+            monitor=monitor,
+            host_gateway=host_gateway,
+            device_gateway=device_gateway,
+        )
+    except MonitorRefusedError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    return {"accepted": True, "duplicate": not inserted, "event_id": report.event_id}
+
+
 @router.post("/reported-observations", operation_id="reportMonitorObservation")
 def report_monitor_observation(
     request: Request,
@@ -278,6 +327,24 @@ def list_monitor_violations(
     page_size: Annotated[int, Query(ge=1, le=MAXIMUM_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
 ) -> ItemPage[dict[str, object]]:
     items, total = list_violations(monitor, caller=caller, page=page, page_size=page_size)
+    return ItemPage(
+        items=[item.to_wire() for item in items],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@router.get(
+    "/disposals", operation_id="listMonitorDisposals", openapi_extra=needs(Permission.MONITOR_VIEW)
+)
+def list_monitor_disposals(
+    caller: Authorized,
+    monitor: Annotated[MonitorRepository, Depends(dependencies.monitor)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=MAXIMUM_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> ItemPage[dict[str, object]]:
+    items, total = list_disposals(monitor, caller=caller, page=page, page_size=page_size)
     return ItemPage(
         items=[item.to_wire() for item in items],
         page=page,

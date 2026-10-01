@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
     ConfigurationBundle,
     ReportBackendProvenance,
     ReportedDecision,
+    ReportedDisposal,
     ReportedHealth,
     ReportedObservation,
     ReportedSopInstance,
@@ -54,6 +55,11 @@ class DecisionReportTransport(Protocol):
         *,
         configuration: ConfigurationBundle | None,
     ) -> None: ...
+
+
+@runtime_checkable
+class DisposalReportTransport(Protocol):
+    def send_disposal(self, report: ReportedDisposal) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +213,11 @@ class HostReportReconciler:
                     event_id=decision_report.event_id,
                 )
             )
+        attempts.extend(
+            self._flush_disposals(
+                now=now, reported_at=reported_at, limit=limit, should_stop=should_stop
+            )
+        )
         return tuple(attempts)
 
     def _flush_observations(
@@ -273,6 +284,34 @@ class HostReportReconciler:
             attempts.append(
                 ReportAttempt(queue_id=pending.queue_id, sent=True, event_id=report.event_id)
             )
+        return attempts
+
+    def _flush_disposals(
+        self,
+        *,
+        now: HostInstant,
+        reported_at: str,
+        limit: int | None,
+        should_stop: Callable[[], bool] | None,
+    ) -> list[ReportAttempt]:
+        attempts: list[ReportAttempt] = []
+        for disposal_id in self._reports.pending_disposal_ids(limit=limit):
+            if should_stop is not None and should_stop():
+                break
+            event_id = f"disposal:{disposal_id}"
+            try:
+                if not isinstance(self._transport, DisposalReportTransport):
+                    raise TypeError("report transport does not support disposal reporting")
+                report = self._reports.disposal_report(disposal_id, reported_at=reported_at)
+                event_id = report.event_id
+                self._transport.send_disposal(report)
+            except Exception as error:
+                message = f"{type(error).__name__}: {error}"[:255]
+                self._reports.record_disposal_failure(disposal_id, at=now, error=message)
+                attempts.append(ReportAttempt(disposal_id, False, event_id, message))
+                continue
+            self._reports.mark_disposal_reported(disposal_id, at=now)
+            attempts.append(ReportAttempt(disposal_id, True, event_id))
         return attempts
 
     def _flush_health(

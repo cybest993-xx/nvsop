@@ -25,6 +25,7 @@ from factory_sop.monitor.model import (
 from nvsop_contracts import (
     ReportBackendProvenance,
     ReportedDecision,
+    ReportedDisposal,
     ReportedHealth,
     ReportedObservation,
     ReportedSopInstance,
@@ -55,6 +56,10 @@ def _clear_s143_monitor_rows(engine: Engine) -> None:
         connection.execute(
             text("DELETE FROM monitor_sop_instance WHERE host_id IN (:host_id, :second_host_id)"),
             {"host_id": str(HOST_ID), "second_host_id": str(SECOND_HOST_ID)},
+        )
+        connection.execute(
+            text("DELETE FROM monitor_disposal WHERE host_id = :host_id"),
+            {"host_id": str(HOST_ID)},
         )
 
 
@@ -544,6 +549,20 @@ def test_runtime_projection_health_uses_event_time_not_ingestion_sequence(engine
     )
     assert [value["event_id"] for value in health] == [f"{stream_id}:newer"]
     assert health[0]["status"] == "source_error"
+
+
+def test_disposal_mirror_is_idempotent_in_real_postgres(engine: Engine) -> None:
+    event_id = f"s024:disposal:{uuid4()}"
+    tail = ("key", "violation", "alert", "actor", "source", "result", None, 1.0, 1, "at")
+    report = ReportedDisposal(event_id, str(HOST_ID), str(STATION_ID), 1, *tail)
+    factory = sessionmaker(bind=engine)
+    with factory() as session:
+        repository = PostgresMonitorRepository(session)
+        assert repository.upsert_disposal(report, received_at=RECEIVED_AT) is True
+        assert repository.upsert_disposal(report, received_at=RECEIVED_AT) is False
+        session.commit()
+        values, _ = repository.page_disposals(page=1, page_size=100)
+    assert [value for value in values if value.event_id == event_id] == [report]
 
 
 def test_health_mirror_is_idempotent_and_persists_stream_identity(engine: Engine) -> None:

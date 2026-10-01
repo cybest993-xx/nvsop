@@ -16,6 +16,7 @@ DECISION_REPORT_CONTRACT_VERSION = 2
 SOP_INSTANCE_REPORT_CONTRACT_VERSION = 1
 HEALTH_REPORT_CONTRACT_VERSION = 2
 OBSERVATION_REPORT_CONTRACT_VERSION = 1
+DISPOSAL_REPORT_CONTRACT_VERSION = 1
 REPORT_CAPABILITIES_HEADER = "X-NVSOP-Report-Capabilities"
 SOP_INSTANCE_REPORT_CAPABILITY = "sop-instance-report-v1"
 HEALTH_REPORT_CAPABILITY = "stream-health-report-v2"
@@ -309,6 +310,94 @@ class ReportedDecision:
             backend_provenance=backend_provenance,
             configuration_revision=configuration_revision,
             configuration_sha256=configuration_sha256,
+            contract_version=contract_version,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReportedDisposal:
+    """edge 本地处置账本的一条不可变结果镜像；中心不得据此再次执行。"""
+
+    event_id: str
+    host_id: str
+    station_id: str
+    instance_id: int
+    idempotency_key: str
+    violation_ref: str
+    action_kind: str
+    actor: str
+    source: str
+    result_kind: str
+    result_detail: str | None
+    result_at: float
+    attempts: int
+    reported_at: str
+    contract_version: int = DISPOSAL_REPORT_CONTRACT_VERSION
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "contract_version": self.contract_version,
+            "event_id": self.event_id,
+            "host_id": self.host_id,
+            "station_id": self.station_id,
+            "instance_id": self.instance_id,
+            "idempotency_key": self.idempotency_key,
+            "violation_ref": self.violation_ref,
+            "action_kind": self.action_kind,
+            "actor": self.actor,
+            "source": self.source,
+            "result_kind": self.result_kind,
+            "result_detail": self.result_detail,
+            "result_at": self.result_at,
+            "attempts": self.attempts,
+            "reported_at": self.reported_at,
+        }
+
+    @classmethod
+    def from_wire(cls, value: Mapping[str, object]) -> ReportedDisposal:
+        _require_keys(
+            value,
+            {
+                "contract_version",
+                "event_id",
+                "host_id",
+                "station_id",
+                "instance_id",
+                "idempotency_key",
+                "violation_ref",
+                "action_kind",
+                "actor",
+                "source",
+                "result_kind",
+                "result_detail",
+                "result_at",
+                "attempts",
+                "reported_at",
+            },
+            "reported disposal",
+        )
+        contract_version = _positive_int(value["contract_version"], "contract_version")
+        if contract_version != DISPOSAL_REPORT_CONTRACT_VERSION:
+            raise ValueError("reported disposal contract version is unsupported")
+        return cls(
+            event_id=_string(value["event_id"], "event_id"),
+            host_id=_string(value["host_id"], "host_id"),
+            station_id=_string(value["station_id"], "station_id"),
+            instance_id=_nonnegative_int(value["instance_id"], "instance_id"),
+            idempotency_key=_string(value["idempotency_key"], "idempotency_key"),
+            violation_ref=_string(value["violation_ref"], "violation_ref"),
+            action_kind=_string(value["action_kind"], "action_kind"),
+            actor=_string(value["actor"], "actor"),
+            source=_string(value["source"], "source"),
+            result_kind=_string(value["result_kind"], "result_kind"),
+            result_detail=(
+                None
+                if value["result_detail"] is None
+                else _string(value["result_detail"], "result_detail")
+            ),
+            result_at=_finite_number(value["result_at"], "result_at"),
+            attempts=_positive_int(value["attempts"], "attempts"),
+            reported_at=_string(value["reported_at"], "reported_at"),
             contract_version=contract_version,
         )
 
@@ -809,6 +898,7 @@ def _is_sha256(value: str) -> bool:
 
 __all__ = [
     "DECISION_REPORT_CONTRACT_VERSION",
+    "DISPOSAL_REPORT_CONTRACT_VERSION",
     "HEALTH_REPORT_CAPABILITY",
     "HEALTH_REPORT_CONTRACT_VERSION",
     "OBSERVATION_REPORT_CONTRACT_VERSION",
@@ -822,6 +912,7 @@ __all__ = [
     "ReportEvidence",
     "ReportViolation",
     "ReportedDecision",
+    "ReportedDisposal",
     "ReportedHealth",
     "ReportedObservation",
     "ReportedSopInstance",

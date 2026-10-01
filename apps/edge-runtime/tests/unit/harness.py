@@ -43,6 +43,11 @@ from edge_runtime.judgment.model import (
     Template,
     TimerFired,
 )
+from edge_runtime.local_state.disposal import (
+    LocalDisposalIntent,
+    LocalDisposalRequest,
+    StoredDisposalResult,
+)
 from edge_runtime.local_state.queues import BackendReportContext
 
 STEPS = ("(1) step 1", "(2) step 2", "(3) step 3", "(4) step 4", "(5) step 5")
@@ -136,9 +141,22 @@ class MemoryReactionStore:
         evidence: Sequence[EvidenceClip],
         closed_instances: Sequence[Instance],
         report_provenance: Mapping[int, tuple[BackendReportContext, ...] | None],
-    ) -> None:
+        disposals: Sequence[LocalDisposalRequest] = (),
+    ) -> tuple[LocalDisposalIntent, ...]:
+        del disposals
         self.reactions.append((state, tuple(decisions), tuple(evidence), tuple(closed_instances)))
         self.report_provenance.append(dict(report_provenance))
+        return ()
+
+    def pending_disposals(self) -> tuple[LocalDisposalIntent, ...]:
+        return ()
+
+    def claim_disposal(self, intent: LocalDisposalIntent, *, at: HostInstant) -> bool:
+        del intent, at
+        return False
+
+    def record_disposal(self, intent: LocalDisposalIntent, result: StoredDisposalResult) -> None:
+        del intent, result
 
     def enqueue_observation(
         self,

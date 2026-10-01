@@ -55,6 +55,7 @@ from nvsop_contracts.host_identity import (
 )
 from nvsop_contracts.reports import (
     DECISION_REPORT_CONTRACT_VERSION,
+    DISPOSAL_REPORT_CONTRACT_VERSION,
     HEALTH_REPORT_CAPABILITY,
     HEALTH_REPORT_CONTRACT_VERSION,
     OBSERVATION_REPORT_CONTRACT_VERSION,
@@ -66,6 +67,7 @@ from nvsop_contracts.reports import (
     SOP_INSTANCE_REPORT_CONTRACT_VERSION,
     ReportBackendProvenance,
     ReportedDecision,
+    ReportedDisposal,
     ReportedHealth,
     ReportedObservation,
     ReportedSopInstance,
@@ -84,6 +86,7 @@ from nvsop_contracts.reports import (
 __all__ = [
     "CONFIGURATION_CONTRACT_VERSION",
     "DECISION_REPORT_CONTRACT_VERSION",
+    "DISPOSAL_REPORT_CONTRACT_VERSION",
     "EXECUTION_LEASE_WRITE_GATE_CAPABILITY",
     "HEALTH_REPORT_CAPABILITY",
     "HEALTH_REPORT_CONTRACT_VERSION",
@@ -119,6 +122,7 @@ __all__ = [
     "ReportEvidence",
     "ReportViolation",
     "ReportedDecision",
+    "ReportedDisposal",
     "ReportedHealth",
     "ReportedObservation",
     "ReportedSopInstance",

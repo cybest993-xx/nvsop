@@ -17,9 +17,18 @@ other modules' HTTP adapters: the annotated dependency that resolves a request i
 an account still holds the handover permission *now*, after an administration change that may
 have landed between two confirmations. It is re-exported here so `execution`'s use cases reach
 it through the same seam as `authorize`, never through `auth.handover` or an adapter.
+
+`handover_authority` is that same decision as an HTTP dependency: other modules' HTTP adapters
+declare `Depends(handover_authority)` rather than importing `auth.adapters.dependencies`
+directly, so the one permitted cross-owner import target stays `auth.api`.
 """
 
-from factory_sop.auth.adapters.dependencies import Authorized, needs, needs_any
+from factory_sop.auth.adapters.dependencies import (
+    Authorized,
+    handover_authority,
+    needs,
+    needs_any,
+)
 from factory_sop.auth.authorization import Caller, authorize
 from factory_sop.auth.handover import HandoverAuthority
 from factory_sop.auth.permissions import Permission
@@ -30,6 +39,7 @@ __all__ = [
     "HandoverAuthority",
     "Permission",
     "authorize",
+    "handover_authority",
     "needs",
     "needs_any",
 ]

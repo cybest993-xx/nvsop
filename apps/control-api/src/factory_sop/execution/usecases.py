@@ -167,6 +167,15 @@ def read_handover(
     return record
 
 
+def read_handover_risk(*, caller: Caller) -> str:
+    """返回服务器权威的强制改绑风险原文，供前端展示。
+
+    前端不自拟第二段风险文本：只有本函数返回的原文可作为确认输入。
+    """
+    authorize(caller, HANDOVER_PERMISSION)
+    return HANDOVER_RISK_STATEMENT
+
+
 def confirm_handover(
     *,
     caller: Caller,
@@ -269,4 +278,5 @@ __all__ = [
     "confirm_handover",
     "create_handover",
     "read_handover",
+    "read_handover_risk",
 ]

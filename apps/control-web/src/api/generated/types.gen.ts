@@ -522,6 +522,15 @@ export type ApiErrorCode =
   | 'ARTIFACT_UNAVAILABLE'
   | 'JOB_NOT_FOUND'
   | 'JOB_RESOURCE_NOT_FOUND'
+  | 'ACTIVE_GRANT_EXISTS'
+  | 'GRANT_NOT_RENEWABLE'
+  | 'HANDOVER_NOT_FOUND'
+  | 'HANDOVER_ALREADY_CONFIRMED'
+  | 'HANDOVER_SAME_OPERATOR'
+  | 'HANDOVER_CONTENT_MISMATCH'
+  | 'HANDOVER_RISK_NOT_ACKNOWLEDGED'
+  | 'HANDOVER_NOT_ELIGIBLE'
+  | 'HANDOVER_TARGET_NOT_FOUND'
 
 /**
  * ArtifactAcceptedView
@@ -1784,6 +1793,118 @@ export type FieldError = {
    * Message
    */
   message: string
+}
+
+/**
+ * HandoverConfirmationInput
+ *
+ * 第二确认输入；必须回带被展示的同一冻结内容。
+ */
+export type HandoverConfirmationInput = {
+  /**
+   * From Host Id
+   */
+  from_host_id: string
+  /**
+   * Risk Acknowledgement
+   */
+  risk_acknowledgement: string
+  /**
+   * Station Id
+   */
+  station_id: string
+  /**
+   * To Host Id
+   */
+  to_host_id: string
+}
+
+/**
+ * HandoverCreation
+ *
+ * 建立强制改绑请求的输入；内容建立后冻结，改内容必须新建。
+ */
+export type HandoverCreation = {
+  /**
+   * From Host Id
+   */
+  from_host_id: string
+  /**
+   * Risk Acknowledgement
+   */
+  risk_acknowledgement: string
+  /**
+   * Station Id
+   */
+  station_id: string
+  /**
+   * To Host Id
+   */
+  to_host_id: string
+}
+
+/**
+ * HandoverRiskView
+ *
+ * 服务器权威的强制改绑风险原文。
+ */
+export type HandoverRiskView = {
+  /**
+   * Risk Statement
+   */
+  risk_statement: string
+}
+
+/**
+ * HandoverView
+ *
+ * 一条强制改绑请求的冻结内容与两人确认事实；`risk_statement` 为服务器原文。
+ */
+export type HandoverView = {
+  /**
+   * From Host Id
+   */
+  from_host_id: string
+  /**
+   * Handover Id
+   */
+  handover_id: string
+  /**
+   * Operator Confirmed At
+   */
+  operator_confirmed_at: string
+  /**
+   * Operator Id
+   */
+  operator_id: string
+  /**
+   * Operator Risk Shown
+   */
+  operator_risk_shown: boolean
+  /**
+   * Risk Statement
+   */
+  risk_statement: string
+  /**
+   * Second Confirmed At
+   */
+  second_confirmed_at: string | null
+  /**
+   * Second Operator Id
+   */
+  second_operator_id: string | null
+  /**
+   * Second Risk Shown
+   */
+  second_risk_shown: boolean | null
+  /**
+   * Station Id
+   */
+  station_id: string
+  /**
+   * To Host Id
+   */
+  to_host_id: string
 }
 
 /**
@@ -5937,6 +6058,176 @@ export type CompleteDeviceCommandResponses = {
 
 export type CompleteDeviceCommandResponse =
   CompleteDeviceCommandResponses[keyof CompleteDeviceCommandResponses]
+
+export type CreateHandoverData = {
+  body: HandoverCreation
+  path?: never
+  query?: never
+  url: '/api/v1/execution/handovers'
+}
+
+export type CreateHandoverErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Execution record not found
+   */
+  404: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CreateHandoverError = CreateHandoverErrors[keyof CreateHandoverErrors]
+
+export type CreateHandoverResponses = {
+  /**
+   * Successful Response
+   */
+  201: HandoverView
+}
+
+export type CreateHandoverResponse = CreateHandoverResponses[keyof CreateHandoverResponses]
+
+export type ReadHandoverRiskData = {
+  body?: never
+  path?: never
+  query?: never
+  url: '/api/v1/execution/handovers/risk'
+}
+
+export type ReadHandoverRiskErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadHandoverRiskError = ReadHandoverRiskErrors[keyof ReadHandoverRiskErrors]
+
+export type ReadHandoverRiskResponses = {
+  /**
+   * Successful Response
+   */
+  200: HandoverRiskView
+}
+
+export type ReadHandoverRiskResponse = ReadHandoverRiskResponses[keyof ReadHandoverRiskResponses]
+
+export type ReadHandoverData = {
+  body?: never
+  path: {
+    /**
+     * Handover Id
+     */
+    handover_id: string
+  }
+  query?: never
+  url: '/api/v1/execution/handovers/{handover_id}'
+}
+
+export type ReadHandoverErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Execution record not found
+   */
+  404: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadHandoverError = ReadHandoverErrors[keyof ReadHandoverErrors]
+
+export type ReadHandoverResponses = {
+  /**
+   * Successful Response
+   */
+  200: HandoverView
+}
+
+export type ReadHandoverResponse = ReadHandoverResponses[keyof ReadHandoverResponses]
+
+export type ConfirmHandoverData = {
+  body: HandoverConfirmationInput
+  path: {
+    /**
+     * Handover Id
+     */
+    handover_id: string
+  }
+  query?: never
+  url: '/api/v1/execution/handovers/{handover_id}/confirmation'
+}
+
+export type ConfirmHandoverErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Execution record not found
+   */
+  404: ProblemDocument
+  /**
+   * Execution state conflict
+   */
+  409: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ConfirmHandoverError = ConfirmHandoverErrors[keyof ConfirmHandoverErrors]
+
+export type ConfirmHandoverResponses = {
+  /**
+   * Successful Response
+   */
+  200: HandoverView
+}
+
+export type ConfirmHandoverResponse = ConfirmHandoverResponses[keyof ConfirmHandoverResponses]
 
 export type ListInferenceBackendsData = {
   body?: never

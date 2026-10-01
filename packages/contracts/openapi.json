@@ -775,7 +775,16 @@
           "ARTIFACT_NOT_FOUND",
           "ARTIFACT_UNAVAILABLE",
           "JOB_NOT_FOUND",
-          "JOB_RESOURCE_NOT_FOUND"
+          "JOB_RESOURCE_NOT_FOUND",
+          "ACTIVE_GRANT_EXISTS",
+          "GRANT_NOT_RENEWABLE",
+          "HANDOVER_NOT_FOUND",
+          "HANDOVER_ALREADY_CONFIRMED",
+          "HANDOVER_SAME_OPERATOR",
+          "HANDOVER_CONTENT_MISMATCH",
+          "HANDOVER_RISK_NOT_ACKNOWLEDGED",
+          "HANDOVER_NOT_ELIGIBLE",
+          "HANDOVER_TARGET_NOT_FOUND"
         ],
         "title": "ApiErrorCode",
         "type": "string"
@@ -2935,6 +2944,177 @@
           "message"
         ],
         "title": "FieldError",
+        "type": "object"
+      },
+      "HandoverConfirmationInput": {
+        "description": "第二确认输入；必须回带被展示的同一冻结内容。",
+        "properties": {
+          "from_host_id": {
+            "format": "uuid",
+            "title": "From Host Id",
+            "type": "string"
+          },
+          "risk_acknowledgement": {
+            "title": "Risk Acknowledgement",
+            "type": "string"
+          },
+          "station_id": {
+            "format": "uuid",
+            "title": "Station Id",
+            "type": "string"
+          },
+          "to_host_id": {
+            "format": "uuid",
+            "title": "To Host Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "station_id",
+          "from_host_id",
+          "to_host_id",
+          "risk_acknowledgement"
+        ],
+        "title": "HandoverConfirmationInput",
+        "type": "object"
+      },
+      "HandoverCreation": {
+        "description": "建立强制改绑请求的输入；内容建立后冻结，改内容必须新建。",
+        "properties": {
+          "from_host_id": {
+            "format": "uuid",
+            "title": "From Host Id",
+            "type": "string"
+          },
+          "risk_acknowledgement": {
+            "title": "Risk Acknowledgement",
+            "type": "string"
+          },
+          "station_id": {
+            "format": "uuid",
+            "title": "Station Id",
+            "type": "string"
+          },
+          "to_host_id": {
+            "format": "uuid",
+            "title": "To Host Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "station_id",
+          "from_host_id",
+          "to_host_id",
+          "risk_acknowledgement"
+        ],
+        "title": "HandoverCreation",
+        "type": "object"
+      },
+      "HandoverRiskView": {
+        "description": "服务器权威的强制改绑风险原文。",
+        "properties": {
+          "risk_statement": {
+            "title": "Risk Statement",
+            "type": "string"
+          }
+        },
+        "required": [
+          "risk_statement"
+        ],
+        "title": "HandoverRiskView",
+        "type": "object"
+      },
+      "HandoverView": {
+        "description": "一条强制改绑请求的冻结内容与两人确认事实；`risk_statement` 为服务器原文。",
+        "properties": {
+          "from_host_id": {
+            "format": "uuid",
+            "title": "From Host Id",
+            "type": "string"
+          },
+          "handover_id": {
+            "format": "uuid",
+            "title": "Handover Id",
+            "type": "string"
+          },
+          "operator_confirmed_at": {
+            "format": "date-time",
+            "title": "Operator Confirmed At",
+            "type": "string"
+          },
+          "operator_id": {
+            "format": "uuid",
+            "title": "Operator Id",
+            "type": "string"
+          },
+          "operator_risk_shown": {
+            "title": "Operator Risk Shown",
+            "type": "boolean"
+          },
+          "risk_statement": {
+            "title": "Risk Statement",
+            "type": "string"
+          },
+          "second_confirmed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Second Confirmed At"
+          },
+          "second_operator_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Second Operator Id"
+          },
+          "second_risk_shown": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Second Risk Shown"
+          },
+          "station_id": {
+            "format": "uuid",
+            "title": "Station Id",
+            "type": "string"
+          },
+          "to_host_id": {
+            "format": "uuid",
+            "title": "To Host Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "handover_id",
+          "station_id",
+          "from_host_id",
+          "to_host_id",
+          "operator_id",
+          "operator_confirmed_at",
+          "operator_risk_shown",
+          "second_operator_id",
+          "second_confirmed_at",
+          "second_risk_shown",
+          "risk_statement"
+        ],
+        "title": "HandoverView",
         "type": "object"
       },
       "HostConfiguration": {
@@ -10438,6 +10618,332 @@
         "tags": [
           "device"
         ]
+      }
+    },
+    "/api/v1/execution/handovers": {
+      "post": {
+        "description": "建立强制改绑请求，操作者同时完成第一确认。",
+        "operationId": "createHandover",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HandoverCreation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandoverView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Execution record not found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Request invalid"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Create",
+        "tags": [
+          "execution"
+        ],
+        "x-required-permission": "execution.handover.edit"
+      }
+    },
+    "/api/v1/execution/handovers/risk": {
+      "get": {
+        "description": "只读返回服务器权威风险原文。",
+        "operationId": "readHandoverRisk",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandoverRiskView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Read Risk",
+        "tags": [
+          "execution"
+        ],
+        "x-required-permission": "execution.handover.edit"
+      }
+    },
+    "/api/v1/execution/handovers/{handover_id}": {
+      "get": {
+        "description": "按请求 id 读取冻结内容与风险原文，供第二名用户查看。",
+        "operationId": "readHandover",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "handover_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Handover Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandoverView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Execution record not found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Read",
+        "tags": [
+          "execution"
+        ],
+        "x-required-permission": "execution.handover.edit"
+      }
+    },
+    "/api/v1/execution/handovers/{handover_id}/confirmation": {
+      "post": {
+        "description": "由另一名当前有权的用户确认被展示的同一请求内容。",
+        "operationId": "confirmHandover",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "handover_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Handover Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HandoverConfirmationInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandoverView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Execution record not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Execution state conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Request invalid"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Confirm",
+        "tags": [
+          "execution"
+        ],
+        "x-required-permission": "execution.handover.edit"
       }
     },
     "/api/v1/inference-backends": {

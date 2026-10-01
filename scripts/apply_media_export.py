@@ -107,6 +107,10 @@ def apply_export(
         raise ValueError(f"edge media configuration is missing: {', '.join(sorted(missing))}")
 
     host_id = _string(export.get("host_id"), "host_id")
+    # 本机主机身份是顶层 host_id；导出只能应用到它所属的那台主机，避免把 A 机拓扑
+    # 写进 B 机配置后只在 media.host_id 上留下不一致。
+    if _string(edge.get("host_id"), "edge host_id") != host_id:
+        raise ValueError("center export belongs to another host")
     existing_cameras = {
         _string(camera.get("camera_id"), "local camera_id"): camera
         for camera in _array(local_media.get("cameras", []), "local cameras")

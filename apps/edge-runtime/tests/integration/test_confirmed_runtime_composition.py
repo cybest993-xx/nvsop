@@ -18,6 +18,10 @@ from nvsop_contracts import (
     generate_host_identity_key_pair,
 )
 
+# The real loopback ISAPI fixture is shared with test_output_safety.py, so the composed adapter is
+# exercised over real HTTP rather than a mocked concrete write.
+from test_output_safety import TRIGGER_PATH, IsapiLoopbackServer
+
 from edge_runtime.connectors.hikvision import CANDIDATE_PROFILE
 from edge_runtime.connectors.port import OutputPoint, PointState, Refused, WriteRefusal, Written
 from edge_runtime.connectors.writes import WriteRequest
@@ -36,8 +40,6 @@ from edge_runtime.judgment.reasons import Verdict
 from edge_runtime.local_state.queues import BackendReportContext, ReportContext
 from edge_runtime.local_state.store import open_local_state
 from edge_runtime.runtime import AutonomousRuntime, build_autonomous_runtime_from_file
-
-# This module is intentionally self-contained when invoked by the repository's unittest target.
 
 
 def _fixture_host_identity(seed: int) -> HostIdentityKeyPair:
@@ -235,24 +237,38 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
             finally:
                 inspection.close()
 
+    def _loopback(self) -> IsapiLoopbackServer:
+        server = IsapiLoopbackServer()
+        server.start()
+        self.addCleanup(server.close)
+        return server
+
+    def _build_runtime(
+        self, directory: Path, bundle: ConfigurationBundle, *, base_url: str, seed: int
+    ) -> AutonomousRuntime:
+        identity = _fixture_host_identity(seed)
+        state = open_local_state(str(directory / "state.sqlite"))
+        state.configuration().confirm(bundle, confirmed_at=1.0)
+        state.close()
+        private_key_file = directory / "host-private-key"
+        private_key_file.write_text(identity.private_key, encoding="utf-8")
+        config_path = directory / "edge.json"
+        config_path.write_text(
+            json.dumps(_local_config(directory, private_key_file, base_url=base_url)),
+            encoding="utf-8",
+        )
+        return build_autonomous_runtime_from_file(config_path)
+
     def test_builder_uses_last_confirmed_station_and_composes_real_connector_seams(self) -> None:
-        bundle = _bundle()
-        identity = _fixture_host_identity(44)
+        loopback = self._loopback()
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            state_path = directory / "state.sqlite"
-            state = open_local_state(str(state_path))
-            state.configuration().confirm(bundle, confirmed_at=1.0)
-            state.close()
-
-            private_key_file = directory / "host-private-key"
-            private_key_file.write_text(identity.private_key, encoding="utf-8")
-            config_path = directory / "edge.json"
-            config_path.write_text(
-                json.dumps(_local_config(directory, private_key_file)), encoding="utf-8"
+            runtime = self._build_runtime(
+                directory,
+                _bundle(address="127.0.0.1", port=None),
+                base_url=loopback.base_url,
+                seed=44,
             )
-
-            runtime = build_autonomous_runtime_from_file(config_path)
             self.assertIsInstance(runtime, AutonomousRuntime)
             try:
                 self.assertEqual(
@@ -266,49 +282,31 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
                 self.assertEqual(0.5, runtime.connector_runtimes.runtimes[0].polling_interval)
                 self.assertIn("connector-a", runtime.output_dispatchers)
                 self.assertEqual("2", runtime.stations[0].output_points["connector-a"][0].address)
-                request = WriteRequest(
-                    point=OutputPoint(label="停线联锁", address="2"),
-                    state=PointState.ACTIVE,
-                    key="station-a:disposal-1",
-                    actor="supervisor",
-                    timeout=1.0,
-                    capability_budget=1.0,
-                    station_id="station-a",
-                    connector_id="connector-a",
-                    attempt_at=HostInstant(1.0),
-                    lease_seconds=5.0,
-                )
-                with patch(
-                    "edge_runtime.connectors.hikvision.IsapiConnector.write",
-                    return_value=Written(at=HostInstant(1.5)),
-                ) as physical_write:
-                    self.assertEqual(
-                        Written(at=HostInstant(1.5)),
-                        runtime.stations[0].write_output(request),
-                    )
-                    physical_write.assert_called_once()
+                request = _output_request()
+                first = runtime.stations[0].write_output(request)
+                self.assertIsInstance(first, Written)
+                self.assertEqual([TRIGGER_PATH], loopback.puts)
             finally:
                 runtime.close()
 
-            restarted = build_autonomous_runtime_from_file(config_path)
+            restarted = build_autonomous_runtime_from_file(directory / "edge.json")
             try:
-                with patch(
-                    "edge_runtime.connectors.hikvision.IsapiConnector.write",
-                    return_value=Written(at=HostInstant(2.5)),
-                ) as physical_write:
-                    self.assertEqual(
-                        Written(at=HostInstant(1.5)),
-                        restarted.stations[0].write_output(
-                            replace(request, attempt_at=HostInstant(2.0))
-                        ),
-                    )
-                    physical_write.assert_not_called()
+                # The restart replays the exact recorded outcome (same frozen instant), so the
+                # caller cannot tell it from the first write and nothing physical is driven again.
+                self.assertEqual(
+                    first,
+                    restarted.stations[0].write_output(
+                        replace(request, attempt_at=HostInstant(2.0))
+                    ),
+                )
+                self.assertEqual([TRIGGER_PATH], loopback.puts)
             finally:
                 restarted.close()
 
     def test_expired_execution_lease_refuses_the_physical_write(self) -> None:
+        loopback = self._loopback()
         bundle = replace(
-            _bundle(),
+            _bundle(address="127.0.0.1", port=None),
             execution_grants=(
                 ExecutionLease(
                     station_id="station-a",
@@ -318,50 +316,81 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
                 ),
             ),
         )
-        identity = _fixture_host_identity(47)
         with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            state = open_local_state(str(directory / "state.sqlite"))
-            state.configuration().confirm(bundle, confirmed_at=1.0)
-            state.close()
-
-            private_key_file = directory / "host-private-key"
-            private_key_file.write_text(identity.private_key, encoding="utf-8")
-            config_path = directory / "edge.json"
-            config_path.write_text(
-                json.dumps(_local_config(directory, private_key_file)), encoding="utf-8"
+            runtime = self._build_runtime(
+                Path(temporary), bundle, base_url=loopback.base_url, seed=47
             )
-
-            runtime = build_autonomous_runtime_from_file(config_path)
             try:
-                request = WriteRequest(
-                    point=OutputPoint(label="停线联锁", address="2"),
-                    state=PointState.ACTIVE,
-                    key="station-a:disposal-expired",
-                    actor="supervisor",
-                    timeout=1.0,
-                    capability_budget=1.0,
-                    station_id="station-a",
-                    connector_id="connector-a",
-                    attempt_at=HostInstant(1.0),
-                    lease_seconds=5.0,
+                with self.assertLogs("edge_runtime", level="INFO") as logs:
+                    outcome = runtime.stations[0].write_output(_output_request())
+                self._assert_refused(outcome, WriteRefusal.EXECUTION_LEASE_EXPIRED)
+                self.assertEqual([], loopback.requests)
+                self.assertTrue(
+                    any("reason=execution_lease_expired" in line for line in logs.output),
+                    "the physical error-proofing failure is queryable with its reason",
                 )
-                with patch(
-                    "edge_runtime.connectors.hikvision.IsapiConnector.write"
-                ) as physical_write:
-                    self.assertEqual(
-                        Refused(
-                            reason=WriteRefusal.EXECUTION_LEASE_EXPIRED,
-                            detail="物理执行权租约已于 2000-01-01T00:00:00Z 到期",
-                        ),
-                        runtime.stations[0].write_output(request),
-                    )
-                    physical_write.assert_not_called()
             finally:
                 runtime.close()
 
+    def test_a_station_only_drives_its_own_targets_and_stops_when_closed(self) -> None:
+        loopback = self._loopback()
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = self._build_runtime(
+                Path(temporary),
+                _bundle(address="127.0.0.1", port=None),
+                base_url=loopback.base_url,
+                seed=48,
+            )
+            try:
+                # A connector this station does not own: refused, with a diagnostic event naming
+                # the target and reason, before any device request (S029 AC1/AC3).
+                unknown = replace(_output_request(), connector_id="connector-other")
+                with self.assertLogs("edge_runtime", level="INFO") as logs:
+                    self._assert_refused(
+                        runtime.stations[0].write_output(unknown),
+                        WriteRefusal.TARGET_NOT_IN_STATION,
+                    )
+                self.assertEqual([], loopback.requests)
+                self.assertTrue(
+                    any(
+                        "point=停线联锁@2" in line and "reason=target_not_in_station" in line
+                        for line in logs.output
+                    ),
+                    "the unconfigured-connector refusal is queryable with target and reason",
+                )
 
-def _local_config(directory: Path, private_key_file: Path) -> dict[str, object]:
+                runtime.stations[0].close()
+                self._assert_refused(
+                    runtime.stations[0].write_output(_output_request()), WriteRefusal.WRITE_STOPPED
+                )
+                self.assertEqual([], loopback.requests)
+            finally:
+                runtime.close()
+
+    def _assert_refused(self, outcome: object, reason: WriteRefusal) -> None:
+        self.assertIsInstance(outcome, Refused)
+        assert isinstance(outcome, Refused)
+        self.assertIs(reason, outcome.reason)
+
+
+def _output_request() -> WriteRequest:
+    return WriteRequest(
+        point=OutputPoint(label="停线联锁", address="2"),
+        state=PointState.ACTIVE,
+        key="station-a:disposal-1",
+        actor="supervisor",
+        timeout=1.0,
+        capability_budget=1.0,
+        station_id="station-a",
+        connector_id="connector-a",
+        attempt_at=HostInstant(1.0),
+        lease_seconds=5.0,
+    )
+
+
+def _local_config(
+    directory: Path, private_key_file: Path, *, base_url: str = "http://camera.example:80"
+) -> dict[str, object]:
     profile = {
         "input_status_path": CANDIDATE_PROFILE.input_status_path,
         "output_trigger_path": CANDIDATE_PROFILE.output_trigger_path,
@@ -388,7 +417,7 @@ def _local_config(directory: Path, private_key_file: Path) -> dict[str, object]:
                 "connector_id": "connector-a",
                 "revision": 1,
                 "credentials_configured": False,
-                "base_url": "http://camera.example:80",
+                "base_url": base_url,
                 "profile": profile,
                 "capability": capability_to_wire(Unverified()),
             }
@@ -413,7 +442,7 @@ def _local_config(directory: Path, private_key_file: Path) -> dict[str, object]:
     }
 
 
-def _bundle() -> ConfigurationBundle:
+def _bundle(*, address: str = "camera.example", port: int | None = 80) -> ConfigurationBundle:
     # Reuse the exact contract shape without depending on another test file's import path.
     from hashlib import sha256
 
@@ -510,8 +539,8 @@ def _bundle() -> ConfigurationBundle:
                         name="Camera IO",
                         connector_type="hikvision_isapi",
                         revision=6,
-                        address="camera.example",
-                        port=80,
+                        address=address,
+                        port=port,
                         capability=Measured(
                             delivery=Polled(interval=0.5),
                             max_delivery_delay=0.5,

@@ -53,7 +53,7 @@ make contracts
 中心 `center-db` 服务端镜像为 `timescale/timescaledb:2.22.1-pg17`（精确版本以 `deploy/dev/compose.yaml` 为准），镜像预装并以 `shared_preload_libraries` 预加载 TimescaleDB，`pg_extension.extversion` 应为 `2.22.1`。`monitor` 迁移 0047 用 `CREATE EXTENSION IF NOT EXISTS` 在 `nvsop` 安装扩展，并把三张镜像事实表转为按 `received_at` 分区的 hypertable（全局 `event_id`/`stream_sequence` 唯一由普通身份表保留，不启用原生压缩）。一次性 client-only 服务（`training-db-init`、`center-role-init`、`training-role-init`、`training-objects-install`）仍用普通 `postgres` 镜像，只做客户端。
 
 - 安装/迁移身份 `nvsop` 需要 `CREATE EXTENSION` 权限；长期运行的中心/训练 runtime 角色不安装扩展。
-- **从 `postgres:17.2-bookworm`（Debian PG17.2）迁到 Alpine PG17 不能直接复用旧数据卷换镜像。** 先停服务，用受控逻辑导出/导入 `nvsop` 与 `training` 两个 database 并保留原角色，再启动新镜像；导入后核对 collation。旧数据卷不保证可直接挂载，本文不宣称可直接替换。
+- **从 `postgres:17.2-bookworm`（Debian PG17.2）迁到 Alpine PG17 不能直接复用旧数据卷换镜像。** 顺序：先停业务写入（旧库仍可读），逻辑导出 `nvsop` 与 `training` 两库及 roles；停旧实例并**保留旧卷不覆盖**，在新卷启动 TimescalePG17 实例；恢复/收敛安装身份与 runtime roles，逻辑导入两库；核对 collation、数据与训练对象后执行迁移 0047，再切回业务。验证完成前不得删除旧卷；失败时保留旧环境以便回退。旧数据卷不保证可直接挂载，本文不宣称可直接替换。
 - 降级（`alembic downgrade`）把三张 hypertable 还原为普通表，但**不卸载** `timescaledb` 扩展（镜像预装于 template1，卸载会破坏同库其它对象）。
 - Q36 备份/恢复仍未解决；本文不宣称已有自动灾备或演练过的恢复目标。
 

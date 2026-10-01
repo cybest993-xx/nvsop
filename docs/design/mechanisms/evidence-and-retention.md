@@ -100,7 +100,7 @@
 
 **当前实现状态（S040）**：`retention` 已作为真实 Center 模块注册，拥有全局保留策略的声明、严格完整组解码、三类证据解析与单行策略持久化/CAS（`retention_policy`）；`auth` 登记 `retention.policy.view/edit`。工位覆盖与生效解析（#204）、缩短前影响估算（#205）、引用保护（#206）、回收执行（#207）仍待各自票实现。三类证据时长、记录明细/压缩/聚合年龄、违规与处置、推理机本地已上报数据的默认值集中在 `factory_sop.retention.model`，永久为显式枚举，未设置与不保留互不混同。推理机本地已上报数据裁剪仍由边缘运行时执行，本阶段不接 HTTP/UI。
 
-**当前实现状态（S020）**：`monitor` 的三张镜像事实表（判定、健康、观测）已是按 `received_at` 分区的 TimescaleDB hypertable，只调用 `create_hypertable` 转换既有表、不创建压缩策略（原生压缩归 S021）。hypertable 的唯一约束必须包含分区列，因此全局 `event_id` 与 `stream_sequence` 唯一由同模块的普通身份表保留，事实表用含 `stream_sequence` 的复合外键指向它；S040 的保留配置归属不变。
+**当前实现状态（S020）**：`monitor` 的三张镜像事实表（判定、健康、观测）已是按 `received_at` 分区的 TimescaleDB hypertable，只调用 `create_hypertable` 转换既有表、不创建压缩策略（原生压缩归 S021）。hypertable 的唯一约束必须包含分区列，因此全局 `event_id` 唯一由同模块的普通身份表保留；decision/health 另有全局 `stream_sequence`，事实表用含 `stream_sequence` 的复合外键指向身份表，observation 无流序号、只按 `(event_id, received_at)` 约束；S040 的保留配置归属不变。
 
 **滚动录像不参与分类。** 录制发生在判定之前，做不到"只录某一类"。分类作用于**从滚动录像提升为长期证据**那一步（§5.5 的 `ffmpeg -c copy` 切片），即：哪些判定类别触发提升、提升后留多久。滚动窗口本身对所有路统一。
 

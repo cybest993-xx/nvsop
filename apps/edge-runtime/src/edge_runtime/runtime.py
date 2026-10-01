@@ -212,12 +212,7 @@ def _outcome_from_storage(kind: str, detail: str | None, at: float) -> WriteOutc
 
 
 class StationWriteLifecycle:
-    """工位物理写入生命周期: 关闭或配置切换后置为停止, 写入边界据此拒绝新写入。
-
-    组合根为每个工位创建一个, 同时交给该工位的输出写入门禁与 ``AutonomousStation``。
-    ``AutonomousStation.close()`` 在关闭输入源前先置位, 因此旧 runtime/station 关闭或切换后
-    无法再驱动执行器 (S029 AC2)。
-    """
+    """工位物理写入生命周期: 关闭或配置切换后置为停止, 写入边界据此拒绝新写入 (S029 AC2)。"""
 
     def __init__(self) -> None:
         self._stopped = threading.Event()
@@ -233,11 +228,8 @@ class StationWriteLifecycle:
 class StationOutputWriteGate:
     """把物理写入授权绑定到真实工位、连接器、输出点位与生命周期。
 
-    它只读 ``LocalExecutionLeaseStore`` 这一份事实, 每次写入都按本机墙钟重新判定到期, 因此
-    不需要等待下一次中心请求, 也不维护第二份有效期 (§5.17)。
-
-    工位身份来自组合根而非 ``request.station_id``: 请求无法借另一工位的租约放行。目标点位必须
-    属于本工位在该连接器上已配置的输出点位, 且工位生命周期未停止 (S029 AC1/AC2)。
+    只读 ``LocalExecutionLeaseStore`` 这一份事实, 每次写入按本机墙钟重新判定到期; 工位身份来自
+    组合根而非 ``request.station_id`` (S029 AC1/AC2)。
     """
 
     def __init__(
@@ -262,6 +254,13 @@ class StationOutputWriteGate:
             return Refused(
                 reason=WriteRefusal.WRITE_STOPPED,
                 detail=f"工位 {self._station_id} 已停止写入",
+            )
+        # 请求必须写回本门禁绑定的工位。否则该请求会拿本工位租约放行, 却把幂等意图落到另一个
+        # 工位的账本作用域 (SQLiteWriteLedger 用 request.station_id), 造成隔离破坏和重复驱动。
+        if request.station_id != self._station_id:
+            return Refused(
+                reason=WriteRefusal.TARGET_NOT_IN_STATION,
+                detail=(f"请求工位 {request.station_id} 不是本门禁绑定的工位 {self._station_id}"),
             )
         if request.connector_id != self._connector_id or request.point not in self._output_points:
             return Refused(
@@ -391,6 +390,7 @@ class AutonomousStation:
         output_dispatchers: Mapping[str, OutputDispatcher] | None = None,
         output_points: Mapping[str, tuple[OutputPoint, ...]] | None = None,
         write_lifecycle: StationWriteLifecycle | None = None,
+        diagnostics: Callable[[WriteAttempted], None] | None = None,
     ) -> None:
         self._supervisor = supervisor
         self._source = source
@@ -399,6 +399,7 @@ class AutonomousStation:
         self._output_dispatchers = dict(output_dispatchers or {})
         self._output_points = dict(output_points or {})
         self._write_lifecycle = write_lifecycle or StationWriteLifecycle()
+        self._diagnostics = diagnostics
 
     @property
     def station_id(self) -> str | None:
@@ -421,19 +422,28 @@ class AutonomousStation:
         return {connector_id: tuple(points) for connector_id, points in self._output_points.items()}
 
     def write_output(self, request: WriteRequest) -> WriteOutcome:
-        """通过本工位已组合的连接器派发一个输出点写入。
-
-        连接器不属于本工位时返回结构化拒绝, 不尝试任何设备请求。
-        """
+        """通过本工位已组合的连接器派发一个输出点写入; 未知连接器返回结构化拒绝并产生诊断事件。"""
         dispatcher = self._output_dispatchers.get(request.connector_id)
         if dispatcher is None:
-            return Refused(
+            refusal = Refused(
                 reason=WriteRefusal.TARGET_NOT_IN_STATION,
                 detail=(
                     f"连接器 {request.connector_id} 未配置到工位 {self._station_id}, "
                     "不驱动物理执行器"
                 ),
             )
+            if self._diagnostics is not None:
+                self._diagnostics(
+                    WriteAttempted(
+                        point=request.point,
+                        state=request.state,
+                        key=request.key,
+                        actor=request.actor,
+                        outcome=refusal,
+                        replayed=False,
+                    )
+                )
+            return refusal
         return dispatcher.write(request)
 
     def close(self) -> None:
@@ -1064,15 +1074,23 @@ _CENTER_WORKER_RESTART_MAX_SECONDS = 30.0
 
 
 def _log_write_attempt(event: WriteAttempted) -> None:
-    """记录连接器写入诊断,但不记录设备凭据。"""
+    """记录连接器写入诊断,但不记录设备凭据; 拒绝带目标地址、具体原因和排障文本 (S029 AC3)。"""
+    outcome = event.outcome
+    refusal = (
+        f" reason={outcome.reason.value} detail={outcome.detail}"
+        if isinstance(outcome, Refused)
+        else ""
+    )
     _logger.info(
-        "connector write attempt key=%s actor=%s point=%s state=%s replayed=%s outcome=%s",
+        "connector write attempt key=%s actor=%s point=%s@%s state=%s replayed=%s outcome=%s%s",
         event.key,
         event.actor,
         event.point.label,
+        event.point.address,
         event.state.value,
         event.replayed,
-        type(event.outcome).__name__,
+        type(outcome).__name__,
+        refusal,
     )
 
 
@@ -1247,6 +1265,7 @@ def _build_runtime_composition(
                         for connector_id in station_binding.connector_ids
                     },
                     write_lifecycle=write_lifecycles[station_config.station_id],
+                    diagnostics=_log_write_attempt,
                 )
             )
     except Exception:

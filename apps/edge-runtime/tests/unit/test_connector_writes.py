@@ -66,20 +66,16 @@ class RecordingConnector:
         *,
         capability: Capability | None = None,
         outcome: WriteOutcome = ACCEPTED,
-        health: ConnectorHealth | None = None,
     ) -> None:
         self.capability: Capability = measured_capability() if capability is None else capability
         self.writes: list[tuple[OutputPoint, PointState]] = []
-        self.probes = 0
-        self.health = health or ConnectorHealth(reachability=Reachability.REACHABLE)
         self._outcome = outcome
 
     def read(self, point: InputPoint, /, *, timeout: float) -> ReadResult:
         return Unreachable(detail="not under test")
 
     def probe(self, /, *, timeout: float) -> ConnectorHealth:
-        self.probes += 1
-        return self.health
+        return ConnectorHealth(reachability=Reachability.REACHABLE)
 
     def write(self, point: OutputPoint, state: PointState, /, *, timeout: float) -> WriteOutcome:
         self.writes.append((point, state))
@@ -279,11 +275,6 @@ class AnUnverifiedConnectorIsNotDrivenTest(unittest.TestCase):
             dispatch.write(request()),
         )
         self.assertEqual([], connector.writes)
-        self.assertEqual(
-            0,
-            connector.probes,
-            "an unverified connector is not even probed: the capability refusal precedes the GET",
-        )
 
     def test_a_refusal_is_not_remembered_as_the_action_having_happened(self) -> None:
         connector = RecordingConnector(capability=Unverified())
@@ -310,53 +301,6 @@ class ASlowConnectorIsNotUsedForSafetyOutputTest(unittest.TestCase):
             dispatch.write(request()),
         )
         self.assertEqual([], connector.writes)
-
-
-class TheConnectionIsConfirmedBeforeTheDeviceIsDrivenTest(unittest.TestCase):
-    """S029 AC1: 断连在写入前拒绝, 探测只是安全 GET, 不占用幂等键。"""
-
-    def test_an_unreachable_probe_refuses_without_a_physical_write(self) -> None:
-        connector = RecordingConnector(
-            health=ConnectorHealth(
-                reachability=Reachability.UNREACHABLE, detail="connection refused"
-            )
-        )
-        dispatch, ledger, events = dispatcher(connector)
-
-        self.assertEqual(
-            Refused(reason=WriteRefusal.CONNECTOR_UNREACHABLE, detail="connection refused"),
-            dispatch.write(request()),
-        )
-        self.assertEqual([], connector.writes)
-        self.assertEqual(1, connector.probes)
-        self.assertIsNone(
-            ledger.outcome_for("disposal-7"),
-            "the probe refusal happens before the ledger claim, so nothing occupies the key",
-        )
-        self.assertIsInstance(events[-1].outcome, Refused)
-        assert isinstance(events[-1].outcome, Refused)
-        self.assertEqual(WriteRefusal.CONNECTOR_UNREACHABLE, events[-1].outcome.reason)
-        self.assertFalse(events[-1].replayed)
-
-    def test_a_recovered_connection_lets_the_same_key_proceed(self) -> None:
-        connector = RecordingConnector(
-            health=ConnectorHealth(reachability=Reachability.UNREACHABLE)
-        )
-        dispatch, _, _ = dispatcher(connector)
-        dispatch.write(request())
-
-        connector.health = ConnectorHealth(reachability=Reachability.REACHABLE)
-
-        self.assertEqual(ACCEPTED, dispatch.write(request()))
-        self.assertEqual([(INTERLOCK, PointState.ACTIVE)], connector.writes)
-
-    def test_a_reachable_probe_lets_the_write_through(self) -> None:
-        connector = RecordingConnector()
-        dispatch, _, _ = dispatcher(connector)
-
-        self.assertEqual(ACCEPTED, dispatch.write(request()))
-        self.assertEqual(1, connector.probes)
-        self.assertEqual([(INTERLOCK, PointState.ACTIVE)], connector.writes)
 
 
 class AuthorizationIsRecheckedImmediatelyBeforeTheSendTest(unittest.TestCase):

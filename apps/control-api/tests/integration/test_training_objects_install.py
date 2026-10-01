@@ -151,6 +151,13 @@ class TrainingInstall:
 @pytest.fixture(scope="module")
 def training_install(tmp_path_factory: pytest.TempPathFactory) -> Iterator[TrainingInstall]:
     """一套真实 PostgreSQL 实例：执行 Compose 的 role-init 与 install 入口。"""
+    yield from build_training_install(tmp_path_factory)
+
+
+def build_training_install(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[TrainingInstall]:
+    """构建 S066/S067 共用的真实实例：执行 Compose 的 role-init 与 install 入口。"""
     _require_docker()
     services = _compose_services()
     install_service = services[INSTALL_SERVICE]

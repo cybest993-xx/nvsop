@@ -48,6 +48,41 @@ make contracts
 
 **当前仓库没有完成 Q36 备份/恢复策略。** 因此不要在本文声称中心数据库、中心训练素材卷、边缘 SQLite 或推理机证据媒体已有统一备份周期、自动灾备或经过演练的恢复目标；具体交付前必须完成适用的策略和验证。
 
+## training database 增量升级
+
+`training` database 承载原样复用的五类训练/标注进程对象，由安装身份 `nvsop` 安装/升级，Center Alembic 从不接管它（Q35/S066/S067）。空库首次安装与已知历史来源的增量升级都由 `deploy/dev/training-install.sh` 处理，定义来源是锁定的 Vendor 合并 DDL `vendor/sop-monitoring-blueprints/microservices/sop-training-bp/db-init-scripts/01-init-tables.sql`（当前基座提交 `69352021…`、内容摘要 `df3e518f…`，见[基座验证台账](../base/verified-commits.md)）。
+
+### 受支持的来源版本
+
+升级只识别显式的已知 Vendor 标注结构，按实际结构（四张表的列集与主键）判定，而不只是表名：
+
+- **原始 standalone 标注结构**：`dataset` / `video` / `chunk` / `annotation` 四表，`dataset` 没有 `two_operator_mode`；
+- **同形四表 + `two_operator_mode`**：同样的四表结构，但 `dataset` 已含 `two_operator_mode`。
+
+来源里可以包含合法的历史附加数据（例如旧用户关联表），这些非 Vendor 拥有的对象不会被改动或删除。若来源里已存在任一训练/增强对象（`augmented_data`、`augmentation_stages`、`training_job`、`ddm_training_job`、`evaluation_job`、`e2e_evaluation_job` 或 `status_enum`、`training_status_enum`），或四表结构与上述不符，则视为未知/部分/不兼容来源并明确拒绝。
+
+### 受支持的迁移/升级步骤
+
+仓库不实现通用 migration framework，也不自动恢复客户备份。受支持的历史数据迁移是手工 `pg_dump`/`pg_restore` 流程，原库保持不变：
+
+1. 停用写来源的标注进程，从历史独立标注数据库或受支持备份 `pg_dump`（`-Fc`）。
+2. 在同一 PostgreSQL 实例保留/创建空的 `training` database。
+3. `pg_restore` 到空的 `training`。
+4. 用安装身份执行 `training-role-init`（S065）收敛 `training_runtime` 权限。
+5. 用安装身份执行 `training-objects-install`（S066/S067）。
+
+顺序固定为 restore → role-init → installer：role-init 的 default privileges 让 runtime 拿到安装身份后续创建对象的权限，安装入口自身依赖 `training-role-init` 完成。
+
+### 升级内容与恢复
+
+入口在同一事务里只补缺失对象并写版本记录：从锁定的 Vendor 合并 DDL 提取标注表之外的定义（`status_enum`、`training_status_enum`、`augmented_data`、`augmentation_stages` 及其两个索引与 `unique_augmentation_stage` 约束、`training_job`、`ddm_training_job`、`evaluation_job`、`e2e_evaluation_job`），并按需补 `dataset.two_operator_mode`。它不重跑空库整体 DDL，也不在本仓库复制定义；升级后 `training` 的最终结构与锁定的 Vendor 合并 DDL 一致：10 张表、2 个枚举、2 个索引、1 个唯一约束。
+
+版本记录写入 `nvsop_training_install`（`vendor_commit`、`ddl_path`、`ddl_sha256`、`source_version`、`installed_at`），其中 `source_version` 为 `empty`（空库安装）或识别到的来源形态。重复启动读到匹配版本即跳过，不重建对象。
+
+**失败与恢复**：DDL 或版本写入失败时整事务回滚，不写版本行、不留半升级对象，已恢复的标注数据与附加历史表保持不变；修复输入后重跑同一入口即可。未知/部分/不兼容来源直接拒绝，不做自动修复或删除。
+
+**Center 隔离**：Center Alembic `upgrade`/`downgrade` 只连 `nvsop`，不修改 `training` 对象；该隔离由 S067 的真实 PostgreSQL 证据覆盖（`apps/control-api/tests/integration/test_training_objects_upgrade.py`）。
+
 ## 中心训练素材存储
 
 ADR-0012 / Issue #350 已把中心训练素材从 MinIO/S3 迁移到 `dataset` 拥有的本地持久卷：

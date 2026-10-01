@@ -65,21 +65,29 @@ class BlockingCiTest(unittest.TestCase):
                     self.assertNotEqual(0, result.returncode, result.stdout)
 
     def test_scope_outputs_must_be_complete_and_consistent(self) -> None:
-        for docs_only, force_all, integration, browser, media, succeeds in (
-            ("true", "false", "false", "false", "false", True),
-            ("false", "true", "true", "true", "true", True),
-            ("false", "false", "false", "false", "false", True),
-            ("false", "false", "true", "false", "false", True),
-            ("false", "false", "false", "true", "false", True),
-            ("false", "false", "true", "true", "false", True),
-            ("false", "false", "true", "true", "true", True),
-            ("true", "true", "true", "true", "true", False),
-            ("true", "false", "true", "false", "false", False),
-            ("false", "false", "false", "true", "true", False),
-            ("", "", "", "", "", False),
-            ("unknown", "false", "false", "false", "false", False),
+        for docs_only, force_all, integration, browser, media, annotation, succeeds in (
+            ("true", "false", "false", "false", "false", "false", True),
+            ("false", "true", "true", "true", "true", "true", True),
+            ("false", "false", "false", "false", "false", "false", True),
+            ("false", "false", "true", "false", "false", "false", True),
+            ("false", "false", "false", "true", "false", "false", True),
+            ("false", "false", "true", "true", "false", "false", True),
+            ("false", "false", "true", "true", "true", "false", True),
+            ("false", "false", "true", "false", "false", "true", True),
+            ("true", "true", "true", "true", "true", "true", False),
+            ("true", "false", "true", "false", "false", "false", False),
+            ("false", "false", "false", "true", "true", "false", False),
+            ("true", "false", "false", "false", "false", "true", False),
+            ("false", "true", "true", "true", "true", "false", False),
+            ("false", "false", "false", "false", "false", "true", False),
+            ("false", "false", "true", "false", "false", "", False),
+            ("false", "false", "true", "false", "false", "unknown", False),
+            ("", "", "", "", "", "", False),
+            ("unknown", "false", "false", "false", "false", "false", False),
         ):
-            with self.subTest(scope=(docs_only, force_all, integration, browser, media)):
+            with self.subTest(
+                scope=(docs_only, force_all, integration, browser, media, annotation)
+            ):
                 result = self.run_step(
                     "scope",
                     "Validate scope outputs",
@@ -89,6 +97,7 @@ class BlockingCiTest(unittest.TestCase):
                         "INTEGRATION": integration,
                         "BROWSER": browser,
                         "MEDIA": media,
+                        "ANNOTATION": annotation,
                     },
                 )
                 self.assertEqual(succeeds, result.returncode == 0, result.stderr)
@@ -98,6 +107,8 @@ class BlockingCiTest(unittest.TestCase):
         self.assertIn("needs.scope.outputs.integration == 'true'", workflow)
         self.assertIn("needs.scope.outputs.browser == 'true'", workflow)
         self.assertIn("needs.scope.outputs.media == 'true'", workflow)
+        self.assertIn("needs.scope.outputs.annotation == 'true'", workflow)
+        self.assertIn("run: make annotation-image", workflow)
         self.assertIn("run: make media-system", workflow)
         self.assertIn("run: make web-e2e-whep", workflow)
         self.assertNotIn("git diff --name-only --no-renames -z", workflow)
@@ -114,6 +125,10 @@ class BlockingCiTest(unittest.TestCase):
         self.assertIn("TEST_SUITE: ${{ matrix.suite }}", integration)
         self.assertIn(
             "if: needs.scope.outputs.media == 'true' && matrix.suite == 'center-system'",
+            integration,
+        )
+        self.assertIn(
+            "if: needs.scope.outputs.annotation == 'true' && matrix.suite == 'center-system'",
             integration,
         )
         self.assertIn(

@@ -9,6 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from threading import Event
 from time import time
+from typing import cast
 from unittest.mock import patch
 from uuid import UUID
 
@@ -175,9 +176,14 @@ class MediaConfigurationTest(MediaFixture):
             DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS,
             self.configuration.recording_compression_age_seconds,
         )
-        for value in (0, -1):
+        for value in (0, -1, True, 1.5, float("nan")):
             with self.assertRaises(ValueError):
-                MediaRuntime(replace(self.configuration, recording_compression_age_seconds=value))
+                MediaRuntime(
+                    replace(
+                        self.configuration,
+                        recording_compression_age_seconds=cast(int, value),
+                    )
+                )
 
     def test_render_uses_one_stable_path_for_passthrough_and_transcode_modes(self) -> None:
         transcoded = replace(

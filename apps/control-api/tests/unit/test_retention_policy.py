@@ -78,7 +78,7 @@ def test_policy_enforces_independence_unset_discard_and_detail_floor() -> None:
     assert policy.evidence_indeterminate.seconds == 30 * 24 * 60 * 60
     with pytest.raises(ValueError, match="must be set"):
         _policy(evidence_pass=RetentionRule(RetentionMode.UNSET))
-    for name in ("evidence_fail", "evidence_indeterminate"):
+    for name in ("evidence_fail", "evidence_indeterminate", "disposal", "local_reported"):
         with pytest.raises(ValueError, match="discard is only for pass"):
             _policy(**{name: RetentionRule(RetentionMode.DISCARD)})
     with pytest.raises(ValueError, match="shorter than compression age"):

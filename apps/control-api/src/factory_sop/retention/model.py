@@ -91,9 +91,9 @@ class RetentionPolicy:
         for name in POLICY_FIELDS:
             if getattr(self, name).mode is RetentionMode.UNSET:
                 raise ValueError(f"{name} must be set; a complete policy has no unset field")
-        for name in ("evidence_fail", "evidence_indeterminate"):
+        for name in ("evidence_fail", "evidence_indeterminate", "disposal", "local_reported"):
             if getattr(self, name).mode is RetentionMode.DISCARD:
-                raise ValueError(f"{name} must retain evidence; discard is only for pass")
+                raise ValueError(f"{name} must not be discard; discard is only for pass")
         for name in ("record_detail", "record_compression_age", "record_aggregate_age"):
             if getattr(self, name).mode is not RetentionMode.DURATION:
                 raise ValueError(f"{name} must be a bounded duration")

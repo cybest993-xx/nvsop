@@ -598,8 +598,9 @@ def _validate_configuration(configuration: MediaRuntimeConfiguration) -> None:
         raise ValueError("host_status is unsupported")
     if configuration.recording_window_seconds <= 0:
         raise ValueError("recording_window_seconds must be positive")
-    if configuration.recording_compression_age_seconds <= 0:
-        raise ValueError("recording_compression_age_seconds must be positive")
+    _positive_integer(
+        configuration.recording_compression_age_seconds, "recording_compression_age_seconds"
+    )
     if configuration.record_segment_duration_seconds <= 0:
         raise ValueError("record_segment_duration_seconds must be positive")
     if configuration.preview_release_delay_seconds < 0:

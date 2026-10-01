@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import logging
 from collections.abc import Callable, Iterable
 from copy import deepcopy
 from dataclasses import dataclass
@@ -31,6 +33,13 @@ from edge_runtime.judgment.model import (
 )
 from edge_runtime.judgment.reasons import ReasonCode
 from edge_runtime.local_state import BackendReportContext, ReactionStore
+from edge_runtime.local_state.disposal import (
+    DISPOSAL_ACTION_FRONTEND_ALERT,
+    DISPOSAL_ACTION_RECORD,
+    LocalDisposalIntent,
+    LocalDisposalRequest,
+    StoredDisposalResult,
+)
 from edge_runtime.stream_health import StreamFact, StreamHealthEvent
 from edge_runtime.supervisor.evidence import clips_for
 from edge_runtime.supervisor.inputs import (
@@ -42,6 +51,45 @@ from edge_runtime.supervisor.inputs import (
     Validity,
     ValidityChanged,
 )
+
+_logger = logging.getLogger("edge_runtime")
+
+
+def _disposals(
+    decisions: Iterable[Decision], policy: str | None
+) -> tuple[LocalDisposalRequest, ...]:
+    if policy is None:
+        return ()
+    result: list[LocalDisposalRequest] = []
+    for decision in decisions:
+        for violation in decision.violations:
+            ref = f"{decision.instance_id}:{violation.reason.value}:{violation.steps!r}"
+            for action in (DISPOSAL_ACTION_RECORD, DISPOSAL_ACTION_FRONTEND_ALERT):
+                key = hashlib.sha256(f"{ref}\0{action}".encode()).hexdigest()
+                result.append(
+                    LocalDisposalRequest(
+                        key,
+                        ref,
+                        decision.instance_id,
+                        action,
+                        "supervisor",
+                        f"station_policy:{policy}",
+                    )
+                )
+    return tuple(result)
+
+
+def _disposal_result(intent: LocalDisposalIntent, at: HostInstant) -> StoredDisposalResult:
+    if intent.action_kind == DISPOSAL_ACTION_RECORD:
+        return StoredDisposalResult("recorded", None, at.seconds)
+    if intent.action_kind == DISPOSAL_ACTION_FRONTEND_ALERT:
+        return StoredDisposalResult(
+            "queued_for_mirror",
+            "Center/Web delivery is asynchronous and not yet asserted",
+            at.seconds,
+        )
+    raise ValueError(f"unsupported local disposal action: {intent.action_kind}")
+
 
 _STREAM_VALIDITY_REASONS = frozenset(
     {
@@ -118,12 +166,14 @@ class StationSupervisor:
         store: ReactionStore,
         margins: EvidenceMargins,
         clock: Callable[[], float] = monotonic,
+        disposition_policy: str | None = None,
         initial_report_provenance: tuple[BackendReportContext, ...] | None = (),
     ) -> None:
         self._state = state
         self._store = store
         self._margins = margins
         self._clock = clock
+        self._disposition_policy = disposition_policy
         self._normalizers: dict[str | None, Normalizer] = {None: Normalizer()}
         self._deadline: HostInstant | None = None
         self._report_provenance: dict[int, dict[str, BackendReportContext] | None] = {}
@@ -135,6 +185,23 @@ class StationSupervisor:
                 if initial_report_provenance is None
                 else {item.backend_id: item for item in initial_report_provenance}
             )
+
+    def resume_pending_disposals(self) -> None:
+        self._execute_disposals(self._store.pending_disposals())
+
+    def _execute_disposals(self, intents: Iterable[LocalDisposalIntent]) -> None:
+        for intent in intents:
+            at = HostInstant(self._clock())
+            if not self._store.claim_disposal(intent, at=at):
+                continue
+            try:
+                result = _disposal_result(intent, at)
+            except Exception as error:
+                _logger.exception("local disposal failed key=%s", intent.idempotency_key)
+                result = StoredDisposalResult(
+                    "failed", f"{type(error).__name__}: {error}"[:255], at.seconds
+                )
+            self._store.record_disposal(intent, result)
 
     @property
     def state(self) -> JudgmentState:
@@ -348,21 +415,22 @@ class StationSupervisor:
             committed_provenance[instance_id] = (
                 None if values is None else tuple(values[key] for key in sorted(values))
             )
-        self._store.commit(
+        committed_evidence = tuple(
+            clip for decision in decisions for clip in clips_for(decision, margins=self._margins)
+        )
+        disposal_intents = self._store.commit(
             state=state,
             decisions=tuple(decisions),
-            evidence=tuple(
-                clip
-                for decision in decisions
-                for clip in clips_for(decision, margins=self._margins)
-            ),
+            evidence=committed_evidence,
             closed_instances=tuple(closed_instances),
             report_provenance=committed_provenance,
+            disposals=_disposals(decisions, self._disposition_policy),
         )
         for instance in closed_instances:
             report_provenance_by_instance.pop(instance.instance_id, None)
         self._report_provenance = report_provenance_by_instance
         self._state, self._deadline = state, deadline
+        self._execute_disposals(disposal_intents)
         return Reaction(
             decisions=tuple(decisions),
             wake_at=deadline,

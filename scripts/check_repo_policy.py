@@ -119,6 +119,18 @@ PACKAGE_MANAGER_PIN = re.compile(r"^[a-z]+@\d+\.\d+\.\d+$")
 STANDARD_LIBRARY = frozenset(sys.stdlib_module_names)
 LOCAL_STATE_ROOT = Path(".nvsop")
 
+# 已存在的切片/回收业务路径：保留/窗口时长必须来自配置，不得在这里写死（§5.19）。
+# 只列真实存在的业务路径；保留策略默认值的单处定义（factory_sop.retention.model）不在其中。
+SLICING_RECYCLING_PATHS = (
+    Path("apps/edge-runtime/src/edge_runtime/media.py"),
+    Path("apps/edge-runtime/src/edge_runtime/media_retention.py"),
+    Path("apps/edge-runtime/src/edge_runtime/evidence_media.py"),
+    Path("apps/edge-runtime/src/edge_runtime/supervisor/evidence.py"),
+)
+# 只认名字带保留/窗口语义、右值以数字开头的赋值，不把路径里的普通数字一概当作违规。
+RETENTION_DURATION_ASSIGNMENT = re.compile(r"^\s*(?P<name>[A-Za-z_]\w*)\s*(?::[^=]+)?=\s*[0-9]")
+RETENTION_DURATION_NAME = re.compile(r"(retention|window|age|expiry|expire|ttl)", re.IGNORECASE)
+
 
 def is_vendor(path: Path) -> bool:
     return path.parts[:1] == (VENDOR_ROOT.name,)
@@ -244,6 +256,7 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
     errors.extend(check_shared_contract_isolation(root, files))
     errors.extend(check_center_modules_are_contracted(root, files))
     errors.extend(center_boundary_violations(root, files))
+    errors.extend(check_retention_duration_literals(root, files))
     errors.extend(check_vendor_lfs(root, files))
 
     return errors
@@ -664,6 +677,32 @@ def center_boundary_violations(root: Path, files: list[Path]) -> list[str]:
             )
 
     return [message for _, _, message in sorted(violations)]
+
+
+def check_retention_duration_literals(root: Path, files: list[Path]) -> list[str]:
+    """拒绝切片/回收业务路径里写死的保留/窗口时长（§5.19）。
+
+    只扫描已存在的切片/回收业务路径，只认名字含保留/窗口语义、右值以数字开头的赋值；
+    `DEFAULT_*` 集中默认值定义除外。不是覆盖全部回收/切片代码的全局时间字面量门禁。
+    """
+    errors: list[str] = []
+    designated = {str(path) for path in SLICING_RECYCLING_PATHS}
+    for path in files:
+        if str(path) not in designated:
+            continue
+        lines = (root / path).read_text(encoding="utf-8").splitlines()
+        for number, line in enumerate(lines, 1):
+            match = RETENTION_DURATION_ASSIGNMENT.match(line)
+            if (
+                match
+                and not match["name"].startswith("DEFAULT_")
+                and RETENTION_DURATION_NAME.search(match["name"])
+            ):
+                errors.append(
+                    f"{path}:{number} hardcodes a retention/window duration "
+                    f"({match['name']}); load it from configuration instead (§5.19)"
+                )
+    return errors
 
 
 def _has_product_owner_shape(path: Path) -> bool:

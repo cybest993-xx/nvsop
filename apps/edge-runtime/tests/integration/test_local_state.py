@@ -66,7 +66,11 @@ from edge_runtime.supervisor.startup import resume_station
 
 def _report_attempts(attempts: tuple[ReportAttempt, ...]) -> tuple[ReportAttempt, ...]:
     """只保留判定/实例上报尝试; 归一化观测有独立积压, 单独验证。"""
-    return tuple(attempt for attempt in attempts if "observation:" not in attempt.event_id)
+    return tuple(
+        attempt
+        for attempt in attempts
+        if "observation:" not in attempt.event_id and "disposal:" not in attempt.event_id
+    )
 
 
 class OneTransactionTest(unittest.TestCase):
@@ -435,7 +439,9 @@ class HistoricalReportContextTest(unittest.TestCase):
             database = str(Path(temporary) / "state.sqlite")
             first = open_local_state(database)
             station = first.station(STATION, report_context=context_n)
-            driver = supervisor(opening_state(), FakeClock(), station)
+            driver = supervisor(
+                opening_state(), FakeClock(), station, disposition_policy="record-alert"
+            )
             provenance = context_n.backends[0]
             driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=provenance)
             driver.receive(action(STEPS[2], at=ANCHOR + 1.0), report_provenance=provenance)
@@ -447,6 +453,15 @@ class HistoricalReportContextTest(unittest.TestCase):
             rebound = second.station(STATION, report_context=context_n1)
             (after_reconfigure,) = rebound.pending_reports()
             self.assertEqual(after_reconfigure.context, context_n)
+            disposals = tuple(
+                second.disposal().report(item, reported_at="2026-09-16T00:00:00Z")
+                for item in second.disposal().pending_report_ids()
+            )
+            self.assertEqual(
+                {(item.result_kind, item.attempts) for item in disposals},
+                {("recorded", 1), ("queued_for_mirror", 1)},
+            )
+            self.assertEqual(second.disposal().pending_local(STATION), ())
             second.close()
 
             third = open_local_state(database)
@@ -906,7 +921,9 @@ class HistoricalReportContextTest(unittest.TestCase):
         state = open_local_state(":memory:")
         self.addCleanup(state.close)
         station = state.station(STATION, report_context=context)
-        driver = supervisor(opening_state(), FakeClock(), station)
+        driver = supervisor(
+            opening_state(), FakeClock(), station, disposition_policy="record-alert"
+        )
         provenance = context.backends[0]
         driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=provenance)
         driver.receive(action(STEPS[2], at=ANCHOR + 1.0), report_provenance=provenance)
@@ -914,6 +931,8 @@ class HistoricalReportContextTest(unittest.TestCase):
         class LostAckTransport:
             def __init__(self) -> None:
                 self.sent: list[object] = []
+                self.center_offline = True
+                self.disposals: list[object] = []
 
             def send_decision(
                 self,
@@ -936,6 +955,11 @@ class HistoricalReportContextTest(unittest.TestCase):
             def send_health(self, report: object, *, configuration: object) -> None:
                 del report, configuration
 
+            def send_disposal(self, report: object) -> None:
+                if self.center_offline:
+                    raise OSError("center offline")
+                self.disposals.append(report)
+
         transport = LostAckTransport()
         first = HostReportReconciler(reports=state.reports(), transport=transport).flush(
             now=HostInstant(ANCHOR + 2.0),
@@ -948,6 +972,10 @@ class HistoricalReportContextTest(unittest.TestCase):
         self.assertEqual(station.pending_instance_reports(), ())
         (pending_after_loss,) = station.pending_reports()
         self.assertEqual(pending_after_loss.reported_at, "2026-09-16T00:00:00Z")
+        failed_disposals = [item for item in first if "disposal:" in item.event_id]
+        self.assertTrue(failed_disposals and not any(item.sent for item in failed_disposals))
+        self.assertEqual(len(failed_disposals), len(state.disposal().pending_report_ids()))
+        transport.center_offline = False
 
         second = HostReportReconciler(reports=state.reports(), transport=transport).flush(
             now=HostInstant(ANCHOR + 3.0),
@@ -955,6 +983,7 @@ class HistoricalReportContextTest(unittest.TestCase):
         )
         self.assertTrue(_report_attempts(second)[0].sent)
         self.assertEqual(transport.sent[0], transport.sent[1])
+        self.assertEqual(len(transport.disposals), len(failed_disposals))
         self.assertEqual(station.pending_reports(), ())
 
     def test_observation_queue_persists_and_flushes_with_stable_identity(self) -> None:

@@ -347,7 +347,7 @@ class MultipleBackendSourcesStayIsolatedTest(unittest.TestCase):
             )
         )
 
-        with patch.object(store, "commit", side_effect=(RuntimeError("commit failed"), None)):
+        with patch.object(store, "commit", side_effect=(RuntimeError("commit failed"), ())):
             with self.assertRaisesRegex(RuntimeError, "commit failed"):
                 supervisor.receive(arriving, report_provenance=source)
             supervisor.receive(arriving, report_provenance=source)

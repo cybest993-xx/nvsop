@@ -1256,6 +1256,7 @@ def _build_runtime_composition(
                         template=station_config.template,
                         parameters=station_config.parameters,
                         margins=station_config.margins,
+                        disposition_policy=station_config.disposition_policy,
                     ),
                     source=source,
                     connector_runtimes=runtimes,

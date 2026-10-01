@@ -1,8 +1,8 @@
 """S020 / #198：monitor 三张镜像事实表的真实 TimescaleDB 拥有者迁移。
 
-真实 TimescaleDB 上从 0044 存量库升级到 head：存量行/查询/全局身份保留，三张 hypertable 可查
+真实 TimescaleDB 上从 0046 存量库升级到 head：存量行/查询/全局身份保留，三张 hypertable 可查
 且无压缩策略（原生压缩归 S021）；跨分区重复与错误流序号在真实 SQL 层被复合外键拒绝；降级还原
-0044 普通表且不卸载预装扩展，再升级仍保留。training 隔离见 ``test_training_database_topology.py``，
+0046 普通表且不卸载预装扩展，再升级仍保留。training 隔离见 ``test_training_database_topology.py``，
 SSE 提交顺序/并发复用 ``test_monitor_streaming.py``。
 """
 
@@ -62,7 +62,7 @@ def _at(offset_seconds: int) -> datetime:
 
 _LegacyRow = ReportedDecisionRow | ReportedHealthRow | ReportedObservationRow
 
-# 三张事实各自的 0044 行构造器；窄的已知清单，不做通用框架。
+# 三张事实各自的 0046 行构造器；窄的已知清单，不做通用框架。
 _LEGACY_BUILDERS: dict[str, Callable[[str, int], _LegacyRow]] = {
     "decision": lambda e, i: ReportedDecisionRow.from_domain(
         replace(_decision(e), received_at=_at(i))
@@ -80,7 +80,7 @@ def _decision_with(event_id: str, *, verdict: str) -> MirroredDecision:
 
 
 def _legacy_insert(connection: Connection, row: _LegacyRow) -> int:
-    """把一条存量事实写进 0044 schema；序号由库的 Identity 生成并取回。"""
+    """把一条存量事实写进 0046 schema；序号由库的 Identity 生成并取回。"""
     table = cast(Table, row.__table__)
     values = {
         column.key: getattr(row, column.key)
@@ -105,7 +105,7 @@ def _hypertables(engine: Engine) -> set[str]:
 
 @pytest.fixture
 def migration(engine: Engine) -> Iterator[MigrationFixture]:
-    """真实 TimescaleDB：每个测试独立数据库，从 0044 存量库升级到 head。"""
+    """真实 TimescaleDB：每个测试独立数据库，从 0046 存量库升级到 head。"""
     installer = create_engine(
         engine.url._replace(database="postgres"), isolation_level="AUTOCOMMIT"
     )
@@ -119,7 +119,7 @@ def migration(engine: Engine) -> Iterator[MigrationFixture]:
     configuration.set_main_option(
         "sqlalchemy.url", upgraded.url.render_as_string(hide_password=False)
     )
-    command.upgrade(configuration, "0044")
+    command.upgrade(configuration, "0046")
 
     ids = {kind: tuple(f"s020:{kind}:{uuid4()}" for _ in range(2)) for kind in _LEGACY_BUILDERS}
     sequences: dict[str, tuple[int, ...]] = {}
@@ -202,8 +202,8 @@ def test_owner_migration_preserves_rows_identity_and_hypertables(
     assert fresh_sequence is not None
     assert fresh_sequence > max(legacy.sequences["decision"])
 
-    # 降级回 0044 后 schema 与数据恢复且预装扩展保留，再升级仍保留（实测回滚，不凭文件存在）。
-    command.downgrade(migration.configuration, "0044")
+    # 降级回 0046 后 schema 与数据恢复且预装扩展保留，再升级仍保留（实测回滚，不凭文件存在）。
+    command.downgrade(migration.configuration, "0046")
     with engine.connect() as connection:
         assert not set(IDENTITIES) & set(
             connection.execute(

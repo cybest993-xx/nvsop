@@ -6,7 +6,11 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from check_repo_policy import center_boundary_violations, check_repository
+from check_repo_policy import (
+    center_boundary_violations,
+    check_repository,
+    check_retention_duration_literals,
+)
 
 
 class RepositoryPolicyTest(unittest.TestCase):
@@ -664,6 +668,42 @@ class RepositoryPolicyTest(unittest.TestCase):
             ".mcp.json", '{"headers": {"Authorization": "Bearer ${ONE_SEARCH_TOKEN}"}}\n'
         )
         self.assertEqual([], self.check(str(manifest)))
+
+
+class RetentionDurationLiteralTest(unittest.TestCase):
+    """切片/回收业务路径的保留/窗口时长不得写死（§5.19）。"""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def write(self, relative: str, content: str) -> Path:
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return Path(relative)
+
+    def test_rejects_a_literal_duration_in_a_designated_slicing_path(self) -> None:
+        path = self.write(
+            "apps/edge-runtime/src/edge_runtime/media_retention.py",
+            "retention_seconds = 7 * 24 * 60 * 60\n",
+        )
+        errors = check_retention_duration_literals(self.root, [path])
+        self.assertEqual(1, len(errors))
+        self.assertIn("hardcodes a retention/window duration", errors[0])
+
+    def test_accepts_config_values_defaults_and_paths_outside_the_set(self) -> None:
+        config = self.write(
+            "apps/edge-runtime/src/edge_runtime/media.py",
+            "window = configuration.recording_window_seconds\n"
+            "port = 8080\n"
+            "DEFAULT_RETENTION_SECONDS = 604800\n",
+        )
+        other = self.write("apps/edge-runtime/src/edge_runtime/other.py", "retention = 604800\n")
+        self.assertEqual([], check_retention_duration_literals(self.root, [config, other]))
 
 
 if __name__ == "__main__":

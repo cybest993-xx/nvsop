@@ -14,8 +14,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0045"
-down_revision: str | None = "0044"
+revision: str = "0047"
+down_revision: str | None = "0046"
 
 # 迁移用原生 SQL 完成数据回填、hypertable 转换与降级还原；声明其触及的表，供迁移所有权门禁核对。
 RAW_SQL_TABLES = frozenset(
@@ -108,7 +108,7 @@ def _convert_fact(fact: str, identity: str, *, sequenced: bool) -> None:
 
 def downgrade() -> None:
     # 不卸载 timescaledb：镜像把扩展预装在 template1，卸载会破坏同库其它对象；这里只把三张
-    # hypertable 还原成 0044 的普通表。
+    # hypertable 还原成 0046 的普通表。
     for fact, (identity, sequenced, indexes) in _FACTS.items():
         _restore_fact(fact, identity, sequenced=sequenced, indexes=indexes)
 

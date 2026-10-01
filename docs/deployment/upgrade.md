@@ -66,7 +66,7 @@ make contracts
 仓库不实现通用 migration framework，也不自动恢复客户备份。受支持的历史数据迁移是手工 `pg_dump`/`pg_restore` 流程，原库保持不变：
 
 1. 停用写来源的标注进程，从历史独立标注数据库或受支持备份 `pg_dump`（`-Fc`）。
-2. 在**同一 PostgreSQL 实例**保留/创建**空**的 `training` database（restore 前提；非空目标会被拒绝，不做破坏性重建）。来源与目标各用 `-d` 指定；连接身份固定为安装身份 `nvsop`。
+2. 在**同一 PostgreSQL 实例**保留/创建**空**的 `training` database（restore 前提；不得向非空目标恢复；流程不自动清库重建）。来源与目标各用 `-d` 指定；连接身份固定为安装身份 `nvsop`。
 3. 用安装身份 `nvsop` 恢复：`pg_restore --no-owner --no-privileges --single-transaction --exit-on-error -d training <dump>`。`--no-owner`/`--no-privileges` 让恢复对象归安装身份所有、不保留历史 owner 角色与 ACL（否则目标 owner 会被历史角色固定成错误身份）；`--single-transaction`/`--exit-on-error` 保证整库原子恢复，失败即回滚。恢复脚本必须 `set -eu`，dump 失败不能继续执行后续步骤。
 4. 用安装身份执行 `training-role-init`（S065）收敛 `training_runtime` 权限。
 5. 用安装身份执行 `training-objects-install`（S066/S067）。

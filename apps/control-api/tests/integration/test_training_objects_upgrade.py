@@ -497,49 +497,49 @@ def test_unknown_partial_and_incompatible_sources_are_rejected(
     )
     assert incompatible.exit_code == 0, incompatible.output
 
-    # 已知列名但类型/外键不符的来源必须按未知形态拒绝，不能只比对列名与主键。
-    _seed_legacy_source(instance, "training_upgrade_wrong_type")
-    wrong_type = _run_sql(
-        instance,
-        "training_upgrade_wrong_type",
-        "ALTER TABLE dataset ALTER COLUMN actions TYPE text USING actions::text;",
+    # 已知列名但类型/外键不符（含引用其它 schema 同名表的跨 schema 外键）的来源必须按未知形态拒绝。
+    mutations = (
+        (
+            "training_upgrade_wrong_type",
+            False,
+            "ALTER TABLE dataset ALTER COLUMN actions TYPE text USING actions::text;",
+        ),
+        (
+            "training_upgrade_bool_type",
+            True,
+            "ALTER TABLE dataset ALTER COLUMN two_operator_mode TYPE text "
+            "USING two_operator_mode::text;",
+        ),
+        (
+            "training_upgrade_missing_fk",
+            False,
+            "ALTER TABLE annotation DROP CONSTRAINT annotation_video_id_fkey;",
+        ),
+        (
+            "training_upgrade_wrong_fk",
+            False,
+            "ALTER TABLE video DROP CONSTRAINT video_dataset_id_fkey, "
+            "ADD FOREIGN KEY (dataset_id) REFERENCES dataset(id);",
+        ),
+        (
+            "training_upgrade_cross_schema",
+            False,
+            "CREATE SCHEMA unrelated; CREATE TABLE unrelated.dataset (id varchar PRIMARY KEY); "
+            "INSERT INTO unrelated.dataset SELECT id FROM public.dataset; "
+            "ALTER TABLE video DROP CONSTRAINT video_dataset_id_fkey, "
+            "ADD FOREIGN KEY (dataset_id) REFERENCES unrelated.dataset(id) ON DELETE CASCADE;",
+        ),
     )
-    assert wrong_type.exit_code == 0, wrong_type.output
-
-    _seed_legacy_source(instance, "training_upgrade_bool_type", two_operator_mode=True)
-    bool_type = _run_sql(
-        instance,
-        "training_upgrade_bool_type",
-        "ALTER TABLE dataset ALTER COLUMN two_operator_mode TYPE text "
-        "USING two_operator_mode::text;",
-    )
-    assert bool_type.exit_code == 0, bool_type.output
-
-    _seed_legacy_source(instance, "training_upgrade_missing_fk")
-    missing_fk = _run_sql(
-        instance,
-        "training_upgrade_missing_fk",
-        "ALTER TABLE annotation DROP CONSTRAINT annotation_video_id_fkey;",
-    )
-    assert missing_fk.exit_code == 0, missing_fk.output
-
-    _seed_legacy_source(instance, "training_upgrade_wrong_fk")
-    wrong_fk = _run_sql(
-        instance,
-        "training_upgrade_wrong_fk",
-        "ALTER TABLE video DROP CONSTRAINT video_dataset_id_fkey, "
-        "ADD FOREIGN KEY (dataset_id) REFERENCES dataset(id);",
-    )
-    assert wrong_fk.exit_code == 0, wrong_fk.output
+    for database, two_operator_mode, mutation in mutations:
+        _seed_legacy_source(instance, database, two_operator_mode=two_operator_mode)
+        altered = _run_sql(instance, database, mutation)
+        assert altered.exit_code == 0, altered.output
 
     for database in (
         "training_upgrade_unknown",
         "training_upgrade_partial",
         "training_upgrade_incompatible",
-        "training_upgrade_wrong_type",
-        "training_upgrade_bool_type",
-        "training_upgrade_missing_fk",
-        "training_upgrade_wrong_fk",
+        *(name for name, _, _ in mutations),
     ):
         result = instance.run_install(database=database)
         assert result.exit_code != 0, database

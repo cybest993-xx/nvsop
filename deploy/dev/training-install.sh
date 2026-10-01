@@ -69,6 +69,7 @@ fk AS (
   JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey)
   JOIN pg_attribute af ON af.attrelid = con.confrelid AND af.attnum = ANY(con.confkey)
   WHERE con.contype = 'f' AND cr.relname IN ('video', 'chunk', 'annotation')
+    AND cr.relnamespace = 'public'::regnamespace AND pr.relnamespace = 'public'::regnamespace
 )
 SELECT CASE
   WHEN to_regclass('public.nvsop_training_install') IS NOT NULL THEN 'present'

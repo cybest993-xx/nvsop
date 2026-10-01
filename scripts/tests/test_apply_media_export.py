@@ -75,6 +75,7 @@ class ApplyMediaExportTest(unittest.TestCase):
             edge.write_text(
                 json.dumps(
                     {
+                        "host_id": host_id,
                         "media": {
                             "media_config_path": str(root / "mediamtx.yml"),
                             "recording_directory": str(root / "recordings"),
@@ -91,7 +92,7 @@ class ApplyMediaExportTest(unittest.TestCase):
                             "transcode_threads": 2,
                             "recording_compression_age_seconds": 3600,
                             "cameras": [{"camera_id": camera_id, "sop_execution": False}],
-                        }
+                        },
                     }
                 ),
                 encoding="utf-8",
@@ -143,6 +144,57 @@ class ApplyMediaExportTest(unittest.TestCase):
             self.assertEqual(
                 "operator-1", confirmed_media["recording_window_confirmation"]["confirmed_by"]
             )
+
+    def test_apply_refuses_an_export_from_another_host(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            export = root / "export.json"
+            edge = root / "edge.json"
+            output = root / "out.json"
+            export.write_text(
+                json.dumps(
+                    {
+                        "host_id": "018f0000-0000-7000-8000-000000000010",
+                        "host_name": "推理机",
+                        "host_revision": 1,
+                        "host_status": "active",
+                        "mediamtx_address": None,
+                        "mediamtx_playback_address": None,
+                        "recording_window_seconds": 3600,
+                        "cameras": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            edge.write_text(
+                json.dumps(
+                    {
+                        "host_id": "018f0000-0000-7000-8000-0000000000ff",
+                        "media": {
+                            "media_config_path": str(root / "mediamtx.yml"),
+                            "recording_directory": str(root / "recordings"),
+                            "mediamtx_binary": "/usr/local/bin/mediamtx",
+                            "ffmpeg_binary": "/usr/bin/ffmpeg",
+                            "rtsp_bind_address": ":8554",
+                            "webrtc_bind_address": ":8889",
+                            "webrtc_udp_bind_address": ":8189",
+                            "playback_bind_address": ":9996",
+                            "allow_origins": ["https://control.example.test"],
+                            "record_segment_duration_seconds": 60,
+                            "preview_release_delay_seconds": 5,
+                            "startup_timeout_seconds": 2,
+                            "transcode_threads": 2,
+                            "cameras": [],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "another host"):
+                MODULE.apply_export(export, edge, output)
+
+            self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":

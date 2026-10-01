@@ -14,6 +14,12 @@ from arq import Worker, cron
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from factory_sop.auth.api import (
+    AuthorizationRefusedError,
+    CurrentCallerResolver,
+    Permission,
+    require_current_actor,
+)
 from factory_sop.dataset.api import (
     AnnotationBackend,
     AnnotationBackendExecutionError,
@@ -53,6 +59,7 @@ from factory_sop.dataset.api import (
     prepare_annotation_execution_copy,
     record_annotation_context_cleanup_candidate,
     record_annotation_execution_cleanup_candidate,
+    refuse_video_validation,
     run_usage_check,
     save_annotation_execution_copy,
     validate_video_upload,
@@ -386,6 +393,36 @@ def _validate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
 
     with factory() as session:
         datasets = runtime.repository(session)
+        member = datasets.member_by_id(running.member_id)
+        if member is not None:
+            try:
+                require_current_actor(
+                    actor_id=member.updated_by,
+                    permissions=(Permission.DATASET_IMPORT,),
+                    resolve_current_caller=_current_caller_resolver(ctx),
+                )
+            except AuthorizationRefusedError as error:
+                refused = refuse_video_validation(
+                    job=running,
+                    datasets=datasets,
+                    now=datetime.now(UTC),
+                    failure_code=error.code.value,
+                    detail="执行者已无权校验该视频",
+                )
+                PostgresJobRepository(session).finish(
+                    job_id=running.id,
+                    status=(JobStatus.FAILED.value if refused else JobStatus.SUPERSEDED.value),
+                    failure_code=error.code.value if refused else None,
+                    now=datetime.now(UTC),
+                    expected_updated_at=running.updated_at,
+                )
+                _commit_if_active(session, fence)
+                _logger.warning(
+                    "job.dataset_validation.authorization_refused",
+                    job_id=str(running.id),
+                    failure_code=error.code.value,
+                )
+                return
         target = begin_video_validation(job=running, datasets=datasets, now=datetime.now(UTC))
         if target is None:
             jobs = PostgresJobRepository(session)
@@ -528,6 +565,24 @@ def _check_dataset_usage_job(ctx: Mapping[str, Any], job_id: str, fence: _Execut
             return
         if not _commit_if_active(session, fence):
             return
+
+    try:
+        require_current_actor(
+            actor_id=target.check.created_by,
+            permissions=(Permission.DATASET_EDIT,),
+            resolve_current_caller=_current_caller_resolver(ctx),
+        )
+    except AuthorizationRefusedError as error:
+        _finish_usage_check_failure(
+            factory=factory,
+            runtime=runtime,
+            target=target,
+            code=error.code.value,
+            detail="执行者已无权执行用途检查",
+            error=error,
+            fence=fence,
+        )
+        return
 
     try:
         annotation_volume = (
@@ -765,6 +820,7 @@ def _generate_dataset_artifact_job(
         job=running,
         finish_job=finish_job,
         commit_transaction=commit_transaction,
+        resolve_current_caller=_current_caller_resolver(ctx),
     )
 
 
@@ -862,6 +918,24 @@ def _prepare_annotation_context_job(
                     data_id=cleanup_data_id,
                 )
                 return
+
+        try:
+            require_current_actor(
+                actor_id=target.context.created_by,
+                permissions=(Permission.DATASET_VIEW, Permission.DATASET_EDIT),
+                resolve_current_caller=_current_caller_resolver(ctx),
+            )
+        except AuthorizationRefusedError as error:
+            _finish_context_preparation_failure(
+                factory=factory,
+                runtime=runtime,
+                target=target,
+                code=error.code.value,
+                detail="执行者已无权准备标注上下文",
+                error=error,
+                fence=fence,
+            )
+            return
 
         prepared = prepare_annotation_context_copy(
             context=target.context,
@@ -1166,6 +1240,24 @@ def _annotate_dataset_job(ctx: Mapping[str, Any], job_id: str, fence: _Execution
                     data_id=cleanup_data_id,
                 )
                 return
+
+        try:
+            require_current_actor(
+                actor_id=target.submission.created_by,
+                permissions=(Permission.DATASET_EDIT,),
+                resolve_current_caller=_current_caller_resolver(ctx),
+            )
+        except AuthorizationRefusedError as error:
+            _finish_annotation_failure(
+                factory=factory,
+                runtime=runtime,
+                target=target,
+                code=error.code.value,
+                detail="执行者已无权执行标注切片",
+                error=error,
+                fence=fence,
+            )
+            return
 
         if not copy_persisted:
             cleanup_target = target
@@ -1520,6 +1612,7 @@ def build_worker(
     usage_runtime: DatasetUsageRuntime,
     artifact_executor: DatasetArtifactExecutor,
     annotation_runtime: DatasetAnnotationRuntime,
+    current_caller_resolver: CurrentCallerResolver,
 ) -> Worker:
     """构造带数据库、Redis 和显式数据集运行时的 worker。"""
     dispatcher = ArqJobDispatcher.from_settings(settings, session_factory=factory)
@@ -1549,6 +1642,7 @@ def build_worker(
             "usage_runtime": usage_runtime,
             "artifact_executor": artifact_executor,
             "annotation_runtime": annotation_runtime,
+            "current_caller_resolver": current_caller_resolver,
             "blocking_job_slots": asyncio.Semaphore(_BLOCKING_JOB_LIMIT),
         },
         max_jobs=_BLOCKING_JOB_LIMIT,
@@ -1586,6 +1680,14 @@ def _session_factory(ctx: Mapping[str, Any]) -> sessionmaker[Session]:
     return cast(sessionmaker[Session], value)
 
 
+def _current_caller_resolver(ctx: Mapping[str, Any]) -> CurrentCallerResolver:
+    """读取组合根装配的当前操作者解析器；缺失即 fail closed，不做可选跳过。"""
+    value = ctx.get("current_caller_resolver")
+    if value is None:
+        raise RuntimeError("worker 未装配当前操作者解析器")
+    return cast(CurrentCallerResolver, value)
+
+
 def run_worker(
     environment: Mapping[str, str],
     *,
@@ -1596,6 +1698,7 @@ def run_worker(
     runtime_factory: Callable[[Settings], DatasetValidationRuntime],
     usage_runtime_factory: Callable[[Settings], DatasetUsageRuntime],
     annotation_runtime_factory: Callable[[Settings], DatasetAnnotationRuntime],
+    current_caller_resolver_factory: Callable[[sessionmaker[Session]], CurrentCallerResolver],
 ) -> None:
     """解析给定环境并运行 worker；真实运行时由组合根工厂显式装配。"""
     settings = Settings.from_environment(environment)
@@ -1606,6 +1709,7 @@ def run_worker(
     runtime = runtime_factory(settings)
     usage_runtime = usage_runtime_factory(settings)
     annotation_runtime = annotation_runtime_factory(settings)
+    current_caller_resolver = current_caller_resolver_factory(factory)
     worker = build_worker(
         settings,
         engine=engine,
@@ -1614,6 +1718,7 @@ def run_worker(
         usage_runtime=usage_runtime,
         artifact_executor=artifact_executor,
         annotation_runtime=annotation_runtime,
+        current_caller_resolver=current_caller_resolver,
     )
     try:
         worker.run()

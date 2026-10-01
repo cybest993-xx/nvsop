@@ -15,6 +15,9 @@ from uuid import UUID, uuid4
 import pytest
 
 import factory_sop.job.adapters.worker as worker_module
+from factory_sop.auth.api import Caller
+from factory_sop.auth.model import User, UserStatus
+from factory_sop.auth.permissions import Permission
 from factory_sop.dataset.api import (
     AnnotationBackendExecutionError,
     AnnotationBackendUnavailableError,
@@ -27,6 +30,24 @@ from factory_sop.job.api import ApplicationJob, JobStatus, JobType
 
 NOW = datetime(2026, 9, 23, 10, 0, tzinfo=UTC)
 _UNEXPECTED_FINISH = object()
+
+
+def _worker_caller_resolver() -> Callable[[UUID], Caller]:
+    """测试隔离用的合成解析器：只回放固定权限，不访问真实 auth 表。"""
+
+    def resolve(user_id: UUID) -> Caller:
+        return Caller(
+            user=User(
+                id=user_id,
+                login_name="worker-test",
+                display_name="worker-test",
+                password_hash="worker-only",  # pragma: allowlist secret
+                status=UserStatus.ACTIVE,
+            ),
+            granted=frozenset(Permission),
+        )
+
+    return resolve
 
 
 class _WorkerState:
@@ -100,7 +121,11 @@ class _Datasets:
 
     def member_by_id(self, member_id: UUID) -> SimpleNamespace:
         assert member_id == self._job.member_id
-        return SimpleNamespace(current_attempt_id=self._job.attempt_id)
+        return SimpleNamespace(
+            current_attempt_id=self._job.attempt_id,
+            created_by=self._job.member_id,
+            updated_by=self._job.member_id,
+        )
 
     def stage_publish(self) -> None:
         self._session.pending_publish = True
@@ -184,6 +209,7 @@ def _context_target(
         job=job,
         context=SimpleNamespace(
             id=job.attempt_id,
+            created_by=job.member_id,
             upstream_data_id=upstream_data_id,
             upstream_video_id=upstream_video_id,
             preparation_failure_code=failure_code,
@@ -211,7 +237,11 @@ def _execution_target(
             failure_code=failure_code,
             failure_detail=failure_detail,
         ),
-        submission=SimpleNamespace(segments=(), mode="segment"),
+        submission=SimpleNamespace(
+            segments=(),
+            mode="segment",
+            created_by=job.member_id,
+        ),
     )
 
 
@@ -292,6 +322,7 @@ def _install_validation_seams(
     monkeypatch.setattr(worker_module, "validate_video_upload", validate_upload)
     return {
         "session_factory": _TrackingSessionFactory(state),
+        "current_caller_resolver": _worker_caller_resolver(),
         "dataset_runtime": _ValidationRuntime(state, job, storage=storage),
         "blocking_job_slots": asyncio.Semaphore(worker_module._BLOCKING_JOB_LIMIT),
     }
@@ -355,6 +386,7 @@ def test_blocking_jobs_leave_event_loop_responsive_and_cancel_promptly(
         "dispatcher": FakeDispatcher(),
         "settings": settings,
         "session_factory": _TrackingSessionFactory(_WorkerState()),
+        "current_caller_resolver": _worker_caller_resolver(),
         "artifact_executor": CleanupExecutor(),
     }
 
@@ -460,6 +492,7 @@ def test_cancel_before_execution_slot_restores_dispatchable_job(
     ctx: Mapping[str, Any] = {
         "blocking_job_slots": asyncio.Semaphore(0),
         "session_factory": _TrackingSessionFactory(state),
+        "current_caller_resolver": _worker_caller_resolver(),
     }
 
     async def scenario() -> None:
@@ -835,7 +868,9 @@ def test_cancelled_artifact_generation_discards_late_candidate(
             job: ApplicationJob,
             finish_job: Callable[[object, ArtifactExecutionResult], bool],
             commit_transaction: Callable[[object], bool],
+            resolve_current_caller: object,
         ) -> ArtifactExecutionResult:
+            del resolve_current_caller
             assert job.id == expected_job_id
             candidate_exists[0] = True
             started.set()
@@ -859,6 +894,7 @@ def test_cancelled_artifact_generation_discards_late_candidate(
     monkeypatch.setattr(worker_module, "PostgresJobRepository", FakeJobRepository)
     ctx: Mapping[str, Any] = {
         "session_factory": _TrackingSessionFactory(state),
+        "current_caller_resolver": _worker_caller_resolver(),
         "artifact_executor": ArtifactExecutor(),
         "blocking_job_slots": asyncio.Semaphore(worker_module._BLOCKING_JOB_LIMIT),
     }
@@ -932,6 +968,7 @@ def test_cancelled_annotation_preparation_discards_unpersisted_backend_copy(
     monkeypatch.setattr(worker_module, "prepare_annotation_context_copy", prepare_copy)
     ctx: Mapping[str, Any] = {
         "session_factory": _TrackingSessionFactory(state),
+        "current_caller_resolver": _worker_caller_resolver(),
         "annotation_runtime": Runtime(),
         "blocking_job_slots": asyncio.Semaphore(worker_module._BLOCKING_JOB_LIMIT),
     }
@@ -1000,6 +1037,7 @@ def test_annotation_preparation_lease_loss_discards_unpublished_backend_copy(
 
     ctx: Mapping[str, Any] = {
         "session_factory": _TrackingSessionFactory(state),
+        "current_caller_resolver": _worker_caller_resolver(),
         "annotation_runtime": Runtime(),
     }
     worker_module._prepare_annotation_context_job(
@@ -1063,6 +1101,7 @@ def test_annotation_backend_construction_failure_is_classified(
 
     ctx: Mapping[str, Any] = {
         "session_factory": _TrackingSessionFactory(state),
+        "current_caller_resolver": _worker_caller_resolver(),
         "annotation_runtime": Runtime(),
     }
     runner(ctx, str(job.id), worker_module._ExecutionFence())
@@ -1130,6 +1169,7 @@ def test_cleanup_candidate_survives_backend_construction_failure(
 
     ctx: Mapping[str, Any] = {
         "session_factory": _TrackingSessionFactory(state),
+        "current_caller_resolver": _worker_caller_resolver(),
         "annotation_runtime": Runtime(),
     }
     runner(ctx, str(job.id), worker_module._ExecutionFence())
@@ -1188,6 +1228,7 @@ def test_annotation_cleanup_pending_is_persisted_for_retry(
     )
     ctx: Mapping[str, Any] = {
         "session_factory": _TrackingSessionFactory(state),
+        "current_caller_resolver": _worker_caller_resolver(),
         "annotation_runtime": Runtime(),
     }
 
@@ -1242,6 +1283,7 @@ def test_annotation_cleanup_candidate_is_retried_before_new_copy(
     )
     ctx: Mapping[str, Any] = {
         "session_factory": _TrackingSessionFactory(state),
+        "current_caller_resolver": _worker_caller_resolver(),
         "annotation_runtime": Runtime(),
     }
 
@@ -1342,6 +1384,7 @@ def test_annotation_copy_commit_unknown_preserves_backend_copy(
     )
     ctx: Mapping[str, Any] = {
         "session_factory": CommitUnknownFactory(),
+        "current_caller_resolver": _worker_caller_resolver(),
         "annotation_runtime": Runtime(),
     }
 
@@ -1431,6 +1474,7 @@ def test_annotation_copy_commit_failure_records_cleanup_candidate(
     monkeypatch.setattr(worker_module, "_record_execution_cleanup_candidate", record_cleanup)
     ctx: Mapping[str, Any] = {
         "session_factory": CommitFailedFactory(),
+        "current_caller_resolver": _worker_caller_resolver(),
         "annotation_runtime": Runtime(),
     }
 
@@ -1501,6 +1545,7 @@ def test_annotation_retry_reuses_persisted_copy_after_uncertain_commit(
     )
     ctx: Mapping[str, Any] = {
         "session_factory": _TrackingSessionFactory(state),
+        "current_caller_resolver": _worker_caller_resolver(),
         "annotation_runtime": Runtime(),
     }
 
@@ -1579,6 +1624,7 @@ def test_cancelled_annotation_discards_late_backend_result(
     monkeypatch.setattr(worker_module, "complete_annotation_execution", complete_annotation)
     ctx: Mapping[str, Any] = {
         "session_factory": _TrackingSessionFactory(state),
+        "current_caller_resolver": _worker_caller_resolver(),
         "annotation_runtime": Runtime(),
         "blocking_job_slots": asyncio.Semaphore(worker_module._BLOCKING_JOB_LIMIT),
     }

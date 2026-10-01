@@ -15,7 +15,23 @@ other modules' HTTP adapters: the annotated dependency that resolves a request i
 """
 
 from factory_sop.auth.adapters.dependencies import Authorized, needs, needs_any
-from factory_sop.auth.authorization import Caller, authorize
+from factory_sop.auth.authorization import (
+    AuthorizationRefusedError,
+    Caller,
+    CurrentCallerResolver,
+    authorize,
+    require_current_actor,
+)
 from factory_sop.auth.permissions import Permission
 
-__all__ = ["Authorized", "Caller", "Permission", "authorize", "needs", "needs_any"]
+__all__ = [
+    "AuthorizationRefusedError",
+    "Authorized",
+    "Caller",
+    "CurrentCallerResolver",
+    "Permission",
+    "authorize",
+    "needs",
+    "needs_any",
+    "require_current_actor",
+]

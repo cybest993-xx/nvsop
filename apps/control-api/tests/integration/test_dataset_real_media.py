@@ -10,6 +10,7 @@ import shutil
 import time
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier
@@ -19,6 +20,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 from _integration_support import (
+    ACTOR_ID,
     RedisServer,
     caller,
     cleanup_dataset,
@@ -26,6 +28,7 @@ from _integration_support import (
     row,
     settings_for,
     upload_video_content,
+    worker_caller_resolver,
 )
 from arq import Worker
 from fastapi.testclient import TestClient
@@ -34,6 +37,7 @@ from sqlalchemy import Engine
 
 from factory_sop.app import API_PREFIX, create_app
 from factory_sop.auth.adapters.cookies import CSRF_COOKIE, CSRF_HEADER
+from factory_sop.auth.adapters.current_caller import current_caller_resolver
 from factory_sop.auth.adapters.repository import PostgresRoleRepository, PostgresUserRepository
 from factory_sop.auth.authorization import Caller
 from factory_sop.auth.model import Role, User, UserStatus
@@ -85,6 +89,7 @@ from factory_sop.job.adapters.worker import (
     prepare_annotation_context_job,
     validate_dataset_job,
 )
+from factory_sop.job.api import JobStatus
 from factory_sop.persistence import session_factory
 from factory_sop.settings import Settings
 
@@ -188,6 +193,9 @@ def _run_worker(engine: Engine, settings: Settings, job_id: UUID) -> None:
     context: dict[str, Any] = {
         "settings": settings,
         "session_factory": session_factory(engine),
+        "current_caller_resolver": worker_caller_resolver(
+            Permission.DATASET_IMPORT, Permission.DATASET_VIEW, Permission.DATASET_EDIT
+        ),
         "dataset_runtime": validation_runtime(settings),
         "blocking_job_slots": asyncio.Semaphore(1),
     }
@@ -300,6 +308,9 @@ async def _run_annotation_arq_worker(
         ctx={
             "settings": settings,
             "session_factory": session_factory(engine),
+            "current_caller_resolver": worker_caller_resolver(
+                Permission.DATASET_IMPORT, Permission.DATASET_VIEW, Permission.DATASET_EDIT
+            ),
             "dataset_runtime": validation_runtime(settings),
             "annotation_runtime": runtime,
             "blocking_job_slots": asyncio.Semaphore(1),
@@ -332,6 +343,9 @@ async def _run_usage_arq_worker(engine: Engine, settings: Settings) -> None:
         ctx={
             "settings": settings,
             "session_factory": factory,
+            "current_caller_resolver": worker_caller_resolver(
+                Permission.DATASET_IMPORT, Permission.DATASET_VIEW, Permission.DATASET_EDIT
+            ),
             "usage_runtime": runtime,
             "artifact_executor": executor,
             "blocking_job_slots": asyncio.Semaphore(1),
@@ -373,6 +387,9 @@ def _requeue_stale_job(engine: Engine, settings: Settings, job_id: UUID) -> None
             {
                 "dispatcher": dispatcher,
                 "session_factory": session_factory(engine),
+                "current_caller_resolver": worker_caller_resolver(
+                    Permission.DATASET_IMPORT, Permission.DATASET_VIEW, Permission.DATASET_EDIT
+                ),
                 "settings": settings,
             }
         )
@@ -391,6 +408,9 @@ async def _run_arq_worker(engine: Engine, settings: Settings) -> int:
         ctx={
             "settings": settings,
             "session_factory": session_factory(engine),
+            "current_caller_resolver": worker_caller_resolver(
+                Permission.DATASET_IMPORT, Permission.DATASET_VIEW, Permission.DATASET_EDIT
+            ),
             "dataset_runtime": validation_runtime(settings),
             "blocking_job_slots": asyncio.Semaphore(1),
         },
@@ -1491,3 +1511,142 @@ def test_concurrent_confirmations_create_one_postgres_validation_job(
             )
         finally:
             cleanup_dataset(engine, dataset_id)
+
+
+def _seed_worker_actor(
+    engine: Engine,
+    *,
+    permissions: frozenset[Permission],
+    status: UserStatus = UserStatus.ACTIVE,
+) -> UUID:
+    """把固定测试 actor 落成真实账号，供 worker 的真实解析器读取当前权限。"""
+    role_id = new_id()
+    with session_factory(engine)() as database:
+        users = PostgresUserRepository(database)
+        if users.by_identifier(ACTOR_ID) is not None:
+            users.remove(ACTOR_ID)
+        users.add(
+            User(
+                id=ACTOR_ID,
+                login_name=f"worker-actor-{uuid4().hex[:12]}",
+                display_name="worker-actor",
+                password_hash="worker-only",  # pragma: allowlist secret
+                status=status,
+                created_by=ACTOR_ID,
+                updated_by=ACTOR_ID,
+            )
+        )
+        roles = PostgresRoleRepository(database)
+        roles.add(
+            Role(
+                id=role_id,
+                code=f"worker-actor-{uuid4().hex[:12]}",
+                name="worker-actor",
+                permissions=permissions,
+                created_by=ACTOR_ID,
+                updated_by=ACTOR_ID,
+            )
+        )
+        roles.assign(user_id=ACTOR_ID, role_ids=[role_id])
+        database.commit()
+    return role_id
+
+
+def _remove_worker_actor(engine: Engine, *, role_id: UUID) -> None:
+    with session_factory(engine)() as database:
+        PostgresRoleRepository(database).remove(role_id)
+        PostgresUserRepository(database).remove(ACTOR_ID)
+        database.commit()
+
+
+def _mutate_worker_actor(
+    engine: Engine,
+    *,
+    role_id: UUID,
+    permissions: frozenset[Permission] | None = None,
+    deactivate: bool = False,
+) -> None:
+    """合法提交后修改持久化账号，模拟 queued -> 撤权/停用 -> dispatch。"""
+    with session_factory(engine)() as database:
+        roles = PostgresRoleRepository(database)
+        if permissions is not None:
+            role = roles.by_identifier(role_id)
+            assert role is not None
+            roles.update(replace(role, permissions=permissions))
+        if deactivate:
+            users = PostgresUserRepository(database)
+            user = users.by_identifier(ACTOR_ID)
+            assert user is not None
+            users.update(replace(user, status=UserStatus.DEACTIVATED, updated_by=ACTOR_ID))
+        database.commit()
+
+
+def _run_validation_with_real_resolver(engine: Engine, settings: Settings, job_id: UUID) -> None:
+    """用真实 auth 解析器运行校验 worker，复核持久化账号当前权限。"""
+    asyncio.run(
+        validate_dataset_job(
+            {
+                "settings": settings,
+                "session_factory": session_factory(engine),
+                "dataset_runtime": validation_runtime(settings),
+                "current_caller_resolver": current_caller_resolver(session_factory(engine)),
+                "blocking_job_slots": asyncio.Semaphore(1),
+            },
+            str(job_id),
+        )
+    )
+
+
+@pytest.mark.parametrize("condition", ["deactivated", "revoked"])
+def test_worker_refuses_deactivated_or_revoked_actor_before_validation_side_effects(
+    engine: Engine,
+    dataset_storage_root: Path,
+    condition: str,
+) -> None:
+    """撤权或停用后，worker 不再开始校验，任务以 PERMISSION_DENIED 结案。"""
+    settings = settings_for(engine, storage_root=dataset_storage_root)
+    role_id = _seed_worker_actor(
+        engine,
+        permissions=frozenset({Permission.DATASET_IMPORT, Permission.DATASET_VIEW}),
+    )
+    content = b"authorization-scope"
+    try:
+        with client_for(engine, settings) as client:
+            dataset_id = _create_dataset(client)
+            try:
+                requested = _request_upload(
+                    client,
+                    dataset_id,
+                    content,
+                    filename="authorization.mp4",
+                    idempotency_key=f"authorization-{condition}",
+                )
+                uploaded = upload_video_content(client, requested["upload"], content)
+                assert uploaded.status_code == 204, uploaded.text
+                member_id = UUID(requested["member"]["id"])
+                job_id = _confirm_upload(client, dataset_id, requested)
+                if condition == "deactivated":
+                    _mutate_worker_actor(engine, role_id=role_id, deactivate=True)
+                else:
+                    _mutate_worker_actor(
+                        engine,
+                        role_id=role_id,
+                        permissions=frozenset({Permission.DATASET_VIEW}),
+                    )
+
+                _run_validation_with_real_resolver(engine, settings, job_id)
+
+                member = _persisted_member(engine, member_id)
+                assert member.status == MemberStatus.FAILED
+                assert member.failure_code == "PERMISSION_DENIED"
+                assert member.recovery_action == RetryMode.VALIDATION.value
+                facts = row(
+                    engine,
+                    "SELECT status, failure_code FROM job_application_job WHERE id = :job_id",
+                    job_id=job_id,
+                )
+                assert tuple(facts) == (JobStatus.FAILED.value, "PERMISSION_DENIED")
+            finally:
+                cleanup_dataset(engine, dataset_id)
+    finally:
+        _remove_worker_actor(engine, role_id=role_id)

@@ -24,6 +24,10 @@ from edge_runtime.configuration_values import (
 )
 from edge_runtime.connectors.hikvision import IsapiProfile
 from edge_runtime.connectors.port import PointState
+from edge_runtime.evidence_media import (
+    EvidenceMediaConfiguration,
+    load_evidence_media_configuration,
+)
 from edge_runtime.media import MediaRuntimeConfiguration, load_media_runtime_configuration
 from edge_runtime.station_runtime import (
     StationRuntimeConfiguration,
@@ -68,6 +72,7 @@ class EdgeRuntimeConfiguration:
     local_state_path: Path | None
     stations: tuple[StationRuntimeConfiguration, ...]
     media: MediaRuntimeConfiguration | None = None
+    evidence: EvidenceMediaConfiguration | None = None
 
 
 _CONFIG_KEYS = frozenset(
@@ -113,7 +118,7 @@ def load_configuration(
     raw: object = json.loads(Path(config_path).read_text(encoding="utf-8"))
     config = _object(raw, "edge runtime configuration")
     required = _CONFIG_KEYS | ({"local_state_path", "stations"} if include_stations else set())
-    _require_keys(config, required=required, optional={"center_ca_file", "media"})
+    _require_keys(config, required=required, optional={"center_ca_file", "media", "evidence"})
     connectors_value = _array(config["connectors"], "connectors")
     connectors = tuple(_local_connector(item) for item in connectors_value)
     stations: tuple[StationRuntimeConfiguration, ...] = ()
@@ -133,6 +138,11 @@ def load_configuration(
     )
     validate_host_identity_private_key(host_private_key)
     media = None if "media" not in config else load_media_runtime_configuration(config["media"])
+    evidence = (
+        None if "evidence" not in config else load_evidence_media_configuration(config["evidence"])
+    )
+    if evidence is not None and media is None:
+        raise ValueError("evidence media configuration requires the local media configuration")
     return EdgeRuntimeConfiguration(
         center_url=safe_url(config["center_url"], "center_url", schemes={"https"}),
         host_id=_non_empty_string(config["host_id"], "host_id"),
@@ -148,6 +158,7 @@ def load_configuration(
         local_state_path=local_state_path,
         stations=stations,
         media=media,
+        evidence=evidence,
     )
 
 

@@ -1,15 +1,11 @@
 """S067：受支持的历史非空标注数据增量升级到 `training`。
 
-在真实 PostgreSQL 上把 Vendor 原始 standalone 标注结构 + 合成历史数据（含一个 provenance 明确、
-非 Vendor 拥有的旧用户关联附加表）作为受支持来源，按文档化工作流用 `pg_dump`/`pg_restore` 恢复到
-空 `training` database，再执行 S065 角色初始化与 Compose 渲染的 `training-objects-install` 入口。
-验证：原视频身份/片段/用户关联/数据保留完整，五类训练服务对象可读写；重复启动跳过且 OID/版本行/
-数据不变；DDL 失败整事务回滚不留版本；未知/部分/结构不符来源明确拒绝；Center Alembic 升级与回滚
-不修改 `training` 对象。
-
-五类 Vendor 服务使用 asyncpg 异步引擎（不在本仓库冻结环境内）；本测试直接加载 Vendor 的真实 ORM
-模型类，用同步 psycopg 引擎按真实列集读写，是与原始适配器等价的 SQL 路径证据，不是完整异步服务
-进程证据（无 GPU）。
+真实 PostgreSQL 上把 Vendor standalone 标注结构 + 合成历史数据（含 provenance 明确的非 Vendor
+旧用户关联表）按文档化 `pg_dump`/`pg_restore` 恢复到空 `training`，再执行 S065 角色初始化与
+`training-objects-install`。AC1-AC3：身份/内容/引用/计数/附加用户表保留，五类对象可读写；重复启动
+跳过且 OID/版本行/数据不变；DDL 失败整事务回滚；未知/部分/结构不符来源拒绝；Center Alembic
+升级/回滚不修改 `training`。Vendor 服务用 asyncpg（不在冻结环境内）；本测试加载 Vendor 真实 ORM
+模型，用同步 psycopg 按真实列集读写，是等价 SQL 路径证据，非完整异步服务证据（无 GPU）。
 """
 
 from __future__ import annotations
@@ -59,8 +55,7 @@ LEGACY_DATABASE = "legacy_annotation"
 CENTER_DATABASE = "nvsop"
 # 合成历史 owner 角色：来源对象不归安装身份所有，用于验证 restore 归一化。
 LEGACY_OWNER = "legacy_annotation_owner"
-# 合成旧用户关联附加表：Vendor 四表没有用户字段，用这张非 Vendor 拥有的表表达历史用户关联。
-# provenance 明确为 S067 fixture，不是生产 user 模型；升级不得改动或删除它。
+# S067 合成用户关联：非 Vendor / 非生产模型，升级须保留。
 USER_TABLE = "historic_annotation_user"
 SOURCE_TABLES = ("dataset", "video", "chunk", "annotation")
 ALL_TABLES = SOURCE_TABLES + tuple(sorted(TRAINING_TABLES))
@@ -154,7 +149,7 @@ def _create_database(instance: TrainingInstall, name: str) -> None:
     )
     try:
         with engine.connect() as connection:
-            connection.execute(text(f'CREATE DATABASE "{name}"'))
+            connection.execute(text(f'CREATE DATABASE "{name}" TEMPLATE template0'))
     finally:
         engine.dispose()
 
@@ -199,10 +194,8 @@ def _table_owners(engine: Engine) -> set[str]:
 def _seed_legacy_source(
     instance: TrainingInstall, database: str, *, two_operator_mode: bool = False
 ) -> None:
-    """在 `database` 里创建 Vendor 原始 standalone 标注结构与合成历史数据。
-
-    来源对象由独立合成历史 owner 角色拥有；`two_operator_mode` 为真时使用同形四表 +
-    `dataset.two_operator_mode` 形态并把历史行设为 true。
+    """在 `database` 建 Vendor standalone 结构与合成历史数据；对象归独立历史 owner 角色，
+    `two_operator_mode` 为真时用同形四表 + `dataset.two_operator_mode` 形态并把历史行设为 true。
     """
     _create_database(instance, database)
     ddl = STANDALONE_DDL.read_text(encoding="utf-8")
@@ -226,7 +219,6 @@ def _seed_legacy_source(
 
 
 def _restore_backup(instance: TrainingInstall, source: str, target: str) -> None:
-    """按文档化工作流把来源备份原子恢复到空目标，归安装身份所有，原库保留。"""
     result = _shell(
         instance,
         "set -eu\n"
@@ -239,7 +231,6 @@ def _restore_backup(instance: TrainingInstall, source: str, target: str) -> None
 
 
 def _upgrade(instance: TrainingInstall, database: str) -> BytesExecResult:
-    """S065 角色初始化先于安装入口执行，与文档化的 restore→role-init→installer 顺序一致。"""
     role_init = _run_role_init(instance, database)
     assert role_init.exit_code == 0, role_init.output
     return instance.run_install(database=database)
@@ -256,7 +247,6 @@ def _load_models(path: Path, name: str) -> ModuleType:
 
 
 def _exercise_five_services(engine: Engine) -> None:
-    """按各服务真实 ORM 模型的列集做一次写入 + 读取（与原始适配器等价的 SQL 路径）。"""
     annotation = _load_models(SERVICE_MODELS["annotation"], "s067_annotation_models")
     generation = _load_models(SERVICE_MODELS["data-generation"], "s067_generation_models")
     cr = _load_models(SERVICE_MODELS["cr-training"], "s067_cr_models")
@@ -267,7 +257,7 @@ def _exercise_five_services(engine: Engine) -> None:
     ddm_status = ddm.TrainingStatusEnum
     eval_status = evaluation.TrainingStatusEnum
 
-    # Vendor 模型只有 ForeignKey 没有 relationship，unit-of-work 不保证插入顺序，按依赖 flush。
+    # Vendor 无 relationship；按外键依赖顺序 flush。
     with Session(engine) as session:
         session.add(annotation.Dataset(id="d1", actions=["pick"], two_operator_mode=True))
         session.flush()
@@ -298,7 +288,6 @@ def _exercise_five_services(engine: Engine) -> None:
         )
         session.commit()
 
-    # 按真实列集读回，证明升级后的表结构对该服务可用。
     with Session(engine) as session:
         dataset = session.get(annotation.Dataset, "d1")
         assert dataset is not None
@@ -321,7 +310,6 @@ def _exercise_five_services(engine: Engine) -> None:
 def test_backup_restore_upgrade_preserves_historic_data_and_enables_five_services(
     training_install: TrainingInstall,
 ) -> None:
-    """AC1：备份恢复到目标后升级，身份/内容/引用/计数与附加用户表保留，五类对象可用。"""
     instance = training_install
     _seed_legacy_source(instance, LEGACY_DATABASE)
     legacy_engine = _admin_engine(instance, LEGACY_DATABASE)
@@ -340,9 +328,7 @@ def test_backup_restore_upgrade_preserves_historic_data_and_enables_five_service
     assert result.exit_code == 0, result.output
     assert "增量升级完成" in result.output.decode("utf-8")
 
-    # 原库在备份/升级后保持不变。
     assert _snapshot(legacy_engine) == legacy_before
-    # 目标身份/内容/引用/计数不变；标注表 OID 不变（未被重建）。
     assert _snapshot(target) == restored
     assert _table_oids(target, SOURCE_TABLES) == before_oids
     with target.connect() as connection:
@@ -386,7 +372,6 @@ def test_backup_restore_upgrade_preserves_historic_data_and_enables_five_service
             == 1
         )
 
-    # S065 runtime 角色经安装身份默认权限读写升级后的全部对象。
     runtime = instance.engine(
         database="training", role=TRAINING_RUNTIME_ROLE, password=instance.runtime_password
     )
@@ -400,7 +385,6 @@ def test_backup_restore_upgrade_preserves_historic_data_and_enables_five_service
 def test_repeat_startup_is_idempotent_and_preserves_oids_version_and_data(
     training_install: TrainingInstall, two_operator_mode: bool, expected_version: str
 ) -> None:
-    """AC2：两种受支持来源形态重复启动不重跑 DDL，OID、版本行与数据均不变。"""
     instance = training_install
     database = "training_idempotent" if not two_operator_mode else "training_idempotent_two_op"
     _seed_legacy_source(instance, database, two_operator_mode=two_operator_mode)
@@ -441,7 +425,6 @@ def test_repeat_startup_is_idempotent_and_preserves_oids_version_and_data(
 def test_upgrade_failure_rolls_back_without_version_or_partial_objects(
     training_install: TrainingInstall,
 ) -> None:
-    """AC2：DDL 失败整事务回滚，不写成功版本，也不留半升级对象。"""
     instance = training_install
     _seed_legacy_source(instance, "training_upgrade_broken")
     role_init = _run_role_init(instance, "training_upgrade_broken")
@@ -477,7 +460,6 @@ def test_upgrade_failure_rolls_back_without_version_or_partial_objects(
 def test_unknown_partial_and_incompatible_sources_are_rejected(
     training_install: TrainingInstall,
 ) -> None:
-    """AC2：未知来源、部分训练对象、结构/类型/外键不符的标注来源都拒绝且不写版本。"""
     instance = training_install
     _create_database(instance, "training_upgrade_unknown")
     unknown = _run_sql(instance, "training_upgrade_unknown", "CREATE TABLE random_legacy (id int);")
@@ -497,7 +479,6 @@ def test_unknown_partial_and_incompatible_sources_are_rejected(
     )
     assert incompatible.exit_code == 0, incompatible.output
 
-    # 已知列名但类型/外键不符（含引用其它 schema 同名表的跨 schema 外键）的来源必须按未知形态拒绝。
     mutations = (
         (
             "training_upgrade_wrong_type",
@@ -559,7 +540,6 @@ def test_unknown_partial_and_incompatible_sources_are_rejected(
 def test_center_migration_and_rollback_leave_training_objects_unchanged(
     training_install: TrainingInstall,
 ) -> None:
-    """AC3：Center Alembic upgrade/downgrade 只落 `nvsop`，`training` 对象/OID/数据不变。"""
     instance = training_install
     _seed_legacy_source(instance, "training_center_isolated")
     result = _upgrade(instance, "training_center_isolated")

@@ -172,38 +172,38 @@ def build_training_install(
     with Network() as network:
         server = (
             PostgresContainer(
-                POSTGRES_IMAGE,
+                cast("str", services["center-db"]["image"]),
                 driver="psycopg",
                 username=INSTALL_ROLE,
                 password=install_password,
-                dbname=TRAINING_DATABASE,
+                dbname="postgres",
             )
             .with_network(network)
             .with_network_aliases("center-db")
         )
         client = _merged_client_container(services, network, secrets)
         with server, client:
-            role_init = client.exec(
-                ["/bin/sh", "-c", _rendered_command(services[ROLE_INIT_SERVICE])]
-            )
-            assert role_init.exit_code == 0, role_init.output
-
-            base_url = make_url(server.get_connection_url())
-            admin = create_engine(base_url, isolation_level="AUTOCOMMIT")
+            base_url = make_url(server.get_connection_url()).set(database=TRAINING_DATABASE)
+            admin = create_engine(base_url.set(database="postgres"), isolation_level="AUTOCOMMIT")
             try:
                 with admin.connect() as connection:
-                    # 额外 database 供拒绝/失败/重复启动场景使用，不共享已安装的 training 状态。
+                    # template0 保持 training 为普通库；其余库用于拒绝、失败和重复启动。
                     for name in (
+                        TRAINING_DATABASE,
                         "training_unknown",
                         "training_mismatch",
                         "training_broken",
                         "training_drifted",
                         REINSTALL_DATABASE,
                     ):
-                        connection.execute(text(f'CREATE DATABASE "{name}"'))
+                        connection.execute(text(f'CREATE DATABASE "{name}" TEMPLATE template0'))
             finally:
                 admin.dispose()
 
+            role_init = client.exec(
+                ["/bin/sh", "-c", _rendered_command(services[ROLE_INIT_SERVICE])]
+            )
+            assert role_init.exit_code == 0, role_init.output
             yield TrainingInstall(
                 base_url=base_url,
                 install_password=install_password,

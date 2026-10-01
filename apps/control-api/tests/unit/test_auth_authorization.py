@@ -18,6 +18,7 @@ from factory_sop.auth.authorization import (
     AuthorizationRefusedError,
     Caller,
     authorize,
+    require_current_actor,
 )
 from factory_sop.auth.model import User, UserStatus
 from factory_sop.auth.permissions import Permission
@@ -181,3 +182,56 @@ def test_granting_does_not_log() -> None:
     authorize(caller(Permission.USER_EDIT), Permission.USER_EDIT)
 
     assert stream.getvalue() == ""
+
+
+def test_require_current_actor_rechecks_the_persisted_account() -> None:
+    # 后台 worker 在派发时按 created_by 复核：权限在入队时已检查，这里再看账号当前角色。
+    current = caller(Permission.DATASET_EDIT)
+
+    require_current_actor(
+        actor_id=current.user.id,
+        permissions=(Permission.DATASET_EDIT,),
+        resolve_current_caller=lambda user_id: current,
+    )
+
+
+def test_require_current_actor_refuses_a_missing_or_deactivated_account() -> None:
+    # 账号被删除或停用时解析器返回 None，按同一拒绝语义处理。
+    with pytest.raises(AuthorizationRefusedError) as refused:
+        require_current_actor(
+            actor_id=new_id(),
+            permissions=(Permission.DATASET_EDIT,),
+            resolve_current_caller=lambda user_id: None,
+        )
+
+    assert refused.value.code.value == "PERMISSION_DENIED"
+
+
+def test_require_current_actor_refuses_after_the_permission_is_revoked() -> None:
+    # 撤销角色后，同一个持久化账号不再持有该权限。
+    current = caller(Permission.DATASET_VIEW)
+
+    with pytest.raises(AuthorizationRefusedError):
+        require_current_actor(
+            actor_id=current.user.id,
+            permissions=(Permission.DATASET_EDIT,),
+            resolve_current_caller=lambda user_id: current,
+        )
+
+
+def test_require_current_actor_requires_every_submitted_permission() -> None:
+    # 提交用例同时要求读取前提与编辑时，worker 复核也要两项都满足。
+    only_view = caller(Permission.DATASET_VIEW)
+
+    with pytest.raises(AuthorizationRefusedError):
+        require_current_actor(
+            actor_id=only_view.user.id,
+            permissions=(Permission.DATASET_VIEW, Permission.DATASET_EDIT),
+            resolve_current_caller=lambda user_id: only_view,
+        )
+
+    require_current_actor(
+        actor_id=only_view.user.id,
+        permissions=(Permission.DATASET_VIEW,),
+        resolve_current_caller=lambda user_id: only_view,
+    )

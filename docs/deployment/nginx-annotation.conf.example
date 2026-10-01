@@ -50,6 +50,13 @@ server {
         proxy_set_header Host $host;
         proxy_set_header Cookie "";
         proxy_set_header Authorization "";
+        proxy_set_header X-CSRF-Token "";
+        proxy_set_header X-Authenticated-User "";
+        proxy_set_header X-Auth-Request-User "";
+        proxy_set_header X-Auth-Request-Groups "";
+        proxy_set_header X-User-ID "";
+        proxy_set_header X-Dataset-ID "";
+        proxy_set_header X-Inference-Host-ID "";
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
@@ -62,6 +69,13 @@ server {
         proxy_set_header Host $host;
         proxy_set_header Cookie "";
         proxy_set_header Authorization "";
+        proxy_set_header X-CSRF-Token "";
+        proxy_set_header X-Authenticated-User "";
+        proxy_set_header X-Auth-Request-User "";
+        proxy_set_header X-Auth-Request-Groups "";
+        proxy_set_header X-User-ID "";
+        proxy_set_header X-Dataset-ID "";
+        proxy_set_header X-Inference-Host-ID "";
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
@@ -299,6 +313,13 @@ server {
         proxy_set_header Host $host;
         proxy_set_header Cookie "";
         proxy_set_header Authorization "";
+        proxy_set_header X-CSRF-Token "";
+        proxy_set_header X-Authenticated-User "";
+        proxy_set_header X-Auth-Request-User "";
+        proxy_set_header X-Auth-Request-Groups "";
+        proxy_set_header X-User-ID "";
+        proxy_set_header X-Dataset-ID "";
+        proxy_set_header X-Inference-Host-ID "";
         proxy_set_header X-Annotation-Upstream-Video-ID $nvsop_annotation_upstream_video;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header Range $http_range;
@@ -320,6 +341,13 @@ server {
         proxy_set_header Host $host;
         proxy_set_header Cookie "";
         proxy_set_header Authorization "";
+        proxy_set_header X-CSRF-Token "";
+        proxy_set_header X-Authenticated-User "";
+        proxy_set_header X-Auth-Request-User "";
+        proxy_set_header X-Auth-Request-Groups "";
+        proxy_set_header X-User-ID "";
+        proxy_set_header X-Dataset-ID "";
+        proxy_set_header X-Inference-Host-ID "";
         proxy_set_header X-Annotation-Upstream-Clip-ID $nvsop_annotation_upstream_clip;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header Range $http_range;
@@ -343,6 +371,13 @@ server {
         proxy_set_header Host $host;
         proxy_set_header Cookie "";
         proxy_set_header Authorization "";
+        proxy_set_header X-CSRF-Token "";
+        proxy_set_header X-Authenticated-User "";
+        proxy_set_header X-Auth-Request-User "";
+        proxy_set_header X-Auth-Request-Groups "";
+        proxy_set_header X-User-ID "";
+        proxy_set_header X-Dataset-ID "";
+        proxy_set_header X-Inference-Host-ID "";
         proxy_set_header X-Annotation-Upstream-Video-ID $nvsop_annotation_upstream_video;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header Range $http_range;

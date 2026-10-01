@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 
+from factory_sop.auth.adapters.current_caller import current_caller_resolver
 from factory_sop.dataset.adapters.dependencies import (
     annotation_runtime,
     artifact_executor,
@@ -22,6 +23,7 @@ def run_worker(environment: Mapping[str, str]) -> None:
         runtime_factory=validation_runtime,
         usage_runtime_factory=usage_runtime,
         annotation_runtime_factory=annotation_runtime,
+        current_caller_resolver_factory=current_caller_resolver,
     )
 
 

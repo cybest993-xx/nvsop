@@ -15,7 +15,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import NoReturn
+from typing import NoReturn, Protocol
+from uuid import UUID
 
 from factory_sop.auth.model import User, UserStatus
 from factory_sop.auth.permissions import Permission
@@ -71,6 +72,39 @@ class Caller:
         role screen is not the set that is enforced.
         """
         return self.user.status is UserStatus.ACTIVE and permission in self.granted
+
+
+class CurrentCallerResolver(Protocol):
+    """把持久化的操作者身份解析为当前权限快照。
+
+    后台任务在派发时使用：只读当前账号与角色，不要求浏览器会话仍然存在；账号已删除或
+    停用时返回 `None`，由调用方按拒绝处理。
+    """
+
+    def __call__(self, user_id: UUID) -> Caller | None:
+        """返回 `user_id` 当前的 `Caller`，账号不可用时返回 `None`。"""
+        ...
+
+
+def require_current_actor(
+    *,
+    actor_id: UUID,
+    permissions: tuple[Permission, ...],
+    resolve_current_caller: CurrentCallerResolver,
+) -> None:
+    """按持久化操作者复核当前权限，缺失或停用账户按同一拒绝语义处理。
+
+    后台 worker 的用例边界调用它：权限在入队时已检查过，这里再按账号当前的角色判定，
+    因此撤销权限或停用账号后新派发不会继续执行，而不依赖提交时的缓存。提交用例要求
+    多项权限（例如读取前提加编辑）时按同一快照逐项判定，任一缺失即拒绝。
+    """
+    if not permissions:
+        raise ValueError("require_current_actor 至少需要一项权限")
+    caller = resolve_current_caller(actor_id)
+    if caller is None:
+        raise AuthorizationRefusedError(permissions[0])
+    for permission in permissions:
+        authorize(caller, permission)
 
 
 def authorize(caller: Caller, permission: Permission) -> None:

@@ -29,7 +29,7 @@ RAW_SQL_TABLES = frozenset(
     }
 )
 
-# fact -> (identity, 是否有流序号, 0044 原有的普通索引列)。窄的三表清单，不做通用框架。
+# fact -> (identity, 是否有流序号, 0046 原有的普通索引列)。窄的三表清单，不做通用框架。
 _FACTS: dict[str, tuple[str, bool, tuple[str, ...]]] = {
     "monitor_reported_decision": (
         "monitor_decision_identity",

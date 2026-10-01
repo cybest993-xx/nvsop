@@ -1,14 +1,14 @@
 """S020 / #198：monitor 三张镜像事实表的真实 TimescaleDB 拥有者迁移。
 
 真实 TimescaleDB 上从 0046 存量库升级到 head：存量行/查询/全局身份保留，三张 hypertable 可查
-且无压缩策略（原生压缩归 S021）；跨分区重复与错误流序号在真实 SQL 层被复合外键拒绝；降级还原
-0046 普通表且不卸载预装扩展，再升级仍保留。training 隔离见 ``test_training_database_topology.py``，
-SSE 提交顺序/并发复用 ``test_monitor_streaming.py``。
+且无压缩策略；跨分区重复与错误流序号在真实 SQL 层被复合外键拒绝；降级还原 0046 普通表且不卸载
+预装扩展。training 隔离见 ``test_training_database_topology.py``，SSE 并发见
+``test_monitor_streaming.py``。
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -30,7 +30,6 @@ from factory_sop.monitor.adapters.tables import (
     ReportedObservationRow,
 )
 from factory_sop.monitor.errors import MonitorRefusedError
-from factory_sop.monitor.model import MirroredDecision
 
 CONTROL_API = Path(__file__).resolve().parents[2]
 TIMESCALE_VERSION = "2.22.1"
@@ -41,46 +40,36 @@ IDENTITIES = (
     "monitor_observation_identity",
 )
 LEGACY_RECEIVED_AT = datetime(2026, 9, 24, tzinfo=UTC)
-
-
-@dataclass(frozen=True, slots=True)
-class Legacy:
-    ids: dict[str, tuple[str, ...]]
-    sequences: dict[str, tuple[int, ...]]
+_LegacyRow = ReportedDecisionRow | ReportedHealthRow | ReportedObservationRow
 
 
 @dataclass(frozen=True, slots=True)
 class MigrationFixture:
     engine: Engine
     configuration: Config
-    legacy: Legacy
+    ids: dict[str, tuple[str, ...]]
+    sequences: dict[str, tuple[int, ...]]
 
 
 def _at(offset_seconds: int) -> datetime:
     return LEGACY_RECEIVED_AT + timedelta(seconds=offset_seconds)
 
 
-_LegacyRow = ReportedDecisionRow | ReportedHealthRow | ReportedObservationRow
-
-# 三张事实各自的 0046 行构造器；窄的已知清单，不做通用框架。
-_LEGACY_BUILDERS: dict[str, Callable[[str, int], _LegacyRow]] = {
-    "decision": lambda e, i: ReportedDecisionRow.from_domain(
-        replace(_decision(e), received_at=_at(i))
-    ),
-    "health": lambda e, i: ReportedHealthRow.from_domain(replace(_health(e), received_at=_at(i))),
-    "observation": lambda e, i: ReportedObservationRow.from_domain(
-        replace(_observation(e), received_at=_at(i))
-    ),
-}
-
-
-def _decision_with(event_id: str, *, verdict: str) -> MirroredDecision:
-    base = _decision(event_id)
-    return replace(base, report=replace(base.report, verdict=verdict))
+def _legacy_row(kind: str, event_id: str, offset: int) -> _LegacyRow:
+    """在 0046 schema 中构造一条存量事实行；窄的已知三表清单，不做通用框架。"""
+    if kind == "decision":
+        return ReportedDecisionRow.from_domain(
+            replace(_decision(event_id), received_at=_at(offset))
+        )
+    if kind == "health":
+        return ReportedHealthRow.from_domain(replace(_health(event_id), received_at=_at(offset)))
+    return ReportedObservationRow.from_domain(
+        replace(_observation(event_id), received_at=_at(offset))
+    )
 
 
 def _legacy_insert(connection: Connection, row: _LegacyRow) -> int:
-    """把一条存量事实写进 0046 schema；序号由库的 Identity 生成并取回。"""
+    """写进 0046 schema；序号由库的 Identity 生成并取回。"""
     table = cast(Table, row.__table__)
     values = {
         column.key: getattr(row, column.key)
@@ -111,7 +100,6 @@ def migration(engine: Engine) -> Iterator[MigrationFixture]:
     )
     name = f"nvsop_timescale_{uuid4().hex[:12]}"
     with installer.connect() as connection:
-        connection.exec_driver_sql(f'DROP DATABASE IF EXISTS "{name}"')
         connection.exec_driver_sql(f'CREATE DATABASE "{name}"')
     upgraded = create_engine(engine.url._replace(database=name))
     configuration = Config(str(CONTROL_API / "alembic.ini"))
@@ -121,21 +109,19 @@ def migration(engine: Engine) -> Iterator[MigrationFixture]:
     )
     command.upgrade(configuration, "0046")
 
-    ids = {kind: tuple(f"s020:{kind}:{uuid4()}" for _ in range(2)) for kind in _LEGACY_BUILDERS}
+    kinds = ("decision", "health", "observation")
+    ids = {kind: tuple(f"s020:{kind}:{uuid4()}" for _ in range(2)) for kind in kinds}
     sequences: dict[str, tuple[int, ...]] = {}
     with upgraded.begin() as connection:
-        for kind, build in _LEGACY_BUILDERS.items():
+        for kind in kinds:
             sequences[kind] = tuple(
-                _legacy_insert(connection, build(event_id, i))
-                for i, event_id in enumerate(ids[kind])
+                _legacy_insert(connection, _legacy_row(kind, event_id, index))
+                for index, event_id in enumerate(ids[kind])
             )
-
     command.upgrade(configuration, "head")
     try:
         yield MigrationFixture(
-            engine=upgraded,
-            configuration=configuration,
-            legacy=Legacy(ids=ids, sequences=sequences),
+            engine=upgraded, configuration=configuration, ids=ids, sequences=sequences
         )
     finally:
         upgraded.dispose()
@@ -148,7 +134,7 @@ def test_owner_migration_preserves_rows_identity_and_hypertables(
     migration: MigrationFixture,
 ) -> None:
     """AC1/AC2：存量行、查询与全局身份保留；三个真实 hypertable 与扩展版本可查。"""
-    engine, legacy = migration.engine, migration.legacy
+    engine, ids, sequences = migration.engine, migration.ids, migration.sequences
     with engine.connect() as connection:
         assert (
             connection.scalar(
@@ -157,7 +143,7 @@ def test_owner_migration_preserves_rows_identity_and_hypertables(
             == TIMESCALE_VERSION
         )
         assert set(FACTS) <= _hypertables(engine)
-        # 只调用 create_hypertable 转换既有表，不创建压缩策略（原生压缩归 S021）。
+        # 只调用 create_hypertable，不创建压缩策略（原生压缩归 S021）。
         assert tuple(
             connection.execute(
                 text(
@@ -167,15 +153,6 @@ def test_owner_migration_preserves_rows_identity_and_hypertables(
                 )
             ).one()
         ) == (0, 0)
-        identity = {
-            row.event_id: row.stream_sequence
-            for row in connection.execute(
-                text("SELECT event_id, stream_sequence FROM monitor_decision_identity")
-            )
-        }
-    assert identity == dict(zip(legacy.ids["decision"], legacy.sequences["decision"], strict=True))
-
-    # 迁移后的 repository 查询结果与存量一致，流序号原样保留。
     with Session(engine) as session:
         repository = PostgresMonitorRepository(session)
         decisions = {
@@ -183,26 +160,21 @@ def test_owner_migration_preserves_rows_identity_and_hypertables(
         }
         health = {value.report.event_id: value for value in repository.recent_health(limit=10)}
         observations, _ = repository.page_observations(page=1, page_size=100)
-    assert (
-        tuple(decisions[i].stream_sequence for i in legacy.ids["decision"])
-        == legacy.sequences["decision"]
-    )
-    assert (
-        tuple(health[i].stream_sequence for i in legacy.ids["health"]) == legacy.sequences["health"]
-    )
-    assert {value.report.event_id for value in observations} >= set(legacy.ids["observation"])
-
-    # 序号继续：新事件取到比存量更大的流序号。
-    fresh_id = f"s020:fresh:{uuid4()}"
-    with Session(engine) as session:
-        repository = PostgresMonitorRepository(session)
+        fresh_id = f"s020:fresh:{uuid4()}"
         assert repository.upsert_decision(replace(_decision(fresh_id), received_at=_at(86400)))
         session.commit()
         fresh_sequence = repository.decision_sequence_for_event(fresh_id)
+    # 存量数据保持：读回的 synthetic report 与写入时逐字段一致，流序号原样保留。
+    assert tuple(decisions[i].stream_sequence for i in ids["decision"]) == sequences["decision"]
+    assert tuple(health[i].stream_sequence for i in ids["health"]) == sequences["health"]
+    assert all(decisions[i].report == _decision(i).report for i in ids["decision"])
+    assert all(health[i].report == _health(i).report for i in ids["health"])
+    observations_by_id = {value.report.event_id: value.report for value in observations}
+    assert all(observations_by_id[i] == _observation(i).report for i in ids["observation"])
     assert fresh_sequence is not None
-    assert fresh_sequence > max(legacy.sequences["decision"])
+    assert fresh_sequence > max(sequences["decision"])
 
-    # 降级回 0046 后 schema 与数据恢复且预装扩展保留，再升级仍保留（实测回滚，不凭文件存在）。
+    # 降级回 0046：还原普通表、数据保留且不卸载预装扩展；再升级仍保留（实测回滚，不凭文件存在）。
     command.downgrade(migration.configuration, "0046")
     with engine.connect() as connection:
         assert not set(IDENTITIES) & set(
@@ -219,19 +191,18 @@ def test_owner_migration_preserves_rows_identity_and_hypertables(
         restored = connection.execute(
             text(
                 "SELECT event_id, stream_sequence FROM monitor_reported_decision "
-                "WHERE event_id = :event_id"
+                "WHERE event_id = :id"
             ),
-            {"event_id": legacy.ids["decision"][0]},
+            {"id": ids["decision"][0]},
         ).one()
-    assert tuple(restored) == (legacy.ids["decision"][0], legacy.sequences["decision"][0])
-
+    assert tuple(restored) == (ids["decision"][0], sequences["decision"][0])
     command.upgrade(migration.configuration, "head")
     with engine.connect() as connection:
         assert set(FACTS) <= _hypertables(engine)
         assert (
             connection.scalar(
-                text("SELECT count(*) FROM monitor_reported_decision WHERE event_id = :event_id"),
-                {"event_id": legacy.ids["decision"][0]},
+                text("SELECT count(*) FROM monitor_reported_decision WHERE event_id = :id"),
+                {"id": ids["decision"][0]},
             )
             == 1
         )
@@ -241,58 +212,64 @@ def test_cross_partition_duplicate_and_wrong_sequence_are_refused(
     migration: MigrationFixture,
 ) -> None:
     """AC2：同一 event 不能跨分区重复；错误流序号与重复身份在真实 SQL 层被拒绝。"""
-    engine, legacy = migration.engine, migration.legacy
-    original = legacy.ids["decision"][0]
+    engine, ids, sequences = migration.engine, migration.ids, migration.sequences
+    original = ids["decision"][0]
     fact_insert = (
         "INSERT INTO monitor_reported_decision "
         "(event_id, received_at, stream_sequence, trace_id, host_id, station_id, payload) "
         "VALUES (:event_id, :received_at, :sequence, 't', 'h', 's', '{}'::jsonb)"
     )
+    # 同一 event_id 落到另一分区、沿用正确序号：复合外键无匹配身份行。
     with engine.begin() as connection, pytest.raises(IntegrityError):
-        # 同一 event_id 落到另一个时间分区：复合外键没有匹配身份行，插入被拒。
         connection.execute(
             text(fact_insert),
-            {"event_id": original, "received_at": _at(30 * 86400), "sequence": 9999},
+            {
+                "event_id": original,
+                "received_at": _at(30 * 86400),
+                "sequence": sequences["decision"][0],
+            },
         )
-
-    # 身份行存在但事实序号写错：外键包含 stream_sequence，插入被拒（不能只靠 Python）。
+    # probe 已占用自己的全局序号；事实行借另一事件的序号被拒绝（不同事件不能共享序号）。
     probe_id = f"s020:probe:{uuid4()}"
+    identity_insert = (
+        "INSERT INTO monitor_decision_identity (event_id, received_at) "
+        "VALUES (:event_id, :received_at)"
+    )
     with engine.begin() as connection:
         connection.execute(
-            text(
-                "INSERT INTO monitor_decision_identity (event_id, received_at) "
-                "VALUES (:event_id, :received_at)"
-            ),
-            {"event_id": probe_id, "received_at": LEGACY_RECEIVED_AT},
+            text(identity_insert), {"event_id": probe_id, "received_at": LEGACY_RECEIVED_AT}
         )
     with engine.begin() as connection, pytest.raises(IntegrityError):
         connection.execute(
             text(fact_insert),
-            {"event_id": probe_id, "received_at": LEGACY_RECEIVED_AT, "sequence": 9999},
+            {
+                "event_id": probe_id,
+                "received_at": LEGACY_RECEIVED_AT,
+                "sequence": sequences["decision"][0],
+            },
         )
     # 身份表全局唯一 event_id：第二个身份行无法插入。
     with engine.begin() as connection, pytest.raises(IntegrityError):
         connection.execute(
-            text(
-                "INSERT INTO monitor_decision_identity (event_id, received_at) "
-                "VALUES (:event_id, :received_at)"
-            ),
-            {"event_id": original, "received_at": _at(30 * 86400)},
+            text(identity_insert), {"event_id": original, "received_at": _at(30 * 86400)}
         )
 
-    # 不同内容重报被拒绝，相同内容仍按幂等返回 False，不新增行。
+    # 不同内容重报被拒绝，相同内容仍按幂等返回 False。
+    conflicting = replace(
+        _decision(original), report=replace(_decision(original).report, verdict="fail")
+    )
     with Session(engine) as session:
         repository = PostgresMonitorRepository(session)
         with pytest.raises(MonitorRefusedError):
-            repository.upsert_decision(_decision_with(original, verdict="fail"))
+            repository.upsert_decision(conflicting)
         session.rollback()
         assert repository.upsert_decision(_decision(original)) is False
         session.commit()
     with engine.connect() as connection:
         assert (
             connection.scalar(
-                text("SELECT count(*) FROM monitor_reported_decision WHERE event_id = :event_id"),
-                {"event_id": original},
+                text("SELECT count(*) FROM monitor_reported_decision WHERE event_id = :id"),
+                {"id": original},
             )
             == 1
         )
@@ -302,24 +279,29 @@ def test_late_historical_event_keeps_cursor_and_does_not_rewrite_history(
     migration: MigrationFixture,
 ) -> None:
     """AC2：迟到历史事件按提交可见序号入流，不覆盖较新事实，游标继续可重放。"""
-    engine, legacy = migration.engine, migration.legacy
-    decision_ids, decision_sequences = legacy.ids["decision"], legacy.sequences["decision"]
+    engine, ids, sequences = migration.engine, migration.ids, migration.sequences
+    decision_ids, decision_sequences = ids["decision"], sequences["decision"]
     after = max(decision_sequences)
     late_id = f"s020:late:{uuid4()}"
+    # 事件实际发生/上报时间很旧，中心直到存量之后才收到；接收时间后移，payload 反映旧事件。
+    late_report = replace(_decision(late_id).report, reported_at="2026-09-01T00:00:00Z")
+    late = replace(
+        _decision(late_id), report=late_report, received_at=LEGACY_RECEIVED_AT + timedelta(days=1)
+    )
     with Session(engine) as session:
         repository = PostgresMonitorRepository(session)
-        assert repository.upsert_decision(
-            replace(_decision(late_id), received_at=LEGACY_RECEIVED_AT - timedelta(days=1))
-        )
+        assert repository.upsert_decision(late)
         session.commit()
         late_sequence = repository.decision_sequence_for_event(late_id)
         replayed = tuple(
             value.report.event_id
             for value in repository.decisions_after_sequence(after_sequence=after, limit=20)
         )
+        stored = repository.recent_decisions(limit=10)
     assert late_sequence is not None
     assert late_sequence > after
     assert replayed == (late_id,)
+    assert next(value.report for value in stored if value.report.event_id == late_id) == late_report
 
     with engine.connect() as connection:
         rows = connection.execute(

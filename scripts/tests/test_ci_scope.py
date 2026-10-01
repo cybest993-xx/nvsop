@@ -81,6 +81,22 @@ class CiScopeTest(unittest.TestCase):
                 self.assertEqual(browser, values.get("browser"), values)
                 self.assertEqual("false", values.get("media"), values)
 
+    def test_annotation_inputs_select_image_and_integration_without_browser(self) -> None:
+        for name in (
+            "deploy/dev/annotation-requirements.lock",
+            "deploy/dev/annotation-backend.Dockerfile",
+            "scripts/test_annotation_image.py",
+            "vendor/sop-monitoring-blueprints/microservices/sop-training-bp/"
+            "microservices/video-annotator-ms/annotation_backend/requirements.txt",
+        ):
+            with self.subTest(path=name):
+                base = self.git("rev-parse", "HEAD").strip()
+                self.write(name)
+                values = self.outputs(self.scope(base, self.commit("annotation input")))
+                self.assertEqual("true", values["annotation"])
+                self.assertEqual("true", values["integration"])
+                self.assertEqual("false", values["browser"])
+
     def test_web_inputs_select_browser_without_center_integration(self) -> None:
         self.write("apps/control-web/src/main.ts")
         result = self.scope(self.base, self.commit("web input"))
@@ -92,6 +108,7 @@ class CiScopeTest(unittest.TestCase):
                 "integration": "false",
                 "browser": "true",
                 "media": "false",
+                "annotation": "false",
             },
             self.outputs(result),
         )
@@ -112,7 +129,7 @@ class CiScopeTest(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(
-            "docs_only=true\nforce_all=false\nintegration=false\nbrowser=false\nmedia=false\n",
+            "docs_only=true\nforce_all=false\nintegration=false\nbrowser=false\nmedia=false\nannotation=false\n",
             result.stdout,
         )
 
@@ -151,7 +168,7 @@ class CiScopeTest(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(
-            "docs_only=false\nforce_all=false\nintegration=false\nbrowser=false\nmedia=false\n",
+            "docs_only=false\nforce_all=false\nintegration=false\nbrowser=false\nmedia=false\nannotation=false\n",
             result.stdout,
         )
 
@@ -171,7 +188,7 @@ class CiScopeTest(unittest.TestCase):
 
                 self.assertEqual(0, result.returncode, result.stderr)
                 self.assertEqual(
-                    "docs_only=false\nforce_all=true\nintegration=true\nbrowser=true\nmedia=true\n",
+                    "docs_only=false\nforce_all=true\nintegration=true\nbrowser=true\nmedia=true\nannotation=true\n",
                     result.stdout,
                 )
 
@@ -184,7 +201,7 @@ class CiScopeTest(unittest.TestCase):
 
                 self.assertEqual(0, result.returncode, result.stderr)
                 self.assertEqual(
-                    "docs_only=false\nforce_all=true\nintegration=true\nbrowser=true\nmedia=true\n",
+                    "docs_only=false\nforce_all=true\nintegration=true\nbrowser=true\nmedia=true\nannotation=true\n",
                     result.stdout,
                 )
 
@@ -208,7 +225,7 @@ class CiScopeTest(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(
-            "docs_only=true\nforce_all=false\nintegration=false\nbrowser=false\nmedia=false\n",
+            "docs_only=true\nforce_all=false\nintegration=false\nbrowser=false\nmedia=false\nannotation=false\n",
             result.stdout,
         )
 
@@ -216,15 +233,15 @@ class CiScopeTest(unittest.TestCase):
         for name, expected in (
             (
                 "docs/guide.md",
-                "docs_only=true\nforce_all=false\nintegration=false\nbrowser=false\nmedia=false\n",
+                "docs_only=true\nforce_all=false\nintegration=false\nbrowser=false\nmedia=false\nannotation=false\n",
             ),
             (
                 "source.py",
-                "docs_only=false\nforce_all=false\nintegration=false\nbrowser=false\nmedia=false\n",
+                "docs_only=false\nforce_all=false\nintegration=false\nbrowser=false\nmedia=false\nannotation=false\n",
             ),
             (
                 "Makefile",
-                "docs_only=false\nforce_all=true\nintegration=true\nbrowser=true\nmedia=true\n",
+                "docs_only=false\nforce_all=true\nintegration=true\nbrowser=true\nmedia=true\nannotation=true\n",
             ),
         ):
             with self.subTest(path=name):
@@ -242,7 +259,7 @@ class CiScopeTest(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(
-            "docs_only=false\nforce_all=false\nintegration=false\nbrowser=false\nmedia=false\n",
+            "docs_only=false\nforce_all=false\nintegration=false\nbrowser=false\nmedia=false\nannotation=false\n",
             result.stdout,
         )
 

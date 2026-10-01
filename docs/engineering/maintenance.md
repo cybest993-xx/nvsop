@@ -29,6 +29,8 @@ Prefer a lightweight maintained library over hand-written infrastructure such as
 
 Use frozen installs through repository commands, not ad-hoc package installs documented as an alternative. A runtime/toolchain bump includes code compatibility, generated artifacts, CI and deployment evidence in the same coherent change. Select affected checks through workflow.md and retain all applicable release requirements.
 
+隔离的基座运行环境由部署所有者维护独立的完整运行依赖锁，不因根工作区锁通过就视为已验证。标注后端的基座 requirements 与 [`annotation-constraints.txt`](../../deploy/dev/annotation-constraints.txt) 经 `make annotation-lock` 生成 [`annotation-requirements.lock`](../../deploy/dev/annotation-requirements.lock)；`make lockfile` 同时核对该锁，安装只消费已解析的固定版本并执行兼容性检查。输入、锁、构建与实际启动证据随部署变更一起维护，具体运行命令与冻结边界见[标注组合证据](../deployment/annotation-evidence.md)。
+
 GitHub Actions syntax uses the repository-pinned `actionlint` version and upstream SHA256 values in `scripts/install_actionlint.py`. `make ci-tools` is the explicit network/bootstrap step; `make ci-lint` never installs or silently substitutes another version. Update version, supported architecture checksums, installer behavior and CI evidence together.
 
 ## Repository-local state

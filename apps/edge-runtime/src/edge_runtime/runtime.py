@@ -46,7 +46,6 @@ from edge_runtime.connectors.writes import (
     PERSISTENT_UNKNOWN_DETAIL,
     OutputDispatcher,
     WriteAttempted,
-    WriteGate,
     WriteRequest,
 )
 from edge_runtime.evidence_media import EvidenceMediaWorker
@@ -212,24 +211,66 @@ def _outcome_from_storage(kind: str, detail: str | None, at: float) -> WriteOutc
     return Failed(detail=detail or f"unknown persistent write result: {kind}")
 
 
-class ExecutionLeaseWriteGate:
-    """按本机持久执行权事实在写入边界拒绝过期或缺失的物理写入。
+class StationWriteLifecycle:
+    """工位物理写入生命周期: 关闭或配置切换后置为停止, 写入边界据此拒绝新写入 (S029 AC2)。"""
 
-    它只读 ``LocalExecutionLeaseStore`` 这一份事实, 每次写入都按本机墙钟重新判定到期, 因此
-    不需要等待下一次中心请求, 也不维护第二份有效期 (§5.17)。
+    def __init__(self) -> None:
+        self._stopped = threading.Event()
+
+    def stop(self) -> None:
+        self._stopped.set()
+
+    @property
+    def stopped(self) -> bool:
+        return self._stopped.is_set()
+
+
+class StationOutputWriteGate:
+    """把物理写入授权绑定到真实工位、连接器、输出点位与生命周期。
+
+    只读 ``LocalExecutionLeaseStore`` 这一份事实, 每次写入按本机墙钟重新判定到期; 工位身份来自
+    组合根而非 ``request.station_id`` (S029 AC1/AC2)。
     """
 
     def __init__(
         self,
-        leases: LocalExecutionLeaseStore,
         *,
+        station_id: str,
+        connector_id: str,
+        output_points: tuple[OutputPoint, ...],
+        leases: LocalExecutionLeaseStore,
+        lifecycle: StationWriteLifecycle,
         clock: Callable[[], float] = time,
     ) -> None:
+        self._station_id = station_id
+        self._connector_id = connector_id
+        self._output_points = frozenset(output_points)
         self._leases = leases
+        self._lifecycle = lifecycle
         self._clock = clock
 
     def refusal(self, request: WriteRequest, /) -> Refused | None:
-        authority = self._leases.status(request.station_id, now=self._clock())
+        if self._lifecycle.stopped:
+            return Refused(
+                reason=WriteRefusal.WRITE_STOPPED,
+                detail=f"工位 {self._station_id} 已停止写入",
+            )
+        # 请求必须写回本门禁绑定的工位。否则该请求会拿本工位租约放行, 却把幂等意图落到另一个
+        # 工位的账本作用域 (SQLiteWriteLedger 用 request.station_id), 造成隔离破坏和重复驱动。
+        if request.station_id != self._station_id:
+            return Refused(
+                reason=WriteRefusal.TARGET_NOT_IN_STATION,
+                detail=(f"请求工位 {request.station_id} 不是本门禁绑定的工位 {self._station_id}"),
+            )
+        if request.connector_id != self._connector_id or request.point not in self._output_points:
+            return Refused(
+                reason=WriteRefusal.TARGET_NOT_IN_STATION,
+                detail=(
+                    f"输出点位 {request.point.label}@{request.point.address} "
+                    f"不属于工位 {self._station_id} 的连接器 {self._connector_id}"
+                ),
+            )
+        authority = self._leases.status(self._station_id, now=self._clock())
         if authority.authorized:
             return None
         reason = (
@@ -348,6 +389,8 @@ class AutonomousStation:
         connector_runtimes: tuple[ConnectorRuntime, ...] = (),
         output_dispatchers: Mapping[str, OutputDispatcher] | None = None,
         output_points: Mapping[str, tuple[OutputPoint, ...]] | None = None,
+        write_lifecycle: StationWriteLifecycle | None = None,
+        diagnostics: Callable[[WriteAttempted], None] | None = None,
     ) -> None:
         self._supervisor = supervisor
         self._source = source
@@ -355,6 +398,8 @@ class AutonomousStation:
         self._connector_runtimes = connector_runtimes
         self._output_dispatchers = dict(output_dispatchers or {})
         self._output_points = dict(output_points or {})
+        self._write_lifecycle = write_lifecycle or StationWriteLifecycle()
+        self._diagnostics = diagnostics
 
     @property
     def station_id(self) -> str | None:
@@ -377,14 +422,33 @@ class AutonomousStation:
         return {connector_id: tuple(points) for connector_id, points in self._output_points.items()}
 
     def write_output(self, request: WriteRequest) -> WriteOutcome:
-        """通过本工位已组合的连接器派发一个输出点写入。"""
+        """通过本工位已组合的连接器派发一个输出点写入; 未知连接器返回结构化拒绝并产生诊断事件。"""
         dispatcher = self._output_dispatchers.get(request.connector_id)
         if dispatcher is None:
-            raise KeyError(f"output connector is not configured: {request.connector_id}")
+            refusal = Refused(
+                reason=WriteRefusal.TARGET_NOT_IN_STATION,
+                detail=(
+                    f"连接器 {request.connector_id} 未配置到工位 {self._station_id}, "
+                    "不驱动物理执行器"
+                ),
+            )
+            if self._diagnostics is not None:
+                self._diagnostics(
+                    WriteAttempted(
+                        point=request.point,
+                        state=request.state,
+                        key=request.key,
+                        actor=request.actor,
+                        outcome=refusal,
+                        replayed=False,
+                    )
+                )
+            return refusal
         return dispatcher.write(request)
 
     def close(self) -> None:
-        """关闭当前工位输入源。"""
+        """先停写再关闭当前工位输入源。"""
+        self._write_lifecycle.stop()
         self._source.close()
 
     def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
@@ -1010,15 +1074,23 @@ _CENTER_WORKER_RESTART_MAX_SECONDS = 30.0
 
 
 def _log_write_attempt(event: WriteAttempted) -> None:
-    """记录连接器写入诊断,但不记录设备凭据。"""
+    """记录连接器写入诊断,但不记录设备凭据; 拒绝带目标地址、具体原因和排障文本 (S029 AC3)。"""
+    outcome = event.outcome
+    refusal = (
+        f" reason={outcome.reason.value} detail={outcome.detail}"
+        if isinstance(outcome, Refused)
+        else ""
+    )
     _logger.info(
-        "connector write attempt key=%s actor=%s point=%s state=%s replayed=%s outcome=%s",
+        "connector write attempt key=%s actor=%s point=%s@%s state=%s replayed=%s outcome=%s%s",
         event.key,
         event.actor,
         event.point.label,
+        event.point.address,
         event.state.value,
         event.replayed,
-        type(event.outcome).__name__,
+        type(outcome).__name__,
+        refusal,
     )
 
 
@@ -1082,15 +1154,37 @@ def _build_runtime_composition(
         timeout=config.command_timeout,
     )
     disposal_ledger = state.disposal()
-    execution_gate: WriteGate = ExecutionLeaseWriteGate(state.execution_leases())
+    leases = state.execution_leases()
+    station_bindings = {
+        binding.configuration.station_id: binding for binding in runtime_configuration.stations
+    }
+    write_lifecycles = {station_id: StationWriteLifecycle() for station_id in station_bindings}
+    output_points_by_station_connector = {
+        station_id: {
+            connector_id: binding.output_points_for(connector_id)
+            for connector_id in binding.connector_ids
+        }
+        for station_id, binding in station_bindings.items()
+    }
+    # 只为已归属工位的连接器建 dispatcher: 门禁绑定真实工位/连接器/目标点位/生命周期,
+    # 不读取请求自报的 station_id。
     output_dispatchers = {
         connector_id: OutputDispatcher(
             connector=adapter,
             ledger=SQLiteWriteLedger(disposal_ledger),
             diagnostics=_log_write_attempt,
-            gate=execution_gate,
+            gate=StationOutputWriteGate(
+                station_id=connector_owners[connector_id],
+                connector_id=connector_id,
+                output_points=output_points_by_station_connector[connector_owners[connector_id]][
+                    connector_id
+                ],
+                leases=leases,
+                lifecycle=write_lifecycles[connector_owners[connector_id]],
+            ),
         )
         for connector_id, adapter in adapters.items()
+        if connector_id in connector_owners
     }
     report_reconciler = (
         None
@@ -1171,6 +1265,8 @@ def _build_runtime_composition(
                         connector_id: station_binding.output_points_for(connector_id)
                         for connector_id in station_binding.connector_ids
                     },
+                    write_lifecycle=write_lifecycles[station_config.station_id],
+                    diagnostics=_log_write_attempt,
                 )
             )
     except Exception:

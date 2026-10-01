@@ -28,6 +28,7 @@ _STATIC_MEDIA_KEYS = frozenset(
         "preview_release_delay_seconds",
         "startup_timeout_seconds",
         "transcode_threads",
+        "recording_compression_age_seconds",
     }
 )
 _EXPORT_KEYS = frozenset(
@@ -100,6 +101,8 @@ def apply_export(
     _require_keys(export, _EXPORT_KEYS, "center export")
     edge = _object(json.loads(edge_path.read_text(encoding="utf-8")), "edge configuration")
     local_media = _object(edge.get("media"), "edge media configuration")
+    # 旧本机配置可以没有原始素材窗口：合并前补上单处默认值，旧配置不因新字段失败。
+    local_media.setdefault("recording_compression_age_seconds", _default_compression_age_seconds())
     missing = _STATIC_MEDIA_KEYS - local_media.keys()
     if missing:
         raise ValueError(f"edge media configuration is missing: {', '.join(sorted(missing))}")
@@ -203,6 +206,18 @@ def _edge_media_functions() -> tuple[
 def _load_media(value: dict[str, object]) -> _MediaConfiguration:
     load_media_runtime_configuration, _, _ = _edge_media_functions()
     return load_media_runtime_configuration(value)
+
+
+def _default_compression_age_seconds() -> int:
+    """惰性读取边缘媒体配置的单处默认原始素材窗口。"""
+    try:
+        from edge_runtime.media import DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS
+    except ModuleNotFoundError:
+        source = Path(__file__).resolve().parents[1] / "apps" / "edge-runtime" / "src"
+        if str(source) not in sys.path:
+            sys.path.insert(0, str(source))
+        from edge_runtime.media import DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS
+    return DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS
 
 
 def _estimate_impact(

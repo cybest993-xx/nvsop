@@ -48,6 +48,10 @@ class RecordingMode(StrEnum):
     CONTINUOUS = "continuous"
 
 
+# 原始素材窗口默认 24 小时, 只在此定义一次 (§5.19); 压缩执行不在本阶段。
+DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS = 24 * 60 * 60
+
+
 @dataclass(frozen=True, slots=True)
 class LocalMediaCamera:
     camera_id: str
@@ -89,6 +93,8 @@ class MediaRuntimeConfiguration:
     transcode_threads: int
     recording_window_confirmation: RecordingImpact | None
     cameras: tuple[LocalMediaCamera, ...]
+    # 已老化出原始素材窗口的分段才可被压缩归档 (§5.19); 本阶段只持有配置, 不执行压缩。
+    recording_compression_age_seconds: int = DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS
 
 
 class _Process(Protocol):
@@ -127,7 +133,7 @@ def load_media_runtime_configuration(value: object) -> MediaRuntimeConfiguration
             "transcode_threads",
             "cameras",
         },
-        optional={"recording_window_confirmation"},
+        optional={"recording_window_confirmation", "recording_compression_age_seconds"},
     )
     cameras = tuple(
         _camera(item, host_id=_string(config["host_id"], "host_id"))
@@ -151,6 +157,14 @@ def load_media_runtime_configuration(value: object) -> MediaRuntimeConfiguration
         parse_recording_impact(config["recording_window_confirmation"])
         if "recording_window_confirmation" in config
         else None
+    )
+    compression_age = (
+        _positive_integer(
+            config["recording_compression_age_seconds"],
+            "recording_compression_age_seconds",
+        )
+        if "recording_compression_age_seconds" in config
+        else DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS
     )
     allow_origins = tuple(
         _origin(item, "allow_origins item")
@@ -185,6 +199,7 @@ def load_media_runtime_configuration(value: object) -> MediaRuntimeConfiguration
         transcode_threads=transcode_threads,
         recording_window_confirmation=confirmation,
         cameras=cameras,
+        recording_compression_age_seconds=compression_age,
     )
     _validate_configuration(configuration)
     return configuration
@@ -583,6 +598,8 @@ def _validate_configuration(configuration: MediaRuntimeConfiguration) -> None:
         raise ValueError("host_status is unsupported")
     if configuration.recording_window_seconds <= 0:
         raise ValueError("recording_window_seconds must be positive")
+    if configuration.recording_compression_age_seconds <= 0:
+        raise ValueError("recording_compression_age_seconds must be positive")
     if configuration.record_segment_duration_seconds <= 0:
         raise ValueError("record_segment_duration_seconds must be positive")
     if configuration.preview_release_delay_seconds < 0:
@@ -959,6 +976,7 @@ def _stream_path(value: str) -> None:
 
 
 __all__ = [
+    "DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS",
     "LocalMediaCamera",
     "MediaPathMode",
     "MediaRuntime",

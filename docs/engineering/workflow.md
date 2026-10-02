@@ -88,6 +88,7 @@ pytest targets report the slowest setup/call/teardown phases and write JUnit res
 | `make local-clean` | Delete declared build/test outputs while preserving installed environments and caches |
 | `make local-purge` | Before authorized task cleanup, also remove task-local environments, tools, caches and legacy generated paths; preserve shared caches, fixed-instance state, secrets and unknown files |
 | `make task-cleanup PR=<number> BRANCH=<branch> CANDIDATE=<sha>` | Remove one verified merged task's clean local worktree and branch; never sweep tasks |
+| `make task-session-bind SESSION=<resumable-id>` | Create or verify this worktree's `.nvsop/session-binding.json`; exclusive, idempotent for the same session, never overwrites |
 | `make pr-check PR=<number>` | Read-only machine-state preflight; never substitutes for independent review or merge authorization |
 | `make pr-land-status PR=<number>` | Read one PR landing state and next machine action; never grants authorization |
 | `make pr-land-refresh PR=<number> EXPECTED_HEAD=<sha>` | Request one conflict-free server-side base refresh guarded by the exact PR head |
@@ -253,11 +254,73 @@ make task-cleanup \
     CANDIDATE=<landing-head-sha>
 ```
 
-The command does not scan branches or historical PRs. Before any destructive command it verifies the direct local `refs/heads/agent/<owner>/<task>` tip, queries the supplied PR once for `state`, `headRefName`, `headRefOid`, `baseRefName`, and `mergeCommit`, fetches `origin main`, and verifies the recorded squash commit is retained by `origin/main`. It refuses symbolic or out-of-scope refs, a mismatched candidate, multiple registered worktrees, the primary or current worktree, dirty worktrees including ignored files, and Git read or configuration failures. A clean task worktree is removed without force; the exact local branch ref is then deleted with `git update-ref --no-deref` and its expected old SHA. Only the exact local `branch.<task>` configuration section is removed; global and similarly prefixed sections remain untouched.
+The command does not scan branches or historical PRs. Before any destructive command it verifies the direct local `refs/heads/agent/<owner>/<task>` tip, queries the supplied PR once for `state`, `headRefName`, `headRefOid`, `baseRefName`, and `mergeCommit`, fetches `origin main`, and verifies the recorded squash commit is retained by `origin/main`. It refuses symbolic or out-of-scope refs, a mismatched candidate, multiple registered worktrees, the primary or current worktree, dirty worktrees including ignored files, and Git read or configuration failures. The sole allowed ignored exception is the worktree's exact validated `.nvsop/session-binding.json`; any other ignored file, directory or symlink refuses, and a `.nvsop` root without that exact binding is unknown ignored state rather than an exception. After every check and the merge proof pass, cleanup releases the binding — the file is removed, then an emptied `.nvsop` directory — immediately before the worktree removal. These commands are not a transaction: a later failure leaves earlier changes and reports the partial result. A clean task worktree is removed without force; the exact local branch ref is then deleted with `git update-ref --no-deref` and its expected old SHA. Only the exact local `branch.<task>` configuration section is removed; global and similarly prefixed sections remain untouched.
 
 All checks finish before the first cleanup command. The individual worktree removal, ref deletion, and local configuration removal are not a multi-command transaction: if a later command fails, earlier changes remain, the command exits nonzero, and no rollback is promised. Inspect the repository and reconcile that partial result manually. The script never resets or synchronizes `main`, deletes remote refs, closes Issues, uses force deletion, or sweeps other tasks.
 
 **Done:** the explicitly supplied merged task worktree and local branch are cleaned only after the exact squash proof, and every unproved or unsafe task remains untouched. Report the command, actual result, and any partial-failure or synchronization gap.
+
+## Landing ownership and session binding
+
+Status: **normative**. This section owns the development/landing ownership state machine and the local implementation-session binding. It is a minimal workflow seam for a future queue/dispatcher, not a queue daemon, a second workflow authority or an automatic merger. Actual landing remains the one-shot CAS flow of [§4](#4-publish-the-candidate-and-evaluate-ci) and [scripts/land_pr.py](../../scripts/land_pr.py) under the bounded [PR lifecycle plan](#pr-lifecycle-approval).
+
+### States and the single writer
+
+```text
+DEVELOPMENT -- freeze + handoff --> QUEUED --> ACTIVE --> MERGED
+      ^                                          |
+      |                                          v
+      +------------- BLOCKED_* <-----------------+
+```
+
+- **DEVELOPMENT** — exactly one implementation session owns the task branch and worktree and is the only writer that may edit task code.
+- **QUEUED** — the implementation session has stopped writing and handed a frozen candidate plus approved actions to landing. Landing owns only controlled integration mutation; the implementation session stays dormant.
+- **ACTIVE** — landing performs the authorized integration actions (controlled base refresh, exact-head squash merge) against the frozen candidate. Task code is not edited here.
+- **MERGED** — the exact landing head is squash-merged and retained by `origin/main`; verified cleanup may follow.
+- **BLOCKED_CI / BLOCKED_CONFLICT / BLOCKED_REVIEW / BLOCKED_MUTATION / BLOCKED_SCOPE** — landing stops and returns repair ownership to the original implementation session. Landing never performs semantic or code repair, conflict resolution, rebase, reset or scope change.
+- **BLOCKED_AGENT_UNAVAILABLE** — the original session cannot be recovered; landing fails closed and selects no replacement.
+
+While landing is QUEUED/ACTIVE the implementation session is dormant and must not write the task branch. A BLOCKED_* outcome returns the task to DEVELOPMENT for repair; the repaired work produces a new validated candidate and is re-enqueued.
+
+### Freeze and handoff preconditions
+
+Before a task enters QUEUED, the implementation session records — and landing consumes — the exact task branch and worktree, the frozen candidate commit SHA, the target `main`, the bounded [PR lifecycle plan](#pr-lifecycle-approval) that names the authorized actions, and the applicable review/CI evidence bound to that candidate.
+
+Queue runtime and enqueue-state storage are deliberately deferred: this seam defines the ownership handoff and the local binding only. Until a dispatcher exists, the existing one-shot manual flow — a single operator running the bounded PR lifecycle plan — is the actual landing path, and nothing here fabricates an enforced queue.
+
+### Repair handoff contract
+
+A BLOCKED_* outcome produces one machine-readable private repair handoff, never a public PR comment, and carries no credentials or runtime session IDs. It is compact JSON with this shape (synthetic values):
+
+```json
+{
+  "version": 1,
+  "repository": "owner/nvsop",
+  "branch": "agent/a/task",
+  "worktree": "/abs/task-worktree",
+  "candidate": "40-hex",
+  "observed_head": "40-hex",
+  "pr": 123,
+  "current_main": "40-hex",
+  "blocked_reason": "BLOCKED_CI",
+  "failure_evidence": {"command": "make pr-land-merge", "exit_code": 1, "log": ".nvsop/artifacts/pytest/center-unit.xml"},
+  "ownership": "DEVELOPMENT"
+}
+```
+
+`blocked_reason` is exactly one of `BLOCKED_CI`, `BLOCKED_CONFLICT`, `BLOCKED_REVIEW`, `BLOCKED_MUTATION` or `BLOCKED_SCOPE`; `failure_evidence` is an object carrying the failing command, its integer exit code and an optional log path. The landing producer and the dispatcher that consumes this handoff are deliberately deferred: the current one-shot [scripts/land_pr.py](../../scripts/land_pr.py) flow does not emit it, and this section only fixes the serialization both will share.
+
+The dispatcher resolves `branch`/`worktree` to the original session through the local binding and resumes it. Before any source repair, the resumed session rechecks repository, worktree, branch, HEAD, PR, current `main`, blocked reason and failure evidence; a changed fact invalidates the handoff and requires a new decision.
+
+### Implementation-session binding
+
+`.nvsop/session-binding.json` maps one task worktree to the session that owns it. It is context lookup for dispatch and repair only — never publish, merge or scope authorization — while `.tmp/task-handoff.md` remains the continuity record. Its schema and repository-local-state rules are owned by [maintenance.md](maintenance.md#session-binding-state), and it is created or verified with:
+
+```sh
+make task-session-bind SESSION=<resumable-id>
+```
+
+Binding is required before the session's first tracked source edit. It is idempotent for the same session and refuses to overwrite an existing binding; another session cannot take over even during concurrent first binds, and the normal bind has no overwrite or force path. An unrecoverable original session is `BLOCKED_AGENT_UNAVAILABLE` and fails closed: replacement requires an explicit rebind/recovery decision after the old writer is stopped and the exact task is verified. Cleanup releases the binding only during the verified exact task cleanup of [§5.2](#52-clean-one-verified-task-worktree-and-local-branch).
 
 ## Persistent continuity
 

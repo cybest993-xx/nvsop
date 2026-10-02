@@ -8,7 +8,7 @@
 	dev-setup dev dev-status dev-logs dev-refresh dev-smoke dev-test-ui dev-down
 
 .PHONY: annotation-lock annotation-lock-check annotation-image
-.PHONY: task-cleanup
+.PHONY: task-cleanup task-session-bind
 
 LOCAL_STATE := $(CURDIR)/.nvsop
 LOCAL_CACHE := $(LOCAL_STATE)/cache
@@ -60,6 +60,11 @@ local-purge:
 task-cleanup:
 	test -n "$(PR)" && test -n "$(BRANCH)" && test -n "$(CANDIDATE)" || (echo "usage: make task-cleanup PR=<number> BRANCH=agent/<owner>/<task> CANDIDATE=<sha>" >&2; exit 2)
 	python3 scripts/cleanup_task.py --pr "$(PR)" --branch "$(BRANCH)" --candidate "$(CANDIDATE)"
+
+# 把任务 worktree 绑定到拥有它的实现会话；独占创建，不覆盖已有绑定。
+task-session-bind:
+	test -n "$(SESSION)" || (echo "usage: make task-session-bind SESSION=<resumable-id>" >&2; exit 2)
+	python3 scripts/bind_task_session.py --session "$(SESSION)"
 
 # 两个 pytest 会话分别拥有容器和缓存，不在同一数据库上并发清表。
 check-integration: sync

@@ -1,4 +1,4 @@
-.PHONY: check check-suite check-docs docs-check check-integration media-system change-size task-check ci-plan ci-tools ci-lint pr-check issue-check hooks local-clean local-purge lockfile sync policy policy-test migrations contract-base \
+.PHONY: check check-suite check-docs docs-check check-integration media-system change-size task-check ci-plan ci-tools ci-lint pr-check pr-land-status pr-land-refresh pr-land-merge issue-check hooks local-clean local-purge lockfile sync policy policy-test migrations contract-base \
 	contract-capability \
 	contracts contracts-python-check contracts-python-format contracts-python-lint \
 	contracts-python-type contracts-python-unit openapi-export openapi-compat openapi-generate \
@@ -101,6 +101,18 @@ ci-lint:
 pr-check:
 	test -n "$(PR)" || (echo "usage: make pr-check PR=<number>" >&2; exit 2)
 	python3 scripts/check_pr_readiness.py "$(PR)"
+
+pr-land-status:
+	test -n "$(PR)" || (echo "usage: make pr-land-status PR=<number>" >&2; exit 2)
+	python3 scripts/land_pr.py status --pr "$(PR)"
+
+pr-land-refresh:
+	test -n "$(PR)" -a -n "$(EXPECTED_HEAD)" || (echo "usage: make pr-land-refresh PR=<number> EXPECTED_HEAD=<sha>" >&2; exit 2)
+	python3 scripts/land_pr.py refresh --pr "$(PR)" --expected-head "$(EXPECTED_HEAD)"
+
+pr-land-merge:
+	test -n "$(PR)" -a -n "$(EXPECTED_HEAD)" || (echo "usage: make pr-land-merge PR=<number> EXPECTED_HEAD=<sha>" >&2; exit 2)
+	python3 scripts/land_pr.py merge --pr "$(PR)" --expected-head "$(EXPECTED_HEAD)"
 
 issue-check:
 	test -n "$(ISSUE)" || (echo "usage: make issue-check ISSUE=<number>" >&2; exit 2)

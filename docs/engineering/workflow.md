@@ -88,6 +88,9 @@ pytest targets report the slowest setup/call/teardown phases and write JUnit res
 | `make local-clean` | Delete declared build/test outputs while preserving installed environments and caches |
 | `make local-purge` | Before authorized retirement, also remove task-local environments, tools, caches and legacy generated paths; preserve shared caches, fixed-instance state, secrets and unknown files |
 | `make pr-check PR=<number>` | Read-only machine-state preflight; never substitutes for independent review or merge authorization |
+| `make pr-land-status PR=<number>` | Read one PR landing state and next machine action; never grants authorization |
+| `make pr-land-refresh PR=<number> EXPECTED_HEAD=<sha>` | Request one conflict-free server-side base refresh guarded by the exact PR head |
+| `make pr-land-merge PR=<number> EXPECTED_HEAD=<sha>` | Attempt one exact-head squash merge after required evidence and authorization exist |
 | `make change-size` | Advisory size report from `BASE`, default `origin/main`; also prints diff review hints; never a bound |
 | `make task-check BASE=<40hex> ALLOW='<paths>' [MAX_LINES=<N>]` | Fixed-base scope and cumulative added+deleted budget; also prints diff review hints; reports `task_check=within-bounds` or `task_check=pause` (script exits 3 on pause); not acceptance |
 | `make contracts` | Generated OpenAPI compatibility and Web client; procedure in [maintenance.md](maintenance.md#generated-contracts) |
@@ -117,6 +120,12 @@ Before merge, `make pr-check PR=<number>` may aggregate the PR head/base, `CI re
 For candidates that change architecture/Issue/mechanism/ADR authority, the module-registry manifest or shared machine contracts, the same preflight reports `dispatch_impact_review=required`. Record the actual open/ready Issue scan and dispositions in the PR template; this mechanical evidence does not replace semantic review of whether the affected set is complete.
 
 `pr-check` also reports `harness_review=required` when the candidate touches gate, policy, manifest or check-configuration entry points. Like the dispatch flag it is a preflight risk hint, never a server-enforced review or an approval; record the independent review in the PR template's existing Review section.
+
+### Serial landing without a queue service
+
+`make pr-land-status PR=<number>` is read-only and reports the PR head, base, mergeability, `CI required` and one `next_action`; the caller supplies PR order, so the repository stores no landing queue, lock, daemon state or approval registry. When `next_action=refresh`, an authorized caller may run `make pr-land-refresh PR=<number> EXPECTED_HEAD=<sha>`: one GitHub update-branch request is guarded by `expected_head_sha`, and the new head invalidates old exact-head CI/review evidence.
+
+After the exact landing head is clean, mergeable and green, required review evidence and explicit merge authorization must already exist before `make pr-land-merge PR=<number> EXPECTED_HEAD=<sha>` performs one squash-merge request guarded by that head SHA. Neither command polls, retries, resolves conflicts, edits task code, closes Issues, deletes remote refs, synchronizes `main` or cleans local worktrees. If another PR lands first, read status again and refresh the now-behind candidate; after confirmed merge and applicable Issue closure, use §5.2 cleanup. This supplies queue semantics by serializing on actual `main` state with CAS instead of a second queue service.
 
 ```sh
 git push -u origin agent/a/<task-slug>

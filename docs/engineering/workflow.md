@@ -142,7 +142,8 @@ OLD_HEAD=<expected-head-used-by-pr-land-refresh>
     STATUS="$(make -s pr-land-status PR="$PR")"
     BRANCH="$(printf '%s\n' "$STATUS" | sed -n 's/^head_branch=//p')"
     LANDING_HEAD="$(printf '%s\n' "$STATUS" | sed -n 's/^head_sha=//p')"
-    test -n "$BRANCH" && test -n "$LANDING_HEAD"
+    test -n "$BRANCH"
+    test -n "$LANDING_HEAD"
     test "$(printf '%s\n' "$STATUS" | sed -n 's/^next_action=//p')" = local-work
     test "$(git -C "$TASK_WORKTREE" branch --show-current)" = "$BRANCH"
     test "$(git -C "$TASK_WORKTREE" rev-parse HEAD)" = "$OLD_HEAD"

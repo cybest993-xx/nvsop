@@ -1,4 +1,4 @@
-.PHONY: check check-suite check-docs docs-check check-integration media-system change-size task-check ci-plan ci-tools ci-lint pr-check issue-check hooks local-clean local-purge lockfile sync policy policy-test migrations contract-base \
+.PHONY: check check-suite check-docs docs-check check-integration media-system change-size task-check ci-plan ci-tools ci-lint pr-check task-cleanup issue-check hooks local-clean local-purge lockfile sync policy policy-test migrations contract-base \
 	contract-capability \
 	contracts contracts-python-check contracts-python-format contracts-python-lint \
 	contracts-python-type contracts-python-unit openapi-export openapi-compat openapi-generate \
@@ -49,7 +49,7 @@ check-docs: sync hooks
 hooks:
 	git config core.hooksPath scripts/githooks
 
-# 日常只清输出；任务退休时才清除独占环境、工具和旧缓存。
+# 日常只清输出；任务清理时才清除独占环境、工具和旧缓存。
 local-clean:
 	python3 scripts/clean_local_artifacts.py
 
@@ -101,6 +101,10 @@ ci-lint:
 pr-check:
 	test -n "$(PR)" || (echo "usage: make pr-check PR=<number>" >&2; exit 2)
 	python3 scripts/check_pr_readiness.py "$(PR)"
+
+task-cleanup:
+	test -n "$(PR)" -a -n "$(BRANCH)" -a -n "$(CANDIDATE)" || (echo "usage: make task-cleanup PR=<number> BRANCH=agent/<owner>/<task> CANDIDATE=<sha>" >&2; exit 2)
+	python3 scripts/cleanup_task.py --pr "$(PR)" --branch "$(BRANCH)" --candidate "$(CANDIDATE)"
 
 issue-check:
 	test -n "$(ISSUE)" || (echo "usage: make issue-check ISSUE=<number>" >&2; exit 2)

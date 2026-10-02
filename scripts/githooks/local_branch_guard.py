@@ -125,7 +125,8 @@ def is_main_loose_ref_prune(root: Path, update: RefUpdate) -> bool:
     if is_zero_oid(update.old) or not is_zero_oid(update.new):
         return False
     common_dir = git_common_dir(root)
-    # Git files backend 在 pack-refs 提交 packed 副本后才删除 loose ref；真实语义删除会持有 packed-refs.lock。
+    # Git files backend 会先提交 packed 副本，再删除 loose ref；
+    # 真实语义删除会在这个 prepared 阶段持有 packed-refs.lock。
     if (common_dir / "packed-refs.lock").exists():
         return False
     return packed_ref_oid(root, update.ref) == update.old

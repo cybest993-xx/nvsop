@@ -25,7 +25,11 @@ Actions: `N/A`
 
 ## Readiness and remaining work
 
-<!-- Record exact-head CI, any required independent review and merge authorization. Merge authorization is the user's explicit authorization of the merge for the exact candidate per workflow.md §3; a full PR lifecycle approval that names this merge satisfies it, and confirming a candidate alone is not merge authorization. Codex is optional, non-blocking feedback; record it only if requested or available. Follow docs/engineering/workflow.md. -->
+<!-- Record the bounded PR lifecycle approval, its authorization-root candidate, the authorized action scope, the current landing head after any controlled refresh, exact-head CI, any required independent review and merge authorization. A controlled refresh may change Landing head without changing Authorization-root candidate, but the refreshed head must re-establish affected technical evidence. Codex is optional, non-blocking feedback. Follow docs/engineering/workflow.md. -->
+PR lifecycle approval: `pending`
+Authorization-root candidate: `N/A`
+Authorized lifecycle actions: `N/A`
+Landing head: `pending`
 CI required: `pending`
 Independent Spec + Standards review (when required): `not-required`
 Codex review (optional): `not-requested`

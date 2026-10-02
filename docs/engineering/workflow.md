@@ -113,7 +113,7 @@ After the user has seen the explicit candidate, the actual diff, the applicable 
 Publication, integration refresh, merge, Issue closure and task cleanup are one bounded delivery, not one approval per action. One explicit user confirmation of a presented **PR lifecycle plan** authorizes every action the plan names, in one pass. The plan is bounded and names:
 
 - the confirmed task candidate SHA, the task branch and worktree, and the target `main`;
-- the action scope: push the task branch, create or update its PR against `main`, perform a controlled conflict-free base refresh when `main` advances, observe `CI required` on each landing head, perform the manual squash merge, close the named Issue(s) when their closure criteria are satisfied — or `none` — and then clean the exact task worktree and local branch;
+- the action scope: push the task branch, create or update its PR against `main`, use the versioned serial-landing entrypoints for any controlled conflict-free base refresh and exact-head merge, observe `CI required` on each landing head, close the named Issue(s) when their closure criteria are satisfied — or `none` — and then use the versioned single-task cleanup entrypoint for the exact task worktree and local branch;
 - the exact cleanup targets: only task-generated reproducible artifacts and the verified merged task's local branch and worktree.
 
 Remote branch deletion and primary `main` synchronization are excluded unless the plan names them explicitly. The user may authorize a subset instead; every excluded action remains unauthorized. A mere implementation or "continue" request and an agent-authored plan are not lifecycle approval.
@@ -122,7 +122,7 @@ Every technical gate stays a precondition, never a second human approval gate: t
 
 The confirmed task candidate is the authorization root. A later landing head inherits that approval only when the authorized delivery flow itself performs a server-side conflict-free base refresh against the exact expected prior head, without manual conflict resolution or task-code edits. That mechanical integration transition does not require another user confirmation, but its new head must satisfy the technical gates above. Any other head change, manual conflict resolution, task-code or scope change, added action, or changed target invalidates the plan and requires revalidation plus a new approval. Later facts the plan already anticipated are not changes: phase completion, a green CI run, the PR number allocated by the approved create, the squash merge commit becoming known, and a previously approved cleanup becoming provably safe.
 
-Sequence once approved: publish and open or update the PR ([§4](#4-publish-the-candidate-and-evaluate-ci)) → when required, perform the controlled base refresh and re-establish affected evidence → observe `CI required` on the exact landing head ([§4](#ci-gates)) → squash-merge on green and confirm the recorded commit is retained by `origin/main` ([§5.1](#51-confirm-the-exact-squash-merge)) → close the named Issues when their closure criteria are satisfied ([issues.md](issues.md#close-with-evidence)) → clean the verified task worktree and local branch. Completion is observable with the verified delivery state; local cleanup may remain explicitly pending when the worktree cannot be removed safely.
+Sequence once approved: publish and open or update the PR ([§4](#4-publish-the-candidate-and-evaluate-ci)) → run `make pr-land-status PR=<number>` and follow §4's serial-landing procedure; when it requires refresh, use the exact reported head with `pr-land-refresh`, apply only the documented guarded local fast-forward, then re-establish affected evidence → observe `CI required` on the exact landing head ([§4](#ci-gates)) → with every gate satisfied, use `pr-land-merge` on that exact head → confirm the recorded squash commit is retained by `origin/main` ([§5.1](#51-confirm-the-exact-squash-merge)) → close the named Issues when their closure criteria are satisfied ([issues.md](issues.md#close-with-evidence)) → run `make task-cleanup` for the verified task. Completion is observable with the verified delivery state; local cleanup may remain explicitly pending when the worktree cannot be removed safely.
 
 **Done:** findings are resolved or explicitly blocking, and evidence covers the candidate's code, tests, configuration, dependencies and relevant external inputs. Evidence does not survive changes to those covered inputs.
 
@@ -173,7 +173,9 @@ All accepted pull requests are merged manually with squash after the exact candi
 
 ## 5. Merge and clean up
 
-Merges require the [PR lifecycle plan](#pr-lifecycle-approval)'s authorization and the required CI/review evidence. The same plan carries the exact cleanup and the named Issue closure, so an approved full lifecycle adds no per-action approval. Use GitHub's squash merge path after the active `main` ruleset is satisfied; there is no repository-owned automatic AI merge path. Keep merge confirmation separate from local task cleanup, and stop all task writers before removing a task worktree or branch.
+When the approved [PR lifecycle plan](#pr-lifecycle-approval) names merge, named Issue closure and exact task cleanup, that one approval covers those delivery actions; it does not add a per-action confirmation step, and every excluded action remains unauthorized.
+
+Merges require explicit authorization and the required CI/review evidence. Use GitHub's squash merge path after the active `main` ruleset is satisfied; there is no repository-owned automatic AI merge path. Keep merge confirmation separate from local task retirement, and stop all task writers before starting cleanup.
 
 ### 5.1 Confirm the exact squash merge
 
@@ -204,11 +206,13 @@ ACCEPTED_ORIGIN_MAIN=<accepted-origin-main-sha>
 )
 ```
 
-Stop when the target branch is not `main`, when any scoped Git read fails, when the histories have diverged, when `origin/main` is not `ACCEPTED_ORIGIN_MAIN`, or when the update would overwrite an ignored path; never fall back to merge, rebase, reset or stash. Never reset a task worktree. This synchronization is a separate manual operation with its own authorization, not implied by implementation, merge or cleanup work and not covered by a [PR lifecycle plan](#pr-lifecycle-approval) that does not name it; the versioned `retire_task.py` cleanup command never performs it. Use `make local-purge` when a task worktree must remove reproducible artifacts before cleanup; the command deliberately preserves shared external caches, fixed-instance state and unknown ignored files.
+Primary `main` synchronization is outside a PR lifecycle approval unless the presented plan names that action explicitly; task cleanup never implies it.
 
-### 5.2 Clean one verified task worktree and local branch
+Stop when the target branch is not `main`, when any scoped Git read fails, when the histories have diverged, when `origin/main` is not `ACCEPTED_ORIGIN_MAIN`, or when the update would overwrite an ignored path; never fall back to merge, rebase, reset or stash. Never reset a task worktree. This synchronization is a separate manual operation with its own authorization, not implied by implementation or merge work; `retire_task.py` never performs it. Use `make local-purge` when a task worktree must remove reproducible artifacts before retirement; the command deliberately preserves shared external caches, fixed-instance state and unknown ignored files.
 
-With writers stopped, run the versioned single-task command from a different worktree and provide the exact reviewed head SHA. A task with no unique commit, or whose tip still equals its starting main commit, is not a cleanup candidate on that basis; never use a progress commit as a substitute for writer coordination or exact merge proof.
+### 5.2 Retire one verified task
+
+With writers stopped, run the versioned single-task command from a different worktree and provide the exact reviewed head SHA. A task with no unique commit, or whose tip still equals its starting main commit, is not a retirement candidate on that basis; never use a progress commit as a substitute for writer coordination or exact merge proof.
 
 ```bash
 python3 scripts/retire_task.py \
@@ -221,7 +225,7 @@ The command does not scan branches or historical PRs. Before any destructive com
 
 All checks finish before the first cleanup command. The individual worktree removal, ref deletion, and local configuration removal are not a multi-command transaction: if a later command fails, earlier changes remain, the command exits nonzero, and no rollback is promised. Inspect the repository and reconcile that partial result manually. The script never resets or synchronizes `main`, deletes remote refs, closes Issues, uses force deletion, or sweeps other tasks.
 
-**Done:** the explicitly supplied merged task worktree and local branch are cleaned only after the exact squash proof, and every unproved or unsafe task remains untouched. Report the command, actual result, and any partial-failure or synchronization gap.
+**Done:** the explicitly supplied merged task is retired only after the exact squash proof, and every unproved or unsafe task remains untouched. Report the command, actual result, and any partial-failure or synchronization gap.
 
 ## Persistent continuity
 

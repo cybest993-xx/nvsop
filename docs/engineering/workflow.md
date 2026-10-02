@@ -126,7 +126,7 @@ The confirmed task candidate is the authorization root. A later landing head inh
 
 This policy/routing layer must land only after the versioned `pr-land-status`, `pr-land-refresh`, `pr-land-merge` and `task-cleanup` entrypoints exist on the target `main`. If any prerequisite is absent, stop instead of merging documentation that routes agents to unavailable commands.
 
-Sequence once approved: publish and open or update the PR ([§4](#4-publish-the-candidate-and-evaluate-ci)) → run `make pr-land-status PR=<number>` and follow §4's serial-landing procedure; when it requires refresh, run `make pr-land-refresh PR=<number> EXPECTED_HEAD=<current-pr-head>`, apply only the documented guarded local fast-forward, then re-establish affected evidence → observe `CI required` on the exact landing head ([§4](#ci-gates)) → with every gate satisfied, run `make pr-land-merge PR=<number> EXPECTED_HEAD=<landing-head>` → confirm the recorded squash commit is retained by `origin/main` ([§5.1](#51-confirm-the-exact-squash-merge)) → close the named Issues when their closure criteria are satisfied ([issues.md](issues.md#close-with-evidence)) → run `make task-cleanup PR=<number> BRANCH=agent/<owner>/<task> CANDIDATE=<reviewed-head-sha>` for the verified task. Completion is observable with the verified delivery state; local cleanup may remain explicitly pending when the worktree cannot be removed safely.
+Sequence once approved: publish and open or update the PR ([§4](#4-publish-the-candidate-and-evaluate-ci)) → run `make pr-land-status PR=<number>` and follow §4's serial-landing procedure; when it requires refresh, run `make pr-land-refresh PR=<number> EXPECTED_HEAD=<current-pr-head>`, apply only the documented guarded local fast-forward, then re-establish affected evidence → observe `CI required` on the exact landing head ([§4](#ci-gates)) → with every gate satisfied, run `make pr-land-merge PR=<number> EXPECTED_HEAD=<landing-head>` → confirm the recorded squash commit is retained by `origin/main` ([§5.1](#51-confirm-the-exact-squash-merge)) → close the named Issues when their closure criteria are satisfied ([issues.md](issues.md#close-with-evidence)) → run `make task-cleanup PR=<number> BRANCH=agent/<owner>/<task> CANDIDATE=<landing-head-sha>` for the verified task. Completion is observable with the verified delivery state; local cleanup may remain explicitly pending when the worktree cannot be removed safely.
 
 ## 4. Publish the candidate and evaluate CI
 
@@ -140,6 +140,37 @@ For candidates that change architecture/Issue/mechanism/ADR authority, the modul
 git push -u origin agent/a/<task-slug>
 gh pr create --base main --head agent/a/<task-slug>
 ```
+
+### Serial landing without a queue service
+
+`make pr-land-status PR=<number>` is read-only and reports the PR head, base, mergeability, `CI required` and one `next_action`; the caller supplies PR order, so the repository stores no landing queue, lock, daemon state or approval registry. When `next_action=refresh`, an authorized caller may run `make pr-land-refresh PR=<number> EXPECTED_HEAD=<sha>`: one GitHub update-branch request is guarded by `expected_head_sha`, and the new head invalidates old exact-head CI/review evidence.
+
+A successful refresh advances the remote PR head but intentionally leaves the local task branch at the old head, so the next status may report `local_candidate=mismatch` / `next_action=local-work`. Only when that mismatch immediately follows the authorized refresh, fast-forward the clean task worktree to the exact refreshed PR head; never substitute `pull`, rebase, reset or a locally created merge commit:
+
+```bash
+PR=<pr-number>
+TASK_WORKTREE=<task-worktree>
+OLD_HEAD=<expected-head-used-by-pr-land-refresh>
+(
+    set -eu
+    STATUS="$(make -s pr-land-status PR="$PR")"
+    BRANCH="$(printf '%s\n' "$STATUS" | sed -n 's/^head_branch=//p')"
+    LANDING_HEAD="$(printf '%s\n' "$STATUS" | sed -n 's/^head_sha=//p')"
+    test -n "$BRANCH" && test -n "$LANDING_HEAD"
+    test "$(printf '%s\n' "$STATUS" | sed -n 's/^next_action=//p')" = local-work
+    test "$(git -C "$TASK_WORKTREE" branch --show-current)" = "$BRANCH"
+    test "$(git -C "$TASK_WORKTREE" rev-parse HEAD)" = "$OLD_HEAD"
+    test -z "$(git -C "$TASK_WORKTREE" status --porcelain=v1 --untracked-files=all)"
+    git -C "$TASK_WORKTREE" fetch origin "$BRANCH"
+    test "$(git -C "$TASK_WORKTREE" rev-parse FETCH_HEAD)" = "$LANDING_HEAD"
+    git -C "$TASK_WORKTREE" merge-base --is-ancestor "$OLD_HEAD" "$LANDING_HEAD"
+    git -C "$TASK_WORKTREE" merge --ff-only --no-overwrite-ignore "$LANDING_HEAD"
+)
+```
+
+Any failed guard or non-fast-forward relation stops landing. The refreshed head must re-establish exact-head CI and any base-sensitive review evidence before merge.
+
+After the exact landing head is clean, mergeable and green, required review evidence and lifecycle merge authorization must already exist before `make pr-land-merge PR=<number> EXPECTED_HEAD=<sha>` performs one squash-merge request guarded by that head SHA. Neither command polls, retries, resolves conflicts, edits task code, closes Issues, deletes remote refs, synchronizes `main` or cleans local worktrees. If another PR lands first, read status again and refresh the now-behind candidate; after confirmed merge and applicable Issue closure, use §5.2 cleanup. Together with the documented server ruleset that requires an up-to-date branch, this supplies serial landing semantics against actual `main` state with CAS instead of a second queue service; the repository scripts alone are not a global queue authority.
 
 ### CI gates
 
@@ -169,13 +200,13 @@ Evaluate any concrete Codex findings as review feedback and address confirmed de
 
 The active server-side `main` ruleset is the mechanical merge boundary. It requires a pull request, successful `CI required`, an up-to-date branch before merge and resolved review conversations; force pushes and branch deletion are blocked. Repository-policy, CI, architecture, shared-contract and other critical changes still require the consolidated independent read-only Spec + Standards review from section 3. This review may be performed by a separate read-only subagent; Codex is not an additional requirement.
 
-All accepted pull requests are merged manually with squash after the exact candidate satisfies the required CI and review evidence and the [PR lifecycle plan](#pr-lifecycle-approval) authorizes the merge. Do not enable a repository workflow that treats any AI verdict as merge authorization or races GitHub's branch rules.
+All accepted pull requests are merged manually with squash after the exact landing head satisfies the required CI and review evidence and the [PR lifecycle plan](#pr-lifecycle-approval) authorizes the merge. Do not enable a repository workflow that treats any AI verdict as merge authorization or races GitHub's branch rules.
 
-**Done:** the published branch names the verified candidate, PR base is `main`, the final candidate has green `CI required`, required independent review is complete, required conversations are resolved, and the merge is covered by an explicit [PR lifecycle plan](#pr-lifecycle-approval). Earlier CI or review evidence does not transfer across candidate changes.
+**Done:** the published branch names the verified landing head, PR base is `main`, that exact landing head has green `CI required`, required independent review is complete, required conversations are resolved, and the merge is covered by an explicit [PR lifecycle plan](#pr-lifecycle-approval). Earlier CI or review evidence does not transfer across candidate changes.
 
 ## 5. Merge and clean up
 
-Merges require explicit authorization and the required CI/review evidence. Use GitHub's squash merge path after the active `main` ruleset is satisfied; there is no repository-owned automatic AI merge path. Keep merge confirmation separate from local task retirement, and stop all task writers before starting cleanup.
+Merges require explicit authorization and the required CI/review evidence. Use GitHub's squash merge path after the active `main` ruleset is satisfied; there is no repository-owned automatic AI merge path. Keep merge confirmation separate from local task cleanup, and stop all task writers before starting cleanup.
 
 ### 5.1 Confirm the exact squash merge
 
@@ -187,7 +218,7 @@ gh pr view <pr-number> --json state,headRefName,headRefOid,baseRefName,mergeComm
 git merge-base --is-ancestor <merge-commit-oid> origin/main
 ```
 
-Continue only when the response is `MERGED`, its `baseRefName` is `main`, its `headRefName` and `headRefOid` equal the reviewed branch and candidate SHA, its `mergeCommit.oid` is present, and that recorded commit is retained by `origin/main`. A squash merge does not make the pre-squash candidate an ancestor of `main`; do not substitute that check. This confirmation is read-only evidence for the operator, not shared state consumed by the cleanup command.
+Continue only when the response is `MERGED`, its `baseRefName` is `main`, its `headRefName` and `headRefOid` equal the reviewed branch and exact landing-head SHA, its `mergeCommit.oid` is present, and that recorded commit is retained by `origin/main`. A squash merge does not make the pre-squash landing head an ancestor of `main`; do not substitute that check. This confirmation is read-only evidence for the operator, not shared state consumed by the cleanup command.
 
 If the primary checkout must be synchronized, identify the dedicated primary `main` worktree from `git worktree list --porcelain` and record the accepted `origin/main` commit as `ACCEPTED_ORIGIN_MAIN`. Tracked, staged and ordinary untracked changes block synchronization; ignored personal configuration and caches that the update does not touch are preserved as they are and do not block it. Synchronize only by fast-forwarding that exact target:
 
@@ -210,13 +241,13 @@ Stop when the target branch is not `main`, when any scoped Git read fails, when 
 
 ### 5.2 Clean one verified task worktree and local branch
 
-With writers stopped, run the versioned single-task command from a different worktree and provide the exact reviewed head SHA. A task with no unique commit, or whose tip still equals its starting main commit, is not a cleanup candidate on that basis; never use a progress commit as a substitute for writer coordination or exact merge proof.
+With writers stopped, run the versioned single-task command from a different worktree and provide the exact reviewed landing-head SHA. A task with no unique commit, or whose tip still equals its starting main commit, is not a cleanup candidate on that basis; never use a progress commit as a substitute for writer coordination or exact merge proof.
 
 ```bash
 make task-cleanup \
     PR=<pr-number> \
     BRANCH=agent/<owner>/<task> \
-    CANDIDATE=<reviewed-head-sha>
+    CANDIDATE=<landing-head-sha>
 ```
 
 The command does not scan branches or historical PRs. Before any destructive command it verifies the direct local `refs/heads/agent/<owner>/<task>` tip, queries the supplied PR once for `state`, `headRefName`, `headRefOid`, `baseRefName`, and `mergeCommit`, fetches `origin main`, and verifies the recorded squash commit is retained by `origin/main`. It refuses symbolic or out-of-scope refs, a mismatched candidate, multiple registered worktrees, the primary or current worktree, dirty worktrees including ignored files, and Git read or configuration failures. A clean task worktree is removed without force; the exact local branch ref is then deleted with `git update-ref --no-deref` and its expected old SHA. Only the exact local `branch.<task>` configuration section is removed; global and similarly prefixed sections remain untouched.

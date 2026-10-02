@@ -125,6 +125,24 @@ For candidates that change architecture/Issue/mechanism/ADR authority, the modul
 
 `make pr-land-status PR=<number>` is read-only and reports the PR head, base, mergeability, `CI required` and one `next_action`; the caller supplies PR order, so the repository stores no landing queue, lock, daemon state or approval registry. When `next_action=refresh`, an authorized caller may run `make pr-land-refresh PR=<number> EXPECTED_HEAD=<sha>`: one GitHub update-branch request is guarded by `expected_head_sha`, and the new head invalidates old exact-head CI/review evidence.
 
+A successful refresh advances the remote PR head but intentionally leaves the local task branch at the old head, so the next status may report `local_candidate=mismatch` / `next_action=local-work`. Only when that mismatch immediately follows the authorized refresh, fast-forward the clean task worktree to the exact refreshed PR head; never substitute `pull`, rebase, reset or a locally created merge commit:
+
+```bash
+TASK_WORKTREE=<task-worktree>
+BRANCH=agent/<owner>/<task>
+OLD_HEAD=<previous_head-from-pr-land-refresh>
+LANDING_HEAD=<current-head-from-pr-land-status>
+test "$(git -C "$TASK_WORKTREE" branch --show-current)" = "$BRANCH"
+test "$(git -C "$TASK_WORKTREE" rev-parse HEAD)" = "$OLD_HEAD"
+test -z "$(git -C "$TASK_WORKTREE" status --porcelain=v1 --untracked-files=all)"
+git -C "$TASK_WORKTREE" fetch origin "$BRANCH"
+test "$(git -C "$TASK_WORKTREE" rev-parse FETCH_HEAD)" = "$LANDING_HEAD"
+git -C "$TASK_WORKTREE" merge-base --is-ancestor "$OLD_HEAD" "$LANDING_HEAD"
+git -C "$TASK_WORKTREE" merge --ff-only --no-overwrite-ignore "$LANDING_HEAD"
+```
+
+Any failed guard or non-fast-forward relation stops landing. The refreshed head must re-establish exact-head CI and any base-sensitive review evidence before merge.
+
 After the exact landing head is clean, mergeable and green, required review evidence and explicit merge authorization must already exist before `make pr-land-merge PR=<number> EXPECTED_HEAD=<sha>` performs one squash-merge request guarded by that head SHA. Neither command polls, retries, resolves conflicts, edits task code, closes Issues, deletes remote refs, synchronizes `main` or cleans local worktrees. If another PR lands first, read status again and refresh the now-behind candidate; after confirmed merge and applicable Issue closure, use §5.2 cleanup. This supplies queue semantics by serializing on actual `main` state with CAS instead of a second queue service.
 
 ```sh

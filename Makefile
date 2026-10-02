@@ -107,11 +107,11 @@ pr-land-status:
 	python3 scripts/land_pr.py status --pr "$(PR)"
 
 pr-land-refresh:
-	test -n "$(PR)" -a -n "$(EXPECTED_HEAD)" || (echo "usage: make pr-land-refresh PR=<number> EXPECTED_HEAD=<sha>" >&2; exit 2)
+	test -n "$(PR)" && test -n "$(EXPECTED_HEAD)" || (echo "usage: make pr-land-refresh PR=<number> EXPECTED_HEAD=<sha>" >&2; exit 2)
 	python3 scripts/land_pr.py refresh --pr "$(PR)" --expected-head "$(EXPECTED_HEAD)"
 
 pr-land-merge:
-	test -n "$(PR)" -a -n "$(EXPECTED_HEAD)" || (echo "usage: make pr-land-merge PR=<number> EXPECTED_HEAD=<sha>" >&2; exit 2)
+	test -n "$(PR)" && test -n "$(EXPECTED_HEAD)" || (echo "usage: make pr-land-merge PR=<number> EXPECTED_HEAD=<sha>" >&2; exit 2)
 	python3 scripts/land_pr.py merge --pr "$(PR)" --expected-head "$(EXPECTED_HEAD)"
 
 issue-check:

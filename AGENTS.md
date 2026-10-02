@@ -7,7 +7,7 @@ NVSOP is the SOP compliance product monorepo. Verify actual code, configuration,
 Read guidance only when its trigger applies, expanding for affected callers or conflicting evidence:
 
 - **Plan or investigate:** deliver findings or the requested plan; start edits only when requested.
-- **Implement code or scripts:** read [coding.md](docs/engineering/coding.md) and the implementation/verification sections of [workflow.md](docs/engineering/workflow.md). Locate the public entry, affected callers and existing tests first.
+- **Implement code or scripts:** read [coding.md](docs/engineering/coding.md) and the implementation/verification sections of [workflow.md](docs/engineering/workflow.md). Locate the public entry, affected callers and existing tests first, and bind this task worktree to the session before the first tracked source edit ([landing ownership and session binding](docs/engineering/workflow.md#landing-ownership-and-session-binding)).
 - **Change repository shape, ownership or dependencies between modules:** read [architecture.md](docs/engineering/architecture.md).
 - **Add or change repository-local generated/ignored state; change CI, generated contracts, dependencies or vendor code:** read [maintenance.md](docs/engineering/maintenance.md) and [workflow.md](docs/engineering/workflow.md).
 - **Write, move or delete documentation/instructions:** read [documentation.md](docs/engineering/documentation.md) and the applicable validation/review sections of [workflow.md](docs/engineering/workflow.md).

@@ -11,6 +11,14 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
+
+from bind_task_session import (
+    BINDING_RELATIVE_PATH,
+    BindingError,
+    canonical_worktree,
+    load_binding,
+)
 
 FULL_OBJECT_ID = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 
@@ -132,10 +140,39 @@ def current_worktree() -> str:
     return canonical_path(root)
 
 
+def check_ignored_binding(worktree_path: str, branch: str) -> None:
+    """只允许唯一一个与本任务精确匹配的忽略状态：会话绑定文件。"""
+    root = canonical_worktree(worktree_path)
+    nvsop = Path(root) / BINDING_RELATIVE_PATH.parent
+    if not nvsop.exists() and not nvsop.is_symlink():
+        return
+    if nvsop.is_symlink() or not nvsop.is_dir():
+        raise CleanupTaskError(".nvsop must be a real directory")
+    children = sorted(nvsop.iterdir(), key=lambda item: item.name)
+    if not children:
+        raise CleanupTaskError(
+            "task worktree has an unknown ignored .nvsop root without a session binding"
+        )
+    if [child.name for child in children] != [BINDING_RELATIVE_PATH.name]:
+        raise CleanupTaskError("task worktree has unexpected ignored state under .nvsop")
+    binding_file = children[0]
+    if binding_file.is_symlink() or not binding_file.is_file():
+        raise CleanupTaskError("session binding must be a regular file")
+    try:
+        binding = load_binding(binding_file)
+    except BindingError as exc:
+        raise CleanupTaskError(f"invalid session binding: {exc}") from exc
+    if binding["branch"] != branch:
+        raise CleanupTaskError("session binding branch does not match the task branch")
+    if binding["worktree"] != root:
+        raise CleanupTaskError("session binding worktree does not match the task worktree")
+
+
 def check_task_worktree(
     worktree: Worktree,
     task_ref: str,
     task_tip: str,
+    branch: str,
     current_path: str,
     primary_path: str,
 ) -> None:
@@ -163,8 +200,24 @@ def check_task_worktree(
         "--untracked-files=all",
         "--ignored=matching",
     )
-    if status:
-        raise CleanupTaskError("task worktree is not clean, including ignored files")
+    for line in output_text(status).splitlines():
+        if not line:
+            continue
+        if line[:2] != "!!" or line[3:] != f"{BINDING_RELATIVE_PATH.parent}/":
+            raise CleanupTaskError("task worktree is not clean, including ignored files")
+    check_ignored_binding(worktree.path, branch)
+
+
+def release_binding(worktree_path: str) -> None:
+    """只在已验证的清理中释放绑定；先删文件，再删空的 .nvsop 目录。"""
+    nvsop = Path(canonical_worktree(worktree_path)) / BINDING_RELATIVE_PATH.parent
+    if nvsop.is_symlink() or not nvsop.is_dir():
+        return
+    binding_file = nvsop / BINDING_RELATIVE_PATH.name
+    if binding_file.is_file() and not binding_file.is_symlink():
+        binding_file.unlink()
+    if not any(nvsop.iterdir()):
+        nvsop.rmdir()
 
 
 def has_local_branch_config(branch: str) -> bool:
@@ -229,7 +282,9 @@ def cleanup_task(pr: int, branch: str, candidate: str) -> None:
     if len(task_worktrees) > 1:
         raise CleanupTaskError("requested branch is registered in multiple worktrees")
     if task_worktrees:
-        check_task_worktree(task_worktrees[0], task_ref, task_tip, current_path, primary_path)
+        check_task_worktree(
+            task_worktrees[0], task_ref, task_tip, branch, current_path, primary_path
+        )
 
     local_config = has_local_branch_config(branch)
     merge_commit = verify_pull_request(pull_request(pr), branch, candidate)
@@ -237,6 +292,7 @@ def cleanup_task(pr: int, branch: str, candidate: str) -> None:
     git("merge-base", "--is-ancestor", merge_commit, "origin/main")
 
     if task_worktrees:
+        release_binding(task_worktrees[0].path)
         git("worktree", "remove", "--", task_worktrees[0].path)
     git("update-ref", "--no-deref", "-d", task_ref, task_tip)
     if local_config:

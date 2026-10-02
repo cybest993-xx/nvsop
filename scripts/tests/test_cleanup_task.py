@@ -35,8 +35,9 @@ class CleanupTaskTest(unittest.TestCase):
         self.git("init", "--quiet", "-b", "main")
         self.git("config", "user.name", "Cleanup task test")
         self.git("config", "user.email", "cleanup-task@example.invalid")
+        (self.repo / ".gitignore").write_text(".nvsop/\n", encoding="utf-8")
         (self.repo / "base.txt").write_text("base\n", encoding="utf-8")
-        self.git("add", "base.txt")
+        self.git("add", ".gitignore", "base.txt")
         self.git("commit", "--quiet", "-m", "base")
         self.base = self.git("rev-parse", "HEAD")
 
@@ -338,6 +339,123 @@ class CleanupTaskTest(unittest.TestCase):
             result = self.run_cli(branch, candidate, merge_commit)
         finally:
             config.write_bytes(original_config)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assert_branch_exists(branch)
+        self.assertTrue(task.exists())
+        self.assertFalse(self.gh_calls.exists())
+
+    def write_binding(
+        self, target: Path, branch: str, *, session: str = "session-a", **overrides: object
+    ) -> Path:
+        directory = target / ".nvsop"
+        directory.mkdir(parents=True, exist_ok=True)
+        binding: dict[str, object] = {
+            "version": 1,
+            "session_id": session,
+            "branch": branch,
+            "worktree": os.path.realpath(target),
+        }
+        binding.update(overrides)
+        path = directory / "session-binding.json"
+        path.write_text(json.dumps(binding, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        return path
+
+    def test_clean_accepts_validated_binding(self) -> None:
+        branch = "agent/a/demo"
+        candidate, merge_commit, task = self.make_merged_task(branch)
+        self.write_binding(task, branch)
+
+        result = self.run_cli(branch, candidate, merge_commit)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assert_branch_absent(branch)
+        self.assertFalse(task.exists())
+        self.assert_gh_called_once()
+
+    def test_malformed_binding_is_preserved(self) -> None:
+        branch = "agent/a/demo"
+        candidate, merge_commit, task = self.make_merged_task(branch)
+        self.write_binding(task, branch)
+        (task / ".nvsop" / "session-binding.json").write_text("{not json", encoding="utf-8")
+
+        result = self.run_cli(branch, candidate, merge_commit)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assert_branch_exists(branch)
+        self.assertTrue(task.exists())
+        self.assertFalse(self.gh_calls.exists())
+
+    def test_mismatched_binding_branch_is_preserved(self) -> None:
+        branch = "agent/a/demo"
+        candidate, merge_commit, task = self.make_merged_task(branch)
+        self.write_binding(task, "agent/a/other")
+
+        result = self.run_cli(branch, candidate, merge_commit)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assert_branch_exists(branch)
+        self.assertTrue(task.exists())
+        self.assertFalse(self.gh_calls.exists())
+
+    def test_mismatched_binding_worktree_is_preserved(self) -> None:
+        branch = "agent/a/demo"
+        candidate, merge_commit, task = self.make_merged_task(branch)
+        self.write_binding(task, branch, worktree=str(self.root / "elsewhere"))
+
+        result = self.run_cli(branch, candidate, merge_commit)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assert_branch_exists(branch)
+        self.assertTrue(task.exists())
+        self.assertFalse(self.gh_calls.exists())
+
+    def test_binding_with_untracked_dirt_is_preserved(self) -> None:
+        branch = "agent/a/demo"
+        candidate, merge_commit, task = self.make_merged_task(branch)
+        self.write_binding(task, branch)
+        (task / "untracked.txt").write_text("keep\n", encoding="utf-8")
+
+        result = self.run_cli(branch, candidate, merge_commit)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assert_branch_exists(branch)
+        self.assertTrue(task.exists())
+        self.assertFalse(self.gh_calls.exists())
+
+    def test_binding_with_other_ignored_state_is_preserved(self) -> None:
+        branch = "agent/a/demo"
+        candidate, merge_commit, task = self.make_merged_task(branch)
+        self.write_binding(task, branch)
+        (self.repo / ".git" / "info" / "exclude").write_text("other.txt\n", encoding="utf-8")
+        (task / "other.txt").write_text("keep\n", encoding="utf-8")
+
+        result = self.run_cli(branch, candidate, merge_commit)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assert_branch_exists(branch)
+        self.assertTrue(task.exists())
+        self.assertFalse(self.gh_calls.exists())
+
+    def test_empty_unknown_ignored_directory_is_preserved(self) -> None:
+        branch = "agent/a/demo"
+        candidate, merge_commit, task = self.make_merged_task(branch)
+        self.write_binding(task, branch)
+        (task / ".nvsop" / "unknown").mkdir()
+
+        result = self.run_cli(branch, candidate, merge_commit)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assert_branch_exists(branch)
+        self.assertTrue(task.exists())
+        self.assertFalse(self.gh_calls.exists())
+
+    def test_empty_unknown_nvsop_root_is_preserved(self) -> None:
+        branch = "agent/a/demo"
+        candidate, merge_commit, task = self.make_merged_task(branch)
+        (task / ".nvsop").mkdir()
+
+        result = self.run_cli(branch, candidate, merge_commit)
 
         self.assertNotEqual(0, result.returncode)
         self.assert_branch_exists(branch)

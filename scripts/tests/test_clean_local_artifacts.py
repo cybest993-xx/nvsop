@@ -37,6 +37,14 @@ class CleanLocalArtifactsTest(unittest.TestCase):
         self.assertFalse(output.exists())
         self.assertTrue(all(path.exists() for path in preserved))
 
+    def test_session_binding_survives_clean_and_purge(self) -> None:
+        binding = self.write(".nvsop/session-binding.json", '{"version": 1}')
+
+        clean(self.root)
+        self.assertTrue(binding.exists())
+        clean(self.root, purge=True)
+        self.assertTrue(binding.exists())
+
     def test_purge_unlinks_legacy_cache_without_deleting_shared_content(self) -> None:
         shared = self.write("shared-cache/wheel", "keep")
         cache = self.root / ".nvsop/cache"

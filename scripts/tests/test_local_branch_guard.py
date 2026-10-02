@@ -57,6 +57,13 @@ class LocalBranchGuardTest(unittest.TestCase):
         self.git("reset", "--quiet", "--hard", "origin/main")
         self.assertEqual(tip, self.git("rev-parse", "main"))
 
+    def test_pack_refs_preserves_existing_main(self) -> None:
+        packed = self.command("pack-refs", "--all", "--prune")
+
+        self.assertEqual(0, packed.returncode, packed.stderr)
+        self.assertEqual(self.initial, self.git("rev-parse", "main"))
+        self.assertEqual(self.initial, self.git("rev-parse", "dev"))
+
     def test_local_main_rejects_worker_merge(self) -> None:
         self.make_agent_commit()
         self.git("switch", "--quiet", "main")
@@ -90,6 +97,13 @@ class LocalBranchGuardTest(unittest.TestCase):
         delete_main = self.command("branch", "-D", "main")
         self.assertNotEqual(0, delete_main.returncode)
         self.assertIn("`main` is permanent", delete_main.stderr)
+
+    def test_main_expected_oid_delete_is_rejected(self) -> None:
+        delete_main = self.command("update-ref", "-d", "refs/heads/main", self.initial)
+
+        self.assertNotEqual(0, delete_main.returncode)
+        self.assertIn("`main` is permanent", delete_main.stderr)
+        self.assertEqual(self.initial, self.git("rev-parse", "main"))
 
     def test_legacy_dev_may_only_be_deleted(self) -> None:
         tip = self.make_agent_commit()

@@ -73,6 +73,26 @@ def ref_oid(root: Path, ref: str) -> str | None:
     return result.stdout.strip()
 
 
+def git_common_dir(root: Path) -> Path:
+    path = Path(git(root, "rev-parse", "--git-common-dir"))
+    return path if path.is_absolute() else root / path
+
+
+def packed_ref_oid(root: Path, ref: str) -> str | None:
+    packed_refs = git_common_dir(root) / "packed-refs"
+    try:
+        lines = packed_refs.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return None
+    for line in lines:
+        if not line or line.startswith(("#", "^")):
+            continue
+        oid, name = line.split(" ", 1)
+        if name == ref:
+            return oid
+    return None
+
+
 def refs_with_suffix(root: Path, prefix: str, suffix: str) -> dict[str, str]:
     names = git(root, "for-each-ref", "--format=%(refname)", prefix).splitlines()
     result: dict[str, str] = {}
@@ -92,10 +112,25 @@ def is_work_branch(name: str) -> bool:
     return WORK_BRANCH.fullmatch(name) is not None
 
 
+def is_existing_ref_storage_rewrite(root: Path, update: RefUpdate) -> bool:
+    return is_zero_oid(update.old) and ref_oid(root, update.ref) == update.new
+
+
+def is_main_loose_ref_prune(root: Path, update: RefUpdate) -> bool:
+    if is_zero_oid(update.old) or not is_zero_oid(update.new):
+        return False
+    common_dir = git_common_dir(root)
+    if (common_dir / "packed-refs.lock").exists():
+        return False
+    return packed_ref_oid(root, update.ref) == update.old
+
+
 def validate_main_update(root: Path, update: RefUpdate) -> list[str]:
     if is_zero_oid(update.old):
         return ["`main` is permanent and cannot be created by a branch operation."]
     if is_zero_oid(update.new):
+        if is_main_loose_ref_prune(root, update):
+            return []
         return ["`main` is permanent and cannot be deleted or renamed."]
     if update.new == update.old:
         return []
@@ -137,6 +172,8 @@ def validate_transaction(root: Path, updates: list[RefUpdate]) -> list[str]:
     errors: list[str] = []
     for update in updates:
         if not update.ref.startswith(LOCAL_HEADS):
+            continue
+        if is_existing_ref_storage_rewrite(root, update):
             continue
         name = branch_name(update.ref)
         if name == "main":

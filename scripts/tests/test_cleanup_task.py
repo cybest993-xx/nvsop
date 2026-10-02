@@ -9,12 +9,12 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "scripts" / "retire_task.py"
+SCRIPT = ROOT / "scripts" / "cleanup_task.py"
 
 
-class RetireTaskTest(unittest.TestCase):
+class CleanupTaskTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.temp_dir = tempfile.TemporaryDirectory(prefix="retire-task-")
+        self.temp_dir = tempfile.TemporaryDirectory(prefix="cleanup-task-")
         self.root = Path(self.temp_dir.name)
         self.repo = self.root / "repo"
         self.repo.mkdir()
@@ -33,8 +33,8 @@ class RetireTaskTest(unittest.TestCase):
         )
         self._install_fake_gh()
         self.git("init", "--quiet", "-b", "main")
-        self.git("config", "user.name", "Retire task test")
-        self.git("config", "user.email", "retire-task@example.invalid")
+        self.git("config", "user.name", "Cleanup task test")
+        self.git("config", "user.email", "cleanup-task@example.invalid")
         (self.repo / "base.txt").write_text("base\n", encoding="utf-8")
         self.git("add", "base.txt")
         self.git("commit", "--quiet", "-m", "base")
@@ -149,7 +149,7 @@ class RetireTaskTest(unittest.TestCase):
     def assert_gh_called_once(self) -> None:
         self.assertEqual("1\n", self.gh_calls.read_text(encoding="utf-8"))
 
-    def test_clean_single_worktree_retires_only_the_requested_task(self) -> None:
+    def test_clean_single_worktree_removes_only_the_requested_task(self) -> None:
         branch = "agent/a/demo"
         candidate, merge_commit, task = self.make_merged_task(branch)
         unrelated = "agent/a/unrelated"
@@ -163,7 +163,7 @@ class RetireTaskTest(unittest.TestCase):
         self.assert_branch_exists(unrelated)
         self.assert_gh_called_once()
 
-    def test_clean_task_without_worktree_is_retired(self) -> None:
+    def test_clean_task_without_worktree_removes_branch(self) -> None:
         branch = "agent/a/demo"
         candidate, merge_commit, task = self.make_merged_task(branch)
         self.git("worktree", "remove", "--", str(task))
@@ -270,7 +270,7 @@ class RetireTaskTest(unittest.TestCase):
         self.assert_branch_exists(branch)
         self.assertFalse(self.gh_calls.exists())
 
-    def test_same_named_tag_survives_branch_retirement(self) -> None:
+    def test_same_named_tag_survives_branch_cleanup(self) -> None:
         branch = "agent/a/demo"
         candidate, merge_commit, _task = self.make_merged_task(branch)
         self.git("tag", branch, self.base)

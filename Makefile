@@ -8,6 +8,7 @@
 	dev-setup dev dev-status dev-logs dev-refresh dev-smoke dev-test-ui dev-down
 
 .PHONY: annotation-lock annotation-lock-check annotation-image
+.PHONY: task-cleanup
 
 LOCAL_STATE := $(CURDIR)/.nvsop
 LOCAL_CACHE := $(LOCAL_STATE)/cache
@@ -49,12 +50,16 @@ check-docs: sync hooks
 hooks:
 	git config core.hooksPath scripts/githooks
 
-# 日常只清输出；任务退休时才清除独占环境、工具和旧缓存。
+# 日常只清输出；任务清理时才清除独占环境、工具和旧缓存。
 local-clean:
 	python3 scripts/clean_local_artifacts.py
 
 local-purge:
 	python3 scripts/clean_local_artifacts.py --purge
+
+task-cleanup:
+	test -n "$(PR)" && test -n "$(BRANCH)" && test -n "$(CANDIDATE)" || (echo "usage: make task-cleanup PR=<number> BRANCH=agent/<owner>/<task> CANDIDATE=<sha>" >&2; exit 2)
+	python3 scripts/cleanup_task.py --pr "$(PR)" --branch "$(BRANCH)" --candidate "$(CANDIDATE)"
 
 # 两个 pytest 会话分别拥有容器和缓存，不在同一数据库上并发清表。
 check-integration: sync

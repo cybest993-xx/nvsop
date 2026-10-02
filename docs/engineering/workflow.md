@@ -206,7 +206,7 @@ All accepted pull requests are merged manually with squash after the exact landi
 
 ## 5. Merge and clean up
 
-Merges require explicit authorization and the required CI/review evidence. Use GitHub's squash merge path after the active `main` ruleset is satisfied; there is no repository-owned automatic AI merge path. Keep merge confirmation separate from local task cleanup, and stop all task writers before starting cleanup.
+Merges require explicit authorization and the required CI/review evidence. Use GitHub's squash merge path after the active `main` ruleset is satisfied; there is no repository-owned automatic AI merge path. Keep merge confirmation separate from local task cleanup, and stop all task writers before removing a task worktree or branch.
 
 ### 5.1 Confirm the exact squash merge
 

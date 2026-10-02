@@ -57,6 +57,10 @@ local-clean:
 local-purge:
 	python3 scripts/clean_local_artifacts.py --purge
 
+task-cleanup:
+	test -n "$(PR)" && test -n "$(BRANCH)" && test -n "$(CANDIDATE)" || (echo "usage: make task-cleanup PR=<number> BRANCH=agent/<owner>/<task> CANDIDATE=<sha>" >&2; exit 2)
+	python3 scripts/cleanup_task.py --pr "$(PR)" --branch "$(BRANCH)" --candidate "$(CANDIDATE)"
+
 # 两个 pytest 会话分别拥有容器和缓存，不在同一数据库上并发清表。
 check-integration: sync
 	+$(MAKE) --jobs=$(CHECK_JOBS) --output-sync=target center-integration center-system
@@ -102,10 +106,6 @@ ci-lint:
 pr-check:
 	test -n "$(PR)" || (echo "usage: make pr-check PR=<number>" >&2; exit 2)
 	python3 scripts/check_pr_readiness.py "$(PR)"
-
-task-cleanup:
-	test -n "$(PR)" && test -n "$(BRANCH)" && test -n "$(CANDIDATE)" || (echo "usage: make task-cleanup PR=<number> BRANCH=agent/<owner>/<task> CANDIDATE=<sha>" >&2; exit 2)
-	python3 scripts/cleanup_task.py --pr "$(PR)" --branch "$(BRANCH)" --candidate "$(CANDIDATE)"
 
 issue-check:
 	test -n "$(ISSUE)" || (echo "usage: make issue-check ISSUE=<number>" >&2; exit 2)

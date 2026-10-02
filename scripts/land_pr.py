@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from check_pr_readiness import REQUIRED_CHECK, check_state
+from check_pr_readiness import REQUIRED_CHECK, required_check_state
 
 FULL_OBJECT_ID = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 PR_FIELDS = (
@@ -84,19 +84,14 @@ def parse_object_id(value: object, name: str) -> str:
     return value
 
 
-def required_check_state(checks: object) -> str:
+def checked_required_check_state(checks: object) -> str:
     if checks is None:
         return "missing"
     if not isinstance(checks, list):
         raise LandingError("statusCheckRollup must be a list")
-    states: list[str] = []
-    for item in checks:
-        if not isinstance(item, dict):
-            raise LandingError("statusCheckRollup entries must be objects")
-        state = check_state(item)
-        if state != "missing":
-            states.append(state)
-    return states[0] if states else "missing"
+    if not all(isinstance(item, dict) for item in checks):
+        raise LandingError("statusCheckRollup entries must be objects")
+    return required_check_state(checks)
 
 
 def pull_request(number: int) -> PullRequestState:
@@ -138,7 +133,7 @@ def pull_request(number: int) -> PullRequestState:
         head_oid=parse_object_id(payload.get("headRefOid"), "pull-request head"),
         merge_state=merge_state.upper(),
         mergeable=mergeable.upper(),
-        ci_required=required_check_state(payload.get("statusCheckRollup")),
+        ci_required=checked_required_check_state(payload.get("statusCheckRollup")),
         review_decision=str(payload.get("reviewDecision") or "none").lower(),
         merge_commit=merge_commit,
     )
@@ -198,8 +193,10 @@ def next_action(pr: PullRequestState, local_state: str) -> str:
         return "address-review"
     if pr.ci_required == "failed":
         return "repair-ci"
-    if pr.ci_required != "success":
+    if pr.ci_required == "pending":
         return "wait-ci"
+    if pr.ci_required != "success":
+        return "blocked-ci"
     if pr.merge_state == "UNKNOWN" or pr.mergeable == "UNKNOWN":
         return "wait-mergeability"
     if pr.merge_state == "CLEAN" and pr.mergeable == "MERGEABLE":

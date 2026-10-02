@@ -120,6 +120,13 @@ def check_state(item: dict[str, Any]) -> str:
     return "unknown"
 
 
+def required_check_state(checks: list[dict[str, Any]]) -> str:
+    return next(
+        (state for item in checks if (state := check_state(item)) != "missing"),
+        "missing",
+    )
+
+
 def requires_dispatch_impact(changed_files: list[str] | tuple[str, ...]) -> bool:
     return any(
         path in DISPATCH_AUTHORITY_FILES
@@ -192,7 +199,7 @@ def evaluate(
     changed_files: list[str] | tuple[str, ...] | None = (),
 ) -> Readiness:
     checks = pr.get("statusCheckRollup") or []
-    ci = next((state for item in checks if (state := check_state(item)) != "missing"), "missing")
+    ci = required_check_state(checks)
     state = str(pr.get("state") or "unknown").lower()
     base = str(pr.get("baseRefName") or "")
     head_branch = str(pr.get("headRefName") or "")

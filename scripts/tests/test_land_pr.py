@@ -189,6 +189,20 @@ class LandPrTest(unittest.TestCase):
         self.assertIn("next_action=resolve-conflict", result.stdout)
         self.assertEqual(1, len(self.calls()))
 
+    def test_status_blocks_missing_or_unknown_required_ci(self) -> None:
+        cases = (
+            [],
+            [{"name": "CI required", "status": "COMPLETED", "conclusion": "NEUTRAL"}],
+        )
+        for checks in cases:
+            with self.subTest(checks=checks):
+                payload = self.pr_payload()
+                payload["statusCheckRollup"] = checks
+                result = self.run_cli("status", "--pr", "123", payload=payload)
+
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertIn("next_action=blocked-ci", result.stdout)
+
     def test_status_stops_when_local_branch_has_unpublished_head(self) -> None:
         self.env["GIT_LOCAL_HEAD"] = "d" * 40
 

@@ -84,10 +84,15 @@ def packed_ref_oid(root: Path, ref: str) -> str | None:
         lines = packed_refs.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
         return None
+    except OSError as error:
+        raise RuntimeError(f"cannot read packed refs: {error}") from error
     for line in lines:
         if not line or line.startswith(("#", "^")):
             continue
-        oid, name = line.split(" ", 1)
+        parts = line.split(" ", 1)
+        if len(parts) != 2:
+            raise RuntimeError(f"malformed packed ref line: {line}")
+        oid, name = parts
         if name == ref:
             return oid
     return None
@@ -120,6 +125,7 @@ def is_main_loose_ref_prune(root: Path, update: RefUpdate) -> bool:
     if is_zero_oid(update.old) or not is_zero_oid(update.new):
         return False
     common_dir = git_common_dir(root)
+    # Git files backend 在 pack-refs 提交 packed 副本后才删除 loose ref；真实语义删除会持有 packed-refs.lock。
     if (common_dir / "packed-refs.lock").exists():
         return False
     return packed_ref_oid(root, update.ref) == update.old

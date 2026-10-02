@@ -280,7 +280,7 @@ web-type:
 	pnpm --filter control-web run typecheck
 
 web-unit:
-	pnpm --filter control-web run test
+	NODE_ENV=test pnpm --filter control-web run test
 
 # Browser-level evidence for SYS-22-07. CI sets PLAYWRIGHT_BRANDED=1 and installs stable Chrome
 # and Edge; a developer runs the same scenarios against Playwright's pinned Chromium.

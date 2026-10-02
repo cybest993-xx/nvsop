@@ -190,3 +190,41 @@ class MakeWorkflowTest(unittest.TestCase):
                     check=True,
                 ).stdout.splitlines()
                 self.assertEqual(str(root / "override"), overridden[0])
+
+    def test_web_unit_uses_test_mode_and_build_keeps_environment(self) -> None:
+        # 父进程 NODE_ENV=production 时，web-unit 必须显式选择 test，web-build 仍继承 production。
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            fake_pnpm = bin_dir / "pnpm"
+            fake_pnpm.write_text(
+                "#!/bin/sh\nprintf 'pnpm NODE_ENV=%s\\n' \"${NODE_ENV-<unset>}\"\n"
+            )
+            fake_pnpm.chmod(0o755)
+            environment = os.environ | {
+                "NODE_ENV": "production",
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            }
+            unit = subprocess.run(
+                ["make", "--no-print-directory", "-f", str(ROOT / "Makefile"), "web-unit"],
+                cwd=root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            build = subprocess.run(
+                ["make", "--no-print-directory", "-f", str(ROOT / "Makefile"), "web-build"],
+                cwd=root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(0, unit.returncode, unit.stdout + unit.stderr)
+            self.assertIn("pnpm NODE_ENV=test", unit.stdout)
+            self.assertEqual(0, build.returncode, build.stdout + build.stderr)
+            self.assertIn("pnpm NODE_ENV=production", build.stdout)

@@ -89,6 +89,9 @@ pytest targets report the slowest setup/call/teardown phases and write JUnit res
 | `make local-purge` | Before authorized task cleanup, also remove task-local environments, tools, caches and legacy generated paths; preserve shared caches, fixed-instance state, secrets and unknown files |
 | `make task-cleanup PR=<number> BRANCH=<branch> CANDIDATE=<sha>` | Remove one verified merged task's clean local worktree and branch; never sweep tasks |
 | `make pr-check PR=<number>` | Read-only machine-state preflight; never substitutes for independent review or merge authorization |
+| `make pr-land-status PR=<number>` | Read one PR landing state and next machine action; never grants authorization |
+| `make pr-land-refresh PR=<number> EXPECTED_HEAD=<sha>` | Request one conflict-free server-side base refresh guarded by the exact PR head |
+| `make pr-land-merge PR=<number> EXPECTED_HEAD=<sha>` | Attempt one exact-head squash merge after required evidence and authorization exist |
 | `make change-size` | Advisory size report from `BASE`, default `origin/main`; also prints diff review hints; never a bound |
 | `make task-check BASE=<40hex> ALLOW='<paths>' [MAX_LINES=<N>]` | Fixed-base scope and cumulative added+deleted budget; also prints diff review hints; reports `task_check=within-bounds` or `task_check=pause` (script exits 3 on pause); not acceptance |
 | `make contracts` | Generated OpenAPI compatibility and Web client; procedure in [maintenance.md](maintenance.md#generated-contracts) |
@@ -139,6 +142,38 @@ For candidates that change architecture/Issue/mechanism/ADR authority, the modul
 git push -u origin agent/a/<task-slug>
 gh pr create --base main --head agent/a/<task-slug>
 ```
+
+### Serial landing without a queue service
+
+`make pr-land-status PR=<number>` is read-only and reports the PR head, base, mergeability, `CI required` and one `next_action`; the caller supplies PR order, so the repository stores no landing queue, lock, daemon state or approval registry. When `next_action=refresh`, an authorized caller may run `make pr-land-refresh PR=<number> EXPECTED_HEAD=<sha>`: one GitHub update-branch request is guarded by `expected_head_sha`, and the new head invalidates old exact-head CI/review evidence.
+
+A successful refresh advances the remote PR head but intentionally leaves the local task branch at the old head, so the next status may report `local_candidate=mismatch` / `next_action=local-work`. Only when that mismatch immediately follows the authorized refresh, fast-forward the clean task worktree to the exact refreshed PR head; never substitute `pull`, rebase, reset or a locally created merge commit:
+
+```bash
+PR=<pr-number>
+TASK_WORKTREE=<task-worktree>
+OLD_HEAD=<expected-head-used-by-pr-land-refresh>
+(
+    set -eu
+    STATUS="$(make -s pr-land-status PR="$PR")"
+    BRANCH="$(printf '%s\n' "$STATUS" | sed -n 's/^head_branch=//p')"
+    LANDING_HEAD="$(printf '%s\n' "$STATUS" | sed -n 's/^head_sha=//p')"
+    test -n "$BRANCH"
+    test -n "$LANDING_HEAD"
+    test "$(printf '%s\n' "$STATUS" | sed -n 's/^next_action=//p')" = local-work
+    test "$(git -C "$TASK_WORKTREE" branch --show-current)" = "$BRANCH"
+    test "$(git -C "$TASK_WORKTREE" rev-parse HEAD)" = "$OLD_HEAD"
+    test -z "$(git -C "$TASK_WORKTREE" status --porcelain=v1 --untracked-files=all)"
+    git -C "$TASK_WORKTREE" fetch origin "$BRANCH"
+    test "$(git -C "$TASK_WORKTREE" rev-parse FETCH_HEAD)" = "$LANDING_HEAD"
+    git -C "$TASK_WORKTREE" merge-base --is-ancestor "$OLD_HEAD" "$LANDING_HEAD"
+    git -C "$TASK_WORKTREE" merge --ff-only --no-overwrite-ignore "$LANDING_HEAD"
+)
+```
+
+Any failed guard or non-fast-forward relation stops landing. The refreshed head must re-establish exact-head CI and any base-sensitive review evidence before merge.
+
+After the exact landing head is clean, mergeable and green, required review evidence and explicit merge authorization must already exist before `make pr-land-merge PR=<number> EXPECTED_HEAD=<sha>` performs one squash-merge request guarded by that head SHA. Neither command polls, retries, resolves conflicts, edits task code, closes Issues, deletes remote refs, synchronizes `main` or cleans local worktrees. If another PR lands first, read status again and refresh the now-behind candidate; after confirmed merge and applicable Issue closure, use §5.2 cleanup. Together with the documented server ruleset that requires an up-to-date branch, this supplies serial landing semantics against actual `main` state with CAS instead of a second queue service; the repository scripts alone are not a global queue authority.
 
 ### CI gates
 

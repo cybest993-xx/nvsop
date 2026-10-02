@@ -116,7 +116,7 @@ After the user has seen the explicit candidate, the actual diff, the applicable 
 Publication, integration refresh, merge, Issue closure and task cleanup are one bounded delivery, not one approval per action. One explicit user confirmation of a presented **PR lifecycle plan** authorizes every action the plan names, in one pass. The plan is bounded and names:
 
 - the confirmed task candidate SHA, the task branch and worktree, and the target `main`;
-- the action scope: push the task branch, create or update its PR against `main`, use the versioned serial-landing entrypoints for any controlled conflict-free base refresh and exact-head merge, name any automatic remote PR-branch deletion that the current repository setting makes a consequence of merge, observe `CI required` on each landing head, close the named Issue(s) when their closure criteria are satisfied — or `none` — and then use the versioned single-task cleanup entrypoint for the exact task worktree and local branch;
+- the action scope: push the task branch, create or update its PR against `main`, perform any controlled conflict-free base refresh against the exact expected prior head, observe `CI required` on each landing head, manually squash-merge the exact landing head when authorized, name any automatic remote PR-branch deletion that the current repository setting makes a consequence of merge, close the named Issue(s) when their closure criteria are satisfied — or `none` — and then use the versioned single-task cleanup entrypoint for the exact task worktree and local branch;
 - the exact cleanup targets: only task-generated reproducible artifacts and the verified merged task's local branch and worktree.
 
 Before presenting the plan, read the live repository setting with `gh repo view --json deleteBranchOnMerge --jq .deleteBranchOnMerge`. When it is `true`, deletion of the remote PR head branch is an inseparable server-side consequence of merge and the plan must disclose it with the merge action; when it is `false`, remote branch deletion is excluded unless separately named. Primary `main` synchronization is always excluded unless the plan names it explicitly. The user may authorize a subset that the current server configuration can actually separate; every excluded action remains unauthorized. A mere implementation or "continue" request and an agent-authored plan are not lifecycle approval.
@@ -125,9 +125,7 @@ Every technical gate stays a precondition, never a second human approval gate: t
 
 The confirmed task candidate is the authorization root. A later landing head inherits that approval only when the authorized delivery flow itself performs a server-side conflict-free base refresh against the exact expected prior head, without manual conflict resolution or task-code edits. That mechanical integration transition does not require another user confirmation, but its new head must satisfy the technical gates above. Any other head change, manual conflict resolution, task-code or scope change, added action, or changed target invalidates the plan and requires revalidation plus a new approval. Later facts the plan already anticipated are not changes: phase completion, a green CI run, the PR number allocated by the approved create, the squash merge commit becoming known, and a previously approved cleanup becoming provably safe.
 
-This policy/routing layer must land only after the versioned `pr-land-status`, `pr-land-refresh`, `pr-land-merge` and `task-cleanup` entrypoints exist on the target `main`. If any prerequisite is absent, stop instead of merging documentation that routes agents to unavailable commands.
-
-Sequence once approved: publish and open or update the PR ([§4](#4-publish-the-candidate-and-evaluate-ci)) → run `make pr-land-status PR=<number>` and follow §4's serial-landing procedure; when it requires refresh, run `make pr-land-refresh PR=<number> EXPECTED_HEAD=<current-pr-head>`, apply only the documented guarded local fast-forward, then re-establish affected evidence → observe `CI required` on the exact landing head ([§4](#ci-gates)) → with every gate satisfied, run `make pr-land-merge PR=<number> EXPECTED_HEAD=<landing-head>` → confirm the recorded squash commit is retained by `origin/main` ([§5.1](#51-confirm-the-exact-squash-merge)) → close the named Issues when their closure criteria are satisfied ([issues.md](issues.md#close-with-evidence)) → run `make task-cleanup PR=<number> BRANCH=agent/<owner>/<task> CANDIDATE=<landing-head-sha>` for the verified task. Completion is observable with the verified delivery state; local cleanup may remain explicitly pending when the worktree cannot be removed safely.
+Sequence once approved: publish and open or update the PR ([§4](#4-publish-the-candidate-and-evaluate-ci)) → when `main` advances, perform only the authorized conflict-free refresh against the exact expected prior head and re-establish affected evidence → observe `CI required` on the exact landing head ([§4](#ci-gates)) → with every gate satisfied, manually squash-merge that exact landing head → confirm the recorded squash commit is retained by `origin/main` ([§5.1](#51-confirm-the-exact-squash-merge)) → close the named Issues when their closure criteria are satisfied ([issues.md](issues.md#close-with-evidence)) → run the versioned single-task cleanup for the verified task. The concrete landing mechanics live with their versioned execution entrypoints when present; this policy layer owns authorization rather than duplicating those mechanics. Completion is observable with the verified delivery state; local cleanup may remain explicitly pending when the worktree cannot be removed safely.
 
 ## 4. Publish the candidate and evaluate CI
 
@@ -141,37 +139,6 @@ For candidates that change architecture/Issue/mechanism/ADR authority, the modul
 git push -u origin agent/a/<task-slug>
 gh pr create --base main --head agent/a/<task-slug>
 ```
-
-### Serial landing without a queue service
-
-`make pr-land-status PR=<number>` is read-only and reports the PR head, base, mergeability, `CI required` and one `next_action`; the caller supplies PR order, so the repository stores no landing queue, lock, daemon state or approval registry. When `next_action=refresh`, an authorized caller may run `make pr-land-refresh PR=<number> EXPECTED_HEAD=<sha>`: one GitHub update-branch request is guarded by `expected_head_sha`, and the new head invalidates old exact-head CI/review evidence.
-
-A successful refresh advances the remote PR head but intentionally leaves the local task branch at the old head, so the next status may report `local_candidate=mismatch` / `next_action=local-work`. Only when that mismatch immediately follows the authorized refresh, fast-forward the clean task worktree to the exact refreshed PR head; never substitute `pull`, rebase, reset or a locally created merge commit:
-
-```bash
-PR=<pr-number>
-TASK_WORKTREE=<task-worktree>
-OLD_HEAD=<expected-head-used-by-pr-land-refresh>
-(
-    set -eu
-    STATUS="$(make -s pr-land-status PR="$PR")"
-    BRANCH="$(printf '%s\n' "$STATUS" | sed -n 's/^head_branch=//p')"
-    LANDING_HEAD="$(printf '%s\n' "$STATUS" | sed -n 's/^head_sha=//p')"
-    test -n "$BRANCH" && test -n "$LANDING_HEAD"
-    test "$(printf '%s\n' "$STATUS" | sed -n 's/^next_action=//p')" = local-work
-    test "$(git -C "$TASK_WORKTREE" branch --show-current)" = "$BRANCH"
-    test "$(git -C "$TASK_WORKTREE" rev-parse HEAD)" = "$OLD_HEAD"
-    test -z "$(git -C "$TASK_WORKTREE" status --porcelain=v1 --untracked-files=all)"
-    git -C "$TASK_WORKTREE" fetch origin "$BRANCH"
-    test "$(git -C "$TASK_WORKTREE" rev-parse FETCH_HEAD)" = "$LANDING_HEAD"
-    git -C "$TASK_WORKTREE" merge-base --is-ancestor "$OLD_HEAD" "$LANDING_HEAD"
-    git -C "$TASK_WORKTREE" merge --ff-only --no-overwrite-ignore "$LANDING_HEAD"
-)
-```
-
-Any failed guard or non-fast-forward relation stops landing. The refreshed head must re-establish exact-head CI and any base-sensitive review evidence before merge.
-
-After the exact landing head is clean, mergeable and green, required review evidence and lifecycle merge authorization must already exist before `make pr-land-merge PR=<number> EXPECTED_HEAD=<sha>` performs one squash-merge request guarded by that head SHA. Neither command polls, retries, resolves conflicts, edits task code, closes Issues, deletes remote refs, synchronizes `main` or cleans local worktrees. If another PR lands first, read status again and refresh the now-behind candidate; after confirmed merge and applicable Issue closure, use §5.2 cleanup. Together with the documented server ruleset that requires an up-to-date branch, this supplies serial landing semantics against actual `main` state with CAS instead of a second queue service; the repository scripts alone are not a global queue authority.
 
 ### CI gates
 

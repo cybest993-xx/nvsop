@@ -29,6 +29,7 @@ Actions: `N/A`
 PR lifecycle approval: `pending`
 Authorization-root candidate: `N/A`
 Authorized lifecycle actions: `N/A`
+Remote PR branch on merge: `pending`
 Landing head: `pending`
 CI required: `pending`
 Independent Spec + Standards review (when required): `not-required`

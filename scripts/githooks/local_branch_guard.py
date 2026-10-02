@@ -84,7 +84,7 @@ def packed_ref_oid(root: Path, ref: str) -> str | None:
         lines = packed_refs.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
         return None
-    except OSError as error:
+    except (OSError, UnicodeError) as error:
         raise RuntimeError(f"cannot read packed refs: {error}") from error
     for line in lines:
         if not line or line.startswith(("#", "^")):

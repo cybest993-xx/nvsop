@@ -135,6 +135,27 @@ class LocalBranchGuardTest(unittest.TestCase):
             (self.root / ".git" / "refs" / "heads" / "main").read_text().strip(),
         )
 
+    def test_non_utf8_packed_refs_fail_closed_without_traceback(self) -> None:
+        packed_refs = self.root / ".git" / "packed-refs"
+        packed_refs.write_bytes(b"\xff\n")
+        hook = HOOKS / "reference-transaction"
+        result = subprocess.run(
+            [hook, "prepared"],
+            cwd=self.root,
+            input=(f"{self.initial} 0000000000000000000000000000000000000000 refs/heads/main\n"),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("local branch guard could not verify the transaction", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertEqual(
+            self.initial,
+            (self.root / ".git" / "refs" / "heads" / "main").read_text().strip(),
+        )
+
     def test_legacy_dev_may_only_be_deleted(self) -> None:
         tip = self.make_agent_commit()
         self.git("switch", "--quiet", "main")

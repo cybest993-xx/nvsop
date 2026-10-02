@@ -173,8 +173,6 @@ All accepted pull requests are merged manually with squash after the exact candi
 
 ## 5. Merge and clean up
 
-When the approved [PR lifecycle plan](#pr-lifecycle-approval) names merge, named Issue closure and exact task cleanup, that one approval covers those delivery actions; it does not add a per-action confirmation step, and every excluded action remains unauthorized.
-
 Merges require explicit authorization and the required CI/review evidence. Use GitHub's squash merge path after the active `main` ruleset is satisfied; there is no repository-owned automatic AI merge path. Keep merge confirmation separate from local task retirement, and stop all task writers before starting cleanup.
 
 ### 5.1 Confirm the exact squash merge
@@ -205,8 +203,6 @@ ACCEPTED_ORIGIN_MAIN=<accepted-origin-main-sha>
     test "$(git -C "$MAIN_WORKTREE" rev-parse HEAD)" = "$ACCEPTED_ORIGIN_MAIN"
 )
 ```
-
-Primary `main` synchronization is outside a PR lifecycle approval unless the presented plan names that action explicitly; task cleanup never implies it.
 
 Stop when the target branch is not `main`, when any scoped Git read fails, when the histories have diverged, when `origin/main` is not `ACCEPTED_ORIGIN_MAIN`, or when the update would overwrite an ignored path; never fall back to merge, rebase, reset or stash. Never reset a task worktree. This synchronization is a separate manual operation with its own authorization, not implied by implementation or merge work; `retire_task.py` never performs it. Use `make local-purge` when a task worktree must remove reproducible artifacts before retirement; the command deliberately preserves shared external caches, fixed-instance state and unknown ignored files.
 

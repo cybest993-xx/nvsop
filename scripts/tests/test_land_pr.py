@@ -152,7 +152,8 @@ class LandPrTest(unittest.TestCase):
         )
 
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn(f"head=agent/test/task@{HEAD}", result.stdout)
+        self.assertIn("head_branch=agent/test/task", result.stdout)
+        self.assertIn(f"head_sha={HEAD}", result.stdout)
         self.assertIn("ci_required=success", result.stdout)
         self.assertIn("next_action=refresh", result.stdout)
         self.assertEqual(1, len(self.calls()))
@@ -192,6 +193,8 @@ class LandPrTest(unittest.TestCase):
     def test_status_blocks_missing_or_unknown_required_ci(self) -> None:
         cases = (
             [],
+            "malformed",
+            [42],
             [{"name": "CI required", "status": "COMPLETED", "conclusion": "NEUTRAL"}],
         )
         for checks in cases:

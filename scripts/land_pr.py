@@ -84,16 +84,6 @@ def parse_object_id(value: object, name: str) -> str:
     return value
 
 
-def checked_required_check_state(checks: object) -> str:
-    if checks is None:
-        return "missing"
-    if not isinstance(checks, list):
-        raise LandingError("statusCheckRollup must be a list")
-    if not all(isinstance(item, dict) for item in checks):
-        raise LandingError("statusCheckRollup entries must be objects")
-    return required_check_state(checks)
-
-
 def pull_request(number: int) -> PullRequestState:
     payload = json_object(["gh", "pr", "view", str(number), "--json", PR_FIELDS])
     state = payload.get("state")
@@ -133,7 +123,7 @@ def pull_request(number: int) -> PullRequestState:
         head_oid=parse_object_id(payload.get("headRefOid"), "pull-request head"),
         merge_state=merge_state.upper(),
         mergeable=mergeable.upper(),
-        ci_required=checked_required_check_state(payload.get("statusCheckRollup")),
+        ci_required=required_check_state(payload.get("statusCheckRollup")),
         review_decision=str(payload.get("reviewDecision") or "none").lower(),
         merge_commit=merge_commit,
     )
@@ -209,7 +199,8 @@ def print_status(pr: PullRequestState) -> None:
     print(f"pr={pr.number}")
     print(f"state={pr.state.lower()}")
     print(f"base={pr.base_name}@{pr.base_oid}")
-    print(f"head={pr.head_name}@{pr.head_oid}")
+    print(f"head_branch={pr.head_name}")
+    print(f"head_sha={pr.head_oid}")
     print(f"draft={'yes' if pr.draft else 'no'}")
     print(f"merge_state={pr.merge_state.lower()}")
     print(f"mergeable={pr.mergeable.lower()}")

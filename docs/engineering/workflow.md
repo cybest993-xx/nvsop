@@ -133,12 +133,16 @@ gh pr create --base main --head agent/a/<task-slug>
 A successful refresh advances the remote PR head but intentionally leaves the local task branch at the old head, so the next status may report `local_candidate=mismatch` / `next_action=local-work`. Only when that mismatch immediately follows the authorized refresh, fast-forward the clean task worktree to the exact refreshed PR head; never substitute `pull`, rebase, reset or a locally created merge commit:
 
 ```bash
+PR=<pr-number>
 TASK_WORKTREE=<task-worktree>
-BRANCH=agent/<owner>/<task>
-OLD_HEAD=<previous_head-from-pr-land-refresh>
-LANDING_HEAD=<current-head-from-pr-land-status>
+OLD_HEAD=<expected-head-used-by-pr-land-refresh>
 (
     set -eu
+    STATUS="$(make -s pr-land-status PR="$PR")"
+    BRANCH="$(printf '%s\n' "$STATUS" | sed -n 's/^head_branch=//p')"
+    LANDING_HEAD="$(printf '%s\n' "$STATUS" | sed -n 's/^head_sha=//p')"
+    test -n "$BRANCH" && test -n "$LANDING_HEAD"
+    test "$(printf '%s\n' "$STATUS" | sed -n 's/^next_action=//p')" = local-work
     test "$(git -C "$TASK_WORKTREE" branch --show-current)" = "$BRANCH"
     test "$(git -C "$TASK_WORKTREE" rev-parse HEAD)" = "$OLD_HEAD"
     test -z "$(git -C "$TASK_WORKTREE" status --porcelain=v1 --untracked-files=all)"

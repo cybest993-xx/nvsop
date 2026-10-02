@@ -12,7 +12,7 @@ Read guidance only when its trigger applies, expanding for affected callers or c
 - **Add or change repository-local generated/ignored state; change CI, generated contracts, dependencies or vendor code:** read [maintenance.md](docs/engineering/maintenance.md) and [workflow.md](docs/engineering/workflow.md).
 - **Write, move or delete documentation/instructions:** read [documentation.md](docs/engineering/documentation.md) and the applicable validation/review sections of [workflow.md](docs/engineering/workflow.md).
 - **Work with Issues, labels or task dispatch:** read [issues.md](docs/engineering/issues.md).
-- **Create branches/worktrees, review, publish, merge or clean up:** read the relevant step of [workflow.md](docs/engineering/workflow.md).
+- **Create branches/worktrees, review, publish/update/refresh a PR, merge or clean up:** read the relevant step of [workflow.md](docs/engineering/workflow.md) and use its versioned lifecycle entrypoints instead of improvising a parallel PR/pull flow.
 - **Change deployment or runtime configuration:** use the [deployment index](docs/README.md#部署与验证), then relevant architecture/verification rules.
 - **Change Edge autonomy, local persistence or Edge→Center reporting:** read [edge-autonomy.md](docs/design/mechanisms/edge-autonomy.md). Also read [architecture.md](docs/engineering/architecture.md) when moving ownership, a public seam or a dependency direction, and [the roadmap](docs/design/solution-and-roadmap.md) when changing approved product behavior or system structure.
 - **Name domain concepts or change product behavior:** use [CONTEXT.md](CONTEXT.md); for behavior/architecture read the affected mechanism and ADRs through [the roadmap](docs/design/solution-and-roadmap.md). Identify an ADR that needs reopening rather than silently overriding it.
@@ -33,4 +33,4 @@ State risk, test reuse/additions and intended checks in at most three lines. Imp
 
 Use the smallest affected checks while iterating; final code uses `make check`, documentation-only work `make check-docs`. Repository-policy and instruction changes still require the workflow's independent read-only review. One main session owns repairs and completion.
 
-Retain every acceptance criterion and report actual evidence/gaps. Stop optional tests/refactors once acceptance and required evidence are complete. Committed or pushed does not mean merge-ready; publication, merge and Issue closure require authorization.
+Retain every acceptance criterion and report actual evidence/gaps. Stop optional tests/refactors once acceptance and required evidence are complete. Committed or pushed does not mean merge-ready; publication, PR update/refresh, merge and task cleanup require the bounded [PR lifecycle approval](docs/engineering/workflow.md#pr-lifecycle-approval) that names those actions. Issue closure uses that plan when named there, or the separate explicit-instruction path in [issues.md](docs/engineering/issues.md#close-with-evidence).

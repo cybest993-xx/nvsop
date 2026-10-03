@@ -34,9 +34,23 @@ class RepositoryPolicyTest(unittest.TestCase):
             Path("docs/engineering/documentation.md"): "# Documentation\n",
             Path("docs/design/solution-and-roadmap.md"): "# Current decisions\n",
             Path(".github/workflows/blocking-ci.yml"): (
-                "pull_request:\nCI required\nalways()\nmake check\n"
+                "pull_request:\npush:\nworkflow_call:\nCI required\nalways()\nmake check\n"
+                "ref: ${{ inputs.head_sha || github.event.pull_request.head.sha || github.sha }}\n"
                 "if: needs.scope.outputs.integration == 'true'\n"
             ),
+            Path(".github/workflows/landing-queue.yml"): (
+                "issue_comment:\nworkflow_dispatch:\ncancel-in-progress: false\n"
+                "guard:\nvars.LANDING_APP_ID != ''\nvars.LANDING_QUEUE_ISSUE != ''\n"
+                "needs.guard.outputs.enabled == 'true'\n"
+                "environment: landing\n"
+                "actions/create-github-app-token@"
+                "fee1f7d63c2ff003460e3d139729b119787bc349\n"
+                "scripts/landing_queue.py prepare\n"
+                "scripts/landing_queue.py finalize\n"
+                "uses: ./.github/workflows/blocking-ci.yml\n"
+                "ref: ${{ github.workflow_sha }}\n"
+            ),
+            Path("scripts/landing_queue.py"): "# landing queue owner\n",
             Path("scripts/ci_scope.py"): (
                 'INTEGRATION_PREFIXES = ("apps/edge-runtime/", "tests/system/")\n'
             ),

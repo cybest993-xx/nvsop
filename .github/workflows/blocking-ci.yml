@@ -1,15 +1,26 @@
 name: blocking-ci
 
+# stage1 过渡契约：保留既有 pull_request / push main 直跑门禁，同时作为可复用工作流
+# 供可信 landing-queue 控制器按显式 head_sha/base_sha 单飞调用；stage2 再移除 legacy 触发器。
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_call:
+    inputs:
+      head_sha:
+        required: true
+        type: string
+      base_sha:
+        required: true
+        type: string
 
 permissions:
   contents: read
 
+# workflow_call 以候选头为并发组，避免与 legacy PR 组互相取消；legacy 事件保持原表达式。
 concurrency:
-  group: blocking-ci-${{ github.event.pull_request.number || github.ref }}
+  group: blocking-ci-${{ inputs.head_sha || github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
@@ -28,14 +39,15 @@ jobs:
       - name: Checkout candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ inputs.head_sha || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
           fetch-depth: 0
       - name: Select applicable gates
         id: scope
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          # 与后续作业验证的候选树一致；PR 使用 GitHub 的合并提交。
-          HEAD_SHA: ${{ github.sha }}
+          BASE_SHA: ${{ inputs.base_sha || github.event.pull_request.base.sha || github.event.before }}
+          # 与后续作业验证的候选树一致：workflow_call 用控制器输入，legacy PR 用 PR 头，push 用事件 sha。
+          HEAD_SHA: ${{ inputs.head_sha || github.event.pull_request.head.sha || github.sha }}
         run: python3 scripts/ci_scope.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
       - name: Validate scope outputs
         env:
@@ -76,6 +88,7 @@ jobs:
       - name: Checkout candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ inputs.head_sha || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Install the pinned Python toolchain runner
         run: pipx install uv==0.12.5
@@ -113,6 +126,7 @@ jobs:
       - name: Checkout candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ inputs.head_sha || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
           fetch-depth: 0
       - name: Install pinned workflow linter
@@ -158,8 +172,8 @@ jobs:
       - name: Run the documentation gate
         if: needs.scope.outputs.docs_only == 'true'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
+          BASE_SHA: ${{ inputs.base_sha || github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ inputs.head_sha || github.event.pull_request.head.sha || github.sha }}
         run: make check-docs BASE="$BASE_SHA" HEAD="$HEAD_SHA"
       - name: Install media test tools
         if: needs.scope.outputs.docs_only == 'false'
@@ -172,17 +186,16 @@ jobs:
       - name: Run the local merge gate
         if: needs.scope.outputs.docs_only == 'false'
         env:
-          # The OpenAPI compatibility check must compare with the actual PR base, not whatever
-          # branch name happens to be checked out as origin/main.
-          OPENAPI_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+          # OpenAPI 兼容检查必须与真实 base 比较：workflow_call 用控制器输入，legacy 用事件 base。
+          OPENAPI_BASE_REF: ${{ inputs.base_sha || github.event.pull_request.base.sha || github.event.before }}
         run: make check
       - name: Report change size for review
-        if: needs.scope.outputs.docs_only == 'false' && github.event_name == 'pull_request'
-        # Harness §5：从共同祖先计算到 PR HEAD，行数只作提示。
+        if: needs.scope.outputs.docs_only == 'false' && github.event_name != 'push'
+        # Harness §5：从共同祖先计算到候选头，行数只作提示；legacy push main 与基线一致地跳过。
         # Git 或文件读取失败仍须使本步骤失败。
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ inputs.base_sha || github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ inputs.head_sha || github.event.pull_request.head.sha || github.sha }}
         run: make change-size BASE="$BASE_SHA" HEAD="$HEAD_SHA"
       - name: Verify a clean worktree
         # Generated output is regenerated in the same change as its source (harness §5). If
@@ -211,6 +224,7 @@ jobs:
       - name: Checkout candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ inputs.head_sha || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
           fetch-depth: 0
       - name: Install the pinned Python toolchain runner
@@ -253,6 +267,7 @@ jobs:
       - name: Checkout candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ inputs.head_sha || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
           fetch-depth: 0
       - name: Set up the pinned Node runtime

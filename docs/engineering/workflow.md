@@ -93,6 +93,9 @@ pytest targets report the slowest setup/call/teardown phases and write JUnit res
 | `make pr-land-status PR=<number>` | Read one PR landing state and next machine action; never grants authorization |
 | `make pr-land-refresh PR=<number> EXPECTED_HEAD=<sha>` | Request one conflict-free server-side base refresh guarded by the exact PR head |
 | `make pr-land-merge PR=<number> EXPECTED_HEAD=<sha>` | Attempt one exact-head squash merge after required evidence and authorization exist |
+| `make pr-land-enqueue PR=<number> EXPECTED_HEAD=<sha> ATTESTATION=<comment-id>` | Post one durable enqueue request referencing an existing human-maintainer attestation comment; validates the bound, clean frozen candidate; never grants authorization |
+| `make pr-land-dequeue PR=<number>` | Post one durable dequeue request; releases the landing writer and preserves the local binding |
+| `make pr-land-queue` | Read the durable queue state (read-only) |
 | `make change-size` | Advisory size report from `BASE`, default `origin/main`; also prints diff review hints; never a bound |
 | `make task-check BASE=<40hex> ALLOW='<paths>' [MAX_LINES=<N>]` | Fixed-base scope and cumulative added+deleted budget; also prints diff review hints; reports `task_check=within-bounds` or `task_check=pause` (script exits 3 on pause); not acceptance |
 | `make contracts` | Generated OpenAPI compatibility and Web client; procedure in [maintenance.md](maintenance.md#generated-contracts) |
@@ -146,41 +149,15 @@ gh pr create --base main --head agent/a/<task-slug>
 
 ### Serial landing without a queue service
 
-`make pr-land-status PR=<number>` is read-only and reports the PR head, base, mergeability, `CI required` and one `next_action`; the caller supplies PR order, so the repository stores no landing queue, lock, daemon state or approval registry. When `next_action=refresh`, an authorized caller may run `make pr-land-refresh PR=<number> EXPECTED_HEAD=<sha>`: one GitHub update-branch request is guarded by `expected_head_sha`, and the new head invalidates old exact-head CI/review evidence.
-
-A successful refresh advances the remote PR head but intentionally leaves the local task branch at the old head, so the next status may report `local_candidate=mismatch` / `next_action=local-work`. Only when that mismatch immediately follows the authorized refresh, fast-forward the clean task worktree to the exact refreshed PR head; never substitute `pull`, rebase, reset or a locally created merge commit:
-
-```bash
-PR=<pr-number>
-TASK_WORKTREE=<task-worktree>
-OLD_HEAD=<expected-head-used-by-pr-land-refresh>
-(
-    set -eu
-    STATUS="$(make -s pr-land-status PR="$PR")"
-    BRANCH="$(printf '%s\n' "$STATUS" | sed -n 's/^head_branch=//p')"
-    LANDING_HEAD="$(printf '%s\n' "$STATUS" | sed -n 's/^head_sha=//p')"
-    test -n "$BRANCH"
-    test -n "$LANDING_HEAD"
-    test "$(printf '%s\n' "$STATUS" | sed -n 's/^next_action=//p')" = local-work
-    test "$(git -C "$TASK_WORKTREE" branch --show-current)" = "$BRANCH"
-    test "$(git -C "$TASK_WORKTREE" rev-parse HEAD)" = "$OLD_HEAD"
-    test -z "$(git -C "$TASK_WORKTREE" status --porcelain=v1 --untracked-files=all)"
-    git -C "$TASK_WORKTREE" fetch origin "$BRANCH"
-    test "$(git -C "$TASK_WORKTREE" rev-parse FETCH_HEAD)" = "$LANDING_HEAD"
-    git -C "$TASK_WORKTREE" merge-base --is-ancestor "$OLD_HEAD" "$LANDING_HEAD"
-    git -C "$TASK_WORKTREE" merge --ff-only --no-overwrite-ignore "$LANDING_HEAD"
-)
-```
-
-Any failed guard or non-fast-forward relation stops landing. The refreshed head must re-establish exact-head CI and any base-sensitive review evidence before merge.
-
-After the exact landing head is clean, mergeable and green, required review evidence and explicit merge authorization must already exist before `make pr-land-merge PR=<number> EXPECTED_HEAD=<sha>` performs one squash-merge request guarded by that head SHA. Neither command polls, retries, resolves conflicts, edits task code, closes Issues, deletes remote refs, synchronizes `main` or cleans local worktrees. If another PR lands first, read status again and refresh the now-behind candidate; after confirmed merge and applicable Issue closure, use §5.2 cleanup. Together with the documented server ruleset that requires an up-to-date branch, this supplies serial landing semantics against actual `main` state with CAS instead of a second queue service; the repository scripts alone are not a global queue authority.
+Status: **normative**. This heading anchors the serial landing rule, not a second landing path. The durable automatic queue in [landing queue and single-flight CI](#landing-queue-and-single-flight-ci) is the supported flow once its server-side deployment is complete; [scripts/land_pr.py](../../scripts/land_pr.py) keeps the one-shot CAS primitives (`pr-land-status`, head-guarded `pr-land-refresh`, exact-head `pr-land-merge`) that the queue calls. During the stage1 bootstrap the controller is deployed but dormant (no App variables, environment, inbox or rulesets yet), `blocking-ci.yml` still runs directly on `pull_request`/`push main`, and the existing manual squash-merge path under the current `main` ruleset is the actual merge path. The queue becomes the landing path only after the stage2 cutover removes the legacy triggers. Human bounded authorization is unchanged: required independent review evidence and explicit merge authorization must already exist, and the queue re-reads the attestation at every step. See [PR lifecycle approval](#pr-lifecycle-approval) and [landing ownership and session binding](#landing-ownership-and-session-binding).
 
 ### CI gates
 
 The supported CI path uses GitHub-hosted `ubuntu-24.04` runners. The repository is intentionally public; do not replace the hosted path with a local or self-hosted runner as an account-billing workaround. A runner-topology change is a separate CI-policy change and requires the same review as other workflow authority changes. Repository visibility, Actions permissions, branch protection/rulesets and repository secrets remain server-side settings; workflow files do not configure them.
 
-The sole aggregate required PR status is `CI required` from [blocking-ci.yml](../../.github/workflows/blocking-ci.yml). Server-side repository settings must separately require it when protection is available. `pr-check` makes missing or unknown enforcement visible; regardless of server enforcement, the exact PR head still needs successful `CI required`. Its `always()` gatherer requires explicit success from scope, lockfile checks and every gate family; failed, cancelled or skipped dependencies are not success.
+The aggregate required PR status is `CI required` from [blocking-ci.yml](../../.github/workflows/blocking-ci.yml). Server-side repository settings must separately require it when protection is available. `pr-check` makes missing or unknown enforcement visible; regardless of server enforcement, the exact PR head still needs successful `CI required`. Its `always()` gatherer requires explicit success from scope, lockfile checks and every gate family; failed, cancelled or skipped dependencies are not success.
+
+`blocking-ci.yml` is the one gate implementation for both entry points. During the stage1 bootstrap it keeps its `pull_request`/`push main` triggers — the same workflow and the same `CI required` check as before — and adds a `workflow_call` interface with required `head_sha`/`base_sha` inputs so the trusted [landing-queue.yml](../../.github/workflows/landing-queue.yml) controller can run the same families once per queue ACTIVE entry. Every checkout resolves the exact candidate head (`ref: ${{ inputs.head_sha || github.event.pull_request.head.sha || github.sha }}` — the PR head, not the virtual merge commit), and every base/`OPENAPI_BASE_REF` resolves per event (`inputs.base_sha` for a reusable call, the PR base or `github.event.before` otherwise). The reusable call keys its concurrency group on the candidate head, so it never shares the controller's global `landing-queue` mutex and cannot self-deadlock. The checked-out candidate HEAD is untrusted candidate code and is given only `contents: read` with no secrets. After the stage2 cutover the legacy triggers are removed and the queue is the only caller; the queue finalizer then publishes the `CI required` and `Landing gate` commit statuses on the exact landing head with the dedicated landing App. See [landing queue](#landing-queue-and-single-flight-ci).
 
 [ci_scope.py](../../scripts/ci_scope.py) compares the actual base/candidate commits with rename detection disabled. A missing comparison baseline forces all gates. The selector also owns integration, browser and media applicability; jobs consume its outputs instead of maintaining their own path regexes. Media-owned inputs select both real-infrastructure and browser lanes, then run `make media-system` and `make web-e2e-whep` with explicit live fixtures so environment-dependent tests cannot silently satisfy media evidence by skipping.
 
@@ -262,7 +239,7 @@ All checks finish before the first cleanup command. The individual worktree remo
 
 ## Landing ownership and session binding
 
-Status: **normative**. This section owns the development/landing ownership state machine and the local implementation-session binding. It is a minimal workflow seam for a future queue/dispatcher, not a queue daemon, a second workflow authority or an automatic merger. Actual landing remains the one-shot CAS flow of [§4](#4-publish-the-candidate-and-evaluate-ci) and [scripts/land_pr.py](../../scripts/land_pr.py) under the bounded [PR lifecycle plan](#pr-lifecycle-approval).
+Status: **normative**. This section owns the development/landing ownership state machine, the automatic queue seam and the local implementation-session binding. The queue is implemented by [scripts/landing_queue.py](../../scripts/landing_queue.py) and driven by the trusted [landing-queue.yml](../../.github/workflows/landing-queue.yml) workflow; [scripts/land_pr.py](../../scripts/land_pr.py) keeps the one-shot CAS primitives that the queue calls under the bounded [PR lifecycle plan](#pr-lifecycle-approval). During the stage1 bootstrap the controller is deployed dormant: its App-bound jobs are guarded on the `LANDING_APP_ID`/`LANDING_QUEUE_ISSUE` repository variables and skip until an operator completes the server-side deployment, so the existing manual squash-merge path and the direct `CI required` gate remain the actual merge path.
 
 ### States and the single writer
 
@@ -277,7 +254,7 @@ DEVELOPMENT -- freeze + handoff --> QUEUED --> ACTIVE --> MERGED
 - **QUEUED** — the implementation session has stopped writing and handed a frozen candidate plus approved actions to landing. Landing owns only controlled integration mutation; the implementation session stays dormant.
 - **ACTIVE** — landing performs the authorized integration actions (controlled base refresh, exact-head squash merge) against the frozen candidate. Task code is not edited here.
 - **MERGED** — the exact landing head is squash-merged and retained by `origin/main`; verified cleanup may follow.
-- **BLOCKED_CI / BLOCKED_CONFLICT / BLOCKED_REVIEW / BLOCKED_MUTATION / BLOCKED_SCOPE** — landing stops and returns repair ownership to the original implementation session. Landing never performs semantic or code repair, conflict resolution, rebase, reset or scope change.
+- **BLOCKED_CI / BLOCKED_CONFLICT / BLOCKED_REVIEW / BLOCKED_MUTATION / BLOCKED_SCOPE / BLOCKED_AUTHORITY / BLOCKED_INFRA** — landing stops and returns repair ownership to the original implementation session. Landing never performs semantic or code repair, conflict resolution, rebase, reset or scope change.
 - **BLOCKED_AGENT_UNAVAILABLE** — the original session cannot be recovered; landing fails closed and selects no replacement.
 
 While landing is QUEUED/ACTIVE the implementation session is dormant and must not write the task branch. A BLOCKED_* outcome returns the task to DEVELOPMENT for repair; the repaired work produces a new validated candidate and is re-enqueued.
@@ -286,11 +263,11 @@ While landing is QUEUED/ACTIVE the implementation session is dormant and must no
 
 Before a task enters QUEUED, the implementation session records — and landing consumes — the exact task branch and worktree, the frozen candidate commit SHA, the target `main`, the bounded [PR lifecycle plan](#pr-lifecycle-approval) that names the authorized actions, and the applicable review/CI evidence bound to that candidate.
 
-Queue runtime and enqueue-state storage are deliberately deferred: this seam defines the ownership handoff and the local binding only. Until a dispatcher exists, the existing one-shot manual flow — a single operator running the bounded PR lifecycle plan — is the actual landing path, and nothing here fabricates an enforced queue.
+[scripts/landing_queue.py](../../scripts/landing_queue.py) consumes these facts, keeps the durable FIFO and drives the controlled integration described in [landing queue and single-flight CI](#landing-queue-and-single-flight-ci). Until the server-side branch, inbox issue, App variables, protected environment and ruleset protections are configured the controller's jobs are skipped by the deployment guard and it fails closed when it does run; during this bootstrap stage the legacy direct `blocking-ci.yml` runs and the manual squash merge under the current `main` ruleset remain the actual merge path, with no new deadlock and no unenforced `Landing gate`.
 
 ### Repair handoff contract
 
-A BLOCKED_* outcome produces one machine-readable private repair handoff, never a public PR comment, and carries no credentials or runtime session IDs. It is compact JSON with this shape (synthetic values):
+A BLOCKED_* outcome is public only as the entry's opaque `blocked_reason` plus `evidence` (handoff id, expected/observed head, `main`, run/attempt, reason, category) in the queue state; it carries no credentials or runtime session IDs. The intended private repair handoff is compact JSON with this shape (synthetic values), but it is not emitted today (below):
 
 ```json
 {
@@ -308,19 +285,56 @@ A BLOCKED_* outcome produces one machine-readable private repair handoff, never 
 }
 ```
 
-`blocked_reason` is exactly one of `BLOCKED_CI`, `BLOCKED_CONFLICT`, `BLOCKED_REVIEW`, `BLOCKED_MUTATION` or `BLOCKED_SCOPE`; `failure_evidence` is an object carrying the failing command, its integer exit code and an optional log path. The landing producer and the dispatcher that consumes this handoff are deliberately deferred: the current one-shot [scripts/land_pr.py](../../scripts/land_pr.py) flow does not emit it, and this section only fixes the serialization both will share.
+`blocked_reason` is exactly one of `BLOCKED_CI`, `BLOCKED_CONFLICT`, `BLOCKED_REVIEW`, `BLOCKED_MUTATION`, `BLOCKED_SCOPE`, `BLOCKED_AUTHORITY` or `BLOCKED_INFRA`; `failure_evidence` is an object carrying the failing command, its integer exit code and an optional log path. `BLOCKED_INFRA` is runtime infrastructure (cancelled, timed-out or startup failure), distinct from a candidate `BLOCKED_CI`.
 
-The dispatcher resolves `branch`/`worktree` to the original session through the local binding and resumes it. Before any source repair, the resumed session rechecks repository, worktree, branch, HEAD, PR, current `main`, blocked reason and failure evidence; a changed fact invalidates the handoff and requires a new decision.
+The private handoff producer and the dispatcher that would consume this JSON are **not implemented**: the queue records only its public opaque `blocked_reason` plus `evidence` in the state branch, and the preserved local `.nvsop/session-binding.json` with `.tmp/task-handoff.md` is the recovery context. The shape above is the fixed serialization both will share when implemented. The dispatcher will resolve `branch`/`worktree` to the original session through the local binding and resume it; before any source repair the resumed session rechecks repository, worktree, branch, HEAD, PR, current `main`, blocked reason and failure evidence, and a changed fact invalidates the handoff.
 
 ### Implementation-session binding
 
-`.nvsop/session-binding.json` maps one task worktree to the session that owns it. It is context lookup for dispatch and repair only — never publish, merge or scope authorization — while `.tmp/task-handoff.md` remains the continuity record. Its schema and repository-local-state rules are owned by [maintenance.md](maintenance.md#session-binding-state), and it is created or verified with:
+`.nvsop/session-binding.json` maps one task worktree to the session that owns it. The bound id is the primary task-owner session — the resumable main-owner id — never an ephemeral worker or subagent id; an implementation subagent acts under that owner but does not become the binding. It is context lookup for dispatch and repair only — never publish, merge or scope authorization — while `.tmp/task-handoff.md` remains the continuity record. Its schema and repository-local-state rules are owned by [maintenance.md](maintenance.md#session-binding-state), and it is created or verified with:
 
 ```sh
 make task-session-bind SESSION=<resumable-id>
 ```
 
 Binding is required before the session's first tracked source edit. It is idempotent for the same session and refuses to overwrite an existing binding; another session cannot take over even during concurrent first binds, and the normal bind has no overwrite or force path. An unrecoverable original session is `BLOCKED_AGENT_UNAVAILABLE` and fails closed: replacement requires an explicit rebind/recovery decision after the old writer is stopped and the exact task is verified. Cleanup releases the binding only during the verified exact task cleanup of [§5.2](#52-clean-one-verified-task-worktree-and-local-branch).
+
+### Landing queue and single-flight CI
+
+[scripts/landing_queue.py](../../scripts/landing_queue.py) owns the durable automatic landing queue. GitHub is the source of truth: one JSON state file on the dedicated `landing-queue-state` branch, updated with a Contents-API blob-SHA compare-and-swap, plus an append-only issue-comment inbox that carries enqueue/dequeue wake requests. There is no daemon, lock service, database or polling loop. The trusted [landing-queue.yml](../../.github/workflows/landing-queue.yml) workflow runs default-branch code as the only writer of the state branch; the CLI never writes it.
+
+States are `QUEUED`, `ACTIVE`, `BLOCKED`, `MERGED` and `CANCELLED` with at most one `ACTIVE` entry. Order is FIFO by server request id, with the PR number only as a deterministic tie-break; a repaired or replaced candidate re-enqueues at the tail, and a queued candidate that changes head is `BLOCKED_MUTATION` rather than a silent replacement of its authorization root. The state file records a consumed-inbox high-water id together with the entries, so an already-processed request never reactivates a terminal PR on replay; terminal entries stay terminal until a new authorized enqueue. `make pr-land-enqueue` validates the open non-draft PR, `main` base, exact `--expected-head`, the bound and clean local task worktree, and a referenced attestation comment (below), then posts one durable request and returns an opaque handoff id — it never grants authorization, and a failed wake dispatch leaves the durable request in place. `make pr-land-dequeue` releases the landing writer (a queued or active entry becomes an observable `CANCELLED`) and preserves the local binding. The public state and comments carry no runtime session identity and no worktree path; a private local receipt under `.nvsop/artifacts/landing/` maps the opaque id to local context.
+
+Authorization is a human-maintainer attestation on the PR, not a boolean: an existing comment marked `<!-- landing-attestation -->` with a stable JSON body naming the exact repository, PR, root SHA, head branch and `main` target, the `refresh` and `squash-merge` actions, the original user confirmation source, completed exact-root `make check` evidence, and applicable independently executed Spec + Standards evidence (or an explicit justification). A reference alone is not proof and an agent-authored boolean or an `APPROVED` review grants nothing; the authenticated human comment is the trust seam. The consumer rejects outsider, bot and edited comments (`created_at == updated_at` required), binds the candidate to the comment id plus body digest and author, and re-reads the attestation at every integration action so a deleted, edited or dismissed authority blocks fail-closed. The queue does not claim automated semantic verification of quoted human evidence. The accepted body is exactly:
+
+```json
+{
+  "version": 1,
+  "repository": "owner/nvsop",
+  "pr": 123,
+  "root": "40-hex",
+  "head_branch": "agent/a/task",
+  "base": "main",
+  "actions": ["refresh", "squash-merge"],
+  "confirmation": {"source": "user message 2026-10-03", "quote": "approve the bounded plan"},
+  "check": {"root": "40-hex", "command": "make check", "result": "passed", "evidence": "make check output"},
+  "review": {"spec": "passed", "standards": "passed", "root": "40-hex", "evidence": "independent Spec + Standards review"}
+}
+```
+
+`review` may instead be `{"not-applicable": "<reason>"}` for a candidate that needs no independent Spec/Standards review; `check.root`, `check.evidence`, `confirmation.source` and `confirmation.quote` must be non-empty and `check.root` must equal `root`.
+
+The trusted workflow runs default-branch code as the only writer of the state branch and is the only place privileged. `prepare` consumes requests, authenticates each request author as a repository collaborator, then drives the single `ACTIVE` phase: when the PR is behind it persists a `REFRESHING` intent (old head, latest `main`, authorization root) with a CAS and calls the one `land_pr.refresh` seam exactly once; the new head is frozen only when its parents prove the controlled integration (`{old head, recorded main}`), otherwise `BLOCKED_MUTATION`. It then persists a `TESTING` intent with the exact head, base, Actions run id and attempt before the reusable `blocking-ci.yml` runs, so a repeated or unrelated event cannot rerun active CI or inherit another run's result. `finalize` re-reads the run identity, current head and `main`, review state and attestation; `main` moving during CI revokes the old statuses and releases as `BLOCKED_SCOPE`. The controller never resolves conflicts, rebases, resets, repairs code or retries arbitrary CI failures; a cancelled or timed-out run is runtime infrastructure, distinct from a genuine test failure (`BLOCKED_CI`).
+
+Before any status or merge write, `finalize` reads the active branch rulesets and fails closed unless exactly three, each with an explicit `refs/heads/...` scope and no exclusions, hold: (a) a bypass-free `main` evidence ruleset requiring `pull_request` (squash-only, resolved threads) and strict up-to-date checks with `CI required` and `Landing gate` bound to the landing App integration id; (b) a `main` update restriction bypassing exactly the App; and (c) a `landing-queue-state` update restriction bypassing exactly the App. Wildcards, `~ALL`, exclusions, a foreign bypass or an unexpected applicable ruleset fail closed. A missing protection is `BLOCKED_AUTHORITY` or an actionable setup error, never a doc-only assertion. Only then does it publish both App-bound statuses on the exact tested head, persist a `MERGING` intent and call the one `land_pr.merge` CAS seam. A `MERGED` entry requires the exact-head squash proof retained on `main` and the tested tree equal to the merged tree; a crash after the merge response is recovered from the merged PR on the next trusted wake rather than re-running CI or re-merging. The post-`main`-push job verifies the recorded proof only.
+
+The dedicated landing GitHub App creates attributable exact-head `CI required` and `Landing gate` statuses and receives the refresh/merge events that `GITHUB_TOKEN` suppresses. Its private key belongs to a protected GitHub Environment named `landing`, restricted to `main`, so only the privileged `prepare`/`finalize`/`integrity` jobs can read it; the [blocking-ci.yml](../../.github/workflows/blocking-ci.yml) jobs inherit no secret, hold only `contents: read`, and check out the candidate HEAD read-only as untrusted candidate code. `pull_request_review` is deliberately not a trigger, because it can run candidate workflow code with the App token; `finalize` reads reviews instead and an operator can wake the queue. The controller fails closed until the server-side protections are configured; code does not claim a ruleset or environment was applied.
+
+During the stage1 bootstrap the App-bound jobs are guarded on the `LANDING_APP_ID`/`LANDING_QUEUE_ISSUE` repository variables: when either is unset — and until the protected `landing` environment exists — the guard job is skipped and `prepare`/`finalize`/`integrity` never start, so a `pull_request_target`, `issue_comment` or `push main` event cannot request the App secret or fail the run. Once the variables, environment, state branch, inbox issue and rulesets exist the guard passes and the controller handles App refresh/synchronize events and enqueue requests normally. The controller remains the sole writer of the queue state branch and no repository code creates server settings.
+
+Server-side deployment plan (deferred; no remote action is taken by this repository's code): create the `landing-queue-state` branch with an initial `queue.json` (`{"version": 3, "consumed_request_id": 0, "entries": []}`); create the inbox issue; set the `LANDING_QUEUE_ISSUE`, `LANDING_APP_ID` and `LANDING_APP_BOT` repository variables; create a protected GitHub Environment named `landing` restricted to `main` and store the App private key there as the `LANDING_APP_PRIVATE_KEY` environment secret (not a repo-wide secret a candidate-authored workflow could read). Add exactly the three branch rulesets `verify_protections` requires: (a) the bypass-free `main` evidence ruleset with squash-only, resolved threads, strict checks and App-bound `CI required` + `Landing gate`; (b) the `main` update restriction bypassing exactly the App; (c) the `landing-queue-state` update restriction bypassing exactly the App. The current ruleset `23648306` does not yet contain these, so `finalize` fails closed until an operator completes them.
+
+Ordered stage2 cutover: complete the server-side items above while the legacy direct triggers still publish `CI required`; then land one PR that removes the `pull_request`/`push main` triggers from `blocking-ci.yml`, reapplies the exact-head `Landing gate` enforcement to `pr-check` and updates the policy checks. Gate coverage is continuous throughout — `CI required` is never absent — and no `Landing gate` is required before it exists, so the bootstrap adds no new deadlock.
 
 ## Persistent continuity
 

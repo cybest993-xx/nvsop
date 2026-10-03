@@ -17,7 +17,7 @@ from check_pr_readiness import REQUIRED_CHECK, required_check_state
 
 FULL_OBJECT_ID = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 PR_FIELDS = (
-    "state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid,"
+    "state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,"
     "mergeStateStatus,mergeable,statusCheckRollup,reviewDecision,mergeCommit"
 )
 
@@ -40,6 +40,7 @@ class PullRequestState:
     ci_required: str
     review_decision: str
     merge_commit: str | None
+    head_repository: str = ""
 
 
 def command_name(arguments: Sequence[str]) -> str:
@@ -113,6 +114,11 @@ def pull_request(number: int) -> PullRequestState:
             raise LandingError("pull-request merge commit must be an object")
         merge_commit = parse_object_id(raw_merge_commit.get("oid"), "pull-request merge commit")
 
+    raw_repository = payload.get("headRepository")
+    head_repository = ""
+    if isinstance(raw_repository, dict) and isinstance(raw_repository.get("nameWithOwner"), str):
+        head_repository = raw_repository["nameWithOwner"]
+
     return PullRequestState(
         number=number,
         state=state.upper(),
@@ -126,6 +132,7 @@ def pull_request(number: int) -> PullRequestState:
         ci_required=required_check_state(payload.get("statusCheckRollup")),
         review_decision=str(payload.get("reviewDecision") or "none").lower(),
         merge_commit=merge_commit,
+        head_repository=head_repository,
     )
 
 
@@ -264,7 +271,7 @@ def refresh(number: int, expected_head: str) -> None:
     print("evidence=stale")
 
 
-def merge(number: int, expected_head: str) -> None:
+def merge(number: int, expected_head: str) -> str:
     pr = pull_request(number)
     require_open_main(pr)
     expected = verify_expected_head(pr, expected_head)
@@ -301,6 +308,7 @@ def merge(number: int, expected_head: str) -> None:
     print("action=merged")
     print(f"head={expected}")
     print(f"merge_commit={merge_commit}")
+    return merge_commit
 
 
 def positive_pr(value: str) -> int:

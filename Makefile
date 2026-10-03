@@ -1,4 +1,4 @@
-.PHONY: check check-suite check-docs docs-check check-integration media-system change-size task-check ci-plan ci-tools ci-lint pr-check pr-land-status pr-land-refresh pr-land-merge issue-check hooks local-clean local-purge lockfile sync policy policy-test migrations contract-base \
+.PHONY: check check-suite check-docs docs-check check-integration media-system change-size task-check ci-plan ci-tools ci-lint pr-check pr-land-status pr-land-refresh pr-land-merge pr-land-enqueue pr-land-dequeue pr-land-queue issue-check hooks local-clean local-purge lockfile sync policy policy-test migrations contract-base \
 	contract-capability \
 	contracts contracts-python-check contracts-python-format contracts-python-lint \
 	contracts-python-type contracts-python-unit openapi-export openapi-compat openapi-generate \
@@ -123,6 +123,18 @@ pr-land-refresh:
 pr-land-merge:
 	test -n "$(PR)" && test -n "$(EXPECTED_HEAD)" || (echo "usage: make pr-land-merge PR=<number> EXPECTED_HEAD=<sha>" >&2; exit 2)
 	python3 scripts/land_pr.py merge --pr "$(PR)" --expected-head "$(EXPECTED_HEAD)"
+
+# 落地队列的公开入口：入队/出队只写入持久请求，不授予授权；只读查看队列状态。
+pr-land-enqueue:
+	test -n "$(PR)" && test -n "$(EXPECTED_HEAD)" && test -n "$(ATTESTATION)" || (echo "usage: make pr-land-enqueue PR=<number> EXPECTED_HEAD=<sha> ATTESTATION=<comment-id>" >&2; exit 2)
+	python3 scripts/landing_queue.py enqueue --pr "$(PR)" --expected-head "$(EXPECTED_HEAD)" --attestation "$(ATTESTATION)"
+
+pr-land-dequeue:
+	test -n "$(PR)" || (echo "usage: make pr-land-dequeue PR=<number>" >&2; exit 2)
+	python3 scripts/landing_queue.py dequeue --pr "$(PR)"
+
+pr-land-queue:
+	python3 scripts/landing_queue.py queue
 
 issue-check:
 	test -n "$(ISSUE)" || (echo "usage: make issue-check ISSUE=<number>" >&2; exit 2)

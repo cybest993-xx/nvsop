@@ -236,25 +236,20 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
     workflow = root / ".github/workflows/blocking-ci.yml"
     if workflow.is_file():
         text = workflow.read_text()
-        # stage1 过渡契约：legacy PR/push 直跑与可复用调用并存，stage2 才移除 legacy 触发器。
-        for required_text in (
-            "pull_request:",
-            "push:",
-            "workflow_call:",
-            "make check",
-            "CI required",
-            "always()",
-        ):
+        # 单飞：blocking-ci 只作为可复用工作流被可信控制器调用，自身不再监听 PR/push。
+        for required_text in ("workflow_call:", "make check", "CI required", "always()"):
             if required_text not in text:
                 errors.append(f"blocking-ci.yml is missing required gate behavior: {required_text}")
-        exact_head = (
-            "ref: ${{ inputs.head_sha || github.event.pull_request.head.sha || github.sha }}"
-        )
-        if exact_head not in text:
-            errors.append(
-                "blocking-ci.yml must resolve the exact candidate head for reusable calls "
-                "and the PR head (not the virtual merge commit) for legacy PR runs"
-            )
+        for forbidden_trigger in ("pull_request:", "push:"):
+            if forbidden_trigger in text:
+                errors.append(
+                    "blocking-ci.yml must be reusable-only; remove the legacy "
+                    f"{forbidden_trigger} trigger"
+                )
+        if "ref: ${{ inputs.head_sha }}" not in text:
+            errors.append("blocking-ci.yml must check out the exact controller-supplied head")
+        if "github.event" in text or "github.sha" in text:
+            errors.append("blocking-ci.yml must resolve head/base from workflow_call inputs only")
         if "needs.scope.outputs.integration" not in text:
             errors.append("blocking-ci.yml must consume the shared ci_scope integration output")
 

@@ -146,7 +146,8 @@ def repository_name() -> str:
 
 def local_candidate(pr: PullRequestState) -> tuple[str, str | None]:
     ref = f"refs/heads/{pr.head_name}"
-    result = run_raw(["git", "show-ref", "--verify", "--hash", ref])
+    # 缺失分支必须是 exit 1 且空输出（rev-parse --verify --quiet）；show-ref 缺失返回 128。
+    result = run_raw(["git", "rev-parse", "--verify", "--quiet", ref])
     if result.returncode == 1:
         return "absent", None
     if result.returncode != 0:

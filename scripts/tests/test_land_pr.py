@@ -167,6 +167,20 @@ class LandPrTest(unittest.TestCase):
         self.assertIn("mergeable=mergeable", result.stdout)
         self.assertIn("next_action=merge", result.stdout)
 
+    def test_status_reports_merge_for_blocked_mergeable_green_head(self) -> None:
+        # 总体 merge_state=BLOCKED 但 mergeable 且 CI 绿、无拒绝：状态必须与 merge 一致。
+        result = self.run_cli(
+            "status",
+            "--pr",
+            "123",
+            payload=self.pr_payload(merge_state="BLOCKED"),
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("merge_state=blocked", result.stdout)
+        self.assertIn("mergeable=mergeable", result.stdout)
+        self.assertIn("next_action=merge", result.stdout)
+
     def test_status_reports_cleanup_after_merge(self) -> None:
         result = self.run_cli(
             "status",
@@ -313,16 +327,30 @@ class LandPrTest(unittest.TestCase):
     def test_merge_refuses_stale_ci_or_behind_head_before_mutation(self) -> None:
         cases = (
             (
+                "ci-not-success",
                 self.pr_payload(ci_status="IN_PROGRESS", ci_conclusion=None),
                 "CI required is not successful",
             ),
+            ("behind", self.pr_payload(merge_state="BEHIND"), "not cleanly mergeable"),
+            ("unknown", self.pr_payload(merge_state="UNKNOWN"), "not cleanly mergeable"),
             (
-                self.pr_payload(merge_state="BEHIND"),
+                "unknown-unmergeable",
+                self.pr_payload(merge_state="UNKNOWN", mergeable="UNKNOWN"),
+                "not cleanly mergeable",
+            ),
+            (
+                "dirty-conflicting",
+                self.pr_payload(merge_state="DIRTY", mergeable="CONFLICTING"),
+                "not cleanly mergeable",
+            ),
+            (
+                "blocked-conflicting",
+                self.pr_payload(merge_state="BLOCKED", mergeable="CONFLICTING"),
                 "not cleanly mergeable",
             ),
         )
-        for payload, expected_error in cases:
-            with self.subTest(expected_error=expected_error):
+        for label, payload, expected_error in cases:
+            with self.subTest(case=label):
                 self.calls_file.unlink(missing_ok=True)
                 result = self.run_cli(
                     "merge",
@@ -362,6 +390,69 @@ class LandPrTest(unittest.TestCase):
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn("GitHub did not merge the pull request: blocked", result.stderr)
+
+    def test_merge_allows_blocked_mergeable_green_head_to_reach_server_cas(self) -> None:
+        # 总体 merge_state=BLOCKED 但 mergeable 且 CI 绿、无拒绝：服务器 ruleset 是权威，
+        # 必须到达精确 head 的 squash CAS，由服务器对执行 actor 判定，本地不得提前否决。
+        result = self.run_cli(
+            "merge",
+            "--pr",
+            "123",
+            "--expected-head",
+            HEAD,
+            payload=self.pr_payload(merge_state="BLOCKED"),
+            api_payload={"merged": True, "sha": MERGE, "message": "merged"},
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("action=merged", result.stdout)
+        self.assertIn(f"merge_commit={MERGE}", result.stdout)
+        self.assertEqual(
+            [
+                "api",
+                "--method",
+                "PUT",
+                "repos/owner/repo/pulls/123/merge",
+                "-f",
+                f"sha={HEAD}",
+                "-f",
+                "merge_method=squash",
+            ],
+            self.calls()[-1],
+        )
+        self.assertEqual(1, len(self.merge_writes()))
+
+    def test_merge_blocked_head_server_rejection_is_not_retried(self) -> None:
+        # BLOCKED 头到达服务器后仍被否决（规则不满足或 API 失败）必须报错且不重试，只写一次。
+        cases = (
+            ("merged-false", "0", {"merged": False, "sha": MERGE, "message": "review required"}),
+            ("api-error", "1", {"message": "Resource not accessible by integration"}),
+        )
+        for label, api_return, api_payload in cases:
+            with self.subTest(case=label):
+                self.calls_file.unlink(missing_ok=True)
+                self.env["GH_API_RETURN"] = api_return
+                try:
+                    result = self.run_cli(
+                        "merge",
+                        "--pr",
+                        "123",
+                        "--expected-head",
+                        HEAD,
+                        payload=self.pr_payload(merge_state="BLOCKED"),
+                        api_payload=api_payload,
+                    )
+                finally:
+                    self.env["GH_API_RETURN"] = "0"
+                self.assertNotEqual(0, result.returncode)
+                self.assertEqual(1, len(self.merge_writes()))
+
+    def merge_writes(self) -> list[list[str]]:
+        return [
+            call
+            for call in self.calls()
+            if call[:3] == ["api", "--method", "PUT"] and call[3].endswith("/merge")
+        ]
 
     def _use_native_git(self) -> None:
         # 移除 PATH 上的 fake git 以暴露真实 git；fake gh 仍拦截网络变更。

@@ -197,7 +197,7 @@ def next_action(pr: PullRequestState, local_state: str) -> str:
         return "blocked-ci"
     if pr.merge_state == "UNKNOWN" or pr.mergeable == "UNKNOWN":
         return "wait-mergeability"
-    if pr.merge_state == "CLEAN" and pr.mergeable == "MERGEABLE":
+    if pr.merge_state in {"CLEAN", "BLOCKED"} and pr.mergeable == "MERGEABLE":
         return "merge"
     return "blocked"
 
@@ -281,7 +281,9 @@ def merge(number: int, expected_head: str) -> str:
         raise LandingError("GitHub review has changes requested")
     if pr.ci_required != "success":
         raise LandingError(f"{REQUIRED_CHECK} is not successful: {pr.ci_required}")
-    if pr.merge_state != "CLEAN" or pr.mergeable != "MERGEABLE":
+    # 总体 merge_state=BLOCKED 仍可能满足服务器 ruleset（App 可绕过 update 限制）；
+    # 合并权只归服务器对执行 actor 的精确 head CAS 判定，本地不得用总体摘要提前否决。
+    if pr.merge_state not in {"CLEAN", "BLOCKED"} or pr.mergeable != "MERGEABLE":
         raise LandingError(
             "pull request is not cleanly mergeable: "
             f"merge_state={pr.merge_state.lower()} mergeable={pr.mergeable.lower()}"

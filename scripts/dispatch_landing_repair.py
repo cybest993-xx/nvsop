@@ -201,7 +201,7 @@ def resume(backend: lq.Backend, pr: int, host: HostBridge, claim: str) -> int:
     try:
         target = resolve_target(event)
     except AgentUnavailableError as exc:
-        return _unavailable(backend, event, digest, pr, str(exc))
+        return _unavailable(backend, event, digest, str(exc))
     request = ResumeRequest(target[1], resume_handoff(event, target, digest))
     try:
         verified = host.verify(request)

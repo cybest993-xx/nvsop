@@ -245,6 +245,19 @@ class RepairDispatchTest(tq.GitTaskFixture):
         with self.assertRaises(dr.DispatchError):
             dr.preflight(self.backend, 1, str(self.worktree))
 
+    def test_missing_receipt_after_resuming_reports_unavailable(self) -> None:
+        # 归属解析失败必须释放为终态 unavailable，而不是抛错把 claim 搁浅在 resuming。
+        self._blocked()
+        token = self._claim()
+        (self.worktree / ".nvsop" / "artifacts" / "landing" / f"{self.handoff}.json").unlink()
+        spy = SpyBridge()
+        code, _ = self._run(lambda: dr.resume(self.backend, 1, spy, token))
+        entry = lq.find(self.backend.state_obj, 1)
+        self.assertEqual(
+            (0, [], "unavailable", lq.BLOCKED),
+            (code, spy.resumed, entry.evidence["repair_state"], entry.state),
+        )
+
     def test_missing_corrupt_or_taken_over_target_fails_closed(self) -> None:
         self._blocked()
         event = lq.repair_event(self.backend, 1)

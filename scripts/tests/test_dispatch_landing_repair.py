@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sys
+import threading
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -61,6 +62,40 @@ class SyncBackend(tq.FakeBackend):
         return True
 
 
+class DeferredBackend(tq.FakeBackend):
+    """dispatch_wake 只把请求写入 inbox、不消费：真实异步控制器与 CLI 读取分离。"""
+
+    def dispatch_wake(self) -> bool:
+        cid = max(self.comments, default=0) + 1
+        self.comments[cid] = tq.comment(cid, self.posted[-1], pr=1)
+        return True
+
+
+class BarrierBackend(SyncBackend):
+    """arm 后前 N 次 state() 读取在 barrier 同步，复现同 token 并发进入 host 阶段的竞态。"""
+
+    _lock: threading.Lock | None = None
+    _barrier: threading.Barrier | None = None
+    _remaining = 0
+
+    def arm(self, parties: int = 2) -> None:
+        self._lock = threading.Lock()
+        self._barrier = threading.Barrier(parties)
+        self._remaining = parties
+
+    def state(self) -> tuple[lq.State, str]:
+        result = super().state()
+        lock, barrier = self._lock, self._barrier
+        if lock is None or barrier is None:
+            return result
+        with lock:
+            wait = self._remaining > 0
+            self._remaining = max(0, self._remaining - 1)
+        if wait:
+            barrier.wait(timeout=5)
+        return result
+
+
 class RepairDispatchTest(tq.GitTaskFixture):
     """真实临时 Git worktree + 绑定 + receipt 的派发 dryrun。"""
 
@@ -71,7 +106,7 @@ class RepairDispatchTest(tq.GitTaskFixture):
         self.handoff = "f" * 32
         lq.local_receipt(self.handoff, 1, self.head, "agent/a/demo")
 
-    def _blocked(self, run: str = "9") -> None:
+    def _blocked(self, run: str = "9", backend_cls: type = SyncBackend) -> None:
         entry, att = tq.active_entry(root=self.head)
         fields = ("handoff", "expected_head", "observed_head", "main", "run", "attempt")
         evidence = dict(
@@ -81,9 +116,12 @@ class RepairDispatchTest(tq.GitTaskFixture):
             lq.State(1, (replace(entry, handoff=self.handoff),)), 1, lq.BLOCKED_CI, evidence
         )
         self.att = att
-        self.backend = SyncBackend(
+        self.backend = backend_cls(
             state=state, comments={500: att}, pr=tq.pr_state(head=self.head), main=tq.BASE
         )
+
+    def _consume(self) -> None:
+        self.backend.state_obj = lq._consume(self.backend, self.backend.state_obj)
 
     def _run(self, call: object) -> tuple[int, str]:
         buffer = io.StringIO()
@@ -112,6 +150,67 @@ class RepairDispatchTest(tq.GitTaskFixture):
 
     def _attestation(self) -> lq.Attestation:
         return lq.attestation_from_comment(self.att, tq.REPO, 1)
+
+    def test_async_backend_pending_then_explicit_rerun_reaches_host_once(self) -> None:
+        # 真实异步 GitHub.dispatch_wake 不消费请求：首次 resume 只能 pending，显式 rerun 才调 host。
+        self._blocked(backend_cls=DeferredBackend)
+        spy, token = SpyBridge(), self._claim()
+        self._consume()
+        code, out = self._resume(spy, token)
+        self.assertEqual((0, [], True), (code, spy.resumed, "pending-resume" in out))
+        self.assertEqual("claimed", lq.find(self.backend.state_obj, 1).evidence["repair_state"])
+        self._consume()
+        self.assertEqual("resuming", lq.find(self.backend.state_obj, 1).evidence["repair_state"])
+        code, out = self._resume(spy, token)
+        self.assertEqual((0, [self.SESSION_ID], True), (code, spy.resumed, "resumed" in out))
+
+    def test_concurrent_same_token_resume_calls_host_at_most_once(self) -> None:
+        self._blocked(backend_cls=BarrierBackend)
+        token = self._claim()
+        self.backend.state_obj = lq.apply_repair(
+            self.backend.state_obj, self._request(lq.REPAIR_RESUMING, 90, token)
+        )
+        spy = SpyBridge()
+        self.backend.arm(2)
+        results: list[int] = []
+        threads = [
+            threading.Thread(target=lambda: results.append(dr.resume(self.backend, 1, spy, token)))
+            for _ in range(2)
+        ]
+        with contextlib.redirect_stdout(io.StringIO()):
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+        self.assertEqual([self.SESSION_ID], spy.resumed)
+        self.assertEqual([0, 1], sorted(results))
+
+    def test_uncertain_or_crashed_resume_preserves_marker(self) -> None:
+        self._blocked()
+        token = self._claim()
+        landing = self.worktree / ".nvsop" / "artifacts" / "landing"
+        code, out = self._resume(BrokenBridge(), token)
+        self.assertEqual((1, True), (code, "uncertain" in out))
+        self.assertEqual(1, len(list(landing.glob("*.resume"))))
+        # marker 已预占：重复调用只能 in-progress，不得移除 marker 或第二次调 host。
+        spy = SpyBridge()
+        code, out = self._resume(spy, token)
+        self.assertEqual((1, [], True), (code, spy.resumed, "in-progress" in out))
+        self.assertEqual(1, len(list(landing.glob("*.resume"))))
+
+    def test_wrong_token_in_resuming_fails_closed_without_host(self) -> None:
+        self._blocked()
+        token = self._claim()
+        self.backend.state_obj = lq.apply_repair(
+            self.backend.state_obj, self._request(lq.REPAIR_RESUMING, 90, token)
+        )
+        spy = SpyBridge()
+        with self.assertRaises(dr.DispatchError):
+            dr.resume(self.backend, 1, spy, "0" * 32)
+        self.assertEqual([], spy.resumed)
+        self.assertEqual(
+            [], list((self.worktree / ".nvsop" / "artifacts" / "landing").glob("*.resume"))
+        )
 
     def test_claim_digest_is_public_but_plaintext_token_is_not(self) -> None:
         self._blocked()
@@ -149,9 +248,11 @@ class RepairDispatchTest(tq.GitTaskFixture):
                 resuming, self._enqueue_request(lq.claim_digest(token), 99), self._attestation()
             )
         spy = SpyBridge()
-        _, out = self._run(lambda: dr.resume(self.backend, 1, spy, token))
-        self.assertEqual([], spy.resumed)
-        self.assertIn("in-progress", out)
+        code, out = self._run(lambda: dr.resume(self.backend, 1, spy, token))
+        # 控制器已确认 resuming：显式 rerun 的 winner 继续并调 host 一次。
+        self.assertEqual((0, [self.SESSION_ID], True), (code, spy.resumed, "resumed" in out))
+        code, out = self._run(lambda: dr.resume(self.backend, 1, spy, token))
+        self.assertEqual((True, 1), ("already-resumed" in out, len(spy.resumed)))
 
     def test_spy_resume_then_reenqueue_and_reblock_cycle(self) -> None:
         self._blocked()
@@ -177,6 +278,12 @@ class RepairDispatchTest(tq.GitTaskFixture):
         self._blocked(run="12")
         self._resume(spy, self._claim())
         self.assertEqual([self.SESSION_ID, self.SESSION_ID], spy.resumed)
+        # 每次 BLOCKED 代次只预占一个 marker；新一代次可继续 resume 同一 session。
+        markers = {
+            path.name
+            for path in (self.worktree / ".nvsop" / "artifacts" / "landing").glob("*.resume")
+        }
+        self.assertEqual(2, len(markers))
 
     def test_bad_token_uncertain_and_stale_release(self) -> None:
         self._blocked()

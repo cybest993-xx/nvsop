@@ -34,8 +34,8 @@ class RepositoryPolicyTest(unittest.TestCase):
             Path("docs/engineering/documentation.md"): "# Documentation\n",
             Path("docs/design/solution-and-roadmap.md"): "# Current decisions\n",
             Path(".github/workflows/blocking-ci.yml"): (
-                "pull_request:\npush:\nworkflow_call:\nCI required\nalways()\nmake check\n"
-                "ref: ${{ inputs.head_sha || github.event.pull_request.head.sha || github.sha }}\n"
+                "workflow_call:\nCI required\nalways()\nmake check\n"
+                "ref: ${{ inputs.head_sha }}\n"
                 "if: needs.scope.outputs.integration == 'true'\n"
             ),
             Path(".github/workflows/landing-queue.yml"): (
@@ -79,6 +79,33 @@ class RepositoryPolicyTest(unittest.TestCase):
 
     def test_accepts_minimum_harness(self) -> None:
         self.assertEqual([], self.check())
+
+    def test_rejects_blocking_ci_legacy_triggers_and_caller_expressions(self) -> None:
+        # queue-only：legacy 触发器与 caller 表达式都必须拒绝，候选头只能来自控制器输入。
+        self.write(
+            ".github/workflows/blocking-ci.yml",
+            "pull_request:\npush:\nworkflow_call:\nCI required\nalways()\nmake check\n"
+            "ref: ${{ inputs.head_sha }}\n"
+            "if: needs.scope.outputs.integration == 'true'\n",
+        )
+        errors = self.check()
+        self.assertIn(
+            "blocking-ci.yml must be reusable-only; remove the legacy pull_request: trigger",
+            errors,
+        )
+        self.assertIn(
+            "blocking-ci.yml must be reusable-only; remove the legacy push: trigger", errors
+        )
+
+        self.write(
+            ".github/workflows/blocking-ci.yml",
+            "workflow_call:\nCI required\nalways()\nmake check\n"
+            "ref: ${{ inputs.head_sha || github.sha }}\n"
+            "if: needs.scope.outputs.integration == 'true'\n",
+        )
+        self.assertIn(
+            "blocking-ci.yml must resolve head/base from workflow_call inputs only", self.check()
+        )
 
     def test_rejects_a_shared_selector_that_omits_system_tests(self) -> None:
         system_test = self.write("tests/system/test_case.py", "")

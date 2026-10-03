@@ -145,26 +145,21 @@ class BlockingCiTest(unittest.TestCase):
         self.assertIn("include-hidden-files: true", workflow)
         self.assertNotIn(".nvsop/dev-main", workflow)
 
-    def test_blocking_ci_keeps_legacy_entry_and_adds_reusable_call(self) -> None:
+    def test_blocking_ci_is_reusable_only_and_checks_exact_controller_head(self) -> None:
         workflow = WORKFLOW.read_text()
-        # stage1：legacy PR / push main 直跑继续存在，同时暴露可复用接口供队列单飞调用。
-        self.assertIn("\n  pull_request:\n", workflow)
-        self.assertIn("\n  push:\n", workflow)
+        # queue-only：候选只由可信 landing-queue 以显式 head/base 调用。
+        self.assertNotIn("\n  pull_request:\n", workflow)
+        self.assertNotIn("\n  push:\n", workflow)
         self.assertIn("workflow_call:", workflow)
         self.assertEqual(2, workflow.count("required: true"))
         self.assertIn("head_sha:", workflow)
         self.assertIn("base_sha:", workflow)
-        # 每个 checkout 解析精确候选头：可复用调用用控制器输入，legacy PR 用 PR 头，push 用 sha。
-        head_expression = (
-            "ref: ${{ inputs.head_sha || github.event.pull_request.head.sha || github.sha }}"
-        )
+        head_expression = "ref: ${{ inputs.head_sha }}"
         self.assertEqual(workflow.count(head_expression), workflow.count("actions/checkout@"))
-        self.assertNotIn("ref: ${{ inputs.head_sha }}", workflow)
-        base_expression = (
-            "BASE_SHA: ${{ inputs.base_sha || github.event.pull_request.base.sha "
-            "|| github.event.before }}"
-        )
-        self.assertIn(base_expression, workflow)
+        self.assertIn("BASE_SHA: ${{ inputs.base_sha }}", workflow)
+        self.assertIn("HEAD_SHA: ${{ inputs.head_sha }}", workflow)
+        self.assertNotIn("github.event", workflow)
+        self.assertNotIn("github.sha", workflow)
         # 候选代码只读检出，绝不携带凭据或 App secret。
         self.assertEqual(
             workflow.count("persist-credentials: false"),
@@ -180,7 +175,7 @@ class BlockingCiTest(unittest.TestCase):
         self.assertIn("group: blocking-ci-", concurrency)
         self.assertNotIn("group: landing-queue", concurrency)
         self.assertIn("inputs.head_sha", concurrency)
-        self.assertIn("cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}", concurrency)
+        self.assertIn("cancel-in-progress: false", concurrency)
 
 
 if __name__ == "__main__":

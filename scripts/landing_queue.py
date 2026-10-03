@@ -138,7 +138,6 @@ REPAIR_PENDING_STATES = frozenset({"claimed", "resuming"})
 REPAIR_TERMINAL_STATES = REPAIR_STATES - REPAIR_PENDING_STATES
 # 修复键与失败证据共用 evidence 白名单：公开但不含 session 身份或 worktree 路径。
 REPAIR_KEYS = ("repair_state", "repair_claim", "repair_generation")
-CLAIM_ID = re.compile(r"^[0-9a-f]{32}$")
 FULL_OBJECT_ID = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 HANDOFF_ID = re.compile(r"^[0-9a-f]{32}$")
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -209,7 +208,7 @@ class Request:
     handoff: str = ""
     attestation_comment: int = 0
     attestation_digest: str = ""
-    # claim 是修复声明/完成 token，generation 是它绑定的阻塞代次；两者都不含会话身份。
+    # claim 是修复声明/完成 token 的 sha256 digest；明文只留在本地 stdout。
     claim: str = ""
     generation: str = ""
 
@@ -305,7 +304,7 @@ def apply_enqueue(state: State, request: Request, attestation: Attestation) -> S
     if repair in REPAIR_STATES:
         # 只有终态声明可被带 token 的重新入队释放；claimed/resuming 未决时一律拒绝，避免双写入者。
         claim = (existing.evidence or {}).get("repair_claim")
-        if repair not in REPAIR_TERMINAL_STATES or claim_digest(request.claim) != claim:
+        if repair not in REPAIR_TERMINAL_STATES or request.claim != claim:
             raise QueueError("a repair claim is active; re-enqueue needs its completion token")
     entries = tuple(entry for entry in state.entries if entry.pr != request.pr)
     return promote(replace(state, entries=(*entries, _new_entry(request, attestation))))
@@ -495,7 +494,8 @@ def apply_repair(state: State, request: Request) -> State:
         raise QueueError("repair event is stale")
     evidence = dict(entry.evidence or {})
     current = evidence.get("repair_state")
-    digest = claim_digest(request.claim)
+    # 请求里的 claim 已是 sha256 digest；控制器无需明文 token。
+    digest = request.claim
     if request.kind == REPAIR_CLAIM:
         if current in REPAIR_STATES:
             raise QueueError("a repair claim already exists for this generation")
@@ -522,8 +522,8 @@ def _validate_repair_request(request: Request) -> None:
         raise QueueError("request id must be a positive integer")
     if HANDOFF_ID.fullmatch(request.handoff) is None:
         raise QueueError("repair request must name an opaque 32-hex handoff")
-    if CLAIM_ID.fullmatch(request.claim) is None:
-        raise QueueError("repair request must name an opaque 32-hex claim")
+    if DIGEST.fullmatch(request.claim) is None:
+        raise QueueError("repair request must name its 64-hex claim digest")
     if DIGEST.fullmatch(request.generation) is None:
         raise QueueError("repair request must name its 64-hex event generation")
 
@@ -541,8 +541,8 @@ def _validate_request_inputs(request: Request) -> None:
         raise QueueError("attestation comment id must be a positive integer")
     if DIGEST.fullmatch(request.attestation_digest) is None:
         raise QueueError("attestation digest must be a sha256 hex digest")
-    if request.claim and CLAIM_ID.fullmatch(request.claim) is None:
-        raise QueueError("repair completion token must be an opaque 32-hex token")
+    if request.claim and DIGEST.fullmatch(request.claim) is None:
+        raise QueueError("repair completion token must be a sha256 digest")
 
 
 # --------------------------------------------------------------------------- 序列化
@@ -1319,9 +1319,10 @@ def enqueue(
     ):
         raise QueueError(f"pr {number} is ACTIVE with a different authorization root")
     repair = _repair_state(existing) if existing is not None and existing.state == BLOCKED else None
-    if repair in REPAIR_STATES and not repair_claim:
-        # 修复声明存在时无 token 入队会被控制器静默拒绝；CLI 先 fail closed，不发请求。
-        raise QueueError("a repair claim is active; re-enqueue requires REPAIR_CLAIM=<token>")
+    digest = claim_digest(repair_claim) if repair_claim else ""
+    if repair in REPAIR_STATES and digest != (existing.evidence or {}).get("repair_claim"):
+        # 未决声明期间无 token 或错误 token 的入队会被控制器静默拒绝；CLI 先 fail closed。
+        raise QueueError("a repair claim is active; re-enqueue requires its matching REPAIR_CLAIM")
     handoff = secrets.token_hex(16)
     backend.post_request(
         request_body(
@@ -1333,7 +1334,7 @@ def enqueue(
                 handoff,
                 attestation.comment,
                 attestation.digest,
-                claim=repair_claim,
+                claim=digest,
             )
         )
     )

@@ -1421,7 +1421,7 @@ class RepairTest(EnvTest):
         state, _ = _blocked_state()
         entry = lq.find(state, 1)
         generation = lq.repair_generation(entry)
-        claim = "a" * 31 + "b"
+        claim = "a" * 63 + "b"
 
         def request(kind: str, rid: int, **kw: str) -> lq.Request:
             base = lq.Request(
@@ -1433,11 +1433,11 @@ class RepairTest(EnvTest):
             with self.subTest(gen=gen[:8]), self.assertRaises(lq.QueueError):
                 lq.apply_repair(state, request(lq.REPAIR_CLAIM, 2, handoff=handoff, generation=gen))
         claimed = lq.apply_repair(state, request(lq.REPAIR_CLAIM, 2))
-        self.assertEqual(lq.claim_digest(claim), lq.find(claimed, 1).evidence["repair_claim"])
+        self.assertEqual(claim, lq.find(claimed, 1).evidence["repair_claim"])
         for kind, token in (
             (lq.REPAIR_CLAIM, claim),
-            (lq.REPAIR_RESUMING, "b" * 32),
-            (lq.REPAIR_RESUMED, "b" * 32),
+            (lq.REPAIR_RESUMING, "b" * 64),
+            (lq.REPAIR_RESUMED, "b" * 64),
         ):
             with self.subTest(kind=kind), self.assertRaises(lq.QueueError):
                 lq.apply_repair(claimed, request(kind, 3, claim=token))
@@ -1451,7 +1451,7 @@ class RepairTest(EnvTest):
         entry = lq.find(state, 1)
         other, _ = queued_entry(pr=2, root=ROOT_SHA, cid=501)
         state = replace(state, entries=(*state.entries, other))
-        token = "a" * 32
+        token = "a" * 64
 
         def repair(kind: str, rid: int) -> lq.Request:
             request = lq.Request(kind, 1, rid, handoff=entry.handoff, claim=token)
@@ -1476,17 +1476,17 @@ class RepairTest(EnvTest):
         self.assertNotIn("repair_state", lq.find(completed, 1).evidence or {})
         for kind in (lq.REPAIR_CLAIM, lq.REPAIR_RESUMING, lq.REPAIR_RESUMED, lq.REPAIR_UNAVAILABLE):
             body = lq.request_body(
-                lq.Request(kind, 7, 0, handoff="f" * 32, claim="a" * 32, generation="0" * 64)
+                lq.Request(kind, 7, 0, handoff="f" * 32, claim="a" * 64, generation="0" * 64)
             )
             parsed = lq.request_from_comment(comment(9, body, pr=7))
             self.assertEqual(
-                (kind, 7, "f" * 32, "a" * 32, "0" * 64),
+                (kind, 7, "f" * 32, "a" * 64, "0" * 64),
                 (parsed.kind, parsed.pr, parsed.handoff, parsed.claim, parsed.generation),
             )
 
     def test_consumed_claim_leaves_prepare_and_finalize_no_op(self) -> None:
         state, att = _blocked_state()
-        request = lq.Request(lq.REPAIR_CLAIM, 1, 0, handoff="f" * 32, claim="a" * 32)
+        request = lq.Request(lq.REPAIR_CLAIM, 1, 0, handoff="f" * 32, claim="a" * 64)
         request = replace(request, generation=lq.repair_generation(lq.find(state, 1)))
         backend = FakeBackend(
             state=state,

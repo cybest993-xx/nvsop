@@ -1417,7 +1417,11 @@ class GitHubAdapterTest(unittest.TestCase):
                 lq.GitHub(runner=runner).pull_request(5)
 
 
-class BindingEnqueueTest(EnvTest):
+class GitTaskFixture(EnvTest):
+    """真实临时 Git worktree + 绑定，供队列与派发的集成测试复用。"""
+
+    SESSION_ID = "landing-test-session"
+
     def setUp(self) -> None:
         super().setUp()
         self.temp_dir = tempfile.TemporaryDirectory(prefix="landing-queue-")
@@ -1439,6 +1443,7 @@ class BindingEnqueueTest(EnvTest):
         (self.repo / "base.txt").write_text("base\n", encoding="utf-8")
         self._git("add", ".gitignore", "base.txt")
         self._git("commit", "--quiet", "-m", "base")
+        self._git("remote", "add", "origin", f"https://github.com/{REPO}.git")
         self.worktree = self.root / "task"
         self._git("worktree", "add", "--quiet", "-b", "agent/a/demo", str(self.worktree))
         self.head = self._git("rev-parse", "HEAD", cwd=self.worktree)
@@ -1446,7 +1451,7 @@ class BindingEnqueueTest(EnvTest):
         os.chdir(self.worktree)
         from bind_task_session import bind
 
-        bind("landing-test-session")
+        bind(self.SESSION_ID)
 
     def tearDown(self) -> None:
         os.chdir(self._previous)
@@ -1466,6 +1471,8 @@ class BindingEnqueueTest(EnvTest):
             self.fail(result.stderr or result.stdout)
         return result.stdout.strip()
 
+
+class BindingEnqueueTest(GitTaskFixture):
     def test_enqueue_posts_opaque_request_and_preserves_binding(self) -> None:
         text = attestation_body(pr=123, root=self.head)
         backend = FakeBackend(
@@ -1524,6 +1531,129 @@ class LandingWorkflowTest(unittest.TestCase):
         for body in (prepare, integrity):
             self.assertIn("needs: guard", body)
             self.assertIn("needs.guard.outputs.enabled == 'true'", body)
+
+
+def _blocked_state(*, reason: str = lq.BLOCKED_CI) -> tuple[lq.State, lq.Comment]:
+    entry, att = active_entry()
+    fields = ("handoff", "expected_head", "observed_head", "main", "run", "attempt")
+    evidence = dict(zip(fields, (entry.handoff, ROOT_SHA, ROOT_SHA, BASE, "9", "1"), strict=True))
+    return lq.block(lq.State(1, (entry,)), 1, reason, evidence), att
+
+
+class RepairTest(EnvTest):
+    def _backend(self, state: lq.State, att: lq.Comment, **overrides: object) -> FakeBackend:
+        defaults = {"state": state, "comments": {500: att}, "pr": pr_state(), "main": BASE}
+        defaults.update(overrides)
+        return FakeBackend(**defaults)  # type: ignore[arg-type]
+
+    def test_event_is_public_and_rejects_non_repair_or_stale_facts(self) -> None:
+        state, att = _blocked_state()
+        event = lq.repair_event(self._backend(state, att), 1)
+        self.assertEqual(lq.repair_generation(lq.find(state, 1)), event["event"])
+        self.assertEqual((ROOT_SHA, BASE), (event["landing_head"], event["main"]))
+        self.assertEqual({"reason", "category", "run", "attempt"}, set(event["failure"]))
+        text = json.dumps(event, sort_keys=True)
+        for key in ("session", "worktree"):
+            self.assertNotIn(key, text)
+        for reason in (lq.BLOCKED_INFRA, lq.BLOCKED_AUTHORITY):
+            blocked, blocked_att = _blocked_state(reason=reason)
+            with self.subTest(reason=reason), self.assertRaises(lq.QueueError):
+                lq.repair_event(self._backend(blocked, blocked_att), 1)
+        for backend in (
+            self._backend(state, att, pr=pr_state(head=NEW_HEAD)),
+            self._backend(state, att, main=NEW_HEAD),
+            self._backend(state, att, pr=pr_state(state="CLOSED")),
+        ):
+            with self.subTest(), self.assertRaises(lq.QueueError):
+                lq.repair_event(backend, 1)
+
+    def test_claim_is_exclusive_terminal(self) -> None:
+        state, _ = _blocked_state()
+        entry = lq.find(state, 1)
+        generation = lq.repair_generation(entry)
+        claim = "a" * 31 + "b"
+
+        def request(kind: str, rid: int, **kw: str) -> lq.Request:
+            base = lq.Request(
+                kind, 1, rid, handoff=entry.handoff, claim=claim, generation=generation
+            )
+            return replace(base, **kw)
+
+        for handoff, gen in ((entry.handoff, "0" * 64), ("0" * 32, generation)):
+            with self.subTest(gen=gen[:8]), self.assertRaises(lq.QueueError):
+                lq.apply_repair(state, request(lq.REPAIR_CLAIM, 2, handoff=handoff, generation=gen))
+        claimed = lq.apply_repair(state, request(lq.REPAIR_CLAIM, 2))
+        self.assertEqual(lq.claim_digest(claim), lq.find(claimed, 1).evidence["repair_claim"])
+        for kind, token in (
+            (lq.REPAIR_CLAIM, claim),
+            (lq.REPAIR_RESUMING, "b" * 32),
+            (lq.REPAIR_RESUMED, "b" * 32),
+        ):
+            with self.subTest(kind=kind), self.assertRaises(lq.QueueError):
+                lq.apply_repair(claimed, request(kind, 3, claim=token))
+        resumed = lq.apply_repair(claimed, request(lq.REPAIR_RESUMED, 3))
+        self.assertEqual("resumed", lq.find(resumed, 1).evidence["repair_state"])
+        with self.assertRaises(lq.QueueError):
+            lq.apply_repair(resumed, request(lq.REPAIR_UNAVAILABLE, 4))
+
+    def test_claim_gates_enqueue_then_requeues_at_tail_and_roundtrips(self) -> None:
+        state, _ = _blocked_state()
+        entry = lq.find(state, 1)
+        other, _ = queued_entry(pr=2, root=ROOT_SHA, cid=501)
+        state = replace(state, entries=(*state.entries, other))
+        token = "a" * 32
+
+        def repair(kind: str, rid: int) -> lq.Request:
+            request = lq.Request(kind, 1, rid, handoff=entry.handoff, claim=token)
+            return replace(request, generation=lq.repair_generation(entry))
+
+        request = lq.Request("enqueue", 1, 3, ROOT_SHA, "b" * 32, 500, "0" * 64, claim=token)
+        attestation = lq.attestation_from_comment(comment(500, attestation_body()), REPO, 1)
+        claimed = lq.apply_repair(state, repair(lq.REPAIR_CLAIM, 2))
+        resuming = lq.apply_repair(claimed, repair(lq.REPAIR_RESUMING, 3))
+        # 未决声明（claimed/resuming）期间带 token 也不得重入队；终态才释放并落到队尾。
+        for pending in (claimed, resuming):
+            with (
+                self.subTest(state=lq.find(pending, 1).evidence["repair_state"]),
+                self.assertRaises(lq.QueueError),
+            ):
+                lq.apply_enqueue(pending, request, attestation)
+        done = lq.apply_repair(resuming, repair(lq.REPAIR_RESUMED, 4))
+        completed = lq.apply_enqueue(done, request, attestation)
+        self.assertEqual(
+            (lq.QUEUED, 1), (lq.find(completed, 1).state, lq.ordered(completed)[-1].pr)
+        )
+        self.assertNotIn("repair_state", lq.find(completed, 1).evidence or {})
+        for kind in (lq.REPAIR_CLAIM, lq.REPAIR_RESUMING, lq.REPAIR_RESUMED, lq.REPAIR_UNAVAILABLE):
+            body = lq.request_body(
+                lq.Request(kind, 7, 0, handoff="f" * 32, claim="a" * 32, generation="0" * 64)
+            )
+            parsed = lq.request_from_comment(comment(9, body, pr=7))
+            self.assertEqual(
+                (kind, 7, "f" * 32, "a" * 32, "0" * 64),
+                (parsed.kind, parsed.pr, parsed.handoff, parsed.claim, parsed.generation),
+            )
+
+    def test_consumed_claim_leaves_prepare_and_finalize_no_op(self) -> None:
+        state, att = _blocked_state()
+        request = lq.Request(lq.REPAIR_CLAIM, 1, 0, handoff="f" * 32, claim="a" * 32)
+        request = replace(request, generation=lq.repair_generation(lq.find(state, 1)))
+        backend = FakeBackend(
+            state=state,
+            comments={500: att, 2: comment(2, lq.request_body(request), pr=1)},
+            pr=pr_state(),
+            main=BASE,
+        )
+        with mock.patch("builtins.print"):
+            lq.prepare(backend, "9", "1", MAIN_HEAD, None)
+        self.assertEqual("claimed", lq.find(backend.state_obj, 1).evidence["repair_state"])
+        writes = backend.writes
+        with mock.patch("builtins.print"):
+            lq.prepare(backend, "9", "1", MAIN_HEAD, None)
+            lq.finalize(backend, 1, "9", "1", "success")
+        self.assertEqual(writes, backend.writes)
+        self.assertEqual(lq.BLOCKED, lq.find(backend.state_obj, 1).state)
+        self.assertNotIn("session", json.dumps(lq.state_to_json(backend.state_obj)))
 
 
 if __name__ == "__main__":

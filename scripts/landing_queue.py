@@ -45,6 +45,7 @@ INBOX_ISSUE_ENV = "LANDING_QUEUE_ISSUE"
 APP_ID_ENV = "LANDING_APP_ID"
 APP_BOT_ENV = "LANDING_APP_BOT"
 CONTROLLER_PATH = ".github/workflows/landing-queue.yml"
+REUSABLE_CI_PATH = ".github/workflows/blocking-ci.yml"
 REQUEST_MARKER = "<!-- landing-queue-request -->"
 ATTESTATION_MARKER = "<!-- landing-attestation -->"
 TRUSTED_EVENTS = ("pull_request_target", "issue_comment", "workflow_dispatch", "push")
@@ -1359,17 +1360,47 @@ def _block_and_report(
     return 0
 
 
+def _references_trusted_ci(run: dict[str, Any], controller: str, repository: str) -> bool:
+    """证明 pull_request_target 运行引用的可复用 CI 来自同仓库固定 main。
+
+    GitHub 上同一次运行有三个 SHA 身份：run.head_sha/head_branch 是触发 PR 的头，
+    github.workflow_sha（= ci_controller）是实际执行的 workflow 源码提交。PR-target
+    运行执行默认分支代码，但头属于触发 PR（可能不是 ACTIVE 候选），因此头字段不能证明
+    源码来源；只信 referenced_workflows 中同仓库、固定 refs/heads/main、精确 controller
+    提交的 blocking-ci.yml。缺失、非 list、条目非 dict、外来仓库或其它路径/ref/sha 一律
+    fail closed，绝不把 AttributeError/畸形元数据当作成功。
+    """
+    workflows = run.get("referenced_workflows")
+    if not isinstance(workflows, list):
+        return False
+    expected = f"{repository}/{REUSABLE_CI_PATH}@{controller}"
+    for item in workflows:
+        if not isinstance(item, dict):
+            return False
+        if (
+            item.get("sha") == controller
+            and item.get("ref") == "refs/heads/main"
+            and item.get("path") == expected
+        ):
+            return True
+    return False
+
+
 def _run_matches(run: dict[str, Any], current: Entry, repository: str) -> bool:
     repo = run.get("repository")
-    return (
-        run.get("head_sha") == current.ci_controller
-        and run.get("head_branch") == "main"
-        and run.get("path") == CONTROLLER_PATH
-        and run.get("event") in TRUSTED_EVENTS
-        and isinstance(repo, dict)
-        and repo.get("full_name") == repository
-        and str(run.get("run_attempt")) == str(current.ci_attempt)
-    )
+    if (
+        run.get("path") != CONTROLLER_PATH
+        or run.get("event") not in TRUSTED_EVENTS
+        or not isinstance(repo, dict)
+        or repo.get("full_name") != repository
+        or str(run.get("run_attempt")) != str(current.ci_attempt)
+    ):
+        return False
+    if run.get("event") == "pull_request_target":
+        # 触发头不是 CI 头，也不能绑定当前 ci_head：PR2 事件可唤醒当前队列 PR1。
+        return _references_trusted_ci(run, current.ci_controller or "", repository)
+    # 其它可信事件运行在 main 上，头即受信 controller 提交。
+    return run.get("head_sha") == current.ci_controller and run.get("head_branch") == "main"
 
 
 CALLER_JOB_PREFIX = "Single-flight blocking CI / "

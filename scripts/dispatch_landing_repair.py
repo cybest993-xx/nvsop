@@ -2,7 +2,8 @@
 """把 BLOCKED 落地条目派发给其绑定的实现会话；无可证明 host 桥即 fail closed。
 
 公开事件不含 session 身份/worktree 路径；私有 resume handoff 才携带。声明经可信控制器
-CAS inbox 独占接受、推进 claimed→resuming 后才调 host，故重入队无法制造第二写入者。
+CAS inbox 独占接受、推进 claimed→resuming 后才调 host；调 host 前用绑定 worktree 内
+per-generation one-shot marker 原子预占，故并发或重入队都无法制造第二写入者。
 """
 
 from __future__ import annotations
@@ -168,6 +169,21 @@ def claim(backend: lq.Backend, pr: int) -> int:
     return 0
 
 
+def _reserve_resume(root: str, event: str) -> bool:
+    """一代次一次的原子预占：O_CREAT|O_EXCL 保证同 generation 只有一个 winner 调 host。
+
+    marker 只在可信绑定 worktree 的 landing 目录创建；崩溃或 uncertain 后保留，operator
+    只能走显式 unavailable/rebind，绝不自动删除或重试 host，避免制造第二写入者。
+    """
+    path = Path(root) / ".nvsop" / "artifacts" / "landing" / f"{event}.resume"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    except FileExistsError:
+        return False
+    return True
+
+
 def resume(backend: lq.Backend, pr: int, host: HostBridge, claim: str) -> int:
     if not claim:
         raise DispatchError("resume requires --claim <token> from the accepted claim")
@@ -180,11 +196,8 @@ def resume(backend: lq.Backend, pr: int, host: HostBridge, claim: str) -> int:
     if repair_state in lq.REPAIR_TERMINAL_STATES:
         print(f"state=already-{repair_state}\npr={pr}")
         return 0
-    if repair_state == "resuming":
-        # 单飞：只有刚推进 claimed→resuming 的调用继续；再次进入一律拒绝，不调 host。
-        print(f"state=in-progress\npr={pr}")
-        return 1
-    if repair_state != "claimed" or digest != evidence.get("repair_claim"):
+    # 必须先验证当前 claim digest（含 resuming 态）：错误 token 一律 fail closed，不碰 host。
+    if repair_state not in lq.REPAIR_PENDING_STATES or digest != evidence.get("repair_claim"):
         raise DispatchError("no accepted repair claim matching this token")
     try:
         event = lq.repair_event(backend, pr)
@@ -192,16 +205,22 @@ def resume(backend: lq.Backend, pr: int, host: HostBridge, claim: str) -> int:
         return _release(backend, pr, entry, digest, str(exc))
     if event["event"] != evidence.get("repair_generation"):
         return _release(backend, pr, entry, digest, "stale-event")
-    # 调 host 前先 CAS 推进 claimed→resuming；未确认前不得调用 host，避免重入队竞态。
-    _post(backend, lq.REPAIR_RESUMING, event, digest)
-    current = lq.find(backend.state()[0], pr)
-    if ((current.evidence or {}).get("repair_state") if current else None) != "resuming":
-        print(f"state=pending-resume\npr={pr}")
-        return 0
+    if repair_state == "claimed":
+        # 调 host 前先 CAS 推进 claimed→resuming；异步控制器未确认前不调 host，避免重入队竞态。
+        _post(backend, lq.REPAIR_RESUMING, event, digest)
+        current = lq.find(backend.state()[0], pr)
+        if ((current.evidence or {}).get("repair_state") if current else None) != "resuming":
+            # 首次 pending：同 token 显式 rerun 会在 controller 确认的 resuming 上继续。
+            print(f"state=pending-resume\npr={pr}")
+            return 0
     try:
         target = resolve_target(event)
     except AgentUnavailableError as exc:
         return _unavailable(backend, event, digest, str(exc))
+    # 控制器已确认 resuming；调 host 前用 per-generation marker 原子预占唯一 resume。
+    if not _reserve_resume(target[0], str(event["event"])):
+        print(f"state=in-progress\npr={pr}")
+        return 1
     request = ResumeRequest(target[1], resume_handoff(event, target, digest))
     try:
         verified = host.verify(request)

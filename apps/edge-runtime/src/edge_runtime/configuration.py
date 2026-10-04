@@ -16,8 +16,10 @@ from nvsop_contracts import (
 
 from edge_runtime.configuration_values import (
     _array,
+    _boolean,
     _non_empty_string,
     _object,
+    _positive_integer,
     _positive_number,
     _require_keys,
     safe_url,
@@ -266,18 +268,6 @@ def _read_secret(path: Path, name: str) -> str:
 
 def _path(value: object, name: str) -> Path:
     return Path(_non_empty_string(value, name))
-
-
-def _boolean(value: object, name: str) -> bool:
-    if not isinstance(value, bool):
-        raise ValueError(f"{name} must be a boolean")
-    return value
-
-
-def _positive_integer(value: object, name: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{name} must be a positive integer")
-    return value
 
 
 def _point_state(value: object, name: str) -> PointState:

@@ -1321,9 +1321,11 @@ def enqueue(
         raise QueueError(f"pr {number} is ACTIVE with a different authorization root")
     repair = _repair_state(existing) if existing is not None and existing.state == BLOCKED else None
     digest = claim_digest(repair_claim) if repair_claim else ""
-    if repair in REPAIR_STATES and digest != (existing.evidence or {}).get("repair_claim"):
-        # 未决声明期间无 token 或错误 token 的入队会被控制器静默拒绝；CLI 先 fail closed。
-        raise QueueError("a repair claim is active; re-enqueue requires its matching REPAIR_CLAIM")
+    if repair in REPAIR_STATES:
+        claim = (existing.evidence or {}).get("repair_claim")
+        if repair not in REPAIR_TERMINAL_STATES or digest != claim:
+            # 与控制器保持同一契约：claimed/resuming 一律阻止重入队，终态才接受匹配 token。
+            raise QueueError("re-enqueue requires a terminal repair claim and its matching token")
     handoff = secrets.token_hex(16)
     backend.post_request(
         request_body(

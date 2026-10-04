@@ -324,14 +324,20 @@ class RepairDispatchTest(tq.GitTaskFixture):
         )
         self.assertEqual(lq.ACTIVE, lq.find(requeued, 1).state)
 
-    def test_tokenless_or_wrong_token_enqueue_fails_closed(self) -> None:
+    def test_pending_claim_blocks_enqueue_until_terminal_completion(self) -> None:
         self._blocked()
         token = self._claim()
         before = len(self.backend.posted)
         for bad in ("", "b" * 32):
             with self.subTest(claim=bad), self.assertRaises(lq.QueueError):
                 lq.enqueue(self.backend, 1, self.head, 500, repair_claim=bad)
+        with self.assertRaises(lq.QueueError):
+            lq.enqueue(self.backend, 1, self.head, 500, repair_claim=token)
         self.assertEqual(before, len(self.backend.posted))
+
+        self.backend.state_obj = lq.apply_repair(
+            self.backend.state_obj, self._request(lq.REPAIR_RESUMED, 90, token)
+        )
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(0, lq.enqueue(self.backend, 1, self.head, 500, repair_claim=token))
         self.assertIn(lq.REQUEST_MARKER, self.backend.posted[-1])
@@ -363,6 +369,22 @@ class RepairDispatchTest(tq.GitTaskFixture):
         self._git("commit", "--quiet", "-m", "x", cwd=self.worktree)
         with self.assertRaises(dr.DispatchError):
             dr.preflight(self.backend, 1, str(self.worktree))
+
+    def test_preflight_keeps_local_head_on_authorization_root_when_remote_head_differs(
+        self,
+    ) -> None:
+        self._blocked()
+        entry = lq.find(self.backend.state_obj, 1)
+        observed_head = "9" * 40
+        self.backend.state_obj = replace(
+            self.backend.state_obj,
+            entries=(replace(entry, evidence={**entry.evidence, "observed_head": observed_head}),),
+        )
+        self.backend.pr = tq.pr_state(head=observed_head)
+
+        code, out = self._run(lambda: dr.preflight(self.backend, 1, str(self.worktree)))
+
+        self.assertEqual((0, True), (code, "preflight=ok" in out))
 
     def test_missing_receipt_after_resuming_reports_unavailable(self) -> None:
         # 归属解析失败必须释放为终态 unavailable，而不是抛错把 claim 搁浅在 resuming。

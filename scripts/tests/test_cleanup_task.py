@@ -224,6 +224,31 @@ class CleanupTaskTest(unittest.TestCase):
         self.assert_branch_exists(unrelated)
         self.assert_gh_called_once()
 
+    def test_merged_cleanup_fast_forwards_primary_main(self) -> None:
+        branch = "agent/a/demo"
+        candidate, merge_commit, task = self.make_merged_task(branch)
+        self.git("reset", "--quiet", "--hard", self.base)
+
+        result = self.run_cli(branch, candidate, merge_commit)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(merge_commit, self.git("rev-parse", "HEAD"))
+        self.assert_branch_absent(branch)
+        self.assertFalse(task.exists())
+
+    def test_dirty_primary_main_preserves_merged_task(self) -> None:
+        branch = "agent/a/demo"
+        candidate, merge_commit, task = self.make_merged_task(branch)
+        self.git("reset", "--quiet", "--hard", self.base)
+        (self.repo / "local.txt").write_text("keep\n", encoding="utf-8")
+
+        result = self.run_cli(branch, candidate, merge_commit)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual(self.base, self.git("rev-parse", "HEAD"))
+        self.assert_branch_exists(branch)
+        self.assertTrue(task.exists())
+
     def test_clean_task_without_worktree_removes_branch(self) -> None:
         branch = "agent/a/demo"
         candidate, merge_commit, task = self.make_merged_task(branch)

@@ -43,13 +43,27 @@ def _read_json_line(path: Path) -> dict[str, object]:
     return value
 
 
-def _pi_processes() -> list[str]:
+def _pi_processes(helper: Path) -> list[str]:
     result: list[str] = []
+    helper_name = helper.name
     for item in Path("/proc").iterdir():
         if not item.name.isdigit():
             continue
         try:
-            if (item / "comm").read_text(encoding="utf-8").strip() == "pi":
+            command = (item / "comm").read_text(encoding="utf-8").strip()
+            resumed_helper = False
+            if command != "pi":
+                arguments = [
+                    os.fsdecode(value)
+                    for value in (item / "cmdline").read_bytes().split(b"\0")
+                    if value
+                ]
+                resumed_helper = (
+                    len(arguments) >= 3
+                    and Path(arguments[1]).name == helper_name
+                    and arguments[2] == "resume"
+                )
+            if command == "pi" or resumed_helper:
                 result.append(os.path.realpath(os.readlink(item / "cwd")))
         except OSError:
             continue
@@ -109,7 +123,7 @@ class PiAdapter:
         agent_dir = Path(os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi" / "agent"))
         self.session_dir = Path(configured).expanduser() if configured else agent_dir / "sessions"
         self.helper = helper or Path(__file__).with_name("pi_resume_session.mjs")
-        self._processes = processes or _pi_processes
+        self._processes = processes or (lambda: _pi_processes(self.helper))
         self._sessions: dict[str, Path] = {}
         self._children: list[subprocess.Popen[bytes]] = []
 
@@ -283,6 +297,32 @@ def claim_path(worktree: str, event: str) -> Path:
     return Path(worktree) / ".nvsop" / "artifacts" / "landing" / f"{event}.claim"
 
 
+def claim_request_path(worktree: str, event: str) -> Path:
+    return Path(worktree) / ".nvsop" / "artifacts" / "landing" / f"{event}.claim-requested"
+
+
+def claim_request_recorded(worktree: str, event: str) -> bool:
+    return os.path.lexists(claim_request_path(worktree, event))
+
+
+def record_claim_request(worktree: str, event: str) -> None:
+    path = claim_request_path(worktree, event)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except FileExistsError:
+        return
+    except OSError as exc:
+        raise ServiceError("cannot persist local repair claim request receipt") from exc
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def local_claim(worktree: str, event: str) -> str:
     path = claim_path(worktree, event)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -353,14 +393,26 @@ class RepairService:
                 self._log("not-local-or-stale", pr=entry.pr, error=str(exc))
                 continue
 
-            token = local_claim(target[0], str(event["event"]))
+            event_id = str(event["event"])
+            token = local_claim(target[0], event_id)
             request = dr.ResumeRequest(target[1], dr.resume_handoff(event, target, token))
             if repair_state is None:
+                if claim_request_recorded(target[0], event_id):
+                    self._log("claim-pending", pr=entry.pr, event=event_id)
+                    continue
                 if not self.bridge.verify(request):
                     self._log("adapter-unavailable", pr=entry.pr)
                     continue
-                dr.claim(self.backend, entry.pr, token)
-                self._log("claim-requested", pr=entry.pr, event=event["event"])
+                try:
+                    dr.claim(self.backend, entry.pr, token)
+                except lq.InfrastructureError as exc:
+                    self._log("infrastructure", pr=entry.pr, error=str(exc))
+                    continue
+                except (lq.QueueError, dr.DispatchError) as exc:
+                    self._log("claim-error", pr=entry.pr, error=str(exc))
+                    continue
+                record_claim_request(target[0], event_id)
+                self._log("claim-requested", pr=entry.pr, event=event_id)
                 actions += 1
                 continue
 
@@ -418,13 +470,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             service.tick()
             return 0
-        except (lq.InfrastructureError, ServiceError) as exc:
+        except (lq.QueueError, dr.DispatchError, ServiceError) as exc:
             print(f"landing_repair_service: {exc}", file=sys.stderr)
             return 1
     while True:
         try:
             service.tick()
-        except (lq.InfrastructureError, ServiceError) as exc:
+        except (lq.QueueError, dr.DispatchError, ServiceError) as exc:
             print(f"landing_repair_service: {exc}", file=sys.stderr, flush=True)
         try:
             time.sleep(arguments.interval)

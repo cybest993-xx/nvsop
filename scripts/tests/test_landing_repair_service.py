@@ -5,11 +5,13 @@ import io
 import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -51,11 +53,15 @@ class RepairServiceTest(tq.GitTaskFixture):
                 strict=True,
             )
         )
-        state = lq.block(
+        self.blocked_state = lq.block(
             lq.State(1, (replace(entry, handoff=self.handoff),)), 1, lq.BLOCKED_CI, evidence
         )
+        self.attestation = att
         self.backend = td.SyncBackend(
-            state=state, comments={500: att}, pr=tq.pr_state(head=self.head), main=tq.BASE
+            state=self.blocked_state,
+            comments={500: self.attestation},
+            pr=tq.pr_state(head=self.head),
+            main=tq.BASE,
         )
 
     def _tick(self, adapter: FakeAdapter) -> int:
@@ -111,6 +117,22 @@ class RepairServiceTest(tq.GitTaskFixture):
         self.assertEqual(0, self._tick(adapter))
         self.assertNotIn("repair_state", lq.find(self.backend.state_obj, 1).evidence)
         self.assertEqual((before, []), (len(self.backend.posted), adapter.resumed))
+
+    def test_deferred_controller_posts_claim_once_across_service_restart(self) -> None:
+        self.backend = td.DeferredBackend(
+            state=self.blocked_state,
+            comments={500: self.attestation},
+            pr=tq.pr_state(head=self.head),
+            main=tq.BASE,
+        )
+        before = len(self.backend.posted)
+        self.assertEqual(1, self._tick(FakeAdapter()))
+        self.assertEqual(0, self._tick(FakeAdapter()))
+        self.assertEqual(before + 1, len(self.backend.posted))
+        entry = lq.find(self.backend.state_obj, 1)
+        event = lq.repair_generation(entry)
+        self.assertTrue(service.claim_request_path(str(self.worktree), event).is_file())
+        self.assertNotIn("repair_state", entry.evidence)
 
     def test_private_claim_mismatch_blocks_resume(self) -> None:
         self.assertEqual(1, self._tick(FakeAdapter()))
@@ -179,3 +201,40 @@ class AdapterContractTest(unittest.TestCase):
                 service.pi_session_writer_may_be_alive(header, str(task), [str(stored)])
             )
             self.assertTrue(service.pi_session_writer_may_be_alive(header, str(task), [str(task)]))
+
+    def test_pi_writer_scan_detects_resume_helper_process(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            task = root / "task"
+            task.mkdir()
+            helper = root / "pi_resume_session.mjs"
+            helper.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+            process = subprocess.Popen([sys.executable, str(helper), "resume"], cwd=task)
+            try:
+                processes = service._pi_processes(helper)
+                self.assertTrue(
+                    service.pi_session_writer_may_be_alive(
+                        {"cwd": str(root / "stored")}, str(task), processes
+                    )
+                )
+            finally:
+                process.terminate()
+                process.wait(timeout=5)
+
+
+class MainLoopTest(unittest.TestCase):
+    def test_daemon_contains_queue_and_dispatch_errors(self) -> None:
+        for error in (lq.StateMissingError("missing queue state"), dr.DispatchError("stale claim")):
+            with self.subTest(error=type(error).__name__):
+                dispatcher = mock.Mock()
+                dispatcher.tick.side_effect = error
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(service, "PiAdapter", return_value=FakeAdapter()),
+                    mock.patch.object(service, "RepairService", return_value=dispatcher),
+                    mock.patch.object(service.time, "sleep", side_effect=KeyboardInterrupt),
+                    contextlib.redirect_stderr(stderr),
+                ):
+                    self.assertEqual(0, service.main(["--interval", "0.01"]))
+                self.assertEqual(1, dispatcher.tick.call_count)
+                self.assertIn(str(error), stderr.getvalue())

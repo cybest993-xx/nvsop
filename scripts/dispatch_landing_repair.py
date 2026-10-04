@@ -257,8 +257,8 @@ def preflight(backend: lq.Backend, pr: int, worktree: str, expected_generation: 
     require_repository(root, str(event["repository"]))
     if _git("rev-parse", "--abbrev-ref", "HEAD", cwd=root) != branch:
         raise DispatchError("current branch is not the repair event branch")
-    if _git("rev-parse", "HEAD", cwd=root) != event["evidence"]["observed_head"]:  # type: ignore[index]
-        raise DispatchError("HEAD is not the blocked observed head")
+    if _git("rev-parse", "HEAD", cwd=root) != event["authorization_root"]:
+        raise DispatchError("HEAD is not the repair authorization root")
     if expected_generation and event["event"] != expected_generation:
         raise DispatchError("blocked generation changed since preflight was requested")
     resolve_target(event)

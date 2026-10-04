@@ -51,7 +51,6 @@ class CleanLocalArtifactsTest(unittest.TestCase):
             self.write(".nvsop/artifacts/landing/handoff.json"),
             self.write(".nvsop/artifacts/landing/event.claim"),
             self.write(".nvsop/artifacts/landing/event.resume"),
-            self.write(".nvsop/artifacts/landing/event.agent.log"),
         ]
 
         clean(self.root)

@@ -15,9 +15,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -34,26 +32,10 @@ class ServiceError(RuntimeError):
     """本地 service 配置、状态或 adapter 契约错误。"""
 
 
-class Adapter(Protocol):
-    name: str
-
-    def verify(self, request: dr.ResumeRequest) -> bool: ...
-
-    def resume(self, request: dr.ResumeRequest) -> dr.ResumeOutcome: ...
-
-
-@dataclass(frozen=True)
-class PiInstall:
-    command: Path
-    node: Path
-    package_root: Path
-
-
 def _read_json_line(path: Path) -> dict[str, object]:
     try:
         with path.open("r", encoding="utf-8") as handle:
-            line = handle.readline()
-        value = json.loads(line)
+            value = json.loads(handle.readline())
     except (OSError, json.JSONDecodeError) as exc:
         raise ServiceError(f"cannot read Pi session header: {path}") from exc
     if not isinstance(value, dict):
@@ -62,63 +44,58 @@ def _read_json_line(path: Path) -> dict[str, object]:
 
 
 def _pi_processes() -> list[str]:
-    """返回 live `pi` 进程 cwd；Pi 无 session lock，因此同 cwd 必须保守视为潜在写者。"""
     result: list[str] = []
     for item in Path("/proc").iterdir():
         if not item.name.isdigit():
             continue
         try:
-            if (item / "comm").read_text(encoding="utf-8").strip() != "pi":
-                continue
-            cwd = os.path.realpath(os.readlink(item / "cwd"))
+            if (item / "comm").read_text(encoding="utf-8").strip() == "pi":
+                result.append(os.path.realpath(os.readlink(item / "cwd")))
         except OSError:
             continue
-        result.append(cwd)
     return result
 
 
 def pi_session_writer_may_be_alive(
     header: Mapping[str, object], worktree: str, processes: Sequence[str]
 ) -> bool:
-    """Pi 没有 session lock；同原 cwd/目标 worktree 的 live Pi 都视为可能写者。"""
+    """Pi 无 session lock；同原 cwd/目标 worktree 的 live Pi 都视为可能写者。"""
     cwd = header.get("cwd")
     if not isinstance(cwd, str) or not cwd:
         raise ServiceError("Pi session header has no cwd")
-    protected_cwds = {canonical_worktree(cwd), canonical_worktree(worktree)}
-    return any(canonical_worktree(process_cwd) in protected_cwds for process_cwd in processes)
+    protected = {canonical_worktree(cwd), canonical_worktree(worktree)}
+    return any(canonical_worktree(process) in protected for process in processes)
 
 
-def resolve_pi_install(command: str | None) -> PiInstall:
+def resolve_pi_install(command: str | None) -> tuple[Path, Path]:
     candidates: list[Path] = []
     if command:
         candidates.append(Path(command).expanduser())
     else:
-        found = shutil.which("pi")
-        if found:
+        if found := shutil.which("pi"):
             candidates.append(Path(found))
         nvm = Path.home() / ".nvm" / "versions" / "node"
         if nvm.is_dir():
-            candidates.extend(path for path in nvm.glob("*/bin/pi") if path.exists())
+            candidates.extend(nvm.glob("*/bin/pi"))
+
     unique = {os.path.realpath(path): path for path in candidates if path.exists()}
     if len(unique) != 1:
         raise ServiceError("Pi adapter needs one unambiguous pi executable; pass --pi-command")
-    launcher = next(iter(unique.values())).expanduser().absolute()
-    if not launcher.exists():
-        raise ServiceError("Pi executable disappeared during resolution")
+    launcher = next(iter(unique.values())).absolute()
     real = Path(os.path.realpath(launcher))
     if real.name != "cli.js" or real.parent.name != "bundle" or real.parent.parent.name != "dist":
         raise ServiceError("pi executable does not resolve to the supported package layout")
-    package_root = real.parents[2]
-    sibling_node = launcher.parent / "node"
-    node = sibling_node if sibling_node.exists() else Path(shutil.which("node") or "")
-    if not node or not node.exists():
-        raise ServiceError("cannot resolve the Node executable for Pi")
-    return PiInstall(launcher, node.resolve(strict=True), package_root.resolve(strict=True))
+
+    node = launcher.parent / "node"
+    if not node.is_file():
+        found = shutil.which("node")
+        if not found:
+            raise ServiceError("cannot resolve the Node executable for Pi")
+        node = Path(found)
+    return node.resolve(strict=True), real.parents[2].resolve(strict=True)
 
 
 class PiAdapter:
-    name = "pi"
-
     def __init__(
         self,
         *,
@@ -127,116 +104,98 @@ class PiAdapter:
         helper: Path | None = None,
         processes: Callable[[], list[str]] | None = None,
     ) -> None:
-        self.install = resolve_pi_install(command)
+        self.node, self.package_root = resolve_pi_install(command)
         configured = session_dir or os.environ.get("PI_CODING_AGENT_SESSION_DIR")
-        if configured:
-            self.session_dir = Path(configured).expanduser()
-        else:
-            agent_dir = Path(os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi" / "agent"))
-            self.session_dir = agent_dir / "sessions"
+        agent_dir = Path(os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi" / "agent"))
+        self.session_dir = Path(configured).expanduser() if configured else agent_dir / "sessions"
         self.helper = helper or Path(__file__).with_name("pi_resume_session.mjs")
         self._processes = processes or _pi_processes
         self._sessions: dict[str, Path] = {}
         self._children: list[subprocess.Popen[bytes]] = []
 
     def _session(self, session_id: str) -> Path:
-        cached = self._sessions.get(session_id)
-        if cached is not None:
+        if cached := self._sessions.get(session_id):
             return cached
-        if not self.session_dir.is_dir():
-            raise ServiceError(f"Pi session directory does not exist: {self.session_dir}")
         suffix = f"_{session_id}.jsonl"
-        matches = [
-            path for path in self.session_dir.rglob(f"*{suffix}") if path.name.endswith(suffix)
-        ]
+        matches = list(self.session_dir.rglob(f"*{suffix}")) if self.session_dir.is_dir() else []
         if len(matches) != 1:
             raise ServiceError(
                 f"expected exactly one Pi session file for {session_id}, found {len(matches)}"
             )
-        header = _read_json_line(matches[0])
+        session = matches[0].resolve(strict=True)
+        header = _read_json_line(session)
         if header.get("type") != "session" or header.get("id") != session_id:
             raise ServiceError("Pi session header does not match the bound session id")
-        self._sessions[session_id] = matches[0].resolve(strict=True)
-        return self._sessions[session_id]
+        self._sessions[session_id] = session
+        return session
 
-    def _probe(self, request: dr.ResumeRequest) -> bool:
-        session = self._session(request.session_id)
-        header = _read_json_line(session)
-        handoff = request.handoff
-        worktree = canonical_worktree(str(handoff["worktree"]))
-        if pi_session_writer_may_be_alive(header, worktree, self._processes()):
-            return False
-        command = [
-            str(self.install.node),
+    def _command(self, action: str, session: Path, worktree: str) -> list[str]:
+        return [
+            str(self.node),
             str(self.helper),
-            "probe",
+            action,
             "--package-root",
-            str(self.install.package_root),
+            str(self.package_root),
             "--session-file",
             str(session),
             "--worktree",
             worktree,
         ]
-        result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=15)
-        if result.returncode != 0:
+
+    @staticmethod
+    def _accepted(payload: object, request: dr.ResumeRequest, worktree: str) -> bool:
+        if not isinstance(payload, dict):
             return False
-        try:
-            payload = json.loads(result.stdout.strip())
-        except json.JSONDecodeError:
-            return False
-        reported_cwd = payload.get("cwd") if isinstance(payload, dict) else None
+        cwd = payload.get("cwd")
         return (
-            isinstance(reported_cwd, str)
-            and bool(reported_cwd)
+            isinstance(cwd, str)
+            and bool(cwd)
             and payload.get("session_id") == request.session_id
-            and canonical_worktree(reported_cwd) == worktree
+            and canonical_worktree(cwd) == worktree
         )
 
     def verify(self, request: dr.ResumeRequest) -> bool:
         try:
-            return self._probe(request)
-        except (OSError, ServiceError, subprocess.SubprocessError):
+            session = self._session(request.session_id)
+            header = _read_json_line(session)
+            worktree = canonical_worktree(str(request.handoff["worktree"]))
+            if pi_session_writer_may_be_alive(header, worktree, self._processes()):
+                return False
+            result = subprocess.run(
+                self._command("probe", session, worktree),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=PI_ACK_TIMEOUT_SECONDS,
+            )
+            return result.returncode == 0 and self._accepted(
+                json.loads(result.stdout.strip()), request, worktree
+            )
+        except (OSError, ServiceError, subprocess.SubprocessError, json.JSONDecodeError):
             return False
 
     def resume(self, request: dr.ResumeRequest) -> dr.ResumeOutcome:
         session = self._session(request.session_id)
         worktree = canonical_worktree(str(request.handoff["worktree"]))
-        event = str(request.handoff["event"])
-        landing = Path(worktree) / ".nvsop" / "artifacts" / "landing"
-        landing.mkdir(parents=True, exist_ok=True)
-        log_path = landing / f"{event}.agent.log"
-        log_fd = os.open(log_path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
         read_fd, write_fd = os.pipe()
         os.set_inheritable(write_fd, True)
-        env = dict(os.environ)
-        env["NVSOP_REPAIR_ACK_FD"] = str(write_fd)
-        command = [
-            str(self.install.node),
-            str(self.helper),
-            "resume",
-            "--package-root",
-            str(self.install.package_root),
-            "--session-file",
-            str(session),
-            "--worktree",
-            worktree,
-        ]
+        env = {**os.environ, "NVSOP_REPAIR_ACK_FD": str(write_fd)}
         process: subprocess.Popen[bytes] | None = None
         try:
             process = subprocess.Popen(
-                command,
+                self._command("resume", session, worktree),
                 cwd=worktree,
                 env=env,
                 stdin=subprocess.PIPE,
-                stdout=log_fd,
-                stderr=log_fd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 pass_fds=(write_fd,),
                 start_new_session=True,
             )
             os.close(write_fd)
             write_fd = -1
             assert process.stdin is not None
-            process.stdin.write(json.dumps(dict(request.handoff), sort_keys=True).encode("utf-8"))
+            process.stdin.write(json.dumps(dict(request.handoff), sort_keys=True).encode())
             process.stdin.close()
             with selectors.DefaultSelector() as selector:
                 selector.register(read_fd, selectors.EVENT_READ)
@@ -245,42 +204,32 @@ class PiAdapter:
                 if process.poll() is not None:
                     return dr.ResumeOutcome.UNAVAILABLE
                 raise ServiceError("Pi resume did not acknowledge startup")
-            raw = os.read(read_fd, 4096).decode("utf-8").strip()
-            payload = json.loads(raw)
-            reported_cwd = payload.get("cwd") if isinstance(payload, dict) else None
-            if (
-                not isinstance(reported_cwd, str)
-                or not reported_cwd
-                or payload.get("state") != "accepted"
-                or payload.get("session_id") != request.session_id
-                or canonical_worktree(reported_cwd) != worktree
-            ):
+            payload = json.loads(os.read(read_fd, 4096).decode().strip())
+            if payload.get("state") != "accepted" or not self._accepted(payload, request, worktree):
                 raise ServiceError("Pi resume acknowledgement does not match the requested session")
-            self._children.append(process)
             self._children = [child for child in self._children if child.poll() is None]
+            self._children.append(process)
             return dr.ResumeOutcome.RESUMED
         finally:
             if write_fd >= 0:
                 os.close(write_fd)
             os.close(read_fd)
-            os.close(log_fd)
 
 
 class CommandAdapter:
-    """外部 agent adapter：可执行文件以 JSON stdin 实现 `probe` / `resume` 两个动作。"""
+    """外部 agent adapter：可执行文件以 JSON stdin 实现 probe / resume。"""
 
     def __init__(self, executable: str) -> None:
         path = Path(executable).expanduser()
         if not path.is_absolute() or not path.is_file() or not os.access(path, os.X_OK):
             raise ServiceError("--adapter-command must name an absolute executable file")
         self.path = path
-        self.name = f"command:{path.name}"
 
     @staticmethod
     def _payload(request: dr.ResumeRequest) -> bytes:
         return json.dumps(
             {"session_id": request.session_id, "handoff": dict(request.handoff)}, sort_keys=True
-        ).encode("utf-8")
+        ).encode()
 
     def _call(self, action: str, request: dr.ResumeRequest) -> dict[str, object]:
         try:
@@ -289,41 +238,28 @@ class CommandAdapter:
                 input=self._payload(request),
                 capture_output=True,
                 check=False,
-                timeout=15,
+                timeout=PI_ACK_TIMEOUT_SECONDS,
             )
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise ServiceError(f"external repair adapter {action} failed") from exc
-        if result.returncode != 0:
-            return {}
-        try:
-            value = json.loads(result.stdout.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
+            value = json.loads(result.stdout.decode()) if result.returncode == 0 else {}
+        except (OSError, subprocess.SubprocessError, UnicodeDecodeError, json.JSONDecodeError):
             return {}
         return value if isinstance(value, dict) else {}
 
     def verify(self, request: dr.ResumeRequest) -> bool:
-        try:
-            return self._call("probe", request).get("available") is True
-        except ServiceError:
-            return False
+        return self._call("probe", request).get("available") is True
 
     def resume(self, request: dr.ResumeRequest) -> dr.ResumeOutcome:
-        outcome = self._call("resume", request).get("outcome")
         return (
             dr.ResumeOutcome.RESUMED
-            if outcome == dr.ResumeOutcome.RESUMED.value
+            if self._call("resume", request).get("outcome") == dr.ResumeOutcome.RESUMED.value
             else dr.ResumeOutcome.UNAVAILABLE
         )
 
 
 class AdapterBridge:
-    def __init__(self, adapters: Sequence[Adapter]) -> None:
+    def __init__(self, adapters: Sequence[dr.HostBridge]) -> None:
         self.adapters = tuple(adapters)
-        self._selected: dict[tuple[str, str], Adapter] = {}
-
-    @staticmethod
-    def _key(request: dr.ResumeRequest) -> tuple[str, str]:
-        return request.session_id, str(request.handoff.get("event", ""))
+        self._selected: dict[tuple[str, str], dr.HostBridge] = {}
 
     def verify(self, request: dr.ResumeRequest) -> bool:
         matches = [adapter for adapter in self.adapters if adapter.verify(request)]
@@ -331,11 +267,13 @@ class AdapterBridge:
             raise ServiceError("multiple repair adapters claim the same bound session")
         if not matches:
             return False
-        self._selected[self._key(request)] = matches[0]
+        key = request.session_id, str(request.handoff.get("event", ""))
+        self._selected[key] = matches[0]
         return True
 
     def resume(self, request: dr.ResumeRequest) -> dr.ResumeOutcome:
-        adapter = self._selected.get(self._key(request))
+        key = request.session_id, str(request.handoff.get("event", ""))
+        adapter = self._selected.get(key)
         if adapter is None:
             raise ServiceError("repair adapter was not verified before resume")
         return adapter.resume(request)
@@ -362,12 +300,12 @@ def local_claim(worktree: str, event: str) -> str:
             existing = path.read_text(encoding="ascii").strip()
         except OSError as exc:
             raise ServiceError("cannot read existing local repair claim") from exc
-        if not stat.S_ISREG(info.st_mode):
-            raise ServiceError("existing local repair claim must be a regular file") from None
-        if stat.S_IMODE(info.st_mode) & 0o077:
-            raise ServiceError("existing local repair claim permissions are too broad") from None
-        if CLAIM_TOKEN.fullmatch(existing) is None:
-            raise ServiceError("existing local repair claim is malformed") from None
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or stat.S_IMODE(info.st_mode) & 0o077
+            or CLAIM_TOKEN.fullmatch(existing) is None
+        ):
+            raise ServiceError("existing local repair claim is not a private valid token") from None
         return existing
     try:
         os.write(descriptor, (token + "\n").encode("ascii"))
@@ -375,12 +313,6 @@ def local_claim(worktree: str, event: str) -> str:
     finally:
         os.close(descriptor)
     return token
-
-
-def _private_request(
-    event: Mapping[str, object], target: tuple[str, str], token: str
-) -> dr.ResumeRequest:
-    return dr.ResumeRequest(target[1], dr.resume_handoff(event, target, token))
 
 
 class RepairService:
@@ -391,7 +323,8 @@ class RepairService:
         self.bridge = bridge
         self.only_pr = only_pr
 
-    def _log(self, state: str, **fields: object) -> None:
+    @staticmethod
+    def _log(state: str, **fields: object) -> None:
         print(json.dumps({"state": state, **fields}, sort_keys=True), flush=True)
 
     def tick(self) -> int:
@@ -400,9 +333,11 @@ class RepairService:
         for entry in lq.ordered(state):
             if self.only_pr is not None and entry.pr != self.only_pr:
                 continue
-            if entry.state != lq.BLOCKED or entry.phase is not None:
-                continue
-            if entry.blocked_reason not in lq.REPAIR_REASONS:
+            if (
+                entry.state != lq.BLOCKED
+                or entry.phase is not None
+                or entry.blocked_reason not in lq.REPAIR_REASONS
+            ):
                 continue
             evidence = entry.evidence or {}
             repair_state = evidence.get("repair_state")
@@ -417,8 +352,9 @@ class RepairService:
             except (lq.QueueError, dr.AgentUnavailableError) as exc:
                 self._log("not-local-or-stale", pr=entry.pr, error=str(exc))
                 continue
+
             token = local_claim(target[0], str(event["event"]))
-            request = _private_request(event, target, token)
+            request = dr.ResumeRequest(target[1], dr.resume_handoff(event, target, token))
             if repair_state is None:
                 if not self.bridge.verify(request):
                     self._log("adapter-unavailable", pr=entry.pr)
@@ -427,6 +363,7 @@ class RepairService:
                 self._log("claim-requested", pr=entry.pr, event=event["event"])
                 actions += 1
                 continue
+
             digest = evidence.get("repair_claim")
             if not isinstance(digest, str) or lq.claim_digest(token) != digest:
                 self._log("claim-mismatch", pr=entry.pr, event=event["event"])
@@ -445,24 +382,13 @@ class RepairService:
 
 
 def parser() -> argparse.ArgumentParser:
-    result = argparse.ArgumentParser(
-        description="Run the local nvsop landing repair dispatcher service."
-    )
-    result.add_argument("--once", action="store_true", help="Run one queue scan and exit.")
+    result = argparse.ArgumentParser(description="Run the local landing repair dispatcher.")
+    result.add_argument("--once", action="store_true")
     result.add_argument("--interval", type=float, default=DEFAULT_INTERVAL_SECONDS)
-    result.add_argument("--pr", type=int, default=None, help="Limit service actions to one PR.")
-    result.add_argument(
-        "--pi-command",
-        default=None,
-        help="Exact Pi executable; auto-detected only when unambiguous.",
-    )
-    result.add_argument("--pi-session-dir", default=None)
-    result.add_argument(
-        "--adapter-command",
-        action="append",
-        default=[],
-        help="Absolute executable implementing JSON `probe` and `resume`; may be repeated.",
-    )
+    result.add_argument("--pr", type=int)
+    result.add_argument("--pi-command")
+    result.add_argument("--pi-session-dir")
+    result.add_argument("--adapter-command", action="append", default=[])
     return result
 
 
@@ -471,7 +397,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.interval <= 0:
         print("landing_repair_service: --interval must be positive", file=sys.stderr)
         return 2
-    adapters: list[Adapter] = []
+    adapters: list[dr.HostBridge] = []
     try:
         adapters.append(
             PiAdapter(command=arguments.pi_command, session_dir=arguments.pi_session_dir)
@@ -486,6 +412,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not adapters:
         print("landing_repair_service: no usable repair adapter", file=sys.stderr)
         return 2
+
     service = RepairService(lq.GitHub(), AdapterBridge(adapters), only_pr=arguments.pr)
     if arguments.once:
         try:

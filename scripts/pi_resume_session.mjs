@@ -15,10 +15,8 @@ function usage(message) {
 function options(argv) {
   const result = {};
   for (let index = 0; index < argv.length; index += 2) {
-    const key = argv[index];
-    const value = argv[index + 1];
-    if (!key?.startsWith("--") || value === undefined) usage("invalid arguments");
-    result[key.slice(2)] = value;
+    if (!argv[index]?.startsWith("--") || argv[index + 1] === undefined) usage("invalid arguments");
+    result[argv[index].slice(2)] = argv[index + 1];
   }
   return result;
 }
@@ -67,30 +65,22 @@ if (command === "probe") {
 
 const handoff = await stdinJson();
 if (handoff.session_id !== sessionId) throw new Error("Pi session id does not match repair handoff");
-if (realpathSync(handoff.worktree) !== worktree) {
-  throw new Error("Pi repair handoff worktree does not match cwd override");
-}
+if (realpathSync(handoff.worktree) !== worktree) throw new Error("Pi repair handoff worktree does not match cwd override");
 const agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
 const createRuntime = async ({ cwd, agentDir: targetAgentDir, sessionManager: targetSession, sessionStartEvent }) => {
   const services = await pi.createAgentSessionServices({
-    cwd,
-    agentDir: targetAgentDir,
-    modelRuntimeSignal: AbortSignal.timeout(15000),
+    cwd, agentDir: targetAgentDir, modelRuntimeSignal: AbortSignal.timeout(15000),
   });
   const errors = services.diagnostics.filter((item) => item.type === "error");
   if (errors.length) throw new Error(errors.map((item) => item.message).join("; "));
   const created = await pi.createAgentSessionFromServices({
-    services,
-    sessionManager: targetSession,
-    sessionStartEvent,
+    services, sessionManager: targetSession, sessionStartEvent,
   });
   if (!created.session.model) throw new Error("Pi session has no configured model");
   return { ...created, services, diagnostics: services.diagnostics };
 };
 const runtime = await pi.createAgentSessionRuntime(createRuntime, {
-  cwd: worktree,
-  agentDir,
-  sessionManager,
+  cwd: worktree, agentDir, sessionManager,
   sessionStartEvent: { type: "session_start", reason: "resume" },
 });
 let acknowledged = false;
@@ -101,11 +91,9 @@ const unsubscribeAck = runtime.session.subscribe((event) => {
   }
 });
 try {
-  const exitCode = await pi.runPrintMode(runtime, {
-    mode: "text",
-    initialMessage: repairPrompt(handoff),
+  process.exitCode = await pi.runPrintMode(runtime, {
+    mode: "text", initialMessage: repairPrompt(handoff),
   });
-  process.exitCode = exitCode;
 } finally {
   unsubscribeAck();
 }

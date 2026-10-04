@@ -209,7 +209,9 @@ def run_payload(**overrides: object) -> dict[str, object]:
         "head_sha": MAIN_HEAD,
         "head_branch": "main",
         "path": lq.CONTROLLER_PATH,
-        "event": "pull_request_target",
+        # 默认形状是运行在 main 上的 workflow_dispatch；pull_request_target 的头属于触发 PR，
+        # 需要单独的 referenced_workflows 来源证明，不能借用此默认。
+        "event": "workflow_dispatch",
         "run_attempt": 1,
         "status": "completed",
         "repository": {"full_name": REPO},
@@ -826,12 +828,158 @@ class FinalizeTest(EnvTest):
                 self._backend(runs={"9": run_payload(head_sha=NEW_HEAD)}),
                 lq.QueueError,
             ),
+            # 共用元数据任一项不匹配都必须在任何 status/merge 之前 fail closed。
+            "foreign repository": (
+                self._backend(runs={"9": run_payload(repository={"full_name": "other/repo"})}),
+                lq.QueueError,
+            ),
+            "wrong controller path": (
+                self._backend(runs={"9": run_payload(path=".github/workflows/other.yml")}),
+                lq.QueueError,
+            ),
+            "untrusted event": (
+                self._backend(runs={"9": run_payload(event="pull_request")}),
+                lq.QueueError,
+            ),
+            "attempt mismatch": (
+                self._backend(runs={"9": run_payload(run_attempt=2)}),
+                lq.QueueError,
+            ),
             "rules missing": (self._backend(rules=rulesets(update_bypass=[])), lq.ProtectionError),
         }
         for label, (backend, error) in cases.items():
             with self.subTest(case=label), self.assertRaises(error):
                 lq.finalize(backend, 1, "9", "1", "success")
             self.assertEqual(([], []), (backend.merge_calls, backend.statuses))
+
+    def test_run_id_mismatch_fails_closed_before_writes(self) -> None:
+        # finalize 预检的 run id 不匹配必须 fail closed，绝不发布门禁或合并。
+        backend = self._backend()
+        with self.assertRaises(lq.QueueError):
+            lq.finalize(backend, 1, "99", "1", "success")
+        self.assertEqual(([], []), (backend.merge_calls, backend.statuses))
+
+    def test_pull_request_target_source_proof_merges_the_frozen_head(self) -> None:
+        # pull_request_target 运行头属于触发 PR，既不等于也不得绑定被测 ci_head；
+        # 可信来源改由 referenced_workflows 证明同仓库固定 main 的 blocking-ci.yml。
+        proof = [
+            {
+                "sha": MAIN_HEAD,
+                "ref": "refs/heads/main",
+                "path": f"{REPO}/.github/workflows/blocking-ci.yml@{MAIN_HEAD}",
+            }
+        ]
+        for trigger_head in (ROOT_SHA, NEW_HEAD):
+            with self.subTest(trigger_head=trigger_head):
+                backend = self._backend(
+                    runs={
+                        "9": run_payload(
+                            event="pull_request_target",
+                            head_sha=trigger_head,
+                            head_branch="agent/a/demo",
+                            referenced_workflows=proof,
+                        )
+                    }
+                )
+                self._finalize(backend)
+                # 合并与门禁都落在冻结的 ci_head 上，而不是触发头。
+                self.assertEqual([(1, ROOT_SHA)], backend.merge_calls)
+                self.assertEqual(
+                    [
+                        (ROOT_SHA, "CI required", "success"),
+                        (ROOT_SHA, "Landing gate", "success"),
+                    ],
+                    backend.statuses,
+                )
+
+    def test_pull_request_target_source_proof_fail_closed(self) -> None:
+        good = {
+            "sha": MAIN_HEAD,
+            "ref": "refs/heads/main",
+            "path": f"{REPO}/.github/workflows/blocking-ci.yml@{MAIN_HEAD}",
+        }
+        cases: dict[str, object] = {
+            # 头字段与 controller 相同却没有来源证据：正是本轮要修的误判，不能放行。
+            "no source proof": None,
+            "not a list": {"sha": MAIN_HEAD},
+            "non-dict entry": ["nope"],
+            "wrong sha": [{**good, "sha": NEW_HEAD}],
+            "wrong ref": [{**good, "ref": "refs/heads/feature"}],
+            "foreign repository": [
+                {**good, "path": f"other/repo/.github/workflows/blocking-ci.yml@{MAIN_HEAD}"}
+            ],
+            "wrong workflow file": [
+                {**good, "path": f"{REPO}/.github/workflows/landing-queue.yml@{MAIN_HEAD}"}
+            ],
+        }
+        for label, reference in cases.items():
+            with self.subTest(case=label):
+                overrides: dict[str, object] = {}
+                if reference is not None:
+                    overrides["referenced_workflows"] = reference
+                backend = self._backend(
+                    runs={
+                        "9": run_payload(
+                            event="pull_request_target",
+                            head_sha=MAIN_HEAD,
+                            head_branch="main",
+                            **overrides,
+                        )
+                    }
+                )
+                with self.assertRaises(lq.QueueError):
+                    lq.finalize(backend, 1, "9", "1", "success")
+                self.assertEqual(([], []), (backend.merge_calls, backend.statuses))
+
+    def test_controlled_refresh_then_pull_request_target_finalize(self) -> None:
+        entry, att = active_entry(phase=lq.REFRESHING)
+        backend = FakeBackend(
+            state=lq.State(1, (replace(entry, refresh_root=ROOT_SHA, refresh_base=BASE),)),
+            comments={500: att},
+            pr=pr_state(head=NEW_HEAD, base=BASE),
+            main=BASE,
+            parents={NEW_HEAD: (ROOT_SHA, BASE)},
+            trees={NEW_HEAD: TREE, MERGE: TREE},
+            runs={
+                "9": run_payload(
+                    event="pull_request_target",
+                    head_sha=NEW_HEAD,
+                    head_branch="agent/a/demo",
+                    referenced_workflows=[
+                        {
+                            "sha": MAIN_HEAD,
+                            "ref": "refs/heads/main",
+                            "path": f"{REPO}/.github/workflows/blocking-ci.yml@{MAIN_HEAD}",
+                        }
+                    ],
+                )
+            },
+            merge_result=MERGE,
+        )
+        # 受控 refresh 事件冻结新头与源码 CI controller，并持久化 TESTING intent；
+        # 已有 REFRESHING intent，因此不再发起第二次 refresh。
+        with mock.patch("builtins.print"):
+            lq.prepare(
+                backend, "9", "1", MAIN_HEAD, lq.RefreshEvent(ROOT_SHA, NEW_HEAD, "lander[bot]", 1)
+            )
+        frozen = lq.find(backend.state_obj, 1)
+        self.assertEqual(
+            (lq.TESTING, NEW_HEAD, MAIN_HEAD),
+            (frozen.phase, frozen.ci_head, frozen.ci_controller),
+        )
+        self.assertEqual([], backend.refresh_calls)
+        reread = lq.state_from_json(lq.state_to_json(backend.state_obj))
+        self.assertEqual(frozen, lq.find(reread, 1))
+        # PR-target 头正是新头时仍以冻结 ci_head 精确合并；不重复 refresh 或 CI。
+        with mock.patch("builtins.print"):
+            lq.finalize(backend, 1, "9", "1", "success")
+        self.assertEqual([(1, NEW_HEAD)], backend.merge_calls)
+        self.assertEqual(
+            [(NEW_HEAD, "CI required", "success"), (NEW_HEAD, "Landing gate", "success")],
+            backend.statuses,
+        )
+        merged = lq.find(backend.state_obj, 1)
+        self.assertEqual((lq.MERGED, "9"), (merged.state, merged.ci_run_id))
 
     def test_ci_job_classification_uses_real_reusable_names(self) -> None:
         running = job("Publish gates and merge", None, status="in_progress")
@@ -1351,6 +1499,8 @@ class LandingWorkflowTest(unittest.TestCase):
         for required in (
             "group: landing-queue",
             "cancel-in-progress: false",
+            # 同提交相对路径引用可复用 CI：运行头与源码提交绑定在同一 workflow_sha。
+            "uses: ./.github/workflows/blocking-ci.yml",
             "ref: ${{ github.workflow_sha }}",
             "--controller-sha",
             "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",

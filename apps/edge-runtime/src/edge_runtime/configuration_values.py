@@ -60,6 +60,18 @@ def _non_empty_string(value: object, name: str) -> str:
     return value
 
 
+def _boolean(value: object, name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{name} must be a boolean")
+    return value
+
+
+def _positive_integer(value: object, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
 def _positive_number(value: object, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
         raise ValueError(f"{name} must be a positive number")

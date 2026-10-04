@@ -41,6 +41,7 @@
 | [媒体部署说明](../deploy/media/README.md) | 合成 RTSP、MediaMTX、CPU 转码和本机媒体配置应用 |
 | [推理机推理服务部署](../deploy/edge/README.md) | 每主机/每后端的推理服务 Compose 身份、资源端口与只读 secret 边界 |
 | [目标环境验证矩阵](research/target-environment-validation-matrix.md) | GPU、真相机、连接器、离线、多机、容量和长稳门禁 |
+| [Landing 修复服务真实环境端到端验证](research/landing-repair-live-e2e-2026-10-04.md) | 本次 live E2E 的起点基线与证据回填入口 |
 
 ## 事实与来源
 

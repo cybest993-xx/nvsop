@@ -309,6 +309,25 @@ def verify_local_target(branch: str, candidate: str) -> CleanupTarget:
     return CleanupTarget(task_ref, task_tip, task_worktree, has_local_branch_config(branch))
 
 
+def sync_primary_main(accepted_main: str) -> None:
+    primary = read_worktrees()[0]
+    primary_path = canonical_path(primary.path)
+    checked_ref = output_text(
+        git("-C", primary_path, "symbolic-ref", "--quiet", "HEAD").rstrip()
+    ).strip()
+    if checked_ref != "refs/heads/main":
+        raise CleanupTaskError("primary worktree is not on main")
+
+    status = git("-C", primary_path, "status", "--porcelain=v1", "--untracked-files=all")
+    if status.strip():
+        raise CleanupTaskError("primary main worktree is not clean")
+
+    git("-C", primary_path, "merge", "--ff-only", "--no-overwrite-ignore", accepted_main)
+    head = output_text(git("-C", primary_path, "rev-parse", "--verify", "HEAD").rstrip()).strip()
+    if head != accepted_main:
+        raise CleanupTaskError("primary main did not reach the accepted origin/main")
+
+
 def remove_local_target(target: CleanupTarget) -> None:
     if target.worktree is not None:
         release_binding(target.worktree.path)
@@ -323,10 +342,15 @@ def cleanup_task(pr: int, branch: str, candidate: str) -> None:
     target = verify_local_target(branch, candidate)
     merge_commit = verify_pull_request(pull_request(pr), branch, candidate)
     git("fetch", "origin", "main")
-    git("merge-base", "--is-ancestor", merge_commit, "origin/main")
+    accepted_main = parse_object_id(
+        output_text(git("rev-parse", "--verify", "origin/main^{commit}").rstrip()).strip(),
+        "origin/main",
+    )
+    git("merge-base", "--is-ancestor", merge_commit, accepted_main)
 
+    sync_primary_main(accepted_main)
     remove_local_target(target)
-    print(f"cleaned {branch} at {target.task_tip}")
+    print(f"synced main to {accepted_main}; cleaned {branch} at {target.task_tip}")
 
 
 def cleanup_abandoned_task(pr: int | None, branch: str, candidate: str, replaced_by: str) -> None:

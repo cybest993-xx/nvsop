@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""在已确认的 squash merge 后安全清理一个本地任务工作树和分支。"""
+"""安全清理一个已合并或被明确取代的本地任务工作树和分支。"""
 
 from __future__ import annotations
 
@@ -31,6 +31,14 @@ class CleanupTaskError(RuntimeError):
 class Worktree:
     path: str
     branch: str | None
+
+
+@dataclass(frozen=True)
+class CleanupTarget:
+    task_ref: str
+    task_tip: str
+    worktree: Worktree | None
+    local_config: bool
 
 
 def command_name(arguments: Sequence[str]) -> str:
@@ -267,7 +275,20 @@ def verify_pull_request(payload: dict[str, object], branch: str, candidate: str)
     return parse_object_id(merge_commit.get("oid"), "pull-request merge commit")
 
 
-def cleanup_task(pr: int, branch: str, candidate: str) -> None:
+def verify_closed_pull_request(payload: dict[str, object], branch: str, candidate: str) -> None:
+    if payload.get("state") != "CLOSED":
+        raise CleanupTaskError("pull request is not closed without merge")
+    if payload.get("baseRefName") != "main":
+        raise CleanupTaskError("pull request base is not main")
+    if payload.get("headRefName") != branch:
+        raise CleanupTaskError("pull request head branch does not match --branch")
+    if payload.get("headRefOid") != candidate:
+        raise CleanupTaskError("pull request head does not match --candidate")
+    if payload.get("mergeCommit") is not None:
+        raise CleanupTaskError("closed pull request unexpectedly records a merge commit")
+
+
+def verify_local_target(branch: str, candidate: str) -> CleanupTarget:
     validate_branch(branch)
     candidate = parse_object_id(candidate, "--candidate")
     current_path = current_worktree()
@@ -281,23 +302,49 @@ def cleanup_task(pr: int, branch: str, candidate: str) -> None:
     task_worktrees = [worktree for worktree in worktrees if worktree.branch == task_ref]
     if len(task_worktrees) > 1:
         raise CleanupTaskError("requested branch is registered in multiple worktrees")
-    if task_worktrees:
-        check_task_worktree(
-            task_worktrees[0], task_ref, task_tip, branch, current_path, primary_path
-        )
+    task_worktree = task_worktrees[0] if task_worktrees else None
+    if task_worktree is not None:
+        check_task_worktree(task_worktree, task_ref, task_tip, branch, current_path, primary_path)
 
-    local_config = has_local_branch_config(branch)
+    return CleanupTarget(task_ref, task_tip, task_worktree, has_local_branch_config(branch))
+
+
+def remove_local_target(target: CleanupTarget) -> None:
+    if target.worktree is not None:
+        release_binding(target.worktree.path)
+        git("worktree", "remove", "--", target.worktree.path)
+    git("update-ref", "--no-deref", "-d", target.task_ref, target.task_tip)
+    if target.local_config:
+        branch = target.task_ref.removeprefix("refs/heads/")
+        git("config", "--local", "--remove-section", f"branch.{branch}")
+
+
+def cleanup_task(pr: int, branch: str, candidate: str) -> None:
+    target = verify_local_target(branch, candidate)
     merge_commit = verify_pull_request(pull_request(pr), branch, candidate)
     git("fetch", "origin", "main")
     git("merge-base", "--is-ancestor", merge_commit, "origin/main")
 
-    if task_worktrees:
-        release_binding(task_worktrees[0].path)
-        git("worktree", "remove", "--", task_worktrees[0].path)
-    git("update-ref", "--no-deref", "-d", task_ref, task_tip)
-    if local_config:
-        git("config", "--local", "--remove-section", f"branch.{branch}")
-    print(f"cleaned {branch} at {task_tip}")
+    remove_local_target(target)
+    print(f"cleaned {branch} at {target.task_tip}")
+
+
+def cleanup_abandoned_task(pr: int | None, branch: str, candidate: str, replaced_by: str) -> None:
+    replaced_by = parse_object_id(replaced_by, "--replaced-by")
+    target = verify_local_target(branch, candidate)
+    if pr is not None:
+        verify_closed_pull_request(pull_request(pr), branch, candidate)
+
+    git("fetch", "origin", "main")
+    resolved = output_text(
+        git("rev-parse", "--verify", f"{replaced_by}^{{commit}}").rstrip()
+    ).strip()
+    if resolved != replaced_by:
+        raise CleanupTaskError("--replaced-by does not resolve to the exact requested commit")
+    git("merge-base", "--is-ancestor", replaced_by, "origin/main")
+
+    remove_local_target(target)
+    print(f"abandoned {branch} at {target.task_tip}; replaced by {replaced_by}")
 
 
 def positive_pr(value: str) -> int:
@@ -312,18 +359,26 @@ def positive_pr(value: str) -> int:
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
-        description="Clean one verified merged local task worktree and branch."
+        description="Clean one verified merged or explicitly superseded local task."
     )
-    result.add_argument("--pr", required=True, type=positive_pr)
+    result.add_argument("--pr", type=positive_pr)
     result.add_argument("--branch", required=True)
     result.add_argument("--candidate", required=True)
+    result.add_argument("--replaced-by")
     return result
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser().parse_args(argv)
     try:
-        cleanup_task(arguments.pr, arguments.branch, arguments.candidate)
+        if arguments.replaced_by is None:
+            if arguments.pr is None:
+                raise CleanupTaskError("--pr is required for merged task cleanup")
+            cleanup_task(arguments.pr, arguments.branch, arguments.candidate)
+        else:
+            cleanup_abandoned_task(
+                arguments.pr, arguments.branch, arguments.candidate, arguments.replaced_by
+            )
     except CleanupTaskError as exc:
         print(f"cleanup_task: {exc}", file=sys.stderr)
         return 1

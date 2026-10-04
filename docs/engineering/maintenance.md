@@ -51,7 +51,7 @@ uv's package cache is a tool-owned shared-cache exception, like the pnpm store: 
 
 pnpm still requires workspace `node_modules/` layout for the current Vue toolchain, and editable Python installs can write `*.egg-info/` beside sources. These are explicit tool-layout exceptions rather than a second state root; `make local-purge` owns their removal. Direct tool invocation may also recreate legacy ignored cache paths, but supported Make commands use the locations above.
 
-The primary `main` checkout synchronizes to accepted `origin/main` only through the fast-forward procedure owned by [workflow.md](workflow.md#51-confirm-the-exact-squash-merge). Tracked, staged and ordinary untracked changes block it; ignored personal configuration and caches that the update does not touch are preserved as they are and do not block it, and synchronization stops when the update would overwrite an ignored path. Task cleanup remains stricter and requires a fully clean task worktree apart from the exact validated session binding, so run `make local-purge` before cleanup when reproducible artifacts are present; the binding is released only by the verified cleanup itself.
+The primary `main` checkout synchronizes to accepted `origin/main` only through the fast-forward procedure owned by [workflow.md](workflow.md#51-confirm-the-exact-squash-merge). Tracked, staged and ordinary untracked changes block it; ignored personal configuration and caches that the update does not touch are preserved as they are and do not block it, and synchronization stops when the update would overwrite an ignored path. Task cleanup remains stricter and requires a fully clean task worktree apart from the exact validated session binding, so run `make local-purge` before cleanup when reproducible artifacts are present; the binding is released only by the verified merged or explicitly abandoned single-task cleanup itself.
 
 ### Session binding state
 
@@ -63,7 +63,7 @@ The primary `main` checkout synchronizes to accepted `origin/main` only through 
 
 `make task-session-bind SESSION=<resumable-id>` ([scripts/bind_task_session.py](../../scripts/bind_task_session.py)) creates it with exclusive create and mode `0600`; the same session is idempotent, while another session, a malformed/unreadable/symlink file or a branch/worktree mismatch fails closed, and there is no overwrite or force path. It carries no provider, model, agent-name, token or permission fields. It is context lookup only, never landing authorization; the ownership and repair rules are owned by [workflow.md](workflow.md#landing-ownership-and-session-binding).
 
-The task's ordinary ignored state (`.nvsop/venv`, caches, tools, artifacts) still blocks cleanup until `make local-purge` removes it. `make local-clean` and `make local-purge` preserve the binding; only the verified single-task cleanup of [workflow.md §5.2](workflow.md#52-clean-one-verified-task-worktree-and-local-branch) releases it.
+The task's ordinary ignored state (`.nvsop/venv`, caches, tools, artifacts) still blocks cleanup until `make local-purge` removes it. `make local-clean` and `make local-purge` preserve the binding; only the verified merged cleanup of [workflow.md §5.2](workflow.md#52-clean-one-verified-task-worktree-and-local-branch) or the explicitly abandoned/superseded cleanup of [workflow.md §5.3](workflow.md#53-clean-one-explicitly-abandoned-or-superseded-task) releases it.
 
 ### Landing queue state
 

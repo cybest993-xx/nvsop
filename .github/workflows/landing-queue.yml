@@ -1,6 +1,6 @@
 # 落地队列控制器：GitHub 是持久真源，仓库状态分支 + issue 评论 inbox 保存队列状态与唤醒请求。
 # 该 workflow 运行默认分支上的可信代码，是队列状态分支的唯一写入者；全局 concurrency 只是互斥，
-# 不是排序。stage1 过渡期 legacy PR / push main 仍直跑 blocking-ci；队列 ACTIVE 项通过可复用调用触发同一门禁。
+# 不是排序。队列 ACTIVE 项通过可复用调用触发 blocking-ci，blocking-ci 自身不再监听 PR/push。
 name: landing-queue
 
 on:
@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   # 部署前守卫：LANDING_APP_ID / LANDING_QUEUE_ISSUE 未配置时不请求 App secret、不运行作业。
-  # 与 main-only 和 inbox 过滤共用；配置完成后（stage2）正常处理 App refresh/synchronize 与入队。
+  # 与 main-only 和 inbox 过滤共用；服务端配置完成后正常处理 App refresh/synchronize 与入队。
   guard:
     name: Landing controller guard
     runs-on: ubuntu-24.04

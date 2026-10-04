@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 REQUIRED_CHECK = "CI required"
+LANDING_GATE = "Landing gate"
 DISPATCH_AUTHORITY_FILES = {
     ".github/ISSUE_TEMPLATE/task.yml",
     "docs/design/solution-and-roadmap.md",
@@ -105,9 +106,9 @@ def gh_json(*args: str) -> dict[str, Any]:
     return payload
 
 
-def check_state(item: dict[str, Any]) -> str:
-    name = item.get("name") or item.get("context")
-    if name != REQUIRED_CHECK:
+def check_state(item: dict[str, Any], name: str = REQUIRED_CHECK) -> str:
+    actual = item.get("name") or item.get("context")
+    if actual != name:
         return "missing"
     conclusion = str(item.get("conclusion") or item.get("state") or "").upper()
     status = str(item.get("status") or "").upper()
@@ -120,13 +121,13 @@ def check_state(item: dict[str, Any]) -> str:
     return "unknown"
 
 
-def required_check_state(checks: object) -> str:
+def required_check_state(checks: object, name: str = REQUIRED_CHECK) -> str:
     if checks is None:
         return "missing"
     if not isinstance(checks, list) or not all(isinstance(item, dict) for item in checks):
         return "unknown"
     return next(
-        (state for item in checks if (state := check_state(item)) != "missing"),
+        (state for item in checks if (state := check_state(item, name)) != "missing"),
         "missing",
     )
 
@@ -201,8 +202,10 @@ def evaluate(
     local_branch: str,
     local_head: str,
     changed_files: list[str] | tuple[str, ...] | None = (),
+    landing_enforcement: str = "unknown",
 ) -> Readiness:
     ci = required_check_state(pr.get("statusCheckRollup"))
+    gate = required_check_state(pr.get("statusCheckRollup"), LANDING_GATE)
     state = str(pr.get("state") or "unknown").lower()
     base = str(pr.get("baseRefName") or "")
     head_branch = str(pr.get("headRefName") or "")
@@ -221,7 +224,12 @@ def evaluate(
         blockers.append(f"base={base or 'missing'}")
     if ci != "success":
         blockers.append(f"{REQUIRED_CHECK}={ci}")
-    if protection not in {"protected", "unsupported"}:
+    # 精确头 Landing gate 缺失或未成功即不可就绪；服务器是否强制由 landing_gate_enforcement 可见。
+    if gate != "success":
+        blockers.append(f"{LANDING_GATE}={gate}")
+    if landing_enforcement != "required":
+        blockers.append(f"landing_gate_enforcement={landing_enforcement}")
+    if protection != "protected":
         blockers.append(f"branch_protection={protection}")
     if local != "matches":
         blockers.append(f"local_candidate={local}")
@@ -267,18 +275,15 @@ def evaluate(
         harness_review = "not-required"
         harness_confirmation = "not-required"
 
-    if protection == "protected":
-        merge_guard = "server-protected"
-    elif protection == "unsupported":
-        merge_guard = "manual-ci-confirmation-required"
-    else:
-        merge_guard = "unverified"
+    merge_guard = "server-protected" if protection == "protected" else "unverified"
 
     lines = (
         f"state={state}",
         f"base={base or 'missing'}",
         f"head={head_branch}@{head_sha or 'missing'}",
         f"ci_required={ci}",
+        f"landing_gate={gate}",
+        f"landing_gate_enforcement={landing_enforcement}",
         f"branch_protection={protection}",
         f"merge_guard={merge_guard}",
         f"local_candidate={local}",
@@ -354,6 +359,39 @@ def protection_state(repository: str, branch: str) -> str:
     return "absent"
 
 
+def landing_gate_enforcement(repository: str, branch: str) -> str:
+    """只读检查服务器 ruleset 是否把 CI required 与 Landing gate 都作为严格必需检查。"""
+    result = run("gh", "api", f"repos/{repository}/rules/branches/{branch}")
+    if result.returncode != 0:
+        return "unknown"
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return "unknown"
+    if not isinstance(payload, list):
+        return "unknown"
+    required_contexts: set[str] = set()
+    for rule in payload:
+        if not isinstance(rule, dict) or rule.get("type") != "required_status_checks":
+            continue
+        parameters = rule.get("parameters")
+        if not isinstance(parameters, dict):
+            continue
+        if not parameters.get("strict_required_status_checks_policy"):
+            continue
+        checks = parameters.get("required_status_checks")
+        if isinstance(checks, list):
+            required_contexts.update(
+                check["context"]
+                for check in checks
+                if isinstance(check, dict) and isinstance(check.get("context"), str)
+            )
+    # 经典 API 的宽松可见性不能单独证明 CI 强制；两个上下文都出现在严格必需检查里才算已强制。
+    if {REQUIRED_CHECK, LANDING_GATE} <= required_contexts:
+        return "required"
+    return "missing"
+
+
 def local_identity() -> tuple[str, str]:
     branch = run("git", "branch", "--show-current")
     head = run("git", "rev-parse", "HEAD")
@@ -416,12 +454,14 @@ def main(argv: list[str]) -> int:
         return 1
 
     local_branch, local_head = local_identity()
+    base_branch = str(pr.get("baseRefName") or "main")
     result = evaluate(
         pr,
-        protection_state(repository, str(pr.get("baseRefName") or "main")),
+        protection_state(repository, base_branch),
         local_branch,
         local_head,
         pr_files(repository, argv[1]),
+        landing_enforcement=landing_gate_enforcement(repository, base_branch),
     )
     print("\n".join(result.lines))
     return 0 if result.ready else 1

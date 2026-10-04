@@ -8,7 +8,7 @@
 	dev-setup dev dev-status dev-logs dev-refresh dev-smoke dev-test-ui dev-down
 
 .PHONY: annotation-lock annotation-lock-check annotation-image
-.PHONY: task-cleanup task-session-bind
+.PHONY: task-cleanup task-abandon task-session-bind
 
 LOCAL_STATE := $(CURDIR)/.nvsop
 LOCAL_CACHE := $(LOCAL_STATE)/cache
@@ -60,6 +60,11 @@ local-purge:
 task-cleanup:
 	test -n "$(PR)" && test -n "$(BRANCH)" && test -n "$(CANDIDATE)" || (echo "usage: make task-cleanup PR=<number> BRANCH=agent/<owner>/<task> CANDIDATE=<sha>" >&2; exit 2)
 	python3 scripts/cleanup_task.py --pr "$(PR)" --branch "$(BRANCH)" --candidate "$(CANDIDATE)"
+
+# 清理一个已被 accepted main 明确取代的本地任务；不扫描、不 force、不推断 supersession。
+task-abandon:
+	test -n "$(BRANCH)" && test -n "$(CANDIDATE)" && test -n "$(REPLACED_BY)" || (echo "usage: make task-abandon BRANCH=agent/<owner>/<task> CANDIDATE=<sha> REPLACED_BY=<accepted-main-sha> [PR=<closed-pr>]" >&2; exit 2)
+	python3 scripts/cleanup_task.py $(if $(strip $(PR)),--pr "$(PR)",) --branch "$(BRANCH)" --candidate "$(CANDIDATE)" --replaced-by "$(REPLACED_BY)"
 
 # 把任务 worktree 绑定到拥有它的实现会话；独占创建，不覆盖已有绑定。
 task-session-bind:

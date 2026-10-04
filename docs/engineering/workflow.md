@@ -88,6 +88,7 @@ pytest targets report the slowest setup/call/teardown phases and write JUnit res
 | `make local-clean` | Delete declared build/test outputs while preserving installed environments and caches |
 | `make local-purge` | Before authorized task cleanup, also remove task-local environments, tools, caches and legacy generated paths; preserve shared caches, fixed-instance state, secrets and unknown files |
 | `make task-cleanup PR=<number> BRANCH=<branch> CANDIDATE=<sha>` | Remove one verified merged task's clean local worktree and branch; never sweep tasks |
+| `make task-abandon BRANCH=<branch> CANDIDATE=<sha> REPLACED_BY=<main-sha> [PR=<closed-pr>]` | Remove one explicitly abandoned/superseded clean local task after exact replacement proof; never infer or sweep |
 | `make task-session-bind SESSION=<resumable-id>` | Create or verify this worktree's `.nvsop/session-binding.json`; exclusive, idempotent for the same session, never overwrites |
 | `make pr-check PR=<number>` | Read-only machine-state preflight; never substitutes for independent review or merge authorization |
 | `make pr-land-status PR=<number>` | Read one PR landing state and next machine action; never grants authorization |
@@ -239,6 +240,26 @@ All checks finish before the first cleanup command. The individual worktree remo
 
 **Done:** the explicitly supplied merged task worktree and local branch are cleaned only after the exact squash proof, and every unproved or unsafe task remains untouched. Report the command, actual result, and any partial-failure or synchronization gap.
 
+### 5.3 Clean one explicitly abandoned or superseded task
+
+An abandoned or superseded task has no merge proof, so cleanup requires a separate explicit operator decision naming the exact local branch, its current candidate SHA, and the accepted `main` commit that replaces the task. The command does not infer supersession from patch equivalence, branch age, a closed PR, or the fact that a newer implementation exists. Stop all writers first and use `make local-purge` to remove reproducible ignored state.
+
+```bash
+make task-abandon \
+    BRANCH=agent/<owner>/<task> \
+    CANDIDATE=<exact-local-tip> \
+    REPLACED_BY=<accepted-main-sha> \
+    [PR=<closed-unmerged-pr>]
+```
+
+`make task-abandon` reuses the same local-target checks and non-force removal path as `task-cleanup`: the direct local branch ref must equal `CANDIDATE`, at most one registered task worktree may own it, the target cannot be the primary/current worktree, and the worktree must be clean including ignored files except its exact validated `.nvsop/session-binding.json`. It fetches `origin/main`, requires `REPLACED_BY` to resolve to that exact commit and to be retained by `origin/main`, then releases the binding immediately before removing the worktree and exact local branch/config. `REPLACED_BY` proves only that the named replacement is accepted trunk; the operator decision supplies the semantic assertion that the task is obsolete. The candidate itself need not be an ancestor of `main`.
+
+When `PR` is supplied, the command queries that PR once and additionally requires `state=CLOSED`, `baseRefName=main`, the exact `headRefName`/`headRefOid` matching `BRANCH`/`CANDIDATE`, and no merge commit. A merged PR belongs to `task-cleanup`, while an open PR must first be deliberately closed or otherwise resolved. No-PR mode exists for explicitly abandoned local/intermediate tasks; it does not authorize deleting a task merely because no PR exists.
+
+As with merged cleanup, all checks finish before the first destructive command. The command never deletes remote refs, closes PRs/Issues, changes queue state, synchronizes `main`, force-removes a worktree, sweeps other tasks, or discards dirty/unknown state. A failure after cleanup begins is reported as a partial result with no rollback.
+
+**Done:** only the explicitly authorized obsolete local task is removed after exact candidate/replacement proof; unresolved, dirty, open-PR, or semantically unreviewed tasks remain untouched.
+
 ## Landing ownership and session binding
 
 Status: **normative**. This section owns the development/landing ownership state machine, the automatic queue seam and the local implementation-session binding. The queue is implemented by [scripts/landing_queue.py](../../scripts/landing_queue.py) and driven by the trusted [landing-queue.yml](../../.github/workflows/landing-queue.yml) workflow; [scripts/land_pr.py](../../scripts/land_pr.py) keeps the one-shot CAS primitives that the queue calls under the bounded [PR lifecycle plan](#pr-lifecycle-approval). The controller is the landing path: its App-bound jobs are guarded on the `LANDING_APP_ID`/`LANDING_QUEUE_ISSUE` repository variables and execute subject to the protected `landing` environment, so the queue runs the reusable `blocking-ci.yml` and performs the authorized exact-head squash merge under the human-maintainer attestation.
@@ -287,7 +308,7 @@ A BLOCKED_* outcome is public only as the entry's opaque `blocked_reason` plus `
 make task-session-bind SESSION=<resumable-id>
 ```
 
-Binding is required before the session's first tracked source edit. It is idempotent for the same session and refuses to overwrite an existing binding; another session cannot take over even during concurrent first binds, and the normal bind has no overwrite or force path. An unrecoverable original session is `BLOCKED_AGENT_UNAVAILABLE` and fails closed: replacement requires an explicit rebind/recovery decision after the old writer is stopped and the exact task is verified. Cleanup releases the binding only during the verified exact task cleanup of [§5.2](#52-clean-one-verified-task-worktree-and-local-branch).
+Binding is required before the session's first tracked source edit. It is idempotent for the same session and refuses to overwrite an existing binding; another session cannot take over even during concurrent first binds, and the normal bind has no overwrite or force path. An unrecoverable original session is `BLOCKED_AGENT_UNAVAILABLE` and fails closed: replacement requires an explicit rebind/recovery decision after the old writer is stopped and the exact task is verified. Cleanup releases the binding only during verified exact merged cleanup in [§5.2](#52-clean-one-verified-task-worktree-and-local-branch) or explicitly abandoned/superseded cleanup in [§5.3](#53-clean-one-explicitly-abandoned-or-superseded-task).
 
 ### Landing queue and single-flight CI
 

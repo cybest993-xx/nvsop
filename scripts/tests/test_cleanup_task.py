@@ -94,6 +94,20 @@ class CleanupTaskTest(unittest.TestCase):
         self.git("push", "--quiet", "origin", "main")
         return candidate, merge_commit, task
 
+    def make_abandoned_task(self, branch: str = "agent/a/demo") -> tuple[str, str, Path]:
+        task = self.root / "task"
+        self.git("worktree", "add", "--quiet", "-b", branch, str(task))
+        (task / "task.txt").write_text("task\n", encoding="utf-8")
+        self.command("add", "task.txt", cwd=task)
+        result = self.command("commit", "--quiet", "-m", "task", cwd=task)
+        if result.returncode != 0:
+            self.fail(result.stderr or result.stdout)
+        candidate = self.git("rev-parse", f"refs/heads/{branch}")
+        self.git("init", "--quiet", "--bare", str(self.remote), cwd=self.root)
+        self.git("remote", "add", "origin", str(self.remote))
+        self.git("push", "--quiet", "origin", "main")
+        return candidate, self.base, task
+
     def run_cli(
         self,
         branch: str,
@@ -128,6 +142,52 @@ class CleanupTaskTest(unittest.TestCase):
                 "--candidate",
                 candidate,
             ],
+            cwd=cwd or self.repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def run_abandon_cli(
+        self,
+        branch: str,
+        candidate: str,
+        replaced_by: str,
+        *,
+        pr_state: str | None = None,
+        head_oid: str | None = None,
+        merge_commit: str | None = None,
+        cwd: Path | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        env = self.env.copy()
+        arguments = [
+            sys.executable,
+            str(SCRIPT),
+            "--branch",
+            branch,
+            "--candidate",
+            candidate,
+            "--replaced-by",
+            replaced_by,
+        ]
+        if pr_state is not None:
+            payload = {
+                "state": pr_state,
+                "headRefName": branch,
+                "headRefOid": head_oid or candidate,
+                "baseRefName": "main",
+                "mergeCommit": {"oid": merge_commit} if merge_commit else None,
+            }
+            env.update(
+                {
+                    "GH_CALLS": str(self.gh_calls),
+                    "GH_PAYLOAD": json.dumps(payload),
+                }
+            )
+            arguments[2:2] = ["--pr", "312"]
+        return subprocess.run(
+            arguments,
             cwd=cwd or self.repo,
             env=env,
             capture_output=True,
@@ -175,6 +235,93 @@ class CleanupTaskTest(unittest.TestCase):
         self.assert_branch_absent(branch)
         self.assertFalse(task.exists())
         self.assert_gh_called_once()
+
+    def test_abandon_without_pr_removes_exact_clean_task(self) -> None:
+        branch = "agent/a/demo"
+        candidate, replaced_by, task = self.make_abandoned_task(branch)
+        self.write_binding(task, branch)
+
+        result = self.run_abandon_cli(branch, candidate, replaced_by)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assert_branch_absent(branch)
+        self.assertFalse(task.exists())
+        self.assertFalse(self.gh_calls.exists())
+
+    def test_abandon_with_closed_pr_requires_exact_head(self) -> None:
+        branch = "agent/a/demo"
+        candidate, replaced_by, task = self.make_abandoned_task(branch)
+
+        result = self.run_abandon_cli(branch, candidate, replaced_by, pr_state="CLOSED")
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assert_branch_absent(branch)
+        self.assertFalse(task.exists())
+        self.assert_gh_called_once()
+
+    def test_abandon_rejects_open_pr(self) -> None:
+        branch = "agent/a/demo"
+        candidate, replaced_by, task = self.make_abandoned_task(branch)
+
+        result = self.run_abandon_cli(branch, candidate, replaced_by, pr_state="OPEN")
+
+        self.assertNotEqual(0, result.returncode)
+        self.assert_branch_exists(branch)
+        self.assertTrue(task.exists())
+        self.assert_gh_called_once()
+
+    def test_abandon_rejects_merged_pr(self) -> None:
+        branch = "agent/a/demo"
+        candidate, replaced_by, task = self.make_abandoned_task(branch)
+
+        result = self.run_abandon_cli(
+            branch,
+            candidate,
+            replaced_by,
+            pr_state="MERGED",
+            merge_commit=self.base,
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assert_branch_exists(branch)
+        self.assertTrue(task.exists())
+        self.assert_gh_called_once()
+
+    def test_abandon_rejects_closed_pr_head_mismatch(self) -> None:
+        branch = "agent/a/demo"
+        candidate, replaced_by, task = self.make_abandoned_task(branch)
+
+        result = self.run_abandon_cli(
+            branch, candidate, replaced_by, pr_state="CLOSED", head_oid=self.base
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assert_branch_exists(branch)
+        self.assertTrue(task.exists())
+        self.assert_gh_called_once()
+
+    def test_abandon_replacement_not_retained_by_main_preserves_task(self) -> None:
+        branch = "agent/a/demo"
+        candidate, _replaced_by, task = self.make_abandoned_task(branch)
+
+        result = self.run_abandon_cli(branch, candidate, candidate)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assert_branch_exists(branch)
+        self.assertTrue(task.exists())
+        self.assertFalse(self.gh_calls.exists())
+
+    def test_abandon_dirty_worktree_is_preserved(self) -> None:
+        branch = "agent/a/demo"
+        candidate, replaced_by, task = self.make_abandoned_task(branch)
+        (task / "untracked.txt").write_text("keep\n", encoding="utf-8")
+
+        result = self.run_abandon_cli(branch, candidate, replaced_by)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assert_branch_exists(branch)
+        self.assertTrue((task / "untracked.txt").exists())
+        self.assertFalse(self.gh_calls.exists())
 
     def test_reviewed_head_mismatch_preserves_branch_and_worktree(self) -> None:
         branch = "agent/a/demo"

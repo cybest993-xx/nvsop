@@ -40,7 +40,7 @@ Supported repository commands place repository-owned local state under the ignor
 - `venv/` owns the frozen Python environment used by Make targets and hooks;
 - `cache/` owns Ruff, mypy, pytest and import-linter caches; mypy/pytest use separate target subdirectories for parallel checks;
 - `tools/` owns explicitly bootstrapped repository tools such as `actionlint`;
-- `artifacts/` owns disposable local build and test output;
+- `artifacts/` owns local build/test output plus the landing repair continuity state described below;
 - `dev-main/` owns the fixed development instance, including local credentials, TLS material and Docker secret files.
 
 Classify every new path before creating it. Durable source, configuration, documentation, test assets and other repository content stay tracked under their existing owner. Repository-owned untracked state created by supported commands belongs under `.nvsop/`. A new repository-owned ignored path outside `.nvsop/` is an explicit exception: use it only when the responsible tool requires that layout, record the reason and exact cleanup ownership here, and update the policy allowlists only when that path is intentionally safe to preserve. `.tmp/task-handoff.md` is the sole repository-defined continuity exception and is created only under [workflow persistent continuity](workflow.md#persistent-continuity). User-supplied secrets remain governed by their documented configuration/security paths rather than being treated as generated state.

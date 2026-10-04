@@ -597,7 +597,7 @@ class PrepareTest(EnvTest):
         self._prepare(backend)
         self.assertEqual(([], 0), (backend.refresh_calls, backend.writes))
 
-    def test_controlled_lineage_requires_app_event(self) -> None:
+    def test_controlled_lineage_waits_for_app_event(self) -> None:
         def backend() -> FakeBackend:
             entry, att = active_entry(phase=lq.REFRESHING)
             return FakeBackend(
@@ -607,19 +607,42 @@ class PrepareTest(EnvTest):
                 parents={NEW_HEAD: (ROOT_SHA, BASE)},
             )
 
-        rejected = backend()
-        self._prepare(rejected)
-        self.assertEqual(lq.BLOCKED_MUTATION, lq.find(rejected.state_obj, 1).blocked_reason)
-        accepted = backend()
+        # 普通 wake（workflow_dispatch，无 App 事件）不证明受控 refresh：保持完整
+        # REFRESHING intent 且零副作用，等待匹配的 App synchronize 事件，绝不发起第二次 refresh。
+        waiting = backend()
+        for _ in range(2):
+            self.assertIn("run_ci=false", self._prepare(waiting))
+        entry = lq.find(waiting.state_obj, 1)
+        self.assertEqual(
+            (lq.ACTIVE, lq.REFRESHING, ROOT_SHA, ROOT_SHA, BASE),
+            (entry.state, entry.phase, entry.candidate, entry.refresh_root, entry.refresh_base),
+        )
+        self.assertEqual(
+            (0, [], [], 0),
+            (waiting.writes, waiting.refresh_calls, waiting.statuses, waiting.dispatches),
+        )
+        # 同一 backend 收到匹配 App 事件才冻结新头并进入 TESTING，保留授权根。
         self.assertIn(
             "run_ci=true",
-            self._prepare(accepted, lq.RefreshEvent(ROOT_SHA, NEW_HEAD, "lander[bot]", 1)),
+            self._prepare(waiting, lq.RefreshEvent(ROOT_SHA, NEW_HEAD, "lander[bot]", 1)),
         )
-        frozen = lq.find(accepted.state_obj, 1)
+        frozen = lq.find(waiting.state_obj, 1)
         self.assertEqual(
             (NEW_HEAD, ROOT_SHA, lq.TESTING),
             (frozen.candidate, frozen.authorization_root, frozen.phase),
         )
+
+    def test_abnormal_parent_lineage_blocks_even_without_app_event(self) -> None:
+        # 早期返回不能掩盖真实头变化：parent 关系异常时即使没有 App 事件也 fail closed。
+        entry, att = active_entry(phase=lq.REFRESHING)
+        backend = FakeBackend(
+            state=lq.State(1, (replace(entry, refresh_root=ROOT_SHA, refresh_base=BASE),)),
+            comments={500: att},
+            pr=pr_state(head=NEW_HEAD, base=BASE),
+            parents={NEW_HEAD: (ROOT_SHA, MERGE)},
+        )
+        self._prepare(backend)
+        self.assertEqual(lq.BLOCKED_MUTATION, lq.find(backend.state_obj, 1).blocked_reason)
 
     def test_main_changed_during_refresh_no_ci(self) -> None:
         entry, att = active_entry(phase=lq.REFRESHING)
@@ -773,14 +796,22 @@ class PrepareTest(EnvTest):
 
     def test_refresh_event_must_name_the_pr(self) -> None:
         entry, att = active_entry(phase=lq.REFRESHING)
-        backend = FakeBackend(
-            state=lq.State(1, (replace(entry, refresh_root=ROOT_SHA, refresh_base=BASE),)),
-            comments={500: att},
-            pr=pr_state(head=NEW_HEAD, base=BASE),
-            parents={NEW_HEAD: (ROOT_SHA, BASE)},
-        )
-        self._prepare(backend, lq.RefreshEvent(ROOT_SHA, NEW_HEAD, "lander[bot]", 2))
-        self.assertEqual(lq.BLOCKED_MUTATION, lq.find(backend.state_obj, 1).blocked_reason)
+        # 显式非 None 事件必须同时精确匹配 PR、旧头、新头与 App actor；任一不匹配都 fail closed。
+        for label, event in (
+            ("wrong pr", lq.RefreshEvent(ROOT_SHA, NEW_HEAD, "lander[bot]", 2)),
+            ("wrong actor", lq.RefreshEvent(ROOT_SHA, NEW_HEAD, "outsider", 1)),
+            ("wrong before", lq.RefreshEvent(MERGE, NEW_HEAD, "lander[bot]", 1)),
+            ("wrong after", lq.RefreshEvent(ROOT_SHA, MERGE, "lander[bot]", 1)),
+        ):
+            with self.subTest(event=label):
+                backend = FakeBackend(
+                    state=lq.State(1, (replace(entry, refresh_root=ROOT_SHA, refresh_base=BASE),)),
+                    comments={500: att},
+                    pr=pr_state(head=NEW_HEAD, base=BASE),
+                    parents={NEW_HEAD: (ROOT_SHA, BASE)},
+                )
+                self._prepare(backend, event)
+                self.assertEqual(lq.BLOCKED_MUTATION, lq.find(backend.state_obj, 1).blocked_reason)
 
 
 class FinalizeTest(EnvTest):

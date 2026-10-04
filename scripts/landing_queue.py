@@ -1454,7 +1454,8 @@ def _resolve_refresh(
     attempt: str,
     controller: str,
 ) -> int:
-    """仅在可证明受控集成时冻结新头并持久化 TESTING；否则 fail closed。"""
+    """仅在 parent 关系与匹配 App 事件都证明受控集成时冻结新头并持久化 TESTING；
+    无 App 事件时保持 REFRESHING 等待，真实 mutation/伪造事件 fail closed。"""
     root, base = current.refresh_root, current.refresh_base
     if root is None or base is None:
         raise InfrastructureError("REFRESHING intent is missing its root/base")
@@ -1465,17 +1466,23 @@ def _resolve_refresh(
     except ProtectionError:
         return _block_and_report(backend, state, revision, current, BLOCKED_AUTHORITY, pr)
     parents = backend.commit_parents(pr.head_oid)
-    # 事件必须同时匹配 PR 号、精确旧/新头与 App actor；同一 SHA 的其它 PR 事件不能代签。
+    if tuple(parents) != (root, base):
+        # 真实头变化不能由无事件早返回掩盖：parent 关系异常一律 fail closed。
+        return _block_and_report(backend, state, revision, current, BLOCKED_MUTATION, pr)
+    if event is None:
+        # 普通 wake（workflow_dispatch 等）没有 App synchronize 佐证：保持 REFRESHING intent 与状态
+        # 不变，不继承授权、不触发 CI、不发起第二次 refresh，等待匹配的 App 事件。
+        print(f"run_ci=false\nactive={current.pr}\nphase=REFRESHING")
+        return 0
+    # 显式事件必须同时匹配 PR 号、精确旧/新头与 App actor；同一 SHA 的其它 PR 事件不能代签。
     event_ok = (
-        event is not None
-        and event.pr == current.pr
+        event.pr == current.pr
         and event.before == root
         and event.after == pr.head_oid
         and event.actor == _app_bot()
     )
-    if tuple(parents) != (root, base) or not event_ok:
-        # 无法证明受控 update-branch（含 App 事件被并发替换而丢失）：不继承授权，也不 CI 错误的树。
-        # 运维需在确认受控刷新后显式唤醒队列，不做投机回退。
+    if not event_ok:
+        # 伪造或并发替换的事件：不继承授权，也不 CI 错误的树。
         return _block_and_report(backend, state, revision, current, BLOCKED_MUTATION, pr)
     accepted = accept_refresh(state, current.pr, pr.head_oid, base)
     intent = begin_testing(accepted, current.pr, run_id, attempt, controller, pr.head_oid, base)

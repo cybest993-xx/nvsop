@@ -1,8 +1,8 @@
 # Landing 修复服务真实环境端到端验证（2026-10-04）
 
-日期：2026-10-04  
-状态：**进行中的现场证据**；剩余实况状态、PR、CI run 与合并证据在端到端验证完成后补充。  
-验证分支：`agent/e2e/landing-repair-live-20261004`  
+日期：2026-10-04
+状态：**进行中的现场证据**；剩余实况状态、PR、CI run 与合并证据在端到端验证完成后补充。
+验证分支：`agent/e2e/landing-repair-live-20261004`
 起始基线：部署在 `main` 的 `a062cdb9db9907522575ba4edeaa57f5b865bedd`（`feat(workflow): add standalone landing repair service (#405)`）
 
 ## 目的与范围

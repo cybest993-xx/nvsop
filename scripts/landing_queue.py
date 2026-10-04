@@ -124,6 +124,21 @@ EVIDENCE_KEYS = (
     "run",
     "attempt",
 )
+# 修复协调：只有候选缺陷类阻塞会回到实现会话；AUTHORITY/INFRA 不是代码修复。
+REPAIR_CLAIM, REPAIR_RESUMING, REPAIR_RESUMED, REPAIR_UNAVAILABLE = (
+    "repair-claim",
+    "repair-resuming",
+    "repair-resumed",
+    "repair-unavailable",
+)
+REPAIR_KINDS = frozenset({REPAIR_CLAIM, REPAIR_RESUMING, REPAIR_RESUMED, REPAIR_UNAVAILABLE})
+REPAIR_REASONS = BLOCKED_REASONS - {BLOCKED_AUTHORITY, BLOCKED_INFRA}
+# claimed/resuming 未决；resumed/unavailable 终态，只有终态才允许带 token 重入队。
+REPAIR_STATES = frozenset({"claimed", "resuming", "resumed", "unavailable"})
+REPAIR_PENDING_STATES = frozenset({"claimed", "resuming"})
+REPAIR_TERMINAL_STATES = REPAIR_STATES - REPAIR_PENDING_STATES
+# 修复键与失败证据共用 evidence 白名单：公开但不含 session 身份或 worktree 路径。
+REPAIR_KEYS = ("repair_state", "repair_claim", "repair_generation")
 FULL_OBJECT_ID = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 HANDOFF_ID = re.compile(r"^[0-9a-f]{32}$")
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -194,6 +209,9 @@ class Request:
     handoff: str = ""
     attestation_comment: int = 0
     attestation_digest: str = ""
+    # claim 是修复声明/完成 token 的 sha256 digest；明文只留在本地 stdout。
+    claim: str = ""
+    generation: str = ""
 
 
 @dataclass(frozen=True)
@@ -283,6 +301,12 @@ def apply_enqueue(state: State, request: Request, attestation: Attestation) -> S
             # 不同候选不得静默替换授权根：先 BLOCKED_MUTATION，修复后显式重新入队到队尾。
             return block(state, request.pr, BLOCKED_MUTATION)
         raise QueueError(f"pr {request.pr} is ACTIVE with a different authorization root")
+    repair = _repair_state(existing) if existing is not None and existing.state == BLOCKED else None
+    if repair in REPAIR_STATES:
+        # 只有终态声明可被带 token 的重新入队释放；claimed/resuming 未决时一律拒绝，避免双写入者。
+        claim = (existing.evidence or {}).get("repair_claim")
+        if repair not in REPAIR_TERMINAL_STATES or request.claim != claim:
+            raise QueueError("a repair claim is active; re-enqueue needs its completion token")
     entries = tuple(entry for entry in state.entries if entry.pr != request.pr)
     return promote(replace(state, entries=(*entries, _new_entry(request, attestation))))
 
@@ -403,6 +427,108 @@ def _require_active(state: State, pr: int) -> Entry:
     return existing
 
 
+def _repair_state(entry: Entry) -> str | None:
+    return (entry.evidence or {}).get("repair_state")
+
+
+def claim_digest(token: str) -> str:
+    """公开状态只存 token 的 sha256；明文 token 只留在本地调用方手里。"""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def repair_generation(entry: Entry) -> str:
+    evidence = entry.evidence or {}
+    keys = ("expected_head", "observed_head", "main", "run", "attempt")
+    parts = [entry.handoff, entry.blocked_reason, entry.candidate, entry.authorization_root]
+    parts += [evidence.get(key, "") for key in keys]
+    return hashlib.sha256("\x1f".join(part or "" for part in parts).encode("utf-8")).hexdigest()
+
+
+def repair_event(backend: Backend, pr: int) -> dict[str, object]:
+    """从当前 BLOCKED 条目和实际 PR/佐证派生公开修复事件；过期或不匹配即拒绝。"""
+    state, _ = backend.state()
+    entry = find(state, pr)
+    if entry is None or entry.state != BLOCKED or entry.phase is not None:
+        raise QueueError("no blocked landing entry to repair")
+    if entry.blocked_reason not in REPAIR_REASONS:
+        raise QueueError(f"{entry.blocked_reason} is not a code-repair handoff")
+    evidence = entry.evidence or {}
+    if not set(EVIDENCE_KEYS).issubset(evidence):
+        raise QueueError("blocked entry is missing its failure evidence")
+    repository = backend.repository()
+    comment_obj = backend.comment(entry.attestation_comment)
+    attestation = attestation_from_comment(comment_obj, repository, pr)
+    if not _trusted(backend, comment_obj):
+        raise QueueError("attestation is not a trusted human maintainer comment")
+    pull = backend.pull_request(pr)
+    if pull.state != "OPEN" or pull.base_name != "main":
+        raise QueueError("pull request is not open against main")
+    if attestation.head_branch != pull.head_name:
+        raise QueueError("attestation branch does not match the pull request")
+    if evidence["observed_head"] != pull.head_oid:
+        raise QueueError("pull-request head moved since the block; the event is stale")
+    if evidence["main"] != backend.main_sha():
+        raise QueueError("main moved since the block; the event is stale")
+    location = {"state_branch": STATE_BRANCH, "path": STATE_PATH}
+    location |= {"run": evidence["run"], "attempt": evidence["attempt"]}
+    event = {"version": 1, "event": repair_generation(entry), "handoff": entry.handoff}
+    event |= {"repository": repository, "pr": pr, "branch": attestation.head_branch}
+    event |= {"blocked_state": entry.blocked_reason, "authorization_root": entry.authorization_root}
+    event |= {"landing_head": evidence["expected_head"], "main": evidence["main"]}
+    event |= {"failure": {key: evidence[key] for key in ("reason", "category", "run", "attempt")}}
+    event |= {"evidence": {key: evidence[key] for key in EVIDENCE_KEYS}}
+    event |= {"evidence_location": location}
+    return event
+
+
+def apply_repair(state: State, request: Request) -> State:
+    """独占修复声明与其结果；同一代次只接受一次，旧/重复请求 fail closed。"""
+    _validate_repair_request(request)
+    entry = find(state, request.pr)
+    if entry is None or entry.state != BLOCKED or entry.phase is not None:
+        raise QueueError("no blocked entry to repair")
+    if entry.blocked_reason not in REPAIR_REASONS:
+        raise QueueError("this blocked reason is not a code-repair handoff")
+    if entry.handoff != request.handoff:
+        raise QueueError("repair request does not name the blocked generation")
+    if repair_generation(entry) != request.generation:
+        raise QueueError("repair event is stale")
+    evidence = dict(entry.evidence or {})
+    current = evidence.get("repair_state")
+    # 请求里的 claim 已是 sha256 digest；控制器无需明文 token。
+    digest = request.claim
+    if request.kind == REPAIR_CLAIM:
+        if current in REPAIR_STATES:
+            raise QueueError("a repair claim already exists for this generation")
+        evidence["repair_state"] = "claimed"
+        evidence["repair_claim"] = digest
+        evidence["repair_generation"] = request.generation
+    elif request.kind == REPAIR_RESUMING:
+        # 只有已接受的 claim 能推进 claimed→resuming；resuming 期间重入队/二次声明全拒。
+        if current != "claimed" or evidence.get("repair_claim") != digest:
+            raise QueueError("repair resume does not match the accepted claim")
+        evidence["repair_state"] = "resuming"
+    else:
+        # 结果只接受未决声明上的终态转换；token digest 必须匹配。
+        if current not in REPAIR_PENDING_STATES or evidence.get("repair_claim") != digest:
+            raise QueueError("repair result does not match the accepted claim")
+        evidence["repair_state"] = "resumed" if request.kind == REPAIR_RESUMED else "unavailable"
+    return _replace_entry(state, request.pr, evidence=evidence)
+
+
+def _validate_repair_request(request: Request) -> None:
+    if not isinstance(request.pr, int) or isinstance(request.pr, bool) or request.pr <= 0:
+        raise QueueError("pr must be a positive integer")
+    if not isinstance(request.request_id, int) or request.request_id <= 0:
+        raise QueueError("request id must be a positive integer")
+    if HANDOFF_ID.fullmatch(request.handoff) is None:
+        raise QueueError("repair request must name an opaque 32-hex handoff")
+    if DIGEST.fullmatch(request.claim) is None:
+        raise QueueError("repair request must name its 64-hex claim digest")
+    if DIGEST.fullmatch(request.generation) is None:
+        raise QueueError("repair request must name its 64-hex event generation")
+
+
 def _validate_request_inputs(request: Request) -> None:
     if not isinstance(request.pr, int) or isinstance(request.pr, bool) or request.pr <= 0:
         raise QueueError("pr must be a positive integer")
@@ -416,6 +542,8 @@ def _validate_request_inputs(request: Request) -> None:
         raise QueueError("attestation comment id must be a positive integer")
     if DIGEST.fullmatch(request.attestation_digest) is None:
         raise QueueError("attestation digest must be a sha256 hex digest")
+    if request.claim and DIGEST.fullmatch(request.claim) is None:
+        raise QueueError("repair completion token must be a sha256 digest")
 
 
 # --------------------------------------------------------------------------- 序列化
@@ -440,9 +568,17 @@ def _opt(value: object, name: str) -> str | None:
 def _evidence(value: object) -> dict[str, str] | None:
     if value is None:
         return None
-    if not isinstance(value, dict) or not set(value).issubset(EVIDENCE_KEYS):
+    if not isinstance(value, dict) or not set(value).issubset(
+        set(EVIDENCE_KEYS) | set(REPAIR_KEYS)
+    ):
         raise QueueError("evidence must be an opaque documented object")
-    return {str(key): _str(item, f"evidence.{key}") for key, item in value.items()}
+    result = {str(key): _str(item, f"evidence.{key}") for key, item in value.items()}
+    if result.get("repair_state", "claimed") not in REPAIR_STATES:
+        raise QueueError("unknown repair state")
+    for key in ("repair_claim", "repair_generation"):
+        if key in result and DIGEST.fullmatch(result[key]) is None:
+            raise QueueError(f"evidence.{key} must be a sha256 hex digest")
+    return result
 
 
 def entry_from_json(payload: object) -> Entry:
@@ -538,6 +674,8 @@ def request_body(request: Request) -> str:
         "handoff": request.handoff,
         "attestation_comment": request.attestation_comment,
         "attestation_digest": request.attestation_digest,
+        "claim": request.claim,
+        "generation": request.generation,
     }
     return f"{REQUEST_MARKER}\n```json\n{json.dumps(payload, sort_keys=True)}\n```\n"
 
@@ -549,7 +687,7 @@ def request_from_comment(comment: Comment) -> Request | None:
     if payload.get("version") != VERSION:
         raise QueueError("inbox request has an unsupported version")
     kind = payload.get("kind")
-    if kind not in {"enqueue", "dequeue"}:
+    if kind not in {"enqueue", "dequeue", *REPAIR_KINDS}:
         raise QueueError("inbox request has an unknown kind")
     return Request(
         kind=kind,
@@ -559,6 +697,8 @@ def request_from_comment(comment: Comment) -> Request | None:
         handoff=str(payload.get("handoff") or ""),
         attestation_comment=_int(payload.get("attestation_comment") or 0, "attestation_comment"),
         attestation_digest=str(payload.get("attestation_digest") or ""),
+        claim=str(payload.get("claim") or ""),
+        generation=str(payload.get("generation") or ""),
     )
 
 
@@ -1119,6 +1259,9 @@ def _consume(backend: Backend, state: State) -> State:
         if request is None:
             continue
         try:
+            if request.kind in REPAIR_KINDS:
+                result = apply_repair(result, request)
+                continue
             before = find(result, request.pr)
             if request.kind == "enqueue":
                 attestation_comment = backend.comment(request.attestation_comment)
@@ -1146,7 +1289,14 @@ def _consume(backend: Backend, state: State) -> State:
     return replace(result, consumed_request_id=highest)
 
 
-def enqueue(backend: Backend, number: int, expected_head: str, attestation_comment: int) -> int:
+def enqueue(
+    backend: Backend,
+    number: int,
+    expected_head: str,
+    attestation_comment: int,
+    *,
+    repair_claim: str = "",
+) -> int:
     repository = backend.repository()
     pr = backend.pull_request(number)
     _require_open_main(pr)
@@ -1169,6 +1319,11 @@ def enqueue(backend: Backend, number: int, expected_head: str, attestation_comme
         and existing.authorization_root != expected_head
     ):
         raise QueueError(f"pr {number} is ACTIVE with a different authorization root")
+    repair = _repair_state(existing) if existing is not None and existing.state == BLOCKED else None
+    digest = claim_digest(repair_claim) if repair_claim else ""
+    if repair in REPAIR_STATES and digest != (existing.evidence or {}).get("repair_claim"):
+        # 未决声明期间无 token 或错误 token 的入队会被控制器静默拒绝；CLI 先 fail closed。
+        raise QueueError("a repair claim is active; re-enqueue requires its matching REPAIR_CLAIM")
     handoff = secrets.token_hex(16)
     backend.post_request(
         request_body(
@@ -1180,6 +1335,7 @@ def enqueue(backend: Backend, number: int, expected_head: str, attestation_comme
                 handoff,
                 attestation.comment,
                 attestation.digest,
+                claim=digest,
             )
         )
     )
@@ -1667,9 +1823,14 @@ def parser() -> argparse.ArgumentParser:
     enqueue_command.add_argument("--pr", required=True, type=int)
     enqueue_command.add_argument("--expected-head", required=True)
     enqueue_command.add_argument("--attestation", required=True, type=int)
+    enqueue_command.add_argument("--repair-claim", default="")
     dequeue_command = commands.add_parser("dequeue", help="Post one durable dequeue request.")
     dequeue_command.add_argument("--pr", required=True, type=int)
     commands.add_parser("queue", help="Read the current queue state.")
+    repair_command = commands.add_parser(
+        "repair-event", help="Print one machine-readable blocked-entry repair event."
+    )
+    repair_command.add_argument("--pr", required=True, type=int)
     prepare_command = commands.add_parser(
         "prepare", help="Consume requests and drive the ACTIVE phase."
     )
@@ -1695,11 +1856,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     backend: Backend = GitHub()
     try:
         if arguments.command == "enqueue":
-            return enqueue(backend, arguments.pr, arguments.expected_head, arguments.attestation)
+            return enqueue(
+                backend,
+                arguments.pr,
+                arguments.expected_head,
+                arguments.attestation,
+                repair_claim=arguments.repair_claim,
+            )
         if arguments.command == "dequeue":
             return dequeue(backend, arguments.pr)
         if arguments.command == "queue":
             return queue_status(backend)
+        if arguments.command == "repair-event":
+            print(json.dumps(repair_event(backend, arguments.pr), sort_keys=True))
+            return 0
         if arguments.command == "prepare":
             return prepare(
                 backend, arguments.run_id, arguments.attempt, arguments.controller_sha, _event()

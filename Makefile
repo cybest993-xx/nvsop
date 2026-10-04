@@ -1,4 +1,4 @@
-.PHONY: check check-suite check-docs docs-check check-integration media-system change-size task-check ci-plan ci-tools ci-lint pr-check pr-land-status pr-land-refresh pr-land-merge pr-land-enqueue pr-land-dequeue pr-land-queue issue-check hooks local-clean local-purge lockfile sync policy policy-test migrations contract-base \
+.PHONY: check check-suite check-docs docs-check check-integration media-system change-size task-check ci-plan ci-tools ci-lint pr-check pr-land-status pr-land-refresh pr-land-merge pr-land-enqueue pr-land-dequeue pr-land-queue pr-land-repair-event pr-land-repair pr-land-repair-service issue-check hooks local-clean local-purge lockfile sync policy policy-test migrations contract-base \
 	contract-capability \
 	contracts contracts-python-check contracts-python-format contracts-python-lint \
 	contracts-python-type contracts-python-unit openapi-export openapi-compat openapi-generate \
@@ -126,8 +126,8 @@ pr-land-merge:
 
 # 落地队列的公开入口：入队/出队只写入持久请求，不授予授权；只读查看队列状态。
 pr-land-enqueue:
-	test -n "$(PR)" && test -n "$(EXPECTED_HEAD)" && test -n "$(ATTESTATION)" || (echo "usage: make pr-land-enqueue PR=<number> EXPECTED_HEAD=<sha> ATTESTATION=<comment-id>" >&2; exit 2)
-	python3 scripts/landing_queue.py enqueue --pr "$(PR)" --expected-head "$(EXPECTED_HEAD)" --attestation "$(ATTESTATION)"
+	test -n "$(PR)" && test -n "$(EXPECTED_HEAD)" && test -n "$(ATTESTATION)" || (echo "usage: make pr-land-enqueue PR=<number> EXPECTED_HEAD=<sha> ATTESTATION=<comment-id> [REPAIR_CLAIM=<token>]" >&2; exit 2)
+	python3 scripts/landing_queue.py enqueue --pr "$(PR)" --expected-head "$(EXPECTED_HEAD)" --attestation "$(ATTESTATION)" $(if $(REPAIR_CLAIM),--repair-claim "$(REPAIR_CLAIM)")
 
 pr-land-dequeue:
 	test -n "$(PR)" || (echo "usage: make pr-land-dequeue PR=<number>" >&2; exit 2)
@@ -135,6 +135,21 @@ pr-land-dequeue:
 
 pr-land-queue:
 	python3 scripts/landing_queue.py queue
+
+# 修复派发：公开事件只读；声明经可信控制器独占接受后才由 resume 调用本地 host。
+# 默认无 host 桥 fail closed；preflight 供恢复会话在任何代码写入前重新核对事实。
+pr-land-repair-event:
+	test -n "$(PR)" || (echo "usage: make pr-land-repair-event PR=<number>" >&2; exit 2)
+	python3 scripts/landing_queue.py repair-event --pr "$(PR)"
+
+pr-land-repair:
+	test -n "$(PR)" && test -n "$(ACTION)" || (echo "usage: make pr-land-repair PR=<number> ACTION=<claim|resume|preflight> [CLAIM=<token> (resume)] [WORKTREE=<path> (preflight)] [EXPECTED_GENERATION=<64hex> (preflight)]" >&2; exit 2)
+	python3 scripts/dispatch_landing_repair.py "$(ACTION)" --pr "$(PR)" $(if $(CLAIM),--claim "$(CLAIM)") $(if $(WORKTREE),--worktree "$(WORKTREE)") $(if $(EXPECTED_GENERATION),--expected-generation "$(EXPECTED_GENERATION)")
+
+# 独立本地 repair dispatcher；默认持续扫描，ONCE=1 做一次性诊断。
+# Pi 可自动从 ~/.nvm 唯一安装解析；其它 agent 通过一个或多个绝对路径 adapter 接入。
+pr-land-repair-service:
+	python3 scripts/landing_repair_service.py $(if $(ONCE),--once) $(if $(PR),--pr "$(PR)") $(if $(INTERVAL),--interval "$(INTERVAL)") $(if $(PI_COMMAND),--pi-command "$(PI_COMMAND)") $(if $(PI_SESSION_DIR),--pi-session-dir "$(PI_SESSION_DIR)") $(foreach path,$(ADAPTER_COMMANDS),--adapter-command "$(path)")
 
 issue-check:
 	test -n "$(ISSUE)" || (echo "usage: make issue-check ISSUE=<number>" >&2; exit 2)

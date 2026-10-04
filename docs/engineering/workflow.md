@@ -18,7 +18,7 @@ git worktree list --porcelain
 git fetch origin main
 ```
 
-The hook path must resolve to `scripts/githooks` or its configured equivalent. A new task starts from the accepted fetched `origin/main` tip and does not require synchronizing the primary `main` worktree. Never reset a task worktree to obtain a clean base. `.nvsop/` is policy-enforced as untracked local state, so preserving it cannot overwrite a committed path. Synchronizing the dedicated primary `main` worktree is a separate authorized operation owned by [§5.1](#51-confirm-the-exact-squash-merge).
+The hook path must resolve to `scripts/githooks` or its configured equivalent. A new task starts from the accepted fetched `origin/main` tip and does not require synchronizing the primary `main` worktree. Never reset a task worktree to obtain a clean base. `.nvsop/` is policy-enforced as untracked local state, so preserving it cannot overwrite a committed path. After a verified merge, synchronizing the dedicated primary `main` worktree is a mandatory completion step owned by [§5.2](#52-synchronize-main-and-clean-one-verified-task), not a second authorization boundary.
 
 ```sh
 git worktree add ../nvsop-task -b agent/a/<task-slug> origin/main
@@ -126,16 +126,16 @@ After the user has seen the explicit candidate, the actual diff, the applicable 
 Publication, integration refresh, merge, Issue closure and task cleanup are one bounded delivery, not one approval per action. One explicit user confirmation of a presented **PR lifecycle plan** authorizes every action the plan names, in one pass. The plan is bounded and names:
 
 - the confirmed task candidate SHA, the task branch and worktree, and the target `main`;
-- the action scope: push the task branch, create or update its PR against `main`, perform any controlled conflict-free base refresh against the exact expected prior head, observe `CI required` on each landing head, hand off to the queue for the queue-controlled exact-head squash merge when authorized, name any automatic remote PR-branch deletion that the current repository setting makes a consequence of merge, close the named Issue(s) when their closure criteria are satisfied — or `none` — and then use the versioned single-task cleanup entrypoint for the exact task worktree and local branch;
-- the exact cleanup targets: only task-generated reproducible artifacts and the verified merged task's local branch and worktree.
+- the action scope: push the task branch, create or update its PR against `main`, perform any controlled conflict-free base refresh against the exact expected prior head, observe `CI required` on each landing head, hand off to the queue for the queue-controlled exact-head squash merge when authorized, name any automatic remote PR-branch deletion that the current repository setting makes a consequence of merge, and close the named Issue(s) when their closure criteria are satisfied — or `none`;
+- the exact cleanup target: the verified merged task's local branch and worktree. Once squash merge is authorized and exact merge proof succeeds, primary `main` synchronization and this single-task cleanup are mandatory completion steps rather than separate actions that need another authorization.
 
-Before presenting the plan, read the live repository setting with `gh repo view --json deleteBranchOnMerge --jq .deleteBranchOnMerge`. When it is `true`, deletion of the remote PR head branch is an inseparable server-side consequence of merge and the plan must disclose it with the merge action; when it is `false`, remote branch deletion is excluded unless separately named. Primary `main` synchronization is always excluded unless the plan names it explicitly. The user may authorize a subset that the current server configuration can actually separate; every excluded action remains unauthorized. A mere implementation or "continue" request and an agent-authored plan are not lifecycle approval.
+Before presenting the plan, read the live repository setting with `gh repo view --json deleteBranchOnMerge --jq .deleteBranchOnMerge`. When it is `true`, deletion of the remote PR head branch is an inseparable server-side consequence of merge and the plan must disclose it with the merge action; when it is `false`, remote branch deletion is excluded unless separately named. The user may authorize a subset that the current server configuration can actually separate, but local synchronization and exact task cleanup are inseparable post-merge completion once the merge itself is authorized. A mere implementation or "continue" request and an agent-authored plan are not lifecycle approval.
 
 Every technical gate stays a precondition, never a second human approval gate: the applicable independent read-only review, exact-head green `CI required`, server protection/rules and resolved review conversations, the queue-controlled exact-head squash merge, exact merge proof, stopped writers, dirty/unknown-state refusal and the ban on sweeping or unowned force cleanup. A controlled base refresh invalidates the old exact-head CI and any base-sensitive technical evidence; rerun or revalidate the affected evidence on the refreshed landing head before merge. Approval never bypasses evidence or grants a generic permission; pause and report the actual stage, command, result and gaps on any blocker.
 
-The confirmed task candidate is the authorization root. A later landing head inherits that approval only when the authorized delivery flow itself performs a server-side conflict-free base refresh against the exact expected prior head, without manual conflict resolution or task-code edits. That mechanical integration transition does not require another user confirmation, but its new head must satisfy the technical gates above. Any other head change, manual conflict resolution, task-code or scope change, added action, or changed target invalidates the plan and requires revalidation plus a new approval. Later facts the plan already anticipated are not changes: phase completion, a green CI run, the PR number allocated by the approved create, the squash merge commit becoming known, and a previously approved cleanup becoming provably safe.
+The confirmed task candidate is the authorization root. A later landing head inherits that approval only when the authorized delivery flow itself performs a server-side conflict-free base refresh against the exact expected prior head, without manual conflict resolution or task-code edits. That mechanical integration transition does not require another user confirmation, but its new head must satisfy the technical gates above. Any other head change, manual conflict resolution, task-code or scope change, added action, or changed target invalidates the plan and requires revalidation plus a new approval. Later facts the plan already anticipated are not changes: phase completion, a green CI run, the PR number allocated by the approved create, the squash merge commit becoming known, and post-merge cleanup becoming provably safe.
 
-Sequence once approved: publish and open or update the PR ([§4](#4-publish-the-candidate-and-evaluate-ci)) → when `main` advances, perform only the authorized conflict-free refresh against the exact expected prior head and re-establish affected evidence → observe `CI required` on the exact landing head ([§4](#ci-gates)) → with every gate satisfied, hand off to the queue for the exact-head squash merge → confirm the recorded squash commit is retained by `origin/main` ([§5.1](#51-confirm-the-exact-squash-merge)) → close the named Issues when their closure criteria are satisfied ([issues.md](issues.md#close-with-evidence)) → run the versioned single-task cleanup for the verified task. The concrete landing mechanics live with their versioned execution entrypoints when present; this policy layer owns authorization rather than duplicating those mechanics. Completion is observable with the verified delivery state; local cleanup may remain explicitly pending when the worktree cannot be removed safely.
+Sequence once approved: publish and open or update the PR ([§4](#4-publish-the-candidate-and-evaluate-ci)) → when `main` advances, perform only the authorized conflict-free refresh against the exact expected prior head and re-establish affected evidence → observe `CI required` on the exact landing head ([§4](#ci-gates)) → with every gate satisfied, hand off to the queue for the exact-head squash merge → confirm the recorded squash commit is retained by `origin/main` ([§5.1](#51-confirm-the-exact-squash-merge)) → purge declared reproducible state from the exact task worktree and run the versioned single-task cleanup, which fast-forwards the clean primary `main` checkout to the accepted `origin/main` and removes the exact merged task → close the named Issues when their closure criteria are satisfied ([issues.md](issues.md#close-with-evidence)). The concrete landing mechanics live with their versioned execution entrypoints when present; this policy layer owns authorization rather than duplicating those mechanics. Completion is observable only after the merged task has either been synchronized and cleaned or a concrete safety blocker has been reported.
 
 ## 4. Publish the candidate and evaluate CI
 
@@ -190,7 +190,7 @@ All accepted pull requests are merged by the trusted queue as an exact-head squa
 
 ## 5. Merge and clean up
 
-Merges require explicit authorization and the required CI/review evidence. Use GitHub's squash merge path after the active `main` ruleset is satisfied; there is no repository-owned automatic AI merge path: the queue merges the exact head only after the human-maintainer attestation and required evidence, and no AI verdict authorizes a merge. Keep merge confirmation separate from local task cleanup, and stop all task writers before removing a task worktree or branch.
+Merges require explicit authorization and the required CI/review evidence. Use GitHub's squash merge path after the active `main` ruleset is satisfied; there is no repository-owned automatic AI merge path: the queue merges the exact head only after the human-maintainer attestation and required evidence, and no AI verdict authorizes a merge. Exact merge proof gates the automatic local synchronization and task cleanup; stop all task writers before removing a task worktree or branch.
 
 ### 5.1 Confirm the exact squash merge
 
@@ -202,43 +202,29 @@ gh pr view <pr-number> --json state,headRefName,headRefOid,baseRefName,mergeComm
 git merge-base --is-ancestor <merge-commit-oid> origin/main
 ```
 
-Continue only when the response is `MERGED`, its `baseRefName` is `main`, its `headRefName` and `headRefOid` equal the reviewed branch and exact landing-head SHA, its `mergeCommit.oid` is present, and that recorded commit is retained by `origin/main`. A squash merge does not make the pre-squash landing head an ancestor of `main`; do not substitute that check. This confirmation is read-only evidence for the operator, not shared state consumed by the cleanup command.
+Continue only when the response is `MERGED`, its `baseRefName` is `main`, its `headRefName` and `headRefOid` equal the reviewed branch and exact landing-head SHA, its `mergeCommit.oid` is present, and that recorded commit is retained by `origin/main`. A squash merge does not make the pre-squash landing head an ancestor of `main`; do not substitute that check. This confirmation is read-only evidence for the operator and the same proof is rechecked by the cleanup command.
 
-If the primary checkout must be synchronized, identify the dedicated primary `main` worktree from `git worktree list --porcelain` and record the accepted `origin/main` commit as `ACCEPTED_ORIGIN_MAIN`. Tracked, staged and ordinary untracked changes block synchronization; ignored personal configuration and caches that the update does not touch are preserved as they are and do not block it. Synchronize only by fast-forwarding that exact target:
+### 5.2 Synchronize `main` and clean one verified task
 
-```bash
-MAIN_WORKTREE=<primary-main-worktree>
-ACCEPTED_ORIGIN_MAIN=<accepted-origin-main-sha>
-(
-    set -eu
-    test "$(git -C "$MAIN_WORKTREE" branch --show-current)" = main
-    MAIN_STATUS="$(git -C "$MAIN_WORKTREE" status --porcelain=v1 --untracked-files=all)"
-    test -z "$MAIN_STATUS"
-    git -C "$MAIN_WORKTREE" fetch origin main
-    test "$(git -C "$MAIN_WORKTREE" rev-parse origin/main)" = "$ACCEPTED_ORIGIN_MAIN"
-    git -C "$MAIN_WORKTREE" merge --ff-only --no-overwrite-ignore "$ACCEPTED_ORIGIN_MAIN"
-    test "$(git -C "$MAIN_WORKTREE" rev-parse HEAD)" = "$ACCEPTED_ORIGIN_MAIN"
-)
-```
-
-Stop when the target branch is not `main`, when any scoped Git read fails, when the histories have diverged, when `origin/main` is not `ACCEPTED_ORIGIN_MAIN`, or when the update would overwrite an ignored path; never fall back to merge, rebase, reset or stash. Never reset a task worktree. This synchronization is a separate manual operation with its own authorization, not implied by implementation or merge work; `cleanup_task.py` never performs it. Use `make local-purge` when a task worktree must remove reproducible artifacts before cleanup; the command deliberately preserves shared external caches, fixed-instance state and unknown ignored files.
-
-### 5.2 Clean one verified task worktree and local branch
-
-With writers stopped, run the versioned single-task command from a different worktree and provide the exact reviewed landing-head SHA. A task with no unique commit, or whose tip still equals its starting main commit, is not a cleanup candidate on that basis; never use a progress commit as a substitute for writer coordination or exact merge proof.
+With writers stopped and exact merge proof complete, merged delivery runs the existing cleanup commands automatically; they do not require another authorization:
 
 ```bash
+make -C <task-worktree> local-purge
 make task-cleanup \
     PR=<pr-number> \
     BRANCH=agent/<owner>/<task> \
     CANDIDATE=<landing-head-sha>
 ```
 
-The command does not scan branches or historical PRs. Before any destructive command it verifies the direct local `refs/heads/agent/<owner>/<task>` tip, queries the supplied PR once for `state`, `headRefName`, `headRefOid`, `baseRefName`, and `mergeCommit`, fetches `origin main`, and verifies the recorded squash commit is retained by `origin/main`. It refuses symbolic or out-of-scope refs, a mismatched candidate, multiple registered worktrees, the primary or current worktree, dirty worktrees including ignored files, and Git read or configuration failures. The sole allowed ignored exception is the worktree's exact validated `.nvsop/session-binding.json`; any other ignored file, directory or symlink refuses, and a `.nvsop` root without that exact binding is unknown ignored state rather than an exception. After every check and the merge proof pass, cleanup releases the binding — the file is removed, then an emptied `.nvsop` directory — immediately before the worktree removal. These commands are not a transaction: a later failure leaves earlier changes and reports the partial result. A clean task worktree is removed without force; the exact local branch ref is then deleted with `git update-ref --no-deref` and its expected old SHA. Only the exact local `branch.<task>` configuration section is removed; global and similarly prefixed sections remain untouched.
+The purge removes only repository-declared reproducible task-local state and preserves the session binding. `task-cleanup` then verifies the direct local `refs/heads/agent/<owner>/<task>` tip, queries the supplied PR once for `state`, `headRefName`, `headRefOid`, `baseRefName`, and `mergeCommit`, fetches `origin main`, and verifies the recorded squash commit is retained by the exact fetched `origin/main`. It requires the primary worktree to be on `main` with no tracked, staged or ordinary untracked changes and fast-forwards it only with `git merge --ff-only --no-overwrite-ignore <accepted-origin-main>`. Ignored personal configuration and caches remain untouched unless Git itself reports that the fast-forward would overwrite them. There is no stash, reset, rebase or non-fast-forward fallback.
 
-All checks finish before the first cleanup command. The individual worktree removal, ref deletion, and local configuration removal are not a multi-command transaction: if a later command fails, earlier changes remain, the command exits nonzero, and no rollback is promised. Inspect the repository and reconcile that partial result manually. The script never resets or synchronizes `main`, deletes remote refs, closes Issues, uses force deletion, or sweeps other tasks.
+Only after primary `main` reaches the accepted `origin/main` does the command remove the exact merged task. It refuses symbolic or out-of-scope refs, a mismatched candidate, multiple registered task worktrees, the primary/current worktree as the cleanup target, dirty task worktrees including ignored files, and Git read or configuration failures. The sole allowed ignored task exception is the worktree's exact validated `.nvsop/session-binding.json`; any other ignored file, directory or symlink refuses. A clean task worktree is removed without force, the exact local branch ref is deleted with its expected old SHA, and only the exact local `branch.<task>` configuration section is removed.
 
-**Done:** the explicitly supplied merged task worktree and local branch are cleaned only after the exact squash proof, and every unproved or unsafe task remains untouched. Report the command, actual result, and any partial-failure or synchronization gap.
+Synchronization and task removal are sequential, not transactional. All task-safety checks and merge proof happen before synchronization; if synchronization cannot proceed, the task remains untouched. If a later task-removal command fails after `main` has already fast-forwarded, report the partial result and reconcile only that exact task. The command never deletes remote refs, closes Issues, force-removes a worktree, sweeps other tasks or discards dirty/unknown state.
+
+A task with no unique commit, or whose tip still equals its starting main commit, is not a cleanup candidate on that basis; never use a progress commit as a substitute for writer coordination or exact merge proof. After a verified merge, the delivery sequence runs `make local-purge` automatically in the exact task worktree before `task-cleanup`; this deterministic cleanup step needs no separate authorization. Shared external caches, fixed-instance state and unknown ignored files are preserved. Explicitly abandoned/superseded tasks continue to use `make local-purge` before `task-abandon`.
+
+**Done:** the verified merge is reflected in the primary `main` checkout and the exact merged task worktree/local branch are removed. Any unsafe synchronization or cleanup condition is a reported blocker, not a reason to leave silent residue.
 
 ### 5.3 Clean one explicitly abandoned or superseded task
 
@@ -308,7 +294,7 @@ A BLOCKED_* outcome is public only as the entry's opaque `blocked_reason` plus `
 make task-session-bind SESSION=<resumable-id>
 ```
 
-Binding is required before the session's first tracked source edit. It is idempotent for the same session and refuses to overwrite an existing binding; another session cannot take over even during concurrent first binds, and the normal bind has no overwrite or force path. An unrecoverable original session is `BLOCKED_AGENT_UNAVAILABLE` and fails closed: replacement requires an explicit rebind/recovery decision after the old writer is stopped and the exact task is verified. Cleanup releases the binding only during verified exact merged cleanup in [§5.2](#52-clean-one-verified-task-worktree-and-local-branch) or explicitly abandoned/superseded cleanup in [§5.3](#53-clean-one-explicitly-abandoned-or-superseded-task).
+Binding is required before the session's first tracked source edit. It is idempotent for the same session and refuses to overwrite an existing binding; another session cannot take over even during concurrent first binds, and the normal bind has no overwrite or force path. An unrecoverable original session is `BLOCKED_AGENT_UNAVAILABLE` and fails closed: replacement requires an explicit rebind/recovery decision after the old writer is stopped and the exact task is verified. Cleanup releases the binding only during verified exact merged cleanup in [§5.2](#52-synchronize-main-and-clean-one-verified-task) or explicitly abandoned/superseded cleanup in [§5.3](#53-clean-one-explicitly-abandoned-or-superseded-task).
 
 ### Landing queue and single-flight CI
 

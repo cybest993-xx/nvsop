@@ -267,6 +267,8 @@ class RepairDispatchTest(tq.GitTaskFixture):
         self.assertEqual(
             ("DEVELOPMENT", "repair"), (handoff["ownership"], handoff["expected_next_action"])
         )
+        self.assertEqual(token, handoff["claim"])
+        self.assertEqual(lq.claim_digest(token), handoff["claim_digest"])
         _, out = self._run(lambda: dr.resume(self.backend, 1, spy, token))
         self.assertEqual((True, 1), ("already-resumed" in out, len(spy.resumed)))
         self.backend.state_obj = lq.apply_enqueue(
@@ -334,6 +336,16 @@ class RepairDispatchTest(tq.GitTaskFixture):
             self.assertEqual(0, lq.enqueue(self.backend, 1, self.head, 500, repair_claim=token))
         self.assertIn(lq.REQUEST_MARKER, self.backend.posted[-1])
         self.assertNotIn(token, self.backend.posted[-1])
+
+    def test_explicit_claim_token_is_private_and_validated(self) -> None:
+        self._blocked()
+        token = "1" * 32
+        code, out = self._run(lambda: dr.claim(self.backend, 1, token))
+        self.assertEqual((0, True), (code, f"claim={token}" in out))
+        self.assertNotIn(token, self.backend.posted[-1])
+        self.assertIn(lq.claim_digest(token), self.backend.posted[-1])
+        with self.assertRaises(dr.DispatchError):
+            dr.claim(self.backend, 1, "not-a-claim-token")
 
     def test_preflight_checks_cwd_repository_generation_and_head(self) -> None:
         self._blocked()

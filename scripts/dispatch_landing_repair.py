@@ -33,6 +33,7 @@ ORIGIN = re.compile(
     r"(?:git@[^:]+:|(?:https?|ssh)://(?:[^/@]+@)?[^/]+/)"
     r"(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?"
 )
+CLAIM_TOKEN = re.compile(r"^[0-9a-f]{32}$")
 
 
 class DispatchError(RuntimeError):
@@ -127,12 +128,17 @@ def resolve_target(event: Mapping[str, object]) -> tuple[str, str]:
 
 
 def resume_handoff(
-    event: Mapping[str, object], target: tuple[str, str], digest: str
+    event: Mapping[str, object], target: tuple[str, str], claim: str
 ) -> dict[str, object]:
     evidence = event["evidence"]
     handoff = {"version": 1, "event": event["event"], "handoff": event["handoff"]}
     handoff |= {"repository": event["repository"], "branch": event["branch"]}
-    handoff |= {"worktree": target[0], "session_id": target[1], "claim": digest}
+    handoff |= {
+        "worktree": target[0],
+        "session_id": target[1],
+        "claim": claim,
+        "claim_digest": lq.claim_digest(claim),
+    }
     handoff |= {"pr": event["pr"], "candidate": event["landing_head"]}
     handoff |= {"observed_head": evidence["observed_head"], "current_main": event["main"]}
     handoff |= {
@@ -161,9 +167,11 @@ def _release(backend: lq.Backend, pr: int, entry: lq.Entry, digest: str, reason:
     return _unavailable(backend, stale, digest, reason)
 
 
-def claim(backend: lq.Backend, pr: int) -> int:
+def claim(backend: lq.Backend, pr: int, token: str | None = None) -> int:
     event = lq.repair_event(backend, pr)
-    token = secrets.token_hex(16)
+    token = token or secrets.token_hex(16)
+    if CLAIM_TOKEN.fullmatch(token) is None:
+        raise DispatchError("repair claim token must be 32 lowercase hex characters")
     _post(backend, lq.REPAIR_CLAIM, event, lq.claim_digest(token))
     print(f"state=pending\npr={pr}\nevent={event['event']}\nclaim={token}")
     return 0
@@ -221,7 +229,7 @@ def resume(backend: lq.Backend, pr: int, host: HostBridge, claim: str) -> int:
     if not _reserve_resume(target[0], str(event["event"])):
         print(f"state=in-progress\npr={pr}")
         return 1
-    request = ResumeRequest(target[1], resume_handoff(event, target, digest))
+    request = ResumeRequest(target[1], resume_handoff(event, target, claim))
     try:
         verified = host.verify(request)
     except Exception:

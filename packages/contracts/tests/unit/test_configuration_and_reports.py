@@ -78,6 +78,11 @@ def template() -> ConfigurationTemplate:
 
 
 class ConfigurationContractTests(unittest.TestCase):
+    def test_runtime_parameters_keep_wire_policy_open_for_capability_gated_behavior(self) -> None:
+        value = ResolvedRuntimeParameters(1, 1, "future-policy")
+
+        self.assertEqual("future-policy", value.disposition_policy)
+
     def test_round_trip_and_digest_cover_host_scoped_content(self) -> None:
         template_value = template()
         bundle = ConfigurationBundle(

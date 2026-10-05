@@ -439,9 +439,7 @@ class HistoricalReportContextTest(unittest.TestCase):
             database = str(Path(temporary) / "state.sqlite")
             first = open_local_state(database)
             station = first.station(STATION, report_context=context_n)
-            driver = supervisor(
-                opening_state(), FakeClock(), station, disposition_policy="record-alert"
-            )
+            driver = supervisor(opening_state(), FakeClock(), station, disposition_policy="record")
             provenance = context_n.backends[0]
             driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=provenance)
             driver.receive(action(STEPS[2], at=ANCHOR + 1.0), report_provenance=provenance)
@@ -921,9 +919,7 @@ class HistoricalReportContextTest(unittest.TestCase):
         state = open_local_state(":memory:")
         self.addCleanup(state.close)
         station = state.station(STATION, report_context=context)
-        driver = supervisor(
-            opening_state(), FakeClock(), station, disposition_policy="record-alert"
-        )
+        driver = supervisor(opening_state(), FakeClock(), station, disposition_policy="record")
         provenance = context.backends[0]
         driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=provenance)
         driver.receive(action(STEPS[2], at=ANCHOR + 1.0), report_provenance=provenance)

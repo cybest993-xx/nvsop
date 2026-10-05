@@ -440,6 +440,46 @@ class EveryAttemptLeavesADiagnosticEventTest(unittest.TestCase):
 
 
 class DurableLocalDisposalLedgerTest(unittest.TestCase):
+    def test_report_metadata_flows_through_sqlite_write_ledger(self) -> None:
+        import sqlite3
+        from dataclasses import replace
+
+        from edge_runtime.local_state.disposal import LocalDisposalLedger
+        from edge_runtime.local_state.schema import migrate
+        from edge_runtime.runtime import SQLiteWriteLedger
+
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        connection.row_factory = sqlite3.Row
+        migrate(connection)
+        ledger = LocalDisposalLedger(connection)
+        enriched = replace(
+            request(),
+            station_id="station-report",
+            connector_id="connector-a",
+            attempt_at=HostInstant(1.0),
+            lease_seconds=5.0,
+            violation_ref="1:wrong_step:('step-3',)",
+            violation_instance_id=1,
+            source="station_policy:stop",
+            report_host_id="host-a",
+        )
+        dispatch = OutputDispatcher(
+            connector=RecordingConnector(),
+            ledger=SQLiteWriteLedger(ledger),
+            diagnostics=lambda event: None,
+        )
+
+        self.assertEqual(ACCEPTED, dispatch.write(enriched))
+        (disposal_id,) = ledger.pending_report_ids()
+        report = ledger.report(disposal_id, reported_at="2026-10-06T00:00:00Z")
+
+        self.assertEqual("write_output", report.action_kind)
+        self.assertEqual(enriched.key, report.idempotency_key)
+        self.assertEqual(enriched.violation_ref, report.violation_ref)
+        self.assertEqual(enriched.violation_instance_id, report.instance_id)
+        self.assertEqual(enriched.source, report.source)
+        connection.close()
+
     def test_failed_result_is_retryable_but_success_closes_the_key(self) -> None:
         import sqlite3
         from dataclasses import replace

@@ -65,6 +65,11 @@ class WriteRequest:
     lease_seconds: float | None = None
     """持久账本必需的租约时长;物理路径不设置默认 cadence。"""
 
+    violation_ref: str | None = None
+    violation_instance_id: int | None = None
+    source: str = "connector"
+    report_host_id: str | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class WriteAttempted:

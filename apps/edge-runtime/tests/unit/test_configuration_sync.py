@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import httpx2
 from nvsop_contracts import (
+    DISPOSITION_STOP_OUTPUT_CAPABILITY,
     ConfigurationBundle,
     ConfiguredStation,
     ResolvedRuntimeParameters,
@@ -418,6 +419,24 @@ class ConfigurationSyncTests(unittest.TestCase):
             puller.pull()
         self.assertEqual(raised.exception.code, "digest_mismatch")
         self.assertIsNone(self.state.configuration().confirmed())
+
+    def test_synchronizer_accepts_stop_output_capability(self) -> None:
+        candidate = ConfigurationBundle(
+            host_id="host-a",
+            config_revision=1,
+            generated_at="2026-09-13T00:00:00Z",
+            stations=(),
+            required_capabilities=(DISPOSITION_STOP_OUTPUT_CAPABILITY,),
+        )
+        synchronizer = ConfigurationSynchronizer(
+            puller=ScriptedPuller([candidate]),
+            store=self.state.configuration(),
+        )
+
+        result = synchronizer.synchronize(observed_at=1.0)
+
+        self.assertEqual(candidate, result.candidate)
+        self.assertIsNone(result.failure)
 
     def test_synchronizer_rejects_unsupported_required_capability(self) -> None:
         candidate = ConfigurationBundle(

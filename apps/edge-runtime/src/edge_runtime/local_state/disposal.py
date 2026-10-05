@@ -23,6 +23,10 @@ class DisposalIntent:
     point_id: str
     actor: str
     requested_state: str
+    violation_ref: str | None = None
+    violation_instance_id: int | None = None
+    source: str = "connector"
+    report_host_id: str | None = None
 
     def __post_init__(self) -> None:
         if any(
@@ -37,10 +41,22 @@ class DisposalIntent:
             )
         ):
             raise ValueError("a disposal intent needs complete identity and target fields")
+        if self.report_host_id is not None:
+            if not self.report_host_id:
+                raise ValueError("reported disposal host id must not be empty")
+            if not self.violation_ref or not self.source:
+                raise ValueError("a reported physical disposal needs violation and source")
+            if (
+                isinstance(self.violation_instance_id, bool)
+                or not isinstance(self.violation_instance_id, int)
+                or self.violation_instance_id < 0
+            ):
+                raise ValueError("a reported physical disposal needs an instance id")
 
 
 DISPOSAL_ACTION_RECORD = "record"
 DISPOSAL_ACTION_FRONTEND_ALERT = "frontend_alert"
+DISPOSAL_ACTION_WRITE_OUTPUT = "write_output"
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,8 +142,9 @@ class LocalDisposalLedger:
         self._connection.execute(
             """
             INSERT INTO local_disposal
-                (station_id, idempotency_key, connector_id, point_id, actor, requested_state)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (station_id, idempotency_key, connector_id, point_id, actor, requested_state,
+                 action_kind, violation_ref, violation_instance_id, source, report_host_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (station_id, idempotency_key) DO NOTHING
             """,
             (
@@ -137,11 +154,17 @@ class LocalDisposalLedger:
                 intent.point_id,
                 intent.actor,
                 intent.requested_state,
+                DISPOSAL_ACTION_WRITE_OUTPUT,
+                intent.violation_ref,
+                intent.violation_instance_id,
+                intent.source,
+                intent.report_host_id,
             ),
         )
         row = self._connection.execute(
             """
-            SELECT connector_id, point_id, actor, requested_state
+            SELECT connector_id, point_id, actor, requested_state, action_kind,
+                   violation_ref, violation_instance_id, source, report_host_id
               FROM local_disposal
              WHERE station_id = ? AND idempotency_key = ?
             """,
@@ -154,6 +177,11 @@ class LocalDisposalLedger:
             intent.point_id,
             intent.actor,
             intent.requested_state,
+            DISPOSAL_ACTION_WRITE_OUTPUT,
+            intent.violation_ref,
+            intent.violation_instance_id,
+            intent.source,
+            intent.report_host_id,
         ):
             raise ValueError("idempotency key was reused for a different disposal intent")
 

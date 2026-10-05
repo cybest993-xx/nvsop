@@ -20,6 +20,8 @@ from factory_sop.device.api import (
 from factory_sop.execution.api import StationGrant
 from factory_sop.template.api import TemplateConfigurationProjection
 from nvsop_contracts import (
+    DISPOSITION_STOP_OUTPUT_CAPABILITY,
+    EXECUTION_LEASE_WRITE_GATE_CAPABILITY,
     ConfigurationBundle,
     ConfiguredStation,
     ExecutionLease,
@@ -96,6 +98,9 @@ class DeviceGateway:
 
 
 class TemplateGateway:
+    def __init__(self, *, disposition_policy: str = "stop") -> None:
+        self.disposition_policy = disposition_policy
+
     def for_station(self, station_id: UUID) -> TemplateConfigurationProjection:
         assert station_id == STATION_ID
         return TemplateConfigurationProjection(
@@ -103,7 +108,7 @@ class TemplateGateway:
             runtime_defaults=ResolvedRuntimeParameters(
                 idle_timeout_seconds=10.0,
                 step_deadline_seconds=2.0,
-                disposition_policy="stop",
+                disposition_policy=self.disposition_policy,
             ),
             revision=9,
         )
@@ -174,6 +179,21 @@ def test_configuration_composition_uses_only_owner_projections() -> None:
     assert station.revision == 9
     assert station.runtime_parameters.idle_timeout_seconds == 10.0
     assert station.model_ids == ("reported-model",)
+    assert bundle.required_capabilities == (
+        DISPOSITION_STOP_OUTPUT_CAPABILITY,
+        EXECUTION_LEASE_WRITE_GATE_CAPABILITY,
+    )
+
+
+def test_record_configuration_does_not_require_stop_output_capability() -> None:
+    bundle = configuration_for_host(
+        host_id=HOST_ID,
+        generated_at=datetime(2026, 9, 13, tzinfo=UTC),
+        device=DeviceGateway(),
+        templates=TemplateGateway(disposition_policy="record"),
+    )
+
+    assert bundle.required_capabilities == (EXECUTION_LEASE_WRITE_GATE_CAPABILITY,)
 
 
 def test_configuration_composition_translates_owner_errors() -> None:

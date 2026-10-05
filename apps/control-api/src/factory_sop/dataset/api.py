@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
-from factory_sop.auth.api import Caller
+from factory_sop.auth.api import Caller, CurrentCallerResolver
 from factory_sop.dataset.annotation import (
     AnnotationBackend,
     AnnotationBackendExecutionError,
@@ -38,6 +38,7 @@ from factory_sop.dataset.storage import ObjectStorage, ObjectStorageUnavailableE
 from factory_sop.dataset.usecases import (
     ValidationObjectEffects,
     begin_video_validation,
+    refuse_video_validation,
     validate_video_upload,
 )
 from factory_sop.dataset.usecases.annotation import (
@@ -120,6 +121,7 @@ class DatasetArtifactExecutor(Protocol):
         job: ApplicationJob,
         finish_job: ArtifactJobFinisher,
         commit_transaction: ArtifactTransactionCommitter,
+        resolve_current_caller: CurrentCallerResolver,
     ) -> ArtifactExecutionResult:
         """执行一个已领取的制品任务。"""
         ...
@@ -390,6 +392,7 @@ __all__ = [
     "prepare_annotation_execution_copy",
     "record_annotation_context_cleanup_candidate",
     "record_annotation_execution_cleanup_candidate",
+    "refuse_video_validation",
     "run_usage_check",
     "save_annotation_execution_copy",
     "summary",

@@ -24,6 +24,8 @@ REQUIRED_FILES = {
     Path("docs/engineering/documentation.md"),
     Path("docs/design/solution-and-roadmap.md"),
     Path(".github/workflows/blocking-ci.yml"),
+    Path(".github/workflows/landing-queue.yml"),
+    Path("scripts/landing_queue.py"),
     Path("scripts/ci_scope.py"),
     # The center backend's frozen toolchain: the pin, the workspace root, and the lockfile
     # CI installs from with `uv sync --frozen` (solution-and-roadmap.md §六).
@@ -234,11 +236,52 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
     workflow = root / ".github/workflows/blocking-ci.yml"
     if workflow.is_file():
         text = workflow.read_text()
-        for required_text in ("pull_request:", "make check", "CI required", "always()"):
+        # 单飞：blocking-ci 只作为可复用工作流被可信控制器调用，自身不再监听 PR/push。
+        for required_text in ("workflow_call:", "make check", "CI required", "always()"):
             if required_text not in text:
                 errors.append(f"blocking-ci.yml is missing required gate behavior: {required_text}")
+        for forbidden_trigger in ("pull_request:", "push:"):
+            if forbidden_trigger in text:
+                errors.append(
+                    "blocking-ci.yml must be reusable-only; remove the legacy "
+                    f"{forbidden_trigger} trigger"
+                )
+        if "ref: ${{ inputs.head_sha }}" not in text:
+            errors.append("blocking-ci.yml must check out the exact controller-supplied head")
+        if "github.event" in text or "github.sha" in text:
+            errors.append("blocking-ci.yml must resolve head/base from workflow_call inputs only")
         if "needs.scope.outputs.integration" not in text:
             errors.append("blocking-ci.yml must consume the shared ci_scope integration output")
+
+    queue = root / ".github/workflows/landing-queue.yml"
+    if queue.is_file():
+        queue_text = queue.read_text()
+        for required_text in (
+            "issue_comment:",
+            "workflow_dispatch:",
+            "cancel-in-progress: false",
+            "guard:",
+            "vars.LANDING_APP_ID != ''",
+            "vars.LANDING_QUEUE_ISSUE != ''",
+            "needs.guard.outputs.enabled == 'true'",
+            "environment: landing",
+            "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
+            "scripts/landing_queue.py prepare",
+            "scripts/landing_queue.py finalize",
+            "uses: ./.github/workflows/blocking-ci.yml",
+            "ref: ${{ github.workflow_sha }}",
+        ):
+            if required_text not in queue_text:
+                errors.append(
+                    f"landing-queue.yml is missing required queue behavior: {required_text}"
+                )
+        if "schedule:" in queue_text:
+            errors.append("landing-queue.yml must not poll on a schedule")
+        if "pull_request_review:" in queue_text:
+            errors.append(
+                "landing-queue.yml must not use pull_request_review: it may run candidate "
+                "workflow code with the App token; finalize reads reviews instead"
+            )
 
     selector = root / "scripts/ci_scope.py"
     if selector.is_file() and any(is_under(path, Path("tests/system")) for path in files):

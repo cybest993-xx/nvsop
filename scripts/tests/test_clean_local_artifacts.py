@@ -37,6 +37,29 @@ class CleanLocalArtifactsTest(unittest.TestCase):
         self.assertFalse(output.exists())
         self.assertTrue(all(path.exists() for path in preserved))
 
+    def test_session_binding_survives_clean_and_purge(self) -> None:
+        binding = self.write(".nvsop/session-binding.json", '{"version": 1}')
+
+        clean(self.root)
+        self.assertTrue(binding.exists())
+        clean(self.root, purge=True)
+        self.assertTrue(binding.exists())
+
+    def test_daily_clean_preserves_landing_state_until_purge(self) -> None:
+        disposable = self.write(".nvsop/artifacts/pytest/center-unit.xml")
+        landing = [
+            self.write(".nvsop/artifacts/landing/handoff.json"),
+            self.write(".nvsop/artifacts/landing/event.claim"),
+            self.write(".nvsop/artifacts/landing/event.resume"),
+        ]
+
+        clean(self.root)
+        self.assertFalse(disposable.exists())
+        self.assertTrue(all(path.exists() for path in landing))
+
+        clean(self.root, purge=True)
+        self.assertTrue(all(not path.exists() for path in landing))
+
     def test_purge_unlinks_legacy_cache_without_deleting_shared_content(self) -> None:
         shared = self.write("shared-cache/wheel", "keep")
         cache = self.root / ".nvsop/cache"

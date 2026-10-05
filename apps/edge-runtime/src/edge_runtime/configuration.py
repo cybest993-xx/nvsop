@@ -16,8 +16,10 @@ from nvsop_contracts import (
 
 from edge_runtime.configuration_values import (
     _array,
+    _boolean,
     _non_empty_string,
     _object,
+    _positive_integer,
     _positive_number,
     _require_keys,
     safe_url,
@@ -54,7 +56,6 @@ class LocalIsapiConnectorConfiguration:
     def __post_init__(self) -> None:
         if self.connector_type not in _SUPPORTED_CONNECTOR_TYPES:
             raise ValueError(f"connector_type is unsupported: {self.connector_type}")
-        safe_url(self.base_url, "connector base_url", schemes={"http", "https"})
         connector_configuration(self.base_url)
 
 
@@ -196,7 +197,7 @@ def _local_connector(value: object) -> LocalIsapiConnectorConfiguration:
         connector_id=_non_empty_string(config["connector_id"], "connector_id"),
         revision=_positive_integer(config["revision"], "revision"),
         credentials_configured=credentials_configured,
-        base_url=safe_url(config["base_url"], "connector base_url", schemes={"http", "https"}),
+        base_url=_non_empty_string(config["base_url"], "connector base_url"),
         username=username,
         password=password,
         profile=_profile(config["profile"]),
@@ -240,8 +241,13 @@ def _profile(value: object) -> IsapiProfile:
 
 
 def connector_configuration(base_url: str) -> dict[str, str | int]:
-    """从本地连接器 URL 生成不含凭据的中心配置快照。"""
-    safe_url(base_url, "connector base_url", schemes={"http", "https"})
+    """从外部连接器 URL 生成不含凭据的中心配置快照。"""
+    validated = safe_url(base_url, "connector base_url", schemes={"http", "https"})
+    return _connector_configuration_from_validated_url(validated)
+
+
+def _connector_configuration_from_validated_url(base_url: str) -> dict[str, str | int]:
+    """从已由冻结本地配置验证的 URL 生成中心配置快照。"""
     parsed = urlsplit(base_url)
     if parsed.hostname is None or parsed.path not in {"", "/"}:
         raise ValueError("connector base_url must not contain a path")
@@ -266,18 +272,6 @@ def _read_secret(path: Path, name: str) -> str:
 
 def _path(value: object, name: str) -> Path:
     return Path(_non_empty_string(value, name))
-
-
-def _boolean(value: object, name: str) -> bool:
-    if not isinstance(value, bool):
-        raise ValueError(f"{name} must be a boolean")
-    return value
-
-
-def _positive_integer(value: object, name: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{name} must be a positive integer")
-    return value
 
 
 def _point_state(value: object, name: str) -> PointState:

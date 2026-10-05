@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 from pydantic import BaseModel, Field, field_validator
 
 from factory_sop.auth.api import Authorized, Permission, needs
+from factory_sop.device.adapters import route_support
 from factory_sop.device.adapters.dependencies import backends, hosts, probe
 from factory_sop.device.model import (
     ConnectionState,
@@ -41,10 +42,6 @@ from factory_sop.responses import DEFAULT_PAGE_SIZE, MAXIMUM_PAGE_SIZE, ItemPage
 router = APIRouter(prefix="/inference-backends", tags=["device"])
 ProblemResponses = dict[int | str, dict[str, Any]]
 
-_UNAUTHORIZED: ProblemResponses = {
-    401: problem_openapi_response("Authentication required or session invalid"),
-    403: problem_openapi_response("Permission denied or CSRF token invalid"),
-}
 _VALIDATION: ProblemResponses = {422: problem_openapi_response("Request invalid")}
 
 
@@ -121,7 +118,7 @@ def _view(backend: InferenceBackend) -> InferenceBackendView:
     status_code=status.HTTP_201_CREATED,
     operation_id="createInferenceBackend",
     openapi_extra=needs(Permission.INFERENCE_BACKEND_EDIT),
-    responses=_UNAUTHORIZED
+    responses=route_support._UNAUTHORIZED
     | _VALIDATION
     | {
         404: problem_openapi_response("Host not found"),
@@ -150,7 +147,7 @@ def create_a_backend(
     "",
     operation_id="listInferenceBackends",
     openapi_extra=needs(Permission.INFERENCE_BACKEND_VIEW),
-    responses=_UNAUTHORIZED | _VALIDATION,
+    responses=route_support._UNAUTHORIZED | _VALIDATION,
 )
 def list_the_backends(
     caller: Authorized,
@@ -179,7 +176,9 @@ def list_the_backends(
     "/{backend_id}",
     operation_id="readInferenceBackend",
     openapi_extra=needs(Permission.INFERENCE_BACKEND_VIEW),
-    responses=_UNAUTHORIZED | _VALIDATION | {404: problem_openapi_response("Backend not found")},
+    responses=route_support._UNAUTHORIZED
+    | _VALIDATION
+    | {404: problem_openapi_response("Backend not found")},
 )
 def read_a_backend(
     backend_id: UUID,
@@ -194,7 +193,7 @@ def read_a_backend(
     "/{backend_id}",
     operation_id="editInferenceBackend",
     openapi_extra=needs(Permission.INFERENCE_BACKEND_EDIT),
-    responses=_UNAUTHORIZED
+    responses=route_support._UNAUTHORIZED
     | _VALIDATION
     | {
         404: problem_openapi_response("Backend or host not found"),
@@ -229,7 +228,7 @@ def edit_a_backend(
     "/{backend_id}/status",
     operation_id="setInferenceBackendStatus",
     openapi_extra=needs(Permission.INFERENCE_BACKEND_EDIT),
-    responses=_UNAUTHORIZED
+    responses=route_support._UNAUTHORIZED
     | _VALIDATION
     | {
         404: problem_openapi_response("Backend not found"),
@@ -270,7 +269,7 @@ def set_the_backend_status(
     "/{backend_id}/connection-test",
     operation_id="testInferenceBackendConnection",
     openapi_extra=needs(Permission.INFERENCE_BACKEND_EDIT),
-    responses=_UNAUTHORIZED
+    responses=route_support._UNAUTHORIZED
     | _VALIDATION
     | {
         404: problem_openapi_response("Backend not found"),
@@ -301,7 +300,7 @@ def test_a_backend_connection(
     status_code=status.HTTP_204_NO_CONTENT,
     operation_id="deleteInferenceBackend",
     openapi_extra=needs(Permission.INFERENCE_BACKEND_DELETE),
-    responses=_UNAUTHORIZED
+    responses=route_support._UNAUTHORIZED
     | _VALIDATION
     | {
         404: problem_openapi_response("Backend not found"),

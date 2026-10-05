@@ -29,17 +29,26 @@ from factory_sop.auth.adapters.dependencies import (
     needs,
     needs_any,
 )
-from factory_sop.auth.authorization import Caller, authorize
+from factory_sop.auth.authorization import (
+    AuthorizationRefusedError,
+    Caller,
+    CurrentCallerResolver,
+    authorize,
+    require_current_actor,
+)
 from factory_sop.auth.handover import HandoverAuthority
 from factory_sop.auth.permissions import Permission
 
 __all__ = [
+    "AuthorizationRefusedError",
     "Authorized",
     "Caller",
+    "CurrentCallerResolver",
     "HandoverAuthority",
     "Permission",
     "authorize",
     "handover_authority",
     "needs",
     "needs_any",
+    "require_current_actor",
 ]

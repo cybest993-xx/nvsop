@@ -19,6 +19,10 @@ ARTIFACT_PATHS = (
     Path("apps/control-web/test-results"),
 )
 
+# landing/ 含队列 receipt、repair claim/resume marker 与 agent log；BLOCKED 修复期间不是可再生产物。
+# 日常 clean 保留它，只有任务结束前的 purge 才移除。
+LANDING_ARTIFACT_PATH = Path(".nvsop/artifacts/landing")
+
 ENVIRONMENT_PATHS = (
     Path(".nvsop/cache"),
     Path(".nvsop/tools"),
@@ -74,7 +78,21 @@ def clean(root: Path = REPOSITORY_ROOT, *, purge: bool = False) -> list[Path]:
 
     paths = ARTIFACT_PATHS + ENVIRONMENT_PATHS if purge else ARTIFACT_PATHS
     for relative in paths:
-        if remove_path(root / relative):
+        path = root / relative
+        if (
+            not purge
+            and relative == Path(".nvsop/artifacts")
+            and path.is_dir()
+            and not path.is_symlink()
+        ):
+            for child in path.iterdir():
+                child_relative = relative / child.name
+                if child_relative == LANDING_ARTIFACT_PATH:
+                    continue
+                if remove_path(child):
+                    removed.append(child_relative)
+            continue
+        if remove_path(path):
             removed.append(relative)
 
     if not purge:

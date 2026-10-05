@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import http.client
 import io
 import json
+import socket
 from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Thread
-from typing import ClassVar
+from time import monotonic
+from typing import ClassVar, cast
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -204,6 +207,53 @@ def test_multipart_filename_cannot_inject_a_header(tmp_path: Path) -> None:
             )
 
 
+def test_response_body_does_not_touch_socket_after_http_client_closes_it(
+    tmp_path: Path,
+) -> None:
+    class Socket:
+        def __init__(self) -> None:
+            self.closed = False
+            self.timeouts: list[float] = []
+
+        def settimeout(self, timeout: float) -> None:
+            if self.closed:
+                raise OSError(9, "Bad file descriptor")
+            self.timeouts.append(timeout)
+
+    class Response:
+        status = 200
+
+        def __init__(self, sock: Socket) -> None:
+            self.sock = sock
+            self.reads = 0
+
+        def isclosed(self) -> bool:
+            return self.sock.closed
+
+        def read1(self, _size: int = -1) -> bytes:
+            self.reads += 1
+            self.sock.closed = True
+            return b"complete response"
+
+    backend = HttpAnnotationBackend(
+        base_url="http://annotation.invalid",
+        timeout_seconds=5,
+        data_root=tmp_path,
+    )
+    sock = Socket()
+    response = Response(sock)
+
+    body = backend._read_response_body(
+        response_socket=cast(socket.socket, sock),
+        response=cast(http.client.HTTPResponse, response),
+        deadline=monotonic() + 5,
+    )
+
+    assert body == b"complete response"
+    assert response.reads == 1
+    assert len(sock.timeouts) == 1
+
+
 def test_download_video_enforces_end_to_end_timeout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -219,6 +269,9 @@ def test_download_video_enforces_end_to_end_timeout(
 
         def __init__(self) -> None:
             self.reads = 0
+
+        def isclosed(self) -> bool:
+            return False
 
         def read1(self, _size: int = -1) -> bytes:
             self.reads += 1

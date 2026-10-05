@@ -5,6 +5,9 @@ from uuid import uuid4
 
 import pytest
 
+from factory_sop.auth.api import Caller
+from factory_sop.auth.model import User, UserStatus
+from factory_sop.auth.permissions import Permission
 from factory_sop.dataset.adapters import artifact_execution as artifact_module
 from factory_sop.dataset.adapters.artifact_execution import PostgresDatasetArtifactExecutor
 from factory_sop.dataset.api import ArtifactExecutionOutcome
@@ -46,7 +49,12 @@ def test_cleanup_pending_commit_obeys_execution_fence(monkeypatch: pytest.Monkey
         generate=lambda path, name: b"",
     )
     job = SimpleNamespace(id=uuid4())
-    artifact = SimpleNamespace(id=uuid4(), dataset_id=uuid4(), object_key="candidate")
+    artifact = SimpleNamespace(
+        id=uuid4(),
+        dataset_id=uuid4(),
+        object_key="candidate",
+        created_by=uuid4(),
+    )
     target = SimpleNamespace(job=job, artifact=artifact)
     monkeypatch.setattr(artifact_module, "begin_artifact_generation", lambda **kwargs: target)
     monkeypatch.setattr(
@@ -72,6 +80,16 @@ def test_cleanup_pending_commit_obeys_execution_fence(monkeypatch: pytest.Monkey
         job=job,  # type: ignore[arg-type]
         finish_job=lambda session, outcome: True,
         commit_transaction=commit_transaction,
+        resolve_current_caller=lambda user_id: Caller(
+            user=User(
+                id=user_id,
+                login_name="artifact-test",
+                display_name="artifact-test",
+                password_hash="artifact-only",  # pragma: allowlist secret
+                status=UserStatus.ACTIVE,
+            ),
+            granted=frozenset({Permission.DATASET_EDIT}),
+        ),
     )
 
     assert result.outcome is ArtifactExecutionOutcome.LEASE_LOST

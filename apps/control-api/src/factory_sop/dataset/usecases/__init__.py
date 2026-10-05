@@ -611,6 +611,54 @@ def begin_video_validation(
     return ValidationTarget(member=validating, attempt=attempt)
 
 
+def refuse_video_validation(
+    *,
+    job: ApplicationJob,
+    datasets: DatasetRepository,
+    now: datetime,
+    failure_code: str,
+    detail: str,
+) -> bool:
+    """授权拒绝时把当前待校验成员/尝试结案为失败，保留固定对象供重试。
+
+    只对当前尝试且仍待校验/校验中的成员生效；已登记成功或已被替换的成员返回 False，
+    由 worker 按 SUPERSEDED 结案，不覆盖合法结果，也不清理对象（重新授权后可
+    `retry_video_upload(mode=validation)` 恢复）。
+    """
+    member = datasets.member_by_id(job.member_id)
+    attempt = datasets.attempt_by_id(job.attempt_id)
+    if (
+        member is None
+        or attempt is None
+        or member.current_attempt_id != attempt.id
+        or attempt.member_id != member.id
+        or member.status not in (MemberStatus.PENDING_VALIDATION, MemberStatus.VALIDATING)
+    ):
+        return False
+    failed = replace(
+        member,
+        status=MemberStatus.FAILED,
+        failure_code=failure_code,
+        failure_detail=detail,
+        recovery_action=RetryMode.VALIDATION.value,
+        updated_at=now,
+    )
+    if not datasets.save_member(
+        failed,
+        expected_attempt_id=attempt.id,
+        expected_updated_at=member.updated_at,
+    ):
+        return False
+    datasets.save_attempt(replace(attempt, status=AttemptStatus.FAILED))
+    _logger.warning(
+        "dataset.video_validation.authorization_refused",
+        member_id=str(member.id),
+        attempt_id=str(attempt.id),
+        failure_code=failure_code,
+    )
+    return True
+
+
 def validate_video_upload(
     *,
     job: ApplicationJob,

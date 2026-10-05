@@ -23,9 +23,8 @@ from edge_runtime.center_client import CenterClient
 from edge_runtime.configuration import (
     EdgeRuntimeConfiguration,
     LocalIsapiConnectorConfiguration,
-    connector_configuration,
+    _connector_configuration_from_validated_url,
     load_configuration,
-    safe_url,
 )
 from edge_runtime.configuration_sync import ConfigurationSynchronizer, HttpConfigurationPuller
 from edge_runtime.connectors.hikvision import IsapiConnector
@@ -317,11 +316,7 @@ class ConfiguredLocalConnectorRegistry(LocalConnectorRegistry):
                 raise ValueError(f"duplicate local connector {configuration.connector_id}")
             adapter = IsapiConnector(
                 transport=UrllibIsapiTransport(
-                    base_url=safe_url(
-                        configuration.base_url,
-                        "connector base_url",
-                        schemes={"http", "https"},
-                    ),
+                    base_url=configuration.base_url,
                     username=configuration.username,
                     password=configuration.password,
                 ),
@@ -332,7 +327,7 @@ class ConfiguredLocalConnectorRegistry(LocalConnectorRegistry):
             connectors[configuration.connector_id] = LocalConnector(
                 revision=configuration.revision,
                 connector_type=configuration.connector_type,
-                configuration=connector_configuration(configuration.base_url),
+                configuration=_connector_configuration_from_validated_url(configuration.base_url),
                 credentials_configured=configuration.credentials_configured,
                 probe=_IsapiConnectionTestProbe(adapter),
             )
@@ -1585,7 +1580,7 @@ def main() -> int:
 
     try:
         runtime = build_autonomous_runtime_from_file(config_path)
-    except (OSError, ValueError, json.JSONDecodeError) as error:
+    except (OSError, ValueError) as error:
         raise SystemExit(f"edge runtime configuration is invalid: {error}") from None
 
     stopping = False

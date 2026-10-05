@@ -81,6 +81,17 @@ class PostgresExecutionGrantRepository(ExecutionGrantRepository):
         )
         return tuple(_from_mapping(row) for row in rows)
 
+    def for_station(self, station_id: UUID) -> StationGrant | None:
+        table = cast(Table, StationGrantRow.__table__)
+        row = (
+            self._session.execute(
+                select(*table.c).where(table.c.station_id == station_id).with_for_update()
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return _from_mapping(row) if row is not None else None
+
 
 def _values(value: StationGrant) -> dict[str, object]:
     return {

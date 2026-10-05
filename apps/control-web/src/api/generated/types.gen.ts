@@ -422,6 +422,7 @@ export type ApiErrorCode =
   | 'INFERENCE_HOST_CREDENTIALS_REMOVED'
   | 'INFERENCE_HOST_HAS_BACKENDS'
   | 'INFERENCE_HOST_HAS_ACTIVE_EXECUTION_GRANT'
+  | 'INFERENCE_HOST_HAS_HANDOVER_HISTORY'
   | 'INFERENCE_HOST_HAS_PENDING_COMMANDS'
   | 'INFERENCE_HOST_NAME_TAKEN'
   | 'INFERENCE_HOST_NOT_FOUND'
@@ -452,6 +453,7 @@ export type ApiErrorCode =
   | 'STATION_HAS_TEMPLATE_BINDING'
   | 'STATION_HAS_CONFIGURATION_REPORT'
   | 'STATION_HAS_ACTIVE_EXECUTION_GRANT'
+  | 'STATION_HAS_HANDOVER_HISTORY'
   | 'INTERNAL_ERROR'
   | 'PERMISSION_DENIED'
   | 'REQUEST_INVALID'
@@ -531,6 +533,8 @@ export type ApiErrorCode =
   | 'HANDOVER_RISK_NOT_ACKNOWLEDGED'
   | 'HANDOVER_NOT_ELIGIBLE'
   | 'HANDOVER_TARGET_NOT_FOUND'
+  | 'HANDOVER_SOURCE_MISMATCH'
+  | 'HANDOVER_SAME_HOST'
 
 /**
  * ArtifactAcceptedView
@@ -6079,6 +6083,10 @@ export type CreateHandoverErrors = {
    * Execution record not found
    */
   404: ProblemDocument
+  /**
+   * Execution state conflict
+   */
+  409: ProblemDocument
   /**
    * Request invalid
    */

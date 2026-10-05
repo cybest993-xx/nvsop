@@ -32,7 +32,7 @@ from factory_sop.auth.api import (
 from factory_sop.execution.adapters import dependencies
 from factory_sop.execution.errors import ExecutionRefusalCode, ExecutionRefusedError
 from factory_sop.execution.model import HANDOVER_RISK_STATEMENT, HandoverConfirmation
-from factory_sop.execution.repository import HandoverRepository
+from factory_sop.execution.repository import ExecutionGrantRepository, HandoverRepository
 from factory_sop.execution.usecases import (
     confirm_handover,
     create_handover,
@@ -136,12 +136,13 @@ def read_risk(caller: Authorized) -> HandoverRiskView:
     status_code=status.HTTP_201_CREATED,
     operation_id="createHandover",
     openapi_extra=needs(Permission.HANDOVER_EDIT),
-    responses=_UNAUTHORIZED | _NOT_FOUND_RESPONSES | _UNPROCESSABLE_RESPONSES,
+    responses=_UNAUTHORIZED | _NOT_FOUND_RESPONSES | _CONFLICT_RESPONSES | _UNPROCESSABLE_RESPONSES,
 )
 def create(
     submission: HandoverCreation,
     caller: Authorized,
     handover_store: Annotated[HandoverRepository, Depends(dependencies.handovers)],
+    grant_store: Annotated[ExecutionGrantRepository, Depends(dependencies.grants)],
     authority: Annotated[HandoverAuthority, Depends(handover_authority)],
 ) -> HandoverView:
     """建立强制改绑请求，操作者同时完成第一确认。"""
@@ -154,6 +155,7 @@ def create(
             risk_acknowledgement=submission.risk_acknowledgement,
             now=datetime.now(UTC),
             handovers=handover_store,
+            grants=grant_store,
             authority=authority,
         )
     except IntegrityError as error:
@@ -190,6 +192,7 @@ def confirm(
     submission: HandoverConfirmationInput,
     caller: Authorized,
     handover_store: Annotated[HandoverRepository, Depends(dependencies.handovers)],
+    grant_store: Annotated[ExecutionGrantRepository, Depends(dependencies.grants)],
     authority: Annotated[HandoverAuthority, Depends(handover_authority)],
 ) -> HandoverView:
     """由另一名当前有权的用户确认被展示的同一请求内容。"""
@@ -202,6 +205,7 @@ def confirm(
         risk_acknowledgement=submission.risk_acknowledgement,
         now=datetime.now(UTC),
         handovers=handover_store,
+        grants=grant_store,
         authority=authority,
     )
     return _view(record)

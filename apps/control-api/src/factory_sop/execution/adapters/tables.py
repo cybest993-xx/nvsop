@@ -63,14 +63,16 @@ class HandoverRow(Table):
     )
 
     handover_id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
+    # 三人/三方引用一律 RESTRICT：删除仍被强制改绑历史引用的设备必须失败，
+    # 不能把两人确认过的诊断事实随一次设备 CRUD 静默级联清除（0050，§5.17）。
     station_id: Mapped[UUID] = mapped_column(
-        Uuid(), ForeignKey("device_station.id", ondelete="CASCADE"), index=True
+        Uuid(), ForeignKey("device_station.id", ondelete="RESTRICT"), index=True
     )
     from_host_id: Mapped[UUID] = mapped_column(
-        Uuid(), ForeignKey("device_inference_host.id", ondelete="CASCADE"), index=True
+        Uuid(), ForeignKey("device_inference_host.id", ondelete="RESTRICT"), index=True
     )
     to_host_id: Mapped[UUID] = mapped_column(
-        Uuid(), ForeignKey("device_inference_host.id", ondelete="CASCADE")
+        Uuid(), ForeignKey("device_inference_host.id", ondelete="RESTRICT")
     )
     operator_id: Mapped[UUID] = mapped_column(Uuid(), nullable=False)
     operator_confirmed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

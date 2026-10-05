@@ -113,12 +113,14 @@ def create_handover(
     risk_acknowledgement: str,
     now: datetime,
     handovers: HandoverRepository,
+    grants: ExecutionGrantRepository,
     authority: HandoverAuthority,
 ) -> HandoverConfirmation:
     """建立强制改绑请求；操作者同时完成第一确认。
 
     内容（工位、旧机、目标机）在此冻结，之后只能读或由另一人第二确认；改内容必须新建请求。
     权限在既有 auth 管理锁内按“此刻”复核，因此已被撤权的 stale 身份不能完成首确认。
+    执行权关系也在此复核：旧机必须是该工位当前归属，建立与第二确认不得只查其一。
     """
     authorize(caller, HANDOVER_PERMISSION)
     holders = authority.lock_and_read_holders()
@@ -132,6 +134,13 @@ def create_handover(
             caller=caller,
             station_id=station_id,
         )
+    _require_current_holder(
+        caller=caller,
+        station_id=station_id,
+        from_host_id=from_host_id,
+        to_host_id=to_host_id,
+        grants=grants,
+    )
     record = HandoverConfirmation(
         handover_id=new_id(),
         station_id=station_id,
@@ -186,12 +195,14 @@ def confirm_handover(
     risk_acknowledgement: str,
     now: datetime,
     handovers: HandoverRepository,
+    grants: ExecutionGrantRepository,
     authority: HandoverAuthority,
 ) -> HandoverConfirmation:
     """由另一名当前有权的用户确认被展示的同一请求内容。
 
     第二人绑定请求 id 与展示的内容：内容不符不确认旧内容。双方“此刻”的有效状态与权限在同一
     管理锁内重读，`Caller` 的旧快照不足；条件更新保证并发重复只有一个赢家。
+    执行权关系在此再次复核：建立与第二确认之间租约被替换时，不能确认旧归属。
     """
     authorize(caller, HANDOVER_PERMISSION)
     holders = authority.lock_and_read_holders()
@@ -228,6 +239,13 @@ def confirm_handover(
         _refuse_handover(
             ExecutionRefusalCode.HANDOVER_NOT_ELIGIBLE, caller=caller, handover_id=handover_id
         )
+    _require_current_holder(
+        caller=caller,
+        station_id=record.station_id,
+        from_host_id=record.from_host_id,
+        to_host_id=record.to_host_id,
+        grants=grants,
+    )
     confirmed = handovers.confirm_second(
         HandoverConfirmation(
             handover_id=record.handover_id,
@@ -259,6 +277,41 @@ def confirm_handover(
         risk_statement=HANDOVER_RISK_STATEMENT,
     )
     return confirmed
+
+
+def _require_current_holder(
+    *,
+    caller: Caller,
+    station_id: UUID,
+    from_host_id: UUID,
+    to_host_id: UUID,
+    grants: ExecutionGrantRepository,
+) -> None:
+    """建立与第二确认共用的执行权关系复核。
+
+    以 execution 自己的当前租约记录为权威：请求的旧机必须是该工位此刻的 holder。到期但未被
+    替换的记录仍是当前归属事实，不额外要求未过期，也不要求旧机在线或 active；不从相机拓扑猜
+    关系。无当前归属（含未知工位）沿用 404，holder 不符为 409，同一台机为 422。
+    """
+    if from_host_id == to_host_id:
+        _refuse_handover(
+            ExecutionRefusalCode.HANDOVER_SAME_HOST,
+            caller=caller,
+            station_id=station_id,
+            from_host_id=from_host_id,
+        )
+    grant = grants.for_station(station_id)
+    if grant is None:
+        _refuse_handover(
+            ExecutionRefusalCode.HANDOVER_TARGET_NOT_FOUND, caller=caller, station_id=station_id
+        )
+    if grant.holder_host_id != from_host_id:
+        _refuse_handover(
+            ExecutionRefusalCode.HANDOVER_SOURCE_MISMATCH,
+            caller=caller,
+            station_id=station_id,
+            from_host_id=from_host_id,
+        )
 
 
 def _refuse_handover(code: ExecutionRefusalCode, *, caller: Caller, **target: UUID) -> NoReturn:

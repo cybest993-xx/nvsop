@@ -30,6 +30,7 @@ from factory_sop.device.adapters.repository import (
     PostgresInferenceHostRepository,
     PostgresStationRepository,
 )
+from factory_sop.device.errors import DeviceRefusalCode, DeviceRefusedError, refusal_problem
 from factory_sop.device.model import DeviceStatus, InferenceHost, Station
 from factory_sop.execution.adapters.dependencies import lease_gateway
 from factory_sop.execution.adapters.repository import (
@@ -37,7 +38,7 @@ from factory_sop.execution.adapters.repository import (
     PostgresHandoverRepository,
 )
 from factory_sop.execution.errors import ExecutionRefusalCode, ExecutionRefusedError
-from factory_sop.execution.model import HANDOVER_RISK_STATEMENT, HandoverConfirmation
+from factory_sop.execution.model import HANDOVER_RISK_STATEMENT, HandoverConfirmation, StationGrant
 from factory_sop.execution.usecases import confirm_handover, create_handover, read_handover
 from factory_sop.identifiers import new_id
 
@@ -114,6 +115,19 @@ def _arrange(
     host_from, host_to = _host("旧机"), _host("新机")
     hosts.add(host_from)
     hosts.add(host_to)
+    # 关系复核以 execution 当前租约为权威：该工位当前归属旧机。
+    # 相对真实墙钟已过期：设备删除清理与历史 FK 验证不被 active-grant 触发器掩盖。
+    wall_now = datetime.now(UTC)
+    PostgresExecutionGrantRepository(session).acquire_if_available(
+        StationGrant(
+            grant_id=new_id(),
+            station_id=station.id,
+            holder_host_id=host_from.id,
+            lease_expires_at=wall_now - timedelta(days=1),
+            renewed_at=wall_now - timedelta(days=8),
+            request_id=new_id(),
+        )
+    )
     session.flush()
     return operator, second, role, station, host_from, host_to
 
@@ -135,6 +149,7 @@ def _create(
         risk_acknowledgement=HANDOVER_RISK_STATEMENT,
         now=now,
         handovers=PostgresHandoverRepository(session),
+        grants=PostgresExecutionGrantRepository(session),
         authority=handover_authority(session),
     )
 
@@ -158,16 +173,20 @@ def _confirm(
         risk_acknowledgement=HANDOVER_RISK_STATEMENT,
         now=now,
         handovers=PostgresHandoverRepository(session),
+        grants=PostgresExecutionGrantRepository(session),
         authority=handover_authority(session),
     )
 
 
 def test_two_users_confirm_same_request_and_grant_is_untouched(session: DatabaseSession) -> None:
     operator, second, _role, station, from_host, to_host = _arrange(session)
+    # 用既有 lease_gateway 把已过期 seed 正常 acquire 成真正未到期租约，再保留其快照断言。
     grant = lease_gateway(session).acquire(
-        station_id=station.id, holder_host_id=from_host.id, request_id=new_id(), now=NOW
+        station_id=station.id,
+        holder_host_id=from_host.id,
+        request_id=new_id(),
+        now=datetime.now(UTC),
     )
-    session.flush()
     record = _create(session, operator, station, from_host, to_host)
     assert (record.operator_id, record.operator_confirmed_at) == (operator.id, NOW)
     assert record.operator_risk_shown is True
@@ -416,6 +435,98 @@ def test_confirm_and_revocation_serialize_on_the_administration_lock(engine: Eng
             station_id=station.id,
             host_ids=(from_host.id, to_host.id),
         )
+
+
+def test_confirm_refused_when_holder_replaced_between_confirmations(
+    session: DatabaseSession,
+) -> None:
+    """建立后当前 holder 被真实租约到期替换：第二确认拒绝，second 仍为空。"""
+    operator, second, _role, station, from_host, to_host = _arrange(session)
+    record = _create(session, operator, station, from_host, to_host)
+    # 真实租约到期语义：在已安排租约的绝对到期之后 acquire，替换 holder（不依赖固定 NOW）。
+    current = PostgresExecutionGrantRepository(session).for_station(station.id)
+    assert current is not None
+    replacement_now = current.lease_expires_at + timedelta(seconds=1)
+    lease_gateway(session).acquire(
+        station_id=station.id,
+        holder_host_id=to_host.id,
+        request_id=new_id(),
+        now=replacement_now,
+    )
+    session.flush()
+    with pytest.raises(ExecutionRefusedError) as refused:
+        _confirm(session, second, record, station, from_host, to_host, now=replacement_now)
+    assert refused.value.code is ExecutionRefusalCode.HANDOVER_SOURCE_MISMATCH
+    stored = PostgresHandoverRepository(session).by_identifier(record.handover_id)
+    assert stored is not None
+    assert stored.second_operator_id is None
+
+
+@pytest.mark.parametrize("target", ["from_host", "to_host", "station"])
+def test_removing_device_referenced_by_handover_history_is_refused(
+    session: DatabaseSession, target: str
+) -> None:
+    """两用户第二确认后，三个引用都不得 CASCADE 删除历史；409 且确认快照仍可读。"""
+    operator, second, _role, station, from_host, to_host = _arrange(session)
+    record = _create(session, operator, station, from_host, to_host)
+    confirmed = _confirm(
+        session, second, record, station, from_host, to_host, now=NOW + timedelta(minutes=5)
+    )
+    assert confirmed.second_operator_id == second.id
+    assert confirmed.second_confirmed_at == NOW + timedelta(minutes=5)
+    assert confirmed.second_risk_shown is True
+    assert PostgresHandoverRepository(session).by_identifier(record.handover_id) == confirmed
+    if target == "station":
+        with pytest.raises(DeviceRefusedError) as refused, session.begin_nested():
+            PostgresStationRepository(session).remove(
+                station.id, expected_revision=station.revision
+            )
+        assert refused.value.code is DeviceRefusalCode.STATION_HAS_HANDOVER_HISTORY
+    else:
+        host = from_host if target == "from_host" else to_host
+        with pytest.raises(DeviceRefusedError) as refused, session.begin_nested():
+            PostgresInferenceHostRepository(session).remove(
+                host.id, expected_revision=host.revision
+            )
+        assert refused.value.code is DeviceRefusalCode.INFERENCE_HOST_HAS_HANDOVER_HISTORY
+    assert refusal_problem(refused.value.code)[0] == 409
+    # 已第二确认的历史完整保留且仍可读取。
+    assert PostgresHandoverRepository(session).by_identifier(record.handover_id) == confirmed
+    assert (
+        read_handover(
+            caller=_caller(operator, Permission.HANDOVER_EDIT),
+            handover_id=record.handover_id,
+            handovers=PostgresHandoverRepository(session),
+        )
+        == confirmed
+    )
+
+
+def test_deactivated_source_host_keeps_handover_queryable(session: DatabaseSession) -> None:
+    """两用户第二确认后旧机正常停用（不是删除）不影响历史：完整确认快照仍可查询。"""
+    operator, second, _role, station, from_host, to_host = _arrange(session)
+    record = _create(session, operator, station, from_host, to_host)
+    confirmed = _confirm(
+        session, second, record, station, from_host, to_host, now=NOW + timedelta(minutes=5)
+    )
+    assert confirmed.second_operator_id == second.id
+    assert confirmed.second_risk_shown is True
+    stored_host = PostgresInferenceHostRepository(session).by_id(from_host.id)
+    assert stored_host is not None
+    PostgresInferenceHostRepository(session).save(
+        replace(stored_host, status=DeviceStatus.DEACTIVATED),
+        expected_revision=stored_host.revision,
+    )
+    session.flush()
+    assert PostgresHandoverRepository(session).by_identifier(record.handover_id) == confirmed
+    assert (
+        read_handover(
+            caller=_caller(operator, Permission.HANDOVER_EDIT),
+            handover_id=record.handover_id,
+            handovers=PostgresHandoverRepository(session),
+        )
+        == confirmed
+    )
 
 
 def _cleanup(

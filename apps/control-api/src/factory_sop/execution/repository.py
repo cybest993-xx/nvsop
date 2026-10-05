@@ -23,6 +23,13 @@ class ExecutionGrantRepository(Protocol):
         """只返回该主机当前持有（含已过期）的租约，按工位排序。"""
         ...
 
+    def for_station(self, station_id: UUID) -> StationGrant | None:
+        """读取该工位当前租约，并在请求事务内锁定它；无归属返回 None。
+
+        建立与第二确认都以它复核执行权关系，避免审批过程中租约被替换后仍确认旧关系。
+        """
+        ...
+
 
 class HandoverRepository(Protocol):
     """强制改绑确认记录的持久化 seam；内容建立后不可变。"""

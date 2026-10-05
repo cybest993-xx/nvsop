@@ -7,6 +7,8 @@ use-case-layer decision, not a route dependency (§5.15).
 
 from __future__ import annotations
 
+from typing import cast
+
 from factory_sop.device.adapters.command_repository import PostgresPendingCommandRepository
 from factory_sop.device.adapters.probe import UrllibConnectionProbe
 from factory_sop.device.adapters.repository import (
@@ -127,11 +129,4 @@ def historical_assignments(session: RequestSession) -> DeviceHistoricalAssignmen
 
 def host_gateway(session: RequestSession) -> DeviceHostGateway:
     """模板上报使用的主机认证与归属 seam。"""
-    return RepositoryDeviceTemplateBindingGateway(
-        stations=PostgresStationRepository(session),
-        hosts=PostgresInferenceHostRepository(session),
-        backends=PostgresInferenceBackendRepository(session),
-        cameras=PostgresCameraRepository(session),
-        connectors=PostgresConnectorRepository(session),
-        points=PostgresPointRepository(session),
-    )
+    return cast(DeviceHostGateway, template_binding(session))

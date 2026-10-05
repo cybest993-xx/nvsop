@@ -237,7 +237,7 @@ class HttpAnnotationBackend:
     ) -> bytes:
         """分段读取响应并在每次底层读取前重新收紧剩余 wall-clock 预算。"""
         chunks: list[bytes] = []
-        while True:
+        while not response.isclosed():
             self._set_socket_remaining_timeout(response_socket, deadline)
             chunk = response.read1(1024 * 1024)
             if not chunk:

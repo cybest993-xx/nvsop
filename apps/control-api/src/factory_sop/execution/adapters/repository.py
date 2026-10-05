@@ -11,9 +11,9 @@ from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.orm import Session
 
-from factory_sop.execution.adapters.tables import StationGrantRow
-from factory_sop.execution.model import StationGrant
-from factory_sop.execution.repository import ExecutionGrantRepository
+from factory_sop.execution.adapters.tables import HandoverRow, StationGrantRow
+from factory_sop.execution.model import HandoverConfirmation, StationGrant
+from factory_sop.execution.repository import ExecutionGrantRepository, HandoverRepository
 
 
 class PostgresExecutionGrantRepository(ExecutionGrantRepository):
@@ -81,6 +81,17 @@ class PostgresExecutionGrantRepository(ExecutionGrantRepository):
         )
         return tuple(_from_mapping(row) for row in rows)
 
+    def for_station(self, station_id: UUID) -> StationGrant | None:
+        table = cast(Table, StationGrantRow.__table__)
+        row = (
+            self._session.execute(
+                select(*table.c).where(table.c.station_id == station_id).with_for_update()
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return _from_mapping(row) if row is not None else None
+
 
 def _values(value: StationGrant) -> dict[str, object]:
     return {
@@ -104,4 +115,71 @@ def _from_mapping(value: RowMapping) -> StationGrant:
     )
 
 
-__all__ = ["PostgresExecutionGrantRepository"]
+class PostgresHandoverRepository(HandoverRepository):
+    """用条件更新原子记录第二人确认，内容不符或已确认时不写入。"""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, value: HandoverConfirmation) -> None:
+        self._session.add(
+            HandoverRow(
+                handover_id=value.handover_id,
+                station_id=value.station_id,
+                from_host_id=value.from_host_id,
+                to_host_id=value.to_host_id,
+                operator_id=value.operator_id,
+                operator_confirmed_at=value.operator_confirmed_at,
+                operator_risk_shown=value.operator_risk_shown,
+                second_operator_id=value.second_operator_id,
+                second_confirmed_at=value.second_confirmed_at,
+                second_risk_shown=value.second_risk_shown,
+            )
+        )
+        self._session.flush()
+
+    def by_identifier(self, handover_id: UUID) -> HandoverConfirmation | None:
+        row = self._session.get(HandoverRow, handover_id)
+        return row.to_domain() if row is not None else None
+
+    def confirm_second(self, value: HandoverConfirmation) -> HandoverConfirmation | None:
+        table = cast(Table, HandoverRow.__table__)
+        result = (
+            self._session.execute(
+                update(table)
+                .where(
+                    table.c.handover_id == value.handover_id,
+                    table.c.station_id == value.station_id,
+                    table.c.from_host_id == value.from_host_id,
+                    table.c.to_host_id == value.to_host_id,
+                    table.c.second_operator_id.is_(None),
+                )
+                .values(
+                    second_operator_id=value.second_operator_id,
+                    second_confirmed_at=value.second_confirmed_at,
+                    second_risk_shown=value.second_risk_shown,
+                )
+                .returning(*table.c)
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return _handover_from_mapping(result) if result is not None else None
+
+
+def _handover_from_mapping(value: RowMapping) -> HandoverConfirmation:
+    return HandoverConfirmation(
+        handover_id=cast(UUID, value["handover_id"]),
+        station_id=cast(UUID, value["station_id"]),
+        from_host_id=cast(UUID, value["from_host_id"]),
+        to_host_id=cast(UUID, value["to_host_id"]),
+        operator_id=cast(UUID, value["operator_id"]),
+        operator_confirmed_at=cast(datetime, value["operator_confirmed_at"]),
+        operator_risk_shown=cast(bool, value["operator_risk_shown"]),
+        second_operator_id=cast(UUID | None, value["second_operator_id"]),
+        second_confirmed_at=cast(datetime | None, value["second_confirmed_at"]),
+        second_risk_shown=cast(bool | None, value["second_risk_shown"]),
+    )
+
+
+__all__ = ["PostgresExecutionGrantRepository", "PostgresHandoverRepository"]

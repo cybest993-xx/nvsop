@@ -11,7 +11,8 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, create_engine, text
-from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, sessionmaker
 
 from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
 from factory_sop.dataset.model import (
@@ -25,6 +26,13 @@ from factory_sop.dataset.model import (
     VlmCandidateKind,
     VlmMediaReference,
 )
+from factory_sop.device.adapters.repository import (
+    PostgresInferenceHostRepository,
+    PostgresStationRepository,
+)
+from factory_sop.device.model import DeviceStatus, InferenceHost, Station
+from factory_sop.execution.adapters.repository import PostgresHandoverRepository
+from factory_sop.execution.model import HandoverConfirmation
 
 CONTROL_API = Path(__file__).resolve().parents[2]
 
@@ -120,6 +128,18 @@ def _nullable_columns(database: Engine, table: str) -> dict[str, bool]:
             {"table": table},
         ).all()
     return {str(name): value == "YES" for name, value in rows}
+
+
+def _handover_foreign_keys(database: Engine) -> dict[str, str]:
+    """返回 `execution_handover` 每个外键的删除行为（'r'=RESTRICT, 'c'=CASCADE）。"""
+    with database.connect() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT conname, confdeltype FROM pg_constraint "
+                "WHERE conrelid = 'execution_handover'::regclass AND contype = 'f'"
+            )
+        ).all()
+    return {str(name): str(deltype) for name, deltype in rows}
 
 
 def test_usage_records_round_trip_through_real_postgres(session: Session) -> None:
@@ -412,6 +432,8 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
         "device_configuration_issue",
     } <= _tables(database_at_0023)
     assert {"monitor_sop_instance", "monitor_disposal"} <= _tables(database_at_0023)
+    assert {"execution_handover"} <= _tables(database_at_0023)
+    assert "execution.handover.edit" in _permission_codes(database_at_0023)
     assert {
         "open_boundary_signal",
         "close_boundary_signal",
@@ -419,7 +441,7 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
 
     with database_at_0023.connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0047"
+    assert version == "0050"
     # 客户端不再必须预读整段视频计算摘要：声明列可为空，权威摘要由中心登记。
     assert _nullable_columns(database_at_0023, "dataset_member")["declared_sha256"] is True
     assert _nullable_columns(database_at_0023, "dataset_upload_attempt")["declared_sha256"] is True
@@ -459,6 +481,108 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
     )
     command.downgrade(configuration, "0022")
     assert "job_application_job" not in _tables(database_at_0023)
+
+
+def test_0050_handover_history_survives_device_deletion(database_at_0023: Engine) -> None:
+    """0049 已有强制改绑记录升级 0050：保留记录、三个引用改 RESTRICT，且可降级再升级。"""
+    configuration = Config(str(CONTROL_API / "alembic.ini"))
+    configuration.set_main_option("script_location", str(CONTROL_API / "migrations"))
+    configuration.set_main_option(
+        "sqlalchemy.url", database_at_0023.url.render_as_string(hide_password=False)
+    )
+    command.upgrade(configuration, "0049")
+
+    now = datetime(2026, 9, 22, 1, 0, tzinfo=UTC)
+    actor, station_id, from_host_id, to_host_id, handover_id = (
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+    )
+    session = sessionmaker(bind=database_at_0023)()
+    try:
+        PostgresStationRepository(session).add(
+            Station(
+                id=station_id,
+                code=f"MIG-{station_id.hex[:8]}",
+                name="迁移工位",
+                tags=(),
+                status=DeviceStatus.ACTIVE,
+                revision=1,
+                created_by=actor,
+                updated_by=actor,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        hosts = PostgresInferenceHostRepository(session)
+        for host_id, name in ((from_host_id, "迁移旧机"), (to_host_id, "迁移新机")):
+            hosts.add(
+                InferenceHost(
+                    id=host_id,
+                    name=name,
+                    address="10.0.8.11",
+                    mediamtx_address=None,
+                    recording_window_seconds=604800,
+                    disk_watermark_percent=85,
+                    status=DeviceStatus.ACTIVE,
+                    revision=1,
+                    created_by=actor,
+                    updated_by=actor,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        PostgresHandoverRepository(session).add(
+            HandoverConfirmation(
+                handover_id=handover_id,
+                station_id=station_id,
+                from_host_id=from_host_id,
+                to_host_id=to_host_id,
+                operator_id=actor,
+                operator_confirmed_at=now,
+                operator_risk_shown=True,
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    command.upgrade(configuration, "0050")
+    assert _handover_foreign_keys(database_at_0023) == {
+        "fk_execution_handover_station_id_device_station": "r",
+        "fk_execution_handover_from_host_id_device_inference_host": "r",
+        "fk_execution_handover_to_host_id_device_inference_host": "r",
+    }
+    with database_at_0023.connect() as connection:
+        assert (
+            connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            == "0050"
+        )
+        assert connection.execute(text("SELECT count(*) FROM execution_handover")).scalar_one() == 1
+
+    # RESTRICT 是真实约束：删除仍被历史引用的推理机被拒绝，记录保留。
+    with pytest.raises(IntegrityError), database_at_0023.begin() as connection:
+        connection.execute(
+            text("DELETE FROM device_inference_host WHERE id = :id"), {"id": from_host_id}
+        )
+    with database_at_0023.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM execution_handover")).scalar_one() == 1
+
+    # 降级按原 CASCADE 重建且不删历史；再升级回到 RESTRICT，记录仍在。
+    command.downgrade(configuration, "0049")
+    assert _handover_foreign_keys(database_at_0023) == {
+        "fk_execution_handover_station_id_device_station": "c",
+        "fk_execution_handover_from_host_id_device_inference_host": "c",
+        "fk_execution_handover_to_host_id_device_inference_host": "c",
+    }
+    with database_at_0023.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM execution_handover")).scalar_one() == 1
+    command.upgrade(configuration, "0050")
+    assert all(behaviour == "r" for behaviour in _handover_foreign_keys(database_at_0023).values())
+    with database_at_0023.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM execution_handover")).scalar_one() == 1
 
 
 def test_file_identity_rename_keeps_registered_values_on_real_postgres(

@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 from pydantic import BaseModel, Field, field_validator
 
 from factory_sop.auth.api import Authorized, Permission, needs
+from factory_sop.device.adapters import route_support
 from factory_sop.device.adapters.dependencies import backends, cameras, connectors, hosts, stations
 from factory_sop.device.adapters.media_views import (
     ExportCameraMediaView,
@@ -46,14 +47,9 @@ from nvsop_contracts import validate_host_identity_public_key
 
 router = APIRouter(prefix="/inference-hosts", tags=["device"])
 
-# FastAPI 的 responses 声明类型；下面的共享字典与之保持一致。
+# FastAPI 的 responses 声明类型；本地只保留本模块拥有的校验响应。
 ProblemResponses = dict[int | str, dict[str, Any]]
 
-# 未认证或无权限调用方的统一响应。
-_UNAUTHORIZED: ProblemResponses = {
-    401: problem_openapi_response("Authentication required or session invalid"),
-    403: problem_openapi_response("Permission denied or CSRF token invalid"),
-}
 _VALIDATION: ProblemResponses = {422: problem_openapi_response("Request invalid")}
 
 
@@ -170,7 +166,7 @@ def _view(host: InferenceHost) -> InferenceHostView:
     status_code=status.HTTP_201_CREATED,
     operation_id="createInferenceHost",
     openapi_extra=needs(Permission.INFERENCE_HOST_EDIT),
-    responses=_UNAUTHORIZED
+    responses=route_support._UNAUTHORIZED
     | _VALIDATION
     | {409: problem_openapi_response("Host name already taken")},
 )
@@ -198,7 +194,7 @@ def create_a_host(
     "",
     operation_id="listInferenceHosts",
     openapi_extra=needs(Permission.INFERENCE_HOST_VIEW),
-    responses=_UNAUTHORIZED | _VALIDATION,
+    responses=route_support._UNAUTHORIZED | _VALIDATION,
 )
 def list_the_hosts(
     caller: Authorized,
@@ -217,7 +213,7 @@ def list_the_hosts(
     "/{host_id}/media-configuration",
     operation_id="exportInferenceHostMediaConfiguration",
     openapi_extra=needs(Permission.INFERENCE_HOST_VIEW, Permission.CAMERA_VIEW),
-    responses=_UNAUTHORIZED
+    responses=route_support._UNAUTHORIZED
     | _VALIDATION
     | {404: problem_openapi_response("Host or camera topology not found")},
 )
@@ -251,7 +247,9 @@ def export_a_host_media_configuration(
     "/{host_id}",
     operation_id="readInferenceHost",
     openapi_extra=needs(Permission.INFERENCE_HOST_VIEW),
-    responses=_UNAUTHORIZED | _VALIDATION | {404: problem_openapi_response("Host not found")},
+    responses=route_support._UNAUTHORIZED
+    | _VALIDATION
+    | {404: problem_openapi_response("Host not found")},
 )
 def read_a_host(
     host_id: UUID,
@@ -266,7 +264,7 @@ def read_a_host(
     "/{host_id}",
     operation_id="editInferenceHost",
     openapi_extra=needs(Permission.INFERENCE_HOST_EDIT),
-    responses=_UNAUTHORIZED
+    responses=route_support._UNAUTHORIZED
     | _VALIDATION
     | {
         404: problem_openapi_response("Host not found"),
@@ -305,7 +303,7 @@ def edit_a_host(
     operation_id="rotateInferenceHostCredential",
     deprecated=True,
     openapi_extra=needs(Permission.INFERENCE_HOST_EDIT),
-    responses=_UNAUTHORIZED
+    responses=route_support._UNAUTHORIZED
     | _VALIDATION
     | {
         404: problem_openapi_response("Host not found"),
@@ -328,7 +326,7 @@ def retired_a_host_credential(
     "/{host_id}/identity-key",
     operation_id="registerInferenceHostIdentityKey",
     openapi_extra=needs(Permission.INFERENCE_HOST_EDIT),
-    responses=_UNAUTHORIZED
+    responses=route_support._UNAUTHORIZED
     | _VALIDATION
     | {
         404: problem_openapi_response("Host not found"),
@@ -358,7 +356,7 @@ def register_a_host_identity_key(
     "/{host_id}/status",
     operation_id="setInferenceHostStatus",
     openapi_extra=needs(Permission.INFERENCE_HOST_EDIT),
-    responses=_UNAUTHORIZED
+    responses=route_support._UNAUTHORIZED
     | _VALIDATION
     | {
         404: problem_openapi_response("Host not found"),
@@ -398,7 +396,7 @@ def set_the_host_status(
     status_code=status.HTTP_204_NO_CONTENT,
     operation_id="deleteInferenceHost",
     openapi_extra=needs(Permission.INFERENCE_HOST_DELETE),
-    responses=_UNAUTHORIZED
+    responses=route_support._UNAUTHORIZED
     | _VALIDATION
     | {
         404: problem_openapi_response("Host not found"),

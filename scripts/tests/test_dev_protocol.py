@@ -605,6 +605,98 @@ configure_manual_test_resources(
             self.assertIsNone(state["last_ui"]["exit_code"])
             self.assertIn("launcher unavailable", state["last_ui"]["error"])
 
+    def test_ui_sigint_after_complete_passing_report_records_passed_result(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            item = DEV.DevPaths(root=Path(directory), state=Path(directory) / "state")
+            DEV.ensure_directories(item)
+            snapshot = item.snapshots / "sha"
+            snapshot.mkdir()
+            DEV.write_state(
+                item, DEV.initial_state("http") | {"status": "ready", "running_sha": "sha"}
+            )
+            urls = DEV.public_urls("http")
+            report = item.reports / "ui-sha.json"
+
+            def finish_ui(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+                report.write_text(
+                    json.dumps(
+                        {
+                            "stats": {
+                                "expected": 16,
+                                "skipped": 2,
+                                "unexpected": 0,
+                                "flaky": 0,
+                            }
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return subprocess.CompletedProcess(["playwright"], 130)
+
+            with (
+                patch.object(DEV, "require_setup"),
+                patch.object(
+                    DEV,
+                    "ready_instance",
+                    return_value=("sha", snapshot, "http", urls),
+                ),
+                patch.object(DEV, "ensure_snapshot_node_modules"),
+                patch.object(DEV, "run_checked", side_effect=finish_ui),
+            ):
+                DEV.run_ui(item)
+
+            state = DEV.read_state(item)
+            self.assertIsNone(state["test"])
+            self.assertEqual("passed", state["last_ui"]["status"])
+            self.assertEqual(130, state["last_ui"]["exit_code"])
+
+    def test_ui_sigint_does_not_reuse_a_stale_passing_report(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            item = DEV.DevPaths(root=Path(directory), state=Path(directory) / "state")
+            DEV.ensure_directories(item)
+            snapshot = item.snapshots / "sha"
+            snapshot.mkdir()
+            DEV.write_state(
+                item, DEV.initial_state("http") | {"status": "ready", "running_sha": "sha"}
+            )
+            urls = DEV.public_urls("http")
+            report = item.reports / "ui-sha.json"
+            report.write_text(
+                json.dumps(
+                    {
+                        "stats": {
+                            "expected": 16,
+                            "skipped": 2,
+                            "unexpected": 0,
+                            "flaky": 0,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(DEV, "require_setup"),
+                patch.object(
+                    DEV,
+                    "ready_instance",
+                    return_value=("sha", snapshot, "http", urls),
+                ),
+                patch.object(DEV, "ensure_snapshot_node_modules"),
+                patch.object(
+                    DEV,
+                    "run_checked",
+                    return_value=subprocess.CompletedProcess(["playwright"], 130),
+                ),
+                self.assertRaises(DEV.DevError),
+            ):
+                DEV.run_ui(item)
+
+            state = DEV.read_state(item)
+            self.assertIsNone(state["test"])
+            self.assertEqual("failed", state["last_ui"]["status"])
+            self.assertEqual(130, state["last_ui"]["exit_code"])
+
     def test_build_failure_marks_old_test_results_stale_immediately(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             item = DEV.DevPaths(root=Path(directory), state=Path(directory) / "state")

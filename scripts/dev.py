@@ -1773,6 +1773,25 @@ def report_path(item: DevPaths, prefix: str, sha: str) -> Path:
     return item.reports / f"{prefix}-{sha}.json"
 
 
+def playwright_ui_report_passed(report: Path) -> bool:
+    try:
+        payload = json.loads(report.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, Mapping):
+        return False
+    stats = payload.get("stats")
+    if not isinstance(stats, Mapping):
+        return False
+    counts = (stats.get("expected"), stats.get("skipped"), stats.get("unexpected"))
+    if not all(
+        isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in counts
+    ):
+        return False
+    expected, skipped, unexpected = counts
+    return unexpected == 0 and expected + skipped > 0
+
+
 def ready_instance(item: DevPaths, *, action: str) -> tuple[str, Path, str, dict[str, str]]:
     """在互斥锁内读取被测 SHA，避免测试跨越一次实例更新。"""
     value = read_state(item)
@@ -1987,6 +2006,7 @@ def run_ui(item: DevPaths) -> None:
         sha, snapshot, protocol, urls = ready_instance(item, action="打开可视化测试")
         ensure_snapshot_node_modules(item, sha=sha, snapshot=snapshot, protocol=protocol)
         report = report_path(item, "ui", sha)
+        report.unlink(missing_ok=True)
         output_dir = item.reports / "ui" / sha
         output_dir.mkdir(parents=True, exist_ok=True)
         web_root = snapshot / "apps" / "control-web"
@@ -2035,17 +2055,18 @@ def run_ui(item: DevPaths) -> None:
             report=report,
             execute=execute,
         )
+        passed = result.returncode in {0, 130} and playwright_ui_report_passed(report)
         entry: dict[str, object] = {
             "tested_sha": sha,
             "protocol": protocol,
-            "status": "passed" if result.returncode == 0 else "failed",
+            "status": "passed" if passed else "failed",
             "exit_code": result.returncode,
             "command": command,
             "report": str(report),
             "finished_at": utc_now(),
         }
         record_test_result(item, kind="ui", entry=entry)
-        if result.returncode != 0:
+        if not passed:
             raise DevError(f"可视化测试进程失败，报告：{report}")
 
 

@@ -288,15 +288,12 @@ def verify_closed_pull_request(payload: dict[str, object], branch: str, candidat
         raise CleanupTaskError("closed pull request unexpectedly records a merge commit")
 
 
-def verify_local_target(branch: str, candidate: str) -> CleanupTarget:
+def verify_local_target(branch: str) -> CleanupTarget:
     validate_branch(branch)
-    candidate = parse_object_id(candidate, "--candidate")
     current_path = current_worktree()
     worktrees = read_worktrees()
     primary_path = canonical_path(worktrees[0].path)
     task_tip = local_tip(branch)
-    if task_tip != candidate:
-        raise CleanupTaskError("local branch tip does not match --candidate")
 
     task_ref = f"refs/heads/{branch}"
     task_worktrees = [worktree for worktree in worktrees if worktree.branch == task_ref]
@@ -307,6 +304,40 @@ def verify_local_target(branch: str, candidate: str) -> CleanupTarget:
         check_task_worktree(task_worktree, task_ref, task_tip, branch, current_path, primary_path)
 
     return CleanupTarget(task_ref, task_tip, task_worktree, has_local_branch_config(branch))
+
+
+def verify_merged_candidate(
+    pr: int,
+    candidate: str,
+    target: CleanupTarget,
+    accepted_main: str,
+) -> None:
+    if target.task_tip == candidate:
+        return
+
+    git("fetch", "--no-tags", "origin", f"pull/{pr}/head")
+    fetched_head = parse_object_id(
+        output_text(git("rev-parse", "--verify", "FETCH_HEAD^{commit}").rstrip()).strip(),
+        "fetched pull-request head",
+    )
+    if fetched_head != candidate:
+        raise CleanupTaskError("fetched pull-request head does not match --candidate")
+
+    parents = output_text(git("show", "-s", "--format=%P", candidate).rstrip()).strip().split()
+    if len(parents) != 2:
+        raise CleanupTaskError("refreshed landing head must have exactly two parents")
+    if parents[0] != target.task_tip:
+        raise CleanupTaskError(
+            "refreshed landing head first parent does not match the local task tip"
+        )
+    arguments = ["git", "merge-base", "--is-ancestor", parents[1], accepted_main]
+    retained = run_raw(arguments)
+    if retained.returncode == 1:
+        raise CleanupTaskError(
+            "refreshed landing head second parent is not retained by origin/main"
+        )
+    if retained.returncode != 0:
+        raise command_error(arguments, retained)
 
 
 def sync_primary_main(accepted_main: str) -> None:
@@ -339,7 +370,8 @@ def remove_local_target(target: CleanupTarget) -> None:
 
 
 def cleanup_task(pr: int, branch: str, candidate: str) -> None:
-    target = verify_local_target(branch, candidate)
+    candidate = parse_object_id(candidate, "--candidate")
+    target = verify_local_target(branch)
     merge_commit = verify_pull_request(pull_request(pr), branch, candidate)
     git("fetch", "origin", "main")
     accepted_main = parse_object_id(
@@ -347,6 +379,7 @@ def cleanup_task(pr: int, branch: str, candidate: str) -> None:
         "origin/main",
     )
     git("merge-base", "--is-ancestor", merge_commit, accepted_main)
+    verify_merged_candidate(pr, candidate, target, accepted_main)
 
     sync_primary_main(accepted_main)
     remove_local_target(target)
@@ -354,8 +387,11 @@ def cleanup_task(pr: int, branch: str, candidate: str) -> None:
 
 
 def cleanup_abandoned_task(pr: int | None, branch: str, candidate: str, replaced_by: str) -> None:
+    candidate = parse_object_id(candidate, "--candidate")
     replaced_by = parse_object_id(replaced_by, "--replaced-by")
-    target = verify_local_target(branch, candidate)
+    target = verify_local_target(branch)
+    if target.task_tip != candidate:
+        raise CleanupTaskError("local branch tip does not match --candidate")
     if pr is not None:
         verify_closed_pull_request(pull_request(pr), branch, candidate)
 

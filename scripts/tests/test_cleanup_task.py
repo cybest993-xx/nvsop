@@ -94,6 +94,74 @@ class CleanupTaskTest(unittest.TestCase):
         self.git("push", "--quiet", "origin", "main")
         return candidate, merge_commit, task
 
+    def make_refreshed_merged_task(
+        self,
+        branch: str = "agent/a/demo",
+        *,
+        wrong_first_parent: bool = False,
+        unretained_second_parent: bool = False,
+        extra_parent: bool = False,
+    ) -> tuple[str, str, str, Path]:
+        task = self.root / "task"
+        self.git("worktree", "add", "--quiet", "-b", branch, str(task))
+        (task / "task.txt").write_text("task\n", encoding="utf-8")
+        self.command("add", "task.txt", cwd=task)
+        result = self.command("commit", "--quiet", "-m", "task", cwd=task)
+        if result.returncode != 0:
+            self.fail(result.stderr or result.stdout)
+        authorization_root = self.git("rev-parse", f"refs/heads/{branch}")
+
+        (self.repo / "main.txt").write_text("refresh base\n", encoding="utf-8")
+        self.git("add", "main.txt")
+        self.git("commit", "--quiet", "-m", "refresh base")
+        refresh_base = self.git("rev-parse", "HEAD")
+
+        first_parent = authorization_root
+        if wrong_first_parent:
+            first_parent = self.git(
+                "commit-tree",
+                f"{authorization_root}^{{tree}}",
+                "-p",
+                self.base,
+                "-m",
+                "wrong first parent",
+            )
+
+        second_parent = refresh_base
+        if unretained_second_parent:
+            second_parent = self.git(
+                "commit-tree",
+                f"{self.base}^{{tree}}",
+                "-p",
+                self.base,
+                "-m",
+                "unretained refresh base",
+            )
+
+        arguments = [
+            "commit-tree",
+            f"{authorization_root}^{{tree}}",
+            "-p",
+            first_parent,
+            "-p",
+            second_parent,
+        ]
+        if extra_parent:
+            arguments.extend(["-p", self.base])
+        arguments.extend(["-m", "queue refresh"])
+        landing_head = self.git(*arguments)
+
+        (self.repo / "merged.txt").write_text("squashed\n", encoding="utf-8")
+        self.git("add", "merged.txt")
+        self.git("commit", "--quiet", "-m", "squashed")
+        merge_commit = self.git("rev-parse", "HEAD")
+
+        self.git("init", "--quiet", "--bare", str(self.remote), cwd=self.root)
+        self.git("remote", "add", "origin", str(self.remote))
+        self.git("push", "--quiet", "origin", "main")
+        self.git("push", "--quiet", "origin", f"{landing_head}:refs/pull/311/head")
+        return authorization_root, landing_head, merge_commit, task
+
     def make_abandoned_task(self, branch: str = "agent/a/demo") -> tuple[str, str, Path]:
         task = self.root / "task"
         self.git("worktree", "add", "--quiet", "-b", branch, str(task))
@@ -235,6 +303,59 @@ class CleanupTaskTest(unittest.TestCase):
         self.assertEqual(merge_commit, self.git("rev-parse", "HEAD"))
         self.assert_branch_absent(branch)
         self.assertFalse(task.exists())
+
+    def test_merged_cleanup_accepts_one_queue_refresh(self) -> None:
+        branch = "agent/a/demo"
+        authorization_root, landing_head, merge_commit, task = self.make_refreshed_merged_task(
+            branch
+        )
+
+        result = self.run_cli(branch, landing_head, merge_commit)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(merge_commit, self.git("rev-parse", "HEAD"))
+        self.assert_branch_absent(branch)
+        self.assertFalse(task.exists())
+        self.assertNotEqual(authorization_root, landing_head)
+        self.assert_gh_called_once()
+
+    def test_merged_cleanup_rejects_refresh_with_wrong_first_parent(self) -> None:
+        branch = "agent/a/demo"
+        authorization_root, landing_head, merge_commit, task = self.make_refreshed_merged_task(
+            branch, wrong_first_parent=True
+        )
+
+        result = self.run_cli(branch, landing_head, merge_commit)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("first parent", result.stderr)
+        self.assertEqual(authorization_root, self.git("rev-parse", f"refs/heads/{branch}"))
+        self.assertTrue(task.exists())
+
+    def test_merged_cleanup_rejects_unretained_refresh_base(self) -> None:
+        branch = "agent/a/demo"
+        authorization_root, landing_head, merge_commit, task = self.make_refreshed_merged_task(
+            branch, unretained_second_parent=True
+        )
+
+        result = self.run_cli(branch, landing_head, merge_commit)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual(authorization_root, self.git("rev-parse", f"refs/heads/{branch}"))
+        self.assertTrue(task.exists())
+
+    def test_merged_cleanup_rejects_refresh_with_extra_parent(self) -> None:
+        branch = "agent/a/demo"
+        authorization_root, landing_head, merge_commit, task = self.make_refreshed_merged_task(
+            branch, extra_parent=True
+        )
+
+        result = self.run_cli(branch, landing_head, merge_commit)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("exactly two parents", result.stderr)
+        self.assertEqual(authorization_root, self.git("rev-parse", f"refs/heads/{branch}"))
+        self.assertTrue(task.exists())
 
     def test_dirty_primary_main_preserves_merged_task(self) -> None:
         branch = "agent/a/demo"

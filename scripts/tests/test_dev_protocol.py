@@ -576,6 +576,34 @@ configure_manual_test_resources(
             self.assertEqual("aborted", state["last_smoke"]["status"])
             self.assertEqual(130, state["last_smoke"]["exit_code"])
 
+    @staticmethod
+    def ui_spec_keys(*titles: str) -> frozenset[tuple[str, int, int, str]]:
+        return frozenset(
+            ("tests/e2e/example.spec.ts", index, 1, title)
+            for index, title in enumerate(titles, start=1)
+        )
+
+    @staticmethod
+    def ui_report(stats: dict[str, int], *titles: str) -> dict[str, object]:
+        return {
+            "stats": stats,
+            "suites": [
+                {
+                    "title": "example.spec.ts",
+                    "specs": [
+                        {
+                            "file": "tests/e2e/example.spec.ts",
+                            "line": index,
+                            "column": 1,
+                            "title": title,
+                            "tests": [],
+                        }
+                        for index, title in enumerate(titles, start=1)
+                    ],
+                }
+            ],
+        }
+
     def test_ui_launch_failure_records_a_failed_result(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             item = DEV.DevPaths(root=Path(directory), state=Path(directory) / "state")
@@ -594,6 +622,11 @@ configure_manual_test_resources(
                     return_value=("sha", snapshot, "http", urls),
                 ),
                 patch.object(DEV, "ensure_snapshot_node_modules"),
+                patch.object(
+                    DEV,
+                    "playwright_ui_expected_specs",
+                    return_value=self.ui_spec_keys("spec"),
+                ),
                 patch.object(DEV, "run_checked", side_effect=DEV.DevError("launcher unavailable")),
                 self.assertRaises(DEV.DevError),
             ):
@@ -620,14 +653,16 @@ configure_manual_test_resources(
             def finish_ui(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
                 report.write_text(
                     json.dumps(
-                        {
-                            "stats": {
-                                "expected": 16,
-                                "skipped": 2,
+                        self.ui_report(
+                            {
+                                "expected": 1,
+                                "skipped": 1,
                                 "unexpected": 0,
                                 "flaky": 0,
-                            }
-                        }
+                            },
+                            "passed spec",
+                            "skipped spec",
+                        )
                     ),
                     encoding="utf-8",
                 )
@@ -641,6 +676,11 @@ configure_manual_test_resources(
                     return_value=("sha", snapshot, "http", urls),
                 ),
                 patch.object(DEV, "ensure_snapshot_node_modules"),
+                patch.object(
+                    DEV,
+                    "playwright_ui_expected_specs",
+                    return_value=self.ui_spec_keys("passed spec", "skipped spec"),
+                ),
                 patch.object(DEV, "run_checked", side_effect=finish_ui),
             ):
                 DEV.run_ui(item)
@@ -674,7 +714,10 @@ configure_manual_test_resources(
                     _stats: dict[str, int] = stats,
                     **_kwargs: object,
                 ) -> subprocess.CompletedProcess[bytes]:
-                    _report.write_text(json.dumps({"stats": _stats}), encoding="utf-8")
+                    _report.write_text(
+                        json.dumps(self.ui_report(_stats, "spec")),
+                        encoding="utf-8",
+                    )
                     return subprocess.CompletedProcess(["playwright"], 130)
 
                 with (
@@ -685,6 +728,11 @@ configure_manual_test_resources(
                         return_value=("sha", snapshot, "http", urls),
                     ),
                     patch.object(DEV, "ensure_snapshot_node_modules"),
+                    patch.object(
+                        DEV,
+                        "playwright_ui_expected_specs",
+                        return_value=self.ui_spec_keys("spec"),
+                    ),
                     patch.object(DEV, "run_checked", side_effect=finish_ui),
                     self.assertRaises(DEV.DevError),
                 ):
@@ -694,6 +742,114 @@ configure_manual_test_resources(
                 self.assertIsNone(state["test"])
                 self.assertEqual("failed", state["last_ui"]["status"])
                 self.assertEqual(130, state["last_ui"]["exit_code"])
+
+    def test_ui_parent_interrupt_after_complete_report_records_passed_result(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            item = DEV.DevPaths(root=Path(directory), state=Path(directory) / "state")
+            DEV.ensure_directories(item)
+            snapshot = item.snapshots / "sha"
+            snapshot.mkdir()
+            DEV.write_state(
+                item, DEV.initial_state("http") | {"status": "ready", "running_sha": "sha"}
+            )
+            urls = DEV.public_urls("http")
+            report = item.reports / "ui-sha.json"
+
+            def interrupt_after_report(
+                *_args: object, **_kwargs: object
+            ) -> subprocess.CompletedProcess[bytes]:
+                report.write_text(
+                    json.dumps(
+                        self.ui_report(
+                            {
+                                "expected": 2,
+                                "skipped": 0,
+                                "unexpected": 0,
+                                "flaky": 0,
+                            },
+                            "first spec",
+                            "second spec",
+                        )
+                    ),
+                    encoding="utf-8",
+                )
+                raise DEV.DevInterrupted("收到停止请求")
+
+            with (
+                patch.object(DEV, "require_setup"),
+                patch.object(
+                    DEV,
+                    "ready_instance",
+                    return_value=("sha", snapshot, "http", urls),
+                ),
+                patch.object(DEV, "ensure_snapshot_node_modules"),
+                patch.object(
+                    DEV,
+                    "playwright_ui_expected_specs",
+                    return_value=self.ui_spec_keys("first spec", "second spec"),
+                ),
+                patch.object(DEV, "run_checked", side_effect=interrupt_after_report),
+            ):
+                DEV.run_ui(item)
+
+            state = DEV.read_state(item)
+            self.assertIsNone(state["test"])
+            self.assertEqual("passed", state["last_ui"]["status"])
+            self.assertEqual(130, state["last_ui"]["exit_code"])
+
+    def test_ui_parent_interrupt_with_partial_report_remains_aborted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            item = DEV.DevPaths(root=Path(directory), state=Path(directory) / "state")
+            DEV.ensure_directories(item)
+            snapshot = item.snapshots / "sha"
+            snapshot.mkdir()
+            DEV.write_state(
+                item, DEV.initial_state("http") | {"status": "ready", "running_sha": "sha"}
+            )
+            urls = DEV.public_urls("http")
+            report = item.reports / "ui-sha.json"
+
+            def interrupt_after_partial_report(
+                *_args: object, **_kwargs: object
+            ) -> subprocess.CompletedProcess[bytes]:
+                report.write_text(
+                    json.dumps(
+                        self.ui_report(
+                            {
+                                "expected": 1,
+                                "skipped": 0,
+                                "unexpected": 0,
+                                "flaky": 0,
+                            },
+                            "first spec",
+                        )
+                    ),
+                    encoding="utf-8",
+                )
+                raise DEV.DevInterrupted("收到停止请求")
+
+            with (
+                patch.object(DEV, "require_setup"),
+                patch.object(
+                    DEV,
+                    "ready_instance",
+                    return_value=("sha", snapshot, "http", urls),
+                ),
+                patch.object(DEV, "ensure_snapshot_node_modules"),
+                patch.object(
+                    DEV,
+                    "playwright_ui_expected_specs",
+                    return_value=self.ui_spec_keys("first spec", "second spec"),
+                ),
+                patch.object(DEV, "run_checked", side_effect=interrupt_after_partial_report),
+                self.assertRaises(DEV.DevInterrupted),
+            ):
+                DEV.run_ui(item)
+
+            state = DEV.read_state(item)
+            self.assertIsNone(state["test"])
+            self.assertEqual("aborted", state["last_ui"]["status"])
+            self.assertEqual(130, state["last_ui"]["exit_code"])
 
     def test_ui_sigint_does_not_reuse_a_stale_passing_report(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -708,14 +864,15 @@ configure_manual_test_resources(
             report = item.reports / "ui-sha.json"
             report.write_text(
                 json.dumps(
-                    {
-                        "stats": {
-                            "expected": 16,
-                            "skipped": 2,
+                    self.ui_report(
+                        {
+                            "expected": 1,
+                            "skipped": 0,
                             "unexpected": 0,
                             "flaky": 0,
-                        }
-                    }
+                        },
+                        "spec",
+                    )
                 ),
                 encoding="utf-8",
             )
@@ -728,6 +885,11 @@ configure_manual_test_resources(
                     return_value=("sha", snapshot, "http", urls),
                 ),
                 patch.object(DEV, "ensure_snapshot_node_modules"),
+                patch.object(
+                    DEV,
+                    "playwright_ui_expected_specs",
+                    return_value=self.ui_spec_keys("spec"),
+                ),
                 patch.object(
                     DEV,
                     "run_checked",

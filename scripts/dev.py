@@ -1773,7 +1773,85 @@ def report_path(item: DevPaths, prefix: str, sha: str) -> Path:
     return item.reports / f"{prefix}-{sha}.json"
 
 
-def playwright_ui_report_passed(report: Path) -> bool:
+def playwright_report_spec_keys(
+    payload: object,
+) -> frozenset[tuple[str, int, int, str]] | None:
+    if not isinstance(payload, Mapping):
+        return None
+    raw_suites = payload.get("suites")
+    if not isinstance(raw_suites, list):
+        return None
+
+    keys: set[tuple[str, int, int, str]] = set()
+    stack: list[object] = list(raw_suites)
+    while stack:
+        suite = stack.pop()
+        if not isinstance(suite, Mapping):
+            return None
+        nested = suite.get("suites", [])
+        specs = suite.get("specs", [])
+        if not isinstance(nested, list) or not isinstance(specs, list):
+            return None
+        stack.extend(nested)
+        for spec in specs:
+            if not isinstance(spec, Mapping):
+                return None
+            file = spec.get("file")
+            line = spec.get("line")
+            column = spec.get("column")
+            title = spec.get("title")
+            if (
+                not isinstance(file, str)
+                or not file
+                or not isinstance(line, int)
+                or isinstance(line, bool)
+                or line < 1
+                or not isinstance(column, int)
+                or isinstance(column, bool)
+                or column < 1
+                or not isinstance(title, str)
+                or not title
+            ):
+                return None
+            keys.add((file, line, column, title))
+    return frozenset(keys)
+
+
+def playwright_ui_expected_specs(
+    web_root: Path, environment: Mapping[str, str]
+) -> frozenset[tuple[str, int, int, str]]:
+    result = run_checked(
+        [
+            "pnpm",
+            "exec",
+            "playwright",
+            "test",
+            "--list",
+            "--reporter=json",
+            "--config",
+            str(web_root / "playwright.config.ts"),
+        ],
+        cwd=web_root,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        raise DevError(f"枚举可视化测试失败：{detail}")
+    try:
+        payload = json.loads(result.stdout)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise DevError("枚举可视化测试未返回有效 JSON") from error
+    specs = playwright_report_spec_keys(payload)
+    if not specs:
+        raise DevError("枚举可视化测试未发现任何测试")
+    return specs
+
+
+def playwright_ui_report_passed(
+    report: Path, expected_specs: frozenset[tuple[str, int, int, str]]
+) -> bool:
     try:
         payload = json.loads(report.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -1789,7 +1867,8 @@ def playwright_ui_report_passed(report: Path) -> bool:
     ):
         return False
     expected, _skipped, unexpected = counts
-    return unexpected == 0 and expected > 0
+    actual_specs = playwright_report_spec_keys(payload)
+    return unexpected == 0 and expected > 0 and actual_specs == expected_specs
 
 
 def ready_instance(item: DevPaths, *, action: str) -> tuple[str, Path, str, dict[str, str]]:
@@ -2010,6 +2089,22 @@ def run_ui(item: DevPaths) -> None:
         output_dir = item.reports / "ui" / sha
         output_dir.mkdir(parents=True, exist_ok=True)
         web_root = snapshot / "apps" / "control-web"
+        environment = runtime_environment(item, sha=sha, source=snapshot, protocol=protocol)
+        environment.pop("NODE_ENV", None)
+        environment.pop("PLAYWRIGHT_JSON_OUTPUT_FILE", None)
+        environment.update(
+            {
+                "NVSOP_DEV": "1",
+                "NVSOP_BASE_URL": urls["business"],
+            }
+        )
+        discovery_environment = environment.copy()
+        environment.update(
+            {
+                "PLAYWRIGHT_OUTPUT_DIR": str(output_dir),
+                "PLAYWRIGHT_JSON_OUTPUT_FILE": str(report),
+            }
+        )
         command = [
             "pnpm",
             "exec",
@@ -2026,25 +2121,24 @@ def run_ui(item: DevPaths) -> None:
             str(web_root / "playwright.config.ts"),
         ]
 
+        expected_specs: frozenset[tuple[str, int, int, str]] = frozenset()
+
         def execute(stopping: Event) -> subprocess.CompletedProcess[bytes]:
-            environment = runtime_environment(item, sha=sha, source=snapshot, protocol=protocol)
-            environment.pop("NODE_ENV", None)
-            environment.update(
-                {
-                    "NVSOP_DEV": "1",
-                    "NVSOP_BASE_URL": urls["business"],
-                    "PLAYWRIGHT_OUTPUT_DIR": str(output_dir),
-                    "PLAYWRIGHT_JSON_OUTPUT_FILE": str(report),
-                }
-            )
-            return run_checked(
-                command,
-                cwd=web_root,
-                env=environment,
-                stdout=None,
-                stderr=None,
-                stop_event=stopping,
-            )
+            nonlocal expected_specs
+            expected_specs = playwright_ui_expected_specs(web_root, discovery_environment)
+            try:
+                return run_checked(
+                    command,
+                    cwd=web_root,
+                    env=environment,
+                    stdout=None,
+                    stderr=None,
+                    stop_event=stopping,
+                )
+            except DevInterrupted:
+                if playwright_ui_report_passed(report, expected_specs):
+                    return subprocess.CompletedProcess(command, 130)
+                raise
 
         result = execute_manual_test(
             item,
@@ -2055,7 +2149,9 @@ def run_ui(item: DevPaths) -> None:
             report=report,
             execute=execute,
         )
-        passed = result.returncode in {0, 130} and playwright_ui_report_passed(report)
+        passed = result.returncode in {0, 130} and playwright_ui_report_passed(
+            report, expected_specs
+        )
         entry: dict[str, object] = {
             "tested_sha": sha,
             "protocol": protocol,

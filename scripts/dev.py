@@ -1788,8 +1788,8 @@ def playwright_ui_report_passed(report: Path) -> bool:
         isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in counts
     ):
         return False
-    expected, skipped, unexpected = counts
-    return unexpected == 0 and expected + skipped > 0
+    expected, _skipped, unexpected = counts
+    return unexpected == 0 and expected > 0
 
 
 def ready_instance(item: DevPaths, *, action: str) -> tuple[str, Path, str, dict[str, str]]:

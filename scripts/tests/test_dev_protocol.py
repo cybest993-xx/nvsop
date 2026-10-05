@@ -650,6 +650,51 @@ configure_manual_test_resources(
             self.assertEqual("passed", state["last_ui"]["status"])
             self.assertEqual(130, state["last_ui"]["exit_code"])
 
+    def test_ui_sigint_with_unexpected_or_all_skipped_report_remains_failed(self) -> None:
+        cases = (
+            {"expected": 15, "skipped": 2, "unexpected": 1, "flaky": 0},
+            {"expected": 0, "skipped": 18, "unexpected": 0, "flaky": 0},
+        )
+        for stats in cases:
+            with self.subTest(stats=stats), tempfile.TemporaryDirectory() as directory:
+                item = DEV.DevPaths(root=Path(directory), state=Path(directory) / "state")
+                DEV.ensure_directories(item)
+                snapshot = item.snapshots / "sha"
+                snapshot.mkdir()
+                DEV.write_state(
+                    item,
+                    DEV.initial_state("http") | {"status": "ready", "running_sha": "sha"},
+                )
+                urls = DEV.public_urls("http")
+                report = item.reports / "ui-sha.json"
+
+                def finish_ui(
+                    *_args: object,
+                    _report: Path = report,
+                    _stats: dict[str, int] = stats,
+                    **_kwargs: object,
+                ) -> subprocess.CompletedProcess[bytes]:
+                    _report.write_text(json.dumps({"stats": _stats}), encoding="utf-8")
+                    return subprocess.CompletedProcess(["playwright"], 130)
+
+                with (
+                    patch.object(DEV, "require_setup"),
+                    patch.object(
+                        DEV,
+                        "ready_instance",
+                        return_value=("sha", snapshot, "http", urls),
+                    ),
+                    patch.object(DEV, "ensure_snapshot_node_modules"),
+                    patch.object(DEV, "run_checked", side_effect=finish_ui),
+                    self.assertRaises(DEV.DevError),
+                ):
+                    DEV.run_ui(item)
+
+                state = DEV.read_state(item)
+                self.assertIsNone(state["test"])
+                self.assertEqual("failed", state["last_ui"]["status"])
+                self.assertEqual(130, state["last_ui"]["exit_code"])
+
     def test_ui_sigint_does_not_reuse_a_stale_passing_report(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             item = DEV.DevPaths(root=Path(directory), state=Path(directory) / "state")

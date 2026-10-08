@@ -1,8 +1,8 @@
 """S020 / #198：monitor 三张镜像事实表的真实 TimescaleDB 拥有者迁移。
 
 真实 TimescaleDB 上从 0046 存量库升级到 head：存量行/查询/全局身份保留，三张 hypertable 可查
-且无压缩策略；跨分区重复与错误流序号在真实 SQL 层被复合外键拒绝；降级还原 0046 普通表且不卸载
-预装扩展。training 隔离见 ``test_training_database_topology.py``，SSE 并发见
+并启用原生压缩；跨分区重复与错误流序号在真实 SQL 层被复合外键拒绝；降级还原 0046
+普通表且不卸载预装扩展。training 隔离见 ``test_training_database_topology.py``，SSE 并发见
 ``test_monitor_streaming.py``。
 """
 
@@ -30,6 +30,7 @@ from factory_sop.monitor.adapters.tables import (
     ReportedObservationRow,
 )
 from factory_sop.monitor.errors import MonitorRefusedError
+from factory_sop.retention.api import DEFAULT_RETENTION_POLICY
 
 CONTROL_API = Path(__file__).resolve().parents[2]
 TIMESCALE_VERSION = "2.22.1"
@@ -143,7 +144,6 @@ def test_owner_migration_preserves_rows_identity_and_hypertables(
             == TIMESCALE_VERSION
         )
         assert set(FACTS) <= _hypertables(engine)
-        # 只调用 create_hypertable，不创建压缩策略（原生压缩归 S021）。
         assert tuple(
             connection.execute(
                 text(
@@ -152,7 +152,22 @@ def test_owner_migration_preserves_rows_identity_and_hypertables(
                     "WHERE proc_name = 'policy_compression')"
                 )
             ).one()
-        ) == (0, 0)
+        ) == (3, 3)
+        jobs = connection.execute(
+            text(
+                "SELECT hypertable_name, config FROM timescaledb_information.jobs "
+                "WHERE proc_name = 'policy_compression'"
+            )
+        ).all()
+        assert {job.hypertable_name for job in jobs} == set(FACTS)
+        assert all(
+            connection.scalar(
+                text("SELECT CAST(:value AS interval)"),
+                {"value": job.config["compress_after"]},
+            ).total_seconds()
+            == DEFAULT_RETENTION_POLICY.record_compression_age.seconds
+            for job in jobs
+        )
     with Session(engine) as session:
         repository = PostgresMonitorRepository(session)
         decisions = {
@@ -206,6 +221,119 @@ def test_owner_migration_preserves_rows_identity_and_hypertables(
             )
             == 1
         )
+
+
+def test_native_columnstore_preserves_reports_identity_and_sse_cursor(
+    migration: MigrationFixture,
+) -> None:
+    """S021 AC2：真实 chunk 压缩后仍可读、幂等入库，SSE 序号持续且引用身份不被删除。"""
+    engine, ids, sequences = migration.engine, migration.ids, migration.sequences
+    with engine.begin() as connection:
+        for fact in FACTS:
+            chunk = connection.scalar(text(f"SELECT tableoid::regclass::text FROM {fact} LIMIT 1"))
+            assert chunk is not None
+            connection.execute(
+                text("CALL convert_to_columnstore(CAST(:chunk AS regclass))"),
+                {"chunk": chunk},
+            )
+            assert (
+                connection.scalar(
+                    text(
+                        "SELECT count(*) FROM timescaledb_information.chunks "
+                        "WHERE hypertable_name = :name AND is_compressed"
+                    ),
+                    {"name": fact},
+                )
+                >= 1
+            )
+
+    late_id = f"s021:late:{uuid4()}"
+    with Session(engine) as session:
+        repository = PostgresMonitorRepository(session)
+        assert repository.upsert_decision(_decision(ids["decision"][0])) is False
+        assert repository.upsert_health(_health(ids["health"][0])) is False
+        assert repository.upsert_observation(_observation(ids["observation"][0])) is False
+        assert {v.report.event_id for v in repository.recent_decisions(limit=20)} >= set(
+            ids["decision"]
+        )
+        assert {v.report.event_id for v in repository.recent_health(limit=20)} >= set(ids["health"])
+        observations, _ = repository.page_observations(page=1, page_size=20)
+        assert {v.report.event_id for v in observations} >= set(ids["observation"])
+        assert repository.upsert_decision(
+            replace(_decision(late_id), received_at=LEGACY_RECEIVED_AT)
+        )
+        session.commit()
+        new_seq = repository.decision_sequence_for_event(late_id)
+        replay = tuple(
+            item.report.event_id
+            for item in repository.decisions_after_sequence(
+                after_sequence=max(sequences["decision"]), limit=20
+            )
+        )
+
+    assert new_seq is not None
+    assert new_seq > max(sequences["decision"])
+    assert replay == (late_id,)
+    with engine.connect() as connection:
+        for identity, kind in zip(IDENTITIES, ("decision", "health", "observation"), strict=True):
+            present = set(connection.execute(text(f"SELECT event_id FROM {identity}")).scalars())
+            assert present >= set(ids[kind])
+        assert (
+            connection.scalar(
+                text("SELECT count(*) FROM monitor_reported_decision WHERE event_id = :id"),
+                {"id": late_id},
+            )
+            == 1
+        )
+
+    # 已转换为 columnstore 的 chunk 在降级回 rowstore 后必须保留同一事件与序号。
+    command.downgrade(migration.configuration, "0050")
+    with engine.connect() as connection:
+        assert (
+            connection.scalar(
+                text("SELECT count(*) FROM monitor_reported_decision WHERE event_id = :id"),
+                {"id": late_id},
+            )
+            == 1
+        )
+        assert (
+            connection.scalar(
+                text("SELECT count(*) FROM monitor_decision_identity WHERE event_id = :id"),
+                {"id": late_id},
+            )
+            == 1
+        )
+    command.upgrade(migration.configuration, "head")
+
+
+def test_native_policies_use_existing_configured_age_on_upgrade(
+    migration: MigrationFixture,
+) -> None:
+    """S021 AC1：历史库已保存的策略优先于默认值，升级后即用于三个原生作业。"""
+    from factory_sop.retention.adapters.repository import PostgresRetentionPolicyRepository
+    from factory_sop.retention.api import RetentionMode, RetentionPolicyState, RetentionRule
+
+    engine, config = migration.engine, migration.configuration
+    command.downgrade(config, "0050")
+    selected = replace(
+        DEFAULT_RETENTION_POLICY,
+        record_compression_age=RetentionRule(RetentionMode.DURATION, 2 * 24 * 60 * 60),
+    )
+    with Session(engine) as session:
+        assert PostgresRetentionPolicyRepository(session).replace_if_current(
+            expected_revision=0, value=RetentionPolicyState(selected, 1)
+        )
+        session.commit()
+    command.upgrade(config, "head")
+    with engine.connect() as connection:
+        jobs = connection.execute(
+            text(
+                "SELECT hypertable_name, CAST(config ->> 'compress_after' AS interval) AS age "
+                "FROM timescaledb_information.jobs WHERE proc_name = 'policy_compression'"
+            )
+        ).all()
+    assert {job.hypertable_name for job in jobs} == set(FACTS)
+    assert all(job.age == timedelta(days=2) for job in jobs)
 
 
 def test_cross_partition_duplicate_and_wrong_sequence_are_refused(

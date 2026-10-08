@@ -113,7 +113,7 @@
 
 中心后台是**模块化单体**：业务模块在一个 FastAPI 部署单元内通过进程内接口协作，各自拥有行为、表和迁移；首版不引入内部 HTTP、服务网格、消息总线或分布式事务。
 
-首切片中心持久化只启用 PostgreSQL、Redis 与 `dataset` 训练素材持久卷；`monitor` 记录存储与压缩的当前实现状态见[证据与保留机制](mechanisms/evidence-and-retention.md)，TimescaleDB/hypertable 压缩仍是 §九 P9 的批准目标。推理机本地状态用 SQLite（§5.7），运行录像与证据媒体均留在拥有它们的推理机。
+首切片中心持久化只启用 PostgreSQL、Redis 与 `dataset` 训练素材持久卷；`monitor` 的三张 hypertable 已在 TimescaleDB 上启用原生 columnstore 压缩；策略年龄、失败观测与验证状态见[证据与保留机制](mechanisms/evidence-and-retention.md)，目标环境的规模/争用仍由 §九 P9 后置验证承担。推理机本地状态用 SQLite（§5.7），运行录像与证据媒体均留在拥有它们的推理机。
 
 **【已定目标】训练侧 `metadata_db` 与中心后台共用一个 PostgreSQL 实例，但使用两个独立 database**（Q35）：Center 使用 `nvsop`，原样复用的训练微服务使用 `training`。训练是低频活动，不值得为它单立第二个 PostgreSQL 实例及独立监控/升级流程；但两套数据所有者没有跨域 JOIN、外键或事务需求，因此不把它们压入同一个 database。Center Alembic 只迁移 `nvsop`，训练侧 DDL/迁移只作用于 `training`；运行角色只连接自己负责的 database，双方通过已批准的 HTTP/控制面 seam 协作，不用 `search_path` 或跨库直连把所有权重新耦合。
 

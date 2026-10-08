@@ -111,6 +111,34 @@ def _wait_for_listeners(engine: Engine, expected: int) -> None:
         time.sleep(0.02)
 
 
+def test_legacy_listener_wiring_exhausts_business_pool_for_real_http_queries(
+    engine: Engine,
+    constrained_monitor: tuple[str, FastAPI],
+) -> None:
+    url, app = constrained_monitor
+    factory = app.state.session_factory
+    business = factory.kw["bind"]
+    # 复现修复前的资源装配：LISTEN 从业务池长期 checkout，不依赖 mock pool。
+    sources = (
+        PostgresMonitorStreamSource(factory, business),
+        PostgresMonitorStreamSource(factory, business),
+    )
+    with httpx2.Client(base_url=url, timeout=20) as client:
+        assert client.post(SESSION_PATH, json=CREDENTIALS).status_code == 201
+        try:
+            for source in sources:
+                source.open()
+            _wait_for_listeners(engine, 2)
+            started = time.monotonic()
+            assert client.get("/api/v1/monitor/violations").status_code == 500
+            assert time.monotonic() - started < 1
+        finally:
+            for source in sources:
+                source.close()
+        _wait_for_listeners(engine, 0)
+        assert client.get("/api/v1/monitor/violations").status_code == 200
+
+
 def test_subscription_limit_preserves_queries_reports_and_recovers_after_disconnect(
     engine: Engine,
     constrained_monitor: tuple[str, FastAPI],

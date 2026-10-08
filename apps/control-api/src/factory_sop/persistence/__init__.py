@@ -17,7 +17,7 @@ from collections.abc import Callable, Iterator
 from typing import Annotated, cast
 
 from fastapi import Depends, Request
-from sqlalchemy import Engine, MetaData, create_engine
+from sqlalchemy import URL, Engine, MetaData, create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from factory_sop.settings import Settings
@@ -50,17 +50,15 @@ def register_after_commit(session: Session, action: Callable[[], None]) -> None:
     cast(list[Callable[[], None]], actions).append(action)
 
 
-def database_url(settings: Settings) -> str:
-    """Build the psycopg3 URL from resolved settings.
-
-    The password is read out of its `SecretStr` here, at the one place a connection is opened.
-    `SecretStr` renders as `**********` everywhere else, which is what keeps a credential out
-    of a traceback or a log line (§5.12).
-    """
-    return (
-        f"postgresql+psycopg://{settings.database_user}:"
-        f"{settings.database_password.get_secret_value()}@"
-        f"{settings.database_host}:{settings.database_port}/{settings.database_name}"
+def database_url(settings: Settings) -> URL:
+    """结构化传递连接字段，保留合法凭据字符；URL 默认显示隐藏密码。"""
+    return URL.create(
+        "postgresql+psycopg",
+        username=settings.database_user,
+        password=settings.database_password.get_secret_value(),
+        host=settings.database_host,
+        port=settings.database_port,
+        database=settings.database_name,
     )
 
 

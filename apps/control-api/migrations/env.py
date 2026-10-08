@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 
 from alembic import context
-from sqlalchemy import create_engine
+from sqlalchemy import URL, create_engine
 
 # Imported for the side effect of registering the tables on `Table.metadata`. `noqa: F401`
 # because nothing in this file references the names.
@@ -35,7 +35,7 @@ from factory_sop.template.adapters import tables as template_tables  # noqa: F40
 target_metadata = Table.metadata
 
 
-def _url() -> str:
+def _url() -> str | URL:
     """Resolve the URL: the configured one if a caller set it, else the environment.
 
     The integration suite sets `sqlalchemy.url` on the config object to point at its

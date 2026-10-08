@@ -88,6 +88,8 @@
 
 **SSE 授权生命周期**：建立请求时沿用普通会话认证与权限错误语义；长连接的初始快照和每个新批次发送前，由 `auth` 公开 Interface 在短 Session 内重读会话、用户状态与当前权限。周期复核不更新会话使用时间，不以保持连接延长 idle 或 absolute lifetime。注销、停用、撤权或到期后停止发送，空闲连接至迟在一个既有心跳等待周期内复核并关闭；复核故障也终止流，不继续使用旧 Caller。响应开始后的失效以关闭流表达，后续重连仍经正常认证／授权；事件身份、Last-Event-ID 和 durable replay 不变。心跳等待的实际默认值由 [SSE 用例](../../../apps/control-api/src/factory_sop/monitor/usecases.py) 拥有。
 
+**SSE 监听资源**：每个 API 进程为长订阅保留独立、有界的 PostgreSQL 监听池，不占用普通请求的业务池；在响应开始前取得配额，满额立即返回 503，不继续等待或扩大连接池。客户端断开或流异常结束时取消监听并归还配额，应用生命周期结束时释放池中连接。有限快照不占长期监听配额，事实查询仍走短业务事务；LISTEN/NOTIFY 只负责唤醒，不替代 PostgreSQL durable replay。预算由运行配置控制并设上限，为同步长流之外的普通请求保留执行余量。
+
 **机器契约按已实现的公共格式维护**：共享包 [`nvsop_contracts`](../../../packages/contracts/src/nvsop_contracts/__init__.py) 已包含 `ConfigurationBundle`、`ReportedDecision`、`ReportedHealth` 与 delegated command wire。配置束采用单一当前模型，字段所有权、摘要身份、能力门禁、历史 SQLite 迁移和其他机器契约清单由[机器契约演进](machine-contract-evolution.md)统一说明；具体 wire 仍以 [`configuration.py`](../../../packages/contracts/src/nvsop_contracts/configuration.py)、[`reports.py`](../../../packages/contracts/src/nvsop_contracts/reports.py) 与 [`commands.py`](../../../packages/contracts/src/nvsop_contracts/commands.py) 为代码权威。历史判定 v2 及旧新组合见[升级兼容说明](../../deployment/upgrade.md#中心与边缘运行时)。原设计的模板/设备信息由当前配置束表达，不另建平行 DTO；局部能力门禁不代表 ADR-0003 的所有机器接口兼容协商已经完成。
 
 **但拉取契约的作用域现在就定：按请求方主机身份裁剪。** `DeviceConfigBundle` 只含该推理机自己绑定的工位、相机、推理后端、连接器与点位，以及这些工位的运行参数生效值（§5.3 已解析，不是默认值加覆盖组两份）与物理执行权状态；不含其他推理机的任何拓扑。`TemplateBundle` 同理，只含该机绑定的模板版本。

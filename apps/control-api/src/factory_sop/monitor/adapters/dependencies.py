@@ -3,8 +3,9 @@
 from collections.abc import Iterator
 from typing import cast
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from sqlalchemy import Engine
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.orm import Session, sessionmaker
 
 from factory_sop.device.api import (
@@ -37,12 +38,19 @@ def historical_assignment_gateway() -> DeviceHistoricalAssignmentGateway:
     raise RuntimeError("monitor historical assignment dependency was not wired")
 
 
-def monitor_stream_source(request: Request) -> Iterator[MonitorStreamSource]:
-    """为 SSE 保留独立 listener；每轮事实读取由 source 自己创建并释放短 Session。"""
+def monitor_stream_source(request: Request, once: bool = False) -> Iterator[MonitorStreamSource]:
+    """长订阅先取得独立 listener 配额；有限快照不占用长期监听资源。"""
     factory = cast(sessionmaker[Session], request.app.state.session_factory)
-    engine = cast(Engine, factory.kw["bind"])
+    engine = cast(Engine, request.app.state.monitor_listener_engine)
     source = PostgresMonitorStreamSource(factory, engine)
     try:
+        if not once:
+            try:
+                source.open()
+            except PoolTimeoutError:
+                raise HTTPException(
+                    status_code=503, detail="monitor subscription limit reached"
+                ) from None
         yield source
     finally:
         source.close()

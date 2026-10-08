@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     database_name: str
     database_user: str
     database_password: SecretStr = Field(repr=False)
+    # 每进程独立 LISTEN 预算；上限为同步长流保留普通请求的线程余量。
+    monitor_max_subscriptions: int = Field(default=16, gt=0, le=32)
 
     # How long a session survives, idle and in total (§六: sessions are server-side records,
     # so both are enforced here rather than encoded in a cookie). Minutes, because that is the

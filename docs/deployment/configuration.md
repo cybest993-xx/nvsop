@@ -27,6 +27,7 @@ uvicorn --factory factory_sop.entrypoint:build
 |---|---|---|
 | 日志 | `SOP_LOG_LEVEL` | `debug/info/warning/error` |
 | PostgreSQL | `SOP_DATABASE_HOST/PORT/NAME/USER`, `SOP_DATABASE_PASSWORD_FILE` | 密码只能来自文件 |
+| SSE 订阅 | `SOP_MONITOR_MAX_SUBSCRIPTIONS` | 每个 API 进程的独立监听连接预算；默认值与上限由 Settings 拥有，超限返回 503 |
 | Session/CSRF | `SOP_SESSION_*`, `SOP_CSRF_SECRET_FILE` | absolute lifetime 不得短于 idle timeout |
 | 训练素材 | `SOP_DATASET_STORAGE_ROOT` | 必须是中心机上的绝对路径；写入经正式 API 流式完成 |
 | Redis | `SOP_REDIS_URL_FILE` | URL 必须是带主机的 `redis://` 或 `rediss://`；库号只能写在路径中（`redis://host:port/N`），URL 的 `db` 查询参数不会被读取 |
@@ -34,6 +35,8 @@ uvicorn --factory factory_sop.entrypoint:build
 | Media probe | binary、timeout | 默认开发镜像使用 `ffprobe` |
 | Annotation | backend URL、media origin、data root、timeouts | backend + media origin 成组，data root 为绝对路径 |
 | Worker | health-check interval | 由 worker 运行环境提供 |
+
+多 API 进程部署时，监听预算按进程累加；配置 PostgreSQL 总连接预算时须同时计入各进程的业务池与监听池，不能把单进程订阅上限当作集群总上限。
 
 开发 Compose 默认使用 `SOP_DEPLOYMENT_MODE=fixed_main` + `SOP_SESSION_COOKIE_TRANSPORT=allow_http`。annotation 本地入口是 `http://localhost:8444`；训练视频经同一个业务网关 `http://localhost:8443` 流式上传，不再有独立对象存储上传入口。`allow_http` 仍只允许与 `fixed_main` 联用；生产部署使用 HTTPS 安全边界。
 

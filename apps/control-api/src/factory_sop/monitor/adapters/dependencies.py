@@ -7,7 +7,11 @@ from fastapi import Request
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from factory_sop.device.api import DeviceHistoricalAssignmentGateway, DeviceHostGateway
+from factory_sop.device.api import (
+    DeviceHistoricalAssignmentGateway,
+    DeviceHostGateway,
+    DeviceMonitorGateway,
+)
 from factory_sop.monitor.adapters.repository import PostgresMonitorRepository
 from factory_sop.monitor.adapters.streaming import PostgresMonitorStreamSource
 from factory_sop.monitor.repository import MonitorRepository, MonitorStreamSource
@@ -21,6 +25,11 @@ def monitor(session: RequestSession) -> MonitorRepository:
 def host_gateway() -> DeviceHostGateway:
     """由 composition root 注入 device owner 的主机认证/归属 seam。"""
     raise RuntimeError("monitor host gateway dependency was not wired")
+
+
+def device_monitor_gateway() -> DeviceMonitorGateway:
+    """由 composition root 注入 device owner 的历史归属与主机清单 seam。"""
+    raise RuntimeError("monitor device gateway dependency was not wired")
 
 
 def historical_assignment_gateway() -> DeviceHistoricalAssignmentGateway:

@@ -21,6 +21,7 @@ def resume_station(
     template: Template,
     parameters: RuntimeParameters,
     margins: EvidenceMargins,
+    disposition_policy: str | None = None,
     clock: Callable[[], float] = monotonic,
 ) -> StationSupervisor:
     """恢复工位并结案启动前遗留的实例。"""
@@ -30,8 +31,10 @@ def resume_station(
         store=store,
         margins=margins,
         clock=clock,
+        disposition_policy=disposition_policy,
         initial_report_provenance=store.resume_report_provenance(),
     )
+    supervisor.resume_pending_disposals()
     interruption_at = state.instance.last_observation_at if state.instance is not None else None
     supervisor.interrupt(at=interruption_at)
     return supervisor

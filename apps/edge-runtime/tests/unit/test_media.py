@@ -7,10 +7,14 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from threading import Event
 from time import time
+from typing import cast
+from unittest.mock import patch
 from uuid import UUID
 
 from edge_runtime.media import (
+    DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS,
     LocalMediaCamera,
     MediaPathMode,
     MediaRuntime,
@@ -157,12 +161,29 @@ class MediaConfigurationTest(MediaFixture):
                 "preview_release_delay_seconds": 5,
                 "startup_timeout_seconds": 2,
                 "transcode_threads": 2,
+                "recording_compression_age_seconds": 7200,
                 "cameras": [],
             }
         )
 
         self.assertIsNone(configuration.mediamtx_address)
         self.assertIsNone(configuration.mediamtx_playback_address)
+        self.assertEqual(7200, configuration.recording_compression_age_seconds)
+
+    def test_recording_compression_age_defaults_and_rejects_non_positive(self) -> None:
+        # 旧短窗口配置没有该字段: 默认 24h 不要求 <= 录像窗口, 不因新字段失败。
+        self.assertEqual(
+            DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS,
+            self.configuration.recording_compression_age_seconds,
+        )
+        for value in (0, -1, True, 1.5, float("nan")):
+            with self.assertRaises(ValueError):
+                MediaRuntime(
+                    replace(
+                        self.configuration,
+                        recording_compression_age_seconds=cast(int, value),
+                    )
+                )
 
     def test_render_uses_one_stable_path_for_passthrough_and_transcode_modes(self) -> None:
         transcoded = replace(
@@ -233,6 +254,29 @@ class MediaConfigurationTest(MediaFixture):
         self.assertEqual("/usr/local/bin/mediamtx", factory.calls[0][0][0])
         self.assertEqual("/usr/bin/ffmpeg", factory.calls[1][0][0])
         runtime.close()
+
+    def test_process_recovery_failure_is_logged_and_kept_in_last_error(self) -> None:
+        runtime = MediaRuntime(self.configuration, popen=ProcessFactory([]))
+        stop = Event()
+
+        def fail_launch(_configuration: MediaRuntimeConfiguration, _rendered: str) -> None:
+            stop.set()
+            raise RuntimeError("synthetic media recovery failure")
+
+        with (
+            patch.object(runtime, "_launch", side_effect=fail_launch),
+            self.assertLogs("edge_runtime", level="ERROR") as logs,
+        ):
+            runtime._watch_processes(stop)
+
+        self.assertEqual("synthetic media recovery failure", runtime.last_error)
+        self.assertTrue(
+            any(
+                "edge.media.recovery.failed error_type=RuntimeError" in message
+                and "synthetic media recovery failure" in message
+                for message in logs.output
+            )
+        )
 
     def test_control_flow_exit_during_ffmpeg_launch_cleans_candidate_resources(self) -> None:
         camera = replace(

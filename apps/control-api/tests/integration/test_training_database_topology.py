@@ -3,7 +3,9 @@
 证据分三层：开发 Compose 只启动一套 PostgreSQL，并把训练/标注进程指向同一实例的 `training`
 database；`training-db-init` 的真实命令在隔离实例上首次建库、二次幂等且不删已有内容；真实
 PostgreSQL 上 Center Alembic 只落 `nvsop`，训练连接实际落在 `training`，且没有 `dblink` / FDW
-等跨 database 直连路径。训练对象安装与角色隔离不在本票（见 #224 / #223）。
+等跨 database 直连路径。角色权限隔离由 S065 覆盖，证据在
+`test_database_role_isolation.py`；`training` 对象安装由 S066 覆盖，证据在
+`test_training_objects_install.py`。
 """
 
 from __future__ import annotations
@@ -33,6 +35,8 @@ VENDOR_TRAINING_COMPOSE = (
     REPO_ROOT / "vendor/sop-monitoring-blueprints/microservices/sop-training-bp/docker-compose.yml"
 )
 POSTGRES_IMAGE = "postgres:17.2-bookworm"
+# 中心服务端实例自带 TimescaleDB（S020）；client-only 的建库/角色/安装服务仍是普通镜像。
+TIMESCALE_IMAGE = "timescale/timescaledb:2.22.1-pg17"
 TRAINING_PROCESS_SERVICES = (
     "sop-data-gen",
     "cosmos-reason-microservice",
@@ -84,34 +88,51 @@ def test_dev_compose_runs_one_postgres_instance_for_center_and_training() -> Non
     # 不再有第二个 PostgreSQL 服务或第二套 metadata_db。
     assert "annotation-db" not in services
     assert "metadata_db" not in services
-    postgres_services = {
-        name: service.get("image")
+    # 只有一套服务端 PostgreSQL，且已换成自带 TimescaleDB 的中心镜像；
+    # 其余 postgres: 服务都是 client-only 的一次性建库/角色/安装容器，不是第二个实例。
+    assert services["center-db"]["image"] == TIMESCALE_IMAGE
+    client_only_services = {
+        name
         for name, service in services.items()
         if str(service.get("image", "")).startswith("postgres:")
     }
-    assert postgres_services == {
-        "center-db": POSTGRES_IMAGE,
-        "training-db-init": POSTGRES_IMAGE,
+    assert client_only_services == {
+        "training-db-init",
+        # S065 的角色初始化与 S066 的对象安装也是同镜像的一次性服务，不是第二个运行实例。
+        "center-role-init",
+        "training-role-init",
+        "training-objects-install",
     }
+    for name in client_only_services:
+        assert services[name]["image"] == POSTGRES_IMAGE
 
     center_environment = cast("dict[str, str]", services["center-db"]["environment"])
     assert center_environment["POSTGRES_DB"] == "nvsop"
     assert center_environment["POSTGRES_USER"] == "nvsop"
 
     # Center 进程（含 Alembic）只连接 nvsop，且不依赖 training 初始化。
-    for name in ("center-migrate", "center-api", "center-bootstrap", "worker"):
+    # 迁移/安装用超级用户 nvsop，长期运行进程用非超级用户 nvsop_runtime（S065）。
+    runtime_services = ("center-api", "center-bootstrap", "worker")
+    for name in ("center-migrate", *runtime_services):
         environment = cast("dict[str, str]", services[name]["environment"])
         assert environment["SOP_DATABASE_NAME"] == "nvsop"
         assert "training-db-init" not in (services[name].get("depends_on") or {})
+    migrate_environment = cast("dict[str, str]", services["center-migrate"]["environment"])
+    assert migrate_environment["SOP_DATABASE_USER"] == "nvsop"
+    assert migrate_environment["SOP_DATABASE_PASSWORD_FILE"] == "/run/secrets/center-db-password"
+    for name in runtime_services:
+        environment = cast("dict[str, str]", services[name]["environment"])
+        assert environment["SOP_DATABASE_USER"] == "nvsop_runtime"
+        assert environment["SOP_DATABASE_PASSWORD_FILE"] == "/run/secrets/nvsop-runtime-password"
 
     # 训练/标注进程经 Vendor POSTGRES_* seam 连接同一实例的 training database。
     backend_environment = cast("dict[str, str]", services["annotation-backend"]["environment"])
     assert backend_environment["POSTGRES_HOST"] == "center-db"
     assert backend_environment["POSTGRES_DB"] == "training"
-    assert backend_environment["POSTGRES_USER"] == "nvsop"
-    assert services["annotation-backend"]["depends_on"]["training-db-init"]["condition"] == (
-        "service_completed_successfully"
-    )
+    assert backend_environment["POSTGRES_USER"] == "training_runtime"
+    assert services["annotation-backend"]["depends_on"]["training-objects-install"][
+        "condition"
+    ] == ("service_completed_successfully")
 
     # training database 在同一实例上幂等创建，而不是启动第二套运行数据库。
     init = services["training-db-init"]
@@ -119,6 +140,21 @@ def test_dev_compose_runs_one_postgres_instance_for_center_and_training() -> Non
     init_command = " ".join(cast("list[str]", init["command"]))
     assert "pg_database" in init_command
     assert "CREATE DATABASE training" in init_command
+
+    # S066 的对象安装在角色初始化之后、以安装身份执行，并复用 Vendor 合并 DDL。
+    install = services["training-objects-install"]
+    assert install["depends_on"]["training-role-init"]["condition"] == (
+        "service_completed_successfully"
+    )
+    assert cast("dict[str, str]", install["environment"])["PGUSER"] == "nvsop"
+    assert cast("dict[str, str]", install["environment"])["PGDATABASE"] == "training"
+    mounted = {
+        volume["target"]: volume["source"]
+        for volume in cast("list[dict[str, str]]", install["volumes"])
+    }
+    assert mounted["/opt/nvsop/training-ddl/01-init-tables.sql"].endswith(
+        "vendor/sop-monitoring-blueprints/microservices/sop-training-bp/db-init-scripts/01-init-tables.sql"
+    )
 
     # 本票只部署 annotation-backend；其余四类训练进程与第二套 metadata_db/adminer 不在此启动。
     assert "annotation-backend" in services
@@ -204,14 +240,15 @@ def test_training_db_init_command_creates_training_idempotently(tmp_path: Path) 
 def postgres_instance() -> Iterator[PostgresContainer]:
     """一套真实 PostgreSQL 实例，供 Center 与 training 共享。"""
     _require_docker()
-    container = PostgresContainer(POSTGRES_IMAGE, driver="psycopg")
+    container = PostgresContainer(TIMESCALE_IMAGE, driver="psycopg")
     container.start()
     try:
         base = make_url(container.get_connection_url())
         engine = create_engine(base, isolation_level="AUTOCOMMIT")
         with engine.connect() as connection:
-            for name in ("nvsop", "training"):
-                connection.execute(text(f'CREATE DATABASE "{name}"'))
+            connection.execute(text('CREATE DATABASE "nvsop"'))
+            # 与部署一致：training 用 template0 建库，不继承镜像装入 template1 的 TimescaleDB。
+            connection.execute(text('CREATE DATABASE "training" TEMPLATE template0'))
         engine.dispose()
         yield container
     finally:
@@ -254,6 +291,20 @@ def test_center_migration_stays_in_nvsop_and_training_connection_lands_in_traini
             nvsop_tables = _public_tables(connection)
             assert "alembic_version" in nvsop_tables
             assert nvsop_tables
+            # 中心迁移在 nvsop 安装扩展并把三张 monitor 事实表转为 hypertable。
+            assert "timescaledb" in set(
+                connection.execute(text("SELECT extname FROM pg_extension")).scalars()
+            )
+            hypertables = set(
+                connection.execute(
+                    text("SELECT hypertable_name FROM timescaledb_information.hypertables")
+                ).scalars()
+            )
+            assert {
+                "monitor_reported_decision",
+                "monitor_reported_health",
+                "monitor_observation",
+            } <= hypertables
             _assert_no_cross_database_paths(connection)
 
         with training_engine.connect() as connection:
@@ -261,6 +312,10 @@ def test_center_migration_stays_in_nvsop_and_training_connection_lands_in_traini
             assert connection.execute(text("SELECT current_database()")).scalar_one() == "training"
             assert connection.execute(text("SELECT current_schema()")).scalar_one() == "public"
             assert _public_tables(connection) == set()
+            # 中心迁移不进入 training：扩展与 hypertable 都不出现在这里。
+            assert "timescaledb" not in set(
+                connection.execute(text("SELECT extname FROM pg_extension")).scalars()
+            )
             _assert_no_cross_database_paths(connection)
     finally:
         nvsop_engine.dispose()

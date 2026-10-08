@@ -11,6 +11,12 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from factory_sop.auth.api import (
+    AuthorizationRefusedError,
+    CurrentCallerResolver,
+    Permission,
+    require_current_actor,
+)
 from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
 from factory_sop.dataset.api import (
     ArtifactExecutionOutcome,
@@ -58,6 +64,7 @@ class PostgresDatasetArtifactExecutor:
         job: ApplicationJob,
         finish_job: ArtifactJobFinisher,
         commit_transaction: ArtifactTransactionCommitter,
+        resolve_current_caller: CurrentCallerResolver,
     ) -> ArtifactExecutionResult:
         """生成制品，并在同一事务内组合数据集与任务终态。"""
         stale_object_keys: tuple[str, ...] = ()
@@ -90,6 +97,22 @@ class PostgresDatasetArtifactExecutor:
                 object_keys=stale_object_keys,
                 finish_job=finish_job,
                 commit_transaction=commit_transaction,
+            )
+
+        try:
+            require_current_actor(
+                actor_id=target.artifact.created_by,
+                permissions=(Permission.DATASET_EDIT,),
+                resolve_current_caller=resolve_current_caller,
+            )
+        except AuthorizationRefusedError as error:
+            return self._finish_failure(
+                target=target,
+                finish_job=finish_job,
+                commit_transaction=commit_transaction,
+                code=error.code.value,
+                detail="执行者已无权生成制品",
+                error=error,
             )
 
         object_key = cast(str, target.artifact.object_key)

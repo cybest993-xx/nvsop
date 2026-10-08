@@ -96,6 +96,7 @@ def test_worker_preserves_existing_uniform_timeout(
         usage_runtime=cast(Any, object()),
         artifact_executor=cast(Any, object()),
         annotation_runtime=cast(Any, object()),
+        current_caller_resolver=cast(Any, object()),
     )
 
     assert set(worker.functions) == {

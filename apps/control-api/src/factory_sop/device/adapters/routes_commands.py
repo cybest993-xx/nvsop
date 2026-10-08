@@ -22,13 +22,13 @@ from factory_sop.device.api import (
     INFERENCE_HOST_NONCE_HEADER,
     INFERENCE_HOST_SIGNATURE_HEADER,
     INFERENCE_HOST_TIMESTAMP_HEADER,
+    host_identity_from_headers,
 )
 from factory_sop.device.errors import DeviceRefusalCode
 from factory_sop.device.model import (
     ConnectorReachability,
     ConnectorTestResult,
     DeviceStatus,
-    InferenceHostIdentity,
     PendingCommand,
     PendingCommandStatus,
     PendingCommandType,
@@ -49,7 +49,6 @@ from nvsop_contracts import (
     ConnectionTestClaim,
     ConnectionTestCommand,
     ConnectionTestOutcome,
-    HostIdentityRequest,
     connection_test_claim_from_wire,
     connection_test_claim_to_wire,
     connection_test_command_from_wire,
@@ -77,33 +76,6 @@ COMMAND_LEASE_DURATION = timedelta(minutes=5)
 # 旧 bearer 头仅保留为可选兼容输入，不参与认证，也不写入中心。
 INFERENCE_HOST_TOKEN_HEADER = "X-Inference-Host-Token"
 COMMAND_CLAIM_TOKEN_HEADER = "X-Command-Claim-Token"
-
-
-def _host_identity(
-    *,
-    host_id: UUID,
-    method: str,
-    path: str,
-    body: dict[str, object] | None,
-    timestamp: str | None,
-    nonce: str | None,
-    signature: str | None,
-) -> InferenceHostIdentity:
-    """把主机身份头转换成一次待验证的签名请求。"""
-    request: HostIdentityRequest | None = None
-    if timestamp is not None and nonce is not None:
-        try:
-            request = HostIdentityRequest(
-                method=method,
-                path=path,
-                host_id=str(host_id),
-                timestamp=int(timestamp),
-                nonce=nonce,
-                body=body,
-            )
-        except (TypeError, ValueError):
-            request = None
-    return InferenceHostIdentity(host_id=host_id, request=request, signature=signature)
 
 
 class PendingCommandView(BaseModel):
@@ -290,7 +262,7 @@ def claim_next_device_command(
 ) -> ConnectionTestClaimDocument | Response:
     """按已验证的主机身份领取一条命令；无命令返回 204。"""
     del host_token
-    identity = _host_identity(
+    identity = host_identity_from_headers(
         host_id=host_id,
         method=request.method,
         path=request.url.path,
@@ -419,7 +391,7 @@ def complete_a_device_command(
 ) -> PendingCommandView:
     """用主机签名、领取令牌和租约回报结果。"""
     del host_token
-    identity = _host_identity(
+    identity = host_identity_from_headers(
         host_id=host_id,
         method=request.method,
         path=request.url.path,

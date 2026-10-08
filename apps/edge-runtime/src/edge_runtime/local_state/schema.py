@@ -12,9 +12,10 @@ one. `apply_migrations` is that rule as a function and holds no knowledge of thi
 unrelated — nothing here is shared with it, because this schema belongs to the edge and
 outlives an unreachable center.
 
-**What this ticket delivers, and what it leaves to each table's writer.** The five tables
-below are the ones whose behaviour E5.2 owns: instances, decisions, latched violations, and
-the two queues. `local_config` and `local_template_version` remain owned by the configuration
+**What this ticket delivers, and what it leaves to each table's writer.** The six tables
+below are the ones whose behaviour E5.2 and S018 own: instances, decisions, latched
+violations, the two reaction queues (reports and evidence), and the independent
+stream-health backlog. `local_config` and `local_template_version` remain owned by the configuration
 landing code. `local_disposal` is created here because connector writes and supervisor
 disposal share one durable deduplication ledger; no connector adapter may create a second
 write ledger.
@@ -301,7 +302,146 @@ _V8 = (
     "ALTER TABLE local_sop_instance ADD COLUMN close_boundary_signal TEXT",
 )
 
-MIGRATIONS: tuple[tuple[str, ...], ...] = (_V1, _V2, _V3, _V4, _V5, _V6, _V7, _V8)
+_V9 = (
+    # An observation the center has not confirmed yet. It is neither stream health nor a
+    # decision: it records what happened at the station, so it gets its own durable backlog
+    # instead of entering the decision outbox. `local_sop_instance` may not exist yet for the
+    # opening observation, so there is no foreign key; a sent row is kept so a retry's event
+    # identity stays stable, exactly as the decision queue does.
+    """
+    CREATE TABLE local_observation_queue (
+        queue_id                   INTEGER PRIMARY KEY,
+        station_id                 TEXT    NOT NULL,
+        instance_id                INTEGER NOT NULL,
+        source                     TEXT    NOT NULL,
+        signal                     TEXT    NOT NULL,
+        source_time                REAL,
+        source_anchor              REAL,
+        observed_at                REAL    NOT NULL,
+        report_host_id             TEXT    NOT NULL,
+        report_template_version_id TEXT,
+        report_template_sha256     TEXT,
+        report_backend_provenance  TEXT,
+        report_reported_at         TEXT,
+        attempts                   INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at            REAL,
+        last_error                 TEXT,
+        sent_at                    REAL
+    )
+    """,
+)
+
+_V10 = (
+    # 本机唯一的工位物理执行权事实。只存中心在成功拉取时签发的绝对到期时刻, 不存本地倒计时,
+    # 所以重启和重复/延迟到达的同一租约都不会复活一个已失效的授权 (S053)。写入边界和 S029
+    # 都读这张表, 不另建有效期。
+    """
+    CREATE TABLE local_execution_lease (
+        station_id        TEXT    PRIMARY KEY,
+        grant_id          TEXT    NOT NULL,
+        holder_host_id    TEXT    NOT NULL,
+        lease_expires_at  REAL    NOT NULL,
+        renewed_at        REAL    NOT NULL
+    )
+    """,
+)
+
+_V11 = (
+    # Stream health is observation validity, not an observation (CONTEXT.md). It gets its own
+    # durable backlog so the center mirror is at-least-once without entering the decision
+    # outbox or the observation path; a sent row is kept so a retry's event identity stays
+    # stable, exactly as the decision queue does. The frozen configuration lets the flush
+    # negotiate the health contract without waiting for a decision to do it first.
+    """
+    CREATE TABLE local_health_queue (
+        queue_id               INTEGER PRIMARY KEY,
+        station_id             TEXT    NOT NULL,
+        stream_id              TEXT,
+        status                 TEXT    NOT NULL,
+        reason_code            TEXT,
+        detail                 TEXT,
+        occurred_at            TEXT    NOT NULL,
+        source_anchor          REAL,
+        anchor_offset          REAL,
+        report_host_id         TEXT    NOT NULL,
+        report_configuration   TEXT,
+        attempts               INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at        REAL,
+        last_error             TEXT,
+        sent_at                REAL
+    )
+    """,
+)
+
+_V12 = (
+    # occurrence time belongs to the health fact; first send time is frozen independently so
+    # a retry preserves one exact wire payload without relabelling when the fact occurred.
+    "ALTER TABLE local_health_queue ADD COLUMN report_reported_at TEXT",
+    # V11 already sent health with reported_at=occurred_at. Preserve that exact payload for
+    # pending rows whose Center acknowledgement may have been lost before this upgrade.
+    """
+    UPDATE local_health_queue
+       SET report_reported_at = occurred_at
+     WHERE report_reported_at IS NULL
+    """,
+)
+
+_V13 = (
+    # 证据入队时冻结“录像墙钟映射”和来源相机路径, 使重启/重绑/删相机后仍能按当时来源切片;
+    # 纯判定窗口仍是 monotonic, 映射只属于本机媒体切片 seam。旧行这些列为 NULL, 无法安全重建,
+    # 保持待办并记录 mapping missing, 不猜成功。covered_* 是已完成产物实际覆盖窗口的交集,
+    # 用来判断请求窗口后来扩大时是否需要重切; 旧结果元数据不被清除, 直到新覆盖切片成功。
+    "ALTER TABLE local_evidence_queue ADD COLUMN wall_offset REAL",
+    "ALTER TABLE local_evidence_queue ADD COLUMN sources TEXT",
+    "ALTER TABLE local_evidence_queue ADD COLUMN media_results TEXT",
+    "ALTER TABLE local_evidence_queue ADD COLUMN covered_from REAL",
+    "ALTER TABLE local_evidence_queue ADD COLUMN covered_to REAL",
+    "ALTER TABLE local_evidence_queue ADD COLUMN sliced_at REAL",
+)
+
+_V14 = (
+    "ALTER TABLE local_disposal RENAME TO local_disposal_v13",
+    """
+    CREATE TABLE local_disposal (
+        disposal_id INTEGER PRIMARY KEY, station_id TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+        action_kind TEXT NOT NULL DEFAULT 'write_output', violation_ref TEXT,
+        violation_instance_id INTEGER, source TEXT NOT NULL DEFAULT 'connector',
+        connector_id TEXT, point_id TEXT, actor TEXT NOT NULL, requested_state TEXT,
+        result_kind TEXT, result_detail TEXT, result_at REAL, attempts INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at REAL, lease_until REAL, report_host_id TEXT, report_reported_at TEXT,
+        report_attempts INTEGER NOT NULL DEFAULT 0, report_last_attempt_at REAL,
+        report_last_error TEXT, sent_at REAL, UNIQUE (station_id, idempotency_key),
+        CHECK (attempts >= 0), CHECK ((result_kind IS NULL) = (result_at IS NULL))
+    )
+    """,
+    """
+    INSERT INTO local_disposal
+        (station_id,idempotency_key,connector_id,point_id,actor,requested_state,
+         result_kind,result_detail,result_at,attempts,last_attempt_at,lease_until)
+    SELECT station_id,idempotency_key,connector_id,point_id,actor,requested_state,
+           result_kind,result_detail,result_at,attempts,last_attempt_at,lease_until
+      FROM local_disposal_v13
+    """,
+    "DROP TABLE local_disposal_v13",
+    "CREATE INDEX local_disposal_by_connector ON local_disposal (station_id,connector_id,point_id)",
+)
+
+MIGRATIONS: tuple[tuple[str, ...], ...] = (
+    _V1,
+    _V2,
+    _V3,
+    _V4,
+    _V5,
+    _V6,
+    _V7,
+    _V8,
+    _V9,
+    _V10,
+    _V11,
+    _V12,
+    _V13,
+    _V14,
+)
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 
 

@@ -104,6 +104,92 @@ def dispatcher(
     )
 
 
+class RecordingGate:
+    """授权接缝上的替身: 它记录自己被询问了几次。"""
+
+    def __init__(self, refusal: Refused | None) -> None:
+        self.refusal_value = refusal
+        self.checked: list[str] = []
+
+    def refusal(self, request: WriteRequest, /) -> Refused | None:
+        self.checked.append(request.key)
+        return self.refusal_value
+
+
+class SequencedGate:
+    """按调用次序返回预设拒绝, 用于证明实际发送前的重新判定。"""
+
+    def __init__(self, *refusals: Refused | None) -> None:
+        self._refusals = list(refusals)
+        self.checked: list[str] = []
+
+    def refusal(self, request: WriteRequest, /) -> Refused | None:
+        self.checked.append(request.key)
+        return self._refusals.pop(0) if self._refusals else None
+
+
+class TheExecutionLeaseGatePrecedesTheDeviceTest(unittest.TestCase):
+    """§5.17: 到期/缺失的执行权先于物理写入生效, 且拒绝不占用幂等键。"""
+
+    def test_a_gate_refusal_does_not_touch_the_device(self) -> None:
+        connector = RecordingConnector()
+        ledger = InMemoryWriteLedger()
+        gate = RecordingGate(Refused(reason=WriteRefusal.EXECUTION_LEASE_EXPIRED, detail="expired"))
+        events: list[WriteAttempted] = []
+        dispatch = OutputDispatcher(
+            connector=connector, ledger=ledger, diagnostics=events.append, gate=gate
+        )
+
+        self.assertEqual(
+            Refused(reason=WriteRefusal.EXECUTION_LEASE_EXPIRED, detail="expired"),
+            dispatch.write(request()),
+        )
+        self.assertEqual([], connector.writes)
+        self.assertEqual(["disposal-7"], gate.checked)
+        self.assertIsNone(
+            ledger.outcome_for("disposal-7"),
+            "nothing was sent to the device, so authority returning must be free to proceed",
+        )
+
+    def test_authority_returning_lets_the_same_key_proceed(self) -> None:
+        connector = RecordingConnector()
+        gate = RecordingGate(Refused(reason=WriteRefusal.EXECUTION_LEASE_MISSING, detail="missing"))
+        dispatch = OutputDispatcher(
+            connector=connector,
+            ledger=InMemoryWriteLedger(),
+            diagnostics=lambda event: None,
+            gate=gate,
+        )
+        dispatch.write(request())
+
+        gate.refusal_value = None
+
+        self.assertEqual(ACCEPTED, dispatch.write(request()))
+        self.assertEqual([(INTERLOCK, PointState.ACTIVE)], connector.writes)
+
+    def test_a_terminal_recorded_outcome_is_replayed_without_asking_the_gate(self) -> None:
+        connector = RecordingConnector()
+        gate = RecordingGate(None)
+        dispatch = OutputDispatcher(
+            connector=connector,
+            ledger=InMemoryWriteLedger(),
+            diagnostics=lambda event: None,
+            gate=gate,
+        )
+        dispatch.write(request())
+        checks_after_first_write = len(gate.checked)
+
+        gate.refusal_value = Refused(reason=WriteRefusal.EXECUTION_LEASE_EXPIRED, detail="expired")
+
+        self.assertEqual(ACCEPTED, dispatch.write(request()))
+        self.assertEqual(
+            checks_after_first_write,
+            len(gate.checked),
+            "the recorded terminal outcome short-circuits before the gate is consulted again",
+        )
+        self.assertEqual([(INTERLOCK, PointState.ACTIVE)], connector.writes)
+
+
 class TheSameKeyDrivesTheDeviceOnceTest(unittest.TestCase):
     """#41: 相同幂等键重试不会重复产生物理写入意图.
 
@@ -217,6 +303,47 @@ class ASlowConnectorIsNotUsedForSafetyOutputTest(unittest.TestCase):
         self.assertEqual([], connector.writes)
 
 
+class AuthorizationIsRecheckedImmediatelyBeforeTheSendTest(unittest.TestCase):
+    """S029 AC2: 探测与账本占用后、实际发送前重新判定执行权/停写。
+
+    The probe and the durable claim can take time, and a lease can expire or a station can be
+    closed while they run. A single check at request start would cover the whole execution with
+    a stale answer; the send therefore re-checks against the local fact and, if refused, leaves
+    the claim as a retryable refusal instead of an attempt that later expires into `unknown`.
+    """
+
+    def test_authority_lost_during_the_attempt_refuses_before_the_send(self) -> None:
+        connector = RecordingConnector()
+        gate = SequencedGate(
+            None,
+            Refused(reason=WriteRefusal.EXECUTION_LEASE_EXPIRED, detail="expired"),
+        )
+        ledger = InMemoryWriteLedger()
+        events: list[WriteAttempted] = []
+        dispatch = OutputDispatcher(
+            connector=connector, ledger=ledger, diagnostics=events.append, gate=gate
+        )
+
+        expected = Refused(reason=WriteRefusal.EXECUTION_LEASE_EXPIRED, detail="expired")
+        self.assertEqual(expected, dispatch.write(request()))
+        self.assertEqual([], connector.writes)
+        self.assertEqual(
+            ["disposal-7", "disposal-7"],
+            gate.checked,
+            "the gate is consulted once before the probe/claim and once before the send",
+        )
+        self.assertEqual(
+            expected,
+            ledger.outcome_for("disposal-7"),
+            "the claim is released as a retryable refusal, never left to expire into unknown",
+        )
+        self.assertEqual(expected, events[-1].outcome)
+        self.assertFalse(events[-1].replayed)
+
+        self.assertEqual(ACCEPTED, dispatch.write(request()))
+        self.assertEqual([(INTERLOCK, PointState.ACTIVE)], connector.writes)
+
+
 class TheAdaptersOwnRefusalIsPassedThroughTest(unittest.TestCase):
     """§5.8: 断线…被保守拒绝并给出结构化原因.
 
@@ -313,6 +440,46 @@ class EveryAttemptLeavesADiagnosticEventTest(unittest.TestCase):
 
 
 class DurableLocalDisposalLedgerTest(unittest.TestCase):
+    def test_report_metadata_flows_through_sqlite_write_ledger(self) -> None:
+        import sqlite3
+        from dataclasses import replace
+
+        from edge_runtime.local_state.disposal import LocalDisposalLedger
+        from edge_runtime.local_state.schema import migrate
+        from edge_runtime.runtime import SQLiteWriteLedger
+
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        connection.row_factory = sqlite3.Row
+        migrate(connection)
+        ledger = LocalDisposalLedger(connection)
+        enriched = replace(
+            request(),
+            station_id="station-report",
+            connector_id="connector-a",
+            attempt_at=HostInstant(1.0),
+            lease_seconds=5.0,
+            violation_ref="1:wrong_step:('step-3',)",
+            violation_instance_id=1,
+            source="station_policy:stop",
+            report_host_id="host-a",
+        )
+        dispatch = OutputDispatcher(
+            connector=RecordingConnector(),
+            ledger=SQLiteWriteLedger(ledger),
+            diagnostics=lambda event: None,
+        )
+
+        self.assertEqual(ACCEPTED, dispatch.write(enriched))
+        (disposal_id,) = ledger.pending_report_ids()
+        report = ledger.report(disposal_id, reported_at="2026-10-06T00:00:00Z")
+
+        self.assertEqual("write_output", report.action_kind)
+        self.assertEqual(enriched.key, report.idempotency_key)
+        self.assertEqual(enriched.violation_ref, report.violation_ref)
+        self.assertEqual(enriched.violation_instance_id, report.instance_id)
+        self.assertEqual(enriched.source, report.source)
+        connection.close()
+
     def test_failed_result_is_retryable_but_success_closes_the_key(self) -> None:
         import sqlite3
         from dataclasses import replace

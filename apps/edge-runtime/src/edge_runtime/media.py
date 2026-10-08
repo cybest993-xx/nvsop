@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shlex
 import subprocess
@@ -18,7 +19,9 @@ from uuid import UUID
 
 from edge_runtime.configuration_values import (
     _array,
+    _boolean,
     _object,
+    _positive_integer,
     _positive_number,
     _require_keys,
 )
@@ -34,6 +37,8 @@ from edge_runtime.media_retention import (
     write_applied_window,
 )
 
+_logger = logging.getLogger("edge_runtime")
+
 
 class MediaPathMode(StrEnum):
     PASSTHROUGH = "passthrough"
@@ -43,6 +48,10 @@ class MediaPathMode(StrEnum):
 class RecordingMode(StrEnum):
     PREVIEW_ONLY = "preview_only"
     CONTINUOUS = "continuous"
+
+
+# 原始素材窗口默认 24 小时, 只在此定义一次 (§5.19); 压缩执行不在本阶段。
+DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS = 24 * 60 * 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +95,8 @@ class MediaRuntimeConfiguration:
     transcode_threads: int
     recording_window_confirmation: RecordingImpact | None
     cameras: tuple[LocalMediaCamera, ...]
+    # 已老化出原始素材窗口的分段才可被压缩归档 (§5.19); 本阶段只持有配置, 不执行压缩。
+    recording_compression_age_seconds: int = DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS
 
 
 class _Process(Protocol):
@@ -124,7 +135,7 @@ def load_media_runtime_configuration(value: object) -> MediaRuntimeConfiguration
             "transcode_threads",
             "cameras",
         },
-        optional={"recording_window_confirmation"},
+        optional={"recording_window_confirmation", "recording_compression_age_seconds"},
     )
     cameras = tuple(
         _camera(item, host_id=_string(config["host_id"], "host_id"))
@@ -137,8 +148,7 @@ def load_media_runtime_configuration(value: object) -> MediaRuntimeConfiguration
     segment = _positive_integer(
         config["record_segment_duration_seconds"], "record_segment_duration_seconds"
     )
-    if segment > recording_window:
-        raise ValueError("record_segment_duration_seconds must not exceed recording_window_seconds")
+    _validate_recording_window(recording_window, segment)
     release_delay = _non_negative_integer(
         config["preview_release_delay_seconds"], "preview_release_delay_seconds"
     )
@@ -149,12 +159,23 @@ def load_media_runtime_configuration(value: object) -> MediaRuntimeConfiguration
         if "recording_window_confirmation" in config
         else None
     )
+    compression_age = (
+        _positive_integer(
+            config["recording_compression_age_seconds"],
+            "recording_compression_age_seconds",
+        )
+        if "recording_compression_age_seconds" in config
+        else DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS
+    )
     allow_origins = tuple(
         _origin(item, "allow_origins item")
         for item in _array(config["allow_origins"], "allow_origins")
     )
     if not allow_origins:
         raise ValueError("allow_origins must not be empty")
+    media_config_path = _path(config["media_config_path"], "media_config_path")
+    if not media_config_path.name:
+        raise ValueError("media_config_path must name a file")
     configuration = MediaRuntimeConfiguration(
         host_id=_string(config["host_id"], "host_id"),
         host_status=_status(config["host_status"], "host_status"),
@@ -163,7 +184,7 @@ def load_media_runtime_configuration(value: object) -> MediaRuntimeConfiguration
             config["mediamtx_playback_address"], "mediamtx_playback_address"
         ),
         recording_window_seconds=recording_window,
-        media_config_path=_path(config["media_config_path"], "media_config_path"),
+        media_config_path=media_config_path,
         recording_directory=_path(config["recording_directory"], "recording_directory"),
         mediamtx_binary=_path(config["mediamtx_binary"], "mediamtx_binary"),
         ffmpeg_binary=_path(config["ffmpeg_binary"], "ffmpeg_binary"),
@@ -182,8 +203,8 @@ def load_media_runtime_configuration(value: object) -> MediaRuntimeConfiguration
         transcode_threads=transcode_threads,
         recording_window_confirmation=confirmation,
         cameras=cameras,
+        recording_compression_age_seconds=compression_age,
     )
-    _validate_configuration(configuration)
     return configuration
 
 
@@ -209,6 +230,14 @@ def render_mediamtx_config(
 ) -> str:
     """生成完整的 MediaMTX v1 配置, 不执行 shell 命令。"""
     _validate_configuration(configuration)
+    return _render_mediamtx_config(configuration, secret_reader=secret_reader)
+
+
+def _render_mediamtx_config(
+    configuration: MediaRuntimeConfiguration,
+    *,
+    secret_reader: SecretReader | None = None,
+) -> str:
     reader = _read_secret if secret_reader is None else secret_reader
     lines = [
         "logLevel: info",
@@ -397,10 +426,10 @@ class MediaRuntime:
                 previous_window = self._configuration.recording_window_seconds
             try:
                 _require_recording_confirmation(configuration, previous_window)
-                rendered = render_mediamtx_config(configuration)
+                rendered = _render_mediamtx_config(configuration)
                 old_configuration = self._configuration if self._started else None
                 old_rendered = (
-                    render_mediamtx_config(old_configuration)
+                    _render_mediamtx_config(old_configuration)
                     if old_configuration is not None
                     else None
                 )
@@ -450,7 +479,6 @@ class MediaRuntime:
             write_applied_window(
                 configuration.media_config_path, configuration.recording_window_seconds
             )
-            self._configuration = configuration
             self._applied_window = configuration.recording_window_seconds
             self._started = True
             return
@@ -532,12 +560,17 @@ class MediaRuntime:
                 if self._started and all(process.poll() is None for process in self._processes()):
                     continue
                 try:
-                    rendered = render_mediamtx_config(self._configuration)
+                    rendered = _render_mediamtx_config(self._configuration)
                     self._stop_processes()
                     self._launch(self._configuration, rendered)
                     self._last_error = None
                 except Exception as error:
                     self._last_error = str(error)
+                    _logger.error(
+                        "edge.media.recovery.failed error_type=%s error=%s",
+                        type(error).__name__,
+                        error,
+                    )
 
     def _processes(self) -> tuple[_Process, ...]:
         return tuple(process for process in (self._mediamtx, *self._ffmpeg) if process is not None)
@@ -568,25 +601,32 @@ def _require_recording_confirmation(
         raise ValueError("recording window impact changed; estimate it again before confirming")
 
 
+def _validate_recording_window(recording_window: int, segment: int) -> None:
+    if segment > recording_window:
+        raise ValueError("record_segment_duration_seconds must not exceed recording_window_seconds")
+
+
 def _validate_configuration(configuration: MediaRuntimeConfiguration) -> None:
-    if not configuration.host_id:
-        raise ValueError("host_id must not be empty")
-    if configuration.host_status not in {"active", "deactivated"}:
-        raise ValueError("host_status is unsupported")
-    if configuration.recording_window_seconds <= 0:
-        raise ValueError("recording_window_seconds must be positive")
-    if configuration.record_segment_duration_seconds <= 0:
-        raise ValueError("record_segment_duration_seconds must be positive")
-    if configuration.preview_release_delay_seconds < 0:
-        raise ValueError("preview_release_delay_seconds must not be negative")
-    if configuration.startup_timeout_seconds <= 0:
-        raise ValueError("startup_timeout_seconds must be positive")
-    if isinstance(configuration.transcode_threads, bool) or configuration.transcode_threads <= 0:
-        raise ValueError("transcode_threads must be positive")
+    _string(configuration.host_id, "host_id")
+    _status(configuration.host_status, "host_status")
+    _positive_integer(configuration.recording_window_seconds, "recording_window_seconds")
+    _positive_integer(
+        configuration.recording_compression_age_seconds, "recording_compression_age_seconds"
+    )
+    _positive_integer(
+        configuration.record_segment_duration_seconds, "record_segment_duration_seconds"
+    )
+    _non_negative_integer(
+        configuration.preview_release_delay_seconds, "preview_release_delay_seconds"
+    )
+    _positive_number(configuration.startup_timeout_seconds, "startup_timeout_seconds")
+    _positive_integer(configuration.transcode_threads, "transcode_threads")
     _optional_http_url(configuration.mediamtx_address, "mediamtx_address")
     _optional_http_url(configuration.mediamtx_playback_address, "mediamtx_playback_address")
-    if configuration.record_segment_duration_seconds > configuration.recording_window_seconds:
-        raise ValueError("record segment duration must not exceed recording window")
+    _validate_recording_window(
+        configuration.recording_window_seconds,
+        configuration.record_segment_duration_seconds,
+    )
     _bind_address(configuration.rtsp_bind_address, "rtsp_bind_address")
     _bind_address(configuration.webrtc_bind_address, "webrtc_bind_address")
     _bind_address(configuration.webrtc_udp_bind_address, "webrtc_udp_bind_address")
@@ -817,12 +857,6 @@ def _status(value: object, name: str) -> str:
     return value
 
 
-def _boolean(value: object, name: str) -> bool:
-    if not isinstance(value, bool):
-        raise ValueError(f"{name} must be a boolean")
-    return value
-
-
 EnumT = TypeVar("EnumT", bound=StrEnum)
 
 
@@ -831,12 +865,6 @@ def _enum(value: object, enum_type: type[EnumT], name: str) -> EnumT:
         return enum_type(_string(value, name))
     except ValueError as error:
         raise ValueError(f"{name} is unsupported") from error
-
-
-def _positive_integer(value: object, name: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{name} must be a positive integer")
-    return value
 
 
 def _non_negative_integer(value: object, name: str) -> int:
@@ -951,6 +979,7 @@ def _stream_path(value: str) -> None:
 
 
 __all__ = [
+    "DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS",
     "LocalMediaCamera",
     "MediaPathMode",
     "MediaRuntime",

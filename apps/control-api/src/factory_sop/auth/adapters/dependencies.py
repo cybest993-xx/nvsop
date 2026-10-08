@@ -18,6 +18,7 @@ from fastapi import Depends, Request
 from sqlalchemy.orm import Session, sessionmaker
 
 from factory_sop.auth.adapters.cookies import SESSION_COOKIE
+from factory_sop.auth.adapters.handover import PostgresHandoverAuthority
 from factory_sop.auth.adapters.repository import (
     PostgresRoleRepository,
     PostgresSessionRepository,
@@ -25,6 +26,7 @@ from factory_sop.auth.adapters.repository import (
 )
 from factory_sop.auth.authorization import Caller
 from factory_sop.auth.errors import AuthenticationRefusedError, RefusalCode
+from factory_sop.auth.handover import HandoverAuthority
 from factory_sop.auth.model import SessionPolicy
 from factory_sop.auth.permissions import Permission
 from factory_sop.auth.repository import RoleRepository, SessionRepository, UserRepository
@@ -71,6 +73,11 @@ def sessions(session: RequestSession) -> SessionRepository:
 def roles(session: RequestSession) -> RoleRepository:
     """`auth_role`, `auth_role_permission` and `auth_user_role` on the request's transaction."""
     return PostgresRoleRepository(session)
+
+
+def handover_authority(session: RequestSession) -> HandoverAuthority:
+    """强制改绑确认在管理锁内复核当前权限的 owner seam。"""
+    return PostgresHandoverAuthority(PostgresRoleRepository(session))
 
 
 def session_policy(request: Request) -> SessionPolicy:

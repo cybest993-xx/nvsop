@@ -16,14 +16,20 @@ from nvsop_contracts import (
 
 from edge_runtime.configuration_values import (
     _array,
+    _boolean,
     _non_empty_string,
     _object,
+    _positive_integer,
     _positive_number,
     _require_keys,
     safe_url,
 )
 from edge_runtime.connectors.hikvision import IsapiProfile
 from edge_runtime.connectors.port import PointState
+from edge_runtime.evidence_media import (
+    EvidenceMediaConfiguration,
+    load_evidence_media_configuration,
+)
 from edge_runtime.media import MediaRuntimeConfiguration, load_media_runtime_configuration
 from edge_runtime.station_runtime import (
     StationRuntimeConfiguration,
@@ -50,7 +56,6 @@ class LocalIsapiConnectorConfiguration:
     def __post_init__(self) -> None:
         if self.connector_type not in _SUPPORTED_CONNECTOR_TYPES:
             raise ValueError(f"connector_type is unsupported: {self.connector_type}")
-        safe_url(self.base_url, "connector base_url", schemes={"http", "https"})
         connector_configuration(self.base_url)
 
 
@@ -68,6 +73,7 @@ class EdgeRuntimeConfiguration:
     local_state_path: Path | None
     stations: tuple[StationRuntimeConfiguration, ...]
     media: MediaRuntimeConfiguration | None = None
+    evidence: EvidenceMediaConfiguration | None = None
 
 
 _CONFIG_KEYS = frozenset(
@@ -113,7 +119,7 @@ def load_configuration(
     raw: object = json.loads(Path(config_path).read_text(encoding="utf-8"))
     config = _object(raw, "edge runtime configuration")
     required = _CONFIG_KEYS | ({"local_state_path", "stations"} if include_stations else set())
-    _require_keys(config, required=required, optional={"center_ca_file", "media"})
+    _require_keys(config, required=required, optional={"center_ca_file", "media", "evidence"})
     connectors_value = _array(config["connectors"], "connectors")
     connectors = tuple(_local_connector(item) for item in connectors_value)
     stations: tuple[StationRuntimeConfiguration, ...] = ()
@@ -133,6 +139,11 @@ def load_configuration(
     )
     validate_host_identity_private_key(host_private_key)
     media = None if "media" not in config else load_media_runtime_configuration(config["media"])
+    evidence = (
+        None if "evidence" not in config else load_evidence_media_configuration(config["evidence"])
+    )
+    if evidence is not None and media is None:
+        raise ValueError("evidence media configuration requires the local media configuration")
     return EdgeRuntimeConfiguration(
         center_url=safe_url(config["center_url"], "center_url", schemes={"https"}),
         host_id=_non_empty_string(config["host_id"], "host_id"),
@@ -148,6 +159,7 @@ def load_configuration(
         local_state_path=local_state_path,
         stations=stations,
         media=media,
+        evidence=evidence,
     )
 
 
@@ -185,7 +197,7 @@ def _local_connector(value: object) -> LocalIsapiConnectorConfiguration:
         connector_id=_non_empty_string(config["connector_id"], "connector_id"),
         revision=_positive_integer(config["revision"], "revision"),
         credentials_configured=credentials_configured,
-        base_url=safe_url(config["base_url"], "connector base_url", schemes={"http", "https"}),
+        base_url=_non_empty_string(config["base_url"], "connector base_url"),
         username=username,
         password=password,
         profile=_profile(config["profile"]),
@@ -229,8 +241,13 @@ def _profile(value: object) -> IsapiProfile:
 
 
 def connector_configuration(base_url: str) -> dict[str, str | int]:
-    """从本地连接器 URL 生成不含凭据的中心配置快照。"""
-    safe_url(base_url, "connector base_url", schemes={"http", "https"})
+    """从外部连接器 URL 生成不含凭据的中心配置快照。"""
+    validated = safe_url(base_url, "connector base_url", schemes={"http", "https"})
+    return _connector_configuration_from_validated_url(validated)
+
+
+def _connector_configuration_from_validated_url(base_url: str) -> dict[str, str | int]:
+    """从已由冻结本地配置验证的 URL 生成中心配置快照。"""
     parsed = urlsplit(base_url)
     if parsed.hostname is None or parsed.path not in {"", "/"}:
         raise ValueError("connector base_url must not contain a path")
@@ -255,18 +272,6 @@ def _read_secret(path: Path, name: str) -> str:
 
 def _path(value: object, name: str) -> Path:
     return Path(_non_empty_string(value, name))
-
-
-def _boolean(value: object, name: str) -> bool:
-    if not isinstance(value, bool):
-        raise ValueError(f"{name} must be a boolean")
-    return value
-
-
-def _positive_integer(value: object, name: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{name} must be a positive integer")
-    return value
 
 
 def _point_state(value: object, name: str) -> PointState:

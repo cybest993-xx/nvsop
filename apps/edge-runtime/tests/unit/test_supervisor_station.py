@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from harness import (
     EXTERNAL_END,
+    EXTERNAL_START,
     IDLE_TIMEOUT,
     STEP_DEADLINE,
     STEPS,
@@ -142,6 +143,23 @@ class EveryInputReachesTheCoreAndCommitsDecisionsTest(unittest.TestCase):
             "error-proofing real-time for the most common violation kind (§5.1)",
         )
 
+    def test_stop_policy_returns_explicit_physical_disposals_for_each_violation(self) -> None:
+        supervisor = StationSupervisor(
+            store=MemoryReactionStore(),
+            state=opening_state(Ordering.ORDERED),
+            margins=MARGINS,
+            clock=FakeClock(),
+            disposition_policy="stop",
+        )
+        supervisor.receive(action(STEPS[0], at=100.0))
+
+        reaction = supervisor.receive(action(STEPS[2], at=101.0))
+
+        self.assertEqual(2, len(reaction.output_disposals))
+        self.assertEqual({"停线联锁"}, {item.target_label for item in reaction.output_disposals})
+        self.assertEqual({"active"}, {item.requested_state for item in reaction.output_disposals})
+        self.assertEqual(2, len({item.idempotency_key for item in reaction.output_disposals}))
+
     def test_multiple_normalized_events_return_the_closing_decision(
         self,
     ) -> None:
@@ -190,6 +208,58 @@ class EveryInputReachesTheCoreAndCommitsDecisionsTest(unittest.TestCase):
             "losing sight is not a conclusion. It goes on the instance's record and is "
             "read when something does conclude (§5.1)",
         )
+
+    def test_a_stream_health_fact_is_queued_for_the_center(self) -> None:
+        store = MemoryReactionStore()
+        supervisor = StationSupervisor(
+            state=opening_state(Ordering.UNORDERED),
+            store=store,
+            margins=MARGINS,
+            clock=FakeClock(),
+        )
+
+        supervisor.receive(
+            StreamHealthObserved(
+                event=StreamHealthEvent(
+                    fact=StreamFact.SOURCE_ERROR,
+                    at_monotonic=110.0,
+                    source_anchor=ANCHOR,
+                    stream_id="camera-a",
+                    detail="lost",
+                )
+            )
+        )
+
+        self.assertEqual(1, len(store.health))
+        queued = store.health[0]
+        self.assertEqual("source_error", queued["status"])
+        self.assertEqual("STREAM_LOST", queued["reason_code"])
+        self.assertEqual("camera-a", queued["stream_id"])
+        self.assertEqual("lost", queued["detail"])
+        self.assertEqual(ANCHOR, queued["source_anchor"])
+        self.assertIsNotNone(queued["occurred_at"])
+        self.assertIsNotNone(queued["anchor_offset"])
+
+    def test_an_unknown_stream_fact_is_queued_by_its_raw_value(self) -> None:
+        store = MemoryReactionStore()
+        supervisor = StationSupervisor(
+            state=opening_state(Ordering.UNORDERED),
+            store=store,
+            margins=MARGINS,
+            clock=FakeClock(),
+        )
+
+        supervisor.receive(
+            StreamHealthObserved(
+                event=StreamHealthEvent(
+                    fact="sensor_on_fire", at_monotonic=110.0, source_anchor=ANCHOR
+                )
+            )
+        )
+
+        self.assertEqual("sensor_on_fire", store.health[0]["status"])
+        self.assertIsNone(store.health[0]["reason_code"])
+        self.assertIsNone(store.health[0]["stream_id"])
 
     def test_the_returned_state_is_already_committed_once(self) -> None:
         store = MemoryReactionStore()
@@ -294,7 +364,7 @@ class MultipleBackendSourcesStayIsolatedTest(unittest.TestCase):
             )
         )
 
-        with patch.object(store, "commit", side_effect=(RuntimeError("commit failed"), None)):
+        with patch.object(store, "commit", side_effect=(RuntimeError("commit failed"), ())):
             with self.assertRaisesRegex(RuntimeError, "commit failed"):
                 supervisor.receive(arriving, report_provenance=source)
             supervisor.receive(arriving, report_provenance=source)
@@ -635,6 +705,79 @@ class OnlyTheMonotonicClockIsReadAndOnlyWhereNoInstantArrivedTest(unittest.TestC
             "the observation carries the instant it was observed at. Restamping it with "
             "the clock would measure the supervisor's own lag as the operator's pace",
         )
+
+
+class ObservationMirrorTest(unittest.TestCase):
+    """到达的归一化观测独立入队, 且只归属真实存在的实例。"""
+
+    def _supervisor(self) -> tuple[StationSupervisor, MemoryReactionStore]:
+        store = MemoryReactionStore()
+        supervisor = StationSupervisor(
+            store=store,
+            state=opening_state(Ordering.UNORDERED),
+            margins=MARGINS,
+            clock=FakeClock(),
+        )
+        return supervisor, store
+
+    def test_action_observation_is_queued_for_its_opened_instance(self) -> None:
+        supervisor, store = self._supervisor()
+
+        supervisor.receive(action(STEPS[0], at=100.0), report_provenance=backend("backend-a"))
+
+        (queued,) = store.observations
+        self.assertEqual(queued["instance_id"], 1)
+        self.assertEqual(queued["source"], "action")
+        self.assertEqual(queued["signal"], STEPS[0])
+        self.assertEqual(queued["source_time"], 100.0)
+        self.assertEqual(queued["source_anchor"], ANCHOR)
+        self.assertEqual(queued["observed_at"], 100.0)
+        self.assertEqual(queued["backend"], backend("backend-a"))
+
+    def test_external_signal_observation_has_no_stream_timeline_or_backend(self) -> None:
+        store = MemoryReactionStore()
+        supervisor = StationSupervisor(
+            store=store,
+            state=opening_state(
+                Ordering.UNORDERED,
+                start_signal=EXTERNAL_START,
+                end_signals=(EXTERNAL_END,),
+            ),
+            margins=MARGINS,
+            clock=FakeClock(),
+        )
+
+        supervisor.receive(
+            ExternalSignal(
+                signal=EXTERNAL_START, at=HostInstant(20.0), alignment=TimeAlignment.ALIGNED
+            )
+        )
+
+        (queued,) = store.observations
+        self.assertEqual(queued["source"], "external_signal")
+        self.assertIsNone(queued["source_time"])
+        self.assertIsNone(queued["source_anchor"])
+        self.assertIsNone(queued["backend"])
+
+    def test_observation_outside_any_instance_is_not_mirrored(self) -> None:
+        supervisor, store = self._supervisor()
+
+        supervisor.receive(action(STEPS[2], at=100.0))
+
+        self.assertEqual(store.observations, [])
+
+    def test_stream_health_is_not_mirrored_as_an_observation(self) -> None:
+        supervisor, store = self._supervisor()
+
+        supervisor.receive(
+            StreamHealthObserved(
+                event=StreamHealthEvent(
+                    fact=StreamFact.SOURCE_ERROR, at_monotonic=100.0, source_anchor=ANCHOR
+                )
+            )
+        )
+
+        self.assertEqual(store.observations, [])
 
 
 if __name__ == "__main__":

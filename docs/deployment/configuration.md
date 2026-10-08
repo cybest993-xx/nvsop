@@ -29,7 +29,7 @@ uvicorn --factory factory_sop.entrypoint:build
 | PostgreSQL | `SOP_DATABASE_HOST/PORT/NAME/USER`, `SOP_DATABASE_PASSWORD_FILE` | 密码只能来自文件 |
 | Session/CSRF | `SOP_SESSION_*`, `SOP_CSRF_SECRET_FILE` | absolute lifetime 不得短于 idle timeout |
 | 训练素材 | `SOP_DATASET_STORAGE_ROOT` | 必须是中心机上的绝对路径；写入经正式 API 流式完成 |
-| Redis | `SOP_REDIS_URL_FILE` | URL 必须是带主机的 `redis://` 或 `rediss://` |
+| Redis | `SOP_REDIS_URL_FILE` | URL 必须是带主机的 `redis://` 或 `rediss://`；库号只能写在路径中（`redis://host:port/N`），URL 的 `db` 查询参数不会被读取 |
 | Dataset | upload TTL、max bytes、supported codecs | codec 列表不能为空 |
 | Media probe | binary、timeout | 默认开发镜像使用 `ffprobe` |
 | Annotation | backend URL、media origin、data root、timeouts | backend + media origin 成组，data root 为绝对路径 |
@@ -68,6 +68,8 @@ NVSOP_EDGE_COMMAND_CONFIG_FILE=/etc/nvsop/edge.json \
 
 环境变量缺失会直接退出。配置文件为本机 JSON；当前中心 URL 只接受 **HTTPS**，且必须是最终地址：边缘不跟随 3xx 跳转，因为请求签名绑定原始路径。
 
+`python -m edge_runtime` 是主机进程，负责判定、处置、证据切片和**唯一的** MediaMTX 预览/录像。每台推理机的推理服务（DeepStream + DDM + vLLM）是独立容器层，按「主机 × 后端」一个 Compose project 部署；其入口、资源/端口分配与只读 secret 边界见[推理机推理服务部署](../../deploy/edge/README.md)，不要在该层另起第二个 MediaMTX 或第二套录像。
+
 **必须由进程守护自动重启。** 工位或本地状态出现未预期异常时，运行时按快速失败退出，重启后从本机 SQLite 恢复（在飞实例以 `RUN_INTERRUPTED` 结案）；中心相关线程的异常不会导致退出（见 [edge-autonomy.md](../design/mechanisms/edge-autonomy.md)）。例如 systemd：
 
 ```ini
@@ -91,7 +93,7 @@ RestartSec=2
 - `local_state_path`
 - `stations`（非空）
 
-可选：`center_ca_file`、`media`。
+可选：`center_ca_file`、`media`、`evidence`。
 
 主机私钥从文件读取并校验；连接器凭据同样留在本机 secret 文件。**当前生产入口以这份本地 JSON 作为 bootstrap/本机部署配置**。设计上的权威分工是中心拥有拓扑、模板、版本和期望运行参数，本机文件拥有本机连接信息、adapter profile 和设备秘密；不要把本机 secret 反向写入中心配置或 Git。
 
@@ -145,13 +147,26 @@ RestartSec=2
 
 能力声明是现场实测事实，不是从型号名猜出的能力。模板绑定和判定依赖能力数据；详见 [`../design/mechanisms/edge-autonomy.md`](../design/mechanisms/edge-autonomy.md)。
 
+### 本机证据切片
+
+可选 `evidence` 段启用本机证据切片；缺少它时运行时照常判定，证据待办保持 pending 而不声称成功。它复用 `media` 的录像目录与 ffmpeg：
+
+| 字段 | 含义 |
+|---|---|
+| `evidence_directory` | 本机证据目录；每个证据一个目录，含片段/关键帧/元数据并整体原子定稿 |
+| `ffprobe_binary` | 读取分段真实时长的 ffprobe |
+| `slice_timeout_seconds` | 单次 ffmpeg/ffprobe 超时 |
+| `recording_timezone`（可选） | 解析分段文件名的 IANA 时区；省略时按本机时区 |
+
+分段文件名来自 MediaMTX `recordPath`，其时间戳是 MediaMTX 进程的本机时区。**部署必须保证 MediaMTX 与边缘运行时同一时区，或用 `recording_timezone` 显式声明 MediaMTX 的时区**，否则证据窗口会错位。入队时冻结录像墙钟映射与当时参与 SOP 的连续录像相机路径，重启或改绑后历史待办仍按当时来源切片。
+
 ## 当前配置变更与同步机制
 
 `python -m edge_runtime` 仍先读取 `NVSOP_EDGE_COMMAND_CONFIG_FILE` 指向的本地 JSON。这份文件是**已实现的 bootstrap 与主机本地配置入口**：它提供中心地址、主机身份/私钥、本地推理端点与请求体、adapter profile、设备凭据、本地 SQLite 路径，以及首次无法取得中心确认配置时的自治起点；它不是中心拥有的拓扑、模板和运行参数的第二份权威。
 
 自治运行时启动后会立即通过带主机签名的 `GET /api/v1/inference-hosts/{host_id}/configuration` 拉取当前主机的配置 bundle。中心先认证主机身份，再只组装该主机的有效后端、工位、相机、连接器/点位、模板版本和运行参数。共享配置契约只有一个当前 wire 模型：严格校验核心字段、`contract_version` 与 canonical SHA-256，不维护 v1/v2/v3 运行时分支。`config_revision` 是中心签发的单调 assignment revision；`effective_sha256` 是运行语义身份；`generated_at` 与可选 `producer` 是信封元数据，不参与运行语义身份。影响 Edge 行为的新数据必须同时声明 `required_capabilities`；当前 Edge 遇到未知 capability 会显式拒绝，不静默忽略。完整字段所有权和演进规则见[机器契约演进](../design/mechanisms/machine-contract-evolution.md)。
 
-统一 Nginx 入口只对当前主机签名机器路径做显式白名单分流：主机配置拉取与已确认配置历史握手、monitor decision/health 上报、delegated command 领取/结果回报，以及模板配置确认上报。这些路径不经过浏览器 session `auth_request`，也不使用浏览器 Cookie、Authorization 或 CSRF 身份；`X-Inference-Host-ID`、timestamp、nonce、signature 则保持原请求值并由 FastAPI 的主机签名认证最终校验。固定 `main` 开发入口的权威实现是 [`../../deploy/dev/nginx.conf`](../../deploy/dev/nginx.conf)；正式部署的随仓 Nginx 配置示例是 [`nginx-annotation.conf.example`](nginx-annotation.conf.example)，两者的机器路由白名单由部署契约测试机械保持一致。其余 `/api/v1/` 管理接口仍由现有 session + CSRF + permission 边界保护，annotation 内部授权入口和媒体网关不在该白名单内。
+统一 Nginx 入口只对当前主机签名机器路径做显式白名单分流：主机配置拉取与已确认配置历史握手、monitor decision/health/observation 上报、delegated command 领取/结果回报，以及模板配置确认上报。这些路径不经过浏览器 session `auth_request`，也不使用浏览器 Cookie、Authorization 或 CSRF 身份；`X-Inference-Host-ID`、timestamp、nonce、signature 则保持原请求值并由 FastAPI 的主机签名认证最终校验。固定 `main` 开发入口的权威实现是 [`../../deploy/dev/nginx.conf`](../../deploy/dev/nginx.conf)；正式部署的随仓 Nginx 配置示例是 [`nginx-annotation.conf.example`](nginx-annotation.conf.example)，两者的机器路由白名单由部署契约测试机械保持一致。其余 `/api/v1/` 管理接口仍由现有 session + CSRF + permission 边界保护，annotation 内部授权入口和媒体网关不在该白名单内。
 
 `LocalConfigurationStore` 只持久化**实际已经生效**的 bundle。旧循环运行时，候选只完成 host scope、revision/同 revision 冲突、能力要求，以及不读取/写入 live station state 的运行配置解析；这些步骤不会前移 durable confirmed。通过纯解析的候选才请求旧循环停机；旧工位线程全部退出后，Edge 才从最新 SQLite 状态恢复 supervisor、构造候选 composition 并切换实际 runtime，最后由 `LocalConfigurationStore` 在 SQLite 单事务确认同一候选。停机后的 composition 失败会重新从原活动配置构造 runtime、记录 `local_config_failure`，并按 revision/effective digest 在当前进程隔离该候选；中心仍返回同一失败候选时只同步诊断、不再反复停掉健康工位，候选身份变化后才重新尝试。该路径不会让候选 supervisor 与仍运行的旧 supervisor 并发写同一工位状态；本地确认失败会关闭候选工位资源，不启动新 runtime 循环，随后失败退出并从最后 durable confirmed 恢复。启动时没有旧循环并发，完整装配成功后才确认；首次无确认值且中心不可达时才使用本地 bootstrap。
 

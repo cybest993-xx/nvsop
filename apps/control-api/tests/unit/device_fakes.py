@@ -382,6 +382,9 @@ class FakeInferenceBackends:
     def any_for_host(self, host_id: UUID) -> bool:
         return any(stored.host_id == host_id for stored in self.rows.values())
 
+    def for_host(self, host_id: UUID) -> list[InferenceBackend]:
+        return [backend for backend in self.rows.values() if backend.host_id == host_id]
+
     def page_of(
         self, *, page: int, page_size: int, host_id: UUID | None
     ) -> tuple[list[InferenceBackend], int]:

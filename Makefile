@@ -1,4 +1,4 @@
-.PHONY: check check-docs docs-check check-integration media-system change-size task-check ci-plan ci-tools ci-lint pr-check issue-check hooks local-clean lockfile sync policy policy-test migrations contract-base \
+.PHONY: check check-suite check-docs docs-check check-integration media-system change-size task-check ci-plan ci-tools ci-lint pr-check pr-land-status pr-land-refresh pr-land-merge pr-land-enqueue pr-land-dequeue pr-land-queue pr-land-repair-event pr-land-repair pr-land-repair-service issue-check hooks local-clean local-purge lockfile sync policy policy-test migrations contract-base \
 	contract-capability \
 	contracts contracts-python-check contracts-python-format contracts-python-lint \
 	contracts-python-type contracts-python-unit openapi-export openapi-compat openapi-generate \
@@ -7,22 +7,31 @@
 	web-install web-format web-lint web-type web-unit web-e2e web-e2e-whep web-build \
 	dev-setup dev dev-status dev-logs dev-refresh dev-smoke dev-test-ui dev-down
 
+.PHONY: annotation-lock annotation-lock-check annotation-image
+.PHONY: task-cleanup task-abandon task-session-bind
+
 LOCAL_STATE := $(CURDIR)/.nvsop
 LOCAL_CACHE := $(LOCAL_STATE)/cache
 LOCAL_ARTIFACTS := $(LOCAL_STATE)/artifacts
 LOCAL_TOOLS := $(LOCAL_STATE)/tools
 UV_PROJECT_ENVIRONMENT := $(LOCAL_STATE)/venv
-UV_CACHE_DIR := $(LOCAL_CACHE)/uv
+# 包缓存跨 worktree 复用；已安装的 editable 环境仍由当前 worktree 独占。
+UV_CACHE_DIR ?= $(or $(XDG_CACHE_HOME),$(HOME)/.cache)/uv
 export UV_PROJECT_ENVIRONMENT UV_CACHE_DIR
 export PYTHONDONTWRITEBYTECODE := 1
 export RUFF_CACHE_DIR := $(LOCAL_CACHE)/ruff
+CHECK_JOBS ?= 2
 
-# The CPU-only, Docker-free merge gate (harness §6). CI calls this exact target.
-check: lockfile sync hooks policy-test policy migrations contract-base contract-capability \
+# 安装与生成先完成，再由同一个 Make jobserver 限制检查并发。
+check: sync hooks contracts
+	+$(MAKE) --jobs=$(CHECK_JOBS) --output-sync=target check-suite
+
+# check 的内部执行阶段；单项检查继续保留自己的最小入口。
+check-suite: policy-test policy migrations contract-base contract-capability \
 	contracts-python-check \
 	boundaries secret-scan center-format center-lint center-type center-unit \
 	edge-format edge-lint edge-type edge-unit edge-integration \
-	contracts web-format web-lint web-type web-unit web-build
+	web-format web-lint web-type web-unit web-build
 
 # 文档内循环只需本机 Python 标准库和 Git；最终门禁仍使用 check-docs/check。
 docs-check:
@@ -30,7 +39,8 @@ docs-check:
 
 # 文档快线复用冻结工具、仓库政策（含 Markdown 链接）与敏感信息扫描。
 # 本地省略 HEAD 时检查从 BASE 到工作区的差异；CI 传入实际比较提交。
-check-docs: lockfile sync hooks policy secret-scan
+check-docs: sync hooks
+	+$(MAKE) policy secret-scan
 	git diff --check "$(BASE)" $(if $(HEAD),"$(HEAD)") --
 
 # Git hooks that hold for whichever agent or person commits (harness §6): the local main/dev
@@ -40,13 +50,30 @@ check-docs: lockfile sync hooks policy secret-scan
 hooks:
 	git config core.hooksPath scripts/githooks
 
-# 删除仓库明确拥有的可再生本地产物；保留 .nvsop/dev-main、本地 secrets 和未知 ignored 文件。
+# 日常只清输出；任务清理时才清除独占环境、工具和旧缓存。
 local-clean:
 	python3 scripts/clean_local_artifacts.py
 
-# The second required target (harness §6): one application plus real local infrastructure,
-# started as containers via testcontainers. `center-system` runs §5.15's acceptance scenarios.
-check-integration: sync center-integration center-system
+local-purge:
+	python3 scripts/clean_local_artifacts.py --purge
+
+task-cleanup:
+	test -n "$(PR)" && test -n "$(BRANCH)" && test -n "$(CANDIDATE)" || (echo "usage: make task-cleanup PR=<number> BRANCH=agent/<owner>/<task> CANDIDATE=<sha>" >&2; exit 2)
+	python3 scripts/cleanup_task.py --pr "$(PR)" --branch "$(BRANCH)" --candidate "$(CANDIDATE)"
+
+# 清理一个已被 accepted main 明确取代的本地任务；不扫描、不 force、不推断 supersession。
+task-abandon:
+	test -n "$(BRANCH)" && test -n "$(CANDIDATE)" && test -n "$(REPLACED_BY)" || (echo "usage: make task-abandon BRANCH=agent/<owner>/<task> CANDIDATE=<sha> REPLACED_BY=<accepted-main-sha> [PR=<closed-pr>]" >&2; exit 2)
+	python3 scripts/cleanup_task.py $(if $(strip $(PR)),--pr "$(PR)",) --branch "$(BRANCH)" --candidate "$(CANDIDATE)" --replaced-by "$(REPLACED_BY)"
+
+# 把任务 worktree 绑定到拥有它的实现会话；独占创建，不覆盖已有绑定。
+task-session-bind:
+	test -n "$(SESSION)" || (echo "usage: make task-session-bind SESSION=<resumable-id>" >&2; exit 2)
+	python3 scripts/bind_task_session.py --session "$(SESSION)"
+
+# 两个 pytest 会话分别拥有容器和缓存，不在同一数据库上并发清表。
+check-integration: sync
+	+$(MAKE) --jobs=$(CHECK_JOBS) --output-sync=target center-integration center-system
 
 # 固定 digest 的真实 MediaMTX 录像/回放证据；夹具使用独立 Compose project 并在结束时清理。
 media-system: sync
@@ -90,6 +117,45 @@ pr-check:
 	test -n "$(PR)" || (echo "usage: make pr-check PR=<number>" >&2; exit 2)
 	python3 scripts/check_pr_readiness.py "$(PR)"
 
+pr-land-status:
+	test -n "$(PR)" || (echo "usage: make pr-land-status PR=<number>" >&2; exit 2)
+	python3 scripts/land_pr.py status --pr "$(PR)"
+
+pr-land-refresh:
+	test -n "$(PR)" && test -n "$(EXPECTED_HEAD)" || (echo "usage: make pr-land-refresh PR=<number> EXPECTED_HEAD=<sha>" >&2; exit 2)
+	python3 scripts/land_pr.py refresh --pr "$(PR)" --expected-head "$(EXPECTED_HEAD)"
+
+pr-land-merge:
+	test -n "$(PR)" && test -n "$(EXPECTED_HEAD)" || (echo "usage: make pr-land-merge PR=<number> EXPECTED_HEAD=<sha>" >&2; exit 2)
+	python3 scripts/land_pr.py merge --pr "$(PR)" --expected-head "$(EXPECTED_HEAD)"
+
+# 落地队列的公开入口：入队/出队只写入持久请求，不授予授权；只读查看队列状态。
+pr-land-enqueue:
+	test -n "$(PR)" && test -n "$(EXPECTED_HEAD)" && test -n "$(ATTESTATION)" || (echo "usage: make pr-land-enqueue PR=<number> EXPECTED_HEAD=<sha> ATTESTATION=<comment-id> [REPAIR_CLAIM=<token>]" >&2; exit 2)
+	python3 scripts/landing_queue.py enqueue --pr "$(PR)" --expected-head "$(EXPECTED_HEAD)" --attestation "$(ATTESTATION)" $(if $(REPAIR_CLAIM),--repair-claim "$(REPAIR_CLAIM)")
+
+pr-land-dequeue:
+	test -n "$(PR)" || (echo "usage: make pr-land-dequeue PR=<number>" >&2; exit 2)
+	python3 scripts/landing_queue.py dequeue --pr "$(PR)"
+
+pr-land-queue:
+	python3 scripts/landing_queue.py queue
+
+# 修复派发：公开事件只读；声明经可信控制器独占接受后才由 resume 调用本地 host。
+# 默认无 host 桥 fail closed；preflight 供恢复会话在任何代码写入前重新核对事实。
+pr-land-repair-event:
+	test -n "$(PR)" || (echo "usage: make pr-land-repair-event PR=<number>" >&2; exit 2)
+	python3 scripts/landing_queue.py repair-event --pr "$(PR)"
+
+pr-land-repair:
+	test -n "$(PR)" && test -n "$(ACTION)" || (echo "usage: make pr-land-repair PR=<number> ACTION=<claim|resume|preflight> [CLAIM=<token> (resume)] [WORKTREE=<path> (preflight)] [EXPECTED_GENERATION=<64hex> (preflight)]" >&2; exit 2)
+	python3 scripts/dispatch_landing_repair.py "$(ACTION)" --pr "$(PR)" $(if $(CLAIM),--claim "$(CLAIM)") $(if $(WORKTREE),--worktree "$(WORKTREE)") $(if $(EXPECTED_GENERATION),--expected-generation "$(EXPECTED_GENERATION)")
+
+# 独立本地 repair dispatcher；默认持续扫描，ONCE=1 做一次性诊断。
+# Pi 可自动从 ~/.nvm 唯一安装解析；其它 agent 通过一个或多个绝对路径 adapter 接入。
+pr-land-repair-service:
+	python3 scripts/landing_repair_service.py $(if $(ONCE),--once) $(if $(PR),--pr "$(PR)") $(if $(INTERVAL),--interval "$(INTERVAL)") $(if $(PI_COMMAND),--pi-command "$(PI_COMMAND)") $(if $(PI_SESSION_DIR),--pi-session-dir "$(PI_SESSION_DIR)") $(foreach path,$(ADAPTER_COMMANDS),--adapter-command "$(path)")
+
 issue-check:
 	test -n "$(ISSUE)" || (echo "usage: make issue-check ISSUE=<number>" >&2; exit 2)
 	python3 scripts/check_issue_readiness.py "$(ISSUE)"
@@ -97,18 +163,30 @@ issue-check:
 UV ?= $(or $(shell command -v uv 2>/dev/null),$(HOME)/.local/bin/uv)
 
 # A dependency change and its lockfile update land together. Frozen checks refuse stale locks.
-lockfile:
+lockfile: annotation-lock-check
 	$(UV) lock --check
 
+# 标注解释器与根工作区隔离，锁由基座 requirements 和部署约束共同生成。
+annotation-lock:
+	python3 scripts/annotation_dependencies.py --uv "$(UV)" --write
+
+annotation-lock-check:
+	python3 scripts/annotation_dependencies.py --uv "$(UV)"
+
+annotation-image: sync annotation-lock-check
+	$(PYTHON) scripts/test_annotation_image.py $(if $(NVSOP_DEV_BUILD_NETWORK),--build-network "$(NVSOP_DEV_BUILD_NETWORK)")
+
 # One frozen environment for the whole gate.
-sync:
+sync: lockfile
 	$(UV) sync --frozen --all-packages
 
 VENV := $(UV_PROJECT_ENVIRONMENT)/bin
 PYTHON := $(VENV)/python
 RUFF := $(VENV)/ruff
 MYPY := $(VENV)/mypy
-PYTEST := $(VENV)/pytest -o cache_dir=$(LOCAL_CACHE)/pytest
+PYTEST_ARGS ?= --durations=20
+PYTEST = $(VENV)/pytest -o cache_dir=$(LOCAL_CACHE)/pytest/$@ \
+	--junitxml=$(LOCAL_ARTIFACTS)/pytest/$@.xml $(PYTEST_ARGS)
 CONTRACT_PY := packages/contracts
 OPENAPI := $(CONTRACT_PY)/openapi.json
 OPENAPI_BASE_REF ?= origin/main
@@ -118,7 +196,7 @@ OPENAPI_BASE_REF ?= origin/main
 # complete worktree after this target, including untracked output.
 contracts: openapi-compat openapi-generate
 
-openapi-export:
+openapi-export: sync
 	PYTHONPATH=$(CENTER)/src $(VENV)/python scripts/export_openapi.py $(OPENAPI)
 
 openapi-compat: openapi-export
@@ -158,7 +236,7 @@ contracts-python-lint:
 	$(RUFF) check --target-version py311 $(CONTRACT_PY)/src $(CONTRACT_PY)/tests
 
 contracts-python-type:
-	MYPYPATH=$(CONTRACT_PY)/src $(MYPY) --cache-dir $(LOCAL_CACHE)/mypy \
+	MYPYPATH=$(CONTRACT_PY)/src $(MYPY) --cache-dir $(LOCAL_CACHE)/mypy/$@ \
 		--python-version 3.11 --strict \
 		$(CONTRACT_PY)/src $(CONTRACT_PY)/tests
 
@@ -188,7 +266,7 @@ center-lint:
 	$(RUFF) check $(CENTER_PATHS)
 
 center-type:
-	MYPYPATH=$(CENTER)/src $(MYPY) --cache-dir $(LOCAL_CACHE)/mypy $(CENTER)/src $(CENTER)/tests
+	MYPYPATH=$(CENTER)/src $(MYPY) --cache-dir $(LOCAL_CACHE)/mypy/$@ $(CENTER)/src $(CENTER)/tests
 
 center-unit:
 	cd $(CENTER) && PYTHONPATH=src $(PYTEST) tests/unit -q
@@ -209,7 +287,7 @@ edge-lint:
 
 edge-type:
 	cd $(EDGE) && MYPYPATH=$(CURDIR)/$(CONTRACT_PY)/src $(MYPY) \
-		--cache-dir $(LOCAL_CACHE)/mypy --strict src tests
+		--cache-dir $(LOCAL_CACHE)/mypy/$@ --strict src tests
 
 edge-unit:
 	cd $(EDGE) && PYTHONPATH=$(CURDIR)/$(CONTRACT_PY)/src:src $(PYTHON) -m unittest \
@@ -234,7 +312,7 @@ web-type:
 	pnpm --filter control-web run typecheck
 
 web-unit:
-	pnpm --filter control-web run test
+	NODE_ENV=test pnpm --filter control-web run test
 
 # Browser-level evidence for SYS-22-07. CI sets PLAYWRIGHT_BRANDED=1 and installs stable Chrome
 # and Edge; a developer runs the same scenarios against Playwright's pinned Chromium.

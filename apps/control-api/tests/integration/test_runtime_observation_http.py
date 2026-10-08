@@ -57,6 +57,8 @@ from factory_sop.template.adapters.tables import TemplateStationBindingRow, Temp
 from factory_sop.template.model import TemplateStationBinding
 from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
+    HEALTH_REPORT_CAPABILITY,
+    HEALTH_REPORT_CONTRACT_VERSION,
     REPORT_CAPABILITIES_HEADER,
     SOP_INSTANCE_REPORT_CAPABILITY,
     SOP_INSTANCE_REPORT_CONTRACT_VERSION,
@@ -66,6 +68,7 @@ from nvsop_contracts import (
     ReportBackendProvenance,
     ReportedDecision,
     ReportedHealth,
+    ReportedObservation,
     ReportedSopInstance,
     ReportEvidence,
     ReportViolation,
@@ -75,6 +78,7 @@ from nvsop_contracts import (
     generate_host_identity_key_pair,
     reported_decision_to_wire,
     reported_health_to_wire,
+    reported_observation_to_wire,
     reported_sop_instance_to_wire,
     sign_host_identity_request,
 )
@@ -89,6 +93,20 @@ class RuntimeTopology:
     backend: InferenceBackend
     connector: Connector
     point: Point
+    template: TemplateFixture
+    identity: HostIdentityKeyPair
+
+
+@dataclass(frozen=True, slots=True)
+class IndependentTopology:
+    """另一台独立推理机的完整拓扑，用于证明主机裁剪不会串入他机身份。"""
+
+    host: InferenceHost
+    station: Station
+    backend: InferenceBackend
+    connector: Connector
+    point: Point
+    camera: Camera
     template: TemplateFixture
     identity: HostIdentityKeyPair
 
@@ -242,6 +260,10 @@ def runtime_topology(engine: Engine) -> Iterator[RuntimeTopology]:
                 {"host_id": str(host.id)},
             )
             connection.execute(
+                text("DELETE FROM monitor_observation WHERE host_id = :host_id"),
+                {"host_id": str(host.id)},
+            )
+            connection.execute(
                 text("DELETE FROM device_point WHERE station_id = :station_id"),
                 {"station_id": station.id},
             )
@@ -277,7 +299,7 @@ def runtime_topology(engine: Engine) -> Iterator[RuntimeTopology]:
 
 
 def _host_headers(
-    topology: RuntimeTopology,
+    topology: RuntimeTopology | IndependentTopology,
     *,
     method: str,
     path: str,
@@ -447,6 +469,182 @@ def _remove_rebound_topology(
         )
 
 
+def _register_independent_topology(engine: Engine) -> IndependentTopology:
+    """插入另一台主机及其独立工位/后端/连接器/点位/相机，供主机裁剪排除断言。"""
+    identity = generate_host_identity_key_pair()
+    actor = new_id()
+    host = InferenceHost(
+        id=new_id(),
+        name=f"HTTP 独立推理机-{new_id().hex[:8]}",
+        address="10.0.8.221",
+        mediamtx_address=None,
+        recording_window_seconds=604800,
+        disk_watermark_percent=85,
+        status=DeviceStatus.ACTIVE,
+        revision=1,
+        created_by=actor,
+        updated_by=actor,
+        created_at=NOW,
+        updated_at=NOW,
+        identity_public_key=identity.public_key,
+    )
+    station = Station(
+        id=new_id(),
+        code=f"HTTP-IND-{new_id().hex[:8]}",
+        name="HTTP 独立验收工位",
+        tags=(),
+        status=DeviceStatus.ACTIVE,
+        revision=1,
+        created_by=actor,
+        updated_by=actor,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    connector = Connector(
+        id=new_id(),
+        station_id=station.id,
+        host_id=host.id,
+        name="HTTP 独立连接器",
+        connector_type=ConnectorType.HIKVISION_ISAPI,
+        configuration=ConnectorConfiguration(address="10.0.8.222", port=80),
+        credentials_configured=False,
+        reachability=ConnectorReachability.UNVERIFIED,
+        health_detail=None,
+        capability=Unverified(),
+        status=DeviceStatus.ACTIVE,
+        revision=1,
+        created_by=actor,
+        updated_by=actor,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    point = Point(
+        id=new_id(),
+        station_id=station.id,
+        connector_id=connector.id,
+        direction=PointDirection.INPUT,
+        identifier="DI-99",
+        semantic_label="独立工件到位",
+        status=DeviceStatus.ACTIVE,
+        revision=1,
+        created_by=actor,
+        updated_by=actor,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    with DatabaseSession(engine) as session:
+        session.add(InferenceHostRow.from_domain(host))
+        session.add(StationRow.from_domain(station))
+        session.flush()
+        template = add_template_version(session, station_id=station.id, now=NOW)
+        version = session.get(TemplateVersionRow, template.version_id)
+        assert version is not None
+        session.add(
+            TemplateStationBindingRow.from_domain(
+                TemplateStationBinding(
+                    id=new_id(),
+                    station_id=station.id,
+                    desired_version_id=template.version_id,
+                    desired_sha256=version.sha256,
+                    desired_config_revision=1,
+                    revision=1,
+                    created_by=actor,
+                    updated_by=actor,
+                    created_at=NOW,
+                    updated_at=NOW,
+                )
+            )
+        )
+        backend = InferenceBackend(
+            id=new_id(),
+            host_id=host.id,
+            base_url="http://10.0.8.221:8000",
+            template_version_id=template.version_id,
+            status=DeviceStatus.ACTIVE,
+            connection_state=ConnectionState.UNVERIFIED,
+            connection_checked_at=None,
+            connection_detail=None,
+            self_reported_model_ids=("independent-model",),
+            self_reported_at=None,
+            revision=1,
+            created_by=actor,
+            updated_by=actor,
+            created_at=NOW,
+            updated_at=NOW,
+        )
+        camera = Camera(
+            id=new_id(),
+            name="HTTP 独立相机",
+            address="10.0.8.223",
+            main_stream_path="/Streaming/Channels/101",
+            sub_stream_path="/Streaming/Channels/102",
+            credentials_configured=False,
+            station_id=station.id,
+            host_id=host.id,
+            backend_id=backend.id,
+            status=DeviceStatus.ACTIVE,
+            revision=1,
+            created_by=actor,
+            updated_by=actor,
+            created_at=NOW,
+            updated_at=NOW,
+        )
+        session.add(InferenceBackendRow.from_domain(backend))
+        session.flush()
+        session.add(CameraRow.from_domain(camera))
+        session.add(ConnectorRow.from_domain(connector))
+        session.flush()
+        session.add(PointRow.from_domain(point))
+        session.commit()
+    return IndependentTopology(host, station, backend, connector, point, camera, template, identity)
+
+
+def _remove_independent_topology(engine: Engine, topology: IndependentTopology) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            text("DELETE FROM device_point WHERE station_id = :station_id"),
+            {"station_id": topology.station.id},
+        )
+        connection.execute(
+            text("DELETE FROM device_camera WHERE station_id = :station_id"),
+            {"station_id": topology.station.id},
+        )
+        connection.execute(
+            text("DELETE FROM device_connector WHERE station_id = :station_id"),
+            {"station_id": topology.station.id},
+        )
+        connection.execute(
+            text("DELETE FROM template_station_binding WHERE station_id = :station_id"),
+            {"station_id": topology.station.id},
+        )
+        connection.execute(
+            text("DELETE FROM device_inference_backend WHERE id = :backend_id"),
+            {"backend_id": topology.backend.id},
+        )
+        remove_template_versions(connection, (topology.template,))
+        connection.execute(
+            text("DELETE FROM device_station WHERE id = :station_id"),
+            {"station_id": topology.station.id},
+        )
+        connection.execute(
+            text("DELETE FROM device_configuration_assignment WHERE host_id = :host_id"),
+            {"host_id": topology.host.id},
+        )
+        connection.execute(
+            text("DELETE FROM device_inference_host WHERE id = :host_id"),
+            {"host_id": topology.host.id},
+        )
+
+
+@pytest.fixture
+def independent_topology(engine: Engine) -> Iterator[IndependentTopology]:
+    topology = _register_independent_topology(engine)
+    try:
+        yield topology
+    finally:
+        _remove_independent_topology(engine, topology)
+
+
 def test_configuration_pull_is_host_scoped_and_contains_real_point_address(
     engine: Engine, runtime_topology: RuntimeTopology, dataset_storage_root: Path
 ) -> None:
@@ -464,6 +662,71 @@ def test_configuration_pull_is_host_scoped_and_contains_real_point_address(
     assert bundle.stations[0].model_ids == ("reported-model", "reported-model-2")
     assert bundle.stations[0].points[0].address == "DI-01"
     assert bundle.stations[0].connectors[0].connector_id == str(runtime_topology.connector.id)
+
+
+def test_configuration_pull_excludes_another_host_topology(
+    engine: Engine,
+    runtime_topology: RuntimeTopology,
+    independent_topology: IndependentTopology,
+    dataset_storage_root: Path,
+) -> None:
+    settings = settings_for(engine, storage_root=dataset_storage_root)
+    own_path = f"{API_PREFIX}/inference-hosts/{runtime_topology.host.id}/configuration"
+    other_path = f"{API_PREFIX}/inference-hosts/{independent_topology.host.id}/configuration"
+    with client_for(engine, settings) as client:
+        own_response = client.get(
+            own_path, headers=_host_headers(runtime_topology, method="GET", path=own_path)
+        )
+        other_response = client.get(
+            other_path, headers=_host_headers(independent_topology, method="GET", path=other_path)
+        )
+        # 主机身份绑定路径：另一台主机的签名不能拉本机配置。
+        forged_response = client.get(
+            own_path, headers=_host_headers(independent_topology, method="GET", path=own_path)
+        )
+
+    assert own_response.status_code == 200
+    assert other_response.status_code == 200
+    assert forged_response.status_code == 401
+
+    own = configuration_from_wire(own_response.json())
+    other = configuration_from_wire(other_response.json())
+    assert own.host_id == str(runtime_topology.host.id)
+    assert other.host_id == str(independent_topology.host.id)
+
+    own_stations = {station.station_id for station in own.stations}
+    own_backends = {station.backend_id for station in own.stations}
+    own_connectors = {
+        connector.connector_id for station in own.stations for connector in station.connectors
+    }
+    own_points = {point.point_id for station in own.stations for point in station.points}
+    own_cameras = {camera.camera_id for station in own.stations for camera in station.cameras}
+
+    other_stations = {station.station_id for station in other.stations}
+    other_backends = {station.backend_id for station in other.stations}
+    other_connectors = {
+        connector.connector_id for station in other.stations for connector in station.connectors
+    }
+    other_points = {point.point_id for station in other.stations for point in station.points}
+    other_cameras = {camera.camera_id for station in other.stations for camera in station.cameras}
+
+    assert own_stations == {str(runtime_topology.station.id)}
+    assert own_backends == {str(runtime_topology.backend.id)}
+    assert own_connectors == {str(runtime_topology.connector.id)}
+    assert own_points == {str(runtime_topology.point.id)}
+    assert len(own_cameras) == 1
+
+    assert other_stations == {str(independent_topology.station.id)}
+    assert other_backends == {str(independent_topology.backend.id)}
+    assert other_connectors == {str(independent_topology.connector.id)}
+    assert other_points == {str(independent_topology.point.id)}
+    assert other_cameras == {str(independent_topology.camera.id)}
+
+    assert own_stations.isdisjoint(other_stations)
+    assert own_backends.isdisjoint(other_backends)
+    assert own_connectors.isdisjoint(other_connectors)
+    assert own_points.isdisjoint(other_points)
+    assert own_cameras.isdisjoint(other_cameras)
 
 
 def test_edge_offline_decision_flushes_after_real_center_rebind(
@@ -610,7 +873,9 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
                         path=confirm_path,
                         body=confirmed_body,
                     )
-                    confirm_headers[REPORT_CAPABILITIES_HEADER] = SOP_INSTANCE_REPORT_CAPABILITY
+                    confirm_headers[REPORT_CAPABILITIES_HEADER] = (
+                        f"{SOP_INSTANCE_REPORT_CAPABILITY},{HEALTH_REPORT_CAPABILITY}"
+                    )
                     confirmed = client.post(
                         confirm_path,
                         json=confirmed_body,
@@ -622,6 +887,7 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
                         "sop_instance_report_contract_version": (
                             SOP_INSTANCE_REPORT_CONTRACT_VERSION
                         ),
+                        "health_report_contract_version": HEALTH_REPORT_CONTRACT_VERSION,
                     }
                     body = reported_decision_to_wire(report)
                     response = client.post(
@@ -930,9 +1196,13 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
             trace_id="trace-health-integration-1",
             host_id=str(runtime_topology.host.id),
             station_id=str(runtime_topology.station.id),
+            stream_id="camera-main",
             status="future_status",
             reason_code="FUTURE_HEALTH_REASON",
             detail="synthetic health detail",
+            occurred_at="2026-09-14T01:00:00Z",
+            source_anchor=1.5,
+            anchor_offset=0.25,
             reported_at="2026-09-14T01:00:00Z",
         )
         health_body = reported_health_to_wire(health)
@@ -945,6 +1215,25 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
                 method="POST",
                 path=health_path,
                 body=health_body,
+            ),
+        )
+        invalid_health = replace(
+            health,
+            event_id=f"{runtime_topology.host.id}:health-invalid-time",
+            trace_id="trace-health-invalid-time",
+            occurred_at="invalid",
+            source_anchor=None,
+            anchor_offset=None,
+        )
+        invalid_health_body = reported_health_to_wire(invalid_health)
+        invalid_health_response = client.post(
+            health_path,
+            json=invalid_health_body,
+            headers=_host_headers(
+                runtime_topology,
+                method="POST",
+                path=health_path,
+                body=invalid_health_body,
             ),
         )
         station = bundle.stations[0]
@@ -1036,6 +1325,11 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
             f"{API_PREFIX}/monitor/stream",
             params={"once": "true"},
         )
+        stream_health = client.get(
+            f"{API_PREFIX}/monitor/stream-health",
+            params={"station_id": str(runtime_topology.station.id)},
+        )
+        host_liveness = client.get(f"{API_PREFIX}/monitor/host-liveness")
 
     assert first.status_code == 200
     assert first.json() == {"accepted": True, "duplicate": False, "event_id": report.event_id}
@@ -1047,6 +1341,7 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
         "duplicate": False,
         "event_id": health.event_id,
     }
+    assert invalid_health_response.status_code == 422
     assert instance_first.status_code == 200
     assert instance_first.json()["duplicate"] is False
     assert instance_duplicate.status_code == 200
@@ -1069,6 +1364,15 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
     assert "FUTURE_REASON" in stream.text
     assert "event: health" in stream.text
     assert health.event_id in stream.text
+    assert stream_health.status_code == 200
+    assert stream_health.json()["station_id"] == str(runtime_topology.station.id)
+    assert stream_health.json()["validity"] == "impaired"
+    assert [item["stream_id"] for item in stream_health.json()["streams"]] == ["camera-main"]
+    assert host_liveness.status_code == 200
+    assert host_liveness.json()["status"] == "available"
+    assert [item["host_id"] for item in host_liveness.json()["hosts"]] == [
+        str(runtime_topology.host.id)
+    ]
     assert "FUTURE_HEALTH_REASON" in stream.text
 
 
@@ -1133,6 +1437,70 @@ def test_reported_violation_is_archived_idempotently_and_queryable(
         "violation": violation.to_wire(),
     }
     assert datetime.fromisoformat(item["received_at"]).tzinfo is not None
+
+
+def test_reported_observation_is_mirrored_idempotently_and_queryable(
+    engine: Engine, runtime_topology: RuntimeTopology, dataset_storage_root: Path
+) -> None:
+    settings = settings_for(engine, storage_root=dataset_storage_root)
+    path = f"{API_PREFIX}/monitor/reported-observations"
+    observation = ReportedObservation(
+        event_id=f"{runtime_topology.host.id}:observation:1",
+        trace_id=f"{runtime_topology.host.id}:observation:1",
+        host_id=str(runtime_topology.host.id),
+        station_id=str(runtime_topology.station.id),
+        instance_id=41,
+        source="action",
+        signal="(1) step 1",
+        source_time=0.5,
+        source_anchor=1000.0,
+        observed_at=12.0,
+        template_version_id=str(runtime_topology.template.version_id),
+        template_sha256="a" * 64,
+        backend=ReportBackendProvenance(str(runtime_topology.backend.id), ("model-integration",)),
+        reported_at="2026-09-14T01:00:00Z",
+    )
+    body = reported_observation_to_wire(observation)
+    with client_for(engine, settings, permissions=frozenset({Permission.MONITOR_VIEW})) as client:
+        first = client.post(
+            path,
+            json=body,
+            headers=_host_headers(runtime_topology, method="POST", path=path, body=body),
+        )
+        duplicate = client.post(
+            path,
+            json=body,
+            headers=_host_headers(runtime_topology, method="POST", path=path, body=body),
+        )
+        listed = client.get(
+            f"{API_PREFIX}/monitor/observations",
+            params={
+                "station_id": str(runtime_topology.station.id),
+                "instance_id": 41,
+            },
+        )
+        other_instance = client.get(
+            f"{API_PREFIX}/monitor/observations",
+            params={
+                "station_id": str(runtime_topology.station.id),
+                "instance_id": 42,
+            },
+        )
+
+    assert first.status_code == 200
+    assert first.json() == {
+        "accepted": True,
+        "duplicate": False,
+        "event_id": observation.event_id,
+    }
+    assert duplicate.status_code == 200
+    assert duplicate.json()["duplicate"] is True
+    assert listed.status_code == 200
+    document = listed.json()
+    assert document["total"] == 1
+    assert document["items"][0] == body
+    assert other_instance.status_code == 200
+    assert other_instance.json()["total"] == 0
 
 
 def test_violation_archive_preserves_open_reason_and_derived_identity(

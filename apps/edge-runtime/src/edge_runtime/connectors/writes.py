@@ -1,6 +1,6 @@
-"""派发一次输出点写入:能力门、账本和结果记录。
+"""派发一次输出点写入:能力门、连接探测、账本和结果记录。
 
-监督器的处置派发到达继电器前必须经过能力校验、幂等账本和无条件诊断事件。适配器只报告设备结果,
+监督器的处置派发到达继电器前必须经过能力校验、连接确认、幂等账本和无条件诊断事件。适配器只报告设备结果,
 不在此处重新判定;重试策略集中写在 ``_replayable``。
 
 本模块只依赖标准库和既有契约。
@@ -20,6 +20,7 @@ from edge_runtime.connectors.port import (
     Failed,
     OutputPoint,
     PointState,
+    Reachability,
     Refused,
     WriteOutcome,
     WriteRefusal,
@@ -64,6 +65,11 @@ class WriteRequest:
     lease_seconds: float | None = None
     """持久账本必需的租约时长;物理路径不设置默认 cadence。"""
 
+    violation_ref: str | None = None
+    violation_instance_id: int | None = None
+    source: str = "connector"
+    report_host_id: str | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class WriteAttempted:
@@ -100,6 +106,20 @@ class WriteLedger(Protocol):
     def record(self, key: str, outcome: WriteOutcome, /) -> None: ...
 
 
+class WriteGate(Protocol):
+    """物理写入前必须通过的授权检查接缝。
+
+    返回 ``Refused`` 表示本次没有向设备发送任何请求, 因此不占用幂等键; 返回 None 表示放行。
+    能力声明在适配器上, 而工位级执行权/目标归属/生命周期事实在组合根绑定, 所以组合根把后者的
+    适配器注入这里。
+
+    ``OutputDispatcher`` 在探测与账本占用前调用一次, 并在实际发送前再调用一次: 租约到期、停写或
+    切换必须立即生效, 不能由请求开始时的一次检查覆盖整个执行 (S029 AC2)。
+    """
+
+    def refusal(self, request: WriteRequest, /) -> Refused | None: ...
+
+
 class InMemoryWriteLedger:
     """只覆盖一个进程生命周期的测试账本。
 
@@ -134,10 +154,12 @@ class OutputDispatcher:
         connector: Connector,
         ledger: WriteLedger,
         diagnostics: Callable[[WriteAttempted], None],
+        gate: WriteGate | None = None,
     ) -> None:
         self._connector = connector
         self._ledger = ledger
         self._diagnostics = diagnostics
+        self._gate = gate
 
     def write(self, request: WriteRequest) -> WriteOutcome:
         """驱动点位,或返回拒绝原因;结果本身就是回答,不用异常表示物理结果。
@@ -148,6 +170,13 @@ class OutputDispatcher:
         held = self._ledger.outcome_for(request.key)
         if held is not None and not _replayable(held):
             return self._note(request, held, replayed=True)
+
+        # 执行权/目标归属/生命周期先于探测与实际写入生效 (§5.17, S029)。到期/缺失/停写/目标
+        # 不属工位在每次写入时按本机事实重新判定; 拒绝不占用幂等键, 恢复后可重试。
+        if self._gate is not None:
+            refusal = self._gate.refusal(request)
+            if refusal is not None:
+                return self._note(request, refusal, replayed=False)
 
         unfitness = unfit_for(
             self._connector.capability,
@@ -171,9 +200,29 @@ class OutputDispatcher:
             # 没有请求发往设备,因此不占用幂等键,修正能力后仍可重试。
             return self._note(request, refusal, replayed=False)
 
+        # 连接确认: 只发送安全 GET (probe), 不发送物理写请求。断连在此拒绝, 不进入账本 (AC1)。
+        health = self._connector.probe(timeout=request.timeout)
+        if health.reachability is not Reachability.REACHABLE:
+            return self._note(
+                request,
+                Refused(
+                    reason=WriteRefusal.CONNECTOR_UNREACHABLE,
+                    detail=health.detail or "连接器探测未得到可达结果",
+                ),
+                replayed=False,
+            )
+
         held = self._ledger.claim(request)
         if held is not None:
             return self._note(request, held, replayed=True)
+
+        # 探测与账本占用可能耗时。实际发送前再按本机事实判定一次; 此时 claim 已占用键, 因此把
+        # 拒绝记录为可重试结果并关闭尝试租约, 不能留成 unknown (AC2)。
+        if self._gate is not None:
+            refusal = self._gate.refusal(request)
+            if refusal is not None:
+                self._ledger.record(request.key, refusal)
+                return self._note(request, refusal, replayed=False)
 
         try:
             outcome = self._connector.write(request.point, request.state, timeout=request.timeout)

@@ -8,12 +8,16 @@ from unittest.mock import patch
 import httpx2
 from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
+    HEALTH_REPORT_CAPABILITY,
+    HEALTH_REPORT_CONTRACT_VERSION,
     REPORT_CAPABILITIES_HEADER,
     SOP_INSTANCE_REPORT_CAPABILITY,
     SOP_INSTANCE_REPORT_CONTRACT_VERSION,
     ConfigurationBundle,
     ReportBackendProvenance,
     ReportedDecision,
+    ReportedHealth,
+    ReportedObservation,
     ReportEvidence,
 )
 
@@ -23,6 +27,7 @@ from edge_runtime.reporting_transport import HttpDecisionReportTransport, Report
 _HANDSHAKE_OK = {
     "decision_report_contract_version": DECISION_REPORT_CONTRACT_VERSION,
     "sop_instance_report_contract_version": SOP_INSTANCE_REPORT_CONTRACT_VERSION,
+    "health_report_contract_version": HEALTH_REPORT_CONTRACT_VERSION,
 }
 
 
@@ -79,6 +84,23 @@ def v2_report(bundle: ConfigurationBundle) -> ReportedDecision:
     )
 
 
+def health_report() -> ReportedHealth:
+    return ReportedHealth(
+        event_id="host-a:health:1",
+        trace_id="host-a:health:1",
+        host_id="host-a",
+        station_id="station-a",
+        stream_id="camera-a",
+        status="source_error",
+        reason_code="STREAM_LOST",
+        detail=None,
+        occurred_at="2026-09-16T00:00:00Z",
+        source_anchor=None,
+        anchor_offset=None,
+        reported_at="2026-09-16T00:00:00Z",
+    )
+
+
 class ReportCompatibilityTests(unittest.TestCase):
     def setUp(self) -> None:
         signing = patch(
@@ -103,6 +125,32 @@ class ReportCompatibilityTests(unittest.TestCase):
             transport=httpx2.MockTransport(record),
         )
         return HttpDecisionReportTransport(client=client, host_id="host-a")
+
+    def test_observation_report_posts_without_a_handshake(self) -> None:
+        report = ReportedObservation(
+            event_id="host-a:observation:1",
+            trace_id="host-a:observation:1",
+            host_id="host-a",
+            station_id="station-a",
+            instance_id=1,
+            source="action",
+            signal="(1) step 1",
+            source_time=0.5,
+            source_anchor=100.0,
+            observed_at=12.0,
+            template_version_id=None,
+            template_sha256=None,
+            backend=None,
+            reported_at="2026-09-16T00:00:00Z",
+        )
+
+        self.transport(lambda _: httpx2.Response(200, json={})).send_observation(report)
+
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(self.requests[0].url.path, "/api/v1/monitor/reported-observations")
+        body = json.loads(self.requests[0].content.decode("utf-8"))
+        self.assertEqual(body["event_id"], report.event_id)
+        self.assertEqual(body["source"], "action")
 
     def test_v1_report_keeps_old_wire_path_without_handshake(self) -> None:
         self.transport(lambda _: httpx2.Response(200, json={})).send_decision(
@@ -135,7 +183,7 @@ class ReportCompatibilityTests(unittest.TestCase):
         self.assertTrue(self.requests[0].url.path.endswith("/confirmed-configuration"))
         self.assertEqual(
             self.requests[0].headers[REPORT_CAPABILITIES_HEADER],
-            SOP_INSTANCE_REPORT_CAPABILITY,
+            f"{SOP_INSTANCE_REPORT_CAPABILITY},{HEALTH_REPORT_CAPABILITY}",
         )
         self.assertEqual(self.requests[1].url.path, "/api/v1/monitor/reported-decisions")
         self.assertEqual(self.requests[2].url.path, "/api/v1/monitor/reported-decisions")
@@ -163,6 +211,30 @@ class ReportCompatibilityTests(unittest.TestCase):
 
         self.assertEqual(len(self.requests), 1)
         self.assertTrue(self.requests[0].url.path.endswith("/confirmed-configuration"))
+
+    def test_health_report_negotiates_the_health_contract_before_posting(self) -> None:
+        bundle = configuration()
+        responses = iter(
+            (
+                httpx2.Response(200, json=_HANDSHAKE_OK),
+                httpx2.Response(200, json={}),
+            )
+        )
+        transport = self.transport(lambda _: next(responses))
+
+        transport.send_health(health_report(), configuration=bundle)
+
+        self.assertEqual(len(self.requests), 2)
+        self.assertTrue(self.requests[0].url.path.endswith("/confirmed-configuration"))
+        self.assertEqual(self.requests[1].url.path, "/api/v1/monitor/health")
+
+    def test_health_report_without_a_frozen_configuration_posts_directly(self) -> None:
+        transport = self.transport(lambda _: httpx2.Response(200, json={}))
+
+        transport.send_health(health_report(), configuration=None)
+
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(self.requests[0].url.path, "/api/v1/monitor/health")
 
 
 if __name__ == "__main__":

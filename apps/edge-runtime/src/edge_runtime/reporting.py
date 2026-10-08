@@ -5,13 +5,16 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
     ConfigurationBundle,
     ReportBackendProvenance,
     ReportedDecision,
+    ReportedDisposal,
+    ReportedHealth,
+    ReportedObservation,
     ReportedSopInstance,
     ReportEvidence,
     ReportViolation,
@@ -20,6 +23,8 @@ from nvsop_contracts import (
 
 from edge_runtime.judgment.model import Decision, HostInstant, Lifecycle
 from edge_runtime.local_state import (
+    PendingHealthReport,
+    PendingObservationReport,
     PendingReport,
     PendingSopInstanceReport,
     ReportContext,
@@ -35,12 +40,26 @@ class DecisionReportTransport(Protocol):
         configuration: ConfigurationBundle | None,
     ) -> None: ...
 
+    def send_health(
+        self,
+        report: ReportedHealth,
+        *,
+        configuration: ConfigurationBundle | None,
+    ) -> None: ...
+
+    def send_observation(self, report: ReportedObservation) -> None: ...
+
     def send_instance(
         self,
         report: ReportedSopInstance,
         *,
         configuration: ConfigurationBundle | None,
     ) -> None: ...
+
+
+@runtime_checkable
+class DisposalReportTransport(Protocol):
+    def send_disposal(self, report: ReportedDisposal) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +91,16 @@ class HostReportReconciler:
         should_stop: Callable[[], bool] | None = None,
     ) -> tuple[ReportAttempt, ...]:
         attempts: list[ReportAttempt] = []
+        attempts.extend(
+            self._flush_observations(
+                now=now, reported_at=reported_at, limit=limit, should_stop=should_stop
+            )
+        )
+        attempts.extend(
+            self._flush_health(
+                now=now, reported_at=reported_at, limit=limit, should_stop=should_stop
+            )
+        )
         for queue_id in self._reports.pending_ids(limit=limit):
             if should_stop is not None and should_stop():
                 break
@@ -184,7 +213,209 @@ class HostReportReconciler:
                     event_id=decision_report.event_id,
                 )
             )
+        attempts.extend(
+            self._flush_disposals(
+                now=now, reported_at=reported_at, limit=limit, should_stop=should_stop
+            )
+        )
         return tuple(attempts)
+
+    def _flush_observations(
+        self,
+        *,
+        now: HostInstant,
+        reported_at: str,
+        limit: int | None,
+        should_stop: Callable[[], bool] | None,
+    ) -> list[ReportAttempt]:
+        """排空观测积压; 它不是判定, 失败只影响本条并继续重试。"""
+        attempts: list[ReportAttempt] = []
+        for queue_id in self._reports.pending_observation_ids(limit=limit):
+            if should_stop is not None and should_stop():
+                break
+            try:
+                pending = self._reports.pending_observation_item(queue_id)
+            except Exception as error:
+                message = f"{type(error).__name__}: {error}"[:255]
+                self._reports.record_observation_failure(queue_id, at=now, error=message)
+                attempts.append(
+                    ReportAttempt(
+                        queue_id=queue_id,
+                        sent=False,
+                        event_id=f"observation:{queue_id}",
+                        error=message,
+                    )
+                )
+                continue
+            try:
+                stable_reported_at = pending.reported_at
+                if stable_reported_at is None:
+                    stable_reported_at = self._reports.freeze_observation_reported_at(
+                        pending.queue_id, candidate=reported_at
+                    )
+                report = reported_observation_from_pending(pending, reported_at=stable_reported_at)
+            except Exception as error:
+                message = f"{type(error).__name__}: {error}"[:255]
+                self._reports.record_observation_failure(pending.queue_id, at=now, error=message)
+                attempts.append(
+                    ReportAttempt(
+                        queue_id=pending.queue_id,
+                        sent=False,
+                        event_id=f"observation:{pending.queue_id}",
+                        error=message,
+                    )
+                )
+                continue
+            try:
+                self._transport.send_observation(report)
+            except Exception as error:
+                message = f"{type(error).__name__}: {error}"[:255]
+                self._reports.record_observation_failure(pending.queue_id, at=now, error=message)
+                attempts.append(
+                    ReportAttempt(
+                        queue_id=pending.queue_id,
+                        sent=False,
+                        event_id=report.event_id,
+                        error=message,
+                    )
+                )
+                continue
+            self._reports.mark_observation_reported(pending.queue_id, at=now)
+            attempts.append(
+                ReportAttempt(queue_id=pending.queue_id, sent=True, event_id=report.event_id)
+            )
+        return attempts
+
+    def _flush_disposals(
+        self,
+        *,
+        now: HostInstant,
+        reported_at: str,
+        limit: int | None,
+        should_stop: Callable[[], bool] | None,
+    ) -> list[ReportAttempt]:
+        attempts: list[ReportAttempt] = []
+        for disposal_id in self._reports.pending_disposal_ids(limit=limit):
+            if should_stop is not None and should_stop():
+                break
+            event_id = f"disposal:{disposal_id}"
+            try:
+                if not isinstance(self._transport, DisposalReportTransport):
+                    raise TypeError("report transport does not support disposal reporting")
+                report = self._reports.disposal_report(disposal_id, reported_at=reported_at)
+                event_id = report.event_id
+                self._transport.send_disposal(report)
+            except Exception as error:
+                message = f"{type(error).__name__}: {error}"[:255]
+                self._reports.record_disposal_failure(disposal_id, at=now, error=message)
+                attempts.append(ReportAttempt(disposal_id, False, event_id, message))
+                continue
+            self._reports.mark_disposal_reported(disposal_id, at=now)
+            attempts.append(ReportAttempt(disposal_id, True, event_id))
+        return attempts
+
+    def _flush_health(
+        self,
+        *,
+        now: HostInstant,
+        reported_at: str,
+        limit: int | None,
+        should_stop: Callable[[], bool] | None,
+    ) -> list[ReportAttempt]:
+        """排空流健康积压; 它不是判定, 失败只影响本条并继续重试。"""
+        attempts: list[ReportAttempt] = []
+        for queue_id in self._reports.pending_health_ids(limit=limit):
+            if should_stop is not None and should_stop():
+                break
+            try:
+                pending = self._reports.pending_health_item(queue_id)
+                stable_reported_at = pending.reported_at
+                if stable_reported_at is None:
+                    stable_reported_at = self._reports.freeze_health_reported_at(
+                        pending.queue_id, candidate=reported_at
+                    )
+                report = reported_health_from_pending(pending, reported_at=stable_reported_at)
+            except Exception as error:
+                message = f"{type(error).__name__}: {error}"[:255]
+                self._reports.record_health_failure(queue_id, at=now, error=message)
+                attempts.append(
+                    ReportAttempt(
+                        queue_id=queue_id,
+                        sent=False,
+                        event_id=f"health:{queue_id}",
+                        error=message,
+                    )
+                )
+                continue
+            try:
+                self._transport.send_health(
+                    report,
+                    configuration=_configuration_from_json(pending.configuration_json),
+                )
+            except Exception as error:
+                message = f"{type(error).__name__}: {error}"[:255]
+                self._reports.record_health_failure(queue_id, at=now, error=message)
+                attempts.append(
+                    ReportAttempt(
+                        queue_id=queue_id,
+                        sent=False,
+                        event_id=f"health:{queue_id}",
+                        error=message,
+                    )
+                )
+                continue
+            self._reports.mark_health_reported(queue_id, at=now)
+            attempts.append(ReportAttempt(queue_id=queue_id, sent=True, event_id=report.event_id))
+        return attempts
+
+
+def reported_observation_from_pending(
+    pending: PendingObservationReport, *, reported_at: str
+) -> ReportedObservation:
+    """映射一条本地持久观测; 中心只归档产生时内容, 不重新判定。"""
+    event_id = f"{pending.host_id}:observation:{pending.queue_id}"
+    backend = pending.backend
+    return ReportedObservation(
+        event_id=event_id,
+        trace_id=event_id,
+        host_id=pending.host_id,
+        station_id=pending.station_id,
+        instance_id=pending.instance_id,
+        source=pending.source,
+        signal=pending.signal,
+        source_time=pending.source_time,
+        source_anchor=pending.source_anchor,
+        observed_at=pending.observed_at,
+        template_version_id=pending.template_version_id,
+        template_sha256=pending.template_sha256,
+        backend=(
+            None
+            if backend is None
+            else ReportBackendProvenance(backend_id=backend.backend_id, model_ids=backend.model_ids)
+        ),
+        reported_at=reported_at,
+    )
+
+
+def reported_health_from_pending(
+    pending: PendingHealthReport, *, reported_at: str
+) -> ReportedHealth:
+    """映射本地持久健康事实; 发生时刻与首次发送时刻各保留其原义。"""
+    event_id = f"{pending.host_id}:health:{pending.queue_id}"
+    return ReportedHealth(
+        event_id=event_id,
+        trace_id=event_id,
+        host_id=pending.host_id,
+        station_id=pending.station_id,
+        stream_id=pending.stream_id,
+        status=pending.status,
+        reason_code=pending.reason_code,
+        detail=pending.detail,
+        occurred_at=pending.occurred_at,
+        source_anchor=pending.source_anchor,
+        anchor_offset=pending.anchor_offset,
+        reported_at=reported_at,
+    )
 
 
 def reported_decision_from_pending(
@@ -269,13 +500,9 @@ def _configuration_from_context(context: ReportContext | None) -> ConfigurationB
     raw = context.configuration_json
     if raw is None:
         raise ValueError("historical report has no frozen confirmed configuration")
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError as error:
-        raise ValueError("frozen confirmed configuration is invalid JSON") from error
-    if not isinstance(value, Mapping):
-        raise ValueError("frozen confirmed configuration is not an object")
-    bundle = configuration_from_wire(value)
+    bundle = _configuration_from_json(raw)
+    if bundle is None:
+        raise ValueError("historical report has no frozen confirmed configuration")
     if (
         bundle.host_id != context.host_id
         or bundle.config_revision != context.configuration_revision
@@ -283,6 +510,19 @@ def _configuration_from_context(context: ReportContext | None) -> ConfigurationB
     ):
         raise ValueError("frozen confirmed configuration does not match report proof")
     return bundle
+
+
+def _configuration_from_json(raw: str | None) -> ConfigurationBundle | None:
+    """把一行上报里冻结的确认配置解码回来; 没有冻结配置时不协商。"""
+    if raw is None:
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise ValueError("frozen confirmed configuration is invalid JSON") from error
+    if not isinstance(value, Mapping):
+        raise ValueError("frozen confirmed configuration is not an object")
+    return configuration_from_wire(value)
 
 
 def reported_instance_from_pending(
@@ -357,6 +597,8 @@ __all__ = [
     "HostReportReconciler",
     "ReportAttempt",
     "reported_decision_from_pending",
+    "reported_health_from_pending",
     "reported_instance_from_pending",
+    "reported_observation_from_pending",
     "reported_open_instance_from_pending",
 ]

@@ -19,6 +19,8 @@ from contextlib import AbstractContextManager
 from threading import RLock
 from typing import Protocol
 
+from nvsop_contracts import ReportedDisposal
+
 from edge_runtime.judgment.evidence import EvidenceClip
 from edge_runtime.judgment.model import (
     Decision,
@@ -41,9 +43,18 @@ from edge_runtime.local_state.codec import (
 )
 from edge_runtime.local_state.codec import violation as decode_violation
 from edge_runtime.local_state.configuration import LocalConfigurationStore
-from edge_runtime.local_state.disposal import LocalDisposalLedger
+from edge_runtime.local_state.disposal import (
+    LocalDisposalIntent,
+    LocalDisposalLedger,
+    LocalDisposalRequest,
+    StoredDisposalResult,
+)
+from edge_runtime.local_state.execution import LocalExecutionLeaseStore
 from edge_runtime.local_state.queues import (
     BackendReportContext,
+    EvidenceSource,
+    PendingHealthReport,
+    PendingObservationReport,
     PendingReport,
     PendingSopInstanceReport,
     ReportContext,
@@ -53,7 +64,10 @@ from edge_runtime.local_state.schema import migrate
 
 
 class ReactionStore(Protocol):
-    """supervisor 提交一次完整反应的接缝; 实现必须全部提交或全部回滚。"""
+    """supervisor 提交一次完整反应的接缝; 实现必须全部提交或全部回滚。
+
+    归一化观测与流健康事实不属于反应: 它们在同一工位作用域下独立持久化, 因此单独的方法。
+    """
 
     def commit(
         self,
@@ -63,6 +77,37 @@ class ReactionStore(Protocol):
         evidence: Sequence[EvidenceClip],
         closed_instances: Sequence[Instance],
         report_provenance: Mapping[int, tuple[BackendReportContext, ...] | None],
+        disposals: Sequence[LocalDisposalRequest] = (),
+    ) -> tuple[LocalDisposalIntent, ...]: ...
+
+    def pending_disposals(self) -> tuple[LocalDisposalIntent, ...]: ...
+    def claim_disposal(self, intent: LocalDisposalIntent, *, at: HostInstant) -> bool: ...
+    def record_disposal(
+        self, intent: LocalDisposalIntent, result: StoredDisposalResult
+    ) -> None: ...
+
+    def enqueue_observation(
+        self,
+        *,
+        instance_id: int,
+        source: str,
+        signal: str,
+        source_time: float | None,
+        source_anchor: float | None,
+        observed_at: float,
+        backend: BackendReportContext | None,
+    ) -> None: ...
+
+    def enqueue_health(
+        self,
+        *,
+        stream_id: str | None,
+        status: str,
+        reason_code: str | None,
+        detail: str | None,
+        occurred_at: str,
+        source_anchor: float | None,
+        anchor_offset: float | None,
     ) -> None: ...
 
 
@@ -79,6 +124,30 @@ class ReportStore(Protocol):
 
     def record_report_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None: ...
 
+    def pending_observation_ids(self, *, limit: int | None = None) -> tuple[int, ...]: ...
+
+    def pending_observation_item(self, queue_id: int) -> PendingObservationReport: ...
+
+    def freeze_observation_reported_at(self, queue_id: int, *, candidate: str) -> str: ...
+
+    def mark_observation_reported(self, queue_id: int, *, at: HostInstant) -> None: ...
+
+    def record_observation_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None: ...
+
+    def pending_health_ids(self, *, limit: int | None = None) -> tuple[int, ...]: ...
+
+    def pending_health_item(self, queue_id: int) -> PendingHealthReport: ...
+
+    def freeze_health_reported_at(self, queue_id: int, *, candidate: str) -> str: ...
+    def mark_health_reported(self, queue_id: int, *, at: HostInstant) -> None: ...
+
+    def record_health_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None: ...
+
+    def pending_disposal_ids(self, *, limit: int | None = None) -> tuple[int, ...]: ...
+    def disposal_report(self, disposal_id: int, *, reported_at: str) -> ReportedDisposal: ...
+    def mark_disposal_reported(self, disposal_id: int, *, at: HostInstant) -> None: ...
+    def record_disposal_failure(self, disposal_id: int, *, at: HostInstant, error: str) -> None: ...
+
 
 class StationStore(StationQueues):
     """推理机数据库中的一个工位作用域。
@@ -94,11 +163,13 @@ class StationStore(StationQueues):
         lock: AbstractContextManager[object],
         report_context: ReportContext | None = None,
         notify_report_pending: Callable[[], None] | None = None,
+        evidence_source: Callable[[str], EvidenceSource | None] | None = None,
     ) -> None:
         super().__init__(connection, station_id, lock)
         self._lock = lock
         self._report_context = report_context
         self._notify_report_pending = notify_report_pending
+        self._evidence_source = evidence_source
 
     def commit(
         self,
@@ -108,9 +179,11 @@ class StationStore(StationQueues):
         evidence: Sequence[EvidenceClip],
         closed_instances: Sequence[Instance],
         report_provenance: Mapping[int, tuple[BackendReportContext, ...] | None],
-    ) -> None:
-        """持久化一次反应, 并串行化共享 SQLite 连接上的工位线程。"""
+        disposals: Sequence[LocalDisposalRequest] = (),
+    ) -> tuple[LocalDisposalIntent, ...]:
+        """持久化一次反应及其处置意图;副作用在提交后执行。"""
         report_enqueued = False
+        created: list[LocalDisposalIntent] = []
         with self._lock:
             self._connection.execute("BEGIN IMMEDIATE")
             try:
@@ -144,6 +217,12 @@ class StationStore(StationQueues):
                         self._supersede_instance_open_report(
                             decision.instance_id, at=decision.evidence.anchor
                         )
+                ledger = LocalDisposalLedger(self._connection, self._lock)
+                host_id = None if self._report_context is None else self._report_context.host_id
+                for request in disposals:
+                    intent = ledger.ensure_local(self._station_id, request, host_id=host_id)
+                    if intent is not None:
+                        created.append(intent)
                 for clip in evidence:
                     self._enqueue_evidence(clip)
                 self._connection.execute("COMMIT")
@@ -152,6 +231,64 @@ class StationStore(StationQueues):
                     self._connection.execute("ROLLBACK")
                 raise
         if report_enqueued and self._notify_report_pending is not None:
+            self._notify_report_pending()
+        return tuple(created)
+
+    def pending_disposals(self) -> tuple[LocalDisposalIntent, ...]:
+        return LocalDisposalLedger(self._connection, self._lock).pending_local(self._station_id)
+
+    def claim_disposal(self, intent: LocalDisposalIntent, *, at: HostInstant) -> bool:
+        return LocalDisposalLedger(self._connection, self._lock).claim_local(intent, now=at.seconds)
+
+    def record_disposal(self, intent: LocalDisposalIntent, result: StoredDisposalResult) -> None:
+        if (
+            LocalDisposalLedger(self._connection, self._lock).record_local_result(intent, result)
+            and self._notify_report_pending is not None
+        ):
+            self._notify_report_pending()
+
+    def enqueue_health(
+        self,
+        *,
+        stream_id: str | None,
+        status: str,
+        reason_code: str | None,
+        detail: str | None,
+        occurred_at: str,
+        source_anchor: float | None,
+        anchor_offset: float | None,
+    ) -> None:
+        """持久化一条流健康事实; 它不进入判定或观测路径。
+
+        无主机身份时 (旧行或合成工位) 不写: 健康上报需要稳定的主机身份, 没有它时宁可不写,
+        也不虚构一个身份。
+        """
+        context = self._report_context
+        if context is None:
+            return
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO local_health_queue (
+                    station_id, stream_id, status, reason_code, detail,
+                    occurred_at, source_anchor, anchor_offset, report_host_id,
+                    report_configuration
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    self._station_id,
+                    stream_id,
+                    status,
+                    reason_code,
+                    detail,
+                    occurred_at,
+                    source_anchor,
+                    anchor_offset,
+                    context.host_id,
+                    context.configuration_json,
+                ),
+            )
+        if self._notify_report_pending is not None:
             self._notify_report_pending()
 
     def _write_instance(
@@ -357,13 +494,70 @@ class StationStore(StationQueues):
             separators=(",", ":"),
         )
 
+    @staticmethod
+    def _encode_backend(backend: BackendReportContext) -> str:
+        return json.dumps(
+            {"backend_id": backend.backend_id, "model_ids": list(backend.model_ids)},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+    def enqueue_observation(
+        self,
+        *,
+        instance_id: int,
+        source: str,
+        signal: str,
+        source_time: float | None,
+        source_anchor: float | None,
+        observed_at: float,
+        backend: BackendReportContext | None,
+    ) -> None:
+        """持久化一条归一化观测; 它不进入判定 outbox, 也不进入流健康路径。
+
+        没有事件时主机身份时不写; 观测上报需要稳定的主机身份, 没有它时宁可不写也不虚构一个身份。
+        """
+        context = self._report_context
+        if context is None:
+            return
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO local_observation_queue (
+                    station_id, instance_id, source, signal, source_time, source_anchor,
+                    observed_at, report_host_id, report_template_version_id,
+                    report_template_sha256, report_backend_provenance
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    self._station_id,
+                    instance_id,
+                    source,
+                    signal,
+                    source_time,
+                    source_anchor,
+                    observed_at,
+                    context.host_id,
+                    context.template_version_id,
+                    context.template_sha256,
+                    None if backend is None else self._encode_backend(backend),
+                ),
+            )
+        if self._notify_report_pending is not None:
+            self._notify_report_pending()
+
     def _enqueue_evidence(self, clip: EvidenceClip) -> None:
-        """每个实例锚点一条证据; 第二次判定需要更大窗口时只扩大、不缩小 (§5.20)。"""
+        """每个实例锚点一条证据; 第二次判定需要更大窗口时只扩大、不缩小 (§5.20)。
+
+        入队时在同一反应事务里冻结录像墙钟映射与来源相机路径 (S033)。冲突扩窗只改请求窗口,
+        不重绑来源、不重算映射、不清旧结果: 旧较小片段不会被当作新窗口已完成。
+        """
+        source = None if self._evidence_source is None else self._evidence_source(self._station_id)
         self._connection.execute(
             """
             INSERT INTO local_evidence_queue (
-                station_id, instance_id, anchor, window_from, window_to
-            ) VALUES (?, ?, ?, ?, ?)
+                station_id, instance_id, anchor, window_from, window_to, wall_offset, sources
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (station_id, instance_id, anchor) DO UPDATE SET
                 window_from = min(window_from, excluded.window_from),
                 window_to   = max(window_to,   excluded.window_to)
@@ -374,6 +568,8 @@ class StationStore(StationQueues):
                 clip.anchor.seconds,
                 clip.start.seconds,
                 clip.end.seconds,
+                None if source is None else source.wall_offset,
+                None if source is None else json.dumps(list(source.media_paths)),
             ),
         )
 
@@ -505,30 +701,55 @@ class LocalState:
         connection: sqlite3.Connection,
         lock: AbstractContextManager[object] | None = None,
         notify_report_pending: Callable[[], None] | None = None,
+        evidence_source: Callable[[str], EvidenceSource | None] | None = None,
     ) -> None:
         self._connection = connection
         self._lock = lock or RLock()
         self._notify_report_pending = notify_report_pending
+        self._evidence_source = evidence_source
 
     def station(
         self, station_id: str, *, report_context: ReportContext | None = None
     ) -> StationStore:
         """返回一个工位的行作用域; 所有工位共享连接和写入锁。"""
         return StationStore(
-            self._connection, station_id, self._lock, report_context, self._notify_report_pending
+            self._connection,
+            station_id,
+            self._lock,
+            report_context,
+            self._notify_report_pending,
+            self._evidence_source,
         )
+
+    def pending_evidence_stations(self) -> tuple[str, ...]:
+        """跨工位返回仍有待切片证据的工位; 工位已从当前配置移除也要返回 (S033)。"""
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT DISTINCT station_id
+                  FROM local_evidence_queue
+                 WHERE uploaded_at IS NULL
+                   AND (sliced_at IS NULL OR covered_from > window_from OR covered_to < window_to)
+                 ORDER BY station_id
+                """
+            ).fetchall()
+        return tuple(str(row["station_id"]) for row in rows)
 
     def reports(self) -> ReportStore:
         """返回该主机 decision/instance 待上报事实的持久接缝。"""
         return _HostReportStore(self._connection, self._lock)
 
     def disposal(self) -> LocalDisposalLedger:
-        """返回该主机唯一的持久连接器写入账本。"""
+        """返回该主机唯一的持久处置账本。"""
         return LocalDisposalLedger(self._connection, self._lock)
 
+    def execution_leases(self) -> LocalExecutionLeaseStore:
+        """返回该主机唯一的持久工位物理执行权事实存储。"""
+        return LocalExecutionLeaseStore(self._connection, self._lock)
+
     def configuration(self) -> LocalConfigurationStore:
-        """返回该主机的原子最后确认配置存储。"""
-        return LocalConfigurationStore(self._connection, self._lock)
+        """返回该主机的原子最后确认配置存储, 确认时一并替换执行权租约事实。"""
+        return LocalConfigurationStore(self._connection, self._lock, leases=self.execution_leases())
 
     def close(self) -> None:
         with self._lock:
@@ -588,6 +809,96 @@ class _HostReportStore:
     def record_report_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None:
         self._queue(queue_id).record_report_failure(queue_id, at=at, error=error)
 
+    def pending_observation_ids(self, *, limit: int | None = None) -> tuple[int, ...]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT queue_id
+                  FROM local_observation_queue
+                 WHERE sent_at IS NULL
+                 ORDER BY attempts, queue_id
+                 LIMIT ?
+                """,
+                (-1 if limit is None else limit,),
+            ).fetchall()
+        return tuple(int(row["queue_id"]) for row in rows)
+
+    def pending_health_ids(self, *, limit: int | None = None) -> tuple[int, ...]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT queue_id
+                  FROM local_health_queue
+                 WHERE sent_at IS NULL
+                 ORDER BY attempts, queue_id
+                 LIMIT ?
+                """,
+                (-1 if limit is None else limit,),
+            ).fetchall()
+        return tuple(int(row["queue_id"]) for row in rows)
+
+    def pending_observation_item(self, queue_id: int) -> PendingObservationReport:
+        return self._observation_queue(queue_id).pending_observation_report(queue_id)
+
+    def freeze_observation_reported_at(self, queue_id: int, *, candidate: str) -> str:
+        return self._observation_queue(queue_id).freeze_observation_reported_at(
+            queue_id, candidate=candidate
+        )
+
+    def mark_observation_reported(self, queue_id: int, *, at: HostInstant) -> None:
+        self._observation_queue(queue_id).mark_observation_reported(queue_id, at=at)
+
+    def record_observation_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None:
+        self._observation_queue(queue_id).record_observation_failure(queue_id, at=at, error=error)
+
+    def _observation_queue(self, queue_id: int) -> StationQueues:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT station_id FROM local_observation_queue WHERE queue_id = ?",
+                (queue_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError("observation queue item does not exist")
+        return StationQueues(self._connection, str(row["station_id"]), self._lock)
+
+    def pending_health_item(self, queue_id: int) -> PendingHealthReport:
+        return self._health_queue(queue_id).pending_health_report(queue_id)
+
+    def freeze_health_reported_at(self, queue_id: int, *, candidate: str) -> str:
+        return self._health_queue(queue_id).freeze_health_reported_at(queue_id, candidate=candidate)
+
+    def mark_health_reported(self, queue_id: int, *, at: HostInstant) -> None:
+        self._health_queue(queue_id).mark_health_reported(queue_id, at=at)
+
+    def record_health_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None:
+        self._health_queue(queue_id).record_health_failure(queue_id, at=at, error=error)
+
+    def _health_queue(self, queue_id: int) -> StationQueues:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT station_id FROM local_health_queue WHERE queue_id = ?",
+                (queue_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError("health queue item does not exist")
+        return StationQueues(self._connection, str(row["station_id"]), self._lock)
+
+    def pending_disposal_ids(self, *, limit: int | None = None) -> tuple[int, ...]:
+        return LocalDisposalLedger(self._connection, self._lock).pending_report_ids(limit=limit)
+
+    def disposal_report(self, disposal_id: int, *, reported_at: str) -> ReportedDisposal:
+        return LocalDisposalLedger(self._connection, self._lock).report(
+            disposal_id, reported_at=reported_at
+        )
+
+    def mark_disposal_reported(self, disposal_id: int, *, at: HostInstant) -> None:
+        LocalDisposalLedger(self._connection, self._lock).mark_reported(disposal_id, at=at.seconds)
+
+    def record_disposal_failure(self, disposal_id: int, *, at: HostInstant, error: str) -> None:
+        LocalDisposalLedger(self._connection, self._lock).record_report_failure(
+            disposal_id, at=at.seconds, error=error
+        )
+
     def _queue(self, queue_id: int) -> StationQueues:
         with self._lock:
             row = self._connection.execute(
@@ -600,7 +911,10 @@ class _HostReportStore:
 
 
 def open_local_state(
-    path: str, *, notify_report_pending: Callable[[], None] | None = None
+    path: str,
+    *,
+    notify_report_pending: Callable[[], None] | None = None,
+    evidence_source: Callable[[str], EvidenceSource | None] | None = None,
 ) -> LocalState:
     """打开或创建推理机本地状态, 并迁移到当前 SQLite 模式。
 
@@ -614,4 +928,8 @@ def open_local_state(
     connection.execute("PRAGMA journal_mode = WAL")
     connection.execute("PRAGMA synchronous = FULL")
     migrate(connection)
-    return LocalState(connection, notify_report_pending=notify_report_pending)
+    return LocalState(
+        connection,
+        notify_report_pending=notify_report_pending,
+        evidence_source=evidence_source,
+    )

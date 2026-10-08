@@ -6,10 +6,22 @@
 
 from __future__ import annotations
 
+import hashlib
+import logging
 from collections.abc import Callable, Iterable
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from time import monotonic
+
+from nvsop_contracts import (
+    DISPOSITION_POLICIES,
+    DISPOSITION_POLICY_STOP,
+    OBSERVATION_SOURCE_ACTION,
+    OBSERVATION_SOURCE_EXTERNAL_SIGNAL,
+    STOP_OUTPUT_REQUESTED_STATE,
+    STOP_OUTPUT_SEMANTIC_LABEL,
+)
 
 from edge_runtime.judgment.core import advance
 from edge_runtime.judgment.evidence import EvidenceMargins
@@ -25,17 +37,110 @@ from edge_runtime.judgment.model import (
     TimerFired,
     ValidityImpaired,
     ValidityRestored,
+    Violation,
 )
 from edge_runtime.judgment.reasons import ReasonCode
 from edge_runtime.local_state import BackendReportContext, ReactionStore
+from edge_runtime.local_state.disposal import (
+    DISPOSAL_ACTION_FRONTEND_ALERT,
+    DISPOSAL_ACTION_RECORD,
+    LocalDisposalIntent,
+    LocalDisposalRequest,
+    StoredDisposalResult,
+)
+from edge_runtime.stream_health import StreamFact, StreamHealthEvent
 from edge_runtime.supervisor.evidence import clips_for
 from edge_runtime.supervisor.inputs import (
+    ActionRecognized,
+    ExternalSignal,
     Normalizer,
     StreamHealthObserved,
     SupervisorInput,
     Validity,
     ValidityChanged,
 )
+
+_logger = logging.getLogger("edge_runtime")
+
+
+def _violation_ref(decision: Decision, violation: Violation) -> str:
+    return f"{decision.instance_id}:{violation.reason.value}:{violation.steps!r}"
+
+
+@dataclass(frozen=True, slots=True)
+class OutputDisposalRequest:
+    idempotency_key: str
+    violation_ref: str
+    instance_id: int
+    target_label: str
+    requested_state: str
+    actor: str
+    source: str
+
+
+def _disposals(
+    decisions: Iterable[Decision], policy: str | None
+) -> tuple[LocalDisposalRequest, ...]:
+    if policy is None:
+        return ()
+    if policy not in DISPOSITION_POLICIES:
+        raise ValueError(f"unsupported disposition policy: {policy}")
+    result: list[LocalDisposalRequest] = []
+    for decision in decisions:
+        for violation in decision.violations:
+            ref = _violation_ref(decision, violation)
+            for action in (DISPOSAL_ACTION_RECORD, DISPOSAL_ACTION_FRONTEND_ALERT):
+                key = hashlib.sha256(f"{ref}\0{action}".encode()).hexdigest()
+                result.append(
+                    LocalDisposalRequest(
+                        key,
+                        ref,
+                        decision.instance_id,
+                        action,
+                        "supervisor",
+                        f"station_policy:{policy}",
+                    )
+                )
+    return tuple(result)
+
+
+def _output_disposals(
+    decisions: Iterable[Decision], policy: str | None
+) -> tuple[OutputDisposalRequest, ...]:
+    if policy != DISPOSITION_POLICY_STOP:
+        return ()
+    result: list[OutputDisposalRequest] = []
+    for decision in decisions:
+        for violation in decision.violations:
+            ref = _violation_ref(decision, violation)
+            identity = (
+                f"{ref}\0write_output\0{STOP_OUTPUT_SEMANTIC_LABEL}\0{STOP_OUTPUT_REQUESTED_STATE}"
+            )
+            result.append(
+                OutputDisposalRequest(
+                    idempotency_key=hashlib.sha256(identity.encode()).hexdigest(),
+                    violation_ref=ref,
+                    instance_id=decision.instance_id,
+                    target_label=STOP_OUTPUT_SEMANTIC_LABEL,
+                    requested_state=STOP_OUTPUT_REQUESTED_STATE,
+                    actor="supervisor",
+                    source=f"station_policy:{policy}",
+                )
+            )
+    return tuple(result)
+
+
+def _disposal_result(intent: LocalDisposalIntent, at: HostInstant) -> StoredDisposalResult:
+    if intent.action_kind == DISPOSAL_ACTION_RECORD:
+        return StoredDisposalResult("recorded", None, at.seconds)
+    if intent.action_kind == DISPOSAL_ACTION_FRONTEND_ALERT:
+        return StoredDisposalResult(
+            "queued_for_mirror",
+            "Center/Web delivery is asynchronous and not yet asserted",
+            at.seconds,
+        )
+    raise ValueError(f"unsupported local disposal action: {intent.action_kind}")
+
 
 _STREAM_VALIDITY_REASONS = frozenset(
     {
@@ -44,6 +149,15 @@ _STREAM_VALIDITY_REASONS = frozenset(
         ReasonCode.CHUNK_BACKLOG_EXCEEDED,
     }
 )
+
+_FACT_REASONS: dict[StreamFact, ReasonCode | None] = {
+    StreamFact.SOURCE_ERROR: ReasonCode.STREAM_LOST,
+    StreamFact.STREAM_ENDED: ReasonCode.STREAM_LOST,
+    StreamFact.INFERENCE_TIMEOUT: ReasonCode.INFERENCE_TIMEOUT,
+    StreamFact.CHUNK_BACKLOG_EXCEEDED: ReasonCode.CHUNK_BACKLOG_EXCEEDED,
+    StreamFact.DELIVERING: None,
+}
+"""每个流事实对应的不可判定原因; `delivering` 是恢复事实, 没有原因码。"""
 
 
 def _is_stream_validity(event: Event) -> bool:
@@ -81,6 +195,7 @@ class Reaction:
     decisions: tuple[Decision, ...]
     wake_at: HostInstant | None
     closed_instances: tuple[Instance, ...] = ()
+    output_disposals: tuple[OutputDisposalRequest, ...] = ()
     """本次反应已提交的闭合实例完整快照, 不是待执行的持久化任务。"""
 
 
@@ -103,12 +218,14 @@ class StationSupervisor:
         store: ReactionStore,
         margins: EvidenceMargins,
         clock: Callable[[], float] = monotonic,
+        disposition_policy: str | None = None,
         initial_report_provenance: tuple[BackendReportContext, ...] | None = (),
     ) -> None:
         self._state = state
         self._store = store
         self._margins = margins
         self._clock = clock
+        self._disposition_policy = disposition_policy
         self._normalizers: dict[str | None, Normalizer] = {None: Normalizer()}
         self._deadline: HostInstant | None = None
         self._report_provenance: dict[int, dict[str, BackendReportContext] | None] = {}
@@ -120,6 +237,23 @@ class StationSupervisor:
                 if initial_report_provenance is None
                 else {item.backend_id: item for item in initial_report_provenance}
             )
+
+    def resume_pending_disposals(self) -> None:
+        self._execute_disposals(self._store.pending_disposals())
+
+    def _execute_disposals(self, intents: Iterable[LocalDisposalIntent]) -> None:
+        for intent in intents:
+            at = HostInstant(self._clock())
+            if not self._store.claim_disposal(intent, at=at):
+                continue
+            try:
+                result = _disposal_result(intent, at)
+            except Exception as error:
+                _logger.exception("local disposal failed key=%s", intent.idempotency_key)
+                result = StoredDisposalResult(
+                    "failed", f"{type(error).__name__}: {error}"[:255], at.seconds
+                )
+            self._store.record_disposal(intent, result)
 
     @property
     def state(self) -> JudgmentState:
@@ -167,6 +301,7 @@ class StationSupervisor:
             aggregate_transition = was_impaired != bool(active_impaired_backend_provenance)
         events = normalizer.events_for(arriving) if aggregate_transition else ()
         if isinstance(arriving, StreamHealthObserved):
+            self._report_stream_health(arriving.event)
             before = _stream_impairments(self._normalizers.values())
             after = _stream_impairments(normalizers.values())
             events = (
@@ -181,11 +316,72 @@ class StationSupervisor:
                     active_impaired_stream_provenance[report_provenance.backend_id] = (
                         report_provenance
                     )
+        if isinstance(arriving, (ActionRecognized, ExternalSignal)):
+            self._record_observation(arriving, report_provenance=report_provenance)
         reaction = self._advance(events, report_provenance=report_provenance)
         self._normalizers = normalizers
         self._active_impaired_backend_provenance = active_impaired_backend_provenance
         self._active_impaired_stream_provenance = active_impaired_stream_provenance
         return reaction
+
+    def _record_observation(
+        self,
+        arriving: ActionRecognized | ExternalSignal,
+        *,
+        report_provenance: BackendReportContext | None,
+    ) -> None:
+        """把一条归一化观测持久化到它自己的上报积压; 它不进入判定 outbox。
+
+        观测必须归属于一个 SOP 实例: 尚未开实例且不是模板开始信号的那条被判定核心丢弃,
+        这里也不镜像, 避免为不属于任何实例的输入虚构归属。实例编号取到达时的核心状态。
+        """
+        instance = self._state.instance
+        if instance is None:
+            if arriving.signal != self._state.template.start_signal:
+                return
+            instance_id = self._state.next_instance_id
+        else:
+            instance_id = instance.instance_id
+        if isinstance(arriving, ActionRecognized):
+            source = OBSERVATION_SOURCE_ACTION
+            source_time: float | None = arriving.source_time
+            source_anchor: float | None = arriving.source_anchor
+        else:
+            source = OBSERVATION_SOURCE_EXTERNAL_SIGNAL
+            source_time = None
+            source_anchor = None
+        self._store.enqueue_observation(
+            instance_id=instance_id,
+            source=source,
+            signal=arriving.signal,
+            source_time=source_time,
+            source_anchor=source_anchor,
+            observed_at=arriving.at.seconds,
+            backend=report_provenance,
+        )
+
+    def _report_stream_health(self, event: StreamHealthEvent) -> None:
+        """把一条流健康事实持久化到它自己的上报积压; 它不进入判定或观测路径。
+
+        未知事实按原始值保留 (ADR-0003), 原因码留空而不是猜测。事实发生时间取本机墙上时钟, 源锚为
+        基座的 `first_timestamp`; 偏移是该墙上时钟相对源锚的秒数。
+        """
+        fact = event.fact
+        status = fact.value if isinstance(fact, StreamFact) else fact
+        reason = _FACT_REASONS.get(fact) if isinstance(fact, StreamFact) else None
+        occurred = datetime.now(UTC)
+        anchor_offset = (
+            None if event.source_anchor is None else occurred.timestamp() - event.source_anchor
+        )
+        self._store.enqueue_health(
+            stream_id=event.stream_id or None,
+            status=status,
+            reason_code=None if reason is None else reason.value,
+            detail=event.detail or None,
+            occurred_at=occurred.isoformat(),
+            source_anchor=event.source_anchor,
+            anchor_offset=anchor_offset,
+        )
 
     def wake(self, *, host: HostLiveness) -> Reaction:
         """The timer the core asked for, if it is in fact due.
@@ -271,23 +467,25 @@ class StationSupervisor:
             committed_provenance[instance_id] = (
                 None if values is None else tuple(values[key] for key in sorted(values))
             )
-        self._store.commit(
+        committed_evidence = tuple(
+            clip for decision in decisions for clip in clips_for(decision, margins=self._margins)
+        )
+        disposal_intents = self._store.commit(
             state=state,
             decisions=tuple(decisions),
-            evidence=tuple(
-                clip
-                for decision in decisions
-                for clip in clips_for(decision, margins=self._margins)
-            ),
+            evidence=committed_evidence,
             closed_instances=tuple(closed_instances),
             report_provenance=committed_provenance,
+            disposals=_disposals(decisions, self._disposition_policy),
         )
         for instance in closed_instances:
             report_provenance_by_instance.pop(instance.instance_id, None)
         self._report_provenance = report_provenance_by_instance
         self._state, self._deadline = state, deadline
+        self._execute_disposals(disposal_intents)
         return Reaction(
             decisions=tuple(decisions),
             wake_at=deadline,
             closed_instances=tuple(closed_instances),
+            output_disposals=_output_disposals(decisions, self._disposition_policy),
         )

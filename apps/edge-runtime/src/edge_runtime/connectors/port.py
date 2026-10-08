@@ -132,6 +132,21 @@ class WriteRefusal(Enum):
 
     POINT_UNREACHABLE = "point_unreachable"
 
+    EXECUTION_LEASE_EXPIRED = "execution_lease_expired"
+    """§5.17: 中心确认的工位物理执行权租约已到期。判定继续, 但不再驱动物理执行器。"""
+
+    EXECUTION_LEASE_MISSING = "execution_lease_missing"
+    """该工位没有中心确认的执行权租约, 因此没有可用的物理写入授权。"""
+
+    CONNECTOR_UNREACHABLE = "connector_unreachable"
+    """写入前的安全连接探测未得到可达结果, 因此没有向设备发送物理写请求。"""
+
+    TARGET_NOT_IN_STATION = "target_not_in_station"
+    """请求的输出点位不属于该工位已配置的目标, 因此不是本工位有权驱动的执行器。"""
+
+    WRITE_STOPPED = "write_stopped"
+    """工位运行时已关闭或已切换, 生命周期结束后不再接受新的物理写入。"""
+
 
 @dataclass(frozen=True, slots=True)
 class Written:

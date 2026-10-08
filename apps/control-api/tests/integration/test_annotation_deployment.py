@@ -76,7 +76,7 @@ def test_host_signed_machine_routes_bypass_only_browser_auth_and_preserve_signat
             "inference-hosts/",
             "/configuration",
             "confirmed-configuration",
-            "monitor/(?:reported-decisions|reported-instances|health)",
+            "monitor/(?:reported-decisions|reported-instances|reported-observations|health)",
             "device-commands/(?:next|",
             "/result)",
             "templates/configuration-reports",
@@ -195,6 +195,14 @@ server {
     max_ranges 0;
     location = /api/v1/chunks/base-clip/download {
         default_type video/mp4;
+        add_header X-Seen-AU "${http_x_authenticated_user}none" always;
+        add_header X-Seen-ARU "${http_x_auth_request_user}none" always;
+        add_header X-Seen-ARG "${http_x_auth_request_groups}none" always;
+        add_header X-Seen-UID "${http_x_user_id}none" always;
+        add_header X-Seen-DID "${http_x_dataset_id}none" always;
+        add_header X-Seen-IHID "${http_x_inference_host_id}none" always;
+        add_header X-Seen-CSRF "${http_x_csrf_token}none" always;
+        add_header X-Seen-COOKIE "${http_cookie}none" always;
         return 200 '__CLIP_BODY__';
     }
 }
@@ -210,6 +218,25 @@ server { listen 9000; return 404; }
     submission_id = "019937d8-0d10-7b31-8d2d-4e60c8f4f501"
     execution_id = "019937d8-0d10-7b31-8d2d-4e60c8f4f502"
     clip_path = f"/annotation/media/clips/{submission_id}/{execution_id}/0/download"
+    forged = {
+        "X-Authenticated-User": "forged-user",
+        "X-Auth-Request-User": "forged-request-user",
+        "X-Auth-Request-Groups": "forged-group",
+        "X-User-ID": "forged-id",
+        "X-Dataset-ID": "forged-dataset",
+        "X-Inference-Host-ID": "forged-host",
+        "X-CSRF-Token": "forged-csrf",
+    }
+    seen = (
+        "x-seen-au",
+        "x-seen-aru",
+        "x-seen-arg",
+        "x-seen-uid",
+        "x-seen-did",
+        "x-seen-ihid",
+        "x-seen-csrf",
+        "x-seen-cookie",
+    )
 
     with Network() as network:
         upstream = (
@@ -226,12 +253,13 @@ server { listen 9000; return 404; }
             direct = httpx2.get(
                 f"http://{upstream.get_container_host_ip()}:{upstream.get_exposed_port(8100)}"
                 "/api/v1/chunks/base-clip/download",
-                headers={"Range": "bytes=0-31"},
+                headers={**forged, "Cookie": "sop_session=fixture", "Range": "bytes=0-31"},
                 timeout=5,
             )
             assert direct.status_code == 200
             assert direct.headers["content-type"].startswith("video/mp4")
             assert len(direct.content) == 128
+            assert direct.headers["x-seen-au"] == "forged-usernone"
 
             gateway = (
                 DockerContainer(NGINX_IMAGE)
@@ -244,7 +272,7 @@ server { listen 9000; return 404; }
                 ranged = httpx2.get(
                     f"http://{gateway.get_container_host_ip()}:{gateway.get_exposed_port(8444)}"
                     f"{clip_path}",
-                    headers={"Cookie": "sop_session=fixture", "Range": "bytes=0-31"},
+                    headers={**forged, "Cookie": "sop_session=fixture", "Range": "bytes=0-31"},
                     timeout=5,
                 )
                 assert ranged.status_code == 206, ranged.text
@@ -252,6 +280,8 @@ server { listen 9000; return 404; }
                 assert ranged.headers["content-range"] == "bytes 0-31/128"
                 assert ranged.headers["content-length"] == "32"
                 assert len(ranged.content) == 32
+                for name in seen:
+                    assert ranged.headers[name] == "none", name
 
 
 def test_deployment_template_keeps_clip_range_contract() -> None:
@@ -282,3 +312,33 @@ def test_media_requests_authorize_before_proxying_upstream_identity() -> None:
         assert 'add_header Cache-Control "no-store" always;' in location
         assert variable in location
         assert location.index("auth_request") < location.index("proxy_pass")
+
+
+def test_browser_identity_and_csrf_are_cleared_on_every_annotation_proxy() -> None:
+    """正式与开发入口的标注静态与媒体代理都不得透传浏览器身份头或 CSRF 头。"""
+    markers = (
+        "location ^~ /annotation/ {",
+        "location ^~ /static/ {",
+        "location ^~ /annotation/media/videos/ {",
+        "location ^~ /annotation/media/clips/ {",
+        "location ^~ /annotation/media/archives/ {",
+    )
+    cleared = (
+        'proxy_set_header X-CSRF-Token "";',
+        'proxy_set_header X-Authenticated-User "";',
+        'proxy_set_header X-Auth-Request-User "";',
+        'proxy_set_header X-Auth-Request-Groups "";',
+        'proxy_set_header X-User-ID "";',
+        'proxy_set_header X-Dataset-ID "";',
+        'proxy_set_header X-Inference-Host-ID "";',
+    )
+    for path in (CONFIG, DEV_CONFIG):
+        source = path.read_text()
+        for marker in markers:
+            start = source.index(marker)
+            end = source.index("\n    }\n", start) + len("\n    }")
+            location = source[start:end]
+            for header in cleared:
+                assert header in location, f"{path.name} {marker} missing {header}"
+            assert 'proxy_set_header Cookie "";' in location
+            assert 'proxy_set_header Authorization "";' in location

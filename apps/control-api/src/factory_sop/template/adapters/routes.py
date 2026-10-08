@@ -686,6 +686,8 @@ class RuntimeParametersInput(BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("处置策略不能为空")
+        if value not in {"record", "stop"}:
+            raise ValueError("处置策略仅支持 record 或 stop")
         return value
 
     def to_domain(self) -> StationRuntimeParameters:
@@ -750,12 +752,6 @@ def _runtime_view(parameters: StationRuntimeParameters | None) -> RuntimeParamet
         step_deadline_seconds=float(parameters.step_deadline_seconds),
         disposition_policy=parameters.disposition_policy,
     )
-
-
-def _optional_runtime_view(
-    parameters: StationRuntimeParameters | None,
-) -> RuntimeParametersView | None:
-    return _runtime_view(parameters)
 
 
 class BindingValidationIssueView(BaseModel):

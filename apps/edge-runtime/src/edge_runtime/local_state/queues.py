@@ -22,6 +22,7 @@ import json
 import sqlite3
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from math import isfinite
 from threading import RLock
 
 from edge_runtime.judgment.model import Decision, HostInstant, Lifecycle, Violation
@@ -123,10 +124,81 @@ class PendingSopInstanceReport:
 
 
 @dataclass(frozen=True, slots=True)
+class PendingObservationReport:
+    """该工位尚未确认的一条归一化观测; ``queue_id`` 是事件身份的本地半边。
+
+    它不是判定, 也不是流健康: 观测陈述作业发生了什么, 中心只归档, 不据此重新判定。
+    """
+
+    queue_id: int
+    station_id: str
+    instance_id: int
+    source: str
+    signal: str
+    source_time: float | None
+    source_anchor: float | None
+    observed_at: float
+    host_id: str
+    template_version_id: str | None
+    template_sha256: str | None
+    backend: BackendReportContext | None
+    reported_at: str | None
+    attempts: int
+    last_error: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class PendingHealthReport:
+    """一路流健康事实的待上报行; ``queue_id`` 是事件身份的本地半边。
+
+    它不是观测: 观测陈述作业发生了什么, 它陈述我们当时能否可靠观察。中心只归档, 不据此判定。
+    """
+
+    queue_id: int
+    station_id: str
+    stream_id: str | None
+    status: str
+    reason_code: str | None
+    detail: str | None
+    occurred_at: str
+    source_anchor: float | None
+    anchor_offset: float | None
+    host_id: str
+    configuration_json: str | None
+    reported_at: str | None
+    attempts: int
+    last_error: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceSource:
+    """入队时冻结的本机证据来源: 录像墙钟映射与本工位连续录像相机路径 (S033)。
+
+    ``wall_offset`` = 录像墙钟 - 主机 monotonic, 在判定反应事务里随待办一起冻结; 机器重启或墙钟
+    跳变后用当前偏移解释旧 HostInstant 会切错录像。``media_paths`` 是入队时参与 SOP 的连续录像相机
+    路径, 冻结后重绑/删相机不改变历史判定的来源。
+    """
+
+    wall_offset: float
+    media_paths: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not isfinite(self.wall_offset):
+            raise ValueError("evidence source wall clock offset must be finite")
+        if not self.media_paths or any(not path for path in self.media_paths):
+            raise ValueError("evidence source must name at least one recording path")
+        if len(set(self.media_paths)) != len(self.media_paths):
+            raise ValueError("evidence source recording paths must be unique")
+
+
+@dataclass(frozen=True, slots=True)
 class PendingEvidence:
     """One clip that exists nowhere but this host.
 
     窗口已由 supervisor 按工位余量加宽 (§5.20), 上传方直接使用, 不再次推导。
+    ``wall_offset``/``sources`` 是入队事务里冻结的录像墙钟映射与来源相机路径 (S033);
+    为 NULL 的旧行无法安全重建映射。``media_results`` 是已完成产物的 typed 每媒体元数据
+    JSON, 与证据目录内 metadata.json 同源。
     """
 
     queue_id: int
@@ -136,6 +208,12 @@ class PendingEvidence:
     end: HostInstant
     attempts: int
     last_error: str | None
+    wall_offset: float | None = None
+    sources: tuple[str, ...] = ()
+    media_results: str | None = None
+    covered_from: float | None = None
+    covered_to: float | None = None
+    sliced_at: float | None = None
 
 
 class StationQueues:
@@ -300,6 +378,228 @@ class StationQueues:
             context=context,
         )
 
+    def pending_observation_reports(
+        self, *, limit: int | None = None
+    ) -> tuple[PendingObservationReport, ...]:
+        """该工位尚未确认的观测, 按最早优先返回。"""
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT queue_id, station_id, instance_id, source, signal,
+                       source_time, source_anchor, observed_at, report_host_id,
+                       report_template_version_id, report_template_sha256,
+                       report_backend_provenance, report_reported_at,
+                       attempts, last_error
+                  FROM local_observation_queue
+                 WHERE station_id = ? AND sent_at IS NULL
+                 ORDER BY queue_id
+                 LIMIT ?
+                """,
+                (self._station_id, -1 if limit is None else limit),
+            ).fetchall()
+            return tuple(self._pending_observation_from_row(row) for row in rows)
+
+    def pending_health_reports(
+        self, *, limit: int | None = None
+    ) -> tuple[PendingHealthReport, ...]:
+        """该工位尚未确认的流健康事实, 按最早优先返回。"""
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT queue_id, station_id, stream_id, status, reason_code, detail,
+                       occurred_at, source_anchor, anchor_offset, report_host_id,
+                       report_configuration, report_reported_at, attempts, last_error
+                  FROM local_health_queue
+                 WHERE station_id = ? AND sent_at IS NULL
+                 ORDER BY queue_id
+                 LIMIT ?
+                """,
+                (self._station_id, -1 if limit is None else limit),
+            ).fetchall()
+            return tuple(self._pending_health_from_row(row) for row in rows)
+
+    def pending_observation_report(self, queue_id: int) -> PendingObservationReport:
+        """按队列身份读取一条仍待发送的观测。"""
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT queue_id, station_id, instance_id, source, signal,
+                       source_time, source_anchor, observed_at, report_host_id,
+                       report_template_version_id, report_template_sha256,
+                       report_backend_provenance, report_reported_at,
+                       attempts, last_error
+                  FROM local_observation_queue
+                 WHERE station_id = ? AND queue_id = ? AND sent_at IS NULL
+                """,
+                (self._station_id, queue_id),
+            ).fetchone()
+        if row is None:
+            raise ValueError("pending observation report does not exist")
+        return self._pending_observation_from_row(row)
+
+    def pending_health_report(self, queue_id: int) -> PendingHealthReport:
+        """按队列身份读取一条仍待发送的流健康事实。"""
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT queue_id, station_id, stream_id, status, reason_code, detail,
+                       occurred_at, source_anchor, anchor_offset, report_host_id,
+                       report_configuration, report_reported_at, attempts, last_error
+                  FROM local_health_queue
+                 WHERE station_id = ? AND queue_id = ? AND sent_at IS NULL
+                """,
+                (self._station_id, queue_id),
+            ).fetchone()
+        if row is None:
+            raise ValueError("pending health report does not exist")
+        return self._pending_health_from_row(row)
+
+    def _pending_observation_from_row(self, row: sqlite3.Row) -> PendingObservationReport:
+        raw_backend = row["report_backend_provenance"]
+        backend: BackendReportContext | None = None
+        if raw_backend is not None:
+            decoded = json.loads(raw_backend)
+            if not isinstance(decoded, dict) or set(decoded) != {"backend_id", "model_ids"}:
+                raise ValueError("pending observation backend provenance is invalid")
+            backend_id = decoded["backend_id"]
+            model_ids = decoded["model_ids"]
+            if (
+                not isinstance(backend_id, str)
+                or not isinstance(model_ids, list)
+                or any(not isinstance(model_id, str) for model_id in model_ids)
+            ):
+                raise ValueError("pending observation backend provenance is invalid")
+            backend = BackendReportContext(backend_id=backend_id, model_ids=tuple(model_ids))
+        return PendingObservationReport(
+            queue_id=int(row["queue_id"]),
+            station_id=str(row["station_id"]),
+            instance_id=int(row["instance_id"]),
+            source=str(row["source"]),
+            signal=str(row["signal"]),
+            source_time=None if row["source_time"] is None else float(row["source_time"]),
+            source_anchor=None if row["source_anchor"] is None else float(row["source_anchor"]),
+            observed_at=float(row["observed_at"]),
+            host_id=str(row["report_host_id"]),
+            template_version_id=row["report_template_version_id"],
+            template_sha256=row["report_template_sha256"],
+            backend=backend,
+            reported_at=row["report_reported_at"],
+            attempts=int(row["attempts"]),
+            last_error=row["last_error"],
+        )
+
+    def _pending_health_from_row(self, row: sqlite3.Row) -> PendingHealthReport:
+        return PendingHealthReport(
+            queue_id=int(row["queue_id"]),
+            station_id=str(row["station_id"]),
+            stream_id=row["stream_id"],
+            status=str(row["status"]),
+            reason_code=row["reason_code"],
+            detail=row["detail"],
+            occurred_at=str(row["occurred_at"]),
+            source_anchor=None if row["source_anchor"] is None else float(row["source_anchor"]),
+            anchor_offset=None if row["anchor_offset"] is None else float(row["anchor_offset"]),
+            host_id=str(row["report_host_id"]),
+            configuration_json=row["report_configuration"],
+            reported_at=row["report_reported_at"],
+            attempts=int(row["attempts"]),
+            last_error=row["last_error"],
+        )
+
+    def freeze_observation_reported_at(self, queue_id: int, *, candidate: str) -> str:
+        """持久化首个 wire 上报时刻, 保证同一观测重试保持完全相同的 payload。"""
+        if not candidate:
+            raise ValueError("reported_at candidate must not be empty")
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_observation_queue
+                   SET report_reported_at = ?
+                 WHERE station_id = ? AND queue_id = ? AND report_reported_at IS NULL
+                """,
+                (candidate, self._station_id, queue_id),
+            )
+            row = self._connection.execute(
+                """
+                SELECT report_reported_at
+                  FROM local_observation_queue
+                 WHERE station_id = ? AND queue_id = ? AND sent_at IS NULL
+                """,
+                (self._station_id, queue_id),
+            ).fetchone()
+        if row is None or row["report_reported_at"] is None:
+            raise ValueError("pending observation report could not freeze its wire timestamp")
+        return str(row["report_reported_at"])
+
+    def mark_observation_reported(self, queue_id: int, *, at: HostInstant) -> None:
+        """中心已确认该观测; 行继续保留以保持事件身份稳定。"""
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_observation_queue
+                   SET sent_at = ?
+                 WHERE station_id = ? AND queue_id = ?
+                """,
+                (at.seconds, self._station_id, queue_id),
+            )
+
+    def record_observation_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None:
+        """发送失败; 行继续待发送并增加一次尝试。"""
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_observation_queue
+                   SET attempts = attempts + 1, last_attempt_at = ?, last_error = ?
+                 WHERE station_id = ? AND queue_id = ?
+                """,
+                (at.seconds, error, self._station_id, queue_id),
+            )
+
+    def freeze_health_reported_at(self, queue_id: int, *, candidate: str) -> str:
+        """持久化首个健康 wire 上报时刻, 保证重试 payload 不变。"""
+        if not candidate:
+            raise ValueError("reported_at candidate must not be empty")
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_health_queue
+                   SET report_reported_at = ?
+                 WHERE station_id = ? AND queue_id = ? AND report_reported_at IS NULL
+                """,
+                (candidate, self._station_id, queue_id),
+            )
+            row = self._connection.execute(
+                """
+                SELECT report_reported_at
+                  FROM local_health_queue
+                 WHERE station_id = ? AND queue_id = ? AND sent_at IS NULL
+                """,
+                (self._station_id, queue_id),
+            ).fetchone()
+        if row is None or row["report_reported_at"] is None:
+            raise ValueError("pending health report could not freeze its wire timestamp")
+        return str(row["report_reported_at"])
+
+    def mark_health_reported(self, queue_id: int, *, at: HostInstant) -> None:
+        """中心已确认该事实;行继续保留以保持事件身份稳定。"""
+        with self._lock:
+            self._connection.execute(
+                "UPDATE local_health_queue SET sent_at = ? WHERE station_id = ? AND queue_id = ?",
+                (at.seconds, self._station_id, queue_id),
+            )
+
+    def record_health_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None:
+        """发送失败;行继续待发送并增加一次尝试。"""
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_health_queue
+                   SET attempts = attempts + 1, last_attempt_at = ?, last_error = ?
+                 WHERE station_id = ? AND queue_id = ?
+                """,
+                (at.seconds, error, self._station_id, queue_id),
+            )
+
     def _report_context_of(self, row: sqlite3.Row) -> ReportContext | None:
         raw_provenance = row["report_backend_provenance"]
         if raw_provenance is None:
@@ -423,28 +723,74 @@ class StationQueues:
 
     def pending_evidence(self, *, limit: int | None = None) -> tuple[PendingEvidence, ...]:
         """只存在于本机的证据片段,按最早优先返回。"""
+        return self._evidence_rows("", limit=limit)
+
+    def evidence_awaiting_slice(self, *, limit: int | None = None) -> tuple[PendingEvidence, ...]:
+        """本机尚未产出媒体、或已有产物不再覆盖当前请求窗口的证据待办。
+
+        请求窗口后来扩大时保留旧结果直到新覆盖切片成功, 因此这里包含 ``covered_*``
+        不再覆盖 ``window_*`` 的已完成行; 调用方不能把旧较小片段当作新窗口已完成 (S033)。
+        """
+        return self._evidence_rows(
+            "AND (sliced_at IS NULL OR covered_from > window_from OR covered_to < window_to)",
+            limit=limit,
+        )
+
+    def _evidence_rows(self, clause: str, *, limit: int | None) -> tuple[PendingEvidence, ...]:
+        # clause 是本模块的字面量, 不是外部输入; 列名与 where 在此一处维护。
         with self._lock:
             rows = self._connection.execute(
-                """
-                SELECT queue_id, instance_id, anchor, window_from, window_to, attempts, last_error
+                f"""
+                SELECT queue_id, instance_id, anchor, window_from, window_to, attempts, last_error,
+                       wall_offset, sources, media_results, covered_from, covered_to, sliced_at
                   FROM local_evidence_queue
-                 WHERE station_id = ? AND uploaded_at IS NULL
+                 WHERE station_id = ? AND uploaded_at IS NULL {clause}
                  ORDER BY queue_id
                  LIMIT ?
                 """,
                 (self._station_id, -1 if limit is None else limit),
             ).fetchall()
-            return tuple(
-                PendingEvidence(
-                    queue_id=row["queue_id"],
-                    instance_id=row["instance_id"],
-                    anchor=HostInstant(row["anchor"]),
-                    start=HostInstant(row["window_from"]),
-                    end=HostInstant(row["window_to"]),
-                    attempts=row["attempts"],
-                    last_error=row["last_error"],
-                )
-                for row in rows
+        return tuple(self._pending_evidence_from_row(row) for row in rows)
+
+    def _pending_evidence_from_row(self, row: sqlite3.Row) -> PendingEvidence:
+        raw_sources = row["sources"]
+        return PendingEvidence(
+            queue_id=row["queue_id"],
+            instance_id=row["instance_id"],
+            anchor=HostInstant(row["anchor"]),
+            start=HostInstant(row["window_from"]),
+            end=HostInstant(row["window_to"]),
+            attempts=row["attempts"],
+            last_error=row["last_error"],
+            wall_offset=None if row["wall_offset"] is None else float(row["wall_offset"]),
+            sources=() if raw_sources is None else tuple(json.loads(raw_sources)),
+            media_results=row["media_results"],
+            covered_from=None if row["covered_from"] is None else float(row["covered_from"]),
+            covered_to=None if row["covered_to"] is None else float(row["covered_to"]),
+            sliced_at=None if row["sliced_at"] is None else float(row["sliced_at"]),
+        )
+
+    def record_evidence_slice(
+        self,
+        queue_id: int,
+        *,
+        at: HostInstant,
+        media_results: str,
+        covered_from: float,
+        covered_to: float,
+    ) -> None:
+        """原子记录一次成功切片: 覆盖窗口 (monotonic) 与每媒体 typed 元数据 JSON。
+
+        只写本机产物索引, 不删任何旧媒体文件; 旧较小窗口的产物与元数据保留在磁盘上。
+        """
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_evidence_queue
+                   SET sliced_at = ?, media_results = ?, covered_from = ?, covered_to = ?
+                 WHERE station_id = ? AND queue_id = ?
+                """,
+                (at.seconds, media_results, covered_from, covered_to, self._station_id, queue_id),
             )
 
     def mark_evidence_uploaded(

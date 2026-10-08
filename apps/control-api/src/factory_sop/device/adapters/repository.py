@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
@@ -18,8 +17,6 @@ from sqlalchemy import (
     delete,
     exists,
     func,
-    insert,
-    inspect,
     or_,
     select,
     update,
@@ -66,72 +63,25 @@ __all__ = [
 ]
 
 
-_HOST_BASE_COLUMNS = (
-    "id",
-    "name",
-    "address",
-    "mediamtx_address",
-    "recording_window_seconds",
-    "disk_watermark_percent",
-    "status",
-    "revision",
-    "created_by",
-    "updated_by",
-    "created_at",
-    "updated_at",
-)
-
-
-def _host_values(
-    host: InferenceHost,
-    *,
-    include_identity: bool,
-    include_media: bool,
-    include_configuration: bool,
-) -> dict[str, object]:
-    values: dict[str, object] = {
+def _host_values(host: InferenceHost) -> dict[str, object]:
+    return {
         "id": host.id,
         "name": host.name,
         "address": host.address,
         "mediamtx_address": host.mediamtx_address,
+        "mediamtx_playback_address": host.mediamtx_playback_address,
         "recording_window_seconds": host.recording_window_seconds,
         "disk_watermark_percent": host.disk_watermark_percent,
         "status": host.status,
         "revision": host.revision,
+        "configuration_revision": host.configuration_revision,
+        "configuration_sha256": host.configuration_sha256,
         "created_by": host.created_by,
         "updated_by": host.updated_by,
         "created_at": host.created_at,
         "updated_at": host.updated_at,
+        "identity_public_key": host.identity_public_key,
     }
-    if include_identity:
-        values["identity_public_key"] = host.identity_public_key
-    if include_media:
-        values["mediamtx_playback_address"] = host.mediamtx_playback_address
-    if include_configuration:
-        values["configuration_revision"] = host.configuration_revision
-        values["configuration_sha256"] = host.configuration_sha256
-    return values
-
-
-def _host_from_values(values: Mapping[str, Any]) -> InferenceHost:
-    return InferenceHost(
-        id=values["id"],
-        name=values["name"],
-        address=values["address"],
-        mediamtx_address=values["mediamtx_address"],
-        mediamtx_playback_address=values.get("mediamtx_playback_address"),
-        recording_window_seconds=values["recording_window_seconds"],
-        disk_watermark_percent=values["disk_watermark_percent"],
-        status=values["status"],
-        revision=values["revision"],
-        configuration_revision=values.get("configuration_revision", 0),
-        configuration_sha256=values.get("configuration_sha256"),
-        created_by=values["created_by"],
-        updated_by=values["updated_by"],
-        created_at=values["created_at"],
-        updated_at=values["updated_at"],
-        identity_public_key=values.get("identity_public_key"),
-    )
 
 
 class PostgresInferenceHostRepository:
@@ -139,42 +89,16 @@ class PostgresInferenceHostRepository:
 
     def __init__(self, session: DatabaseSession) -> None:
         self._session = session
-        self._has_identity_column: bool | None = None
-        self._has_media_column: bool | None = None
-        self._has_configuration_columns: bool | None = None
 
     def add(self, host: InferenceHost) -> None:
-        if (
-            self._supports_host_identity()
-            and self._supports_host_media()
-            and self._supports_host_configuration()
-        ):
-            self._session.add(InferenceHostRow.from_domain(host))
-        else:
-            if host.identity_public_key is not None and not self._supports_host_identity():
-                raise ValueError("旧版主机表不支持公钥身份")
-            self._session.execute(
-                insert(cast("Any", InferenceHostRow.__table__)).values(
-                    **_host_values(
-                        host,
-                        include_identity=self._supports_host_identity(),
-                        include_media=self._supports_host_media(),
-                        include_configuration=self._supports_host_configuration(),
-                    )
-                )
-            )
+        self._session.add(InferenceHostRow.from_domain(host))
         try:
             self._session.flush()
         except DatabaseError as error:
             _refuse_constraint_violation(error)
 
     def save(self, host: InferenceHost, *, expected_revision: int) -> None:
-        values = _host_values(
-            host,
-            include_identity=self._supports_host_identity(),
-            include_media=self._supports_host_media(),
-            include_configuration=self._supports_host_configuration(),
-        )
+        values = _host_values(host)
         try:
             result = cast(
                 "CursorResult[Any]",
@@ -199,68 +123,8 @@ class PostgresInferenceHostRepository:
             )
 
     def by_id(self, host_id: UUID) -> InferenceHost | None:
-        if (
-            self._supports_host_identity()
-            and self._supports_host_media()
-            and self._supports_host_configuration()
-        ):
-            row = self._session.get(InferenceHostRow, host_id)
-            return row.to_domain() if row is not None else None
-        values = self._legacy_host_by_id(host_id)
-        return _host_from_values(values) if values is not None else None
-
-    def _supports_host_identity(self) -> bool:
-        if self._has_identity_column is None:
-            self._has_identity_column = any(
-                column["name"] == "identity_public_key"
-                for column in inspect(self._session.connection()).get_columns(
-                    InferenceHostRow.__tablename__
-                )
-            )
-        return self._has_identity_column
-
-    def _supports_host_media(self) -> bool:
-        if self._has_media_column is None:
-            self._has_media_column = any(
-                column["name"] == "mediamtx_playback_address"
-                for column in inspect(self._session.connection()).get_columns(
-                    InferenceHostRow.__tablename__
-                )
-            )
-        return self._has_media_column
-
-    def _supports_host_configuration(self) -> bool:
-        if self._has_configuration_columns is None:
-            columns = {
-                column["name"]
-                for column in inspect(self._session.connection()).get_columns(
-                    InferenceHostRow.__tablename__
-                )
-            }
-            self._has_configuration_columns = {
-                "configuration_revision",
-                "configuration_sha256",
-            }.issubset(columns)
-        return self._has_configuration_columns
-
-    def _host_columns(self) -> list[Any]:
-        names = list(_HOST_BASE_COLUMNS)
-        if self._supports_host_media():
-            names.insert(names.index("mediamtx_address") + 1, "mediamtx_playback_address")
-        if self._supports_host_identity():
-            names.append("identity_public_key")
-        if self._supports_host_configuration():
-            names.extend(("configuration_revision", "configuration_sha256"))
-        return [getattr(InferenceHostRow, name) for name in names]
-
-    def _legacy_host_by_id(self, host_id: UUID) -> Mapping[str, Any] | None:
-        columns = self._host_columns()
-        return cast(
-            "Mapping[str, Any] | None",
-            self._session.execute(select(*columns).where(InferenceHostRow.id == host_id))
-            .mappings()
-            .one_or_none(),
-        )
+        row = self._session.get(InferenceHostRow, host_id)
+        return row.to_domain() if row is not None else None
 
     def next_configuration_revision(
         self,
@@ -272,8 +136,6 @@ class PostgresInferenceHostRepository:
         """按配置内容分配持久化、单调且并发安全的主机版本。"""
         if minimum_revision < 0:
             raise ValueError("minimum_revision must not be negative")
-        if not self._supports_host_configuration():
-            raise ValueError("主机表不支持持久化配置版本")
         row = self._session.execute(
             select(
                 InferenceHostRow.configuration_revision,
@@ -383,6 +245,62 @@ class PostgresInferenceHostRepository:
                 raise ValueError(
                     "configuration assignment revision conflicts with immutable history"
                 )
+
+    def has_historical_station(
+        self,
+        *,
+        host_id: UUID,
+        station_id: UUID,
+        template_version_id: str | None = None,
+        template_sha256: str | None = None,
+    ) -> bool:
+        """验证主机/工位及可用的模板证明是否存在于不可变配置历史。"""
+        rows = self._session.scalars(
+            select(ConfigurationAssignmentRow).where(
+                ConfigurationAssignmentRow.host_id == host_id,
+                ConfigurationAssignmentRow.station_id == station_id,
+            )
+        ).all()
+        if template_version_id is None and template_sha256 is None:
+            return bool(rows)
+        return any(
+            (None if row.template_version_id is None else str(row.template_version_id))
+            == template_version_id
+            and row.template_sha256 == template_sha256
+            for row in rows
+        )
+
+    def has_historical_assignment(
+        self,
+        *,
+        host_id: UUID,
+        station_id: UUID,
+        backend_id: UUID,
+        template_version_id: str | None,
+        template_sha256: str | None,
+        model_ids: tuple[str, ...],
+    ) -> bool:
+        """验证产生时 provenance 是否存在于任一不可变历史 assignment。"""
+        rows = self._session.scalars(
+            select(ConfigurationAssignmentRow).where(
+                ConfigurationAssignmentRow.host_id == host_id,
+                ConfigurationAssignmentRow.station_id == station_id,
+                ConfigurationAssignmentRow.backend_id == backend_id,
+            )
+        ).all()
+        return any(
+            (None if row.template_version_id is None else str(row.template_version_id))
+            == template_version_id
+            and row.template_sha256 == template_sha256
+            and tuple(row.model_ids) == model_ids
+            for row in rows
+        )
+
+    def registered_host_ids(self) -> tuple[UUID, ...]:
+        """返回 device owner 当前登记的主机集合。"""
+        return tuple(
+            self._session.scalars(select(InferenceHostRow.id).order_by(InferenceHostRow.id)).all()
+        )
 
     def has_configuration_station(
         self,
@@ -499,31 +417,13 @@ class PostgresInferenceHostRepository:
         total = cast(
             "int", self._session.scalar(select(func.count()).select_from(InferenceHostRow))
         )
-        if (
-            self._supports_host_identity()
-            and self._supports_host_media()
-            and self._supports_host_configuration()
-        ):
-            rows = self._session.scalars(
-                select(InferenceHostRow)
-                .order_by(InferenceHostRow.created_at.desc(), InferenceHostRow.id.desc())
-                .offset((page - 1) * page_size)
-                .limit(page_size)
-            ).all()
-            return [row.to_domain() for row in rows], total
-
-        columns = self._host_columns()
-        legacy_rows = (
-            self._session.execute(
-                select(*columns)
-                .order_by(InferenceHostRow.created_at.desc(), InferenceHostRow.id.desc())
-                .offset((page - 1) * page_size)
-                .limit(page_size)
-            )
-            .mappings()
-            .all()
-        )
-        return [_host_from_values(cast("Mapping[str, Any]", row)) for row in legacy_rows], total
+        rows = self._session.scalars(
+            select(InferenceHostRow)
+            .order_by(InferenceHostRow.created_at.desc(), InferenceHostRow.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        ).all()
+        return [row.to_domain() for row in rows], total
 
 
 class PostgresInferenceBackendRepository:
@@ -710,6 +610,14 @@ class PostgresInferenceBackendRepository:
         return bool(
             self._session.scalar(select(exists().where(InferenceBackendRow.host_id == host_id)))
         )
+
+    def for_host(self, host_id: UUID) -> list[InferenceBackend]:
+        rows = self._session.scalars(
+            select(InferenceBackendRow)
+            .where(InferenceBackendRow.host_id == host_id)
+            .order_by(InferenceBackendRow.created_at.desc(), InferenceBackendRow.id.desc())
+        ).all()
+        return [row.to_domain() for row in rows]
 
     def page_of(
         self, *, page: int, page_size: int, host_id: UUID | None

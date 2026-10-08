@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from nvsop_contracts import (
+    DISPOSITION_STOP_OUTPUT_CAPABILITY,
     ConfigurationArtifact,
     ConfigurationBundle,
     ConfigurationTemplate,
@@ -38,7 +39,7 @@ from edge_runtime.runtime_configuration import (
     bootstrap_runtime_configuration,
     confirmed_runtime_configuration,
 )
-from edge_runtime.station_runtime import StationRuntimeConfiguration
+from edge_runtime.station_runtime import StationRuntimeConfiguration, station_configuration
 
 HOST_ID = "host-a"
 STATION_ID = "station-a"
@@ -133,6 +134,7 @@ def confirmed_bundle() -> ConfigurationBundle:
         host_id=HOST_ID,
         config_revision=7,
         generated_at="2026-09-14T00:00:00Z",
+        required_capabilities=(DISPOSITION_STOP_OUTPUT_CAPABILITY,),
         stations=(
             ConfiguredStation(
                 station_id=STATION_ID,
@@ -285,6 +287,74 @@ class ConfirmedRuntimeConfigurationTests(unittest.TestCase):
                 bundle=confirmed_bundle(),
                 bootstrap_stations=(local_station(),),
                 local_connectors=(),
+            )
+
+    def test_stop_policy_requires_a_confirmed_named_output_target(self) -> None:
+        bundle = confirmed_bundle()
+        station = bundle.stations[0]
+        without_stop = replace(
+            station,
+            points=tuple(point for point in station.points if point.name != "停线联锁"),
+        )
+
+        with self.assertRaisesRegex(RuntimeConfigurationError, "停线联锁"):
+            confirmed_runtime_configuration(
+                bundle=replace(bundle, stations=(without_stop,)),
+                bootstrap_stations=(local_station(),),
+                local_connectors=(local_connector(),),
+            )
+
+    def test_confirmed_stop_policy_requires_the_behavior_capability(self) -> None:
+        bundle = confirmed_bundle()
+
+        with self.assertRaisesRegex(RuntimeConfigurationError, "stop-output-v1"):
+            confirmed_runtime_configuration(
+                bundle=replace(bundle, required_capabilities=()),
+                bootstrap_stations=(local_station(),),
+                local_connectors=(local_connector(),),
+            )
+
+    def test_confirmed_runtime_rejects_unknown_disposition_policy(self) -> None:
+        bundle = confirmed_bundle()
+        station = bundle.stations[0]
+        unknown = replace(
+            station,
+            runtime_parameters=ResolvedRuntimeParameters(7.0, 3.0, "future-policy"),
+        )
+
+        with self.assertRaisesRegex(RuntimeConfigurationError, "unsupported disposition policy"):
+            confirmed_runtime_configuration(
+                bundle=replace(bundle, stations=(unknown,)),
+                bootstrap_stations=(local_station(),),
+                local_connectors=(local_connector(),),
+            )
+
+    def test_bootstrap_stop_policy_is_not_activated_without_confirmed_output_topology(self) -> None:
+        stopping = replace(local_station(), disposition_policy="stop")
+
+        with self.assertRaisesRegex(RuntimeConfigurationError, "confirmed output topology"):
+            bootstrap_runtime_configuration(
+                stations=(stopping,),
+                connectors=(local_connector(),),
+            )
+
+    def test_local_station_configuration_rejects_unknown_disposition_policy(self) -> None:
+        with self.assertRaisesRegex(ValueError, "disposition_policy is unsupported"):
+            station_configuration(
+                {
+                    "station_id": STATION_ID,
+                    "inference_url": "http://inference.example/v1/chat/completions",
+                    "request": {"stream": True, "messages": []},
+                    "template": {
+                        "steps": ["(1) old"],
+                        "ordering": "ordered",
+                        "start_signal": "(1) old",
+                        "end_signals": [],
+                    },
+                    "parameters": {"idle_timeout": 1.0, "step_deadline": 1.0},
+                    "margins": {"leading": 0.0, "trailing": 0.0},
+                    "disposition_policy": "guess",
+                }
             )
 
 

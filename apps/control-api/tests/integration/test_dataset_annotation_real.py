@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, BinaryIO, cast
 from uuid import UUID, uuid4
@@ -15,8 +15,10 @@ import pytest
 from _integration_support import (
     RedisServer,
     cleanup_dataset,
+    row,
     settings_for,
     upload_video_content,
+    worker_caller_resolver,
 )
 from arq import Worker
 from fastapi.testclient import TestClient
@@ -25,6 +27,7 @@ from sqlalchemy.orm import Session as DatabaseSession
 
 from factory_sop.app import API_PREFIX, create_app
 from factory_sop.auth.adapters.cookies import CSRF_COOKIE, CSRF_HEADER
+from factory_sop.auth.adapters.current_caller import current_caller_resolver
 from factory_sop.auth.adapters.repository import PostgresRoleRepository, PostgresUserRepository
 from factory_sop.auth.model import Role, User, UserStatus
 from factory_sop.auth.passwords import hash_password
@@ -182,6 +185,29 @@ def _remove_manager(engine: Engine, *, user_id: UUID, role_id: UUID) -> None:
         database.commit()
 
 
+def _mutate_manager(
+    engine: Engine,
+    *,
+    user_id: UUID,
+    role_id: UUID,
+    permissions: frozenset[Permission] | None = None,
+    deactivate: bool = False,
+) -> None:
+    """合法提交后修改真实账号，模拟 queued -> 撤权/停用 -> dispatch。"""
+    with session_factory(engine)() as database:
+        roles = PostgresRoleRepository(database)
+        if permissions is not None:
+            role = roles.by_identifier(role_id)
+            assert role is not None
+            roles.update(replace(role, permissions=permissions))
+        if deactivate:
+            users = PostgresUserRepository(database)
+            user = users.by_identifier(user_id)
+            assert user is not None
+            users.update(replace(user, status=UserStatus.DEACTIVATED, updated_by=user_id))
+        database.commit()
+
+
 def _annotation_app(engine: Engine, settings: Settings) -> TestClient:
     app = create_app(settings, session_factory=session_factory(engine))
     return TestClient(app, base_url="https://testserver")
@@ -193,6 +219,9 @@ async def _run_validation(engine: Engine, settings: Settings, job_id: UUID) -> N
             "settings": settings,
             "session_factory": session_factory(engine),
             "dataset_runtime": _ValidationRuntime(engine, settings),
+            "current_caller_resolver": worker_caller_resolver(
+                Permission.DATASET_IMPORT, Permission.DATASET_VIEW, Permission.DATASET_EDIT
+            ),
             "blocking_job_slots": asyncio.Semaphore(1),
         },
         str(job_id),
@@ -225,6 +254,7 @@ async def _run_actual_arq_worker(
     settings: Settings,
     *,
     annotation_runtime: DatasetAnnotationRuntime | None = None,
+    current_caller: Callable[[UUID], object] | None = None,
 ) -> None:
     """用真实 ARQ worker 消费 Redis 中已经提交的任务。"""
     dispatcher = ArqJobDispatcher.from_settings(
@@ -241,6 +271,10 @@ async def _run_actual_arq_worker(
             "dataset_runtime": _ValidationRuntime(engine, settings),
             "annotation_runtime": annotation_runtime
             or dataset_dependencies.annotation_runtime(settings),
+            "current_caller_resolver": current_caller
+            or worker_caller_resolver(
+                Permission.DATASET_IMPORT, Permission.DATASET_VIEW, Permission.DATASET_EDIT
+            ),
             "blocking_job_slots": asyncio.Semaphore(1),
         },
         burst=True,
@@ -415,11 +449,13 @@ def test_stale_context_cleanup_cannot_overwrite_winning_postgres_result(
         _remove_manager(engine, user_id=user_id, role_id=role_id)
 
 
+@pytest.mark.parametrize("condition", ["normal", "revoked", "deactivated"])
 def test_real_http_annotation_persists_revisions_and_isolates_retry_copies(
     engine: Engine,
     dataset_storage_root: Path,
     redis_server: RedisServer,
     real_video_bytes: bytes,
+    condition: str,
 ) -> None:
     settings = settings_for(
         engine, storage_root=dataset_storage_root, redis_url=redis_server.url
@@ -509,6 +545,36 @@ def test_real_http_annotation_persists_revisions_and_isolates_retry_copies(
                 },
             )
             assert submitted.status_code == 202, submitted.text
+            if condition != "normal":
+                _mutate_manager(
+                    engine,
+                    user_id=user_id,
+                    role_id=role_id,
+                    permissions=(
+                        None
+                        if condition == "deactivated"
+                        else frozenset({Permission.DATASET_IMPORT, Permission.DATASET_VIEW})
+                    ),
+                    deactivate=condition == "deactivated",
+                )
+                asyncio.run(
+                    _run_actual_arq_worker(
+                        engine,
+                        settings,
+                        annotation_runtime=runtime,
+                        current_caller=current_caller_resolver(session_factory(engine)),
+                    )
+                )
+                facts = row(
+                    engine,
+                    "SELECT status, failure_code FROM job_application_job "
+                    "WHERE member_id = :member_id AND job_type = 'dataset_annotation' "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    member_id=member_id,
+                )
+                assert tuple(facts) == ("failed", "PERMISSION_DENIED")
+                assert runtime.annotation_backend.copies == ["real-test-video-1"]
+                return
             asyncio.run(
                 _run_actual_arq_worker(
                     engine,

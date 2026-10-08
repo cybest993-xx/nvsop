@@ -65,7 +65,7 @@ The check is also part of the existing repository policy, hence `make check-docs
 
 ## Transitional links
 
-The [historical harness map](../design/repository-harness.md) retains only §1–§10 destinations for existing source/test comments. Retire it after those recorded consumers are migrated; it owns no rules. The installed review skill also locates [the old tracker entry](../agents/issue-tracker.md); keep that routing pointer until the skill's path contract is updated.
+The [historical harness map](../design/repository-harness.md) retains only §1–§10 destinations for existing source/test comments. Retire it after those recorded consumers are migrated; it owns no rules. A locally installed review skill still locates [the old tracker entry](../agents/issue-tracker.md); keep that routing pointer until its path contract is updated.
 
 ## Reference methods adopted
 

@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 from nvsop_contracts import (
+    DISPOSITION_POLICIES,
     Capability,
     HostIdentityRequest,
     validate_host_identity_public_key,
@@ -132,6 +133,8 @@ class StationRuntimeParameters:
                 raise ValueError(f"{field} 必须是有限且大于零的数字")
         if not isinstance(self.disposition_policy, str) or not self.disposition_policy.strip():
             raise ValueError("disposition_policy 不能为空")
+        if self.disposition_policy not in DISPOSITION_POLICIES:
+            raise ValueError("disposition_policy 仅支持 record 或 stop")
 
     def to_wire(self) -> dict[str, object]:
         """转换为完整 JSON 对象；不产生逐项合并结果。"""

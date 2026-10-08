@@ -1201,8 +1201,12 @@ def status(item: DevPaths) -> int:
     }
     if compose_error:
         value["compose_error"] = compose_error
+    # 先按既有判据 + compose_error 计算一次退出码；只读地改写内存展示状态，绝不回写 state 文件。
+    result = 1 if compose_error is not None else status_exit_code(value, services)
+    if result != 0 and value.get("status") == "ready":
+        value["status"] = "degraded"
     print(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
-    return 1 if compose_error is not None else status_exit_code(value, services)
+    return result
 
 
 def read_pid(path: Path) -> int | None:

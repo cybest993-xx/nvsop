@@ -1145,15 +1145,12 @@ _CENTER_WORKER_RESTART_MAX_SECONDS = 30.0
 
 
 def _log_write_attempt(event: WriteAttempted) -> None:
-    """记录连接器写入诊断,但不记录设备凭据; 拒绝带目标地址、具体原因和排障文本 (S029 AC3)。"""
+    """记录点位、结果和拒绝原因码; 设备详情可能含凭据, 不写日志。"""
     outcome = event.outcome
-    refusal = (
-        f" reason={outcome.reason.value} detail={outcome.detail}"
-        if isinstance(outcome, Refused)
-        else ""
-    )
+    refusal = f" reason={outcome.reason.value}" if isinstance(outcome, Refused) else ""
     _logger.info(
-        "connector write attempt key=%s actor=%s point=%s@%s state=%s replayed=%s outcome=%s%s",
+        "edge.connector.write_attempt key=%s actor=%s point=%s@%s "
+        "state=%s replayed=%s outcome=%s%s",
         event.key,
         event.actor,
         event.point.label,
@@ -1659,6 +1656,7 @@ def _synchronize_runtime_configuration(
 
 def main() -> int:
     """启动推理机的自治命令和实时判定循环。"""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     config_path = os.environ.get("NVSOP_EDGE_COMMAND_CONFIG_FILE")
     if not config_path:
         raise SystemExit("NVSOP_EDGE_COMMAND_CONFIG_FILE is required")

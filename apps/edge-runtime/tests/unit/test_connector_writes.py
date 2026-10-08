@@ -550,7 +550,8 @@ class DurableLocalDisposalLedgerTest(unittest.TestCase):
         expected = Failed(detail=PERSISTENT_UNKNOWN_DETAIL)
         with self.assertLogs("edge_runtime", level="ERROR") as logs:
             self.assertEqual(expected, dispatch.write(durable_request))
-        self.assertIn("RuntimeError: adapter crashed after send", logs.output[0])
+        self.assertIn("error_type=RuntimeError", logs.output[0])
+        self.assertNotIn("adapter crashed after send", logs.output[0])
         stored = LocalDisposalLedger(connection).result_for("station-unknown", "disposal-7")
         self.assertIsNotNone(stored)
         assert stored is not None
@@ -600,7 +601,8 @@ class DurableLocalDisposalLedgerTest(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "ledger unavailable"),
         ):
             dispatch.write(request())
-        self.assertIn("RuntimeError: adapter crashed after send", logs.output[0])
+        self.assertIn("error_type=RuntimeError", logs.output[0])
+        self.assertNotIn("adapter crashed after send", logs.output[0])
 
     def test_control_flow_exit_is_not_recorded_as_unknown(self) -> None:
         import sqlite3

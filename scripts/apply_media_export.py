@@ -28,6 +28,7 @@ _STATIC_MEDIA_KEYS = frozenset(
         "preview_release_delay_seconds",
         "startup_timeout_seconds",
         "transcode_threads",
+        "recording_compression_age_seconds",
     }
 )
 _EXPORT_KEYS = frozenset(
@@ -100,11 +101,16 @@ def apply_export(
     _require_keys(export, _EXPORT_KEYS, "center export")
     edge = _object(json.loads(edge_path.read_text(encoding="utf-8")), "edge configuration")
     local_media = _object(edge.get("media"), "edge media configuration")
-    missing = _STATIC_MEDIA_KEYS - local_media.keys()
+    # 原始素材窗口是本机可选配置；旧配置没有该键时不要求补齐，由边缘加载器给单处默认值。
+    missing = (_STATIC_MEDIA_KEYS - {"recording_compression_age_seconds"}) - local_media.keys()
     if missing:
         raise ValueError(f"edge media configuration is missing: {', '.join(sorted(missing))}")
 
     host_id = _string(export.get("host_id"), "host_id")
+    # 本机主机身份是顶层 host_id；导出只能应用到它所属的那台主机，避免把 A 机拓扑
+    # 写进 B 机配置后只在 media.host_id 上留下不一致。
+    if _string(edge.get("host_id"), "edge host_id") != host_id:
+        raise ValueError("center export belongs to another host")
     existing_cameras = {
         _string(camera.get("camera_id"), "local camera_id"): camera
         for camera in _array(local_media.get("cameras", []), "local cameras")
@@ -116,7 +122,7 @@ def apply_export(
     ]
     target_window = export.get("recording_window_seconds")
     media = {
-        **{key: local_media[key] for key in _STATIC_MEDIA_KEYS},
+        **{key: local_media[key] for key in _STATIC_MEDIA_KEYS if key in local_media},
         "host_id": host_id,
         "host_status": _string(export.get("host_status"), "host_status"),
         "mediamtx_address": _optional_string(export.get("mediamtx_address"), "mediamtx_address"),

@@ -30,7 +30,7 @@ uvicorn --factory factory_sop.entrypoint:build
 | SSE 订阅 | `SOP_MONITOR_MAX_SUBSCRIPTIONS` | 每个 API 进程的独立监听连接预算；默认值与上限由 Settings 拥有，超限返回 503 |
 | Session/CSRF | `SOP_SESSION_*`, `SOP_CSRF_SECRET_FILE` | absolute lifetime 不得短于 idle timeout |
 | 训练素材 | `SOP_DATASET_STORAGE_ROOT` | 必须是中心机上的绝对路径；写入经正式 API 流式完成 |
-| Redis | `SOP_REDIS_URL_FILE` | URL 必须是带主机的 `redis://` 或 `rediss://` |
+| Redis | `SOP_REDIS_URL_FILE` | URL 必须是带主机的 `redis://` 或 `rediss://`；库号只能写在路径中（`redis://host:port/N`），URL 的 `db` 查询参数不会被读取 |
 | Dataset | upload TTL、max bytes、supported codecs | codec 列表不能为空 |
 | Media probe | binary、timeout | 默认开发镜像使用 `ffprobe` |
 | Annotation | backend URL、media origin、data root、timeouts | backend + media origin 成组，data root 为绝对路径 |
@@ -71,6 +71,8 @@ NVSOP_EDGE_COMMAND_CONFIG_FILE=/etc/nvsop/edge.json \
 
 环境变量缺失会直接退出。配置文件为本机 JSON；当前中心 URL 只接受 **HTTPS**，且必须是最终地址：边缘不跟随 3xx 跳转，因为请求签名绑定原始路径。
 
+`python -m edge_runtime` 是主机进程，负责判定、处置、证据切片和**唯一的** MediaMTX 预览/录像。每台推理机的推理服务（DeepStream + DDM + vLLM）是独立容器层，按「主机 × 后端」一个 Compose project 部署；其入口、资源/端口分配与只读 secret 边界见[推理机推理服务部署](../../deploy/edge/README.md)，不要在该层另起第二个 MediaMTX 或第二套录像。
+
 **必须由进程守护自动重启。** 工位或本地状态出现未预期异常时，运行时按快速失败退出，重启后从本机 SQLite 恢复（在飞实例以 `RUN_INTERRUPTED` 结案）；中心相关线程的异常不会导致退出（见 [edge-autonomy.md](../design/mechanisms/edge-autonomy.md)）。例如 systemd：
 
 ```ini
@@ -94,7 +96,7 @@ RestartSec=2
 - `local_state_path`
 - `stations`（非空）
 
-可选：`center_ca_file`、`media`。
+可选：`center_ca_file`、`media`、`evidence`。
 
 主机私钥从文件读取并校验；连接器凭据同样留在本机 secret 文件。**当前生产入口以这份本地 JSON 作为 bootstrap/本机部署配置**。设计上的权威分工是中心拥有拓扑、模板、版本和期望运行参数，本机文件拥有本机连接信息、adapter profile 和设备秘密；不要把本机 secret 反向写入中心配置或 Git。
 
@@ -147,6 +149,19 @@ RestartSec=2
 当前本机配置解析器支持的生产 connector type 是 `hikvision_isapi`。每个连接器配置包含 ID、revision、`credentials_configured`、`base_url`、ISAPI profile 和能力声明。若 `credentials_configured=true`，必须提供 `username_file` 与 `password_file`；秘密文件不得为空。
 
 能力声明是现场实测事实，不是从型号名猜出的能力。模板绑定和判定依赖能力数据；详见 [`../design/mechanisms/edge-autonomy.md`](../design/mechanisms/edge-autonomy.md)。
+
+### 本机证据切片
+
+可选 `evidence` 段启用本机证据切片；缺少它时运行时照常判定，证据待办保持 pending 而不声称成功。它复用 `media` 的录像目录与 ffmpeg：
+
+| 字段 | 含义 |
+|---|---|
+| `evidence_directory` | 本机证据目录；每个证据一个目录，含片段/关键帧/元数据并整体原子定稿 |
+| `ffprobe_binary` | 读取分段真实时长的 ffprobe |
+| `slice_timeout_seconds` | 单次 ffmpeg/ffprobe 超时 |
+| `recording_timezone`（可选） | 解析分段文件名的 IANA 时区；省略时按本机时区 |
+
+分段文件名来自 MediaMTX `recordPath`，其时间戳是 MediaMTX 进程的本机时区。**部署必须保证 MediaMTX 与边缘运行时同一时区，或用 `recording_timezone` 显式声明 MediaMTX 的时区**，否则证据窗口会错位。入队时冻结录像墙钟映射与当时参与 SOP 的连续录像相机路径，重启或改绑后历史待办仍按当时来源切片。
 
 ## 当前配置变更与同步机制
 

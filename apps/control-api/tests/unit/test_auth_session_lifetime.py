@@ -13,6 +13,7 @@ from factory_sop.auth.usecases.sessions import (
     restore_session,
     revoke_every_session_of,
     revoke_session,
+    validate_session,
 )
 
 POLICY = SessionPolicy(idle_timeout=timedelta(hours=12), absolute_lifetime=timedelta(days=30))
@@ -39,6 +40,30 @@ def logged_in(
         now=now,
     )
     return opened.token, opened.session
+
+
+def test_rechecking_session_does_not_extend_its_idle_lifetime() -> None:
+    users, sessions = FakeUsers(), FakeSessions()
+    token, opened = logged_in(users, sessions)
+    for hour in (1, 5, 11):
+        checked, user = validate_session(
+            token=token,
+            users=users,
+            sessions=sessions,
+            policy=POLICY,
+            now=MONDAY_MORNING + timedelta(hours=hour),
+        )
+        assert checked == opened
+        assert user.id == opened.user_id
+        assert sessions.by_token_fingerprint(fingerprint(token)) == opened
+    with pytest.raises(AuthenticationRefusedError):
+        validate_session(
+            token=token,
+            users=users,
+            sessions=sessions,
+            policy=POLICY,
+            now=MONDAY_MORNING + POLICY.idle_timeout,
+        )
 
 
 def test_a_token_from_a_previous_request_restores_the_same_session() -> None:

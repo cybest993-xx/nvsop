@@ -155,6 +155,7 @@ layers = [
     "factory_sop.device",
     "factory_sop.dataset",
     "factory_sop.job",
+    "factory_sop.retention",
     "factory_sop.auth",
     "factory_sop.persistence",
     "factory_sop.observability",
@@ -186,6 +187,7 @@ type = "forbidden"
 source_modules = [
     "factory_sop.auth.model",
     "factory_sop.auth.errors",
+    "factory_sop.auth.handover",
     "factory_sop.auth.passwords",
     "factory_sop.auth.tokens",
     "factory_sop.auth.repository",
@@ -267,6 +269,12 @@ ignore_imports = [
 [[tool.importlinter.contracts]]
 name = "execution behavior does not depend on storage or transport adapters"
 type = "forbidden"
+# The same seam rule `device`'s and `template`'s contracts hold: `execution` reaches auth
+# only through `auth.api`, the one permitted cross-module import target. Every auth submodule
+# except `api` is forbidden — directly or through any chain — so an execution use case cannot
+# slip past the seam to `auth.usecases` or an adapter. `ignore_imports` removes exactly the
+# re-export edges `auth.api` itself owns; without that, the api's own re-exports would count as
+# a chain into the internals it publishes, which is the point of it.
 source_modules = [
     "factory_sop.execution.api",
     "factory_sop.execution.model",
@@ -278,8 +286,24 @@ forbidden_modules = [
     "factory_sop.execution.adapters",
     "factory_sop.device.adapters",
     "factory_sop.auth.adapters",
+    "factory_sop.auth.authorization",
+    "factory_sop.auth.csrf",
+    "factory_sop.auth.errors",
+    "factory_sop.auth.handover",
+    "factory_sop.auth.model",
+    "factory_sop.auth.passwords",
+    "factory_sop.auth.permissions",
+    "factory_sop.auth.repository",
+    "factory_sop.auth.tokens",
+    "factory_sop.auth.usecases",
     "fastapi",
     "sqlalchemy",
+]
+ignore_imports = [
+    "factory_sop.auth.api -> factory_sop.auth.adapters.dependencies",
+    "factory_sop.auth.api -> factory_sop.auth.authorization",
+    "factory_sop.auth.api -> factory_sop.auth.handover",
+    "factory_sop.auth.api -> factory_sop.auth.permissions",
 ]
 
 [[tool.importlinter.contracts]]
@@ -308,6 +332,13 @@ name = "evidence behavior does not depend on adapters"
 type = "forbidden"
 source_modules = ["factory_sop.evidence.api", "factory_sop.evidence.model", "factory_sop.evidence.errors", "factory_sop.evidence.repository", "factory_sop.evidence.usecases"]
 forbidden_modules = ["factory_sop.evidence.adapters", "factory_sop.device.adapters", "factory_sop.auth.adapters", "fastapi", "sqlalchemy"]
+
+[[tool.importlinter.contracts]]
+name = "retention behavior does not depend on adapters"
+type = "forbidden"
+source_modules = ["factory_sop.retention.api", "factory_sop.retention.model", "factory_sop.retention.usecases"]
+forbidden_modules = ["factory_sop.retention.adapters", "factory_sop.auth.adapters", "fastapi", "sqlalchemy"]
+ignore_imports = ["factory_sop.auth.api -> factory_sop.auth.adapters.dependencies", "factory_sop.auth.api -> factory_sop.auth.authorization", "factory_sop.auth.api -> factory_sop.auth.permissions"]
 
 [[tool.importlinter.contracts]]
 name = "dataset's behavior does not depend on how it is stored or reached"

@@ -12,6 +12,10 @@ from dataclasses import dataclass, replace
 from urllib.parse import urlsplit
 
 from nvsop_contracts import (
+    DISPOSITION_POLICIES,
+    DISPOSITION_POLICY_STOP,
+    DISPOSITION_STOP_OUTPUT_CAPABILITY,
+    STOP_OUTPUT_SEMANTIC_LABEL,
     ConfigurationBundle,
     ConfiguredConnector,
     ConfiguredStation,
@@ -46,6 +50,19 @@ class StationRuntimeBinding:
     def output_points_for(self, connector_id: str) -> tuple[OutputPoint, ...]:
         return tuple(point for owner, point in self.output_points if owner == connector_id)
 
+    def output_target(self, semantic_label: str) -> tuple[str, OutputPoint]:
+        matches = tuple(
+            (connector_id, point)
+            for connector_id, point in self.output_points
+            if point.label == semantic_label
+        )
+        if len(matches) != 1:
+            raise RuntimeConfigurationError(
+                f"station {self.configuration.station_id} requires exactly one output point "
+                f"named {semantic_label!r}"
+            )
+        return matches[0]
+
 
 @dataclass(frozen=True, slots=True)
 class RuntimeConfiguration:
@@ -71,6 +88,10 @@ def bootstrap_runtime_configuration(
     _unique_connector_ids(connectors)
     grouped: dict[str, list[StationRuntimeBinding]] = {}
     for station in stations:
+        if station.disposition_policy == DISPOSITION_POLICY_STOP:
+            raise RuntimeConfigurationError(
+                "stop disposition requires confirmed output topology before activation"
+            )
         bootstrap = replace(station, model_ids=())
         grouped.setdefault(station.station_id, []).append(
             StationRuntimeBinding(
@@ -100,6 +121,16 @@ def confirmed_runtime_configuration(
     本机配置只提供后端端点、请求体和凭据;模板、运行参数、连接器能力及点位拓扑均来自中心。
     """
     _unique_connector_ids(local_connectors)
+    if (
+        any(
+            station.runtime_parameters.disposition_policy == DISPOSITION_POLICY_STOP
+            for station in bundle.stations
+        )
+        and DISPOSITION_STOP_OUTPUT_CAPABILITY not in bundle.required_capabilities
+    ):
+        raise RuntimeConfigurationError(
+            "stop disposition requires disposition.stop-output-v1 capability"
+        )
     station_slices: dict[str, list[StationRuntimeBinding]] = {}
     connectors_by_id: dict[str, LocalIsapiConnectorConfiguration] = {}
     for configured in bundle.stations:
@@ -143,6 +174,11 @@ def _confirmed_station(
     bootstrap_stations: tuple[StationRuntimeConfiguration, ...],
 ) -> StationRuntimeBinding:
     local = _local_station(configured, bootstrap_stations)
+    if configured.runtime_parameters.disposition_policy not in DISPOSITION_POLICIES:
+        raise RuntimeConfigurationError(
+            f"station {configured.station_id} has unsupported disposition policy "
+            f"{configured.runtime_parameters.disposition_policy!r}"
+        )
     if configured.template is None:
         raise RuntimeConfigurationError(f"station {configured.station_id} 没有完整的已确认模板")
     template = _template_from_artifact(configured)
@@ -175,13 +211,16 @@ def _confirmed_station(
             raise RuntimeConfigurationError(
                 f"point {point.point_id} has unsupported direction {point.direction!r}"
             )
-    return StationRuntimeBinding(
+    binding = StationRuntimeBinding(
         configuration=effective,
         input_points=tuple(input_points),
         output_points=tuple(output_points),
         connector_ids=connector_ids,
         configurations=(effective,),
     )
+    if effective.disposition_policy == DISPOSITION_POLICY_STOP:
+        binding.output_target(STOP_OUTPUT_SEMANTIC_LABEL)
+    return binding
 
 
 def _merge_station_bindings(

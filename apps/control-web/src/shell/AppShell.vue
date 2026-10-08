@@ -62,6 +62,10 @@ const navigation: NavigationItem[] = [
       'device.point.view',
       'device.point.edit',
       'device.point.delete',
+      'device.station.view',
+      'device.station.edit',
+      'monitor.report.view',
+      'execution.handover.edit',
     ],
   },
   {

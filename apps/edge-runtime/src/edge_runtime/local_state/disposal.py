@@ -1,4 +1,4 @@
-"""由 ``local_state`` 拥有的持久连接器处置账本。
+"""由 ``local_state`` 拥有的唯一持久处置账本。
 
 连接器适配器可以在这个小存储接缝上转换结构化结果,但不能拥有第二份幂等表。主键是工位和调用方
 拥有的幂等键,跨进程重启和中心离线保持不变。
@@ -12,6 +12,8 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from threading import RLock
 
+from nvsop_contracts import ReportedDisposal
+
 
 @dataclass(frozen=True, slots=True)
 class DisposalIntent:
@@ -21,6 +23,10 @@ class DisposalIntent:
     point_id: str
     actor: str
     requested_state: str
+    violation_ref: str | None = None
+    violation_instance_id: int | None = None
+    source: str = "connector"
+    report_host_id: str | None = None
 
     def __post_init__(self) -> None:
         if any(
@@ -35,6 +41,37 @@ class DisposalIntent:
             )
         ):
             raise ValueError("a disposal intent needs complete identity and target fields")
+        if self.report_host_id is not None:
+            if not self.report_host_id:
+                raise ValueError("reported disposal host id must not be empty")
+            if not self.violation_ref or not self.source:
+                raise ValueError("a reported physical disposal needs violation and source")
+            if (
+                isinstance(self.violation_instance_id, bool)
+                or not isinstance(self.violation_instance_id, int)
+                or self.violation_instance_id < 0
+            ):
+                raise ValueError("a reported physical disposal needs an instance id")
+
+
+DISPOSAL_ACTION_RECORD = "record"
+DISPOSAL_ACTION_FRONTEND_ALERT = "frontend_alert"
+DISPOSAL_ACTION_WRITE_OUTPUT = "write_output"
+
+
+@dataclass(frozen=True, slots=True)
+class LocalDisposalRequest:
+    idempotency_key: str
+    violation_ref: str
+    instance_id: int
+    action_kind: str
+    actor: str
+    source: str
+
+
+@dataclass(frozen=True, slots=True)
+class LocalDisposalIntent(LocalDisposalRequest):
+    station_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,8 +142,9 @@ class LocalDisposalLedger:
         self._connection.execute(
             """
             INSERT INTO local_disposal
-                (station_id, idempotency_key, connector_id, point_id, actor, requested_state)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (station_id, idempotency_key, connector_id, point_id, actor, requested_state,
+                 action_kind, violation_ref, violation_instance_id, source, report_host_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (station_id, idempotency_key) DO NOTHING
             """,
             (
@@ -116,11 +154,17 @@ class LocalDisposalLedger:
                 intent.point_id,
                 intent.actor,
                 intent.requested_state,
+                DISPOSAL_ACTION_WRITE_OUTPUT,
+                intent.violation_ref,
+                intent.violation_instance_id,
+                intent.source,
+                intent.report_host_id,
             ),
         )
         row = self._connection.execute(
             """
-            SELECT connector_id, point_id, actor, requested_state
+            SELECT connector_id, point_id, actor, requested_state, action_kind,
+                   violation_ref, violation_instance_id, source, report_host_id
               FROM local_disposal
              WHERE station_id = ? AND idempotency_key = ?
             """,
@@ -133,8 +177,161 @@ class LocalDisposalLedger:
             intent.point_id,
             intent.actor,
             intent.requested_state,
+            DISPOSAL_ACTION_WRITE_OUTPUT,
+            intent.violation_ref,
+            intent.violation_instance_id,
+            intent.source,
+            intent.report_host_id,
         ):
             raise ValueError("idempotency key was reused for a different disposal intent")
+
+    def ensure_local(
+        self, station_id: str, request: LocalDisposalRequest, *, host_id: str | None
+    ) -> LocalDisposalIntent | None:
+        intent = LocalDisposalIntent(
+            request.idempotency_key,
+            request.violation_ref,
+            request.instance_id,
+            request.action_kind,
+            request.actor,
+            request.source,
+            station_id,
+        )
+        with self._write_transaction():
+            inserted = (
+                self._connection.execute(
+                    """
+                INSERT INTO local_disposal
+                    (station_id,idempotency_key,action_kind,violation_ref,violation_instance_id,
+                     source,actor,report_host_id)
+                VALUES (?,?,?,?,?,?,?,?)
+                ON CONFLICT (station_id,idempotency_key) DO NOTHING
+                """,
+                    (
+                        station_id,
+                        request.idempotency_key,
+                        request.action_kind,
+                        request.violation_ref,
+                        request.instance_id,
+                        request.source,
+                        request.actor,
+                        host_id,
+                    ),
+                ).rowcount
+                == 1
+            )
+            row = self._connection.execute(
+                """SELECT action_kind,violation_ref,violation_instance_id FROM local_disposal
+                     WHERE station_id=? AND idempotency_key=?""",
+                (station_id, request.idempotency_key),
+            ).fetchone()
+            if row is None or tuple(row) != (
+                request.action_kind,
+                request.violation_ref,
+                request.instance_id,
+            ):
+                raise ValueError("idempotency key was reused for a different local disposal")
+        return intent if inserted else None
+
+    def pending_local(self, station_id: str) -> tuple[LocalDisposalIntent, ...]:
+        with self._lock:
+            rows = self._connection.execute(
+                """SELECT station_id,idempotency_key,violation_ref,violation_instance_id,
+                          action_kind,actor,source FROM local_disposal
+                     WHERE station_id=? AND action_kind!='write_output' AND result_kind IS NULL
+                     ORDER BY disposal_id""",
+                (station_id,),
+            ).fetchall()
+        return tuple(_local_intent(row) for row in rows)
+
+    def claim_local(self, intent: LocalDisposalIntent, *, now: float) -> bool:
+        with self._write_transaction():
+            return (
+                self._connection.execute(
+                    """UPDATE local_disposal SET attempts=attempts+1,last_attempt_at=?
+                     WHERE station_id=? AND idempotency_key=? AND result_kind IS NULL""",
+                    (now, intent.station_id, intent.idempotency_key),
+                ).rowcount
+                == 1
+            )
+
+    def record_local_result(
+        self, intent: LocalDisposalIntent, result: StoredDisposalResult
+    ) -> bool:
+        with self._write_transaction():
+            return (
+                self._connection.execute(
+                    """UPDATE local_disposal SET result_kind=?,result_detail=?,result_at=?
+                     WHERE station_id=? AND idempotency_key=? AND result_kind IS NULL""",
+                    (
+                        result.kind,
+                        result.detail,
+                        result.at,
+                        intent.station_id,
+                        intent.idempotency_key,
+                    ),
+                ).rowcount
+                == 1
+            )
+
+    def pending_report_ids(self, *, limit: int | None = None) -> tuple[int, ...]:
+        with self._lock:
+            rows = self._connection.execute(
+                """SELECT disposal_id FROM local_disposal
+                     WHERE report_host_id IS NOT NULL AND result_kind IS NOT NULL
+                       AND sent_at IS NULL ORDER BY disposal_id LIMIT ?""",
+                (-1 if limit is None else limit,),
+            ).fetchall()
+        return tuple(int(row[0]) for row in rows)
+
+    def report(self, disposal_id: int, *, reported_at: str) -> ReportedDisposal:
+        with self._write_transaction():
+            self._connection.execute(
+                """UPDATE local_disposal SET report_reported_at=?
+                     WHERE disposal_id=? AND report_reported_at IS NULL AND sent_at IS NULL""",
+                (reported_at, disposal_id),
+            )
+            row = self._connection.execute(
+                """SELECT station_id,idempotency_key,violation_ref,violation_instance_id,
+                          action_kind,actor,source,result_kind,result_detail,result_at,attempts,
+                          report_host_id,report_reported_at FROM local_disposal
+                     WHERE disposal_id=? AND report_host_id IS NOT NULL
+                       AND result_kind IS NOT NULL AND sent_at IS NULL""",
+                (disposal_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError("pending disposal report does not exist")
+        event_id = f"{row['report_host_id']}:disposal:{disposal_id}"
+        return ReportedDisposal(
+            event_id=event_id,
+            host_id=str(row["report_host_id"]),
+            station_id=str(row["station_id"]),
+            instance_id=int(row["violation_instance_id"]),
+            idempotency_key=str(row["idempotency_key"]),
+            violation_ref=str(row["violation_ref"]),
+            action_kind=str(row["action_kind"]),
+            actor=str(row["actor"]),
+            source=str(row["source"]),
+            result_kind=str(row["result_kind"]),
+            result_detail=row["result_detail"],
+            result_at=float(row["result_at"]),
+            attempts=int(row["attempts"]),
+            reported_at=str(row["report_reported_at"]),
+        )
+
+    def mark_reported(self, disposal_id: int, *, at: float) -> None:
+        with self._write_transaction():
+            self._connection.execute(
+                "UPDATE local_disposal SET sent_at=? WHERE disposal_id=?", (at, disposal_id)
+            )
+
+    def record_report_failure(self, disposal_id: int, *, at: float, error: str) -> None:
+        with self._write_transaction():
+            self._connection.execute(
+                """UPDATE local_disposal SET report_attempts=report_attempts+1,
+                       report_last_attempt_at=?,report_last_error=? WHERE disposal_id=?""",
+                (at, error, disposal_id),
+            )
 
     def result_for(self, station_id: str, idempotency_key: str) -> StoredDisposalResult | None:
         with self._lock:
@@ -290,6 +487,18 @@ class LocalDisposalLedger:
             raise RuntimeError("disposal result was already replaced by another attempt")
 
 
+def _local_intent(row: sqlite3.Row) -> LocalDisposalIntent:
+    return LocalDisposalIntent(
+        idempotency_key=str(row["idempotency_key"]),
+        violation_ref=str(row["violation_ref"]),
+        instance_id=int(row["violation_instance_id"]),
+        action_kind=str(row["action_kind"]),
+        actor=str(row["actor"]),
+        source=str(row["source"]),
+        station_id=str(row["station_id"]),
+    )
+
+
 def _stored_result(row: sqlite3.Row | tuple[object, ...] | None) -> StoredDisposalResult | None:
     if row is None:
         return None
@@ -305,10 +514,14 @@ def _stored_result(row: sqlite3.Row | tuple[object, ...] | None) -> StoredDispos
 
 
 __all__ = [
+    "DISPOSAL_ACTION_FRONTEND_ALERT",
+    "DISPOSAL_ACTION_RECORD",
     "DISPOSAL_RESULT_UNKNOWN",
     "DISPOSAL_RESULT_WRITTEN",
     "DisposalClaim",
     "DisposalIntent",
+    "LocalDisposalIntent",
     "LocalDisposalLedger",
+    "LocalDisposalRequest",
     "StoredDisposalResult",
 ]

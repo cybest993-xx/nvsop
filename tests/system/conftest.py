@@ -27,7 +27,8 @@ from alembic.config import Config
 from sqlalchemy import Engine, create_engine, text
 from testcontainers.community.postgres import PostgresContainer
 
-POSTGRES_IMAGE = "postgres:17.6-alpine"
+# 中心部署镜像自带 TimescaleDB 扩展（S020），固定具体标签以便迁移能创建部署预加载的扩展。
+POSTGRES_IMAGE = "timescale/timescaledb:2.22.1-pg17"
 SERVER_HOST = "127.0.0.1"
 SERVER_START_TIMEOUT_SECONDS = 30.0
 
@@ -279,6 +280,12 @@ def _make_tls_certificate(directory: Path) -> tuple[Path, Path]:
     return certificate, key
 
 
+@pytest.fixture(scope="session")
+def tls_certificate(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
+    """仅复用不可变证书；服务进程、日志和数据库清理仍逐场景隔离。"""
+    return _make_tls_certificate(tmp_path_factory.mktemp("system-tls"))
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.bind((SERVER_HOST, 0))
@@ -342,9 +349,10 @@ def client(
     deployment_environ: dict[str, str],
     tmp_path: Path,
     log: ServerLog,
+    tls_certificate: tuple[Path, Path],
 ) -> Iterator[httpx2.Client]:
     """Talk to the published app through a real TLS-enabled Uvicorn subprocess."""
-    certificate, key = _make_tls_certificate(tmp_path)
+    certificate, key = tls_certificate
     _reset_database(engine)
     port = _free_port()
     base_url = f"https://{SERVER_HOST}:{port}"

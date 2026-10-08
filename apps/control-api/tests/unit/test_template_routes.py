@@ -643,6 +643,28 @@ def test_invalid_import_is_a_problem_but_the_failed_import_record_remains(
     assert next(iter(center.templates.imports.values())).status is ImportStatus.FAILED
 
 
+def test_runtime_parameters_reject_unknown_disposition_policy_at_http_boundary() -> None:
+    center = Center()
+    center.log_in(Permission.STATION_EDIT)
+
+    response = center.send(
+        "PUT",
+        f"{TEMPLATES}/stations/{UUID(int=1)}/runtime-parameters",
+        headers={"If-Match": "1"},
+        json={
+            "mode": "custom",
+            "parameters": {
+                "idle_timeout_seconds": 10,
+                "step_deadline_seconds": 2,
+                "disposition_policy": "guess",
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "REQUEST_INVALID"
+
+
 def test_template_routes_declare_their_permission() -> None:
     center = Center()
     schema = center.app.openapi()

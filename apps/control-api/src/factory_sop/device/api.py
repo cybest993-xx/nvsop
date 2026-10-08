@@ -70,6 +70,7 @@ class TemplateBindingSpecification:
     template_version_sha256: str
     start_signal: BindingSignal | None
     end_signals: tuple[BindingSignal, ...]
+    disposition_policy: str
     runtime_mode: RuntimeParameterMode | None = None
     runtime_overrides: StationRuntimeParameters | None = None
     actor_id: UUID | None = None
@@ -159,6 +160,38 @@ class DeviceHostGateway(Protocol):
 
     def owns_station_backend(self, *, host_id: UUID, station_id: UUID, backend_id: UUID) -> bool:
         """只允许认证主机上报自己拥有的工位和推理后端。"""
+        ...
+
+
+class DeviceMonitorGateway(Protocol):
+    """monitor 读取设备 owner 持有的历史归属与主机清单。"""
+
+    def has_historical_station(
+        self,
+        *,
+        host_id: UUID,
+        station_id: UUID,
+        template_version_id: str | None = None,
+        template_sha256: str | None = None,
+    ) -> bool:
+        """仅在不可变配置历史证明主机曾拥有该工位/模板时返回真。"""
+        ...
+
+    def has_historical_assignment(
+        self,
+        *,
+        host_id: UUID,
+        station_id: UUID,
+        backend_id: UUID,
+        template_version_id: str | None,
+        template_sha256: str | None,
+        model_ids: tuple[str, ...],
+    ) -> bool:
+        """仅在不可变历史中存在精确的产生时 assignment 时返回真。"""
+        ...
+
+    def registered_host_ids(self) -> tuple[UUID, ...]:
+        """返回当前已登记主机身份，供 Center 外部存活见证使用。"""
         ...
 
 
@@ -355,6 +388,7 @@ __all__ = [
     "DeviceConfigurationTopology",
     "DeviceHistoricalAssignmentGateway",
     "DeviceHostGateway",
+    "DeviceMonitorGateway",
     "DeviceTemplateBindingGateway",
     "InferenceHostIdentity",
     "RuntimeParameterMode",

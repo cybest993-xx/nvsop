@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import cast
 from uuid import UUID
 
 from factory_sop.auth.api import Caller, Permission, authorize
+from factory_sop.device.api import DeviceMonitorGateway
 from factory_sop.monitor.api import HistoricalAssignmentGateway, HostOwnershipGateway
 from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.model import (
@@ -22,6 +24,7 @@ from factory_sop.monitor.repository import MonitorRepository, MonitorStreamSourc
 from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
     ReportedDecision,
+    ReportedDisposal,
     ReportedHealth,
     ReportedObservation,
     ReportedSopInstance,
@@ -133,13 +136,18 @@ def mirror_health(
     received_at: datetime,
     monitor: MonitorRepository,
     host_gateway: HostOwnershipGateway,
+    device_gateway: DeviceMonitorGateway,
 ) -> bool:
-    """只保存认证主机所属的健康观测。"""
+    """保存当前归属或不可变历史归属能够证明的一路流健康事实。"""
+    _health_occurred_at(report)
     host_id = _uuid(report.host_id, "health host_id")
-    if report.station_id is not None:
-        station_id = _uuid(report.station_id, "health station_id")
-        if not host_gateway.owns_station(host_id=host_id, station_id=station_id):
-            raise MonitorRefusedError("reported health is outside the authenticated host topology")
+    station_id = _uuid(report.station_id, "health station_id")
+    if not host_gateway.owns_station(
+        host_id=host_id, station_id=station_id
+    ) and not device_gateway.has_historical_station(host_id=host_id, station_id=station_id):
+        raise MonitorRefusedError(
+            "reported health is outside current and historical host assignment"
+        )
     return monitor.upsert_health(MirroredHealth(report=report, received_at=received_at))
 
 
@@ -205,18 +213,70 @@ def list_violations(
     return monitor.page_violations(page=page, page_size=page_size)
 
 
+def mirror_disposal(
+    report: ReportedDisposal,
+    *,
+    received_at: datetime,
+    monitor: MonitorRepository,
+    host_gateway: HostOwnershipGateway,
+    device_gateway: DeviceMonitorGateway,
+) -> bool:
+    host_id, station_id = (
+        _uuid(report.host_id, "disposal host_id"),
+        _uuid(report.station_id, "disposal station_id"),
+    )
+    if not host_gateway.owns_station(
+        host_id=host_id, station_id=station_id
+    ) and not device_gateway.has_historical_station(host_id=host_id, station_id=station_id):
+        raise MonitorRefusedError(
+            "reported disposal is outside current and historical host assignment"
+        )
+    return monitor.upsert_disposal(report, received_at=received_at)
+
+
+def list_disposals(
+    monitor: MonitorRepository, *, caller: Caller, page: int, page_size: int
+) -> tuple[tuple[ReportedDisposal, ...], int]:
+    authorize(caller, Permission.MONITOR_VIEW)
+    return monitor.page_disposals(page=page, page_size=page_size)
+
+
 def mirror_observation(
     report: ReportedObservation,
     *,
     received_at: datetime,
     monitor: MonitorRepository,
     host_gateway: HostOwnershipGateway,
+    device_gateway: DeviceMonitorGateway,
 ) -> bool:
-    """只保存认证主机所属工位的归一化观测；中心不重新判定。"""
+    """保存当前归属或产生时 provenance 的历史归属能够证明的观测。"""
     host_id = _uuid(report.host_id, "observation host_id")
     station_id = _uuid(report.station_id, "observation station_id")
-    if not host_gateway.owns_station(host_id=host_id, station_id=station_id):
-        raise MonitorRefusedError("reported observation is outside the authenticated host topology")
+    if host_gateway.owns_station(host_id=host_id, station_id=station_id):
+        return monitor.upsert_observation(
+            MirroredObservation(report=report, received_at=received_at)
+        )
+    backend = report.backend
+    if backend is None:
+        assigned = device_gateway.has_historical_station(
+            host_id=host_id,
+            station_id=station_id,
+            template_version_id=report.template_version_id,
+            template_sha256=report.template_sha256,
+        )
+    else:
+        assigned = device_gateway.has_historical_assignment(
+            host_id=host_id,
+            station_id=station_id,
+            backend_id=_uuid(backend.backend_id, "observation backend_id"),
+            template_version_id=report.template_version_id,
+            template_sha256=report.template_sha256,
+            model_ids=backend.model_ids,
+        )
+    if not assigned:
+        raise MonitorRefusedError(
+            "reported observation is outside current and historical assignment"
+        )
     return monitor.upsert_observation(MirroredObservation(report=report, received_at=received_at))
 
 
@@ -240,6 +300,131 @@ def list_observations(
 
 
 @dataclass(frozen=True, slots=True)
+class StreamHealthView:
+    """一个工位的运行有效性投影：每路流的最新事实与工位级分类。
+
+    它只陈述"这段时间的观测能不能用于判定"；配置验证与主机可达性属于 device，不在此重复。
+    """
+
+    station_id: str
+    validity: str
+    streams: tuple[MirroredHealth, ...]
+
+
+def stream_health_view(
+    monitor: MonitorRepository,
+    *,
+    caller: Caller,
+    station_id: str,
+    limit: int = 50,
+) -> StreamHealthView:
+    """返回授权用户可查看的工位运行有效性；不反写 edge，也不虚构健康。
+
+    ``no_data`` 表示中心尚无该工位任何流健康事实；这不是"健康"，也不是"失联"。
+    """
+    authorize(caller, Permission.MONITOR_VIEW)
+    reports = monitor.health_for_station(station_id=station_id)
+    latest = latest_health_per_stream(reports)
+    if not latest:
+        return StreamHealthView(station_id=station_id, validity="no_data", streams=())
+    validity = (
+        "healthy"
+        if all(_health_is_healthy(report.report.status) for report in latest)
+        else "impaired"
+    )
+    ordered = tuple(sorted(latest, key=_health_event_order, reverse=True))
+    return StreamHealthView(station_id=station_id, validity=validity, streams=ordered[:limit])
+
+
+def latest_health_per_stream(reports: tuple[MirroredHealth, ...]) -> tuple[MirroredHealth, ...]:
+    """每路流按 edge 事件时间保留最新事实；Center ingestion sequence 只服务 SSE。
+
+    monitor owner 唯一的健康业务分类：SSE 投影与工位视图都复用它，不另造排序。
+    """
+    latest: dict[str | None, MirroredHealth] = {}
+    for report in reports:
+        key = report.report.stream_id
+        current = latest.get(key)
+        if current is None or _health_event_order(report) > _health_event_order(current):
+            latest[key] = report
+    return tuple(latest.values())
+
+
+def _health_event_order(value: MirroredHealth) -> tuple[float, str]:
+    """使用冻结的事件时间锚排序；event_id 仅为相同时刻提供稳定次序。"""
+    return _health_occurred_at(value.report), value.report.event_id
+
+
+def _health_occurred_at(report: ReportedHealth) -> float:
+    """验证健康发生时间，并优先用冻结源锚给事件排序。"""
+    try:
+        occurred_at = datetime.fromisoformat(report.occurred_at.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("health occurred_at must be an ISO-8601 timestamp") from error
+    if occurred_at.tzinfo is None:
+        raise ValueError("health occurred_at must include a timezone")
+    if report.source_anchor is not None and report.anchor_offset is not None:
+        return report.source_anchor + report.anchor_offset
+    return occurred_at.timestamp()
+
+
+def _health_is_healthy(status: str) -> bool:
+    """只有明确的"正在投递"算健康；未知状态保守地按受损处理 (§5.21)。"""
+    return status == "delivering"
+
+
+@dataclass(frozen=True, slots=True)
+class HostLiveness:
+    """中心对一台推理机的独立存活判据（外部证人，§5.7）。
+
+    它判的是"这台机还活着吗"，不是流健康；因此不反写 edge 判定，也不虚构健康。
+    """
+
+    host_id: str
+    last_reported_at: datetime | None
+    age_seconds: float | None
+    suspicious: bool
+
+
+def host_liveness(
+    monitor: MonitorRepository,
+    *,
+    device_gateway: DeviceMonitorGateway,
+    caller: Caller,
+    now: datetime,
+    stale_after_seconds: float,
+) -> tuple[HostLiveness, ...]:
+    """按 device 登记主机集合和 Center 接收事实计算独立外部见证。"""
+    authorize(caller, Permission.MONITOR_VIEW)
+    if stale_after_seconds <= 0:
+        raise ValueError("host liveness threshold must be positive")
+    last_by_host = dict(monitor.last_report_at_by_host())
+    values: list[HostLiveness] = []
+    for host_id in device_gateway.registered_host_ids():
+        last_reported_at = last_by_host.get(str(host_id))
+        if last_reported_at is None:
+            values.append(
+                HostLiveness(
+                    host_id=str(host_id),
+                    last_reported_at=None,
+                    age_seconds=None,
+                    suspicious=True,
+                )
+            )
+            continue
+        age = (now - last_reported_at).total_seconds()
+        values.append(
+            HostLiveness(
+                host_id=str(host_id),
+                last_reported_at=last_reported_at,
+                age_seconds=age,
+                suspicious=age > stale_after_seconds,
+            )
+        )
+    return tuple(values)
+
+
+@dataclass(frozen=True, slots=True)
 class SseSnapshot:
     """初始帧和两个镜像表各自的数据库高水位。"""
 
@@ -250,6 +435,7 @@ class SseSnapshot:
     health_event_id: str
     decision_sequence: int = 0
     health_sequence: int = 0
+    runtime_projection: tuple[dict[str, object], ...] = ()
 
 
 def sse_snapshot(
@@ -341,30 +527,37 @@ def sse_snapshot_state(
         health_after, health_event_id = boundary, ""
     else:
         health_after, health_event_id = health_cursor
+    runtime_projection = monitor.runtime_projection()
+    frames = tuple(
+        _sse_frame(event=kind, event_id=event_id, data=data)
+        for _, kind, event_id, _, data in events
+    ) + tuple(_runtime_frame(value) for value in runtime_projection)
     return SseSnapshot(
-        frames=tuple(
-            _sse_frame(event=kind, event_id=event_id, data=data)
-            for _, kind, event_id, _, data in events
-        ),
+        frames=frames,
         decision_after=decision_after,
         decision_event_id=decision_event_id,
         health_after=health_after,
         health_event_id=health_event_id,
         decision_sequence=decision_sequence,
         health_sequence=health_sequence,
+        runtime_projection=runtime_projection,
     )
 
 
 def sse_stream(
     source: MonitorStreamSource,
     *,
-    caller: Caller,
+    current_caller: Callable[[], Caller | None],
+    initial_frames: tuple[str, ...] = (),
     decision_sequence: int = 0,
     health_sequence: int = 0,
+    runtime_projection: tuple[dict[str, object], ...] = (),
     wait_timeout: float = 15.0,
 ) -> Iterator[str]:
-    """用 durable cursor 重放事实；LISTEN/NOTIFY 仅缩短下一轮读取的等待。"""
-    authorize(caller, Permission.MONITOR_VIEW)
+    """每批发送前复核授权；durable cursor 是事实权威，通知只缩短等待。"""
+    if not _authorize_stream(current_caller):
+        return
+    yield from initial_frames
     while True:
         decisions, health = source.read_after_sequences(
             decision_sequence=decision_sequence,
@@ -393,16 +586,42 @@ def sse_stream(
                 for value in health
             ),
         )
+        current_runtime = source.read_runtime_projection()
+        previous_by_station = {
+            cast(str, value["station_id"]): value for value in runtime_projection
+        }
+        current_by_station = {cast(str, value["station_id"]): value for value in current_runtime}
+        if not _authorize_stream(current_caller):
+            return
+        for station_id in sorted(current_by_station):
+            value = current_by_station[station_id]
+            if previous_by_station.get(station_id) != value:
+                yield _runtime_frame(value)
+        runtime_projection = current_runtime
         if not events:
-            if not source.wait_for_wakeup(timeout=wait_timeout):
+            awakened = source.wait_for_wakeup(timeout=wait_timeout)
+            if not _authorize_stream(current_caller):
+                return
+            if not awakened:
                 yield ": keep-alive\n\n"
             continue
+        if not _authorize_stream(current_caller):
+            return
         for _, kind, event_id, sequence, data in events:
             if kind == "decision":
                 decision_sequence = max(decision_sequence, sequence)
             else:
                 health_sequence = max(health_sequence, sequence)
             yield _sse_frame(event=kind, event_id=event_id, data=data)
+
+
+def _authorize_stream(current_caller: Callable[[], Caller | None]) -> bool:
+    """失效会话结束流；现存身份仍走统一权限规则，异常绝不沿用旧授权。"""
+    caller = current_caller()
+    if caller is None:
+        return False
+    authorize(caller, Permission.MONITOR_VIEW)
+    return True
 
 
 SseEvent = tuple[datetime, str, str, int, dict[str, object]]
@@ -435,6 +654,11 @@ def _snapshot_cursor(values: Iterator[tuple[datetime, str]]) -> tuple[datetime, 
     return max(values, default=None)
 
 
+def _runtime_frame(data: dict[str, object]) -> str:
+    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    return f"event: runtime\ndata: {payload}\n\n"
+
+
 def _sse_frame(*, event: str, event_id: str, data: dict[str, object]) -> str:
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     return f"id: {event_id}\nevent: {event}\ndata: {payload}\n\n"
@@ -448,7 +672,11 @@ def _uuid(value: str, label: str) -> UUID:
 
 
 __all__ = [
+    "HostLiveness",
     "SseSnapshot",
+    "StreamHealthView",
+    "host_liveness",
+    "latest_health_per_stream",
     "list_instances",
     "list_observations",
     "list_violations",
@@ -459,4 +687,5 @@ __all__ = [
     "sse_snapshot",
     "sse_snapshot_state",
     "sse_stream",
+    "stream_health_view",
 ]

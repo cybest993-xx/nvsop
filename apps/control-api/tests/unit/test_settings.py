@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr
 
-from factory_sop.settings import ConfigurationError, Settings
+from factory_sop.settings import ConfigurationError, RedisConnection, Settings, parse_redis_url
 
 
 def write_secret(tmp_path: Path, content: str, name: str = "database-password") -> str:
@@ -167,6 +167,48 @@ def test_refuses_a_negative_redis_database(tmp_path: Path) -> None:
                 ),
             )
         )
+
+
+def test_refuses_a_malformed_redis_url(tmp_path: Path) -> None:
+    with pytest.raises(ConfigurationError, match="redis_url"):
+        Settings.from_environment(
+            environment(
+                tmp_path,
+                SOP_REDIS_URL_FILE=write_secret(
+                    tmp_path, "redis://[::1/0\n", name="malformed-redis-url"
+                ),
+            )
+        )
+
+
+def test_parse_redis_url_returns_the_supported_connection_facts() -> None:
+    url = "rediss://operator:secret@redis.internal:6380/3"  # pragma: allowlist secret
+
+    assert parse_redis_url(url) == RedisConnection(
+        host="redis.internal",
+        port=6380,
+        database=3,
+        username="operator",
+        password="secret",  # pragma: allowlist secret
+        ssl=True,
+    )
+
+
+def test_parse_redis_url_defaults_port_and_database() -> None:
+    assert parse_redis_url("redis://redis.internal") == RedisConnection(
+        host="redis.internal",
+        port=6379,
+        database=0,
+        username=None,
+        password=None,
+        ssl=False,
+    )
+
+
+def test_parse_redis_url_hides_the_password_in_its_repr() -> None:
+    parsed = parse_redis_url("redis://operator:secret@redis.internal:6379/0")
+
+    assert "secret" not in repr(parsed)
 
 
 def test_accepts_annotation_backend_with_a_same_host_https_media_origin(tmp_path: Path) -> None:

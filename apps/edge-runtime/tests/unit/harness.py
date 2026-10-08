@@ -43,6 +43,11 @@ from edge_runtime.judgment.model import (
     Template,
     TimerFired,
 )
+from edge_runtime.local_state.disposal import (
+    LocalDisposalIntent,
+    LocalDisposalRequest,
+    StoredDisposalResult,
+)
 from edge_runtime.local_state.queues import BackendReportContext
 
 STEPS = ("(1) step 1", "(2) step 2", "(3) step 3", "(4) step 4", "(5) step 5")
@@ -126,6 +131,7 @@ class MemoryReactionStore:
         ] = []
         self.report_provenance: list[Mapping[int, tuple[BackendReportContext, ...] | None]] = []
         self.observations: list[dict[str, object]] = []
+        self.health: list[dict[str, object]] = []
 
     def commit(
         self,
@@ -135,9 +141,22 @@ class MemoryReactionStore:
         evidence: Sequence[EvidenceClip],
         closed_instances: Sequence[Instance],
         report_provenance: Mapping[int, tuple[BackendReportContext, ...] | None],
-    ) -> None:
+        disposals: Sequence[LocalDisposalRequest] = (),
+    ) -> tuple[LocalDisposalIntent, ...]:
+        del disposals
         self.reactions.append((state, tuple(decisions), tuple(evidence), tuple(closed_instances)))
         self.report_provenance.append(dict(report_provenance))
+        return ()
+
+    def pending_disposals(self) -> tuple[LocalDisposalIntent, ...]:
+        return ()
+
+    def claim_disposal(self, intent: LocalDisposalIntent, *, at: HostInstant) -> bool:
+        del intent, at
+        return False
+
+    def record_disposal(self, intent: LocalDisposalIntent, result: StoredDisposalResult) -> None:
+        del intent, result
 
     def enqueue_observation(
         self,
@@ -159,6 +178,29 @@ class MemoryReactionStore:
                 "source_anchor": source_anchor,
                 "observed_at": observed_at,
                 "backend": backend,
+            }
+        )
+
+    def enqueue_health(
+        self,
+        *,
+        stream_id: str | None,
+        status: str,
+        reason_code: str | None,
+        detail: str | None,
+        occurred_at: str,
+        source_anchor: float | None,
+        anchor_offset: float | None,
+    ) -> None:
+        self.health.append(
+            {
+                "stream_id": stream_id,
+                "status": status,
+                "reason_code": reason_code,
+                "detail": detail,
+                "occurred_at": occurred_at,
+                "source_anchor": source_anchor,
+                "anchor_offset": anchor_offset,
             }
         )
 

@@ -7,11 +7,14 @@ from collections.abc import Mapping
 
 from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
+    HEALTH_REPORT_CAPABILITY,
+    HEALTH_REPORT_CONTRACT_VERSION,
     REPORT_CAPABILITIES_HEADER,
     SOP_INSTANCE_REPORT_CAPABILITY,
     SOP_INSTANCE_REPORT_CONTRACT_VERSION,
     ConfigurationBundle,
     ReportedDecision,
+    ReportedDisposal,
     ReportedHealth,
     ReportedObservation,
     ReportedSopInstance,
@@ -75,6 +78,10 @@ class HttpDecisionReportTransport(DecisionReportTransport):
             or configuration.effective_sha256 != configuration_sha256
         ):
             raise ValueError("frozen configuration does not match report proof")
+        self._negotiate_report_contract(configuration)
+
+    def _negotiate_report_contract(self, configuration: ConfigurationBundle) -> None:
+        """一次 confirmed-configuration 握手; 同一 revision 只做一次。"""
         key = (configuration.config_revision, configuration.effective_sha256)
         if key in self._confirmed_report_configurations:
             return
@@ -82,22 +89,35 @@ class HttpDecisionReportTransport(DecisionReportTransport):
         response = self._post_json(
             path,
             configuration_to_wire(configuration),
-            extra_headers={REPORT_CAPABILITIES_HEADER: SOP_INSTANCE_REPORT_CAPABILITY},
+            extra_headers={
+                REPORT_CAPABILITIES_HEADER: (
+                    f"{SOP_INSTANCE_REPORT_CAPABILITY},{HEALTH_REPORT_CAPABILITY}"
+                )
+            },
         )
         if set(response) != {
             "decision_report_contract_version",
             "sop_instance_report_contract_version",
+            "health_report_contract_version",
         }:
             raise ReportTransportError("中心运行时兼容响应格式不受支持")
         if response["decision_report_contract_version"] != DECISION_REPORT_CONTRACT_VERSION:
             raise ReportTransportError("中心不支持当前 historical decision report contract")
         if response["sop_instance_report_contract_version"] != SOP_INSTANCE_REPORT_CONTRACT_VERSION:
             raise ReportTransportError("中心不支持当前 SOP instance report contract")
+        if response["health_report_contract_version"] != HEALTH_REPORT_CONTRACT_VERSION:
+            raise ReportTransportError("中心不支持当前 stream health report contract")
         self._confirmed_report_configurations.add(key)
 
-    def send_health(self, report: ReportedHealth) -> None:
+    def send_health(
+        self, report: ReportedHealth, *, configuration: ConfigurationBundle | None
+    ) -> None:
         if report.host_id != self._host_id:
             raise ValueError("a health report cannot be sent by a different host")
+        if configuration is not None:
+            if configuration.host_id != report.host_id:
+                raise ValueError("health report configuration is for a different host")
+            self._negotiate_report_contract(configuration)
         self._post("/api/v1/monitor/health", reported_health_to_wire(report))
 
     def send_instance(
@@ -122,6 +142,11 @@ class HttpDecisionReportTransport(DecisionReportTransport):
         if report.host_id != self._host_id:
             raise ValueError("an observation report cannot be sent by a different host")
         self._post("/api/v1/monitor/reported-observations", reported_observation_to_wire(report))
+
+    def send_disposal(self, report: ReportedDisposal) -> None:
+        if report.host_id != self._host_id:
+            raise ValueError("a disposal report cannot be sent by a different host")
+        self._post("/api/v1/monitor/reported-disposals", report.to_wire())
 
     def _post(self, path: str, body: dict[str, object]) -> None:
         try:

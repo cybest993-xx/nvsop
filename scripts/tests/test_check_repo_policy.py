@@ -6,7 +6,11 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from check_repo_policy import center_boundary_violations, check_repository
+from check_repo_policy import (
+    center_boundary_violations,
+    check_repository,
+    check_retention_duration_literals,
+)
 
 
 class RepositoryPolicyTest(unittest.TestCase):
@@ -30,9 +34,23 @@ class RepositoryPolicyTest(unittest.TestCase):
             Path("docs/engineering/documentation.md"): "# Documentation\n",
             Path("docs/design/solution-and-roadmap.md"): "# Current decisions\n",
             Path(".github/workflows/blocking-ci.yml"): (
-                "pull_request:\nCI required\nalways()\nmake check\n"
+                "workflow_call:\nCI required\nalways()\nmake check\n"
+                "ref: ${{ inputs.head_sha }}\n"
                 "if: needs.scope.outputs.integration == 'true'\n"
             ),
+            Path(".github/workflows/landing-queue.yml"): (
+                "issue_comment:\nworkflow_dispatch:\ncancel-in-progress: false\n"
+                "guard:\nvars.LANDING_APP_ID != ''\nvars.LANDING_QUEUE_ISSUE != ''\n"
+                "needs.guard.outputs.enabled == 'true'\n"
+                "environment: landing\n"
+                "actions/create-github-app-token@"
+                "fee1f7d63c2ff003460e3d139729b119787bc349\n"
+                "scripts/landing_queue.py prepare\n"
+                "scripts/landing_queue.py finalize\n"
+                "uses: ./.github/workflows/blocking-ci.yml\n"
+                "ref: ${{ github.workflow_sha }}\n"
+            ),
+            Path("scripts/landing_queue.py"): "# landing queue owner\n",
             Path("scripts/ci_scope.py"): (
                 'INTEGRATION_PREFIXES = ("apps/edge-runtime/", "tests/system/")\n'
             ),
@@ -61,6 +79,33 @@ class RepositoryPolicyTest(unittest.TestCase):
 
     def test_accepts_minimum_harness(self) -> None:
         self.assertEqual([], self.check())
+
+    def test_rejects_blocking_ci_legacy_triggers_and_caller_expressions(self) -> None:
+        # queue-only：legacy 触发器与 caller 表达式都必须拒绝，候选头只能来自控制器输入。
+        self.write(
+            ".github/workflows/blocking-ci.yml",
+            "pull_request:\npush:\nworkflow_call:\nCI required\nalways()\nmake check\n"
+            "ref: ${{ inputs.head_sha }}\n"
+            "if: needs.scope.outputs.integration == 'true'\n",
+        )
+        errors = self.check()
+        self.assertIn(
+            "blocking-ci.yml must be reusable-only; remove the legacy pull_request: trigger",
+            errors,
+        )
+        self.assertIn(
+            "blocking-ci.yml must be reusable-only; remove the legacy push: trigger", errors
+        )
+
+        self.write(
+            ".github/workflows/blocking-ci.yml",
+            "workflow_call:\nCI required\nalways()\nmake check\n"
+            "ref: ${{ inputs.head_sha || github.sha }}\n"
+            "if: needs.scope.outputs.integration == 'true'\n",
+        )
+        self.assertIn(
+            "blocking-ci.yml must resolve head/base from workflow_call inputs only", self.check()
+        )
 
     def test_rejects_a_shared_selector_that_omits_system_tests(self) -> None:
         system_test = self.write("tests/system/test_case.py", "")
@@ -664,6 +709,42 @@ class RepositoryPolicyTest(unittest.TestCase):
             ".mcp.json", '{"headers": {"Authorization": "Bearer ${ONE_SEARCH_TOKEN}"}}\n'
         )
         self.assertEqual([], self.check(str(manifest)))
+
+
+class RetentionDurationLiteralTest(unittest.TestCase):
+    """切片/回收业务路径的保留/窗口时长不得写死（§5.19）。"""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def write(self, relative: str, content: str) -> Path:
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return Path(relative)
+
+    def test_rejects_a_literal_duration_in_a_designated_slicing_path(self) -> None:
+        path = self.write(
+            "apps/edge-runtime/src/edge_runtime/media_retention.py",
+            "retention_seconds = 7 * 24 * 60 * 60\n",
+        )
+        errors = check_retention_duration_literals(self.root, [path])
+        self.assertEqual(1, len(errors))
+        self.assertIn("hardcodes a retention/window duration", errors[0])
+
+    def test_accepts_config_values_defaults_and_paths_outside_the_set(self) -> None:
+        config = self.write(
+            "apps/edge-runtime/src/edge_runtime/media.py",
+            "window = configuration.recording_window_seconds\n"
+            "port = 8080\n"
+            "DEFAULT_RETENTION_SECONDS = 604800\n",
+        )
+        other = self.write("apps/edge-runtime/src/edge_runtime/other.py", "retention = 604800\n")
+        self.assertEqual([], check_retention_duration_literals(self.root, [config, other]))
 
 
 if __name__ == "__main__":

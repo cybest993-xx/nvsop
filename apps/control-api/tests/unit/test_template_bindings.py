@@ -125,7 +125,11 @@ class HostGateway(DeviceHostGateway):
         return self.allowed
 
 
-def build_fixture() -> tuple[
+def build_fixture(
+    *,
+    connectors: FakeConnectors | None = None,
+    points: FakePoints | None = None,
+) -> tuple[
     TemplateStore,
     RepositoryDeviceTemplateBindingGateway,
     Station,
@@ -138,8 +142,8 @@ def build_fixture() -> tuple[
     hosts = FakeInferenceHosts()
     backends = FakeInferenceBackends()
     cameras = FakeCameras()
-    connectors = FakeConnectors()
-    points = FakePoints()
+    connectors = FakeConnectors() if connectors is None else connectors
+    points = FakePoints() if points is None else points
     station = stations.register(code="A-001", name="装配一号工位")
     host = hosts.register(name="推理机一")
     backend = backends.register(host_id=host.id, base_url="http://10.0.0.1:8000")
@@ -197,6 +201,23 @@ def build_fixture() -> tuple[
     return templates_store, gateway, station, host, backend, camera, version
 
 
+def stop_version(version: TemplateVersion) -> TemplateVersion:
+    defaults = TemplateRuntimeDefaults(30.0, 90.0, "stop")
+    artifacts = build_template_artifacts(
+        steps=version.steps,
+        ordering=version.ordering,
+        boundary=version.boundary,
+        runtime_defaults=defaults,
+    )
+    return replace(
+        version,
+        id=new_id(),
+        runtime_defaults=defaults,
+        artifacts=artifacts.artifacts,
+        sha256=artifacts.sha256,
+    )
+
+
 def test_bind_persists_desired_but_not_reported_and_resolves_template_defaults() -> None:
     store, device, station, _host, backend, camera, version = build_fixture()
 
@@ -236,7 +257,7 @@ def test_custom_parameters_survive_a_rebind_and_are_not_merged_with_new_defaults
         templates=store,
         device=device,
     )
-    custom = StationRuntimeParameters(12.0, 44.0, "hold")
+    custom = StationRuntimeParameters(12.0, 44.0, "record")
     custom_configuration = update_station_runtime_parameters(
         station_id=station.id,
         mode=RuntimeParameterMode.CUSTOM,
@@ -248,7 +269,7 @@ def test_custom_parameters_survive_a_rebind_and_are_not_merged_with_new_defaults
         device=device,
     )
 
-    second_defaults = TemplateRuntimeDefaults(60.0, 120.0, "discard")
+    second_defaults = TemplateRuntimeDefaults(60.0, 120.0, "record")
     second_boundary = first.boundary
     second_artifacts = build_template_artifacts(
         steps=first.steps,
@@ -278,10 +299,39 @@ def test_custom_parameters_survive_a_rebind_and_are_not_merged_with_new_defaults
 
     assert rebound.runtime.mode is RuntimeParameterMode.CUSTOM
     assert rebound.runtime.overrides == custom
-    assert rebound.runtime.defaults == StationRuntimeParameters(60.0, 120.0, "discard")
+    assert rebound.runtime.defaults == StationRuntimeParameters(60.0, 120.0, "record")
     assert rebound.runtime.effective == custom
     assert rebound.binding is not None
     assert rebound.binding.desired_version_id == second.id
+
+
+def test_runtime_update_to_stop_requires_the_named_safety_output() -> None:
+    store, device, station, _host, _backend, _camera, version = build_fixture()
+    bound = bind_template_version(
+        station_id=station.id,
+        version_id=version.id,
+        runtime_mode=None,
+        runtime_overrides=None,
+        expected_station_revision=station.revision,
+        caller=CALLER,
+        now=NOW,
+        templates=store,
+        device=device,
+    )
+
+    with pytest.raises(TemplateRefusedError) as raised:
+        update_station_runtime_parameters(
+            station_id=station.id,
+            mode=RuntimeParameterMode.CUSTOM,
+            overrides=StationRuntimeParameters(30.0, 90.0, "stop"),
+            expected_station_revision=bound.station_revision,
+            caller=CALLER,
+            now=NOW + timedelta(minutes=1),
+            templates=store,
+            device=device,
+        )
+
+    assert any("停线联锁" in error.message for error in raised.value.field_errors)
 
 
 def test_report_acceptance_and_digest_rejection_keep_last_valid_confirmation() -> None:

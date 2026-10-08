@@ -13,6 +13,8 @@ from threading import Event, Lock, Thread, current_thread
 from time import monotonic
 from typing import Protocol, cast
 
+from nvsop_contracts import DISPOSITION_POLICIES
+
 from edge_runtime.configuration_values import (
     _array,
     _is_number,
@@ -569,6 +571,11 @@ def station_configuration(value: object) -> StationRuntimeConfiguration:
         model_ids = tuple(
             _non_empty_string(item, "model id") for item in _array(config["model_ids"], "model_ids")
         )
+    disposition_policy: str | None = None
+    if config.get("disposition_policy") is not None:
+        disposition_policy = _non_empty_string(config["disposition_policy"], "disposition_policy")
+        if disposition_policy not in DISPOSITION_POLICIES:
+            raise ValueError("station disposition_policy is unsupported")
     return StationRuntimeConfiguration(
         station_id=_non_empty_string(config["station_id"], "station_id"),
         inference_url=safe_url(config["inference_url"], "inference_url", schemes={"http", "https"}),
@@ -592,11 +599,7 @@ def station_configuration(value: object) -> StationRuntimeConfiguration:
             else _non_empty_string(config["template_sha256"], "template_sha256")
         ),
         model_ids=model_ids,
-        disposition_policy=(
-            None
-            if config.get("disposition_policy") is None
-            else _non_empty_string(config["disposition_policy"], "disposition_policy")
-        ),
+        disposition_policy=disposition_policy,
     )
 
 

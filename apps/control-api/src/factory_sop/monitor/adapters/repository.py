@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import cast
 
-from sqlalchemy import Table, func, select, text, update
+from sqlalchemy import Table, and_, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.orm import Session
 
 from factory_sop.monitor.adapters.tables import (
+    DecisionIdentityRow,
+    HealthIdentityRow,
+    ObservationIdentityRow,
     ReportedDecisionRow,
+    ReportedDisposalRow,
     ReportedHealthRow,
     ReportedObservationRow,
     ReportedSopInstanceRow,
@@ -24,7 +29,15 @@ from factory_sop.monitor.model import (
     MirroredViolation,
 )
 from factory_sop.monitor.repository import MonitorRepository
-from nvsop_contracts import ReportedSopInstance
+from factory_sop.monitor.usecases import latest_health_per_stream
+from nvsop_contracts import (
+    ReportedDisposal,
+    ReportedSopInstance,
+    reported_decision_to_wire,
+    reported_health_to_wire,
+    reported_observation_to_wire,
+    reported_sop_instance_to_wire,
+)
 
 MONITOR_STREAM_CHANNEL = "nvsop_monitor_stream"
 _DECISION_STREAM_LOCK_KEY = 0x4D4F4E444543  # "MONDEC"
@@ -38,53 +51,69 @@ class PostgresMonitorRepository(MonitorRepository):
     def upsert_decision(self, value: MirroredDecision) -> bool:
         self._acquire_stream_lock(_DECISION_STREAM_LOCK_KEY)
         row = ReportedDecisionRow.from_domain(value)
+        identity = cast(Table, DecisionIdentityRow.__table__)
+        # 先按事件 id 预约全局唯一身份并取流内序号，再写分区事实；重复上报不写事实。
+        sequence = self._session.execute(
+            postgres_insert(identity)
+            .values(event_id=row.event_id, received_at=row.received_at)
+            .on_conflict_do_nothing(index_elements=[identity.c.event_id])
+            .returning(identity.c.stream_sequence)
+        ).scalar_one_or_none()
         table = cast(Table, ReportedDecisionRow.__table__)
-        statement = postgres_insert(table).values(
-            event_id=row.event_id,
-            trace_id=row.trace_id,
-            host_id=row.host_id,
-            station_id=row.station_id,
-            backend_id=row.backend_id,
-            received_at=row.received_at,
-            payload=row.payload,
-        )
-        result = self._session.execute(
-            statement.on_conflict_do_nothing(index_elements=[table.c.event_id]).returning(
-                table.c.event_id
+        if sequence is not None:
+            self._session.execute(
+                postgres_insert(table).values(
+                    event_id=row.event_id,
+                    received_at=row.received_at,
+                    stream_sequence=sequence,
+                    trace_id=row.trace_id,
+                    host_id=row.host_id,
+                    station_id=row.station_id,
+                    backend_id=row.backend_id,
+                    payload=row.payload,
+                )
             )
-        )
-        if result.scalar_one_or_none() is not None:
             self._notify_stream("decision")
             return True
-        existing = self._session.get(ReportedDecisionRow, row.event_id)
+        existing = self._session.scalars(
+            select(ReportedDecisionRow).where(ReportedDecisionRow.event_id == row.event_id)
+        ).one_or_none()
         if existing is None:
-            raise RuntimeError("decision mirror insert conflicted without a visible row")
+            raise RuntimeError("decision mirror conflicted without a visible row")
         _ensure_same(existing.payload, row.payload, "decision", row.event_id)
         return False
 
     def upsert_health(self, value: MirroredHealth) -> bool:
         self._acquire_stream_lock(_HEALTH_STREAM_LOCK_KEY)
         row = ReportedHealthRow.from_domain(value)
+        identity = cast(Table, HealthIdentityRow.__table__)
+        sequence = self._session.execute(
+            postgres_insert(identity)
+            .values(event_id=row.event_id, received_at=row.received_at)
+            .on_conflict_do_nothing(index_elements=[identity.c.event_id])
+            .returning(identity.c.stream_sequence)
+        ).scalar_one_or_none()
         table = cast(Table, ReportedHealthRow.__table__)
-        statement = postgres_insert(table).values(
-            event_id=row.event_id,
-            trace_id=row.trace_id,
-            host_id=row.host_id,
-            station_id=row.station_id,
-            received_at=row.received_at,
-            payload=row.payload,
-        )
-        result = self._session.execute(
-            statement.on_conflict_do_nothing(index_elements=[table.c.event_id]).returning(
-                table.c.event_id
+        if sequence is not None:
+            self._session.execute(
+                postgres_insert(table).values(
+                    event_id=row.event_id,
+                    received_at=row.received_at,
+                    stream_sequence=sequence,
+                    trace_id=row.trace_id,
+                    host_id=row.host_id,
+                    station_id=row.station_id,
+                    stream_id=row.stream_id,
+                    payload=row.payload,
+                )
             )
-        )
-        if result.scalar_one_or_none() is not None:
             self._notify_stream("health")
             return True
-        existing = self._session.get(ReportedHealthRow, row.event_id)
+        existing = self._session.scalars(
+            select(ReportedHealthRow).where(ReportedHealthRow.event_id == row.event_id)
+        ).one_or_none()
         if existing is None:
-            raise RuntimeError("health mirror insert conflicted without a visible row")
+            raise RuntimeError("health mirror conflicted without a visible row")
         _ensure_same(existing.payload, row.payload, "health", row.event_id)
         return False
 
@@ -110,6 +139,7 @@ class PostgresMonitorRepository(MonitorRepository):
             )
         )
         if result.scalar_one_or_none() is not None:
+            self._notify_stream("runtime")
             return True
         existing = self._session.get(ReportedSopInstanceRow, row.event_id)
         if existing is None:
@@ -134,6 +164,7 @@ class PostgresMonitorRepository(MonitorRepository):
                 .returning(ReportedSopInstanceRow.event_id)
             )
             if closed.scalar_one_or_none() is not None:
+                self._notify_stream("runtime")
                 return True
             current = self._session.get(ReportedSopInstanceRow, row.event_id)
             if current is None:
@@ -202,31 +233,74 @@ class PostgresMonitorRepository(MonitorRepository):
         total = self._session.scalar(select(func.count()).select_from(ReportedViolationRow))
         return tuple(row.to_domain() for row in rows), int(total or 0)
 
-    def upsert_observation(self, value: MirroredObservation) -> bool:
-        row = ReportedObservationRow.from_domain(value)
-        table = cast(Table, ReportedObservationRow.__table__)
-        statement = postgres_insert(table).values(
-            event_id=row.event_id,
-            trace_id=row.trace_id,
-            host_id=row.host_id,
-            station_id=row.station_id,
-            instance_id=row.instance_id,
-            source=row.source,
-            signal=row.signal,
-            observed_at=row.observed_at,
-            received_at=row.received_at,
-            payload=row.payload,
-        )
+    def upsert_disposal(self, report: ReportedDisposal, *, received_at: datetime) -> bool:
+        payload = report.to_wire()
+        table = cast(Table, ReportedDisposalRow.__table__)
         result = self._session.execute(
-            statement.on_conflict_do_nothing(index_elements=[table.c.event_id]).returning(
-                table.c.event_id
+            postgres_insert(table)
+            .values(
+                event_id=report.event_id,
+                host_id=report.host_id,
+                received_at=received_at,
+                payload=payload,
             )
+            .on_conflict_do_nothing(index_elements=[table.c.event_id])
+            .returning(table.c.event_id)
         )
         if result.scalar_one_or_none() is not None:
             return True
-        existing = self._session.get(ReportedObservationRow, row.event_id)
+        existing = self._session.get(ReportedDisposalRow, report.event_id)
         if existing is None:
-            raise RuntimeError("observation mirror insert conflicted without a visible row")
+            raise RuntimeError("disposal mirror insert conflicted without a visible row")
+        _ensure_same(existing.payload, payload, "disposal", report.event_id)
+        return False
+
+    def page_disposals(
+        self, *, page: int, page_size: int
+    ) -> tuple[tuple[ReportedDisposal, ...], int]:
+        rows = self._session.scalars(
+            select(ReportedDisposalRow)
+            .order_by(ReportedDisposalRow.received_at.desc(), ReportedDisposalRow.event_id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        ).all()
+        total = self._session.scalar(select(func.count()).select_from(ReportedDisposalRow))
+        return tuple(
+            ReportedDisposal.from_wire(cast(dict[str, object], row.payload)) for row in rows
+        ), int(total or 0)
+
+    def upsert_observation(self, value: MirroredObservation) -> bool:
+        row = ReportedObservationRow.from_domain(value)
+        identity = cast(Table, ObservationIdentityRow.__table__)
+        reserved = self._session.execute(
+            postgres_insert(identity)
+            .values(event_id=row.event_id, received_at=row.received_at)
+            .on_conflict_do_nothing(index_elements=[identity.c.event_id])
+            .returning(identity.c.event_id)
+        ).scalar_one_or_none()
+        table = cast(Table, ReportedObservationRow.__table__)
+        if reserved is not None:
+            self._session.execute(
+                postgres_insert(table).values(
+                    event_id=row.event_id,
+                    received_at=row.received_at,
+                    trace_id=row.trace_id,
+                    host_id=row.host_id,
+                    station_id=row.station_id,
+                    instance_id=row.instance_id,
+                    source=row.source,
+                    signal=row.signal,
+                    observed_at=row.observed_at,
+                    payload=row.payload,
+                )
+            )
+            self._notify_stream("runtime")
+            return True
+        existing = self._session.scalars(
+            select(ReportedObservationRow).where(ReportedObservationRow.event_id == row.event_id)
+        ).one_or_none()
+        if existing is None:
+            raise RuntimeError("observation mirror conflicted without a visible row")
         _ensure_same(existing.payload, row.payload, "observation", row.event_id)
         return False
 
@@ -274,6 +348,31 @@ class PostgresMonitorRepository(MonitorRepository):
         ).all()
         return tuple(row.to_domain() for row in rows)
 
+    def health_for_station(self, *, station_id: str) -> tuple[MirroredHealth, ...]:
+        rows = self._session.scalars(
+            select(ReportedHealthRow).where(ReportedHealthRow.station_id == station_id)
+        ).all()
+        return tuple(row.to_domain() for row in rows)
+
+    def last_report_at_by_host(self) -> tuple[tuple[str, datetime], ...]:
+        """跨全部镜像事实汇总每个主机最近一次被中心接收的时刻。"""
+        latest: dict[str, datetime] = {}
+        for host_column, received_column in (
+            (ReportedDecisionRow.host_id, ReportedDecisionRow.received_at),
+            (ReportedDisposalRow.host_id, ReportedDisposalRow.received_at),
+            (ReportedHealthRow.host_id, ReportedHealthRow.received_at),
+            (ReportedObservationRow.host_id, ReportedObservationRow.received_at),
+            (ReportedSopInstanceRow.host_id, ReportedSopInstanceRow.received_at),
+        ):
+            rows = self._session.execute(
+                select(host_column, func.max(received_column)).group_by(host_column)
+            ).all()
+            for host_id, received_at in rows:
+                current = latest.get(host_id)
+                if current is None or received_at > current:
+                    latest[host_id] = received_at
+        return tuple(sorted(latest.items()))
+
     def decisions_after_sequence(
         self, *, after_sequence: int, limit: int
     ) -> tuple[MirroredDecision, ...]:
@@ -306,6 +405,85 @@ class PostgresMonitorRepository(MonitorRepository):
     def health_sequence_for_event(self, event_id: str) -> int | None:
         return self._session.scalar(
             select(ReportedHealthRow.stream_sequence).where(ReportedHealthRow.event_id == event_id)
+        )
+
+    def runtime_projection(self) -> tuple[dict[str, object], ...]:
+        """从 durable mirror 按工位读取当前事实，不限制全局行数。
+
+        每路流健康复用 monitor owner 的事件时间分类，避免 Center ingestion 序号在
+        迟到旧报告时覆盖较新的业务事实。
+        """
+        decisions = self._session.scalars(
+            select(ReportedDecisionRow)
+            .distinct(ReportedDecisionRow.station_id)
+            .order_by(ReportedDecisionRow.station_id, ReportedDecisionRow.stream_sequence.desc())
+        ).all()
+        health = self._session.scalars(
+            select(ReportedHealthRow)
+            .where(ReportedHealthRow.station_id.is_not(None))
+            .order_by(ReportedHealthRow.station_id, ReportedHealthRow.stream_id)
+        ).all()
+        latest_hosts = (
+            select(ReportedSopInstanceRow.station_id, ReportedSopInstanceRow.host_id)
+            .distinct(ReportedSopInstanceRow.station_id)
+            .order_by(
+                ReportedSopInstanceRow.station_id,
+                ReportedSopInstanceRow.received_at.desc(),
+                ReportedSopInstanceRow.event_id.desc(),
+            )
+            .subquery()
+        )
+        instances = self._session.scalars(
+            select(ReportedSopInstanceRow)
+            .join(
+                latest_hosts,
+                and_(
+                    ReportedSopInstanceRow.station_id == latest_hosts.c.station_id,
+                    ReportedSopInstanceRow.host_id == latest_hosts.c.host_id,
+                ),
+            )
+            .distinct(ReportedSopInstanceRow.station_id)
+            .order_by(
+                ReportedSopInstanceRow.station_id,
+                ReportedSopInstanceRow.instance_id.desc(),
+                ReportedSopInstanceRow.event_id.desc(),
+            )
+        ).all()
+        observations = self._session.scalars(
+            select(ReportedObservationRow)
+            .distinct(ReportedObservationRow.station_id)
+            .order_by(
+                ReportedObservationRow.station_id,
+                ReportedObservationRow.received_at.desc(),
+                ReportedObservationRow.event_id.desc(),
+            )
+        ).all()
+        by_station: dict[str, dict[str, object]] = {}
+        health_by_station: dict[str, list[MirroredHealth]] = {}
+        for decision_row in decisions:
+            by_station.setdefault(decision_row.station_id, {})["decision"] = (
+                reported_decision_to_wire(decision_row.to_domain().report)
+            )
+        for health_row in health:
+            health_by_station.setdefault(health_row.station_id or "", []).append(
+                health_row.to_domain()
+            )
+        for station_id, reports in health_by_station.items():
+            by_station.setdefault(station_id, {})["health"] = [
+                reported_health_to_wire(value.report)
+                for value in latest_health_per_stream(tuple(reports))
+            ]
+        for instance_row in instances:
+            by_station.setdefault(instance_row.station_id, {})["instance"] = (
+                reported_sop_instance_to_wire(instance_row.to_domain().report)
+            )
+        for observation_row in observations:
+            by_station.setdefault(observation_row.station_id, {})["observation"] = (
+                reported_observation_to_wire(observation_row.to_domain().report)
+            )
+        return tuple(
+            {"station_id": station_id, **by_station[station_id]}
+            for station_id in sorted(by_station)
         )
 
     def _acquire_stream_lock(self, key: int) -> None:

@@ -14,6 +14,8 @@ from factory_sop.template.api import (
     TemplateConfigurationGateway,
 )
 from nvsop_contracts import (
+    DISPOSITION_POLICY_STOP,
+    DISPOSITION_STOP_OUTPUT_CAPABILITY,
     EXECUTION_LEASE_WRITE_GATE_CAPABILITY,
     ConfigurationBundle,
     ExecutionLease,
@@ -66,6 +68,13 @@ def configuration_for_host(
                 )
             )
 
+        required_capabilities = {EXECUTION_LEASE_WRITE_GATE_CAPABILITY}
+        if any(
+            station.runtime_parameters.disposition_policy == DISPOSITION_POLICY_STOP
+            for station in stations
+        ):
+            required_capabilities.add(DISPOSITION_STOP_OUTPUT_CAPABILITY)
+
         candidate = ConfigurationBundle(
             host_id=str(topology.host_id),
             config_revision=1,
@@ -73,7 +82,7 @@ def configuration_for_host(
             stations=tuple(sorted(stations, key=lambda item: (item.station_id, item.backend_id))),
             # 物理写入门禁是行为扩展: 声明能力门禁, 不支持该能力的旧 Edge 显式拒绝整个候选,
             # 而不是忽略 execution_grants 继续无门禁写入 (machine-contract-evolution.md)。
-            required_capabilities=(EXECUTION_LEASE_WRITE_GATE_CAPABILITY,),
+            required_capabilities=tuple(sorted(required_capabilities)),
         )
         revision_floor = max(
             topology.host_revision,

@@ -8,7 +8,7 @@ SQLite 是该接缝的真实基础设施, 测试使用真实迁移和 supervisor
 - 一个事务提交实例、判定、锁存和两个队列, 失败时全部回滚;
 - 返工、不可判定结案和中心不可达不会清除已锁存违规;
 - 重启以 RUN_INTERRUPTED 结案, 不续接上次实例;
-- 两个队列的失败重试都保留本地唯一副本;
+- 三个队列的失败重试都保留本地唯一副本;
 - 证据余量只加宽核心所需跨度, 不截断。
 """
 
@@ -26,6 +26,7 @@ from nvsop_contracts import (
     ConfigurationBundle,
     ReportBackendProvenance,
     ReportedDecision,
+    ReportedHealth,
     ReportedObservation,
     configuration_to_wire,
 )
@@ -65,7 +66,11 @@ from edge_runtime.supervisor.startup import resume_station
 
 def _report_attempts(attempts: tuple[ReportAttempt, ...]) -> tuple[ReportAttempt, ...]:
     """只保留判定/实例上报尝试; 归一化观测有独立积压, 单独验证。"""
-    return tuple(attempt for attempt in attempts if "observation:" not in attempt.event_id)
+    return tuple(
+        attempt
+        for attempt in attempts
+        if "observation:" not in attempt.event_id and "disposal:" not in attempt.event_id
+    )
 
 
 class OneTransactionTest(unittest.TestCase):
@@ -434,7 +439,7 @@ class HistoricalReportContextTest(unittest.TestCase):
             database = str(Path(temporary) / "state.sqlite")
             first = open_local_state(database)
             station = first.station(STATION, report_context=context_n)
-            driver = supervisor(opening_state(), FakeClock(), station)
+            driver = supervisor(opening_state(), FakeClock(), station, disposition_policy="record")
             provenance = context_n.backends[0]
             driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=provenance)
             driver.receive(action(STEPS[2], at=ANCHOR + 1.0), report_provenance=provenance)
@@ -446,6 +451,15 @@ class HistoricalReportContextTest(unittest.TestCase):
             rebound = second.station(STATION, report_context=context_n1)
             (after_reconfigure,) = rebound.pending_reports()
             self.assertEqual(after_reconfigure.context, context_n)
+            disposals = tuple(
+                second.disposal().report(item, reported_at="2026-09-16T00:00:00Z")
+                for item in second.disposal().pending_report_ids()
+            )
+            self.assertEqual(
+                {(item.result_kind, item.attempts) for item in disposals},
+                {("recorded", 1), ("queued_for_mirror", 1)},
+            )
+            self.assertEqual(second.disposal().pending_local(STATION), ())
             second.close()
 
             third = open_local_state(database)
@@ -723,6 +737,9 @@ class HistoricalReportContextTest(unittest.TestCase):
             def send_observation(self, report: object) -> None:
                 del report
 
+            def send_health(self, report: object, *, configuration: object) -> None:
+                del report, configuration
+
         transport = Transport()
         attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(
             now=HostInstant(ANCHOR + 2.0),
@@ -767,6 +784,9 @@ class HistoricalReportContextTest(unittest.TestCase):
 
             def send_observation(self, report: object) -> None:
                 del report
+
+            def send_health(self, report: object, *, configuration: object) -> None:
+                del report, configuration
 
         transport = Transport()
         attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(
@@ -833,6 +853,9 @@ class HistoricalReportContextTest(unittest.TestCase):
             def send_observation(self, report: object) -> None:
                 del report
 
+            def send_health(self, report: object, *, configuration: object) -> None:
+                del report, configuration
+
         transport = Transport()
         attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(
             now=HostInstant(ANCHOR + 2.0),
@@ -896,7 +919,7 @@ class HistoricalReportContextTest(unittest.TestCase):
         state = open_local_state(":memory:")
         self.addCleanup(state.close)
         station = state.station(STATION, report_context=context)
-        driver = supervisor(opening_state(), FakeClock(), station)
+        driver = supervisor(opening_state(), FakeClock(), station, disposition_policy="record")
         provenance = context.backends[0]
         driver.receive(action(STEPS[0], at=ANCHOR), report_provenance=provenance)
         driver.receive(action(STEPS[2], at=ANCHOR + 1.0), report_provenance=provenance)
@@ -904,6 +927,8 @@ class HistoricalReportContextTest(unittest.TestCase):
         class LostAckTransport:
             def __init__(self) -> None:
                 self.sent: list[object] = []
+                self.center_offline = True
+                self.disposals: list[object] = []
 
             def send_decision(
                 self,
@@ -923,6 +948,14 @@ class HistoricalReportContextTest(unittest.TestCase):
             def send_observation(self, report: object) -> None:
                 del report
 
+            def send_health(self, report: object, *, configuration: object) -> None:
+                del report, configuration
+
+            def send_disposal(self, report: object) -> None:
+                if self.center_offline:
+                    raise OSError("center offline")
+                self.disposals.append(report)
+
         transport = LostAckTransport()
         first = HostReportReconciler(reports=state.reports(), transport=transport).flush(
             now=HostInstant(ANCHOR + 2.0),
@@ -935,6 +968,10 @@ class HistoricalReportContextTest(unittest.TestCase):
         self.assertEqual(station.pending_instance_reports(), ())
         (pending_after_loss,) = station.pending_reports()
         self.assertEqual(pending_after_loss.reported_at, "2026-09-16T00:00:00Z")
+        failed_disposals = [item for item in first if "disposal:" in item.event_id]
+        self.assertTrue(failed_disposals and not any(item.sent for item in failed_disposals))
+        self.assertEqual(len(failed_disposals), len(state.disposal().pending_report_ids()))
+        transport.center_offline = False
 
         second = HostReportReconciler(reports=state.reports(), transport=transport).flush(
             now=HostInstant(ANCHOR + 3.0),
@@ -942,6 +979,7 @@ class HistoricalReportContextTest(unittest.TestCase):
         )
         self.assertTrue(_report_attempts(second)[0].sent)
         self.assertEqual(transport.sent[0], transport.sent[1])
+        self.assertEqual(len(transport.disposals), len(failed_disposals))
         self.assertEqual(station.pending_reports(), ())
 
     def test_observation_queue_persists_and_flushes_with_stable_identity(self) -> None:
@@ -984,6 +1022,9 @@ class HistoricalReportContextTest(unittest.TestCase):
 
             def send_observation(self, report: ReportedObservation) -> None:
                 self.observations.append(report)
+
+            def send_health(self, report: object, *, configuration: object) -> None:
+                del report, configuration
 
         transport = Transport()
         attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(
@@ -1068,6 +1109,9 @@ class HistoricalReportContextTest(unittest.TestCase):
                     self.fail_first = False
                     raise OSError("center committed but acknowledgement was lost")
 
+            def send_health(self, report: object, *, configuration: object) -> None:
+                del report, configuration
+
         transport = LostAckTransport()
         first = HostReportReconciler(reports=state.reports(), transport=transport).flush(
             now=HostInstant(ANCHOR + 2.0),
@@ -1131,6 +1175,9 @@ class HistoricalReportContextTest(unittest.TestCase):
             def send_observation(self, report: object) -> None:
                 del report
 
+            def send_health(self, report: object, *, configuration: object) -> None:
+                del report, configuration
+
         transport = Transport()
         reconciler = HostReportReconciler(reports=state.reports(), transport=transport)
         first = reconciler.flush(
@@ -1188,6 +1235,9 @@ class HistoricalReportContextTest(unittest.TestCase):
 
             def send_observation(self, report: object) -> None:
                 del report
+
+            def send_health(self, report: object, *, configuration: object) -> None:
+                del report, configuration
 
         transport = Transport()
         attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(
@@ -1257,6 +1307,9 @@ class HistoricalReportContextTest(unittest.TestCase):
 
                 def send_observation(self, report: object) -> None:
                     del report
+
+                def send_health(self, report: object, *, configuration: object) -> None:
+                    del report, configuration
 
             transport = Transport()
             try:
@@ -1353,6 +1406,9 @@ class HistoricalReportContextTest(unittest.TestCase):
                 def send_observation(self, report: object) -> None:
                     del report
 
+                def send_health(self, report: object, *, configuration: object) -> None:
+                    del report, configuration
+
             transport = Transport()
             try:
                 attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(
@@ -1424,6 +1480,9 @@ class HistoricalReportContextTest(unittest.TestCase):
 
             def send_observation(self, report: object) -> None:
                 del report
+
+            def send_health(self, report: object, *, configuration: object) -> None:
+                del report, configuration
 
         transport = Transport()
         attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(
@@ -1692,6 +1751,203 @@ def _schema_of(path: str) -> dict[str, str]:
         }
     finally:
         connection.close()
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class HealthQueueTest(unittest.TestCase):
+    """流健康事实走自己的持久积压; 它不进入判定或观测路径。"""
+
+    @staticmethod
+    def _context() -> ReportContext:
+        bundle = ConfigurationBundle(
+            host_id="host-a",
+            config_revision=9,
+            generated_at="2026-09-16T00:00:00Z",
+            stations=(),
+        )
+        return ReportContext(
+            host_id="host-a",
+            station_id=STATION,
+            backends=(),
+            template_version_id=None,
+            template_sha256=None,
+            configuration_revision=bundle.config_revision,
+            configuration_sha256=bundle.effective_sha256,
+            configuration_json=json.dumps(
+                configuration_to_wire(bundle), ensure_ascii=False, separators=(",", ":")
+            ),
+        )
+
+    def test_health_fact_is_queued_and_reconciled_once(self) -> None:
+        state = open_local_state(":memory:")
+        self.addCleanup(state.close)
+        station = state.station(STATION, report_context=self._context())
+        station.enqueue_health(
+            stream_id="camera-a",
+            status="source_error",
+            reason_code="STREAM_LOST",
+            detail="lost",
+            occurred_at="2026-09-16T00:00:00Z",
+            source_anchor=ANCHOR,
+            anchor_offset=0.5,
+        )
+
+        (pending,) = station.pending_health_reports()
+        self.assertEqual("host-a", pending.host_id)
+        self.assertEqual("camera-a", pending.stream_id)
+        self.assertEqual("source_error", pending.status)
+        self.assertEqual("STREAM_LOST", pending.reason_code)
+        self.assertEqual(ANCHOR, pending.source_anchor)
+        self.assertEqual(self._context().configuration_json, pending.configuration_json)
+        self.assertIsNone(pending.reported_at)
+
+        class Transport:
+            def __init__(self) -> None:
+                self.sent: list[ReportedHealth] = []
+                self.configurations: list[ConfigurationBundle | None] = []
+
+            def send_health(
+                self, report: ReportedHealth, *, configuration: ConfigurationBundle | None
+            ) -> None:
+                self.sent.append(report)
+                self.configurations.append(configuration)
+
+            def send_observation(self, report: object) -> None:
+                del report
+
+            def send_decision(self, report: object, *, configuration: object) -> None:
+                del report, configuration
+
+            def send_instance(self, report: object, *, configuration: object) -> None:
+                del report, configuration
+
+        transport = Transport()
+        reconciler = HostReportReconciler(reports=state.reports(), transport=transport)
+        attempts = reconciler.flush(
+            now=HostInstant(ANCHOR + 1.0), reported_at="2026-09-16T00:00:05Z"
+        )
+
+        self.assertTrue(attempts[0].sent)
+        self.assertEqual("host-a:health:1", transport.sent[0].event_id)
+        self.assertEqual("host-a", transport.sent[0].host_id)
+        self.assertEqual(STATION, transport.sent[0].station_id)
+        self.assertEqual("camera-a", transport.sent[0].stream_id)
+        self.assertEqual("source_error", transport.sent[0].status)
+        self.assertEqual(ANCHOR, transport.sent[0].source_anchor)
+        self.assertEqual(0.5, transport.sent[0].anchor_offset)
+        self.assertEqual("2026-09-16T00:00:00Z", transport.sent[0].occurred_at)
+        self.assertEqual("2026-09-16T00:00:05Z", transport.sent[0].reported_at)
+        sent_configuration = transport.configurations[0]
+        assert sent_configuration is not None
+        self.assertEqual(9, sent_configuration.config_revision)
+        self.assertEqual((), station.pending_health_reports())
+
+    def test_health_fact_keeps_its_event_identity_across_a_failed_attempt(self) -> None:
+        """AC1: 一次失败重试仍用同一稳定身份, 中心幂等归档, 不产生第二条事实。"""
+        state = open_local_state(":memory:")
+        self.addCleanup(state.close)
+        station = state.station(STATION, report_context=self._context())
+        station.enqueue_health(
+            stream_id="camera-a",
+            status="source_error",
+            reason_code="STREAM_LOST",
+            detail="lost",
+            occurred_at="2026-09-16T00:00:00Z",
+            source_anchor=ANCHOR,
+            anchor_offset=0.5,
+        )
+
+        class Transport:
+            def __init__(self) -> None:
+                self.sent: list[ReportedHealth] = []
+                self.fail = True
+
+            def send_health(self, report: ReportedHealth, *, configuration: object) -> None:
+                del configuration
+                if self.fail:
+                    self.fail = False
+                    raise RuntimeError("中心暂时不可达")
+                self.sent.append(report)
+
+            def send_observation(self, report: object) -> None:
+                del report
+
+            def send_decision(self, report: object, *, configuration: object) -> None:
+                del report, configuration
+
+            def send_instance(self, report: object, *, configuration: object) -> None:
+                del report, configuration
+
+        transport = Transport()
+        reconciler = HostReportReconciler(reports=state.reports(), transport=transport)
+        first = reconciler.flush(now=HostInstant(ANCHOR + 1.0), reported_at="2026-09-16T00:00:05Z")
+        self.assertFalse(first[0].sent)
+        self.assertEqual(1, len(station.pending_health_reports()))
+
+        second = reconciler.flush(now=HostInstant(ANCHOR + 2.0), reported_at="2026-09-16T00:00:06Z")
+        self.assertTrue(second[0].sent)
+        self.assertEqual("host-a:health:1", transport.sent[0].event_id)
+        self.assertEqual("2026-09-16T00:00:00Z", transport.sent[0].occurred_at)
+        self.assertEqual("2026-09-16T00:00:05Z", transport.sent[0].reported_at)
+        self.assertEqual((), station.pending_health_reports())
+
+    def test_v11_pending_health_keeps_legacy_payload_after_v12_upgrade(self) -> None:
+        occurred_at = "2026-09-16T00:00:00Z"
+        with TemporaryDirectory() as temporary:
+            database = str(Path(temporary) / "health-v11.sqlite")
+            connection = sqlite3.connect(database)
+            apply_migrations(connection, MIGRATIONS[:11])
+            connection.execute(
+                """
+                INSERT INTO local_health_queue (
+                    station_id, stream_id, status, reason_code, detail,
+                    occurred_at, source_anchor, anchor_offset, report_host_id,
+                    report_configuration, attempts
+                ) VALUES (?, 'camera-a', 'source_error', 'STREAM_LOST', 'lost', ?, ?, 0.5,
+                          'host-a', NULL, 1)
+                """,
+                (STATION, occurred_at, ANCHOR),
+            )
+            connection.commit()
+            connection.close()
+
+            state = open_local_state(database)
+            self.addCleanup(state.close)
+            (pending,) = state.station(STATION).pending_health_reports()
+            self.assertEqual(occurred_at, pending.reported_at)
+
+            class Transport:
+                def __init__(self) -> None:
+                    self.sent: list[ReportedHealth] = []
+
+                def send_health(
+                    self, report: ReportedHealth, *, configuration: ConfigurationBundle | None
+                ) -> None:
+                    del configuration
+                    self.sent.append(report)
+
+                def send_observation(self, report: object) -> None:
+                    del report
+
+                def send_decision(self, report: object, *, configuration: object) -> None:
+                    del report, configuration
+
+                def send_instance(self, report: object, *, configuration: object) -> None:
+                    del report, configuration
+
+            transport = Transport()
+            attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(
+                now=HostInstant(ANCHOR + 2.0),
+                reported_at="2026-09-16T00:00:05Z",
+            )
+
+            self.assertTrue(attempts[0].sent)
+            self.assertEqual("host-a:health:1", transport.sent[0].event_id)
+            self.assertEqual(occurred_at, transport.sent[0].occurred_at)
+            self.assertEqual(occurred_at, transport.sent[0].reported_at)
 
 
 if __name__ == "__main__":

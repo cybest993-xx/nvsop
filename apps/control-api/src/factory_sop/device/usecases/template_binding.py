@@ -47,7 +47,14 @@ from factory_sop.device.repository import (
     PointRepository,
     StationRepository,
 )
-from nvsop_contracts import PointRole, Unfitness
+from nvsop_contracts import (
+    DISPOSITION_POLICY_RECORD,
+    DISPOSITION_POLICY_STOP,
+    SAFETY_OUTPUT_BUDGET_SECONDS,
+    STOP_OUTPUT_SEMANTIC_LABEL,
+    PointRole,
+    Unfitness,
+)
 
 TEMPLATE_EXTERNAL_SIGNAL_BUDGET_SECONDS = 0.5
 
@@ -218,6 +225,79 @@ class RepositoryDeviceTemplateBindingGateway(DeviceTemplateBindingGateway):
                         message="连接器必须使用工位相同的推理机",
                     )
                 )
+
+        if specification.disposition_policy == DISPOSITION_POLICY_STOP:
+            stop_points = [
+                point
+                for point in topology.points
+                if point.semantic_label == STOP_OUTPUT_SEMANTIC_LABEL
+            ]
+            if len(stop_points) != 1:
+                issues.append(
+                    BindingValidationIssue(
+                        code="safety_output_required",
+                        field="disposition_policy",
+                        message="stop 处置需要唯一语义标签为“停线联锁”的输出点位",
+                    )
+                )
+            else:
+                point = stop_points[0]
+                stop_connector = connector_by_id.get(point.connector_id)
+                if point.status is DeviceStatus.DEACTIVATED:
+                    issues.append(
+                        BindingValidationIssue(
+                            code="point_deactivated",
+                            field="disposition_policy",
+                            message="停线联锁点位已停用",
+                        )
+                    )
+                if point.direction is not PointDirection.OUTPUT:
+                    issues.append(
+                        BindingValidationIssue(
+                            code="wrong_direction",
+                            field="disposition_policy",
+                            message="停线联锁必须引用输出点位",
+                        )
+                    )
+                if stop_connector is None:
+                    issues.append(
+                        BindingValidationIssue(
+                            code="connector_not_found",
+                            field="disposition_policy",
+                            message="停线联锁点位所属连接器不存在",
+                        )
+                    )
+                else:
+                    if stop_connector.status is DeviceStatus.DEACTIVATED:
+                        issues.append(
+                            BindingValidationIssue(
+                                code="connector_deactivated",
+                                field="disposition_policy",
+                                message="停线联锁点位所属连接器已停用",
+                            )
+                        )
+                    if camera_host_ids and stop_connector.host_id not in camera_host_ids:
+                        issues.append(
+                            BindingValidationIssue(
+                                code="connector_station_host_conflict",
+                                field="disposition_policy",
+                                message="停线联锁连接器必须与工位使用相同推理机",
+                            )
+                        )
+                    for reason in capability_unfitness(
+                        stop_connector.capability,
+                        role=PointRole.SAFETY_OUTPUT,
+                        budget_seconds=SAFETY_OUTPUT_BUDGET_SECONDS,
+                    ):
+                        issues.append(self._capability_issue("disposition_policy", reason))
+        elif specification.disposition_policy != DISPOSITION_POLICY_RECORD:
+            issues.append(
+                BindingValidationIssue(
+                    code="unsupported_disposition_policy",
+                    field="disposition_policy",
+                    message="处置策略仅支持 record 或 stop",
+                )
+            )
 
         for backend_id in backend_ids:
             backend = backend_by_id[backend_id]

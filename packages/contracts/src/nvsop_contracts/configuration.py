@@ -21,6 +21,13 @@ from nvsop_contracts.capability import Capability, capability_from_wire, capabil
 
 CONFIGURATION_CONTRACT_VERSION = 2
 EXECUTION_LEASE_WRITE_GATE_CAPABILITY = "execution.lease-write-gate"
+DISPOSITION_STOP_OUTPUT_CAPABILITY = "disposition.stop-output-v1"
+DISPOSITION_POLICY_RECORD = "record"
+DISPOSITION_POLICY_STOP = "stop"
+DISPOSITION_POLICIES = frozenset({DISPOSITION_POLICY_RECORD, DISPOSITION_POLICY_STOP})
+STOP_OUTPUT_SEMANTIC_LABEL = "停线联锁"
+STOP_OUTPUT_REQUESTED_STATE = "active"
+SAFETY_OUTPUT_BUDGET_SECONDS = 0.5
 """把 ``execution_grants`` 用作物理写入门禁所声明的行为能力门禁。
 
 Center 在 bundle 中声明它, 要求 Edge 在该字段缺席或租约到期时拒绝物理写入; 不支持该能力的
@@ -779,7 +786,14 @@ def _positive_int(value: object, label: str) -> int:
 
 __all__ = [
     "CONFIGURATION_CONTRACT_VERSION",
+    "DISPOSITION_POLICIES",
+    "DISPOSITION_POLICY_RECORD",
+    "DISPOSITION_POLICY_STOP",
+    "DISPOSITION_STOP_OUTPUT_CAPABILITY",
     "EXECUTION_LEASE_WRITE_GATE_CAPABILITY",
+    "SAFETY_OUTPUT_BUDGET_SECONDS",
+    "STOP_OUTPUT_REQUESTED_STATE",
+    "STOP_OUTPUT_SEMANTIC_LABEL",
     "ConfigurationArtifact",
     "ConfigurationBundle",
     "ConfigurationTemplate",

@@ -177,6 +177,10 @@ MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU �
 
 **默认取舍**：外部信号**不作为违规的唯一证据**——单点位信号无法区分"没按"与"线路故障"，与 §2.1 的教训同构。
 
+**物理处置最小契约**：首版处置策略只定义 `record` 与 `stop`。`record` 只写本地处置记录并排队前端告警，不驱动物理点位；`stop` 在同样的记录/告警之外，对每个已确认违规生成一次稳定的 `write_output` 意图，逻辑目标必须是当前工位唯一语义标签为 `停线联锁` 的输出点位，请求状态为 `ACTIVE`。绑定时即验证该点位活动、方向正确、连接器/主机拓扑一致，并以现有 500 ms 预算验证 `safety_output` 能力；运行时仍在真正写设备前重新检查 S029 的目标归属、连接可达性、工位生命周期与物理执行租约。设备地址只从已确认配置解析，不按点位顺序、连接器类型或自由文本猜测。
+
+`stop` 是配置行为扩展，必须与 `required_capabilities` 中的 `disposition.stop-output-v1` 同时出现；缺 capability 的 `stop` 候选和不认识该 capability 的 Edge 都 fail-closed。这样 Center/Edge 可滚动升级而不会把旧自由文本策略静默改成物理行为。所有物理写入只走 `AutonomousStation.write_output → OutputDispatcher → SQLiteWriteLedger/local_disposal`，沿用现有幂等、unknown 终态、诊断和重启抑制语义，不建立第二份处置账本。
+
 ---
 
 ## 5.17 工位改绑与物理执行权

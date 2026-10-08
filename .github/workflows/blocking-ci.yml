@@ -1,16 +1,24 @@
 name: blocking-ci
 
+# 单飞：blocking-ci 只作为可复用工作流被可信 landing-queue 控制器按显式 head_sha/base_sha 调用，
+# 自身不再监听 pull_request / push；候选头与比较基线全部来自调用输入。
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_call:
+    inputs:
+      head_sha:
+        required: true
+        type: string
+      base_sha:
+        required: true
+        type: string
 
 permissions:
   contents: read
 
+# 以候选头为并发组，绝不与 landing-queue 的全局互斥组同名而自锁；单飞调用不取消在跑的候选。
 concurrency:
-  group: blocking-ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: blocking-ci-${{ inputs.head_sha }}
+  cancel-in-progress: false
 
 jobs:
   scope:
@@ -23,18 +31,20 @@ jobs:
       integration: ${{ steps.scope.outputs.integration }}
       browser: ${{ steps.scope.outputs.browser }}
       media: ${{ steps.scope.outputs.media }}
+      annotation: ${{ steps.scope.outputs.annotation }}
     steps:
       - name: Checkout candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ inputs.head_sha }}
           persist-credentials: false
           fetch-depth: 0
       - name: Select applicable gates
         id: scope
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          # 与后续作业验证的候选树一致；PR 使用 GitHub 的合并提交。
-          HEAD_SHA: ${{ github.sha }}
+          BASE_SHA: ${{ inputs.base_sha }}
+          # 与后续作业验证的候选树一致：head/base 都来自可信控制器的显式输入。
+          HEAD_SHA: ${{ inputs.head_sha }}
         run: python3 scripts/ci_scope.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
       - name: Validate scope outputs
         env:
@@ -43,17 +53,22 @@ jobs:
           INTEGRATION: ${{ steps.scope.outputs.integration }}
           BROWSER: ${{ steps.scope.outputs.browser }}
           MEDIA: ${{ steps.scope.outputs.media }}
+          ANNOTATION: ${{ steps.scope.outputs.annotation }}
         run: |
           set -euo pipefail
-          for value in "$DOCS_ONLY" "$FORCE_ALL" "$INTEGRATION" "$BROWSER" "$MEDIA"; do
+          for value in "$DOCS_ONLY" "$FORCE_ALL" "$INTEGRATION" "$BROWSER" "$MEDIA" "$ANNOTATION"; do
             case "$value" in true|false) ;; *) echo "Invalid CI scope output: $value" >&2; exit 1 ;; esac
           done
-          if [ "$DOCS_ONLY" = true ] && [ "$FORCE_ALL:$INTEGRATION:$BROWSER:$MEDIA" != false:false:false:false ]; then
+          if [ "$DOCS_ONLY" = true ] && [ "$FORCE_ALL:$INTEGRATION:$BROWSER:$MEDIA:$ANNOTATION" != false:false:false:false:false ]; then
             echo "Documentation fast lane cannot select another gate." >&2
             exit 1
           fi
-          if [ "$FORCE_ALL" = true ] && [ "$DOCS_ONLY:$INTEGRATION:$BROWSER:$MEDIA" != false:true:true:true ]; then
+          if [ "$FORCE_ALL" = true ] && [ "$DOCS_ONLY:$INTEGRATION:$BROWSER:$MEDIA:$ANNOTATION" != false:true:true:true:true ]; then
             echo "force_all must select every blocking family." >&2
+            exit 1
+          fi
+          if [ "$ANNOTATION" = true ] && [ "$INTEGRATION" != true ]; then
+            echo "Annotation changes require integration evidence." >&2
             exit 1
           fi
           if [ "$MEDIA" = true ] && { [ "$INTEGRATION" != true ] || [ "$BROWSER" != true ]; }; then
@@ -70,6 +85,7 @@ jobs:
       - name: Checkout candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ inputs.head_sha }}
           persist-credentials: false
       - name: Install the pinned Python toolchain runner
         run: pipx install uv==0.12.5
@@ -107,6 +123,7 @@ jobs:
       - name: Checkout candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ inputs.head_sha }}
           persist-credentials: false
           fetch-depth: 0
       - name: Install pinned workflow linter
@@ -152,23 +169,30 @@ jobs:
       - name: Run the documentation gate
         if: needs.scope.outputs.docs_only == 'true'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
+          BASE_SHA: ${{ inputs.base_sha }}
+          HEAD_SHA: ${{ inputs.head_sha }}
         run: make check-docs BASE="$BASE_SHA" HEAD="$HEAD_SHA"
+      - name: Install media test tools
+        if: needs.scope.outputs.docs_only == 'false'
+        # `make check` runs the edge-integration suite, which decodes real media with ffmpeg.
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ffmpeg=7:6.1.1-3ubuntu5
+          command -v ffmpeg
+          command -v ffprobe
       - name: Run the local merge gate
         if: needs.scope.outputs.docs_only == 'false'
         env:
-          # The OpenAPI compatibility check must compare with the actual PR base, not whatever
-          # branch name happens to be checked out as origin/main.
-          OPENAPI_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+          # OpenAPI 兼容检查必须与真实 base 比较：使用可信控制器传入的 base_sha。
+          OPENAPI_BASE_REF: ${{ inputs.base_sha }}
         run: make check
       - name: Report change size for review
-        if: needs.scope.outputs.docs_only == 'false' && github.event_name == 'pull_request'
-        # Harness §5：从共同祖先计算到 PR HEAD，行数只作提示。
+        if: needs.scope.outputs.docs_only == 'false'
+        # Harness §5：从共同祖先计算到候选头，行数只作提示。
         # Git 或文件读取失败仍须使本步骤失败。
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ inputs.base_sha }}
+          HEAD_SHA: ${{ inputs.head_sha }}
         run: make change-size BASE="$BASE_SHA" HEAD="$HEAD_SHA"
       - name: Verify a clean worktree
         # Generated output is regenerated in the same change as its source (harness §5). If
@@ -183,17 +207,21 @@ jobs:
             exit 1
           fi
 
-  # Real local infrastructure: center integration/system flows plus MediaMTX when its owning
-  # inputs changed. The shared selector decides applicability once; skipped suites are explicit.
+  # 独立 runner 并行验证两个套件；matrix 的汇总仍是 CI required 的必需依赖。
   integration-gate:
-    name: Center and cross-app system evidence
+    name: ${{ matrix.suite }} evidence
     needs: scope
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [center-integration, center-system]
     steps:
       - name: Checkout candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ inputs.head_sha }}
           persist-credentials: false
           fetch-depth: 0
       - name: Install the pinned Python toolchain runner
@@ -211,9 +239,14 @@ jobs:
         # Docker is present on the GitHub-hosted runner, which is what testcontainers uses to
         # start PostgreSQL. No service container is declared here: the suite owns the image
         # tag and the lifecycle, so a developer runs the same database CI does.
-        run: make check-integration
+        env:
+          TEST_SUITE: ${{ matrix.suite }}
+        run: make sync "$TEST_SUITE"
+      - name: Verify frozen annotation image and real media operations
+        if: needs.scope.outputs.annotation == 'true' && matrix.suite == 'center-system'
+        run: make annotation-image
       - name: Run real MediaMTX recording and playback evidence
-        if: needs.scope.outputs.media == 'true'
+        if: needs.scope.outputs.media == 'true' && matrix.suite == 'center-system'
         run: make media-system
       - name: Explicit success with nothing to check
         if: needs.scope.outputs.integration == 'false'
@@ -231,6 +264,7 @@ jobs:
       - name: Checkout candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ inputs.head_sha }}
           persist-credentials: false
           fetch-depth: 0
       - name: Set up the pinned Node runtime

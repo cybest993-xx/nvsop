@@ -12,6 +12,9 @@ import type {
   CompleteDeviceCommandData,
   CompleteDeviceCommandErrors,
   CompleteDeviceCommandResponses,
+  ConfirmHandoverData,
+  ConfirmHandoverErrors,
+  ConfirmHandoverResponses,
   ConfirmInferenceHostConfigurationHistoryData,
   ConfirmInferenceHostConfigurationHistoryErrors,
   ConfirmInferenceHostConfigurationHistoryResponses,
@@ -27,6 +30,9 @@ import type {
   CreateConnectorData,
   CreateConnectorErrors,
   CreateConnectorResponses,
+  CreateHandoverData,
+  CreateHandoverErrors,
+  CreateHandoverResponses,
   CreateInferenceBackendData,
   CreateInferenceBackendErrors,
   CreateInferenceBackendResponses,
@@ -117,6 +123,12 @@ import type {
   ExportInferenceHostMediaConfigurationData,
   ExportInferenceHostMediaConfigurationErrors,
   ExportInferenceHostMediaConfigurationResponses,
+  GetMonitorHostLivenessData,
+  GetMonitorHostLivenessErrors,
+  GetMonitorHostLivenessResponses,
+  GetMonitorStreamHealthData,
+  GetMonitorStreamHealthErrors,
+  GetMonitorStreamHealthResponses,
   ImportTemplateDraftData,
   ImportTemplateDraftErrors,
   ImportTemplateDraftResponses,
@@ -150,6 +162,9 @@ import type {
   ListInferenceHostsData,
   ListInferenceHostsErrors,
   ListInferenceHostsResponses,
+  ListMonitorDisposalsData,
+  ListMonitorDisposalsErrors,
+  ListMonitorDisposalsResponses,
   ListMonitorObservationsData,
   ListMonitorObservationsErrors,
   ListMonitorObservationsResponses,
@@ -228,6 +243,12 @@ import type {
   ReadDeviceCommandData,
   ReadDeviceCommandErrors,
   ReadDeviceCommandResponses,
+  ReadHandoverData,
+  ReadHandoverErrors,
+  ReadHandoverResponses,
+  ReadHandoverRiskData,
+  ReadHandoverRiskErrors,
+  ReadHandoverRiskResponses,
   ReadInferenceBackendData,
   ReadInferenceBackendErrors,
   ReadInferenceBackendResponses,
@@ -282,6 +303,9 @@ import type {
   ReportMonitorDecisionData,
   ReportMonitorDecisionErrors,
   ReportMonitorDecisionResponses,
+  ReportMonitorDisposalData,
+  ReportMonitorDisposalErrors,
+  ReportMonitorDisposalResponses,
   ReportMonitorHealthData,
   ReportMonitorHealthErrors,
   ReportMonitorHealthResponses,
@@ -931,6 +955,66 @@ export const completeDeviceCommand = <ThrowOnError extends boolean = false>(
   })
 
 /**
+ * Create
+ *
+ * 建立强制改绑请求，操作者同时完成第一确认。
+ */
+export const createHandover = <ThrowOnError extends boolean = false>(
+  options: Options<CreateHandoverData, ThrowOnError>,
+): RequestResult<CreateHandoverResponses, CreateHandoverErrors, ThrowOnError> =>
+  (options.client ?? client).post<CreateHandoverResponses, CreateHandoverErrors, ThrowOnError>({
+    url: '/api/v1/execution/handovers',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read Risk
+ *
+ * 只读返回服务器权威风险原文。
+ */
+export const readHandoverRisk = <ThrowOnError extends boolean = false>(
+  options?: Options<ReadHandoverRiskData, ThrowOnError>,
+): RequestResult<ReadHandoverRiskResponses, ReadHandoverRiskErrors, ThrowOnError> =>
+  (options?.client ?? client).get<ReadHandoverRiskResponses, ReadHandoverRiskErrors, ThrowOnError>({
+    url: '/api/v1/execution/handovers/risk',
+    ...options,
+  })
+
+/**
+ * Read
+ *
+ * 按请求 id 读取冻结内容与风险原文，供第二名用户查看。
+ */
+export const readHandover = <ThrowOnError extends boolean = false>(
+  options: Options<ReadHandoverData, ThrowOnError>,
+): RequestResult<ReadHandoverResponses, ReadHandoverErrors, ThrowOnError> =>
+  (options.client ?? client).get<ReadHandoverResponses, ReadHandoverErrors, ThrowOnError>({
+    url: '/api/v1/execution/handovers/{handover_id}',
+    ...options,
+  })
+
+/**
+ * Confirm
+ *
+ * 由另一名当前有权的用户确认被展示的同一请求内容。
+ */
+export const confirmHandover = <ThrowOnError extends boolean = false>(
+  options: Options<ConfirmHandoverData, ThrowOnError>,
+): RequestResult<ConfirmHandoverResponses, ConfirmHandoverErrors, ThrowOnError> =>
+  (options.client ?? client).post<ConfirmHandoverResponses, ConfirmHandoverErrors, ThrowOnError>({
+    url: '/api/v1/execution/handovers/{handover_id}/confirmation',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
  * List The Backends
  *
  * List endpoints, optionally filtered to one host, under the common page envelope.
@@ -1297,6 +1381,18 @@ export const readLiveness = <ThrowOnError extends boolean = false>(
   })
 
 /**
+ * List Monitor Disposals
+ */
+export const listMonitorDisposals = <ThrowOnError extends boolean = false>(
+  options?: Options<ListMonitorDisposalsData, ThrowOnError>,
+): RequestResult<ListMonitorDisposalsResponses, ListMonitorDisposalsErrors, ThrowOnError> =>
+  (options?.client ?? client).get<
+    ListMonitorDisposalsResponses,
+    ListMonitorDisposalsErrors,
+    ThrowOnError
+  >({ url: '/api/v1/monitor/disposals', ...options })
+
+/**
  * Report Monitor Health
  */
 export const reportMonitorHealth = <ThrowOnError extends boolean = false>(
@@ -1314,6 +1410,20 @@ export const reportMonitorHealth = <ThrowOnError extends boolean = false>(
       ...options.headers,
     },
   })
+
+/**
+ * Get Monitor Host Liveness
+ *
+ * 中心自己的外部证人判据：该机多久没上报，而不是流健康。
+ */
+export const getMonitorHostLiveness = <ThrowOnError extends boolean = false>(
+  options?: Options<GetMonitorHostLivenessData, ThrowOnError>,
+): RequestResult<GetMonitorHostLivenessResponses, GetMonitorHostLivenessErrors, ThrowOnError> =>
+  (options?.client ?? client).get<
+    GetMonitorHostLivenessResponses,
+    GetMonitorHostLivenessErrors,
+    ThrowOnError
+  >({ url: '/api/v1/monitor/host-liveness', ...options })
 
 /**
  * List Monitor Instances
@@ -1351,6 +1461,25 @@ export const reportMonitorDecision = <ThrowOnError extends boolean = false>(
     ThrowOnError
   >({
     url: '/api/v1/monitor/reported-decisions',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Report Monitor Disposal
+ */
+export const reportMonitorDisposal = <ThrowOnError extends boolean = false>(
+  options: Options<ReportMonitorDisposalData, ThrowOnError>,
+): RequestResult<ReportMonitorDisposalResponses, ReportMonitorDisposalErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    ReportMonitorDisposalResponses,
+    ReportMonitorDisposalErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/monitor/reported-disposals',
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -1407,6 +1536,20 @@ export const streamMonitorEvents = <ThrowOnError extends boolean = false>(
     StreamMonitorEventsErrors,
     ThrowOnError
   >({ url: '/api/v1/monitor/stream', ...options })
+
+/**
+ * Get Monitor Stream Health
+ *
+ * 一个工位的运行有效性投影；与 device 的配置/可达性并列而不混同。
+ */
+export const getMonitorStreamHealth = <ThrowOnError extends boolean = false>(
+  options: Options<GetMonitorStreamHealthData, ThrowOnError>,
+): RequestResult<GetMonitorStreamHealthResponses, GetMonitorStreamHealthErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    GetMonitorStreamHealthResponses,
+    GetMonitorStreamHealthErrors,
+    ThrowOnError
+  >({ url: '/api/v1/monitor/stream-health', ...options })
 
 /**
  * List Monitor Violations

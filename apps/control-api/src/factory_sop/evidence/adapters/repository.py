@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
-from sqlalchemy import Table, func, select, update
+from sqlalchemy import CursorResult, Table, func, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.orm import Session
 
@@ -18,7 +18,11 @@ class PostgresEvidenceRepository(EvidenceRepository):
         self._session = session
 
     def find(self, evidence_id: str) -> EvidenceReference | None:
-        row = self._session.get(EvidenceReferenceRow, evidence_id)
+        row = self._session.scalar(
+            select(EvidenceReferenceRow)
+            .where(EvidenceReferenceRow.evidence_id == evidence_id)
+            .execution_options(populate_existing=True)
+        )
         return None if row is None else row.to_domain()
 
     def insert(self, value: EvidenceReference) -> bool:
@@ -32,13 +36,49 @@ class PostgresEvidenceRepository(EvidenceRepository):
         )
         return self._session.execute(statement).scalar_one_or_none() is not None
 
-    def replace(self, value: EvidenceReference) -> None:
-        row = EvidenceReferenceRow.from_domain(value)
+    def replace_if_current(self, *, expected: EvidenceReference, value: EvidenceReference) -> bool:
+        """只更新仍属于调用方读取 generation 的行；证据身份列从不参与覆盖。"""
         table = cast(Table, EvidenceReferenceRow.__table__)
+        expected_registration = expected.registration
+        registration = value.registration
         statement = (
-            update(table).where(table.c.evidence_id == row.evidence_id).values(**_columns(row))
+            update(table)
+            .where(
+                table.c.evidence_id == expected.evidence_id,
+                table.c.status == expected.status.value,
+                (
+                    table.c.sha256.is_(None)
+                    if expected_registration.sha256 is None
+                    else table.c.sha256 == expected_registration.sha256
+                ),
+                (
+                    table.c.size.is_(None)
+                    if expected_registration.size is None
+                    else table.c.size == expected_registration.size
+                ),
+                (
+                    table.c.reference.is_(None)
+                    if expected_registration.reference is None
+                    else table.c.reference == expected_registration.reference
+                ),
+                (
+                    table.c.failure_reason.is_(None)
+                    if expected.failure_reason is None
+                    else table.c.failure_reason == expected.failure_reason
+                ),
+                table.c.received_at == expected.received_at,
+            )
+            .values(
+                sha256=registration.sha256,
+                size=registration.size,
+                reference=registration.reference,
+                status=value.status.value,
+                failure_reason=value.failure_reason,
+                received_at=value.received_at,
+            )
         )
-        self._session.execute(statement)
+        result = cast("CursorResult[Any]", self._session.execute(statement))
+        return result.rowcount == 1
 
     def page(
         self,

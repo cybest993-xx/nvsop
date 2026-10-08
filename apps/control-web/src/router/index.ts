@@ -66,6 +66,8 @@ const routes: RouteRecordRaw[] = [
             'device.point.delete',
             'device.station.view',
             'device.station.edit',
+            'monitor.report.view',
+            'execution.handover.edit',
           ],
         },
       },

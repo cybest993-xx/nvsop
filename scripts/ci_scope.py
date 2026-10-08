@@ -24,6 +24,21 @@ BROWSER_FILES = {
     "pnpm-workspace.yaml",
     ".nvmrc",
 }
+ANNOTATION_PREFIXES = (
+    "vendor/sop-monitoring-blueprints/microservices/sop-training-bp/"
+    "microservices/video-annotator-ms/annotation_backend/",
+)
+ANNOTATION_FILES = {
+    "deploy/dev/annotation-backend.Dockerfile",
+    "deploy/dev/annotation-entrypoint.sh",
+    "deploy/dev/annotation-constraints.txt",
+    "deploy/dev/annotation-requirements.lock",
+    "scripts/annotation_dependencies.py",
+    "scripts/test_annotation_image.py",
+    "uv.lock",
+    "pyproject.toml",
+    ".python-version",
+}
 MEDIA_PREFIXES = ("deploy/media/",)
 MEDIA_FILES = {
     "scripts/test_media_playback.py",
@@ -38,13 +53,20 @@ def selected(path: str, prefixes: tuple[str, ...], files: set[str]) -> bool:
 
 
 def emit(
-    *, docs_only: bool, force_all: bool, integration: bool, browser: bool, media: bool
+    *,
+    docs_only: bool,
+    force_all: bool,
+    integration: bool,
+    browser: bool,
+    media: bool,
+    annotation: bool,
 ) -> None:
     print(f"docs_only={str(docs_only).lower()}")
     print(f"force_all={str(force_all).lower()}")
     print(f"integration={str(integration).lower()}")
     print(f"browser={str(browser).lower()}")
     print(f"media={str(media).lower()}")
+    print(f"annotation={str(annotation).lower()}")
 
 
 def resolve_commit(reference: str) -> str:
@@ -67,7 +89,14 @@ def main(argv: list[str]) -> int:
             base = resolve_commit(argv[1])
         except subprocess.CalledProcessError:
             print("No usable base commit; running all gates.", file=sys.stderr)
-            emit(docs_only=False, force_all=True, integration=True, browser=True, media=True)
+            emit(
+                docs_only=False,
+                force_all=True,
+                integration=True,
+                browser=True,
+                media=True,
+                annotation=True,
+            )
             return 0
         changed = subprocess.run(
             ["git", "diff", "--name-only", "--no-renames", "-z", base, head, "--"],
@@ -91,8 +120,12 @@ def main(argv: list[str]) -> int:
         for path in paths
     )
     media = force_all or any(selected(path, MEDIA_PREFIXES, MEDIA_FILES) for path in paths)
+    annotation = force_all or any(
+        selected(path, ANNOTATION_PREFIXES, ANNOTATION_FILES) for path in paths
+    )
     integration = (
         force_all
+        or annotation
         or media
         or any(selected(path, INTEGRATION_PREFIXES, INTEGRATION_FILES) for path in paths)
     )
@@ -105,6 +138,7 @@ def main(argv: list[str]) -> int:
         integration=integration,
         browser=browser,
         media=media,
+        annotation=annotation,
     )
     return 0
 

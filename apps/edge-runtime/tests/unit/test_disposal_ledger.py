@@ -9,6 +9,7 @@ from edge_runtime.local_state.disposal import (
     DisposalClaim,
     DisposalIntent,
     LocalDisposalLedger,
+    LocalDisposalRequest,
     StoredDisposalResult,
 )
 from edge_runtime.local_state.schema import migrate
@@ -44,6 +45,36 @@ class DisposalLedgerTests(unittest.TestCase):
         self.assertIsNotNone(held.result)
         assert held.result is not None
         self.assertEqual(held.result.kind, "written")
+
+    def test_physical_result_with_violation_metadata_enters_existing_report_queue(self) -> None:
+        intent = DisposalIntent(
+            station_id="station-a",
+            idempotency_key="stop-1",
+            connector_id="connector-a",
+            point_id="relay-1",
+            actor="supervisor",
+            requested_state="active",
+            violation_ref="1:wrong_step:('step-3',)",
+            violation_instance_id=1,
+            source="station_policy:stop",
+            report_host_id="host-a",
+        )
+        self.ledger.ensure_intent(intent)
+        self.assertTrue(self.ledger.claim(intent, now=1.0, lease_seconds=5.0).claimed)
+        self.ledger.record_result(
+            intent,
+            result=StoredDisposalResult(kind="written", detail=None, at=2.0),
+        )
+
+        (disposal_id,) = self.ledger.pending_report_ids()
+        report = self.ledger.report(disposal_id, reported_at="2026-10-06T00:00:00Z")
+
+        self.assertEqual("write_output", report.action_kind)
+        self.assertEqual(intent.idempotency_key, report.idempotency_key)
+        self.assertEqual(intent.violation_ref, report.violation_ref)
+        self.assertEqual(intent.violation_instance_id, report.instance_id)
+        self.assertEqual(intent.source, report.source)
+        self.assertEqual("written", report.result_kind)
 
     def test_expired_lease_closes_unknown_instead_of_replaying_physical_write(self) -> None:
         claim = self.ledger.claim(self.intent, now=1.0, lease_seconds=5.0)
@@ -83,6 +114,13 @@ class DisposalLedgerTests(unittest.TestCase):
                     requested_state="inactive",
                 )
             )
+
+    def test_local_key_reuse_for_another_action_is_rejected(self) -> None:
+        request = LocalDisposalRequest("k", "v", 1, "record", "a", "s")
+        self.ledger.ensure_local("station-a", request, host_id="host-a")
+        other = LocalDisposalRequest("k", "v", 1, "frontend_alert", "a", "s")
+        with self.assertRaises(ValueError):
+            self.ledger.ensure_local("station-a", other, host_id="host-a")
 
     def test_concurrent_claims_reserve_one_physical_attempt(self) -> None:
         connection = sqlite3.connect(":memory:", isolation_level=None, check_same_thread=False)

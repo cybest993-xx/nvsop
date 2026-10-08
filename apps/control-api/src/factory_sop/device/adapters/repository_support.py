@@ -19,6 +19,16 @@ _CONSTRAINT_REFUSALS: dict[str, DeviceRefusalCode] = {
     "ck_device_connector_configuration_safe": DeviceRefusalCode.CONNECTOR_CONFIGURATION_SECRET,
     "uq_device_point_station_id_semantic_label": (DeviceRefusalCode.POINT_SEMANTIC_LABEL_TAKEN),
     "uq_device_point_connector_id_direction_identifier": (DeviceRefusalCode.POINT_IDENTITY_TAKEN),
+    # 强制改绑历史引用：删设备时由 execution_handover 的 RESTRICT 外键拒绝（0050，§5.17）。
+    "fk_execution_handover_station_id_device_station": (
+        DeviceRefusalCode.STATION_HAS_HANDOVER_HISTORY
+    ),
+    "fk_execution_handover_from_host_id_device_inference_host": (
+        DeviceRefusalCode.INFERENCE_HOST_HAS_HANDOVER_HISTORY
+    ),
+    "fk_execution_handover_to_host_id_device_inference_host": (
+        DeviceRefusalCode.INFERENCE_HOST_HAS_HANDOVER_HISTORY
+    ),
 }
 _HOST_FOREIGN_KEY = "fk_device_inference_backend_host_id_device_inference_host"
 _ACTIVE_EXECUTION_GRANT_DELETE = "execution_active_grant_delete"

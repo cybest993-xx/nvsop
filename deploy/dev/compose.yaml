@@ -33,7 +33,9 @@ x-center-environment: &center-environment
 
 services:
   center-db:
-    image: postgres:17.2-bookworm
+    # 中心实例自带 TimescaleDB（S020）。固定具体标签，扩展由迁移中的 CREATE EXTENSION 安装；
+    # 一次性 client-only 服务（建库/角色/对象安装）仍用普通 postgres 镜像，只做客户端。
+    image: timescale/timescaledb:2.22.1-pg17
     environment:
       POSTGRES_DB: nvsop
       POSTGRES_USER: nvsop
@@ -50,7 +52,8 @@ services:
 
   # Q35：同一 PostgreSQL 实例内的第二个 database。训练/标注进程连接 `training`，
   # Center 只连接 `nvsop`。幂等创建以兼容既有数据卷；training 对象安装由 #224(S066) 负责，
-  # 这里不执行 DDL，也不重建/清空中心数据卷。
+  # 这里不执行 DDL，也不重建/清空中心数据卷。用 `TEMPLATE template0` 建库：TimescaleDB
+  # 镜像会把扩展装进 template1 与默认库，若照抄 template1，training 会继承扩展而不再是普通库。
   training-db-init:
     image: postgres:17.2-bookworm
     depends_on:
@@ -70,7 +73,7 @@ services:
         if psql -tAc "SELECT 1 FROM pg_database WHERE datname = 'training'" | grep -qx 1; then
           echo "training database already present"
         else
-          psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE training"
+          psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE training TEMPLATE template0"
         fi
     restart: "no"
 
@@ -120,6 +123,29 @@ services:
         export PGPASSWORD="$$(cat /run/secrets/center-db-password)"
         export RUNTIME_PASSWORD="$$(cat /run/secrets/training-runtime-password)"
         psql -v ON_ERROR_STOP=1 -v database=training -v runtime_role=training_runtime -d training -f /opt/nvsop/db-roles.sql
+    restart: "no"
+
+  # S066：在空 `training` database 上安装五类训练/标注进程所需对象。
+  # DDL 复用 Vendor 合并脚本并锁定其提交/摘要；重复启动跳过，未知非空/部分状态明确拒绝。
+  training-objects-install:
+    image: postgres:17.2-bookworm
+    depends_on:
+      training-role-init:
+        condition: service_completed_successfully
+    environment:
+      PGHOST: center-db
+      PGUSER: nvsop
+      PGDATABASE: training
+      NVSOP_TRAINING_VENDOR_COMMIT: "69352021c2aae0ba071acd2629f5cff224d14ca6"  # pragma: allowlist secret
+      NVSOP_TRAINING_DDL_PATH: vendor/sop-monitoring-blueprints/microservices/sop-training-bp/db-init-scripts/01-init-tables.sql
+      NVSOP_TRAINING_DDL_SHA256: "df3e518f7becfad1adb3f785e75cf4a254d8e82faccb76513c03d6af9b7c3d12"  # pragma: allowlist secret
+    secrets:
+      - center-db-password
+    volumes:
+      - ./training-install.sh:/opt/nvsop/training-install.sh:ro
+      - ./training-install-version.sql:/opt/nvsop/training-install-version.sql:ro
+      - ../../vendor/sop-monitoring-blueprints/microservices/sop-training-bp/db-init-scripts/01-init-tables.sql:/opt/nvsop/training-ddl/01-init-tables.sql:ro
+    entrypoint: ["/bin/sh", "/opt/nvsop/training-install.sh"]
     restart: "no"
 
   redis:
@@ -229,7 +255,7 @@ services:
       context: ${NVSOP_SOURCE_DIR:-.}
       dockerfile: deploy/dev/annotation-backend.Dockerfile
     depends_on:
-      training-role-init:
+      training-objects-install:
         condition: service_completed_successfully
     environment:
       # 训练/标注进程经 Vendor `POSTGRES_*` seam 以 `training_runtime` 非超级用户连接 `training`。

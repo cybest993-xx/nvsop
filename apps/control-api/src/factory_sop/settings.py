@@ -10,6 +10,7 @@ a deployment that looks healthy while being wrong.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, get_args
 from urllib.parse import urlsplit
@@ -241,30 +242,68 @@ class Settings(BaseSettings):
         return settings
 
 
-def _require_runtime_infrastructure(settings: Settings) -> None:
-    """拒绝缺失本地媒体存储或任务队列的可运行配置。
+@dataclass(frozen=True, slots=True)
+class RedisConnection:
+    """redis(s) URL 解析出的完整连接事实。
 
-    格式规则由 `Settings` 自身校验，这里只判定必需项是否存在。
+    `from_environment` 的运行校验与 dispatcher 装配共用 `parse_redis_url`，因此两侧不会
+    各自维护一套规则；密码只在 `repr` 中隐藏，仍交给真正的连接配置。
+    """
+
+    host: str
+    port: int
+    database: int
+    username: str | None
+    password: str | None = field(repr=False)
+    ssl: bool
+
+
+def parse_redis_url(value: str) -> RedisConnection:
+    """把 redis(s) URL 解析成连接事实，任何不可用形式都抛 `ConfigurationError`。
+
+    直接构造 `Settings` 会绕过 `from_environment` 的运行校验，dispatcher 仍调用本函数，
+    所以共享的是一条纯解析规则而不是「已验证」这一假设。
+    """
+    try:
+        parsed = urlsplit(value)
+    except ValueError as error:
+        raise ConfigurationError("redis_url 无效") from error
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise ConfigurationError("redis_url 端口无效") from error
+    if parsed.scheme not in {"redis", "rediss"} or not parsed.hostname:
+        raise ConfigurationError("redis_url 必须使用带主机的 redis(s) 地址")
+    if port is not None and not 1 <= port <= 65535:
+        raise ConfigurationError("redis_url 端口无效")
+    try:
+        database = int(parsed.path.strip("/") or "0")
+    except ValueError as error:
+        raise ConfigurationError("redis_url 数据库编号无效") from error
+    if database < 0:
+        raise ConfigurationError("redis_url 数据库编号无效")
+    return RedisConnection(
+        host=parsed.hostname,
+        port=port if port is not None else 6379,
+        database=database,
+        username=parsed.username,
+        password=parsed.password,
+        ssl=parsed.scheme == "rediss",
+    )
+
+
+def _require_runtime_infrastructure(settings: Settings) -> None:
+    """拒绝缺失本地媒体存储或不可用任务队列的可运行配置。
+
+    必需项的“存在性”在这里判定；字段格式由 `Settings` 自身校验，Redis URL 的可用性由
+    共享的 `parse_redis_url` 判定，使环境路径与直接构造 Settings 的 dispatcher 装配
+    使用同一规则。
     """
     if settings.dataset_storage_root is None:
         raise ConfigurationError("部署必须配置中心训练素材本地存储根目录")
     if settings.redis_url is None:
         raise ConfigurationError("部署必须配置 Redis 任务队列")
-    redis_url = urlsplit(settings.redis_url.get_secret_value())
-    try:
-        port = redis_url.port
-    except ValueError as error:
-        raise ConfigurationError("redis_url 端口无效") from error
-    if port is not None and not 1 <= port <= 65535:
-        raise ConfigurationError("redis_url 端口无效")
-    if redis_url.scheme not in {"redis", "rediss"} or not redis_url.hostname:
-        raise ConfigurationError("redis_url 必须使用带主机的 redis(s) 地址")
-    try:
-        database = int(redis_url.path.strip("/") or "0")
-    except ValueError as error:
-        raise ConfigurationError("redis_url 数据库编号无效") from error
-    if database < 0:
-        raise ConfigurationError("redis_url 数据库编号无效")
+    parse_redis_url(settings.redis_url.get_secret_value())
 
 
 def _variable_name(field_name: str) -> str:

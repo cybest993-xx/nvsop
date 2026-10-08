@@ -7,6 +7,8 @@ use-case-layer decision, not a route dependency (§5.15).
 
 from __future__ import annotations
 
+from typing import cast
+
 from factory_sop.device.adapters.command_repository import PostgresPendingCommandRepository
 from factory_sop.device.adapters.probe import UrllibConnectionProbe
 from factory_sop.device.adapters.repository import (
@@ -21,6 +23,7 @@ from factory_sop.device.api import (
     DeviceConfigurationGateway,
     DeviceHistoricalAssignmentGateway,
     DeviceHostGateway,
+    DeviceMonitorGateway,
     DeviceTemplateBindingGateway,
 )
 from factory_sop.device.probing import ConnectionProbe
@@ -114,6 +117,11 @@ def configuration_gateway(session: RequestSession) -> DeviceConfigurationGateway
     )
 
 
+def monitor_gateway(session: RequestSession) -> DeviceMonitorGateway:
+    """monitor 使用的历史归属与当前登记主机 owner seam。"""
+    return PostgresInferenceHostRepository(session)
+
+
 def historical_assignments(session: RequestSession) -> DeviceHistoricalAssignmentGateway:
     """监控上报入口使用的历史配置归属验证接缝。"""
     return PostgresInferenceHostRepository(session)
@@ -121,11 +129,4 @@ def historical_assignments(session: RequestSession) -> DeviceHistoricalAssignmen
 
 def host_gateway(session: RequestSession) -> DeviceHostGateway:
     """模板上报使用的主机认证与归属 seam。"""
-    return RepositoryDeviceTemplateBindingGateway(
-        stations=PostgresStationRepository(session),
-        hosts=PostgresInferenceHostRepository(session),
-        backends=PostgresInferenceBackendRepository(session),
-        cameras=PostgresCameraRepository(session),
-        connectors=PostgresConnectorRepository(session),
-        points=PostgresPointRepository(session),
-    )
+    return cast(DeviceHostGateway, template_binding(session))

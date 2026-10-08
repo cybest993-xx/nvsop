@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import shutil
 from pathlib import Path
 
@@ -10,8 +11,19 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 # .nvsop/dev-main 持有凭据、本地 secret 和固定开发实例状态，
 # 因此故意不进入通用制品清理范围。
-DISPOSABLE_PATHS = (
+ARTIFACT_PATHS = (
     Path(".nvsop/artifacts"),
+    Path("apps/control-web/coverage"),
+    Path("apps/control-web/dist"),
+    Path("apps/control-web/playwright-report"),
+    Path("apps/control-web/test-results"),
+)
+
+# landing/ 含队列 receipt、repair claim/resume marker 与 agent log；BLOCKED 修复期间不是可再生产物。
+# 日常 clean 保留它，只有任务结束前的 purge 才移除。
+LANDING_ARTIFACT_PATH = Path(".nvsop/artifacts/landing")
+
+ENVIRONMENT_PATHS = (
     Path(".nvsop/cache"),
     Path(".nvsop/tools"),
     Path(".nvsop/venv"),
@@ -28,10 +40,6 @@ DISPOSABLE_PATHS = (
     Path(".husky/_"),
     Path("--version/_"),
     Path("apps/control-api/.pytest_cache"),
-    Path("apps/control-web/coverage"),
-    Path("apps/control-web/dist"),
-    Path("apps/control-web/playwright-report"),
-    Path("apps/control-web/test-results"),
     Path("apps/edge-runtime/.mypy_cache"),
     Path("apps/edge-runtime/.pytest_cache"),
     Path("apps/edge-runtime/.ruff_cache"),
@@ -65,12 +73,30 @@ def remove_path(path: Path) -> bool:
     return False
 
 
-def clean(root: Path = REPOSITORY_ROOT) -> list[Path]:
+def clean(root: Path = REPOSITORY_ROOT, *, purge: bool = False) -> list[Path]:
     removed: list[Path] = []
 
-    for relative in DISPOSABLE_PATHS:
-        if remove_path(root / relative):
+    paths = ARTIFACT_PATHS + ENVIRONMENT_PATHS if purge else ARTIFACT_PATHS
+    for relative in paths:
+        path = root / relative
+        if (
+            not purge
+            and relative == Path(".nvsop/artifacts")
+            and path.is_dir()
+            and not path.is_symlink()
+        ):
+            for child in path.iterdir():
+                child_relative = relative / child.name
+                if child_relative == LANDING_ARTIFACT_PATH:
+                    continue
+                if remove_path(child):
+                    removed.append(child_relative)
+            continue
+        if remove_path(path):
             removed.append(relative)
+
+    if not purge:
+        return removed
 
     generated: list[Path] = []
     for relative in GENERATED_METADATA_ROOTS:
@@ -90,7 +116,10 @@ def clean(root: Path = REPOSITORY_ROOT) -> list[Path]:
 
 
 def main() -> int:
-    for path in clean():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--purge", action="store_true", help="同时清除任务环境、工具和旧缓存")
+    arguments = parser.parse_args()
+    for path in clean(purge=arguments.purge):
         print(path.as_posix())
     return 0
 

@@ -64,9 +64,20 @@ def opening_state(
     )
 
 
-def supervisor(state: JudgmentState, clock: FakeClock, store: StationStore) -> StationSupervisor:
+def supervisor(
+    state: JudgmentState,
+    clock: FakeClock,
+    store: StationStore,
+    disposition_policy: str | None = None,
+) -> StationSupervisor:
     """真实 supervisor 在 receive/wake/interrupt 内提交完整反应。"""
-    return StationSupervisor(state=state, store=store, margins=MARGINS, clock=clock)
+    return StationSupervisor(
+        state=state,
+        store=store,
+        margins=MARGINS,
+        clock=clock,
+        disposition_policy=disposition_policy,
+    )
 
 
 def action(signal: str, at: float) -> ActionRecognized:

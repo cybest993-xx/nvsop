@@ -17,15 +17,21 @@ from pathlib import Path
 from time import monotonic, sleep, time
 from types import FrameType
 
-from nvsop_contracts import ConfigurationBundle, ConnectionTestOutcome, configuration_to_wire
+from nvsop_contracts import (
+    DISPOSITION_POLICY_STOP,
+    SAFETY_OUTPUT_BUDGET_SECONDS,
+    STOP_OUTPUT_SEMANTIC_LABEL,
+    ConfigurationBundle,
+    ConnectionTestOutcome,
+    configuration_to_wire,
+)
 
 from edge_runtime.center_client import CenterClient
 from edge_runtime.configuration import (
     EdgeRuntimeConfiguration,
     LocalIsapiConnectorConfiguration,
-    connector_configuration,
+    _connector_configuration_from_validated_url,
     load_configuration,
-    safe_url,
 )
 from edge_runtime.configuration_sync import ConfigurationSynchronizer, HttpConfigurationPuller
 from edge_runtime.connectors.hikvision import IsapiConnector
@@ -33,6 +39,7 @@ from edge_runtime.connectors.port import (
     Failed,
     InputPoint,
     OutputPoint,
+    PointState,
     Reachability,
     Refused,
     TimedOut,
@@ -46,12 +53,13 @@ from edge_runtime.connectors.writes import (
     PERSISTENT_UNKNOWN_DETAIL,
     OutputDispatcher,
     WriteAttempted,
-    WriteGate,
     WriteRequest,
 )
+from edge_runtime.evidence_media import EvidenceMediaWorker
 from edge_runtime.judgment.model import HostInstant, HostLiveness
 from edge_runtime.local_state import (
     BackendReportContext,
+    EvidenceSource,
     ExecutionLeaseState,
     LocalExecutionLeaseStore,
     LocalState,
@@ -65,7 +73,12 @@ from edge_runtime.local_state.disposal import (
     LocalDisposalLedger,
     StoredDisposalResult,
 )
-from edge_runtime.media import MediaRuntime, validate_sop_camera_bindings
+from edge_runtime.media import (
+    MediaRuntime,
+    MediaRuntimeConfiguration,
+    RecordingMode,
+    validate_sop_camera_bindings,
+)
 from edge_runtime.reporting import HostReportReconciler
 from edge_runtime.reporting_transport import HttpDecisionReportTransport
 from edge_runtime.runtime_configuration import (
@@ -95,7 +108,7 @@ from edge_runtime.supervisor.delegated_commands import (
 from edge_runtime.supervisor.delegated_transport import CommandTransportError, HttpCommandTransport
 from edge_runtime.supervisor.inputs import StreamHealthObserved
 from edge_runtime.supervisor.startup import resume_station
-from edge_runtime.supervisor.station import StationSupervisor
+from edge_runtime.supervisor.station import OutputDisposalRequest, Reaction, StationSupervisor
 
 
 class SQLiteWriteLedger:
@@ -113,6 +126,10 @@ class SQLiteWriteLedger:
             point_id=request.point.address,
             actor=request.actor,
             requested_state=request.state.value,
+            violation_ref=request.violation_ref,
+            violation_instance_id=request.violation_instance_id,
+            source=request.source,
+            report_host_id=request.report_host_id,
         )
         self._ledger.ensure_intent(intent)
         self._intents[request.key] = intent
@@ -205,24 +222,66 @@ def _outcome_from_storage(kind: str, detail: str | None, at: float) -> WriteOutc
     return Failed(detail=detail or f"unknown persistent write result: {kind}")
 
 
-class ExecutionLeaseWriteGate:
-    """按本机持久执行权事实在写入边界拒绝过期或缺失的物理写入。
+class StationWriteLifecycle:
+    """工位物理写入生命周期: 关闭或配置切换后置为停止, 写入边界据此拒绝新写入 (S029 AC2)。"""
 
-    它只读 ``LocalExecutionLeaseStore`` 这一份事实, 每次写入都按本机墙钟重新判定到期, 因此
-    不需要等待下一次中心请求, 也不维护第二份有效期 (§5.17)。
+    def __init__(self) -> None:
+        self._stopped = threading.Event()
+
+    def stop(self) -> None:
+        self._stopped.set()
+
+    @property
+    def stopped(self) -> bool:
+        return self._stopped.is_set()
+
+
+class StationOutputWriteGate:
+    """把物理写入授权绑定到真实工位、连接器、输出点位与生命周期。
+
+    只读 ``LocalExecutionLeaseStore`` 这一份事实, 每次写入按本机墙钟重新判定到期; 工位身份来自
+    组合根而非 ``request.station_id`` (S029 AC1/AC2)。
     """
 
     def __init__(
         self,
-        leases: LocalExecutionLeaseStore,
         *,
+        station_id: str,
+        connector_id: str,
+        output_points: tuple[OutputPoint, ...],
+        leases: LocalExecutionLeaseStore,
+        lifecycle: StationWriteLifecycle,
         clock: Callable[[], float] = time,
     ) -> None:
+        self._station_id = station_id
+        self._connector_id = connector_id
+        self._output_points = frozenset(output_points)
         self._leases = leases
+        self._lifecycle = lifecycle
         self._clock = clock
 
     def refusal(self, request: WriteRequest, /) -> Refused | None:
-        authority = self._leases.status(request.station_id, now=self._clock())
+        if self._lifecycle.stopped:
+            return Refused(
+                reason=WriteRefusal.WRITE_STOPPED,
+                detail=f"工位 {self._station_id} 已停止写入",
+            )
+        # 请求必须写回本门禁绑定的工位。否则该请求会拿本工位租约放行, 却把幂等意图落到另一个
+        # 工位的账本作用域 (SQLiteWriteLedger 用 request.station_id), 造成隔离破坏和重复驱动。
+        if request.station_id != self._station_id:
+            return Refused(
+                reason=WriteRefusal.TARGET_NOT_IN_STATION,
+                detail=(f"请求工位 {request.station_id} 不是本门禁绑定的工位 {self._station_id}"),
+            )
+        if request.connector_id != self._connector_id or request.point not in self._output_points:
+            return Refused(
+                reason=WriteRefusal.TARGET_NOT_IN_STATION,
+                detail=(
+                    f"输出点位 {request.point.label}@{request.point.address} "
+                    f"不属于工位 {self._station_id} 的连接器 {self._connector_id}"
+                ),
+            )
+        authority = self._leases.status(self._station_id, now=self._clock())
         if authority.authorized:
             return None
         reason = (
@@ -269,11 +328,7 @@ class ConfiguredLocalConnectorRegistry(LocalConnectorRegistry):
                 raise ValueError(f"duplicate local connector {configuration.connector_id}")
             adapter = IsapiConnector(
                 transport=UrllibIsapiTransport(
-                    base_url=safe_url(
-                        configuration.base_url,
-                        "connector base_url",
-                        schemes={"http", "https"},
-                    ),
+                    base_url=configuration.base_url,
                     username=configuration.username,
                     password=configuration.password,
                 ),
@@ -284,7 +339,7 @@ class ConfiguredLocalConnectorRegistry(LocalConnectorRegistry):
             connectors[configuration.connector_id] = LocalConnector(
                 revision=configuration.revision,
                 connector_type=configuration.connector_type,
-                configuration=connector_configuration(configuration.base_url),
+                configuration=_connector_configuration_from_validated_url(configuration.base_url),
                 credentials_configured=configuration.credentials_configured,
                 probe=_IsapiConnectionTestProbe(adapter),
             )
@@ -341,6 +396,11 @@ class AutonomousStation:
         connector_runtimes: tuple[ConnectorRuntime, ...] = (),
         output_dispatchers: Mapping[str, OutputDispatcher] | None = None,
         output_points: Mapping[str, tuple[OutputPoint, ...]] | None = None,
+        write_lifecycle: StationWriteLifecycle | None = None,
+        diagnostics: Callable[[WriteAttempted], None] | None = None,
+        output_disposal_target: tuple[str, OutputPoint] | None = None,
+        output_report_host_id: str | None = None,
+        output_write_timeout: float | None = None,
     ) -> None:
         self._supervisor = supervisor
         self._source = source
@@ -348,6 +408,11 @@ class AutonomousStation:
         self._connector_runtimes = connector_runtimes
         self._output_dispatchers = dict(output_dispatchers or {})
         self._output_points = dict(output_points or {})
+        self._write_lifecycle = write_lifecycle or StationWriteLifecycle()
+        self._diagnostics = diagnostics
+        self._output_disposal_target = output_disposal_target
+        self._output_report_host_id = output_report_host_id
+        self._output_write_timeout = output_write_timeout
 
     @property
     def station_id(self) -> str | None:
@@ -370,14 +435,86 @@ class AutonomousStation:
         return {connector_id: tuple(points) for connector_id, points in self._output_points.items()}
 
     def write_output(self, request: WriteRequest) -> WriteOutcome:
-        """通过本工位已组合的连接器派发一个输出点写入。"""
+        """通过本工位已组合的连接器派发一个输出点写入; 未知连接器返回结构化拒绝并产生诊断事件。"""
         dispatcher = self._output_dispatchers.get(request.connector_id)
         if dispatcher is None:
-            raise KeyError(f"output connector is not configured: {request.connector_id}")
+            refusal = Refused(
+                reason=WriteRefusal.TARGET_NOT_IN_STATION,
+                detail=(
+                    f"连接器 {request.connector_id} 未配置到工位 {self._station_id}, "
+                    "不驱动物理执行器"
+                ),
+            )
+            if self._diagnostics is not None:
+                self._diagnostics(
+                    WriteAttempted(
+                        point=request.point,
+                        state=request.state,
+                        key=request.key,
+                        actor=request.actor,
+                        outcome=refusal,
+                        replayed=False,
+                    )
+                )
+            return refusal
         return dispatcher.write(request)
 
+    def _execute_output_disposals(self, reaction: Reaction) -> None:
+        if not reaction.output_disposals:
+            return
+        if (
+            self._station_id is None
+            or self._output_disposal_target is None
+            or self._output_report_host_id is None
+            or self._output_write_timeout is None
+        ):
+            raise RuntimeError("physical disposal is not fully composed")
+        connector_id, point = self._output_disposal_target
+        station_id = self._station_id
+        report_host_id = self._output_report_host_id
+        for disposal in reaction.output_disposals:
+            self._write_disposal(
+                disposal,
+                connector_id=connector_id,
+                point=point,
+                timeout=self._output_write_timeout,
+                station_id=station_id,
+                report_host_id=report_host_id,
+            )
+
+    def _write_disposal(
+        self,
+        disposal: OutputDisposalRequest,
+        *,
+        connector_id: str,
+        point: OutputPoint,
+        timeout: float,
+        station_id: str,
+        report_host_id: str,
+    ) -> None:
+        self.write_output(
+            WriteRequest(
+                point=point,
+                state=PointState(disposal.requested_state),
+                key=disposal.idempotency_key,
+                actor=disposal.actor,
+                timeout=timeout,
+                capability_budget=SAFETY_OUTPUT_BUDGET_SECONDS,
+                station_id=station_id,
+                connector_id=connector_id,
+                attempt_at=HostInstant(monotonic()),
+                # A safe probe and the physical write may each consume up to one timeout.
+                lease_seconds=2.0 * timeout,
+                violation_ref=disposal.violation_ref,
+                violation_instance_id=disposal.instance_id,
+                source=disposal.source,
+                report_host_id=report_host_id,
+            )
+        )
+
     def close(self) -> None:
-        """关闭当前工位输入源。"""
+        """先停写再关闭当前工位输入源。"""
+        self._write_lifecycle.stop()
         self._source.close()
 
     def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
@@ -400,7 +537,7 @@ class AutonomousStation:
                 if should_stop():
                     break
                 if isinstance(arriving, InputWaitExpired):
-                    supervisor.wake(host=HostLiveness.ALIVE)
+                    self._execute_output_disposals(supervisor.wake(host=HostLiveness.ALIVE))
                 elif arriving is None:
                     if source.ended:
                         ended = StreamHealthObserved(
@@ -409,21 +546,23 @@ class AutonomousStation:
                                 at_monotonic=monotonic(),
                             )
                         )
-                        supervisor.receive(ended)
+                        self._execute_output_disposals(supervisor.receive(ended))
                         break
-                    supervisor.wake(host=HostLiveness.ALIVE)
+                    self._execute_output_disposals(supervisor.wake(host=HostLiveness.ALIVE))
                 elif isinstance(arriving, ProvenancedSupervisorInput):
-                    supervisor.receive(
-                        arriving.arriving,
-                        report_provenance=arriving.provenance,
+                    self._execute_output_disposals(
+                        supervisor.receive(
+                            arriving.arriving,
+                            report_provenance=arriving.provenance,
+                        )
                     )
                 else:
-                    supervisor.receive(arriving)
+                    self._execute_output_disposals(supervisor.receive(arriving))
                 self._poll_due(
                     supervisor=supervisor,
                     connector_runtimes=connector_runtimes,
                 )
-            self._supervisor.interrupt()
+            self._execute_output_disposals(self._supervisor.interrupt())
         finally:
             self.close()
 
@@ -443,8 +582,8 @@ class AutonomousStation:
             timeout = connector_timeout if timeout is None else min(timeout, connector_timeout)
         return timeout
 
-    @staticmethod
     def _poll_due(
+        self,
         *,
         supervisor: StationSupervisor,
         connector_runtimes: tuple[ConnectorRuntime, ...],
@@ -455,7 +594,7 @@ class AutonomousStation:
             if due is None or now < due:
                 continue
             for arriving in runtime.poll(now=now):
-                supervisor.receive(arriving)
+                self._execute_output_disposals(supervisor.receive(arriving))
 
 
 @dataclass(frozen=True, slots=True)
@@ -625,8 +764,19 @@ class _RuntimeCycleRunner:
             try:
                 media.start()
                 return
-            except Exception:
+            except Exception as error:
+                _logger.error(
+                    "edge.media.start.failed error_type=%s error=%s",
+                    type(error).__name__,
+                    error,
+                )
                 self._cycle_stop.wait(0.5)
+
+    def _run_evidence(self) -> None:
+        evidence = self._runtime._evidence
+        if evidence is None:
+            return
+        evidence.run_forever(should_stop=self._stop_requested)
 
     def _run_configuration(self) -> None:
         runtime = self._runtime
@@ -719,6 +869,18 @@ class _RuntimeCycleRunner:
                 if runtime._media is not None
                 else []
             ),
+            *(
+                [
+                    threading.Thread(
+                        target=self._guard,
+                        args=(self._run_evidence,),
+                        name="edge-evidence-media",
+                        daemon=True,
+                    )
+                ]
+                if runtime._evidence is not None
+                else []
+            ),
             threading.Thread(
                 target=self._guard,
                 args=(lambda: self._isolate_center_worker("command", self._run_command),),
@@ -777,6 +939,7 @@ class AutonomousRuntime:
         stations: tuple[AutonomousStation, ...],
         state: LocalState,
         media: MediaRuntime | None = None,
+        evidence: EvidenceMediaWorker | None = None,
         report_reconciler: HostReportReconciler | None = None,
         report_wake: threading.Event | None = None,
         configuration_sync: ConfigurationSynchronizer | None = None,
@@ -793,6 +956,7 @@ class AutonomousRuntime:
         self._stations = list(stations)
         self._state = state
         self._media = media
+        self._evidence = evidence
         self._report_reconciler = report_reconciler
         self._report_wake = report_wake or threading.Event()
         self._configuration_sync = configuration_sync
@@ -978,15 +1142,23 @@ _CENTER_WORKER_RESTART_MAX_SECONDS = 30.0
 
 
 def _log_write_attempt(event: WriteAttempted) -> None:
-    """记录连接器写入诊断,但不记录设备凭据。"""
+    """记录连接器写入诊断,但不记录设备凭据; 拒绝带目标地址、具体原因和排障文本 (S029 AC3)。"""
+    outcome = event.outcome
+    refusal = (
+        f" reason={outcome.reason.value} detail={outcome.detail}"
+        if isinstance(outcome, Refused)
+        else ""
+    )
     _logger.info(
-        "connector write attempt key=%s actor=%s point=%s state=%s replayed=%s outcome=%s",
+        "connector write attempt key=%s actor=%s point=%s@%s state=%s replayed=%s outcome=%s%s",
         event.key,
         event.actor,
         event.point.label,
+        event.point.address,
         event.state.value,
         event.replayed,
-        type(event.outcome).__name__,
+        type(outcome).__name__,
+        refusal,
     )
 
 
@@ -1050,15 +1222,37 @@ def _build_runtime_composition(
         timeout=config.command_timeout,
     )
     disposal_ledger = state.disposal()
-    execution_gate: WriteGate = ExecutionLeaseWriteGate(state.execution_leases())
+    leases = state.execution_leases()
+    station_bindings = {
+        binding.configuration.station_id: binding for binding in runtime_configuration.stations
+    }
+    write_lifecycles = {station_id: StationWriteLifecycle() for station_id in station_bindings}
+    output_points_by_station_connector = {
+        station_id: {
+            connector_id: binding.output_points_for(connector_id)
+            for connector_id in binding.connector_ids
+        }
+        for station_id, binding in station_bindings.items()
+    }
+    # 只为已归属工位的连接器建 dispatcher: 门禁绑定真实工位/连接器/目标点位/生命周期,
+    # 不读取请求自报的 station_id。
     output_dispatchers = {
         connector_id: OutputDispatcher(
             connector=adapter,
             ledger=SQLiteWriteLedger(disposal_ledger),
             diagnostics=_log_write_attempt,
-            gate=execution_gate,
+            gate=StationOutputWriteGate(
+                station_id=connector_owners[connector_id],
+                connector_id=connector_id,
+                output_points=output_points_by_station_connector[connector_owners[connector_id]][
+                    connector_id
+                ],
+                leases=leases,
+                lifecycle=write_lifecycles[connector_owners[connector_id]],
+            ),
         )
         for connector_id, adapter in adapters.items()
+        if connector_id in connector_owners
     }
     report_reconciler = (
         None
@@ -1122,6 +1316,11 @@ def _build_runtime_composition(
                 for connector_id in station_binding.connector_ids
                 if connector_id in output_dispatchers
             }
+            output_disposal_target = (
+                station_binding.output_target(STOP_OUTPUT_SEMANTIC_LABEL)
+                if station_config.disposition_policy == DISPOSITION_POLICY_STOP
+                else None
+            )
             stations.append(
                 AutonomousStation(
                     station_id=station_config.station_id,
@@ -1130,6 +1329,7 @@ def _build_runtime_composition(
                         template=station_config.template,
                         parameters=station_config.parameters,
                         margins=station_config.margins,
+                        disposition_policy=station_config.disposition_policy,
                     ),
                     source=source,
                     connector_runtimes=runtimes,
@@ -1138,6 +1338,11 @@ def _build_runtime_composition(
                         connector_id: station_binding.output_points_for(connector_id)
                         for connector_id in station_binding.connector_ids
                     },
+                    write_lifecycle=write_lifecycles[station_config.station_id],
+                    diagnostics=_log_write_attempt,
+                    output_disposal_target=output_disposal_target,
+                    output_report_host_id=config.host_id,
+                    output_write_timeout=config.command_timeout,
                 )
             )
     except Exception:
@@ -1222,6 +1427,39 @@ def build_connection_test_loop_from_file(
     )
 
 
+def _evidence_source_factory(
+    media: MediaRuntimeConfiguration | None,
+) -> Callable[[str], EvidenceSource | None] | None:
+    """从本机媒体配置按相机真实工位绑定装配入队时冻结来源 (S033)。
+
+    只纳入本机启用且参与 SOP 的连续录像相机; 工位未映射返回 None, 待办保持 pending 并记录
+    mapping missing, 不按当前中心重绑给历史判定猜来源。
+    """
+    if media is None:
+        return None
+    paths: dict[str, list[str]] = {}
+    for camera in media.cameras:
+        enabled = (
+            media.host_status == "active"
+            and camera.camera_status == "active"
+            and camera.station_status == "active"
+        )
+        if enabled and camera.sop_execution and camera.recording_mode is RecordingMode.CONTINUOUS:
+            paths.setdefault(camera.station_id, []).append(camera.media_path)
+    if not paths:
+        return None
+
+    def source(station_id: str) -> EvidenceSource | None:
+        frozen = paths.get(station_id)
+        return (
+            None
+            if not frozen
+            else EvidenceSource(wall_offset=time() - monotonic(), media_paths=tuple(sorted(frozen)))
+        )
+
+    return source
+
+
 def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRuntime:
     """从中心确认配置、真实连接器和 SQLite 状态装配自治运行时。"""
     config = load_configuration(config_path, include_stations=True)
@@ -1231,6 +1469,7 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
     state = open_local_state(
         str(config.local_state_path),
         notify_report_pending=report_wake.set,
+        evidence_source=_evidence_source_factory(config.media),
     )
     composition: RuntimeComposition | None = None
 
@@ -1303,11 +1542,26 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
                 report_transport=report_transport,
             )
 
+        media_configuration = config.media
+        evidence_configuration = config.evidence
+        evidence_worker = (
+            EvidenceMediaWorker(
+                state=state,
+                host_id=config.host_id,
+                recording_directory=media_configuration.recording_directory,
+                ffmpeg_binary=media_configuration.ffmpeg_binary,
+                configuration=evidence_configuration,
+                interval=config.command_poll_interval,
+            )
+            if media_configuration is not None and evidence_configuration is not None
+            else None
+        )
         runtime = AutonomousRuntime(
             command_loop=command_loop,
             stations=composition.stations,
             state=state,
             media=MediaRuntime(config.media) if config.media is not None else None,
+            evidence=evidence_worker,
             report_reconciler=composition.report_reconciler,
             report_wake=report_wake,
             configuration_sync=configuration_sync,
@@ -1407,7 +1661,7 @@ def main() -> int:
 
     try:
         runtime = build_autonomous_runtime_from_file(config_path)
-    except (OSError, ValueError, json.JSONDecodeError) as error:
+    except (OSError, ValueError) as error:
         raise SystemExit(f"edge runtime configuration is invalid: {error}") from None
 
     stopping = False

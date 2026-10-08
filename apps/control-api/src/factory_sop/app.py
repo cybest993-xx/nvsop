@@ -74,6 +74,9 @@ from factory_sop.device.api import summary as device_summary
 from factory_sop.device.errors import DeviceRefusedError
 from factory_sop.device.errors import refusal_problem as device_refusal_problem
 from factory_sop.execution.adapters import dependencies as execution_dependencies
+from factory_sop.execution.adapters import routes as execution_routes
+from factory_sop.execution.errors import ExecutionRefusedError
+from factory_sop.execution.errors import refusal_problem as execution_refusal_problem
 from factory_sop.job.adapters import dependencies as job_dependencies
 from factory_sop.job.adapters.dispatcher import ArqJobDispatcher
 from factory_sop.job.adapters.routes import router as job_router
@@ -237,6 +240,7 @@ def create_app(
     app.include_router(annotation_compatibility_router)
     app.include_router(job_router, prefix=API_PREFIX)
     app.include_router(monitor_router, prefix=API_PREFIX)
+    app.include_router(execution_routes.router, prefix=API_PREFIX)
     app.include_router(overview_router, prefix=API_PREFIX)
     # 组合根把跨模块查询和任务依赖接到各自模块的真实适配器。
     app.dependency_overrides[configuration_dependencies.device_gateway] = (
@@ -254,6 +258,9 @@ def create_app(
     )
     app.dependency_overrides[template_dependencies.host_gateway] = device_dependencies.host_gateway
     app.dependency_overrides[monitor_dependencies.host_gateway] = device_dependencies.host_gateway
+    app.dependency_overrides[monitor_dependencies.device_monitor_gateway] = (
+        device_dependencies.monitor_gateway
+    )
     app.dependency_overrides[monitor_dependencies.historical_assignment_gateway] = (
         device_dependencies.historical_assignments
     )
@@ -378,6 +385,16 @@ def create_app(
             title=title,
             error_code=ApiErrorCode(error.code.value),
             detail=error.detail,
+        )
+
+    @app.exception_handler(ExecutionRefusedError)
+    async def execution_refused(request: Request, error: ExecutionRefusedError) -> Response:
+        """报告执行权或强制改绑拒绝：状态与标题由拒绝码自己给出。"""
+        status_code, title = execution_refusal_problem(error.code)
+        return problem_response(
+            status=status_code,
+            title=title,
+            error_code=ApiErrorCode(error.code.value),
         )
 
     @app.exception_handler(RequestValidationError)

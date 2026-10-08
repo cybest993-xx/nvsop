@@ -32,6 +32,8 @@
 
 配置 bundle 的 `execution_grants` 是 host-scoped 授权元数据：Center 在成功拉取边界只续期认证主机自己持有的租约并随信封下发，该字段不参与配置的 stable/effective identity，也不进入配置运行时的组合或切换。它现在是已生效的物理写入授权事实，因此按第 2 类（显式能力门禁的行为扩展）投递：Center 在 bundle 中声明 `required_capabilities = ["execution.lease-write-gate"]`，Edge 声明支持该能力并把租约持久化为本地唯一执行权事实（到期/缺失即在写入边界拒绝，不依赖下一次中心请求）；不支持的旧 Edge 显式拒绝整个候选，而不是忽略 `execution_grants` 继续无门禁写入。隐藏或未知的配置行为字段仍必须走第 2 类。
 
+`disposition_policy=stop` 同样属于第 2 类行为扩展。共享 wire 仍把 `disposition_policy` 保持为既有的非空字符串，避免通过收窄字段制造隐式破坏；Center 的产品/绑定层只允许首版 `record` / `stop`。只要任一工位实际生效值为 `stop`，Center 就必须同时声明 `disposition.stop-output-v1`。新 Edge 只有在该 capability 存在、策略值受支持且确认拓扑能唯一解析 `停线联锁` 输出点时才激活物理处置；缺 capability 的旧 Center `stop` 候选也必须拒绝，防止升级后的 Edge 把历史自由文本从“记录类处置”静默重解释为物理停线。旧 Edge 不认识该 capability 时则在候选阶段拒绝整个新配置。`record` 不要求这一 capability。
+
 配置契约不提供 `extensions`、任意 JSON bag、插件字典或“未知字段照单全收”。核心字段仍严格必填，未知字段仍拒绝。
 
 只有真正无法用上述方式安全协同发布时才重新定义 contract generation，例如：删除/收窄已存在字段；改变既有字段语义；改变 assignment/effective digest 的身份规则且无法兼容迁移；或 capability gate 无法表达所需的不兼容边界。即使发生这类变化，也应做一次协同迁移并收敛回单一生产模型，而不是长期保留多代运行分支。
@@ -61,7 +63,7 @@
 |---|---|---|
 | Host configuration | `ConfigurationBundle` 当前单一严格模型；行为扩展用 `required_capabilities` | 本文规则适用；历史 v1/v2 仅 Edge local-state 迁移 |
 | Decision report | `ReportedDecision` 明确维护严格 v1 与历史证明/复数 provenance 的 v2，并在发送 v2 前通过 confirmed-configuration 握手 | 这是已存在的跨异步升级兼容协议，不由配置契约重构删除；后续演进归 monitor/reporting owner |
-| Health report | `ReportedHealth` 严格 `REPORT_CONTRACT_VERSION=1`，status/reason 文本保留可扩展值语义 | 当前无并行 generation；若新增行为语义，先定义对应兼容门禁，归 monitor/reporting owner |
+| Health report | `ReportedHealth` 严格 `HEALTH_REPORT_CONTRACT_VERSION=2`，携带每路流身份、发生时间与源锚/偏移；status/reason 文本保留可扩展值语义 | v1 从未有生产发送方（旧 Edge 只定义了 `send_health`，没有任何调用点），没有需要迁移的历史数据，因此不保留 v1 解码；有冻结 confirmed 配置的上报在发送前经 confirmed-configuration 握手协商 `stream-health-report-v2`，无配置的上报沿用既有直接发送路径（与 bootstrap 判定只表达当前归属同一边界），归 monitor/reporting owner |
 | Observation report | `ReportedObservation` 严格 `OBSERVATION_REPORT_CONTRACT_VERSION=1`，只归档产生时内容 | 当前无并行 generation；主机签名上报按当前拓扑归属校验（与 Health report 同），归 monitor/reporting owner |
 | Delegated connection-test command | 无数字 generation；以严格 `command_type` + 固定字段解析，未知字段拒绝 | 当前单一 shape；需要新命令行为时新增显式 command type/协商，不把任意字段塞入现有 payload，归 delegated-command owner |
 

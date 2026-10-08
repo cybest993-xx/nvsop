@@ -16,6 +16,8 @@ from factory_sop.device.model import (
     ConnectorReachability,
     ConnectorType,
     DeviceStatus,
+    InferenceHost,
+    Station,
 )
 from factory_sop.device.repository import (
     CameraRepository,
@@ -341,32 +343,36 @@ def _existing(connector_id: UUID, connectors: ConnectorRepository) -> Connector:
     return connector
 
 
-def _existing_station(station_id: UUID, stations: StationRepository) -> None:
-    if stations.by_id(station_id) is None:
-        refuse(_REFUSAL_EVENT, DeviceRefusalCode.STATION_NOT_FOUND, station_id=str(station_id))
-
-
-def _active_station(station_id: UUID, stations: StationRepository) -> None:
-    _existing_station(station_id, stations)
+def _existing_station(station_id: UUID, stations: StationRepository) -> Station:
     station = stations.by_id(station_id)
-    if station is not None and station.status is DeviceStatus.DEACTIVATED:
+    if station is None:
+        refuse(_REFUSAL_EVENT, DeviceRefusalCode.STATION_NOT_FOUND, station_id=str(station_id))
+    return station
+
+
+def _active_station(station_id: UUID, stations: StationRepository) -> Station:
+    station = _existing_station(station_id, stations)
+    if station.status is DeviceStatus.DEACTIVATED:
         refuse(_REFUSAL_EVENT, DeviceRefusalCode.STATION_DEACTIVATED, station_id=str(station_id))
+    return station
 
 
-def _existing_host(host_id: UUID, hosts: InferenceHostRepository) -> None:
-    if hosts.by_id(host_id) is None:
-        refuse(_REFUSAL_EVENT, DeviceRefusalCode.INFERENCE_HOST_NOT_FOUND, host_id=str(host_id))
-
-
-def _active_host(host_id: UUID, hosts: InferenceHostRepository) -> None:
-    _existing_host(host_id, hosts)
+def _existing_host(host_id: UUID, hosts: InferenceHostRepository) -> InferenceHost:
     host = hosts.by_id(host_id)
-    if host is not None and host.status is DeviceStatus.DEACTIVATED:
+    if host is None:
+        refuse(_REFUSAL_EVENT, DeviceRefusalCode.INFERENCE_HOST_NOT_FOUND, host_id=str(host_id))
+    return host
+
+
+def _active_host(host_id: UUID, hosts: InferenceHostRepository) -> InferenceHost:
+    host = _existing_host(host_id, hosts)
+    if host.status is DeviceStatus.DEACTIVATED:
         refuse(
             _REFUSAL_EVENT,
             DeviceRefusalCode.INFERENCE_HOST_DEACTIVATED,
             host_id=str(host_id),
         )
+    return host
 
 
 def _require_revision(connector: Connector, expected_revision: int) -> None:

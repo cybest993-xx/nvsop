@@ -10,10 +10,12 @@ before it can decide anything.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, cast
 
 from fastapi import Depends, Request
+from sqlalchemy.orm import Session, sessionmaker
 
 from factory_sop.auth.adapters.cookies import SESSION_COOKIE
 from factory_sop.auth.adapters.handover import PostgresHandoverAuthority
@@ -29,7 +31,7 @@ from factory_sop.auth.model import SessionPolicy
 from factory_sop.auth.permissions import Permission
 from factory_sop.auth.repository import RoleRepository, SessionRepository, UserRepository
 from factory_sop.auth.tokens import SessionToken
-from factory_sop.auth.usecases.sessions import RestoredSession, restore_session
+from factory_sop.auth.usecases.sessions import RestoredSession, restore_session, validate_session
 from factory_sop.persistence import RequestSession
 
 # The OpenAPI extension member a write route carries its permission in. `x-` prefixed, as
@@ -155,3 +157,33 @@ def authorized_caller(
 # What a route whose use case enforces a permission annotates its caller parameter with.
 # `Authenticated` says who; this says who *and* what they may do.
 Authorized = Annotated[Caller, Depends(authorized_caller)]
+
+
+def session_recheck(request: Request) -> Callable[[], Caller | None]:
+    """给 monitor 长连接非续期复核；失效返回 None，基础设施故障向上传播。"""
+    token = presented_token(request)
+    factory = cast(sessionmaker[Session], request.app.state.session_factory)
+    policy = session_policy(request)
+
+    def current_caller() -> Caller | None:
+        if token is None:
+            return None
+        with factory() as session:
+            try:
+                _, user = validate_session(
+                    token=token,
+                    users=PostgresUserRepository(session),
+                    sessions=PostgresSessionRepository(session),
+                    policy=policy,
+                    now=datetime.now(UTC),
+                )
+            except AuthenticationRefusedError:
+                return None
+            return Caller(
+                user=user, granted=PostgresRoleRepository(session).permissions_of(user.id)
+            )
+
+    return current_caller
+
+
+SessionRecheck = Annotated[Callable[[], Caller | None], Depends(session_recheck)]

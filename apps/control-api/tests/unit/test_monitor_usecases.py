@@ -592,7 +592,7 @@ def test_runtime_projection_snapshot_and_stream_are_idless_and_emit_only_changes
     monitor.runtime = ({"station_id": station, "decision": {"verdict": "fail"}},)
     stream = sse_stream(
         monitor,
-        caller=caller(Permission.MONITOR_VIEW),
+        current_caller=lambda: caller(Permission.MONITOR_VIEW),
         runtime_projection=snapshot.runtime_projection,
         wait_timeout=0,
     )
@@ -600,6 +600,22 @@ def test_runtime_projection_snapshot_and_stream_are_idless_and_emit_only_changes
     assert '"verdict":"fail"' in changed
     assert "id:" not in changed
     assert next(stream) == ": keep-alive\n\n"
+
+
+def test_sse_revoked_caller_does_not_receive_a_new_runtime_projection() -> None:
+    monitor = MemoryMonitor()
+    permitted = True
+
+    def current_caller() -> Caller | None:
+        return caller(Permission.MONITOR_VIEW) if permitted else None
+
+    stream = sse_stream(monitor, current_caller=current_caller, wait_timeout=0)
+    assert next(stream) == ": keep-alive\n\n"
+
+    permitted = False
+    monitor.runtime = ({"station_id": str(STATION_ID), "decision": {"verdict": "fail"}},)
+    with pytest.raises(StopIteration):
+        next(stream)
 
 
 def test_health_mirror_accepts_current_assignment_without_history() -> None:
@@ -685,6 +701,33 @@ def test_sse_resume_consumes_last_event_id_without_replaying_it() -> None:
     assert snapshot.decision_sequence == 1
 
 
+@pytest.mark.parametrize(
+    "failure", [AuthorizationRefusedError(Permission.MONITOR_VIEW), OSError("auth unavailable")]
+)
+def test_sse_never_sends_snapshot_or_new_batch_after_recheck_failure(failure: Exception) -> None:
+    monitor = MemoryMonitor()
+    active = True
+
+    def current_caller() -> Caller:
+        if not active:
+            raise failure
+        return caller(Permission.MONITOR_VIEW)
+
+    stream = sse_stream(
+        monitor, current_caller=current_caller, initial_frames=("snapshot",), wait_timeout=0
+    )
+    assert next(stream) == "snapshot"
+    active = False
+    with pytest.raises(type(failure)):
+        next(stream)
+    with pytest.raises(StopIteration):
+        next(stream)
+
+    refused = sse_stream(monitor, current_caller=current_caller, initial_frames=("snapshot",))
+    with pytest.raises(type(failure)):
+        next(refused)
+
+
 def test_sse_resume_replays_backlog_in_cursor_order_without_snapshot_gap() -> None:
     monitor = MemoryMonitor()
     received_at = datetime(2026, 9, 13, 0, 0, 0, tzinfo=UTC)
@@ -710,7 +753,7 @@ def test_sse_resume_replays_backlog_in_cursor_order_without_snapshot_gap() -> No
 
     stream = sse_stream(
         monitor,
-        caller=caller(Permission.MONITOR_VIEW),
+        current_caller=lambda: caller(Permission.MONITOR_VIEW),
         decision_sequence=snapshot.decision_sequence,
         health_sequence=snapshot.health_sequence,
         wait_timeout=0,
@@ -745,7 +788,7 @@ def test_sse_preserves_stream_sequence_when_received_at_order_reverses() -> None
 
     stream = sse_stream(
         monitor,
-        caller=caller(Permission.MONITOR_VIEW),
+        current_caller=lambda: caller(Permission.MONITOR_VIEW),
         wait_timeout=0,
     )
     assert "id: host:event-1" in next(stream)
@@ -776,7 +819,7 @@ def test_sse_cursors_do_not_replay_snapshot_or_skip_same_timestamp_events() -> N
     )
     stream = sse_stream(
         monitor,
-        caller=caller(Permission.MONITOR_VIEW),
+        current_caller=lambda: caller(Permission.MONITOR_VIEW),
         decision_sequence=snapshot.decision_sequence,
         health_sequence=snapshot.health_sequence,
         wait_timeout=0,

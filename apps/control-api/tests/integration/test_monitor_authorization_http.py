@@ -51,6 +51,10 @@ def live_monitor(engine: Engine) -> Iterator[str]:
             assert not worker.is_alive(), "HTTP 服务未释放 SSE 资源"
             _clear_s143_monitor_rows(engine)
             with engine.begin() as connection:
+                # 已删除镜像事实后，同步清除本测试唯一前缀的 durable id 记录。
+                connection.execute(
+                    text("DELETE FROM monitor_health_identity WHERE event_id LIKE 's149-%'")
+                )
                 connection.execute(text("TRUNCATE auth_user CASCADE"))
                 connection.execute(text("DELETE FROM auth_role WHERE code = 's149-viewer'"))
 
@@ -74,6 +78,15 @@ def _publish(engine: Engine, event_id: str) -> None:
     with session_factory(engine)() as session:
         PostgresMonitorRepository(session).upsert_health(_health(event_id))
         session.commit()
+
+
+def _next_id(lines: Iterator[str], event_id: str) -> None:
+    # runtime projection is idless and may be interleaved with durable health events.
+    for line in lines:
+        if line.startswith("id: "):
+            assert line == f"id: {event_id}"
+            return
+    pytest.fail(f"SSE stream ended before {event_id}")
 
 
 def _invalidate(engine: Engine, client: httpx2.Client, reason: str) -> None:
@@ -110,12 +123,12 @@ def test_invalidated_stream_stops_before_the_next_batch(
         with client.stream("GET", "/api/v1/monitor/stream") as response:
             assert response.status_code == 200
             lines = response.iter_lines()
-            assert next(lines) == "id: s149-before"
+            _next_id(lines, "s149-before")
             # 消费整个初始批次，再从独立请求/事务使会话或权限失效。
             while next(lines):
                 pass
             _publish(engine, "s149-valid")
-            assert next(lines) == "id: s149-valid"
+            _next_id(lines, "s149-valid")
             while next(lines):
                 pass
             _invalidate(engine, client, reason)
@@ -137,7 +150,12 @@ def test_idle_stream_closes_within_one_heartbeat_without_renewing_session(
                 pass
             with engine.connect() as connection:
                 used_at = connection.scalar(text("SELECT last_used_at FROM auth_session"))
-            assert next(lines) == ": keep-alive"
+            for line in lines:
+                if line == ": keep-alive":
+                    break
+                assert not line.startswith("id: "), "空闲连接收到意外的 durable 事件"
+            else:
+                pytest.fail("空闲 SSE 未按心跳周期输出 keep-alive")
             assert next(lines) == ""
             with engine.connect() as connection:
                 assert connection.scalar(text("SELECT last_used_at FROM auth_session")) == used_at

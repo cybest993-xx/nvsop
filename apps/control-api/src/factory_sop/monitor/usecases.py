@@ -591,6 +591,8 @@ def sse_stream(
             cast(str, value["station_id"]): value for value in runtime_projection
         }
         current_by_station = {cast(str, value["station_id"]): value for value in current_runtime}
+        if not _authorize_stream(current_caller):
+            return
         for station_id in sorted(current_by_station):
             value = current_by_station[station_id]
             if previous_by_station.get(station_id) != value:

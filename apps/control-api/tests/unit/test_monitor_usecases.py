@@ -592,7 +592,7 @@ def test_runtime_projection_snapshot_and_stream_are_idless_and_emit_only_changes
     monitor.runtime = ({"station_id": station, "decision": {"verdict": "fail"}},)
     stream = sse_stream(
         monitor,
-        caller=caller(Permission.MONITOR_VIEW),
+        current_caller=lambda: caller(Permission.MONITOR_VIEW),
         runtime_projection=snapshot.runtime_projection,
         wait_timeout=0,
     )
@@ -600,6 +600,22 @@ def test_runtime_projection_snapshot_and_stream_are_idless_and_emit_only_changes
     assert '"verdict":"fail"' in changed
     assert "id:" not in changed
     assert next(stream) == ": keep-alive\n\n"
+
+
+def test_sse_revoked_caller_does_not_receive_a_new_runtime_projection() -> None:
+    monitor = MemoryMonitor()
+    permitted = True
+
+    def current_caller() -> Caller | None:
+        return caller(Permission.MONITOR_VIEW) if permitted else None
+
+    stream = sse_stream(monitor, current_caller=current_caller, wait_timeout=0)
+    assert next(stream) == ": keep-alive\n\n"
+
+    permitted = False
+    monitor.runtime = ({"station_id": str(STATION_ID), "decision": {"verdict": "fail"}},)
+    with pytest.raises(StopIteration):
+        next(stream)
 
 
 def test_health_mirror_accepts_current_assignment_without_history() -> None:

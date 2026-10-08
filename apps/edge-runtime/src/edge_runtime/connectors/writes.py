@@ -226,16 +226,19 @@ class OutputDispatcher:
 
         try:
             outcome = self._connector.write(request.point, request.state, timeout=request.timeout)
-        except Exception:
+        except Exception as error:
             # claim 已代表物理请求可能离开进程; 普通异常不能证明设备未执行。
             outcome = Failed(detail=PERSISTENT_UNKNOWN_DETAIL)
-            _logger.exception(
-                "connector write adapter raised key=%s actor=%s connector=%s point=%s state=%s",
+            # 适配器异常可能夹带凭据, 诊断只记录类型而不输出 traceback 或异常消息。
+            _logger.error(
+                "connector write adapter raised key=%s actor=%s connector=%s point=%s state=%s "
+                "error_type=%s",
                 request.key,
                 request.actor,
                 request.connector_id,
                 request.point.label,
                 request.state.value,
+                type(error).__name__,
             )
             self._ledger.record(request.key, outcome)
             return self._note(request, outcome, replayed=False)

@@ -69,6 +69,8 @@ NVSOP_EDGE_COMMAND_CONFIG_FILE=/etc/nvsop/edge.json \
   python -m edge_runtime
 ```
 
+生产入口在装配前初始化标准错误日志输出，进程守护应采集 stderr，保留 `edge.connector.write_attempt` 点位诊断。默认级别与输出格式由 [`runtime.py`](../../apps/edge-runtime/src/edge_runtime/runtime.py) 的入口拥有；日志不输出连接器凭据或主机私钥，不另建审计存储。
+
 环境变量缺失会直接退出。配置文件为本机 JSON；当前中心 URL 只接受 **HTTPS**，且必须是最终地址：边缘不跟随 3xx 跳转，因为请求签名绑定原始路径。
 
 `python -m edge_runtime` 是主机进程，负责判定、处置、证据切片和**唯一的** MediaMTX 预览/录像。每台推理机的推理服务（DeepStream + DDM + vLLM）是独立容器层，按「主机 × 后端」一个 Compose project 部署；其入口、资源/端口分配与只读 secret 边界见[推理机推理服务部署](../../deploy/edge/README.md)，不要在该层另起第二个 MediaMTX 或第二套录像。

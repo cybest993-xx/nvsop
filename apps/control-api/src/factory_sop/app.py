@@ -9,7 +9,8 @@ an ARQ worker or a smoke script and not only from an HTTP request (§5.15).
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import Any
 
@@ -80,6 +81,7 @@ from factory_sop.job.errors import JobRefusedError
 from factory_sop.job.errors import refusal_problem as job_refusal_problem
 from factory_sop.monitor.adapters import dependencies as monitor_dependencies
 from factory_sop.monitor.adapters.routes import router as monitor_router
+from factory_sop.monitor.adapters.streaming import create_monitor_listener_engine
 from factory_sop.monitor.api import summary as monitor_summary
 from factory_sop.observability import (
     correlation_scope,
@@ -152,18 +154,31 @@ def create_app(
     调用方可注入自己的 `session_factory`；未注入时由本组合根从 settings 建立 engine 与
     factory，使 dispatcher 只装配一次且可执行，不必先建半装配实例再由调用方覆盖状态。
     """
-    app = FastAPI(
-        title="SOP compliance center backend",
-        docs_url=f"{API_PREFIX}/docs",
-        responses={500: problem_openapi_response("Internal server error")},
-    )
-    app.state.settings = settings
     factory = (
         session_factory
         if session_factory is not None
         else make_session_factory(create_database_engine(settings))
     )
+    listener_engine = create_monitor_listener_engine(
+        factory, limit=settings.monitor_max_subscriptions
+    )
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            listener_engine.dispose()
+
+    app = FastAPI(
+        title="SOP compliance center backend",
+        docs_url=f"{API_PREFIX}/docs",
+        responses={500: problem_openapi_response("Internal server error")},
+        lifespan=lifespan,
+    )
+    app.state.settings = settings
     app.state.session_factory = factory
+    app.state.monitor_listener_engine = listener_engine
     # 一次性装入可执行投递器：`from_settings` 缺少 session_factory 时无法解析任务类型，
     # 所以生产路径必须先有完整 factory，不能先建半装配实例再由调用方覆盖。
     app.state.job_dispatcher = ArqJobDispatcher.from_settings(settings, session_factory=factory)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 from psycopg import Connection as PsycopgConnection
-from sqlalchemy import Connection, Engine
+from sqlalchemy import Connection, Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from factory_sop.monitor.adapters.repository import (
@@ -16,6 +16,18 @@ from factory_sop.monitor.model import MirroredDecision, MirroredHealth
 from factory_sop.monitor.repository import MonitorStreamSource
 
 
+def create_monitor_listener_engine(factory: sessionmaker[Session], *, limit: int) -> Engine:
+    """监听连接使用独立有界池；满额立即拒绝，不能借用普通请求连接。"""
+    business_engine = cast(Engine, factory.kw["bind"])
+    return create_engine(
+        business_engine.url,
+        pool_size=limit,
+        max_overflow=0,
+        pool_timeout=0,
+        pool_pre_ping=True,
+    )
+
+
 class PostgresMonitorStreamSource(MonitorStreamSource):
     """LISTEN 连接只负责提示；事实始终从短生命周期 ORM Session 重放。"""
 
@@ -23,6 +35,10 @@ class PostgresMonitorStreamSource(MonitorStreamSource):
         self._factory = factory
         self._engine = engine
         self._listener: Connection | None = None
+
+    def open(self) -> None:
+        """响应开始前预留监听配额，以便超限仍能返回明确 HTTP 错误。"""
+        self._ensure_listener()
 
     def read_after_sequences(
         self,

@@ -46,6 +46,17 @@ def environment(tmp_path: Path, **overrides: str) -> dict[str, str]:
     return base
 
 
+@pytest.mark.parametrize("value", ["0", "-1", "33"])
+def test_rejects_unbounded_monitor_subscription_budget(tmp_path: Path, value: str) -> None:
+    with pytest.raises(ConfigurationError, match="monitor_max_subscriptions"):
+        Settings.from_environment(environment(tmp_path, SOP_MONITOR_MAX_SUBSCRIPTIONS=value))
+
+
+def test_loads_monitor_subscription_budget(tmp_path: Path) -> None:
+    configured = Settings.from_environment(environment(tmp_path, SOP_MONITOR_MAX_SUBSCRIPTIONS="2"))
+    assert configured.monitor_max_subscriptions == 2
+
+
 def test_loads_a_complete_environment(tmp_path: Path) -> None:
     settings = Settings.from_environment(environment(tmp_path))
 

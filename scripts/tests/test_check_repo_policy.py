@@ -77,6 +77,37 @@ class RepositoryPolicyTest(unittest.TestCase):
     def center_boundaries(self, *paths: Path) -> list[str]:
         return center_boundary_violations(self.root, list(paths))
 
+    def test_rejects_top_level_tests_in_unittest_owners(self) -> None:
+        for directory in (
+            "apps/edge-runtime/tests/unit",
+            "apps/edge-runtime/tests/integration",
+            "packages/contracts/tests/unit",
+            "scripts/tests",
+            "tests/contract/base",
+            "tests/contract/capability",
+        ):
+            for definition in ("def", "async def"):
+                with self.subTest(directory=directory, definition=definition):
+                    path = self.write(
+                        f"{directory}/test_discovery.py", f"{definition} test_lost():\n    pass\n"
+                    )
+                    self.assertIn(
+                        f"unittest cannot collect top-level test: {path}:1: "
+                        "test_lost; use TestCase",
+                        self.check(str(path)),
+                    )
+
+    def test_accepts_unittest_methods_helpers_and_pytest_owner(self) -> None:
+        unittest_path = self.write(
+            "apps/edge-runtime/tests/unit/test_discovery.py",
+            "import unittest\ndef fixture():\n    pass\n"
+            "class Example(unittest.TestCase):\n    def test_collected(self):\n        pass\n",
+        )
+        pytest_path = self.write(
+            "apps/control-api/tests/unit/test_discovery.py", "def test_collected():\n    pass\n"
+        )
+        self.assertEqual([], self.check(str(unittest_path), str(pytest_path)))
+
     def test_accepts_minimum_harness(self) -> None:
         self.assertEqual([], self.check())
 

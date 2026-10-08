@@ -50,6 +50,18 @@ ALLOWED_TOP_LEVEL_DIRS = {
 }
 ALLOWED_APPS = {"control-api", "control-web", "edge-runtime"}
 ALLOWED_ROOT_TEST_AREAS = {"contract", "fixtures", "performance", "system"}
+# Makefile 中明确使用 unittest discover 的 owner；不覆盖 Center 的 pytest 目录。
+UNITTEST_TEST_ROOTS = tuple(
+    Path(value)
+    for value in (
+        "apps/edge-runtime/tests/unit",
+        "apps/edge-runtime/tests/integration",
+        "packages/contracts/tests/unit",
+        "scripts/tests",
+        "tests/contract/base",
+        "tests/contract/capability",
+    )
+)
 SECRET_SUFFIXES = {".key", ".pem"}
 VENDOR_ROOT = Path("vendor")
 NVIDIA_VENDOR_ROOT = VENDOR_ROOT / "sop-monitoring-blueprints"
@@ -226,6 +238,16 @@ def check_repository(root: Path, files: list[Path]) -> list[str]:
         )
         if is_python_test and path.parts[0] in {"apps", "packages"} and "tests" not in path.parts:
             errors.append(f"Python test must live in its owner's tests/ tree: {path}")
+        if is_python_test and any(path.is_relative_to(owner) for owner in UNITTEST_TEST_ROOTS):
+            tree = ast.parse((root / path).read_text(encoding="utf-8"), filename=str(path))
+            for node in tree.body:
+                if isinstance(
+                    node, (ast.FunctionDef, ast.AsyncFunctionDef)
+                ) and node.name.startswith("test_"):
+                    errors.append(
+                        f"unittest cannot collect top-level test: {path}:{node.lineno}: "
+                        f"{node.name}; use TestCase"
+                    )
 
     errors.extend(check_documentation(root, files))
 

@@ -384,6 +384,7 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
             self.assertIs(runtime_configuration, candidate_runtime)
             activated.set()
             return RuntimeComposition(
+                command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
                 configuration=candidate_runtime,
                 stations=(),
                 connector_runtimes=cast(ConnectorRuntimeSet, object()),
@@ -582,6 +583,7 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
             composition_called = True
             self.assertIs(runtime_configuration, candidate_runtime)
             return RuntimeComposition(
+                command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
                 configuration=candidate_runtime,
                 stations=(),
                 connector_runtimes=cast(ConnectorRuntimeSet, object()),
@@ -621,6 +623,7 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
         state = _State()
         candidate_runtime = RuntimeConfiguration(stations=(), connectors=(), confirmed=candidate)
         composition = RuntimeComposition(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
             configuration=candidate_runtime,
             stations=(),
             connector_runtimes=cast(ConnectorRuntimeSet, object()),
@@ -667,12 +670,14 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
         candidate_station = _Station()
         rollback_runtime = RuntimeConfiguration(stations=(), connectors=(), confirmed=old)
         composition = RuntimeComposition(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
             configuration=candidate_runtime,
             stations=(cast(AutonomousStation, candidate_station),),
             connector_runtimes=cast(ConnectorRuntimeSet, object()),
             output_dispatchers={},
         )
         rollback = RuntimeComposition(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
             configuration=rollback_runtime,
             stations=(),
             connector_runtimes=cast(ConnectorRuntimeSet, object()),
@@ -718,12 +723,14 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
             stations=(), connectors=(), confirmed=replacement
         )
         rollback = RuntimeComposition(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
             configuration=old_runtime,
             stations=(),
             connector_runtimes=cast(ConnectorRuntimeSet, object()),
             output_dispatchers={},
         )
         replacement_composition = RuntimeComposition(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
             configuration=replacement_runtime,
             stations=(),
             connector_runtimes=cast(ConnectorRuntimeSet, object()),

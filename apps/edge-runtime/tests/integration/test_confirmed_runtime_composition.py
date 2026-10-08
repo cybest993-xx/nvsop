@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import tempfile
 import unittest
 from dataclasses import replace
@@ -10,6 +11,10 @@ from unittest.mock import patch
 
 from nvsop_contracts import (
     ConfigurationBundle,
+    ConnectionTestClaim,
+    ConnectionTestCommand,
+    ConnectionTestOutcome,
+    ConnectionTestResult,
     ExecutionLease,
     HostIdentityKeyPair,
     Unverified,
@@ -23,7 +28,15 @@ from nvsop_contracts import (
 from test_output_safety import TRIGGER_PATH, IsapiLoopbackServer
 
 from edge_runtime.connectors.hikvision import CANDIDATE_PROFILE
-from edge_runtime.connectors.port import OutputPoint, PointState, Refused, WriteRefusal, Written
+from edge_runtime.connectors.port import (
+    ConnectorHealth,
+    OutputPoint,
+    PointState,
+    Reachability,
+    Refused,
+    WriteRefusal,
+    Written,
+)
 from edge_runtime.connectors.writes import WriteRequest
 from edge_runtime.judgment.model import (
     Decision,
@@ -39,7 +52,11 @@ from edge_runtime.judgment.model import (
 from edge_runtime.judgment.reasons import Verdict
 from edge_runtime.local_state.queues import BackendReportContext, ReportContext
 from edge_runtime.local_state.store import open_local_state
-from edge_runtime.runtime import AutonomousRuntime, build_autonomous_runtime_from_file
+from edge_runtime.runtime import (
+    AutonomousRuntime,
+    _PendingConfigurationSwitch,
+    build_autonomous_runtime_from_file,
+)
 
 
 def _fixture_host_identity(seed: int) -> HostIdentityKeyPair:
@@ -52,6 +69,82 @@ def _fixture_host_identity(seed: int) -> HostIdentityKeyPair:
 
 
 class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
+    def test_command_view_switches_with_confirmed_runtime_and_rejects_old_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime, pending = _command_runtime(Path(temporary))
+            try:
+                runtime._close_stations(runtime.stations)
+                runtime._apply_configuration_switch(pending)
+                with patch(
+                    "edge_runtime.runtime.IsapiConnector.probe",
+                    return_value=ConnectorHealth(reachability=Reachability.REACHABLE),
+                ) as probe:
+                    current = _command(7)
+                    self.assertEqual(
+                        ConnectionTestResult(
+                            outcome=ConnectionTestOutcome.REACHABLE, credentials_configured=True
+                        ),
+                        _execute_command(runtime, current),
+                    )
+                    for rejected in (
+                        _command(6),
+                        replace(current, connector_type="board_card"),
+                        replace(current, configuration={"address": "other.example", "port": 80}),
+                    ):
+                        self.assertEqual(
+                            "COMMAND_CONFIGURATION_CHANGED",
+                            _execute_command(runtime, rejected).failure_code,
+                        )
+                    probe.assert_called_once_with(timeout=1.0)
+                self.assertEqual(pending.bundle, runtime._state.configuration().confirmed())
+            finally:
+                runtime.close()
+
+    def test_command_view_rolls_back_after_assembly_or_confirmation_failure(self) -> None:
+        for failure in ("assembly", "confirmation"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                runtime, pending = _command_runtime(Path(temporary))
+                previous = runtime.configuration
+                try:
+                    runtime._close_stations(runtime.stations)
+                    if failure == "assembly":
+                        with patch(
+                            "edge_runtime.runtime.build_connection_test_loop",
+                            side_effect=[
+                                ValueError("candidate command assembly failed"),
+                                runtime._command_loop,
+                            ],
+                        ):
+                            runtime._apply_configuration_switch(pending)
+                    else:
+                        assert runtime._configuration_sync is not None
+                        with (
+                            patch.object(
+                                runtime._configuration_sync,
+                                "confirm",
+                                side_effect=sqlite3.OperationalError("confirmation failed"),
+                            ),
+                            self.assertRaises(sqlite3.OperationalError),
+                        ):
+                            runtime._apply_configuration_switch(pending)
+                    self.assertEqual(previous, runtime.configuration)
+                    self.assertEqual(_bundle(), runtime._state.configuration().confirmed())
+                    with patch(
+                        "edge_runtime.runtime.IsapiConnector.probe",
+                        return_value=ConnectorHealth(reachability=Reachability.REACHABLE),
+                    ) as probe:
+                        self.assertEqual(
+                            ConnectionTestOutcome.REACHABLE,
+                            _execute_command(runtime, _command(6)).outcome,
+                        )
+                        self.assertEqual(
+                            "COMMAND_CONFIGURATION_CHANGED",
+                            _execute_command(runtime, _command(7)).failure_code,
+                        )
+                        probe.assert_called_once()
+                finally:
+                    runtime.close()
+
     def test_builder_uses_one_station_runtime_for_multiple_backend_slices(self) -> None:
         bundle = _bundle()
         second_slice = replace(bundle.stations[0], backend_id="backend-b", model_ids=("model-b",))
@@ -385,6 +478,62 @@ def _output_request() -> WriteRequest:
         connector_id="connector-a",
         attempt_at=HostInstant(1.0),
         lease_seconds=5.0,
+    )
+
+
+def _command(revision: int) -> ConnectionTestCommand:
+    return ConnectionTestCommand(
+        command_id="synthetic-command",
+        connector_id="connector-a",
+        connector_revision=revision,
+        connector_type="hikvision_isapi",
+        configuration={"address": "camera.example", "port": 80},
+    )
+
+
+def _execute_command(
+    runtime: AutonomousRuntime, command: ConnectionTestCommand
+) -> ConnectionTestResult:
+    claim = ConnectionTestClaim(command, "synthetic-claim", "2099-01-01T00:00:00Z")
+    with (
+        patch("edge_runtime.runtime.HttpCommandTransport.claim_next", return_value=claim),
+        patch("edge_runtime.runtime.HttpCommandTransport.report") as report,
+    ):
+        assert runtime._command_loop.run_once()
+        report.assert_called_once()
+        result = report.call_args.args[1]
+        assert isinstance(result, ConnectionTestResult)
+        return result
+
+
+def _command_runtime(directory: Path) -> tuple[AutonomousRuntime, _PendingConfigurationSwitch]:
+    identity = _fixture_host_identity(48)
+    private_key = directory / "host-private-key"
+    private_key.write_text(identity.private_key)
+    config = _local_config(directory, private_key)
+    connectors = config["connectors"]
+    assert isinstance(connectors, list)
+    for field in ("username", "password"):
+        secret = directory / field
+        secret.write_text(f"synthetic-{field}")
+        connectors[0][f"{field}_file"] = str(secret)
+    connectors[0]["credentials_configured"] = True
+    path = directory / "edge.json"
+    path.write_text(json.dumps(config))
+    current = _bundle()
+    with patch("edge_runtime.runtime.HttpConfigurationPuller.pull", return_value=current):
+        runtime = build_autonomous_runtime_from_file(path)
+    station = current.stations[0]
+    candidate = replace(
+        current,
+        config_revision=8,
+        stations=(replace(station, connectors=(replace(station.connectors[0], revision=7),)),),
+    )
+    assert runtime._configuration_resolver is not None
+    return runtime, _PendingConfigurationSwitch(
+        candidate,
+        runtime._configuration_resolver(candidate),
+        3.0,
     )
 
 

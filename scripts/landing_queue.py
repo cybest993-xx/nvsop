@@ -746,7 +746,8 @@ def attestation_from_comment(comment: Comment, repository: str, number: int) -> 
     ):
         # 元组成员判断保留对任意 JSON 类型的 fail-closed：list/dict 不等于任一精确命令。
         raise QueueError(
-            "attestation must carry exact-root passed make check or make check-docs evidence reference"
+            "attestation must carry exact-root passed make check or make check-docs "
+            "evidence reference"
         )
     review = payload.get("review")
     if not isinstance(review, dict):

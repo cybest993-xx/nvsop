@@ -1061,6 +1061,33 @@ configure_manual_test_resources(
             DEV.status_exit_code({"status": "failed", "api_liveness": {"ok": False}}, {}),
         )
 
+    def test_persisted_ready_with_unhealthy_service_reports_degraded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            item = DEV.DevPaths(root=root, state=root / ".tmp")
+            DEV.ensure_directories(item)
+            state = DEV.initial_state("http")
+            state.update({"status": "ready", "running_sha": "a" * 40})
+            DEV.write_state(item, state)
+            item.setup_file.write_text("{}\n", encoding="utf-8")
+            rows = [
+                {"Service": name, "State": "running", "Health": "healthy"}
+                for name in sorted(DEV._REQUIRED_READY_SERVICES)
+            ]
+            rows = [row for row in rows if row["Service"] != "worker"] + [
+                {"Service": "worker", "State": "exited", "Health": ""}
+            ]
+            output = io.StringIO()
+            with (
+                patch.object(DEV, "service_rows", return_value=(rows, None)),
+                patch.object(DEV, "http_probe", return_value={"ok": True}),
+                contextlib.redirect_stdout(output),
+            ):
+                result = DEV.status(item)
+
+        self.assertEqual(1, result)
+        self.assertIn('"status": "degraded"', output.getvalue())
+
     def test_status_command_rejects_a_failed_instance(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             item = DEV.DevPaths(root=Path(directory), state=Path(directory) / ".tmp")

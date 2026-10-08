@@ -87,6 +87,8 @@ make dev-test-ui     # Playwright UI，2 workers
 make dev-down        # 停止实例
 ```
 
+`make dev-status` 只读：当持久化状态为 `ready` 但实测服务不健康时，输出把该条目标记为 `degraded` 并以退出码 1 结束，state 文件不回写。
+
 日志可限定服务和行数：
 
 ```sh

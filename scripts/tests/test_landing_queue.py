@@ -484,6 +484,24 @@ class AttestationTest(unittest.TestCase):
                 comment(1, attestation_body(review={"not-applicable": "n/a"})), REPO, 1
             ).root
         )
+        # 文档-only 任务允许 make check-docs；两种精确命令之外仍拒绝。
+        self.assertTrue(
+            lq.attestation_from_comment(
+                comment(
+                    1,
+                    attestation_body(
+                        check={
+                            "root": ROOT_SHA,
+                            "command": "make check-docs",
+                            "result": "passed",
+                            "evidence": "docs",
+                        }
+                    ),
+                ),
+                REPO,
+                1,
+            ).root
+        )
         for body in (
             attestation_body(actions=("squash-merge",)),
             attestation_body(repo="other/repo"),
@@ -493,6 +511,23 @@ class AttestationTest(unittest.TestCase):
             attestation_body(confirmation={}),
             attestation_body(confirmation={"source": "user", "quote": "  "}),
             attestation_body(check={"root": ROOT_SHA, "command": "make check", "result": "passed"}),
+            # 非字符串 command（JSON list/dict）必须 fail closed，成员判断不得抛 TypeError。
+            attestation_body(
+                check={
+                    "root": ROOT_SHA,
+                    "command": ["make", "check"],
+                    "result": "passed",
+                    "evidence": "e",
+                }
+            ),
+            attestation_body(
+                check={
+                    "root": ROOT_SHA,
+                    "command": {"make": "check"},
+                    "result": "passed",
+                    "evidence": "e",
+                }
+            ),
             attestation_body(
                 check={
                     "root": NEW_HEAD,

@@ -40,6 +40,7 @@ from factory_sop.template.model import (
     TemplateVersion,
 )
 from factory_sop.template.repository import TemplateBindingRepository
+from nvsop_contracts import DISPOSITION_POLICY_STOP
 
 _logger = get_logger("template")
 
@@ -352,6 +353,18 @@ def update_station_runtime_parameters(
             runtime=current,
             topology_issues=(),
         )
+    if version is not None:
+        specification = _specification(
+            station_id=station_id,
+            version=version,
+            runtime_mode=mode,
+            runtime_overrides=overrides,
+            actor_id=caller.user.id,
+        )
+        if specification.disposition_policy == DISPOSITION_POLICY_STOP:
+            validation = device.validate_template_binding(specification)
+            if not validation.accepted:
+                _raise_binding_invalid(validation.reasons)
     updated = device.update_station_runtime_parameters(
         station_id,
         mode=mode,
@@ -635,6 +648,12 @@ def _specification(
 ) -> TemplateBindingSpecification:
     assert version.boundary.start_signal is not None
     assert version.boundary.end_signals is not None
+    disposition_policy = (
+        runtime_overrides.disposition_policy
+        if runtime_mode is RuntimeParameterMode.CUSTOM and runtime_overrides is not None
+        else version.runtime_defaults.disposition_policy
+    )
+    assert disposition_policy is not None
     return TemplateBindingSpecification(
         station_id=station_id,
         template_version_id=version.id,
@@ -646,6 +665,7 @@ def _specification(
         end_signals=tuple(
             _signal(signal.kind.value, signal.value) for signal in version.boundary.end_signals
         ),
+        disposition_policy=disposition_policy,
         runtime_mode=runtime_mode,
         runtime_overrides=runtime_overrides,
         actor_id=actor_id,

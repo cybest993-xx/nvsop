@@ -29,6 +29,7 @@ from factory_sop.template.repository import (
     TemplateVersionPublishRepository,
     TemplateVersionRepository,
 )
+from nvsop_contracts import DISPOSITION_POLICIES
 
 _logger = get_logger("template")
 
@@ -132,6 +133,10 @@ def publish_template_version(
             errors.append(TemplateFieldError("草稿", None, "step_deadline_seconds", "必须填写"))
         if runtime.disposition_policy is None or not runtime.disposition_policy.strip():
             errors.append(TemplateFieldError("草稿", None, "disposition_policy", "必须填写"))
+        elif runtime.disposition_policy not in DISPOSITION_POLICIES:
+            errors.append(
+                TemplateFieldError("草稿", None, "disposition_policy", "仅支持 record 或 stop")
+            )
         for field, value in (
             ("idle_timeout_seconds", runtime.idle_timeout_seconds),
             ("step_deadline_seconds", runtime.step_deadline_seconds),

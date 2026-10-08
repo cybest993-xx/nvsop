@@ -14,7 +14,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import monotonic
 
-from nvsop_contracts import OBSERVATION_SOURCE_ACTION, OBSERVATION_SOURCE_EXTERNAL_SIGNAL
+from nvsop_contracts import (
+    DISPOSITION_POLICIES,
+    DISPOSITION_POLICY_STOP,
+    OBSERVATION_SOURCE_ACTION,
+    OBSERVATION_SOURCE_EXTERNAL_SIGNAL,
+    STOP_OUTPUT_REQUESTED_STATE,
+    STOP_OUTPUT_SEMANTIC_LABEL,
+)
 
 from edge_runtime.judgment.core import advance
 from edge_runtime.judgment.evidence import EvidenceMargins
@@ -30,6 +37,7 @@ from edge_runtime.judgment.model import (
     TimerFired,
     ValidityImpaired,
     ValidityRestored,
+    Violation,
 )
 from edge_runtime.judgment.reasons import ReasonCode
 from edge_runtime.local_state import BackendReportContext, ReactionStore
@@ -55,15 +63,32 @@ from edge_runtime.supervisor.inputs import (
 _logger = logging.getLogger("edge_runtime")
 
 
+def _violation_ref(decision: Decision, violation: Violation) -> str:
+    return f"{decision.instance_id}:{violation.reason.value}:{violation.steps!r}"
+
+
+@dataclass(frozen=True, slots=True)
+class OutputDisposalRequest:
+    idempotency_key: str
+    violation_ref: str
+    instance_id: int
+    target_label: str
+    requested_state: str
+    actor: str
+    source: str
+
+
 def _disposals(
     decisions: Iterable[Decision], policy: str | None
 ) -> tuple[LocalDisposalRequest, ...]:
     if policy is None:
         return ()
+    if policy not in DISPOSITION_POLICIES:
+        raise ValueError(f"unsupported disposition policy: {policy}")
     result: list[LocalDisposalRequest] = []
     for decision in decisions:
         for violation in decision.violations:
-            ref = f"{decision.instance_id}:{violation.reason.value}:{violation.steps!r}"
+            ref = _violation_ref(decision, violation)
             for action in (DISPOSAL_ACTION_RECORD, DISPOSAL_ACTION_FRONTEND_ALERT):
                 key = hashlib.sha256(f"{ref}\0{action}".encode()).hexdigest()
                 result.append(
@@ -76,6 +101,32 @@ def _disposals(
                         f"station_policy:{policy}",
                     )
                 )
+    return tuple(result)
+
+
+def _output_disposals(
+    decisions: Iterable[Decision], policy: str | None
+) -> tuple[OutputDisposalRequest, ...]:
+    if policy != DISPOSITION_POLICY_STOP:
+        return ()
+    result: list[OutputDisposalRequest] = []
+    for decision in decisions:
+        for violation in decision.violations:
+            ref = _violation_ref(decision, violation)
+            identity = (
+                f"{ref}\0write_output\0{STOP_OUTPUT_SEMANTIC_LABEL}\0{STOP_OUTPUT_REQUESTED_STATE}"
+            )
+            result.append(
+                OutputDisposalRequest(
+                    idempotency_key=hashlib.sha256(identity.encode()).hexdigest(),
+                    violation_ref=ref,
+                    instance_id=decision.instance_id,
+                    target_label=STOP_OUTPUT_SEMANTIC_LABEL,
+                    requested_state=STOP_OUTPUT_REQUESTED_STATE,
+                    actor="supervisor",
+                    source=f"station_policy:{policy}",
+                )
+            )
     return tuple(result)
 
 
@@ -144,6 +195,7 @@ class Reaction:
     decisions: tuple[Decision, ...]
     wake_at: HostInstant | None
     closed_instances: tuple[Instance, ...] = ()
+    output_disposals: tuple[OutputDisposalRequest, ...] = ()
     """本次反应已提交的闭合实例完整快照, 不是待执行的持久化任务。"""
 
 
@@ -435,4 +487,5 @@ class StationSupervisor:
             decisions=tuple(decisions),
             wake_at=deadline,
             closed_instances=tuple(closed_instances),
+            output_disposals=_output_disposals(decisions, self._disposition_policy),
         )

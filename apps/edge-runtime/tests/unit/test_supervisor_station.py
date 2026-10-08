@@ -143,6 +143,23 @@ class EveryInputReachesTheCoreAndCommitsDecisionsTest(unittest.TestCase):
             "error-proofing real-time for the most common violation kind (§5.1)",
         )
 
+    def test_stop_policy_returns_explicit_physical_disposals_for_each_violation(self) -> None:
+        supervisor = StationSupervisor(
+            store=MemoryReactionStore(),
+            state=opening_state(Ordering.ORDERED),
+            margins=MARGINS,
+            clock=FakeClock(),
+            disposition_policy="stop",
+        )
+        supervisor.receive(action(STEPS[0], at=100.0))
+
+        reaction = supervisor.receive(action(STEPS[2], at=101.0))
+
+        self.assertEqual(2, len(reaction.output_disposals))
+        self.assertEqual({"停线联锁"}, {item.target_label for item in reaction.output_disposals})
+        self.assertEqual({"active"}, {item.requested_state for item in reaction.output_disposals})
+        self.assertEqual(2, len({item.idempotency_key for item in reaction.output_disposals}))
+
     def test_multiple_normalized_events_return_the_closing_decision(
         self,
     ) -> None:

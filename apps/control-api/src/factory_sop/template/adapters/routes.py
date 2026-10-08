@@ -686,6 +686,8 @@ class RuntimeParametersInput(BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("处置策略不能为空")
+        if value not in {"record", "stop"}:
+            raise ValueError("处置策略仅支持 record 或 stop")
         return value
 
     def to_domain(self) -> StationRuntimeParameters:

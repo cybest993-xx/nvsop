@@ -17,7 +17,14 @@ from pathlib import Path
 from time import monotonic, sleep, time
 from types import FrameType
 
-from nvsop_contracts import ConfigurationBundle, ConnectionTestOutcome, configuration_to_wire
+from nvsop_contracts import (
+    DISPOSITION_POLICY_STOP,
+    SAFETY_OUTPUT_BUDGET_SECONDS,
+    STOP_OUTPUT_SEMANTIC_LABEL,
+    ConfigurationBundle,
+    ConnectionTestOutcome,
+    configuration_to_wire,
+)
 
 from edge_runtime.center_client import CenterClient
 from edge_runtime.configuration import (
@@ -32,6 +39,7 @@ from edge_runtime.connectors.port import (
     Failed,
     InputPoint,
     OutputPoint,
+    PointState,
     Reachability,
     Refused,
     TimedOut,
@@ -100,7 +108,7 @@ from edge_runtime.supervisor.delegated_commands import (
 from edge_runtime.supervisor.delegated_transport import CommandTransportError, HttpCommandTransport
 from edge_runtime.supervisor.inputs import StreamHealthObserved
 from edge_runtime.supervisor.startup import resume_station
-from edge_runtime.supervisor.station import StationSupervisor
+from edge_runtime.supervisor.station import OutputDisposalRequest, Reaction, StationSupervisor
 
 
 class SQLiteWriteLedger:
@@ -118,6 +126,10 @@ class SQLiteWriteLedger:
             point_id=request.point.address,
             actor=request.actor,
             requested_state=request.state.value,
+            violation_ref=request.violation_ref,
+            violation_instance_id=request.violation_instance_id,
+            source=request.source,
+            report_host_id=request.report_host_id,
         )
         self._ledger.ensure_intent(intent)
         self._intents[request.key] = intent
@@ -386,6 +398,9 @@ class AutonomousStation:
         output_points: Mapping[str, tuple[OutputPoint, ...]] | None = None,
         write_lifecycle: StationWriteLifecycle | None = None,
         diagnostics: Callable[[WriteAttempted], None] | None = None,
+        output_disposal_target: tuple[str, OutputPoint] | None = None,
+        output_report_host_id: str | None = None,
+        output_write_timeout: float | None = None,
     ) -> None:
         self._supervisor = supervisor
         self._source = source
@@ -395,6 +410,9 @@ class AutonomousStation:
         self._output_points = dict(output_points or {})
         self._write_lifecycle = write_lifecycle or StationWriteLifecycle()
         self._diagnostics = diagnostics
+        self._output_disposal_target = output_disposal_target
+        self._output_report_host_id = output_report_host_id
+        self._output_write_timeout = output_write_timeout
 
     @property
     def station_id(self) -> str | None:
@@ -441,6 +459,59 @@ class AutonomousStation:
             return refusal
         return dispatcher.write(request)
 
+    def _execute_output_disposals(self, reaction: Reaction) -> None:
+        if not reaction.output_disposals:
+            return
+        if (
+            self._station_id is None
+            or self._output_disposal_target is None
+            or self._output_report_host_id is None
+            or self._output_write_timeout is None
+        ):
+            raise RuntimeError("physical disposal is not fully composed")
+        connector_id, point = self._output_disposal_target
+        station_id = self._station_id
+        report_host_id = self._output_report_host_id
+        for disposal in reaction.output_disposals:
+            self._write_disposal(
+                disposal,
+                connector_id=connector_id,
+                point=point,
+                timeout=self._output_write_timeout,
+                station_id=station_id,
+                report_host_id=report_host_id,
+            )
+
+    def _write_disposal(
+        self,
+        disposal: OutputDisposalRequest,
+        *,
+        connector_id: str,
+        point: OutputPoint,
+        timeout: float,
+        station_id: str,
+        report_host_id: str,
+    ) -> None:
+        self.write_output(
+            WriteRequest(
+                point=point,
+                state=PointState(disposal.requested_state),
+                key=disposal.idempotency_key,
+                actor=disposal.actor,
+                timeout=timeout,
+                capability_budget=SAFETY_OUTPUT_BUDGET_SECONDS,
+                station_id=station_id,
+                connector_id=connector_id,
+                attempt_at=HostInstant(monotonic()),
+                # A safe probe and the physical write may each consume up to one timeout.
+                lease_seconds=2.0 * timeout,
+                violation_ref=disposal.violation_ref,
+                violation_instance_id=disposal.instance_id,
+                source=disposal.source,
+                report_host_id=report_host_id,
+            )
+        )
+
     def close(self) -> None:
         """先停写再关闭当前工位输入源。"""
         self._write_lifecycle.stop()
@@ -466,7 +537,7 @@ class AutonomousStation:
                 if should_stop():
                     break
                 if isinstance(arriving, InputWaitExpired):
-                    supervisor.wake(host=HostLiveness.ALIVE)
+                    self._execute_output_disposals(supervisor.wake(host=HostLiveness.ALIVE))
                 elif arriving is None:
                     if source.ended:
                         ended = StreamHealthObserved(
@@ -475,21 +546,23 @@ class AutonomousStation:
                                 at_monotonic=monotonic(),
                             )
                         )
-                        supervisor.receive(ended)
+                        self._execute_output_disposals(supervisor.receive(ended))
                         break
-                    supervisor.wake(host=HostLiveness.ALIVE)
+                    self._execute_output_disposals(supervisor.wake(host=HostLiveness.ALIVE))
                 elif isinstance(arriving, ProvenancedSupervisorInput):
-                    supervisor.receive(
-                        arriving.arriving,
-                        report_provenance=arriving.provenance,
+                    self._execute_output_disposals(
+                        supervisor.receive(
+                            arriving.arriving,
+                            report_provenance=arriving.provenance,
+                        )
                     )
                 else:
-                    supervisor.receive(arriving)
+                    self._execute_output_disposals(supervisor.receive(arriving))
                 self._poll_due(
                     supervisor=supervisor,
                     connector_runtimes=connector_runtimes,
                 )
-            self._supervisor.interrupt()
+            self._execute_output_disposals(self._supervisor.interrupt())
         finally:
             self.close()
 
@@ -509,8 +582,8 @@ class AutonomousStation:
             timeout = connector_timeout if timeout is None else min(timeout, connector_timeout)
         return timeout
 
-    @staticmethod
     def _poll_due(
+        self,
         *,
         supervisor: StationSupervisor,
         connector_runtimes: tuple[ConnectorRuntime, ...],
@@ -521,7 +594,7 @@ class AutonomousStation:
             if due is None or now < due:
                 continue
             for arriving in runtime.poll(now=now):
-                supervisor.receive(arriving)
+                self._execute_output_disposals(supervisor.receive(arriving))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1243,6 +1316,11 @@ def _build_runtime_composition(
                 for connector_id in station_binding.connector_ids
                 if connector_id in output_dispatchers
             }
+            output_disposal_target = (
+                station_binding.output_target(STOP_OUTPUT_SEMANTIC_LABEL)
+                if station_config.disposition_policy == DISPOSITION_POLICY_STOP
+                else None
+            )
             stations.append(
                 AutonomousStation(
                     station_id=station_config.station_id,
@@ -1262,6 +1340,9 @@ def _build_runtime_composition(
                     },
                     write_lifecycle=write_lifecycles[station_config.station_id],
                     diagnostics=_log_write_attempt,
+                    output_disposal_target=output_disposal_target,
+                    output_report_host_id=config.host_id,
+                    output_write_timeout=config.command_timeout,
                 )
             )
     except Exception:

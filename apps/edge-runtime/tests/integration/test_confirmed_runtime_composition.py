@@ -447,6 +447,7 @@ def _bundle(*, address: str = "camera.example", port: int | None = 80) -> Config
     from hashlib import sha256
 
     from nvsop_contracts import (
+        DISPOSITION_STOP_OUTPUT_CAPABILITY,
         ConfigurationArtifact,
         ConfigurationTemplate,
         ConfiguredConnector,
@@ -517,6 +518,7 @@ def _bundle(*, address: str = "camera.example", port: int | None = 80) -> Config
         host_id="host-a",
         config_revision=7,
         generated_at="2026-09-14T00:00:00Z",
+        required_capabilities=(DISPOSITION_STOP_OUTPUT_CAPABILITY,),
         execution_grants=(
             ExecutionLease(
                 station_id="station-a",

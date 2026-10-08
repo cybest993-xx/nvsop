@@ -70,6 +70,7 @@ class TemplateBindingSpecification:
     template_version_sha256: str
     start_signal: BindingSignal | None
     end_signals: tuple[BindingSignal, ...]
+    disposition_policy: str
     runtime_mode: RuntimeParameterMode | None = None
     runtime_overrides: StationRuntimeParameters | None = None
     actor_id: UUID | None = None

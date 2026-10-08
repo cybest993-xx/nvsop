@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import cast
@@ -547,14 +547,17 @@ def sse_snapshot_state(
 def sse_stream(
     source: MonitorStreamSource,
     *,
-    caller: Caller,
+    current_caller: Callable[[], Caller | None],
+    initial_frames: tuple[str, ...] = (),
     decision_sequence: int = 0,
     health_sequence: int = 0,
     runtime_projection: tuple[dict[str, object], ...] = (),
     wait_timeout: float = 15.0,
 ) -> Iterator[str]:
-    """用 durable cursor 重放事实；LISTEN/NOTIFY 仅缩短下一轮读取的等待。"""
-    authorize(caller, Permission.MONITOR_VIEW)
+    """每批发送前复核授权；durable cursor 是事实权威，通知只缩短等待。"""
+    if not _authorize_stream(current_caller):
+        return
+    yield from initial_frames
     while True:
         decisions, health = source.read_after_sequences(
             decision_sequence=decision_sequence,
@@ -588,21 +591,37 @@ def sse_stream(
             cast(str, value["station_id"]): value for value in runtime_projection
         }
         current_by_station = {cast(str, value["station_id"]): value for value in current_runtime}
+        if not _authorize_stream(current_caller):
+            return
         for station_id in sorted(current_by_station):
             value = current_by_station[station_id]
             if previous_by_station.get(station_id) != value:
                 yield _runtime_frame(value)
         runtime_projection = current_runtime
         if not events:
-            if not source.wait_for_wakeup(timeout=wait_timeout):
+            awakened = source.wait_for_wakeup(timeout=wait_timeout)
+            if not _authorize_stream(current_caller):
+                return
+            if not awakened:
                 yield ": keep-alive\n\n"
             continue
+        if not _authorize_stream(current_caller):
+            return
         for _, kind, event_id, sequence, data in events:
             if kind == "decision":
                 decision_sequence = max(decision_sequence, sequence)
             else:
                 health_sequence = max(health_sequence, sequence)
             yield _sse_frame(event=kind, event_id=event_id, data=data)
+
+
+def _authorize_stream(current_caller: Callable[[], Caller | None]) -> bool:
+    """失效会话结束流；现存身份仍走统一权限规则，异常绝不沿用旧授权。"""
+    caller = current_caller()
+    if caller is None:
+        return False
+    authorize(caller, Permission.MONITOR_VIEW)
+    return True
 
 
 SseEvent = tuple[datetime, str, str, int, dict[str, object]]

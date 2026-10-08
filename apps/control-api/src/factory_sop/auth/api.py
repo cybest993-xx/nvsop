@@ -14,8 +14,17 @@ other modules' HTTP adapters: the annotated dependency that resolves a request i
 `Caller`, and the OpenAPI metadata a route declares its permission with.
 """
 
-from factory_sop.auth.adapters.dependencies import Authorized, needs, needs_any
-from factory_sop.auth.authorization import Caller, authorize
+from factory_sop.auth.adapters.dependencies import Authorized, SessionRecheck, needs, needs_any
+from factory_sop.auth.authorization import AuthorizationRefusedError, Caller, authorize
 from factory_sop.auth.permissions import Permission
 
-__all__ = ["Authorized", "Caller", "Permission", "authorize", "needs", "needs_any"]
+__all__ = [
+    "AuthorizationRefusedError",
+    "Authorized",
+    "Caller",
+    "Permission",
+    "SessionRecheck",
+    "authorize",
+    "needs",
+    "needs_any",
+]

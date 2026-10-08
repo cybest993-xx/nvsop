@@ -10,7 +10,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
-from factory_sop.auth.api import Authorized, Permission, needs
+from factory_sop.auth.api import (
+    AuthorizationRefusedError,
+    Authorized,
+    Permission,
+    SessionRecheck,
+    needs,
+)
 from factory_sop.device.api import (
     DeviceHistoricalAssignmentGateway,
     DeviceHostGateway,
@@ -229,6 +235,7 @@ def list_monitor_violations(
 )
 def stream_monitor_events(
     caller: Authorized,
+    current_caller: SessionRecheck,
     monitor: Annotated[MonitorRepository, Depends(dependencies.monitor)],
     source: Annotated[
         MonitorStreamSource,
@@ -240,14 +247,20 @@ def stream_monitor_events(
     snapshot = sse_snapshot_state(monitor, caller=caller, last_event_id=last_event_id)
 
     def events() -> Iterator[str]:
-        yield from snapshot.frames
-        if not once:
+        if once:
+            yield from snapshot.frames
+            return
+        try:
             yield from sse_stream(
                 source,
-                caller=caller,
+                current_caller=current_caller,
+                initial_frames=snapshot.frames,
                 decision_sequence=snapshot.decision_sequence,
                 health_sequence=snapshot.health_sequence,
             )
+        except AuthorizationRefusedError:
+            # 响应头已经发送，不能再改成 401/403；关闭流，重连仍走原认证语义。
+            return
 
     return StreamingResponse(events(), media_type="text/event-stream")
 

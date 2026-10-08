@@ -468,6 +468,33 @@ def test_sse_resume_consumes_last_event_id_without_replaying_it() -> None:
     assert snapshot.decision_sequence == 1
 
 
+@pytest.mark.parametrize(
+    "failure", [AuthorizationRefusedError(Permission.MONITOR_VIEW), OSError("auth unavailable")]
+)
+def test_sse_never_sends_snapshot_or_new_batch_after_recheck_failure(failure: Exception) -> None:
+    monitor = MemoryMonitor()
+    active = True
+
+    def current_caller() -> Caller:
+        if not active:
+            raise failure
+        return caller(Permission.MONITOR_VIEW)
+
+    stream = sse_stream(
+        monitor, current_caller=current_caller, initial_frames=("snapshot",), wait_timeout=0
+    )
+    assert next(stream) == "snapshot"
+    active = False
+    with pytest.raises(type(failure)):
+        next(stream)
+    with pytest.raises(StopIteration):
+        next(stream)
+
+    refused = sse_stream(monitor, current_caller=current_caller, initial_frames=("snapshot",))
+    with pytest.raises(type(failure)):
+        next(refused)
+
+
 def test_sse_resume_replays_backlog_in_cursor_order_without_snapshot_gap() -> None:
     monitor = MemoryMonitor()
     received_at = datetime(2026, 9, 13, 0, 0, 0, tzinfo=UTC)
@@ -493,7 +520,7 @@ def test_sse_resume_replays_backlog_in_cursor_order_without_snapshot_gap() -> No
 
     stream = sse_stream(
         monitor,
-        caller=caller(Permission.MONITOR_VIEW),
+        current_caller=lambda: caller(Permission.MONITOR_VIEW),
         decision_sequence=snapshot.decision_sequence,
         health_sequence=snapshot.health_sequence,
         wait_timeout=0,
@@ -528,7 +555,7 @@ def test_sse_preserves_stream_sequence_when_received_at_order_reverses() -> None
 
     stream = sse_stream(
         monitor,
-        caller=caller(Permission.MONITOR_VIEW),
+        current_caller=lambda: caller(Permission.MONITOR_VIEW),
         wait_timeout=0,
     )
     assert "id: host:event-1" in next(stream)
@@ -559,7 +586,7 @@ def test_sse_cursors_do_not_replay_snapshot_or_skip_same_timestamp_events() -> N
     )
     stream = sse_stream(
         monitor,
-        caller=caller(Permission.MONITOR_VIEW),
+        current_caller=lambda: caller(Permission.MONITOR_VIEW),
         decision_sequence=snapshot.decision_sequence,
         health_sequence=snapshot.health_sequence,
         wait_timeout=0,

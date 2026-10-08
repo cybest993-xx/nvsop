@@ -115,6 +115,25 @@ def restore_session(
     row is removed on the way out, so a token that has been refused once cannot be retried
     against a store that still holds it.
     """
+    session, user = validate_session(
+        token=token, users=users, sessions=sessions, policy=policy, now=now
+    )
+    touched = sessions.touch(session, last_used_at=now)
+    if touched is None:
+        # 普通请求仍要拒绝读取后、续期前发生的并发吊销。
+        _refuse_session(reason="revoked_during_request")
+    return RestoredSession(session=touched, user=user)
+
+
+def validate_session(
+    *,
+    token: SessionToken,
+    users: UserRepository,
+    sessions: SessionRepository,
+    policy: SessionPolicy,
+    now: datetime,
+) -> tuple[Session, User]:
+    """供长连接复核及普通请求共用有效性规则，成功时不续期。"""
     session = sessions.by_token_fingerprint(fingerprint(token))
     if session is None:
         _refuse_session(reason="unknown_token")
@@ -131,13 +150,7 @@ def restore_session(
         sessions.remove(session)
         _refuse_session(reason=_refusal_reason(user=user, session=session, policy=policy, now=now))
 
-    touched = sessions.touch(session, last_used_at=now)
-    if touched is None:
-        # The row was revoked by another request after this one read it. Same code as any
-        # other unusable session: the client discards the cookie and logs in again.
-        _refuse_session(reason="revoked_during_request")
-
-    return RestoredSession(session=touched, user=user)
+    return session, user
 
 
 def revoke_session(*, token: SessionToken, sessions: SessionRepository) -> None:

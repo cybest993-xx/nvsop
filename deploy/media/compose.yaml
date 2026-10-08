@@ -1,14 +1,16 @@
 # Issue #34 的无 GPU MediaMTX 1.21.0 冒烟环境。
-# digest 固定可复现的 amd64 本地/CI 示例镜像。
+# 用同版本 1.21.0 的 ffmpeg 变体让 MediaMTX runOnDemand 调用真实 ffmpeg（CPU 转码按需路径）；
+# 这是测试夹具工具，不是生产镜像或依赖。固定 OCI 多架构 index digest（保留 amd64/arm64 等平台能力）。
 services:
   mediamtx:
-    image: bluenviron/mediamtx:1.21.0@sha256:095da39dd94defa496d592e8b7a968bfd171491ea325d5176c6d32929ba4f1f9
+    image: bluenviron/mediamtx:1.21.0-ffmpeg@sha256:9d148b5f29906618dee627ea3232c75d4ed60da8d40a3ad7276ca87c1ec4f19e
     command: ["/config/mediamtx.yml"]
     ports:
       - "127.0.0.1:${NVSOP_MEDIA_RTSP_HOST_PORT:-8554}:8554/tcp"
       - "127.0.0.1:${NVSOP_MEDIA_WEBRTC_HOST_PORT:-8889}:8889/tcp"
       - "127.0.0.1:${NVSOP_MEDIA_ICE_HOST_PORT:-8189}:8189/udp"
       - "127.0.0.1:${NVSOP_MEDIA_PLAYBACK_HOST_PORT:-9996}:9996/tcp"
+      - "127.0.0.1:${NVSOP_MEDIA_API_HOST_PORT:-9997}:9997/tcp"
     volumes:
       - ./mediamtx.yml:/config/mediamtx.yml:ro
       - media-recordings:/recordings

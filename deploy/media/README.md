@@ -6,6 +6,7 @@
 
 从仓库根目录运行，需要 Docker Compose、curl；实际回放视频检查还需要 ffprobe。镜像及摘要以 [compose.yaml](compose.yaml) 为准，MediaMTX 路径和监听以 [mediamtx.yml](mediamtx.yml) 为准，CI 主机工具由 [blocking-ci.yml](../../.github/workflows/blocking-ci.yml) 配置。
 该合成环境把录像分段缩短为 2 秒，只用于快速形成可回放证据；正式边缘运行时的分段时长来自本机媒体策略，不从该 smoke 配置继承。
+夹具的 MediaMTX 使用同版本 `1.21.0` 的 ffmpeg 变体（固定 OCI index digest），使 `runOnDemand` 能调用真实 ffmpeg；这是测试夹具工具，不是生产镜像或依赖变更。除两条连续路径外，配置还提供 `on-demand`（零转码 `sourceOnDemand`）与 `transcode-on-demand`（`runOnDemand` ffmpeg）两条仅预览按需路径：无 reader 时不拉源，最后一位 reader 离开并到 `closeAfter` 后释放。管理 API 只在夹具 loopback 映射（默认 `9997`），并在 [mediamtx.yml](mediamtx.yml) 显式授权 `api` 动作。
 
 ```sh
 docker compose -f deploy/media/compose.yaml up -d
@@ -22,10 +23,10 @@ curl -fsSG http://127.0.0.1:9996/list \
   --data-urlencode path=cpu-transcoded --data-urlencode "start=$START" --data-urlencode "end=$END"
 ```
 
-WebRTC 信令在 `http://127.0.0.1:8889`，ICE 为 `8189/udp`；回放监听独立使用 `http://127.0.0.1:9996`。WHEP 预览通过 `POST /<path>/whep` 交换 `application/sdp`，不是向中心 API 请求视频。该测试环境仅允许配置的 loopback origin；正式部署应配置可信 HTTPS 信令/回放与明确 Web origin，只向操作网络开放观看端口。
+WebRTC 信令在 `http://127.0.0.1:8889`，ICE 为 `8189/udp`；回放监听独立使用 `http://127.0.0.1:9996`；管理 API 在 `http://127.0.0.1:9997`，可用 `GET /v3/paths/get/<path>` 读取真实 `ready`/`readers` 状态。WHEP 预览通过 `POST /<path>/whep` 交换 `application/sdp`，不是向中心 API 请求视频。该测试环境仅允许配置的 loopback origin；正式部署应配置可信 HTTPS 信令/回放与明确 Web origin，只向操作网络开放观看端口。
 
-**完成条件：** 两路均能查询到本次真实分段，回放返回可解码视频；只有 Compose 启动或信令协商成功不算完成。检查入口是[真实 MediaMTX system 场景](../../tests/system/test_sys_34_media.py)及[浏览器媒体场景](../../apps/control-web/tests/e2e/sys-34-media.spec.ts)。测试所需的 `NVSOP_MEDIA_*` URL 必须指向本次真实环境；缺失变量导致 skip，不是通过。稳定软件验证场景见下表，不能从这两个文件的存在推断所有场景已完成。
-仓库自动入口 `make media-system` 会为宿主 RTSP/WebRTC/ICE/playback 选择临时空闲端口，启动独立 Compose project、等待两路真实分段、把本次 `/list`/`/get` URL 注入上述 system 场景并在结束后清理自己的测试卷；CI 只在媒体相关输入变化时运行它。WHEP 对应使用 `make web-e2e-whep` 的独立真实协议夹具。直接手工执行 `docker compose` 时仍使用上文的默认端口。
+**完成条件：** 两路均能查询到本次真实分段，回放返回可解码视频；只有 Compose 启动或信令协商成功不算完成。检查入口是[真实 MediaMTX system 场景](../../tests/system/test_sys_34_media.py)及[浏览器媒体场景](../../apps/control-web/tests/e2e/sys-34-media.spec.ts)。system 场景还通过 loopback 管理 API 断言 SYS-34-04 按需拉源/释放、SYS-34-05 无人观看连续录像、SYS-34-08/09 断源恢复和 SYS-34-11 重启后历史回放。测试所需的 `NVSOP_MEDIA_*` URL 必须指向本次真实环境；缺失变量导致 skip，不是通过。稳定软件验证场景见下表，不能从这两个文件的存在推断所有场景已完成。
+仓库自动入口 `make media-system` 会为宿主 RTSP/WebRTC/ICE/playback/API 选择临时空闲端口，启动独立 Compose project、等待两路真实分段，再通过 loopback 管理 API 验证按需拉源/释放、无人观看连续录像、断源恢复和 MediaMTX 重启后的历史回放，并在结束后清理自己的测试卷；CI 只在媒体相关输入变化时运行它。WHEP 对应使用 `make web-e2e-whep` 的独立真实协议夹具。直接手工执行 `docker compose` 时仍使用上文的默认端口。
 
 测试结束仅停止本环境：
 

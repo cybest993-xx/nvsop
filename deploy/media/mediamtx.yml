@@ -1,4 +1,16 @@
 logLevel: info
+api: yes
+apiAddress: :9997
+# 夹具网络下通过宿主 loopback 映射访问管理 API；显式授权保持 RTSP/WHEP/回放/API 行为。
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+      - action: read
+      - action: playback
+      - action: api
 rtspAddress: :8554
 webrtcAddress: :8889
 webrtcLocalUDPAddress: :8189
@@ -13,9 +25,24 @@ pathDefaults:
   recordSegmentDuration: 2s
   recordDeleteAfter: 3600s
 paths:
+  # 连续路径：publisher 持续推送，无人观看也录像（SYS-34-05）。
   synthetic:
     source: publisher
     record: yes
   cpu-transcoded:
     source: publisher
     record: yes
+  # 仅预览零转码：无 reader 不拉源，最后一位 reader 离开并到期后释放（SYS-34-04）。
+  on-demand:
+    source: rtsp://mediamtx:8554/synthetic
+    sourceOnDemand: yes
+    sourceOnDemandCloseAfter: 2s
+    record: no
+  # 仅预览 CPU 转码：首个 reader 触发 runOnDemand ffmpeg，最后一位离开并到期后结束（SYS-34-04）。
+  # 参数与边缘运行时 media.py 生成的 runOnDemand 命令一致。
+  transcode-on-demand:
+    source: publisher
+    runOnDemand: /usr/bin/ffmpeg -hide_banner -loglevel error -rtsp_transport tcp -i rtsp://mediamtx:8554/synthetic -map 0:v:0 -an -c:v libx264 -preset veryfast -tune zerolatency -g 30 -threads 2 -f rtsp -rtsp_transport tcp rtsp://mediamtx:8554/transcode-on-demand
+    runOnDemandRestart: yes
+    runOnDemandCloseAfter: 2s
+    record: no

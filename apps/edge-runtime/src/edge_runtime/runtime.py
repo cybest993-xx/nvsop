@@ -605,6 +605,7 @@ class RuntimeComposition:
     stations: tuple[AutonomousStation, ...]
     connector_runtimes: ConnectorRuntimeSet
     output_dispatchers: Mapping[str, OutputDispatcher]
+    command_loop: ConnectionTestCommandLoop
     report_reconciler: HostReportReconciler | None = None
 
 
@@ -999,6 +1000,7 @@ class AutonomousRuntime:
                 stations=tuple(self._stations),
                 connector_runtimes=self._connector_runtimes,
                 output_dispatchers=dict(self._output_dispatchers),
+                command_loop=self._command_loop,
                 report_reconciler=self._report_reconciler,
             )
             self._stations = list(composition.stations)
@@ -1006,6 +1008,7 @@ class AutonomousRuntime:
             self._connector_runtimes = composition.connector_runtimes
             self._output_dispatchers = dict(composition.output_dispatchers)
             self._report_reconciler = composition.report_reconciler
+            self._command_loop = composition.command_loop
         return previous
 
     @staticmethod
@@ -1195,6 +1198,23 @@ def _build_runtime_composition(
     report_transport: HttpDecisionReportTransport | None,
 ) -> RuntimeComposition:
     """组合已确认拓扑、真实适配器、轮询运行时和持久账本。"""
+    confirmed_connector_ids = {
+        connector.connector_id for connector in runtime_configuration.connectors
+    }
+    command_connectors = runtime_configuration.connectors + tuple(
+        connector
+        for connector in config.connectors
+        if connector.connector_id not in confirmed_connector_ids
+    )
+    command_loop = build_connection_test_loop(
+        center_url=config.center_url,
+        host_id=config.host_id,
+        host_private_key=config.host_private_key,
+        command_timeout=config.command_timeout,
+        command_poll_interval=config.command_poll_interval,
+        local_connectors=command_connectors,
+        ssl_context=config.ssl_context,
+    )
     registry = ConfiguredLocalConnectorRegistry(runtime_configuration.connectors)
     adapters = registry.adapters
     points_by_connector: dict[str, list[InputPoint]] = {
@@ -1354,6 +1374,7 @@ def _build_runtime_composition(
         stations=tuple(stations),
         connector_runtimes=connector_runtimes,
         output_dispatchers=output_dispatchers,
+        command_loop=command_loop,
         report_reconciler=report_reconciler,
     )
 
@@ -1516,23 +1537,6 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
             runtime_configuration=active_configuration,
             report_transport=report_transport,
         )
-        confirmed_connector_ids = {
-            connector.connector_id for connector in active_configuration.connectors
-        }
-        command_connectors = active_configuration.connectors + tuple(
-            connector
-            for connector in config.connectors
-            if connector.connector_id not in confirmed_connector_ids
-        )
-        command_loop = build_connection_test_loop(
-            center_url=config.center_url,
-            host_id=config.host_id,
-            host_private_key=config.host_private_key,
-            command_timeout=config.command_timeout,
-            command_poll_interval=config.command_poll_interval,
-            local_connectors=command_connectors,
-            ssl_context=config.ssl_context,
-        )
 
         def compose_runtime(runtime_configuration: RuntimeConfiguration) -> RuntimeComposition:
             return _build_runtime_composition(
@@ -1557,7 +1561,7 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
             else None
         )
         runtime = AutonomousRuntime(
-            command_loop=command_loop,
+            command_loop=composition.command_loop,
             stations=composition.stations,
             state=state,
             media=MediaRuntime(config.media) if config.media is not None else None,

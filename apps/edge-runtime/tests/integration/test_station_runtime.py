@@ -1332,6 +1332,7 @@ class AutonomousStationIntegrationTest(unittest.TestCase):
                 stations=(), connectors=(), confirmed=candidate
             )
             candidate_composition = RuntimeComposition(
+                command_loop=cast(ConnectionTestCommandLoop, _IdleCommandLoop()),
                 configuration=candidate_runtime,
                 stations=(),
                 connector_runtimes=cast(ConnectorRuntimeSet, object()),

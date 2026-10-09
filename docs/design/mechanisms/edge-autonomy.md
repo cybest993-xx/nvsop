@@ -65,6 +65,8 @@ MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU �
 
 这个 reconciler 只承载发往 Center `monitor` 的小型结构化事实。证据媒体始终留在本机，证据引用/元数据登记保留独立的生命周期；配置同步保留 Center→Edge candidate/confirmed 生命周期，物理处置保留 `local_disposal` 幂等账本与本地执行路径；不引入通用事件总线、Event Sourcing 或 `kind + payload` 万能 outbox。
 
+**本机积压容量（S030）**：SQLite 的 `local_report_queue`、`local_evidence_queue`、`local_observation_queue` 和 `local_health_queue` 各自以本机部署 JSON 的 `queue_capacity` 声明未确认行数上限（缺省值由配置模型统一拥有），不增加消息中间件。`LocalState.queue_status()` 记录深度、最早待办、最近未确认失败与容量；上报 worker 输出不带秘密原文的结构化状态日志。中心传输错误只增加重试成本，不阻止限额内的本地判断和锁存；越过本机容量边界则记录 `edge.local_queue.capacity_exhausted`，整个反应事务回滚，禁止以部分锁存、假正常判定或删除唯一副本掩盖故障。工位运行时明确记录 `edge.station.judgment_unavailable` 并按既有本地状态故障策略停止运行周期，由进程守护重启；满额时无法再次持久化一个可信的 `INDETERMINATE` 事件，不生成虚假不可判定判定结果，更不能声称已成功。中心侧继续使用上报时距作外部失能告警。实际 SQLite 磁盘耗尽同样需传播为本地致命故障。本容量是待办条数保护，不替代磁盘水位监控和保留策略。
+
 **对账语义**：上报按事件 id 幂等 upsert，至少一次；处置记录带幂等键，恢复后不重复执行已执行的动作；证据元数据/引用登记失败可重试且不删除本机权威证据文件。历史判定的事件时配置与 backend provenance 跟 decision/outbox 同事务冻结：多 backend 工位按实例累计实际参与输入的 backend/model 集合，重启和计时器结案沿用已持久化来源，不从当前配置选择任意 backend。带 historical proof 的判定走严格 report v2；发送前用主机签名确认冻结的旧 configuration，Center 只有在该 revision/effective digest 确实曾由自己签发时才建立不可变历史 assignment 并明确协商 v2。旧 Center 不支持握手时保留 outbox，不降级丢证明。其他尚未版本化的机器协议仍受 ADR-0003 的通用 runtime/version handshake 要求约束（[ADR-0003](../../adr/0003-api-v1-is-a-fixed-prefix.md)）。
 
 **健康状态的两种语义与写入者**（避免 `device` 与 `monitor` 各存一份"健康"）：

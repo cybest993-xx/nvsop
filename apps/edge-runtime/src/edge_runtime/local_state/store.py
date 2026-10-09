@@ -13,14 +13,17 @@ edge-autonomy.md §5.11。
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
+from dataclasses import dataclass
 from threading import RLock
 from typing import Protocol
 
 from nvsop_contracts import ReportedDisposal
 
+from edge_runtime.configuration_values import DEFAULT_QUEUE_CAPACITY, QueueCapacity
 from edge_runtime.judgment.evidence import EvidenceClip
 from edge_runtime.judgment.model import (
     Decision,
@@ -62,6 +65,72 @@ from edge_runtime.local_state.queues import (
     StationQueues,
 )
 from edge_runtime.local_state.schema import migrate
+
+_logger = logging.getLogger("edge_runtime")
+
+
+class QueueCapacityError(RuntimeError):
+    """容量已耗尽; 本机不得把这次未提交的判定当成已成功。"""
+
+
+@dataclass(frozen=True, slots=True)
+class QueueStatus:
+    name: str
+    depth: int
+    oldest_queue_id: int | None
+    last_failure: str | None
+    last_failed_queue_id: int | None
+    limit: int
+
+
+# 固定的本地 SQL 列表: 不接收外部表名, 容量不包括已确认或已被结案取代的待办。
+_PENDING_QUEUES = {
+    "report": ("local_report_queue", "sent_at IS NULL AND superseded_at IS NULL"),
+    "evidence": (
+        "local_evidence_queue",
+        "(registered_at IS NULL OR covered_from > window_from OR covered_to < window_to)",
+    ),
+    "observation": ("local_observation_queue", "sent_at IS NULL"),
+    "health": ("local_health_queue", "sent_at IS NULL"),
+}
+
+
+def _queue_status(connection: sqlite3.Connection, name: str, limit: int) -> QueueStatus:
+    table, predicate = _PENDING_QUEUES[name]
+    row = connection.execute(
+        f"SELECT count(*) AS depth, min(queue_id) AS oldest FROM {table} WHERE {predicate}"
+    ).fetchone()
+    failed = connection.execute(
+        f"SELECT queue_id, last_error FROM {table} "
+        f"WHERE {predicate} AND last_error IS NOT NULL "
+        "ORDER BY last_attempt_at DESC, queue_id DESC LIMIT 1"
+    ).fetchone()
+    return QueueStatus(
+        name=name,
+        depth=int(row["depth"]),
+        oldest_queue_id=None if row["oldest"] is None else int(row["oldest"]),
+        last_failure=None if failed is None else str(failed["last_error"]),
+        last_failed_queue_id=None if failed is None else int(failed["queue_id"]),
+        limit=limit,
+    )
+
+
+def _require_queue_capacity(
+    connection: sqlite3.Connection, name: str, limit: int, *, additional: int = 0
+) -> None:
+    table, predicate = _PENDING_QUEUES[name]
+    depth = (
+        int(connection.execute(f"SELECT count(*) FROM {table} WHERE {predicate}").fetchone()[0])
+        + additional
+    )
+    if depth > limit:
+        _logger.error(
+            "edge.local_queue.capacity_exhausted queue=%s depth=%s limit=%s",
+            name,
+            depth,
+            limit,
+        )
+        raise QueueCapacityError(f"{name} pending queue at capacity: {depth}/{limit}")
 
 
 class ReactionStore(Protocol):
@@ -168,12 +237,14 @@ class StationStore(StationQueues):
         report_context: ReportContext | None = None,
         notify_report_pending: Callable[[], None] | None = None,
         evidence_source: Callable[[str], EvidenceSource | None] | None = None,
+        queue_capacity: QueueCapacity = DEFAULT_QUEUE_CAPACITY,
     ) -> None:
         super().__init__(connection, station_id, lock)
         self._lock = lock
         self._report_context = report_context
         self._notify_report_pending = notify_report_pending
         self._evidence_source = evidence_source
+        self._queue_capacity = queue_capacity
 
     def commit(
         self,
@@ -246,6 +317,14 @@ class StationStore(StationQueues):
                         """,
                         (self._station_id, int(pause_to)),
                     )
+                if report_enqueued:
+                    _require_queue_capacity(
+                        self._connection, "report", self._queue_capacity.reports
+                    )
+                if evidence:
+                    _require_queue_capacity(
+                        self._connection, "evidence", self._queue_capacity.evidence
+                    )
                 self._connection.execute("COMMIT")
             except Exception:
                 if self._connection.in_transaction:
@@ -288,6 +367,9 @@ class StationStore(StationQueues):
         if context is None:
             return
         with self._lock:
+            _require_queue_capacity(
+                self._connection, "health", self._queue_capacity.health, additional=1
+            )
             self._connection.execute(
                 """
                 INSERT INTO local_health_queue (
@@ -554,6 +636,9 @@ class StationStore(StationQueues):
         if context is None:
             return
         with self._lock:
+            _require_queue_capacity(
+                self._connection, "observation", self._queue_capacity.observations, additional=1
+            )
             self._connection.execute(
                 """
                 INSERT INTO local_observation_queue (
@@ -744,11 +829,13 @@ class LocalState:
         lock: AbstractContextManager[object] | None = None,
         notify_report_pending: Callable[[], None] | None = None,
         evidence_source: Callable[[str], EvidenceSource | None] | None = None,
+        queue_capacity: QueueCapacity = DEFAULT_QUEUE_CAPACITY,
     ) -> None:
         self._connection = connection
         self._lock = lock or RLock()
         self._notify_report_pending = notify_report_pending
         self._evidence_source = evidence_source
+        self._queue_capacity = queue_capacity
 
     def station(
         self, station_id: str, *, report_context: ReportContext | None = None
@@ -761,6 +848,7 @@ class LocalState:
             report_context,
             self._notify_report_pending,
             self._evidence_source,
+            self._queue_capacity,
         )
 
     def pending_evidence_stations(self) -> tuple[str, ...]:
@@ -791,6 +879,16 @@ class LocalState:
                 """
             ).fetchall()
         return tuple(str(row["station_id"]) for row in rows)
+
+    def queue_status(self) -> tuple[QueueStatus, ...]:
+        """跨工位查看未确认深度、最早待办、最近失败和配置的容量边界。"""
+        with self._lock:
+            return (
+                _queue_status(self._connection, "report", self._queue_capacity.reports),
+                _queue_status(self._connection, "evidence", self._queue_capacity.evidence),
+                _queue_status(self._connection, "observation", self._queue_capacity.observations),
+                _queue_status(self._connection, "health", self._queue_capacity.health),
+            )
 
     def reports(self) -> ReportStore:
         """返回该主机 decision/instance 待上报事实的持久接缝。"""
@@ -972,6 +1070,7 @@ def open_local_state(
     *,
     notify_report_pending: Callable[[], None] | None = None,
     evidence_source: Callable[[str], EvidenceSource | None] | None = None,
+    queue_capacity: QueueCapacity = DEFAULT_QUEUE_CAPACITY,
 ) -> LocalState:
     """打开或创建推理机本地状态, 并迁移到当前 SQLite 模式。
 
@@ -989,4 +1088,5 @@ def open_local_state(
         connection,
         notify_report_pending=notify_report_pending,
         evidence_source=evidence_source,
+        queue_capacity=queue_capacity,
     )

@@ -22,9 +22,11 @@ from nvsop_contracts import (
     generate_host_identity_key_pair,
 )
 
+from edge_runtime.configuration import load_configuration
 from edge_runtime.connectors.hikvision import CANDIDATE_PROFILE
 from edge_runtime.judgment.model import HostInstant
 from edge_runtime.judgment.reasons import ReasonCode
+from edge_runtime.local_state import DEFAULT_QUEUE_CAPACITY, QueueCapacity
 from edge_runtime.media import MediaRuntimeConfiguration, RecordingMode
 from edge_runtime.runtime import (
     ConnectionTestCommandLoop,
@@ -580,6 +582,38 @@ class ConnectionTestCommandLoopTest(unittest.TestCase):
 
 
 class RuntimeConfigurationTest(unittest.TestCase):
+    def test_local_queue_capacity_defaults_and_strict_explicit_limits(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            config_path = _valid_config(
+                directory,
+                center_url="https://center.example",
+                connector_url="http://camera.example",
+            )
+            self.assertEqual(DEFAULT_QUEUE_CAPACITY, load_configuration(config_path).queue_capacity)
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["queue_capacity"] = {
+                "reports": 3,
+                "evidence": 4,
+                "observations": 5,
+                "health": 6,
+            }
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            self.assertEqual(
+                QueueCapacity(reports=3, evidence=4, observations=5, health=6),
+                load_configuration(config_path).queue_capacity,
+            )
+            for invalid in (0, -1, True, "10"):
+                with self.subTest(invalid=invalid):
+                    config["queue_capacity"]["reports"] = invalid
+                    config_path.write_text(json.dumps(config), encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, "queue_capacity.reports"):
+                        load_configuration(config_path)
+            config["queue_capacity"].pop("reports")
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_configuration(config_path)
+
     def test_loader_rejects_an_unsupported_connector_type_at_startup(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

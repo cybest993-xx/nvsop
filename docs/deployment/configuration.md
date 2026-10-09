@@ -98,7 +98,20 @@ RestartSec=2
 - `local_state_path`
 - `stations`（非空）
 
-可选：`center_ca_file`、`media`、`evidence`。
+可选：`center_ca_file`、`media`、`evidence`、`queue_capacity`。
+
+`queue_capacity` 可选，未填写时四类待办分别默认最多 `10000` 条。显式设置时必须完整指定正整数 `reports`、`evidence`、`observations`、`health`。这些限制仅约束本机尚未确认的 SQLite 行数，不代表磁盘字节配额；部署仍须监控本机磁盘水位。处置写入账本不属于可丢弃队列。
+
+```json
+"queue_capacity": {
+  "reports": 10000,
+  "evidence": 10000,
+  "observations": 10000,
+  "health": 10000
+}
+```
+
+`LocalState.queue_status()` 在本机提供四类待办的深度、最早 `queue_id`、最近待办失败与容量边界；上报循环周期性记录 `edge.local_queue.status`，不输出可能含秘密的原始失败信息。达到容量时，新增待办拒绝并记录 `edge.local_queue.capacity_exhausted`，判定反应事务整体回滚；运行时另发 `edge.station.judgment_unavailable` 告警并按现有本地致命错误路径退出，由守护进程重启，不制造额外 `INDETERMINATE`/正常判定，不能对外声称已锁存或已完成判定。不得丢弃未确认的唯一副本，需修复积压并取得中心确认后恢复容量。磁盘自身写入失败同样不能被归类为单纯中心传输失败。
 
 主机私钥从文件读取并校验；连接器凭据同样留在本机 secret 文件。**当前生产入口以这份本地 JSON 作为 bootstrap/本机部署配置**。设计上的权威分工是中心拥有拓扑、模板、版本和期望运行参数，本机文件拥有本机连接信息、adapter profile 和设备秘密；不要把本机 secret 反向写入中心配置或 Git。
 

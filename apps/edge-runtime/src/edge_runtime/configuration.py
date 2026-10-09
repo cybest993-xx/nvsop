@@ -15,6 +15,8 @@ from nvsop_contracts import (
 )
 
 from edge_runtime.configuration_values import (
+    DEFAULT_QUEUE_CAPACITY,
+    QueueCapacity,
     _array,
     _boolean,
     _non_empty_string,
@@ -74,6 +76,7 @@ class EdgeRuntimeConfiguration:
     stations: tuple[StationRuntimeConfiguration, ...]
     media: MediaRuntimeConfiguration | None = None
     evidence: EvidenceMediaConfiguration | None = None
+    queue_capacity: QueueCapacity = DEFAULT_QUEUE_CAPACITY
 
 
 _CONFIG_KEYS = frozenset(
@@ -119,7 +122,11 @@ def load_configuration(
     raw: object = json.loads(Path(config_path).read_text(encoding="utf-8"))
     config = _object(raw, "edge runtime configuration")
     required = _CONFIG_KEYS | ({"local_state_path", "stations"} if include_stations else set())
-    _require_keys(config, required=required, optional={"center_ca_file", "media", "evidence"})
+    _require_keys(
+        config,
+        required=required,
+        optional={"center_ca_file", "media", "evidence", "queue_capacity"},
+    )
     connectors_value = _array(config["connectors"], "connectors")
     connectors = tuple(_local_connector(item) for item in connectors_value)
     stations: tuple[StationRuntimeConfiguration, ...] = ()
@@ -144,6 +151,11 @@ def load_configuration(
     )
     if evidence is not None and media is None:
         raise ValueError("evidence media configuration requires the local media configuration")
+    limits = (
+        DEFAULT_QUEUE_CAPACITY
+        if "queue_capacity" not in config
+        else _queue_capacity(config["queue_capacity"])
+    )
     return EdgeRuntimeConfiguration(
         center_url=safe_url(config["center_url"], "center_url", schemes={"https"}),
         host_id=_non_empty_string(config["host_id"], "host_id"),
@@ -160,6 +172,20 @@ def load_configuration(
         stations=stations,
         media=media,
         evidence=evidence,
+        queue_capacity=limits,
+    )
+
+
+def _queue_capacity(value: object) -> QueueCapacity:
+    values = _object(value, "queue_capacity")
+    _require_keys(
+        values, required={"reports", "evidence", "observations", "health"}, optional=set()
+    )
+    return QueueCapacity(
+        reports=_positive_integer(values["reports"], "queue_capacity.reports"),
+        evidence=_positive_integer(values["evidence"], "queue_capacity.evidence"),
+        observations=_positive_integer(values["observations"], "queue_capacity.observations"),
+        health=_positive_integer(values["health"], "queue_capacity.health"),
     )
 
 

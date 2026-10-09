@@ -3,8 +3,28 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import cast
 from urllib.parse import urlsplit
+
+
+@dataclass(frozen=True, slots=True)
+class QueueCapacity:
+    """本机配置拥有的四类持久队列待办容量; 不限制已确认历史行。"""
+
+    reports: int = 10_000
+    evidence: int = 10_000
+    observations: int = 10_000
+    health: int = 10_000
+
+    def __post_init__(self) -> None:
+        for name in ("reports", "evidence", "observations", "health"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"queue capacity {name} must be a positive integer")
+
+
+DEFAULT_QUEUE_CAPACITY = QueueCapacity()
 
 
 def safe_url(value: object, name: str, *, schemes: set[str]) -> str:

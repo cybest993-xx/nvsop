@@ -322,14 +322,12 @@ class StationSupervisor:
                     return self._receive(arriving, report_provenance=report_provenance)
                 return Reaction(decisions=(), wake_at=None)
             cutoff = self._resume_after
-            if cutoff is not None:
-                if isinstance(arriving, (ActionRecognized, ExternalSignal)):
-                    if arriving.at.seconds <= cutoff:
-                        return Reaction(decisions=(), wake_at=self._deadline)
-                elif isinstance(arriving, StreamHealthObserved):
-                    instant = arriving.event.at_monotonic
-                    if instant is not None and instant <= cutoff:
-                        return Reaction(decisions=(), wake_at=self._deadline)
+            if (
+                cutoff is not None
+                and isinstance(arriving, (ActionRecognized, ExternalSignal))
+                and arriving.at.seconds <= cutoff
+            ):
+                return Reaction(decisions=(), wake_at=self._deadline)
             return self._receive(arriving, report_provenance=report_provenance)
 
     def _receive(

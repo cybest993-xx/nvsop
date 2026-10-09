@@ -842,6 +842,32 @@ class LocalPauseResumeTest(unittest.TestCase):
         self.assertEqual(1, len(store.health))
         self.assertEqual((), supervisor.pause().decisions)
 
+    def test_delayed_health_restoration_after_resume_is_still_applied(self) -> None:
+        supervisor, clock = station()
+        supervisor.receive(
+            StreamHealthObserved(
+                StreamHealthEvent(
+                    fact=StreamFact.SOURCE_ERROR,
+                    at_monotonic=10.0,
+                )
+            )
+        )
+        clock.now = 40.0
+        supervisor.pause()
+        supervisor.resume()
+        # 恢复事实入队时刻较早, 但在恢复操作后才被 supervisor 消费。
+        supervisor.receive(
+            StreamHealthObserved(
+                StreamHealthEvent(
+                    fact=StreamFact.DELIVERING,
+                    at_monotonic=30.0,
+                )
+            )
+        )
+        for index, signal in enumerate(STEPS):
+            response = supervisor.receive(action(signal, at=41.0 + index))
+        self.assertEqual(Verdict.PASS, response.decisions[0].verdict)
+
     def test_restored_health_while_paused_does_not_poison_new_pass(self) -> None:
         supervisor, clock = station()
         supervisor.receive(

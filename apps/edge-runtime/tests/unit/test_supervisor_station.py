@@ -892,3 +892,44 @@ class LocalPauseResumeTest(unittest.TestCase):
         for index, signal in enumerate(STEPS):
             response = supervisor.receive(action(signal, at=41.0 + index))
         self.assertEqual(Verdict.PASS, response.decisions[0].verdict)
+
+
+class ExplicitLocalTerminationTest(unittest.TestCase):
+    def test_explicit_termination_has_one_reason_and_requires_a_new_declared_start(self) -> None:
+        driver, clock = station()
+        self.assertEqual(Reaction(decisions=(), wake_at=None), driver.terminate_instance())
+        driver.receive(action(STEPS[0], at=100.0))
+        clock.now = 150.0
+
+        closing = driver.terminate_instance()
+        (decision,) = closing.decisions
+        self.assertEqual(Verdict.INDETERMINATE, decision.verdict)
+        self.assertEqual((ReasonCode.RUN_INTERRUPTED,), decision.reasons)
+        self.assertIs(Lifecycle.CLOSED_BY_RUN_INTERRUPTION, decision.lifecycle)
+        self.assertEqual((), decision.violations)
+        self.assertEqual(1, decision.instance_id)
+        self.assertEqual(HostInstant(150.0), decision.evidence.anchor)
+        self.assertEqual(Reaction(decisions=(), wake_at=None), driver.terminate_instance())
+
+        self.assertEqual(
+            Reaction(decisions=(), wake_at=None),
+            driver.receive(action(STEPS[0], at=149.0)),
+        )
+        self.assertIsNone(driver.state.instance)
+        self.assertEqual(
+            Reaction(decisions=(), wake_at=None),
+            driver.receive(action(STEPS[1], at=151.0)),
+        )
+        self.assertIsNone(driver.state.instance)
+        driver.receive(action(STEPS[0], at=152.0))
+        instance = driver.state.instance
+        assert instance is not None
+        self.assertEqual(2, instance.instance_id)
+        self.assertEqual(HostInstant(152.0), instance.opened_at)
+
+    def test_terminate_with_a_paused_station_is_an_explainable_noop(self) -> None:
+        driver, _ = station()
+        driver.pause()
+        self.assertEqual(Reaction(decisions=(), wake_at=None), driver.terminate_instance())
+        self.assertTrue(driver.paused)
+        self.assertIsNone(driver.state.instance)

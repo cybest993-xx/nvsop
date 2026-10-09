@@ -1197,6 +1197,39 @@ class AutonomousStationIntegrationTest(unittest.TestCase):
             self.assertFalse(store.judgment_paused())
             database.close()
 
+    def test_local_terminate_entry_persists_one_clear_close_without_center(self) -> None:
+        database = open_local_state(":memory:")
+        self.addCleanup(database.close)
+        store = database.station("station-terminate")
+        driver = resume_station(
+            store,
+            template=Template(
+                steps=("(1) start", "(2) finish"),
+                ordering=Ordering.ORDERED,
+                start_signal="(1) start",
+            ),
+            parameters=RuntimeParameters(idle_timeout=10.0, step_deadline=10.0),
+            margins=EvidenceMargins(leading=0.0, trailing=0.0),
+            clock=lambda: 120.0,
+        )
+        station = AutonomousStation(supervisor=driver, source=_OneInputSource())
+        self.assertEqual(Reaction(decisions=(), wake_at=None), station.terminate_current_instance())
+        driver.receive(
+            ActionRecognized(
+                signal="(1) start",
+                at=HostInstant(100.0),
+                source_time=100.0,
+                source_anchor=1.0,
+            )
+        )
+        closing = station.terminate_current_instance()
+        self.assertEqual((ReasonCode.RUN_INTERRUPTED,), closing.decisions[0].reasons)
+        self.assertIs(Lifecycle.CLOSED_BY_RUN_INTERRUPTION, closing.decisions[0].lifecycle)
+        reports = store.pending_reports()
+        self.assertEqual(closing.decisions[0], reports[-1].decision)
+        self.assertEqual(Reaction(decisions=(), wake_at=None), station.terminate_current_instance())
+        self.assertEqual(reports, store.pending_reports())
+
     def test_station_loop_resumes_sqlite_state_and_commits_a_real_input_reaction(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             state = open_local_state(str(Path(temporary) / "state.sqlite"))

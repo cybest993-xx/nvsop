@@ -436,6 +436,10 @@ class AutonomousStation:
         """恢复后仅消费新的观测, 不续接已被中断的实例。"""
         return self._supervisor.resume()
 
+    def terminate_current_instance(self) -> Reaction:
+        """本机显式终止当前 SOP 实例, 持久结案交由 supervisor 完成。"""
+        return self._supervisor.terminate_instance()
+
     @property
     def connector_runtimes(self) -> tuple[ConnectorRuntime, ...]:
         return self._connector_runtimes

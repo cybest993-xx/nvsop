@@ -469,6 +469,17 @@ class StationSupervisor:
             )
         )
 
+    def terminate_instance(self) -> Reaction:
+        """显式结案当前实例; 无在飞实例时返回空反应, 不产生重复处置。"""
+        with self._control_lock:
+            if self._state.instance is None:
+                return Reaction(decisions=(), wake_at=self._deadline)
+            terminated_at = HostInstant(self._clock())
+            result = self._interrupt(at=terminated_at)
+            # 终止前入队的旧观测不得在新一遍中重新打开已终止实例。
+            self._resume_after = terminated_at.seconds
+            return result
+
     def interrupt(self, *, at: HostInstant | None = None) -> Reaction:
         with self._control_lock:
             if self._paused and self._state.instance is None:

@@ -53,7 +53,7 @@ if 证据覆盖不足 or 流不健康 or 推理不健康 or 时间未对齐:
 
 判定与该不变量都在推理机的判定核心内实现（[ADR-0005](../../adr/0005-judgment-runs-inside-the-inference-host.md)），因为有效性所需的第一手信号在本机 pipeline 回调里（§2.4）。
 
-不可判定原因码（10）：`STREAM_LOST`、`INFERENCE_BACKEND_UNREACHABLE`、`INFERENCE_TIMEOUT`、`TIMESTAMP_DISCONTINUITY`、`CHUNK_BACKLOG_EXCEEDED`、`ACTION_ID_UNKNOWN`（VLM 输出动作号不在模板声明内）、`INFERENCE_HOST_DOWN`、`RUN_INTERRUPTED`（配置切换中止 / 进程重启）、`IO_SIGNAL_LOST`（模板依赖的输入点位不可达）、`IO_TIME_UNALIGNED`（外部信号与视频时间轴对齐偏差超阈值，§5.8）。
+不可判定原因码（10）：`STREAM_LOST`、`INFERENCE_BACKEND_UNREACHABLE`、`INFERENCE_TIMEOUT`、`TIMESTAMP_DISCONTINUITY`、`CHUNK_BACKLOG_EXCEEDED`、`ACTION_ID_UNKNOWN`（VLM 输出动作号不在模板声明内）、`INFERENCE_HOST_DOWN`、`RUN_INTERRUPTED`（配置切换 / 进程重启 / 本地暂停 / 显式终止，见 §5.18）、`IO_SIGNAL_LOST`（模板依赖的输入点位不可达）、`IO_TIME_UNALIGNED`（外部信号与视频时间轴对齐偏差超阈值，§5.8）。
 
 不通过原因码（4）：`MISSED_STEP`、`WRONG_STEP`、`OUT_OF_ORDER`、`DEADLINE_EXCEEDED`。
 
@@ -99,7 +99,7 @@ if 证据覆盖不足 or 流不健康 or 推理不健康 or 时间未对齐:
 | 观测 | 动作编号或外部信号语义标签、源时间、主机单调锚 | 开实例、序列比对、顺序型跳号即报、超时违规 |
 | 有效性事实变更 | 流健康事件或推理可达性变化，及其在事件序中的位置 | 累积进实例的有效性记录，闭合时供有效性门查 |
 | 计时器到点 | 触发时刻的单调值，以及 supervisor 当时查得的进程存活与流健康 | 空闲超时闭合、超时违规 |
-| 运行中断 | 原因（配置切换 / 进程重启） | 在飞实例结案为不可判定 + `RUN_INTERRUPTED` |
+| 运行中断 | supervisor 传入的中断时刻（配置切换 / 进程重启 / 本地暂停 / 显式终止） | 在飞实例结案为不可判定 + `RUN_INTERRUPTED` |
 
 模板（含步骤、顺序性声明、已解析的运行参数生效值）随状态一起传入，是数据不是配置读取。
 

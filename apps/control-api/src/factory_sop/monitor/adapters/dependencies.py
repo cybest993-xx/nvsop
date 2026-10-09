@@ -1,6 +1,6 @@
 """绑定到请求工作单元的 monitor HTTP 依赖。"""
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import cast
 
 from fastapi import HTTPException, Request
@@ -13,9 +13,11 @@ from factory_sop.device.api import (
     DeviceHostGateway,
     DeviceMonitorGateway,
 )
+from factory_sop.execution.api import ExecutionGrantViewGateway
 from factory_sop.monitor.adapters.repository import PostgresMonitorRepository
 from factory_sop.monitor.adapters.streaming import PostgresMonitorStreamSource
 from factory_sop.monitor.repository import MonitorRepository, MonitorStreamSource
+from factory_sop.monitor.usecases import HOST_SILENCE_THRESHOLD_SECONDS
 from factory_sop.persistence import RequestSession
 
 
@@ -42,7 +44,16 @@ def monitor_stream_source(request: Request, once: bool = False) -> Iterator[Moni
     """长订阅先取得独立 listener 配额；有限快照不占用长期监听资源。"""
     factory = cast(sessionmaker[Session], request.app.state.session_factory)
     engine = cast(Engine, request.app.state.monitor_listener_engine)
-    source = PostgresMonitorStreamSource(factory, engine)
+    execution_gateway_factory = cast(
+        Callable[[Session], ExecutionGrantViewGateway],
+        request.app.state.execution_lease_gateway_factory,
+    )
+    source = PostgresMonitorStreamSource(
+        factory,
+        engine,
+        execution_gateway_factory=execution_gateway_factory,
+        stale_after_seconds=HOST_SILENCE_THRESHOLD_SECONDS,
+    )
     try:
         if not once:
             try:

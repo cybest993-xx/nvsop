@@ -74,6 +74,10 @@ class RepositoryExecutionLeaseGateway:
             raise ExecutionRefusedError(ExecutionRefusalCode.GRANT_NOT_RENEWABLE)
         return renewed
 
+    def current_grant(self, *, station_id: UUID) -> StationGrant | None:
+        """只读返回 Center 当前租约事实，不改变或续期它。"""
+        return self._grants.for_station(station_id)
+
     def renew_host_leases(
         self,
         *,

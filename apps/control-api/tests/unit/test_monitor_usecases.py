@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
@@ -10,6 +10,7 @@ import pytest
 from factory_sop.auth.authorization import AuthorizationRefusedError, Caller
 from factory_sop.auth.model import User, UserStatus
 from factory_sop.auth.permissions import Permission
+from factory_sop.execution.model import StationGrant
 from factory_sop.identifiers import new_id
 from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.model import (
@@ -27,6 +28,7 @@ from factory_sop.monitor.usecases import (
     mirror_decision,
     mirror_health,
     mirror_observation,
+    physical_safety_projection,
     sse_snapshot,
     sse_snapshot_state,
     sse_stream,
@@ -1270,3 +1272,59 @@ def test_host_liveness_rejects_a_caller_without_monitor_permission() -> None:
             now=datetime(2026, 9, 13, 0, 10, tzinfo=UTC),
             stale_after_seconds=300.0,
         )
+
+
+def test_physical_safety_projection_never_keeps_stale_authorization_green() -> None:
+    now = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
+    grant = StationGrant(
+        grant_id=new_id(),
+        station_id=STATION_ID,
+        holder_host_id=HOST_ID,
+        lease_expires_at=now + timedelta(days=1),
+        renewed_at=now - timedelta(minutes=1),
+        request_id=new_id(),
+    )
+    fresh = physical_safety_projection(
+        {}, grant=grant, last_reported_at=now - timedelta(seconds=10), now=now
+    )
+    assert fresh["status"] == "protected"
+    fresh_center = fresh["center_authorization"]
+    assert isinstance(fresh_center, dict)
+    assert fresh_center["state"] == "active"
+    stale = physical_safety_projection(
+        {}, grant=grant, last_reported_at=now - timedelta(minutes=6), now=now
+    )
+    assert stale["status"] == "stale"
+    stale_edge = stale["edge_status"]
+    assert isinstance(stale_edge, dict)
+    assert stale_edge["stale"] is True
+
+
+def test_physical_safety_projection_marks_expired_and_missing_grants_failed() -> None:
+    now = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
+    expired = StationGrant(
+        grant_id=new_id(),
+        station_id=STATION_ID,
+        holder_host_id=HOST_ID,
+        lease_expires_at=now - timedelta(seconds=1),
+        renewed_at=now - timedelta(days=7),
+        request_id=new_id(),
+    )
+    expired_view = physical_safety_projection(
+        {}, grant=expired, last_reported_at=now - timedelta(seconds=1), now=now
+    )
+    assert expired_view["status"] == "failed"
+    expired_center = expired_view["center_authorization"]
+    assert isinstance(expired_center, dict)
+    assert expired_center["state"] == "expired"
+    missing_view = physical_safety_projection(
+        {"instance": {"host_id": str(HOST_ID)}},
+        grant=None,
+        last_reported_at=now,
+        now=now,
+    )
+    assert missing_view["status"] == "failed"
+    assert missing_view["center_authorization"] == {"state": "missing"}
+    missing_edge = missing_view["edge_status"]
+    assert isinstance(missing_edge, dict)
+    assert missing_edge["host_id"] == str(HOST_ID)

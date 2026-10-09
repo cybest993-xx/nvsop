@@ -41,6 +41,16 @@ const stationLabel = (id: string) =>
     ? (props.stations.find((station) => station.id === id)?.name ?? id)
     : id
 const verdicts: Record<string, string> = { pass: '通过', fail: '不通过', indeterminate: '不可判定' }
+const physicalSafetyLabels: Record<string, string> = {
+  protected: '物理防错有效',
+  stale: '物理防错状态未知（数据已过期）',
+  failed: '物理防错失效',
+}
+const authorizationLabels: Record<string, string> = {
+  active: 'Center 授权有效',
+  expired: 'Center 授权已到期',
+  missing: 'Center 无当前授权',
+}
 const reasons: Record<string, string> = {
   STREAM_LOST: '观测流中断',
   INFERENCE_BACKEND_UNREACHABLE: '推理后端不可达',
@@ -206,6 +216,40 @@ onUnmounted(() => {
         工位 {{ stationLabel(p.station_id) }} <small>{{ p.station_id }}</small>
       </h3>
       <div class="runtime__grid">
+        <section aria-label="物理防错与执行权">
+          <h4>物理防错与执行权</h4>
+          <template v-if="p.physical_safety">
+            <p>
+              状态：
+              <strong>{{
+                physicalSafetyLabels[p.physical_safety.status] ??
+                `未知状态（${p.physical_safety.status}）`
+              }}</strong>
+            </p>
+            <p>说明：{{ p.physical_safety.detail }}</p>
+            <p>
+              Center 来源：
+              {{
+                authorizationLabels[p.physical_safety.center_authorization.state] ??
+                `未知授权状态（${p.physical_safety.center_authorization.state}）`
+              }}
+            </p>
+            <p v-if="p.physical_safety.center_authorization.holder_host_id">
+              授权推理机：{{ p.physical_safety.center_authorization.holder_host_id }}
+            </p>
+            <p v-if="p.physical_safety.center_authorization.lease_expires_at">
+              授权到期：{{ time(p.physical_safety.center_authorization.lease_expires_at) }}
+            </p>
+            <p>
+              Edge 来源：{{ p.physical_safety.edge_status.host_id ?? '未能确定来源推理机' }}；
+              最后已知：{{ time(p.physical_safety.edge_status.last_reported_at) }}
+            </p>
+            <p v-if="p.physical_safety.edge_status.stale">
+              数据已过期；不会沿用最后一次正常状态表示仍可写。
+            </p>
+          </template>
+          <p v-else class="muted">尚无物理执行权镜像；不推断为可写。</p>
+        </section>
         <section aria-label="SOP 实例与实际来源">
           <h4>SOP 实例与实际来源</h4>
           <template v-if="p.instance">

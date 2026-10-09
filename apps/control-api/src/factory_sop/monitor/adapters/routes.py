@@ -477,7 +477,12 @@ def stream_monitor_events(
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
     once: bool = Query(default=False),
 ) -> StreamingResponse:
-    snapshot = sse_snapshot_state(monitor, caller=caller, last_event_id=last_event_id)
+    snapshot = sse_snapshot_state(
+        monitor,
+        caller=caller,
+        last_event_id=last_event_id,
+        runtime_projection=source.read_runtime_projection(),
+    )
 
     def events() -> Iterator[str]:
         if once:

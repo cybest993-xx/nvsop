@@ -383,8 +383,27 @@ type RuntimeHealth = RuntimeFact & {
   anchor_offset: number | null
 }
 
+export interface RuntimePhysicalSafety {
+  status: string
+  detail: string
+  center_authorization: {
+    state: string
+    grant_id?: string
+    holder_host_id?: string
+    lease_expires_at?: string
+    renewed_at?: string
+  }
+  edge_status: {
+    host_id: string | null
+    last_reported_at: string | null
+    age_seconds: number | null
+    stale: boolean
+  }
+}
+
 export interface RuntimeStationProjection extends RuntimeFact {
   station_id: string
+  physical_safety?: RuntimePhysicalSafety
   instance?: RuntimeFact
   observation?: RuntimeFact
   decision?: RuntimeDecision

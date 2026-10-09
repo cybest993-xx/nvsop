@@ -184,6 +184,9 @@ def create_app(
     app.state.settings = settings
     app.state.session_factory = factory
     app.state.monitor_listener_engine = listener_engine
+    # Long-lived monitor streams open short independent sessions; expose only the public
+    # execution gateway factory through the composition root, never an execution adapter import.
+    app.state.execution_lease_gateway_factory = execution_dependencies.lease_gateway
     # 一次性装入可执行投递器：`from_settings` 缺少 session_factory 时无法解析任务类型，
     # 所以生产路径必须先有完整 factory，不能先建半装配实例再由调用方覆盖。
     app.state.job_dispatcher = ArqJobDispatcher.from_settings(settings, session_factory=factory)

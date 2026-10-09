@@ -11,6 +11,7 @@ from uuid import UUID
 
 from factory_sop.auth.api import Caller, Permission, authorize
 from factory_sop.device.api import DeviceMonitorGateway
+from factory_sop.execution.api import StationGrant
 from factory_sop.monitor.api import HistoricalAssignmentGateway, HostOwnershipGateway
 from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.model import (
@@ -382,6 +383,68 @@ def _health_is_healthy(status: str) -> bool:
     return status == "delivering"
 
 
+HOST_SILENCE_THRESHOLD_SECONDS = 300.0
+
+
+def physical_safety_projection(
+    runtime: dict[str, object],
+    *,
+    grant: StationGrant | None,
+    last_reported_at: datetime | None,
+    now: datetime,
+    stale_after_seconds: float = HOST_SILENCE_THRESHOLD_SECONDS,
+) -> dict[str, object]:
+    """把 Center 授权与 Edge 上报新鲜度并列投影；不替 Edge 决定是否写点位。"""
+    if stale_after_seconds <= 0:
+        raise ValueError("host liveness threshold must be positive")
+    instance = runtime.get("instance")
+    instance_host = (
+        instance.get("host_id")
+        if isinstance(instance, dict) and isinstance(instance.get("host_id"), str)
+        else None
+    )
+    host_id = str(grant.holder_host_id) if grant is not None else instance_host
+    age = None if last_reported_at is None else (now - last_reported_at).total_seconds()
+    stale = last_reported_at is None or (age is not None and age > stale_after_seconds)
+    if grant is None:
+        authorization = "missing"
+        status = "failed"
+        detail = "Center 当前无物理执行权授权；不能把工位显示为可写"
+    elif grant.lease_expires_at <= now:
+        authorization = "expired"
+        status = "failed"
+        detail = "Center 记录的物理执行权已到期；Edge 写入门禁按契约停止点位写入"
+    else:
+        authorization = "active"
+        status = "stale" if stale else "protected"
+        detail = (
+            "Edge 最近状态已过期；保留最后已知授权但不显示为仍可写"
+            if stale
+            else "Center 授权有效且 Edge 最近上报未过期"
+        )
+    center: dict[str, object] = {"state": authorization}
+    if grant is not None:
+        center.update(
+            grant_id=str(grant.grant_id),
+            holder_host_id=str(grant.holder_host_id),
+            lease_expires_at=grant.lease_expires_at.isoformat(),
+            renewed_at=grant.renewed_at.isoformat(),
+        )
+    return {
+        "status": status,
+        "detail": detail,
+        "center_authorization": center,
+        "edge_status": {
+            "host_id": host_id,
+            "last_reported_at": (
+                None if last_reported_at is None else last_reported_at.isoformat()
+            ),
+            "age_seconds": age,
+            "stale": stale,
+        },
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class HostLiveness:
     """中心对一台推理机的独立存活判据（外部证人，§5.7）。
@@ -473,6 +536,7 @@ def sse_snapshot_state(
     limit: int = 100,
     boundary: datetime | None = None,
     last_event_id: str | None = None,
+    runtime_projection: tuple[dict[str, object], ...] | None = None,
 ) -> SseSnapshot:
     """读取初始投影并记录数据库序号，避免墙上时钟造成丢事件窗口。"""
     authorize(caller, Permission.MONITOR_VIEW)
@@ -545,7 +609,9 @@ def sse_snapshot_state(
         health_after, health_event_id = boundary, ""
     else:
         health_after, health_event_id = health_cursor
-    runtime_projection = monitor.runtime_projection()
+    runtime_projection = (
+        monitor.runtime_projection() if runtime_projection is None else runtime_projection
+    )
     frames = tuple(
         _sse_frame(event=kind, event_id=event_id, data=data)
         for _, kind, event_id, _, data in events

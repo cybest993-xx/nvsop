@@ -10,6 +10,12 @@ from factory_sop.execution.errors import ExecutionRefusalCode, ExecutionRefusedE
 from factory_sop.execution.model import StationGrant
 
 
+class ExecutionGrantViewGateway(Protocol):
+    """供只读运行投影读取 Center 当前物理执行权事实。"""
+
+    def current_grant(self, *, station_id: UUID) -> StationGrant | None: ...
+
+
 class ExecutionLeaseGateway(Protocol):
     """供中心配置/交权组合层建立或续期工位当前物理执行权租约。"""
 
@@ -44,6 +50,7 @@ class ExecutionLeaseGateway(Protocol):
 
 
 __all__ = [
+    "ExecutionGrantViewGateway",
     "ExecutionLeaseGateway",
     "ExecutionRefusalCode",
     "ExecutionRefusedError",

@@ -2,18 +2,26 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any, cast
+from uuid import UUID
 
 from psycopg import Connection as PsycopgConnection
 from sqlalchemy import Connection, Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from factory_sop.execution.api import ExecutionGrantViewGateway
 from factory_sop.monitor.adapters.repository import (
     MONITOR_STREAM_CHANNEL,
     PostgresMonitorRepository,
 )
 from factory_sop.monitor.model import MirroredDecision, MirroredHealth
 from factory_sop.monitor.repository import MonitorStreamSource
+from factory_sop.monitor.usecases import (
+    HOST_SILENCE_THRESHOLD_SECONDS,
+    physical_safety_projection,
+)
 
 
 def create_monitor_listener_engine(factory: sessionmaker[Session], *, limit: int) -> Engine:
@@ -31,9 +39,18 @@ def create_monitor_listener_engine(factory: sessionmaker[Session], *, limit: int
 class PostgresMonitorStreamSource(MonitorStreamSource):
     """LISTEN 连接只负责提示；事实始终从短生命周期 ORM Session 重放。"""
 
-    def __init__(self, factory: sessionmaker[Session], engine: Engine) -> None:
+    def __init__(
+        self,
+        factory: sessionmaker[Session],
+        engine: Engine,
+        *,
+        execution_gateway_factory: Callable[[Session], ExecutionGrantViewGateway] | None = None,
+        stale_after_seconds: float = HOST_SILENCE_THRESHOLD_SECONDS,
+    ) -> None:
         self._factory = factory
         self._engine = engine
+        self._execution_gateway_factory = execution_gateway_factory
+        self._stale_after_seconds = stale_after_seconds
         self._listener: Connection | None = None
 
     def open(self) -> None:
@@ -62,9 +79,40 @@ class PostgresMonitorStreamSource(MonitorStreamSource):
         return decisions, health
 
     def read_runtime_projection(self) -> tuple[dict[str, object], ...]:
-        self._ensure_listener()
         with self._factory() as session:
-            return PostgresMonitorRepository(session).runtime_projection()
+            repository = PostgresMonitorRepository(session)
+            runtime = repository.runtime_projection()
+            if self._execution_gateway_factory is None:
+                return runtime
+            gateway = self._execution_gateway_factory(session)
+            last_by_host = dict(repository.last_report_at_by_host())
+            now = datetime.now(UTC)
+            values: list[dict[str, object]] = []
+            for item in runtime:
+                station_id = UUID(cast(str, item["station_id"]))
+                grant = gateway.current_grant(station_id=station_id)
+                instance = item.get("instance")
+                instance_host = (
+                    instance.get("host_id")
+                    if isinstance(instance, dict) and isinstance(instance.get("host_id"), str)
+                    else None
+                )
+                host_id = str(grant.holder_host_id) if grant is not None else instance_host
+                values.append(
+                    {
+                        **item,
+                        "physical_safety": physical_safety_projection(
+                            item,
+                            grant=grant,
+                            last_reported_at=(
+                                None if host_id is None else last_by_host.get(host_id)
+                            ),
+                            now=now,
+                            stale_after_seconds=self._stale_after_seconds,
+                        ),
+                    }
+                )
+            return tuple(values)
 
     def wait_for_wakeup(self, *, timeout: float) -> bool:
         listener = self._ensure_listener()

@@ -1824,6 +1824,26 @@ def test_evidence_registration_signed_http_and_idempotent_reconciliation(
                 json=altered,
                 headers=_host_headers(runtime_topology, method="POST", path=path, body=body),
             )
+            foreign_station = {**body, "station_id": str(new_id())}
+            rejected_station = client.post(
+                path,
+                json=foreign_station,
+                headers=_host_headers(
+                    runtime_topology, method="POST", path=path, body=foreign_station
+                ),
+            )
+            no_material = {
+                **body,
+                "evidence_id": evidence_id + "-pending",
+                "sha256": None,
+                "size": None,
+                "reference": None,
+            }
+            rejected_pending = client.post(
+                path,
+                json=no_material,
+                headers=_host_headers(runtime_topology, method="POST", path=path, body=no_material),
+            )
         assert first.status_code == 200, first.text
         assert duplicate.status_code == 200, duplicate.text
         assert (
@@ -1838,7 +1858,17 @@ def test_evidence_registration_signed_http_and_idempotent_reconciliation(
         assert conflicting.status_code == 409
         assert unsigned.status_code == 401
         assert forged.status_code == 401
+        assert rejected_station.status_code == 409
+        assert rejected_pending.status_code == 422
         with DatabaseSession(engine) as session:
+            assert (
+                session.scalar(
+                    text("SELECT count(*) FROM evidence_evidence WHERE evidence_id = :id"),
+                    {"id": evidence_id},
+                )
+                == 1
+            )
+            assert PostgresEvidenceRepository(session).find(evidence_id + "-pending") is None
             saved = PostgresEvidenceRepository(session).find(evidence_id)
             assert saved is not None
             assert saved.registration.sha256 == "a" * 64

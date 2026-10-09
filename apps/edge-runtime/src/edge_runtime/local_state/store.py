@@ -784,7 +784,7 @@ class LocalState:
                 """
                 SELECT DISTINCT station_id
                   FROM local_evidence_queue
-                 WHERE uploaded_at IS NULL AND registered_at IS NULL
+                 WHERE registered_at IS NULL
                    AND sliced_at IS NOT NULL
                    AND covered_from <= window_from AND covered_to >= window_to
                  ORDER BY station_id

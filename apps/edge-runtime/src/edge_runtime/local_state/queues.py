@@ -736,15 +736,16 @@ class StationQueues:
             )
 
     def pending_evidence(self, *, limit: int | None = None) -> tuple[PendingEvidence, ...]:
-        """仍待中心确认引用的本机证据; 媒体不进入中心。"""
-        return self._evidence_rows("AND registered_at IS NULL", limit=limit)
+        """旧证据媒体待办的本机查询: 中心登记不改变本机文件/上传状态。"""
+        return self._evidence_rows("AND uploaded_at IS NULL", limit=limit)
 
     def evidence_ready_for_registration(
         self, *, limit: int | None = None
     ) -> tuple[PendingEvidence, ...]:
         """只返回已定稿、覆盖当前请求窗口且尚未确认的引用上报项。"""
         return self._evidence_rows(
-            "AND sliced_at IS NOT NULL AND covered_from <= window_from AND covered_to >= window_to",
+            "AND registered_at IS NULL AND sliced_at IS NOT NULL "
+            "AND covered_from <= window_from AND covered_to >= window_to",
             limit=limit,
         )
 
@@ -755,6 +756,7 @@ class StationQueues:
         不再覆盖 ``window_*`` 的已完成行; 调用方不能把旧较小片段当作新窗口已完成 (S033)。
         """
         return self._evidence_rows(
+            "AND uploaded_at IS NULL "
             "AND (sliced_at IS NULL OR covered_from > window_from OR covered_to < window_to)",
             limit=limit,
         )
@@ -767,7 +769,7 @@ class StationQueues:
                 SELECT queue_id, instance_id, anchor, window_from, window_to, attempts, last_error,
                        wall_offset, sources, media_results, covered_from, covered_to, sliced_at
                   FROM local_evidence_queue
-                 WHERE station_id = ? AND uploaded_at IS NULL {clause}
+                 WHERE station_id = ? {clause}
                  ORDER BY queue_id
                  LIMIT ?
                 """,

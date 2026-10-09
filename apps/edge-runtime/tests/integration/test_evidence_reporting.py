@@ -139,7 +139,10 @@ class RegistrationTest(unittest.TestCase):
         self.assertEqual(len(self.client.records), 2)
         self.assertEqual(len(self.client.posts), 3)
         self.assertEqual(self.worker().drain(limit=5), 0)
-        self.assertEqual(self.state.station(STATION).pending_evidence(), ())
+        self.assertEqual(len(self.client.posts), 3)
+        station = self.state.station(STATION)
+        self.assertEqual(station.evidence_ready_for_registration(), ())
+        self.assertEqual(len(station.pending_evidence()), 1)
         self.assertTrue(all(path.is_file() for path in self.files))
 
     def test_center_refusal_keeps_queue_and_registration_does_not_claim_upload(self) -> None:
@@ -148,10 +151,14 @@ class RegistrationTest(unittest.TestCase):
         self.assertEqual(self.worker().drain(limit=5), 0)
         (pending,) = self.state.station(STATION).pending_evidence()
         self.assertIn("HTTP 409", pending.last_error or "")
+        self.assertIsNotNone(pending.media_results)
+        self.assertEqual((pending.covered_from, pending.covered_to), (95.0, 105.0))
         self.assertTrue(all(path.exists() for path in self.files))
         self.client.status = 200
         self.assertEqual(self.worker().drain(limit=5), 1)
-        self.assertEqual(self.state.station(STATION).pending_evidence(), ())
+        station = self.state.station(STATION)
+        self.assertEqual(station.evidence_ready_for_registration(), ())
+        self.assertEqual(len(station.pending_evidence()), 1)
         self.assertTrue(all(path.exists() for path in self.files))
 
 

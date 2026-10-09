@@ -736,8 +736,18 @@ class StationQueues:
             )
 
     def pending_evidence(self, *, limit: int | None = None) -> tuple[PendingEvidence, ...]:
-        """只存在于本机的证据片段,按最早优先返回。"""
-        return self._evidence_rows("", limit=limit)
+        """旧证据媒体待办的本机查询: 中心登记不改变本机文件/上传状态。"""
+        return self._evidence_rows("AND uploaded_at IS NULL", limit=limit)
+
+    def evidence_ready_for_registration(
+        self, *, limit: int | None = None
+    ) -> tuple[PendingEvidence, ...]:
+        """只返回已定稿、覆盖当前请求窗口且尚未确认的引用上报项。"""
+        return self._evidence_rows(
+            "AND registered_at IS NULL AND sliced_at IS NOT NULL "
+            "AND covered_from <= window_from AND covered_to >= window_to",
+            limit=limit,
+        )
 
     def evidence_awaiting_slice(self, *, limit: int | None = None) -> tuple[PendingEvidence, ...]:
         """本机尚未产出媒体、或已有产物不再覆盖当前请求窗口的证据待办。
@@ -746,6 +756,7 @@ class StationQueues:
         不再覆盖 ``window_*`` 的已完成行; 调用方不能把旧较小片段当作新窗口已完成 (S033)。
         """
         return self._evidence_rows(
+            "AND uploaded_at IS NULL "
             "AND (sliced_at IS NULL OR covered_from > window_from OR covered_to < window_to)",
             limit=limit,
         )
@@ -758,7 +769,7 @@ class StationQueues:
                 SELECT queue_id, instance_id, anchor, window_from, window_to, attempts, last_error,
                        wall_offset, sources, media_results, covered_from, covered_to, sliced_at
                   FROM local_evidence_queue
-                 WHERE station_id = ? AND uploaded_at IS NULL {clause}
+                 WHERE station_id = ? {clause}
                  ORDER BY queue_id
                  LIMIT ?
                 """,
@@ -801,11 +812,29 @@ class StationQueues:
             self._connection.execute(
                 """
                 UPDATE local_evidence_queue
-                   SET sliced_at = ?, media_results = ?, covered_from = ?, covered_to = ?
+                   SET sliced_at = ?, media_results = ?, covered_from = ?, covered_to = ?,
+                       registered_at = NULL
                  WHERE station_id = ? AND queue_id = ?
                 """,
                 (at.seconds, media_results, covered_from, covered_to, self._station_id, queue_id),
             )
+
+    def mark_evidence_registered(
+        self, queue_id: int, *, at: HostInstant, expected_media_results: str
+    ) -> bool:
+        """全部媒体引用已由中心确认; 只完成当前定稿版本, 不确认任何媒体副本。"""
+        with self._lock:
+            result = self._connection.execute(
+                """
+                UPDATE local_evidence_queue
+                   SET registered_at = ?
+                 WHERE station_id = ? AND queue_id = ? AND registered_at IS NULL
+                   AND media_results = ?
+                   AND covered_from <= window_from AND covered_to >= window_to
+                """,
+                (at.seconds, self._station_id, queue_id, expected_media_results),
+            )
+            return result.rowcount == 1
 
     def mark_evidence_uploaded(
         self, queue_id: int, *, at: HostInstant, remote_reference: str
@@ -830,7 +859,7 @@ class StationQueues:
             )
 
     def record_evidence_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None:
-        """上传失败;行继续待上传,本地副本继续保留。"""
+        """切片或登记失败; 待办与本机媒体保持不变。"""
         with self._lock:
             self._connection.execute(
                 """

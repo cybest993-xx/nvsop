@@ -444,6 +444,9 @@ _V16 = (
     """,
 )
 
+# S034 在现行 V16 暂停迁移之后追加证据登记确认状态, 保留已部署数据库的升级序列。
+_V17 = ("ALTER TABLE local_evidence_queue ADD COLUMN registered_at REAL",)
+
 MIGRATIONS: tuple[tuple[str, ...], ...] = (
     _V1,
     _V2,
@@ -461,6 +464,7 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
     _V14,
     _V15,
     _V16,
+    _V17,
 )
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 

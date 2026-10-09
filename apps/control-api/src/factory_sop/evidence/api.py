@@ -14,6 +14,7 @@ from factory_sop.evidence.model import (
     EvidenceStatus,
 )
 from factory_sop.evidence.repository import EvidenceRepository
+from factory_sop.evidence.usecases import register_evidence
 
 
 class HostOwnershipGateway(Protocol):
@@ -32,4 +33,5 @@ __all__ = [
     "EvidenceRepository",
     "EvidenceStatus",
     "HostOwnershipGateway",
+    "register_evidence",
 ]

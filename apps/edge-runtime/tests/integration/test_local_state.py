@@ -1696,6 +1696,55 @@ class MigrationTest(unittest.TestCase):
             digest,
         )
 
+    def test_v16_pause_database_upgrades_to_v17_without_losing_evidence(self) -> None:
+        """已部署的暂停控制 V16 数据保留, 新版只追加引用登记确认字段。"""
+        with TemporaryDirectory() as directory:
+            path = str(Path(directory) / "v16.sqlite3")
+            with sqlite3.connect(path, isolation_level=None) as connection:
+                self.assertEqual(apply_migrations(connection, MIGRATIONS[:16]), 16)
+                connection.execute(
+                    "INSERT INTO local_station_judgment_control (station_id, paused) VALUES (?, 1)",
+                    (STATION,),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO local_sop_instance (
+                        station_id, instance_id, opened_at, last_observation_at, seen,
+                        expected_index, impairments, settled
+                    ) VALUES (?, 1, 1.0, 2.0, '[]', 0, '[]', '[]')
+                    """,
+                    (STATION,),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO local_evidence_queue
+                        (station_id, instance_id, anchor, window_from, window_to)
+                    VALUES (?, 1, 2.0, 1.0, 3.0)
+                    """,
+                    (STATION,),
+                )
+
+            upgraded = open_local_state(path)
+            self.assertTrue(upgraded.station(STATION).judgment_paused())
+            (evidence,) = upgraded.station(STATION).pending_evidence()
+            self.assertEqual((evidence.anchor.seconds, evidence.start.seconds), (2.0, 1.0))
+            upgraded.close()
+
+            with sqlite3.connect(path) as connection:
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 17)
+                self.assertEqual(
+                    connection.execute(
+                        "SELECT paused FROM local_station_judgment_control WHERE station_id = ?",
+                        (STATION,),
+                    ).fetchone()[0],
+                    1,
+                )
+                self.assertIsNone(
+                    connection.execute("SELECT registered_at FROM local_evidence_queue").fetchone()[
+                        0
+                    ]
+                )
+
     def test_opening_an_already_current_database_changes_nothing(self) -> None:
         with TemporaryDirectory() as directory:
             path = str(Path(directory) / "local-state.sqlite3")

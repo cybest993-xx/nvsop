@@ -73,6 +73,8 @@ from factory_sop.device.adapters.routes_stations import router as stations_route
 from factory_sop.device.api import summary as device_summary
 from factory_sop.device.errors import DeviceRefusedError
 from factory_sop.device.errors import refusal_problem as device_refusal_problem
+from factory_sop.evidence.adapters import dependencies as evidence_dependencies
+from factory_sop.evidence.adapters.routes import router as evidence_router
 from factory_sop.execution.adapters import dependencies as execution_dependencies
 from factory_sop.execution.adapters import routes as execution_routes
 from factory_sop.execution.errors import ExecutionRefusedError
@@ -240,6 +242,7 @@ def create_app(
     app.include_router(annotation_compatibility_router)
     app.include_router(job_router, prefix=API_PREFIX)
     app.include_router(monitor_router, prefix=API_PREFIX)
+    app.include_router(evidence_router, prefix=API_PREFIX)
     app.include_router(execution_routes.router, prefix=API_PREFIX)
     app.include_router(overview_router, prefix=API_PREFIX)
     # 组合根把跨模块查询和任务依赖接到各自模块的真实适配器。
@@ -258,6 +261,7 @@ def create_app(
     )
     app.dependency_overrides[template_dependencies.host_gateway] = device_dependencies.host_gateway
     app.dependency_overrides[monitor_dependencies.host_gateway] = device_dependencies.host_gateway
+    app.dependency_overrides[evidence_dependencies.host_gateway] = device_dependencies.host_gateway
     app.dependency_overrides[monitor_dependencies.device_monitor_gateway] = (
         device_dependencies.monitor_gateway
     )

@@ -92,6 +92,7 @@ make contracts
 - 安装/迁移身份 `nvsop` 需要 `CREATE EXTENSION` 权限；长期运行的中心/训练 runtime 角色不安装扩展。
 - **从 `postgres:17.2-bookworm`（Debian PG17.2）迁到 Alpine PG17 不能直接复用旧数据卷换镜像。** 顺序：先停业务写入（旧库仍可读），逻辑导出 `nvsop` 与 `training` 两库及 roles；停旧实例并**保留旧卷不覆盖**，在新卷启动 TimescalePG17 实例；恢复/收敛安装身份与 runtime roles，逻辑导入两库；核对 collation、数据与训练对象后执行迁移 0047，再切回业务。验证完成前不得删除旧卷；失败时保留旧环境以便回退。旧数据卷不保证可直接挂载，本文不宣称可直接替换。
 - 降级（`alembic downgrade`）把三张 hypertable 还原为普通表，但**不卸载** `timescaledb` 扩展（镜像预装于 template1，卸载会破坏同库其它对象）。
+- 0051 降级先逐条自动提交 `CALL remove_columnstore_policy(..., if_exists => true)` 删除三个原生压缩策略，再退出该 block，在同一事务里把已压缩 chunk 转回行存储、关闭 columnstore 并删除 `monitor_set_compression_age`。删除策略阶段非原子：降级前暂停业务写入；若该阶段已提交而后续 DDL 失败，`alembic_version` 停在 `0051` 且三个策略可能已全部/部分删除，事实行、identity、`stream_sequence` 与配置的压缩年龄保持不变。修复导致失败的对象后重复 `alembic downgrade 0050`（`if_exists` 跳过已删策略），再 `alembic upgrade head` 恢复三个策略与 configured age；不要在缺策略的 `0051` 上直接 `upgrade head`。
 - Q36 备份/恢复仍未解决；本文不宣称已有自动灾备或演练过的恢复目标。
 
 ## 中心训练素材存储

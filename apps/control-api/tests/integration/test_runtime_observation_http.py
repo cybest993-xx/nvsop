@@ -1773,3 +1773,109 @@ def test_configuration_pull_rolls_back_lease_renewal_when_request_fails(
         assert stored.request_id == acquisition_request
     finally:
         _clear_execution_grants(engine, (runtime_topology.station.id,))
+
+
+def test_evidence_registration_signed_http_and_idempotent_reconciliation(
+    engine: Engine, runtime_topology: RuntimeTopology, dataset_storage_root: Path
+) -> None:
+    """真实主机签名 HTTP + PG: 重复登记、事实冲突和伪造来源不推进中心状态。"""
+    from factory_sop.evidence.adapters.repository import PostgresEvidenceRepository
+
+    settings = settings_for(engine, storage_root=dataset_storage_root)
+    path = f"{API_PREFIX}/evidence/registrations"
+    evidence_id = f"s034-{runtime_topology.host.id}"
+    body: dict[str, object] = {
+        "evidence_id": evidence_id,
+        "host_id": str(runtime_topology.host.id),
+        "station_id": str(runtime_topology.station.id),
+        "instance_id": 31,
+        "violation_id": None,
+        "kind": "clip",
+        "origin": "automatic",
+        "anchor": 110.0,
+        "window_start": 105.0,
+        "window_end": 115.0,
+        "generation": "original",
+        "sha256": "a" * 64,
+        "size": 129,
+        "reference": "edge-evidence/camera-1.mp4",
+    }
+    try:
+        with client_for(engine, settings) as client:
+            first = client.post(
+                path,
+                json=body,
+                headers=_host_headers(runtime_topology, method="POST", path=path, body=body),
+            )
+            duplicate = client.post(
+                path,
+                json=body,
+                headers=_host_headers(runtime_topology, method="POST", path=path, body=body),
+            )
+            altered = {**body, "sha256": "b" * 64}
+            conflicting = client.post(
+                path,
+                json=altered,
+                headers=_host_headers(runtime_topology, method="POST", path=path, body=altered),
+            )
+            unsigned = client.post(path, json=body)
+            forged = client.post(
+                path,
+                json=altered,
+                headers=_host_headers(runtime_topology, method="POST", path=path, body=body),
+            )
+            foreign_station = {**body, "station_id": str(new_id())}
+            rejected_station = client.post(
+                path,
+                json=foreign_station,
+                headers=_host_headers(
+                    runtime_topology, method="POST", path=path, body=foreign_station
+                ),
+            )
+            no_material = {
+                **body,
+                "evidence_id": evidence_id + "-pending",
+                "sha256": None,
+                "size": None,
+                "reference": None,
+            }
+            rejected_pending = client.post(
+                path,
+                json=no_material,
+                headers=_host_headers(runtime_topology, method="POST", path=path, body=no_material),
+            )
+        assert first.status_code == 200, first.text
+        assert duplicate.status_code == 200, duplicate.text
+        assert (
+            first.json()
+            == duplicate.json()
+            == {
+                "accepted": True,
+                "evidence_id": evidence_id,
+                "status": "available",
+            }
+        )
+        assert conflicting.status_code == 409
+        assert unsigned.status_code == 401
+        assert forged.status_code == 401
+        assert rejected_station.status_code == 409
+        assert rejected_pending.status_code == 422
+        with DatabaseSession(engine) as session:
+            assert (
+                session.scalar(
+                    text("SELECT count(*) FROM evidence_evidence WHERE evidence_id = :id"),
+                    {"id": evidence_id},
+                )
+                == 1
+            )
+            assert PostgresEvidenceRepository(session).find(evidence_id + "-pending") is None
+            saved = PostgresEvidenceRepository(session).find(evidence_id)
+            assert saved is not None
+            assert saved.registration.sha256 == "a" * 64
+            assert saved.registration.reference == body["reference"]
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM evidence_evidence WHERE evidence_id = :id"),
+                {"id": evidence_id},
+            )

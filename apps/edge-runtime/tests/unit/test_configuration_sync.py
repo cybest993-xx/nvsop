@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import httpx2
 from nvsop_contracts import (
+    DISPOSITION_SOUND_LIGHT_OUTPUT_CAPABILITY,
     DISPOSITION_STOP_OUTPUT_CAPABILITY,
     ConfigurationBundle,
     ConfiguredStation,
@@ -310,6 +311,24 @@ class ConfigurationSyncTests(unittest.TestCase):
         self.assertEqual(first.stable_content_wire(), repeated.stable_content_wire())
         synchronizer.confirm(repeated, confirmed_at=2.0)
         self.assertEqual(self.state.configuration().confirmed(), repeated)
+
+    def test_synchronizer_accepts_sound_light_output_capability(self) -> None:
+        candidate = ConfigurationBundle(
+            host_id="host-a",
+            config_revision=1,
+            generated_at="2026-09-13T00:00:00Z",
+            stations=(),
+            required_capabilities=(DISPOSITION_SOUND_LIGHT_OUTPUT_CAPABILITY,),
+        )
+        synchronizer = ConfigurationSynchronizer(
+            puller=ScriptedPuller([candidate]),
+            store=self.state.configuration(),
+        )
+
+        result = synchronizer.synchronize(observed_at=1.0)
+
+        self.assertEqual(candidate, result.candidate)
+        self.assertIsNone(result.failure)
 
     def test_invalid_runtime_view_is_not_confirmed(self) -> None:
         candidate = ConfigurationBundle(

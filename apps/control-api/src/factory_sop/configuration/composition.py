@@ -15,8 +15,10 @@ from factory_sop.template.api import (
 )
 from nvsop_contracts import (
     DISPOSITION_POLICY_STOP,
+    DISPOSITION_SOUND_LIGHT_OUTPUT_CAPABILITY,
     DISPOSITION_STOP_OUTPUT_CAPABILITY,
     EXECUTION_LEASE_WRITE_GATE_CAPABILITY,
+    SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL,
     ConfigurationBundle,
     ExecutionLease,
 )
@@ -74,6 +76,12 @@ def configuration_for_host(
             for station in stations
         ):
             required_capabilities.add(DISPOSITION_STOP_OUTPUT_CAPABILITY)
+        if any(
+            point.direction == "output" and point.name == SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL
+            for station in stations
+            for point in station.points
+        ):
+            required_capabilities.add(DISPOSITION_SOUND_LIGHT_OUTPUT_CAPABILITY)
 
         candidate = ConfigurationBundle(
             host_id=str(topology.host_id),

@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from nvsop_contracts import (
+    SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL,
     EdgePreservation,
     Measured,
     Polled,
@@ -182,10 +183,12 @@ class RuntimeConnectorPollingTest(unittest.TestCase):
                 station_id="station-a",
                 output_dispatchers={"connector-a": dispatcher},
                 output_points={"connector-a": (OutputPoint(label="停线联锁", address="2"),)},
-                output_disposal_target=(
-                    "connector-a",
-                    OutputPoint(label="停线联锁", address="2"),
-                ),
+                output_disposal_targets={
+                    "停线联锁": (
+                        "connector-a",
+                        OutputPoint(label="停线联锁", address="2"),
+                    )
+                },
                 output_report_host_id="host-a",
                 output_write_timeout=1.0,
             )
@@ -196,6 +199,52 @@ class RuntimeConnectorPollingTest(unittest.TestCase):
             self.assertEqual(2, len(events))
             self.assertTrue(all(event.actor == "supervisor" for event in events))
             self.assertTrue(source.closed)
+            state.close()
+
+    def test_configured_sound_light_violation_uses_existing_output_dispatcher(self) -> None:
+        connector = PollingConnector()
+        events: list[WriteAttempted] = []
+        dispatcher = OutputDispatcher(
+            connector=connector,
+            ledger=InMemoryWriteLedger(),
+            diagnostics=events.append,
+        )
+        point = OutputPoint(label=SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL, address="3")
+        with tempfile.TemporaryDirectory() as temporary:
+            state = open_local_state(str(Path(temporary) / "sound-light.sqlite"))
+            supervisor = resume_station(
+                state.station("station-a"),
+                template=Template(
+                    steps=("start", "second", "third"),
+                    ordering=Ordering.ORDERED,
+                    start_signal="start",
+                ),
+                parameters=RuntimeParameters(idle_timeout=10.0, step_deadline=10.0),
+                margins=EvidenceMargins(leading=0.0, trailing=0.0),
+                disposition_policy="record",
+                sound_light_output_label=SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL,
+            )
+            source = ViolationInput()
+            station = AutonomousStation(
+                supervisor=supervisor,
+                source=source,
+                station_id="station-a",
+                output_dispatchers={"connector-a": dispatcher},
+                output_points={"connector-a": (point,)},
+                output_disposal_targets={SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL: ("connector-a", point)},
+                output_report_host_id="host-a",
+                output_write_timeout=1.0,
+            )
+
+            station.run_forever(should_stop=lambda: False)
+
+            self.assertEqual(2, len(connector.writes))
+            self.assertEqual(
+                {SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL},
+                {write[0].label for write in connector.writes if isinstance(write[0], OutputPoint)},
+            )
+            self.assertEqual(2, len(events))
+            self.assertTrue(all(event.actor == "supervisor" for event in events))
             state.close()
 
 

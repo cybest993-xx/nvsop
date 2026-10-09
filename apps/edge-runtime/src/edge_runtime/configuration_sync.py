@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from nvsop_contracts import (
+    DISPOSITION_SOUND_LIGHT_OUTPUT_CAPABILITY,
     DISPOSITION_STOP_OUTPUT_CAPABILITY,
     EXECUTION_LEASE_WRITE_GATE_CAPABILITY,
     ConfigurationBundle,
@@ -18,7 +19,11 @@ from edge_runtime.center_client import CenterClient, CenterUnreachableError
 from edge_runtime.local_state.configuration import ConfigurationFailure, LocalConfigurationStore
 
 _SUPPORTED_CONFIGURATION_CAPABILITIES: frozenset[str] = frozenset(
-    {DISPOSITION_STOP_OUTPUT_CAPABILITY, EXECUTION_LEASE_WRITE_GATE_CAPABILITY}
+    {
+        DISPOSITION_SOUND_LIGHT_OUTPUT_CAPABILITY,
+        DISPOSITION_STOP_OUTPUT_CAPABILITY,
+        EXECUTION_LEASE_WRITE_GATE_CAPABILITY,
+    }
 )
 
 

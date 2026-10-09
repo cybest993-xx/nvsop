@@ -9,7 +9,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from nvsop_contracts import (
+    DISPOSITION_SOUND_LIGHT_OUTPUT_CAPABILITY,
     DISPOSITION_STOP_OUTPUT_CAPABILITY,
+    SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL,
     ConfigurationArtifact,
     ConfigurationBundle,
     ConfigurationTemplate,
@@ -29,6 +31,7 @@ from nvsop_contracts import (
 from edge_runtime.configuration import EdgeRuntimeConfiguration, LocalIsapiConnectorConfiguration
 from edge_runtime.configuration_sync import ConfigurationPullError
 from edge_runtime.connectors.hikvision import CANDIDATE_PROFILE
+from edge_runtime.connectors.port import OutputPoint
 from edge_runtime.judgment.evidence import EvidenceMargins
 from edge_runtime.judgment.model import Ordering, RuntimeParameters, Template
 from edge_runtime.local_state.schema import migrate
@@ -243,6 +246,65 @@ class ConfirmedRuntimeConfigurationTests(unittest.TestCase):
         self.assertEqual(station.output_points_for(CONNECTOR_ID)[0].address, "2")
         self.assertEqual(result.connectors[0].revision, 6)
         self.assertIsInstance(result.connectors[0].capability, Measured)
+
+    def test_sound_light_output_target_is_optional_but_exact_when_configured(self) -> None:
+        bundle = confirmed_bundle()
+        without_sound = confirmed_runtime_configuration(
+            bundle=bundle,
+            bootstrap_stations=(local_station(),),
+            local_connectors=(local_connector(),),
+        ).stations[0]
+        self.assertIsNone(
+            without_sound.output_target_if_configured(SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL)
+        )
+
+        station = bundle.stations[0]
+        sound_point = ConfiguredPoint(
+            point_id="point-sound-light",
+            name=SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL,
+            direction="output",
+            connector_id=CONNECTOR_ID,
+            role="safety_output",
+            address="3",
+        )
+        configured = confirmed_runtime_configuration(
+            bundle=replace(
+                bundle,
+                stations=(replace(station, points=(*station.points, sound_point)),),
+                required_capabilities=tuple(
+                    sorted(
+                        (*bundle.required_capabilities, DISPOSITION_SOUND_LIGHT_OUTPUT_CAPABILITY)
+                    )
+                ),
+            ),
+            bootstrap_stations=(local_station(),),
+            local_connectors=(local_connector(),),
+        ).stations[0]
+
+        self.assertEqual(
+            (CONNECTOR_ID, OutputPoint(label=SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL, address="3")),
+            configured.output_target_if_configured(SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL),
+        )
+
+    def test_sound_light_capability_requires_a_confirmed_named_output_target(self) -> None:
+        bundle = confirmed_bundle()
+
+        with self.assertRaisesRegex(RuntimeConfigurationError, "sound-light"):
+            confirmed_runtime_configuration(
+                bundle=replace(
+                    bundle,
+                    required_capabilities=tuple(
+                        sorted(
+                            (
+                                *bundle.required_capabilities,
+                                DISPOSITION_SOUND_LIGHT_OUTPUT_CAPABILITY,
+                            )
+                        )
+                    ),
+                ),
+                bootstrap_stations=(local_station(),),
+                local_connectors=(local_connector(),),
+            )
 
     def test_multiple_backend_slices_share_one_station_state_and_connector_set(self) -> None:
         bundle = confirmed_bundle()

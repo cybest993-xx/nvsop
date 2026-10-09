@@ -19,6 +19,7 @@ from harness import (
     MemoryReactionStore,
     opening_state,
 )
+from nvsop_contracts import SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL
 
 from edge_runtime.judgment import ReasonCode, Verdict
 from edge_runtime.judgment.evidence import EvidenceMargins
@@ -159,6 +160,34 @@ class EveryInputReachesTheCoreAndCommitsDecisionsTest(unittest.TestCase):
         self.assertEqual({"停线联锁"}, {item.target_label for item in reaction.output_disposals})
         self.assertEqual({"active"}, {item.requested_state for item in reaction.output_disposals})
         self.assertEqual(2, len({item.idempotency_key for item in reaction.output_disposals}))
+
+    def test_configured_sound_light_returns_one_stable_output_intent_per_violation(self) -> None:
+        def reaction() -> Reaction:
+            supervisor = StationSupervisor(
+                store=MemoryReactionStore(),
+                state=opening_state(Ordering.ORDERED),
+                margins=MARGINS,
+                clock=FakeClock(),
+                disposition_policy="record",
+                sound_light_output_label=SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL,
+            )
+            supervisor.receive(action(STEPS[0], at=100.0))
+            return supervisor.receive(action(STEPS[2], at=101.0))
+
+        first = reaction()
+        repeated = reaction()
+
+        self.assertEqual(2, len(first.output_disposals))
+        self.assertEqual(
+            {SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL},
+            {item.target_label for item in first.output_disposals},
+        )
+        self.assertEqual({"active"}, {item.requested_state for item in first.output_disposals})
+        self.assertEqual(
+            tuple(item.idempotency_key for item in first.output_disposals),
+            tuple(item.idempotency_key for item in repeated.output_disposals),
+            "the same violation identity must survive restart without a new sound/light action",
+        )
 
     def test_multiple_normalized_events_return_the_closing_decision(
         self,

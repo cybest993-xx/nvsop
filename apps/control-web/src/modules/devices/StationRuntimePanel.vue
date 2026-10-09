@@ -24,7 +24,8 @@ const selectedViolation = ref<RuntimeViolation | null>(null)
 const selectedHint = ref('')
 const seenViolations = new Set<string>()
 const pendingDecisions = new Set<string>()
-const openedAt = Date.now()
+// 只将来源上报与中心接收相隔很短的事实视作新告警；迟到补报保持为历史归档。
+const liveReportLagMs = 30_000
 let live = false
 let active = true
 let loadRevision = 0
@@ -81,13 +82,15 @@ async function loadViolations(): Promise<void> {
   try {
     const result = await readMonitorViolations()
     if (!active || revision !== loadRevision) return
-    // 稳定归档身份去重；来源上报早于页面订阅的历史补报不弹新告警。
-    const alerts = result.items.filter(
-      (value) =>
+    const alerts = result.items.filter((value) => {
+      const lag = Date.parse(value.received_at) - Date.parse(value.reported_at)
+      return (
         !seenViolations.has(value.event_id) &&
         pendingDecisions.has(value.decision_event_id) &&
-        Date.parse(value.reported_at) >= openedAt,
-    )
+        lag >= 0 &&
+        lag <= liveReportLagMs
+      )
+    })
     violations.value = result.items
     violationsTotal.value = result.total
     for (const value of result.items) seenViolations.add(value.event_id)
@@ -125,27 +128,25 @@ async function locateViolation(value: RuntimeViolation): Promise<void> {
 
 onMounted(() => {
   if (!session.may('monitor.report.view')) return
-  void loadViolations().then(() => {
-    if (!active) return
-    closeStream = openRuntimeProjection(
-      update,
-      (value) => {
-        connected.value = value
-        hasConnected.value ||= value
-        if (!value) live = false
-      },
-      (value) => {
-        if (!live || !value.violations?.length) return
-        pendingDecisions.add(value.event_id)
-        void loadViolations()
-      },
-      () => {
-        live = true
-        // 断线补报只更新列表，不把本次连接的历史快照当成新告警。
-        void loadViolations()
-      },
-    )
-  })
+  void loadViolations()
+  closeStream = openRuntimeProjection(
+    update,
+    (value) => {
+      connected.value = value
+      hasConnected.value ||= value
+      if (!value) live = false
+    },
+    (value) => {
+      if (!live || !value.violations?.length) return
+      pendingDecisions.add(value.event_id)
+      void loadViolations()
+    },
+    () => {
+      live = true
+      // 断线补报只更新列表，不把本次连接的历史快照当成新告警。
+      void loadViolations()
+    },
+  )
 })
 onUnmounted(() => {
   active = false

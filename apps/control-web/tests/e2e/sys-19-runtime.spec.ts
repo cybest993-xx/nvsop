@@ -27,14 +27,18 @@ const frame = (value: object) => `event: runtime\ndata: ${JSON.stringify(value)}
 const decisionFrame = (value: object) =>
   `id: ${(value as { event_id: string }).event_id}\nevent: decision\ndata: ${JSON.stringify(value)}\n\n`
 const liveFrame = 'event: live\ndata: {}\n\n'
-const violation = (id: string, reportedAt = '2026-09-14T08:00:02Z') => ({
+const violation = (
+  id: string,
+  reportedAt = '2026-09-14T08:00:02Z',
+  receivedAt = '2026-10-09T08:00:00Z',
+) => ({
   event_id: `${id}#0`,
   decision_event_id: id,
   host_id: 'host-19',
   station_id: stationId,
   instance_id: 19,
   reported_at: reportedAt,
-  received_at: '2026-10-09T08:00:00Z',
+  received_at: receivedAt,
   violation: {
     reason_code: id === 'decision-19' ? 'FUTURE_REASON_19' : 'MISSED_STEP',
     detail: '来源判定已锁存',
@@ -216,8 +220,18 @@ test('SYS-23 — only live, fresh, stable events notify; reconnect and delayed r
 }) => {
   const historical = violation('decision-19')
   const freshId = 'decision-new-19'
-  const fresh = violation(freshId, new Date(Date.now() + 5_000).toISOString())
-  const delayed = violation('decision-delayed-19')
+  const now = Date.now()
+  const fresh = violation(
+    freshId,
+    new Date(now + 1_000).toISOString(),
+    new Date(now + 2_000).toISOString(),
+  )
+  // 来源判定发生于页面打开之后，但中心在很久以后才接收：只能归档，不能当作新告警。
+  const delayed = violation(
+    'decision-delayed-19',
+    new Date(now + 10_000).toISOString(),
+    new Date(now + 130_000).toISOString(),
+  )
   let reads = 0
   await standardRoutes(
     page,
@@ -260,6 +274,25 @@ test('SYS-23 — only live, fresh, stable events notify; reconnect and delayed r
   await expect(page.getByText('新上报违规：', { exact: false })).toHaveCount(1)
   await expect(page.getByText('连接中断，保留上次镜像等待恢复')).toBeVisible()
   await expect(archive).toContainText('来源判定上报')
+})
+
+test('SYS-23 — slow archive request never blocks the runtime SSE projection', async ({ page }) => {
+  let releaseArchive: (() => void) | undefined
+  await standardRoutes(page)
+  await page.route('**/api/v1/monitor/violations*', async (route) => {
+    await new Promise<void>((resolve) => {
+      releaseArchive = resolve
+    })
+    await route.fulfill({ status: 200, json: pageOf([]) })
+  })
+  await page.goto('/devices')
+  await expect(page.getByText('正在读取违规归档…')).toBeVisible()
+  try {
+    await expect(page.getByRole('region', { name: '最新判定' })).toContainText('通过')
+  } finally {
+    releaseArchive?.()
+  }
+  await expect(page.getByText('尚无已归档违规；不推断工位合规。')).toBeVisible()
 })
 
 test('SYS-23 — failure to read the archive stays visible and retry does not erase old records', async ({

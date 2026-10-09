@@ -608,6 +608,7 @@ def test_monitor_stream_route_separates_replayed_decisions_from_live_events() ->
     from factory_sop.monitor.adapters.routes import stream_monitor_events
 
     monitor = MemoryMonitor()
+    monitor.runtime = ({"station_id": str(STATION_ID), "decision": {"verdict": "pass"}},)
     mirror_decision(
         report("host:archived-decision"),
         received_at=datetime(2026, 9, 13, tzinfo=UTC),
@@ -623,17 +624,20 @@ def test_monitor_stream_route_separates_replayed_decisions_from_live_events() ->
         once=False,
     )
 
-    async def read_boundary() -> tuple[str, str]:
+    async def read_boundary() -> tuple[str, str, str]:
         iterator = aiter(response.body_iterator)
-        first = await anext(iterator)
-        second = await anext(iterator)
-        assert isinstance(first, str)
-        assert isinstance(second, str)
-        return first, second
+        decision = await anext(iterator)
+        runtime = await anext(iterator)
+        boundary = await anext(iterator)
+        assert isinstance(decision, str)
+        assert isinstance(runtime, str)
+        assert isinstance(boundary, str)
+        return decision, runtime, boundary
 
-    snapshot, live_boundary = asyncio.run(read_boundary())
-    assert "event: decision" in snapshot
-    assert "id: host:archived-decision" in snapshot
+    decision, runtime, live_boundary = asyncio.run(read_boundary())
+    assert "event: decision" in decision
+    assert "id: host:archived-decision" in decision
+    assert "event: runtime" in runtime
     assert live_boundary == "event: live\ndata: {}\n\n"
 
 

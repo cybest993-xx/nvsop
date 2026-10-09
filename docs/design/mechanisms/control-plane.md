@@ -86,6 +86,8 @@
 
 **长任务进度**：REST 轮询 `GET /api/v1/jobs/{id}`。运行观测的 SSE 展示链路已经实现：中心 [monitor SSE 路由](../../../apps/control-api/src/factory_sop/monitor/adapters/routes.py)的 `/api/v1/monitor/stream` 投影已持久化的上报事实，Web [概览页](../../../apps/control-web/src/modules/overview/OverviewView.vue)订阅该流。decision/health 各自以 PostgreSQL 提交顺序化的 `stream_sequence` 作为 durable replay cursor；浏览器的 `Last-Event-ID` 仍是事件 id，由短事务解析到该 cursor。SSE 的事实读取使用短 Session，独立 `LISTEN/NOTIFY` 连接只负责提交后唤醒，通知丢失后仍以 durable replay 为正确性来源，不引入第二消息权威。这只表示现有展示链路可用，不代表 §九 P9 整体完成。P9 中 TimescaleDB/hypertable 原生压缩等剩余验收仍按原门禁追踪，SSE 本身也不进入实时防错链路。
 
+**SSE 快照/实时边界**：长期 `/api/v1/monitor/stream` 先发送已归档的初始 decision/health/runtime 快照，再发送无 `id:` 的 `event: live` 标记，此后才发送实时增量；Web 用该标记区分重连重放与实时提示。该标记不推进 `Last-Event-ID`，不改变原事件身份与 durable replay。
+
 **SSE 授权生命周期**：建立请求时沿用普通会话认证与权限错误语义；长连接的初始快照和每个新批次发送前，由 `auth` 公开 Interface 在短 Session 内重读会话、用户状态与当前权限。周期复核不更新会话使用时间，不以保持连接延长 idle 或 absolute lifetime。注销、停用、撤权或到期后停止发送，空闲连接至迟在一个既有心跳等待周期内复核并关闭；复核故障也终止流，不继续使用旧 Caller。响应开始后的失效以关闭流表达，后续重连仍经正常认证／授权；事件身份、Last-Event-ID 和 durable replay 不变。心跳等待的实际默认值由 [SSE 用例](../../../apps/control-api/src/factory_sop/monitor/usecases.py) 拥有。
 
 **SSE 监听资源**：每个 API 进程为长订阅保留独立、有界的 PostgreSQL 监听池，不占用普通请求的业务池；在响应开始前取得配额，满额立即返回 503，不继续等待或扩大连接池。客户端断开或流异常结束时取消监听并归还配额，应用生命周期结束时释放池中连接。有限快照不占长期监听配额，事实查询仍走短业务事务；LISTEN/NOTIFY 只负责唤醒，不替代 PostgreSQL durable replay。预算由运行配置控制并设上限，为同步长流之外的普通请求保留执行余量。

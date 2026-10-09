@@ -2016,3 +2016,78 @@ class HealthQueueTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DurableLocalJudgmentPauseTest(unittest.TestCase):
+    def test_pause_survives_restart_and_resume_never_joins_old_instance(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = str(Path(directory) / "pause-state.sqlite3")
+            first = open_local_state(path)
+            station = first.station(STATION)
+            clock = FakeClock(now=ANCHOR)
+            driver = supervisor(opening_state(), clock, station)
+            driver.receive(action(STEPS[0], at=ANCHOR))
+            clock.now = ANCHOR + 1
+            driver.pause()
+            reports_before = station.pending_reports()
+            self.assertTrue(station.judgment_paused())
+            self.assertFalse(first.station(OTHER_STATION).judgment_paused())
+            first.close()
+
+            second = open_local_state(path)
+            restored_station = second.station(STATION)
+            clock = FakeClock(now=ANCHOR + 20)
+            restored = resume_station(
+                restored_station,
+                template=opening_state().template,
+                parameters=opening_state().parameters,
+                margins=MARGINS,
+                clock=clock,
+            )
+            self.assertTrue(restored.paused)
+            self.assertEqual(reports_before, restored_station.pending_reports())
+            restored.receive(action(STEPS[0], at=ANCHOR + 19))
+            self.assertIsNone(restored.state.instance)
+            restored.resume()
+            self.assertFalse(restored_station.judgment_paused())
+            restored.receive(action(STEPS[0], at=ANCHOR + 19))
+            self.assertIsNone(restored.state.instance)
+            restored.receive(action(STEPS[0], at=ANCHOR + 21))
+            instance = restored.state.instance
+            assert instance is not None
+            self.assertEqual(2, instance.instance_id)
+            self.assertEqual(reports_before, restored_station.pending_reports())
+            second.close()
+
+    def test_failed_pause_transaction_retains_uninterrupted_state_and_reports(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = str(Path(directory) / "pause-failure.sqlite3")
+            database = open_local_state(path)
+            station = database.station(STATION)
+            clock = FakeClock(now=ANCHOR)
+            driver = supervisor(opening_state(), clock, station)
+            driver.receive(action(STEPS[0], at=ANCHOR))
+            before = station.pending_reports()
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    """
+                    CREATE TRIGGER reject_pause BEFORE INSERT
+                    ON local_station_judgment_control BEGIN
+                        SELECT RAISE(ABORT, 'pause failed');
+                    END
+                    """
+                )
+            clock.now = ANCHOR + 1
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "pause failed"):
+                driver.pause()
+            self.assertFalse(driver.paused)
+            instance = driver.state.instance
+            assert instance is not None
+            self.assertEqual(1, instance.instance_id)
+            self.assertFalse(station.judgment_paused())
+            self.assertEqual(before, station.pending_reports())
+            with sqlite3.connect(path) as connection:
+                connection.execute("DROP TRIGGER reject_pause")
+            driver.pause()
+            self.assertTrue(station.judgment_paused())
+            database.close()

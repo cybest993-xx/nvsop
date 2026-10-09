@@ -147,6 +147,10 @@ class Normalizer:
         self._anchor: float | None = None
         self._stream: StreamHealth = StreamHealth.HEALTHY
 
+    def reset_observation_anchor(self) -> None:
+        """为恢复后的新观测建立锚点, 保留仍然有效的流健康事实。"""
+        self._anchor = None
+
     @property
     def stream_health(self) -> StreamHealth:
         """The stream's state as the last health event left it.

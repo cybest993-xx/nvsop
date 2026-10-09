@@ -8,17 +8,19 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import Connection, Engine, MetaData, Table, create_engine, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 from test_monitor_streaming import _decision, _health, _observation
 
@@ -41,6 +43,92 @@ IDENTITIES = (
 )
 LEGACY_RECEIVED_AT = datetime(2026, 9, 24, tzinfo=UTC)
 _LegacyRow = ReportedDecisionRow | ReportedHealthRow | ReportedObservationRow
+
+# 原生 job advisory 的 locktag field4；TimescaleDB 2.22.1 用它避免与用户 advisory 锁冲突。
+_NATIVE_JOB_ADVISORY_FIELD4 = 29749
+_HEALTH_FACT = "monitor_reported_health"
+
+
+def _health_compression_job_and_chunk(engine: Engine) -> tuple[int, str]:
+    """取 health 原生压缩 job 与其已存在 chunk；两者都由 0051/0047 拥有。"""
+    with engine.connect() as connection:
+        job_id = connection.scalar(
+            text(
+                "SELECT job_id FROM timescaledb_information.jobs "
+                "WHERE proc_name = 'policy_compression' AND hypertable_name = :fact"
+            ),
+            {"fact": _HEALTH_FACT},
+        )
+        chunk = connection.scalar(
+            text(
+                "SELECT chunk_schema || '.' || chunk_name FROM timescaledb_information.chunks "
+                "WHERE hypertable_name = :fact ORDER BY range_start LIMIT 1"
+            ),
+            {"fact": _HEALTH_FACT},
+        )
+    assert job_id is not None, "health compression policy job missing"
+    assert chunk is not None, "health chunk missing"
+    return int(job_id), str(chunk)
+
+
+def _health_native_advisory_holders(engine: Engine, job_id: int) -> list[int]:
+    """pg_locks 中持该 job 原生 advisory 的 pid；field4 落在 objsubid 列。"""
+    with engine.connect() as connection:
+        return [
+            int(pid)
+            for pid in connection.execute(
+                text(
+                    "SELECT pid FROM pg_locks WHERE locktype = 'advisory' "
+                    "AND classid = :job AND objid = 0 AND objsubid = :field4"
+                ),
+                {"job": job_id, "field4": _NATIVE_JOB_ADVISORY_FIELD4},
+            ).scalars()
+        ]
+
+
+def _wait_for_blocked_health_worker(
+    engine: Engine, job_id: int, chunk: str, *, timeout: float = 30.0
+) -> None:
+    """有界等待真实 scheduler 启动的 health worker 持 job advisory 且阻塞在该 chunk。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        holders = _health_native_advisory_holders(engine, job_id)
+        if holders:
+            with engine.connect() as connection:
+                waiting = connection.scalar(
+                    text(
+                        "SELECT count(*) FROM pg_locks WHERE NOT granted "
+                        "AND pid = ANY(:pids) AND relation = CAST(:chunk AS regclass)"
+                    ),
+                    {"pids": holders, "chunk": chunk},
+                )
+            if waiting:
+                return
+        time.sleep(0.1)
+    pytest.fail(
+        "health native compression worker did not hold its job advisory while waiting on the chunk"
+    )
+
+
+def _dispose_failed_migration_engine(error: BaseException) -> None:
+    """env.py 在迁移抛错时会跳过 engine.dispose()，其连接池连接不随 GC 关闭；
+    从异常栈帧取回该 Engine 并显式释放，避免 teardown 的 DROP DATABASE 被它占用。"""
+    traceback = error.__traceback__
+    while traceback is not None:
+        candidate = traceback.tb_frame.f_locals.get("engine")
+        if isinstance(candidate, Engine):
+            candidate.dispose()
+        traceback = traceback.tb_next
+
+
+def _wait_for_advisory_release(engine: Engine, job_id: int, *, timeout: float = 30.0) -> bool:
+    """有界等待 worker 退出并释放 job advisory，避免 teardown 时仍有 session 占用数据库。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _health_native_advisory_holders(engine, job_id):
+            return True
+        time.sleep(0.1)
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +179,30 @@ def _hypertables(engine: Engine) -> set[str]:
                 text("SELECT hypertable_name FROM timescaledb_information.hypertables")
             ).scalars()
         )
+
+
+def _monitor_snapshot(engine: Engine) -> tuple[dict[str, tuple[tuple[object, ...], ...]], int]:
+    """合成数据快照：三张事实表/身份表的全部行与生效的压缩年龄；失败降级与重放后须逐字一致。"""
+    with engine.connect() as connection:
+        rows = {
+            table: tuple(
+                tuple(row)
+                for row in connection.execute(text(f"SELECT * FROM {table} ORDER BY event_id"))
+            )
+            for table in (*FACTS, *IDENTITIES)
+        }
+        stored_age = connection.scalar(
+            text(
+                "SELECT (policy -> 'record_compression_age' ->> 'seconds')::integer "
+                "FROM retention_policy WHERE singleton = 1"
+            )
+        )
+    age = (
+        DEFAULT_RETENTION_POLICY.record_compression_age.seconds
+        if stored_age is None
+        else int(stored_age)
+    )
+    return rows, cast(int, age)
 
 
 @pytest.fixture
@@ -337,6 +449,119 @@ def test_native_policies_use_existing_configured_age_on_upgrade(
         ).all()
     assert {job.hypertable_name for job in jobs} == set(FACTS)
     assert all(job.age == timedelta(days=2) for job in jobs)
+
+
+def test_downgrade_does_not_deadlock_against_running_native_compression(
+    migration: MigrationFixture,
+) -> None:
+    """CI 37884171294：真实 scheduler 启动的 health worker 持 job advisory 等 chunk 时，降级删策略
+    不得形成 advisory↔bgw_job_stat 死锁。旧实现同一事务连续 remove 会稳定复现该死锁。"""
+    engine, config = migration.engine, migration.configuration
+    job_id, chunk = _health_compression_job_and_chunk(engine)
+
+    # 持 health chunk 的 ACCESS EXCLUSIVE，使真实 worker 在压缩该 chunk 前停住，
+    # 并持 native job advisory。
+    locker = create_engine(engine.url)
+    lock_connection = locker.connect()
+    lock_transaction = lock_connection.begin()
+    lock_connection.execute(text(f"LOCK TABLE {chunk} IN ACCESS EXCLUSIVE MODE"))
+    try:
+        with engine.connect() as connection:
+            connection = connection.execution_options(isolation_level="AUTOCOMMIT")
+            connection.execute(text("SELECT alter_job(:job, next_start => now())"), {"job": job_id})
+            # alter_job 只改 catalog；SIGHUP 唤醒 scheduler 重读 next_start 并立即启动真实 worker。
+            connection.execute(text("SELECT pg_reload_conf()"))
+        _wait_for_blocked_health_worker(engine, job_id, chunk)
+        command.downgrade(config, "0050")
+    finally:
+        if lock_transaction.is_active:
+            lock_transaction.rollback()
+        lock_connection.close()
+        locker.dispose()
+        # best-effort 让被取消的 worker 收尾退出，不掩盖真正的失败（红例仍会抛 DeadlockDetected）。
+        _wait_for_advisory_release(engine, job_id)
+
+    assert _wait_for_advisory_release(engine, job_id), (
+        "health worker did not release its job advisory"
+    )
+    with engine.connect() as connection:
+        assert (
+            connection.scalar(
+                text("SELECT count(*) FROM timescaledb_information.jobs WHERE job_id = :job"),
+                {"job": job_id},
+            )
+            == 0
+        )
+
+
+def test_downgrade_replays_after_ddl_failure_with_partial_policy_removal(
+    migration: MigrationFixture,
+) -> None:
+    """失败契约：删策略阶段非原子、DDL 阶段单事务。先经公开策略仓储写入非默认 2 天压缩年龄，再用真实
+    SQL 依赖让 DDL 阶段的 DROP FUNCTION 失败：三策略删除已提交、revision 停 0051，事实行/身份行与
+    该非默认年龄逐字保留；修复依赖后重复 downgrade 0050 成功，再 upgrade head 恢复该年龄。"""
+    from factory_sop.retention.adapters.repository import PostgresRetentionPolicyRepository
+    from factory_sop.retention.api import RetentionMode, RetentionPolicyState, RetentionRule
+
+    engine, config = migration.engine, migration.configuration
+    # 先降到 0052：把 0051 降级回归起点固定在 0052，避免 0053 正常 drop 决策列混入保留断言。
+    command.downgrade(config, "0052")
+    selected = replace(
+        DEFAULT_RETENTION_POLICY,
+        record_compression_age=RetentionRule(RetentionMode.DURATION, 2 * 24 * 60 * 60),
+    )
+    with Session(engine) as session:
+        assert PostgresRetentionPolicyRepository(session).replace_if_current(
+            expected_revision=0, value=RetentionPolicyState(selected, 1)
+        )
+        session.commit()
+    before = _monitor_snapshot(engine)
+    assert before[1] == selected.record_compression_age.seconds
+    assert before[1] != DEFAULT_RETENTION_POLICY.record_compression_age.seconds
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE VIEW monitor_compression_age_probe AS "
+                "SELECT monitor_set_compression_age(1) IS NULL AS age_probe"
+            )
+        )
+    with pytest.raises(DBAPIError, match="depend") as caught:
+        command.downgrade(config, "0050")
+    _dispose_failed_migration_engine(caught.value)
+
+    # 删策略阶段已提交，DDL 阶段回滚：revision 停 0051、三策略缺失，事实/identity/age 逐行保留。
+    with engine.connect() as connection:
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0051"
+        assert (
+            connection.scalar(
+                text(
+                    "SELECT count(*) FROM timescaledb_information.jobs "
+                    "WHERE proc_name = 'policy_compression'"
+                )
+            )
+            == 0
+        )
+    assert _monitor_snapshot(engine) == before
+
+    # 修复依赖后重复 downgrade 0050：if_exists 跳过已删策略，DDL 成功，数据保留。
+    with engine.begin() as connection:
+        connection.execute(text("DROP VIEW monitor_compression_age_probe"))
+    command.downgrade(config, "0050")
+    with engine.connect() as connection:
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0050"
+    assert _monitor_snapshot(engine) == before
+
+    # 再 upgrade head：三策略恢复且沿用 configured age。
+    command.upgrade(config, "head")
+    with engine.connect() as connection:
+        jobs = connection.execute(
+            text(
+                "SELECT hypertable_name, CAST(config ->> 'compress_after' AS interval) AS age "
+                "FROM timescaledb_information.jobs WHERE proc_name = 'policy_compression'"
+            )
+        ).all()
+    assert {job.hypertable_name for job in jobs} == set(FACTS)
+    assert all(job.age.total_seconds() == before[1] for job in jobs)
 
 
 def test_cross_partition_duplicate_and_wrong_sequence_are_refused(

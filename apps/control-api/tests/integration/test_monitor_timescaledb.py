@@ -493,11 +493,25 @@ def test_downgrade_does_not_deadlock_against_running_native_compression(
 def test_downgrade_replays_after_ddl_failure_with_partial_policy_removal(
     migration: MigrationFixture,
 ) -> None:
-    """失败契约：删策略阶段非原子、DDL 阶段单事务。用真实 SQL 依赖让 DDL 阶段的 DROP FUNCTION 失败：
-    三策略删除已提交、revision 停 0051，三张事实表/身份表全部行与配置的压缩年龄逐字保留；修复依赖后
-    重复 downgrade 0050 成功，再 upgrade head 恢复 configured age。"""
+    """失败契约：删策略阶段非原子、DDL 阶段单事务。先经公开策略仓储写入非默认 2 天压缩年龄，再用真实
+    SQL 依赖让 DDL 阶段的 DROP FUNCTION 失败：三策略删除已提交、revision 停 0051，事实行/身份行与
+    该非默认年龄逐字保留；修复依赖后重复 downgrade 0050 成功，再 upgrade head 恢复该年龄。"""
+    from factory_sop.retention.adapters.repository import PostgresRetentionPolicyRepository
+    from factory_sop.retention.api import RetentionMode, RetentionPolicyState, RetentionRule
+
     engine, config = migration.engine, migration.configuration
+    selected = replace(
+        DEFAULT_RETENTION_POLICY,
+        record_compression_age=RetentionRule(RetentionMode.DURATION, 2 * 24 * 60 * 60),
+    )
+    with Session(engine) as session:
+        assert PostgresRetentionPolicyRepository(session).replace_if_current(
+            expected_revision=0, value=RetentionPolicyState(selected, 1)
+        )
+        session.commit()
     before = _monitor_snapshot(engine)
+    assert before[1] == selected.record_compression_age.seconds
+    assert before[1] != DEFAULT_RETENTION_POLICY.record_compression_age.seconds
     with engine.begin() as connection:
         connection.execute(
             text(
@@ -541,10 +555,7 @@ def test_downgrade_replays_after_ddl_failure_with_partial_policy_removal(
             )
         ).all()
     assert {job.hypertable_name for job in jobs} == set(FACTS)
-    assert all(
-        job.age.total_seconds() == DEFAULT_RETENTION_POLICY.record_compression_age.seconds
-        for job in jobs
-    )
+    assert all(job.age.total_seconds() == before[1] for job in jobs)
 
 
 def test_cross_partition_duplicate_and_wrong_sequence_are_refused(

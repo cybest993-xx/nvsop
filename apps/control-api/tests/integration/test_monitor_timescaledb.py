@@ -12,13 +12,12 @@ from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
 from uuid import uuid4
 
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Connection, Engine, Table, create_engine, text
+from sqlalchemy import Connection, Engine, MetaData, Table, create_engine, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from test_monitor_streaming import _decision, _health, _observation
@@ -71,7 +70,8 @@ def _legacy_row(kind: str, event_id: str, offset: int) -> _LegacyRow:
 
 def _legacy_insert(connection: Connection, row: _LegacyRow) -> int:
     """写进 0046 schema；序号由库的 Identity 生成并取回。"""
-    table = cast(Table, row.__table__)
+    # The 0046 database, not the current ORM model, owns historical insert columns.
+    table = Table(row.__tablename__, MetaData(), autoload_with=connection)
     values = {
         column.key: getattr(row, column.key)
         for column in table.columns
@@ -183,6 +183,9 @@ def test_owner_migration_preserves_rows_identity_and_hypertables(
     assert tuple(decisions[i].stream_sequence for i in ids["decision"]) == sequences["decision"]
     assert tuple(health[i].stream_sequence for i in ids["health"]) == sequences["health"]
     assert all(decisions[i].report == _decision(i).report for i in ids["decision"])
+    assert all(
+        decisions[i].latched_at is None and not decisions[i].realtime for i in ids["decision"]
+    )
     assert all(health[i].report == _health(i).report for i in ids["health"])
     observations_by_id = {value.report.event_id: value.report for value in observations}
     assert all(observations_by_id[i] == _observation(i).report for i in ids["observation"])

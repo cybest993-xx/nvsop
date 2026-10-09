@@ -53,7 +53,7 @@ if 证据覆盖不足 or 流不健康 or 推理不健康 or 时间未对齐:
 
 判定与该不变量都在推理机的判定核心内实现（[ADR-0005](../../adr/0005-judgment-runs-inside-the-inference-host.md)），因为有效性所需的第一手信号在本机 pipeline 回调里（§2.4）。
 
-不可判定原因码（10）：`STREAM_LOST`、`INFERENCE_BACKEND_UNREACHABLE`、`INFERENCE_TIMEOUT`、`TIMESTAMP_DISCONTINUITY`、`CHUNK_BACKLOG_EXCEEDED`、`ACTION_ID_UNKNOWN`（VLM 输出动作号不在模板声明内）、`INFERENCE_HOST_DOWN`、`RUN_INTERRUPTED`（配置切换中止 / 进程重启）、`IO_SIGNAL_LOST`（模板依赖的输入点位不可达）、`IO_TIME_UNALIGNED`（外部信号与视频时间轴对齐偏差超阈值，§5.8）。
+不可判定原因码（10）：`STREAM_LOST`、`INFERENCE_BACKEND_UNREACHABLE`、`INFERENCE_TIMEOUT`、`TIMESTAMP_DISCONTINUITY`、`CHUNK_BACKLOG_EXCEEDED`、`ACTION_ID_UNKNOWN`（VLM 输出动作号不在模板声明内）、`INFERENCE_HOST_DOWN`、`RUN_INTERRUPTED`（配置切换 / 进程重启 / 本地暂停 / 显式终止，见 §5.18）、`IO_SIGNAL_LOST`（模板依赖的输入点位不可达）、`IO_TIME_UNALIGNED`（外部信号与视频时间轴对齐偏差超阈值，§5.8）。
 
 不通过原因码（4）：`MISSED_STEP`、`WRONG_STEP`、`OUT_OF_ORDER`、`DEADLINE_EXCEEDED`。
 

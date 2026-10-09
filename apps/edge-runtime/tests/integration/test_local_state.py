@@ -2091,3 +2091,94 @@ class DurableLocalJudgmentPauseTest(unittest.TestCase):
             driver.pause()
             self.assertTrue(station.judgment_paused())
             database.close()
+
+
+class ExplicitLocalTerminationDurabilityTest(unittest.TestCase):
+    def test_terminal_decision_report_is_once_and_latched_violation_survives_reopen(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = str(Path(directory) / "termination.sqlite")
+            database = open_local_state(path)
+            owner = database.station(STATION)
+            clock = FakeClock(now=ANCHOR)
+            driver = supervisor(opening_state(), clock, owner)
+            driver.receive(action(STEPS[0], at=ANCHOR))
+            driver.receive(action(STEPS[2], at=ANCHOR + 1.0))
+            violations = owner.latched_violations(instance_id=1)
+            evidence = owner.pending_evidence()
+            self.assertTrue(violations)
+            self.assertTrue(evidence)
+
+            clock.now = ANCHOR + 2.0
+            closing = driver.terminate_instance()
+            (decision,) = closing.decisions
+            self.assertEqual(Verdict.INDETERMINATE, decision.verdict)
+            self.assertEqual((ReasonCode.RUN_INTERRUPTED,), decision.reasons)
+            self.assertEqual((), decision.violations)
+            self.assertIs(Lifecycle.CLOSED_BY_RUN_INTERRUPTION, decision.lifecycle)
+            reports = owner.pending_reports()
+            self.assertEqual(decision, reports[-1].decision)
+            self.assertEqual(violations, owner.latched_violations(instance_id=1))
+            closed_evidence = owner.pending_evidence()
+            self.assertEqual(evidence, closed_evidence[: len(evidence)])
+            self.assertEqual(len(evidence) + 1, len(closed_evidence))
+            self.assertEqual(HostInstant(ANCHOR + 2.0), closed_evidence[-1].anchor)
+            self.assertEqual((), driver.terminate_instance().decisions)
+            self.assertEqual(reports, owner.pending_reports())
+            self.assertEqual(closed_evidence, owner.pending_evidence())
+            database.close()
+
+            reopened = open_local_state(path)
+            owner = reopened.station(STATION)
+            restored = resume_station(
+                owner,
+                template=opening_state().template,
+                parameters=opening_state().parameters,
+                margins=MARGINS,
+                clock=FakeClock(now=ANCHOR + 10.0),
+            )
+            self.assertIsNone(restored.state.instance)
+            self.assertEqual(reports, owner.pending_reports())
+            self.assertEqual(violations, owner.latched_violations(instance_id=1))
+            self.assertEqual(closed_evidence, owner.pending_evidence())
+            self.assertEqual((), restored.terminate_instance().decisions)
+            self.assertEqual(reports, owner.pending_reports())
+            restored.receive(action(STEPS[0], at=ANCHOR + 11.0))
+            instance = restored.state.instance
+            assert instance is not None
+            self.assertEqual(2, instance.instance_id)
+            reopened.close()
+
+    def test_failed_termination_commit_leaves_instance_and_report_unchanged(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = str(Path(directory) / "termination-failure.sqlite")
+            database = open_local_state(path)
+            owner = database.station(STATION)
+            clock = FakeClock(now=ANCHOR)
+            driver = supervisor(opening_state(), clock, owner)
+            driver.receive(action(STEPS[0], at=ANCHOR))
+            before_state = driver.state
+            before_report = owner.pending_reports()
+
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    """
+                    CREATE TRIGGER reject_terminal_decision BEFORE INSERT
+                    ON local_decision BEGIN
+                        SELECT RAISE(ABORT, 'terminal decision refused');
+                    END
+                    """
+                )
+            clock.now = ANCHOR + 1.0
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "terminal decision refused"):
+                driver.terminate_instance()
+            self.assertEqual(before_state, driver.state)
+            self.assertEqual(before_report, owner.pending_reports())
+            self.assertEqual((), owner.pending_evidence())
+
+            with sqlite3.connect(path) as connection:
+                connection.execute("DROP TRIGGER reject_terminal_decision")
+            result = driver.terminate_instance()
+            self.assertEqual((ReasonCode.RUN_INTERRUPTED,), result.decisions[0].reasons)
+            self.assertEqual(result.decisions[0], owner.pending_reports()[-1].decision)
+            self.assertEqual((), driver.terminate_instance().decisions)
+            database.close()

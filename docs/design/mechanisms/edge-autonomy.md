@@ -53,6 +53,8 @@ MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU �
 
 **工位判定暂停与恢复（S026）**：推理机本机 `AutonomousStation.pause_judgment()` / `resume_judgment()` 经 `StationSupervisor` 执行；`judgment_paused` 直接暴露状态。暂停把在飞实例按 `RUN_INTERRUPTED` 结案为不可判定，并与本工位暂停状态同一 SQLite 事务持久化；不造正常判定，不撤销已锁存违规、证据或上报积压。暂停期间继续处理流健康诊断，但忽略判定观测与计时器；恢复只接受新主机单调时刻之后的观测，不拼接旧实例。重复暂停/恢复不产生重复判定或重复上报，机器重启时保持暂停状态，中心不可达不影响本地命令。本票不改变终止实例或物理点位处置策略。
 
+**本地实例终止（S027）**：推理机本机 `AutonomousStation.terminate_current_instance()` 进入 `StationSupervisor.terminate_instance()`，复用既有 `RunInterrupted` 判定事件，将当前在飞实例一次性持久结案为 `INDETERMINATE / RUN_INTERRUPTED / CLOSED_BY_RUN_INTERRUPTION`，判定和报告在同一事务内冻结；操作不是制造正常或违规结论。没有活动实例时返回空 `Reaction` 表示无需结案，重复终止不产生新的报告或处置。终止后的排队旧观测不会重新打开实例；只有终止时刻之后的模板声明开始信号才能新开一个不同的实例。旧违规和待办证据继续保留，结案证据请求只新增一次、上报积压不丢失，本地终止不依赖 Center，不改变暂停状态或物理点位处置。
+
 **中心链路的失败不停止判定。** 命令领取与配置同步线程出现普通异常（网络故障或代码缺陷）时记录 `edge.center_worker.failed` 并按指数退避重启；上报线程记录 `edge.report_flush.failed` 并按固定间隔重试；候选配置解析失败记录为应用失败。工位继续判定。工位与本地状态的未预期异常（包括记录配置应用失败时本地配置库的 SQLite 错误）仍结束运行周期并让进程退出，由进程守护重启后从本机状态恢复（[部署配置](../../deployment/configuration.md)）。
 
 **配置消费者一起切换。** 工位循环、实时连接器视图与委托命令循环由同一活动配置装配；旧周期的线程退出后，才替换整个 `RuntimeComposition` 并持久确认。命令探测使用活动连接器的 revision、类型和端点，中心已领取但目标不再匹配的命令仍明确拒绝。候选命令装配失败时不前移 durable confirmed，恢复旧配置的消费者；本地确认失败时恢复旧视图并结束本轮，不启动候选命令循环。上报对账与媒体保留各自的既有生命周期，不纳入通用配置同步框架。

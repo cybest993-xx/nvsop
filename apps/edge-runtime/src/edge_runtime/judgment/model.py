@@ -168,10 +168,9 @@ class ValidityRestored:
 
 @dataclass(frozen=True, slots=True)
 class RunInterrupted:
-    """A configuration switch or a process restart ended this run.
+    """运行因配置切换、重启、本地暂停或显式终止而中断。
 
-    In-flight instances are concluded as indeterminate rather than carried across, so one
-    maintenance action does not manufacture a violation.
+    在飞实例只结案为不可判定, 不续接也不制造新的违规。
     """
 
     at: HostInstant

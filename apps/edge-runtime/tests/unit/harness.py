@@ -132,6 +132,7 @@ class MemoryReactionStore:
         self.report_provenance: list[Mapping[int, tuple[BackendReportContext, ...] | None]] = []
         self.observations: list[dict[str, object]] = []
         self.health: list[dict[str, object]] = []
+        self.paused = False
 
     def commit(
         self,
@@ -144,10 +145,13 @@ class MemoryReactionStore:
         latched_at: str,
         latched_monotonic: HostInstant,
         disposals: Sequence[LocalDisposalRequest] = (),
+        pause_to: bool | None = None,
     ) -> tuple[LocalDisposalIntent, ...]:
         del disposals
         self.reactions.append((state, tuple(decisions), tuple(evidence), tuple(closed_instances)))
         self.report_provenance.append(dict(report_provenance))
+        if pause_to is not None:
+            self.paused = pause_to
         return ()
 
     def pending_disposals(self) -> tuple[LocalDisposalIntent, ...]:

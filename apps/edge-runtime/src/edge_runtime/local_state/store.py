@@ -81,6 +81,7 @@ class ReactionStore(Protocol):
         latched_at: str,
         latched_monotonic: HostInstant,
         disposals: Sequence[LocalDisposalRequest] = (),
+        pause_to: bool | None = None,
     ) -> tuple[LocalDisposalIntent, ...]: ...
 
     def pending_disposals(self) -> tuple[LocalDisposalIntent, ...]: ...
@@ -185,6 +186,7 @@ class StationStore(StationQueues):
         latched_at: str,
         latched_monotonic: HostInstant,
         disposals: Sequence[LocalDisposalRequest] = (),
+        pause_to: bool | None = None,
     ) -> tuple[LocalDisposalIntent, ...]:
         """持久化一次反应及其处置意图;副作用在提交后执行。"""
         report_enqueued = False
@@ -234,6 +236,16 @@ class StationStore(StationQueues):
                         created.append(intent)
                 for clip in evidence:
                     self._enqueue_evidence(clip)
+                if pause_to is not None:
+                    self._connection.execute(
+                        """
+                        INSERT INTO local_station_judgment_control (station_id, paused)
+                        VALUES (?, ?)
+                        ON CONFLICT (station_id) DO UPDATE SET paused=excluded.paused
+                            WHERE paused != excluded.paused
+                        """,
+                        (self._station_id, int(pause_to)),
+                    )
                 self._connection.execute("COMMIT")
             except Exception:
                 if self._connection.in_transaction:
@@ -666,6 +678,15 @@ class StationStore(StationQueues):
         ):
             raise ValueError("stored backend report provenance is not sorted")
         return result
+
+    def judgment_paused(self) -> bool:
+        """返回经本地事务确认的工位暂停事实; 无记录的工位照常运行。"""
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT paused FROM local_station_judgment_control WHERE station_id=?",
+                (self._station_id,),
+            ).fetchone()
+        return row is not None and bool(row[0])
 
     def resume(self, template: Template, parameters: RuntimeParameters) -> JudgmentState:
         """恢复工位启动时的核心状态。

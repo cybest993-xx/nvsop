@@ -89,6 +89,7 @@ class PostgresMonitorRepository(MonitorRepository):
 
     def upsert_execution_authority(self, value: MirroredExecutionAuthority) -> bool:
         row = ReportedExecutionAuthorityRow.from_domain(value)
+        self._acquire_execution_authority_lock(row.station_id, row.host_id)
         existing = self._session.get(
             ReportedExecutionAuthorityRow,
             {"station_id": row.station_id, "host_id": row.host_id},
@@ -527,6 +528,12 @@ class PostgresMonitorRepository(MonitorRepository):
         return tuple(
             {"station_id": station_id, **by_station[station_id]}
             for station_id in sorted(by_station)
+        )
+
+    def _acquire_execution_authority_lock(self, station_id: str, host_id: str) -> None:
+        key = f"monitor-execution-authority:{station_id}:{host_id}"
+        self._session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": key}
         )
 
     def _acquire_stream_lock(self, key: int) -> None:

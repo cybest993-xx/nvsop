@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import cast
 
 REPORT_CONTRACT_VERSION = 1
@@ -442,6 +443,12 @@ class ReportedExecutionAuthority:
                 not isinstance(optional_value, str) or not optional_value
             ):
                 raise ValueError(f"{name} must be a non-empty string or null")
+        try:
+            reported_at = datetime.fromisoformat(self.reported_at.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ValueError("reported_at must be an ISO-8601 timestamp") from error
+        if reported_at.tzinfo is None:
+            raise ValueError("reported_at must include a timezone")
 
     def to_wire(self) -> dict[str, object]:
         return {

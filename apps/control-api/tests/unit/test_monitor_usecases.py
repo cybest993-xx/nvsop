@@ -1323,6 +1323,7 @@ def _edge_authority(
     now: datetime,
     write_state: str = "enabled",
     authority_state: str = "active",
+    grant_matches: bool = True,
     received_delta: timedelta = timedelta(seconds=10),
     detail: str | None = None,
 ) -> MirroredExecutionAuthority:
@@ -1335,10 +1336,14 @@ def _edge_authority(
             write_state=write_state,
             reason_code="write_stopped" if write_state == "stopped" else None,
             detail=detail,
-            grant_id=None if grant is None else str(grant.grant_id),
-            holder_host_id=None if grant is None else str(grant.holder_host_id),
-            lease_expires_at=None if grant is None else grant.lease_expires_at.isoformat(),
-            renewed_at=None if grant is None else grant.renewed_at.isoformat(),
+            grant_id=None if grant is None or not grant_matches else str(grant.grant_id),
+            holder_host_id=(
+                None if grant is None or not grant_matches else str(grant.holder_host_id)
+            ),
+            lease_expires_at=(
+                None if grant is None or not grant_matches else grant.lease_expires_at.isoformat()
+            ),
+            renewed_at=None if grant is None or not grant_matches else grant.renewed_at.isoformat(),
             reported_at=(now - received_delta).isoformat(),
         ),
         received_at=now - received_delta,
@@ -1388,6 +1393,8 @@ def test_physical_safety_projection_distinguishes_center_expiry_and_edge_stop() 
             center=active_center,
             now=now,
             write_state="stopped",
+            authority_state="missing",
+            grant_matches=False,
             detail="工位已停止写入",
         ),
         now=now,

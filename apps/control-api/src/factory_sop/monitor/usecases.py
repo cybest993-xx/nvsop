@@ -496,14 +496,14 @@ def physical_safety_projection(
         report = edge.report
         expected_holder = None if grant is None else str(grant.holder_host_id)
         expected_grant = None if grant is None else str(grant.grant_id)
-        if (
+        if report.write_state == "stopped":
+            status, detail = "failed", report.detail or "Edge 已停止物理写入"
+        elif (
             report.host_id != expected_holder
             or report.grant_id != expected_grant
             or report.holder_host_id != expected_holder
         ):
             status, detail = "stale", "Center 与 Edge 执行权事实尚未收敛；不显示为仍可写"
-        elif report.write_state == "stopped":
-            status, detail = "failed", report.detail or "Edge 已停止物理写入"
         elif report.write_state != "enabled" or report.authority_state != "active":
             status, detail = "unknown", "Edge 返回未识别的执行权/写入状态；不显示为仍可写"
         else:

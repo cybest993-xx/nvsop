@@ -508,6 +508,10 @@ class ReportContractTests(unittest.TestCase):
         self.assertEqual(reported_execution_authority_from_wire(wire), report)
         self.assertEqual(wire["authority_state"], "future_authority")
         self.assertEqual(wire["write_state"], "future_write_state")
+        with self.assertRaisesRegex(ValueError, "reported_at"):
+            replace(report, reported_at="not-a-timestamp")
+        with self.assertRaisesRegex(ValueError, "timezone"):
+            replace(report, reported_at="2026-10-09T12:00:00")
 
     def test_health_keeps_raw_status_and_reason(self) -> None:
         health = self._health()

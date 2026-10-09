@@ -19,6 +19,7 @@ from factory_sop.monitor.adapters.repository import PostgresMonitorRepository
 from factory_sop.monitor.adapters.streaming import PostgresMonitorStreamSource
 from factory_sop.monitor.model import (
     MirroredDecision,
+    MirroredExecutionAuthority,
     MirroredHealth,
     MirroredObservation,
     MirroredSopInstance,
@@ -27,6 +28,7 @@ from nvsop_contracts import (
     ReportBackendProvenance,
     ReportedDecision,
     ReportedDisposal,
+    ReportedExecutionAuthority,
     ReportedHealth,
     ReportedObservation,
     ReportedSopInstance,
@@ -344,6 +346,66 @@ def test_durable_replay_does_not_require_a_prior_wakeup(engine: Engine) -> None:
         assert event_id in {value.report.event_id for value in health}
     finally:
         source.close()
+
+
+def test_execution_authority_concurrent_first_write_keeps_latest(engine: Engine) -> None:
+    factory = sessionmaker(bind=engine)
+    station_id, host_id = str(uuid4()), str(uuid4())
+
+    def value(reported_at: str, second: int) -> MirroredExecutionAuthority:
+        return MirroredExecutionAuthority(
+            report=ReportedExecutionAuthority(
+                host_id=host_id,
+                station_id=station_id,
+                authority_state="active",
+                write_state="enabled",
+                reason_code=None,
+                detail=None,
+                grant_id=f"grant-{second}",
+                holder_host_id=host_id,
+                lease_expires_at="2026-10-10T00:00:00Z",
+                renewed_at="2026-10-09T00:00:00Z",
+                reported_at=reported_at,
+            ),
+            received_at=RECEIVED_AT + timedelta(seconds=second),
+        )
+
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def write(sample: MirroredExecutionAuthority) -> None:
+        try:
+            with factory() as session:
+                barrier.wait()
+                PostgresMonitorRepository(session).upsert_execution_authority(sample)
+                session.commit()
+        except BaseException as error:
+            errors.append(error)
+
+    older = value("2026-10-09T00:00:00Z", 1)
+    newer = value("2026-10-09T00:00:01Z", 2)
+    threads = [threading.Thread(target=write, args=(sample,)) for sample in (older, newer)]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+        assert not errors
+        with factory() as session:
+            stored = PostgresMonitorRepository(session).execution_authority_for_stations(
+                station_ids=(station_id,)
+            )
+        assert len(stored) == 1
+        assert stored[0].report == newer.report
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "DELETE FROM monitor_execution_authority "
+                    "WHERE station_id = :station_id AND host_id = :host_id"
+                ),
+                {"station_id": station_id, "host_id": host_id},
+            )
 
 
 def _instance(

@@ -43,7 +43,7 @@ const stationLabel = (id: string) =>
 const verdicts: Record<string, string> = { pass: '通过', fail: '不通过', indeterminate: '不可判定' }
 const physicalSafetyLabels: Record<string, string> = {
   protected: '物理防错有效',
-  stale: '物理防错状态未知（数据已过期）',
+  stale: '物理防错状态未知',
   failed: '物理防错失效',
   unknown: '物理防错状态未知（未识别事实）',
 }

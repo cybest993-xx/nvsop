@@ -161,7 +161,7 @@ test('SYS-19 — reconnect retains projection and native MessageEvent.lastEventI
   await expect(decision).toContainText('未知原因码：FUTURE_REASON_19')
   await expect(page.getByText(/连接中断，保留上次镜像等待恢复/)).toBeVisible()
   await expect(page.getByRole('region', { name: '物理防错与执行权' })).toContainText(
-    '物理防错状态未知（数据已过期）',
+    '物理防错状态未知',
   )
   await expect(decision).toContainText('不可判定')
   await expect(page.getByText(/连接中断，保留上次镜像等待恢复/)).toBeVisible()
@@ -171,7 +171,7 @@ test('SYS-19 — reconnect retains projection and native MessageEvent.lastEventI
     'future_health_state',
   )
   const physicalSafety = page.getByRole('region', { name: '物理防错与执行权' })
-  await expect(physicalSafety).toContainText('物理防错状态未知（数据已过期）')
+  await expect(physicalSafety).toContainText('物理防错状态未知')
   await expect(physicalSafety).toContainText('Center 授权有效')
   await expect(physicalSafety).toContainText('host-19')
   await expect(page.getByRole('region', { name: 'SOP 实例与实际来源' })).toContainText(
@@ -196,8 +196,10 @@ test('S054 — Edge stopped-write is a failed physical-safety state separate fro
     ...value.physical_safety,
     status: 'failed',
     detail: '工位已停止写入',
+    center_authorization: { ...value.physical_safety.center_authorization, state: 'expired' },
     edge_status: {
       ...value.physical_safety.edge_status,
+      authority_state: 'expired',
       write_state: 'stopped',
       reason_code: 'write_stopped',
       detail: '工位已停止写入',
@@ -207,6 +209,9 @@ test('S054 — Edge stopped-write is a failed physical-safety state separate fro
   await standardRoutes(page, session.permissions)
   await page.goto('/devices')
   await expect(page.getByRole('region', { name: '物理防错与执行权' })).toContainText('物理防错失效')
+  await expect(page.getByRole('region', { name: '物理防错与执行权' })).toContainText(
+    'Center 授权已到期',
+  )
   await expect(page.getByRole('region', { name: '物理防错与执行权' })).toContainText(
     'Edge 已停止物理写入',
   )
@@ -227,7 +232,7 @@ test('S054 — stale Edge state shows known time and never a green write indicat
   await standardRoutes(page, session.permissions)
   await page.goto('/devices')
   const physical = page.getByRole('region', { name: '物理防错与执行权' })
-  await expect(physical).toContainText('物理防错状态未知（数据已过期）')
+  await expect(physical).toContainText('物理防错状态未知')
   await expect(physical).toContainText('Edge 已知时间')
   await expect(physical).toContainText('数据已过期；不会沿用最后一次正常状态表示仍可写')
   await expect(physical).not.toContainText('物理防错有效')

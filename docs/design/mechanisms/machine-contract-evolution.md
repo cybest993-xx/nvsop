@@ -34,6 +34,8 @@
 
 `disposition_policy=stop` 同样属于第 2 类行为扩展。共享 wire 仍把 `disposition_policy` 保持为既有的非空字符串，避免通过收窄字段制造隐式破坏；Center 的产品/绑定层只允许首版 `record` / `stop`。只要任一工位实际生效值为 `stop`，Center 就必须同时声明 `disposition.stop-output-v1`。新 Edge 只有在该 capability 存在、策略值受支持且确认拓扑能唯一解析 `停线联锁` 输出点时才激活物理处置；缺 capability 的旧 Center `stop` 候选也必须拒绝，防止升级后的 Edge 把历史自由文本从“记录类处置”静默重解释为物理停线。旧 Edge 不认识该 capability 时则在候选阶段拒绝整个新配置。`record` 不要求这一 capability。
 
+点位型声光动作也按第 2 类行为扩展发布。Center 只有在实际主机切片包含名为 `声光告警` 的输出点时才声明 `disposition.sound-light-output-v1`；新 Edge 只在 capability 存在且确认拓扑能唯一解析该输出点时生成声光处置，并继续复用统一输出写入门禁与本地处置账本。没有 capability 的历史 bundle 即使碰巧存在同名自由文本点位也保持原行为，不允许升级后的 Edge 静默把旧配置解释成新的物理动作；旧 Edge 不认识新 capability 时显式拒绝候选。
+
 配置契约不提供 `extensions`、任意 JSON bag、插件字典或“未知字段照单全收”。核心字段仍严格必填，未知字段仍拒绝。
 
 只有真正无法用上述方式安全协同发布时才重新定义 contract generation，例如：删除/收窄已存在字段；改变既有字段语义；改变 assignment/effective digest 的身份规则且无法兼容迁移；或 capability gate 无法表达所需的不兼容边界。即使发生这类变化，也应做一次协同迁移并收敛回单一生产模型，而不是长期保留多代运行分支。

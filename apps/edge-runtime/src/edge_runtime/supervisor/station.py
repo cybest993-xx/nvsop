@@ -20,6 +20,7 @@ from nvsop_contracts import (
     DISPOSITION_POLICY_STOP,
     OBSERVATION_SOURCE_ACTION,
     OBSERVATION_SOURCE_EXTERNAL_SIGNAL,
+    SOUND_LIGHT_OUTPUT_REQUESTED_STATE,
     STOP_OUTPUT_REQUESTED_STATE,
     STOP_OUTPUT_SEMANTIC_LABEL,
 )
@@ -106,28 +107,43 @@ def _disposals(
 
 
 def _output_disposals(
-    decisions: Iterable[Decision], policy: str | None
+    decisions: Iterable[Decision],
+    policy: str | None,
+    *,
+    sound_light_output_label: str | None,
 ) -> tuple[OutputDisposalRequest, ...]:
-    if policy != DISPOSITION_POLICY_STOP:
+    targets: list[tuple[str, str, str]] = []
+    if sound_light_output_label is not None:
+        targets.append(
+            (
+                sound_light_output_label,
+                SOUND_LIGHT_OUTPUT_REQUESTED_STATE,
+                "station_sound_light",
+            )
+        )
+    if policy == DISPOSITION_POLICY_STOP:
+        targets.append(
+            (STOP_OUTPUT_SEMANTIC_LABEL, STOP_OUTPUT_REQUESTED_STATE, f"station_policy:{policy}")
+        )
+    if not targets:
         return ()
     result: list[OutputDisposalRequest] = []
     for decision in decisions:
         for violation in decision.violations:
             ref = _violation_ref(decision, violation)
-            identity = (
-                f"{ref}\0write_output\0{STOP_OUTPUT_SEMANTIC_LABEL}\0{STOP_OUTPUT_REQUESTED_STATE}"
-            )
-            result.append(
-                OutputDisposalRequest(
-                    idempotency_key=hashlib.sha256(identity.encode()).hexdigest(),
-                    violation_ref=ref,
-                    instance_id=decision.instance_id,
-                    target_label=STOP_OUTPUT_SEMANTIC_LABEL,
-                    requested_state=STOP_OUTPUT_REQUESTED_STATE,
-                    actor="supervisor",
-                    source=f"station_policy:{policy}",
+            for target_label, requested_state, source in targets:
+                identity = f"{ref}\0write_output\0{target_label}\0{requested_state}"
+                result.append(
+                    OutputDisposalRequest(
+                        idempotency_key=hashlib.sha256(identity.encode()).hexdigest(),
+                        violation_ref=ref,
+                        instance_id=decision.instance_id,
+                        target_label=target_label,
+                        requested_state=requested_state,
+                        actor="supervisor",
+                        source=source,
+                    )
                 )
-            )
     return tuple(result)
 
 
@@ -220,6 +236,7 @@ class StationSupervisor:
         margins: EvidenceMargins,
         clock: Callable[[], float] = monotonic,
         disposition_policy: str | None = None,
+        sound_light_output_label: str | None = None,
         initial_report_provenance: tuple[BackendReportContext, ...] | None = (),
         initial_paused: bool = False,
     ) -> None:
@@ -228,6 +245,7 @@ class StationSupervisor:
         self._margins = margins
         self._clock = clock
         self._disposition_policy = disposition_policy
+        self._sound_light_output_label = sound_light_output_label
         self._control_lock = RLock()
         self._paused = initial_paused
         self._resume_after: float | None = None
@@ -569,5 +587,9 @@ class StationSupervisor:
             decisions=tuple(decisions),
             wake_at=deadline,
             closed_instances=tuple(closed_instances),
-            output_disposals=_output_disposals(decisions, self._disposition_policy),
+            output_disposals=_output_disposals(
+                decisions,
+                self._disposition_policy,
+                sound_light_output_label=self._sound_light_output_label,
+            ),
         )

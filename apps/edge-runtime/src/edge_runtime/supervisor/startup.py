@@ -22,6 +22,7 @@ def resume_station(
     parameters: RuntimeParameters,
     margins: EvidenceMargins,
     disposition_policy: str | None = None,
+    sound_light_output_label: str | None = None,
     clock: Callable[[], float] = monotonic,
 ) -> StationSupervisor:
     """恢复工位并结案启动前遗留的实例。"""
@@ -32,6 +33,7 @@ def resume_station(
         margins=margins,
         clock=clock,
         disposition_policy=disposition_policy,
+        sound_light_output_label=sound_light_output_label,
         initial_report_provenance=store.resume_report_provenance(),
         initial_paused=store.judgment_paused(),
     )

@@ -14,7 +14,9 @@ from urllib.parse import urlsplit
 from nvsop_contracts import (
     DISPOSITION_POLICIES,
     DISPOSITION_POLICY_STOP,
+    DISPOSITION_SOUND_LIGHT_OUTPUT_CAPABILITY,
     DISPOSITION_STOP_OUTPUT_CAPABILITY,
+    SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL,
     STOP_OUTPUT_SEMANTIC_LABEL,
     ConfigurationBundle,
     ConfiguredConnector,
@@ -50,18 +52,29 @@ class StationRuntimeBinding:
     def output_points_for(self, connector_id: str) -> tuple[OutputPoint, ...]:
         return tuple(point for owner, point in self.output_points if owner == connector_id)
 
-    def output_target(self, semantic_label: str) -> tuple[str, OutputPoint]:
+    def output_target_if_configured(self, semantic_label: str) -> tuple[str, OutputPoint] | None:
         matches = tuple(
             (connector_id, point)
             for connector_id, point in self.output_points
             if point.label == semantic_label
         )
+        if not matches:
+            return None
         if len(matches) != 1:
+            raise RuntimeConfigurationError(
+                f"station {self.configuration.station_id} requires at most one output point "
+                f"named {semantic_label!r}"
+            )
+        return matches[0]
+
+    def output_target(self, semantic_label: str) -> tuple[str, OutputPoint]:
+        target = self.output_target_if_configured(semantic_label)
+        if target is None:
             raise RuntimeConfigurationError(
                 f"station {self.configuration.station_id} requires exactly one output point "
                 f"named {semantic_label!r}"
             )
-        return matches[0]
+        return target
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,8 +160,16 @@ def confirmed_runtime_configuration(
             if previous is not None and previous != connector:
                 raise RuntimeConfigurationError(f"connector {connector.connector_id} 被重复配置")
             connectors_by_id[connector.connector_id] = connector
+    stations = tuple(_merge_station_bindings(values) for values in station_slices.values())
+    if DISPOSITION_SOUND_LIGHT_OUTPUT_CAPABILITY in bundle.required_capabilities and not any(
+        station.output_target_if_configured(SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL) is not None
+        for station in stations
+    ):
+        raise RuntimeConfigurationError(
+            "sound-light output capability requires a confirmed '声光告警' output target"
+        )
     return RuntimeConfiguration(
-        stations=tuple(_merge_station_bindings(values) for values in station_slices.values()),
+        stations=stations,
         connectors=tuple(connectors_by_id.values()),
         confirmed=bundle,
     )

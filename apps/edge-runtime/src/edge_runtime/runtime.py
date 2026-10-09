@@ -19,7 +19,9 @@ from types import FrameType
 
 from nvsop_contracts import (
     DISPOSITION_POLICY_STOP,
+    DISPOSITION_SOUND_LIGHT_OUTPUT_CAPABILITY,
     SAFETY_OUTPUT_BUDGET_SECONDS,
+    SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL,
     STOP_OUTPUT_SEMANTIC_LABEL,
     ConfigurationBundle,
     ConnectionTestOutcome,
@@ -400,7 +402,7 @@ class AutonomousStation:
         output_points: Mapping[str, tuple[OutputPoint, ...]] | None = None,
         write_lifecycle: StationWriteLifecycle | None = None,
         diagnostics: Callable[[WriteAttempted], None] | None = None,
-        output_disposal_target: tuple[str, OutputPoint] | None = None,
+        output_disposal_targets: Mapping[str, tuple[str, OutputPoint]] | None = None,
         output_report_host_id: str | None = None,
         output_write_timeout: float | None = None,
     ) -> None:
@@ -412,7 +414,7 @@ class AutonomousStation:
         self._output_points = dict(output_points or {})
         self._write_lifecycle = write_lifecycle or StationWriteLifecycle()
         self._diagnostics = diagnostics
-        self._output_disposal_target = output_disposal_target
+        self._output_disposal_targets = dict(output_disposal_targets or {})
         self._output_report_host_id = output_report_host_id
         self._output_write_timeout = output_write_timeout
 
@@ -483,15 +485,19 @@ class AutonomousStation:
             return
         if (
             self._station_id is None
-            or self._output_disposal_target is None
             or self._output_report_host_id is None
             or self._output_write_timeout is None
         ):
             raise RuntimeError("physical disposal is not fully composed")
-        connector_id, point = self._output_disposal_target
         station_id = self._station_id
         report_host_id = self._output_report_host_id
         for disposal in reaction.output_disposals:
+            target = self._output_disposal_targets.get(disposal.target_label)
+            if target is None:
+                raise RuntimeError(
+                    f"physical disposal target {disposal.target_label!r} is not composed"
+                )
+            connector_id, point = target
             self._write_disposal(
                 disposal,
                 connector_id=connector_id,
@@ -1432,11 +1438,19 @@ def _build_runtime_composition(
                 for connector_id in station_binding.connector_ids
                 if connector_id in output_dispatchers
             }
-            output_disposal_target = (
-                station_binding.output_target(STOP_OUTPUT_SEMANTIC_LABEL)
-                if station_config.disposition_policy == DISPOSITION_POLICY_STOP
+            sound_light_target = (
+                station_binding.output_target_if_configured(SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL)
+                if confirmed is not None
+                and DISPOSITION_SOUND_LIGHT_OUTPUT_CAPABILITY in confirmed.required_capabilities
                 else None
             )
+            output_disposal_targets: dict[str, tuple[str, OutputPoint]] = {}
+            if station_config.disposition_policy == DISPOSITION_POLICY_STOP:
+                output_disposal_targets[STOP_OUTPUT_SEMANTIC_LABEL] = station_binding.output_target(
+                    STOP_OUTPUT_SEMANTIC_LABEL
+                )
+            if sound_light_target is not None:
+                output_disposal_targets[SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL] = sound_light_target
             stations.append(
                 AutonomousStation(
                     station_id=station_config.station_id,
@@ -1446,6 +1460,11 @@ def _build_runtime_composition(
                         parameters=station_config.parameters,
                         margins=station_config.margins,
                         disposition_policy=station_config.disposition_policy,
+                        sound_light_output_label=(
+                            SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL
+                            if sound_light_target is not None
+                            else None
+                        ),
                     ),
                     source=source,
                     connector_runtimes=runtimes,
@@ -1456,7 +1475,7 @@ def _build_runtime_composition(
                     },
                     write_lifecycle=write_lifecycles[station_config.station_id],
                     diagnostics=_log_write_attempt,
-                    output_disposal_target=output_disposal_target,
+                    output_disposal_targets=output_disposal_targets,
                     output_report_host_id=config.host_id,
                     output_write_timeout=config.command_timeout,
                 )

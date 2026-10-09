@@ -20,12 +20,17 @@ from factory_sop.device.api import (
 from factory_sop.execution.api import StationGrant
 from factory_sop.template.api import TemplateConfigurationProjection
 from nvsop_contracts import (
+    DISPOSITION_SOUND_LIGHT_OUTPUT_CAPABILITY,
     DISPOSITION_STOP_OUTPUT_CAPABILITY,
     EXECUTION_LEASE_WRITE_GATE_CAPABILITY,
+    SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL,
     ConfigurationBundle,
+    ConfiguredConnector,
+    ConfiguredPoint,
     ConfiguredStation,
     ExecutionLease,
     ResolvedRuntimeParameters,
+    Unverified,
 )
 
 HOST_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f101")
@@ -40,6 +45,8 @@ class DeviceGateway:
         self.confirmed: list[ConfigurationBundle] = []
         self.station_error: DeviceConfigurationError | None = None
         self.confirm_error: DeviceConfigurationError | None = None
+        self.connectors: tuple[ConfiguredConnector, ...] = ()
+        self.points: tuple[ConfiguredPoint, ...] = ()
 
     def authenticate(self, *, host: object, now: datetime) -> None:
         del host, now
@@ -78,8 +85,8 @@ class DeviceGateway:
             name="Station A",
             revision=7,
             runtime_parameters=runtime_defaults,
-            connectors=(),
-            points=(),
+            connectors=self.connectors,
+            points=self.points,
             template=None,
             model_ids=("reported-model",),
         )
@@ -194,6 +201,43 @@ def test_record_configuration_does_not_require_stop_output_capability() -> None:
     )
 
     assert bundle.required_capabilities == (EXECUTION_LEASE_WRITE_GATE_CAPABILITY,)
+
+
+def test_sound_light_output_declares_its_behavior_capability() -> None:
+    device = DeviceGateway()
+    device.connectors = (
+        ConfiguredConnector(
+            connector_id="connector-a",
+            name="I/O",
+            connector_type="hikvision_isapi",
+            revision=1,
+            address="camera.example",
+            port=80,
+            capability=Unverified(),
+        ),
+    )
+    device.points = (
+        ConfiguredPoint(
+            point_id="sound-light",
+            name=SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL,
+            direction="output",
+            connector_id="connector-a",
+            role="output",
+            address="3",
+        ),
+    )
+
+    bundle = configuration_for_host(
+        host_id=HOST_ID,
+        generated_at=datetime(2026, 9, 13, tzinfo=UTC),
+        device=device,
+        templates=TemplateGateway(disposition_policy="record"),
+    )
+
+    assert bundle.required_capabilities == (
+        DISPOSITION_SOUND_LIGHT_OUTPUT_CAPABILITY,
+        EXECUTION_LEASE_WRITE_GATE_CAPABILITY,
+    )
 
 
 def test_configuration_composition_translates_owner_errors() -> None:

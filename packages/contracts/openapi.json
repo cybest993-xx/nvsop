@@ -10624,6 +10624,61 @@
         ]
       }
     },
+    "/api/v1/evidence/registrations": {
+      "post": {
+        "operationId": "registerEvidenceReference",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Registerevidencereference",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Report Evidence Reference",
+        "tags": [
+          "evidence"
+        ]
+      }
+    },
     "/api/v1/execution/handovers": {
       "post": {
         "description": "建立强制改绑请求，操作者同时完成第一确认。",

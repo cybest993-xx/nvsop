@@ -511,6 +511,8 @@ EXEMPT = {
     ("POST", f"{API_PREFIX}/monitor/reported-instances"),
     ("POST", f"{API_PREFIX}/monitor/reported-disposals"),
     ("POST", f"{API_PREFIX}/monitor/reported-observations"),
+    # Evidence reference registration authenticates the inference host signature.
+    ("POST", f"{API_PREFIX}/evidence/registrations"),
 }
 
 

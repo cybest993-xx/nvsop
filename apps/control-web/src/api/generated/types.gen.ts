@@ -6063,6 +6063,46 @@ export type CompleteDeviceCommandResponses = {
 export type CompleteDeviceCommandResponse =
   CompleteDeviceCommandResponses[keyof CompleteDeviceCommandResponses]
 
+export type RegisterEvidenceReferenceData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/evidence/registrations'
+}
+
+export type RegisterEvidenceReferenceErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type RegisterEvidenceReferenceError =
+  RegisterEvidenceReferenceErrors[keyof RegisterEvidenceReferenceErrors]
+
+export type RegisterEvidenceReferenceResponses = {
+  /**
+   * Response Registerevidencereference
+   *
+   * Successful Response
+   */
+  200: {
+    [key: string]: unknown
+  }
+}
+
+export type RegisterEvidenceReferenceResponse =
+  RegisterEvidenceReferenceResponses[keyof RegisterEvidenceReferenceResponses]
+
 export type CreateHandoverData = {
   body: HandoverCreation
   path?: never

@@ -404,6 +404,51 @@ def _path(value: object, name: str) -> Path:
     return Path(value)
 
 
+def evidence_registration_payloads(
+    pending: PendingEvidence, *, host_id: str, station_id: str, directory: Path
+) -> tuple[dict[str, object], ...]:
+    """从已定稿证据构造不可变中心引用; 扩窗以新产物目录形成新证据身份。"""
+    if pending.media_results is None or pending.covered_from is None or pending.covered_to is None:
+        raise ValueError("evidence media has not been finalized")
+    if pending.covered_from > pending.start.seconds or pending.covered_to < pending.end.seconds:
+        raise ValueError("evidence material does not cover the requested window")
+    artifact = _artifact_name(
+        _evidence_id(host_id, pending.queue_id), pending.covered_from, pending.covered_to
+    )
+    media = json.loads(pending.media_results)
+    results: list[dict[str, object]] = []
+    for item in media:
+        for kind, field in (("clip", "clip_file"), ("keyframe", "keyframe_file")):
+            name = item[field]
+            if not isinstance(name, str) or "/" in name or "\\" in name or name in {".", ".."}:
+                raise ValueError("evidence metadata contains an invalid filename")
+            file_path = directory / artifact / name
+            size = file_path.stat().st_size
+            digest = _digest(file_path)
+            if kind == "clip" and (digest != item["sha256"] or size != item["size_bytes"]):
+                raise ValueError("evidence media does not match its finalized digest")
+            reference = f"{artifact}/{name}"
+            results.append(
+                {
+                    "evidence_id": reference,
+                    "host_id": host_id,
+                    "station_id": station_id,
+                    "instance_id": pending.instance_id,
+                    "violation_id": None,
+                    "kind": kind,
+                    "origin": "automatic",
+                    "anchor": pending.anchor.seconds,
+                    "window_start": pending.start.seconds,
+                    "window_end": pending.end.seconds,
+                    "generation": item["material_generation"],
+                    "sha256": digest,
+                    "size": size,
+                    "reference": reference,
+                }
+            )
+    return tuple(results)
+
+
 class EvidenceMediaWorker:
     """后台消费本机证据待办: 不阻塞判定, 不依赖中心, 不删除本机媒体 (S033)。"""
 

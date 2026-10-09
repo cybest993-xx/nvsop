@@ -56,6 +56,7 @@ from edge_runtime.connectors.writes import (
     WriteRequest,
 )
 from edge_runtime.evidence_media import EvidenceMediaWorker
+from edge_runtime.evidence_reporting import EvidenceReferenceReconciler
 from edge_runtime.judgment.model import HostInstant, HostLiveness
 from edge_runtime.local_state import (
     BackendReportContext,
@@ -792,6 +793,11 @@ class _RuntimeCycleRunner:
             return
         evidence.run_forever(should_stop=self._stop_requested)
 
+    def _run_evidence_registration(self) -> None:
+        worker = self._runtime._evidence_registration
+        if worker is not None:
+            worker.run_forever(should_stop=self._stop_requested, limit=_REPORT_WORK_BUDGET)
+
     def _run_configuration(self) -> None:
         runtime = self._runtime
         synchronizer = runtime._configuration_sync
@@ -895,6 +901,22 @@ class _RuntimeCycleRunner:
                 if runtime._evidence is not None
                 else []
             ),
+            *(
+                [
+                    threading.Thread(
+                        target=self._guard,
+                        args=(
+                            lambda: self._isolate_center_worker(
+                                "evidence_registration", self._run_evidence_registration
+                            ),
+                        ),
+                        name="edge-evidence-registration",
+                        daemon=True,
+                    )
+                ]
+                if runtime._evidence_registration is not None
+                else []
+            ),
             threading.Thread(
                 target=self._guard,
                 args=(lambda: self._isolate_center_worker("command", self._run_command),),
@@ -954,6 +976,7 @@ class AutonomousRuntime:
         state: LocalState,
         media: MediaRuntime | None = None,
         evidence: EvidenceMediaWorker | None = None,
+        evidence_registration: EvidenceReferenceReconciler | None = None,
         report_reconciler: HostReportReconciler | None = None,
         report_wake: threading.Event | None = None,
         configuration_sync: ConfigurationSynchronizer | None = None,
@@ -971,6 +994,7 @@ class AutonomousRuntime:
         self._state = state
         self._media = media
         self._evidence = evidence
+        self._evidence_registration = evidence_registration
         self._report_reconciler = report_reconciler
         self._report_wake = report_wake or threading.Event()
         self._configuration_sync = configuration_sync
@@ -1576,6 +1600,17 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
             state=state,
             media=MediaRuntime(config.media) if config.media is not None else None,
             evidence=evidence_worker,
+            evidence_registration=(
+                EvidenceReferenceReconciler(
+                    state=state,
+                    client=_center_client(config),
+                    host_id=config.host_id,
+                    evidence_directory=evidence_configuration.evidence_directory,
+                    interval=config.command_poll_interval,
+                )
+                if evidence_worker is not None and evidence_configuration is not None
+                else None
+            ),
             report_reconciler=composition.report_reconciler,
             report_wake=report_wake,
             configuration_sync=configuration_sync,

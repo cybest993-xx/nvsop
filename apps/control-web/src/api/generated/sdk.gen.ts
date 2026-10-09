@@ -294,6 +294,9 @@ import type {
   RegisterDatasetActionListData,
   RegisterDatasetActionListErrors,
   RegisterDatasetActionListResponses,
+  RegisterEvidenceReferenceData,
+  RegisterEvidenceReferenceErrors,
+  RegisterEvidenceReferenceResponses,
   RegisterInferenceHostIdentityKeyData,
   RegisterInferenceHostIdentityKeyErrors,
   RegisterInferenceHostIdentityKeyResponses,
@@ -950,6 +953,29 @@ export const completeDeviceCommand = <ThrowOnError extends boolean = false>(
     ThrowOnError
   >({
     url: '/api/v1/device-commands/{command_id}/result',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Report Evidence Reference
+ */
+export const registerEvidenceReference = <ThrowOnError extends boolean = false>(
+  options: Options<RegisterEvidenceReferenceData, ThrowOnError>,
+): RequestResult<
+  RegisterEvidenceReferenceResponses,
+  RegisterEvidenceReferenceErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    RegisterEvidenceReferenceResponses,
+    RegisterEvidenceReferenceErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/evidence/registrations',
     ...options,
     headers: {
       'Content-Type': 'application/json',

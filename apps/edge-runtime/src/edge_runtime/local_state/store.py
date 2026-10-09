@@ -777,6 +777,21 @@ class LocalState:
             ).fetchall()
         return tuple(str(row["station_id"]) for row in rows)
 
+    def pending_evidence_registration_stations(self) -> tuple[str, ...]:
+        """跨工位领取已定稿但未收到中心登记确认的证据。"""
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT DISTINCT station_id
+                  FROM local_evidence_queue
+                 WHERE uploaded_at IS NULL AND registered_at IS NULL
+                   AND sliced_at IS NOT NULL
+                   AND covered_from <= window_from AND covered_to >= window_to
+                 ORDER BY station_id
+                """
+            ).fetchall()
+        return tuple(str(row["station_id"]) for row in rows)
+
     def reports(self) -> ReportStore:
         """返回该主机 decision/instance 待上报事实的持久接缝。"""
         return _HostReportStore(self._connection, self._lock)

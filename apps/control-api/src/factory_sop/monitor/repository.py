@@ -7,6 +7,7 @@ from typing import Protocol
 
 from factory_sop.monitor.model import (
     MirroredDecision,
+    MirroredExecutionAuthority,
     MirroredHealth,
     MirroredObservation,
     MirroredSopInstance,
@@ -21,6 +22,10 @@ class MonitorRepository(Protocol):
         ...
 
     def upsert_disposal(self, report: ReportedDisposal, *, received_at: datetime) -> bool: ...
+
+    def upsert_execution_authority(self, value: MirroredExecutionAuthority) -> bool:
+        """按 host/station 保存最新 Edge 写入门禁状态。"""
+        ...
 
     def upsert_health(self, value: MirroredHealth) -> bool:
         """只插入一次；相同重试返回 False。"""
@@ -59,6 +64,10 @@ class MonitorRepository(Protocol):
 
     def recent_health(self, *, limit: int) -> tuple[MirroredHealth, ...]: ...
 
+    def execution_authority_for_stations(
+        self, *, station_ids: tuple[str, ...]
+    ) -> tuple[MirroredExecutionAuthority, ...]: ...
+
     def health_for_station(self, *, station_id: str) -> tuple[MirroredHealth, ...]:
         """返回工位全部健康事实；展示 limit 不得改变业务分类。"""
         ...
@@ -91,7 +100,9 @@ class MonitorStreamSource(Protocol):
         limit: int,
     ) -> tuple[tuple[MirroredDecision, ...], tuple[MirroredHealth, ...]]: ...
 
-    def read_runtime_projection(self) -> tuple[dict[str, object], ...]: ...
+    def read_runtime_projection(
+        self, *, reserve_listener: bool = True
+    ) -> tuple[dict[str, object], ...]: ...
 
     def wait_for_wakeup(self, *, timeout: float) -> bool:
         """等待提交后提示；False 只表示本次等待超时。"""

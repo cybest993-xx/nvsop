@@ -2,18 +2,27 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any, cast
+from uuid import UUID
 
 from psycopg import Connection as PsycopgConnection
 from sqlalchemy import Connection, Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from factory_sop.execution.api import ExecutionGrantViewGateway
 from factory_sop.monitor.adapters.repository import (
     MONITOR_STREAM_CHANNEL,
     PostgresMonitorRepository,
 )
 from factory_sop.monitor.model import MirroredDecision, MirroredHealth
 from factory_sop.monitor.repository import MonitorStreamSource
+from factory_sop.monitor.usecases import (
+    HOST_SILENCE_THRESHOLD_SECONDS,
+    physical_safety_projection,
+    select_execution_authority,
+)
 
 
 def create_monitor_listener_engine(factory: sessionmaker[Session], *, limit: int) -> Engine:
@@ -31,9 +40,18 @@ def create_monitor_listener_engine(factory: sessionmaker[Session], *, limit: int
 class PostgresMonitorStreamSource(MonitorStreamSource):
     """LISTEN 连接只负责提示；事实始终从短生命周期 ORM Session 重放。"""
 
-    def __init__(self, factory: sessionmaker[Session], engine: Engine) -> None:
+    def __init__(
+        self,
+        factory: sessionmaker[Session],
+        engine: Engine,
+        *,
+        execution_gateway_factory: Callable[[Session], ExecutionGrantViewGateway],
+        stale_after_seconds: float = HOST_SILENCE_THRESHOLD_SECONDS,
+    ) -> None:
         self._factory = factory
         self._engine = engine
+        self._execution_gateway_factory = execution_gateway_factory
+        self._stale_after_seconds = stale_after_seconds
         self._listener: Connection | None = None
 
     def open(self) -> None:
@@ -61,10 +79,57 @@ class PostgresMonitorStreamSource(MonitorStreamSource):
             )
         return decisions, health
 
-    def read_runtime_projection(self) -> tuple[dict[str, object], ...]:
-        self._ensure_listener()
+    def read_runtime_projection(
+        self, *, reserve_listener: bool = True
+    ) -> tuple[dict[str, object], ...]:
+        if reserve_listener:
+            self._ensure_listener()
         with self._factory() as session:
-            return PostgresMonitorRepository(session).runtime_projection()
+            repository = PostgresMonitorRepository(session)
+            runtime = repository.runtime_projection()
+            station_ids = tuple(
+                cast(str, item["station_id"])
+                for item in runtime
+                if isinstance(item.get("station_id"), str)
+            )
+            parsed_ids: list[UUID] = []
+            for station_id in station_ids:
+                try:
+                    parsed_ids.append(UUID(station_id))
+                except ValueError:
+                    continue
+            gateway = self._execution_gateway_factory(session)
+            center_views = {
+                str(view.station_id): view
+                for view in gateway.station_views(
+                    station_ids=tuple(parsed_ids),
+                    now=datetime.now(UTC),
+                )
+            }
+            edge_values = repository.execution_authority_for_stations(station_ids=station_ids)
+            now = datetime.now(UTC)
+            values: list[dict[str, object]] = []
+            for item in runtime:
+                raw_station_id = item.get("station_id")
+                center = (
+                    center_views.get(raw_station_id) if isinstance(raw_station_id, str) else None
+                )
+                if center is None:
+                    values.append(item)
+                    continue
+                edge = select_execution_authority(edge_values, center=center)
+                values.append(
+                    {
+                        **item,
+                        "physical_safety": physical_safety_projection(
+                            center=center,
+                            edge=edge,
+                            now=now,
+                            stale_after_seconds=self._stale_after_seconds,
+                        ),
+                    }
+                )
+            return tuple(values)
 
     def wait_for_wakeup(self, *, timeout: float) -> bool:
         listener = self._ensure_listener()

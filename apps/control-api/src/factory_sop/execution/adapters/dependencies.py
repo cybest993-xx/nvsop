@@ -4,15 +4,23 @@ from factory_sop.execution.adapters.repository import (
     PostgresExecutionGrantRepository,
     PostgresHandoverRepository,
 )
-from factory_sop.execution.api import ExecutionLeaseGateway
+from factory_sop.execution.api import ExecutionGrantViewGateway, ExecutionLeaseGateway
 from factory_sop.execution.repository import ExecutionGrantRepository, HandoverRepository
-from factory_sop.execution.usecases import RepositoryExecutionLeaseGateway
+from factory_sop.execution.usecases import (
+    RepositoryExecutionGrantViewGateway,
+    RepositoryExecutionLeaseGateway,
+)
 from factory_sop.persistence import RequestSession
 
 
 def grants(session: RequestSession) -> ExecutionGrantRepository:
     """返回参与当前请求事务的当前租约 owner seam。"""
     return PostgresExecutionGrantRepository(session)
+
+
+def grant_views(session: RequestSession) -> ExecutionGrantViewGateway:
+    """返回无锁的 Center 执行权只读投影。"""
+    return RepositoryExecutionGrantViewGateway(grants(session))
 
 
 def lease_gateway(session: RequestSession) -> ExecutionLeaseGateway:
@@ -25,4 +33,4 @@ def handovers(session: RequestSession) -> HandoverRepository:
     return PostgresHandoverRepository(session)
 
 
-__all__ = ["grants", "handovers", "lease_gateway"]
+__all__ = ["grant_views", "grants", "handovers", "lease_gateway"]

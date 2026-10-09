@@ -7,6 +7,7 @@ from datetime import datetime
 
 from nvsop_contracts import (
     ReportedDecision,
+    ReportedExecutionAuthority,
     ReportedHealth,
     ReportedObservation,
     ReportedSopInstance,
@@ -21,6 +22,12 @@ class MirroredDecision:
     stream_sequence: int | None = None
     latched_at: str | None = None
     realtime: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class MirroredExecutionAuthority:
+    report: ReportedExecutionAuthority
+    received_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +91,7 @@ class MirroredViolation:
 
 __all__ = [
     "MirroredDecision",
+    "MirroredExecutionAuthority",
     "MirroredHealth",
     "MirroredObservation",
     "MirroredSopInstance",

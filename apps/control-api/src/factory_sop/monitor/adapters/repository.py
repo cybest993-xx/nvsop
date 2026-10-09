@@ -15,6 +15,7 @@ from factory_sop.monitor.adapters.tables import (
     ObservationIdentityRow,
     ReportedDecisionRow,
     ReportedDisposalRow,
+    ReportedExecutionAuthorityRow,
     ReportedHealthRow,
     ReportedObservationRow,
     ReportedSopInstanceRow,
@@ -23,6 +24,7 @@ from factory_sop.monitor.adapters.tables import (
 from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.model import (
     MirroredDecision,
+    MirroredExecutionAuthority,
     MirroredHealth,
     MirroredObservation,
     MirroredSopInstance,
@@ -84,6 +86,33 @@ class PostgresMonitorRepository(MonitorRepository):
             raise RuntimeError("decision mirror conflicted without a visible row")
         _ensure_same(existing.payload, row.payload, "decision", row.event_id)
         return False
+
+    def upsert_execution_authority(self, value: MirroredExecutionAuthority) -> bool:
+        row = ReportedExecutionAuthorityRow.from_domain(value)
+        self._acquire_execution_authority_lock(row.station_id, row.host_id)
+        existing = self._session.get(
+            ReportedExecutionAuthorityRow,
+            {"station_id": row.station_id, "host_id": row.host_id},
+        )
+        if existing is None:
+            self._session.add(row)
+            self._session.flush()
+            self._notify_stream("runtime")
+            return True
+        if row.reported_at < existing.reported_at:
+            return False
+        if row.reported_at == existing.reported_at:
+            _ensure_same(existing.payload, row.payload, "execution authority", row.station_id)
+            return False
+        previous_semantic = {k: v for k, v in existing.payload.items() if k != "reported_at"}
+        current_semantic = {k: v for k, v in row.payload.items() if k != "reported_at"}
+        existing.reported_at = row.reported_at
+        existing.received_at = row.received_at
+        existing.payload = row.payload
+        self._session.flush()
+        if previous_semantic != current_semantic:
+            self._notify_stream("runtime")
+        return True
 
     def upsert_health(self, value: MirroredHealth) -> bool:
         self._acquire_stream_lock(_HEALTH_STREAM_LOCK_KEY)
@@ -350,6 +379,18 @@ class PostgresMonitorRepository(MonitorRepository):
         ).all()
         return tuple(row.to_domain() for row in rows)
 
+    def execution_authority_for_stations(
+        self, *, station_ids: tuple[str, ...]
+    ) -> tuple[MirroredExecutionAuthority, ...]:
+        if not station_ids:
+            return ()
+        rows = self._session.scalars(
+            select(ReportedExecutionAuthorityRow).where(
+                ReportedExecutionAuthorityRow.station_id.in_(station_ids)
+            )
+        ).all()
+        return tuple(row.to_domain() for row in rows)
+
     def health_for_station(self, *, station_id: str) -> tuple[MirroredHealth, ...]:
         rows = self._session.scalars(
             select(ReportedHealthRow).where(ReportedHealthRow.station_id == station_id)
@@ -362,6 +403,7 @@ class PostgresMonitorRepository(MonitorRepository):
         for host_column, received_column in (
             (ReportedDecisionRow.host_id, ReportedDecisionRow.received_at),
             (ReportedDisposalRow.host_id, ReportedDisposalRow.received_at),
+            (ReportedExecutionAuthorityRow.host_id, ReportedExecutionAuthorityRow.received_at),
             (ReportedHealthRow.host_id, ReportedHealthRow.received_at),
             (ReportedObservationRow.host_id, ReportedObservationRow.received_at),
             (ReportedSopInstanceRow.host_id, ReportedSopInstanceRow.received_at),
@@ -486,6 +528,12 @@ class PostgresMonitorRepository(MonitorRepository):
         return tuple(
             {"station_id": station_id, **by_station[station_id]}
             for station_id in sorted(by_station)
+        )
+
+    def _acquire_execution_authority_lock(self, station_id: str, host_id: str) -> None:
+        key = f"monitor-execution-authority:{station_id}:{host_id}"
+        self._session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": key}
         )
 
     def _acquire_stream_lock(self, key: int) -> None:

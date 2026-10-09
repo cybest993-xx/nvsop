@@ -41,6 +41,26 @@ const stationLabel = (id: string) =>
     ? (props.stations.find((station) => station.id === id)?.name ?? id)
     : id
 const verdicts: Record<string, string> = { pass: '通过', fail: '不通过', indeterminate: '不可判定' }
+const physicalSafetyLabels: Record<string, string> = {
+  protected: '物理防错有效',
+  stale: '物理防错状态未知',
+  failed: '物理防错失效',
+  unknown: '物理防错状态未知（未识别事实）',
+}
+const authorizationLabels: Record<string, string> = {
+  active: 'Center 授权有效',
+  expired: 'Center 授权已到期',
+  missing: 'Center 无当前授权',
+}
+const edgeAuthorityLabels: Record<string, string> = {
+  active: 'Edge 本地授权有效',
+  expired: 'Edge 本地授权已到期',
+  missing: 'Edge 本地无授权',
+}
+const writeStateLabels: Record<string, string> = {
+  enabled: 'Edge 物理写入门禁已启用',
+  stopped: 'Edge 已停止物理写入',
+}
 const reasons: Record<string, string> = {
   STREAM_LOST: '观测流中断',
   INFERENCE_BACKEND_UNREACHABLE: '推理后端不可达',
@@ -65,6 +85,12 @@ const time = (value: string | number | null) =>
     : typeof value === 'number'
       ? `${value}（推理机时间轴）`
       : new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+const physicalDisplayStatus = (value: RuntimeStationProjection) =>
+  hasConnected.value && !connected.value ? 'stale' : (value.physical_safety?.status ?? 'unknown')
+const physicalDisplayDetail = (value: RuntimeStationProjection) =>
+  hasConnected.value && !connected.value
+    ? 'Center 实时流已中断；以下仅为最后已知镜像，不表示仍可写。'
+    : (value.physical_safety?.detail ?? '尚无物理执行权镜像')
 const models = (sources: unknown) =>
   ((sources ?? []) as { backend_id: string; model_ids: string[] }[])
     .map((source) => `${source.backend_id}：${source.model_ids.join('、') || '无模型标识'}`)
@@ -206,6 +232,60 @@ onUnmounted(() => {
         工位 {{ stationLabel(p.station_id) }} <small>{{ p.station_id }}</small>
       </h3>
       <div class="runtime__grid">
+        <section aria-label="物理防错与执行权">
+          <h4>物理防错与执行权</h4>
+          <template v-if="p.physical_safety">
+            <p>
+              状态：
+              <strong>{{
+                physicalSafetyLabels[physicalDisplayStatus(p)] ??
+                `未知状态（${physicalDisplayStatus(p)}）`
+              }}</strong>
+            </p>
+            <p>说明：{{ physicalDisplayDetail(p) }}</p>
+            <p>
+              Center 来源：
+              {{
+                authorizationLabels[p.physical_safety.center_authorization.state] ??
+                `未知授权状态（${p.physical_safety.center_authorization.state}）`
+              }}
+            </p>
+            <p v-if="p.physical_safety.center_authorization.holder_host_id">
+              授权推理机：{{ p.physical_safety.center_authorization.holder_host_id }}
+            </p>
+            <p v-if="p.physical_safety.center_authorization.lease_expires_at">
+              授权到期：{{ time(p.physical_safety.center_authorization.lease_expires_at) }}
+            </p>
+            <p>Edge 来源：{{ p.physical_safety.edge_status.host_id ?? '未能确定来源推理机' }}</p>
+            <p>
+              Edge 授权：{{
+                edgeAuthorityLabels[p.physical_safety.edge_status.authority_state] ??
+                `未知授权状态（${p.physical_safety.edge_status.authority_state}）`
+              }}
+            </p>
+            <p>
+              Edge 写入：{{
+                writeStateLabels[p.physical_safety.edge_status.write_state] ??
+                `未知写入状态（${p.physical_safety.edge_status.write_state}）`
+              }}
+            </p>
+            <p v-if="p.physical_safety.edge_status.reason_code">
+              Edge 原因：{{ p.physical_safety.edge_status.reason_code }}
+              <template v-if="p.physical_safety.edge_status.detail">
+                — {{ p.physical_safety.edge_status.detail }}
+              </template>
+            </p>
+            <p>
+              Edge 已知时间：{{ time(p.physical_safety.edge_status.reported_at) }}； Center 接收：{{
+                time(p.physical_safety.edge_status.received_at)
+              }}
+            </p>
+            <p v-if="p.physical_safety.edge_status.stale || (hasConnected && !connected)">
+              数据已过期；不会沿用最后一次正常状态表示仍可写。
+            </p>
+          </template>
+          <p v-else class="muted">尚无物理执行权镜像；不推断为可写。</p>
+        </section>
         <section aria-label="SOP 实例与实际来源">
           <h4>SOP 实例与实际来源</h4>
           <template v-if="p.instance">

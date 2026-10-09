@@ -19,6 +19,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from factory_sop.monitor.model import (
     MirroredDecision,
+    MirroredExecutionAuthority,
     MirroredHealth,
     MirroredObservation,
     MirroredSopInstance,
@@ -29,6 +30,8 @@ from nvsop_contracts import (
     ReportViolation,
     reported_decision_from_wire,
     reported_decision_to_wire,
+    reported_execution_authority_from_wire,
+    reported_execution_authority_to_wire,
     reported_health_from_wire,
     reported_health_to_wire,
     reported_observation_from_wire,
@@ -110,6 +113,33 @@ class ReportedDecisionRow(Table):
         if value.stream_sequence is not None:
             row.stream_sequence = value.stream_sequence
         return row
+
+
+class ReportedExecutionAuthorityRow(Table):
+    __tablename__ = "monitor_execution_authority"
+
+    station_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    host_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    reported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+    def to_domain(self) -> MirroredExecutionAuthority:
+        return MirroredExecutionAuthority(
+            report=reported_execution_authority_from_wire(cast(dict[str, object], self.payload)),
+            received_at=self.received_at,
+        )
+
+    @classmethod
+    def from_domain(cls, value: MirroredExecutionAuthority) -> ReportedExecutionAuthorityRow:
+        report = value.report
+        return cls(
+            station_id=report.station_id,
+            host_id=report.host_id,
+            reported_at=datetime.fromisoformat(report.reported_at.replace("Z", "+00:00")),
+            received_at=value.received_at,
+            payload=reported_execution_authority_to_wire(report),
+        )
 
 
 class HealthIdentityRow(Table):

@@ -7,6 +7,7 @@ from typing import NoReturn
 from uuid import UUID
 
 from factory_sop.auth.api import Caller, HandoverAuthority, Permission, authorize
+from factory_sop.execution.api import ExecutionGrantState, ExecutionGrantView
 from factory_sop.execution.errors import ExecutionRefusalCode, ExecutionRefusedError
 from factory_sop.execution.model import (
     HANDOVER_RISK_STATEMENT,
@@ -23,6 +24,29 @@ LEASE_TTL = timedelta(days=7)
 HANDOVER_PERMISSION = Permission.HANDOVER_EDIT
 
 _logger = get_logger("execution")
+
+
+class RepositoryExecutionGrantViewGateway:
+    """执行权 owner 内集中判定 Center 租约当前状态；读取不加写锁。"""
+
+    def __init__(self, grants: ExecutionGrantRepository) -> None:
+        self._grants = grants
+
+    def station_views(
+        self, *, station_ids: tuple[UUID, ...], now: datetime
+    ) -> tuple[ExecutionGrantView, ...]:
+        grants = {grant.station_id: grant for grant in self._grants.for_stations(station_ids)}
+        values: list[ExecutionGrantView] = []
+        for station_id in station_ids:
+            grant = grants.get(station_id)
+            if grant is None:
+                state = ExecutionGrantState.MISSING
+            elif grant.lease_expires_at <= now:
+                state = ExecutionGrantState.EXPIRED
+            else:
+                state = ExecutionGrantState.ACTIVE
+            values.append(ExecutionGrantView(station_id=station_id, state=state, grant=grant))
+        return tuple(values)
 
 
 class RepositoryExecutionLeaseGateway:

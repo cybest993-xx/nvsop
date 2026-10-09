@@ -16,6 +16,7 @@ from nvsop_contracts import (
     ConfigurationBundle,
     ReportBackendProvenance,
     ReportedDecision,
+    ReportedExecutionAuthority,
     ReportedHealth,
     ReportedObservation,
     ReportEvidence,
@@ -81,6 +82,22 @@ def v2_report(bundle: ConfigurationBundle) -> ReportedDecision:
         configuration_revision=bundle.config_revision,
         configuration_sha256=bundle.effective_sha256,
         contract_version=DECISION_REPORT_CONTRACT_VERSION,
+    )
+
+
+def execution_authority_report() -> ReportedExecutionAuthority:
+    return ReportedExecutionAuthority(
+        host_id="host-a",
+        station_id="station-a",
+        authority_state="active",
+        write_state="enabled",
+        reason_code=None,
+        detail=None,
+        grant_id="grant-a",
+        holder_host_id="host-a",
+        lease_expires_at="2026-10-10T00:00:00Z",
+        renewed_at="2026-10-09T00:00:00Z",
+        reported_at="2026-10-09T12:00:00Z",
     )
 
 
@@ -253,6 +270,26 @@ class ReportCompatibilityTests(unittest.TestCase):
         self.assertEqual(len(self.requests), 2)
         self.assertTrue(self.requests[0].url.path.endswith("/confirmed-configuration"))
         self.assertEqual(self.requests[1].url.path, "/api/v1/monitor/health")
+
+    def test_execution_authority_posts_as_signed_advisory_state(self) -> None:
+        transport = self.transport(lambda _: httpx2.Response(200, json={}))
+
+        transport.send_execution_authority(execution_authority_report())
+
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(self.requests[0].url.path, "/api/v1/monitor/execution-authority")
+        self.assertEqual(
+            json.loads(self.requests[0].content.decode("utf-8"))["write_state"], "enabled"
+        )
+
+    def test_old_center_404_disables_only_execution_authority_advisory_report(self) -> None:
+        transport = self.transport(lambda _: httpx2.Response(404, json={}))
+
+        transport.send_execution_authority(execution_authority_report())
+        transport.send_execution_authority(execution_authority_report())
+
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(self.requests[0].url.path, "/api/v1/monitor/execution-authority")
 
     def test_health_report_without_a_frozen_configuration_posts_directly(self) -> None:
         transport = self.transport(lambda _: httpx2.Response(200, json={}))

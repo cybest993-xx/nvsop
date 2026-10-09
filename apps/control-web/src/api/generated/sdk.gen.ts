@@ -312,6 +312,9 @@ import type {
   ReportMonitorEnvelopedDecisionData,
   ReportMonitorEnvelopedDecisionErrors,
   ReportMonitorEnvelopedDecisionResponses,
+  ReportMonitorExecutionAuthorityData,
+  ReportMonitorExecutionAuthorityErrors,
+  ReportMonitorExecutionAuthorityResponses,
   ReportMonitorHealthData,
   ReportMonitorHealthErrors,
   ReportMonitorHealthResponses,
@@ -1420,6 +1423,29 @@ export const listMonitorDisposals = <ThrowOnError extends boolean = false>(
     ListMonitorDisposalsErrors,
     ThrowOnError
   >({ url: '/api/v1/monitor/disposals', ...options })
+
+/**
+ * Report Monitor Execution Authority
+ */
+export const reportMonitorExecutionAuthority = <ThrowOnError extends boolean = false>(
+  options: Options<ReportMonitorExecutionAuthorityData, ThrowOnError>,
+): RequestResult<
+  ReportMonitorExecutionAuthorityResponses,
+  ReportMonitorExecutionAuthorityErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    ReportMonitorExecutionAuthorityResponses,
+    ReportMonitorExecutionAuthorityErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/monitor/execution-authority',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
 
 /**
  * Report Monitor Health

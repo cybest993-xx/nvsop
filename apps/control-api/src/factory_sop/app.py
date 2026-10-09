@@ -268,6 +268,9 @@ def create_app(
     app.dependency_overrides[monitor_dependencies.historical_assignment_gateway] = (
         device_dependencies.historical_assignments
     )
+    app.dependency_overrides[monitor_dependencies.execution_view_factory] = lambda: (
+        execution_dependencies.grant_views
+    )
     app.dependency_overrides[job_dependencies.dataset_resource] = (
         dataset_dependencies.dataset_resource
     )

@@ -15,11 +15,13 @@ from nvsop_contracts import (
     ConfigurationBundle,
     ReportedDecision,
     ReportedDisposal,
+    ReportedExecutionAuthority,
     ReportedHealth,
     ReportedObservation,
     ReportedSopInstance,
     configuration_to_wire,
     reported_decision_to_wire,
+    reported_execution_authority_to_wire,
     reported_health_to_wire,
     reported_observation_to_wire,
     reported_sop_instance_to_wire,
@@ -42,6 +44,7 @@ class HttpDecisionReportTransport(DecisionReportTransport):
         self._client = client
         self._host_id = host_id
         self._confirmed_report_configurations: set[tuple[int, str]] = set()
+        self._execution_authority_supported: bool | None = None
 
     def send_decision(
         self,
@@ -177,6 +180,24 @@ class HttpDecisionReportTransport(DecisionReportTransport):
         if report.host_id != self._host_id:
             raise ValueError("an observation report cannot be sent by a different host")
         self._post("/api/v1/monitor/reported-observations", reported_observation_to_wire(report))
+
+    def send_execution_authority(self, report: ReportedExecutionAuthority) -> None:
+        """Best-effort advisory state; an older Center must not affect the local write gate."""
+        if report.host_id != self._host_id:
+            raise ValueError("an execution authority report cannot be sent by a different host")
+        if self._execution_authority_supported is False:
+            return
+        try:
+            self._post(
+                "/api/v1/monitor/execution-authority",
+                reported_execution_authority_to_wire(report),
+            )
+        except ReportTransportError as error:
+            if error.status != 404:
+                raise
+            self._execution_authority_supported = False
+            return
+        self._execution_authority_supported = True
 
     def send_disposal(self, report: ReportedDisposal) -> None:
         if report.host_id != self._host_id:

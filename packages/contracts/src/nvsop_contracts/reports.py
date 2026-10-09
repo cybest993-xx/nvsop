@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import cast
 
 REPORT_CONTRACT_VERSION = 1
@@ -17,6 +18,7 @@ SOP_INSTANCE_REPORT_CONTRACT_VERSION = 1
 HEALTH_REPORT_CONTRACT_VERSION = 2
 OBSERVATION_REPORT_CONTRACT_VERSION = 1
 DISPOSAL_REPORT_CONTRACT_VERSION = 1
+EXECUTION_AUTHORITY_REPORT_CONTRACT_VERSION = 1
 REPORT_CAPABILITIES_HEADER = "X-NVSOP-Report-Capabilities"
 SOP_INSTANCE_REPORT_CAPABILITY = "sop-instance-report-v1"
 HEALTH_REPORT_CAPABILITY = "stream-health-report-v2"
@@ -400,6 +402,130 @@ class ReportedDisposal:
             reported_at=_string(value["reported_at"], "reported_at"),
             contract_version=contract_version,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class ReportedExecutionAuthority:
+    """edge 本机写入门禁的当前状态快照；中心只镜像，不据此授权。"""
+
+    host_id: str
+    station_id: str
+    authority_state: str
+    write_state: str
+    reason_code: str | None
+    detail: str | None
+    grant_id: str | None
+    holder_host_id: str | None
+    lease_expires_at: str | None
+    renewed_at: str | None
+    reported_at: str
+    contract_version: int = EXECUTION_AUTHORITY_REPORT_CONTRACT_VERSION
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("host_id", self.host_id),
+            ("station_id", self.station_id),
+            ("authority_state", self.authority_state),
+            ("write_state", self.write_state),
+            ("reported_at", self.reported_at),
+        ):
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{name} must not be empty")
+        for name, optional_value in (
+            ("reason_code", self.reason_code),
+            ("detail", self.detail),
+            ("grant_id", self.grant_id),
+            ("holder_host_id", self.holder_host_id),
+            ("lease_expires_at", self.lease_expires_at),
+            ("renewed_at", self.renewed_at),
+        ):
+            if optional_value is not None and (
+                not isinstance(optional_value, str) or not optional_value
+            ):
+                raise ValueError(f"{name} must be a non-empty string or null")
+        try:
+            reported_at = datetime.fromisoformat(self.reported_at.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ValueError("reported_at must be an ISO-8601 timestamp") from error
+        if reported_at.tzinfo is None:
+            raise ValueError("reported_at must include a timezone")
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "contract_version": self.contract_version,
+            "host_id": self.host_id,
+            "station_id": self.station_id,
+            "authority_state": self.authority_state,
+            "write_state": self.write_state,
+            "reason_code": self.reason_code,
+            "detail": self.detail,
+            "grant_id": self.grant_id,
+            "holder_host_id": self.holder_host_id,
+            "lease_expires_at": self.lease_expires_at,
+            "renewed_at": self.renewed_at,
+            "reported_at": self.reported_at,
+        }
+
+    @classmethod
+    def from_wire(cls, value: Mapping[str, object]) -> ReportedExecutionAuthority:
+        _require_keys(
+            value,
+            {
+                "contract_version",
+                "host_id",
+                "station_id",
+                "authority_state",
+                "write_state",
+                "reason_code",
+                "detail",
+                "grant_id",
+                "holder_host_id",
+                "lease_expires_at",
+                "renewed_at",
+                "reported_at",
+            },
+            "reported execution authority",
+        )
+        contract_version = _positive_int(value["contract_version"], "contract_version")
+        if contract_version != EXECUTION_AUTHORITY_REPORT_CONTRACT_VERSION:
+            raise ValueError("reported execution authority contract version is unsupported")
+        optional: dict[str, str | None] = {}
+        for name in (
+            "reason_code",
+            "detail",
+            "grant_id",
+            "holder_host_id",
+            "lease_expires_at",
+            "renewed_at",
+        ):
+            raw = value[name]
+            optional[name] = None if raw is None else _string(raw, name)
+        return cls(
+            host_id=_string(value["host_id"], "host_id"),
+            station_id=_string(value["station_id"], "station_id"),
+            authority_state=_string(value["authority_state"], "authority_state"),
+            write_state=_string(value["write_state"], "write_state"),
+            reason_code=optional["reason_code"],
+            detail=optional["detail"],
+            grant_id=optional["grant_id"],
+            holder_host_id=optional["holder_host_id"],
+            lease_expires_at=optional["lease_expires_at"],
+            renewed_at=optional["renewed_at"],
+            reported_at=_string(value["reported_at"], "reported_at"),
+            contract_version=contract_version,
+        )
+
+
+def reported_execution_authority_to_wire(
+    report: ReportedExecutionAuthority,
+) -> dict[str, object]:
+    return report.to_wire()
+
+
+def reported_execution_authority_from_wire(
+    value: Mapping[str, object],
+) -> ReportedExecutionAuthority:
+    return ReportedExecutionAuthority.from_wire(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -899,6 +1025,7 @@ def _is_sha256(value: str) -> bool:
 __all__ = [
     "DECISION_REPORT_CONTRACT_VERSION",
     "DISPOSAL_REPORT_CONTRACT_VERSION",
+    "EXECUTION_AUTHORITY_REPORT_CONTRACT_VERSION",
     "HEALTH_REPORT_CAPABILITY",
     "HEALTH_REPORT_CONTRACT_VERSION",
     "OBSERVATION_REPORT_CONTRACT_VERSION",
@@ -913,11 +1040,14 @@ __all__ = [
     "ReportViolation",
     "ReportedDecision",
     "ReportedDisposal",
+    "ReportedExecutionAuthority",
     "ReportedHealth",
     "ReportedObservation",
     "ReportedSopInstance",
     "reported_decision_from_wire",
     "reported_decision_to_wire",
+    "reported_execution_authority_from_wire",
+    "reported_execution_authority_to_wire",
     "reported_health_from_wire",
     "reported_health_to_wire",
     "reported_observation_from_wire",

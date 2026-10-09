@@ -81,6 +81,21 @@ class PostgresExecutionGrantRepository(ExecutionGrantRepository):
         )
         return tuple(_from_mapping(row) for row in rows)
 
+    def for_stations(self, station_ids: tuple[UUID, ...]) -> tuple[StationGrant, ...]:
+        if not station_ids:
+            return ()
+        table = cast(Table, StationGrantRow.__table__)
+        rows = (
+            self._session.execute(
+                select(*table.c)
+                .where(table.c.station_id.in_(station_ids))
+                .order_by(table.c.station_id)
+            )
+            .mappings()
+            .all()
+        )
+        return tuple(_from_mapping(row) for row in rows)
+
     def for_station(self, station_id: UUID) -> StationGrant | None:
         table = cast(Table, StationGrantRow.__table__)
         row = (

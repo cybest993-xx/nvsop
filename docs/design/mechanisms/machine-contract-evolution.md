@@ -67,4 +67,6 @@
 | Observation report | `ReportedObservation` 严格 `OBSERVATION_REPORT_CONTRACT_VERSION=1`，只归档产生时内容 | 当前无并行 generation；主机签名上报按当前拓扑归属校验（与 Health report 同），归 monitor/reporting owner |
 | Delegated connection-test command | 无数字 generation；以严格 `command_type` + 固定字段解析，未知字段拒绝 | 当前单一 shape；需要新命令行为时新增显式 command type/协商，不把任意字段塞入现有 payload，归 delegated-command owner |
 
+**判定投递信封**：`ReportedDecision` 严格 v1/v2 格式不变。`/monitor/reported-decisions/enveloped` 接收被同一主机身份签名覆盖的 `decision`、`latched_at` 与 `realtime`；后两者属于投递/归档元数据，不进入不可变的判定 payload。新 Edge 在旧 Center 的该入口返回 404 时退回原 v2 归档路径（不保留“实时”资格）；旧 Edge/历史 SQLite 没有可证明的锁存时刻时也沿用原上报，仅归档。每个事件首次入库的元数据保留，后续重发不可覆盖。协议扩展不引入新判定版本或第二判定权威。
+
 Decision report 的 v1/v2 是已有、已握手的报告协议例外，不构成继续给 configuration 增加 v3/v4 的先例。仓库目前也没有覆盖全部 Center↔Edge 机器接口的软件版本握手；每个未来行为扩展必须在自己的协议 owner 处给出明确兼容边界。

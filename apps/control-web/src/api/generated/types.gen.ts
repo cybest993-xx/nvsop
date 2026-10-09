@@ -7561,6 +7561,64 @@ export type ReportMonitorDecisionResponses = {
 export type ReportMonitorDecisionResponse =
   ReportMonitorDecisionResponses[keyof ReportMonitorDecisionResponses]
 
+export type ReportMonitorEnvelopedDecisionData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  headers?: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID'?: string | null
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/monitor/reported-decisions/enveloped'
+}
+
+export type ReportMonitorEnvelopedDecisionErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReportMonitorEnvelopedDecisionError =
+  ReportMonitorEnvelopedDecisionErrors[keyof ReportMonitorEnvelopedDecisionErrors]
+
+export type ReportMonitorEnvelopedDecisionResponses = {
+  /**
+   * Response Reportmonitorenvelopeddecision
+   *
+   * Successful Response
+   */
+  200: {
+    [key: string]: unknown
+  }
+}
+
+export type ReportMonitorEnvelopedDecisionResponse =
+  ReportMonitorEnvelopedDecisionResponses[keyof ReportMonitorEnvelopedDecisionResponses]
+
 export type ReportMonitorDisposalData = {
   /**
    * Body

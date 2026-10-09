@@ -23,6 +23,7 @@ from nvsop_contracts import (
 
 from edge_runtime.judgment.model import Decision, HostInstant, Lifecycle
 from edge_runtime.local_state import (
+    REPORT_RUN_ID,
     PendingHealthReport,
     PendingObservationReport,
     PendingReport,
@@ -58,6 +59,20 @@ class DecisionReportTransport(Protocol):
 
 
 @runtime_checkable
+class TimedDecisionReportTransport(Protocol):
+    """Optional authenticated delivery envelope, separate from immutable decision payload."""
+
+    def send_timed_decision(
+        self,
+        report: ReportedDecision,
+        *,
+        configuration: ConfigurationBundle | None,
+        latched_at: str,
+        realtime: bool,
+    ) -> None: ...
+
+
+@runtime_checkable
 class DisposalReportTransport(Protocol):
     def send_disposal(self, report: ReportedDisposal) -> None: ...
 
@@ -68,6 +83,9 @@ class ReportAttempt:
     sent: bool
     event_id: str
     error: str | None = None
+
+
+LIVE_REPORT_WINDOW_SECONDS = 30.0
 
 
 class HostReportReconciler:
@@ -181,10 +199,30 @@ class HostReportReconciler:
                 )
                 continue
             try:
-                self._transport.send_decision(
-                    decision_report,
-                    configuration=_configuration_from_context(pending.context),
-                )
+                configuration = _configuration_from_context(pending.context)
+                if pending.latched_at is not None and isinstance(
+                    self._transport, TimedDecisionReportTransport
+                ):
+                    realtime = (
+                        pending.attempts == 0
+                        and pending.latch_run_id == REPORT_RUN_ID
+                        and pending.latched_monotonic is not None
+                        and 0
+                        <= now.seconds - pending.latched_monotonic
+                        <= LIVE_REPORT_WINDOW_SECONDS
+                        and bool(decision_report.violations)
+                    )
+                    self._transport.send_timed_decision(
+                        decision_report,
+                        configuration=configuration,
+                        latched_at=pending.latched_at,
+                        realtime=realtime,
+                    )
+                else:
+                    self._transport.send_decision(
+                        decision_report,
+                        configuration=configuration,
+                    )
                 instance_report = reported_instance_from_pending(
                     pending, reported_at=stable_reported_at or reported_at
                 )

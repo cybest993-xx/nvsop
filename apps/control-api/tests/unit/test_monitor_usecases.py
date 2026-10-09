@@ -899,6 +899,34 @@ def test_decision_mirror_archives_latched_violations_idempotently() -> None:
     assert archived.received_at == received_at
 
 
+def test_latched_decision_live_hint_is_first_arrival_only_and_replayed_with_stable_time() -> None:
+    monitor = MemoryMonitor()
+    original = failing_report("host:proof-1")
+    happened = "2026-10-09T06:00:00Z"
+    assert mirror_decision(
+        original,
+        received_at=datetime(2026, 10, 9, 6, 0, 1, tzinfo=UTC),
+        monitor=monitor,
+        host_gateway=HostGateway(),
+        latched_at=happened,
+        realtime=True,
+    )
+    assert not mirror_decision(
+        original,
+        received_at=datetime(2026, 10, 9, 9, 0, tzinfo=UTC),
+        monitor=monitor,
+        host_gateway=HostGateway(),
+        latched_at=happened,
+        realtime=False,
+    )
+    archived = monitor.violations["host:proof-1#0"]
+    assert archived.latched_at == happened
+    assert archived.to_wire()["latched_at"] == happened
+    snapshot = sse_snapshot(monitor, caller=caller(Permission.MONITOR_VIEW))
+    assert '"realtime":true' in snapshot[0]
+    assert happened in snapshot[0]
+
+
 def test_violation_query_retains_instance_and_source_for_the_authorized_caller() -> None:
     monitor = MemoryMonitor()
     mirror_decision(

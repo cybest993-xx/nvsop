@@ -19,6 +19,8 @@ class MirroredDecision:
     report: ReportedDecision
     received_at: datetime
     stream_sequence: int | None = None
+    latched_at: str | None = None
+    realtime: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +50,8 @@ class MirroredViolation:
 
     `event_id` 由来源判定事件 id 与违规在该判定中的序号推导，因此同一判定的重复上报
     命中同一行；`decision_reported_at` 保存来源判定的上报时刻，与中心 `received_at`
-    （接收时刻）分开。违规的真实发生时刻是其 evidence 锚点，随 violation 原样保留。
+    （接收时刻）分开。证据锚点属于本机单调时间轴；latched_at 是首次确认墙钟，
+    不冒充视频采集时刻。
     """
 
     event_id: str
@@ -59,6 +62,7 @@ class MirroredViolation:
     report: ReportViolation
     decision_reported_at: str
     received_at: datetime
+    latched_at: str | None = None
 
     def payload(self) -> dict[str, object]:
         """持久化与幂等比较使用的内容；接收时刻是列，不进 payload。"""
@@ -69,6 +73,7 @@ class MirroredViolation:
             "station_id": self.station_id,
             "instance_id": self.instance_id,
             "reported_at": self.decision_reported_at,
+            **({"latched_at": self.latched_at} if self.latched_at is not None else {}),
             "violation": self.report.to_wire(),
         }
 

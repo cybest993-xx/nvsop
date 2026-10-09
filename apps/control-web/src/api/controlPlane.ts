@@ -365,6 +365,7 @@ type RuntimeDecision = RuntimeFact & {
   lifecycle: string
   reported_at: string
   violations?: unknown[]
+  realtime?: boolean
   template_version_id: string | null
   template_sha256: string | null
   backend_id?: string
@@ -398,6 +399,7 @@ export interface RuntimeViolation {
   instance_id: number
   reported_at: string
   received_at: string
+  latched_at?: string
   violation: {
     reason_code: string
     detail: string | null

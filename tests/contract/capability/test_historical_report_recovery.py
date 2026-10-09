@@ -207,6 +207,8 @@ class HistoricalRecoveryContractTest(unittest.TestCase):
             evidence=(),
             closed_instances=(instance,),
             report_provenance={1: (provenance_n,)},
+            latched_at="2026-10-09T06:00:00Z",
+            latched_monotonic=HostInstant(2.0),
         )
 
         (offline_pending,) = station.pending_reports()

@@ -88,6 +88,8 @@
 
 **SSE 快照/实时边界**：长期 `/api/v1/monitor/stream` 先发送已归档的初始 decision/health/runtime 快照，再发送无 `id:` 的 `event: live` 标记，此后才发送实时增量；Web 用该标记区分重连重放与实时提示。该标记不推进 `Last-Event-ID`，不改变原事件身份与 durable replay。
 
+**违规实时提示资格**：Edge 将首次锁存 UTC 时刻与本机单调时刻、当前进程身份在同一 SQLite 事务冻结；首次发送前仅用当前进程内的单调钟龄及首次尝试事实判断实时资格。运行时重启、旧 outbox 或迟到的首次发送都只归档。经签名的 `/monitor/reported-decisions/enveloped` 将不变的 v2 判定与可变化的投递 `realtime` 提示分离；Center 只在**首次成功插入**时冻结该提示，重试不改事实和资格；旧 Center 不支持新入口时仅走原接口归档。Center SSE 将资格投影给 Web，Web 仍先跳过快照/重连重放，再按稳定事件 ID 去重提示，不比较跨机墙钟。此资格表达 Edge 首次投递时的即时性而非摄像头采集时刻；跨机 NTP 误差不被假设为已验证。
+
 **SSE 授权生命周期**：建立请求时沿用普通会话认证与权限错误语义；长连接的初始快照和每个新批次发送前，由 `auth` 公开 Interface 在短 Session 内重读会话、用户状态与当前权限。周期复核不更新会话使用时间，不以保持连接延长 idle 或 absolute lifetime。注销、停用、撤权或到期后停止发送，空闲连接至迟在一个既有心跳等待周期内复核并关闭；复核故障也终止流，不继续使用旧 Caller。响应开始后的失效以关闭流表达，后续重连仍经正常认证／授权；事件身份、Last-Event-ID 和 durable replay 不变。心跳等待的实际默认值由 [SSE 用例](../../../apps/control-api/src/factory_sop/monitor/usecases.py) 拥有。
 
 **SSE 监听资源**：每个 API 进程为长订阅保留独立、有界的 PostgreSQL 监听池，不占用普通请求的业务池；在响应开始前取得配额，满额立即返回 503，不继续等待或扩大连接池。客户端断开或流异常结束时取消监听并归还配额，应用生命周期结束时释放池中连接。有限快照不占长期监听配额，事实查询仍走短业务事务；LISTEN/NOTIFY 只负责唤醒，不替代 PostgreSQL durable replay。预算由运行配置控制并设上限，为同步长流之外的普通请求保留执行余量。

@@ -24,8 +24,7 @@ const selectedViolation = ref<RuntimeViolation | null>(null)
 const selectedHint = ref('')
 const seenViolations = new Set<string>()
 const pendingDecisions = new Set<string>()
-// 只将来源上报与中心接收相隔很短的事实视作新告警；迟到补报保持为历史归档。
-const liveReportLagMs = 30_000
+// 实时资格由 Edge 本机单调钟与 Center 已认证首次入库联合确认；Web 不比较跨机墙钟。
 let live = false
 let active = true
 let loadRevision = 0
@@ -82,22 +81,17 @@ async function loadViolations(): Promise<void> {
   try {
     const result = await readMonitorViolations()
     if (!active || revision !== loadRevision) return
-    const alerts = result.items.filter((value) => {
-      const lag = Date.parse(value.received_at) - Date.parse(value.reported_at)
-      return (
-        !seenViolations.has(value.event_id) &&
-        pendingDecisions.has(value.decision_event_id) &&
-        lag >= 0 &&
-        lag <= liveReportLagMs
-      )
-    })
+    const alerts = result.items.filter(
+      (value) =>
+        !seenViolations.has(value.event_id) && pendingDecisions.has(value.decision_event_id),
+    )
     violations.value = result.items
     violationsTotal.value = result.total
     for (const value of result.items) seenViolations.add(value.event_id)
     pendingDecisions.clear()
     for (const value of alerts) {
       ElMessage.warning({
-        message: `新上报违规：${reasonLabel(value.violation.reason_code)}；来源时间 ${time(value.reported_at)}`,
+        message: `新上报违规：${reasonLabel(value.violation.reason_code)}；原确认时间 ${time(value.latched_at ?? null)}`,
         duration: 5000,
       })
     }
@@ -137,7 +131,7 @@ onMounted(() => {
       if (!value) live = false
     },
     (value) => {
-      if (!live || !value.violations?.length) return
+      if (!live || !value.realtime || !value.violations?.length) return
       pendingDecisions.add(value.event_id)
       void loadViolations()
     },
@@ -189,7 +183,8 @@ onUnmounted(() => {
           <p>
             工位 {{ stationLabel(v.station_id) }}（{{ v.station_id }}）/ 实例 {{ v.instance_id }}
           </p>
-          <p>原发生：{{ time(v.violation.evidence.anchor) }}</p>
+          <p>原确认：{{ v.latched_at ? time(v.latched_at) : '旧归档未记录墙钟时间' }}</p>
+          <p>证据时间轴：{{ time(v.violation.evidence.anchor) }}</p>
           <p>来源判定上报：{{ time(v.reported_at) }} / 中心接收：{{ time(v.received_at) }}</p>
           <p>来源推理机：{{ v.host_id }} / 归档事件：{{ v.event_id }}</p>
           <button type="button" @click="locateViolation(v)">定位相关判定</button>

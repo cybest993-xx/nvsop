@@ -239,12 +239,14 @@ test('SYS-23 — only live, fresh, stable events notify; reconnect and delayed r
     async (route) => {
       const decision = {
         event_id: freshId,
+        realtime: true,
         reported_at: fresh.reported_at,
         station_id: stationId,
         violations: [fresh.violation],
       }
       const oldDecision = {
         event_id: delayed.decision_event_id,
+        realtime: false,
         reported_at: delayed.reported_at,
         station_id: stationId,
         violations: [delayed.violation],

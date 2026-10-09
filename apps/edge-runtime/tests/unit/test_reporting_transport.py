@@ -188,6 +188,32 @@ class ReportCompatibilityTests(unittest.TestCase):
         self.assertEqual(self.requests[1].url.path, "/api/v1/monitor/reported-decisions")
         self.assertEqual(self.requests[2].url.path, "/api/v1/monitor/reported-decisions")
 
+    def test_signed_envelope_preserves_report_and_older_center_archives_without_live(self) -> None:
+        bundle = configuration()
+        report = v2_report(bundle)
+        sent = iter(
+            (
+                httpx2.Response(200, json=_HANDSHAKE_OK),
+                httpx2.Response(404, json={}),
+                httpx2.Response(200, json={}),
+            )
+        )
+        self.transport(lambda _: next(sent)).send_timed_decision(
+            report,
+            configuration=bundle,
+            latched_at="2026-10-09T06:00:00Z",
+            realtime=True,
+        )
+        assert self.requests[1].url.path.endswith("/reported-decisions/enveloped")
+        envelope = json.loads(self.requests[1].content)
+        assert envelope == {
+            "decision": report.to_wire(),
+            "latched_at": "2026-10-09T06:00:00Z",
+            "realtime": True,
+        }
+        assert self.requests[2].url.path.endswith("/reported-decisions")
+        assert json.loads(self.requests[2].content) == report.to_wire()
+
     def test_new_edge_does_not_downgrade_v2_when_old_center_lacks_handshake(self) -> None:
         bundle = configuration()
 

@@ -69,6 +69,8 @@ class JudgmentEffectsPersistenceTest(unittest.TestCase):
             evidence=clips_for(decision, margins=margins),
             closed_instances=(instance,),
             report_provenance={},
+            latched_at="2026-10-09T00:00:00+00:00",
+            latched_monotonic=HostInstant(1.0),
         )
         (pending_report,) = self.store.pending_reports()
         self.assertEqual(pending_report.queue_id, 1)

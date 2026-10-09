@@ -16,8 +16,12 @@ from factory_sop.device.adapters.repository import (
 )
 from factory_sop.device.errors import DeviceRefusalCode, DeviceRefusedError
 from factory_sop.device.model import DeviceStatus, InferenceHost, Station
-from factory_sop.execution.adapters.dependencies import lease_gateway
-from factory_sop.execution.api import ExecutionRefusalCode, ExecutionRefusedError
+from factory_sop.execution.adapters.dependencies import grant_views, lease_gateway
+from factory_sop.execution.api import (
+    ExecutionGrantState,
+    ExecutionRefusalCode,
+    ExecutionRefusedError,
+)
 from factory_sop.identifiers import new_id
 
 NOW = datetime(2026, 9, 22, 1, 0, tzinfo=UTC)
@@ -570,6 +574,45 @@ def _cleanup_execution_rows(
         connection.execute(
             text("DELETE FROM device_inference_host WHERE id = ANY(:host_ids)"),
             {"host_ids": list(host_ids)},
+        )
+
+
+def test_grant_view_batches_current_state_without_renewing(engine: Engine) -> None:
+    station, host_a, host_b = _arrange_targets(engine)
+    missing_station = _add_station(engine)
+    try:
+        setup = DatabaseSession(engine)
+        try:
+            lease_gateway(setup).acquire(
+                station_id=station.id,
+                holder_host_id=host_a.id,
+                request_id=new_id(),
+                now=NOW,
+            )
+            setup.commit()
+        finally:
+            setup.close()
+
+        session = DatabaseSession(engine)
+        try:
+            views = grant_views(session).station_views(
+                station_ids=(station.id, missing_station.id),
+                now=NOW + timedelta(days=8),
+            )
+        finally:
+            session.close()
+
+        assert tuple(view.station_id for view in views) == (station.id, missing_station.id)
+        assert views[0].state is ExecutionGrantState.EXPIRED
+        assert views[0].grant is not None
+        assert views[0].grant.renewed_at == NOW
+        assert views[1].state is ExecutionGrantState.MISSING
+        assert views[1].grant is None
+    finally:
+        _cleanup_execution_rows(
+            engine,
+            station_ids=(station.id, missing_station.id),
+            host_ids=(host_a.id, host_b.id),
         )
 
 

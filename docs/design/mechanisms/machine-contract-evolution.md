@@ -65,6 +65,7 @@
 | Decision report | `ReportedDecision` 明确维护严格 v1 与历史证明/复数 provenance 的 v2，并在发送 v2 前通过 confirmed-configuration 握手 | 这是已存在的跨异步升级兼容协议，不由配置契约重构删除；后续演进归 monitor/reporting owner |
 | Health report | `ReportedHealth` 严格 `HEALTH_REPORT_CONTRACT_VERSION=2`，携带每路流身份、发生时间与源锚/偏移；status/reason 文本保留可扩展值语义 | v1 从未有生产发送方（旧 Edge 只定义了 `send_health`，没有任何调用点），没有需要迁移的历史数据，因此不保留 v1 解码；有冻结 confirmed 配置的上报在发送前经 confirmed-configuration 握手协商 `stream-health-report-v2`，无配置的上报沿用既有直接发送路径（与 bootstrap 判定只表达当前归属同一边界），归 monitor/reporting owner |
 | Observation report | `ReportedObservation` 严格 `OBSERVATION_REPORT_CONTRACT_VERSION=1`，只归档产生时内容 | 当前无并行 generation；主机签名上报按当前拓扑归属校验（与 Health report 同），归 monitor/reporting owner |
+| Execution-authority report | `ReportedExecutionAuthority` 严格 `EXECUTION_AUTHORITY_REPORT_CONTRACT_VERSION=1`，只镜像 Edge 本机写入门禁当前状态 | 新 Edge 向 `/monitor/execution-authority` 上报；旧 Center 返回 404 时 Edge 仅在本进程停用该 advisory 展示上报，不重试制造噪声，也绝不改变本地租约/写入门禁/判定。兼容 Center 未取得 Edge 状态时 Web 保守显示未知/过期而不是可写；归 monitor/reporting owner |
 | Delegated connection-test command | 无数字 generation；以严格 `command_type` + 固定字段解析，未知字段拒绝 | 当前单一 shape；需要新命令行为时新增显式 command type/协商，不把任意字段塞入现有 payload，归 delegated-command owner |
 
 **判定投递信封**：`ReportedDecision` 严格 v1/v2 格式不变。`/monitor/reported-decisions/enveloped` 接收被同一主机身份签名覆盖的 `decision`、`latched_at` 与 `realtime`；后两者属于投递/归档元数据，不进入不可变的判定 payload。新 Edge 在旧 Center 的该入口返回 404 时退回原 v2 归档路径（不保留“实时”资格）；旧 Edge/历史 SQLite 没有可证明的锁存时刻时也沿用原上报，仅归档。每个事件首次入库的元数据保留，后续重发不可覆盖。协议扩展不引入新判定版本或第二判定权威。

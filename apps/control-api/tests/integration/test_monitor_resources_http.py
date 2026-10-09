@@ -24,6 +24,7 @@ from factory_sop.app import create_app
 from factory_sop.auth.adapters.repository import PostgresRoleRepository
 from factory_sop.auth.api import Permission
 from factory_sop.auth.model import Role
+from factory_sop.execution.adapters import dependencies as execution_dependencies
 from factory_sop.identifiers import new_id
 from factory_sop.monitor.adapters.repository import PostgresMonitorRepository
 from factory_sop.monitor.adapters.streaming import PostgresMonitorStreamSource
@@ -120,8 +121,16 @@ def test_legacy_listener_wiring_exhausts_business_pool_for_real_http_queries(
     business = factory.kw["bind"]
     # 复现修复前的资源装配：LISTEN 从业务池长期 checkout，不依赖 mock pool。
     sources = (
-        PostgresMonitorStreamSource(factory, business),
-        PostgresMonitorStreamSource(factory, business),
+        PostgresMonitorStreamSource(
+            factory,
+            business,
+            execution_gateway_factory=execution_dependencies.grant_views,
+        ),
+        PostgresMonitorStreamSource(
+            factory,
+            business,
+            execution_gateway_factory=execution_dependencies.grant_views,
+        ),
     )
     with httpx2.Client(base_url=url, timeout=20) as client:
         assert client.post(SESSION_PATH, json=CREDENTIALS).status_code == 201

@@ -23,6 +23,10 @@ class ExecutionGrantRepository(Protocol):
         """只返回该主机当前持有（含已过期）的租约，按工位排序。"""
         ...
 
+    def for_stations(self, station_ids: tuple[UUID, ...]) -> tuple[StationGrant, ...]:
+        """无锁批量读取运行投影所需的当前租约事实。"""
+        ...
+
     def for_station(self, station_id: UUID) -> StationGrant | None:
         """读取该工位当前租约，并在请求事务内锁定它；无归属返回 None。
 

@@ -14,10 +14,12 @@ import pytest
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from factory_sop.execution.adapters import dependencies as execution_dependencies
 from factory_sop.monitor.adapters.repository import PostgresMonitorRepository
 from factory_sop.monitor.adapters.streaming import PostgresMonitorStreamSource
 from factory_sop.monitor.model import (
     MirroredDecision,
+    MirroredExecutionAuthority,
     MirroredHealth,
     MirroredObservation,
     MirroredSopInstance,
@@ -26,6 +28,7 @@ from nvsop_contracts import (
     ReportBackendProvenance,
     ReportedDecision,
     ReportedDisposal,
+    ReportedExecutionAuthority,
     ReportedHealth,
     ReportedObservation,
     ReportedSopInstance,
@@ -247,8 +250,16 @@ def test_commit_wakes_independent_listeners_and_reads_use_short_transactions(
 ) -> None:
     factory = sessionmaker(bind=engine)
     decision_sequence, health_sequence = _current_sequences(factory)
-    source_a = PostgresMonitorStreamSource(factory, engine)
-    source_b = PostgresMonitorStreamSource(factory, engine)
+    source_a = PostgresMonitorStreamSource(
+        factory,
+        engine,
+        execution_gateway_factory=execution_dependencies.grant_views,
+    )
+    source_b = PostgresMonitorStreamSource(
+        factory,
+        engine,
+        execution_gateway_factory=execution_dependencies.grant_views,
+    )
     event_ids = tuple(f"s143:wakeup:{uuid4()}" for _ in range(3))
 
     try:
@@ -321,7 +332,11 @@ def test_durable_replay_does_not_require_a_prior_wakeup(engine: Engine) -> None:
         assert PostgresMonitorRepository(session).upsert_health(_health(event_id))
         session.commit()
 
-    source = PostgresMonitorStreamSource(factory, engine)
+    source = PostgresMonitorStreamSource(
+        factory,
+        engine,
+        execution_gateway_factory=execution_dependencies.grant_views,
+    )
     try:
         _, health = source.read_after_sequences(
             decision_sequence=decision_sequence,
@@ -331,6 +346,66 @@ def test_durable_replay_does_not_require_a_prior_wakeup(engine: Engine) -> None:
         assert event_id in {value.report.event_id for value in health}
     finally:
         source.close()
+
+
+def test_execution_authority_concurrent_first_write_keeps_latest(engine: Engine) -> None:
+    factory = sessionmaker(bind=engine)
+    station_id, host_id = str(uuid4()), str(uuid4())
+
+    def value(reported_at: str, second: int) -> MirroredExecutionAuthority:
+        return MirroredExecutionAuthority(
+            report=ReportedExecutionAuthority(
+                host_id=host_id,
+                station_id=station_id,
+                authority_state="active",
+                write_state="enabled",
+                reason_code=None,
+                detail=None,
+                grant_id=f"grant-{second}",
+                holder_host_id=host_id,
+                lease_expires_at="2026-10-10T00:00:00Z",
+                renewed_at="2026-10-09T00:00:00Z",
+                reported_at=reported_at,
+            ),
+            received_at=RECEIVED_AT + timedelta(seconds=second),
+        )
+
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def write(sample: MirroredExecutionAuthority) -> None:
+        try:
+            with factory() as session:
+                barrier.wait()
+                PostgresMonitorRepository(session).upsert_execution_authority(sample)
+                session.commit()
+        except BaseException as error:
+            errors.append(error)
+
+    older = value("2026-10-09T00:00:00Z", 1)
+    newer = value("2026-10-09T00:00:01Z", 2)
+    threads = [threading.Thread(target=write, args=(sample,)) for sample in (older, newer)]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+        assert not errors
+        with factory() as session:
+            stored = PostgresMonitorRepository(session).execution_authority_for_stations(
+                station_ids=(station_id,)
+            )
+        assert len(stored) == 1
+        assert stored[0].report == newer.report
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "DELETE FROM monitor_execution_authority "
+                    "WHERE station_id = :station_id AND host_id = :host_id"
+                ),
+                {"station_id": station_id, "host_id": host_id},
+            )
 
 
 def _instance(
@@ -394,7 +469,11 @@ def _station_instance(rows: tuple[dict[str, object], ...], station_id: str) -> d
 
 def test_runtime_projection_keeps_new_instance_when_old_close_arrives_late(engine: Engine) -> None:
     factory = sessionmaker(bind=engine)
-    source = PostgresMonitorStreamSource(factory, engine)
+    source = PostgresMonitorStreamSource(
+        factory,
+        engine,
+        execution_gateway_factory=execution_dependencies.grant_views,
+    )
     station_id, first, second = str(uuid4()), f"s019:instance:{uuid4()}", f"s019:instance:{uuid4()}"
     try:
         assert station_id not in {value["station_id"] for value in source.read_runtime_projection()}
@@ -426,7 +505,11 @@ def test_runtime_projection_keeps_new_instance_when_old_close_arrives_late(engin
         assert latest["closed_at"] is None
     finally:
         source.close()
-    reconnect = PostgresMonitorStreamSource(factory, engine)
+    reconnect = PostgresMonitorStreamSource(
+        factory,
+        engine,
+        execution_gateway_factory=execution_dependencies.grant_views,
+    )
     try:
         assert _station_instance(reconnect.read_runtime_projection(), station_id) == latest
         with factory() as session:
@@ -477,7 +560,11 @@ def test_runtime_observation_notify_is_transactional_and_projection_has_no_globa
     engine: Engine,
 ) -> None:
     factory = sessionmaker(bind=engine)
-    source = PostgresMonitorStreamSource(factory, engine)
+    source = PostgresMonitorStreamSource(
+        factory,
+        engine,
+        execution_gateway_factory=execution_dependencies.grant_views,
+    )
     try:
         existing_stations = {value["station_id"] for value in source.read_runtime_projection()}
         rollback_station = str(uuid4())

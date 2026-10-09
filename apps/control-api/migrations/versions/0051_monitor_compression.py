@@ -94,8 +94,16 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # 三次 remove 各自独立提交：native 删除对每个 job 取 AccessExclusive advisory 并删
+    # bgw_job_stat 行，该表锁会保留到提交；若三条删除同处一个事务，第一条删除留下的表锁会与
+    # 正在收尾的 scheduler/worker（持 job advisory、等 bgw_job_stat）形成死锁。if_exists 让
+    # 中断后重放可跳过已删策略；三策略全部删完后再离开 block。
+    with op.get_context().autocommit_block():
+        for fact in _FACTS:
+            op.execute(f"CALL remove_columnstore_policy('{fact}', if_exists => true)")
+
+    # 策略删除已提交；以下 DDL 仍在退出 block 后的单一事务内，失败则整体回滚。
     for fact in _FACTS:
-        op.execute(f"CALL remove_columnstore_policy('{fact}')")
         # 降级前将已压缩 chunk 原生转换回行存储，保留事件身份与事实数据。
         chunks = (
             op.get_bind()

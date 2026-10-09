@@ -81,12 +81,16 @@ class ReportedDecisionRow(Table):
     # 流内序号；全局唯一由 monitor_decision_identity 承载，此处保留副本供 SSE 游标查询。
     stream_sequence: Mapped[int] = mapped_column(BigInteger(), nullable=False, index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    latched_at: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    realtime: Mapped[bool] = mapped_column(default=False, nullable=False)
 
     def to_domain(self) -> MirroredDecision:
         return MirroredDecision(
             report=reported_decision_from_wire(cast(dict[str, object], self.payload)),
             received_at=self.received_at,
             stream_sequence=self.stream_sequence,
+            latched_at=self.latched_at,
+            realtime=self.realtime,
         )
 
     @classmethod
@@ -100,6 +104,8 @@ class ReportedDecisionRow(Table):
             backend_id=report.backend_id,
             received_at=value.received_at,
             payload=reported_decision_to_wire(report),
+            latched_at=value.latched_at,
+            realtime=value.realtime,
         )
         if value.stream_sequence is not None:
             row.stream_sequence = value.stream_sequence
@@ -301,6 +307,7 @@ class ReportedViolationRow(Table):
             report=ReportViolation.from_wire(cast(dict[str, object], payload["violation"])),
             decision_reported_at=cast(str, payload["reported_at"]),
             received_at=self.received_at,
+            latched_at=cast(str | None, payload.get("latched_at")),
         )
 
     @classmethod

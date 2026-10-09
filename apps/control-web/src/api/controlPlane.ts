@@ -48,6 +48,7 @@ import {
   listConnectors as generatedListConnectors,
   listDatasetMembers as generatedListDatasetMembers,
   listInferenceHosts as generatedListInferenceHosts,
+  listMonitorViolations as generatedListMonitorViolations,
   listPermissions as generatedListPermissions,
   listPoints as generatedListPoints,
   listRoles as generatedListRoles,
@@ -357,11 +358,14 @@ export interface RuntimeProvenance {
 
 type RuntimeFact = Record<string, unknown>
 type RuntimeDecision = RuntimeFact & {
+  event_id: string
   verdict: string
   reason_codes: string[]
   instance_id: number
   lifecycle: string
   reported_at: string
+  violations?: unknown[]
+  realtime?: boolean
   template_version_id: string | null
   template_sha256: string | null
   backend_id?: string
@@ -387,15 +391,54 @@ export interface RuntimeStationProjection extends RuntimeFact {
   health?: RuntimeHealth[]
 }
 
+export interface RuntimeViolation {
+  event_id: string
+  decision_event_id: string
+  host_id: string
+  station_id: string
+  instance_id: number
+  reported_at: string
+  received_at: string
+  latched_at?: string
+  violation: {
+    reason_code: string
+    detail: string | null
+    step_ids: string[]
+    evidence: { anchor: number | null; start: number | null; end: number | null }
+  }
+}
+
+/** 中心归档已经按稳定事件身份幂等去重；这里只读取，不重新判定。 */
+export async function readMonitorViolations(
+  page = 1,
+  pageSize = 50,
+): Promise<{
+  items: RuntimeViolation[]
+  page: number
+  page_size: number
+  total: number
+}> {
+  const result = await execute(
+    generatedListMonitorViolations({ query: { page, page_size: pageSize } }),
+  )
+  return { ...result, items: result.items as unknown as RuntimeViolation[] }
+}
+
 /** 订阅当前工位运行镜像；原生 EventSource 负责 Last-Event-ID 增量重连。 */
 export function openRuntimeProjection(
   onProjection: (projection: RuntimeStationProjection) => void,
   onConnection: (connected: boolean) => void,
+  onDecision?: (decision: RuntimeDecision) => void,
+  onLive?: () => void,
 ): () => void {
   const source = new EventSource('/api/v1/monitor/stream')
   source.addEventListener('runtime', (event) => {
     onProjection(JSON.parse((event as MessageEvent<string>).data) as RuntimeStationProjection)
   })
+  source.addEventListener('decision', (event) => {
+    onDecision?.(JSON.parse((event as MessageEvent<string>).data) as RuntimeDecision)
+  })
+  source.addEventListener('live', () => onLive?.())
   source.onopen = () => onConnection(true)
   source.onerror = () => onConnection(false)
   return () => source.close()

@@ -43,7 +43,6 @@ from factory_sop.monitor.usecases import (
 )
 from factory_sop.responses import DEFAULT_PAGE_SIZE, MAXIMUM_PAGE_SIZE, ItemPage
 from nvsop_contracts import (
-    ReportedDecision,
     ReportedDisposal,
     ReportedHealth,
     ReportedObservation,
@@ -63,6 +62,7 @@ HOST_SILENCE_THRESHOLD_SECONDS = 300.0
 """外部证人判据（§5.7）：超过该秒数未收到任何主机事实即标记该机可疑。"""
 
 
+@router.post("/reported-decisions/enveloped", operation_id="reportMonitorEnvelopedDecision")
 @router.post("/reported-decisions", operation_id="reportMonitorDecision")
 def report_monitor_decision(
     request: Request,
@@ -83,7 +83,24 @@ def report_monitor_decision(
     ] = None,
 ) -> dict[str, object]:
     try:
-        report: ReportedDecision = reported_decision_from_wire(body)
+        enveloped = request.url.path.endswith("/enveloped")
+        if enveloped:
+            if set(body) != {"decision", "latched_at", "realtime"}:
+                raise ValueError("decision envelope keys are invalid")
+            raw = body["decision"]
+            if not isinstance(raw, dict):
+                raise ValueError("decision envelope report must be an object")
+            latched_at = body["latched_at"]
+            realtime = body["realtime"]
+            if not isinstance(latched_at, str) or type(realtime) is not bool:
+                raise ValueError("decision envelope metadata is invalid")
+            latch_time = datetime.fromisoformat(latched_at.replace("Z", "+00:00"))
+            if latch_time.tzinfo is None:
+                raise ValueError("decision latch time must have a timezone")
+            report = reported_decision_from_wire(raw)
+        else:
+            report = reported_decision_from_wire(body)
+            latched_at, realtime = None, False
         host_id = UUID(report.host_id)
     except (ValueError, TypeError) as error:
         raise HTTPException(
@@ -106,6 +123,8 @@ def report_monitor_decision(
             monitor=monitor,
             host_gateway=host_gateway,
             assignment_gateway=assignment_gateway,
+            latched_at=latched_at,
+            realtime=realtime,
         )
     except MonitorRefusedError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
@@ -468,7 +487,8 @@ def stream_monitor_events(
             yield from sse_stream(
                 source,
                 current_caller=current_caller,
-                initial_frames=snapshot.frames,
+                # 显式分隔历史快照与之后的实时事件，供浏览器抑制重连补报提示。
+                initial_frames=(*snapshot.frames, "event: live\ndata: {}\n\n"),
                 decision_sequence=snapshot.decision_sequence,
                 health_sequence=snapshot.health_sequence,
                 runtime_projection=snapshot.runtime_projection,

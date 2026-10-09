@@ -51,6 +51,7 @@ from edge_runtime.local_state.disposal import (
 )
 from edge_runtime.local_state.execution import LocalExecutionLeaseStore
 from edge_runtime.local_state.queues import (
+    REPORT_RUN_ID,
     BackendReportContext,
     EvidenceSource,
     PendingHealthReport,
@@ -77,6 +78,8 @@ class ReactionStore(Protocol):
         evidence: Sequence[EvidenceClip],
         closed_instances: Sequence[Instance],
         report_provenance: Mapping[int, tuple[BackendReportContext, ...] | None],
+        latched_at: str,
+        latched_monotonic: HostInstant,
         disposals: Sequence[LocalDisposalRequest] = (),
     ) -> tuple[LocalDisposalIntent, ...]: ...
 
@@ -179,6 +182,8 @@ class StationStore(StationQueues):
         evidence: Sequence[EvidenceClip],
         closed_instances: Sequence[Instance],
         report_provenance: Mapping[int, tuple[BackendReportContext, ...] | None],
+        latched_at: str,
+        latched_monotonic: HostInstant,
         disposals: Sequence[LocalDisposalRequest] = (),
     ) -> tuple[LocalDisposalIntent, ...]:
         """持久化一次反应及其处置意图;副作用在提交后执行。"""
@@ -208,10 +213,14 @@ class StationStore(StationQueues):
                     self._enqueue_report(
                         decision_id,
                         report_provenance.get(decision.instance_id),
+                        latched_at=latched_at,
+                        latched_monotonic=latched_monotonic.seconds,
                     )
                     report_enqueued = True
                     for violation in decision.violations:
-                        self._latch(decision.instance_id, decision_id, violation)
+                        self._latch(
+                            decision.instance_id, decision_id, violation, latched_at=latched_at
+                        )
                     if decision.lifecycle is not Lifecycle.STAYS_OPEN:
                         self._close_instance(decision)
                         self._supersede_instance_open_report(
@@ -363,14 +372,16 @@ class StationStore(StationQueues):
         )
         return int(cursor.lastrowid or 0)
 
-    def _latch(self, instance_id: int, decision_id: int, violation: Violation) -> None:
+    def _latch(
+        self, instance_id: int, decision_id: int, violation: Violation, *, latched_at: str
+    ) -> None:
         """只插入实例违例; 重复报告同一事实时保留首次确认时刻 (§5.2)。"""
         self._connection.execute(
             """
             INSERT INTO local_violation (
                 station_id, instance_id, decision_id, reason, steps,
-                evidence_anchor, evidence_from, evidence_to
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                evidence_anchor, evidence_from, evidence_to, latched_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (station_id, instance_id, reason, steps) DO NOTHING
             """,
             (
@@ -382,6 +393,7 @@ class StationStore(StationQueues):
                 violation.evidence.anchor.seconds,
                 violation.evidence.required_from.seconds,
                 violation.evidence.required_to.seconds,
+                latched_at,
             ),
         )
 
@@ -389,14 +401,19 @@ class StationStore(StationQueues):
         self,
         decision_id: int,
         provenance: tuple[BackendReportContext, ...] | None,
+        *,
+        latched_at: str,
+        latched_monotonic: float,
     ) -> None:
         if self._report_context is None:
             self._connection.execute(
                 """
-                INSERT INTO local_report_queue (station_id, decision_id, report_kind)
-                VALUES (?, ?, 'decision')
+                INSERT INTO local_report_queue (
+                    station_id, decision_id, report_kind,
+                    latched_at, latched_monotonic, latch_run_id
+                ) VALUES (?, ?, 'decision', ?, ?, ?)
                 """,
-                (self._station_id, decision_id),
+                (self._station_id, decision_id, latched_at, latched_monotonic, REPORT_RUN_ID),
             )
             return
         context = self._report_context
@@ -413,8 +430,9 @@ class StationStore(StationQueues):
                 station_id, decision_id, report_kind, report_host_id,
                 report_template_version_id, report_template_sha256,
                 report_backend_provenance, report_configuration,
-                configuration_revision, configuration_sha256
-            ) VALUES (?, ?, 'decision', ?, ?, ?, ?, ?, ?, ?)
+                configuration_revision, configuration_sha256,
+                latched_at, latched_monotonic, latch_run_id
+            ) VALUES (?, ?, 'decision', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 self._station_id,
@@ -426,6 +444,9 @@ class StationStore(StationQueues):
                 context.configuration_json,
                 context.configuration_revision,
                 context.configuration_sha256,
+                latched_at,
+                latched_monotonic,
+                REPORT_RUN_ID,
             ),
         )
 

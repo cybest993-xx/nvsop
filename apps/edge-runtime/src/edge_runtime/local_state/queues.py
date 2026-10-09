@@ -24,11 +24,15 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from math import isfinite
 from threading import RLock
+from uuid import uuid4
 
 from edge_runtime.judgment.model import Decision, HostInstant, Lifecycle, Violation
 from edge_runtime.judgment.reasons import ReasonCode, Verdict
 from edge_runtime.local_state.codec import span
 from edge_runtime.local_state.codec import violation as decode_violation
+
+# A new process cannot validate a previous process's monotonic report time.
+REPORT_RUN_ID = uuid4().hex
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +105,9 @@ class PendingReport:
     attempts: int
     last_error: str | None
     reported_at: str | None = None
+    latched_at: str | None = None
+    latched_monotonic: float | None = None
+    latch_run_id: str | None = None
     context: ReportContext | None = None
     opened_at: float | None = None
     closed_at: float | None = None
@@ -243,6 +250,7 @@ class StationQueues:
                        q.report_backend_provenance,
                        q.report_configuration,
                        q.configuration_revision, q.configuration_sha256,
+                       q.latched_at, q.latched_monotonic, q.latch_run_id,
                        d.decision_id, d.instance_id, d.verdict, d.reasons, d.lifecycle,
                        d.evidence_anchor, d.evidence_from, d.evidence_to,
                        i.opened_at, i.closed_at, i.lifecycle AS instance_lifecycle,
@@ -273,6 +281,7 @@ class StationQueues:
                        q.report_backend_provenance,
                        q.report_configuration,
                        q.configuration_revision, q.configuration_sha256,
+                       q.latched_at, q.latched_monotonic, q.latch_run_id,
                        d.decision_id, d.instance_id, d.verdict, d.reasons, d.lifecycle,
                        d.evidence_anchor, d.evidence_from, d.evidence_to,
                        i.opened_at, i.closed_at, i.lifecycle AS instance_lifecycle,
@@ -300,6 +309,11 @@ class StationQueues:
             attempts=row["attempts"],
             last_error=row["last_error"],
             reported_at=row["report_reported_at"],
+            latched_at=row["latched_at"],
+            latched_monotonic=(
+                None if row["latched_monotonic"] is None else float(row["latched_monotonic"])
+            ),
+            latch_run_id=row["latch_run_id"],
             context=self._report_context_of(row),
             opened_at=row["opened_at"] if row["closed_at"] is not None else None,
             closed_at=row["closed_at"],

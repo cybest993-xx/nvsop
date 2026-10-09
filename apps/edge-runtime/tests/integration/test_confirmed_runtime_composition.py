@@ -247,6 +247,8 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
                 evidence=(),
                 closed_instances=(instance,),
                 report_provenance={1: (provenance,)},
+                latched_at="2026-10-09T00:00:00+00:00",
+                latched_monotonic=HostInstant(2.0),
             )
             self.assertTrue(state.reports().pending_ids())
             state.configuration().confirm(bundle_n1, confirmed_at=3.0)
@@ -265,7 +267,7 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
                 self.assertIsNotNone(runtime._report_reconciler)
                 with (
                     patch(
-                        "edge_runtime.reporting_transport.HttpDecisionReportTransport.send_decision"
+                        "edge_runtime.reporting_transport.HttpDecisionReportTransport.send_timed_decision"
                     ) as send_decision,
                     patch(
                         "edge_runtime.reporting_transport.HttpDecisionReportTransport.send_instance"

@@ -426,6 +426,14 @@ _V14 = (
     "CREATE INDEX local_disposal_by_connector ON local_disposal (station_id,connector_id,point_id)",
 )
 
+# Older rows have no proven wall-clock latch or live-delivery epoch: they remain archival.
+_V15 = (
+    "ALTER TABLE local_report_queue ADD COLUMN latched_at TEXT",
+    "ALTER TABLE local_report_queue ADD COLUMN latched_monotonic REAL",
+    "ALTER TABLE local_report_queue ADD COLUMN latch_run_id TEXT",
+    "ALTER TABLE local_violation ADD COLUMN latched_at TEXT",
+)
+
 MIGRATIONS: tuple[tuple[str, ...], ...] = (
     _V1,
     _V2,
@@ -441,6 +449,7 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
     _V12,
     _V13,
     _V14,
+    _V15,
 )
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 

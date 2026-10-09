@@ -602,6 +602,45 @@ def test_runtime_projection_snapshot_and_stream_are_idless_and_emit_only_changes
     assert next(stream) == ": keep-alive\n\n"
 
 
+def test_monitor_stream_route_separates_replayed_decisions_from_live_events() -> None:
+    import asyncio
+
+    from factory_sop.monitor.adapters.routes import stream_monitor_events
+
+    monitor = MemoryMonitor()
+    monitor.runtime = ({"station_id": str(STATION_ID), "decision": {"verdict": "pass"}},)
+    mirror_decision(
+        report("host:archived-decision"),
+        received_at=datetime(2026, 9, 13, tzinfo=UTC),
+        monitor=monitor,
+        host_gateway=HostGateway(),
+    )
+    response = stream_monitor_events(
+        caller=caller(Permission.MONITOR_VIEW),
+        current_caller=lambda: caller(Permission.MONITOR_VIEW),
+        monitor=monitor,
+        source=monitor,
+        last_event_id=None,
+        once=False,
+    )
+
+    async def read_boundary() -> tuple[str, str, str]:
+        iterator = aiter(response.body_iterator)
+        decision = await anext(iterator)
+        runtime = await anext(iterator)
+        boundary = await anext(iterator)
+        assert isinstance(decision, str)
+        assert isinstance(runtime, str)
+        assert isinstance(boundary, str)
+        return decision, runtime, boundary
+
+    decision, runtime, live_boundary = asyncio.run(read_boundary())
+    assert "event: decision" in decision
+    assert "id: host:archived-decision" in decision
+    assert "event: runtime" in runtime
+    assert live_boundary == "event: live\ndata: {}\n\n"
+
+
 def test_sse_revoked_caller_does_not_receive_a_new_runtime_projection() -> None:
     monitor = MemoryMonitor()
     permitted = True
@@ -858,6 +897,34 @@ def test_decision_mirror_archives_latched_violations_idempotently() -> None:
     # 原发生时刻停留在首次归档, 不被重报时的接收时刻改写 (§AC2)
     assert archived.decision_reported_at == original.reported_at
     assert archived.received_at == received_at
+
+
+def test_latched_decision_live_hint_is_first_arrival_only_and_replayed_with_stable_time() -> None:
+    monitor = MemoryMonitor()
+    original = failing_report("host:proof-1")
+    happened = "2026-10-09T06:00:00Z"
+    assert mirror_decision(
+        original,
+        received_at=datetime(2026, 10, 9, 6, 0, 1, tzinfo=UTC),
+        monitor=monitor,
+        host_gateway=HostGateway(),
+        latched_at=happened,
+        realtime=True,
+    )
+    assert not mirror_decision(
+        original,
+        received_at=datetime(2026, 10, 9, 9, 0, tzinfo=UTC),
+        monitor=monitor,
+        host_gateway=HostGateway(),
+        latched_at=happened,
+        realtime=False,
+    )
+    archived = monitor.violations["host:proof-1#0"]
+    assert archived.latched_at == happened
+    assert archived.to_wire()["latched_at"] == happened
+    snapshot = sse_snapshot(monitor, caller=caller(Permission.MONITOR_VIEW))
+    assert '"realtime":true' in snapshot[0]
+    assert happened in snapshot[0]
 
 
 def test_violation_query_retains_instance_and_source_for_the_authorized_caller() -> None:

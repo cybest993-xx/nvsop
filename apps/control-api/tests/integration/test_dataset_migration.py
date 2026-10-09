@@ -441,7 +441,8 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
 
     with database_at_0023.connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0052"
+    assert version == "0053"
+    assert {"latched_at", "realtime"} <= _columns(database_at_0023, "monitor_reported_decision")
     # 客户端不再必须预读整段视频计算摘要：声明列可为空，权威摘要由中心登记。
     assert _nullable_columns(database_at_0023, "dataset_member")["declared_sha256"] is True
     assert _nullable_columns(database_at_0023, "dataset_upload_attempt")["declared_sha256"] is True

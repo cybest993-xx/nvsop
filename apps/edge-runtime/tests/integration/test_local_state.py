@@ -21,6 +21,7 @@ from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event
+from unittest.mock import patch
 
 from nvsop_contracts import (
     ConfigurationBundle,
@@ -161,6 +162,8 @@ class OneTransactionTest(unittest.TestCase):
             evidence=(),
             closed_instances=(),
             report_provenance={},
+            latched_at="2026-10-09T00:00:00+00:00",
+            latched_monotonic=HostInstant(1.0),
         )
         # 第二次提交用同一身份再次锁存相同事实: 不得新增第二条。
         station.commit(
@@ -169,6 +172,8 @@ class OneTransactionTest(unittest.TestCase):
             evidence=(),
             closed_instances=(),
             report_provenance={},
+            latched_at="2026-10-09T00:00:00+00:00",
+            latched_monotonic=HostInstant(1.0),
         )
 
         self.assertEqual(station.latched_violations(instance_id=1), (violation,))
@@ -679,6 +684,65 @@ class HistoricalReportContextTest(unittest.TestCase):
         self.assertEqual(pending.context.backends, (backend_a, backend_b))
         self.assertEqual(pending.decision.verdict, Verdict.INDETERMINATE)
         self.assertIn(ReasonCode.INFERENCE_BACKEND_UNREACHABLE, pending.decision.reasons)
+
+    def test_latch_freshness_is_monotonic_and_process_scoped(self) -> None:
+        class Transport:
+            def __init__(self) -> None:
+                self.received: list[tuple[str, bool]] = []
+
+            def send_timed_decision(
+                self,
+                report: ReportedDecision,
+                *,
+                configuration: ConfigurationBundle | None,
+                latched_at: str,
+                realtime: bool,
+            ) -> None:
+                del report, configuration
+                self.received.append((latched_at, realtime))
+
+            def send_decision(
+                self, report: ReportedDecision, *, configuration: ConfigurationBundle | None
+            ) -> None:
+                raise AssertionError("new event must use signed envelope")
+
+            def send_instance(self, report: object, *, configuration: object) -> None:
+                del report, configuration
+
+            def send_observation(self, report: object) -> None:
+                del report
+
+            def send_health(self, report: object, *, configuration: object) -> None:
+                del report, configuration
+
+        for lag, new_process, expected in (
+            (1.0, False, True),
+            (3600.0, False, False),
+            (1.0, True, False),
+        ):
+            with self.subTest(lag=lag, new_process=new_process):
+                state = open_local_state(":memory:")
+                self.addCleanup(state.close)
+                station = state.station(
+                    STATION, report_context=self.context(revision=9, backend_id="backend-a")
+                )
+                driver = supervisor(opening_state(), FakeClock(), station)
+                driver.receive(action(STEPS[0], at=ANCHOR))
+                driver.receive(action(STEPS[2], at=ANCHOR + 1.0))
+                (pending,) = station.pending_reports()
+                assert pending.latched_at is not None
+                assert pending.latched_monotonic is not None
+                self.assertTrue(pending.decision.violations)
+                transport = Transport()
+                with patch(
+                    "edge_runtime.reporting.REPORT_RUN_ID",
+                    "new-process" if new_process else pending.latch_run_id,
+                ):
+                    HostReportReconciler(reports=state.reports(), transport=transport).flush(
+                        now=HostInstant(pending.latched_monotonic + lag),
+                        reported_at="2026-10-09T06:00:05Z",
+                    )
+                self.assertEqual(transport.received, [(pending.latched_at, expected)])
 
     def test_non_first_backend_provenance_reaches_the_report_outbox(self) -> None:
         bundle = ConfigurationBundle(

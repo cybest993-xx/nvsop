@@ -306,6 +306,9 @@ import type {
   ReportMonitorDisposalData,
   ReportMonitorDisposalErrors,
   ReportMonitorDisposalResponses,
+  ReportMonitorEnvelopedDecisionData,
+  ReportMonitorEnvelopedDecisionErrors,
+  ReportMonitorEnvelopedDecisionResponses,
   ReportMonitorHealthData,
   ReportMonitorHealthErrors,
   ReportMonitorHealthResponses,
@@ -1461,6 +1464,29 @@ export const reportMonitorDecision = <ThrowOnError extends boolean = false>(
     ThrowOnError
   >({
     url: '/api/v1/monitor/reported-decisions',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Report Monitor Decision
+ */
+export const reportMonitorEnvelopedDecision = <ThrowOnError extends boolean = false>(
+  options: Options<ReportMonitorEnvelopedDecisionData, ThrowOnError>,
+): RequestResult<
+  ReportMonitorEnvelopedDecisionResponses,
+  ReportMonitorEnvelopedDecisionErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    ReportMonitorEnvelopedDecisionResponses,
+    ReportMonitorEnvelopedDecisionErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/monitor/reported-decisions/enveloped',
     ...options,
     headers: {
       'Content-Type': 'application/json',

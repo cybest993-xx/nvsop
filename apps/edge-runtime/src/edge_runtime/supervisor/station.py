@@ -476,6 +476,8 @@ class StationSupervisor:
             evidence=committed_evidence,
             closed_instances=tuple(closed_instances),
             report_provenance=committed_provenance,
+            latched_at=datetime.now(UTC).isoformat(),
+            latched_monotonic=HostInstant(self._clock()),
             disposals=_disposals(decisions, self._disposition_policy),
         )
         for instance in closed_instances:

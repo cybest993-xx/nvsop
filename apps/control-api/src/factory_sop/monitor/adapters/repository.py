@@ -71,6 +71,8 @@ class PostgresMonitorRepository(MonitorRepository):
                     station_id=row.station_id,
                     backend_id=row.backend_id,
                     payload=row.payload,
+                    latched_at=row.latched_at,
+                    realtime=row.realtime,
                 )
             )
             self._notify_stream("decision")

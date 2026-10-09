@@ -836,6 +836,8 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
                 evidence=(),
                 closed_instances=(instance,),
                 report_provenance={1: (provenance_n,)},
+                latched_at="2026-10-09T06:00:00Z",
+                latched_monotonic=edge_model.HostInstant(2.0),
             )
             (offline_pending,) = edge_station.pending_reports()
             assert offline_pending.context == context_n

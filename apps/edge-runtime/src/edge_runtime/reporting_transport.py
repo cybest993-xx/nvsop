@@ -64,6 +64,41 @@ class HttpDecisionReportTransport(DecisionReportTransport):
             raise ValueError("v1 report cannot carry a confirmed configuration proof")
         self._post("/api/v1/monitor/reported-decisions", reported_decision_to_wire(report))
 
+    def send_timed_decision(
+        self,
+        report: ReportedDecision,
+        *,
+        configuration: ConfigurationBundle | None,
+        latched_at: str,
+        realtime: bool,
+    ) -> None:
+        """Sign report and ephemeral freshness separately; older Center archives normally."""
+        if report.host_id != self._host_id:
+            raise ValueError("a report cannot be sent by a different host")
+        if report.contract_version != DECISION_REPORT_CONTRACT_VERSION:
+            self.send_decision(report, configuration=configuration)
+            return
+        if configuration is None:
+            raise ValueError("v2 report requires its frozen confirmed configuration")
+        self._ensure_report_compatibility(
+            host_id=report.host_id,
+            configuration_revision=report.configuration_revision,
+            configuration_sha256=report.configuration_sha256,
+            configuration=configuration,
+        )
+        envelope = {
+            "decision": reported_decision_to_wire(report),
+            "latched_at": latched_at,
+            "realtime": realtime,
+        }
+        try:
+            self._post("/api/v1/monitor/reported-decisions/enveloped", envelope)
+        except ReportTransportError as error:
+            if error.status != 404:
+                raise
+            # An older Center still receives the immutable report, but cannot certify live.
+            self._post("/api/v1/monitor/reported-decisions", reported_decision_to_wire(report))
+
     def _ensure_report_compatibility(
         self,
         *,

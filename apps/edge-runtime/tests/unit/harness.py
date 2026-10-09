@@ -141,6 +141,8 @@ class MemoryReactionStore:
         evidence: Sequence[EvidenceClip],
         closed_instances: Sequence[Instance],
         report_provenance: Mapping[int, tuple[BackendReportContext, ...] | None],
+        latched_at: str,
+        latched_monotonic: HostInstant,
         disposals: Sequence[LocalDisposalRequest] = (),
     ) -> tuple[LocalDisposalIntent, ...]:
         del disposals

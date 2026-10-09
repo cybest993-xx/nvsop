@@ -55,6 +55,8 @@ def mirror_decision(
     monitor: MonitorRepository,
     host_gateway: HostOwnershipGateway,
     assignment_gateway: HistoricalAssignmentGateway | None = None,
+    latched_at: str | None = None,
+    realtime: bool = False,
 ) -> bool:
     """保存推理机的不可变观测，不在中心重新计算结论。"""
     host_id = _uuid(report.host_id, "report host_id")
@@ -103,8 +105,13 @@ def mirror_decision(
                 raise MonitorRefusedError(
                     "reported decision backend provenance is outside the historical host assignment"
                 )
-    inserted = monitor.upsert_decision(MirroredDecision(report=report, received_at=received_at))
-    _archive_violations(report, received_at=received_at, monitor=monitor)
+    inserted = monitor.upsert_decision(
+        MirroredDecision(
+            report=report, received_at=received_at, latched_at=latched_at, realtime=realtime
+        )
+    )
+    if inserted:
+        _archive_violations(report, received_at=received_at, monitor=monitor, latched_at=latched_at)
     return inserted
 
 
@@ -113,6 +120,7 @@ def _archive_violations(
     *,
     received_at: datetime,
     monitor: MonitorRepository,
+    latched_at: str | None,
 ) -> None:
     """把判定随附的已锁存违规投影为独立归档；只保存事实，不重新判定。"""
     for index, violation in enumerate(report.violations):
@@ -126,6 +134,7 @@ def _archive_violations(
                 report=violation,
                 decision_reported_at=report.reported_at,
                 received_at=received_at,
+                latched_at=latched_at,
             )
         )
 
@@ -438,6 +447,15 @@ class SseSnapshot:
     runtime_projection: tuple[dict[str, object], ...] = ()
 
 
+def _decision_stream_payload(value: MirroredDecision) -> dict[str, object]:
+    wire = reported_decision_to_wire(value.report)
+    if value.latched_at is not None:
+        wire["latched_at"] = value.latched_at
+    if value.realtime:
+        wire["realtime"] = True
+    return wire
+
+
 def sse_snapshot(
     monitor: MonitorRepository,
     *,
@@ -493,7 +511,7 @@ def sse_snapshot_state(
                 "decision",
                 value.report.event_id,
                 value.stream_sequence or 0,
-                reported_decision_to_wire(value.report),
+                _decision_stream_payload(value),
             )
             for value in decisions
             if resume_decision is None
@@ -571,7 +589,7 @@ def sse_stream(
                     "decision",
                     value.report.event_id,
                     value.stream_sequence or 0,
-                    reported_decision_to_wire(value.report),
+                    _decision_stream_payload(value),
                 )
                 for value in decisions
             ),

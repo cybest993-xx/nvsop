@@ -19,6 +19,7 @@ from edge_runtime.local_state.execution import (
     LocalExecutionLeaseStore,
 )
 from edge_runtime.local_state.queues import (
+    REPORT_RUN_ID,
     BackendReportContext,
     EvidenceSource,
     PendingEvidence,
@@ -37,6 +38,7 @@ from edge_runtime.local_state.store import (
 )
 
 __all__ = [
+    "REPORT_RUN_ID",
     "BackendReportContext",
     "EvidenceSource",
     "ExecutionAuthority",

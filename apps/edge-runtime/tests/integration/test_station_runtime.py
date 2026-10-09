@@ -1171,6 +1171,32 @@ class NormalizedContractReplayTest(unittest.TestCase):
 
 
 class AutonomousStationIntegrationTest(unittest.TestCase):
+    def test_local_pause_state_and_resume_entry_are_available_without_center(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            database = open_local_state(str(Path(temporary) / "state.sqlite"))
+            store = database.station("station-local")
+            driver = resume_station(
+                store,
+                template=Template(
+                    steps=("(1) start", "(2) finish"),
+                    ordering=Ordering.ORDERED,
+                    start_signal="(1) start",
+                ),
+                parameters=RuntimeParameters(idle_timeout=10.0, step_deadline=10.0),
+                margins=EvidenceMargins(leading=0.0, trailing=0.0),
+            )
+            station = AutonomousStation(supervisor=driver, source=_OneInputSource())
+            self.assertFalse(station.judgment_paused)
+            station.pause_judgment()
+            self.assertTrue(station.judgment_paused)
+            self.assertTrue(store.judgment_paused())
+            station.pause_judgment()
+            station.resume_judgment()
+            station.resume_judgment()
+            self.assertFalse(station.judgment_paused)
+            self.assertFalse(store.judgment_paused())
+            database.close()
+
     def test_station_loop_resumes_sqlite_state_and_commits_a_real_input_reaction(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             state = open_local_state(str(Path(temporary) / "state.sqlite"))

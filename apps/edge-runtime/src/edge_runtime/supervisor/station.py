@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterable
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from threading import RLock
 from time import monotonic
 
 from nvsop_contracts import (
@@ -220,12 +221,16 @@ class StationSupervisor:
         clock: Callable[[], float] = monotonic,
         disposition_policy: str | None = None,
         initial_report_provenance: tuple[BackendReportContext, ...] | None = (),
+        initial_paused: bool = False,
     ) -> None:
         self._state = state
         self._store = store
         self._margins = margins
         self._clock = clock
         self._disposition_policy = disposition_policy
+        self._control_lock = RLock()
+        self._paused = initial_paused
+        self._resume_after: float | None = None
         self._normalizers: dict[str | None, Normalizer] = {None: Normalizer()}
         self._deadline: HostInstant | None = None
         self._report_provenance: dict[int, dict[str, BackendReportContext] | None] = {}
@@ -265,17 +270,69 @@ class StationSupervisor:
         """The instant the core asked to be woken at, or None when nothing is in flight."""
         return self._deadline
 
-    def timeout(self) -> float | None:
-        """How long the run loop may wait, or None when it may wait indefinitely.
+    @property
+    def paused(self) -> bool:
+        """当前工位判定暂停状态; 实例与违规仍保留本地权威记录。"""
+        with self._control_lock:
+            return self._paused
 
-        Never negative: a loop would read that as an unbounded poll, and a deadline already
-        passed means the wake-up is owed now.
-        """
-        if self._deadline is None:
-            return None
-        return max(0.0, self._deadline.seconds - self._clock())
+    def pause(self) -> Reaction:
+        """安全中断本工位在飞实例, 并在同一 SQLite 提交中锁存暂停。"""
+        with self._control_lock:
+            if self._paused:
+                return Reaction(decisions=(), wake_at=None)
+            result = self._advance((RunInterrupted(at=HostInstant(self._clock())),), pause_to=True)
+            self._paused = True
+            self._resume_after = None
+            _logger.info("edge.station_judgment.paused")
+            return result
+
+    def resume(self) -> Reaction:
+        """从新的主机单调观测边界恢复; 不会拼接已结案的旧实例。"""
+        with self._control_lock:
+            if not self._paused:
+                return Reaction(decisions=(), wake_at=self._deadline)
+            resumed_at = self._clock()
+            result = self._advance((), pause_to=False)
+            self._paused = False
+            self._resume_after = resumed_at
+            for normalizer in self._normalizers.values():
+                normalizer.reset_observation_anchor()
+            _logger.info("edge.station_judgment.resumed")
+            return result
+
+    def timeout(self) -> float | None:
+        """返回剩余到点时间; 暂停工位不交给核心任何计时器。"""
+        with self._control_lock:
+            if self._paused or self._deadline is None:
+                return None
+            return max(0.0, self._deadline.seconds - self._clock())
 
     def receive(
+        self,
+        arriving: SupervisorInput,
+        *,
+        report_provenance: BackendReportContext | None = None,
+    ) -> Reaction:
+        """串行化运行循环输入与本地暂停/恢复命令, 禁止竞态续接。"""
+        with self._control_lock:
+            if self._paused:
+                # 健康和有效性事实继续更新, 观测/计时器仍不进入判定。
+                if isinstance(arriving, (StreamHealthObserved, ValidityChanged)):
+                    return self._receive(arriving, report_provenance=report_provenance)
+                return Reaction(decisions=(), wake_at=None)
+            cutoff = self._resume_after
+            if cutoff is not None:
+                if isinstance(arriving, (ActionRecognized, ExternalSignal)):
+                    if arriving.at.seconds <= cutoff:
+                        return Reaction(decisions=(), wake_at=self._deadline)
+                elif isinstance(arriving, StreamHealthObserved):
+                    instant = arriving.event.at_monotonic
+                    if instant is not None and instant <= cutoff:
+                        return Reaction(decisions=(), wake_at=self._deadline)
+            return self._receive(arriving, report_provenance=report_provenance)
+
+    def _receive(
         self,
         arriving: SupervisorInput,
         *,
@@ -384,6 +441,12 @@ class StationSupervisor:
         )
 
     def wake(self, *, host: HostLiveness) -> Reaction:
+        with self._control_lock:
+            if self._paused:
+                return Reaction(decisions=(), wake_at=None)
+            return self._wake(host=host)
+
+    def _wake(self, *, host: HostLiveness) -> Reaction:
         """The timer the core asked for, if it is in fact due.
 
         `host` is passed in rather than probed here because the run loop is what holds that
@@ -409,6 +472,12 @@ class StationSupervisor:
         )
 
     def interrupt(self, *, at: HostInstant | None = None) -> Reaction:
+        with self._control_lock:
+            if self._paused and self._state.instance is None:
+                return Reaction(decisions=(), wake_at=None)
+            return self._interrupt(at=at)
+
+    def _interrupt(self, *, at: HostInstant | None = None) -> Reaction:
         """A configuration switch or a shutdown ended this run.
 
         The pass in flight is concluded as indeterminate rather than carried across, so one
@@ -423,6 +492,7 @@ class StationSupervisor:
         events: tuple[Event, ...],
         *,
         report_provenance: BackendReportContext | None = None,
+        pause_to: bool | None = None,
     ) -> Reaction:
         """先收集全部事件的结果, 一次提交成功后才发布新状态、provenance 和计时器。"""
         state, deadline = self._state, self._deadline
@@ -479,6 +549,7 @@ class StationSupervisor:
             latched_at=datetime.now(UTC).isoformat(),
             latched_monotonic=HostInstant(self._clock()),
             disposals=_disposals(decisions, self._disposition_policy),
+            pause_to=pause_to,
         )
         for instance in closed_instances:
             report_provenance_by_instance.pop(instance.instance_id, None)

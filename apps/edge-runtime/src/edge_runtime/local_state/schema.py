@@ -434,6 +434,16 @@ _V15 = (
     "ALTER TABLE local_violation ADD COLUMN latched_at TEXT",
 )
 
+# 暂停是工位本地持久控制事实, 不改变实例/违规的历史结论。
+_V16 = (
+    """
+    CREATE TABLE local_station_judgment_control (
+        station_id TEXT PRIMARY KEY,
+        paused INTEGER NOT NULL CHECK (paused IN (0, 1))
+    )
+    """,
+)
+
 MIGRATIONS: tuple[tuple[str, ...], ...] = (
     _V1,
     _V2,
@@ -450,6 +460,7 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
     _V13,
     _V14,
     _V15,
+    _V16,
 )
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 

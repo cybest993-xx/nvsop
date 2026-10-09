@@ -33,6 +33,7 @@ def resume_station(
         clock=clock,
         disposition_policy=disposition_policy,
         initial_report_provenance=store.resume_report_provenance(),
+        initial_paused=store.judgment_paused(),
     )
     supervisor.resume_pending_disposals()
     interruption_at = state.instance.last_observation_at if state.instance is not None else None

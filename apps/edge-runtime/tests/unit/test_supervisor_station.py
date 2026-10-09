@@ -782,3 +782,87 @@ class ObservationMirrorTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LocalPauseResumeTest(unittest.TestCase):
+    def test_pause_interrupts_once_and_only_fresh_observations_restart_judgment(self) -> None:
+        supervisor, clock = station()
+        supervisor.receive(action(STEPS[0], at=100.0))
+        clock.now = 150.0
+
+        first = supervisor.pause()
+        self.assertTrue(supervisor.paused)
+        self.assertEqual(Verdict.INDETERMINATE, first.decisions[0].verdict)
+        self.assertEqual((ReasonCode.RUN_INTERRUPTED,), first.decisions[0].reasons)
+        self.assertIsNone(supervisor.wake_at)
+        self.assertEqual(Reaction(decisions=(), wake_at=None), supervisor.pause())
+        self.assertEqual(
+            Reaction(decisions=(), wake_at=None),
+            supervisor.receive(action(STEPS[1], at=160.0)),
+        )
+        self.assertEqual(
+            Reaction(decisions=(), wake_at=None),
+            supervisor.wake(host=HostLiveness.ALIVE),
+        )
+
+        clock.now = 200.0
+        self.assertEqual(Reaction(decisions=(), wake_at=None), supervisor.resume())
+        self.assertFalse(supervisor.paused)
+        self.assertEqual(Reaction(decisions=(), wake_at=None), supervisor.resume())
+        self.assertEqual(
+            Reaction(decisions=(), wake_at=None),
+            supervisor.receive(action(STEPS[0], at=199.0)),
+        )
+        reaction = supervisor.receive(action(STEPS[0], at=201.0))
+        self.assertEqual(HostInstant(261.0), reaction.wake_at)
+        instance = supervisor.state.instance
+        assert instance is not None
+        self.assertEqual(2, instance.instance_id)
+
+    def test_pause_preserves_health_diagnostics_without_judging_or_mirroring_inputs(self) -> None:
+        store = MemoryReactionStore()
+        clock = FakeClock(now=120.0)
+        supervisor = StationSupervisor(
+            store=store,
+            state=opening_state(Ordering.UNORDERED),
+            margins=MARGINS,
+            clock=clock,
+        )
+        supervisor.pause()
+        supervisor.receive(
+            StreamHealthObserved(
+                StreamHealthEvent(
+                    fact=StreamFact.SOURCE_ERROR,
+                    at_monotonic=125.0,
+                )
+            )
+        )
+        supervisor.receive(action(STEPS[0], at=125.0))
+        self.assertEqual([], store.observations)
+        self.assertEqual(1, len(store.health))
+        self.assertEqual((), supervisor.pause().decisions)
+
+    def test_restored_health_while_paused_does_not_poison_new_pass(self) -> None:
+        supervisor, clock = station()
+        supervisor.receive(
+            StreamHealthObserved(
+                StreamHealthEvent(
+                    fact=StreamFact.SOURCE_ERROR,
+                    at_monotonic=10.0,
+                )
+            )
+        )
+        supervisor.pause()
+        supervisor.receive(
+            StreamHealthObserved(
+                StreamHealthEvent(
+                    fact=StreamFact.DELIVERING,
+                    at_monotonic=30.0,
+                )
+            )
+        )
+        clock.now = 40.0
+        supervisor.resume()
+        for index, signal in enumerate(STEPS):
+            response = supervisor.receive(action(signal, at=41.0 + index))
+        self.assertEqual(Verdict.PASS, response.decisions[0].verdict)

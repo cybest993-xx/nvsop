@@ -423,6 +423,19 @@ class AutonomousStation:
         return self._supervisor
 
     @property
+    def judgment_paused(self) -> bool:
+        """本工位本地暂停状态; 不依赖 Center 连接。"""
+        return self._supervisor.paused
+
+    def pause_judgment(self) -> Reaction:
+        """通过已有 supervisor 公开命令入口暂停工位判定。"""
+        return self._supervisor.pause()
+
+    def resume_judgment(self) -> Reaction:
+        """恢复后仅消费新的观测, 不续接已被中断的实例。"""
+        return self._supervisor.resume()
+
+    @property
     def connector_runtimes(self) -> tuple[ConnectorRuntime, ...]:
         return self._connector_runtimes
 

@@ -11,7 +11,7 @@ from nvsop_contracts import ConfigurationBundle
 
 from edge_runtime.configuration_sync import ConfigurationSynchronizer, ConfigurationSyncResult
 from edge_runtime.connectors.runtime import ConnectorRuntimeSet
-from edge_runtime.local_state.store import LocalState
+from edge_runtime.local_state.store import LocalState, QueueCapacityError, QueueStatus
 from edge_runtime.media import MediaRuntime
 from edge_runtime.reporting import HostReportReconciler
 from edge_runtime.runtime import (
@@ -33,6 +33,9 @@ class _CommandLoop:
 class _State:
     def __init__(self) -> None:
         self.closed = False
+
+    def queue_status(self) -> tuple[QueueStatus, ...]:
+        return ()
 
     def close(self) -> None:
         self.closed = True
@@ -367,6 +370,31 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "synthetic station defect"):
             runtime.run_forever(should_stop=lambda: False)
         self.assertTrue(state.closed)
+
+    def test_queue_exhaustion_alerts_and_fails_closed_without_report_fabrication(self) -> None:
+        class ExhaustedStation(_Station):
+            def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
+                del should_stop
+                raise QueueCapacityError("report pending queue at capacity: 2/1")
+
+        state = _State()
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            stations=(cast(AutonomousStation, ExhaustedStation()),),
+            state=cast(LocalState, state),
+        )
+        with (
+            self.assertLogs("edge_runtime", level="ERROR") as logs,
+            self.assertRaisesRegex(QueueCapacityError, "report"),
+        ):
+            runtime.run_forever(should_stop=lambda: False)
+        self.assertTrue(state.closed)
+        self.assertTrue(
+            any(
+                "edge.station.judgment_unavailable reason=local_queue_capacity" in line
+                for line in logs.output
+            )
+        )
 
     def test_blocked_report_flush_does_not_block_configuration_activation(self) -> None:
         old = _bundle(1)

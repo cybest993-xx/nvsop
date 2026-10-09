@@ -67,6 +67,7 @@ from edge_runtime.local_state import (
     ExecutionLeaseState,
     LocalExecutionLeaseStore,
     LocalState,
+    QueueCapacityError,
     ReportContext,
     open_local_state,
 )
@@ -710,6 +711,19 @@ class _ReportLifecycleRunner:
                                 "edge.report_flush.retry_pending failed_count=%s",
                                 len(failed_attempts),
                             )
+                # Host-level status is observable even when Center is down. Avoid writing
+                # last_error text to logs because a transport error might contain a secret.
+                for status in self._runtime._state.queue_status():
+                    if status.depth:
+                        _logger.info(
+                            "edge.local_queue.status queue=%s depth=%s oldest_queue_id=%s "
+                            "last_failed_queue_id=%s limit=%s",
+                            status.name,
+                            status.depth,
+                            status.oldest_queue_id,
+                            status.last_failed_queue_id,
+                            status.limit,
+                        )
                 if self._stop_requested():
                     return
                 self._runtime._report_wake.wait(_REPORT_RETRY_INTERVAL_SECONDS)
@@ -780,7 +794,13 @@ class _RuntimeCycleRunner:
         self._runtime._command_loop.run_forever(should_stop=self._stop_requested)
 
     def _run_station(self, station: AutonomousStation) -> None:
-        station.run_forever(should_stop=self._stop_requested)
+        try:
+            station.run_forever(should_stop=self._stop_requested)
+        except QueueCapacityError:
+            # 满额时无法原子写入不可判定报告; 显式告警并退出交给进程守护,
+            # 绝不把未持久化的判定、锁存或物理动作当作已完成。
+            _logger.error("edge.station.judgment_unavailable reason=local_queue_capacity")
+            raise
 
     def _run_media(self) -> None:
         media = self._runtime._media
@@ -1605,6 +1625,7 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
     state = open_local_state(
         str(config.local_state_path),
         notify_report_pending=report_wake.set,
+        queue_capacity=config.queue_capacity,
         evidence_source=_evidence_source_factory(config.media),
     )
     composition: RuntimeComposition | None = None

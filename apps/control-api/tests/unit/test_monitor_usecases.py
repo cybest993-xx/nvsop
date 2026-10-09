@@ -602,6 +602,41 @@ def test_runtime_projection_snapshot_and_stream_are_idless_and_emit_only_changes
     assert next(stream) == ": keep-alive\n\n"
 
 
+def test_monitor_stream_route_separates_replayed_decisions_from_live_events() -> None:
+    import asyncio
+
+    from factory_sop.monitor.adapters.routes import stream_monitor_events
+
+    monitor = MemoryMonitor()
+    mirror_decision(
+        report("host:archived-decision"),
+        received_at=datetime(2026, 9, 13, tzinfo=UTC),
+        monitor=monitor,
+        host_gateway=HostGateway(),
+    )
+    response = stream_monitor_events(
+        caller=caller(Permission.MONITOR_VIEW),
+        current_caller=lambda: caller(Permission.MONITOR_VIEW),
+        monitor=monitor,
+        source=monitor,
+        last_event_id=None,
+        once=False,
+    )
+
+    async def read_boundary() -> tuple[str, str]:
+        iterator = aiter(response.body_iterator)
+        first = await anext(iterator)
+        second = await anext(iterator)
+        assert isinstance(first, str)
+        assert isinstance(second, str)
+        return first, second
+
+    snapshot, live_boundary = asyncio.run(read_boundary())
+    assert "event: decision" in snapshot
+    assert "id: host:archived-decision" in snapshot
+    assert live_boundary == "event: live\ndata: {}\n\n"
+
+
 def test_sse_revoked_caller_does_not_receive_a_new_runtime_projection() -> None:
     monitor = MemoryMonitor()
     permitted = True

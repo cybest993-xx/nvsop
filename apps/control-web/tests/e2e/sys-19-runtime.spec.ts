@@ -24,6 +24,24 @@ const projection = (verdict: string) =>
   "health":[{"event_id":"health-19","trace_id":"trace-health-19","host_id":"host-19","station_id":"${stationId}","contract_version":1,"stream_id":"camera-19","status":"future_health_state","reason_code":"FUTURE_HEALTH_REASON","detail":"synthetic stream fact","occurred_at":"2026-09-14T08:00:00Z","source_anchor":100.5,"anchor_offset":0.25,"reported_at":"2026-09-14T08:00:03Z"}]
 }`)
 const frame = (value: object) => `event: runtime\ndata: ${JSON.stringify(value)}\n\n`
+const decisionFrame = (value: object) =>
+  `id: ${(value as { event_id: string }).event_id}\nevent: decision\ndata: ${JSON.stringify(value)}\n\n`
+const liveFrame = 'event: live\ndata: {}\n\n'
+const violation = (id: string, reportedAt = '2026-09-14T08:00:02Z') => ({
+  event_id: `${id}#0`,
+  decision_event_id: id,
+  host_id: 'host-19',
+  station_id: stationId,
+  instance_id: 19,
+  reported_at: reportedAt,
+  received_at: '2026-10-09T08:00:00Z',
+  violation: {
+    reason_code: id === 'decision-19' ? 'FUTURE_REASON_19' : 'MISSED_STEP',
+    detail: '来源判定已锁存',
+    step_ids: ['bolt'],
+    evidence: { anchor: 8.25, start: 7.5, end: 9 },
+  },
+})
 const pageOf = (items: unknown[]) => ({ items, page: 1, page_size: 50, total: items.length })
 const stationConfig = JSON.parse(
   `{"station_id":"${stationId}","station_revision":1,"status":"waiting","desired":{"version_id":"desired-runtime-template","sha256":"${'f'.repeat(64)}","config_revision":1},"version":null,"backends":[],"runtime_parameter_mode":"follow_template","runtime_parameters_revision":1,"effective_runtime_parameters":null,"runtime_overrides":null,"template_defaults":null,"topology_issues":[]}`,
@@ -33,6 +51,7 @@ async function standardRoutes(
   page: Page,
   permissions = session.permissions,
   stream?: (route: Route) => Promise<void>,
+  violations: () => object[] = () => [],
 ) {
   await page.route('**/api/v1/**', async (route) => {
     const path = new URL(route.request().url()).pathname
@@ -50,6 +69,10 @@ async function standardRoutes(
     }
     if (path === '/api/v1/connectors') {
       await route.fulfill({ status: 200, json: pageOf([]) })
+      return
+    }
+    if (path === '/api/v1/monitor/violations') {
+      await route.fulfill({ status: 200, json: pageOf(violations()) })
       return
     }
     if (path === '/api/v1/monitor/stream') {
@@ -165,4 +188,101 @@ test('SYS-19 — device-only permission does not open stream or expose runtime f
   await expect(page.getByRole('heading', { name: '工位与设备' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '工位运行镜像' })).toHaveCount(0)
   expect(streams).toBe(0)
+})
+
+test('SYS-23 — archive preserves original timestamps, handles keyboard location and unknown codes', async ({
+  page,
+}) => {
+  const history = violation('decision-19')
+  await standardRoutes(page, ['monitor.report.view', 'device.station.view'], undefined, () => [
+    history,
+  ])
+  await page.goto('/devices')
+  const archive = page.getByRole('region', { name: '违规告警归档' })
+  await expect(archive).toContainText('未知原因码：FUTURE_REASON_19')
+  await expect(archive).toContainText('8.25（推理机时间轴）')
+  await expect(archive).toContainText('2026/10/9')
+  await expect(archive).toContainText('装配工位十九')
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  const locator = archive.getByRole('button', { name: '定位相关判定' })
+  await locator.focus()
+  await locator.press('Enter')
+  await expect(page.getByRole('region', { name: '最新判定' })).toBeFocused()
+  await expect(page.getByText('已定位至当前运行镜像中的原判定。', { exact: false })).toBeVisible()
+})
+
+test('SYS-23 — only live, fresh, stable events notify; reconnect and delayed reports remain archival', async ({
+  page,
+}) => {
+  const historical = violation('decision-19')
+  const freshId = 'decision-new-19'
+  const fresh = violation(freshId, new Date(Date.now() + 5_000).toISOString())
+  const delayed = violation('decision-delayed-19')
+  let reads = 0
+  await standardRoutes(
+    page,
+    ['monitor.report.view'],
+    async (route) => {
+      const decision = {
+        event_id: freshId,
+        reported_at: fresh.reported_at,
+        station_id: stationId,
+        violations: [fresh.violation],
+      }
+      const oldDecision = {
+        event_id: delayed.decision_event_id,
+        reported_at: delayed.reported_at,
+        station_id: stationId,
+        violations: [delayed.violation],
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: [
+          decisionFrame({ ...decision, event_id: historical.decision_event_id }),
+          frame(projection('pass')),
+          liveFrame,
+          decisionFrame(decision),
+          decisionFrame(decision),
+          decisionFrame(oldDecision),
+        ].join(''),
+      })
+    },
+    () => {
+      reads += 1
+      return reads < 3 ? [historical] : [fresh, delayed, historical]
+    },
+  )
+  await page.goto('/devices')
+  const archive = page.getByRole('region', { name: '违规告警归档' })
+  await expect(archive).toContainText(fresh.event_id)
+  await expect(archive).toContainText(delayed.event_id)
+  await expect(page.getByText('新上报违规：', { exact: false })).toHaveCount(1)
+  await expect(page.getByText('连接中断，保留上次镜像等待恢复')).toBeVisible()
+  await expect(archive).toContainText('来源判定上报')
+})
+
+test('SYS-23 — failure to read the archive stays visible and retry does not erase old records', async ({
+  page,
+}) => {
+  const history = violation('decision-19')
+  let fail = false
+  await standardRoutes(page, session.permissions, undefined, () => [history])
+  await page.route('**/api/v1/monitor/violations*', async (route) => {
+    if (fail) {
+      await route.fulfill({
+        status: 500,
+        json: { title: '归档服务暂不可用', error_code: 'MONITOR_DOWN' },
+      })
+    } else {
+      await route.fulfill({ status: 200, json: pageOf([history]) })
+    }
+  })
+  await page.goto('/devices')
+  const archive = page.getByRole('region', { name: '违规告警归档' })
+  await expect(archive).toContainText(history.event_id)
+  fail = true
+  await archive.getByRole('button', { name: '刷新归档' }).click()
+  await expect(page.getByRole('alert')).toContainText('归档服务暂不可用')
+  await expect(archive).toContainText(history.event_id)
 })

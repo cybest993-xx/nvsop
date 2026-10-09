@@ -468,7 +468,8 @@ def stream_monitor_events(
             yield from sse_stream(
                 source,
                 current_caller=current_caller,
-                initial_frames=snapshot.frames,
+                # 显式分隔历史快照与之后的实时事件，供浏览器抑制重连补报提示。
+                initial_frames=(*snapshot.frames, "event: live\ndata: {}\n\n"),
                 decision_sequence=snapshot.decision_sequence,
                 health_sequence=snapshot.health_sequence,
                 runtime_projection=snapshot.runtime_projection,

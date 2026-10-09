@@ -395,8 +395,16 @@ export interface RuntimePhysicalSafety {
   }
   edge_status: {
     host_id: string | null
-    last_reported_at: string | null
-    age_seconds: number | null
+    authority_state: string
+    write_state: string
+    reason_code: string | null
+    detail: string | null
+    grant_id: string | null
+    holder_host_id: string | null
+    lease_expires_at: string | null
+    renewed_at: string | null
+    reported_at: string | null
+    received_at: string | null
     stale: boolean
   }
 }

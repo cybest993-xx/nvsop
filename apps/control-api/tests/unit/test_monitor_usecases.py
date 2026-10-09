@@ -10,11 +10,13 @@ import pytest
 from factory_sop.auth.authorization import AuthorizationRefusedError, Caller
 from factory_sop.auth.model import User, UserStatus
 from factory_sop.auth.permissions import Permission
+from factory_sop.execution.api import ExecutionGrantState, ExecutionGrantView
 from factory_sop.execution.model import StationGrant
 from factory_sop.identifiers import new_id
 from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.model import (
     MirroredDecision,
+    MirroredExecutionAuthority,
     MirroredHealth,
     MirroredObservation,
     MirroredSopInstance,
@@ -29,6 +31,7 @@ from factory_sop.monitor.usecases import (
     mirror_health,
     mirror_observation,
     physical_safety_projection,
+    select_execution_authority,
     sse_snapshot,
     sse_snapshot_state,
     sse_stream,
@@ -39,6 +42,7 @@ from nvsop_contracts import (
     ReportBackendProvenance,
     ReportedDecision,
     ReportedDisposal,
+    ReportedExecutionAuthority,
     ReportedHealth,
     ReportedObservation,
     ReportEvidence,
@@ -59,6 +63,7 @@ class MemoryMonitor:
         self.decisions: dict[str, MirroredDecision] = {}
         self.disposals: dict[str, ReportedDisposal] = {}
         self.health: dict[str, MirroredHealth] = {}
+        self.execution_authorities: dict[tuple[str, str], MirroredExecutionAuthority] = {}
         self.instances: dict[str, MirroredSopInstance] = {}
         self.violations: dict[str, MirroredViolation] = {}
         self.observations: dict[str, MirroredObservation] = {}
@@ -148,6 +153,22 @@ class MemoryMonitor:
         start = (page - 1) * page_size
         return values[start : start + page_size], len(values)
 
+    def upsert_execution_authority(self, value: MirroredExecutionAuthority) -> bool:
+        key = (value.report.station_id, value.report.host_id)
+        previous = self.execution_authorities.get(key)
+        self.execution_authorities[key] = value
+        return previous != value
+
+    def execution_authority_for_stations(
+        self, *, station_ids: tuple[str, ...]
+    ) -> tuple[MirroredExecutionAuthority, ...]:
+        allowed = set(station_ids)
+        return tuple(
+            value
+            for value in self.execution_authorities.values()
+            if value.report.station_id in allowed
+        )
+
     def recent_health(self, *, limit: int) -> tuple[MirroredHealth, ...]:
         return tuple(self.health.values())[:limit]
 
@@ -161,6 +182,10 @@ class MemoryMonitor:
         for host_id, received_at in (
             *((value.report.host_id, value.received_at) for value in self.decisions.values()),
             *((value.report.host_id, value.received_at) for value in self.health.values()),
+            *(
+                (value.report.host_id, value.received_at)
+                for value in self.execution_authorities.values()
+            ),
             *((value.report.host_id, value.received_at) for value in self.instances.values()),
         ):
             current = latest.get(host_id)
@@ -1274,57 +1299,127 @@ def test_host_liveness_rejects_a_caller_without_monitor_permission() -> None:
         )
 
 
+def _grant_view(*, now: datetime, state: ExecutionGrantState) -> ExecutionGrantView:
+    grant = None
+    if state is not ExecutionGrantState.MISSING:
+        grant = StationGrant(
+            grant_id=new_id(),
+            station_id=STATION_ID,
+            holder_host_id=HOST_ID,
+            lease_expires_at=(
+                now + timedelta(days=1)
+                if state is ExecutionGrantState.ACTIVE
+                else now - timedelta(seconds=1)
+            ),
+            renewed_at=now - timedelta(minutes=1),
+            request_id=new_id(),
+        )
+    return ExecutionGrantView(station_id=STATION_ID, state=state, grant=grant)
+
+
+def _edge_authority(
+    *,
+    center: ExecutionGrantView,
+    now: datetime,
+    write_state: str = "enabled",
+    authority_state: str = "active",
+    received_delta: timedelta = timedelta(seconds=10),
+    detail: str | None = None,
+) -> MirroredExecutionAuthority:
+    grant = center.grant
+    return MirroredExecutionAuthority(
+        report=ReportedExecutionAuthority(
+            host_id=str(HOST_ID),
+            station_id=str(STATION_ID),
+            authority_state=authority_state,
+            write_state=write_state,
+            reason_code="write_stopped" if write_state == "stopped" else None,
+            detail=detail,
+            grant_id=None if grant is None else str(grant.grant_id),
+            holder_host_id=None if grant is None else str(grant.holder_host_id),
+            lease_expires_at=None if grant is None else grant.lease_expires_at.isoformat(),
+            renewed_at=None if grant is None else grant.renewed_at.isoformat(),
+            reported_at=(now - received_delta).isoformat(),
+        ),
+        received_at=now - received_delta,
+    )
+
+
 def test_physical_safety_projection_never_keeps_stale_authorization_green() -> None:
     now = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
-    grant = StationGrant(
-        grant_id=new_id(),
-        station_id=STATION_ID,
-        holder_host_id=HOST_ID,
-        lease_expires_at=now + timedelta(days=1),
-        renewed_at=now - timedelta(minutes=1),
-        request_id=new_id(),
-    )
+    center = _grant_view(now=now, state=ExecutionGrantState.ACTIVE)
     fresh = physical_safety_projection(
-        {}, grant=grant, last_reported_at=now - timedelta(seconds=10), now=now
+        center=center, edge=_edge_authority(center=center, now=now), now=now
     )
     assert fresh["status"] == "protected"
-    fresh_center = fresh["center_authorization"]
-    assert isinstance(fresh_center, dict)
-    assert fresh_center["state"] == "active"
     stale = physical_safety_projection(
-        {}, grant=grant, last_reported_at=now - timedelta(minutes=6), now=now
+        center=center,
+        edge=_edge_authority(center=center, now=now, received_delta=timedelta(minutes=6)),
+        now=now,
     )
     assert stale["status"] == "stale"
     stale_edge = stale["edge_status"]
     assert isinstance(stale_edge, dict)
     assert stale_edge["stale"] is True
+    assert "不显示为仍可写" in str(stale["detail"])
 
 
-def test_physical_safety_projection_marks_expired_and_missing_grants_failed() -> None:
+def test_physical_safety_projection_distinguishes_center_expiry_and_edge_stop() -> None:
     now = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
-    expired = StationGrant(
-        grant_id=new_id(),
-        station_id=STATION_ID,
-        holder_host_id=HOST_ID,
-        lease_expires_at=now - timedelta(seconds=1),
-        renewed_at=now - timedelta(days=7),
-        request_id=new_id(),
-    )
-    expired_view = physical_safety_projection(
-        {}, grant=expired, last_reported_at=now - timedelta(seconds=1), now=now
-    )
-    assert expired_view["status"] == "failed"
-    expired_center = expired_view["center_authorization"]
-    assert isinstance(expired_center, dict)
-    assert expired_center["state"] == "expired"
-    missing_view = physical_safety_projection(
-        {"instance": {"host_id": str(HOST_ID)}},
-        grant=None,
-        last_reported_at=now,
+    expired_center = _grant_view(now=now, state=ExecutionGrantState.EXPIRED)
+    expired = physical_safety_projection(
+        center=expired_center,
+        edge=_edge_authority(
+            center=expired_center,
+            now=now,
+            authority_state="expired",
+            write_state="stopped",
+            detail="Edge 本机租约到期后已停止写入",
+        ),
         now=now,
     )
-    assert missing_view["status"] == "failed"
-    assert missing_view["center_authorization"] == {"state": "missing"}
-    missing_edge = missing_view["edge_status"]
-    assert isinstance(missing_edge, dict)
-    assert missing_edge["host_id"] == str(HOST_ID)
+    assert expired["status"] == "failed"
+    assert expired["center_authorization"] != {"state": "active"}
+
+    active_center = _grant_view(now=now, state=ExecutionGrantState.ACTIVE)
+    stopped = physical_safety_projection(
+        center=active_center,
+        edge=_edge_authority(
+            center=active_center,
+            now=now,
+            write_state="stopped",
+            detail="工位已停止写入",
+        ),
+        now=now,
+    )
+    assert stopped["status"] == "failed"
+    assert stopped["detail"] == "工位已停止写入"
+
+    missing_center = _grant_view(now=now, state=ExecutionGrantState.MISSING)
+    missing = physical_safety_projection(center=missing_center, edge=None, now=now)
+    assert missing["status"] == "failed"
+    assert missing["center_authorization"] == {"state": "missing"}
+
+
+def test_execution_authority_selection_prefers_current_center_holder() -> None:
+    now = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
+    center = _grant_view(now=now, state=ExecutionGrantState.ACTIVE)
+    current = _edge_authority(center=center, now=now)
+    old = MirroredExecutionAuthority(
+        report=ReportedExecutionAuthority(
+            host_id=str(new_id()),
+            station_id=str(STATION_ID),
+            authority_state="missing",
+            write_state="stopped",
+            reason_code="write_stopped",
+            detail="old host stopped",
+            grant_id=None,
+            holder_host_id=None,
+            lease_expires_at=None,
+            renewed_at=None,
+            reported_at=now.isoformat(),
+        ),
+        received_at=now,
+    )
+    selected = select_execution_authority((old, current), center=center)
+    assert selected == current

@@ -11,11 +11,15 @@ from uuid import UUID
 
 from factory_sop.auth.api import Caller, Permission, authorize
 from factory_sop.device.api import DeviceMonitorGateway
-from factory_sop.execution.api import StationGrant
+from factory_sop.execution.api import (
+    ExecutionGrantState,
+    ExecutionGrantView,
+)
 from factory_sop.monitor.api import HistoricalAssignmentGateway, HostOwnershipGateway
 from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.model import (
     MirroredDecision,
+    MirroredExecutionAuthority,
     MirroredHealth,
     MirroredObservation,
     MirroredSopInstance,
@@ -26,6 +30,7 @@ from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
     ReportedDecision,
     ReportedDisposal,
+    ReportedExecutionAuthority,
     ReportedHealth,
     ReportedObservation,
     ReportedSopInstance,
@@ -244,6 +249,27 @@ def mirror_disposal(
     return monitor.upsert_disposal(report, received_at=received_at)
 
 
+def mirror_execution_authority(
+    report: ReportedExecutionAuthority,
+    *,
+    received_at: datetime,
+    monitor: MonitorRepository,
+    host_gateway: HostOwnershipGateway,
+    device_gateway: DeviceMonitorGateway,
+) -> bool:
+    host_id = _uuid(report.host_id, "execution authority host_id")
+    station_id = _uuid(report.station_id, "execution authority station_id")
+    if not host_gateway.owns_station(
+        host_id=host_id, station_id=station_id
+    ) and not device_gateway.has_historical_station(host_id=host_id, station_id=station_id):
+        raise MonitorRefusedError(
+            "reported execution authority is outside current and historical host assignment"
+        )
+    return monitor.upsert_execution_authority(
+        MirroredExecutionAuthority(report=report, received_at=received_at)
+    )
+
+
 def list_disposals(
     monitor: MonitorRepository, *, caller: Caller, page: int, page_size: int
 ) -> tuple[tuple[ReportedDisposal, ...], int]:
@@ -386,62 +412,107 @@ def _health_is_healthy(status: str) -> bool:
 HOST_SILENCE_THRESHOLD_SECONDS = 300.0
 
 
-def physical_safety_projection(
-    runtime: dict[str, object],
+def select_execution_authority(
+    values: tuple[MirroredExecutionAuthority, ...],
     *,
-    grant: StationGrant | None,
-    last_reported_at: datetime | None,
+    center: ExecutionGrantView,
+) -> MirroredExecutionAuthority | None:
+    """优先选 Center 当前 holder 的 Edge 状态；无 holder 时保留最近已知来源。"""
+    station_values = tuple(
+        value for value in values if value.report.station_id == str(center.station_id)
+    )
+    grant = center.grant
+    if grant is not None:
+        holder = str(grant.holder_host_id)
+        matching = tuple(value for value in station_values if value.report.host_id == holder)
+        if matching:
+            return max(matching, key=lambda value: value.received_at)
+    if not station_values:
+        return None
+    return max(station_values, key=lambda value: value.received_at)
+
+
+def physical_safety_projection(
+    *,
+    center: ExecutionGrantView,
+    edge: MirroredExecutionAuthority | None,
     now: datetime,
     stale_after_seconds: float = HOST_SILENCE_THRESHOLD_SECONDS,
 ) -> dict[str, object]:
-    """把 Center 授权与 Edge 上报新鲜度并列投影；不替 Edge 决定是否写点位。"""
+    """并列 Center 授权事实与 Edge 实际写入门禁状态；浏览器只消费结果。"""
     if stale_after_seconds <= 0:
         raise ValueError("host liveness threshold must be positive")
-    instance = runtime.get("instance")
-    instance_host = (
-        instance.get("host_id")
-        if isinstance(instance, dict) and isinstance(instance.get("host_id"), str)
-        else None
-    )
-    host_id = str(grant.holder_host_id) if grant is not None else instance_host
-    age = None if last_reported_at is None else (now - last_reported_at).total_seconds()
-    stale = last_reported_at is None or (age is not None and age > stale_after_seconds)
-    if grant is None:
-        authorization = "missing"
-        status = "failed"
-        detail = "Center 当前无物理执行权授权；不能把工位显示为可写"
-    elif grant.lease_expires_at <= now:
-        authorization = "expired"
-        status = "failed"
-        detail = "Center 记录的物理执行权已到期；Edge 写入门禁按契约停止点位写入"
-    else:
-        authorization = "active"
-        status = "stale" if stale else "protected"
-        detail = (
-            "Edge 最近状态已过期；保留最后已知授权但不显示为仍可写"
-            if stale
-            else "Center 授权有效且 Edge 最近上报未过期"
-        )
-    center: dict[str, object] = {"state": authorization}
+    grant = center.grant
+    center_wire: dict[str, object] = {"state": center.state.value}
     if grant is not None:
-        center.update(
+        center_wire.update(
             grant_id=str(grant.grant_id),
             holder_host_id=str(grant.holder_host_id),
             lease_expires_at=grant.lease_expires_at.isoformat(),
             renewed_at=grant.renewed_at.isoformat(),
         )
+
+    edge_wire: dict[str, object]
+    stale = edge is None or (now - edge.received_at).total_seconds() > stale_after_seconds
+    if edge is None:
+        edge_wire = {
+            "host_id": None,
+            "authority_state": "unknown",
+            "write_state": "unknown",
+            "reason_code": None,
+            "detail": None,
+            "grant_id": None,
+            "holder_host_id": None,
+            "lease_expires_at": None,
+            "renewed_at": None,
+            "reported_at": None,
+            "received_at": None,
+            "stale": True,
+        }
+    else:
+        report = edge.report
+        edge_wire = {
+            "host_id": report.host_id,
+            "authority_state": report.authority_state,
+            "write_state": report.write_state,
+            "reason_code": report.reason_code,
+            "detail": report.detail,
+            "grant_id": report.grant_id,
+            "holder_host_id": report.holder_host_id,
+            "lease_expires_at": report.lease_expires_at,
+            "renewed_at": report.renewed_at,
+            "reported_at": report.reported_at,
+            "received_at": edge.received_at.isoformat(),
+            "stale": stale,
+        }
+
+    if center.state is ExecutionGrantState.MISSING:
+        status, detail = "failed", "Center 当前无物理执行权授权"
+    elif center.state is ExecutionGrantState.EXPIRED:
+        status, detail = "failed", "Center 当前物理执行权授权已到期"
+    elif edge is None or stale:
+        status, detail = "stale", "Edge 执行权/停写状态已过期或尚未取得；不显示为仍可写"
+    else:
+        report = edge.report
+        expected_holder = None if grant is None else str(grant.holder_host_id)
+        expected_grant = None if grant is None else str(grant.grant_id)
+        if (
+            report.host_id != expected_holder
+            or report.grant_id != expected_grant
+            or report.holder_host_id != expected_holder
+        ):
+            status, detail = "stale", "Center 与 Edge 执行权事实尚未收敛；不显示为仍可写"
+        elif report.write_state == "stopped":
+            status, detail = "failed", report.detail or "Edge 已停止物理写入"
+        elif report.write_state != "enabled" or report.authority_state != "active":
+            status, detail = "unknown", "Edge 返回未识别的执行权/写入状态；不显示为仍可写"
+        else:
+            status, detail = "protected", "Center 授权有效，Edge 报告物理写入门禁已启用"
     return {
         "status": status,
         "detail": detail,
-        "center_authorization": center,
-        "edge_status": {
-            "host_id": host_id,
-            "last_reported_at": (
-                None if last_reported_at is None else last_reported_at.isoformat()
-            ),
-            "age_seconds": age,
-            "stale": stale,
-        },
+        "center_authorization": center_wire,
+        "edge_status": edge_wire,
     }
 
 
@@ -756,6 +827,7 @@ def _uuid(value: str, label: str) -> UUID:
 
 
 __all__ = [
+    "HOST_SILENCE_THRESHOLD_SECONDS",
     "HostLiveness",
     "SseSnapshot",
     "StreamHealthView",
@@ -765,9 +837,12 @@ __all__ = [
     "list_observations",
     "list_violations",
     "mirror_decision",
+    "mirror_execution_authority",
     "mirror_health",
     "mirror_instance",
     "mirror_observation",
+    "physical_safety_projection",
+    "select_execution_authority",
     "sse_snapshot",
     "sse_snapshot_state",
     "sse_stream",

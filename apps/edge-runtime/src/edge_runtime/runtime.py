@@ -23,6 +23,7 @@ from nvsop_contracts import (
     STOP_OUTPUT_SEMANTIC_LABEL,
     ConfigurationBundle,
     ConnectionTestOutcome,
+    ReportedExecutionAuthority,
     configuration_to_wire,
 )
 
@@ -1312,10 +1313,67 @@ def _build_runtime_composition(
         for connector_id, adapter in adapters.items()
         if connector_id in connector_owners
     }
+
+    def execution_authority_reports(reported_at: str) -> tuple[ReportedExecutionAuthority, ...]:
+        wall_now = datetime.fromisoformat(reported_at.replace("Z", "+00:00")).timestamp()
+        values: list[ReportedExecutionAuthority] = []
+        for station_id in sorted(station_bindings):
+            authority = leases.status(station_id, now=wall_now)
+            lifecycle_stopped = write_lifecycles[station_id].stopped
+            fact = authority.fact
+            if lifecycle_stopped:
+                write_state = "stopped"
+                reason_code = "write_stopped"
+                detail = f"工位 {station_id} 已停止写入"
+            elif authority.state is ExecutionLeaseState.ACTIVE:
+                write_state = "enabled"
+                reason_code = None
+                detail = None
+            elif authority.state is ExecutionLeaseState.EXPIRED:
+                write_state = "stopped"
+                reason_code = "execution_lease_expired"
+                detail = authority.detail
+            else:
+                write_state = "stopped"
+                reason_code = "execution_lease_missing"
+                detail = authority.detail
+            values.append(
+                ReportedExecutionAuthority(
+                    host_id=config.host_id,
+                    station_id=station_id,
+                    authority_state=authority.state.value,
+                    write_state=write_state,
+                    reason_code=reason_code,
+                    detail=detail,
+                    grant_id=None if fact is None else fact.grant_id,
+                    holder_host_id=None if fact is None else fact.holder_host_id,
+                    lease_expires_at=(
+                        None
+                        if fact is None
+                        else datetime.fromtimestamp(fact.lease_expires_at, tz=UTC)
+                        .isoformat()
+                        .replace("+00:00", "Z")
+                    ),
+                    renewed_at=(
+                        None
+                        if fact is None
+                        else datetime.fromtimestamp(fact.renewed_at, tz=UTC)
+                        .isoformat()
+                        .replace("+00:00", "Z")
+                    ),
+                    reported_at=reported_at,
+                )
+            )
+        return tuple(values)
+
     report_reconciler = (
         None
         if report_transport is None
-        else HostReportReconciler(reports=state.reports(), transport=report_transport)
+        else HostReportReconciler(
+            reports=state.reports(),
+            transport=report_transport,
+            execution_authorities=execution_authority_reports,
+        )
     )
     stations: list[AutonomousStation] = []
     try:

@@ -27,6 +27,7 @@ from factory_sop.monitor.adapters import dependencies
 from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.repository import MonitorRepository, MonitorStreamSource
 from factory_sop.monitor.usecases import (
+    HOST_SILENCE_THRESHOLD_SECONDS,
     host_liveness,
     list_disposals,
     list_instances,
@@ -34,6 +35,7 @@ from factory_sop.monitor.usecases import (
     list_violations,
     mirror_decision,
     mirror_disposal,
+    mirror_execution_authority,
     mirror_health,
     mirror_instance,
     mirror_observation,
@@ -44,6 +46,7 @@ from factory_sop.monitor.usecases import (
 from factory_sop.responses import DEFAULT_PAGE_SIZE, MAXIMUM_PAGE_SIZE, ItemPage
 from nvsop_contracts import (
     ReportedDisposal,
+    ReportedExecutionAuthority,
     ReportedHealth,
     ReportedObservation,
     ReportedSopInstance,
@@ -57,9 +60,6 @@ from nvsop_contracts import (
 )
 
 router = APIRouter(prefix="/monitor", tags=["monitor"])
-
-HOST_SILENCE_THRESHOLD_SECONDS = 300.0
-"""外部证人判据（§5.7）：超过该秒数未收到任何主机事实即标记该机可疑。"""
 
 
 @router.post("/reported-decisions/enveloped", operation_id="reportMonitorEnvelopedDecision")
@@ -226,6 +226,52 @@ def report_monitor_instance(
     except MonitorRefusedError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     return {"accepted": True, "duplicate": not inserted, "event_id": report.event_id}
+
+
+@router.post("/execution-authority", operation_id="reportMonitorExecutionAuthority")
+def report_monitor_execution_authority(
+    request: Request,
+    body: dict[str, object],
+    monitor: Annotated[MonitorRepository, Depends(dependencies.monitor)],
+    device_gateway: Annotated[DeviceMonitorGateway, Depends(dependencies.device_monitor_gateway)],
+    host_gateway: Annotated[DeviceHostGateway, Depends(dependencies.host_gateway)],
+    inference_host_id: Annotated[str | None, Header(alias="X-Inference-Host-ID")] = None,
+    inference_host_timestamp: Annotated[
+        str | None, Header(alias="X-Inference-Host-Timestamp")
+    ] = None,
+    inference_host_nonce: Annotated[str | None, Header(alias="X-Inference-Host-Nonce")] = None,
+    inference_host_signature: Annotated[
+        str | None, Header(alias="X-Inference-Host-Signature")
+    ] = None,
+) -> dict[str, object]:
+    try:
+        report = ReportedExecutionAuthority.from_wire(body)
+        host_id = UUID(report.host_id)
+    except (ValueError, TypeError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
+        ) from error
+    _authenticate_report_host(
+        request=request,
+        host_gateway=host_gateway,
+        body=body,
+        host_id=host_id,
+        inference_host_id=inference_host_id,
+        inference_host_timestamp=inference_host_timestamp,
+        inference_host_nonce=inference_host_nonce,
+        inference_host_signature=inference_host_signature,
+    )
+    try:
+        updated = mirror_execution_authority(
+            report,
+            received_at=datetime.now(UTC),
+            monitor=monitor,
+            host_gateway=host_gateway,
+            device_gateway=device_gateway,
+        )
+    except MonitorRefusedError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    return {"accepted": True, "updated": updated}
 
 
 @router.post("/reported-disposals", operation_id="reportMonitorDisposal")

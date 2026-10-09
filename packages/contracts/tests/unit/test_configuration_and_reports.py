@@ -19,6 +19,7 @@ from nvsop_contracts import (
     Polled,
     ReportBackendProvenance,
     ReportedDecision,
+    ReportedExecutionAuthority,
     ReportedHealth,
     ReportedObservation,
     ReportEvidence,
@@ -29,6 +30,8 @@ from nvsop_contracts import (
     configuration_to_wire,
     reported_decision_from_wire,
     reported_decision_to_wire,
+    reported_execution_authority_from_wire,
+    reported_execution_authority_to_wire,
     reported_observation_from_wire,
     reported_observation_to_wire,
 )
@@ -486,6 +489,25 @@ class ReportContractTests(unittest.TestCase):
         wire["evidence"] = {"anchor": float("nan"), "start": 0.5, "end": 1.5}
         with self.assertRaises(ValueError):
             reported_decision_from_wire(wire)
+
+    def test_execution_authority_round_trip_preserves_unknown_states(self) -> None:
+        report = ReportedExecutionAuthority(
+            host_id="host-a",
+            station_id="station-a",
+            authority_state="future_authority",
+            write_state="future_write_state",
+            reason_code="FUTURE_REASON",
+            detail="preserve raw state",
+            grant_id="grant-a",
+            holder_host_id="host-a",
+            lease_expires_at="2026-10-10T00:00:00Z",
+            renewed_at="2026-10-09T00:00:00Z",
+            reported_at="2026-10-09T12:00:00Z",
+        )
+        wire = reported_execution_authority_to_wire(report)
+        self.assertEqual(reported_execution_authority_from_wire(wire), report)
+        self.assertEqual(wire["authority_state"], "future_authority")
+        self.assertEqual(wire["write_state"], "future_write_state")
 
     def test_health_keeps_raw_status_and_reason(self) -> None:
         health = self._health()

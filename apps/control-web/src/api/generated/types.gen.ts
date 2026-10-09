@@ -7367,6 +7367,64 @@ export type ListMonitorDisposalsResponses = {
 export type ListMonitorDisposalsResponse =
   ListMonitorDisposalsResponses[keyof ListMonitorDisposalsResponses]
 
+export type ReportMonitorExecutionAuthorityData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  headers?: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID'?: string | null
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/monitor/execution-authority'
+}
+
+export type ReportMonitorExecutionAuthorityErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReportMonitorExecutionAuthorityError =
+  ReportMonitorExecutionAuthorityErrors[keyof ReportMonitorExecutionAuthorityErrors]
+
+export type ReportMonitorExecutionAuthorityResponses = {
+  /**
+   * Response Reportmonitorexecutionauthority
+   *
+   * Successful Response
+   */
+  200: {
+    [key: string]: unknown
+  }
+}
+
+export type ReportMonitorExecutionAuthorityResponse =
+  ReportMonitorExecutionAuthorityResponses[keyof ReportMonitorExecutionAuthorityResponses]
+
 export type ReportMonitorHealthData = {
   /**
    * Body

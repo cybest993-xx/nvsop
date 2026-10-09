@@ -13,6 +13,7 @@ from nvsop_contracts import (
     ReportBackendProvenance,
     ReportedDecision,
     ReportedDisposal,
+    ReportedExecutionAuthority,
     ReportedHealth,
     ReportedObservation,
     ReportedSopInstance,
@@ -73,6 +74,11 @@ class TimedDecisionReportTransport(Protocol):
 
 
 @runtime_checkable
+class ExecutionAuthorityReportTransport(Protocol):
+    def send_execution_authority(self, report: ReportedExecutionAuthority) -> None: ...
+
+
+@runtime_checkable
 class DisposalReportTransport(Protocol):
     def send_disposal(self, report: ReportedDisposal) -> None: ...
 
@@ -86,6 +92,7 @@ class ReportAttempt:
 
 
 LIVE_REPORT_WINDOW_SECONDS = 30.0
+EXECUTION_AUTHORITY_HEARTBEAT_SECONDS = 60.0
 
 
 class HostReportReconciler:
@@ -96,9 +103,14 @@ class HostReportReconciler:
         *,
         reports: ReportStore,
         transport: DecisionReportTransport,
+        execution_authorities: (
+            Callable[[str], tuple[ReportedExecutionAuthority, ...]] | None
+        ) = None,
     ) -> None:
         self._reports = reports
         self._transport = transport
+        self._execution_authorities = execution_authorities
+        self._execution_delivery: dict[tuple[str, str], tuple[tuple[object, ...], float]] = {}
 
     def flush(
         self,
@@ -256,7 +268,43 @@ class HostReportReconciler:
                 now=now, reported_at=reported_at, limit=limit, should_stop=should_stop
             )
         )
+        self._flush_execution_authorities(now=now, reported_at=reported_at, should_stop=should_stop)
         return tuple(attempts)
+
+    def _flush_execution_authorities(
+        self,
+        *,
+        now: HostInstant,
+        reported_at: str,
+        should_stop: Callable[[], bool] | None,
+    ) -> None:
+        if self._execution_authorities is None:
+            return
+        if not isinstance(self._transport, ExecutionAuthorityReportTransport):
+            raise TypeError("report transport does not support execution authority reporting")
+        for report in self._execution_authorities(reported_at):
+            if should_stop is not None and should_stop():
+                return
+            key = (report.host_id, report.station_id)
+            signature: tuple[object, ...] = (
+                report.authority_state,
+                report.write_state,
+                report.reason_code,
+                report.detail,
+                report.grant_id,
+                report.holder_host_id,
+                report.lease_expires_at,
+                report.renewed_at,
+            )
+            previous = self._execution_delivery.get(key)
+            if (
+                previous is not None
+                and previous[0] == signature
+                and now.seconds - previous[1] < EXECUTION_AUTHORITY_HEARTBEAT_SECONDS
+            ):
+                continue
+            self._transport.send_execution_authority(report)
+            self._execution_delivery[key] = (signature, now.seconds)
 
     def _flush_observations(
         self,
@@ -632,6 +680,7 @@ def reported_open_instance_from_pending(
 
 __all__ = [
     "DecisionReportTransport",
+    "ExecutionAuthorityReportTransport",
     "HostReportReconciler",
     "ReportAttempt",
     "reported_decision_from_pending",

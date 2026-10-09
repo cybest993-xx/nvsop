@@ -14,6 +14,7 @@ import pytest
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from factory_sop.execution.adapters import dependencies as execution_dependencies
 from factory_sop.monitor.adapters.repository import PostgresMonitorRepository
 from factory_sop.monitor.adapters.streaming import PostgresMonitorStreamSource
 from factory_sop.monitor.model import (
@@ -247,8 +248,16 @@ def test_commit_wakes_independent_listeners_and_reads_use_short_transactions(
 ) -> None:
     factory = sessionmaker(bind=engine)
     decision_sequence, health_sequence = _current_sequences(factory)
-    source_a = PostgresMonitorStreamSource(factory, engine)
-    source_b = PostgresMonitorStreamSource(factory, engine)
+    source_a = PostgresMonitorStreamSource(
+        factory,
+        engine,
+        execution_gateway_factory=execution_dependencies.grant_views,
+    )
+    source_b = PostgresMonitorStreamSource(
+        factory,
+        engine,
+        execution_gateway_factory=execution_dependencies.grant_views,
+    )
     event_ids = tuple(f"s143:wakeup:{uuid4()}" for _ in range(3))
 
     try:
@@ -321,7 +330,11 @@ def test_durable_replay_does_not_require_a_prior_wakeup(engine: Engine) -> None:
         assert PostgresMonitorRepository(session).upsert_health(_health(event_id))
         session.commit()
 
-    source = PostgresMonitorStreamSource(factory, engine)
+    source = PostgresMonitorStreamSource(
+        factory,
+        engine,
+        execution_gateway_factory=execution_dependencies.grant_views,
+    )
     try:
         _, health = source.read_after_sequences(
             decision_sequence=decision_sequence,
@@ -394,7 +407,11 @@ def _station_instance(rows: tuple[dict[str, object], ...], station_id: str) -> d
 
 def test_runtime_projection_keeps_new_instance_when_old_close_arrives_late(engine: Engine) -> None:
     factory = sessionmaker(bind=engine)
-    source = PostgresMonitorStreamSource(factory, engine)
+    source = PostgresMonitorStreamSource(
+        factory,
+        engine,
+        execution_gateway_factory=execution_dependencies.grant_views,
+    )
     station_id, first, second = str(uuid4()), f"s019:instance:{uuid4()}", f"s019:instance:{uuid4()}"
     try:
         assert station_id not in {value["station_id"] for value in source.read_runtime_projection()}
@@ -426,7 +443,11 @@ def test_runtime_projection_keeps_new_instance_when_old_close_arrives_late(engin
         assert latest["closed_at"] is None
     finally:
         source.close()
-    reconnect = PostgresMonitorStreamSource(factory, engine)
+    reconnect = PostgresMonitorStreamSource(
+        factory,
+        engine,
+        execution_gateway_factory=execution_dependencies.grant_views,
+    )
     try:
         assert _station_instance(reconnect.read_runtime_projection(), station_id) == latest
         with factory() as session:
@@ -477,7 +498,11 @@ def test_runtime_observation_notify_is_transactional_and_projection_has_no_globa
     engine: Engine,
 ) -> None:
     factory = sessionmaker(bind=engine)
-    source = PostgresMonitorStreamSource(factory, engine)
+    source = PostgresMonitorStreamSource(
+        factory,
+        engine,
+        execution_gateway_factory=execution_dependencies.grant_views,
+    )
     try:
         existing_stations = {value["station_id"] for value in source.read_runtime_projection()}
         rollback_station = str(uuid4())

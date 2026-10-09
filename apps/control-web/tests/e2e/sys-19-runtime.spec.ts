@@ -18,7 +18,7 @@ const station = { id: stationId, name: '装配工位十九', code: 'A19', revisi
 const projection = (verdict: string) =>
   JSON.parse(`{
   "station_id":"${stationId}",
-  "physical_safety":{"status":"protected","detail":"Center 授权有效且 Edge 最近上报未过期","center_authorization":{"state":"active","grant_id":"grant-19","holder_host_id":"host-19","lease_expires_at":"2026-09-15T08:00:00Z","renewed_at":"2026-09-14T08:00:00Z"},"edge_status":{"host_id":"host-19","last_reported_at":"2026-09-14T08:00:03Z","age_seconds":1,"stale":false}},
+  "physical_safety":{"status":"protected","detail":"Center 授权有效，Edge 报告物理写入门禁已启用","center_authorization":{"state":"active","grant_id":"grant-19","holder_host_id":"host-19","lease_expires_at":"2026-09-15T08:00:00Z","renewed_at":"2026-09-14T08:00:00Z"},"edge_status":{"host_id":"host-19","authority_state":"active","write_state":"enabled","reason_code":null,"detail":null,"grant_id":"grant-19","holder_host_id":"host-19","lease_expires_at":"2026-09-15T08:00:00Z","renewed_at":"2026-09-14T08:00:00Z","reported_at":"2026-09-14T08:00:03Z","received_at":"2026-09-14T08:00:04Z","stale":false}},
   "instance":{"event_id":"instance-19","trace_id":"trace-instance-19","host_id":"host-19","instance_id":19,"opened_at":12.5,"closed_at":null,"close_reason":null,"open_boundary_signal":"start","close_boundary_signal":null,"contract_version":1,"template_version_id":"actual-instance-template","template_sha256":"${'a'.repeat(64)}","backend_provenance":[{"backend_id":"backend-19","model_ids":["actual-instance-model"]}],"configuration_revision":7,"configuration_sha256":"${'b'.repeat(64)}","reported_at":"2026-09-14T08:00:00Z"},
   "observation":{"event_id":"observation-19","contract_version":1,"instance_id":19,"source":"action","signal":"(2) 拧紧螺栓","source_time":8.25,"source_anchor":100.5,"observed_at":8.5,"template_version_id":"actual-observation-template","template_sha256":"${'d'.repeat(64)}","backend":{"backend_id":"backend-observation","model_ids":["actual-observation-model"]},"reported_at":"2026-09-14T08:00:01Z"},
   "decision":{"event_id":"decision-19","trace_id":"trace-19","host_id":"host-19","instance_id":19,"verdict":"${verdict}","reason_codes":["FUTURE_REASON_19"],"lifecycle":"open","evidence":{"anchor":8.25,"start":7.5,"end":9},"template_version_id":"actual-decision-template","template_sha256":"${'c'.repeat(64)}","model_ids":[],"backend_provenance":[{"backend_id":"backend-decision","model_ids":["actual-field-model"]}],"configuration_revision":7,"configuration_sha256":"${'e'.repeat(64)}","contract_version":2,"violations":[],"reported_at":"2026-09-14T08:00:02Z"},
@@ -94,6 +94,27 @@ async function standardRoutes(
   })
 }
 
+async function installStableRuntimeStream(page: Page, value: object) {
+  await page.addInitScript((projectionValue) => {
+    class StableEventSource extends EventTarget {
+      onopen: ((event: Event) => void) | null = null
+      onerror: ((event: Event) => void) | null = null
+
+      constructor() {
+        super()
+        setTimeout(() => {
+          this.onopen?.(new Event('open'))
+          this.dispatchEvent(new MessageEvent('runtime', { data: JSON.stringify(projectionValue) }))
+          this.dispatchEvent(new MessageEvent('live', { data: '{}' }))
+        }, 0)
+      }
+
+      close() {}
+    }
+    Object.defineProperty(window, 'EventSource', { value: StableEventSource, configurable: true })
+  }, value)
+}
+
 test('SYS-19 — reconnect retains projection and native MessageEvent.lastEventId while ignoring duplicate/legacy frames', async ({
   page,
 }) => {
@@ -123,10 +144,10 @@ test('SYS-19 — reconnect retains projection and native MessageEvent.lastEventI
     const value = projection(requests < 3 ? 'pass' : requests < 5 ? 'indeterminate' : 'fail')
     const body =
       requests === 1
-        ? `retry: 50\nid: legacy-cursor\nevent: decision\ndata: {}\n\n${frame(value)}${frame(value)}`
+        ? `retry: 50\nid: legacy-cursor\nevent: decision\ndata: {}\n\n${frame(value)}${frame(value)}${liveFrame}`
         : requests === 3
-          ? `${frame(projection('pass'))}${frame(value)}id: legacy-cursor\nevent: decision\ndata: {"verdict":"pass"}\n\n`
-          : `${frame(projection('indeterminate'))}${frame(value)}`
+          ? `${frame(projection('pass'))}${frame(value)}${liveFrame}id: legacy-cursor\nevent: decision\ndata: {"verdict":"pass"}\n\n`
+          : `${frame(projection('indeterminate'))}${frame(value)}${liveFrame}`
     await route.fulfill({
       status: 200,
       contentType: 'text/event-stream',
@@ -139,6 +160,9 @@ test('SYS-19 — reconnect retains projection and native MessageEvent.lastEventI
   await expect(decision).toContainText('通过')
   await expect(decision).toContainText('未知原因码：FUTURE_REASON_19')
   await expect(page.getByText(/连接中断，保留上次镜像等待恢复/)).toBeVisible()
+  await expect(page.getByRole('region', { name: '物理防错与执行权' })).toContainText(
+    '物理防错状态未知（数据已过期）',
+  )
   await expect(decision).toContainText('不可判定')
   await expect(page.getByText(/连接中断，保留上次镜像等待恢复/)).toBeVisible()
   await expect(decision).toContainText('不通过')
@@ -147,7 +171,7 @@ test('SYS-19 — reconnect retains projection and native MessageEvent.lastEventI
     'future_health_state',
   )
   const physicalSafety = page.getByRole('region', { name: '物理防错与执行权' })
-  await expect(physicalSafety).toContainText('物理防错有效')
+  await expect(physicalSafety).toContainText('物理防错状态未知（数据已过期）')
   await expect(physicalSafety).toContainText('Center 授权有效')
   await expect(physicalSafety).toContainText('host-19')
   await expect(page.getByRole('region', { name: 'SOP 实例与实际来源' })).toContainText(
@@ -162,6 +186,51 @@ test('SYS-19 — reconnect retains projection and native MessageEvent.lastEventI
   await expect(page.getByRole('alert')).toHaveCount(0)
   expect(requests).toBeGreaterThanOrEqual(5)
   expect(await page.evaluate(() => window.runtimeEventIds)).toContain('legacy-cursor')
+})
+
+test('S054 — Edge stopped-write is a failed physical-safety state separate from judgment', async ({
+  page,
+}) => {
+  const value = projection('pass')
+  value.physical_safety = {
+    ...value.physical_safety,
+    status: 'failed',
+    detail: '工位已停止写入',
+    edge_status: {
+      ...value.physical_safety.edge_status,
+      write_state: 'stopped',
+      reason_code: 'write_stopped',
+      detail: '工位已停止写入',
+    },
+  }
+  await installStableRuntimeStream(page, value)
+  await standardRoutes(page, session.permissions)
+  await page.goto('/devices')
+  await expect(page.getByRole('region', { name: '物理防错与执行权' })).toContainText('物理防错失效')
+  await expect(page.getByRole('region', { name: '物理防错与执行权' })).toContainText(
+    'Edge 已停止物理写入',
+  )
+  await expect(page.getByRole('region', { name: '最新判定' })).toContainText('通过')
+})
+
+test('S054 — stale Edge state shows known time and never a green write indication', async ({
+  page,
+}) => {
+  const value = projection('pass')
+  value.physical_safety = {
+    ...value.physical_safety,
+    status: 'stale',
+    detail: 'Edge 执行权/停写状态已过期或尚未取得；不显示为仍可写',
+    edge_status: { ...value.physical_safety.edge_status, stale: true },
+  }
+  await installStableRuntimeStream(page, value)
+  await standardRoutes(page, session.permissions)
+  await page.goto('/devices')
+  const physical = page.getByRole('region', { name: '物理防错与执行权' })
+  await expect(physical).toContainText('物理防错状态未知（数据已过期）')
+  await expect(physical).toContainText('Edge 已知时间')
+  await expect(physical).toContainText('数据已过期；不会沿用最后一次正常状态表示仍可写')
+  await expect(physical).not.toContainText('物理防错有效')
 })
 
 test('SYS-19 — station permission separates configured/actual versions and keyboard navigation reaches the runtime panel', async ({

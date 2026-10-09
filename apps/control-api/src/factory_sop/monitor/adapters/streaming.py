@@ -21,6 +21,7 @@ from factory_sop.monitor.repository import MonitorStreamSource
 from factory_sop.monitor.usecases import (
     HOST_SILENCE_THRESHOLD_SECONDS,
     physical_safety_projection,
+    select_execution_authority,
 )
 
 
@@ -44,7 +45,7 @@ class PostgresMonitorStreamSource(MonitorStreamSource):
         factory: sessionmaker[Session],
         engine: Engine,
         *,
-        execution_gateway_factory: Callable[[Session], ExecutionGrantViewGateway] | None = None,
+        execution_gateway_factory: Callable[[Session], ExecutionGrantViewGateway],
         stale_after_seconds: float = HOST_SILENCE_THRESHOLD_SECONDS,
     ) -> None:
         self._factory = factory
@@ -82,31 +83,43 @@ class PostgresMonitorStreamSource(MonitorStreamSource):
         with self._factory() as session:
             repository = PostgresMonitorRepository(session)
             runtime = repository.runtime_projection()
-            if self._execution_gateway_factory is None:
-                return runtime
+            station_ids = tuple(
+                cast(str, item["station_id"])
+                for item in runtime
+                if isinstance(item.get("station_id"), str)
+            )
+            parsed_ids: list[UUID] = []
+            for station_id in station_ids:
+                try:
+                    parsed_ids.append(UUID(station_id))
+                except ValueError:
+                    continue
             gateway = self._execution_gateway_factory(session)
-            last_by_host = dict(repository.last_report_at_by_host())
+            center_views = {
+                str(view.station_id): view
+                for view in gateway.station_views(
+                    station_ids=tuple(parsed_ids),
+                    now=datetime.now(UTC),
+                )
+            }
+            edge_values = repository.execution_authority_for_stations(station_ids=station_ids)
             now = datetime.now(UTC)
             values: list[dict[str, object]] = []
             for item in runtime:
-                station_id = UUID(cast(str, item["station_id"]))
-                grant = gateway.current_grant(station_id=station_id)
-                instance = item.get("instance")
-                instance_host = (
-                    instance.get("host_id")
-                    if isinstance(instance, dict) and isinstance(instance.get("host_id"), str)
-                    else None
+                raw_station_id = item.get("station_id")
+                center = (
+                    center_views.get(raw_station_id) if isinstance(raw_station_id, str) else None
                 )
-                host_id = str(grant.holder_host_id) if grant is not None else instance_host
+                if center is None:
+                    values.append(item)
+                    continue
+                edge = select_execution_authority(edge_values, center=center)
                 values.append(
                     {
                         **item,
                         "physical_safety": physical_safety_projection(
-                            item,
-                            grant=grant,
-                            last_reported_at=(
-                                None if host_id is None else last_by_host.get(host_id)
-                            ),
+                            center=center,
+                            edge=edge,
                             now=now,
                             stale_after_seconds=self._stale_after_seconds,
                         ),

@@ -1,9 +1,9 @@
 """绑定到请求工作单元的 monitor HTTP 依赖。"""
 
 from collections.abc import Callable, Iterator
-from typing import cast
+from typing import Annotated, cast
 
-from fastapi import HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 from sqlalchemy import Engine
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.orm import Session, sessionmaker
@@ -40,14 +40,21 @@ def historical_assignment_gateway() -> DeviceHistoricalAssignmentGateway:
     raise RuntimeError("monitor historical assignment dependency was not wired")
 
 
-def monitor_stream_source(request: Request, once: bool = False) -> Iterator[MonitorStreamSource]:
+def execution_view_factory() -> Callable[[Session], ExecutionGrantViewGateway]:
+    """由 composition root 注入 execution owner 的无锁只读视图 factory。"""
+    raise RuntimeError("monitor execution view dependency was not wired")
+
+
+def monitor_stream_source(
+    request: Request,
+    execution_gateway_factory: Annotated[
+        Callable[[Session], ExecutionGrantViewGateway], Depends(execution_view_factory)
+    ],
+    once: bool = False,
+) -> Iterator[MonitorStreamSource]:
     """长订阅先取得独立 listener 配额；有限快照不占用长期监听资源。"""
     factory = cast(sessionmaker[Session], request.app.state.session_factory)
     engine = cast(Engine, request.app.state.monitor_listener_engine)
-    execution_gateway_factory = cast(
-        Callable[[Session], ExecutionGrantViewGateway],
-        request.app.state.execution_lease_gateway_factory,
-    )
     source = PostgresMonitorStreamSource(
         factory,
         engine,

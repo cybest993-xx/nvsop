@@ -100,7 +100,9 @@ class MonitorStreamSource(Protocol):
         limit: int,
     ) -> tuple[tuple[MirroredDecision, ...], tuple[MirroredHealth, ...]]: ...
 
-    def read_runtime_projection(self) -> tuple[dict[str, object], ...]: ...
+    def read_runtime_projection(
+        self, *, reserve_listener: bool = True
+    ) -> tuple[dict[str, object], ...]: ...
 
     def wait_for_wakeup(self, *, timeout: float) -> bool:
         """等待提交后提示；False 只表示本次等待超时。"""

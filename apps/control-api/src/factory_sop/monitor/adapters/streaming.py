@@ -79,8 +79,11 @@ class PostgresMonitorStreamSource(MonitorStreamSource):
             )
         return decisions, health
 
-    def read_runtime_projection(self) -> tuple[dict[str, object], ...]:
-        self._ensure_listener()
+    def read_runtime_projection(
+        self, *, reserve_listener: bool = True
+    ) -> tuple[dict[str, object], ...]:
+        if reserve_listener:
+            self._ensure_listener()
         with self._factory() as session:
             repository = PostgresMonitorRepository(session)
             runtime = repository.runtime_projection()

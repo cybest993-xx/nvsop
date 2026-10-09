@@ -234,7 +234,11 @@ class MemoryMonitor:
     def runtime_projection(self) -> tuple[dict[str, object], ...]:
         return self.runtime
 
-    read_runtime_projection = runtime_projection
+    def read_runtime_projection(
+        self, *, reserve_listener: bool = True
+    ) -> tuple[dict[str, object], ...]:
+        del reserve_listener
+        return self.runtime_projection()
 
     def wait_for_wakeup(self, *, timeout: float) -> bool:
         del timeout

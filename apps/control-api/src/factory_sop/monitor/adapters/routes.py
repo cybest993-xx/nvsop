@@ -527,7 +527,7 @@ def stream_monitor_events(
         monitor,
         caller=caller,
         last_event_id=last_event_id,
-        runtime_projection=source.read_runtime_projection(),
+        runtime_projection=source.read_runtime_projection(reserve_listener=not once),
     )
 
     def events() -> Iterator[str]:

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 from uuid import UUID
 
-from factory_sop.evidence.api import HostOwnershipGateway
+if TYPE_CHECKING:
+    from factory_sop.evidence.api import HostOwnershipGateway
 from factory_sop.evidence.errors import EvidenceRefusal, EvidenceRefusedError
 from factory_sop.evidence.model import (
     EvidenceReference,

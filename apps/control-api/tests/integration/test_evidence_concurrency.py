@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime
 from threading import Barrier
 from uuid import UUID
@@ -17,6 +18,7 @@ from factory_sop.evidence.model import (
     EvidenceOrigin,
     EvidenceReference,
     EvidenceRegistration,
+    EvidenceStatus,
 )
 from factory_sop.evidence.usecases import register_evidence
 
@@ -118,4 +120,80 @@ def test_competing_available_material_cannot_overwrite_the_winner(engine: Engine
             cleanup.execute(
                 text("DELETE FROM evidence_evidence WHERE evidence_id = :evidence_id"),
                 {"evidence_id": EVIDENCE_ID},
+            )
+
+
+def test_postgresql_evidence_idempotence_pending_promotion_and_filters(engine: Engine) -> None:
+    """真实 PG 主键、pending->available、查询 count 与仅存引用的表形态 (S034 B1)。"""
+    owner = Owner()
+    first_id, other_id = "evidence-b1-first", "evidence-b1-other"
+    available = replace(
+        registration(sha256="a" * 64, reference="evidence/a.mp4"), evidence_id=first_id
+    )
+    pending = replace(
+        registration(sha256=None, reference=None), evidence_id=other_id, instance_id=8
+    )
+    try:
+        with DatabaseSession(engine) as session:
+            repository = PostgresEvidenceRepository(session)
+            initial = register_evidence(
+                available, received_at=NOW, evidence=repository, host_gateway=owner
+            )
+            same = register_evidence(
+                available, received_at=NOW, evidence=repository, host_gateway=owner
+            )
+            assert initial == same
+            waiting = register_evidence(
+                pending, received_at=NOW, evidence=repository, host_gateway=owner
+            )
+            assert waiting.status is EvidenceStatus.PENDING
+            promoted = register_evidence(
+                replace(pending, sha256="b" * 64, size=2048, reference="evidence/b.mp4"),
+                received_at=NOW,
+                evidence=repository,
+                host_gateway=owner,
+            )
+            assert promoted.status is EvidenceStatus.AVAILABLE
+            rows, count = repository.page(
+                page=1,
+                page_size=10,
+                status=EvidenceStatus.AVAILABLE,
+                station_id=str(STATION_ID),
+                instance_id=8,
+            )
+            assert count == 1
+            assert rows == (promoted,)
+            rows, count = repository.page(
+                page=1,
+                page_size=10,
+                status=EvidenceStatus.AVAILABLE,
+                station_id=str(STATION_ID),
+            )
+            assert count >= 2
+            assert {first_id, other_id} <= {r.evidence_id for r in rows}
+            assert repository.find(first_id) == initial
+            session.commit()
+        with engine.connect() as connection:
+            columns = set(
+                connection.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name = 'evidence_evidence'"
+                    )
+                ).scalars()
+            )
+            assert {"evidence_id", "sha256", "size", "reference", "status"} <= columns
+            assert not any(
+                name.startswith(("s3_", "object_", "media_uploaded")) for name in columns
+            )
+            actual = connection.scalar(
+                text("SELECT count(*) FROM evidence_evidence WHERE evidence_id IN (:a, :b)"),
+                {"a": first_id, "b": other_id},
+            )
+            assert actual == 2
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM evidence_evidence WHERE evidence_id IN (:a, :b)"),
+                {"a": first_id, "b": other_id},
             )

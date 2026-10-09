@@ -730,7 +730,7 @@ def test_configuration_pull_excludes_another_host_topology(
 
 
 def test_edge_offline_decision_flushes_after_real_center_rebind(
-    engine: Engine, runtime_topology: RuntimeTopology, dataset_storage_root: Path
+    engine: Engine, runtime_topology: RuntimeTopology, dataset_storage_root: Path, tmp_path: Path
 ) -> None:
     edge_source = str(Path(__file__).resolve().parents[4] / "apps/edge-runtime/src")
     sys.path.insert(0, edge_source)
@@ -746,7 +746,8 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
     config_path = f"{API_PREFIX}/inference-hosts/{runtime_topology.host.id}/configuration"
     report_path = f"{API_PREFIX}/monitor/reported-decisions"
     rebound = _rebound_topology(engine, runtime_topology)
-    edge_state = edge_local_state.open_local_state(":memory:")
+    edge_database = str(tmp_path / "offline-recovery.sqlite")
+    edge_state = edge_local_state.open_local_state(edge_database)
     try:
         with client_for(engine, settings) as client:
             initial = client.get(
@@ -826,9 +827,15 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
                 decisions=(
                     edge_model.Decision(
                         instance_id=1,
-                        verdict=edge_reasons.Verdict.PASS,
-                        reasons=(),
-                        violations=(),
+                        verdict=edge_reasons.Verdict.FAIL,
+                        reasons=(edge_reasons.ReasonCode.MISSED_STEP,),
+                        violations=(
+                            edge_model.Violation(
+                                reason=edge_reasons.ReasonCode.MISSED_STEP,
+                                steps=("step-2",),
+                                evidence=edge_model.EvidenceSpan.at(edge_model.HostInstant(2.0)),
+                            ),
+                        ),
                         lifecycle=edge_model.Lifecycle.CLOSED_BY_END_SIGNAL,
                         evidence=edge_model.EvidenceSpan.at(edge_model.HostInstant(2.0)),
                     ),
@@ -841,6 +848,38 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
             )
             (offline_pending,) = edge_station.pending_reports()
             assert offline_pending.context == context_n
+            assert len(edge_station.latched_violations(instance_id=1)) == 1
+            assert {row.name: row.depth for row in edge_state.queue_status()}["report"] == 1
+
+            def mirror_counts(event_id: str) -> tuple[int, int]:
+                # 与 Edge 本机持久积压独立读取真实 PostgreSQL 镜像，仅比较此事件身份。
+                with engine.connect() as connection:
+                    params = {"event_id": event_id}
+                    return (
+                        int(
+                            connection.scalar(
+                                text(
+                                    "SELECT count(*) FROM monitor_reported_decision "
+                                    "WHERE event_id = :event_id"
+                                ),
+                                params,
+                            )
+                            or 0
+                        ),
+                        int(
+                            connection.scalar(
+                                text(
+                                    "SELECT count(*) FROM monitor_violation "
+                                    "WHERE decision_event_id = :event_id"
+                                ),
+                                params,
+                            )
+                            or 0
+                        ),
+                    )
+
+            event_id = f"{context_n.host_id}:{offline_pending.queue_id}"
+            assert mirror_counts(event_id) == (0, 0)
 
             _rebind_station_to_host_b(engine, runtime_topology, rebound)
             changed = client.get(
@@ -856,6 +895,7 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
                 def __init__(self) -> None:
                     self.sent: list[ReportedDecision] = []
                     self.instances: list[ReportedSopInstance] = []
+                    self.duplicate_acks: list[bool] = []
 
                 def send_decision(
                     self,
@@ -905,6 +945,10 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
                     assert response.status_code == 200
                     assert response.json()["accepted"] is True
                     self.sent.append(report)
+                    self.duplicate_acks.append(response.json()["duplicate"])
+                    if len(self.sent) == 1:
+                        # Center 已事务归档，但首个 HTTP ack 在 Edge 端丢失。
+                        raise OSError("center committed but its acknowledgement was lost")
 
                 def send_instance(
                     self,
@@ -930,38 +974,79 @@ def test_edge_offline_decision_flushes_after_real_center_rebind(
                     self.instances.append(report)
 
             transport = SignedHttpTransport()
-            attempts = edge_reporting.HostReportReconciler(
+            first = edge_reporting.HostReportReconciler(
                 reports=edge_state.reports(), transport=transport
-            ).flush(
-                now=edge_model.HostInstant(10.0),
-                reported_at="2026-09-16T00:00:00Z",
+            ).flush(now=edge_model.HostInstant(10.0), reported_at="2026-09-16T00:00:00Z")
+            assert len(first) == 1
+            assert first[0].sent is False
+            assert transport.duplicate_acks == [False]
+            assert transport.instances == []
+            assert mirror_counts(event_id) == (1, 1)
+            assert {row.name: row.depth for row in edge_state.queue_status()}["report"] == 1
+            (retry_pending,) = edge_station.pending_reports()
+            assert retry_pending.attempts == 1
+            assert retry_pending.reported_at == "2026-09-16T00:00:00Z"
+
+            # 断网期间已经切换了中心工位归属；Edge 重启后不再持有旧工位配置对象。
+            edge_state.close()
+            edge_state = edge_local_state.open_local_state(edge_database)
+            recovered_station = edge_state.station(station_n.station_id)
+            (restored,) = recovered_station.pending_reports()
+            assert restored == retry_pending
+            assert recovered_station.latched_violations(instance_id=1) == (
+                edge_model.Violation(
+                    reason=edge_reasons.ReasonCode.MISSED_STEP,
+                    steps=("step-2",),
+                    evidence=edge_model.EvidenceSpan.at(edge_model.HostInstant(2.0)),
+                ),
             )
-            assert len(attempts) == 1
-            assert attempts[0].sent is True
-            assert len(transport.sent) == 1
-            assert len(transport.instances) == 1
+            assert {row.name: row.depth for row in edge_state.queue_status()}["report"] == 1
+
+            retried = edge_reporting.HostReportReconciler(
+                reports=edge_state.reports(), transport=transport
+            ).flush(now=edge_model.HostInstant(20.0), reported_at="2026-09-16T00:05:00Z")
+            assert len(retried) == 1
+            assert retried[0].sent is True
+            assert transport.duplicate_acks == [False, True]
+            assert transport.sent[0] == transport.sent[1]
+            assert transport.sent[0].event_id == event_id
             assert transport.sent[0].configuration_revision == bundle_n.config_revision
             assert transport.sent[0].backend_id is None
             assert transport.sent[0].backend_provenance == (
                 ReportBackendProvenance(station_n.backend_id, station_n.model_ids),
             )
+            assert transport.sent[0].reported_at == "2026-09-16T00:00:00Z"
+            assert len(transport.instances) == 1
             assert transport.instances[0].configuration_revision == bundle_n.config_revision
             assert transport.instances[0].instance_id == 1
-            assert edge_station.pending_reports() == ()
+            assert mirror_counts(event_id) == (1, 1)
+            assert {row.name: row.depth for row in edge_state.queue_status()}["report"] == 0
+            assert recovered_station.pending_reports() == ()
 
-            duplicate_body = reported_decision_to_wire(transport.sent[0])
-            duplicate = client.post(
-                report_path,
-                json=duplicate_body,
-                headers=_host_headers(
-                    runtime_topology,
-                    method="POST",
-                    path=report_path,
-                    body=duplicate_body,
-                ),
-            )
-            assert duplicate.status_code == 200
-            assert duplicate.json()["duplicate"] is True
+            third = edge_reporting.HostReportReconciler(
+                reports=edge_state.reports(), transport=transport
+            ).flush(now=edge_model.HostInstant(30.0), reported_at="2026-09-16T00:06:00Z")
+            assert third == ()
+            assert mirror_counts(event_id) == (1, 1)
+            with engine.connect() as connection:
+                payload = connection.scalar(
+                    text(
+                        "SELECT payload FROM monitor_reported_decision WHERE event_id = :event_id"
+                    ),
+                    {"event_id": event_id},
+                )
+                assert payload is not None
+                assert payload["configuration_revision"] == bundle_n.config_revision
+                assert payload["reported_at"] == "2026-09-16T00:00:00Z"
+                assert payload["backend_provenance"][0]["backend_id"] == station_n.backend_id
+                violation_payload = connection.scalar(
+                    text(
+                        "SELECT payload FROM monitor_violation WHERE decision_event_id = :event_id"
+                    ),
+                    {"event_id": event_id},
+                )
+                assert violation_payload is not None
+                assert violation_payload["violation"]["reason_code"] == "MISSED_STEP"
     finally:
         edge_state.close()
         _remove_rebound_topology(engine, runtime_topology, rebound)

@@ -44,6 +44,12 @@
 - 契约测试：`tests/contract/base/` 的 `test_annotation_patch.py` 验证补丁从当前 vendor 树可逆向干净应用、只触及登记的五个文件、上传请求在一次调用内固定目标、上下文入口存在、标注服务不发布端口，以及控件标签关联未丢失。
 - 补丁是否需要调整：不需要。训练基座的产品接入仍须在上游提交变化后重新运行该族测试。
 
+#### S118 浏览器短片切片失败修正（2026-10-11）
+
+- 已接受主线 `286dfa990d8f79ef504568cec07075a97f496fa3` 下，真实隔离 HTTP 实例的 Chrome/Edge 标注提交成功到达异步 job，但 NVIDIA 标注基座将已生成的 2463 字节 MP4 因静态 10 KB 下限删除并报 500；原始容器日志存于本地 Git 忽略证据目录 `.nvsop/artifacts/validation/s118-20261010/evidence/bug453/`，不提交媒体或浏览器敏感 trace。
+- 通过 FFmpeg/ffprobe 确认独立合成 2040 字节 H.264 MP4 仍有 1.5 秒正时长。本次仅扩大已登记的 `0002-annotation-upload-target-and-accessibility.patch`：两个既有切片生成模式复用实际 `VideoFileClip` 解码与正时长校验，保留不存在/无法解码/零时长的拒绝及失败清理，不改分段选择与上传/存储路径。
+- `test_annotation_patch.py` 增加短片契约断言，并继续核对登记补丁可正反重放。此项为当前基座已验证提交上的独立缺陷修复，**不是新的 NVIDIA 上游提交**；完整真实浏览器复测、`make check`、独立审查及交付证据以 Issue #453 和其 PR 最终结果为准。
+
 #### Git-LFS 失效资产清理（2026-09-16）
 
 - 补丁：[`patches/0003-drop-unavailable-lfs-assets.patch`](patches/0003-drop-unavailable-lfs-assets.patch)。删除 8 个仅有 LFS pointer 的文档资产（7 个唯一 OID）以及两处 `filter=lfs` 规则，并移除对应文档嵌入。

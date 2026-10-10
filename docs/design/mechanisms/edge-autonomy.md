@@ -28,7 +28,8 @@ MediaMTX（独立于判定的预览/录像路径；每路 passthrough 或 CPU �
 ```
 
 生产入口是 `python -m edge_runtime`。它读取 `NVSOP_EDGE_COMMAND_CONFIG_FILE` 指向的本机 JSON，
-同时启动 MediaMTX 媒体运行时、委托命令轮询和每个已配置工位的自治判定循环；中心 URL 只允许 HTTPS，
+同时启动 MediaMTX 媒体运行时、委托命令轮询和每个已配置工位的自治判定循环；推理机运行时的 `center_url` 当前只允许 HTTPS，必须校验 TLS 证书。
+本地固定 `main` 的 Center/Nginx 开发入口默认使用 HTTP（见 [S004 HTTP 实测](../../research/s004-http-session-media-edge-2026-10-10.md)）；本次只用合成签名主机请求验证该入口，不代表 `python -m edge_runtime` 可以将 `center_url` 配置为 HTTP。HTTP 验收不免除主机签名、时间戳和 nonce 校验，也不放松生产 Edge 的 TLS 信任校验。
 设备凭据、相机 RTSP 凭据和主机私钥只从本机 secret 文件读取。中心导出的相机配置使用
 `camera-<uuid hex>` 稳定 path，由部署人员用 `scripts/apply_media_export.py` 与本机二进制/绑定设置合并。
 

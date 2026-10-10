@@ -91,6 +91,7 @@ make dev-down        # 停止实例
 
 本地固定实例的故障与版本锁真实验收记录参见 [S002 验收报告](../research/s002-main-update-validation-2026-10-10.md)。
 开发数据保留、测试报告版本绑定和服务故障的本地实测参见 [S003 验收报告](../research/s003-data-preservation-report-binding-2026-10-10.md)。
+默认 HTTP 的浏览器会话、授权媒体 Range、七条机器签名网关接口实测参见 [S004 HTTP 验收报告](../research/s004-http-session-media-edge-2026-10-10.md)。此验证不涵盖可选 HTTPS 的证书链。
 
 `make dev-status` 只读：当持久化状态为 `ready` 但实测服务不健康时，输出把该条目标记为 `degraded` 并以退出码 1 结束，state 文件不回写。
 

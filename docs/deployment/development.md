@@ -87,6 +87,8 @@ make dev-test-ui     # Playwright UI，2 workers
 make dev-down        # 停止实例
 ```
 
+每次更新先构建目标 SHA 的镜像，成功后停止旧实例，并在启动新版本 API、worker、网关前单独执行目标 Alembic 迁移。迁移失败会记录 `failure.phase=migration` 与 `logs/migrate-<SHA>.log`，不放行目标应用；数据库和人工数据不回滚或清空。修复迁移故障后用 `make dev-refresh` 对同一目标 SHA 重试。镜像构建失败则保留旧运行实例。
+
 `make dev-status` 只读：当持久化状态为 `ready` 但实测服务不健康时，输出把该条目标记为 `degraded` 并以退出码 1 结束，state 文件不回写。
 
 日志可限定服务和行数：

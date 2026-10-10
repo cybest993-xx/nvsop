@@ -1478,6 +1478,37 @@ def build_target(
     return None
 
 
+def migrate_target(
+    item: DevPaths,
+    *,
+    sha: str,
+    source: Path,
+    protocol: str,
+    stop_event: Event | None = None,
+) -> Path | None:
+    """在新目标应用启动前完成迁移；失败不得放行目标服务。"""
+    environment = runtime_environment(item, sha=sha, source=source, protocol=protocol)
+    log_path = item.logs / f"migrate-{sha}.log"
+    with log_path.open("wb") as log:
+        result = run_checked(
+            compose_command(
+                item,
+                "up",
+                "--no-build",
+                "--exit-code-from",
+                "center-migrate",
+                "center-migrate",
+                source=source,
+            ),
+            cwd=source,
+            env=environment,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            stop_event=stop_event,
+        )
+    return log_path if result.returncode == 0 else None
+
+
 def stale_test_entry(entry: object, *, current_sha: str) -> object:
     """把旧提交的测试结果显式标成需重测，而不是继续显示为当前通过。"""
     if not isinstance(entry, dict) or entry.get("tested_sha") == current_sha:
@@ -1616,6 +1647,24 @@ def update_to(
         last_smoke=stale_smoke,
         last_ui=stale_ui,
     )
+    migration_log = migrate_target(
+        item, sha=sha, source=snapshot, protocol=protocol, stop_event=stop_event
+    )
+    if migration_log is None:
+        change_state(
+            item,
+            status="failed",
+            target_sha=sha,
+            running_sha=None,
+            failure={
+                "phase": "migration",
+                "target_sha": sha,
+                "exit_code": 1,
+                "log": str(item.logs / f"migrate-{sha}.log"),
+                "at": utc_now(),
+            },
+        )
+        return False
     try:
         start_tilt(item, sha=sha, source=snapshot, protocol=protocol)
         ready, phase = wait_until_ready(item, sha=sha, protocol=protocol, stop_event=stop_event)
@@ -1641,6 +1690,10 @@ def update_to(
         )
         return False
     if not ready:
+        with contextlib.suppress(DevError):
+            stop_tilt(item)
+        with contextlib.suppress(DevError):
+            compose_down(item)
         change_state(
             item,
             status="failed",

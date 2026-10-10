@@ -904,6 +904,89 @@ configure_manual_test_resources(
             self.assertEqual("failed", state["last_ui"]["status"])
             self.assertEqual(130, state["last_ui"]["exit_code"])
 
+    def test_failed_tilt_stage_stops_new_target_services(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            item = DEV.DevPaths(root=Path(directory), state=Path(directory) / "state")
+            DEV.ensure_directories(item)
+            snapshot = item.snapshots / "new"
+            snapshot.mkdir()
+            with (
+                patch.object(DEV, "archive_main", return_value=snapshot),
+                patch.object(DEV, "render_gateway_config"),
+                patch.object(DEV, "build_target", return_value=item.logs / "build-new.log"),
+                patch.object(DEV, "run_checked", return_value=subprocess.CompletedProcess([], 0)),
+                patch.object(DEV, "stop_tilt") as stopped,
+                patch.object(DEV, "compose_down") as down,
+                patch.object(DEV, "start_tilt"),
+                patch.object(DEV, "wait_until_ready", return_value=(False, "migration")),
+            ):
+                self.assertFalse(DEV.update_to(item, sha="new", protocol="http"))
+
+            self.assertEqual(2, stopped.call_count)
+            self.assertEqual(2, down.call_count)
+            self.assertEqual("migration", DEV.read_state(item)["failure"]["phase"])
+
+    def test_failed_migration_never_starts_new_target_services(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            item = DEV.DevPaths(root=Path(directory), state=Path(directory) / "state")
+            DEV.ensure_directories(item)
+            snapshot = item.snapshots / "new"
+            snapshot.mkdir()
+            DEV.write_state(
+                item, DEV.initial_state("http") | {"status": "ready", "running_sha": "old"}
+            )
+            with (
+                patch.object(DEV, "archive_main", return_value=snapshot),
+                patch.object(DEV, "render_gateway_config"),
+                patch.object(DEV, "build_target", return_value=item.logs / "build-new.log"),
+                patch.object(DEV, "stop_tilt"),
+                patch.object(DEV, "compose_down"),
+                patch.object(
+                    DEV, "run_checked", return_value=subprocess.CompletedProcess([], 1)
+                ) as migration,
+                patch.object(DEV, "start_tilt") as started,
+                patch.object(DEV, "wait_until_ready", return_value=(False, "migration")),
+            ):
+                self.assertFalse(DEV.update_to(item, sha="new", protocol="http"))
+
+            started.assert_not_called()
+            self.assertIn("center-migrate", migration.call_args.args[0])
+            state = DEV.read_state(item)
+            self.assertEqual("failed", state["status"])
+            self.assertIsNone(state["running_sha"])
+            self.assertEqual("migration", state["failure"]["phase"])
+
+    def test_successful_migration_precedes_target_start(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            item = DEV.DevPaths(root=Path(directory), state=Path(directory) / "state")
+            DEV.ensure_directories(item)
+            snapshot = item.snapshots / "new"
+            snapshot.mkdir()
+
+            def migration_done(
+                *_args: object, **_kwargs: object
+            ) -> subprocess.CompletedProcess[bytes]:
+                started.assert_not_called()
+                return subprocess.CompletedProcess([], 0)
+
+            with (
+                patch.object(DEV, "archive_main", return_value=snapshot),
+                patch.object(DEV, "render_gateway_config"),
+                patch.object(DEV, "build_target", return_value=item.logs / "build-new.log"),
+                patch.object(DEV, "stop_tilt"),
+                patch.object(DEV, "compose_down"),
+                patch.object(DEV, "run_checked", side_effect=migration_done) as migration,
+                patch.object(DEV, "start_tilt") as started,
+                patch.object(DEV, "wait_until_ready", return_value=(True, None)),
+            ):
+                self.assertTrue(DEV.update_to(item, sha="new", protocol="http"))
+
+            self.assertIn("center-migrate", migration.call_args.args[0])
+            started.assert_called_once()
+            state = DEV.read_state(item)
+            self.assertEqual("ready", state["status"])
+            self.assertEqual("new", state["running_sha"])
+
     def test_build_failure_marks_old_test_results_stale_immediately(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             item = DEV.DevPaths(root=Path(directory), state=Path(directory) / "state")

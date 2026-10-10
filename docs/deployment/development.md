@@ -90,6 +90,7 @@ make dev-down        # 停止实例
 每次更新先构建目标 SHA 的镜像，成功后停止旧实例，并在启动新版本 API、worker、网关前单独执行目标 Alembic 迁移。迁移失败会记录 `failure.phase=migration` 与 `logs/migrate-<SHA>.log`，不放行目标应用；数据库和人工数据不回滚或清空。修复迁移故障后用 `make dev-refresh` 对同一目标 SHA 重试。镜像构建失败则保留旧运行实例。
 
 本地固定实例的故障与版本锁真实验收记录参见 [S002 验收报告](../research/s002-main-update-validation-2026-10-10.md)。
+开发数据保留、测试报告版本绑定和服务故障的本地实测参见 [S003 验收报告](../research/s003-data-preservation-report-binding-2026-10-10.md)。
 
 `make dev-status` 只读：当持久化状态为 `ready` 但实测服务不健康时，输出把该条目标记为 `degraded` 并以退出码 1 结束，state 文件不回写。
 

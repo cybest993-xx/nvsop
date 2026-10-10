@@ -161,5 +161,24 @@ class AnnotationEditorAccessibilityContractTest(unittest.TestCase):
             self.assertIn(fragment, self.source)
 
 
+class SmallVideoSplitContractTest(unittest.TestCase):
+    """压缩率高的可播放短片不应被硬编码的文件大小下限丢弃。"""
+
+    def test_encoded_short_clips_are_verified_by_decoding_in_both_modes(self) -> None:
+        source = read(INFERENCE)
+        concurrent = source.split("async def _process_concurrent_segment(", 1)[1].split(
+            "async def _process_single_segment(", 1
+        )[0]
+        single = source.split("async def _process_single_segment(", 1)[1].split(
+            "async def _split_video_by_timestamps(", 1
+        )[0]
+
+        for method in (concurrent, single):
+            self.assertNotIn("file_size < 10240", method)
+            self.assertIn("VideoFileClip(output_path)", method)
+            self.assertIn("test_duration", method)
+            self.assertIn("test_duration <= 0", method)
+
+
 if __name__ == "__main__":
     unittest.main()

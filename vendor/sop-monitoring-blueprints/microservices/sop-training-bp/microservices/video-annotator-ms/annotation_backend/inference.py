@@ -1447,10 +1447,18 @@ async def _process_concurrent_segment(
         return None
 
     file_size = os.path.getsize(output_path)
-    if file_size < 10240:
-        app_logger.error(f"Video split produced small file ({file_size} bytes)")
+    # Highly compressible short clips can be valid even when smaller than 10 KB.
+    try:
+        test_clip = VideoFileClip(output_path)
+        try:
+            test_duration = test_clip.duration
+        finally:
+            test_clip.close()
+        if test_duration is None or test_duration <= 0:
+            raise ValueError("Split video has invalid duration")
+    except Exception:
         os.remove(output_path)
-        return None
+        raise
 
     # Create chunk record
     chunk_id = str(uuid.uuid4())
@@ -1627,21 +1635,13 @@ async def _process_single_segment(
         subclip.close()
         full_clip.close()
 
-        # Verify output file exists and has reasonable size
+        # File size alone does not distinguish invalid data from a well-compressed short clip.
         if not os.path.exists(output_path):
             raise FileNotFoundError("Output file was not created")
 
         file_size = os.path.getsize(output_path)
 
-        # Enhanced file size validation - reject files smaller than 10KB
-        if file_size < 10240:  # 10KB threshold
-            app_logger.error(
-                f"Video split produced small file ({file_size} bytes): {output_path}"
-            )
-            os.remove(output_path)
-            raise ValueError("Video split produced file that is too small")
-
-        # Additional validation: try to open the clip to ensure it's playable
+        # Validate by decoding the generated media instead of imposing a byte minimum.
         test_clip = VideoFileClip(output_path)
         test_duration = test_clip.duration
         test_clip.close()

@@ -11,7 +11,9 @@
 docker compose -f deploy/media/compose.yaml up -d
 ```
 
-环境提供 `synthetic` 零转码和 `cpu-transcoded` 真实 CPU 转码路径。先让环境生成完成的录像分段，再设置覆盖本次实际录制时段的 UTC 起止时间，不要照抄历史日期：
+环境提供 `synthetic` 零转码和 `cpu-transcoded` 真实 CPU 转码路径，并用同版本 MediaMTX 的 `-ffmpeg` 变体提供两条按需路径：`on-demand-passthrough` 复用生产的 `sourceOnDemand` 拉源语义，`on-demand-cpu` 复用生产的 `runOnDemand` + ffmpeg 语义；两者在最后一位 reader 退出并到达 2 秒等待期后释放，CPU 路径同时结束容器内 ffmpeg。管理 API 只映射到 loopback `9997`（`NVSOP_MEDIA_API_HOST_PORT`），供真实 system 场景断言 path 的 `ready`/`readers`，不对外暴露。
+
+先让环境生成完成的录像分段，再设置覆盖本次实际录制时段的 UTC 起止时间，不要照抄历史日期：
 
 ```sh
 START=<recording-start-utc-rfc3339>
@@ -22,9 +24,9 @@ curl -fsSG http://127.0.0.1:9996/list \
   --data-urlencode path=cpu-transcoded --data-urlencode "start=$START" --data-urlencode "end=$END"
 ```
 
-WebRTC 信令在 `http://127.0.0.1:8889`，ICE 为 `8189/udp`；回放监听独立使用 `http://127.0.0.1:9996`。WHEP 预览通过 `POST /<path>/whep` 交换 `application/sdp`，不是向中心 API 请求视频。该测试环境仅允许配置的 loopback origin；正式部署应配置可信 HTTPS 信令/回放与明确 Web origin，只向操作网络开放观看端口。
+WebRTC 信令在 `http://127.0.0.1:8889`，ICE 为 `8189/udp`；回放监听独立使用 `http://127.0.0.1:9996`，管理 API 独立使用 `http://127.0.0.1:9997`（均只在 loopback）。WHEP 预览通过 `POST /<path>/whep` 交换 `application/sdp`，不是向中心 API 请求视频。该测试环境仅允许配置的 loopback origin；正式部署应配置可信 HTTPS 信令/回放与明确 Web origin，只向操作网络开放观看端口。
 
-**完成条件：** 两路均能查询到本次真实分段，回放返回可解码视频；只有 Compose 启动或信令协商成功不算完成。检查入口是[真实 MediaMTX system 场景](../../tests/system/test_sys_34_media.py)及[浏览器媒体场景](../../apps/control-web/tests/e2e/sys-34-media.spec.ts)。测试所需的 `NVSOP_MEDIA_*` URL 必须指向本次真实环境；缺失变量导致 skip，不是通过。稳定软件验证场景见下表，不能从这两个文件的存在推断所有场景已完成。
+**完成条件：** 两路均能查询到本次真实分段，回放返回可解码视频；只有 Compose 启动或信令协商成功不算完成。按需路径的 `ready`/`readers`、最后一位 reader 退出后的释放、CPU 路径无遗留 ffmpeg，由同一 system 场景通过管理 API 与容器进程断言。检查入口是[真实 MediaMTX system 场景](../../tests/system/test_sys_34_media.py)及[浏览器媒体场景](../../apps/control-web/tests/e2e/sys-34-media.spec.ts)。测试所需的 `NVSOP_MEDIA_*` URL 必须指向本次真实环境；缺失变量导致 skip，不是通过。稳定软件验证场景见下表，不能从这两个文件的存在推断所有场景已完成。
 仓库自动入口 `make media-system` 会为宿主 RTSP/WebRTC/ICE/playback 选择临时空闲端口，启动独立 Compose project、等待两路真实分段、把本次 `/list`/`/get` URL 注入上述 system 场景并在结束后清理自己的测试卷；CI 只在媒体相关输入变化时运行它。WHEP 对应使用 `make web-e2e-whep` 的独立真实协议夹具。直接手工执行 `docker compose` 时仍使用上文的默认端口。
 
 测试结束仅停止本环境：

@@ -46,7 +46,7 @@ make dev-setup
 `make dev-setup` 会：
 
 - 校验工具、Docker daemon、Compose、Tilt 版本和固定端口；
-- 生成开发 secrets 和合成测试视频；显式 HTTPS 模式才生成开发 CA/服务端证书；
+- 生成开发 secrets 和合成测试视频；HTTPS 模式只校验并暂存部署者显式提供的外部 cert/key；
 - 执行 frozen `pnpm install` 与 `uv sync`；
 - 拉取 PostgreSQL、Redis、Nginx 等基础镜像；训练素材使用本地 named volume，不需要对象存储镜像；
 - 在 `.nvsop/dev-main/`（或 `--state-dir` 指定目录）写入状态、凭据路径和测试制品。
@@ -57,16 +57,28 @@ make dev-setup
 
 中心 `center-db` 服务端镜像自带 TimescaleDB（S020），扩展由迁移中的 `CREATE EXTENSION` 安装；`training` 仍是普通 PostgreSQL 库，用 `TEMPLATE template0` 建库以避免继承镜像装入 template1 的扩展。镜像切换与既有数据卷的升级步骤见 [`upgrade.md`](upgrade.md)。
 
-### 可选 HTTPS CA
+### 可选 HTTPS
 
-默认 HTTP 不生成也不要求本地 CA。需要本地 TLS 时重新准备并以同一协议启动：
+默认 HTTP 不读取也不要求证书。需要本地 TLS 时必须由部署者显式提供外部证书和私钥：
 
 ```sh
-NVSOP_DEV_PROTOCOL=https make dev-setup
-NVSOP_DEV_PROTOCOL=https make dev
+NVSOP_DEV_PROTOCOL=https \
+NVSOP_DEV_TLS_CERT_FILE=/path/to/fullchain.pem \
+NVSOP_DEV_TLS_KEY_FILE=/path/to/privkey.pem \
+make dev-setup
+NVSOP_DEV_PROTOCOL=https \
+NVSOP_DEV_TLS_CERT_FILE=/path/to/fullchain.pem \
+NVSOP_DEV_TLS_KEY_FILE=/path/to/privkey.pem \
+make dev
 ```
 
-HTTPS 模式会在状态目录的 `tls/` 生成开发 CA，并生成 `TRUST-CA.txt`。浏览器访问前，把 `ca.crt` 导入当前用户的可信根证书存储。Playwright 和本地 HTTPS 客户端使用同一 CA，不以“跳过 TLS 校验”作为正常工作流。
+- `NVSOP_DEV_TLS_CERT_FILE`：服务端证书，可含中间证书的完整链，必须对主机名 `localhost` 有效。
+- `NVSOP_DEV_TLS_KEY_FILE`：与证书匹配的私钥；加密私钥不被接受。
+- `NVSOP_DEV_TLS_CA_FILE`（可选）：显式自定义信任锚。省略时使用宿主系统信任库，证书须由系统信任的 CA 为 `localhost` 签发；宿主通过 `SSL_CERT_FILE`/`SSL_CERT_DIR` 指定的信任配置同样生效。
+
+HTTPS 模式不会自动生成、修复或沿用旧的开发 CA/私钥。输入文件只读复制到状态目录 `tls/` 的 `dev.crt`/`dev.key`（自定义 CA 复制为 `ca.crt`）供 Nginx 与客户端使用，输入文件本身保持原样。省略 `NVSOP_DEV_TLS_CA_FILE` 时，宿主当前生效的系统信任根会汇总复制为 `tls/system-ca.crt`，仅供容器网关健康检查使用；这只是复制既有信任根，不会生成、签名或导入任何 CA。缺失、过期、尚未生效、主机名不符、私钥不匹配或信任链不可验证都会明确拒绝，且不会静默回退 HTTP。
+
+浏览器访问前需让浏览器信任签发链；使用自定义 CA 时把 `NVSOP_DEV_TLS_CA_FILE` 指定的 CA 导入当前用户的可信根证书存储。`make dev-status`、`make dev-smoke`、容器网关健康检查与标注媒体客户端使用同一信任配置，不以“跳过 TLS 校验”作为正常工作流。
 
 ## 日常命令
 

@@ -49,6 +49,8 @@ import {
   listDatasetMembers as generatedListDatasetMembers,
   listInferenceHosts as generatedListInferenceHosts,
   listMonitorViolations as generatedListMonitorViolations,
+  readEvidence as generatedReadEvidence,
+  createEvidenceAccessContext as generatedCreateEvidenceAccessContext,
   listPermissions as generatedListPermissions,
   listPoints as generatedListPoints,
   listRoles as generatedListRoles,
@@ -130,6 +132,8 @@ import {
   type DatasetView,
   type DeviceStatus,
   type DownloadTemplateImportResponse,
+  type EvidenceAccessContext,
+  type EvidenceListing,
   type DownloadTemplateVersionArtifactResponse,
   type EditRoleData,
   type EditUserData,
@@ -433,6 +437,22 @@ export interface RuntimeViolation {
     step_ids: string[]
     evidence: { anchor: number | null; start: number | null; end: number | null }
   }
+}
+
+/** 具体证据引用：媒体字节始终在来源推理机，中心只登记与授权（ADR-0012）。 */
+export type EvidenceReference = EvidenceListing
+export type EvidenceContext = EvidenceAccessContext
+
+/** 按工位与实例读取中心登记的证据引用；同一实例可能存在于多台推理机，调用方按 host_id 隔离。 */
+export function readEvidence(stationId: string, instanceId: number): Promise<EvidenceReference[]> {
+  return execute(
+    generatedReadEvidence({ query: { station_id: stationId, instance_id: instanceId } }),
+  )
+}
+
+/** 由中心签发绑定来源主机与当前会话的短票据；随后每次媒体读取都由来源机回查中心。 */
+export function createEvidenceAccessContext(evidenceId: string): Promise<EvidenceContext> {
+  return execute(generatedCreateEvidenceAccessContext({ path: { evidence_id: evidenceId } }))
 }
 
 /** 中心归档已经按稳定事件身份幂等去重；这里只读取，不重新判定。 */

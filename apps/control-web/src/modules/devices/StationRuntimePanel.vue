@@ -10,6 +10,7 @@ import {
   type StationView,
 } from '@/api/controlPlane'
 import { useSessionStore } from '@/session/store'
+import EvidencePlayer from './EvidencePlayer.vue'
 
 const props = defineProps<{ stations: StationView[] }>()
 const session = useSessionStore()
@@ -225,6 +226,12 @@ onUnmounted(() => {
       >
         {{ selectedHint }} 判定事件：{{ selectedViolation.decision_event_id }}
       </div>
+      <EvidencePlayer
+        v-if="selectedViolation"
+        :host-id="selectedViolation.host_id"
+        :station-id="selectedViolation.station_id"
+        :instance-id="selectedViolation.instance_id"
+      />
     </section>
     <p v-if="!projections.size" class="muted">尚无运行镜像；连接恢复后会继续读取最新事实。</p>
     <article v-for="p in projections.values()" :key="p.station_id">

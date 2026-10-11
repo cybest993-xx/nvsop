@@ -37,11 +37,11 @@ def required_string(value: object, name: str) -> str:
     return value
 
 
-def media_probe(url: str, cookie: str, ca: Path) -> dict[str, object]:
+def media_probe(url: str, cookie: str, ca: Path | None) -> dict[str, object]:
     request = Request(url, headers={"Cookie": cookie, "Range": f"bytes=0-{MEDIA_RANGE_END}"})
     try:
         if urlsplit(url).scheme == "https":
-            context = ssl.create_default_context(cafile=str(ca))
+            context = ssl.create_default_context(cafile=str(ca) if ca is not None else None)
             response_context = urlopen(request, context=context, timeout=20)
         else:
             response_context = urlopen(request, timeout=20)
@@ -236,7 +236,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--ca-file",
         type=Path,
-        default=Path(__file__).resolve().parents[1] / ".nvsop" / "dev-main" / "tls" / "ca.crt",
+        default=None,
+        help="显式自定义 CA；省略时使用系统信任库",
     )
     arguments = parser.parse_args(argv)
     try:

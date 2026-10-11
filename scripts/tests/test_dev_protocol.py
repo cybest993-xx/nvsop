@@ -8,6 +8,7 @@ import os
 import shutil
 import signal
 import socket
+import ssl
 import subprocess
 import sys
 import tarfile
@@ -17,6 +18,7 @@ import time
 import unittest
 from pathlib import Path
 from threading import Event
+from types import ModuleType
 from unittest.mock import patch
 
 from scripts import dev_snapshot
@@ -79,7 +81,9 @@ class DevProtocolTest(unittest.TestCase):
         self.assertEqual("require_https", environment["NVSOP_DEV_COOKIE_TRANSPORT"])
         self.assertEqual("https://localhost:8443", environment["NVSOP_DEV_BASE_URL"])
         self.assertEqual("https://localhost:8444", environment["NVSOP_DEV_MEDIA_URL"])
-        self.assertEqual("/state/tls/ca.crt", environment["SSL_CERT_FILE"])
+        # 未显式选择自定义 CA 时使用系统信任库，不注入 SSL_CERT_FILE。
+        self.assertNotIn("SSL_CERT_FILE", environment)
+        self.assertEqual("", environment["NVSOP_DEV_TLS_HEALTHCHECK_ARGS"])
 
     def test_unknown_protocol_is_rejected(self) -> None:
         with self.assertRaises(DEV.DevError):
@@ -235,161 +239,6 @@ class DevProtocolTest(unittest.TestCase):
             self.assertIn("Git archive 流失败", str(failure.exception))
             self.assertFalse((item.snapshots / f".{sha}.tmp-{os.getpid()}").exists())
             self.assertFalse((item.snapshots / sha).exists())
-
-    def test_tls_repairs_a_legacy_ca_without_ca_usage_extensions(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            item = DEV.DevPaths(root=Path(directory), state=Path(directory) / ".tmp")
-            DEV.ensure_directories(item)
-            legacy_ca = subprocess.run(
-                [
-                    "openssl",
-                    "req",
-                    "-x509",
-                    "-new",
-                    "-nodes",
-                    "-newkey",
-                    "rsa:2048",
-                    "-keyout",
-                    str(item.tls / "ca.key"),
-                    "-out",
-                    str(item.tls / "ca.crt"),
-                    "-days",
-                    "1",
-                    "-subj",
-                    "/CN=Legacy NVSOP Development CA",
-                ],
-                check=False,
-                capture_output=True,
-            )
-            self.assertEqual(0, legacy_ca.returncode, legacy_ca.stderr.decode())
-
-            DEV.ensure_tls(item)
-
-            self.assertTrue(DEV.usable_ca_certificate(item.tls / "ca.crt", item.tls / "ca.key"))
-            self.assertTrue(
-                DEV.usable_server_certificate(
-                    item.tls / "ca.crt", item.tls / "dev.crt", item.tls / "dev.key"
-                )
-            )
-            verified = subprocess.run(
-                [
-                    "openssl",
-                    "verify",
-                    "-CAfile",
-                    str(item.tls / "ca.crt"),
-                    str(item.tls / "dev.crt"),
-                ],
-                check=False,
-                capture_output=True,
-            )
-            self.assertEqual(0, verified.returncode, verified.stderr.decode())
-
-    def test_tls_replaces_a_mismatched_ca_key_before_signing(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            item = DEV.DevPaths(root=Path(directory), state=Path(directory) / ".tmp")
-            DEV.ensure_directories(item)
-            DEV.ensure_tls(item)
-            replacement = subprocess.run(
-                ["openssl", "genrsa", "-out", str(item.tls / "ca.key"), "2048"],
-                check=False,
-                capture_output=True,
-            )
-            self.assertEqual(0, replacement.returncode, replacement.stderr.decode())
-            self.assertFalse(DEV.usable_ca_certificate(item.tls / "ca.crt", item.tls / "ca.key"))
-
-            DEV.ensure_tls(item)
-
-            self.assertTrue(DEV.usable_ca_certificate(item.tls / "ca.crt", item.tls / "ca.key"))
-            self.assertTrue(
-                DEV.usable_server_certificate(
-                    item.tls / "ca.crt", item.tls / "dev.crt", item.tls / "dev.key"
-                )
-            )
-
-    def test_tls_replaces_a_non_self_signed_ca_before_signing(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            item = DEV.DevPaths(root=Path(directory), state=Path(directory) / ".tmp")
-            DEV.ensure_directories(item)
-            DEV.ensure_tls(item)
-            external_key = item.tls / "external.key"
-            external_crt = item.tls / "external.crt"
-            root = subprocess.run(
-                [
-                    "openssl",
-                    "req",
-                    "-x509",
-                    "-new",
-                    "-nodes",
-                    "-newkey",
-                    "rsa:2048",
-                    "-keyout",
-                    str(external_key),
-                    "-out",
-                    str(external_crt),
-                    "-days",
-                    "825",
-                    "-subj",
-                    "/CN=External Development Root",
-                ],
-                check=False,
-                capture_output=True,
-            )
-            self.assertEqual(0, root.returncode, root.stderr.decode())
-            csr = item.tls / "ca.csr"
-            request = subprocess.run(
-                [
-                    "openssl",
-                    "req",
-                    "-new",
-                    "-key",
-                    str(item.tls / "ca.key"),
-                    "-out",
-                    str(csr),
-                    "-subj",
-                    "/CN=Non-self-signed Development CA",
-                ],
-                check=False,
-                capture_output=True,
-            )
-            self.assertEqual(0, request.returncode, request.stderr.decode())
-            signed = subprocess.run(
-                [
-                    "openssl",
-                    "x509",
-                    "-req",
-                    "-in",
-                    str(csr),
-                    "-CA",
-                    str(external_crt),
-                    "-CAkey",
-                    str(external_key),
-                    "-CAcreateserial",
-                    "-CAserial",
-                    str(item.tls / "external.srl"),
-                    "-out",
-                    str(item.tls / "ca.crt"),
-                    "-days",
-                    "825",
-                    "-sha256",
-                    "-extfile",
-                    str(item.tls / "openssl.cnf"),
-                    "-extensions",
-                    "v3_ca",
-                ],
-                check=False,
-                capture_output=True,
-            )
-            self.assertEqual(0, signed.returncode, signed.stderr.decode())
-
-            self.assertFalse(DEV.usable_ca_certificate(item.tls / "ca.crt", item.tls / "ca.key"))
-            DEV.ensure_tls(item)
-
-            self.assertTrue(DEV.usable_ca_certificate(item.tls / "ca.crt", item.tls / "ca.key"))
-            self.assertTrue(
-                DEV.usable_server_certificate(
-                    item.tls / "ca.crt", item.tls / "dev.crt", item.tls / "dev.key"
-                )
-            )
 
     def test_tilt_commands_use_the_committed_snapshot_script(self) -> None:
         item = DEV.DevPaths(root=Path("/repo"), state=Path("/state"))
@@ -1218,6 +1067,872 @@ configure_manual_test_resources(
             top_level = subprocess.CompletedProcess([], 0, stdout=f"{root}\n".encode(), stderr=b"")
             with patch.object(DEV, "run_checked", side_effect=[branch, top_level]):
                 DEV.require_main_checkout(item)
+
+
+class ExternalTlsFixture:
+    """在临时目录生成合成外部 TLS 材料，仅用于测试，不写入仓库。"""
+
+    def __init__(self, directory: Path) -> None:
+        self.directory = directory
+        self.root_crt = directory / "root.crt"
+        self.root_key = directory / "root.key"
+        self.other_ca_crt = directory / "other-ca.crt"
+        self.other_ca_key = directory / "other-ca.key"
+        self.intermediate_crt = directory / "intermediate.crt"
+        self.intermediate_key = directory / "intermediate.key"
+        self.leaf_crt = directory / "leaf.crt"
+        self.leaf_key = directory / "leaf.key"
+        self.chain = directory / "chain.pem"
+        self.wrong_host_crt = directory / "wrong-host.crt"
+        self.wrong_host_chain = directory / "wrong-host-chain.pem"
+        self.wrong_host_key = directory / "wrong-host.key"
+        self.expired_crt = directory / "expired.crt"
+        self.expired_chain = directory / "expired-chain.pem"
+        self.future_crt = directory / "future.crt"
+        self.future_chain = directory / "future-chain.pem"
+        self.encrypted_key = directory / "encrypted.key"
+        self.malformed_crt = directory / "malformed.crt"
+        self.trust_dir = directory / "trust"
+
+    def openssl(self, *arguments: str) -> None:
+        subprocess.run(["openssl", *arguments], check=True, capture_output=True, text=True)
+
+    def extension_file(self, name: str, text: str) -> Path:
+        path = self.directory / name
+        path.write_text(text, encoding="ascii")
+        return path
+
+    def build(self) -> None:
+        ca_extensions = self.extension_file(
+            "ca.ext",
+            "basicConstraints=critical,CA:true,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\n",
+        )
+        server_extensions = self.extension_file(
+            "server.ext",
+            "subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n",
+        )
+        wrong_extensions = self.extension_file(
+            "wrong.ext", "subjectAltName=DNS:other.example\nextendedKeyUsage=serverAuth\n"
+        )
+        self.openssl(
+            "req",
+            "-x509",
+            "-new",
+            "-nodes",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            str(self.root_key),
+            "-out",
+            str(self.root_crt),
+            "-days",
+            "825",
+            "-subj",
+            "/CN=Test Root CA",
+            "-addext",
+            "basicConstraints=critical,CA:true",
+            "-addext",
+            "keyUsage=critical,keyCertSign,cRLSign",
+        )
+        self.openssl(
+            "req",
+            "-x509",
+            "-new",
+            "-nodes",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            str(self.other_ca_key),
+            "-out",
+            str(self.other_ca_crt),
+            "-days",
+            "825",
+            "-subj",
+            "/CN=Other Root CA",
+            "-addext",
+            "basicConstraints=critical,CA:true",
+            "-addext",
+            "keyUsage=critical,keyCertSign,cRLSign",
+        )
+        intermediate_csr = self.directory / "intermediate.csr"
+        self.openssl(
+            "req",
+            "-new",
+            "-nodes",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            str(self.intermediate_key),
+            "-out",
+            str(intermediate_csr),
+            "-subj",
+            "/CN=Test Intermediate CA",
+        )
+        self.openssl(
+            "x509",
+            "-req",
+            "-in",
+            str(intermediate_csr),
+            "-CA",
+            str(self.root_crt),
+            "-CAkey",
+            str(self.root_key),
+            "-CAcreateserial",
+            "-out",
+            str(self.intermediate_crt),
+            "-days",
+            "825",
+            "-sha256",
+            "-extfile",
+            str(ca_extensions),
+        )
+        leaf_csr = self.directory / "leaf.csr"
+        self.openssl(
+            "req",
+            "-new",
+            "-nodes",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            str(self.leaf_key),
+            "-out",
+            str(leaf_csr),
+            "-subj",
+            "/CN=localhost",
+        )
+        self.openssl(
+            "x509",
+            "-req",
+            "-in",
+            str(leaf_csr),
+            "-CA",
+            str(self.intermediate_crt),
+            "-CAkey",
+            str(self.intermediate_key),
+            "-CAcreateserial",
+            "-out",
+            str(self.leaf_crt),
+            "-days",
+            "825",
+            "-sha256",
+            "-extfile",
+            str(server_extensions),
+        )
+        self.chain.write_bytes(self.leaf_crt.read_bytes() + self.intermediate_crt.read_bytes())
+        wrong_csr = self.directory / "wrong.csr"
+        self.openssl(
+            "req",
+            "-new",
+            "-nodes",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            str(self.wrong_host_key),
+            "-out",
+            str(wrong_csr),
+            "-subj",
+            "/CN=other.example",
+        )
+        self.openssl(
+            "x509",
+            "-req",
+            "-in",
+            str(wrong_csr),
+            "-CA",
+            str(self.intermediate_crt),
+            "-CAkey",
+            str(self.intermediate_key),
+            "-CAcreateserial",
+            "-out",
+            str(self.wrong_host_crt),
+            "-days",
+            "825",
+            "-sha256",
+            "-extfile",
+            str(wrong_extensions),
+        )
+        self.wrong_host_chain.write_bytes(
+            self.wrong_host_crt.read_bytes() + self.intermediate_crt.read_bytes()
+        )
+        self.openssl(
+            "x509",
+            "-req",
+            "-in",
+            str(leaf_csr),
+            "-CA",
+            str(self.intermediate_crt),
+            "-CAkey",
+            str(self.intermediate_key),
+            "-CAcreateserial",
+            "-out",
+            str(self.expired_crt),
+            "-days",
+            "-1",
+            "-sha256",
+            "-extfile",
+            str(server_extensions),
+        )
+        self.expired_chain.write_bytes(
+            self.expired_crt.read_bytes() + self.intermediate_crt.read_bytes()
+        )
+        self.build_future_certificate(leaf_csr, server_extensions)
+        self.future_chain.write_bytes(
+            self.future_crt.read_bytes() + self.intermediate_crt.read_bytes()
+        )
+        self.openssl(
+            "pkey",
+            "-in",
+            str(self.leaf_key),
+            "-aes256",
+            "-passout",
+            "pass:secret",
+            "-out",
+            str(self.encrypted_key),
+        )
+        self.malformed_crt.write_text("not a certificate\n", encoding="ascii")
+        self.trust_dir.mkdir()
+        (self.trust_dir / "root.crt").write_bytes(self.root_crt.read_bytes())
+        self.openssl("rehash", str(self.trust_dir))
+
+    def build_future_certificate(self, leaf_csr: Path, server_extensions: Path) -> None:
+        ca_directory = self.directory / "ca"
+        (ca_directory / "newcerts").mkdir(parents=True, exist_ok=True)
+        (ca_directory / "index.txt").touch()
+        (ca_directory / "serial").write_text("1000\n", encoding="ascii")
+        config = self.directory / "ca.cnf"
+        config.write_text(
+            "[ca]\n"
+            "default_ca = CA_default\n"
+            "[CA_default]\n"
+            f"dir = {ca_directory}\n"
+            "database = $dir/index.txt\n"
+            "new_certs_dir = $dir/newcerts\n"
+            "serial = $dir/serial\n"
+            f"certificate = {self.intermediate_crt}\n"
+            f"private_key = {self.intermediate_key}\n"
+            "default_md = sha256\n"
+            "policy = policy_any\n"
+            "copy_extensions = copy\n"
+            "[policy_any]\n"
+            "commonName = supplied\n",
+            encoding="ascii",
+        )
+        self.openssl(
+            "ca",
+            "-batch",
+            "-config",
+            str(config),
+            "-in",
+            str(leaf_csr),
+            "-out",
+            str(self.future_crt),
+            "-startdate",
+            "20990101000000Z",
+            "-enddate",
+            "20991231235959Z",
+            "-extfile",
+            str(server_extensions),
+        )
+
+
+def assert_missing_external_certificate_rejected(module: ModuleType) -> None:
+    """HTTPS 缺失显式外部 cert/key 时必须拒绝且不生成任何 TLS 材料。"""
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        item = module.DevPaths(root=root, state=root / ".state")
+        module.ensure_directories(item)
+        template = root / "deploy" / "dev" / "nginx.conf"
+        template.parent.mkdir(parents=True, exist_ok=True)
+        template.write_text(
+            "server {\n"
+            "    listen 8443__NVSOP_LISTEN_SUFFIX__;\n"
+            "    # __NVSOP_TLS_DIRECTIVES__\n"
+            "    server_name localhost nginx;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        environment = {
+            "NVSOP_DEV_TLS_CERT_FILE": "",
+            "NVSOP_DEV_TLS_KEY_FILE": "",
+            "NVSOP_DEV_TLS_CA_FILE": "",
+        }
+        with patch.dict(os.environ, environment, clear=False):
+            os.environ.pop("SSL_CERT_FILE", None)
+            try:
+                module.render_gateway_config(item, source=root, protocol="https")
+            except module.DevError:
+                pass
+            else:
+                raise AssertionError("HTTPS 缺失外部 cert/key 时未拒绝")
+        generated = sorted(path.name for path in item.tls.iterdir())
+        if generated:
+            raise AssertionError(f"HTTPS 缺失外部 cert/key 时仍生成 TLS 材料：{generated}")
+
+
+class DevExternalTlsTest(unittest.TestCase):
+    """显式外部 TLS 材料：缺失/损坏/不匹配必须拒绝，有效材料只读暂存。"""
+
+    module = DEV
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._fixture_directory = tempfile.TemporaryDirectory()
+        cls.tls = ExternalTlsFixture(Path(cls._fixture_directory.name))
+        cls.tls.build()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._fixture_directory.cleanup()
+
+    def make_item(self, directory: str) -> DEV.DevPaths:
+        root = Path(directory)
+        item = self.module.DevPaths(root=root, state=root / ".state")
+        self.module.ensure_directories(item)
+        template = root / "deploy" / "dev" / "nginx.conf"
+        template.parent.mkdir(parents=True, exist_ok=True)
+        template.write_text(
+            "server {\n"
+            "    listen 8443__NVSOP_LISTEN_SUFFIX__;\n"
+            "    # __NVSOP_TLS_DIRECTIVES__\n"
+            "    server_name localhost nginx;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        return item
+
+    def render_https(
+        self,
+        item: DEV.DevPaths,
+        root: Path,
+        *,
+        cert: Path | None = None,
+        key: Path | None = None,
+        ca: Path | None = None,
+        ssl_cert_file: Path | None = None,
+        ssl_cert_dir: Path | None = None,
+    ) -> Path | None:
+        environment = {
+            "NVSOP_DEV_TLS_CERT_FILE": str(cert) if cert is not None else "",
+            "NVSOP_DEV_TLS_KEY_FILE": str(key) if key is not None else "",
+            "NVSOP_DEV_TLS_CA_FILE": str(ca) if ca is not None else "",
+        }
+        with patch.dict(os.environ, environment, clear=False):
+            for name, value in (("SSL_CERT_FILE", ssl_cert_file), ("SSL_CERT_DIR", ssl_cert_dir)):
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = str(value)
+            return self.module.render_gateway_config(item, source=root, protocol="https")
+
+    def assert_https_rejected(
+        self, *, cert: Path, key: Path, ca: Path | None = None, reason: str | None = None
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            item = self.make_item(directory)
+            with self.assertRaises(self.module.DevError) as caught:
+                self.render_https(item, root, cert=cert, key=key, ca=ca)
+            if reason is not None:
+                self.assertIn(reason, str(caught.exception))
+            self.assertEqual([], sorted(path.name for path in item.tls.iterdir()))
+
+    def test_https_without_external_cert_key_is_rejected_without_generating_material(self) -> None:
+        assert_missing_external_certificate_rejected(self.module)
+
+    def test_https_accepts_valid_external_full_chain_and_stages_untouched_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            item = self.make_item(directory)
+            chain_before = self.tls.chain.read_bytes()
+            key_before = self.tls.leaf_key.read_bytes()
+            ca_before = self.tls.root_crt.read_bytes()
+            ca = self.render_https(
+                item, root, cert=self.tls.chain, key=self.tls.leaf_key, ca=self.tls.root_crt
+            )
+            self.assertEqual(item.tls / "ca.crt", ca)
+            self.assertEqual(chain_before, self.tls.chain.read_bytes())
+            self.assertEqual(key_before, self.tls.leaf_key.read_bytes())
+            self.assertEqual(ca_before, self.tls.root_crt.read_bytes())
+            self.assertEqual(chain_before, (item.tls / "dev.crt").read_bytes())
+            self.assertEqual(key_before, (item.tls / "dev.key").read_bytes())
+            self.assertEqual(ca_before, (item.tls / "ca.crt").read_bytes())
+            self.assertEqual(0o600, (item.tls / "dev.key").stat().st_mode & 0o777)
+            self.assertEqual(0o644, (item.tls / "dev.crt").stat().st_mode & 0o777)
+            self.assertEqual(item.tls / "ca.crt", self.module.configured_ca_certificate(item))
+            rendered = (item.state / "nginx.conf").read_text(encoding="utf-8")
+            self.assertIn("listen 8443 ssl;", rendered)
+            self.assertIn("ssl_certificate /etc/nginx/tls/dev.crt;", rendered)
+            self.assertIn("ssl_certificate_key /etc/nginx/tls/dev.key;", rendered)
+
+    def test_https_without_custom_ca_uses_system_trust_without_staged_ca(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            item = self.make_item(directory)
+            with patch.dict(os.environ, {"SSL_CERT_DIR": str(self.tls.trust_dir)}, clear=False):
+                ca = self.render_https(
+                    item,
+                    root,
+                    cert=self.tls.chain,
+                    key=self.tls.leaf_key,
+                    ssl_cert_dir=self.tls.trust_dir,
+                )
+                self.assertIsNone(ca)
+                self.assertIsNone(self.module.configured_ca_certificate(item))
+                self.assertFalse((item.tls / "ca.crt").exists())
+                bundle = item.tls / "system-ca.crt"
+                self.assertTrue(bundle.is_file())
+                self.assertIn(b"BEGIN CERTIFICATE", bundle.read_bytes())
+                self.assertEqual(0o644, bundle.stat().st_mode & 0o777)
+                environment = self.module.runtime_environment(
+                    item, sha="abc", source=root, protocol="https"
+                )
+            self.assertNotIn("SSL_CERT_FILE", environment)
+            self.assertEqual(str(self.tls.trust_dir), environment["SSL_CERT_DIR"])
+            self.assertEqual(
+                "--cacert /etc/nginx/tls/system-ca.crt",
+                environment["NVSOP_DEV_TLS_HEALTHCHECK_ARGS"],
+            )
+            verified = subprocess.run(
+                [
+                    "openssl",
+                    "verify",
+                    "-no-CApath",
+                    "-no-CAstore",
+                    "-CAfile",
+                    str(bundle),
+                    "-untrusted",
+                    str(self.tls.chain),
+                    "-purpose",
+                    "sslserver",
+                    "-verify_hostname",
+                    "localhost",
+                    str(self.tls.chain),
+                ],
+                check=False,
+                capture_output=True,
+            )
+            self.assertEqual(0, verified.returncode, verified.stderr.decode())
+
+    def test_https_without_custom_ca_preserves_user_ssl_cert_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            item = self.make_item(directory)
+            user_bundle = root / "user-system-bundle.pem"
+            user_bundle.write_bytes(self.tls.root_crt.read_bytes())
+            self.render_https(
+                item,
+                root,
+                cert=self.tls.chain,
+                key=self.tls.leaf_key,
+                ssl_cert_file=user_bundle,
+            )
+            self.assertTrue((item.tls / "system-ca.crt").is_file())
+            with patch.dict(os.environ, {"SSL_CERT_FILE": str(user_bundle)}, clear=False):
+                environment = self.module.runtime_environment(
+                    item, sha="abc", source=root, protocol="https"
+                )
+            self.assertEqual(str(user_bundle), environment["SSL_CERT_FILE"])
+            self.assertEqual(
+                "--cacert /etc/nginx/tls/system-ca.crt",
+                environment["NVSOP_DEV_TLS_HEALTHCHECK_ARGS"],
+            )
+
+    def test_https_system_bundle_excludes_unindexed_certificates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            item = self.make_item(directory)
+            trust_dir = root / "trust"
+            shutil.copytree(self.tls.trust_dir, trust_dir)
+            (trust_dir / "untrusted.pem").write_bytes(self.tls.other_ca_crt.read_bytes())
+
+            self.render_https(
+                item, root, cert=self.tls.chain, key=self.tls.leaf_key, ssl_cert_dir=trust_dir
+            )
+
+            bundle = item.tls / "system-ca.crt"
+            self.assertTrue(bundle.is_file())
+            indexed = subprocess.run(
+                [
+                    "openssl",
+                    "verify",
+                    "-no-CApath",
+                    "-no-CAstore",
+                    "-CAfile",
+                    str(bundle),
+                    str(self.tls.root_crt),
+                ],
+                check=False,
+                capture_output=True,
+            )
+            self.assertEqual(0, indexed.returncode, indexed.stderr.decode())
+            unindexed = subprocess.run(
+                [
+                    "openssl",
+                    "verify",
+                    "-no-CApath",
+                    "-no-CAstore",
+                    "-CAfile",
+                    str(bundle),
+                    str(self.tls.other_ca_crt),
+                ],
+                check=False,
+                capture_output=True,
+            )
+            self.assertNotEqual(0, unindexed.returncode)
+
+    def test_https_system_bundle_reads_colon_separated_trust_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            item = self.make_item(directory)
+            second = root / "second"
+            second.mkdir()
+            shutil.copy(self.tls.other_ca_crt, second / "other.pem")
+            subprocess.run(["openssl", "rehash", str(second)], check=True, capture_output=True)
+            combined = Path(f"{self.tls.trust_dir}{os.pathsep}{second}")
+
+            self.render_https(
+                item, root, cert=self.tls.chain, key=self.tls.leaf_key, ssl_cert_dir=combined
+            )
+
+            bundle = item.tls / "system-ca.crt"
+            self.assertTrue(bundle.is_file())
+            for certificate in (self.tls.root_crt, self.tls.other_ca_crt):
+                verified = subprocess.run(
+                    [
+                        "openssl",
+                        "verify",
+                        "-no-CApath",
+                        "-no-CAstore",
+                        "-CAfile",
+                        str(bundle),
+                        str(certificate),
+                    ],
+                    check=False,
+                    capture_output=True,
+                )
+                self.assertEqual(0, verified.returncode, verified.stderr.decode())
+
+    def test_https_system_bundle_joins_cafile_without_trailing_newline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            item = self.make_item(directory)
+            cafile = root / "system-cafile.pem"
+            cafile.write_bytes(self.tls.other_ca_crt.read_bytes().rstrip(b"\n"))
+            self.assertFalse(cafile.read_bytes().endswith(b"\n"))
+            capath = root / "trust"
+            shutil.copytree(self.tls.trust_dir, capath)
+            cafile_before = cafile.read_bytes()
+            entries_before = {
+                path.name: path.read_bytes() for path in capath.iterdir() if path.is_file()
+            }
+
+            self.render_https(
+                item,
+                root,
+                cert=self.tls.chain,
+                key=self.tls.leaf_key,
+                ssl_cert_file=cafile,
+                ssl_cert_dir=capath,
+            )
+
+            bundle = item.tls / "system-ca.crt"
+            self.assertTrue(bundle.is_file())
+            ssl.create_default_context(cafile=str(bundle))
+            verified = subprocess.run(
+                [
+                    "openssl",
+                    "verify",
+                    "-no-CApath",
+                    "-no-CAstore",
+                    "-CAfile",
+                    str(bundle),
+                    "-untrusted",
+                    str(self.tls.chain),
+                    "-purpose",
+                    "sslserver",
+                    "-verify_hostname",
+                    "localhost",
+                    str(self.tls.chain),
+                ],
+                check=False,
+                capture_output=True,
+            )
+            self.assertEqual(0, verified.returncode, verified.stderr.decode())
+            self.assertEqual(cafile_before, cafile.read_bytes())
+            self.assertEqual(
+                entries_before,
+                {path.name: path.read_bytes() for path in capath.iterdir() if path.is_file()},
+            )
+
+    def test_https_system_bundle_preserves_explicitly_empty_cafile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            item = self.make_item(directory)
+            capath = root / "trust"
+            shutil.copytree(self.tls.trust_dir, capath)
+            default_root = self.tls.other_ca_crt
+            fake_paths = ssl.get_default_verify_paths()._replace(
+                openssl_cafile=str(default_root), openssl_capath=str(capath)
+            )
+            environment = {
+                "NVSOP_DEV_TLS_CERT_FILE": str(self.tls.chain),
+                "NVSOP_DEV_TLS_KEY_FILE": str(self.tls.leaf_key),
+                "NVSOP_DEV_TLS_CA_FILE": "",
+                "SSL_CERT_FILE": "",
+                "SSL_CERT_DIR": str(capath),
+            }
+            with (
+                patch.object(DEV.ssl, "get_default_verify_paths", return_value=fake_paths),
+                patch.dict(os.environ, environment, clear=False),
+            ):
+                self.module.render_gateway_config(item, source=root, protocol="https")
+
+            bundle = item.tls / "system-ca.crt"
+            self.assertTrue(bundle.is_file())
+            trusted = subprocess.run(
+                [
+                    "openssl",
+                    "verify",
+                    "-no-CApath",
+                    "-no-CAstore",
+                    "-CAfile",
+                    str(bundle),
+                    str(self.tls.root_crt),
+                ],
+                check=False,
+                capture_output=True,
+            )
+            self.assertEqual(0, trusted.returncode, trusted.stderr.decode())
+            broadened = subprocess.run(
+                [
+                    "openssl",
+                    "verify",
+                    "-no-CApath",
+                    "-no-CAstore",
+                    "-CAfile",
+                    str(bundle),
+                    str(default_root),
+                ],
+                check=False,
+                capture_output=True,
+            )
+            self.assertNotEqual(0, broadened.returncode)
+
+    def test_https_system_bundle_preserves_explicitly_empty_trust_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            item = self.make_item(directory)
+            cafile = root / "system-cafile.pem"
+            cafile.write_bytes(self.tls.root_crt.read_bytes())
+            default_capath = root / "default-trust"
+            default_capath.mkdir()
+            shutil.copy(self.tls.other_ca_crt, default_capath / "other.pem")
+            subprocess.run(
+                ["openssl", "rehash", str(default_capath)], check=True, capture_output=True
+            )
+            fake_paths = ssl.get_default_verify_paths()._replace(
+                openssl_cafile=str(cafile), openssl_capath=str(default_capath)
+            )
+            environment = {
+                "NVSOP_DEV_TLS_CERT_FILE": str(self.tls.chain),
+                "NVSOP_DEV_TLS_KEY_FILE": str(self.tls.leaf_key),
+                "NVSOP_DEV_TLS_CA_FILE": "",
+                "SSL_CERT_FILE": str(cafile),
+                "SSL_CERT_DIR": "",
+            }
+            with (
+                patch.object(DEV.ssl, "get_default_verify_paths", return_value=fake_paths),
+                patch.dict(os.environ, environment, clear=False),
+            ):
+                self.module.render_gateway_config(item, source=root, protocol="https")
+
+            bundle = item.tls / "system-ca.crt"
+            self.assertTrue(bundle.is_file())
+            trusted = subprocess.run(
+                [
+                    "openssl",
+                    "verify",
+                    "-no-CApath",
+                    "-no-CAstore",
+                    "-CAfile",
+                    str(bundle),
+                    str(self.tls.root_crt),
+                ],
+                check=False,
+                capture_output=True,
+            )
+            self.assertEqual(0, trusted.returncode, trusted.stderr.decode())
+            broadened = subprocess.run(
+                [
+                    "openssl",
+                    "verify",
+                    "-no-CApath",
+                    "-no-CAstore",
+                    "-CAfile",
+                    str(bundle),
+                    str(self.tls.other_ca_crt),
+                ],
+                check=False,
+                capture_output=True,
+            )
+            self.assertNotEqual(0, broadened.returncode)
+
+    def test_https_runtime_environment_uses_explicit_custom_ca(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            item = self.make_item(directory)
+            self.render_https(
+                item, root, cert=self.tls.chain, key=self.tls.leaf_key, ca=self.tls.root_crt
+            )
+            environment = self.module.runtime_environment(
+                item, sha="abc", source=root, protocol="https"
+            )
+            self.assertEqual(str(item.tls / "ca.crt"), environment["SSL_CERT_FILE"])
+            self.assertEqual(
+                "--cacert /etc/nginx/tls/ca.crt",
+                environment["NVSOP_DEV_TLS_HEALTHCHECK_ARGS"],
+            )
+
+    def test_https_rejects_missing_configured_ca_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            item = self.make_item(directory)
+            self.render_https(
+                item, root, cert=self.tls.chain, key=self.tls.leaf_key, ca=self.tls.root_crt
+            )
+            (item.tls / "ca.crt").unlink()
+            with self.assertRaises(self.module.DevError):
+                self.module.configured_ca_certificate(item)
+
+    def test_http_does_not_read_or_generate_certificates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            item = self.make_item(directory)
+            with patch.dict(
+                os.environ,
+                {
+                    "NVSOP_DEV_TLS_CERT_FILE": "",
+                    "NVSOP_DEV_TLS_KEY_FILE": "",
+                    "NVSOP_DEV_TLS_CA_FILE": "",
+                },
+                clear=False,
+            ):
+                ca = self.module.render_gateway_config(item, source=root, protocol="http")
+            self.assertIsNone(ca)
+            self.assertEqual([], sorted(path.name for path in item.tls.iterdir()))
+            rendered = (item.state / "nginx.conf").read_text(encoding="utf-8")
+            self.assertIn("listen 8443;", rendered)
+            self.assertNotIn("ssl_certificate", rendered)
+
+    def test_https_rejects_expired_certificate(self) -> None:
+        self.assert_https_rejected(
+            cert=self.tls.expired_chain,
+            key=self.tls.leaf_key,
+            ca=self.tls.root_crt,
+            reason="certificate has expired",
+        )
+
+    def test_https_rejects_not_yet_valid_certificate(self) -> None:
+        self.assert_https_rejected(
+            cert=self.tls.future_chain,
+            key=self.tls.leaf_key,
+            ca=self.tls.root_crt,
+            reason="certificate is not yet valid",
+        )
+
+    def test_https_rejects_hostname_mismatch(self) -> None:
+        self.assert_https_rejected(
+            cert=self.tls.wrong_host_chain,
+            key=self.tls.wrong_host_key,
+            ca=self.tls.root_crt,
+            reason="hostname mismatch",
+        )
+
+    def test_https_rejects_mismatched_private_key(self) -> None:
+        self.assert_https_rejected(
+            cert=self.tls.chain,
+            key=self.tls.other_ca_key,
+            ca=self.tls.root_crt,
+            reason="不匹配",
+        )
+
+    def test_https_rejects_encrypted_private_key(self) -> None:
+        self.assert_https_rejected(
+            cert=self.tls.chain,
+            key=self.tls.encrypted_key,
+            ca=self.tls.root_crt,
+            reason="私钥无效",
+        )
+
+    def test_https_rejects_malformed_certificate(self) -> None:
+        self.assert_https_rejected(
+            cert=self.tls.malformed_crt,
+            key=self.tls.leaf_key,
+            ca=self.tls.root_crt,
+            reason="不可解析",
+        )
+
+    def test_https_rejects_untrusted_chain_without_custom_ca(self) -> None:
+        self.assert_https_rejected(
+            cert=self.tls.chain,
+            key=self.tls.leaf_key,
+            reason="unable to get local issuer certificate",
+        )
+
+    def test_https_rejects_unknown_custom_ca(self) -> None:
+        self.assert_https_rejected(
+            cert=self.tls.chain,
+            key=self.tls.leaf_key,
+            ca=self.tls.other_ca_crt,
+            reason="unable to get local issuer certificate",
+        )
+
+    def test_https_rejects_explicitly_wrong_ca_despite_trusted_default_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            item = self.make_item(directory)
+            with self.assertRaises(self.module.DevError) as caught:
+                self.render_https(
+                    item,
+                    root,
+                    cert=self.tls.chain,
+                    key=self.tls.leaf_key,
+                    ca=self.tls.other_ca_crt,
+                    ssl_cert_dir=self.tls.trust_dir,
+                )
+            self.assertIn("unable to get local issuer certificate", str(caught.exception))
+            self.assertEqual([], sorted(path.name for path in item.tls.iterdir()))
+
+    def test_https_staging_replaces_symlinked_targets_with_usable_copies(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            item = self.make_item(directory)
+            external_cert = root / "external-cert.pem"
+            external_key = root / "external-key.pem"
+            external_cert.write_bytes(self.tls.chain.read_bytes())
+            external_key.write_bytes(self.tls.leaf_key.read_bytes())
+            (item.tls / "dev.crt").symlink_to(external_cert)
+            (item.tls / "dev.key").symlink_to(external_key)
+
+            self.render_https(
+                item, root, cert=external_cert, key=external_key, ca=self.tls.root_crt
+            )
+
+            staged_cert = item.tls / "dev.crt"
+            staged_key = item.tls / "dev.key"
+            self.assertFalse(staged_cert.is_symlink())
+            self.assertFalse(staged_key.is_symlink())
+            self.assertEqual(external_cert.read_bytes(), staged_cert.read_bytes())
+            self.assertEqual(external_key.read_bytes(), staged_key.read_bytes())
+            self.assertEqual(0o600, staged_key.stat().st_mode & 0o777)
+            usable = subprocess.run(
+                ["openssl", "pkey", "-in", str(staged_key), "-noout", "-check", "-passin", "pass:"],
+                check=False,
+                capture_output=True,
+            )
+            self.assertEqual(0, usable.returncode, usable.stderr.decode())
+            self.assertEqual(self.tls.chain.read_bytes(), external_cert.read_bytes())
+            self.assertEqual(self.tls.leaf_key.read_bytes(), external_key.read_bytes())
 
 
 if __name__ == "__main__":

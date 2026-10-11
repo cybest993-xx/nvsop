@@ -11,12 +11,14 @@ import argparse
 import contextlib
 import json
 import os
+import re
 import shutil
 import signal
 import socket
 import ssl
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
@@ -73,6 +75,14 @@ MEDIA_PORT = 8444
 PLAYWRIGHT_UI_PORT = 9323
 PLAYWRIGHT_UI_URL = f"http://localhost:{PLAYWRIGHT_UI_PORT}"
 PROTOCOL_ENVIRONMENT = "NVSOP_DEV_PROTOCOL"
+TLS_CERT_ENVIRONMENT = "NVSOP_DEV_TLS_CERT_FILE"
+TLS_KEY_ENVIRONMENT = "NVSOP_DEV_TLS_KEY_FILE"
+TLS_CA_ENVIRONMENT = "NVSOP_DEV_TLS_CA_FILE"
+GATEWAY_TLS_CA_PATH = "/etc/nginx/tls/ca.crt"
+GATEWAY_SYSTEM_CA_NAME = "system-ca.crt"
+GATEWAY_SYSTEM_CA_PATH = "/etc/nginx/tls/system-ca.crt"
+HASHED_CERTIFICATE_ENTRY = re.compile(r"^[0-9a-fA-F]{8}\.\d+$")
+TLS_METADATA_FILE = "tls.json"
 DEFAULT_PROTOCOL = "http"
 SUPPORTED_PROTOCOLS = frozenset({"http", "https"})
 POLL_SECONDS = 2
@@ -631,10 +641,22 @@ def runtime_environment(
             "PYTHONDONTWRITEBYTECODE": "1",
         }
     )
-    if selected == "https":
-        environment["SSL_CERT_FILE"] = str(item.tls / "ca.crt")
+    ca = configured_ca_certificate(item) if selected == "https" else None
+    if ca is not None:
+        environment["SSL_CERT_FILE"] = str(ca)
+        healthcheck_args = f"--cacert {GATEWAY_TLS_CA_PATH}"
+    elif selected == "https":
+        # HTTPS 无自定义 CA 时保留继承的 SSL_CERT_FILE/SSL_CERT_DIR，并让网关
+        # 使用同一份暂存的系统信任根，避免容器内 curl 缺少宿主私有 CA。
+        healthcheck_args = (
+            f"--cacert {GATEWAY_SYSTEM_CA_PATH}"
+            if (item.tls / GATEWAY_SYSTEM_CA_NAME).is_file()
+            else ""
+        )
     else:
         environment.pop("SSL_CERT_FILE", None)
+        healthcheck_args = ""
+    environment["NVSOP_DEV_TLS_HEALTHCHECK_ARGS"] = healthcheck_args
     return environment
 
 
@@ -677,24 +699,17 @@ def write_secret(path: Path, value: str) -> None:
     path.chmod(0o600)
 
 
-def certificate_text(path: Path) -> str | None:
-    if not path.is_file():
-        return None
-    result = run_checked(
-        ["openssl", "x509", "-in", str(path), "-noout", "-text"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if result.returncode != 0:
-        return None
-    return result.stdout.decode("utf-8", errors="replace")
+def tls_input_path(environ: Mapping[str, str], name: str) -> Path | None:
+    """读取显式外部 TLS 输入路径；空值表示未配置。"""
+    raw = environ.get(name, "").strip()
+    return Path(raw).expanduser() if raw else None
 
 
 def public_key(path: Path, *, certificate: bool) -> bytes | None:
     command = (
         ["openssl", "x509", "-in", str(path), "-pubkey", "-noout"]
         if certificate
-        else ["openssl", "pkey", "-in", str(path), "-pubout"]
+        else ["openssl", "pkey", "-in", str(path), "-pubout", "-passin", "pass:"]
     )
     result = run_checked(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.returncode != 0:
@@ -702,219 +717,193 @@ def public_key(path: Path, *, certificate: bool) -> bytes | None:
     return result.stdout
 
 
-def certificate_is_current(path: Path) -> bool:
-    result = run_checked(
-        ["openssl", "x509", "-in", str(path), "-noout", "-checkend", "0"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    return result.returncode == 0
-
-
-def certificate_is_self_signed(path: Path) -> bool:
-    result = run_checked(
-        [
-            "openssl",
-            "verify",
-            "-CAfile",
-            str(path),
-            "-purpose",
-            "any",
-            "-check_ss_sig",
-            str(path),
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    return result.returncode == 0
-
-
 def private_key_is_valid(path: Path) -> bool:
+    """校验私钥可用；-passin pass: 让加密私钥立即失败而不是交互式索要口令。"""
     result = run_checked(
-        ["openssl", "pkey", "-in", str(path), "-noout", "-check"],
+        ["openssl", "pkey", "-in", str(path), "-noout", "-check", "-passin", "pass:"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
     return result.returncode == 0
 
 
-def usable_ca_certificate(path: Path, key: Path | None = None) -> bool:
-    text = certificate_text(path)
-    if text is None or not certificate_is_current(path):
-        return False
-    if "CA:TRUE" not in text or "Certificate Sign" not in text:
-        return False
-    if not certificate_is_self_signed(path):
-        return False
-    if key is None:
-        return True
+def server_certificate_error(cert: Path, key: Path, ca: Path | None) -> str | None:
+    """校验显式外部服务端材料；返回拒绝原因，通过时返回 None。
+
+    cert 可以是含中间证书的完整链；ca 为显式自定义信任锚，缺省时使用系统信任库。
+    """
+    if not cert.is_file() or cert.stat().st_size == 0:
+        return f"证书文件不存在或为空：{cert}"
+    if not key.is_file() or key.stat().st_size == 0:
+        return f"私钥文件不存在或为空：{key}"
+    if ca is not None and (not ca.is_file() or ca.stat().st_size == 0):
+        return f"CA 文件不存在或为空：{ca}"
     if not private_key_is_valid(key):
-        return False
-    certificate_public_key = public_key(path, certificate=True)
+        return f"私钥无效、不可读或已加密：{key}"
+    certificate_public_key = public_key(cert, certificate=True)
+    if certificate_public_key is None:
+        return f"证书文件不可解析或不是 PEM 证书：{cert}"
     private_public_key = public_key(key, certificate=False)
-    return (
-        certificate_public_key is not None
-        and private_public_key is not None
-        and certificate_public_key == private_public_key
-    )
-
-
-def usable_server_certificate(ca: Path, server: Path, key: Path | None = None) -> bool:
-    if not ca.is_file() or not server.is_file() or not certificate_is_current(server):
-        return False
-    result = run_checked(
-        [
-            "openssl",
-            "verify",
-            "-CAfile",
-            str(ca),
-            "-purpose",
-            "sslserver",
-            "-verify_hostname",
-            "localhost",
-            str(server),
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    if private_public_key is None or certificate_public_key != private_public_key:
+        return f"证书与私钥不匹配：{cert} / {key}"
+    command = [
+        "openssl",
+        "verify",
+        "-untrusted",
+        str(cert),
+        "-purpose",
+        "sslserver",
+        "-verify_hostname",
+        "localhost",
+    ]
+    if ca is not None:
+        # 显式自定义 CA 时必须禁用默认 CApath/CAstore，否则 -CAfile 会回退到系统信任库。
+        command += ["-no-CApath", "-no-CAstore", "-CAfile", str(ca)]
+    command.append(str(cert))
+    result = run_checked(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.returncode != 0:
-        return False
-    if key is None:
-        return True
-    if not private_key_is_valid(key):
-        return False
-    certificate_public_key = public_key(server, certificate=True)
-    private_public_key = public_key(key, certificate=False)
-    return (
-        certificate_public_key is not None
-        and private_public_key is not None
-        and certificate_public_key == private_public_key
-    )
-
-
-def ensure_tls(item: DevPaths) -> None:
-    ca_key = item.tls / "ca.key"
-    ca_crt = item.tls / "ca.crt"
-    server_key = item.tls / "dev.key"
-    server_crt = item.tls / "dev.crt"
-    config = item.tls / "openssl.cnf"
-    config.write_text(
-        """[req]
- prompt = no
- distinguished_name = subject
-
- [subject]
- CN = localhost
-
- [v3_ca]
- subjectKeyIdentifier = hash
- basicConstraints = critical, CA:true, pathlen:1
- keyUsage = critical, keyCertSign, cRLSign
-
- [v3_server]
- subjectAltName = DNS:localhost,DNS:nginx,IP:127.0.0.1
- extendedKeyUsage = serverAuth
- """,
-        encoding="ascii",
-    )
-    if not ca_key.exists() or not usable_ca_certificate(ca_crt, ca_key):
-        ca_key.unlink(missing_ok=True)
-        ca_crt.unlink(missing_ok=True)
-        server_crt.unlink(missing_ok=True)
-        run = run_checked(
-            [
-                "openssl",
-                "req",
-                "-x509",
-                "-new",
-                "-nodes",
-                "-newkey",
-                "rsa:2048",
-                "-keyout",
-                str(ca_key),
-                "-out",
-                str(ca_crt),
-                "-days",
-                "825",
-                "-subj",
-                "/CN=NVSOP Development CA",
-                "-config",
-                str(config),
-                "-extensions",
-                "v3_ca",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+        lines = [
+            line
+            for line in result.stderr.decode("utf-8", errors="replace").splitlines()
+            if line.strip()
+        ]
+        detail = next(
+            (line for line in lines if line.startswith("error ") and " at " in line),
+            lines[-1] if lines else "验证失败",
         )
-        if run.returncode != 0:
-            raise DevError(f"无法生成开发 CA：{run.stderr.decode(errors='replace')}")
-    if not server_key.exists() or not usable_server_certificate(ca_crt, server_crt, server_key):
-        csr = item.tls / "dev.csr"
-        serial = item.tls / "ca.srl"
-        generated = run_checked(
-            [
-                "openssl",
-                "req",
-                "-new",
-                "-nodes",
-                "-newkey",
-                "rsa:2048",
-                "-keyout",
-                str(server_key),
-                "-out",
-                str(csr),
-                "-config",
-                str(config),
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+        return f"证书链或主机名 localhost 校验失败：{detail}"
+    return None
+
+
+def atomic_write(path: Path, data: bytes, *, mode: int) -> None:
+    """原子写入状态目录文件，不写穿已存在的符号链接。"""
+    handle, temporary_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(handle, "wb") as stream:
+            stream.write(data)
+        temporary.chmod(mode)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def stage_tls_file(source: Path, target: Path, *, mode: int) -> None:
+    """把已校验的外部材料原子复制到状态目录；不修改输入，也不写穿目标符号链接。"""
+    atomic_write(target, source.read_bytes(), mode=mode)
+
+
+def _hashed_certificate_files(directory: Path) -> list[Path]:
+    """列出 OpenSSL 哈希目录中的证书索引条目，忽略其它文件与 CRL。"""
+    if not directory.is_dir():
+        return []
+    return [
+        child
+        for child in sorted(directory.iterdir())
+        if child.is_file() and HASHED_CERTIFICATE_ENTRY.match(child.name)
+    ]
+
+
+def effective_system_trust_pem() -> bytes | None:
+    """把宿主当前生效的系统信任根原样拼接成单个 PEM；无可用根时返回 None。
+
+    只复制既有信任根，不生成、不签名、不导入任何 CA。OpenSSL 的 capath 惰性加载，
+    因此按哈希目录语义只读取索引条目（`<8位十六进制>.<整数>`），不扫描目录内其它 PEM。
+    """
+    paths = ssl.get_default_verify_paths()
+    sources: list[Path] = []
+    cafile = os.environ.get(paths.openssl_cafile_env, paths.openssl_cafile or "")
+    if cafile:
+        sources.append(Path(cafile))
+    capath = os.environ.get(paths.openssl_capath_env, paths.openssl_capath or "")
+    for entry in capath.split(os.pathsep):
+        if entry:
+            sources.extend(_hashed_certificate_files(Path(entry)))
+    parts: list[bytes] = []
+    for source in sources:
+        try:
+            parts.append(source.read_bytes())
+        except OSError:
+            continue
+    if not parts:
+        return None
+    return b"\n".join(parts)
+
+
+def stage_system_trust(item: DevPaths) -> Path:
+    """把生效的系统信任根暂存到 tls/ 供容器网关使用；无法读取任何根时明确拒绝。"""
+    bundle = effective_system_trust_pem()
+    if bundle is None:
+        raise DevError(
+            "HTTPS 未提供 NVSOP_DEV_TLS_CA_FILE，且无法从系统信任库读取任何根证书；"
+            "请显式提供 NVSOP_DEV_TLS_CA_FILE"
         )
-        if generated.returncode != 0:
-            raise DevError(f"无法生成开发证书请求：{generated.stderr.decode(errors='replace')}")
-        signed = run_checked(
-            [
-                "openssl",
-                "x509",
-                "-req",
-                "-in",
-                str(csr),
-                "-CA",
-                str(ca_crt),
-                "-CAkey",
-                str(ca_key),
-                "-CAcreateserial",
-                "-CAserial",
-                str(serial),
-                "-out",
-                str(server_crt),
-                "-days",
-                "825",
-                "-sha256",
-                "-extfile",
-                str(config),
-                "-extensions",
-                "v3_server",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        if signed.returncode != 0:
-            raise DevError(f"无法签发开发证书：{signed.stderr.decode(errors='replace')}")
-        csr.unlink(missing_ok=True)
-        serial.unlink(missing_ok=True)
-    for private_key in (ca_key, server_key):
-        private_key.chmod(0o600)
-    (item.tls / "TRUST-CA.txt").write_text(
-        "将 ca.crt 导入 Windows 当前用户的受信任根证书颁发机构。WSL 可执行：\n"
-        '  powershell.exe -Command "Import-Certificate -FilePath '
-        "'<Windows path to ca.crt>' -CertStoreLocation Cert:\\CurrentUser\\Root\"\n"
-        "Playwright 与本地 HTTPS 客户端会使用该目录中的 ca.crt，不跳过 TLS 校验。\n",
+    target = item.tls / GATEWAY_SYSTEM_CA_NAME
+    atomic_write(target, bundle, mode=0o644)
+    return target
+
+
+def write_tls_metadata(item: DevPaths, ca: Path | None) -> None:
+    item.state.mkdir(parents=True, exist_ok=True)
+    (item.state / TLS_METADATA_FILE).write_text(
+        json.dumps({"ca_certificate": str(ca) if ca is not None else None}) + "\n",
         encoding="utf-8",
     )
 
 
-def render_gateway_config(item: DevPaths, *, source: Path, protocol: str) -> None:
-    """按协议渲染 Nginx 入口；HTTP 不读取也不要求证书。"""
+def configured_ca_certificate(item: DevPaths) -> Path | None:
+    """读取显式选择的自定义 CA；未配置返回 None，元数据损坏或文件缺失则拒绝。"""
+    path = item.state / TLS_METADATA_FILE
+    if not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise DevError(f"TLS 元数据不可读：{path}") from error
+    if not isinstance(value, dict):
+        raise DevError(f"TLS 元数据不是对象：{path}")
+    raw = value.get("ca_certificate")
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw:
+        raise DevError(f"TLS 元数据中的 CA 路径无效：{raw!r}")
+    ca = Path(raw)
+    if not ca.is_file():
+        raise DevError(f"已配置的自定义 CA 不存在：{ca}；请重新运行 make dev-setup")
+    return ca
+
+
+def prepare_tls(item: DevPaths, environ: Mapping[str, str] | None = None) -> Path | None:
+    """校验并暂存显式外部 TLS 材料；缺失 cert/key 时拒绝，绝不自动生成或修复。
+
+    输入文件只读复制，不修改；返回暂存的自定义 CA 路径，未配置时为 None。
+    """
+    values = os.environ if environ is None else environ
+    cert = tls_input_path(values, TLS_CERT_ENVIRONMENT)
+    key = tls_input_path(values, TLS_KEY_ENVIRONMENT)
+    ca = tls_input_path(values, TLS_CA_ENVIRONMENT)
+    if cert is None or key is None:
+        raise DevError(
+            "HTTPS 需要显式提供外部证书和私钥："
+            f"{TLS_CERT_ENVIRONMENT} 与 {TLS_KEY_ENVIRONMENT}；不会自动生成或修复开发证书"
+        )
+    error = server_certificate_error(cert, key, ca)
+    if error is not None:
+        raise DevError(f"外部 TLS 材料不可用：{error}")
+    stage_tls_file(cert, item.tls / "dev.crt", mode=0o644)
+    stage_tls_file(key, item.tls / "dev.key", mode=0o600)
+    staged_ca: Path | None = None
+    if ca is not None:
+        staged_ca = item.tls / "ca.crt"
+        stage_tls_file(ca, staged_ca, mode=0o644)
+    else:
+        stage_system_trust(item)
+    write_tls_metadata(item, staged_ca)
+    return staged_ca
+
+
+def render_gateway_config(item: DevPaths, *, source: Path, protocol: str) -> Path | None:
+    """按协议渲染 Nginx 入口；HTTP 不读取也不要求证书，HTTPS 只接受显式外部材料。"""
     if protocol not in SUPPORTED_PROTOCOLS:
         raise DevError(f"不支持的开发协议：{protocol}")
     template = source / "deploy" / "dev" / "nginx.conf"
@@ -923,8 +912,9 @@ def render_gateway_config(item: DevPaths, *, source: Path, protocol: str) -> Non
     text = template.read_text(encoding="utf-8")
     if "__NVSOP_LISTEN_SUFFIX__" not in text or "# __NVSOP_TLS_DIRECTIVES__" not in text:
         raise DevError(f"开发网关配置缺少协议占位符：{template}")
+    ca: Path | None = None
     if protocol == "https":
-        ensure_tls(item)
+        ca = prepare_tls(item)
         listen_suffix = " ssl"
         tls_directives = (
             "    ssl_certificate /etc/nginx/tls/dev.crt;\n"
@@ -940,6 +930,7 @@ def render_gateway_config(item: DevPaths, *, source: Path, protocol: str) -> Non
     temporary = output.with_suffix(".tmp")
     temporary.write_text(rendered, encoding="utf-8")
     temporary.replace(output)
+    return ca
 
 
 def ensure_sample_video(item: DevPaths) -> None:
@@ -1003,7 +994,7 @@ def setup(item: DevPaths) -> None:
     ensure_directories(item)
     require_tools(protocol=protocol)
     ensure_credentials(item)
-    render_gateway_config(item, source=item.root, protocol=protocol)
+    staged_ca = render_gateway_config(item, source=item.root, protocol=protocol)
     ensure_sample_video(item)
     install = run_checked(
         ["pnpm", "install", "--frozen-lockfile", "--prefer-offline"], cwd=item.root
@@ -1036,7 +1027,7 @@ def setup(item: DevPaths) -> None:
                 "project": PROJECT_NAME,
                 "created_at": utc_now(),
                 "protocol": protocol,
-                "ca_certificate": str(item.tls / "ca.crt") if protocol == "https" else None,
+                "ca_certificate": str(staged_ca) if staged_ca is not None else None,
                 "gateway_config": str(item.state / "nginx.conf"),
                 "credentials_file": str(item.credentials_file),
                 "sample_video": str(item.samples / "dev-sample.mp4"),
@@ -1051,8 +1042,9 @@ def setup(item: DevPaths) -> None:
     print(f"开发实例准备完成：{item.state}")
     print(f"协议：{protocol}；入口：{public_urls(protocol)['business']}")
     print(f"开发账号信息文件：{item.credentials_file}")
-    if protocol == "https":
-        print(f"请先把 CA 导入浏览器，说明见：{item.tls / 'TRUST-CA.txt'}")
+    if protocol == "https" and staged_ca is not None:
+        certificate = item.tls / "dev.crt"
+        print(f"已使用显式自定义 CA：{staged_ca}；浏览器需信任该 CA，服务端证书：{certificate}")
 
 
 def require_setup(item: DevPaths, *, runtime_credentials: bool = True) -> None:
@@ -1068,7 +1060,8 @@ def require_setup(item: DevPaths, *, runtime_credentials: bool = True) -> None:
         ]
     required += [item.state / "nginx.conf", item.samples / "dev-sample.mp4"]
     if protocol == "https":
-        required.extend((item.tls / "ca.crt", item.tls / "dev.crt", item.tls / "dev.key"))
+        required.extend((item.tls / "dev.crt", item.tls / "dev.key"))
+        configured_ca_certificate(item)
     for path in required:
         if not path.is_file():
             mode = (
@@ -1166,7 +1159,8 @@ def http_probe(item: DevPaths, url: str) -> dict[str, object]:
     try:
         request = Request(url, headers={"Accept": "application/json"})
         if urlsplit(url).scheme == "https":
-            context = ssl.create_default_context(cafile=str(item.tls / "ca.crt"))
+            ca = configured_ca_certificate(item)
+            context = ssl.create_default_context(cafile=str(ca) if ca is not None else None)
             response_context = urlopen(request, context=context, timeout=5)
         else:
             response_context = urlopen(request, timeout=5)
@@ -2065,11 +2059,11 @@ def run_smoke(item: DevPaths) -> None:
             dev_login_name(item),
             "--password-file",
             str(item.secrets / "bootstrap-password"),
-            "--ca-file",
-            str(item.tls / "ca.crt"),
-            "--report-file",
-            str(report),
         ]
+        staged_ca = configured_ca_certificate(item) if protocol == "https" else None
+        if staged_ca is not None:
+            command += ["--ca-file", str(staged_ca)]
+        command += ["--report-file", str(report)]
         output = item.logs / f"smoke-{sha}.log"
 
         def execute(stopping: Event) -> subprocess.CompletedProcess[bytes]:

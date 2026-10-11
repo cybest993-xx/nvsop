@@ -489,7 +489,7 @@ def test_evidence_source_reads_are_authorized_and_bounded(
     reason="真实浏览器证据需显式 NVSOP_EVIDENCE_BROWSER=1（本地需 Node/pnpm/Chromium）",
 )
 def test_evidence_playback_reaches_real_browser(
-    live_evidence: LiveEvidence, tmp_path: Path
+    live_evidence: LiveEvidence, client: Client, tmp_path: Path
 ) -> None:
     """显式 opt-in：真实 Vue UI 经 Vite 读取真实 Edge 并解码片段与关键帧。"""
     stack = live_evidence
@@ -544,6 +544,7 @@ def test_evidence_playback_reaches_real_browser(
                 "NVSOP_EVIDENCE_STATION_ID": stack.station_id,
                 "NVSOP_EVIDENCE_INSTANCE_ID": str(INSTANCE_ID),
                 "NVSOP_EVIDENCE_SESSION": stack.session_cookie,
+                "NVSOP_EVIDENCE_CSRF": client.cookies["sop_csrf"],
                 "NVSOP_EVIDENCE_ORIGIN": stack.edge_origin,
             },
             capture_output=True,
@@ -556,6 +557,9 @@ def test_evidence_playback_reaches_real_browser(
         # 断言真的执行并通过，而不是因环境变量缺失被 skip。
         assert "1 passed" in played.stdout, played.stdout
         assert "skipped" not in played.stdout, played.stdout
+        # 人工复核不重编码、不修改证据媒体：原始摘要与大小保持不变。
+        assert _digest(stack.clip) == stack.clip_digest
+        assert stack.clip.stat().st_size == stack.clip_size
     finally:
         _stop_server(vite)
         vite_stdout.close()

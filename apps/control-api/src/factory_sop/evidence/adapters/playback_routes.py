@@ -2,11 +2,11 @@
 
 from dataclasses import asdict
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, Response
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from factory_sop.auth.api import (
     Authorized,
@@ -22,18 +22,25 @@ from factory_sop.device.api import (
 )
 from factory_sop.evidence.adapters import dependencies
 from factory_sop.evidence.adapters.routes import EvidenceRegistrationBody
-from factory_sop.evidence.model import EvidenceKind, EvidenceStatus
+from factory_sop.evidence.model import EvidenceKind, EvidenceStatus, ReviewConclusion
 from factory_sop.evidence.playback import (
     EvidenceAccessRefusedError,
     check_access_context,
     evidence_for_instance,
     issue_access_context,
 )
-from factory_sop.evidence.repository import EvidenceRepository
+from factory_sop.evidence.repository import EvidenceRepository, EvidenceReviewRepository
+from factory_sop.evidence.reviews import (
+    EvidenceReviewRefusedError,
+    list_reviews,
+    save_review,
+)
+from factory_sop.problem import ApiErrorCode, problem_response
 from factory_sop.settings import Settings
 
 router = APIRouter(prefix="/evidence", tags=["evidence"])
 Repository = Annotated[EvidenceRepository, Depends(dependencies.evidence)]
+ReviewRepository = Annotated[EvidenceReviewRepository, Depends(dependencies.reviews)]
 HostAuthenticator = Annotated[DeviceHostGateway, Depends(dependencies.host_gateway)]
 HostRegistry = Annotated[DeviceMonitorGateway, Depends(dependencies.registered_hosts)]
 
@@ -61,6 +68,27 @@ class EvidenceMedia(BaseModel):
     size: int
     sha256: str
     kind: EvidenceKind
+
+
+class EvidenceReviewBody(BaseModel):
+    """一次人工复核提交：稳定幂等 ID、证据代次与结论；不接受其它扩展字段。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    # JSON 解码后是字符串；strict 模式下 UUID 只接受实例，故仅此字段放宽容忍字符串。
+    review_id: UUID = Field(strict=False)
+    generation: str
+    conclusion: Literal["confirmed", "rejected"]
+
+
+class EvidenceReviewRecord(BaseModel):
+    review_id: UUID
+    evidence_id: str
+    generation: str
+    reviewer_id: UUID
+    reviewer_name: str
+    reviewed_at: datetime
+    conclusion: ReviewConclusion
 
 
 @router.get(
@@ -107,6 +135,54 @@ def create_context(
         secret=settings.csrf_secret.get_secret_value(),
         now=datetime.now(UTC).timestamp(),
     )
+
+
+@router.get(
+    "/{evidence_id:path}/reviews",
+    operation_id="readEvidenceReviews",
+    response_model=list[EvidenceReviewRecord],
+    openapi_extra=needs(Permission.EVIDENCE_VIEW),
+)
+def read_reviews(
+    evidence_id: str, caller: Authorized, reviews: ReviewRepository
+) -> list[dict[str, object]]:
+    return [asdict(row) for row in list_reviews(caller, evidence_id=evidence_id, reviews=reviews)]
+
+
+@router.post(
+    "/{evidence_id:path}/reviews",
+    operation_id="registerEvidenceReview",
+    response_model=EvidenceReviewRecord,
+    openapi_extra=needs(Permission.EVIDENCE_VIEW, Permission.EVIDENCE_REVIEW_EDIT),
+)
+def register_review(
+    evidence_id: str,
+    body: EvidenceReviewBody,
+    caller: Authorized,
+    evidence: Repository,
+    reviews: ReviewRepository,
+) -> dict[str, object] | Response:
+    """同步登记一条人工复核结论；只返回已持久化的记录，不走 jobs。"""
+    try:
+        record = save_review(
+            caller,
+            review_id=body.review_id,
+            evidence_id=evidence_id,
+            generation=body.generation,
+            conclusion=ReviewConclusion(body.conclusion),
+            reviewed_at=datetime.now(UTC),
+            evidence=evidence,
+            reviews=reviews,
+        )
+    except EvidenceReviewRefusedError as error:
+        error_code, title = {
+            "evidence_unregistered": (ApiErrorCode.OBJECT_NOT_FOUND, "证据未登记"),
+            "evidence_generation_mismatch": (ApiErrorCode.RESOURCE_MISMATCH, "证据代次不匹配"),
+            "evidence_unavailable": (ApiErrorCode.STATE_CONFLICT, "证据当前不可用，无法复核"),
+            "review_conflict": (ApiErrorCode.IDEMPOTENCY_CONFLICT, "复核请求与既有结论冲突"),
+        }[error.code]
+        return problem_response(status=error.status, title=title, error_code=error_code)
+    return asdict(record)
 
 
 @router.post("/access-check", operation_id="checkEvidenceAccess", response_model=EvidenceMedia)

@@ -48,6 +48,9 @@ from test_dataset_usecases import (
 from test_dataset_usecases import (
     FakeStorage as DatasetFakeStorage,
 )
+from test_evidence_usecases import MemoryEvidence
+from test_evidence_usecases import _register as register_evidence_reference
+from test_evidence_usecases import _registration as evidence_registration
 
 from factory_sop.app import API_PREFIX, MODIFYING_METHODS, create_app
 from factory_sop.auth.adapters import dependencies
@@ -72,6 +75,8 @@ from factory_sop.device.model import (
     PendingCommandCompletion,
     PointDirection,
 )
+from factory_sop.evidence.adapters import dependencies as evidence_dependencies
+from factory_sop.evidence.model import EvidenceReview
 from factory_sop.execution.adapters import dependencies as execution_dependencies
 from factory_sop.execution.model import HANDOVER_RISK_STATEMENT, HandoverConfirmation
 from factory_sop.identifiers import new_id
@@ -86,6 +91,8 @@ PASSWORD = "assembly-line-3"  # pragma: allowlist secret
 DATASET_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f101")
 DATASET_MEMBER_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f102")
 DATASET_ATTEMPT_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f103")
+EVIDENCE_ID = "evidence/review.mp4"
+REVIEW_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f104")
 
 
 def settings() -> Settings:
@@ -493,6 +500,11 @@ ROUTES = [
             "risk_acknowledgement": HANDOVER_RISK_STATEMENT,
         },
     ),
+    Target(
+        "POST",
+        "/evidence/{evidence_id}/reviews",
+        {"review_id": str(REVIEW_ID), "generation": "original", "conclusion": "confirmed"},
+    ),
 ]
 
 # The session resource: no permission, by design, and therefore not part of the check above.
@@ -608,6 +620,25 @@ class FakeHandovers:
         return None
 
 
+class FakeEvidenceReviews:
+    """内存只追加复核仓储，足够让授权用例跑到真实拒绝/成功分支。"""
+
+    def __init__(self) -> None:
+        self.records: dict[UUID, EvidenceReview] = {}
+
+    def insert(self, value: EvidenceReview) -> bool:
+        if value.review_id in self.records:
+            return False
+        self.records[value.review_id] = value
+        return True
+
+    def find(self, review_id: UUID) -> EvidenceReview | None:
+        return self.records.get(review_id)
+
+    def list_for_evidence(self, evidence_id: str) -> tuple[EvidenceReview, ...]:
+        return tuple(row for row in self.records.values() if row.evidence_id == evidence_id)
+
+
 class Backend:
     """使用内存适配器构造可控权限的应用。"""
 
@@ -719,6 +750,10 @@ class Backend:
         self.dataset_jobs = DatasetFakeJobs()
         self.handover_authority = FakeHandoverAuthority(frozenset({self.actor.id}))
         self.handovers = FakeHandovers()
+        # 复用 evidence 用例测试的完整 Protocol fake 及其登记 helper，不再另造只读替身。
+        self.evidence = MemoryEvidence()
+        register_evidence_reference(self.evidence, evidence_registration(evidence_id=EVIDENCE_ID))
+        self.evidence_reviews = FakeEvidenceReviews()
 
         self.app.dependency_overrides[dependencies.users] = lambda: self.users
         self.app.dependency_overrides[dependencies.sessions] = lambda: self.sessions
@@ -747,6 +782,8 @@ class Backend:
         )
         self.app.dependency_overrides[dataset_dependencies.usage_jobs] = lambda: self.dataset_jobs
         self.app.dependency_overrides[execution_dependencies.handovers] = lambda: self.handovers
+        self.app.dependency_overrides[evidence_dependencies.evidence] = lambda: self.evidence
+        self.app.dependency_overrides[evidence_dependencies.reviews] = lambda: self.evidence_reviews
         self.app.dependency_overrides[auth_handover_authority] = lambda: self.handover_authority
         self.app.dependency_overrides[request_session] = StubRequestSession
         self.client = TestClient(self.app, base_url="https://testserver")
@@ -775,6 +812,7 @@ class Backend:
             "attempt_id": DATASET_ATTEMPT_ID,
             "submission_id": DATASET_ATTEMPT_ID,
             "handover_id": UUID(int=2),
+            "evidence_id": EVIDENCE_ID,
         }
         path = target.template.format(**identifiers)
 

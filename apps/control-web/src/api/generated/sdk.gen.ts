@@ -252,6 +252,9 @@ import type {
   ReadEvidenceData,
   ReadEvidenceErrors,
   ReadEvidenceResponses,
+  ReadEvidenceReviewsData,
+  ReadEvidenceReviewsErrors,
+  ReadEvidenceReviewsResponses,
   ReadHandoverData,
   ReadHandoverErrors,
   ReadHandoverResponses,
@@ -306,6 +309,9 @@ import type {
   RegisterEvidenceReferenceData,
   RegisterEvidenceReferenceErrors,
   RegisterEvidenceReferenceResponses,
+  RegisterEvidenceReviewData,
+  RegisterEvidenceReviewErrors,
+  RegisterEvidenceReviewResponses,
   RegisterInferenceHostIdentityKeyData,
   RegisterInferenceHostIdentityKeyErrors,
   RegisterInferenceHostIdentityKeyResponses,
@@ -1040,6 +1046,39 @@ export const createEvidenceAccessContext = <ThrowOnError extends boolean = false
     CreateEvidenceAccessContextErrors,
     ThrowOnError
   >({ url: '/api/v1/evidence/{evidence_id}/access-context', ...options })
+
+/**
+ * Read Reviews
+ */
+export const readEvidenceReviews = <ThrowOnError extends boolean = false>(
+  options: Options<ReadEvidenceReviewsData, ThrowOnError>,
+): RequestResult<ReadEvidenceReviewsResponses, ReadEvidenceReviewsErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadEvidenceReviewsResponses,
+    ReadEvidenceReviewsErrors,
+    ThrowOnError
+  >({ url: '/api/v1/evidence/{evidence_id}/reviews', ...options })
+
+/**
+ * Register Review
+ *
+ * 同步登记一条人工复核结论；只返回已持久化的记录，不走 jobs。
+ */
+export const registerEvidenceReview = <ThrowOnError extends boolean = false>(
+  options: Options<RegisterEvidenceReviewData, ThrowOnError>,
+): RequestResult<RegisterEvidenceReviewResponses, RegisterEvidenceReviewErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    RegisterEvidenceReviewResponses,
+    RegisterEvidenceReviewErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/evidence/{evidence_id}/reviews',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
 
 /**
  * Create

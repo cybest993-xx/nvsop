@@ -10,6 +10,7 @@ const hostId = process.env.NVSOP_EVIDENCE_HOST_ID ?? ''
 const stationId = process.env.NVSOP_EVIDENCE_STATION_ID ?? ''
 const instanceId = Number(process.env.NVSOP_EVIDENCE_INSTANCE_ID ?? '0')
 const sessionCookie = process.env.NVSOP_EVIDENCE_SESSION ?? ''
+const csrfCookie = process.env.NVSOP_EVIDENCE_CSRF ?? ''
 const edgeOrigin = process.env.NVSOP_EVIDENCE_ORIGIN ?? ''
 
 test.use({ ignoreHTTPSErrors: true })
@@ -22,6 +23,7 @@ const SESSION = {
   permissions: [
     'monitor.report.view',
     'evidence.evidence.view',
+    'evidence.review.edit',
     'device.station.view',
     'device.connector.view',
     'device.inference_host.view',
@@ -54,6 +56,7 @@ test('SYS-35 — 浏览器经真实来源解码证据片段与关键帧', async 
   )
   await context.addCookies([
     { name: 'sop_session', value: sessionCookie, domain: '127.0.0.1', path: '/', secure: false },
+    { name: 'sop_csrf', value: csrfCookie, domain: '127.0.0.1', path: '/', secure: false },
   ])
   const mediaHeaders: Record<string, string>[] = []
   const mediaResponses: { status: number; headers: Record<string, string> }[] = []
@@ -116,6 +119,32 @@ test('SYS-35 — 浏览器经真实来源解码证据片段与关键帧', async 
   expect(metrics.readyState).toBeGreaterThanOrEqual(2)
   expect(metrics.videoWidth).toBeGreaterThan(0)
   expect(metrics.currentTime).toBeGreaterThan(0)
+
+  // AC3：原机器判定不在当前镜像时如实说明，不据违规推断为“不通过”。
+  await expect(page.locator('.runtime__review')).toContainText('原判定结论未加载或缺失')
+
+  // 人工复核：真实表单提交经 Center 持久化，再以 GET 查询证明字段与服务器时间。
+  // 键盘可用性：标签 radio 可聚焦，提交按钮 focus 后 Enter 提交。
+  await page.getByLabel('确认（同意原判定）').check()
+  const saveButton = page.getByRole('button', { name: '保存复核结论' })
+  await saveButton.focus()
+  await saveButton.press('Enter')
+  const savedStatus = page.getByRole('status').filter({ hasText: '已保存复核结论' })
+  await expect(savedStatus).toBeVisible()
+  await expect(savedStatus).toBeFocused()
+  const clipSource = (await video.getAttribute('src')) ?? ''
+  const evidenceId = decodeURIComponent(new URL(clipSource).pathname.replace('/evidence/', ''))
+  const listed = await page.request.get(
+    `/api/v1/evidence/${encodeURIComponent(evidenceId)}/reviews`,
+  )
+  expect(listed.status()).toBe(200)
+  const saved = (await listed.json()).find(
+    (row: { evidence_id: string }) => row.evidence_id === evidenceId,
+  )
+  expect(saved.review_id).toBeTruthy()
+  expect(saved).toMatchObject({ generation: 'original', conclusion: 'confirmed' })
+  expect(saved.reviewed_at).toBeTruthy()
+  expect(saved.reviewer_name).toBeTruthy()
 
   // 关键帧：真实来源读取并解码。
   await page

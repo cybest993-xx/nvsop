@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from typing import Protocol
+from uuid import UUID
 
-from factory_sop.evidence.model import EvidenceReference, EvidenceStatus
+from factory_sop.evidence.model import EvidenceReference, EvidenceReview, EvidenceStatus
 
 
 class EvidenceRepository(Protocol):
@@ -35,4 +36,20 @@ class EvidenceRepository(Protocol):
         ...
 
 
-__all__ = ["EvidenceRepository"]
+class EvidenceReviewRepository(Protocol):
+    """人工复核结论的只追加 seam；不提供更新或删除。"""
+
+    def insert(self, value: EvidenceReview) -> bool:
+        """仅在 ``review_id`` 尚未存在时插入；已有行时返回 ``False``，不覆盖。"""
+        ...
+
+    def find(self, review_id: UUID) -> EvidenceReview | None:
+        """按稳定复核 ID 读取一条结论，不存在时返回 ``None``。"""
+        ...
+
+    def list_for_evidence(self, evidence_id: str) -> tuple[EvidenceReview, ...]:
+        """返回该证据的全部复核结论，按复核时刻升序；不删除他人记录。"""
+        ...
+
+
+__all__ = ["EvidenceRepository", "EvidenceReviewRepository"]

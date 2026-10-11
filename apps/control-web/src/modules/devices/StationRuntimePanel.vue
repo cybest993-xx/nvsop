@@ -9,6 +9,7 @@ import {
   type RuntimeStationProjection,
   type StationView,
 } from '@/api/controlPlane'
+import { reasonLabel } from '@/reasonCodes'
 import { useSessionStore } from '@/session/store'
 import EvidencePlayer from './EvidencePlayer.vue'
 
@@ -62,24 +63,6 @@ const writeStateLabels: Record<string, string> = {
   enabled: 'Edge 物理写入门禁已启用',
   stopped: 'Edge 已停止物理写入',
 }
-const reasons: Record<string, string> = {
-  STREAM_LOST: '观测流中断',
-  INFERENCE_BACKEND_UNREACHABLE: '推理后端不可达',
-  INFERENCE_TIMEOUT: '推理超时',
-  TIMESTAMP_DISCONTINUITY: '时间轴不连续',
-  CHUNK_BACKLOG_EXCEEDED: '观测积压超限',
-  ACTION_ID_UNKNOWN: '动作编号不在模板中',
-  INFERENCE_HOST_DOWN: '推理机失联',
-  RUN_INTERRUPTED: '运行被中断',
-  IO_SIGNAL_LOST: '外部信号不可达',
-  IO_TIME_UNALIGNED: '外部信号时间未对齐',
-  MISSED_STEP: '缺少必做步骤',
-  WRONG_STEP: '出现错误步骤',
-  OUT_OF_ORDER: '步骤顺序错误',
-  DEADLINE_EXCEEDED: '步骤超时',
-}
-const reasonLabel = (code: string) =>
-  reasons[code] ? `${code} — ${reasons[code]}` : `未知原因码：${code} — 该原因码尚无对应说明。`
 // 只展示与选中违规同一判定事件的最新镜像；不匹配时不得据违规推断结论。
 const selectedDecision = computed(() => {
   const violation = selectedViolation.value

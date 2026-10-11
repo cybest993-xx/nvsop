@@ -767,6 +767,7 @@ export type {
   ReadVlmCandidateErrors,
   ReadVlmCandidateResponse,
   ReadVlmCandidateResponses,
+  ReasonCode,
   RecordingMode,
   RegisterDatasetActionListData,
   RegisterDatasetActionListError,

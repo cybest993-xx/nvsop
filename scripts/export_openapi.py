@@ -10,6 +10,7 @@ import json
 import sys
 from pathlib import Path
 
+from edge_runtime.judgment.reasons import ReasonCode
 from pydantic import SecretStr
 
 from factory_sop.app import create_app
@@ -32,9 +33,16 @@ def export_openapi(destination: Path) -> None:
             redis_url=SecretStr("redis://redis.invalid:6379/0"),
         )
     )
+    schema = app.openapi()
+    # 仅作派生元数据、不被任何 operation 引用的原因码组件（wire 枚举 + 逐码提示）。
+    schema.setdefault("components", {}).setdefault("schemas", {})["ReasonCode"] = {
+        "type": "string",
+        "enum": [code.value for code in ReasonCode],
+        "x-hints": {code.value: code.hint for code in ReasonCode},
+    }
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(
-        json.dumps(app.openapi(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        json.dumps(schema, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 

@@ -6,6 +6,18 @@ webrtcAllowOrigins: ['http://localhost:3000', 'http://localhost:8443', 'https://
 playback: yes
 playbackAddress: :9996
 playbackAllowOrigins: ['http://localhost:3000', 'http://localhost:8443', 'https://localhost:8443']
+# 管理 API 只映射到夹具 loopback，供按需路径的 ready/readers 断言。
+api: yes
+apiAddress: :9997
+# 夹具本身无鉴权；显式保留 publish/read/playback 并额外授权 api 动作。
+authMethod: internal
+authInternalUsers:
+  - user: any
+    permissions:
+      - action: api
+      - action: publish
+      - action: read
+      - action: playback
 pathDefaults:
   recordFormat: fmp4
   recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
@@ -19,3 +31,18 @@ paths:
   cpu-transcoded:
     source: publisher
     record: yes
+  # 按需拉源语义，复用生产 media.py 的 sourceOnDemand 字段；夹具用短释放等待。
+  on-demand-passthrough:
+    source: rtsp://127.0.0.1:8554/synthetic
+    sourceOnDemand: yes
+    sourceOnDemandStartTimeout: 10s
+    sourceOnDemandCloseAfter: 2s
+    record: no
+  # 按需 CPU 转码语义，复用生产 media.py 的 runOnDemand + ffmpeg；容器内无遗留进程是验收点。
+  on-demand-cpu:
+    source: publisher
+    runOnDemand: ffmpeg -hide_banner -loglevel error -rtsp_transport tcp -i rtsp://127.0.0.1:8554/synthetic -map 0:v:0 -an -c:v libx264 -preset veryfast -tune zerolatency -g 30 -threads 2 -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/on-demand-cpu
+    runOnDemandRestart: yes
+    runOnDemandStartTimeout: 10s
+    runOnDemandCloseAfter: 2s
+    record: no

@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from typing import Any, cast
+from uuid import UUID
 
 from sqlalchemy import CursorResult, Table, func, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.orm import Session
 
-from factory_sop.evidence.adapters.tables import EvidenceReferenceRow
-from factory_sop.evidence.model import EvidenceReference, EvidenceStatus
-from factory_sop.evidence.repository import EvidenceRepository
+from factory_sop.evidence.adapters.tables import EvidenceReferenceRow, EvidenceReviewRow
+from factory_sop.evidence.model import EvidenceReference, EvidenceReview, EvidenceStatus
+from factory_sop.evidence.repository import EvidenceRepository, EvidenceReviewRepository
 
 
 class PostgresEvidenceRepository(EvidenceRepository):
@@ -108,10 +109,42 @@ class PostgresEvidenceRepository(EvidenceRepository):
         return tuple(row.to_domain() for row in rows), int(total or 0)
 
 
-def _columns(row: EvidenceReferenceRow) -> dict[str, object]:
-    return {
-        column.name: getattr(row, column.key) for column in EvidenceReferenceRow.__table__.columns
-    }
+def _columns(row: EvidenceReferenceRow | EvidenceReviewRow) -> dict[str, object]:
+    return {column.name: getattr(row, column.key) for column in row.__table__.columns}
 
 
-__all__ = ["PostgresEvidenceRepository"]
+class PostgresEvidenceReviewRepository(EvidenceReviewRepository):
+    """人工复核结论的 PostgreSQL 只追加仓储；无更新或删除路径。"""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def insert(self, value: EvidenceReview) -> bool:
+        row = EvidenceReviewRow.from_domain(value)
+        table = cast(Table, EvidenceReviewRow.__table__)
+        statement = (
+            postgres_insert(table)
+            .values(**_columns(row))
+            .on_conflict_do_nothing(index_elements=[table.c.review_id])
+            .returning(table.c.review_id)
+        )
+        return self._session.execute(statement).scalar_one_or_none() is not None
+
+    def find(self, review_id: UUID) -> EvidenceReview | None:
+        row = self._session.scalar(
+            select(EvidenceReviewRow)
+            .where(EvidenceReviewRow.review_id == review_id)
+            .execution_options(populate_existing=True)
+        )
+        return None if row is None else row.to_domain()
+
+    def list_for_evidence(self, evidence_id: str) -> tuple[EvidenceReview, ...]:
+        rows = self._session.scalars(
+            select(EvidenceReviewRow)
+            .where(EvidenceReviewRow.evidence_id == evidence_id)
+            .order_by(EvidenceReviewRow.reviewed_at.asc(), EvidenceReviewRow.review_id.asc())
+        ).all()
+        return tuple(row.to_domain() for row in rows)
+
+
+__all__ = ["PostgresEvidenceRepository", "PostgresEvidenceReviewRepository"]

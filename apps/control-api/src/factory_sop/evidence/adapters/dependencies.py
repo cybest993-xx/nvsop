@@ -1,13 +1,20 @@
 """evidence 适配器绑定请求事务与 device 主机身份。"""
 
 from factory_sop.device.api import DeviceHostGateway, DeviceMonitorGateway
-from factory_sop.evidence.adapters.repository import PostgresEvidenceRepository
-from factory_sop.evidence.repository import EvidenceRepository
+from factory_sop.evidence.adapters.repository import (
+    PostgresEvidenceRepository,
+    PostgresEvidenceReviewRepository,
+)
+from factory_sop.evidence.repository import EvidenceRepository, EvidenceReviewRepository
 from factory_sop.persistence import RequestSession
 
 
 def evidence(session: RequestSession) -> EvidenceRepository:
     return PostgresEvidenceRepository(session)
+
+
+def reviews(session: RequestSession) -> EvidenceReviewRepository:
+    return PostgresEvidenceReviewRepository(session)
 
 
 def host_gateway() -> DeviceHostGateway:

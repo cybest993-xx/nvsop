@@ -1815,6 +1815,57 @@ export type EvidenceMedia = {
 }
 
 /**
+ * EvidenceReviewBody
+ *
+ * 一次人工复核提交：稳定幂等 ID、证据代次与结论；不接受其它扩展字段。
+ */
+export type EvidenceReviewBody = {
+  /**
+   * Conclusion
+   */
+  conclusion: 'confirmed' | 'rejected'
+  /**
+   * Generation
+   */
+  generation: string
+  /**
+   * Review Id
+   */
+  review_id: string
+}
+
+/**
+ * EvidenceReviewRecord
+ */
+export type EvidenceReviewRecord = {
+  conclusion: ReviewConclusion
+  /**
+   * Evidence Id
+   */
+  evidence_id: string
+  /**
+   * Generation
+   */
+  generation: string
+  /**
+   * Review Id
+   */
+  review_id: string
+  /**
+   * Reviewed At
+   */
+  reviewed_at: string
+  /**
+   * Reviewer Id
+   */
+  reviewer_id: string
+  /**
+   * Reviewer Name
+   */
+  reviewer_name: string
+}
+
+/**
  * EvidenceStatus
  *
  * 中心引用的登记状态；没有“媒体已上传中心”这一类状态（ADR-0012）。
@@ -3190,6 +3241,13 @@ export type RetryView = {
   member: DatasetMemberView
   upload: UploadInstructionsView | null
 }
+
+/**
+ * ReviewConclusion
+ *
+ * 人工对一条证据的复核结论：确认或否定；不改写原判定（§六）。
+ */
+export type ReviewConclusion = 'confirmed' | 'rejected'
 
 /**
  * RoleView
@@ -6340,6 +6398,79 @@ export type CreateEvidenceAccessContextResponses = {
 
 export type CreateEvidenceAccessContextResponse =
   CreateEvidenceAccessContextResponses[keyof CreateEvidenceAccessContextResponses]
+
+export type ReadEvidenceReviewsData = {
+  body?: never
+  path: {
+    /**
+     * Evidence Id
+     */
+    evidence_id: string
+  }
+  query?: never
+  url: '/api/v1/evidence/{evidence_id}/reviews'
+}
+
+export type ReadEvidenceReviewsErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadEvidenceReviewsError = ReadEvidenceReviewsErrors[keyof ReadEvidenceReviewsErrors]
+
+export type ReadEvidenceReviewsResponses = {
+  /**
+   * Response Readevidencereviews
+   *
+   * Successful Response
+   */
+  200: Array<EvidenceReviewRecord>
+}
+
+export type ReadEvidenceReviewsResponse =
+  ReadEvidenceReviewsResponses[keyof ReadEvidenceReviewsResponses]
+
+export type RegisterEvidenceReviewData = {
+  body: EvidenceReviewBody
+  path: {
+    /**
+     * Evidence Id
+     */
+    evidence_id: string
+  }
+  query?: never
+  url: '/api/v1/evidence/{evidence_id}/reviews'
+}
+
+export type RegisterEvidenceReviewErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type RegisterEvidenceReviewError =
+  RegisterEvidenceReviewErrors[keyof RegisterEvidenceReviewErrors]
+
+export type RegisterEvidenceReviewResponses = {
+  /**
+   * Successful Response
+   */
+  200: EvidenceReviewRecord
+}
+
+export type RegisterEvidenceReviewResponse =
+  RegisterEvidenceReviewResponses[keyof RegisterEvidenceReviewResponses]
 
 export type CreateHandoverData = {
   body: HandoverCreation

@@ -80,6 +80,13 @@ const reasons: Record<string, string> = {
 }
 const reasonLabel = (code: string) =>
   reasons[code] ? `${code} — ${reasons[code]}` : `未知原因码：${code} — 该原因码尚无对应说明。`
+// 只展示与选中违规同一判定事件的最新镜像；不匹配时不得据违规推断结论。
+const selectedDecision = computed(() => {
+  const violation = selectedViolation.value
+  if (!violation) return null
+  const decision = projections.value.get(violation.station_id)?.decision
+  return decision && decision.event_id === violation.decision_event_id ? decision : null
+})
 const time = (value: string | number | null) =>
   value === null
     ? '无'
@@ -226,12 +233,29 @@ onUnmounted(() => {
       >
         {{ selectedHint }} 判定事件：{{ selectedViolation.decision_event_id }}
       </div>
-      <EvidencePlayer
+      <section
         v-if="selectedViolation"
-        :host-id="selectedViolation.host_id"
-        :station-id="selectedViolation.station_id"
-        :instance-id="selectedViolation.instance_id"
-      />
+        class="runtime__review"
+        aria-labelledby="runtime-review-heading"
+      >
+        <h4 id="runtime-review-heading">人工复核（只追加，不改写机器事实）</h4>
+        <div aria-label="原机器判定">
+          <h5>原机器判定（只读）</h5>
+          <p v-if="selectedDecision">
+            结论：{{
+              verdicts[selectedDecision.verdict] ?? `未知结论（${selectedDecision.verdict}）`
+            }}； 判定事件：{{ selectedDecision.event_id }}
+          </p>
+          <p v-else class="muted">
+            该原判定结论未加载或缺失，不能据违规推断为“不通过”；请用稳定判定事件 ID 核对归档。
+          </p>
+        </div>
+        <EvidencePlayer
+          :host-id="selectedViolation.host_id"
+          :station-id="selectedViolation.station_id"
+          :instance-id="selectedViolation.instance_id"
+        />
+      </section>
     </section>
     <p v-if="!projections.size" class="muted">尚无运行镜像；连接恢复后会继续读取最新事实。</p>
     <article v-for="p in projections.values()" :key="p.station_id">

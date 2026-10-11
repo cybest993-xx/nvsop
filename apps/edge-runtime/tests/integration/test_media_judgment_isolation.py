@@ -1,8 +1,8 @@
 """SYS-34-16 软件媒体路径与判定隔离证据 (Issue #433)。
 
 媒体进程属于推理机本机软件路径, 判定核心只吃归一化观测。本文件在真实
-``AutonomousRuntime.run_forever`` 组合上证明: 凭据慢读、媒体进程启动失败/退避重试都不会等待、
-改写或伪造判定, 也不会把媒体异常传进工位线程。
+``AutonomousRuntime.run_forever`` 组合上证明: 凭据慢读、媒体进程启动失败/退避重试、
+以及运行中进程断连后的恢复尝试都不会等待、改写或伪造判定, 也不会把媒体异常传进工位线程。
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ from edge_runtime.media import (
     MediaRuntimeConfiguration,
     RecordingMode,
 )
+from edge_runtime.media_retention import read_applied_window
 from edge_runtime.runtime import (
     AutonomousRuntime,
     AutonomousStation,
@@ -121,6 +122,7 @@ class _PersistentStartupFailures:
         self._failing_binary = str(failing_binary)
         self.calls: list[tuple[str, ...]] = []
         self.failure_count = 0
+        self.failure_instants: list[float] = []
         self.failures_reached = Event()
         self._lock = threading.Lock()
 
@@ -130,9 +132,28 @@ class _PersistentStartupFailures:
             if args[0] != self._failing_binary:
                 return _AliveProcess()
             self.failure_count += 1
+            self.failure_instants.append(monotonic())
             if self.failure_count >= 2:
                 self.failures_reached.set()
         return _ExitedProcess()
+
+
+class _DisconnectingProcessFactory:
+    """合成外部进程工厂: 首次启动返回存活替身, 进程被外部终止后的恢复重试返回已退出替身。"""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.process: _AliveProcess | None = None
+        self.recovery_started = Event()
+
+    def __call__(self, args: list[str], **_kwargs: object) -> _AliveProcess | _ExitedProcess:
+        del args
+        with self._lock:
+            if self.process is None:
+                self.process = _AliveProcess()
+                return self.process
+            self.recovery_started.set()
+            return _ExitedProcess()
 
 
 class _IdleCommandLoop:
@@ -299,6 +320,24 @@ class MediaJudgmentIsolationTest(unittest.TestCase):
                 return reports
             time.sleep(0.01)
         self.fail("durable report was not persisted before the timeout")
+
+    def _wait_for_applied_window(
+        self, media_config_path: Path, expected: int, *, timeout: float = 10.0
+    ) -> None:
+        deadline = monotonic() + timeout
+        while monotonic() < deadline:
+            if read_applied_window(media_config_path) == expected:
+                return
+            time.sleep(0.01)
+        self.fail("media runtime never recorded a successful startup")
+
+    def _wait_for_media_error(self, media: MediaRuntime, *, timeout: float = 10.0) -> None:
+        deadline = monotonic() + timeout
+        while monotonic() < deadline:
+            if media.last_error is not None:
+                return
+            time.sleep(0.01)
+        self.fail("media recovery failure was not observed")
 
     def _baseline_identity(self, database: Path) -> tuple[object, ...]:
         """无媒体路径的参照判定: 唯一变量是媒体, 判定身份必须不变。"""
@@ -469,7 +508,66 @@ class MediaJudgmentIsolationTest(unittest.TestCase):
             self.assertTrue(source.closed)
             # 媒体异常被本机运行时吸收, 没有传进工位线程; 退避重试至少两次。
             self.assertGreaterEqual(factory.failure_count, 2)
+            # 真实 0.5s 退避: 前两次启动尝试之间必须留出重试间隔, 而非忙循环。
+            self.assertGreaterEqual(len(factory.failure_instants), 2)
+            self.assertGreaterEqual(factory.failure_instants[1] - factory.failure_instants[0], 0.45)
             self.assertIsNotNone(media.last_error)
+
+    def test_media_process_disconnect_retries_without_touching_judgment(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            username, password = self._write_readonly_credentials(root)
+            media_configuration = self._media_configuration(
+                root,
+                username=username,
+                password=password,
+                media_path_mode=MediaPathMode.PASSTHROUGH,
+                recording_mode=RecordingMode.CONTINUOUS,
+            )
+            factory = _DisconnectingProcessFactory()
+            media = MediaRuntime(media_configuration, popen=factory)
+            state = open_local_state(str(root / "disconnect.sqlite"))
+            self.addCleanup(state.close)
+            store = state.station(STATION_ID)
+            # 观测只在进程被外部终止并触发一次恢复尝试之后放行。
+            source = _TwoStepInputSource(gate=factory.recovery_started)
+            runtime = self._build_runtime(state, store, source, media=media)
+            stopping = Event()
+            errors: list[BaseException] = []
+
+            def run() -> None:
+                try:
+                    runtime.run_forever(should_stop=stopping.is_set)
+                except BaseException as error:
+                    errors.append(error)
+
+            worker = threading.Thread(target=run, daemon=True)
+            worker.start()
+            try:
+                self._wait_for_applied_window(
+                    media_configuration.media_config_path,
+                    media_configuration.recording_window_seconds,
+                )
+                self.assertEqual((), store.pending_reports())
+                started = factory.process
+                assert started is not None, "媒体进程从未启动"
+                started.terminate()
+                self.assertTrue(
+                    factory.recovery_started.wait(5.0),
+                    "媒体进程断连后从未触发恢复重试",
+                )
+                reports = self._wait_for_reports(store)
+                self.assertEqual(1, len(reports))
+                self.assertEqual(EXPECTED_IDENTITY, _identity(reports[0].decision))
+                self.assertIsNot(reports[0].decision.verdict, Verdict.FAIL)
+                self.assertEqual((), store.pending_health_reports())
+                self._wait_for_media_error(media)
+            finally:
+                stopping.set()
+                worker.join(timeout=10.0)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual([], errors)
+            self.assertTrue(source.closed)
 
 
 if __name__ == "__main__":

@@ -133,18 +133,20 @@ def enqueue_connector_connection_test(
 def claim_next_command(
     *,
     host: InferenceHostIdentity,
+    command_type: PendingCommandType,
     now: datetime,
     lease_duration: timedelta,
     hosts: InferenceHostRepository,
     commands: PendingCommandRepository,
 ) -> PendingCommand | None:
-    """认证后原子领取该推理机的下一条命令。"""
+    """认证后原子领取该推理机指定类型的下一条命令。"""
     authenticate_command_host(host=host, now=now, hosts=hosts)
     if lease_duration <= timedelta(0):
         raise ValueError("command lease duration must be positive")
     token = str(new_id())
     claimed = commands.claim_next(
         host_id=host.host_id,
+        command_type=command_type,
         claim_token=token,
         claimed_at=now,
         lease_expires_at=now + lease_duration,
@@ -442,3 +444,66 @@ def _existing_connector(connector_id: UUID, connectors: ConnectorRepository) -> 
             connector_id=str(connector_id),
         )
     return connector
+
+
+class RepositoryDeviceEvidenceGateway:
+    """`evidence` 再切片请求所需的 device 最小事实：来源主机滚动窗口与委托命令登记。
+
+    命令在调用方的请求事务内写入同一队列；本票保持不可领取（领取按命令类型收窄），故
+    `target_revision` 无对应配置，固定 1 保留队列非空语义，不猜来源主机状态。
+    """
+
+    def __init__(
+        self,
+        *,
+        hosts: InferenceHostRepository,
+        commands: PendingCommandRepository,
+    ) -> None:
+        self._hosts = hosts
+        self._commands = commands
+
+    def recording_window_seconds(self, *, host_id: UUID) -> int | None:
+        host = self._hosts.by_id(host_id)
+        return None if host is None else host.recording_window_seconds
+
+    def enqueue_reclip_command(
+        self,
+        *,
+        host_id: UUID,
+        request_id: UUID,
+        idempotency_key: str,
+        actor_id: UUID,
+        now: datetime,
+    ) -> UUID:
+        command = PendingCommand(
+            id=new_id(),
+            host_id=host_id,
+            command_type=PendingCommandType.RECLIP_EVIDENCE,
+            target_id=request_id,
+            target_revision=1,
+            idempotency_key=idempotency_key,
+            status=PendingCommandStatus.PENDING,
+            attempt=0,
+            claim_token=None,
+            claimed_at=None,
+            lease_expires_at=None,
+            result=None,
+            result_detail=None,
+            failure_code=None,
+            completed_at=None,
+            created_by=actor_id,
+            created_at=now,
+            updated_at=now,
+        )
+        stored = self._commands.add_or_get(command)
+        if (
+            stored.command_type is not PendingCommandType.RECLIP_EVIDENCE
+            or stored.target_id != request_id
+        ):
+            refuse(
+                _REFUSAL_EVENT,
+                DeviceRefusalCode.COMMAND_IDEMPOTENCY_CONFLICT,
+                idempotency_key=idempotency_key,
+                actor_id=str(actor_id),
+            )
+        return stored.id

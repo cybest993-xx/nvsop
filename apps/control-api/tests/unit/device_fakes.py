@@ -29,6 +29,7 @@ from factory_sop.device.model import (
     PendingCommand,
     PendingCommandCompletion,
     PendingCommandStatus,
+    PendingCommandType,
     Point,
     PointDirection,
     Station,
@@ -185,13 +186,15 @@ class FakePendingCommands(PendingCommandRepository):
         self,
         *,
         host_id: UUID,
+        command_type: PendingCommandType,
         claim_token: str,
         claimed_at: datetime,
         lease_expires_at: datetime,
     ) -> PendingCommand | None:
         for command in self.rows.values():
             if (
-                command.status is PendingCommandStatus.CLAIMED
+                command.command_type is command_type
+                and command.status is PendingCommandStatus.CLAIMED
                 and command.lease_expires_at is not None
                 and command.lease_expires_at <= claimed_at
             ):
@@ -207,7 +210,9 @@ class FakePendingCommands(PendingCommandRepository):
             (
                 command
                 for command in self.rows.values()
-                if command.host_id == host_id and command.status is PendingCommandStatus.PENDING
+                if command.host_id == host_id
+                and command.command_type is command_type
+                and command.status is PendingCommandStatus.PENDING
             ),
             key=lambda item: (item.created_at, item.id),
         )

@@ -274,6 +274,7 @@ def claim_next_device_command(
     now = datetime.now(UTC)
     command = claim_next_command(
         host=identity,
+        command_type=PendingCommandType.TEST_CONNECTOR_CONNECTION,
         now=now,
         lease_duration=COMMAND_LEASE_DURATION,
         hosts=host_store,

@@ -19,6 +19,7 @@ from factory_sop.device.model import (
     InferenceHost,
     PendingCommand,
     PendingCommandCompletion,
+    PendingCommandType,
     Point,
     Station,
 )
@@ -288,11 +289,15 @@ class PendingCommandRepository(Protocol):
         self,
         *,
         host_id: UUID,
+        command_type: PendingCommandType,
         claim_token: str,
         claimed_at: datetime,
         lease_expires_at: datetime,
     ) -> PendingCommand | None:
-        """原子领取该推理机的一条命令，并回收已过期的旧领取。"""
+        """原子领取该推理机指定类型的一条命令，并回收已过期的旧领取。
+
+        类型是领取边界：未开放的委托类型留在队列中不被旧消费者取走。
+        """
         ...
 
     def complete(self, completion: PendingCommandCompletion) -> PendingCommand:

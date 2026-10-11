@@ -268,6 +268,9 @@ def create_app(
     app.dependency_overrides[evidence_dependencies.registered_hosts] = (
         device_dependencies.monitor_gateway
     )
+    app.dependency_overrides[evidence_dependencies.reclip_gateway] = (
+        device_dependencies.evidence_gateway
+    )
     app.dependency_overrides[monitor_dependencies.device_monitor_gateway] = (
         device_dependencies.monitor_gateway
     )

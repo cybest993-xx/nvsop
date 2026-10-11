@@ -17,6 +17,7 @@ from factory_sop.device.model import (
     PendingCommand,
     PendingCommandCompletion,
     PendingCommandStatus,
+    PendingCommandType,
 )
 
 
@@ -95,15 +96,17 @@ class PostgresPendingCommandRepository:
         self,
         *,
         host_id: UUID,
+        command_type: PendingCommandType,
         claim_token: str,
         claimed_at: datetime,
         lease_expires_at: datetime,
     ) -> PendingCommand | None:
-        """在一个事务中回收过期领取并锁定该主机的最早待命令。"""
+        """在一个事务中回收过期领取并锁定该主机指定类型的最早待命令。"""
         self._session.execute(
             update(PendingCommandRow)
             .where(
                 PendingCommandRow.host_id == host_id,
+                PendingCommandRow.command_type == command_type,
                 PendingCommandRow.status == PendingCommandStatus.CLAIMED,
                 PendingCommandRow.lease_expires_at.is_not(None),
                 PendingCommandRow.lease_expires_at <= claimed_at,
@@ -120,6 +123,7 @@ class PostgresPendingCommandRepository:
             select(PendingCommandRow)
             .where(
                 PendingCommandRow.host_id == host_id,
+                PendingCommandRow.command_type == command_type,
                 PendingCommandRow.status == PendingCommandStatus.PENDING,
             )
             .order_by(PendingCommandRow.created_at, PendingCommandRow.id)

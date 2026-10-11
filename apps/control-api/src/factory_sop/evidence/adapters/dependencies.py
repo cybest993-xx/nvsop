@@ -1,11 +1,16 @@
 """evidence 适配器绑定请求事务与 device 主机身份。"""
 
-from factory_sop.device.api import DeviceHostGateway, DeviceMonitorGateway
+from factory_sop.device.api import DeviceEvidenceGateway, DeviceHostGateway, DeviceMonitorGateway
 from factory_sop.evidence.adapters.repository import (
+    PostgresEvidenceReclipRequestRepository,
     PostgresEvidenceRepository,
     PostgresEvidenceReviewRepository,
 )
-from factory_sop.evidence.repository import EvidenceRepository, EvidenceReviewRepository
+from factory_sop.evidence.repository import (
+    EvidenceReclipRequestRepository,
+    EvidenceRepository,
+    EvidenceReviewRepository,
+)
 from factory_sop.persistence import RequestSession
 
 
@@ -15,6 +20,15 @@ def evidence(session: RequestSession) -> EvidenceRepository:
 
 def reviews(session: RequestSession) -> EvidenceReviewRepository:
     return PostgresEvidenceReviewRepository(session)
+
+
+def reclip_requests(session: RequestSession) -> EvidenceReclipRequestRepository:
+    return PostgresEvidenceReclipRequestRepository(session)
+
+
+def reclip_gateway() -> DeviceEvidenceGateway:
+    """由控制面组合根绑定 device owner 的来源主机窗口与委托命令 seam。"""
+    raise RuntimeError("evidence reclip gateway dependency was not wired")
 
 
 def host_gateway() -> DeviceHostGateway:

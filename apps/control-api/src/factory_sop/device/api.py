@@ -163,6 +163,26 @@ class DeviceHostGateway(Protocol):
         ...
 
 
+class DeviceEvidenceGateway(Protocol):
+    """`evidence` 再切片请求使用的来源主机事实与委托命令 seam。"""
+
+    def recording_window_seconds(self, *, host_id: UUID) -> int | None:
+        """返回该推理机当前生效的录像滚动窗口秒数；主机不存在时为 ``None``。"""
+        ...
+
+    def enqueue_reclip_command(
+        self,
+        *,
+        host_id: UUID,
+        request_id: UUID,
+        idempotency_key: str,
+        actor_id: UUID,
+        now: datetime,
+    ) -> UUID:
+        """在同一请求事务内登记一条不可领取的再切片委托，返回命令 ID。"""
+        ...
+
+
 class DeviceMonitorGateway(Protocol):
     """monitor 读取设备 owner 持有的历史归属与主机清单。"""
 
@@ -386,6 +406,7 @@ __all__ = [
     "DeviceConfigurationGateway",
     "DeviceConfigurationTarget",
     "DeviceConfigurationTopology",
+    "DeviceEvidenceGateway",
     "DeviceHistoricalAssignmentGateway",
     "DeviceHostGateway",
     "DeviceMonitorGateway",

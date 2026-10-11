@@ -145,6 +145,16 @@ class RegistrationTest(unittest.TestCase):
         self.assertEqual(len(station.pending_evidence()), 1)
         self.assertTrue(all(path.is_file() for path in self.files))
 
+    def test_registration_carries_frozen_mapping_and_core_required_span(self) -> None:
+        # 中心截止必须来自来源机冻结的墙钟映射与核心必需跨度, 不是已加余量的请求窗口。
+        self.client.drop_reply = False
+        self.assertEqual(self.worker().drain(limit=5), 1)
+        payload = next(row for row in self.client.records.values() if row["kind"] == "clip")
+        self.assertEqual(payload["wall_offset"], 0.0)
+        self.assertEqual(payload["required_from"], 100.0)
+        self.assertEqual(payload["required_to"], 100.0)
+        self.assertEqual((payload["window_start"], payload["window_end"]), (95.0, 105.0))
+
     def test_center_refusal_keeps_queue_and_registration_does_not_claim_upload(self) -> None:
         self.client.drop_reply = False
         self.client.status = 409

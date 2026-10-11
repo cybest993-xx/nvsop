@@ -19,6 +19,7 @@ from factory_sop.device.model import (
     InferenceHostIdentity,
     PendingCommand,
     PendingCommandStatus,
+    PendingCommandType,
 )
 from factory_sop.device.usecases.commands import (
     claim_next_command,
@@ -158,6 +159,7 @@ def test_claim_and_real_result_complete_the_command_and_update_connector_state()
 
     claimed = claim_next_command(
         host=host_identity(hosts, host.id),
+        command_type=PendingCommandType.TEST_CONNECTOR_CONNECTION,
         now=NOW,
         lease_duration=timedelta(minutes=1),
         hosts=hosts,
@@ -209,6 +211,7 @@ def test_health_result_keeps_configuration_revision_for_the_next_command() -> No
     )
     claimed = claim_next_command(
         host=host_identity(hosts, host.id),
+        command_type=PendingCommandType.TEST_CONNECTOR_CONNECTION,
         now=NOW,
         lease_duration=timedelta(minutes=1),
         hosts=hosts,
@@ -268,6 +271,7 @@ def test_another_host_cannot_claim_or_complete_the_command() -> None:
     assert (
         claim_next_command(
             host=host_identity(hosts, other.id),
+            command_type=PendingCommandType.TEST_CONNECTOR_CONNECTION,
             now=NOW,
             lease_duration=timedelta(minutes=1),
             hosts=hosts,
@@ -277,6 +281,7 @@ def test_another_host_cannot_claim_or_complete_the_command() -> None:
     )
     claimed = claim_next_command(
         host=host_identity(hosts, owner.id),
+        command_type=PendingCommandType.TEST_CONNECTOR_CONNECTION,
         now=NOW,
         lease_duration=timedelta(minutes=1),
         hosts=hosts,
@@ -320,6 +325,7 @@ def test_a_late_result_after_the_claim_lease_expires_does_not_change_state() -> 
     )
     claimed = claim_next_command(
         host=host_identity(hosts, host.id),
+        command_type=PendingCommandType.TEST_CONNECTOR_CONNECTION,
         now=NOW,
         lease_duration=timedelta(seconds=1),
         hosts=hosts,
@@ -365,6 +371,7 @@ def test_a_result_for_an_old_connector_revision_is_rejected_without_overwriting_
     )
     claimed = claim_next_command(
         host=host_identity(hosts, host.id),
+        command_type=PendingCommandType.TEST_CONNECTOR_CONNECTION,
         now=NOW,
         lease_duration=timedelta(minutes=1),
         hosts=hosts,
@@ -413,6 +420,7 @@ def test_repeating_the_same_result_is_idempotent_after_completion() -> None:
     )
     claimed = claim_next_command(
         host=host_identity(hosts, host.id),
+        command_type=PendingCommandType.TEST_CONNECTOR_CONNECTION,
         now=NOW,
         lease_duration=timedelta(minutes=1),
         hosts=hosts,
@@ -466,6 +474,7 @@ def test_local_rejection_completes_without_overwriting_connector_health() -> Non
     )
     claimed = claim_next_command(
         host=host_identity(hosts, host.id),
+        command_type=PendingCommandType.TEST_CONNECTOR_CONNECTION,
         now=NOW,
         lease_duration=timedelta(minutes=1),
         hosts=hosts,

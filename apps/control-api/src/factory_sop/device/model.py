@@ -550,6 +550,8 @@ class PendingCommandType(StrEnum):
     """推理机从中心领取的设备命令类型。"""
 
     TEST_CONNECTOR_CONNECTION = "test_connector_connection"
+    # 再切片委托：请求由 evidence 拥有，命令入同一队列；S038/S039 就绪前不可领取。
+    RECLIP_EVIDENCE = "reclip_evidence"
 
 
 class PendingCommandStatus(StrEnum):

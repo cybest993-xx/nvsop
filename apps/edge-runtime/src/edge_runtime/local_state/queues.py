@@ -221,6 +221,9 @@ class PendingEvidence:
     covered_from: float | None = None
     covered_to: float | None = None
     sliced_at: float | None = None
+    # 同锚点判定/违规声明的核心必需跨度 (monotonic); 旧行或无可证来源时为 None。
+    required_from: float | None = None
+    required_to: float | None = None
 
 
 class StationQueues:
@@ -763,14 +766,27 @@ class StationQueues:
 
     def _evidence_rows(self, clause: str, *, limit: int | None) -> tuple[PendingEvidence, ...]:
         # clause 是本模块的字面量, 不是外部输入; 列名与 where 在此一处维护。
+        # 核心必需跨度从同锚点的判定/违规行 union 读出, 不新增证据队列表列 (S037)。
         with self._lock:
             rows = self._connection.execute(
                 f"""
-                SELECT queue_id, instance_id, anchor, window_from, window_to, attempts, last_error,
-                       wall_offset, sources, media_results, covered_from, covered_to, sliced_at
-                  FROM local_evidence_queue
-                 WHERE station_id = ? {clause}
-                 ORDER BY queue_id
+                SELECT q.queue_id, q.instance_id, q.anchor, q.window_from, q.window_to,
+                       q.attempts, q.last_error, q.wall_offset, q.sources, q.media_results,
+                       q.covered_from, q.covered_to, q.sliced_at,
+                       min(min(coalesce(d.evidence_from, v.evidence_from),
+                               coalesce(v.evidence_from, d.evidence_from))) AS required_from,
+                       max(max(coalesce(d.evidence_to, v.evidence_to),
+                               coalesce(v.evidence_to, d.evidence_to))) AS required_to
+                  FROM local_evidence_queue q
+                  LEFT JOIN local_decision d
+                    ON d.station_id = q.station_id AND d.instance_id = q.instance_id
+                   AND d.evidence_anchor = q.anchor
+                  LEFT JOIN local_violation v
+                    ON v.station_id = q.station_id AND v.instance_id = q.instance_id
+                   AND v.evidence_anchor = q.anchor
+                 WHERE q.station_id = ? {clause}
+                 GROUP BY q.queue_id
+                 ORDER BY q.queue_id
                  LIMIT ?
                 """,
                 (self._station_id, -1 if limit is None else limit),
@@ -793,6 +809,8 @@ class StationQueues:
             covered_from=None if row["covered_from"] is None else float(row["covered_from"]),
             covered_to=None if row["covered_to"] is None else float(row["covered_to"]),
             sliced_at=None if row["sliced_at"] is None else float(row["sliced_at"]),
+            required_from=None if row["required_from"] is None else float(row["required_from"]),
+            required_to=None if row["required_to"] is None else float(row["required_to"]),
         )
 
     def record_evidence_slice(

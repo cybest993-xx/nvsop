@@ -97,6 +97,38 @@ class CiScopeTest(unittest.TestCase):
                 self.assertEqual("true", values["integration"])
                 self.assertEqual("false", values["browser"])
 
+    def test_deployment_and_training_vendor_inputs_select_integration(self) -> None:
+        for name in (
+            "deploy/dev/compose.yaml",
+            "deploy/dev/db-roles.sql",
+            "deploy/dev/nginx.conf",
+            "deploy/dev/training-install.sh",
+            "deploy/dev/training-install-version.sql",
+            "deploy/dataset-annotation-volume.compose.example.yml",
+            "docs/deployment/nginx-annotation.conf.example",
+            "vendor/sop-monitoring-blueprints/microservices/sop-training-bp/docker-compose.yml",
+            "vendor/sop-monitoring-blueprints/microservices/sop-training-bp/"
+            "db-init-scripts/01-init-tables.sql",
+            "vendor/sop-monitoring-blueprints/microservices/sop-training-bp/"
+            "microservices/evaluation-ms/validation/postgres_validation.py",
+        ):
+            with self.subTest(path=name):
+                base = self.git("rev-parse", "HEAD").strip()
+                self.write(name)
+                result = self.scope(base, self.commit("deployment input"))
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(
+                    {
+                        "docs_only": "false",
+                        "force_all": "false",
+                        "integration": "true",
+                        "browser": "false",
+                        "media": "false",
+                        "annotation": "false",
+                    },
+                    self.outputs(result),
+                )
+
     def test_web_inputs_select_browser_without_center_integration(self) -> None:
         self.write("apps/control-web/src/main.ts")
         result = self.scope(self.base, self.commit("web input"))
@@ -253,6 +285,50 @@ class CiScopeTest(unittest.TestCase):
 
                 self.assertEqual(0, result.returncode, result.stderr)
                 self.assertEqual(expected, result.stdout)
+
+    def test_deleted_deployment_inputs_still_select_integration(self) -> None:
+        for name in (
+            "deploy/dev/nginx.conf",
+            "vendor/sop-monitoring-blueprints/microservices/sop-training-bp/docker-compose.yml",
+        ):
+            with self.subTest(path=name):
+                self.write(name)
+                base = self.commit("existing input")
+                self.git("rm", name)
+
+                result = self.scope(base, self.commit("delete input"))
+
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(
+                    {
+                        "docs_only": "false",
+                        "force_all": "false",
+                        "integration": "true",
+                        "browser": "false",
+                        "media": "false",
+                        "annotation": "false",
+                    },
+                    self.outputs(result),
+                )
+
+    def test_unrelated_paths_avoid_expensive_lanes(self) -> None:
+        for name in (
+            "vendor/README.md",
+            "vendor/sop-monitoring-blueprints/README.md",
+            "deploy/edge/compose.yaml",
+            "deploy/edge/README.md",
+            "docs/image.png",
+        ):
+            with self.subTest(path=name):
+                base = self.git("rev-parse", "HEAD").strip()
+                self.write(name)
+                result = self.scope(base, self.commit("unrelated change"))
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(
+                    "docs_only=false\nforce_all=false\nintegration=false\nbrowser=false\n"
+                    "media=false\nannotation=false\n",
+                    result.stdout,
+                )
 
     def test_empty_diff_does_not_claim_to_be_documentation(self) -> None:
         result = self.scope(self.base, self.base)

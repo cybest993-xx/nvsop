@@ -7,15 +7,26 @@ import subprocess
 import sys
 
 ROOT_DOCS = {"AGENTS.md", "CLAUDE.md", "CONTEXT.md", "README.md"}
+# 集成/系统套件真实读取的部署与训练基座输入：dev Compose 及其挂载脚本、标注网关模板、
+# 训练 blueprint 子树（Vendor 合并 DDL 与五类进程 schema 校验）。
 INTEGRATION_PREFIXES = (
     "apps/control-api/",
     "apps/edge-runtime/",
     "packages/contracts/",
     "tests/system/",
     "tests/fixtures/",
+    "deploy/dev/",
     "deploy/media/",
+    "vendor/sop-monitoring-blueprints/microservices/sop-training-bp/",
 )
-INTEGRATION_FILES = {"Makefile", "uv.lock", "pyproject.toml", ".python-version"}
+INTEGRATION_FILES = {
+    "Makefile",
+    "uv.lock",
+    "pyproject.toml",
+    ".python-version",
+    "deploy/dataset-annotation-volume.compose.example.yml",
+    "docs/deployment/nginx-annotation.conf.example",
+}
 BROWSER_PREFIXES = ("apps/control-web/",)
 BROWSER_FILES = {
     "Makefile",

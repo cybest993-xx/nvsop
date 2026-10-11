@@ -25,7 +25,7 @@ Actions: `N/A`
 
 ## Readiness and remaining work
 
-<!-- Record real user confirmation, named authorized actions, current candidate, exact-head CI and required independent review. Disclose automatic remote-head deletion if enabled. A changed head needs renewed affected evidence. These fields record evidence, not approval; implementation/publication alone does not authorize merge. Optional Codex feedback belongs in Review. Follow docs/engineering/workflow.md. -->
+<!-- Record the task's single real user confirmation, named authorized actions through completion, current candidate, exact-head CI and required independent review. Disclose automatic remote-head deletion if enabled. In-scope repairs and successor heads renew affected evidence, not approval. These fields record evidence, not approval; implementation/publication alone does not authorize merge. Optional Codex feedback belongs in Review. Follow docs/engineering/workflow.md. -->
 PR lifecycle approval: `pending`
 Authorized lifecycle actions: `N/A`
 Candidate head: `pending`

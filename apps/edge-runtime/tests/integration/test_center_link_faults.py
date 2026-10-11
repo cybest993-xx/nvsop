@@ -75,6 +75,8 @@ class CenterLinkFaultTest(unittest.TestCase):
             host_id="host-1",
             host_private_key="unused",  # pragma: allowlist secret
             timeout=2.0,
+            # 本地故障注入直接连 socket，避免环境代理把断连改写成 502。
+            transport=httpx2.HTTPTransport(),
         )
 
     def test_center_client_maps_disconnect_and_truncated_body_to_unreachable(self) -> None:

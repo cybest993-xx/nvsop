@@ -167,7 +167,11 @@ class DeviceEvidenceGateway(Protocol):
     """`evidence` 再切片请求使用的来源主机事实与委托命令 seam。"""
 
     def recording_window_seconds(self, *, host_id: UUID) -> int | None:
-        """返回该推理机当前生效的录像滚动窗口秒数；主机不存在时为 ``None``。"""
+        """返回中心保存的该推理机录像滚动窗口秒数；主机不存在时为 ``None``。
+
+        这是配置值，不是“来源机已实际应用”的证明：中心只能算理论截止，执行时素材
+        是否真的还在由再切片执行（S039）按真实结果结案。
+        """
         ...
 
     def enqueue_reclip_command(

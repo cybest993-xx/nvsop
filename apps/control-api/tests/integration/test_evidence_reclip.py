@@ -206,6 +206,72 @@ def test_reclip_request_is_authorized_idempotent_and_bound_to_the_source_host(
             )
 
 
+def test_reclip_rejects_non_finite_margins_before_writing(
+    engine: Engine, runtime_topology: RuntimeTopology
+) -> None:
+    """NaN/Infinity 余量必须在任何写入前以 422 拒绝, 不得先入队再在领域校验里 500。"""
+    _grant(engine)
+    host_id = str(runtime_topology.host.id)
+    evidence_id = f"{host_id}/nan.mp4"
+    app = create_app(settings(), session_factory=session_factory(engine))
+    request_id = uuid4()
+    try:
+        with (
+            TestClient(app, base_url="https://testserver") as browser,
+            TestClient(app, base_url="https://testserver") as host,
+        ):
+            registered = _post_as_host(
+                host,
+                runtime_topology,
+                path=REGISTRATIONS,
+                body=_registration(
+                    runtime_topology,
+                    evidence_id,
+                    wall_offset=datetime.now(UTC).timestamp() - 100.0,
+                    required_from=90.0,
+                    required_to=110.0,
+                ),
+            )
+            assert registered.status_code == 200, registered.text
+            assert browser.post(SESSION_PATH, json=CREDENTIALS).status_code == 201
+            csrf = {CSRF_HEADER: browser.cookies[CSRF_COOKIE]}
+            raw = (
+                b'{"request_id": "' + str(request_id).encode() + b'", '
+                b'"generation": "original", "before_seconds": NaN, "after_seconds": 1.0}'
+            )
+            response = browser.post(
+                f"{API_PREFIX}/evidence/{evidence_id}/reclip-requests",
+                content=raw,
+                headers={**csrf, "content-type": "application/json"},
+            )
+            assert response.status_code == 422, response.text
+            with engine.begin() as connection:
+                requests = connection.execute(
+                    text("SELECT count(*) FROM evidence_reclip_request")
+                ).scalar_one()
+                commands = connection.execute(
+                    text(
+                        "SELECT count(*) FROM device_pending_command "
+                        "WHERE host_id = :host_id AND command_type = 'reclip_evidence'"
+                    ),
+                    {"host_id": runtime_topology.host.id},
+                ).scalar_one()
+            assert (requests, commands) == (0, 0)
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM evidence_evidence WHERE evidence_id = :id"), {"id": evidence_id}
+            )
+            connection.execute(
+                text("DELETE FROM device_pending_command WHERE host_id = :host_id"),
+                {"host_id": runtime_topology.host.id},
+            )
+            connection.execute(text("TRUNCATE auth_user CASCADE"))
+            connection.execute(
+                text("DELETE FROM auth_role WHERE code = :code"), {"code": ROLE_CODE}
+            )
+
+
 def test_reclip_rejects_expired_and_unknown_metadata(
     engine: Engine, runtime_topology: RuntimeTopology
 ) -> None:

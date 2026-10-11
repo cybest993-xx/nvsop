@@ -119,8 +119,8 @@ class EvidenceReclipBody(BaseModel):
 
     request_id: UUID = Field(strict=False)
     generation: str
-    before_seconds: float
-    after_seconds: float
+    before_seconds: float = Field(allow_inf_nan=False)
+    after_seconds: float = Field(allow_inf_nan=False)
 
 
 class EvidenceReclipRecord(BaseModel):
@@ -164,7 +164,10 @@ def read_evidence(
         if host_id not in windows:
             windows[host_id] = gateway.recording_window_seconds(host_id=host_id)
         deadline, available = reclip_availability(
-            row.registration, recording_window_seconds=windows[host_id], now=now
+            row.registration,
+            status=row.status,
+            recording_window_seconds=windows[host_id],
+            now=now,
         )
         result.append(
             asdict(row.registration)

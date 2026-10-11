@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -35,15 +36,18 @@ class EvidenceReclipRefusedError(ValueError):
 def reclip_availability(
     registration: EvidenceRegistration,
     *,
+    status: EvidenceStatus,
     recording_window_seconds: int | None,
     now: float,
 ) -> tuple[float | None, bool]:
-    """按来源机冻结的墙钟映射与当前滚动窗口给出绝对截止时刻及是否仍可再切片。
+    """按来源机冻结的墙钟映射与中心保存的滚动窗口给出理论截止时刻及是否可再切片。
 
-    截止取核心必需跨度的最早时刻老化出滚动录像的时刻；旧登记缺冻结元数据时返回未知，不猜。
+    截止取核心必需跨度的最早时刻老化出滚动录像的时刻；旧登记缺冻结元数据、证据尚未对账
+    或来源机窗口未知时返回不可再切片。窗口值是中心保存的配置，不代表来源机已实际应用。
     """
     if (
-        recording_window_seconds is None
+        status is not EvidenceStatus.AVAILABLE
+        or recording_window_seconds is None
         or registration.wall_offset is None
         or registration.required_from is None
     ):
@@ -72,7 +76,12 @@ def create_reclip_request(
     """
     authorize(caller, Permission.EVIDENCE_VIEW)
     authorize(caller, Permission.EVIDENCE_REVIEW_EDIT)
-    if before_seconds < 0 or after_seconds < 0:
+    if (
+        not math.isfinite(before_seconds)
+        or not math.isfinite(after_seconds)
+        or before_seconds < 0
+        or after_seconds < 0
+    ):
         raise EvidenceReclipRefusedError(422, "reclip_margins_invalid")
     existing = requests.find(request_id)
     if existing is not None:

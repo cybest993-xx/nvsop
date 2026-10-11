@@ -7,6 +7,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 
 import { type OverviewDocument, type OverviewSection, readOverview } from '@/api/controlPlane'
+import { reasonLabel } from '@/reasonCodes'
 import { useSessionStore } from '@/session/store'
 
 const session = useSessionStore()
@@ -116,18 +117,6 @@ function fieldLabel(value: string): string {
 
 function enumLabel(value: string): string {
   return enumLabels[value] ?? value
-}
-
-function reasonText(code: string): string {
-  const known: Record<string, string> = {
-    STREAM_LOST: '视频流中断，无法可靠判定',
-    INFERENCE_TIMEOUT: '推理超时，无法可靠判定',
-    MISSED_STEP: '确认步骤未出现',
-    WRONG_STEP: '出现了错误步骤',
-    OUT_OF_ORDER: '步骤顺序不符',
-    DEADLINE_EXCEEDED: '步骤等待超过时限',
-  }
-  return `${code} — ${known[code] ?? `未知原因码：${code}`}`
 }
 
 function summaryEntries(data: Record<string, unknown>): SummaryEntry[] {
@@ -307,7 +296,7 @@ onUnmounted(() => {
             <span v-if="event.verdict">结论 {{ enumLabel(event.verdict) }}</span>
             <span v-if="event.reasons.length">
               <span v-for="reason in event.reasons" :key="reason" class="overview__reason">
-                {{ reasonText(reason) }}
+                {{ reasonLabel(reason) }}
               </span>
             </span>
             <span v-if="event.templateVersion">模板 {{ event.templateVersion }}</span>

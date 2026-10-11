@@ -5087,6 +5087,41 @@
         "title": "PublishedVersionSummary",
         "type": "object"
       },
+      "ReasonCode": {
+        "enum": [
+          "STREAM_LOST",
+          "INFERENCE_BACKEND_UNREACHABLE",
+          "INFERENCE_TIMEOUT",
+          "TIMESTAMP_DISCONTINUITY",
+          "CHUNK_BACKLOG_EXCEEDED",
+          "ACTION_ID_UNKNOWN",
+          "INFERENCE_HOST_DOWN",
+          "RUN_INTERRUPTED",
+          "IO_SIGNAL_LOST",
+          "IO_TIME_UNALIGNED",
+          "MISSED_STEP",
+          "WRONG_STEP",
+          "OUT_OF_ORDER",
+          "DEADLINE_EXCEEDED"
+        ],
+        "type": "string",
+        "x-hints": {
+          "ACTION_ID_UNKNOWN": "动作编号不在模板中",
+          "CHUNK_BACKLOG_EXCEEDED": "观测积压超限",
+          "DEADLINE_EXCEEDED": "步骤超时",
+          "INFERENCE_BACKEND_UNREACHABLE": "推理后端不可达",
+          "INFERENCE_HOST_DOWN": "推理机失联",
+          "INFERENCE_TIMEOUT": "推理超时",
+          "IO_SIGNAL_LOST": "外部信号不可达",
+          "IO_TIME_UNALIGNED": "外部信号时间未对齐",
+          "MISSED_STEP": "缺少必做步骤",
+          "OUT_OF_ORDER": "步骤顺序错误",
+          "RUN_INTERRUPTED": "运行被中断。配置切换、进程重启、本地暂停或显式终止。",
+          "STREAM_LOST": "观测流中断",
+          "TIMESTAMP_DISCONTINUITY": "时间轴不连续",
+          "WRONG_STEP": "出现了错误步骤"
+        }
+      },
       "RecordingMode": {
         "description": "相机是否只在观看时取流，还是持续录制。",
         "enum": [

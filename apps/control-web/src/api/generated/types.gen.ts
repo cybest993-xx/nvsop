@@ -3117,6 +3117,22 @@ export type PublishedVersionSummary = {
   total: number
 }
 
+export type ReasonCode =
+  | 'STREAM_LOST'
+  | 'INFERENCE_BACKEND_UNREACHABLE'
+  | 'INFERENCE_TIMEOUT'
+  | 'TIMESTAMP_DISCONTINUITY'
+  | 'CHUNK_BACKLOG_EXCEEDED'
+  | 'ACTION_ID_UNKNOWN'
+  | 'INFERENCE_HOST_DOWN'
+  | 'RUN_INTERRUPTED'
+  | 'IO_SIGNAL_LOST'
+  | 'IO_TIME_UNALIGNED'
+  | 'MISSED_STEP'
+  | 'WRONG_STEP'
+  | 'OUT_OF_ORDER'
+  | 'DEADLINE_EXCEEDED'
+
 /**
  * RecordingMode
  *

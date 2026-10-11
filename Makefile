@@ -152,7 +152,7 @@ OPENAPI_BASE_REF ?= origin/main
 contracts: openapi-compat openapi-generate
 
 openapi-export: sync
-	PYTHONPATH="$(CENTER)/src" "$(VENV)/python" scripts/export_openapi.py $(OPENAPI)
+	PYTHONPATH="$(CENTER)/src:$(EDGE)/src" "$(VENV)/python" scripts/export_openapi.py $(OPENAPI)
 
 openapi-compat: openapi-export
 	"$(VENV)/python" scripts/check_openapi_compatibility.py $(OPENAPI_BASE_REF) $(OPENAPI) $(CONTRACT_PY)/breaking-changes.json
@@ -162,6 +162,8 @@ openapi-generate: openapi-export web-install
 	# Start from the one generated directory so a committed SDK cannot retain stale operations.
 	rm -rf $(WEB)/src/api/generated
 	pnpm --filter control-web run generate:api
+	# 在清理与 SDK 生成之后追加派生步骤：原因码提示常量同样由 core 派生。
+	"$(VENV)/python" scripts/generate_reason_codes.py $(OPENAPI) $(WEB)/src/api/generated/reasonCodes.gen.ts
 
 policy-test:
 	command -v git-lfs >/dev/null || (echo "policy-test requires git-lfs; LFS tests must not be skipped" >&2; exit 1)

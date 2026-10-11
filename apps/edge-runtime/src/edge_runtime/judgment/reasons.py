@@ -36,30 +36,46 @@ class ReasonCode(Enum):
     """
 
     verdict: Verdict
+    # 人类提示随成员携带。它是 OpenAPI 元数据与 Web 常量的派生源。
+    hint: str
 
-    def __new__(cls, wire: str, verdict: Verdict) -> ReasonCode:
+    def __new__(cls, wire: str, verdict: Verdict, hint: str) -> ReasonCode:
         member = object.__new__(cls)
         member._value_ = wire
         member.verdict = verdict
+        member.hint = hint
         return member
 
     # Indeterminate: we could not observe reliably, so we do not conclude.
-    STREAM_LOST = ("STREAM_LOST", Verdict.INDETERMINATE)
-    INFERENCE_BACKEND_UNREACHABLE = ("INFERENCE_BACKEND_UNREACHABLE", Verdict.INDETERMINATE)
-    INFERENCE_TIMEOUT = ("INFERENCE_TIMEOUT", Verdict.INDETERMINATE)
-    TIMESTAMP_DISCONTINUITY = ("TIMESTAMP_DISCONTINUITY", Verdict.INDETERMINATE)
-    CHUNK_BACKLOG_EXCEEDED = ("CHUNK_BACKLOG_EXCEEDED", Verdict.INDETERMINATE)
-    ACTION_ID_UNKNOWN = ("ACTION_ID_UNKNOWN", Verdict.INDETERMINATE)
-    INFERENCE_HOST_DOWN = ("INFERENCE_HOST_DOWN", Verdict.INDETERMINATE)
-    RUN_INTERRUPTED = ("RUN_INTERRUPTED", Verdict.INDETERMINATE)
-    IO_SIGNAL_LOST = ("IO_SIGNAL_LOST", Verdict.INDETERMINATE)
-    IO_TIME_UNALIGNED = ("IO_TIME_UNALIGNED", Verdict.INDETERMINATE)
+    STREAM_LOST = ("STREAM_LOST", Verdict.INDETERMINATE, "观测流中断")
+    INFERENCE_BACKEND_UNREACHABLE = (
+        "INFERENCE_BACKEND_UNREACHABLE",
+        Verdict.INDETERMINATE,
+        "推理后端不可达",
+    )
+    INFERENCE_TIMEOUT = ("INFERENCE_TIMEOUT", Verdict.INDETERMINATE, "推理超时")
+    TIMESTAMP_DISCONTINUITY = (
+        "TIMESTAMP_DISCONTINUITY",
+        Verdict.INDETERMINATE,
+        "时间轴不连续",
+    )
+    CHUNK_BACKLOG_EXCEEDED = ("CHUNK_BACKLOG_EXCEEDED", Verdict.INDETERMINATE, "观测积压超限")
+    ACTION_ID_UNKNOWN = ("ACTION_ID_UNKNOWN", Verdict.INDETERMINATE, "动作编号不在模板中")
+    INFERENCE_HOST_DOWN = ("INFERENCE_HOST_DOWN", Verdict.INDETERMINATE, "推理机失联")
+    # 中断的四种成因都算。配置切换、进程重启、本地暂停、显式终止。
+    RUN_INTERRUPTED = (
+        "RUN_INTERRUPTED",
+        Verdict.INDETERMINATE,
+        "运行被中断。配置切换、进程重启、本地暂停或显式终止。",
+    )
+    IO_SIGNAL_LOST = ("IO_SIGNAL_LOST", Verdict.INDETERMINATE, "外部信号不可达")
+    IO_TIME_UNALIGNED = ("IO_TIME_UNALIGNED", Verdict.INDETERMINATE, "外部信号时间未对齐")
 
     # Failing: a confirmed deviation. These four are the violation kinds.
-    MISSED_STEP = ("MISSED_STEP", Verdict.FAIL)
-    WRONG_STEP = ("WRONG_STEP", Verdict.FAIL)
-    OUT_OF_ORDER = ("OUT_OF_ORDER", Verdict.FAIL)
-    DEADLINE_EXCEEDED = ("DEADLINE_EXCEEDED", Verdict.FAIL)
+    MISSED_STEP = ("MISSED_STEP", Verdict.FAIL, "缺少必做步骤")
+    WRONG_STEP = ("WRONG_STEP", Verdict.FAIL, "出现了错误步骤")
+    OUT_OF_ORDER = ("OUT_OF_ORDER", Verdict.FAIL, "步骤顺序错误")
+    DEADLINE_EXCEEDED = ("DEADLINE_EXCEEDED", Verdict.FAIL, "步骤超时")
 
     @classmethod
     def from_wire(cls, wire: str) -> ReasonCode:

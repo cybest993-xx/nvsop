@@ -1690,6 +1690,138 @@ export type EditedUser = {
 }
 
 /**
+ * EvidenceAccessContext
+ */
+export type EvidenceAccessContext = {
+  /**
+   * Context
+   */
+  context: string
+  /**
+   * Expires At
+   */
+  expires_at: number
+  /**
+   * Host Id
+   */
+  host_id: string
+  /**
+   * Origin
+   */
+  origin: string
+}
+
+/**
+ * EvidenceAccessRequest
+ */
+export type EvidenceAccessRequest = {
+  /**
+   * Context
+   */
+  context: string
+  /**
+   * Evidence Id
+   */
+  evidence_id: string
+}
+
+/**
+ * EvidenceKind
+ *
+ * 证据媒体的切片形态：片段或锚点关键帧（§5.20）。
+ */
+export type EvidenceKind = 'clip' | 'keyframe'
+
+/**
+ * EvidenceListing
+ */
+export type EvidenceListing = {
+  /**
+   * Anchor
+   */
+  anchor: number
+  /**
+   * Evidence Id
+   */
+  evidence_id: string
+  /**
+   * Generation
+   */
+  generation: string
+  /**
+   * Host Id
+   */
+  host_id: string
+  /**
+   * Instance Id
+   */
+  instance_id: number
+  /**
+   * Kind
+   */
+  kind: 'clip' | 'keyframe'
+  /**
+   * Origin
+   */
+  origin: 'automatic' | 'reclip'
+  /**
+   * Reference
+   */
+  reference?: string | null
+  /**
+   * Sha256
+   */
+  sha256?: string | null
+  /**
+   * Size
+   */
+  size?: number | null
+  /**
+   * Station Id
+   */
+  station_id: string
+  status: EvidenceStatus
+  /**
+   * Violation Id
+   */
+  violation_id: string | null
+  /**
+   * Window End
+   */
+  window_end: number
+  /**
+   * Window Start
+   */
+  window_start: number
+}
+
+/**
+ * EvidenceMedia
+ */
+export type EvidenceMedia = {
+  kind: EvidenceKind
+  /**
+   * Reference
+   */
+  reference: string
+  /**
+   * Sha256
+   */
+  sha256: string
+  /**
+   * Size
+   */
+  size: number
+}
+
+/**
+ * EvidenceStatus
+ *
+ * 中心引用的登记状态；没有“媒体已上传中心”这一类状态（ADR-0012）。
+ */
+export type EvidenceStatus = 'pending' | 'available' | 'failed'
+
+/**
  * ExportCameraMediaView
  *
  * 推理机本地应用配置；secret 仍由本机只读文件提供。
@@ -6063,6 +6195,76 @@ export type CompleteDeviceCommandResponses = {
 export type CompleteDeviceCommandResponse =
   CompleteDeviceCommandResponses[keyof CompleteDeviceCommandResponses]
 
+export type ReadEvidenceData = {
+  body?: never
+  path?: never
+  query: {
+    /**
+     * Station Id
+     */
+    station_id: string
+    /**
+     * Instance Id
+     */
+    instance_id: number
+  }
+  url: '/api/v1/evidence'
+}
+
+export type ReadEvidenceErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadEvidenceError = ReadEvidenceErrors[keyof ReadEvidenceErrors]
+
+export type ReadEvidenceResponses = {
+  /**
+   * Response Readevidence
+   *
+   * Successful Response
+   */
+  200: Array<EvidenceListing>
+}
+
+export type ReadEvidenceResponse = ReadEvidenceResponses[keyof ReadEvidenceResponses]
+
+export type CheckEvidenceAccessData = {
+  body: EvidenceAccessRequest
+  path?: never
+  query?: never
+  url: '/api/v1/evidence/access-check'
+}
+
+export type CheckEvidenceAccessErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CheckEvidenceAccessError = CheckEvidenceAccessErrors[keyof CheckEvidenceAccessErrors]
+
+export type CheckEvidenceAccessResponses = {
+  /**
+   * Successful Response
+   */
+  200: EvidenceMedia
+}
+
+export type CheckEvidenceAccessResponse =
+  CheckEvidenceAccessResponses[keyof CheckEvidenceAccessResponses]
+
 export type RegisterEvidenceReferenceData = {
   /**
    * Body
@@ -6102,6 +6304,42 @@ export type RegisterEvidenceReferenceResponses = {
 
 export type RegisterEvidenceReferenceResponse =
   RegisterEvidenceReferenceResponses[keyof RegisterEvidenceReferenceResponses]
+
+export type CreateEvidenceAccessContextData = {
+  body?: never
+  path: {
+    /**
+     * Evidence Id
+     */
+    evidence_id: string
+  }
+  query?: never
+  url: '/api/v1/evidence/{evidence_id}/access-context'
+}
+
+export type CreateEvidenceAccessContextErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CreateEvidenceAccessContextError =
+  CreateEvidenceAccessContextErrors[keyof CreateEvidenceAccessContextErrors]
+
+export type CreateEvidenceAccessContextResponses = {
+  /**
+   * Successful Response
+   */
+  200: EvidenceAccessContext
+}
+
+export type CreateEvidenceAccessContextResponse =
+  CreateEvidenceAccessContextResponses[keyof CreateEvidenceAccessContextResponses]
 
 export type CreateHandoverData = {
   body: HandoverCreation

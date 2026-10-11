@@ -187,3 +187,38 @@ def session_recheck(request: Request) -> Callable[[], Caller | None]:
 
 
 SessionRecheck = Annotated[Callable[[], Caller | None], Depends(session_recheck)]
+
+
+def current_session_fingerprint(caller: Authenticated) -> str:
+    """证据票据绑定当前会话的不可登录指纹，不把 Cookie 交给来源机。"""
+    return caller.session.token_fingerprint
+
+
+def fingerprint_recheck(request: Request) -> Callable[[str], Caller | None]:
+    """证据的签名主机回查当前会话与权限；不续期，也不把指纹当登录入口。"""
+    from factory_sop.auth.usecases.sessions import validate_session_fingerprint
+
+    factory = cast(sessionmaker[Session], request.app.state.session_factory)
+    policy = session_policy(request)
+
+    def current_caller(value: str) -> Caller | None:
+        with factory() as session:
+            try:
+                _, user = validate_session_fingerprint(
+                    token_fingerprint=value,
+                    users=PostgresUserRepository(session),
+                    sessions=PostgresSessionRepository(session),
+                    policy=policy,
+                    now=datetime.now(UTC),
+                )
+            except AuthenticationRefusedError:
+                return None
+            return Caller(
+                user=user, granted=PostgresRoleRepository(session).permissions_of(user.id)
+            )
+
+    return current_caller
+
+
+CurrentSessionFingerprint = Annotated[str, Depends(current_session_fingerprint)]
+SessionFingerprintRecheck = Annotated[Callable[[str], Caller | None], Depends(fingerprint_recheck)]

@@ -9,13 +9,15 @@ a deployment that looks healthy while being wrong.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, get_args
 from urllib.parse import urlsplit
+from uuid import UUID
 
-from pydantic import Field, SecretStr, ValidationError, model_validator
+from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 ENVIRONMENT_PREFIX = "SOP_"
@@ -89,8 +91,15 @@ class Settings(BaseSettings):
     annotation_data_root: str | None = None
     annotation_http_timeout_seconds: int = Field(default=120, gt=0, le=3600)
     annotation_context_ttl_seconds: int = Field(default=3600, gt=0, le=86400)
+    # 已登记来源主机 UUID 到直读服务 origin；部署配置，不接受浏览器 URL。
+    evidence_host_origins: dict[str, str] = Field(default_factory=dict)
     # ARQ 默认值保持 1 小时；开发环境通过环境变量缩短为 5 秒，让 worker 健康事实及时过期。
     worker_health_check_interval_seconds: int = Field(default=3600, gt=0, le=86400)
+
+    @field_validator("evidence_host_origins", mode="before")
+    @classmethod
+    def _evidence_origins_from_environment(cls, value: object) -> object:
+        return json.loads(value) if isinstance(value, str) else value
 
     @model_validator(mode="after")
     def _validate_deployment_values(self) -> Settings:
@@ -169,6 +178,24 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "HTTP annotation_media_origin is only valid with allow_http local mode"
                 )
+        for host_id, origin in self.evidence_host_origins.items():
+            if str(UUID(host_id)) != host_id:
+                raise ValueError("evidence origin requires canonical registered host UUID")
+            parsed = urlsplit(origin)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or any(character.isspace() for character in origin)
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.path
+                or parsed.query
+                or parsed.fragment
+                or (parsed.port is not None and not 1 <= parsed.port <= 65535)
+            ):
+                raise ValueError("evidence origin must be one HTTP(S) origin without credentials")
+            if parsed.scheme == "http" and self.session_cookie_transport != "allow_http":
+                raise ValueError("HTTP evidence origin requires fixed_main HTTP deployment")
         return self
 
     @classmethod

@@ -74,7 +74,9 @@ from factory_sop.device.api import summary as device_summary
 from factory_sop.device.errors import DeviceRefusedError
 from factory_sop.device.errors import refusal_problem as device_refusal_problem
 from factory_sop.evidence.adapters import dependencies as evidence_dependencies
+from factory_sop.evidence.adapters.playback_routes import router as evidence_playback_router
 from factory_sop.evidence.adapters.routes import router as evidence_router
+from factory_sop.evidence.playback import EvidenceAccessRefusedError
 from factory_sop.execution.adapters import dependencies as execution_dependencies
 from factory_sop.execution.adapters import routes as execution_routes
 from factory_sop.execution.errors import ExecutionRefusedError
@@ -243,6 +245,7 @@ def create_app(
     app.include_router(job_router, prefix=API_PREFIX)
     app.include_router(monitor_router, prefix=API_PREFIX)
     app.include_router(evidence_router, prefix=API_PREFIX)
+    app.include_router(evidence_playback_router, prefix=API_PREFIX)
     app.include_router(execution_routes.router, prefix=API_PREFIX)
     app.include_router(overview_router, prefix=API_PREFIX)
     # 组合根把跨模块查询和任务依赖接到各自模块的真实适配器。
@@ -262,6 +265,9 @@ def create_app(
     app.dependency_overrides[template_dependencies.host_gateway] = device_dependencies.host_gateway
     app.dependency_overrides[monitor_dependencies.host_gateway] = device_dependencies.host_gateway
     app.dependency_overrides[evidence_dependencies.host_gateway] = device_dependencies.host_gateway
+    app.dependency_overrides[evidence_dependencies.registered_hosts] = (
+        device_dependencies.monitor_gateway
+    )
     app.dependency_overrides[monitor_dependencies.device_monitor_gateway] = (
         device_dependencies.monitor_gateway
     )
@@ -279,6 +285,17 @@ def create_app(
         job_dependencies.annotation_jobs
     )
     app.dependency_overrides[dataset_dependencies.usage_jobs] = job_dependencies.usage_jobs
+
+    @app.exception_handler(EvidenceAccessRefusedError)
+    async def evidence_access_refused(
+        request: Request, error: EvidenceAccessRefusedError
+    ) -> Response:
+        return Response(
+            json.dumps({"detail": error.code}),
+            status_code=error.status,
+            media_type="application/json",
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.exception_handler(AuthenticationRefusedError)
     async def refused(request: Request, error: AuthenticationRefusedError) -> Response:

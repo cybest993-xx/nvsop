@@ -25,6 +25,8 @@ directly, so the one permitted cross-owner import target stays `auth.api`.
 
 from factory_sop.auth.adapters.dependencies import (
     Authorized,
+    CurrentSessionFingerprint,
+    SessionFingerprintRecheck,
     SessionRecheck,
     handover_authority,
     needs,
@@ -45,8 +47,10 @@ __all__ = [
     "Authorized",
     "Caller",
     "CurrentCallerResolver",
+    "CurrentSessionFingerprint",
     "HandoverAuthority",
     "Permission",
+    "SessionFingerprintRecheck",
     "SessionRecheck",
     "authorize",
     "handover_authority",

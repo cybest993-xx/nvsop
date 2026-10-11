@@ -42,6 +42,14 @@ uvicorn --factory factory_sop.entrypoint:build
 
 开发 Compose 中的完整当前变量集合见 [`../../deploy/dev/compose.yaml`](../../deploy/dev/compose.yaml)，不要把其中的开发值复制成生产默认值。
 
+### 证据访问授权
+
+`SOP_EVIDENCE_HOST_ORIGINS` 是中心部署配置的 JSON 对象：键为已登记来源推理机的规范 UUID，值为浏览器可达的证据服务 HTTP(S) origin（不得含路径、凭据、查询或片段）。缺省为空；缺少该主机映射时签发返回 `source_host_unconfigured`，不能从浏览器参数、主机地址或猜测端口补齐。HTTP 只可用于 `fixed_main` + `allow_http` 本地部署。
+
+用户须有 `evidence.evidence.view` 权限。中心只签发绑定具体证据 ID、来源主机、会话指纹和短有效期的上下文，不返回媒体字节；来源主机每次读取均通过签名 `POST /api/v1/evidence/access-check` 复核当前会话与权限。登出、会话过期和撤权使旧上下文无法继续读取，上下文不延长会话。
+
+业务网关仅将 `/api/v1/evidence/registrations` 与 `/api/v1/evidence/access-check` 两条精确路径交给主机签名认证，清除 Cookie/Authorization/CSRF 而保留签名头；列表与签发仍走浏览器会话认证。中心不挂载、保存或代理证据目录。Edge 读取服务和 Web 播放入口另由各自部署步骤提供，只有授权协议不代表浏览器已可播放。
+
 ## Web 开发代理
 
 Vite 开发服务器把 `/api` 代理到：

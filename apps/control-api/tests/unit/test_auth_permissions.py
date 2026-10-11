@@ -47,6 +47,7 @@ def test_a_permission_names_the_module_that_owns_the_resource() -> None:
         "monitor",
         "retention",
         "execution",
+        "evidence",
     }
     for permission in Permission:
         assert permission.value.split(".")[0] in registered_modules, permission

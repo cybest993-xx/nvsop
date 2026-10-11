@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from typing import Any
 
 REQUIRED_CHECK = "CI required"
-LANDING_GATE = "Landing gate"
 DISPATCH_AUTHORITY_FILES = {
     ".github/ISSUE_TEMPLATE/task.yml",
     "docs/design/solution-and-roadmap.md",
@@ -202,10 +201,8 @@ def evaluate(
     local_branch: str,
     local_head: str,
     changed_files: list[str] | tuple[str, ...] | None = (),
-    landing_enforcement: str = "unknown",
 ) -> Readiness:
     ci = required_check_state(pr.get("statusCheckRollup"))
-    gate = required_check_state(pr.get("statusCheckRollup"), LANDING_GATE)
     state = str(pr.get("state") or "unknown").lower()
     base = str(pr.get("baseRefName") or "")
     head_branch = str(pr.get("headRefName") or "")
@@ -224,11 +221,8 @@ def evaluate(
         blockers.append(f"base={base or 'missing'}")
     if ci != "success":
         blockers.append(f"{REQUIRED_CHECK}={ci}")
-    # 精确头 Landing gate 缺失或未成功即不可就绪；服务器是否强制由 landing_gate_enforcement 可见。
-    if gate != "success":
-        blockers.append(f"{LANDING_GATE}={gate}")
-    if landing_enforcement != "required":
-        blockers.append(f"landing_gate_enforcement={landing_enforcement}")
+    if review == "changes_requested":
+        blockers.append(f"github_review_decision={review}")
     if protection != "protected":
         blockers.append(f"branch_protection={protection}")
     if local != "matches":
@@ -282,8 +276,6 @@ def evaluate(
         f"base={base or 'missing'}",
         f"head={head_branch}@{head_sha or 'missing'}",
         f"ci_required={ci}",
-        f"landing_gate={gate}",
-        f"landing_gate_enforcement={landing_enforcement}",
         f"branch_protection={protection}",
         f"merge_guard={merge_guard}",
         f"local_candidate={local}",
@@ -302,94 +294,46 @@ def evaluate(
 
 
 def protection_state(repository: str, branch: str) -> str:
-    result = run("gh", "api", f"repos/{repository}/branches/{branch}/protection")
-    if result.returncode == 0:
-        return "protected"
-
-    message = result.stderr.lower()
-    plan_capability_error = (
-        "upgrade to github pro or make this repository public to enable this feature"
-    )
-    if plan_capability_error in message and "http 403" in message:
-        return "unsupported"
-    if "404" not in message and "not found" not in message:
-        return "unknown"
-
-    rules = run("gh", "api", f"repos/{repository}/rules/branches/{branch}")
-    if rules.returncode != 0:
-        rules_message = rules.stderr.lower()
-        if plan_capability_error in rules_message and "http 403" in rules_message:
-            return "unsupported"
-        if "404" in rules_message or "not found" in rules_message:
-            return "absent"
-        return "unknown"
-
-    try:
-        payload = json.loads(rules.stdout)
-    except json.JSONDecodeError:
-        return "unknown"
-    if not isinstance(payload, list):
-        return "unknown"
-
-    pull_request_rule = next(
-        (rule for rule in payload if isinstance(rule, dict) and rule.get("type") == "pull_request"),
-        None,
-    )
-    required_status_rules = [
-        rule
-        for rule in payload
-        if isinstance(rule, dict) and rule.get("type") == "required_status_checks"
-    ]
-    if not isinstance(pull_request_rule, dict) or not required_status_rules:
-        return "absent"
-
-    for required_status_rule in required_status_rules:
-        parameters = required_status_rule.get("parameters")
-        if not isinstance(parameters, dict):
-            continue
-        if not parameters.get("strict_required_status_checks_policy"):
-            continue
-        checks = parameters.get("required_status_checks")
-        if not isinstance(checks, list):
-            continue
-        if any(
-            isinstance(check, dict) and check.get("context") == REQUIRED_CHECK for check in checks
-        ):
-            return "protected"
-    return "absent"
-
-
-def landing_gate_enforcement(repository: str, branch: str) -> str:
-    """只读检查服务器 ruleset 是否把 CI required 与 Landing gate 都作为严格必需检查。"""
+    """只读核对现行 ruleset；旧 App 门禁尚未切换时不能报告普通 PR 已就绪。"""
     result = run("gh", "api", f"repos/{repository}/rules/branches/{branch}")
     if result.returncode != 0:
-        return "unknown"
+        message = result.stderr.lower()
+        capability_error = (
+            "upgrade to github pro or make this repository public to enable this feature"
+        )
+        if capability_error in message and "http 403" in message:
+            return "unsupported"
+        return "absent" if "http 404" in message else "unknown"
     try:
-        payload = json.loads(result.stdout)
+        rules = json.loads(result.stdout)
     except json.JSONDecodeError:
         return "unknown"
-    if not isinstance(payload, list):
+    if not isinstance(rules, list) or not all(isinstance(rule, dict) for rule in rules):
         return "unknown"
-    required_contexts: set[str] = set()
-    for rule in payload:
-        if not isinstance(rule, dict) or rule.get("type") != "required_status_checks":
+    strict_contexts: set[str] = set()
+    contexts: set[str] = set()
+    for rule in rules:
+        if rule.get("type") != "required_status_checks":
             continue
         parameters = rule.get("parameters")
         if not isinstance(parameters, dict):
-            continue
-        if not parameters.get("strict_required_status_checks_policy"):
-            continue
+            return "unknown"
         checks = parameters.get("required_status_checks")
-        if isinstance(checks, list):
-            required_contexts.update(
-                check["context"]
-                for check in checks
-                if isinstance(check, dict) and isinstance(check.get("context"), str)
-            )
-    # 经典 API 的宽松可见性不能单独证明 CI 强制；两个上下文都出现在严格必需检查里才算已强制。
-    if {REQUIRED_CHECK, LANDING_GATE} <= required_contexts:
-        return "required"
-    return "missing"
+        if not isinstance(checks, list) or not all(
+            isinstance(check, dict) and isinstance(check.get("context"), str) for check in checks
+        ):
+            return "unknown"
+        names = {check["context"] for check in checks}
+        contexts.update(names)
+        if parameters.get("strict_required_status_checks_policy") is True:
+            strict_contexts.update(names)
+    if "Landing gate" in contexts:
+        return "migration-required"
+    if REQUIRED_CHECK in strict_contexts and any(
+        rule.get("type") == "pull_request" for rule in rules
+    ):
+        return "protected"
+    return "absent"
 
 
 def local_identity() -> tuple[str, str]:
@@ -461,7 +405,6 @@ def main(argv: list[str]) -> int:
         local_branch,
         local_head,
         pr_files(repository, argv[1]),
-        landing_enforcement=landing_gate_enforcement(repository, base_branch),
     )
     print("\n".join(result.lines))
     return 0 if result.ready else 1

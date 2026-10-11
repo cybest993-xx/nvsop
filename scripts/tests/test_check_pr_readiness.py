@@ -8,7 +8,6 @@ from scripts.check_pr_readiness import (
     architecture_review_evidence,
     body_field,
     evaluate,
-    landing_gate_enforcement,
     pr_files,
     protection_state,
     requires_architecture_review,
@@ -26,25 +25,19 @@ class PrReadinessTest(unittest.TestCase):
                 "headRefName": "agent/test/task",
                 "headRefOid": "abc",
                 "reviewDecision": "APPROVED",
-                "statusCheckRollup": [
-                    {"name": "CI required", "conclusion": "SUCCESS"},
-                    {"name": "Landing gate", "conclusion": "SUCCESS"},
-                ],
+                "statusCheckRollup": [{"name": "CI required", "conclusion": "SUCCESS"}],
             },
             "protected",
             "agent/test/task",
             "abc",
-            landing_enforcement="required",
         )
         self.assertTrue(result.ready)
         self.assertIn("independent_review=manual-confirmation-required", result.lines)
-        self.assertIn("landing_gate=success", result.lines)
-        self.assertIn("landing_gate_enforcement=required", result.lines)
         self.assertIn("automated_readiness=ready", result.lines)
         self.assertIn("merge_guard=server-protected", result.lines)
 
     def test_unsupported_branch_protection_is_not_ready(self) -> None:
-        # 不可读/不支持的 protection 无法证明服务器强制双上下文，绝不能作为落地路径就绪。
+        # 不可读/不支持的 ruleset 无法证明 PR 与必需 CI，不能报告机器检查已就绪。
         result = evaluate(
             {
                 "state": "OPEN",
@@ -59,7 +52,6 @@ class PrReadinessTest(unittest.TestCase):
             "unsupported",
             "agent/test/task",
             "abc",
-            landing_enforcement="required",
         )
         self.assertFalse(result.ready)
         self.assertIn("branch_protection=unsupported", result.lines)
@@ -102,54 +94,58 @@ class PrReadinessTest(unittest.TestCase):
 
     @patch("scripts.check_pr_readiness.run")
     def test_protection_state_accepts_ruleset_with_strict_ci_required(self, run_mock: Mock) -> None:
-        run_mock.side_effect = [
-            subprocess.CompletedProcess(
-                args=[], returncode=1, stdout="", stderr="gh: Branch not protected (HTTP 404)"
+        run_mock.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                '[{"type":"pull_request"},'
+                '{"type":"required_status_checks","parameters":{'
+                '"strict_required_status_checks_policy":true,'
+                '"required_status_checks":[{"context":"Another check"}]}},'
+                '{"type":"required_status_checks","parameters":{'
+                '"strict_required_status_checks_policy":true,'
+                '"required_status_checks":[{"context":"CI required"}]}}]'
             ),
-            subprocess.CompletedProcess(
-                args=[],
-                returncode=0,
-                stdout=(
-                    '[{"type":"pull_request"},'
-                    '{"type":"required_status_checks","parameters":{'
-                    '"strict_required_status_checks_policy":true,'
-                    '"required_status_checks":[{"context":"Another check"}]}},'
-                    '{"type":"required_status_checks","parameters":{'
-                    '"strict_required_status_checks_policy":true,'
-                    '"required_status_checks":[{"context":"CI required"}]}}]'
-                ),
-                stderr="",
-            ),
-        ]
-
-        self.assertEqual(protection_state("owner/repo", "main"), "protected")
-        self.assertEqual(
-            run_mock.call_args_list[1].args,
-            ("gh", "api", "repos/owner/repo/rules/branches/main"),
+            stderr="",
         )
+        self.assertEqual(protection_state("owner/repo", "main"), "protected")
+        run_mock.assert_called_once_with("gh", "api", "repos/owner/repo/rules/branches/main")
 
     @patch("scripts.check_pr_readiness.run")
     def test_ruleset_without_strict_ci_required_is_not_reported_as_protected(
         self, run_mock: Mock
     ) -> None:
-        run_mock.side_effect = [
-            subprocess.CompletedProcess(
-                args=[], returncode=1, stdout="", stderr="gh: Branch not protected (HTTP 404)"
+        run_mock.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                '[{"type":"pull_request"},'
+                '{"type":"required_status_checks","parameters":{'
+                '"strict_required_status_checks_policy":false,'
+                '"required_status_checks":[{"context":"CI required"}]}}]'
             ),
-            subprocess.CompletedProcess(
-                args=[],
-                returncode=0,
-                stdout=(
-                    '[{"type":"pull_request"},'
-                    '{"type":"required_status_checks","parameters":{'
-                    '"strict_required_status_checks_policy":false,'
-                    '"required_status_checks":[{"context":"CI required"}]}}]'
-                ),
-                stderr="",
-            ),
-        ]
+            stderr="",
+        )
 
         self.assertEqual(protection_state("owner/repo", "main"), "absent")
+
+    def test_changes_requested_blocks_machine_readiness(self) -> None:
+        result = evaluate(
+            {
+                "state": "OPEN",
+                "baseRefName": "main",
+                "headRefName": "agent/test/task",
+                "headRefOid": "abc",
+                "reviewDecision": "CHANGES_REQUESTED",
+                "statusCheckRollup": [{"name": "CI required", "conclusion": "SUCCESS"}],
+            },
+            "protected",
+            "agent/test/task",
+            "abc",
+        )
+        self.assertFalse(result.ready)
+        self.assertIn("github_review_decision=changes_requested", result.lines)
+        self.assertIn("blockers=github_review_decision=changes_requested", result.lines)
 
     def test_different_local_branch_cannot_be_reported_as_automatically_ready(self) -> None:
         result = evaluate(
@@ -190,7 +186,6 @@ class PrReadinessTest(unittest.TestCase):
             "agent/test/task",
             "abc",
             ["docs/engineering/issues.md"],
-            landing_enforcement="required",
         )
         self.assertFalse(missing.ready)
         self.assertIn("dispatch_impact_review=required", missing.lines)
@@ -207,7 +202,6 @@ class PrReadinessTest(unittest.TestCase):
             "agent/test/task",
             "abc",
             ["docs/engineering/issues.md"],
-            landing_enforcement="required",
         )
         self.assertTrue(reviewed.ready)
         self.assertIn("dispatch_impact_evidence=present", reviewed.lines)
@@ -225,9 +219,7 @@ class PrReadinessTest(unittest.TestCase):
             "body": ("Architecture review: `not-required`\nArchitecture authority checked: `N/A`"),
         }
         changed = ["apps/control-api/src/factory_sop/synthetic_owner/api.py"]
-        missing = evaluate(
-            pr, "protected", "agent/test/task", "abc", changed, landing_enforcement="required"
-        )
+        missing = evaluate(pr, "protected", "agent/test/task", "abc", changed)
         self.assertFalse(missing.ready)
         self.assertIn("architecture_review=required", missing.lines)
         self.assertIn("architecture_review_evidence=missing", missing.lines)
@@ -236,9 +228,7 @@ class PrReadinessTest(unittest.TestCase):
             "Architecture review: `reviewed`\n"
             "Architecture authority checked: `docs/engineering/architecture.md`"
         )
-        reviewed = evaluate(
-            pr, "protected", "agent/test/task", "abc", changed, landing_enforcement="required"
-        )
+        reviewed = evaluate(pr, "protected", "agent/test/task", "abc", changed)
         self.assertTrue(reviewed.ready)
         self.assertIn("architecture_review_evidence=present", reviewed.lines)
 
@@ -379,7 +369,6 @@ class PrReadinessTest(unittest.TestCase):
             "agent/test/task",
             "abc",
             ["Makefile"],
-            landing_enforcement="required",
         )
         self.assertTrue(result.ready)
         self.assertIn("harness_review=required", result.lines)
@@ -456,27 +445,22 @@ class PrReadinessTest(unittest.TestCase):
         self.assertIn("branch_protection=unknown", result.lines)
         self.assertIn("automated_readiness=blocked", result.lines)
 
-    def test_unsupported_protection_without_observable_landing_gate_is_not_ready(self) -> None:
-        result = evaluate(
-            {
-                "state": "OPEN",
-                "baseRefName": "main",
-                "headRefName": "agent/test/task",
-                "headRefOid": "abc",
-                "statusCheckRollup": [
-                    {"name": "CI required", "conclusion": "SUCCESS"},
-                    {"name": "Landing gate", "conclusion": "SUCCESS"},
-                ],
-            },
-            "unsupported",
-            "agent/test/task",
-            "abc",
+    @patch("scripts.check_pr_readiness.run")
+    def test_previous_landing_ruleset_blocks_normal_pr_readiness(self, run_mock: Mock) -> None:
+        run_mock.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                '[{"type":"pull_request"},'
+                '{"type":"required_status_checks","parameters":{'
+                '"strict_required_status_checks_policy":true,'
+                '"required_status_checks":[{"context":"CI required"},'
+                '{"context":"Landing gate"}]}}]'
+            ),
+            stderr="",
         )
-        self.assertFalse(result.ready)
-        self.assertIn("landing_gate_enforcement=unknown", result.lines)
-        self.assertIn("automated_readiness=blocked", result.lines)
-
-    def test_missing_exact_head_landing_gate_blocks_readiness(self) -> None:
+        protection = protection_state("owner/repo", "main")
+        self.assertEqual("migration-required", protection)
         result = evaluate(
             {
                 "state": "OPEN",
@@ -485,108 +469,31 @@ class PrReadinessTest(unittest.TestCase):
                 "headRefOid": "abc",
                 "statusCheckRollup": [{"name": "CI required", "conclusion": "SUCCESS"}],
             },
-            "protected",
+            protection,
             "agent/test/task",
             "abc",
-            landing_enforcement="required",
         )
         self.assertFalse(result.ready)
-        self.assertIn("landing_gate=missing", result.lines)
-        self.assertIn("automated_readiness=blocked", result.lines)
-
-    def test_missing_server_landing_gate_enforcement_blocks_readiness(self) -> None:
-        result = evaluate(
-            {
-                "state": "OPEN",
-                "baseRefName": "main",
-                "headRefName": "agent/test/task",
-                "headRefOid": "abc",
-                "statusCheckRollup": [
-                    {"name": "CI required", "conclusion": "SUCCESS"},
-                    {"name": "Landing gate", "conclusion": "SUCCESS"},
-                ],
-            },
-            "protected",
-            "agent/test/task",
-            "abc",
-            landing_enforcement="missing",
-        )
-        self.assertFalse(result.ready)
-        self.assertIn("landing_gate_enforcement=missing", result.lines)
+        self.assertIn("branch_protection=migration-required", result.lines)
 
     @patch("scripts.check_pr_readiness.run")
-    def test_landing_gate_enforcement_reads_strict_required_ruleset(self, run_mock: Mock) -> None:
-        run_mock.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout=(
-                '[{"type":"required_status_checks","parameters":{'
-                '"strict_required_status_checks_policy":true,'
-                '"required_status_checks":[{"context":"CI required"},'
-                '{"context":"Landing gate"}]}}]'
-            ),
-            stderr="",
-        )
-        self.assertEqual(landing_gate_enforcement("owner/repo", "main"), "required")
-        self.assertEqual(
-            run_mock.call_args.args, ("gh", "api", "repos/owner/repo/rules/branches/main")
-        )
-
-    @patch("scripts.check_pr_readiness.run")
-    def test_landing_gate_enforcement_requires_both_strict_contexts(self, run_mock: Mock) -> None:
-        # 经典 API 的宽松可见性不能单独证明 CI 强制；缺任一上下文或非 strict 都不算已强制。
-        cases = {
-            "ci-only": (
-                '[{"type":"required_status_checks","parameters":{'
-                '"strict_required_status_checks_policy":true,'
-                '"required_status_checks":[{"context":"CI required"}]}}]'
-            ),
-            "gate-only": (
-                '[{"type":"required_status_checks","parameters":{'
-                '"strict_required_status_checks_policy":true,'
-                '"required_status_checks":[{"context":"Landing gate"}]}}]'
-            ),
-            "not-strict": (
-                '[{"type":"required_status_checks","parameters":{'
-                '"strict_required_status_checks_policy":false,'
-                '"required_status_checks":[{"context":"CI required"},'
-                '{"context":"Landing gate"}]}}]'
-            ),
-        }
-        for label, payload in cases.items():
-            with self.subTest(case=label):
-                run_mock.return_value = subprocess.CompletedProcess(
-                    args=[], returncode=0, stdout=payload, stderr=""
-                )
-                self.assertEqual(landing_gate_enforcement("owner/repo", "main"), "missing")
-
-    @patch("scripts.check_pr_readiness.run")
-    def test_landing_gate_enforcement_unions_strict_contexts_across_rules(
-        self, run_mock: Mock
-    ) -> None:
-        run_mock.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout=(
-                '[{"type":"required_status_checks","parameters":{'
-                '"strict_required_status_checks_policy":true,'
-                '"required_status_checks":[{"context":"CI required"}]}},'
-                '{"type":"required_status_checks","parameters":{'
-                '"strict_required_status_checks_policy":true,'
-                '"required_status_checks":[{"context":"Landing gate"}]}}]'
-            ),
-            stderr="",
-        )
-        self.assertEqual(landing_gate_enforcement("owner/repo", "main"), "required")
-
-    @patch("scripts.check_pr_readiness.run")
-    def test_landing_gate_enforcement_fails_closed_on_unreadable_ruleset(
-        self, run_mock: Mock
-    ) -> None:
+    def test_unreadable_or_malformed_ruleset_is_unknown(self, run_mock: Mock) -> None:
         run_mock.return_value = subprocess.CompletedProcess(
             args=[], returncode=1, stdout="", stderr="gh: error (HTTP 500)"
         )
-        self.assertEqual(landing_gate_enforcement("owner/repo", "main"), "unknown")
+        self.assertEqual("unknown", protection_state("owner/repo", "main"))
+        for payload in (
+            "not-json",
+            "{}",
+            '[{"type":"pull_request"},null]',
+            '[{"type":"required_status_checks","parameters":null}]',
+            '[{"type":"required_status_checks","parameters":{"required_status_checks":null}}]',
+        ):
+            with self.subTest(payload=payload):
+                run_mock.return_value = subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout=payload, stderr=""
+                )
+                self.assertEqual("unknown", protection_state("owner/repo", "main"))
 
 
 if __name__ == "__main__":

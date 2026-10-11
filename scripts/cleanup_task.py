@@ -13,12 +13,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from bind_task_session import (
-    BINDING_RELATIVE_PATH,
-    BindingError,
-    canonical_worktree,
-    load_binding,
-)
+# 只识别已有旧任务的绑定以安全收尾；新任务不再创建绑定或恢复会话。
+BINDING_RELATIVE_PATH = Path(".nvsop/session-binding.json")
 
 FULL_OBJECT_ID = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 
@@ -150,7 +146,7 @@ def current_worktree() -> str:
 
 def check_ignored_binding(worktree_path: str, branch: str) -> None:
     """只允许唯一一个与本任务精确匹配的忽略状态：会话绑定文件。"""
-    root = canonical_worktree(worktree_path)
+    root = canonical_path(worktree_path)
     nvsop = Path(root) / BINDING_RELATIVE_PATH.parent
     if not nvsop.exists() and not nvsop.is_symlink():
         return
@@ -167,9 +163,33 @@ def check_ignored_binding(worktree_path: str, branch: str) -> None:
     if binding_file.is_symlink() or not binding_file.is_file():
         raise CleanupTaskError("session binding must be a regular file")
     try:
-        binding = load_binding(binding_file)
-    except BindingError as exc:
+        raw = binding_file.read_bytes()
+        if len(raw) > 4096:
+            raise CleanupTaskError("session binding is unreasonably large")
+        binding = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise CleanupTaskError(f"invalid session binding: {exc}") from exc
+    if not isinstance(binding, dict) or set(binding) != {
+        "version",
+        "session_id",
+        "branch",
+        "worktree",
+    }:
+        raise CleanupTaskError("invalid session binding keys")
+    if type(binding["version"]) is not int or binding["version"] != 1:
+        raise CleanupTaskError("invalid session binding version")
+    session = binding["session_id"]
+    if (
+        not isinstance(session, str)
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}", session) is None
+    ):
+        raise CleanupTaskError("invalid session binding id")
+    bound_branch = binding["branch"]
+    if (
+        not isinstance(bound_branch, str)
+        or re.fullmatch(r"agent/[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*", bound_branch) is None
+    ):
+        raise CleanupTaskError("invalid session binding branch")
     if binding["branch"] != branch:
         raise CleanupTaskError("session binding branch does not match the task branch")
     if binding["worktree"] != root:
@@ -218,7 +238,7 @@ def check_task_worktree(
 
 def release_binding(worktree_path: str) -> None:
     """只在已验证的清理中释放绑定；先删文件，再删空的 .nvsop 目录。"""
-    nvsop = Path(canonical_worktree(worktree_path)) / BINDING_RELATIVE_PATH.parent
+    nvsop = Path(canonical_path(worktree_path)) / BINDING_RELATIVE_PATH.parent
     if nvsop.is_symlink() or not nvsop.is_dir():
         return
     binding_file = nvsop / BINDING_RELATIVE_PATH.name
@@ -306,40 +326,6 @@ def verify_local_target(branch: str) -> CleanupTarget:
     return CleanupTarget(task_ref, task_tip, task_worktree, has_local_branch_config(branch))
 
 
-def verify_merged_candidate(
-    pr: int,
-    candidate: str,
-    target: CleanupTarget,
-    accepted_main: str,
-) -> None:
-    if target.task_tip == candidate:
-        return
-
-    git("fetch", "--no-tags", "origin", f"pull/{pr}/head")
-    fetched_head = parse_object_id(
-        output_text(git("rev-parse", "--verify", "FETCH_HEAD^{commit}").rstrip()).strip(),
-        "fetched pull-request head",
-    )
-    if fetched_head != candidate:
-        raise CleanupTaskError("fetched pull-request head does not match --candidate")
-
-    parents = output_text(git("show", "-s", "--format=%P", candidate).rstrip()).strip().split()
-    if len(parents) != 2:
-        raise CleanupTaskError("refreshed landing head must have exactly two parents")
-    if parents[0] != target.task_tip:
-        raise CleanupTaskError(
-            "refreshed landing head first parent does not match the local task tip"
-        )
-    arguments = ["git", "merge-base", "--is-ancestor", parents[1], accepted_main]
-    retained = run_raw(arguments)
-    if retained.returncode == 1:
-        raise CleanupTaskError(
-            "refreshed landing head second parent is not retained by origin/main"
-        )
-    if retained.returncode != 0:
-        raise command_error(arguments, retained)
-
-
 def sync_primary_main(accepted_main: str) -> None:
     primary = read_worktrees()[0]
     primary_path = canonical_path(primary.path)
@@ -372,6 +358,8 @@ def remove_local_target(target: CleanupTarget) -> None:
 def cleanup_task(pr: int, branch: str, candidate: str) -> None:
     candidate = parse_object_id(candidate, "--candidate")
     target = verify_local_target(branch)
+    if target.task_tip != candidate:
+        raise CleanupTaskError("local branch tip does not match --candidate")
     merge_commit = verify_pull_request(pull_request(pr), branch, candidate)
     git("fetch", "origin", "main")
     accepted_main = parse_object_id(
@@ -379,7 +367,6 @@ def cleanup_task(pr: int, branch: str, candidate: str) -> None:
         "origin/main",
     )
     git("merge-base", "--is-ancestor", merge_commit, accepted_main)
-    verify_merged_candidate(pr, candidate, target, accepted_main)
 
     sync_primary_main(accepted_main)
     remove_local_target(target)

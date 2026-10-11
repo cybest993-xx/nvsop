@@ -1,23 +1,10 @@
 #!/usr/bin/env python3
-"""Git pre-commit hook: the rules every agent and developer must hit before a commit lands.
+"""轻量提交门禁，由 make hooks 为人员和代理统一启用。
 
-Enabled by `make hooks` (`git config core.hooksPath scripts/githooks`), so it holds for any
-tool that commits through git — Claude Code, Codex, pi, or a person — with no per-agent
-configuration. Standard library only: it must run before `make sync` has ever been run.
-
-Three refusals, each carrying the rule it enforces:
-
-- no direct commit on `main` or legacy `dev`: task work stays on `agent/...`, is pushed as that
-  branch, and reaches `main` only through a pull request; the reference-transaction hook is the
-  final guard for local ref updates;
-- no staged change under `vendor/`: the NVIDIA base changes only through `git subtree pull`
-  (which merges and does not pass here) or the recorded patch (ADR-0007) — set
-  `NVSOP_VENDOR_PATCH=1` to commit a patch change deliberately;
-- no unformatted Python: the engineering workflow requires committed Python to pass the
-  repository formatter; the hook checks the bytes in Git's index, not unrelated worktree edits.
-
-The full gate stays `make check`; this is the subset that is cheap enough to run on every
-commit and whose violation is expensive to unwind afterwards.
+拒绝 trunk 直接提交、vendor 误改与未格式化的暂存 Python；只读 Git index，
+不检查无关工作区修改。基座变更走 subtree 或 ADR-0007 登记补丁，补丁提交需显式
+NVSOP_VENDOR_PATCH=1。使用标准库，格式检查调用当前 worktree 的冻结 Ruff。
+完整验证仍由 make check/CI 执行，不在 hook 中重复运行。
 """
 
 from __future__ import annotations

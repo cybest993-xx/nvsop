@@ -65,6 +65,20 @@ class ReasonCodeClassificationTest(unittest.TestCase):
         for code in ReasonCode:
             self.assertEqual(code.name, code.value)
 
+    def test_every_code_carries_a_non_empty_human_hint(self) -> None:
+        # hint 是 OpenAPI 元数据与 Web 常量的唯一来源。缺提示的码会从两者中静默消失。
+        for code in ReasonCode:
+            self.assertTrue(
+                isinstance(code.hint, str) and code.hint.strip(),
+                f"{code.value} must carry a non-empty hint",
+            )
+
+    def test_from_wire_resolves_known_codes_and_rejects_unknown_ones(self) -> None:
+        # 跨进程 wire 边界不得用 from_wire。它把未知码渲染为原始码而不是抛错。
+        self.assertIs(ReasonCode.STREAM_LOST, ReasonCode.from_wire("STREAM_LOST"))
+        with self.assertRaises(KeyError):
+            ReasonCode.from_wire("FUTURE_REASON")
+
 
 if __name__ == "__main__":
     unittest.main()

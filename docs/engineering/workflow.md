@@ -97,7 +97,7 @@ The server rules must require PRs, successful strict/latest-base `CI required` b
 
 ## 5. Merge and complete the authorized task
 
-Immediately re-read PR state, current head/base, required checks and review/conversation state. Stop on changed/unverified facts. For an authorized, current candidate use native `gh pr merge <number> --squash --match-head-commit <sha>` without `--admin`. `gh pr checks <number> --required` is a read-only check, not authorization. An explicitly authorized native base update may use `gh pr update-branch <number> --expected-head-commit <sha>`; its successor needs fresh affected evidence and exact-head CI.
+Immediately re-read PR state, current head/base, required checks and review/conversation state. Stop on changed/unverified facts. For an authorized, current candidate use native `gh pr merge <number> --squash --match-head-commit <sha>` without `--admin`. `gh pr checks <number> --required` is a read-only check, not authorization. An explicitly authorized base update uses the [native REST endpoint](https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request-branch) via `gh api --method PUT repos/{owner}/{repo}/pulls/<number>/update-branch -f expected_head_sha=<sha>`; a head mismatch is rejected. Its successor needs fresh affected evidence and exact-head CI.
 
 ### 5.1 Confirm the exact squash merge
 

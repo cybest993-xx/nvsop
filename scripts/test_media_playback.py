@@ -83,14 +83,9 @@ def main(argv: list[str] | None = None) -> int:
         print("test_media_playback: provide a test command after --", file=sys.stderr)
         return 2
 
-    compose = [
-        "docker",
-        "compose",
-        "-p",
-        f"nvsop-media-test-{os.getpid()}",
-        "-f",
-        "deploy/media/compose.yaml",
-    ]
+    project = f"nvsop-media-test-{os.getpid()}"
+    compose_file = os.path.abspath("deploy/media/compose.yaml")
+    compose = ["docker", "compose", "-p", project, "-f", compose_file]
     compose_environment = os.environ.copy()
     compose_environment.update(
         {
@@ -98,8 +93,11 @@ def main(argv: list[str] | None = None) -> int:
             "NVSOP_MEDIA_WEBRTC_HOST_PORT": str(free_port(socket.SOCK_STREAM)),
             "NVSOP_MEDIA_ICE_HOST_PORT": str(free_port(socket.SOCK_DGRAM)),
             "NVSOP_MEDIA_PLAYBACK_HOST_PORT": str(free_port(socket.SOCK_STREAM)),
+            "NVSOP_MEDIA_API_HOST_PORT": str(free_port(socket.SOCK_STREAM)),
         }
     )
+    rtsp = f"rtsp://127.0.0.1:{compose_environment['NVSOP_MEDIA_RTSP_HOST_PORT']}"
+    admin = f"http://127.0.0.1:{compose_environment['NVSOP_MEDIA_API_HOST_PORT']}"
     playback = f"http://127.0.0.1:{compose_environment['NVSOP_MEDIA_PLAYBACK_HOST_PORT']}"
     start = (datetime.now(UTC) - timedelta(seconds=5)).isoformat().replace("+00:00", "Z")
     try:
@@ -111,6 +109,8 @@ def main(argv: list[str] | None = None) -> int:
             arguments.startup_timeout,
         )
         environment = os.environ.copy()
+        # 保留同一批宿主端口，让测试里的 docker compose 操作命中同一 project。
+        environment.update(compose_environment)
         environment.update(
             {
                 "NVSOP_MEDIA_PLAYBACK_LIST_URL": urls["synthetic"][0],
@@ -119,6 +119,10 @@ def main(argv: list[str] | None = None) -> int:
                 "NVSOP_MEDIA_CPU_PLAYBACK_GET_URL": urls["cpu-transcoded"][1],
                 "NVSOP_MEDIA_EXPECTED_PATH": "synthetic",
                 "NVSOP_MEDIA_CPU_EXPECTED_PATH": "cpu-transcoded",
+                "NVSOP_MEDIA_RTSP_URL": rtsp,
+                "NVSOP_MEDIA_ADMIN_URL": admin,
+                "NVSOP_MEDIA_COMPOSE_PROJECT": project,
+                "NVSOP_MEDIA_COMPOSE_FILE": compose_file,
             }
         )
         completed = subprocess.run(command, env=environment, check=False)

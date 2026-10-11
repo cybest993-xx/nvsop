@@ -18,6 +18,8 @@ Inspect cwd, branch, HEAD, worktrees, tracked/staged/untracked changes and accep
 
 Use installed Skills when their trigger applies; read the selected skill before its procedure. A manual-only skill runs only when requested, not merely because this document names it. Clear implementation work can use `/implement`, test-first changes `/tdd`, independent review `/code-review`, and PR writing `/pr`. Clarify only unresolved decisions; spec/ticket decomposition and prototypes are conditional, not mandatory stages for small tasks.
 
+Read the referenced skill file with the host's actual tools; a missing Skill API does not prevent using an available file reader. Use other named tool operations only when an equivalent operation preserves the same behavior and authorization boundary; when no equivalent exists, report the step as not executed or unavailable rather than claiming completion. This does not weaken the manual-only trigger or the repository-rule precedence below, and the [review](#3-review-and-repair) section still requires a fixed candidate, affected callers and the actual specification.
+
 Repository rules take precedence: domain language stays in [CONTEXT.md](../../CONTEXT.md), specs/acceptance/tickets and labels use existing GitHub Issue rules, and documentation uses its [current owner](documentation.md). Do not copy Skills into another workflow, create a parallel spec/tracker registry, or treat a skill's commit/reset/publish/merge/cleanup step as authorization. Unavailable Skills are reported, not claimed as executed.
 
 ## 2. Implement and select evidence

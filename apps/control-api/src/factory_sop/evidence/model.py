@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
+from uuid import UUID
 
 
 class EvidenceKind(StrEnum):
@@ -136,10 +137,44 @@ class EvidenceReference:
         return self.registration.evidence_id
 
 
+class ReviewConclusion(StrEnum):
+    """人工对一条证据的复核结论：确认或否定；不改写原判定（§六）。"""
+
+    CONFIRMED = "confirmed"
+    REJECTED = "rejected"
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceReview:
+    """一条只追加的人工复核结论；不改机器事实、证据或他人记录。
+
+    ``review_id`` 是客户端一次提交的稳定幂等键；``reviewer_name`` 是提交时的显示名快照，
+    复核人改名不改变已存结论，也不使同一意图重放冲突。
+    """
+
+    review_id: UUID
+    evidence_id: str
+    generation: str
+    reviewer_id: UUID
+    reviewer_name: str
+    reviewed_at: datetime
+    conclusion: ReviewConclusion
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.evidence_id, str) or not self.evidence_id:
+            raise ValueError("review evidence_id must be a non-empty string")
+        if not isinstance(self.generation, str) or not self.generation:
+            raise ValueError("review generation must be a non-empty string")
+        if not isinstance(self.reviewer_name, str) or not self.reviewer_name:
+            raise ValueError("review reviewer_name must be a non-empty string")
+
+
 __all__ = [
     "EvidenceKind",
     "EvidenceOrigin",
     "EvidenceReference",
     "EvidenceRegistration",
+    "EvidenceReview",
     "EvidenceStatus",
+    "ReviewConclusion",
 ]

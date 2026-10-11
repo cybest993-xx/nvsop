@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from uuid import UUID
 
-from sqlalchemy import BigInteger, DateTime, String, Text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from factory_sop.evidence.model import (
@@ -12,7 +13,9 @@ from factory_sop.evidence.model import (
     EvidenceOrigin,
     EvidenceReference,
     EvidenceRegistration,
+    EvidenceReview,
     EvidenceStatus,
+    ReviewConclusion,
 )
 from factory_sop.persistence import Table
 
@@ -87,4 +90,43 @@ class EvidenceReferenceRow(Table):
         )
 
 
-__all__ = ["EvidenceReferenceRow"]
+class EvidenceReviewRow(Table):
+    """一条人工复核结论：只追加，不存媒体字节，也不直接引用 auth/monitor 表。"""
+
+    __tablename__ = "evidence_review"
+
+    review_id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
+    evidence_id: Mapped[str] = mapped_column(
+        String(255), ForeignKey("evidence_evidence.evidence_id", ondelete="CASCADE"), index=True
+    )
+    generation: Mapped[str] = mapped_column(String(128))
+    reviewer_id: Mapped[UUID] = mapped_column(Uuid())
+    reviewer_name: Mapped[str] = mapped_column(String(255))
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    conclusion: Mapped[str] = mapped_column(String(32))
+
+    def to_domain(self) -> EvidenceReview:
+        return EvidenceReview(
+            review_id=self.review_id,
+            evidence_id=self.evidence_id,
+            generation=self.generation,
+            reviewer_id=self.reviewer_id,
+            reviewer_name=self.reviewer_name,
+            reviewed_at=self.reviewed_at,
+            conclusion=ReviewConclusion(self.conclusion),
+        )
+
+    @classmethod
+    def from_domain(cls, value: EvidenceReview) -> EvidenceReviewRow:
+        return cls(
+            review_id=value.review_id,
+            evidence_id=value.evidence_id,
+            generation=value.generation,
+            reviewer_id=value.reviewer_id,
+            reviewer_name=value.reviewer_name,
+            reviewed_at=value.reviewed_at,
+            conclusion=value.conclusion.value,
+        )
+
+
+__all__ = ["EvidenceReferenceRow", "EvidenceReviewRow"]

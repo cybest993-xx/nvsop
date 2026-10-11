@@ -120,6 +120,8 @@ NVSOP_EVIDENCE_BROWSER=1 make center-system
 
 缺少 `NVSOP_EVIDENCE_BROWSER` 时浏览器用例 skip，不作为证据；本地验收必须记录一次实际通过。
 
+浏览器回看后可在同一界面登记人工复核结论：查询复用 `evidence.evidence.view`，提交需 `evidence.review.edit`，浏览器须带 `sop_csrf` 双提交头。结论只追加，不改写机器判定、证据或他人记录，也不重编码媒体。
+
 ## 范围边界
 
 本环境只验证预览、录像和媒体配置应用的稳定软件路径；证据切片/复核、分类保留、引用保护、磁盘水位与压缩由各自机制和验证入口负责。它不裁决 Q25/Q36，滚动录像也不是证据制品。生产不引入逐观看者 JWT、公网分发、原生移动端、音频对讲或第二套录像索引/录制实现；中心不转发运行态视频。现场实测要求见[目标环境矩阵](../../docs/research/target-environment-validation-matrix.md)。历史追溯仍以 `SYS-34-*` 场景编号、原 Issue #34 和 Git 历史中的 `issue-34-spec.md` 为入口；它们不在本文维护实时任务状态或后置票完成度。

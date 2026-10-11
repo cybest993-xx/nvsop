@@ -50,6 +50,8 @@ import {
   listInferenceHosts as generatedListInferenceHosts,
   listMonitorViolations as generatedListMonitorViolations,
   readEvidence as generatedReadEvidence,
+  readEvidenceReviews as generatedReadEvidenceReviews,
+  registerEvidenceReview as generatedRegisterEvidenceReview,
   createEvidenceAccessContext as generatedCreateEvidenceAccessContext,
   listPermissions as generatedListPermissions,
   listPoints as generatedListPoints,
@@ -134,6 +136,8 @@ import {
   type DownloadTemplateImportResponse,
   type EvidenceAccessContext,
   type EvidenceListing,
+  type EvidenceReviewBody,
+  type EvidenceReviewRecord,
   type DownloadTemplateVersionArtifactResponse,
   type EditRoleData,
   type EditUserData,
@@ -218,6 +222,8 @@ export type {
   DatasetView,
   DeviceStatus,
   DownloadTemplateVersionArtifactResponse,
+  EvidenceReviewRecord,
+  ReviewConclusion,
   HandoverConfirmationInput,
   HandoverCreation,
   HandoverRiskView,
@@ -453,6 +459,24 @@ export function readEvidence(stationId: string, instanceId: number): Promise<Evi
 /** 由中心签发绑定来源主机与当前会话的短票据；随后每次媒体读取都由来源机回查中心。 */
 export function createEvidenceAccessContext(evidenceId: string): Promise<EvidenceContext> {
   return execute(generatedCreateEvidenceAccessContext({ path: { evidence_id: evidenceId } }))
+}
+
+/** 一条人工复核结论；只追加，不改写机器判定、证据或他人记录。 */
+export type EvidenceReview = EvidenceReviewRecord
+
+/** 读取该证据的全部复核结论；查询复用查看权限，不隐含编辑。 */
+export function readEvidenceReviews(evidenceId: string): Promise<EvidenceReview[]> {
+  return execute(generatedReadEvidenceReviews({ path: { evidence_id: evidenceId } }))
+}
+
+/** 同步登记一条复核结论，返回服务器持久化后的回执；调用方按同一 `review_id` 安全重放。 */
+export function registerEvidenceReview(
+  evidenceId: string,
+  submitted: EvidenceReviewBody,
+): Promise<EvidenceReview> {
+  return execute(
+    generatedRegisterEvidenceReview({ path: { evidence_id: evidenceId }, body: submitted }),
+  )
 }
 
 /** 中心归档已经按稳定事件身份幂等去重；这里只读取，不重新判定。 */

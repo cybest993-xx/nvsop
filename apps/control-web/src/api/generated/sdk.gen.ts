@@ -36,6 +36,9 @@ import type {
   CreateEvidenceAccessContextData,
   CreateEvidenceAccessContextErrors,
   CreateEvidenceAccessContextResponses,
+  CreateEvidenceReclipRequestData,
+  CreateEvidenceReclipRequestErrors,
+  CreateEvidenceReclipRequestResponses,
   CreateHandoverData,
   CreateHandoverErrors,
   CreateHandoverResponses,
@@ -251,6 +254,9 @@ import type {
   ReadDeviceCommandResponses,
   ReadEvidenceData,
   ReadEvidenceErrors,
+  ReadEvidenceReclipRequestsData,
+  ReadEvidenceReclipRequestsErrors,
+  ReadEvidenceReclipRequestsResponses,
   ReadEvidenceResponses,
   ReadEvidenceReviewsData,
   ReadEvidenceReviewsErrors,
@@ -1046,6 +1052,49 @@ export const createEvidenceAccessContext = <ThrowOnError extends boolean = false
     CreateEvidenceAccessContextErrors,
     ThrowOnError
   >({ url: '/api/v1/evidence/{evidence_id}/access-context', ...options })
+
+/**
+ * Read Reclip Requests
+ *
+ * 列出该证据的全部再切片请求；等待/失败状态可查，不隐含编辑。
+ */
+export const readEvidenceReclipRequests = <ThrowOnError extends boolean = false>(
+  options: Options<ReadEvidenceReclipRequestsData, ThrowOnError>,
+): RequestResult<
+  ReadEvidenceReclipRequestsResponses,
+  ReadEvidenceReclipRequestsErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).get<
+    ReadEvidenceReclipRequestsResponses,
+    ReadEvidenceReclipRequestsErrors,
+    ThrowOnError
+  >({ url: '/api/v1/evidence/{evidence_id}/reclip-requests', ...options })
+
+/**
+ * Request Reclip
+ *
+ * 登记一次再切片请求，并在同一事务内委托给来源主机的不可领取命令队列。
+ */
+export const createEvidenceReclipRequest = <ThrowOnError extends boolean = false>(
+  options: Options<CreateEvidenceReclipRequestData, ThrowOnError>,
+): RequestResult<
+  CreateEvidenceReclipRequestResponses,
+  CreateEvidenceReclipRequestErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    CreateEvidenceReclipRequestResponses,
+    CreateEvidenceReclipRequestErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/evidence/{evidence_id}/reclip-requests',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
 
 /**
  * Read Reviews

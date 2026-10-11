@@ -1,3 +1,14 @@
-# Issue tracker — routing for installed skills
+# Issue tracker: GitHub
 
-GitHub Issue authoring and operations are maintained in [engineering/issues.md](../engineering/issues.md). A locally installed review skill still locates this exact path, so keep this pointer while that consumer remains. Read the linked owner instead of treating this file's presence as a separate policy or setup requirement. Remove this stub only after the remaining skill entrypoint has migrated. New repository instructions link the current owner directly.
+Issues and specs live in GitHub Issues. Use `gh` inside the actual clone;
+infer the repository from `git remote -v`.
+
+[Issue authoring and operations](../engineering/issues.md) owns Issue
+shape, labels, dependencies, claim and closure. Read that owner before
+Issue work; this file is the configuration entrypoint for installed skills,
+not a separate policy.
+
+**PRs as a request surface: no.**
+
+PR delivery and authorization follow the
+[engineering workflow](../engineering/workflow.md).

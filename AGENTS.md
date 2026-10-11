@@ -7,12 +7,13 @@ NVSOP is the SOP compliance product monorepo. Verify actual code, configuration,
 Read guidance only when its trigger applies, expanding for affected callers or conflicting evidence:
 
 - **Plan or investigate:** deliver findings or the requested plan; start edits only when requested.
-- **Implement code or scripts:** read [coding.md](docs/engineering/coding.md) and the implementation/verification sections of [workflow.md](docs/engineering/workflow.md). Locate the public entry, affected callers and existing tests first, and bind this task worktree to the session before the first tracked source edit ([landing ownership and session binding](docs/engineering/workflow.md#landing-ownership-and-session-binding)).
+- **Use Skills:** choose the task method under [Skills routing](docs/engineering/workflow.md#skills-routing); repository rules and operation authorization still apply.
+- **Implement code or scripts:** read [coding.md](docs/engineering/coding.md) and the implementation/verification sections of [workflow.md](docs/engineering/workflow.md). Locate the public entry, affected callers and existing tests first.
 - **Change repository shape, ownership or dependencies between modules:** read [architecture.md](docs/engineering/architecture.md).
 - **Add or change repository-local generated/ignored state; change CI, generated contracts, dependencies or vendor code:** read [maintenance.md](docs/engineering/maintenance.md) and [workflow.md](docs/engineering/workflow.md).
 - **Write, move or delete documentation/instructions:** read [documentation.md](docs/engineering/documentation.md) and the applicable validation/review sections of [workflow.md](docs/engineering/workflow.md).
 - **Work with Issues, labels or task dispatch:** read [issues.md](docs/engineering/issues.md).
-- **Create branches/worktrees, review, publish/update/refresh a PR, merge or clean up:** read the relevant step of [workflow.md](docs/engineering/workflow.md) and use its versioned lifecycle entrypoints instead of improvising a parallel PR/pull flow.
+- **Create branches/worktrees, review, publish/update/refresh a PR, merge or clean up:** read the relevant step of [workflow.md](docs/engineering/workflow.md). Use native Git/GitHub operations and the versioned single-task cleanup; no separate landing/session-recovery workflow.
 - **Change deployment or runtime configuration:** use the [deployment index](docs/README.md#部署与验证), then relevant architecture/verification rules.
 - **Change Edge autonomy, local persistence or Edge→Center reporting:** read [edge-autonomy.md](docs/design/mechanisms/edge-autonomy.md). Also read [architecture.md](docs/engineering/architecture.md) when moving ownership, a public seam or a dependency direction, and [the roadmap](docs/design/solution-and-roadmap.md) when changing approved product behavior or system structure.
 - **Name domain concepts or change product behavior:** use [CONTEXT.md](CONTEXT.md); for behavior/architecture read the affected mechanism and ADRs through [the roadmap](docs/design/solution-and-roadmap.md). Identify an ADR that needs reopening rather than silently overriding it.

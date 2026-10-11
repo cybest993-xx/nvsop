@@ -1,24 +1,16 @@
 name: blocking-ci
 
-# 单飞：blocking-ci 只作为可复用工作流被可信 landing-queue 控制器按显式 head_sha/base_sha 调用，
-# 自身不再监听 pull_request / push；候选头与比较基线全部来自调用输入。
+# PR 直接触发检查；只取消同一 PR 被新提交替代的运行，不使用特权事件或 App secret。
 on:
-  workflow_call:
-    inputs:
-      head_sha:
-        required: true
-        type: string
-      base_sha:
-        required: true
-        type: string
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: read
 
-# 以候选头为并发组，绝不与 landing-queue 的全局互斥组同名而自锁；单飞调用不取消在跑的候选。
 concurrency:
-  group: blocking-ci-${{ inputs.head_sha }}
-  cancel-in-progress: false
+  group: blocking-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   scope:
@@ -36,15 +28,15 @@ jobs:
       - name: Checkout candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.head_sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
           fetch-depth: 0
       - name: Select applicable gates
         id: scope
         env:
-          BASE_SHA: ${{ inputs.base_sha }}
-          # 与后续作业验证的候选树一致：head/base 都来自可信控制器的显式输入。
-          HEAD_SHA: ${{ inputs.head_sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # 路径选择与全部检查使用同一个事件绑定的候选头和基线。
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python3 scripts/ci_scope.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
       - name: Validate scope outputs
         env:
@@ -85,7 +77,7 @@ jobs:
       - name: Checkout candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.head_sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: Install the pinned Python toolchain runner
         run: pipx install uv==0.12.5
@@ -123,7 +115,7 @@ jobs:
       - name: Checkout candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.head_sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
           fetch-depth: 0
       - name: Install pinned workflow linter
@@ -169,8 +161,8 @@ jobs:
       - name: Run the documentation gate
         if: needs.scope.outputs.docs_only == 'true'
         env:
-          BASE_SHA: ${{ inputs.base_sha }}
-          HEAD_SHA: ${{ inputs.head_sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: make check-docs BASE="$BASE_SHA" HEAD="$HEAD_SHA"
       - name: Install media test tools
         if: needs.scope.outputs.docs_only == 'false'
@@ -183,16 +175,16 @@ jobs:
       - name: Run the local merge gate
         if: needs.scope.outputs.docs_only == 'false'
         env:
-          # OpenAPI 兼容检查必须与真实 base 比较：使用可信控制器传入的 base_sha。
-          OPENAPI_BASE_REF: ${{ inputs.base_sha }}
+          # OpenAPI 兼容检查使用本次 PR 事件的真实基线。
+          OPENAPI_BASE_REF: ${{ github.event.pull_request.base.sha }}
         run: make check
       - name: Report change size for review
         if: needs.scope.outputs.docs_only == 'false'
         # Harness §5：从共同祖先计算到候选头，行数只作提示。
         # Git 或文件读取失败仍须使本步骤失败。
         env:
-          BASE_SHA: ${{ inputs.base_sha }}
-          HEAD_SHA: ${{ inputs.head_sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: make change-size BASE="$BASE_SHA" HEAD="$HEAD_SHA"
       - name: Verify a clean worktree
         # Generated output is regenerated in the same change as its source (harness §5). If
@@ -221,7 +213,7 @@ jobs:
       - name: Checkout candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.head_sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
           fetch-depth: 0
       - name: Install the pinned Python toolchain runner
@@ -264,7 +256,7 @@ jobs:
       - name: Checkout candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.head_sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
           fetch-depth: 0
       - name: Set up the pinned Node runtime

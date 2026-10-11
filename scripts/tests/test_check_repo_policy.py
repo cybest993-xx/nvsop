@@ -34,23 +34,13 @@ class RepositoryPolicyTest(unittest.TestCase):
             Path("docs/engineering/documentation.md"): "# Documentation\n",
             Path("docs/design/solution-and-roadmap.md"): "# Current decisions\n",
             Path(".github/workflows/blocking-ci.yml"): (
-                "workflow_call:\nCI required\nalways()\nmake check\n"
-                "ref: ${{ inputs.head_sha }}\n"
+                "pull_request:\nCI required\nalways()\nmake check\ncontents: read\n"
+                "ref: ${{ github.event.pull_request.head.sha }}\n"
+                "BASE_SHA: ${{ github.event.pull_request.base.sha }}\n"
+                "HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n"
+                "persist-credentials: false\n"
                 "if: needs.scope.outputs.integration == 'true'\n"
             ),
-            Path(".github/workflows/landing-queue.yml"): (
-                "issue_comment:\nworkflow_dispatch:\ncancel-in-progress: false\n"
-                "guard:\nvars.LANDING_APP_ID != ''\nvars.LANDING_QUEUE_ISSUE != ''\n"
-                "needs.guard.outputs.enabled == 'true'\n"
-                "environment: landing\n"
-                "actions/create-github-app-token@"
-                "fee1f7d63c2ff003460e3d139729b119787bc349\n"
-                "scripts/landing_queue.py prepare\n"
-                "scripts/landing_queue.py finalize\n"
-                "uses: ./.github/workflows/blocking-ci.yml\n"
-                "ref: ${{ github.workflow_sha }}\n"
-            ),
-            Path("scripts/landing_queue.py"): "# landing queue owner\n",
             Path("scripts/ci_scope.py"): (
                 'INTEGRATION_PREFIXES = ("apps/edge-runtime/", "tests/system/")\n'
             ),
@@ -111,31 +101,22 @@ class RepositoryPolicyTest(unittest.TestCase):
     def test_accepts_minimum_harness(self) -> None:
         self.assertEqual([], self.check())
 
-    def test_rejects_blocking_ci_legacy_triggers_and_caller_expressions(self) -> None:
-        # queue-only：legacy 触发器与 caller 表达式都必须拒绝，候选头只能来自控制器输入。
+    def test_rejects_privileged_ci_triggers_and_non_pr_candidate_expressions(self) -> None:
+        workflow = ".github/workflows/blocking-ci.yml"
+        original = self.files[Path(workflow)]
+        for trigger in ("pull_request_target:", "workflow_call:", "push:"):
+            with self.subTest(trigger=trigger):
+                self.write(workflow, original + trigger + "\n")
+                self.assertIn(
+                    f"blocking-ci.yml must use ordinary PR CI only; remove {trigger}",
+                    self.check(),
+                )
         self.write(
-            ".github/workflows/blocking-ci.yml",
-            "pull_request:\npush:\nworkflow_call:\nCI required\nalways()\nmake check\n"
-            "ref: ${{ inputs.head_sha }}\n"
-            "if: needs.scope.outputs.integration == 'true'\n",
-        )
-        errors = self.check()
-        self.assertIn(
-            "blocking-ci.yml must be reusable-only; remove the legacy pull_request: trigger",
-            errors,
+            workflow,
+            original.replace("github.event.pull_request.head.sha", "inputs.head_sha || github.sha"),
         )
         self.assertIn(
-            "blocking-ci.yml must be reusable-only; remove the legacy push: trigger", errors
-        )
-
-        self.write(
-            ".github/workflows/blocking-ci.yml",
-            "workflow_call:\nCI required\nalways()\nmake check\n"
-            "ref: ${{ inputs.head_sha || github.sha }}\n"
-            "if: needs.scope.outputs.integration == 'true'\n",
-        )
-        self.assertIn(
-            "blocking-ci.yml must resolve head/base from workflow_call inputs only", self.check()
+            "blocking-ci.yml must resolve head/base from the pull_request event only", self.check()
         )
 
     def test_rejects_a_shared_selector_that_omits_system_tests(self) -> None:

@@ -304,11 +304,12 @@ class CleanupTaskTest(unittest.TestCase):
         self.assert_branch_absent(branch)
         self.assertFalse(task.exists())
 
-    def test_merged_cleanup_accepts_one_queue_refresh(self) -> None:
+    def test_merged_cleanup_accepts_locally_updated_candidate(self) -> None:
         branch = "agent/a/demo"
         authorization_root, landing_head, merge_commit, task = self.make_refreshed_merged_task(
             branch
         )
+        self.git("merge", "--quiet", "--ff-only", landing_head, cwd=task)
 
         result = self.run_cli(branch, landing_head, merge_commit)
 
@@ -328,7 +329,8 @@ class CleanupTaskTest(unittest.TestCase):
         result = self.run_cli(branch, landing_head, merge_commit)
 
         self.assertNotEqual(0, result.returncode)
-        self.assertIn("first parent", result.stderr)
+        self.assertIn("local branch tip does not match --candidate", result.stderr)
+        self.assertFalse(self.gh_calls.exists())
         self.assertEqual(authorization_root, self.git("rev-parse", f"refs/heads/{branch}"))
         self.assertTrue(task.exists())
 
@@ -353,7 +355,7 @@ class CleanupTaskTest(unittest.TestCase):
         result = self.run_cli(branch, landing_head, merge_commit)
 
         self.assertNotEqual(0, result.returncode)
-        self.assertIn("exactly two parents", result.stderr)
+        self.assertIn("local branch tip does not match --candidate", result.stderr)
         self.assertEqual(authorization_root, self.git("rev-parse", f"refs/heads/{branch}"))
         self.assertTrue(task.exists())
 

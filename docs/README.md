@@ -8,7 +8,7 @@
 
 | 要做什么 | 唯一规则归属 |
 |---|---|
-| 建立任务 worktree、选测试、审查、发 PR、看 CI、合并与清理 | [交付工作流](engineering/workflow.md) |
+| 按 Skills 实施、建立任务 worktree、选测试、审查、普通 PR/CI、授权合并与单任务清理 | [交付工作流](engineering/workflow.md) |
 | 新建、拆分、领取、分派或关闭 Issue，处理标签和依赖 | [Issue 管理](engineering/issues.md) |
 | 编码、复用、接口设计、拆分模块和注释 | [代码写作](engineering/coding.md) |
 | 改仓库布局、模块所有权或跨模块依赖 | [仓库架构](engineering/architecture.md) |

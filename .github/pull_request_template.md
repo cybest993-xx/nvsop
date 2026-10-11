@@ -25,16 +25,12 @@ Actions: `N/A`
 
 ## Readiness and remaining work
 
-<!-- Record the bounded PR lifecycle approval, its authorization-root candidate, the authorized action scope, the current landing head after any controlled refresh, exact-head CI and any required independent review. Merge is authorized only when it is named in Authorized lifecycle actions; these fields record evidence and do not create approval. A controlled refresh may change Landing head without changing Authorization-root candidate, but the refreshed head must re-establish affected technical evidence. Codex is optional, non-blocking feedback. Follow docs/engineering/workflow.md. -->
+<!-- Record real user confirmation, named authorized actions, current candidate, exact-head CI and required independent review. Disclose automatic remote-head deletion if enabled. A changed head needs renewed affected evidence. These fields record evidence, not approval; implementation/publication alone does not authorize merge. Optional Codex feedback belongs in Review. Follow docs/engineering/workflow.md. -->
 PR lifecycle approval: `pending`
-Authorization-root candidate: `N/A`
 Authorized lifecycle actions: `N/A`
+Candidate head: `pending`
 Remote PR branch on merge: `pending`
-Landing head: `pending`
 CI required: `pending`
 Independent Spec + Standards review (when required): `not-required`
-Codex review (optional): `not-requested`
-Codex reviewed commit (if available): `N/A`
-Codex feedback disposition (if any): `N/A`
 
 <!-- Deferred original acceptance links, unverified target-environment evidence and blockers. Publication/CI status alone is not merge authorization. -->

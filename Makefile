@@ -181,12 +181,13 @@ sync: lockfile
 	$(UV) sync --frozen --all-packages
 
 VENV := $(UV_PROJECT_ENVIRONMENT)/bin
-PYTHON := $(VENV)/python
-RUFF := $(VENV)/ruff
-MYPY := $(VENV)/mypy
+# 路径可能含空格（worktree 名）：命令里对可执行文件与缓存/产物参数加引号，不做其它语义改动。
+PYTHON := "$(VENV)/python"
+RUFF := "$(VENV)/ruff"
+MYPY := "$(VENV)/mypy"
 PYTEST_ARGS ?= --durations=20
-PYTEST = $(VENV)/pytest -o cache_dir=$(LOCAL_CACHE)/pytest/$@ \
-	--junitxml=$(LOCAL_ARTIFACTS)/pytest/$@.xml $(PYTEST_ARGS)
+PYTEST = "$(VENV)/pytest" -o cache_dir="$(LOCAL_CACHE)/pytest/$@" \
+	--junitxml="$(LOCAL_ARTIFACTS)/pytest/$@.xml" $(PYTEST_ARGS)
 CONTRACT_PY := packages/contracts
 OPENAPI := $(CONTRACT_PY)/openapi.json
 OPENAPI_BASE_REF ?= origin/main
@@ -197,10 +198,10 @@ OPENAPI_BASE_REF ?= origin/main
 contracts: openapi-compat openapi-generate
 
 openapi-export: sync
-	PYTHONPATH=$(CENTER)/src $(VENV)/python scripts/export_openapi.py $(OPENAPI)
+	PYTHONPATH="$(CENTER)/src" "$(VENV)/python" scripts/export_openapi.py $(OPENAPI)
 
 openapi-compat: openapi-export
-	$(VENV)/python scripts/check_openapi_compatibility.py $(OPENAPI_BASE_REF) $(OPENAPI) $(CONTRACT_PY)/breaking-changes.json
+	"$(VENV)/python" scripts/check_openapi_compatibility.py $(OPENAPI_BASE_REF) $(OPENAPI) $(CONTRACT_PY)/breaking-changes.json
 
 openapi-generate: openapi-export web-install
 	# The generator does not promise to remove files for operations deleted from the schema.
@@ -223,7 +224,7 @@ contract-base:
 	$(PYTHON) -m unittest discover -s tests/contract/base -p 'test_*.py'
 
 contract-capability:
-	PYTHONPATH=$(CONTRACT_PY)/src:apps/edge-runtime/src:apps/control-api/src $(VENV)/python \
+	PYTHONPATH="$(CONTRACT_PY)/src:apps/edge-runtime/src:apps/control-api/src" "$(VENV)/python" \
 		-m unittest discover -s tests/contract/capability -p 'test_*.py'
 
 contracts-python-check: contracts-python-format contracts-python-lint contracts-python-type \
@@ -236,17 +237,17 @@ contracts-python-lint:
 	$(RUFF) check --target-version py311 $(CONTRACT_PY)/src $(CONTRACT_PY)/tests
 
 contracts-python-type:
-	MYPYPATH=$(CONTRACT_PY)/src $(MYPY) --cache-dir $(LOCAL_CACHE)/mypy/$@ \
+	MYPYPATH="$(CONTRACT_PY)/src" $(MYPY) --cache-dir "$(LOCAL_CACHE)/mypy/$@" \
 		--python-version 3.11 --strict \
 		$(CONTRACT_PY)/src $(CONTRACT_PY)/tests
 
 contracts-python-unit:
-	PYTHONPATH=$(CONTRACT_PY)/src $(PYTHON) -m unittest discover \
+	PYTHONPATH="$(CONTRACT_PY)/src" $(PYTHON) -m unittest discover \
 		-s $(CONTRACT_PY)/tests/unit -t $(CONTRACT_PY)/tests/unit -p 'test_*.py'
 
 boundaries:
-	PYTHONPATH=apps/control-api/src:apps/edge-runtime/src:$(CONTRACT_PY)/src \
-		$(VENV)/lint-imports --cache-dir $(LOCAL_CACHE)/import-linter
+	PYTHONPATH="apps/control-api/src:apps/edge-runtime/src:$(CONTRACT_PY)/src" \
+		"$(VENV)/lint-imports" --cache-dir "$(LOCAL_CACHE)/import-linter"
 
 # `vendor/` is excluded because the policy check already reads its templates by value. The
 # two lockfiles contain package integrity hashes, and the exported OpenAPI document is generated
@@ -254,7 +255,7 @@ boundaries:
 secret-scan:
 	git ls-files -z --cached --others --exclude-standard \
 		| grep -zvE '^(vendor/|uv\.lock$$|pnpm-lock\.yaml$$|packages/contracts/openapi\.json$$|\.secrets\.baseline$$)' \
-		| xargs -0 $(VENV)/detect-secrets-hook --baseline .secrets.baseline
+		| xargs -0 "$(VENV)/detect-secrets-hook" --baseline .secrets.baseline
 
 CENTER := apps/control-api
 CENTER_PATHS := $(CENTER)/src $(CENTER)/tests scripts tests/contract tests/system
@@ -266,7 +267,7 @@ center-lint:
 	$(RUFF) check $(CENTER_PATHS)
 
 center-type:
-	MYPYPATH=$(CENTER)/src $(MYPY) --cache-dir $(LOCAL_CACHE)/mypy/$@ $(CENTER)/src $(CENTER)/tests
+	MYPYPATH="$(CENTER)/src" $(MYPY) --cache-dir "$(LOCAL_CACHE)/mypy/$@" $(CENTER)/src $(CENTER)/tests
 
 center-unit:
 	cd $(CENTER) && PYTHONPATH=src $(PYTEST) tests/unit -q
@@ -275,7 +276,7 @@ center-integration:
 	cd $(CENTER) && PYTHONPATH=src $(PYTEST) tests/integration -q
 
 center-system:
-	PYTHONPATH=$(CENTER)/src:$(EDGE)/src:$(CONTRACT_PY)/src $(PYTEST) tests/system -q
+	PYTHONPATH="$(CENTER)/src:$(EDGE)/src:$(CONTRACT_PY)/src" $(PYTEST) tests/system -q
 
 EDGE := apps/edge-runtime
 
@@ -286,15 +287,15 @@ edge-lint:
 	cd $(EDGE) && $(RUFF) check src tests
 
 edge-type:
-	cd $(EDGE) && MYPYPATH=$(CURDIR)/$(CONTRACT_PY)/src $(MYPY) \
-		--cache-dir $(LOCAL_CACHE)/mypy/$@ --strict src tests
+	cd $(EDGE) && MYPYPATH="$(CURDIR)/$(CONTRACT_PY)/src" $(MYPY) \
+		--cache-dir "$(LOCAL_CACHE)/mypy/$@" --strict src tests
 
 edge-unit:
-	cd $(EDGE) && PYTHONPATH=$(CURDIR)/$(CONTRACT_PY)/src:src $(PYTHON) -m unittest \
+	cd $(EDGE) && PYTHONPATH="$(CURDIR)/$(CONTRACT_PY)/src:src" $(PYTHON) -m unittest \
 		discover -s tests/unit -t tests/unit -p 'test_*.py'
 
 edge-integration:
-	cd $(EDGE) && PYTHONPATH=$(CURDIR)/$(CONTRACT_PY)/src:src $(PYTHON) -m unittest \
+	cd $(EDGE) && PYTHONPATH="$(CURDIR)/$(CONTRACT_PY)/src:src" $(PYTHON) -m unittest \
 		discover -s tests/integration -t tests/integration -p 'test_*.py'
 
 WEB := apps/control-web
@@ -317,12 +318,12 @@ web-unit:
 # Browser-level evidence for SYS-22-07. CI sets PLAYWRIGHT_BRANDED=1 and installs stable Chrome
 # and Edge; a developer runs the same scenarios against Playwright's pinned Chromium.
 web-e2e:
-	PLAYWRIGHT_OUTPUT_DIR=$(LOCAL_ARTIFACTS)/web/test-results \
+	PLAYWRIGHT_OUTPUT_DIR="$(LOCAL_ARTIFACTS)/web/test-results" \
 		pnpm --filter control-web run test:e2e
 
 # 使用固定 digest 的 MediaMTX 容器和合成 H.264 RTSP 源验证 SYS-34 WHEP。
 web-e2e-whep:
-	PLAYWRIGHT_OUTPUT_DIR=$(LOCAL_ARTIFACTS)/web/test-results \
+	PLAYWRIGHT_OUTPUT_DIR="$(LOCAL_ARTIFACTS)/web/test-results" \
 		python3 scripts/test_whep.py -- pnpm --filter control-web exec playwright test tests/e2e/sys-34-media.spec.ts --workers 2
 
 web-build:

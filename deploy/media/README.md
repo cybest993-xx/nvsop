@@ -90,6 +90,36 @@ NVSOP_EDGE_COMMAND_CONFIG_FILE=edge.json python3 -m edge_runtime
 
 Chrome/Edge、1366×768 与 1920×1080、键盘、焦点、文本错误与状态仍属于软件验证范围。合成输入或记录过的浏览器 adapter seam 可以验证故障逻辑，但不能声称真相机、现场网络、目标 GPU 或容量已通过。
 
+## 来源主机证据回看服务
+
+证据媒体留在产生它的推理机；浏览器复核具体证据时按中心逐次授权直连该主机读取，中心只回引用与摘要、绝不代理字节。服务入口是 [edge_runtime.evidence_access](../../apps/edge-runtime/src/edge_runtime/evidence_access.py)，按本机运行方式启动：
+
+```sh
+python3 -m edge_runtime.evidence_access \
+  --center-url https://center.internal:8443 \
+  --host-id <canonical-host-uuid> \
+  --private-key-file /etc/nvsop/host-identity.key \
+  --evidence-directory /var/lib/nvsop/evidence \
+  --web-origin https://web.internal \
+  --bind 127.0.0.1 --port 8765
+```
+
+前置条件与边界：
+
+- 该主机已向中心登记，且中心 `SOP_EVIDENCE_HOST_ORIGINS` 用规范小写主机 UUID 映射到本服务对浏览器可达的 **HTTPS** origin；非 `fixed_main` 部署只接受 HTTPS 证据来源。
+- 服务本身只讲 HTTP，必须由可信 HTTPS 终止（Nginx/负载均衡）承载，不得关闭证书校验或让浏览器绕过混合内容限制；`--evidence-directory` 只含本机证据目录，不接受客户端路径或 URL。
+- `--private-key-file` 是只读本机 secret（权限 `0600`），不进入中心、浏览器或日志；不得固化默认账号密码，凭据由随机生成或外部配置提供。
+- `--web-origin` 必须是精确的单一 Web origin。浏览器媒体请求匿名（`crossOrigin=anonymous`、凭据省略），不向来源主机携带中心 Cookie/令牌；来源响应逐次 `no-store`，撤销后缓存不能继续供片。
+- 缺失、过期、撤权与中心不可达是不同错误，由来源 `X-Evidence-Error` 呈现，不把中心“缺对象”当作播放失败。
+
+稳定软件验证入口是 [真实 Center/PG + Edge system 场景](../../tests/system/test_sys_35_evidence.py)（无需 Node，CI 运行）与 [真实浏览器场景](../../apps/control-web/tests/e2e/sys-35-evidence.spec.ts)。浏览器用例是显式 opt-in，本地需已具备 Docker、ffmpeg、Node/pnpm 与已安装的 Playwright Chromium（`pnpm exec playwright install chromium`，不自动安装），然后运行：
+
+```sh
+NVSOP_EVIDENCE_BROWSER=1 make center-system
+```
+
+缺少 `NVSOP_EVIDENCE_BROWSER` 时浏览器用例 skip，不作为证据；本地验收必须记录一次实际通过。
+
 ## 范围边界
 
 本环境只验证预览、录像和媒体配置应用的稳定软件路径；证据切片/复核、分类保留、引用保护、磁盘水位与压缩由各自机制和验证入口负责。它不裁决 Q25/Q36，滚动录像也不是证据制品。生产不引入逐观看者 JWT、公网分发、原生移动端、音频对讲或第二套录像索引/录制实现；中心不转发运行态视频。现场实测要求见[目标环境矩阵](../../docs/research/target-environment-validation-matrix.md)。历史追溯仍以 `SYS-34-*` 场景编号、原 Issue #34 和 Git 历史中的 `issue-34-spec.md` 为入口；它们不在本文维护实时任务状态或后置票完成度。

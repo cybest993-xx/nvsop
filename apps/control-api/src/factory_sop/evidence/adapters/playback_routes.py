@@ -81,7 +81,7 @@ def read_evidence(
 
 
 @router.get(
-    "/{evidence_id}/access-context",
+    "/{evidence_id:path}/access-context",
     operation_id="createEvidenceAccessContext",
     response_model=EvidenceAccessContext,
     openapi_extra=needs(Permission.EVIDENCE_VIEW),

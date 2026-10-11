@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import quote
 
 from conftest import BootstrapCommand, _free_port, _stop_server, _wait_for_server, log_in
 from httpx2 import Client, Response
@@ -69,7 +70,7 @@ def test_evidence_authorization_crosses_real_https_gateway(
                 Client(base_url=str(browser.base_url), verify=False, trust_env=False) as host,
             ):
                 registration_path = "/api/v1/evidence/registrations"
-                evidence_id = f"{host_id}-gateway-clip"
+                evidence_id = f"{host_id}/gateway/clip.mp4"
                 registration = {
                     "evidence_id": evidence_id,
                     "host_id": host_id,
@@ -103,7 +104,7 @@ def test_evidence_authorization_crosses_real_https_gateway(
                 registered = signed_post(registration_path, registration)
                 assert registered.status_code == 200, registered.text
                 # 机器路由无 Cookie 仍通过签名；浏览器签发始终需要中心会话。
-                context_path = f"/api/v1/evidence/{evidence_id}/access-context"
+                context_path = f"/api/v1/evidence/{quote(evidence_id, safe='')}/access-context"
                 assert browser.get(context_path).status_code == 401
                 browser.cookies.update(client.cookies)
                 context = browser.get(context_path)

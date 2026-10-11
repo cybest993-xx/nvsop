@@ -50,7 +50,7 @@ def _registration(topology: RuntimeTopology, evidence_id: str) -> dict[str, obje
     """来源推理机登记的最小受控引用：相对路径 + 摘要 + 大小，故中心登记为可用。"""
     return {
         "evidence_id": evidence_id,
-        "host_id": str(topology.host.id),
+        "host_id": str(topology.host.id).upper(),
         "station_id": str(topology.station.id),
         "instance_id": 7,
         "violation_id": None,
@@ -96,7 +96,7 @@ def test_evidence_access_is_issued_and_rechecked_at_real_boundaries(
     secret = settings().csrf_secret.get_secret_value()
     host_id = str(runtime_topology.host.id)
     station_id = str(runtime_topology.station.id)
-    evidence_id = f"{host_id}-clip-1"
+    evidence_id = f"{host_id}/{'证' * 213}.mp4"
     registration = _registration(runtime_topology, evidence_id)
     app = create_app(
         settings().model_copy(update={"evidence_host_origins": {host_id: ORIGIN}}),

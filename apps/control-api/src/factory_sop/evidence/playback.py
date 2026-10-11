@@ -12,7 +12,7 @@ from uuid import UUID
 from factory_sop.auth.api import Caller, Permission, authorize
 from factory_sop.evidence.model import EvidenceReference, EvidenceStatus
 from factory_sop.evidence.repository import EvidenceRepository
-from factory_sop.evidence.usecases import is_controlled_reference
+from factory_sop.evidence.usecases import find_evidence, is_controlled_reference, list_evidence
 
 
 class EvidenceAccessRefusedError(ValueError):
@@ -26,7 +26,9 @@ def evidence_for_instance(
     caller: Caller, *, evidence: EvidenceRepository, station_id: str, instance_id: int
 ) -> tuple[EvidenceReference, ...]:
     authorize(caller, Permission.EVIDENCE_VIEW)
-    rows, _ = evidence.page(page=1, page_size=100, station_id=station_id, instance_id=instance_id)
+    rows, _ = list_evidence(
+        evidence, page=1, page_size=100, station_id=station_id, instance_id=instance_id
+    )
     return rows
 
 
@@ -45,11 +47,13 @@ def issue_access_context(
     registration = _available(evidence, evidence_id).registration
     if UUID(registration.host_id) not in registered_hosts:
         raise EvidenceAccessRefusedError(403, "source_host_unregistered")
-    origin = origins.get(registration.host_id)
+    origin = origins.get(str(UUID(registration.host_id)))
     if origin is None:
         raise EvidenceAccessRefusedError(503, "source_host_unconfigured")
     expires = int(now) + 120
-    payload = json.dumps([evidence_id, registration.host_id, fingerprint, expires]).encode()
+    payload = json.dumps(
+        [evidence_id, str(UUID(registration.host_id)), fingerprint, expires]
+    ).encode()
     encoded = base64.urlsafe_b64encode(payload).decode().rstrip("=")
     signature = hmac.new(secret.encode(), b"evidence\0" + encoded.encode(), hashlib.sha256)
     return {
@@ -70,8 +74,9 @@ def check_access_context(
     secret: str,
     now: float,
 ) -> dict[str, object]:
+    # 255 字符 ID 经 JSON 转义和 Base64 可超过 512；签发格式仍有明确长度上限。
     try:
-        if len(context) > 512:
+        if len(context) > 4096:
             raise ValueError
         encoded, signature = context.split(".")
         expected = hmac.new(secret.encode(), b"evidence\0" + encoded.encode(), hashlib.sha256)
@@ -96,7 +101,7 @@ def check_access_context(
         raise EvidenceAccessRefusedError(403, "session_invalid")
     authorize(caller, Permission.EVIDENCE_VIEW)
     registration = _available(evidence, evidence_id).registration
-    if registration.host_id != host_id:
+    if UUID(registration.host_id) != UUID(host_id):
         raise EvidenceAccessRefusedError(403, "source_host_mismatch")
     return {
         "reference": registration.reference,
@@ -107,7 +112,7 @@ def check_access_context(
 
 
 def _available(evidence: EvidenceRepository, evidence_id: str) -> EvidenceReference:
-    value = evidence.find(evidence_id)
+    value = find_evidence(evidence, evidence_id)
     if value is None:
         raise EvidenceAccessRefusedError(404, "evidence_unregistered")
     if value.status is not EvidenceStatus.AVAILABLE:

@@ -83,24 +83,19 @@ def main(argv: list[str] | None = None) -> int:
         print("test_media_playback: provide a test command after --", file=sys.stderr)
         return 2
 
-    compose = [
-        "docker",
-        "compose",
-        "-p",
-        f"nvsop-media-test-{os.getpid()}",
-        "-f",
-        "deploy/media/compose.yaml",
-    ]
+    compose_file = "deploy/media/compose.yaml"
+    project = f"nvsop-media-test-{os.getpid()}"
+    compose = ["docker", "compose", "-p", project, "-f", compose_file]
+    host_ports = {
+        "NVSOP_MEDIA_RTSP_HOST_PORT": free_port(socket.SOCK_STREAM),
+        "NVSOP_MEDIA_WEBRTC_HOST_PORT": free_port(socket.SOCK_STREAM),
+        "NVSOP_MEDIA_ICE_HOST_PORT": free_port(socket.SOCK_DGRAM),
+        "NVSOP_MEDIA_PLAYBACK_HOST_PORT": free_port(socket.SOCK_STREAM),
+        "NVSOP_MEDIA_API_HOST_PORT": free_port(socket.SOCK_STREAM),
+    }
     compose_environment = os.environ.copy()
-    compose_environment.update(
-        {
-            "NVSOP_MEDIA_RTSP_HOST_PORT": str(free_port(socket.SOCK_STREAM)),
-            "NVSOP_MEDIA_WEBRTC_HOST_PORT": str(free_port(socket.SOCK_STREAM)),
-            "NVSOP_MEDIA_ICE_HOST_PORT": str(free_port(socket.SOCK_DGRAM)),
-            "NVSOP_MEDIA_PLAYBACK_HOST_PORT": str(free_port(socket.SOCK_STREAM)),
-        }
-    )
-    playback = f"http://127.0.0.1:{compose_environment['NVSOP_MEDIA_PLAYBACK_HOST_PORT']}"
+    compose_environment.update({name: str(port) for name, port in host_ports.items()})
+    playback = f"http://127.0.0.1:{host_ports['NVSOP_MEDIA_PLAYBACK_HOST_PORT']}"
     start = (datetime.now(UTC) - timedelta(seconds=5)).isoformat().replace("+00:00", "Z")
     try:
         subprocess.run([*compose, "up", "-d", "--wait"], check=True, env=compose_environment)
@@ -110,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
             (datetime.now(UTC) + timedelta(minutes=2)).isoformat().replace("+00:00", "Z"),
             arguments.startup_timeout,
         )
-        environment = os.environ.copy()
+        environment = compose_environment.copy()
         environment.update(
             {
                 "NVSOP_MEDIA_PLAYBACK_LIST_URL": urls["synthetic"][0],
@@ -119,6 +114,11 @@ def main(argv: list[str] | None = None) -> int:
                 "NVSOP_MEDIA_CPU_PLAYBACK_GET_URL": urls["cpu-transcoded"][1],
                 "NVSOP_MEDIA_EXPECTED_PATH": "synthetic",
                 "NVSOP_MEDIA_CPU_EXPECTED_PATH": "cpu-transcoded",
+                "NVSOP_MEDIA_PLAYBACK_URL": playback,
+                "NVSOP_MEDIA_API_URL": f"http://127.0.0.1:{host_ports['NVSOP_MEDIA_API_HOST_PORT']}",
+                "NVSOP_MEDIA_RTSP_URL": f"rtsp://127.0.0.1:{host_ports['NVSOP_MEDIA_RTSP_HOST_PORT']}",
+                "NVSOP_MEDIA_COMPOSE_PROJECT": project,
+                "NVSOP_MEDIA_COMPOSE_FILE": os.path.abspath(compose_file),
             }
         )
         completed = subprocess.run(command, env=environment, check=False)

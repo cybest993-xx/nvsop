@@ -91,7 +91,6 @@ from edge_runtime.runtime_configuration import (
     StationRuntimeBinding,
     bootstrap_runtime_configuration,
     confirmed_runtime_configuration,
-    validate_confirmed_runtime_configuration,
 )
 from edge_runtime.station_runtime import (
     InputWaitExpired,
@@ -1123,19 +1122,19 @@ class AutonomousRuntime:
                     should_stop=should_stop,
                 ).run()
                 if cycle.errors:
-                    reports.stop_and_join()
-                    if self._media is not None:
-                        with suppress(BaseException):
-                            self._media.close()
-                    with suppress(BaseException):
-                        self._state.close()
                     raise cycle.errors[0]
                 if reports.error is not None:
                     break
                 if cycle.pending_switch is not None:
                     self._apply_configuration_switch(cycle.pending_switch)
-        finally:
+        except BaseException:
+            # 异常退出(含配置确认失败回滚)统一收尾: 先停上报, 再用 close 释放剩余
+            # 工位/媒体/SQLite state; 抑制清理失败以保证原始 fatal 异常优先传播。
             reports.stop_and_join()
+            with suppress(BaseException):
+                self.close()
+            raise
+        reports.stop_and_join()
 
         if reports.error is not None:
             self.close()
@@ -1770,38 +1769,6 @@ def _center_client(config: EdgeRuntimeConfiguration) -> CenterClient:
         timeout=config.command_timeout,
         ssl_context=config.ssl_context,
     )
-
-
-def _synchronize_runtime_configuration(
-    config: EdgeRuntimeConfiguration, state: LocalState
-) -> RuntimeConfiguration:
-    """主动拉取一次; 失败时使用最后确认 bundle, 首次失败才使用 bootstrap."""
-    synchronizer = ConfigurationSynchronizer(
-        puller=HttpConfigurationPuller(client=_center_client(config), host_id=config.host_id),
-        store=state.configuration(),
-        expected_host_id=config.host_id,
-        validator=lambda bundle: validate_confirmed_runtime_configuration(
-            bundle=bundle,
-            bootstrap_stations=config.stations,
-            local_connectors=config.connectors,
-        ),
-    )
-    observed_at = time()
-    result = synchronizer.synchronize(observed_at=observed_at)
-    bundle = result.candidate or result.confirmed
-    if bundle is None:
-        return bootstrap_runtime_configuration(
-            stations=config.stations,
-            connectors=config.connectors,
-        )
-    runtime_configuration = confirmed_runtime_configuration(
-        bundle=bundle,
-        bootstrap_stations=config.stations,
-        local_connectors=config.connectors,
-    )
-    if result.candidate is not None:
-        synchronizer.confirm(result.candidate, confirmed_at=observed_at)
-    return runtime_configuration
 
 
 def main() -> int:

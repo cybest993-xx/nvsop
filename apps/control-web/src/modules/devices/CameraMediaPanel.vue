@@ -10,7 +10,7 @@ import {
   ElSelect,
   ElTag,
 } from 'element-plus'
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
 import {
   ControlPlaneError,
@@ -38,6 +38,7 @@ const selectedCameraId = ref<string | null>(null)
 const playerStatus = reactive<Record<string, PlayerStatus>>({})
 const playerFailure = reactive<Record<string, string>>({})
 const videoElements = new Map<string, HTMLVideoElement>()
+const recordingElements = new Map<string, HTMLVideoElement>()
 const peerConnections = new Map<string, RTCPeerConnection>()
 const playerControllers = new Map<string, AbortController>()
 const firstFrameTimers = new Map<string, number>()
@@ -136,6 +137,14 @@ function setVideoRef(cameraId: string, element: unknown): void {
     videoElements.set(cameraId, element)
   } else {
     videoElements.delete(cameraId)
+  }
+}
+
+function setRecordingRef(cameraId: string, element: unknown): void {
+  if (element instanceof HTMLVideoElement) {
+    recordingElements.set(cameraId, element)
+  } else {
+    recordingElements.delete(cameraId)
   }
 }
 
@@ -356,6 +365,9 @@ async function startPreview(camera: CameraMediaView, attempt = 0): Promise<void>
       }
     }
   })
+  // firstFrame 可能在到达 `await firstFrame` 之前就被停止或超时拒绝（信令仍挂起）；
+  // 先挂一个空处理器，避免这段窗口里的拒绝成为未处理拒绝。
+  void firstFrame.catch(() => {})
 
   try {
     const offer = await peer.createOffer()
@@ -416,6 +428,12 @@ function stopPreview(cameraId: string): void {
   retryTimers.delete(cameraId)
   closePreview(cameraId)
   setStatus(cameraId, 'stopped')
+}
+
+/** 停止该相机的预览与回看：连接、待决请求、重试与回放资源一起释放。 */
+function stopCamera(cameraId: string): void {
+  stopPreview(cameraId)
+  stopPlayback(cameraId)
 }
 
 function selectCamera(cameraId: string): void {
@@ -488,7 +506,7 @@ function playbackEmptyMessage(camera: CameraMediaView, start: string, end: strin
   const cutoff = now - camera.recording_window_seconds * 1000
   if (Date.parse(end) <= cutoff) return '素材已超过推理机录像窗口，已过期。'
   if (Date.parse(start) < cutoff) return '请求跨越录像窗口，较早部分已过期。'
-  return '该时间范围未录像，或录像区间存在时间空洞。'
+  return '该时间范围未录像。'
 }
 
 function playbackCoverageNotice(
@@ -548,6 +566,14 @@ function stopPlayback(cameraId: string): void {
   playbackControllers.get(cameraId)?.abort()
   nextPlaybackGeneration(cameraId)
   playbackControllers.delete(cameraId)
+  // 从 DOM 移除 <video> 不会停止已建立的媒体元素；显式暂停并释放源。
+  const recording = recordingElements.get(cameraId)
+  if (recording) {
+    recording.pause()
+    recording.srcObject = null
+    recording.removeAttribute('src')
+    recording.load()
+  }
   delete playbackUrls[cameraId]
   delete intervals[cameraId]
   delete playbackNotice[cameraId]
@@ -629,9 +655,10 @@ async function queryPlayback(camera: CameraMediaView): Promise<void> {
     intervals[cameraId] = parsed
     const notice = parsed.length ? playbackCoverageNotice(camera, range, parsed) : ''
     if (notice) playbackNotice[cameraId] = notice
-    const playbackUrl = playbackGetUrl(camera, parsed[0])
-    if (playbackUrl) playbackUrls[cameraId] = playbackUrl
-    if (!parsed.length) {
+    if (parsed.length) {
+      const playbackUrl = playbackGetUrl(camera, parsed[0])
+      if (playbackUrl) playbackUrls[cameraId] = playbackUrl
+    } else {
       playbackFailure[cameraId] = playbackEmptyMessage(camera, range.start, range.end)
     }
   } catch (error) {
@@ -773,6 +800,15 @@ async function load(): Promise<void> {
 }
 
 onMounted(load)
+// 会话中撤权时隐藏面板不等于释放媒体：主动关闭直连 peer、中止请求并停止回放。
+watch(mayViewCameras, (mayView) => {
+  if (mayView) return
+  for (const camera of cameras.value) {
+    stopPreview(camera.camera_id)
+    stopPlayback(camera.camera_id)
+  }
+  detailPausedCameras.clear()
+})
 onBeforeUnmount(() => {
   for (const camera of cameras.value) {
     stopPreview(camera.camera_id)
@@ -843,7 +879,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="media-card__actions">
           <ElButton type="primary" @click="startPreview(camera)">开始预览</ElButton>
-          <ElButton @click="stopPreview(camera.camera_id)">停止</ElButton>
+          <ElButton @click="stopCamera(camera.camera_id)">停止</ElButton>
           <ElButton @click="selectCamera(camera.camera_id)">详情</ElButton>
           <ElButton v-if="mayEditCameras" @click="openCameraEdit(camera)">编辑媒体策略</ElButton>
         </div>
@@ -898,6 +934,7 @@ onBeforeUnmount(() => {
           <p v-else class="media-card__meta">暂无可用片段；可能已过录像窗口或存在时间空洞。</p>
           <video
             v-if="playbackUrls[camera.camera_id]"
+            :ref="(element) => setRecordingRef(camera.camera_id, element)"
             class="media-card__recording"
             controls
             crossorigin="anonymous"

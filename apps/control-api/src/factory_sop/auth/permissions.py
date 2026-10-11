@@ -90,6 +90,7 @@ class Permission(StrEnum):
     # Read-only mirror of edge decisions and host health. It never grants execution or
     # configuration authority and is therefore the only monitor permission in this slice.
     MONITOR_VIEW = "monitor.report.view"
+    EVIDENCE_VIEW = "evidence.evidence.view"
 
     # 保留策略是全局策略，独立于工位运行参数；不借用 station 权限管理全局默认值。
     RETENTION_POLICY_VIEW = "retention.policy.view"

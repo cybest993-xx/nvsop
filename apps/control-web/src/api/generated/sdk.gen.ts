@@ -6,6 +6,9 @@ import type {
   BindTemplateVersionData,
   BindTemplateVersionErrors,
   BindTemplateVersionResponses,
+  CheckEvidenceAccessData,
+  CheckEvidenceAccessErrors,
+  CheckEvidenceAccessResponses,
   ClaimNextDeviceCommandData,
   ClaimNextDeviceCommandErrors,
   ClaimNextDeviceCommandResponses,
@@ -30,6 +33,9 @@ import type {
   CreateConnectorData,
   CreateConnectorErrors,
   CreateConnectorResponses,
+  CreateEvidenceAccessContextData,
+  CreateEvidenceAccessContextErrors,
+  CreateEvidenceAccessContextResponses,
   CreateHandoverData,
   CreateHandoverErrors,
   CreateHandoverResponses,
@@ -243,6 +249,9 @@ import type {
   ReadDeviceCommandData,
   ReadDeviceCommandErrors,
   ReadDeviceCommandResponses,
+  ReadEvidenceData,
+  ReadEvidenceErrors,
+  ReadEvidenceResponses,
   ReadHandoverData,
   ReadHandoverErrors,
   ReadHandoverResponses,
@@ -964,6 +973,36 @@ export const completeDeviceCommand = <ThrowOnError extends boolean = false>(
   })
 
 /**
+ * Read Evidence
+ */
+export const readEvidence = <ThrowOnError extends boolean = false>(
+  options: Options<ReadEvidenceData, ThrowOnError>,
+): RequestResult<ReadEvidenceResponses, ReadEvidenceErrors, ThrowOnError> =>
+  (options.client ?? client).get<ReadEvidenceResponses, ReadEvidenceErrors, ThrowOnError>({
+    url: '/api/v1/evidence',
+    ...options,
+  })
+
+/**
+ * Check Context
+ */
+export const checkEvidenceAccess = <ThrowOnError extends boolean = false>(
+  options: Options<CheckEvidenceAccessData, ThrowOnError>,
+): RequestResult<CheckEvidenceAccessResponses, CheckEvidenceAccessErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    CheckEvidenceAccessResponses,
+    CheckEvidenceAccessErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/evidence/access-check',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
  * Report Evidence Reference
  */
 export const registerEvidenceReference = <ThrowOnError extends boolean = false>(
@@ -985,6 +1024,22 @@ export const registerEvidenceReference = <ThrowOnError extends boolean = false>(
       ...options.headers,
     },
   })
+
+/**
+ * Create Context
+ */
+export const createEvidenceAccessContext = <ThrowOnError extends boolean = false>(
+  options: Options<CreateEvidenceAccessContextData, ThrowOnError>,
+): RequestResult<
+  CreateEvidenceAccessContextResponses,
+  CreateEvidenceAccessContextErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).get<
+    CreateEvidenceAccessContextResponses,
+    CreateEvidenceAccessContextErrors,
+    ThrowOnError
+  >({ url: '/api/v1/evidence/{evidence_id}/access-context', ...options })
 
 /**
  * Create

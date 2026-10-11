@@ -514,6 +514,8 @@ EXEMPT = {
     ("POST", f"{API_PREFIX}/monitor/execution-authority"),
     # Evidence reference registration authenticates the inference host signature.
     ("POST", f"{API_PREFIX}/evidence/registrations"),
+    # 来源机逐次回查要求主机签名，同时复核票据绑定的真实会话与权限。
+    ("POST", f"{API_PREFIX}/evidence/access-check"),
 }
 
 

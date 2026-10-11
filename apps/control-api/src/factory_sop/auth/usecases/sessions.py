@@ -134,7 +134,21 @@ def validate_session(
     now: datetime,
 ) -> tuple[Session, User]:
     """供长连接复核及普通请求共用有效性规则，成功时不续期。"""
-    session = sessions.by_token_fingerprint(fingerprint(token))
+    return validate_session_fingerprint(
+        token_fingerprint=fingerprint(token), users=users, sessions=sessions, policy=policy, now=now
+    )
+
+
+def validate_session_fingerprint(
+    *,
+    token_fingerprint: str,
+    users: UserRepository,
+    sessions: SessionRepository,
+    policy: SessionPolicy,
+    now: datetime,
+) -> tuple[Session, User]:
+    """证据上下文复核持久会话身份，复用同一有效性规则，不接受它作为登录凭据。"""
+    session = sessions.by_token_fingerprint(token_fingerprint)
     if session is None:
         _refuse_session(reason="unknown_token")
 

@@ -21,10 +21,15 @@ it through the same seam as `authorize`, never through `auth.handover` or an ada
 `handover_authority` is that same decision as an HTTP dependency: other modules' HTTP adapters
 declare `Depends(handover_authority)` rather than importing `auth.adapters.dependencies`
 directly, so the one permitted cross-owner import target stays `auth.api`.
+
+`CurrentSessionFingerprint` 供 evidence HTTP 适配器绑定上下文；指纹不是登录凭据。
+`SessionFingerprintRecheck` 供该适配器逐次复核当前会话与权限，不续期。
 """
 
 from factory_sop.auth.adapters.dependencies import (
     Authorized,
+    CurrentSessionFingerprint,
+    SessionFingerprintRecheck,
     SessionRecheck,
     handover_authority,
     needs,
@@ -45,8 +50,10 @@ __all__ = [
     "Authorized",
     "Caller",
     "CurrentCallerResolver",
+    "CurrentSessionFingerprint",
     "HandoverAuthority",
     "Permission",
+    "SessionFingerprintRecheck",
     "SessionRecheck",
     "authorize",
     "handover_authority",

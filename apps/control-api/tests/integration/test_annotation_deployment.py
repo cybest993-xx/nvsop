@@ -80,6 +80,7 @@ def test_host_signed_machine_routes_bypass_only_browser_auth_and_preserve_signat
             "device-commands/(?:next|",
             "/result)",
             "templates/configuration-reports",
+            "evidence/(?:registrations|access-check)",
         ):
             assert route in location
 

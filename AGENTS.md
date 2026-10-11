@@ -35,3 +35,17 @@ State risk, test reuse/additions and intended checks in at most three lines. Imp
 Use the smallest affected checks while iterating; final code uses `make check`, documentation-only work `make check-docs`. Repository-policy and instruction changes still require the workflow's independent read-only review. One main session owns repairs and completion.
 
 Retain every acceptance criterion and report actual evidence/gaps. Stop optional tests/refactors once acceptance and required evidence are complete. Committed or pushed does not mean merge-ready; confirm one bounded [task lifecycle plan](docs/engineering/workflow.md#pr-lifecycle-approval) at task start for all intended delivery actions; in-scope repairs and successor SHAs renew evidence, not approval. Issue closure uses that plan when named there, or the separate explicit-instruction path in [issues.md](docs/engineering/issues.md#close-with-evidence).
+
+## Agent skills
+
+### Issue tracker
+
+Skills use GitHub Issues. Read the [tracker configuration](docs/agents/issue-tracker.md) and authoritative [Issue rules](docs/engineering/issues.md) before Issue work.
+
+### Triage labels
+
+Before triage, read the [canonical label mapping](docs/agents/triage-labels.md).
+
+### Domain docs
+
+Single-context. Before domain exploration, read the [domain configuration](docs/agents/domain.md).

@@ -27,6 +27,7 @@ from nvsop_contracts import (
 # exercised over real HTTP rather than a mocked concrete write.
 from test_output_safety import TRIGGER_PATH, IsapiLoopbackServer
 
+from edge_runtime.configuration_sync import ConfigurationPullError
 from edge_runtime.connectors.hikvision import CANDIDATE_PROFILE
 from edge_runtime.connectors.port import (
     ConnectorHealth,
@@ -331,6 +332,74 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
                 self.assertEqual(confirmed, inspection.configuration().confirmed())
             finally:
                 inspection.close()
+
+    def test_first_start_uses_bootstrap_when_pull_fails_without_confirmation(self) -> None:
+        identity = _fixture_host_identity(49)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            private_key_file = directory / "host-private-key"
+            private_key_file.write_text(identity.private_key, encoding="utf-8")
+            config_path = directory / "edge.json"
+            config_path.write_text(
+                json.dumps(_local_config(directory, private_key_file)), encoding="utf-8"
+            )
+
+            with patch(
+                "edge_runtime.runtime.HttpConfigurationPuller.pull",
+                side_effect=ConfigurationPullError("center_unreachable", "center unavailable"),
+            ):
+                runtime = build_autonomous_runtime_from_file(config_path)
+            try:
+                configuration = runtime.configuration
+                assert configuration is not None
+                self.assertIsNone(configuration.confirmed)
+                self.assertEqual(1, len(runtime.stations))
+                self.assertEqual(
+                    ("(1) local",), runtime.stations[0].supervisor.state.template.steps
+                )
+            finally:
+                runtime.close()
+
+            inspection = open_local_state(str(directory / "state.sqlite"))
+            try:
+                failure = inspection.configuration().failure()
+                self.assertIsNotNone(failure)
+                assert failure is not None
+                self.assertEqual("center_unreachable", failure.code)
+            finally:
+                inspection.close()
+
+    def test_pull_failure_keeps_the_last_confirmed_bundle_active(self) -> None:
+        bundle = _bundle()
+        identity = _fixture_host_identity(50)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            state = open_local_state(str(directory / "state.sqlite"))
+            state.configuration().confirm(bundle, confirmed_at=1.0)
+            state.close()
+
+            private_key_file = directory / "host-private-key"
+            private_key_file.write_text(identity.private_key, encoding="utf-8")
+            config_path = directory / "edge.json"
+            config_path.write_text(
+                json.dumps(_local_config(directory, private_key_file)), encoding="utf-8"
+            )
+
+            with patch(
+                "edge_runtime.runtime.HttpConfigurationPuller.pull",
+                side_effect=ConfigurationPullError("center_unreachable", "center unavailable"),
+            ):
+                runtime = build_autonomous_runtime_from_file(config_path)
+            try:
+                configuration = runtime.configuration
+                assert configuration is not None
+                self.assertEqual(bundle, configuration.confirmed)
+                self.assertEqual(1, len(runtime.stations))
+                self.assertEqual(
+                    ("(1) confirmed",), runtime.stations[0].supervisor.state.template.steps
+                )
+            finally:
+                runtime.close()
 
     def _loopback(self) -> IsapiLoopbackServer:
         server = IsapiLoopbackServer()

@@ -693,9 +693,11 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
             confirm_error=OSError("local confirmation failed"),
         )
         state = _State()
+        media = _Media()
         old_runtime = RuntimeConfiguration(stations=(), connectors=(), confirmed=old)
         candidate_runtime = RuntimeConfiguration(stations=(), connectors=(), confirmed=candidate)
         candidate_station = _Station()
+        restored_station = _Station()
         rollback_runtime = RuntimeConfiguration(stations=(), connectors=(), confirmed=old)
         composition = RuntimeComposition(
             command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
@@ -707,7 +709,65 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
         rollback = RuntimeComposition(
             command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
             configuration=rollback_runtime,
+            stations=(cast(AutonomousStation, restored_station),),
+            connector_runtimes=cast(ConnectorRuntimeSet, object()),
+            output_dispatchers={},
+        )
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
             stations=(),
+            state=cast(LocalState, state),
+            media=cast(MediaRuntime, media),
+            configuration_sync=cast(ConfigurationSynchronizer, synchronizer),
+            maintenance_interval=0.001,
+            configuration=old_runtime,
+            configuration_resolver=lambda bundle: candidate_runtime,
+            configuration_factory=lambda value: (
+                composition if value is candidate_runtime else rollback
+            ),
+            connector_runtimes=cast(ConnectorRuntimeSet, object()),
+        )
+        synchronizer.runtime = runtime
+
+        try:
+            with self.assertRaisesRegex(OSError, "local confirmation failed"):
+                runtime.run_forever(should_stop=lambda: False)
+            self.assertEqual(runtime.configuration, old_runtime)
+            self.assertTrue(candidate_station.closed)
+            # 退出前统一收尾: 恢复工位/媒体/SQLite state 均须释放, 不依赖调用方 finally。
+            self.assertTrue(restored_station.closed)
+            self.assertTrue(media.closed)
+            self.assertTrue(state.closed)
+            self.assertFalse(synchronizer.confirmation_completed)
+        finally:
+            runtime.close()
+
+    def test_confirmation_failure_cleanup_error_does_not_mask_original(self) -> None:
+        # 清理恢复资源时若再失败, 原始确认错误仍优先传播 (原fatal不被关闭错误覆盖)。
+        old = _bundle(1)
+        candidate = _bundle(2)
+        synchronizer = _Synchronizer(
+            candidate=candidate,
+            confirmed=old,
+            confirm_error=OSError("local confirmation failed"),
+        )
+        state = _State()
+        old_runtime = RuntimeConfiguration(stations=(), connectors=(), confirmed=old)
+        candidate_runtime = RuntimeConfiguration(stations=(), connectors=(), confirmed=candidate)
+        restored_station = _Station(
+            close_error=RuntimeError("synthetic restored station close failure")
+        )
+        composition = RuntimeComposition(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            configuration=candidate_runtime,
+            stations=(),
+            connector_runtimes=cast(ConnectorRuntimeSet, object()),
+            output_dispatchers={},
+        )
+        rollback = RuntimeComposition(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            configuration=old_runtime,
+            stations=(cast(AutonomousStation, restored_station),),
             connector_runtimes=cast(ConnectorRuntimeSet, object()),
             output_dispatchers={},
         )
@@ -726,14 +786,10 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
         )
         synchronizer.runtime = runtime
 
-        try:
-            with self.assertRaisesRegex(OSError, "local confirmation failed"):
-                runtime.run_forever(should_stop=lambda: False)
-            self.assertEqual(runtime.configuration, old_runtime)
-            self.assertTrue(candidate_station.closed)
-            self.assertFalse(synchronizer.confirmation_completed)
-        finally:
-            runtime.close()
+        with self.assertRaisesRegex(OSError, "local confirmation failed"):
+            runtime.run_forever(should_stop=lambda: False)
+        self.assertTrue(restored_station.closed)
+        self.assertTrue(state.closed)
 
     def test_composition_failure_quarantines_candidate_until_identity_changes(self) -> None:
         old = _bundle(1)

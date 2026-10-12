@@ -2,7 +2,8 @@
 
 本文负责**每台推理机上推理服务容器**的 Compose 部署入口与两层边界。产品行为与安全边界在
 [推理机自治](../../docs/design/mechanisms/edge-autonomy.md) 与 [ADR-0008](../../docs/adr/0008-credentials-stay-on-the-inference-host.md)；
-本机运行配置字段在 [运行配置](../../docs/deployment/configuration.md)；测试选择与交付在[工程工作流](../../docs/engineering/workflow.md)。
+本机运行配置字段在 [运行配置](../../docs/deployment/configuration.md)；测试选择与交付在[工程工作流](../../docs/engineering/workflow.md)；
+重启与恢复对账的离线验证准备包（Issue #195）见[推理机重启与恢复对账验证包](../../docs/deployment/edge-restart-validation.md)。
 
 ## 两层边界
 

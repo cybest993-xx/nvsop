@@ -35,10 +35,10 @@ HTTPS 网关的 443/8444 端口。源训练视频经中心正式 API 流式写�
 部署前先用真实 Compose 渲染配置并确认训练服务没有宿主机端口：
 
 ```sh
-docker compose -f vendor/sop-monitoring-blueprints/microservices/sop-training-bp/docker-compose.yml config
+NVSOP_SOURCE_DIR="$PWD" docker compose -f deploy/dev/compose.yaml config
 ```
 
-确认其中 `annotation-backend` 和 `annotation-frontend` 没有宿主机端口映射。若使用基座的独立
+确认其中五个训练后端和 `annotation-frontend` 均没有宿主机端口映射。若使用基座的独立
 `microservices/video-annotator-ms/docker-compose.yml`，也必须保持同样的标注服务内部网络约束，
 不得自行添加端口映射。
 
@@ -79,3 +79,26 @@ env -u NODE_ENV pnpm exec playwright test tests/e2e/sys-31-annotation.spec.ts
 系统测试覆盖正式网关登录、数据集/视频登记、准备状态、未拥有数据集拒绝、媒体全量读取、Range、注销后以统一 problem+json 重新拒绝和未开放兼容写操作。浏览器测试从真实部署进入训练数据集页面，点击真实 NVIDIA React 控件并等待中心返回已完成切片。
 
 凭据文件、客户媒体和部署数据不得写入 Git。没有真实部署时，只能报告证据未证实，不能将 skip 解释为 SYS-31 通过。
+
+## 训练环境冻结与统一入口验证（S068）
+
+```sh
+make training-lock          # 更新输入时显式重解析四环境、CR base 阶段和 CPU 测试环境
+make training-lock-check    # 只核对，不重写；由 make lockfile 纳入现有门禁
+make training-build-inputs  # 从原 Vendor Dockerfiles 生成冻结构建 context
+NVSOP_SOURCE_DIR="$PWD" docker compose -f deploy/dev/compose.yaml config
+```
+
+`deploy/dev/training-*.in/lock` 冻结安装依赖的完整解析闭包；CR base 与最终 package 的 torchao 版本分别保留 0.16/0.15；原浮动 Transformer Engine 固定为 2.13.0，同版本 `torch` 扩展声明 `transformer-engine-cu12==2.13.0`，与 CUDA 12.8/PyTorch 2.8+cu128 对齐，并已实际解析。固定目标调用方 `scripts/training_dependencies.py` 固定 amd64 NVIDIA image digest 和外部源码 refs，在各 stage 注入 runtime/build constraints。原 handlers、源码编译、计算命令与有意的 xformers 卸载不变；不在仓库复制庞大 Dockerfile。生成资产归 `.nvsop/artifacts/training-build/`。在主工作树显式使用 `COMPOSE_PROFILES=training-gpu make dev` 时，开发实例会先生成这些输入，再串行构建；未启用该 profile 的默认 core 构建不调用训练准备工具、不构建 GPU 镜像。Tilt 和 Compose 共享同一个标准 profile 环境。CUDA 源码构建使用 `MAX_JOBS=1`、`NVCC_THREADS=1`，开发编排串行构建镜像；不得在资源受限主机并行编译。
+
+锁解析成功**不证明**完整 GPU 镜像安装、ABI 或训练计算成功。特别是原 CR/evaluation 在安装 vLLM 0.11.0 后卸载 xformers，而其 Linux/x86_64 发布 metadata 声明 `xformers==0.0.32.post1`；保持原计算行为，不为使 `pip check` 绿色擅自保留 xformers。完整环境的 installed inventory/兼容性仍需在生产构建证据中核实，不能把 CPU 环境或解析闭包当成最终生产 installed inventory。OS apt 索引/包版本与逐包内容哈希未新增冻结，限制同上标注镜像说明。
+
+真实 CPU 控制面测试：
+
+```sh
+.nvsop/venv/bin/pytest apps/control-api/tests/integration/test_training_gateway_deployment.py -q
+```
+
+测试构建原标注后端/React 和仅用于测试的独立 CPU Web/DB 依赖环境，启动原四个 app、原 startup、真实 PostgreSQL（Center 与 training 独立 database）、真实中心登录/授权/模板/设备 API 和真实 Nginx；不替换 readiness/DB/app，不执行训练 subprocess。逐个 stop/start 关联固定路由，验证其他 readiness、中心和原标注保持可用；还覆盖全部训练 DNS 缺席时网关启动、真实 DB 拒绝/恢复、仅 GET 和未开放路径拒绝。DDM 孤儿任务取消只在隔离合成数据库验证，禁止把此测试指向生产 training database。构建日志位于 pytest 临时 context；需要保留证据时将 `--basetemp` 指向预分配的 `.nvsop/artifacts/` 子目录。
+
+上述测试不替代 GPU 计算、完整浏览器、SYS-31 媒体操作或离线验收；相关验证任务的未完成项不得据此关闭。

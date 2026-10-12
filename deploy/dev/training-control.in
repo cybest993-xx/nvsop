@@ -1,0 +1,9 @@
+# 仅用于 CPU 原 app/DB/Nginx 验证，不是生产训练环境。
+fastapi==0.124.0
+uvicorn[standard]==0.38.0
+pydantic==2.12.5
+asyncpg==0.30.0
+sqlalchemy[asyncio]==2.0.41
+psutil==7.1.2
+toml==0.10.2
+pyyaml

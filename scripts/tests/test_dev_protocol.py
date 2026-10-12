@@ -32,6 +32,30 @@ SPEC.loader.exec_module(DEV)
 
 
 class DevProtocolTest(unittest.TestCase):
+    def test_training_gpu_profile_is_opt_in_at_the_build_caller(self) -> None:
+        for profiles in ("", "training-gpu", "*"):
+            with self.subTest(profiles=profiles), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                item = DEV.DevPaths(root=root, state=root / "state")
+                DEV.ensure_directories(item)
+                with (
+                    patch.dict(os.environ, {"COMPOSE_PROFILES": profiles}),
+                    patch.object(
+                        DEV, "run_checked", return_value=subprocess.CompletedProcess([], 0)
+                    ) as run,
+                ):
+                    result = DEV.build_target(item, sha="candidate", source=root, protocol="http")
+                self.assertIsNotNone(result)
+                calls = run.call_args_list
+                self.assertEqual(1 if not profiles else 2, len(calls))
+                if profiles:
+                    self.assertIn("--prepare", calls[0].args[0])
+                    self.assertNotIn("--parallel", calls[-1].args[0])
+                    self.assertEqual("1", calls[-1].kwargs["env"]["COMPOSE_PARALLEL_LIMIT"])
+                else:
+                    self.assertIn("--parallel", calls[0].args[0])
+                self.assertEqual(profiles, calls[-1].kwargs["env"]["COMPOSE_PROFILES"])
+
     def test_http_is_the_default_and_https_is_explicit(self) -> None:
         self.assertEqual("http", DEV.configured_protocol({}))
         self.assertEqual("http", DEV.configured_protocol({"NVSOP_DEV_PROTOCOL": "http"}))

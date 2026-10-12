@@ -1,0 +1,17 @@
+# 原 Vendor Dockerfile 的安装输入；CR/evaluation 包含固定 Cosmos 源码声明的传递输入。
+-r ../../vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/ddm-training-ms/ddm/requirements.txt
+torch==2.7.1+cu128
+torchvision==0.22.1+cu128
+torchaudio==2.7.1+cu128
+torchcodec==0.7.0
+ninja==1.13.0
+psutil==7.1.2
+asyncpg==0.30.0
+sqlalchemy[asyncio]==2.0.41
+fastapi==0.124.0
+uvicorn[standard]==0.38.0
+pydantic==2.12.5
+pip
+setuptools==79.0.1
+wheel==0.45.1
+build==1.3.0

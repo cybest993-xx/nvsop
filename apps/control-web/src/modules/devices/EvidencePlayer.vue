@@ -60,6 +60,12 @@ let reclipToken = 0
 let reclipId: string | null = null
 let reclipIntent = ''
 
+// 截止必须随真实时间推进：同一页面不重新拉取，也要在到期后置灰并说明。
+const now = ref(Date.now())
+const deadlineClock = setInterval(() => {
+  now.value = Date.now()
+}, 1000)
+
 // 每次切换或重新播放都递增，迟到的响应不得复活已被替换的播放器。
 let revision = 0
 let controller: AbortController | undefined
@@ -93,7 +99,10 @@ const deadlineTime = (value: number) =>
  * 一条证据的可再切片状态：具体绝对截止、过期原因与缺元数据未知。
  * 截止时刻由中心保存的滚动录像窗口算出，只是理论边界，不代表来源机已实际应用或素材仍在。
  */
-function reclipState(item: EvidenceReference): {
+function reclipState(
+  item: EvidenceReference,
+  nowMs: number = now.value,
+): {
   text: string
   enabled: boolean
   reason: string
@@ -115,7 +124,7 @@ function reclipState(item: EvidenceReference): {
     }
   }
   const at = deadlineTime(deadline)
-  if (!item.reclip_available) {
+  if (!item.reclip_available || nowMs >= deadline * 1000) {
     return {
       text: `可再切片截止：${at}（已过期）`,
       enabled: false,
@@ -172,6 +181,12 @@ async function submitReclip(): Promise<void> {
   const after = Number(afterSeconds.value)
   if (!Number.isFinite(before) || !Number.isFinite(after) || before < 0 || after < 0) {
     reclipError.value = '新前后余量必须是非负有限数字。'
+    return
+  }
+  // 提交瞬间按当前时间复核：反应式时钟可能尚未推进，不能凭已渲染的表单放行过期请求。
+  const state = reclipState(item, Date.now())
+  if (!state.enabled) {
+    reclipError.value = state.reason
     return
   }
   const intent = `${item.evidence_id}\u0000${item.generation}\u0000${before}\u0000${after}`
@@ -427,6 +442,7 @@ watch(
 watch(conclusion, () => invalidateReview())
 // 卸载同样作废 revision：迟到的 createContext/readEvidence 不能再发起来源请求。
 onUnmounted(() => {
+  clearInterval(deadlineClock)
   revision += 1
   invalidateReview()
   invalidateReclip()
@@ -450,7 +466,7 @@ onUnmounted(() => {
         </span>
         <span
           class="evidence__deadline"
-          :class="{ 'evidence__deadline--disabled': !item.reclip_available }"
+          :class="{ 'evidence__deadline--disabled': !reclipState(item).enabled }"
         >
           {{ reclipState(item).text }}
         </span>

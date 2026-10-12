@@ -108,6 +108,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.useRealTimers()
 })
 
 describe('证据回看', () => {
@@ -309,6 +310,51 @@ describe('证据回看', () => {
     // 缺冻结时间元数据：截止未知，说明原因。
     expect(text).toContain('截止时刻：未知')
     expect(text).toContain('冻结')
+  })
+
+  it('expires a still-enabled reclip deadline as time passes and guards the submit instant', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+    vi.setSystemTime(new Date('2026-09-14T01:00:00Z'))
+    vi.stubGlobal('fetch', probeOk())
+    signIn(REVIEW_PERMISSIONS)
+    const deadline = Math.floor(Date.now() / 1000) + 5
+    api.readEvidence.mockResolvedValue([
+      { ...LISTING, reclip_deadline: deadline, reclip_available: true },
+    ])
+    api.readEvidenceReclipRequests.mockResolvedValue([])
+    const wrapper = mountPlayer()
+    await flushPromises()
+    await wrapper.find('.evidence__list button').trigger('click')
+    await flushPromises()
+
+    const at = new Date(deadline * 1000).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+    // 拉取时仍在截止前：显示具体日期、可提交、列表项未置灰。
+    expect(wrapper.text()).toContain(at)
+    expect(wrapper.find('form.evidence__reclip-form').exists()).toBe(true)
+    expect(wrapper.find('.evidence__list .evidence__deadline').classes()).not.toContain(
+      'evidence__deadline--disabled',
+    )
+
+    // 反应式时钟未推进，但系统时间已过截止：提交瞬间的复核必须拦下。
+    vi.setSystemTime(new Date((deadline + 2) * 1000))
+    await wrapper.find('form.evidence__reclip-form').trigger('submit')
+    await flushPromises()
+    expect(api.createEvidenceReclipRequest).not.toHaveBeenCalled()
+    expect(wrapper.find('.evidence__reclip [role="alert"]').text()).toContain('已回收')
+
+    // 时钟跨过截止：不重新拉取，列表与所选证据都置灰并说明原因，日期仍具体。
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushPromises()
+    expect(api.readEvidence).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain(at)
+    expect(wrapper.text()).toContain('已过期')
+    expect(wrapper.text()).toContain('已回收')
+    expect(wrapper.find('.evidence__list .evidence__deadline').classes()).toContain(
+      'evidence__deadline--disabled',
+    )
+    expect(wrapper.find('form.evidence__reclip-form').exists()).toBe(false)
+
+    wrapper.unmount()
   })
 
   it('submits a reclip request once per intent and shows the server waiting status', async () => {

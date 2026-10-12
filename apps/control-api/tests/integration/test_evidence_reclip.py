@@ -1,4 +1,4 @@
-"""#199 再切片请求：真实 ASGI + PostgreSQL 的截止、权限、幂等与不可领取边界。
+"""#199 再切片请求：真实 ASGI + PostgreSQL 的截止、权限、幂等与默认领取收窄边界。
 
 `TestClient` 驱动实际 FastAPI 应用、每请求事务与容器里的真实 PostgreSQL；会话与权限来自真实
 登录与角色行，证据登记与主机签名复用 `test_evidence_access` / `test_runtime_observation_http`
@@ -165,7 +165,7 @@ def test_reclip_request_is_authorized_idempotent_and_bound_to_the_source_host(
             assert [item["request_id"] for item in listed] == [str(request_id)]
             assert listed[0]["status"] == "pending"
 
-            # 委托命令绑定来源主机、稳定幂等键，但当前不可领取：主机领取连接测试命令得到空。
+            # 委托命令绑定来源主机与稳定幂等键；默认入口只领连接测试, 不取该类型命令。
             with engine.begin() as connection:
                 command = connection.execute(
                     text(

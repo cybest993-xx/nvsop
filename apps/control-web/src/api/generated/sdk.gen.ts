@@ -12,9 +12,15 @@ import type {
   ClaimNextDeviceCommandData,
   ClaimNextDeviceCommandErrors,
   ClaimNextDeviceCommandResponses,
+  ClaimNextReclipCommandData,
+  ClaimNextReclipCommandErrors,
+  ClaimNextReclipCommandResponses,
   CompleteDeviceCommandData,
   CompleteDeviceCommandErrors,
   CompleteDeviceCommandResponses,
+  CompleteReclipCommandData,
+  CompleteReclipCommandErrors,
+  CompleteReclipCommandResponses,
   ConfirmHandoverData,
   ConfirmHandoverErrors,
   ConfirmHandoverResponses,
@@ -952,6 +958,20 @@ export const claimNextDeviceCommand = <ThrowOnError extends boolean = false>(
   >({ url: '/api/v1/device-commands/next', ...options })
 
 /**
+ * Claim Next Reclip Command
+ *
+ * 按已验证主机身份领取一条再切片命令；无命令返回 204。
+ */
+export const claimNextReclipCommand = <ThrowOnError extends boolean = false>(
+  options: Options<ClaimNextReclipCommandData, ThrowOnError>,
+): RequestResult<ClaimNextReclipCommandResponses, ClaimNextReclipCommandErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ClaimNextReclipCommandResponses,
+    ClaimNextReclipCommandErrors,
+    ThrowOnError
+  >({ url: '/api/v1/device-commands/reclip/next', ...options })
+
+/**
  * Read A Device Command
  *
  * 读取命令状态, 供 Web 轮询直到真实结果或明确拒绝。
@@ -962,6 +982,27 @@ export const readDeviceCommand = <ThrowOnError extends boolean = false>(
   (options.client ?? client).get<ReadDeviceCommandResponses, ReadDeviceCommandErrors, ThrowOnError>(
     { url: '/api/v1/device-commands/{command_id}', ...options },
   )
+
+/**
+ * Complete Reclip Command
+ *
+ * 先认证并结案领取命令, 再在同一请求事务内结案请求的成功或终局失败；拒绝都回滚整次写入。
+ */
+export const completeReclipCommand = <ThrowOnError extends boolean = false>(
+  options: Options<CompleteReclipCommandData, ThrowOnError>,
+): RequestResult<CompleteReclipCommandResponses, CompleteReclipCommandErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    CompleteReclipCommandResponses,
+    CompleteReclipCommandErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/device-commands/{command_id}/reclip-result',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
 
 /**
  * Complete A Device Command
@@ -1074,7 +1115,7 @@ export const readEvidenceReclipRequests = <ThrowOnError extends boolean = false>
 /**
  * Request Reclip
  *
- * 登记一次再切片请求，并在同一事务内委托给来源主机的不可领取命令队列。
+ * 登记一次再切片请求，并在同一事务内委托给来源主机的专用再切片命令队列。
  */
 export const createEvidenceReclipRequest = <ThrowOnError extends boolean = false>(
   options: Options<CreateEvidenceReclipRequestData, ThrowOnError>,

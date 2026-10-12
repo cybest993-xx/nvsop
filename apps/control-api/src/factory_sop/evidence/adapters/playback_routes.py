@@ -271,7 +271,7 @@ def request_reclip(
     requests: ReclipRepository,
     gateway: ReclipGateway,
 ) -> dict[str, object] | Response:
-    """登记一次再切片请求，并在同一事务内委托给来源主机的不可领取命令队列。"""
+    """登记一次再切片请求，并在同一事务内委托给来源主机的专用再切片命令队列。"""
     try:
         record = create_reclip_request(
             caller,

@@ -5,22 +5,24 @@
 稳定请求 ID 的意图与产物先持久化到本机 ``local_reclip_request``: 一旦定稿, 该产物即权威,
 重启/重复领取/登记确认丢失都直接复用, 不再查询或重切可能已过期/被压缩的滚动素材。
 
-**本模块尚未接入生产运行时**: 真实派发在 S039 能结案失败前保持关闭; 生产
-``build_autonomous_runtime_from_file`` 不装配本 runner, 领取端点也不挂载。测试在显式装配的
-应用/适配器接缝上验证, 不伪造成功。失败不在此结案 (S039 拥有), 只在本机记录留下可观察原因。
+**本模块已接入生产运行时**: ``build_autonomous_runtime_from_file`` 装配本 runner 与领取循环,
+生产 ``create_app`` 挂载专用签名端点。终局失败 (过期/素材缺失/切片错误) 由 runner 回报中心结案;
+中心暂时不可达保留本机待办等待恢复, 不静默丢弃。
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from pathlib import Path
-from time import monotonic
+from time import monotonic, time
 from typing import Protocol, cast
 
 from nvsop_contracts import ReclipEvidenceClaim, ReclipEvidenceCommand, ReclipEvidenceResult
 
 from edge_runtime.center_client import CenterClient, CenterUnreachableError
 from edge_runtime.evidence_media import (
+    EvidenceClipSet,
     EvidenceMediaConfiguration,
     EvidenceMediaError,
     evidence_registration_payloads,
@@ -34,12 +36,17 @@ from edge_runtime.local_state import LocalState, PendingEvidence, PendingReclip,
 
 
 class ReclipEvidenceError(RuntimeError):
-    """一次再切片本机执行失败的具体原因; 记录到本机待办, 不冒充成功也不静默丢弃。"""
+    """一次再切片本机执行失败的具体原因; 记录到本机待办, 不冒充成功也不静默丢弃。
 
-    def __init__(self, reason: str, detail: str) -> None:
+    ``terminal`` 区分终局失败与可恢复故障: 过期/素材缺失/切片错误/已定稿媒体损坏都是终局失败,
+    由 runner 回报中心结案; 中心暂时不可达或拒绝登记属于恢复等待, 保留待办下一轮重试 (S039/AC1)。
+    """
+
+    def __init__(self, reason: str, detail: str, *, terminal: bool = True) -> None:
         super().__init__(f"{reason}: {detail}")
         self.reason = reason
         self.detail = detail
+        self.terminal = terminal
 
 
 class ReclipCommandTransport(Protocol):
@@ -57,6 +64,38 @@ def _covers_frozen_span(record: PendingReclip) -> bool:
     return record.window_from <= min(required_from, record.anchor) and record.window_to >= max(
         required_to, record.anchor
     )
+
+
+def _coverage_number(value: object, name: str) -> float:
+    """读取再切片产物的覆盖边界; 非数字即视为不可信的部分产物。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise EvidenceMediaError(
+            "reclip_window_incomplete", f"reclip result has a non-numeric {name}"
+        )
+    return float(value)
+
+
+def _require_full_reclip_coverage(record: PendingReclip, clip_set: EvidenceClipSet) -> None:
+    """再切片产物必须覆盖全部冻结来源与请求窗口; 部分覆盖是终局失败, 不冒充成功 (AC3)。
+
+    首次切片允许部分覆盖留给后续登记对账; 再切片在登记前显式拒绝, 不改动首次切片语义。
+    """
+    media = cast("list[dict[str, object]]", json.loads(clip_set.media_json))
+    present = {cast(str, item["media_path"]) for item in media}
+    missing = [source for source in record.sources if source not in present]
+    if missing:
+        raise EvidenceMediaError(
+            "reclip_source_missing",
+            f"reclip result is missing frozen sources: {', '.join(missing)}",
+        )
+    for item in media:
+        actual_from = _coverage_number(item["actual_from"], "actual_from")
+        actual_to = _coverage_number(item["actual_to"], "actual_to")
+        if actual_from > record.window_from or actual_to < record.window_to:
+            raise EvidenceMediaError(
+                "reclip_window_incomplete",
+                f"source {item['media_path']} does not cover the requested reclip window",
+            )
 
 
 def _pending_evidence(record: PendingReclip) -> PendingEvidence:
@@ -92,6 +131,7 @@ class ReclipEvidenceExecutor:
         configuration: EvidenceMediaConfiguration,
         client: CenterClient,
         clock: Callable[[], float] = monotonic,
+        wall_clock: Callable[[], float] = time,
     ) -> None:
         self._state = state
         self._host_id = host_id
@@ -100,44 +140,77 @@ class ReclipEvidenceExecutor:
         self._configuration = configuration
         self._client = client
         self._clock = clock
+        self._wall_clock = wall_clock
 
     def execute(self, command: ReclipEvidenceCommand) -> ReclipEvidenceResult:
         """只从本机入队冻结的原始素材映射切片, 不改锚点, 不覆盖旧片段。"""
         station = self._state.station(command.station_id)
         record = station.reclip_request(command.request_id) or self._begin(station, command)
         now = HostInstant(self._clock())
+        if record.terminal_error_code is not None:
+            # 终局失败已冻结: 重启/重复领取复用同一原因, 素材后来恢复或不同异常都不重切 (AC1)。
+            raise ReclipEvidenceError(
+                record.terminal_error_code, record.terminal_error_detail or ""
+            )
         if record.wall_offset is None or not record.sources or record.identity is None:
             # 来源事实缺失已在 _begin 持久化; 重复领取保持同一可观察失败, 不重切也不登记。
-            raise ReclipEvidenceError(
-                "reclip_source_missing", record.last_error or "no frozen local material mapping"
+            raise self._terminal(
+                station,
+                command.request_id,
+                code="reclip_source_missing",
+                detail=record.last_error or "no frozen local material mapping",
+                now=now,
             )
         if not _covers_frozen_span(record):
-            station.record_reclip_failure(
+            raise self._terminal(
+                station,
                 command.request_id,
-                at=now,
-                error="reclip_window_incomplete: requested window does not cover the frozen span",
-            )
-            raise ReclipEvidenceError(
-                "reclip_window_incomplete",
-                "requested window does not cover the frozen core span and anchor",
+                code="reclip_window_incomplete",
+                detail="requested window does not cover the frozen core span and anchor",
+                now=now,
             )
         # 已定稿产物是权威: 直接复用, 不再查询或重切滚动素材。
         if record.evidence_id is not None:
             return ReclipEvidenceResult(evidence_id=record.evidence_id)
         if record.media_results is None:
-            record = self._slice(station, record, now)
+            record = self._slice(station, record, command, now)
         try:
             payloads = self._payloads(record)
+        except (ValueError, OSError) as error:
+            # 本机已定稿媒体被篡改/删除: 重试无法恢复, 终局失败并回报具体原因。
+            raise self._terminal(
+                station,
+                command.request_id,
+                code="reclip_registration_failed",
+                detail=f"{type(error).__name__}: {error}",
+                now=now,
+            ) from error
+        try:
             register_evidence_payloads(self._client, payloads)
-        except (CenterUnreachableError, ValueError, OSError) as error:
-            # 登记准备 (文件缺失/摘要不符) 与中心拒绝一样折叠为可观察失败, 不重切、不冒成功。
+        except (CenterUnreachableError, ValueError) as error:
+            # 中心未确认 (暂时不可达或 HTTP 拒绝): 保留待办等待中心恢复, 不结案成终局失败 (AC1)。
             station.record_reclip_failure(
                 command.request_id, at=now, error=f"{type(error).__name__}: {error}"[:255]
             )
-            raise ReclipEvidenceError("reclip_registration_failed", str(error)) from error
+            raise ReclipEvidenceError(
+                "reclip_registration_failed", str(error), terminal=False
+            ) from error
         evidence_id = cast(str, payloads[0]["evidence_id"])
         station.mark_reclip_registered(command.request_id, at=now, evidence_id=evidence_id)
         return ReclipEvidenceResult(evidence_id=evidence_id)
+
+    @staticmethod
+    def _terminal(
+        station: StationStore,
+        request_id: str,
+        *,
+        code: str,
+        detail: str,
+        now: HostInstant,
+    ) -> ReclipEvidenceError:
+        """冻结首次终局失败原因并返回对应错误, 使重试复用同一结案 (S039/AC1)。"""
+        station.record_reclip_terminal_failure(request_id, at=now, code=code, detail=detail)
+        return ReclipEvidenceError(code, detail)
 
     def _begin(self, station: StationStore, command: ReclipEvidenceCommand) -> PendingReclip:
         row = station.evidence_at(instance_id=command.instance_id, anchor=command.anchor)
@@ -181,7 +254,11 @@ class ReclipEvidenceExecutor:
         )
 
     def _slice(
-        self, station: StationStore, record: PendingReclip, now: HostInstant
+        self,
+        station: StationStore,
+        record: PendingReclip,
+        command: ReclipEvidenceCommand,
+        now: HostInstant,
     ) -> PendingReclip:
         assert record.identity is not None
         try:
@@ -192,19 +269,30 @@ class ReclipEvidenceExecutor:
                 directory=self._configuration.evidence_directory,
                 identity=record.identity,
             )
-            clip_set = recovered or slice_evidence(
-                _pending_evidence(record),
-                host_id=self._host_id,
-                recording_directory=self._recording_directory,
-                ffmpeg_binary=self._ffmpeg_binary,
-                configuration=self._configuration,
-                identity=record.identity,
-            )
+            if recovered is not None:
+                # 已定稿产物优先于过期判定: 租约/重启后不得因中心截止而丢掉已拥有的产物。
+                clip_set = recovered
+            else:
+                self._reject_if_expired(station, record, command, now)
+                clip_set = slice_evidence(
+                    _pending_evidence(record),
+                    host_id=self._host_id,
+                    recording_directory=self._recording_directory,
+                    ffmpeg_binary=self._ffmpeg_binary,
+                    configuration=self._configuration,
+                    identity=record.identity,
+                )
+            _require_full_reclip_coverage(record, clip_set)
+        except ReclipEvidenceError:
+            raise
         except EvidenceMediaError as error:
-            station.record_reclip_failure(
-                record.request_id, at=now, error=f"{error.reason}: {error.detail}"
-            )
-            raise ReclipEvidenceError(error.reason, error.detail) from error
+            raise self._terminal(
+                station,
+                record.request_id,
+                code=error.reason,
+                detail=error.detail,
+                now=now,
+            ) from error
         station.record_reclip_slice(
             record.request_id,
             at=now,
@@ -216,6 +304,24 @@ class ReclipEvidenceExecutor:
         if updated is None:
             raise ReclipEvidenceError("reclip_record_missing", "reclip record disappeared")
         return updated
+
+    def _reject_if_expired(
+        self,
+        station: StationStore,
+        record: PendingReclip,
+        command: ReclipEvidenceCommand,
+        now: HostInstant,
+    ) -> None:
+        """仅当尚未产出任何产物时才按中心截止报终局归档过期; 已定稿产物已在前面复用。"""
+        if self._wall_clock() < command.available_until:
+            return
+        raise self._terminal(
+            station,
+            record.request_id,
+            code="archive_expired",
+            detail="center reclip deadline passed before any artifact was produced",
+            now=now,
+        )
 
     def _payloads(self, record: PendingReclip) -> tuple[dict[str, object], ...]:
         return evidence_registration_payloads(
@@ -238,13 +344,22 @@ class ReclipCommandRunner:
         self._executor = executor
 
     def run_once(self) -> bool:
-        """处理一条命令; 无命令返回 False。失败保留待办原因, 不回报伪成功 (S039 结案)。"""
+        """处理一条命令; 无命令返回 False。终局失败回报具体原因, 中心不可达保留待办 (S039)。"""
         claim = self._transport.claim_next()
         if claim is None:
             return False
         try:
             result = self._executor.execute(claim.command)
-        except ReclipEvidenceError:
+        except ReclipEvidenceError as error:
+            if not error.terminal:
+                return True
+            self._transport.report(
+                claim,
+                ReclipEvidenceResult(
+                    failure_code=error.reason,
+                    detail=error.detail[:255] if error.detail else None,
+                ),
+            )
             return True
         self._transport.report(claim, result)
         return True

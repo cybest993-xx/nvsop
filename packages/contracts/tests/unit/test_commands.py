@@ -144,6 +144,7 @@ class ReclipEvidenceContractTest(unittest.TestCase):
             anchor=100.0,
             window_start=90.0,
             window_end=110.0,
+            available_until=1_700_000_000.0,
         )
 
     def test_command_round_trips_as_a_strict_object(self) -> None:
@@ -169,6 +170,12 @@ class ReclipEvidenceContractTest(unittest.TestCase):
                 anchor=float("nan"),
                 window_start=90.0,
                 window_end=110.0,
+                available_until=1_700_000_000.0,
+            )
+        # 缺少中心截止的旧形状被拒绝, 来源机不得自行猜归档截止。
+        with self.assertRaises(ValueError):
+            reclip_evidence_command_from_wire(
+                {key: value for key, value in document.items() if key != "available_until"}
             )
 
     def test_claim_round_trips_and_rejects_empty_lease_fields(self) -> None:
@@ -193,6 +200,32 @@ class ReclipEvidenceContractTest(unittest.TestCase):
         self.assertEqual(result, reclip_evidence_result_from_wire(document))
         with self.assertRaises(ValueError):
             ReclipEvidenceResult(evidence_id="")
+
+    def test_failure_result_round_trips_without_reusing_the_success_shape(self) -> None:
+        result = ReclipEvidenceResult(
+            failure_code="material_missing", detail="no recording segment overlaps the window"
+        )
+
+        document = reclip_evidence_result_to_wire(result)
+
+        self.assertEqual({"evidence_id", "failure_code", "detail"}, set(document))
+        self.assertIsNone(document["evidence_id"])
+        self.assertEqual(result, reclip_evidence_result_from_wire(document))
+        # 成功与失败互斥: 缺失败原因或同时携带成功引用都必须拒绝, 不静默降级。
+        with self.assertRaises(ValueError):
+            ReclipEvidenceResult(failure_code="")
+        with self.assertRaises(ValueError):
+            ReclipEvidenceResult(evidence_id="host-1/camera-a.mp4", failure_code="material_missing")
+        with self.assertRaises(ValueError):
+            reclip_evidence_result_from_wire({**document, "evidence_id": "host-1/camera-a.mp4"})
+        with self.assertRaises(ValueError):
+            reclip_evidence_result_from_wire(
+                {"evidence_id": None, "failure_code": "", "detail": None}
+            )
+        with self.assertRaises(ValueError):
+            reclip_evidence_result_from_wire(
+                {"evidence_id": "host-1/camera-a.mp4", "failure_code": None}
+            )
 
 
 if __name__ == "__main__":

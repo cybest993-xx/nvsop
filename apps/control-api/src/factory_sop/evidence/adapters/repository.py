@@ -263,6 +263,26 @@ class PostgresEvidenceReclipRequestRepository(EvidenceReclipRequestRepository):
         )
         return result.rowcount == 1
 
+    def mark_failed(self, request_id: UUID, *, failure_reason: str) -> bool:
+        """仅在 ``PENDING`` 时原子转为 ``FAILED``；不覆盖已成功/已失败终态。"""
+        table = cast(Table, EvidenceReclipRequestRow.__table__)
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(table)
+                .where(
+                    table.c.request_id == request_id,
+                    table.c.status == ReclipRequestStatus.PENDING.value,
+                )
+                .values(
+                    status=ReclipRequestStatus.FAILED.value,
+                    failure_reason=failure_reason,
+                    result_evidence_id=None,
+                )
+            ),
+        )
+        return result.rowcount == 1
+
     def list_for_evidence(self, evidence_id: str) -> tuple[EvidenceReclipRequest, ...]:
         rows = self._session.scalars(
             select(EvidenceReclipRequestRow)

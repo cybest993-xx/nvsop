@@ -58,7 +58,7 @@ from edge_runtime.connectors.writes import (
     WriteAttempted,
     WriteRequest,
 )
-from edge_runtime.evidence_media import EvidenceMediaWorker
+from edge_runtime.evidence_media import EvidenceMediaConfiguration, EvidenceMediaWorker
 from edge_runtime.evidence_reporting import EvidenceReferenceReconciler
 from edge_runtime.judgment.model import HostInstant, HostLiveness
 from edge_runtime.local_state import (
@@ -109,8 +109,16 @@ from edge_runtime.supervisor.delegated_commands import (
     LocalConnectorRegistry,
     LocalProbeResult,
 )
-from edge_runtime.supervisor.delegated_transport import CommandTransportError, HttpCommandTransport
+from edge_runtime.supervisor.delegated_transport import (
+    CommandTransportError,
+    HttpCommandTransport,
+    HttpReclipCommandTransport,
+)
 from edge_runtime.supervisor.inputs import StreamHealthObserved
+from edge_runtime.supervisor.reclip import (
+    ReclipCommandRunner,
+    ReclipEvidenceExecutor,
+)
 from edge_runtime.supervisor.startup import resume_station
 from edge_runtime.supervisor.station import OutputDisposalRequest, Reaction, StationSupervisor
 
@@ -378,6 +386,34 @@ class ConnectionTestCommandLoop:
 
     def run_once(self) -> bool:
         """运行一轮真实命令处理, 供进程循环和系统接缝共同使用。"""
+        return self._runner.run_once()
+
+    def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
+        """持续运行, 传输失败只影响本轮并交给下一轮重新领取。"""
+        while not should_stop():
+            with suppress(CommandTransportError):
+                self.run_once()
+            self._sleep(self._poll_interval)
+
+
+class ReclipCommandLoop:
+    """持续驱动再切片命令的领取、本机真实执行与终局回报; 中心暂时不可达时安全重试。"""
+
+    def __init__(
+        self,
+        *,
+        runner: ReclipCommandRunner,
+        poll_interval: float,
+        sleep_fn: Callable[[float], None] = sleep,
+    ) -> None:
+        if poll_interval <= 0:
+            raise ValueError("reclip poll interval must be positive")
+        self._runner = runner
+        self._poll_interval = poll_interval
+        self._sleep = sleep_fn
+
+    def run_once(self) -> bool:
+        """运行一轮真实再切片命令处理, 供进程循环与系统接缝共同使用。"""
         return self._runner.run_once()
 
     def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
@@ -828,6 +864,11 @@ class _RuntimeCycleRunner:
         if worker is not None:
             worker.run_forever(should_stop=self._stop_requested, limit=_REPORT_WORK_BUDGET)
 
+    def _run_reclip(self) -> None:
+        loop = self._runtime._reclip_loop
+        if loop is not None:
+            loop.run_forever(should_stop=self._stop_requested)
+
     def _run_configuration(self) -> None:
         runtime = self._runtime
         synchronizer = runtime._configuration_sync
@@ -947,6 +988,18 @@ class _RuntimeCycleRunner:
                 if runtime._evidence_registration is not None
                 else []
             ),
+            *(
+                [
+                    threading.Thread(
+                        target=self._guard,
+                        args=(lambda: self._isolate_center_worker("reclip", self._run_reclip),),
+                        name="edge-reclip-commands",
+                        daemon=True,
+                    )
+                ]
+                if runtime._reclip_loop is not None
+                else []
+            ),
             threading.Thread(
                 target=self._guard,
                 args=(lambda: self._isolate_center_worker("command", self._run_command),),
@@ -1007,6 +1060,7 @@ class AutonomousRuntime:
         media: MediaRuntime | None = None,
         evidence: EvidenceMediaWorker | None = None,
         evidence_registration: EvidenceReferenceReconciler | None = None,
+        reclip_loop: ReclipCommandLoop | None = None,
         report_reconciler: HostReportReconciler | None = None,
         report_wake: threading.Event | None = None,
         configuration_sync: ConfigurationSynchronizer | None = None,
@@ -1025,6 +1079,7 @@ class AutonomousRuntime:
         self._media = media
         self._evidence = evidence
         self._evidence_registration = evidence_registration
+        self._reclip_loop = reclip_loop
         self._report_reconciler = report_reconciler
         self._report_wake = report_wake or threading.Event()
         self._configuration_sync = configuration_sync
@@ -1582,6 +1637,74 @@ def build_connection_test_loop_from_file(
     )
 
 
+def build_reclip_runner(
+    *,
+    center_url: str,
+    host_id: str,
+    host_private_key: str,
+    command_timeout: float,
+    state: LocalState,
+    recording_directory: Path,
+    ffmpeg_binary: Path,
+    evidence_configuration: EvidenceMediaConfiguration,
+    ssl_context: ssl.SSLContext | None = None,
+) -> ReclipCommandRunner:
+    """装配生产再切片执行器: 专用签名传输 + 复用首次切片能力的本机执行器。"""
+
+    def client() -> CenterClient:
+        return CenterClient(
+            center_url=center_url,
+            host_id=host_id,
+            host_private_key=host_private_key,
+            timeout=command_timeout,
+            ssl_context=ssl_context,
+        )
+
+    return ReclipCommandRunner(
+        transport=HttpReclipCommandTransport(client=client()),
+        executor=ReclipEvidenceExecutor(
+            state=state,
+            host_id=host_id,
+            recording_directory=recording_directory,
+            ffmpeg_binary=ffmpeg_binary,
+            configuration=evidence_configuration,
+            client=client(),
+        ),
+    )
+
+
+def build_reclip_loop(
+    *,
+    center_url: str,
+    host_id: str,
+    host_private_key: str,
+    command_timeout: float,
+    command_poll_interval: float,
+    state: LocalState,
+    recording_directory: Path,
+    ffmpeg_binary: Path,
+    evidence_configuration: EvidenceMediaConfiguration,
+    ssl_context: ssl.SSLContext | None = None,
+    sleep_fn: Callable[[float], None] = sleep,
+) -> ReclipCommandLoop:
+    """装配生产再切片命令循环, 供自治运行时按中心轮询节奏领取与回报。"""
+    return ReclipCommandLoop(
+        runner=build_reclip_runner(
+            center_url=center_url,
+            host_id=host_id,
+            host_private_key=host_private_key,
+            command_timeout=command_timeout,
+            state=state,
+            recording_directory=recording_directory,
+            ffmpeg_binary=ffmpeg_binary,
+            evidence_configuration=evidence_configuration,
+            ssl_context=ssl_context,
+        ),
+        poll_interval=command_poll_interval,
+        sleep_fn=sleep_fn,
+    )
+
+
 def _evidence_source_factory(
     media: MediaRuntimeConfiguration | None,
 ) -> Callable[[str], EvidenceSource | None] | None:
@@ -1695,6 +1818,22 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
             if media_configuration is not None and evidence_configuration is not None
             else None
         )
+        reclip_loop = (
+            build_reclip_loop(
+                center_url=config.center_url,
+                host_id=config.host_id,
+                host_private_key=config.host_private_key,
+                command_timeout=config.command_timeout,
+                command_poll_interval=config.command_poll_interval,
+                state=state,
+                recording_directory=media_configuration.recording_directory,
+                ffmpeg_binary=media_configuration.ffmpeg_binary,
+                evidence_configuration=evidence_configuration,
+                ssl_context=config.ssl_context,
+            )
+            if media_configuration is not None and evidence_configuration is not None
+            else None
+        )
         runtime = AutonomousRuntime(
             command_loop=composition.command_loop,
             stations=composition.stations,
@@ -1712,6 +1851,7 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
                 if evidence_worker is not None and evidence_configuration is not None
                 else None
             ),
+            reclip_loop=reclip_loop,
             report_reconciler=composition.report_reconciler,
             report_wake=report_wake,
             configuration_sync=configuration_sync,

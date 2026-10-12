@@ -249,6 +249,9 @@ class PendingReclip:
     registered_at: float | None
     attempts: int
     last_error: str | None
+    # 首次终局失败的冻结原因; 一旦写入不再改写, 使重启/重复领取复用同一结案 (S039)。
+    terminal_error_code: str | None = None
+    terminal_error_detail: str | None = None
 
 
 class StationQueues:
@@ -940,6 +943,32 @@ class StationQueues:
                 (at.seconds, error, self._station_id, request_id),
             )
 
+    def record_reclip_terminal_failure(
+        self, request_id: str, *, at: HostInstant, code: str, detail: str
+    ) -> None:
+        """冻结首次终局失败原因; 已冻结时不再改写, 使重启/重复领取复用同一结案 (S039)。
+
+        只写本机索引, 不删除已有产物; 终局原因一旦写入, 后续素材恢复或不同异常都不能重切或改因。
+        """
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_reclip_request
+                   SET attempts = attempts + 1, last_attempt_at = ?, last_error = ?,
+                       terminal_error_code = COALESCE(terminal_error_code, ?),
+                       terminal_error_detail = COALESCE(terminal_error_detail, ?)
+                 WHERE station_id = ? AND request_id = ?
+                """,
+                (
+                    at.seconds,
+                    f"{code}: {detail}"[:255],
+                    code,
+                    detail[:255] if detail else None,
+                    self._station_id,
+                    request_id,
+                ),
+            )
+
     def _reclip_from_row(self, row: sqlite3.Row) -> PendingReclip:
         return PendingReclip(
             request_id=str(row["request_id"]),
@@ -961,6 +990,8 @@ class StationQueues:
             registered_at=None if row["registered_at"] is None else float(row["registered_at"]),
             attempts=int(row["attempts"]),
             last_error=row["last_error"],
+            terminal_error_code=row["terminal_error_code"],
+            terminal_error_detail=row["terminal_error_detail"],
         )
 
     def _evidence_rows(

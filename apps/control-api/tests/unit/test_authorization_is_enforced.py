@@ -523,6 +523,8 @@ EXEMPT = {
     ("POST", f"{API_PREFIX}/auth/session"),
     ("DELETE", f"{API_PREFIX}/auth/session"),
     ("POST", f"{API_PREFIX}/device-commands/{{command_id}}/result"),
+    # 再切片结果回报同样是主机签名机器端点, 不接受浏览器会话或人类权限。
+    ("POST", f"{API_PREFIX}/device-commands/{{command_id}}/reclip-result"),
     # 主机配置上报用公钥签名认证，不接受浏览器会话或人类权限。
     ("POST", f"{API_PREFIX}/templates/configuration-reports"),
     # Historical configuration confirmation is also a host-signed machine endpoint.

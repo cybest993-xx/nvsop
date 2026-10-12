@@ -193,7 +193,11 @@ def connection_test_result_from_wire(value: Mapping[str, object]) -> ConnectionT
 
 @dataclass(frozen=True, slots=True)
 class ReclipEvidenceCommand:
-    """目标推理机可执行的再切片命令: 原锚点固定, 只给并集窗口与新请求身份。"""
+    """目标推理机可执行的再切片命令: 原锚点固定, 只给并集窗口、新请求身份与中心截止。
+
+    ``available_until`` 是中心按原登记冻结墙钟映射与来源机滚动窗口算出的权威截止时刻
+    （epoch 秒）；来源机不得用本机当前配置猜测归档截止, 只在该时刻之后报终局过期。
+    """
 
     command_id: str
     request_id: str
@@ -202,6 +206,7 @@ class ReclipEvidenceCommand:
     anchor: float
     window_start: float
     window_end: float
+    available_until: float
 
     def __post_init__(self) -> None:
         if not self.command_id or not self.request_id or not self.station_id:
@@ -212,6 +217,7 @@ class ReclipEvidenceCommand:
             ("anchor", self.anchor),
             ("window_start", self.window_start),
             ("window_end", self.window_end),
+            ("available_until", self.available_until),
         ):
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise ValueError(f"reclip command {name} must be a finite number")
@@ -236,13 +242,27 @@ class ReclipEvidenceClaim:
 
 @dataclass(frozen=True, slots=True)
 class ReclipEvidenceResult:
-    """再切片成功回报: 只声明中心已追加的新证据引用身份, 不复制媒体字节。"""
+    """再切片终局回报: 成功只声明中心已追加的新引用身份, 失败声明机器可读原因。
 
-    evidence_id: str
+    成功与失败互斥: 成功携带 ``evidence_id``; 失败携带 ``failure_code``（及可选 ``detail``），
+    不伪造成功引用, 也不把失败猜成成功。
+    """
+
+    evidence_id: str | None = None
+    failure_code: str | None = None
+    detail: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.evidence_id:
-            raise ValueError("reclip result evidence_id must not be empty")
+        if self.evidence_id is not None:
+            if not self.evidence_id:
+                raise ValueError("reclip result evidence_id must not be empty")
+            if self.failure_code is not None or self.detail is not None:
+                raise ValueError("a successful reclip result must not carry a failure")
+            return
+        if not self.failure_code:
+            raise ValueError("a failed reclip result must carry a failure code")
+        if self.detail is not None and not isinstance(self.detail, str):
+            raise ValueError("reclip result detail must be a string or null")
 
 
 def reclip_evidence_command_to_wire(command: ReclipEvidenceCommand) -> dict[str, object]:
@@ -256,6 +276,7 @@ def reclip_evidence_command_to_wire(command: ReclipEvidenceCommand) -> dict[str,
         "anchor": command.anchor,
         "window_start": command.window_start,
         "window_end": command.window_end,
+        "available_until": command.available_until,
     }
 
 
@@ -270,6 +291,7 @@ def reclip_evidence_command_from_wire(value: Mapping[str, object]) -> ReclipEvid
         "anchor",
         "window_start",
         "window_end",
+        "available_until",
     }
     if set(value) != required or value.get("command_type") != "reclip_evidence":
         raise ValueError("reclip command has unsupported fields")
@@ -289,7 +311,7 @@ def reclip_evidence_command_from_wire(value: Mapping[str, object]) -> ReclipEvid
     if isinstance(instance_id, bool) or not isinstance(instance_id, int):
         raise ValueError("reclip command has an invalid instance_id")
     numbers: dict[str, float] = {}
-    for name in ("anchor", "window_start", "window_end"):
+    for name in ("anchor", "window_start", "window_end", "available_until"):
         raw = value[name]
         if isinstance(raw, bool) or not isinstance(raw, (int, float)):
             raise ValueError(f"reclip command has an invalid {name}")
@@ -302,6 +324,7 @@ def reclip_evidence_command_from_wire(value: Mapping[str, object]) -> ReclipEvid
         anchor=numbers["anchor"],
         window_start=numbers["window_start"],
         window_end=numbers["window_end"],
+        available_until=numbers["available_until"],
     )
 
 
@@ -336,18 +359,34 @@ def reclip_evidence_claim_from_wire(value: Mapping[str, object]) -> ReclipEviden
 
 
 def reclip_evidence_result_to_wire(result: ReclipEvidenceResult) -> dict[str, object]:
-    """把再切片成功回报编码为严格对象。"""
-    return {"evidence_id": result.evidence_id}
+    """把再切片终局回报编码为严格对象; 成功保持原 ``{evidence_id}`` 形状。"""
+    if result.evidence_id is not None:
+        return {"evidence_id": result.evidence_id}
+    return {
+        "evidence_id": None,
+        "failure_code": result.failure_code,
+        "detail": result.detail,
+    }
 
 
 def reclip_evidence_result_from_wire(value: Mapping[str, object]) -> ReclipEvidenceResult:
-    """解析再切片成功回报并拒绝未声明字段。"""
-    if set(value) != {"evidence_id"}:
-        raise ValueError("reclip result has unsupported fields")
-    evidence_id = value["evidence_id"]
-    if not isinstance(evidence_id, str) or not evidence_id:
-        raise ValueError("reclip result has an invalid evidence_id")
-    return ReclipEvidenceResult(evidence_id=evidence_id)
+    """解析成功或失败终局回报并拒绝未声明字段; 成功形状与历史版本完全一致。"""
+    if set(value) == {"evidence_id"}:
+        evidence_id = value["evidence_id"]
+        if not isinstance(evidence_id, str) or not evidence_id:
+            raise ValueError("reclip result has an invalid evidence_id")
+        return ReclipEvidenceResult(evidence_id=evidence_id)
+    if set(value) == {"evidence_id", "failure_code", "detail"}:
+        if value["evidence_id"] is not None:
+            raise ValueError("a failed reclip result must not carry an evidence_id")
+        failure_code = value["failure_code"]
+        detail = value["detail"]
+        if not isinstance(failure_code, str) or not failure_code:
+            raise ValueError("reclip result has an invalid failure code")
+        if detail is not None and not isinstance(detail, str):
+            raise ValueError("reclip result has an invalid detail")
+        return ReclipEvidenceResult(failure_code=failure_code, detail=detail)
+    raise ValueError("reclip result has unsupported fields")
 
 
 def _validate_configuration(value: Mapping[str, object]) -> None:

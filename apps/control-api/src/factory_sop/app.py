@@ -75,6 +75,7 @@ from factory_sop.device.errors import DeviceRefusedError
 from factory_sop.device.errors import refusal_problem as device_refusal_problem
 from factory_sop.evidence.adapters import dependencies as evidence_dependencies
 from factory_sop.evidence.adapters.playback_routes import router as evidence_playback_router
+from factory_sop.evidence.adapters.reclip_routes import router as evidence_reclip_router
 from factory_sop.evidence.adapters.routes import router as evidence_router
 from factory_sop.evidence.playback import EvidenceAccessRefusedError
 from factory_sop.execution.adapters import dependencies as execution_dependencies
@@ -226,6 +227,7 @@ def create_app(
     app.include_router(configuration_router, prefix=API_PREFIX)
     app.include_router(inference_backends_router, prefix=API_PREFIX)
     app.include_router(device_commands_router, prefix=API_PREFIX)
+    app.include_router(evidence_reclip_router, prefix=API_PREFIX)
     app.include_router(stations_router, prefix=API_PREFIX)
     app.include_router(cameras_router, prefix=API_PREFIX)
     app.include_router(connectors_router, prefix=API_PREFIX)

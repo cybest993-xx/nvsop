@@ -3239,7 +3239,7 @@ export type ReasonCode =
 /**
  * ReclipRequestStatus
  *
- * 再切片委托的生命周期状态；成功追加新引用，终态失败由后续执行票写入。
+ * 再切片委托的生命周期状态；成功追加新引用，终局失败记录可查询原因。
  */
 export type ReclipRequestStatus = 'pending' | 'succeeded' | 'failed'
 
@@ -6251,6 +6251,52 @@ export type ClaimNextDeviceCommandResponses = {
 export type ClaimNextDeviceCommandResponse =
   ClaimNextDeviceCommandResponses[keyof ClaimNextDeviceCommandResponses]
 
+export type ClaimNextReclipCommandData = {
+  body?: never
+  headers: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID': string
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/device-commands/reclip/next'
+}
+
+export type ClaimNextReclipCommandErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ClaimNextReclipCommandError =
+  ClaimNextReclipCommandErrors[keyof ClaimNextReclipCommandErrors]
+
+export type ClaimNextReclipCommandResponses = {
+  /**
+   * Successful Response
+   */
+  200: unknown
+}
+
 export type ReadDeviceCommandData = {
   body?: never
   path: {
@@ -6300,6 +6346,66 @@ export type ReadDeviceCommandResponses = {
 }
 
 export type ReadDeviceCommandResponse = ReadDeviceCommandResponses[keyof ReadDeviceCommandResponses]
+
+export type CompleteReclipCommandData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  headers: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID': string
+    /**
+     * X-Command-Claim-Token
+     */
+    'X-Command-Claim-Token': string
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path: {
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/device-commands/{command_id}/reclip-result'
+}
+
+export type CompleteReclipCommandErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CompleteReclipCommandError =
+  CompleteReclipCommandErrors[keyof CompleteReclipCommandErrors]
+
+export type CompleteReclipCommandResponses = {
+  /**
+   * Successful Response
+   */
+  200: unknown
+}
 
 export type CompleteDeviceCommandData = {
   body: ConnectionTestResultDocument

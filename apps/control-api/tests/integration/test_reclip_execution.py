@@ -2,7 +2,7 @@
 
 `TestClient` 驱动实际 FastAPI 应用与每请求事务；会话、权限、主机签名与证据登记复用
 `test_evidence_reclip` / `test_evidence_access` / `test_runtime_observation_http` 的既有
-helper。再切片领取端点默认不挂载在生产 `create_app` 上，这里显式装配以验证完整链路。
+helper。再切片领取端点由生产 `create_app` 挂载，这里直接驱动该应用验证完整链路。
 """
 
 from __future__ import annotations
@@ -21,7 +21,6 @@ from test_runtime_observation_http import runtime_topology as runtime_topology
 
 from factory_sop.app import API_PREFIX, create_app
 from factory_sop.auth.adapters.cookies import CSRF_COOKIE, CSRF_HEADER
-from factory_sop.evidence.adapters.reclip_routes import router as reclip_router
 from factory_sop.persistence import session_factory
 from nvsop_contracts import reclip_evidence_claim_from_wire
 
@@ -31,10 +30,8 @@ WINDOW_SECONDS = 604800
 
 
 def _reclip_app(engine: Engine) -> FastAPI:
-    """显式装配再切片端点；生产 `create_app` 不含它，真实派发保持关闭 (S039 就绪前)。"""
-    app = create_app(settings(), session_factory=session_factory(engine))
-    app.include_router(reclip_router, prefix=API_PREFIX)
-    return app
+    """生产 ``create_app`` 已挂载再切片端点；此处按同一接缝构造应用。"""
+    return create_app(settings(), session_factory=session_factory(engine))
 
 
 def _reclip_registration(
@@ -133,6 +130,8 @@ def test_signed_reclip_claim_appends_reference_and_settles_success(
             assert claim.command.instance_id == 7
             assert claim.command.anchor == 100.0
             assert (claim.command.window_start, claim.command.window_end) == (90.0, 110.0)
+            # 权威截止由中心按原登记冻结墙钟与滚动窗口算出, 随命令下发。
+            assert claim.command.available_until == 90.0 + wall_offset + WINDOW_SECONDS
 
             # 伪造的 reclip 登记 (无对应请求) 被拒, 不追加无来源关联的代次。
             forged = _post_as_host(
@@ -386,9 +385,428 @@ def test_reclip_settlement_requires_the_matching_request_scope(
             )
 
 
-def test_unmounted_reclip_router_is_absent_from_production_app(engine: Engine) -> None:
-    """生产应用不挂载再切片端点, 故默认 Edge 无法领取, 真实派发保持关闭。"""
+def test_claim_settles_a_command_whose_request_vanished(
+    engine: Engine, runtime_topology: RuntimeTopology
+) -> None:
+    """请求在领取前消失时, 命令必须终局结案, 不静默 204 留下永久领取循环。"""
+    _grant(engine)
+    host_id = str(runtime_topology.host.id)
+    original_id = f"{host_id}/reclip-vanished.mp4"
+    app = _reclip_app(engine)
+    base = f"{API_PREFIX}/evidence/{original_id}/reclip-requests"
+    wall_offset = datetime.now(UTC).timestamp() - 100.0
+    request_id = uuid4()
+    body = {
+        "request_id": str(request_id),
+        "generation": "original",
+        "before_seconds": 2.0,
+        "after_seconds": 3.0,
+    }
+    try:
+        with (
+            TestClient(app, base_url="https://testserver") as browser,
+            TestClient(app, base_url="https://testserver") as host,
+        ):
+            assert (
+                _post_as_host(
+                    host,
+                    runtime_topology,
+                    path=REGISTRATIONS,
+                    body=_registration(
+                        runtime_topology,
+                        original_id,
+                        wall_offset=wall_offset,
+                        required_from=90.0,
+                        required_to=110.0,
+                    ),
+                ).status_code
+                == 200
+            )
+            assert browser.post(SESSION_PATH, json=CREDENTIALS).status_code == 201
+            csrf = {CSRF_HEADER: browser.cookies[CSRF_COOKIE]}
+            assert browser.post(base, json=body, headers=csrf).status_code == 200
+            # 模拟原证据被删除 (cascade 掉请求) 而命令仍在队列。
+            with engine.begin() as connection:
+                connection.execute(
+                    text("DELETE FROM evidence_reclip_request WHERE request_id = :id"),
+                    {"id": request_id},
+                )
+            claimed = host.get(
+                RECLIP_CLAIM_PATH,
+                headers=_host_headers(runtime_topology, method="GET", path=RECLIP_CLAIM_PATH),
+            )
+            assert claimed.status_code == 204, claimed.text
+            with engine.begin() as connection:
+                row = connection.execute(
+                    text(
+                        "SELECT status, failure_code FROM device_pending_command "
+                        "WHERE target_id = :id"
+                    ),
+                    {"id": request_id},
+                ).one()
+            assert row.status == "failed"
+            assert row.failure_code == "reclip_source_missing"
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM evidence_evidence WHERE evidence_id = :a"),
+                {"a": original_id},
+            )
+            connection.execute(
+                text("DELETE FROM device_pending_command WHERE host_id = :host_id"),
+                {"host_id": runtime_topology.host.id},
+            )
+            connection.execute(text("TRUNCATE auth_user CASCADE"))
+            connection.execute(
+                text("DELETE FROM auth_role WHERE code = :code"), {"code": ROLE_CODE}
+            )
+
+
+def test_production_app_mounts_reclip_endpoints(engine: Engine) -> None:
+    """生产应用挂载再切片签名端点, 使 S039 失败/成功结案都可达。"""
     app = create_app(settings(), session_factory=session_factory(engine))
     paths = set(app.openapi()["paths"])
-    assert RECLIP_CLAIM_PATH not in paths
-    assert f"{API_PREFIX}/device-commands/{{command_id}}/reclip-result" not in paths
+    assert RECLIP_CLAIM_PATH in paths
+    assert f"{API_PREFIX}/device-commands/{{command_id}}/reclip-result" in paths
+
+
+def test_signed_reclip_failure_settles_a_queryable_terminal_reason(
+    engine: Engine, runtime_topology: RuntimeTopology
+) -> None:
+    """素材已过期/缺失等终局失败: 命令与请求同事务结案, 原因可查询且不动原证据。"""
+    _grant(engine)
+    host_id = str(runtime_topology.host.id)
+    station_id = str(runtime_topology.station.id)
+    original_id = f"{host_id}/reclip-failure-source.mp4"
+    app = _reclip_app(engine)
+    base = f"{API_PREFIX}/evidence/{original_id}/reclip-requests"
+    wall_offset = datetime.now(UTC).timestamp() - 100.0
+    request_id = uuid4()
+    body = {
+        "request_id": str(request_id),
+        "generation": "original",
+        "before_seconds": 2.0,
+        "after_seconds": 3.0,
+    }
+    try:
+        with (
+            TestClient(app, base_url="https://testserver") as browser,
+            TestClient(app, base_url="https://testserver") as host,
+        ):
+            registered = _post_as_host(
+                host,
+                runtime_topology,
+                path=REGISTRATIONS,
+                body=_registration(
+                    runtime_topology,
+                    original_id,
+                    wall_offset=wall_offset,
+                    required_from=90.0,
+                    required_to=110.0,
+                ),
+            )
+            assert registered.status_code == 200, registered.text
+            assert browser.post(SESSION_PATH, json=CREDENTIALS).status_code == 201
+            csrf = {CSRF_HEADER: browser.cookies[CSRF_COOKIE]}
+            created = browser.post(base, json=body, headers=csrf)
+            assert created.status_code == 200, created.text
+            claim = reclip_evidence_claim_from_wire(
+                host.get(
+                    RECLIP_CLAIM_PATH,
+                    headers=_host_headers(runtime_topology, method="GET", path=RECLIP_CLAIM_PATH),
+                ).json()
+            )
+            result_path = f"{API_PREFIX}/device-commands/{claim.command.command_id}/reclip-result"
+            failure_body: dict[str, object] = {
+                "evidence_id": None,
+                "failure_code": "material_missing",
+                "detail": "no recording segment overlaps the window",
+            }
+            reported = host.post(
+                result_path,
+                json=failure_body,
+                headers=_host_headers(
+                    runtime_topology, method="POST", path=result_path, body=failure_body
+                )
+                | {"X-Command-Claim-Token": claim.claim_token},
+            )
+            assert reported.status_code == 200, reported.text
+            assert reported.json() == {
+                "accepted": True,
+                "request_id": str(request_id),
+                "status": "failed",
+                "failure_reason": "material_missing",
+            }
+            with engine.begin() as connection:
+                request_row = connection.execute(
+                    text(
+                        "SELECT status, failure_reason, result_evidence_id "
+                        "FROM evidence_reclip_request WHERE request_id = :id"
+                    ),
+                    {"id": request_id},
+                ).one()
+                command_row = connection.execute(
+                    text(
+                        "SELECT status, failure_code, result_detail "
+                        "FROM device_pending_command WHERE id = :id"
+                    ),
+                    {"id": claim.command.command_id},
+                ).one()
+            assert request_row.status == "failed"
+            assert request_row.failure_reason == "material_missing"
+            assert request_row.result_evidence_id is None
+            assert command_row.status == "failed"
+            assert command_row.failure_code == "material_missing"
+            assert command_row.result_detail == "no recording segment overlaps the window"
+            # 失败不覆盖原证据: 原引用仍可回看, 且失败原因按查看权限可查。
+            listing = browser.get(
+                f"{API_PREFIX}/evidence",
+                params={"station_id": station_id, "instance_id": 7},
+            ).json()
+            original = next(item for item in listing if item["evidence_id"] == original_id)
+            assert original["status"] == "available"
+            queried = browser.get(base).json()
+            assert queried[0]["status"] == "failed"
+            assert queried[0]["failure_reason"] == "material_missing"
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM evidence_evidence WHERE evidence_id = :a"),
+                {"a": original_id},
+            )
+            connection.execute(
+                text("DELETE FROM device_pending_command WHERE host_id = :host_id"),
+                {"host_id": runtime_topology.host.id},
+            )
+            connection.execute(text("TRUNCATE auth_user CASCADE"))
+            connection.execute(
+                text("DELETE FROM auth_role WHERE code = :code"), {"code": ROLE_CODE}
+            )
+
+
+def test_reclip_failure_cannot_overwrite_a_successful_generation(
+    engine: Engine, runtime_topology: RuntimeTopology
+) -> None:
+    """已成功结案的请求不得被迟到的失败回报改写 (AC2)。"""
+    _grant(engine)
+    host_id = str(runtime_topology.host.id)
+    original_id = f"{host_id}/reclip-keep-source.mp4"
+    new_id = f"{host_id}/reclip-keep-result.mp4"
+    app = _reclip_app(engine)
+    base = f"{API_PREFIX}/evidence/{original_id}/reclip-requests"
+    wall_offset = datetime.now(UTC).timestamp() - 100.0
+    request_id = uuid4()
+    body = {
+        "request_id": str(request_id),
+        "generation": "original",
+        "before_seconds": 2.0,
+        "after_seconds": 3.0,
+    }
+    try:
+        with (
+            TestClient(app, base_url="https://testserver") as browser,
+            TestClient(app, base_url="https://testserver") as host,
+        ):
+            assert (
+                _post_as_host(
+                    host,
+                    runtime_topology,
+                    path=REGISTRATIONS,
+                    body=_registration(
+                        runtime_topology,
+                        original_id,
+                        wall_offset=wall_offset,
+                        required_from=90.0,
+                        required_to=110.0,
+                    ),
+                ).status_code
+                == 200
+            )
+            assert browser.post(SESSION_PATH, json=CREDENTIALS).status_code == 201
+            csrf = {CSRF_HEADER: browser.cookies[CSRF_COOKIE]}
+            assert browser.post(base, json=body, headers=csrf).status_code == 200
+            claim = reclip_evidence_claim_from_wire(
+                host.get(
+                    RECLIP_CLAIM_PATH,
+                    headers=_host_headers(runtime_topology, method="GET", path=RECLIP_CLAIM_PATH),
+                ).json()
+            )
+            assert (
+                _post_as_host(
+                    host,
+                    runtime_topology,
+                    path=REGISTRATIONS,
+                    body=_reclip_registration(runtime_topology, new_id),
+                ).status_code
+                == 200
+            )
+            result_path = f"{API_PREFIX}/device-commands/{claim.command.command_id}/reclip-result"
+            settle_body: dict[str, object] = {"evidence_id": new_id}
+            settled = host.post(
+                result_path,
+                json=settle_body,
+                headers=_host_headers(
+                    runtime_topology, method="POST", path=result_path, body=settle_body
+                )
+                | {"X-Command-Claim-Token": claim.claim_token},
+            )
+            assert settled.status_code == 200, settled.text
+            assert settled.json()["status"] == "succeeded"
+
+            # 同一命令/请求的迟到失败回报必须被拒, 不覆盖成功代次。
+            failure_body: dict[str, object] = {
+                "evidence_id": None,
+                "failure_code": "material_missing",
+                "detail": None,
+            }
+            rejected = host.post(
+                result_path,
+                json=failure_body,
+                headers=_host_headers(
+                    runtime_topology, method="POST", path=result_path, body=failure_body
+                )
+                | {"X-Command-Claim-Token": claim.claim_token},
+            )
+            assert rejected.status_code == 409, rejected.text
+            with engine.begin() as connection:
+                row = connection.execute(
+                    text(
+                        "SELECT status, result_evidence_id, failure_reason "
+                        "FROM evidence_reclip_request WHERE request_id = :id"
+                    ),
+                    {"id": request_id},
+                ).one()
+            assert row.status == "succeeded"
+            assert row.result_evidence_id == new_id
+            assert row.failure_reason is None
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM evidence_evidence WHERE evidence_id IN (:a, :b)"),
+                {"a": original_id, "b": new_id},
+            )
+            connection.execute(
+                text("DELETE FROM device_pending_command WHERE host_id = :host_id"),
+                {"host_id": runtime_topology.host.id},
+            )
+            connection.execute(text("TRUNCATE auth_user CASCADE"))
+            connection.execute(
+                text("DELETE FROM auth_role WHERE code = :code"), {"code": ROLE_CODE}
+            )
+
+
+def test_repeated_reclip_failure_is_idempotent_and_success_cannot_replace_it(
+    engine: Engine, runtime_topology: RuntimeTopology
+) -> None:
+    """同一失败原因重放幂等; 失败结案后成功回报也拒绝, 不把失败悄悄改成成功。"""
+    _grant(engine)
+    host_id = str(runtime_topology.host.id)
+    original_id = f"{host_id}/reclip-fail-source.mp4"
+    new_id = f"{host_id}/reclip-fail-result.mp4"
+    app = _reclip_app(engine)
+    base = f"{API_PREFIX}/evidence/{original_id}/reclip-requests"
+    wall_offset = datetime.now(UTC).timestamp() - 100.0
+    request_id = uuid4()
+    body = {
+        "request_id": str(request_id),
+        "generation": "original",
+        "before_seconds": 2.0,
+        "after_seconds": 3.0,
+    }
+    try:
+        with (
+            TestClient(app, base_url="https://testserver") as browser,
+            TestClient(app, base_url="https://testserver") as host,
+        ):
+            assert (
+                _post_as_host(
+                    host,
+                    runtime_topology,
+                    path=REGISTRATIONS,
+                    body=_registration(
+                        runtime_topology,
+                        original_id,
+                        wall_offset=wall_offset,
+                        required_from=90.0,
+                        required_to=110.0,
+                    ),
+                ).status_code
+                == 200
+            )
+            assert browser.post(SESSION_PATH, json=CREDENTIALS).status_code == 201
+            csrf = {CSRF_HEADER: browser.cookies[CSRF_COOKIE]}
+            assert browser.post(base, json=body, headers=csrf).status_code == 200
+            claim = reclip_evidence_claim_from_wire(
+                host.get(
+                    RECLIP_CLAIM_PATH,
+                    headers=_host_headers(runtime_topology, method="GET", path=RECLIP_CLAIM_PATH),
+                ).json()
+            )
+            result_path = f"{API_PREFIX}/device-commands/{claim.command.command_id}/reclip-result"
+            failure_body: dict[str, object] = {
+                "evidence_id": None,
+                "failure_code": "material_missing",
+                "detail": None,
+            }
+            headers = _host_headers(
+                runtime_topology, method="POST", path=result_path, body=failure_body
+            ) | {"X-Command-Claim-Token": claim.claim_token}
+            first = host.post(result_path, json=failure_body, headers=headers)
+            assert first.status_code == 200, first.text
+            # 真实重试使用新 nonce; 同一失败原因仍应幂等返回同一结案。
+            replay = host.post(
+                result_path,
+                json=failure_body,
+                headers=_host_headers(
+                    runtime_topology, method="POST", path=result_path, body=failure_body
+                )
+                | {"X-Command-Claim-Token": claim.claim_token},
+            )
+            assert replay.status_code == 200, replay.text
+            assert replay.json() == first.json()
+
+            # 失败是终态: 即使登记了合法的 reclip 新引用, 成功回报也必须拒绝。
+            assert (
+                _post_as_host(
+                    host,
+                    runtime_topology,
+                    path=REGISTRATIONS,
+                    body=_reclip_registration(runtime_topology, new_id),
+                ).status_code
+                == 200
+            )
+            settle_body: dict[str, object] = {"evidence_id": new_id}
+            rejected = host.post(
+                result_path,
+                json=settle_body,
+                headers=_host_headers(
+                    runtime_topology, method="POST", path=result_path, body=settle_body
+                )
+                | {"X-Command-Claim-Token": claim.claim_token},
+            )
+            assert rejected.status_code == 409, rejected.text
+            with engine.begin() as connection:
+                row = connection.execute(
+                    text(
+                        "SELECT status, result_evidence_id, failure_reason "
+                        "FROM evidence_reclip_request WHERE request_id = :id"
+                    ),
+                    {"id": request_id},
+                ).one()
+            assert row.status == "failed"
+            assert row.result_evidence_id is None
+            assert row.failure_reason == "material_missing"
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM evidence_evidence WHERE evidence_id IN (:a, :b)"),
+                {"a": original_id, "b": new_id},
+            )
+            connection.execute(
+                text("DELETE FROM device_pending_command WHERE host_id = :host_id"),
+                {"host_id": runtime_topology.host.id},
+            )
+            connection.execute(text("TRUNCATE auth_user CASCADE"))
+            connection.execute(
+                text("DELETE FROM auth_role WHERE code = :code"), {"code": ROLE_CODE}
+            )

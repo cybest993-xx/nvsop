@@ -703,6 +703,17 @@ def test_host_signed_machine_api_crosses_real_nginx_gateway_without_browser_sess
                 success_status=200,
             )
 
+            # 再切片专用端点也必须穿过白名单并由主机签名最终认证；空队列返回 204。
+            reclip_claim_path = "/api/v1/device-commands/reclip/next"
+            _assert_signature_rejection_matrix(
+                edge,
+                host_id=host_id,
+                private_key=private_key,
+                method="GET",
+                path=reclip_claim_path,
+                success_status=204,
+            )
+
             template_report_path = "/api/v1/templates/configuration-reports"
             template_report: dict[str, object] = {
                 "station_id": station_id,

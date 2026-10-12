@@ -480,6 +480,13 @@ _V18 = (
     """,
 )
 
+# S039 终局失败 (过期/素材缺失/切片错误/已定稿媒体损坏) 必须在重启与重复领取后仍冻结同一原因,
+# 不得因素材后来恢复或不同异常而重切或改变结案。两列只在首次终局失败时写入, 之后不再改写。
+_V19 = (
+    "ALTER TABLE local_reclip_request ADD COLUMN terminal_error_code TEXT",
+    "ALTER TABLE local_reclip_request ADD COLUMN terminal_error_detail TEXT",
+)
+
 MIGRATIONS: tuple[tuple[str, ...], ...] = (
     _V1,
     _V2,
@@ -499,6 +506,7 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
     _V16,
     _V17,
     _V18,
+    _V19,
 )
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 

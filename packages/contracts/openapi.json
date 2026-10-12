@@ -5292,7 +5292,7 @@
         }
       },
       "ReclipRequestStatus": {
-        "description": "再切片委托的生命周期状态；成功追加新引用，终态失败由后续执行票写入。",
+        "description": "再切片委托的生命周期状态；成功追加新引用，终局失败记录可查询原因。",
         "enum": [
           "pending",
           "succeeded",
@@ -10842,6 +10842,112 @@
         ]
       }
     },
+    "/api/v1/device-commands/reclip/next": {
+      "get": {
+        "description": "按已验证主机身份领取一条再切片命令；无命令返回 204。",
+        "operationId": "claimNextReclipCommand",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Inference-Host-ID",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "X-Inference-Host-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Timestamp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Timestamp"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Nonce",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Nonce"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Claim Next Reclip Command",
+        "tags": [
+          "evidence"
+        ]
+      }
+    },
     "/api/v1/device-commands/{command_id}": {
       "get": {
         "description": "读取命令状态, 供 Web 轮询直到真实结果或明确拒绝。",
@@ -10935,6 +11041,145 @@
           "device"
         ],
         "x-required-permission": "device.connector.view"
+      }
+    },
+    "/api/v1/device-commands/{command_id}/reclip-result": {
+      "post": {
+        "description": "先认证并结案领取命令, 再在同一请求事务内结案请求的成功或终局失败；拒绝都回滚整次写入。",
+        "operationId": "completeReclipCommand",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Command Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-ID",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "X-Inference-Host-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Command-Claim-Token",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "X-Command-Claim-Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Timestamp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Timestamp"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Nonce",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Nonce"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Signature"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Complete Reclip Command",
+        "tags": [
+          "evidence"
+        ]
       }
     },
     "/api/v1/device-commands/{command_id}/result": {
@@ -11416,7 +11661,7 @@
         "x-required-permission": "evidence.evidence.view"
       },
       "post": {
-        "description": "登记一次再切片请求，并在同一事务内委托给来源主机的不可领取命令队列。",
+        "description": "登记一次再切片请求，并在同一事务内委托给来源主机的专用再切片命令队列。",
         "operationId": "createEvidenceReclipRequest",
         "parameters": [
           {

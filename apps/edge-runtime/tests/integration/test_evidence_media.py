@@ -75,6 +75,16 @@ def segments(
         part.rename(directory / f"{stamp}.mp4")
 
 
+def annotate(directory: Path, generations: str | list[str]) -> None:
+    """写入本机录像生产者声明的每分段素材代次 sidecar; 用于真实重编码/混合素材。"""
+    parts = sorted(directory.glob("*.mp4"))
+    values = [generations] * len(parts) if isinstance(generations, str) else generations
+    for part, generation in zip(parts, values, strict=True):
+        part.with_suffix(".material.json").write_text(
+            json.dumps({"generation": generation}), encoding="utf-8"
+        )
+
+
 def enqueue(state: LocalState, *, anchor: float = ANCHOR, start: float | None = None) -> None:
     at = HostInstant(anchor)
     decision = Decision(
@@ -182,6 +192,57 @@ class EvidenceMediaTest(unittest.TestCase):
             other = _frame(fixture, 1.0, self.root / "b.jpg")
             self.assertNotEqual(other, keyframe.read_bytes())
         self.assertEqual(self.worker(reopened).drain(), 0)  # 已覆盖, 不再重切
+
+    def test_segment_material_provenance_is_read_not_relabelled_original(self) -> None:
+        # 真实重编码素材: 每分段 sidecar 声明 compressed, 结果代次必须是 compressed 而非 original。
+        camera = self.recording / CAMERAS[0]
+        segments(camera, ANCHOR - 6, 8, crf=32)
+        annotate(camera, "compressed")
+        state = self.state(paths=(CAMERAS[0],))
+        enqueue(state)
+        self.assertEqual(self.worker(state).drain(), 1)
+        (pending,) = state.station(STATION).pending_evidence()
+        (media,) = _media(pending)
+        self.assertEqual(media["material_generation"], "compressed")
+        self.assertEqual(set(cast(dict[str, int], media["segment_generations"])), {"compressed"})
+
+    def test_mixed_segment_provenance_gets_a_deterministic_label(self) -> None:
+        camera = self.recording / CAMERAS[0]
+        segments(camera, ANCHOR - 6, 8)
+        parts = sorted(camera.glob("*.mp4"))
+        annotate(camera, ["original", "compressed"] * (len(parts) // 2))
+        state = self.state(paths=(CAMERAS[0],))
+        enqueue(state)
+        self.assertEqual(self.worker(state).drain(), 1)
+        (pending,) = state.station(STATION).pending_evidence()
+        (media,) = _media(pending)
+        self.assertEqual(media["material_generation"], "mixed")
+        self.assertEqual(
+            set(cast(dict[str, int], media["segment_generations"])), {"original", "compressed"}
+        )
+
+    def test_malformed_or_unknown_provenance_stays_pending(self) -> None:
+        camera = self.recording / CAMERAS[0]
+        segments(camera, ANCHOR - 6, 8)
+        first = sorted(camera.glob("*.mp4"))[0]
+        first.with_suffix(".material.json").write_text("not json", encoding="utf-8")
+        state = self.state(paths=(CAMERAS[0],))
+        enqueue(state)
+        self.assertEqual(self.worker(state).drain(), 0)
+        (pending,) = state.station(STATION).pending_evidence()
+        self.assertIsNone(pending.sliced_at)
+        self.assertIn("material_provenance_invalid", cast(str, pending.last_error))
+        first.with_suffix(".material.json").write_text(
+            json.dumps({"generation": "quantum"}), encoding="utf-8"
+        )
+        self.assertEqual(self.worker(state).drain(), 0)
+        (pending,) = state.station(STATION).pending_evidence()
+        self.assertIn("material_provenance_invalid", cast(str, pending.last_error))
+        # 移除非法声明后同一待办恢复, 素材字节从未被改写。
+        first.with_suffix(".material.json").unlink()
+        self.assertEqual(self.worker(state).drain(), 1)
+        (media,) = _media(state.station(STATION).pending_evidence()[0])
+        self.assertEqual(media["material_generation"], "original")
 
     def test_material_and_mapping_failures_stay_pending(self) -> None:
         for camera in CAMERAS:

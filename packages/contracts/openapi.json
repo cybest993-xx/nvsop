@@ -5292,9 +5292,10 @@
         }
       },
       "ReclipRequestStatus": {
-        "description": "再切片委托的生命周期状态；本票只创建``PENDING``，失败由后续执行票写入。",
+        "description": "再切片委托的生命周期状态；成功追加新引用，终态失败由后续执行票写入。",
         "enum": [
           "pending",
+          "succeeded",
           "failed"
         ],
         "title": "ReclipRequestStatus",

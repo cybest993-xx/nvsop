@@ -447,6 +447,39 @@ _V16 = (
 # S034 在现行 V16 暂停迁移之后追加证据登记确认状态, 保留已部署数据库的升级序列。
 _V17 = ("ALTER TABLE local_evidence_queue ADD COLUMN registered_at REAL",)
 
+# S038 再切片执行需要按稳定请求 ID 持久化已定稿产物, 使重启/重复领取/登记确认丢失时不重切
+# 已过期或被压缩的滚动素材, 也不产生冲突代次。该表只索引本机证据目录内的权威文件, 不复制文件。
+# 来源事实缺失 (无冻结映射/相机路径) 时仍要留下可查询失败原因, 因此这些列可为 NULL,
+# 不伪造 0 或默认相机。
+_V18 = (
+    """
+    CREATE TABLE local_reclip_request (
+        request_id       TEXT    PRIMARY KEY,
+        station_id       TEXT    NOT NULL,
+        instance_id      INTEGER NOT NULL,
+        anchor           REAL    NOT NULL,
+        window_from      REAL    NOT NULL,
+        window_to        REAL    NOT NULL,
+        wall_offset      REAL,
+        sources          TEXT,
+        required_from    REAL,
+        required_to      REAL,
+        identity         TEXT,
+        media_results    TEXT,
+        covered_from     REAL,
+        covered_to       REAL,
+        evidence_id      TEXT,
+        sliced_at        REAL,
+        registered_at    REAL,
+        attempts         INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at  REAL,
+        last_error       TEXT,
+        CHECK ((sliced_at IS NULL) = (media_results IS NULL)),
+        CHECK ((registered_at IS NULL) = (evidence_id IS NULL))
+    )
+    """,
+)
+
 MIGRATIONS: tuple[tuple[str, ...], ...] = (
     _V1,
     _V2,
@@ -465,6 +498,7 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
     _V15,
     _V16,
     _V17,
+    _V18,
 )
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 

@@ -1,7 +1,8 @@
-"""中心与推理机共同解释的委托连接测试线契约。"""
+"""中心与推理机共同解释的委托连接测试与再切片命令线契约。"""
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -188,6 +189,165 @@ def connection_test_result_from_wire(value: Mapping[str, object]) -> ConnectionT
         credentials_configured=credentials_configured,
         failure_code=failure_code,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class ReclipEvidenceCommand:
+    """目标推理机可执行的再切片命令: 原锚点固定, 只给并集窗口与新请求身份。"""
+
+    command_id: str
+    request_id: str
+    station_id: str
+    instance_id: int
+    anchor: float
+    window_start: float
+    window_end: float
+
+    def __post_init__(self) -> None:
+        if not self.command_id or not self.request_id or not self.station_id:
+            raise ValueError("reclip command identities must not be empty")
+        if isinstance(self.instance_id, bool) or self.instance_id < 0:
+            raise ValueError("reclip command instance_id must be a non-negative integer")
+        for name, value in (
+            ("anchor", self.anchor),
+            ("window_start", self.window_start),
+            ("window_end", self.window_end),
+        ):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"reclip command {name} must be a finite number")
+            if not math.isfinite(float(value)):
+                raise ValueError(f"reclip command {name} must be a finite number")
+        if self.window_end < self.window_start:
+            raise ValueError("reclip command window_end must not precede window_start")
+
+
+@dataclass(frozen=True, slots=True)
+class ReclipEvidenceClaim:
+    """推理机领取后的再切片命令信封, 含仅用于回报的领取令牌和租约截止时刻。"""
+
+    command: ReclipEvidenceCommand
+    claim_token: str
+    lease_expires_at: str
+
+    def __post_init__(self) -> None:
+        if not self.claim_token or not self.lease_expires_at:
+            raise ValueError("reclip claim lease fields must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class ReclipEvidenceResult:
+    """再切片成功回报: 只声明中心已追加的新证据引用身份, 不复制媒体字节。"""
+
+    evidence_id: str
+
+    def __post_init__(self) -> None:
+        if not self.evidence_id:
+            raise ValueError("reclip result evidence_id must not be empty")
+
+
+def reclip_evidence_command_to_wire(command: ReclipEvidenceCommand) -> dict[str, object]:
+    """把再切片命令编码为中心和推理机共用的严格 JSON 对象。"""
+    return {
+        "command_type": "reclip_evidence",
+        "command_id": command.command_id,
+        "request_id": command.request_id,
+        "station_id": command.station_id,
+        "instance_id": command.instance_id,
+        "anchor": command.anchor,
+        "window_start": command.window_start,
+        "window_end": command.window_end,
+    }
+
+
+def reclip_evidence_command_from_wire(value: Mapping[str, object]) -> ReclipEvidenceCommand:
+    """解析再切片命令并拒绝未知键或非数字窗口。"""
+    required = {
+        "command_type",
+        "command_id",
+        "request_id",
+        "station_id",
+        "instance_id",
+        "anchor",
+        "window_start",
+        "window_end",
+    }
+    if set(value) != required or value.get("command_type") != "reclip_evidence":
+        raise ValueError("reclip command has unsupported fields")
+    command_id = value["command_id"]
+    request_id = value["request_id"]
+    station_id = value["station_id"]
+    instance_id = value["instance_id"]
+    if (
+        not isinstance(command_id, str)
+        or not command_id
+        or not isinstance(request_id, str)
+        or not request_id
+        or not isinstance(station_id, str)
+        or not station_id
+    ):
+        raise ValueError("reclip command has invalid identity")
+    if isinstance(instance_id, bool) or not isinstance(instance_id, int):
+        raise ValueError("reclip command has an invalid instance_id")
+    numbers: dict[str, float] = {}
+    for name in ("anchor", "window_start", "window_end"):
+        raw = value[name]
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise ValueError(f"reclip command has an invalid {name}")
+        numbers[name] = float(raw)
+    return ReclipEvidenceCommand(
+        command_id=command_id,
+        request_id=request_id,
+        station_id=station_id,
+        instance_id=instance_id,
+        anchor=numbers["anchor"],
+        window_start=numbers["window_start"],
+        window_end=numbers["window_end"],
+    )
+
+
+def reclip_evidence_claim_to_wire(claim: ReclipEvidenceClaim) -> dict[str, object]:
+    """把再切片领取信封编码为严格对象。"""
+    return {
+        "command": reclip_evidence_command_to_wire(claim.command),
+        "claim_token": claim.claim_token,
+        "lease_expires_at": claim.lease_expires_at,
+    }
+
+
+def reclip_evidence_claim_from_wire(value: Mapping[str, object]) -> ReclipEvidenceClaim:
+    """解析再切片领取信封并拒绝未声明字段。"""
+    required = {"command", "claim_token", "lease_expires_at"}
+    if set(value) != required:
+        raise ValueError("reclip claim has unsupported fields")
+    command = value["command"]
+    claim_token = value["claim_token"]
+    lease_expires_at = value["lease_expires_at"]
+    if not isinstance(command, Mapping):
+        raise ValueError("reclip claim has an invalid command")
+    if not isinstance(claim_token, str) or not claim_token:
+        raise ValueError("reclip claim has an invalid claim token")
+    if not isinstance(lease_expires_at, str) or not lease_expires_at:
+        raise ValueError("reclip claim has an invalid lease expiry")
+    return ReclipEvidenceClaim(
+        command=reclip_evidence_command_from_wire(command),
+        claim_token=claim_token,
+        lease_expires_at=lease_expires_at,
+    )
+
+
+def reclip_evidence_result_to_wire(result: ReclipEvidenceResult) -> dict[str, object]:
+    """把再切片成功回报编码为严格对象。"""
+    return {"evidence_id": result.evidence_id}
+
+
+def reclip_evidence_result_from_wire(value: Mapping[str, object]) -> ReclipEvidenceResult:
+    """解析再切片成功回报并拒绝未声明字段。"""
+    if set(value) != {"evidence_id"}:
+        raise ValueError("reclip result has unsupported fields")
+    evidence_id = value["evidence_id"]
+    if not isinstance(evidence_id, str) or not evidence_id:
+        raise ValueError("reclip result has an invalid evidence_id")
+    return ReclipEvidenceResult(evidence_id=evidence_id)
 
 
 def _validate_configuration(value: Mapping[str, object]) -> None:

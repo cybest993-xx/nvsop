@@ -8,6 +8,7 @@ from uuid import UUID
 from factory_sop.auth.api import Caller, Permission, authorize
 from factory_sop.device.errors import DeviceRefusalCode
 from factory_sop.device.model import (
+    ClaimedReclipCommand,
     Connector,
     ConnectorReachability,
     ConnectorTestResult,
@@ -159,6 +160,88 @@ def claim_next_command(
             attempt=str(claimed.attempt),
         )
     return claimed
+
+
+def complete_reclip_command(
+    *,
+    command_id: UUID,
+    host: InferenceHostIdentity,
+    claim_token: str,
+    now: datetime,
+    hosts: InferenceHostRepository,
+    commands: PendingCommandRepository,
+) -> PendingCommand:
+    """认证领取主机后把一条再切片命令结案为 ``SUCCEEDED``；同一令牌重放幂等。
+
+    失败结案属 S039，本票只登记成功；命令类型不匹配或令牌/租约非法时明确拒绝。
+    """
+    authenticate_command_host(host=host, now=now, hosts=hosts)
+    command = _existing_command_for_update(command_id, commands)
+    if command.host_id != host.host_id:
+        refuse(
+            _REFUSAL_EVENT,
+            DeviceRefusalCode.COMMAND_HOST_MISMATCH,
+            command_id=str(command_id),
+            host_id=str(host.host_id),
+        )
+    if command.command_type is not PendingCommandType.RECLIP_EVIDENCE:
+        refuse(_REFUSAL_EVENT, DeviceRefusalCode.COMMAND_NOT_FOUND, command_id=str(command_id))
+    if command.status is PendingCommandStatus.SUCCEEDED:
+        if command.claim_token == claim_token:
+            return command
+        refuse(
+            _REFUSAL_EVENT,
+            DeviceRefusalCode.COMMAND_ALREADY_COMPLETED,
+            command_id=str(command_id),
+            host_id=str(host.host_id),
+        )
+    if command.status in {PendingCommandStatus.FAILED, PendingCommandStatus.REJECTED}:
+        refuse(
+            _REFUSAL_EVENT,
+            DeviceRefusalCode.COMMAND_ALREADY_COMPLETED,
+            command_id=str(command_id),
+            host_id=str(host.host_id),
+        )
+    if command.status is not PendingCommandStatus.CLAIMED:
+        refuse(
+            _REFUSAL_EVENT,
+            DeviceRefusalCode.COMMAND_CLAIM_REQUIRED,
+            command_id=str(command_id),
+            host_id=str(host.host_id),
+        )
+    if command.claim_token != claim_token:
+        refuse(
+            _REFUSAL_EVENT,
+            DeviceRefusalCode.COMMAND_CLAIM_TOKEN_INVALID,
+            command_id=str(command_id),
+            host_id=str(host.host_id),
+        )
+    if command.lease_expires_at is None or now >= command.lease_expires_at:
+        refuse(
+            _REFUSAL_EVENT,
+            DeviceRefusalCode.COMMAND_CLAIM_EXPIRED,
+            command_id=str(command_id),
+            host_id=str(host.host_id),
+        )
+    completed = commands.complete(
+        PendingCommandCompletion(
+            command_id=command.id,
+            host_id=host.host_id,
+            claim_token=claim_token,
+            status=PendingCommandStatus.SUCCEEDED,
+            result=None,
+            result_detail=None,
+            failure_code=None,
+            completed_at=now,
+        )
+    )
+    _logger.info(
+        "device.pending_command.completed",
+        command_id=str(command.id),
+        host_id=str(host.host_id),
+        outcome="reclip_succeeded",
+    )
+    return completed
 
 
 def authenticate_command_host(
@@ -507,3 +590,40 @@ class RepositoryDeviceEvidenceGateway:
                 actor_id=str(actor_id),
             )
         return stored.id
+
+    def claim_reclip_command(
+        self, *, host: InferenceHostIdentity, now: datetime, lease_duration: timedelta
+    ) -> ClaimedReclipCommand | None:
+        claimed = claim_next_command(
+            host=host,
+            command_type=PendingCommandType.RECLIP_EVIDENCE,
+            now=now,
+            lease_duration=lease_duration,
+            hosts=self._hosts,
+            commands=self._commands,
+        )
+        if claimed is None or claimed.claim_token is None or claimed.lease_expires_at is None:
+            return None
+        return ClaimedReclipCommand(
+            command_id=claimed.id,
+            request_id=claimed.target_id,
+            claim_token=claimed.claim_token,
+            lease_expires_at=claimed.lease_expires_at,
+        )
+
+    def complete_reclip_command(
+        self,
+        *,
+        command_id: UUID,
+        host: InferenceHostIdentity,
+        claim_token: str,
+        now: datetime,
+    ) -> None:
+        complete_reclip_command(
+            command_id=command_id,
+            host=host,
+            claim_token=claim_token,
+            now=now,
+            hosts=self._hosts,
+            commands=self._commands,
+        )

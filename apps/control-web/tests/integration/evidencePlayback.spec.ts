@@ -426,6 +426,32 @@ describe('证据回看', () => {
     expect(api.createEvidenceReclipRequest.mock.calls[2]?.[1].request_id).not.toBe(first)
   })
 
+  it('renders pending, succeeded and failed reclip request states distinctly', async () => {
+    vi.stubGlobal('fetch', probeOk())
+    signIn(REVIEW_PERMISSIONS)
+    api.readEvidenceReclipRequests.mockResolvedValue([
+      { ...RECLIP_RECORD, request_id: 'pending-1', status: 'pending' as const },
+      { ...RECLIP_RECORD, request_id: 'succeeded-1', status: 'succeeded' as const },
+      {
+        ...RECLIP_RECORD,
+        request_id: 'failed-1',
+        status: 'failed' as const,
+        failure_reason: '素材已过期',
+      },
+    ])
+    const wrapper = mountPlayer()
+    await flushPromises()
+    await wrapper.find('.evidence__list button').trigger('click')
+    await flushPromises()
+
+    // 三种真实状态各自渲染，已完成的请求不再假装仍在等待。
+    const rows = wrapper.findAll('.evidence__reclips li').map((item) => item.text())
+    expect(rows).toHaveLength(3)
+    expect(rows.some((text) => text.includes('等待来源推理机执行'))).toBe(true)
+    expect(rows.some((text) => text.includes('已完成'))).toBe(true)
+    expect(rows.some((text) => text.includes('失败：素材已过期'))).toBe(true)
+  })
+
   it('offers no reclip submit control to a view-only session', async () => {
     vi.stubGlobal('fetch', probeOk())
     signIn(['monitor.report.view', 'evidence.evidence.view'])

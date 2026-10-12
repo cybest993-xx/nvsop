@@ -52,8 +52,29 @@ class EvidenceReclipRequestRepository(Protocol):
         """按稳定请求 ID 读取一条请求，不存在时返回 ``None``。"""
         ...
 
+    def find_by_command_id(self, command_id: UUID) -> EvidenceReclipRequest | None:
+        """按委托命令 ID 读取对应请求，不存在时返回 ``None``。"""
+        ...
+
     def list_for_evidence(self, evidence_id: str) -> tuple[EvidenceReclipRequest, ...]:
         """返回该证据的全部再切片请求，按请求时刻升序。"""
+        ...
+
+    def has_for(
+        self,
+        *,
+        host_id: UUID,
+        station_id: str,
+        instance_id: int,
+        anchor: float,
+        window_start: float,
+        window_end: float,
+    ) -> bool:
+        """是否存在该来源主机/工位/实例/锚点/窗口的真实再切片请求，用于登记来源关联校验。"""
+        ...
+
+    def mark_succeeded(self, request_id: UUID, *, result_evidence_id: str) -> bool:
+        """仅在仍为 ``PENDING`` 时原子转为 ``SUCCEEDED`` 并记录新引用；CAS 失败返回 ``False``。"""
         ...
 
 

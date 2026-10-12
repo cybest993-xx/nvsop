@@ -19,6 +19,7 @@ from factory_sop.evidence.model import (
     EvidenceReference,
     EvidenceReview,
     EvidenceStatus,
+    ReclipRequestStatus,
 )
 from factory_sop.evidence.repository import (
     EvidenceReclipRequestRepository,
@@ -205,6 +206,62 @@ class PostgresEvidenceReclipRequestRepository(EvidenceReclipRequestRepository):
             .execution_options(populate_existing=True)
         )
         return None if row is None else row.to_domain()
+
+    def find_by_command_id(self, command_id: UUID) -> EvidenceReclipRequest | None:
+        row = self._session.scalar(
+            select(EvidenceReclipRequestRow)
+            .where(EvidenceReclipRequestRow.command_id == command_id)
+            .execution_options(populate_existing=True)
+        )
+        return None if row is None else row.to_domain()
+
+    def has_for(
+        self,
+        *,
+        host_id: UUID,
+        station_id: str,
+        instance_id: int,
+        anchor: float,
+        window_start: float,
+        window_end: float,
+    ) -> bool:
+        """经原证据登记连接，验证存在对应来源主机/工位/实例/锚点/窗口的真实请求。"""
+        statement = (
+            select(EvidenceReclipRequestRow.request_id)
+            .join(
+                EvidenceReferenceRow,
+                EvidenceReferenceRow.evidence_id == EvidenceReclipRequestRow.evidence_id,
+            )
+            .where(
+                EvidenceReclipRequestRow.host_id == host_id,
+                EvidenceReferenceRow.station_id == station_id,
+                EvidenceReferenceRow.instance_id == instance_id,
+                EvidenceReclipRequestRow.anchor == anchor,
+                func.abs(EvidenceReclipRequestRow.window_start - window_start) <= 1e-6,
+                func.abs(EvidenceReclipRequestRow.window_end - window_end) <= 1e-6,
+            )
+            .limit(1)
+        )
+        return self._session.scalar(statement) is not None
+
+    def mark_succeeded(self, request_id: UUID, *, result_evidence_id: str) -> bool:
+        table = cast(Table, EvidenceReclipRequestRow.__table__)
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(table)
+                .where(
+                    table.c.request_id == request_id,
+                    table.c.status == ReclipRequestStatus.PENDING.value,
+                )
+                .values(
+                    status=ReclipRequestStatus.SUCCEEDED.value,
+                    result_evidence_id=result_evidence_id,
+                    failure_reason=None,
+                )
+            ),
+        )
+        return result.rowcount == 1
 
     def list_for_evidence(self, evidence_id: str) -> tuple[EvidenceReclipRequest, ...]:
         rows = self._session.scalars(

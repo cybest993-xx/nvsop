@@ -3239,9 +3239,9 @@ export type ReasonCode =
 /**
  * ReclipRequestStatus
  *
- * 再切片委托的生命周期状态；本票只创建``PENDING``，失败由后续执行票写入。
+ * 再切片委托的生命周期状态；成功追加新引用，终态失败由后续执行票写入。
  */
-export type ReclipRequestStatus = 'pending' | 'failed'
+export type ReclipRequestStatus = 'pending' | 'succeeded' | 'failed'
 
 /**
  * RecordingMode

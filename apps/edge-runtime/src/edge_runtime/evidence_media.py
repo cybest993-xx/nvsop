@@ -34,6 +34,15 @@ from edge_runtime.judgment.model import HostInstant
 from edge_runtime.local_state import LocalState, PendingEvidence, StationStore
 
 MATERIAL_GENERATION_ORIGINAL = "original"
+MATERIAL_GENERATION_COMPRESSED = "compressed"
+MATERIAL_GENERATION_MIXED = "mixed"
+_KNOWN_MATERIAL_GENERATIONS = frozenset(
+    {MATERIAL_GENERATION_ORIGINAL, MATERIAL_GENERATION_COMPRESSED}
+)
+# 录像生产者在每个分段旁声明素材代次: <segment>.material.json 内含 {"generation": <known>}。
+# 未标注分段按未重编码的原始素材处理 (当前 MediaMTX 生产者契约); 标注非法或未知即拒绝,
+# 不把无法证明的素材静默回退成 original (S038/AC3)。
+_MATERIAL_SIDECAR_SUFFIX = ".material.json"
 _SEGMENT_TIME_FORMAT = "%Y-%m-%d_%H-%M-%S-%f"
 _BOUNDARY_TOLERANCE = 1e-3
 """相邻分段边界抖动容限。实测多数真实 MediaMTX fmp4 边界抖动 ≤11µs, 但首段可与次段重叠约 0.5s;
@@ -111,17 +120,20 @@ def slice_evidence(
     recording_directory: Path,
     ffmpeg_binary: Path,
     configuration: EvidenceMediaConfiguration,
+    identity: str | None = None,
 ) -> EvidenceClipSet:
     """按冻结映射从本机分段切片, 原子定稿到证据目录并返回 typed 元数据。
 
     ``mapping_missing`` 表示入队时没有冻结录像墙钟映射或来源路径 (旧行/无媒体配置), 不能猜成功。
+    ``identity`` 覆盖产物目录的稳定身份 (再切片用请求 ID 区分同覆盖不同请求窗口); 省略时按原
+    证据队列行身份, 使首次切片行为不变。
     """
     wall_offset = pending.wall_offset
     if wall_offset is None or not pending.sources:
         raise EvidenceMediaError(
             "mapping_missing", "pending evidence has no frozen recording source mapping"
         )
-    evidence_id = _evidence_id(host_id, pending.queue_id)
+    evidence_id = identity or _evidence_id(host_id, pending.queue_id)
     try:
         configuration.evidence_directory.mkdir(parents=True, exist_ok=True)
         work = Path(
@@ -183,6 +195,60 @@ def slice_evidence(
         raise
 
 
+def recover_finalized_clip_set(
+    pending: PendingEvidence,
+    *,
+    host_id: str,
+    directory: Path,
+    identity: str,
+) -> EvidenceClipSet | None:
+    """SQL 索引丢失时按稳定身份发现唯一已定稿产物, 复用其权威元数据而不重切滚动素材 (S038)。
+
+    只在证据目录内按 ``identity`` 前缀发现候选, 并校验元数据身份、冻结意图与文件完整; 多个候选或
+    与冻结意图不匹配即显式失败, 不猜选、不覆盖、不回退重切。无候选返回 ``None`` 交给正常切片。
+    """
+    if not directory.is_dir():
+        return None
+    candidates = sorted(
+        entry
+        for entry in directory.iterdir()
+        if entry.is_dir() and entry.name.startswith(f"{identity}-")
+    )
+    if not candidates:
+        return None
+    if len(candidates) != 1:
+        raise EvidenceMediaError(
+            "finalize_conflict",
+            f"{len(candidates)} finalized artifacts exist for one reclip identity",
+        )
+    final = candidates[0]
+    metadata, media = _read_metadata_document(final)
+    try:
+        matches = (
+            metadata["evidence_id"] == identity
+            and metadata["host_id"] == host_id
+            and _number(metadata["anchor"]) == pending.anchor.seconds
+            and _number(metadata["window_from"]) == pending.start.seconds
+            and _number(metadata["window_to"]) == pending.end.seconds
+        )
+        covered_from = _number(metadata["covered_from"])
+        covered_to = _number(metadata["covered_to"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise EvidenceMediaError(
+            "finalize_conflict", f"finalized artifact {final.name} has unreadable metadata"
+        ) from error
+    if not matches or covered_from > pending.start.seconds or covered_to < pending.end.seconds:
+        raise EvidenceMediaError(
+            "finalize_conflict",
+            f"finalized artifact {final.name} does not match the frozen reclip intent",
+        )
+    return EvidenceClipSet(
+        covered_from=covered_from,
+        covered_to=covered_to,
+        media_json=json.dumps(media, separators=(",", ":")),
+    )
+
+
 def _slice_source(
     source: str,
     *,
@@ -200,6 +266,7 @@ def _slice_source(
         raise EvidenceMediaError("material_missing", f"recording directory absent for {source}")
     selected = _select_segments(_list_segments(directory, configuration), wall_from, wall_to)
     actual_from, actual_to = selected[0].start, selected[-1].end
+    generations = [_segment_generation(segment.path) for segment in selected]
     clip = work / f"{source}.mp4"
     timeout = configuration.slice_timeout_seconds
     inputs = ["-f", "concat", "-safe", "0", "-i", str(_segment_list(work, selected))]
@@ -219,10 +286,44 @@ def _slice_source(
         "keyframe_file": keyframe.name,
         "actual_from": actual_from - wall_offset,
         "actual_to": actual_to - wall_offset,
-        "material_generation": MATERIAL_GENERATION_ORIGINAL,
+        "material_generation": _output_generation(generations),
+        "segment_generations": {
+            generation: generations.count(generation) for generation in sorted(set(generations))
+        },
         "sha256": _digest(clip),
         "size_bytes": clip.stat().st_size,
     }
+
+
+def _segment_generation(path: Path) -> str:
+    """读取单个分段的真实素材代次; 缺失 sidecar 按原始素材, 非法/未知声明即拒绝。"""
+    sidecar = path.with_suffix(_MATERIAL_SIDECAR_SUFFIX)
+    if not sidecar.exists():
+        return MATERIAL_GENERATION_ORIGINAL
+    try:
+        document = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise EvidenceMediaError(
+            "material_provenance_invalid", f"unreadable material sidecar for {path.name}"
+        ) from error
+    if not isinstance(document, dict) or set(document) != {"generation"}:
+        raise EvidenceMediaError(
+            "material_provenance_invalid", f"malformed material sidecar for {path.name}"
+        )
+    generation = document["generation"]
+    if not isinstance(generation, str) or generation not in _KNOWN_MATERIAL_GENERATIONS:
+        raise EvidenceMediaError(
+            "material_provenance_invalid", f"unknown material generation for {path.name}"
+        )
+    return generation
+
+
+def _output_generation(generations: list[str]) -> str:
+    """分段代次一致时沿用该代次; 混合来源取确定性标签, 不谎称单一来源。"""
+    unique = set(generations)
+    if len(unique) == 1:
+        return unique.pop()
+    return MATERIAL_GENERATION_MIXED
 
 
 def _segment_list(work: Path, segments: list[_Segment]) -> Path:
@@ -290,7 +391,9 @@ def _publish(work: Path, final: Path) -> bool:
     return True
 
 
-def _read_metadata(directory: Path) -> tuple[float, float, list[dict[str, object]]]:
+def _read_metadata_document(
+    directory: Path,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
     try:
         metadata = _object(
             json.loads((directory / "metadata.json").read_text(encoding="utf-8")),
@@ -310,6 +413,11 @@ def _read_metadata(directory: Path) -> tuple[float, float, list[dict[str, object
         raise EvidenceMediaError(
             "finalize_failed", f"existing artifact {directory.name} incomplete"
         )
+    return metadata, media
+
+
+def _read_metadata(directory: Path) -> tuple[float, float, list[dict[str, object]]]:
+    metadata, media = _read_metadata_document(directory)
     return _number(metadata["covered_from"]), _number(metadata["covered_to"]), media
 
 
@@ -367,6 +475,11 @@ def _evidence_id(host_id: str, queue_id: int) -> str:
     return f"{re.sub(r'[^A-Za-z0-9._-]', '_', host_id)}-{queue_id}"
 
 
+def reclip_evidence_identity(host_id: str, queue_id: int, request_id: str) -> str:
+    """再切片产物稳定身份: 原队列身份 + 稳定请求 ID, 同覆盖不同请求窗口也不冲突 (S038)。"""
+    return f"{_evidence_id(host_id, queue_id)}-reclip-{re.sub(r'[^A-Za-z0-9._-]', '_', request_id)}"
+
+
 def _artifact_name(evidence_id: str, covered_from: float, covered_to: float) -> str:
     """产物目录名编码实际覆盖窗口, 使扩窗重切追加新目录而不覆盖旧权威。"""
     return f"{evidence_id}-{round(covered_from * 1000)}-{round(covered_to * 1000)}"
@@ -405,20 +518,29 @@ def _path(value: object, name: str) -> Path:
 
 
 def evidence_registration_payloads(
-    pending: PendingEvidence, *, host_id: str, station_id: str, directory: Path
+    pending: PendingEvidence,
+    *,
+    host_id: str,
+    station_id: str,
+    directory: Path,
+    identity: str | None = None,
+    origin: str = "automatic",
 ) -> tuple[dict[str, object], ...]:
     """从已定稿证据构造不可变中心引用; 扩窗以新产物目录形成新证据身份。
 
     同时上报入队时冻结的录像墙钟映射与同锚点核心必需跨度, 供中心计算可再切片截止时刻。
     旧行缺任一冻结事实时整组省略, 中心登记为"截止未知、不可再切片", 不猜墙钟。新增字段为
     Center-first 部署: 旧 Center 的严格解码会拒绝整条登记, 对账器保留本机待办与媒体。
+    ``identity``/``origin`` 供再切片复用同一构造: 身份含稳定请求 ID, 来源标注为 ``reclip``。
     """
     if pending.media_results is None or pending.covered_from is None or pending.covered_to is None:
         raise ValueError("evidence media has not been finalized")
     if pending.covered_from > pending.start.seconds or pending.covered_to < pending.end.seconds:
         raise ValueError("evidence material does not cover the requested window")
     artifact = _artifact_name(
-        _evidence_id(host_id, pending.queue_id), pending.covered_from, pending.covered_to
+        identity or _evidence_id(host_id, pending.queue_id),
+        pending.covered_from,
+        pending.covered_to,
     )
     frozen: dict[str, object] = {}
     if (
@@ -452,7 +574,7 @@ def evidence_registration_payloads(
                     "instance_id": pending.instance_id,
                     "violation_id": None,
                     "kind": kind,
-                    "origin": "automatic",
+                    "origin": origin,
                     "anchor": pending.anchor.seconds,
                     "window_start": pending.start.seconds,
                     "window_end": pending.end.seconds,

@@ -13,6 +13,8 @@ from uuid import UUID
 
 from factory_sop.auth.api import Caller, Permission, authorize
 from factory_sop.evidence.model import (
+    EvidenceKind,
+    EvidenceOrigin,
     EvidenceReclipRequest,
     EvidenceRegistration,
     EvidenceStatus,
@@ -164,9 +166,75 @@ def list_reclip_requests(
     return requests.list_for_evidence(evidence_id)
 
 
+def settle_reclip_success(
+    *,
+    command_id: UUID,
+    evidence_id: str,
+    host_id: UUID,
+    evidence: EvidenceRepository,
+    requests: EvidenceReclipRequestRepository,
+) -> EvidenceReclipRequest:
+    """把一条已领取再切片命令的成功结果结案为请求 ``SUCCEEDED`` 并记录新引用。
+
+    新引用必须已登记、来源为 reclip、属于同一主机与锚点, 且与原证据的工位/实例及本请求的
+    精确并集窗口一致; 否则拒绝, 不追加伪造代次, 也不把另一请求的结果算到本请求上。
+    """
+    request = requests.find_by_command_id(command_id)
+    if request is None:
+        raise EvidenceReclipRefusedError(404, "reclip_request_unregistered")
+    if request.host_id != host_id:
+        raise EvidenceReclipRefusedError(409, "reclip_request_host_mismatch")
+    reference = evidence.find(evidence_id)
+    if reference is None or reference.registration.origin is not EvidenceOrigin.RECLIP:
+        raise EvidenceReclipRefusedError(409, "reclip_result_unregistered")
+    registration = reference.registration
+    if UUID(registration.host_id) != host_id:
+        raise EvidenceReclipRefusedError(409, "reclip_result_host_mismatch")
+    if registration.anchor != request.anchor:
+        raise EvidenceReclipRefusedError(409, "reclip_result_anchor_mismatch")
+    original = evidence.find(request.evidence_id)
+    if original is None:
+        raise EvidenceReclipRefusedError(409, "reclip_source_unregistered")
+    if (
+        registration.kind is not EvidenceKind.CLIP
+        or reference.status is not EvidenceStatus.AVAILABLE
+    ):
+        raise EvidenceReclipRefusedError(409, "reclip_result_unsuitable")
+    if (
+        registration.station_id != original.registration.station_id
+        or registration.instance_id != original.registration.instance_id
+    ):
+        raise EvidenceReclipRefusedError(409, "reclip_result_scope_mismatch")
+    if (
+        abs(registration.window_start - request.window_start) > 1e-6
+        or abs(registration.window_end - request.window_end) > 1e-6
+    ):
+        raise EvidenceReclipRefusedError(409, "reclip_result_window_mismatch")
+    if request.status is ReclipRequestStatus.SUCCEEDED:
+        if request.result_evidence_id == evidence_id:
+            return request
+        raise EvidenceReclipRefusedError(409, "reclip_request_conflict")
+    if request.status is ReclipRequestStatus.FAILED:
+        raise EvidenceReclipRefusedError(409, "reclip_request_conflict")
+    if not requests.mark_succeeded(request.request_id, result_evidence_id=evidence_id):
+        current = requests.find(request.request_id)
+        if (
+            current is not None
+            and current.status is ReclipRequestStatus.SUCCEEDED
+            and current.result_evidence_id == evidence_id
+        ):
+            return current
+        raise EvidenceReclipRefusedError(409, "reclip_request_conflict")
+    updated = requests.find(request.request_id)
+    if updated is None:
+        raise RuntimeError("reclip request disappeared after success settlement")
+    return updated
+
+
 __all__ = [
     "EvidenceReclipRefusedError",
     "create_reclip_request",
     "list_reclip_requests",
     "reclip_availability",
+    "settle_reclip_success",
 ]

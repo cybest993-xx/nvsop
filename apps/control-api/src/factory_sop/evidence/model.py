@@ -199,9 +199,10 @@ class EvidenceReview:
 
 
 class ReclipRequestStatus(StrEnum):
-    """再切片委托的生命周期状态；本票只创建``PENDING``，失败由后续执行票写入。"""
+    """再切片委托的生命周期状态；成功追加新引用，终态失败由后续执行票写入。"""
 
     PENDING = "pending"
+    SUCCEEDED = "succeeded"
     FAILED = "failed"
 
 
@@ -226,6 +227,7 @@ class EvidenceReclipRequest:
     command_id: UUID
     status: ReclipRequestStatus
     failure_reason: str | None = None
+    result_evidence_id: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.evidence_id, str) or not self.evidence_id:
@@ -252,8 +254,15 @@ class EvidenceReclipRequest:
         if self.status is ReclipRequestStatus.FAILED:
             if not isinstance(self.failure_reason, str) or not self.failure_reason:
                 raise ValueError("failed reclip request must carry a failure reason")
-        elif self.failure_reason is not None:
-            raise ValueError("only failed reclip requests may carry a failure reason")
+            if self.result_evidence_id is not None:
+                raise ValueError("failed reclip requests must not carry a result reference")
+        elif self.status is ReclipRequestStatus.SUCCEEDED:
+            if not isinstance(self.result_evidence_id, str) or not self.result_evidence_id:
+                raise ValueError("succeeded reclip request must name the appended reference")
+            if self.failure_reason is not None:
+                raise ValueError("succeeded reclip requests must not carry a failure reason")
+        elif self.failure_reason is not None or self.result_evidence_id is not None:
+            raise ValueError("pending reclip requests must not carry a terminal result")
 
     def matches(
         self,

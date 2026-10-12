@@ -8,13 +8,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
 from uuid import UUID
 
 from factory_sop.auth.api import Caller
 from factory_sop.device.model import (
+    ClaimedReclipCommand,
     InferenceHostIdentity,
     RuntimeParameterMode,
     Station,
@@ -44,6 +45,9 @@ INFERENCE_HOST_ID_HEADER = "X-Inference-Host-ID"
 INFERENCE_HOST_TIMESTAMP_HEADER = "X-Inference-Host-Timestamp"
 INFERENCE_HOST_NONCE_HEADER = "X-Inference-Host-Nonce"
 INFERENCE_HOST_SIGNATURE_HEADER = "X-Inference-Host-Signature"
+# 委托命令领取令牌的公开头名与领取租约时长；连接测试与再切片共享同一策略。
+COMMAND_CLAIM_TOKEN_HEADER = "X-Command-Claim-Token"
+COMMAND_LEASE_DURATION = timedelta(minutes=5)
 
 
 class BindingSignalKind(StrEnum):
@@ -184,6 +188,23 @@ class DeviceEvidenceGateway(Protocol):
         now: datetime,
     ) -> UUID:
         """在同一请求事务内登记一条不可领取的再切片委托，返回命令 ID。"""
+        ...
+
+    def claim_reclip_command(
+        self, *, host: InferenceHostIdentity, now: datetime, lease_duration: timedelta
+    ) -> ClaimedReclipCommand | None:
+        """认证主机后领取该主机最早一条再切片命令；队列为空时返回 ``None``。"""
+        ...
+
+    def complete_reclip_command(
+        self,
+        *,
+        command_id: UUID,
+        host: InferenceHostIdentity,
+        claim_token: str,
+        now: datetime,
+    ) -> None:
+        """认证领取主机后把一条再切片命令结案为 ``SUCCEEDED``。"""
         ...
 
 
@@ -399,6 +420,8 @@ def authenticate_host(
 
 
 __all__ = [
+    "COMMAND_CLAIM_TOKEN_HEADER",
+    "COMMAND_LEASE_DURATION",
     "INFERENCE_HOST_ID_HEADER",
     "INFERENCE_HOST_NONCE_HEADER",
     "INFERENCE_HOST_SIGNATURE_HEADER",
@@ -406,6 +429,7 @@ __all__ = [
     "BindingSignal",
     "BindingSignalKind",
     "BindingValidationIssue",
+    "ClaimedReclipCommand",
     "DeviceConfigurationError",
     "DeviceConfigurationGateway",
     "DeviceConfigurationTarget",

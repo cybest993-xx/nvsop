@@ -617,6 +617,16 @@ class PendingCommandCompletion:
 
 
 @dataclass(frozen=True, slots=True)
+class ClaimedReclipCommand:
+    """一条已领取的再切片命令的非秘密交付事实；不含媒体或凭据。"""
+
+    command_id: UUID
+    request_id: UUID
+    claim_token: str
+    lease_expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class ConnectorTestResult:
     """推理机真实连接测试的可持久化结果，不携带设备凭据。"""
 

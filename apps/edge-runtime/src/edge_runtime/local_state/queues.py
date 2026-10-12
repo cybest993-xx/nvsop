@@ -226,6 +226,31 @@ class PendingEvidence:
     required_to: float | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class PendingReclip:
+    """按稳定请求 ID 持久化的再切片执行记录; 已定稿产物是权威, 不重切滚动素材 (S038)。"""
+
+    request_id: str
+    station_id: str
+    instance_id: int
+    anchor: float
+    window_from: float
+    window_to: float
+    wall_offset: float | None
+    sources: tuple[str, ...]
+    required_from: float | None
+    required_to: float | None
+    identity: str | None
+    media_results: str | None
+    covered_from: float | None
+    covered_to: float | None
+    evidence_id: str | None
+    sliced_at: float | None
+    registered_at: float | None
+    attempts: int
+    last_error: str | None
+
+
 class StationQueues:
     """主机数据库中一个工位尚未完成的工作。"""
 
@@ -764,7 +789,183 @@ class StationQueues:
             limit=limit,
         )
 
-    def _evidence_rows(self, clause: str, *, limit: int | None) -> tuple[PendingEvidence, ...]:
+    def evidence_at(self, *, instance_id: int, anchor: float) -> PendingEvidence | None:
+        """按入队冻结的同锚点证据行定位本机原始素材映射; 已登记/已切片行也返回 (S038)。
+
+        再切片只能复用该行入队时冻结的墙钟映射与来源相机路径, 不读当前拓扑重绑历史判定。
+        """
+        rows = self._evidence_rows(
+            "AND q.instance_id = ? AND q.anchor = ?",
+            limit=1,
+            params=(instance_id, anchor),
+        )
+        return rows[0] if rows else None
+
+    def reclip_request(self, request_id: str) -> PendingReclip | None:
+        """读取一条本机再切片执行记录; 不存在时返回 ``None``。"""
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM local_reclip_request WHERE station_id = ? AND request_id = ?",
+                (self._station_id, request_id),
+            ).fetchone()
+        return None if row is None else self._reclip_from_row(row)
+
+    def record_reclip_intent(
+        self,
+        *,
+        request_id: str,
+        instance_id: int,
+        anchor: float,
+        window_from: float,
+        window_to: float,
+        wall_offset: float,
+        sources: tuple[str, ...],
+        required_from: float | None,
+        required_to: float | None,
+        identity: str,
+    ) -> PendingReclip:
+        """幂等记录一次再切片意图; 已有同一请求 ID 时返回原行, 不覆盖已冻结事实。"""
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT OR IGNORE INTO local_reclip_request (
+                    request_id, station_id, instance_id, anchor, window_from, window_to,
+                    wall_offset, sources, required_from, required_to, identity
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    request_id,
+                    self._station_id,
+                    instance_id,
+                    anchor,
+                    window_from,
+                    window_to,
+                    wall_offset,
+                    json.dumps(list(sources)),
+                    required_from,
+                    required_to,
+                    identity,
+                ),
+            )
+            row = self._connection.execute(
+                "SELECT * FROM local_reclip_request WHERE station_id = ? AND request_id = ?",
+                (self._station_id, request_id),
+            ).fetchone()
+        if row is None:
+            raise ValueError("reclip intent was not persisted")
+        return self._reclip_from_row(row)
+
+    def record_reclip_intent_failure(
+        self,
+        *,
+        request_id: str,
+        instance_id: int,
+        anchor: float,
+        window_from: float,
+        window_to: float,
+        error: str,
+    ) -> PendingReclip:
+        """来源事实缺失时也持久化一条可查询失败意图; 不伪造墙钟/相机映射 (S038 AC3)。
+
+        命令窗口仍按中心签发值冻结, 但 ``wall_offset``/``sources``/``identity`` 保持 NULL, 使
+        重启或重复领取能读到同一原因, 且不会被当作可切片的已冻结意图。
+        """
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT OR IGNORE INTO local_reclip_request (
+                    request_id, station_id, instance_id, anchor, window_from, window_to,
+                    attempts, last_error
+                ) VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+                """,
+                (
+                    request_id,
+                    self._station_id,
+                    instance_id,
+                    anchor,
+                    window_from,
+                    window_to,
+                    error,
+                ),
+            )
+            row = self._connection.execute(
+                "SELECT * FROM local_reclip_request WHERE station_id = ? AND request_id = ?",
+                (self._station_id, request_id),
+            ).fetchone()
+        if row is None:
+            raise ValueError("reclip intent failure was not persisted")
+        return self._reclip_from_row(row)
+
+    def record_reclip_slice(
+        self,
+        request_id: str,
+        *,
+        at: HostInstant,
+        media_results: str,
+        covered_from: float,
+        covered_to: float,
+    ) -> None:
+        """记录已定稿再切片产物; 只写本机索引, 不删任何旧媒体文件。"""
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_reclip_request
+                   SET sliced_at = ?, media_results = ?, covered_from = ?, covered_to = ?
+                 WHERE station_id = ? AND request_id = ?
+                """,
+                (at.seconds, media_results, covered_from, covered_to, self._station_id, request_id),
+            )
+
+    def mark_reclip_registered(self, request_id: str, *, at: HostInstant, evidence_id: str) -> None:
+        """中心已确认追加的新引用; 记录新身份使重复领取直接复用。"""
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_reclip_request
+                   SET registered_at = ?, evidence_id = ?
+                 WHERE station_id = ? AND request_id = ?
+                """,
+                (at.seconds, evidence_id, self._station_id, request_id),
+            )
+
+    def record_reclip_failure(self, request_id: str, *, at: HostInstant, error: str) -> None:
+        """再切片失败; 记录可观察原因, 不伪报成功也不删除已有产物。"""
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_reclip_request
+                   SET attempts = attempts + 1, last_attempt_at = ?, last_error = ?
+                 WHERE station_id = ? AND request_id = ?
+                """,
+                (at.seconds, error, self._station_id, request_id),
+            )
+
+    def _reclip_from_row(self, row: sqlite3.Row) -> PendingReclip:
+        return PendingReclip(
+            request_id=str(row["request_id"]),
+            station_id=str(row["station_id"]),
+            instance_id=int(row["instance_id"]),
+            anchor=float(row["anchor"]),
+            window_from=float(row["window_from"]),
+            window_to=float(row["window_to"]),
+            wall_offset=None if row["wall_offset"] is None else float(row["wall_offset"]),
+            sources=() if row["sources"] is None else tuple(json.loads(row["sources"])),
+            required_from=None if row["required_from"] is None else float(row["required_from"]),
+            required_to=None if row["required_to"] is None else float(row["required_to"]),
+            identity=row["identity"],
+            media_results=row["media_results"],
+            covered_from=None if row["covered_from"] is None else float(row["covered_from"]),
+            covered_to=None if row["covered_to"] is None else float(row["covered_to"]),
+            evidence_id=row["evidence_id"],
+            sliced_at=None if row["sliced_at"] is None else float(row["sliced_at"]),
+            registered_at=None if row["registered_at"] is None else float(row["registered_at"]),
+            attempts=int(row["attempts"]),
+            last_error=row["last_error"],
+        )
+
+    def _evidence_rows(
+        self, clause: str, *, limit: int | None, params: tuple[object, ...] = ()
+    ) -> tuple[PendingEvidence, ...]:
         # clause 是本模块的字面量, 不是外部输入; 列名与 where 在此一处维护。
         # 核心必需跨度从同锚点的判定/违规行 union 读出, 不新增证据队列表列 (S037)。
         with self._lock:
@@ -789,7 +990,7 @@ class StationQueues:
                  ORDER BY q.queue_id
                  LIMIT ?
                 """,
-                (self._station_id, -1 if limit is None else limit),
+                (self._station_id, *params, -1 if limit is None else limit),
             ).fetchall()
         return tuple(self._pending_evidence_from_row(row) for row in rows)
 

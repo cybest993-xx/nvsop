@@ -29,6 +29,7 @@ from typing import IO
 from urllib.error import URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
+from uuid import UUID
 
 try:
     import fcntl
@@ -85,6 +86,12 @@ HASHED_CERTIFICATE_ENTRY = re.compile(r"^[0-9a-fA-F]{8}\.\d+$")
 TLS_METADATA_FILE = "tls.json"
 DEFAULT_PROTOCOL = "http"
 SUPPORTED_PROTOCOLS = frozenset({"http", "https"})
+# 已登记来源推理机 UUID → 浏览器可达证据服务 origin 的部署配置；中心与网关 CSP 同源于此。
+EVIDENCE_ORIGINS_ENVIRONMENT = "SOP_EVIDENCE_HOST_ORIGINS"
+# origin 只允许 scheme、主机（含 IPv6 字面量）和端口；拒绝空白/引号/分号/$/通配符等注入字符。
+EVIDENCE_ORIGIN_PATTERN = re.compile(r"https?://[A-Za-z0-9.\-\[\]:]+")
+CSP_ADD_HEADER_PATTERN = re.compile(r'add_header Content-Security-Policy "([^"]*)" always;')
+CSP_EVIDENCE_DIRECTIVES = ("media-src", "connect-src")
 POLL_SECONDS = 2
 READY_TIMEOUT_SECONDS = 900
 
@@ -902,7 +909,97 @@ def prepare_tls(item: DevPaths, environ: Mapping[str, str] | None = None) -> Pat
     return staged_ca
 
 
-def render_gateway_config(item: DevPaths, *, source: Path, protocol: str) -> Path | None:
+def evidence_source_origins(environ: Mapping[str, str], *, protocol: str) -> list[str]:
+    """读取并严格校验部署来源映射；非法输入直接拒绝，不做弱默认降级。
+
+    值与中心 `Settings.evidence_host_origins` 同源同义：规范 UUID → 单一 HTTP(S)
+    origin，不含路径、凭据、查询或片段。网关必须独立拒绝可能注入 CSP/Nginx 的字符。
+    未设置该变量时保持既有行为；显式空值/空白是配置错误，不是“未配置”。
+    错误消息不回显 origin/键的原始值，避免把误填凭据写进普通错误输出。
+    """
+    if EVIDENCE_ORIGINS_ENVIRONMENT not in environ:
+        return []
+    raw = environ[EVIDENCE_ORIGINS_ENVIRONMENT]
+    if not raw.strip():
+        raise DevError(
+            f"{EVIDENCE_ORIGINS_ENVIRONMENT} 已显式设置为空；请提供合法 JSON 对象或移除该变量"
+        )
+    try:
+        mapping = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise DevError(f"{EVIDENCE_ORIGINS_ENVIRONMENT} 不是合法 JSON 对象") from error
+    if not isinstance(mapping, dict):
+        raise DevError(f"{EVIDENCE_ORIGINS_ENVIRONMENT} 必须是 UUID→origin 的 JSON 对象")
+    origins: list[str] = []
+    for index, (host_id, origin) in enumerate(mapping.items(), start=1):
+        if not isinstance(host_id, str) or not isinstance(origin, str):
+            raise DevError(
+                f"{EVIDENCE_ORIGINS_ENVIRONMENT} 的键必须是 UUID、值必须是 origin 字符串"
+            )
+        try:
+            canonical = str(UUID(host_id)) == host_id
+        except ValueError:
+            canonical = False
+        if not canonical:
+            raise DevError(f"第 {index} 个证据来源主机必须是规范 UUID")
+        try:
+            parsed = urlsplit(origin)
+        except ValueError as error:
+            raise DevError(f"第 {index} 个证据来源 origin 无法解析") from error
+        try:
+            port = parsed.port
+        except ValueError as error:
+            raise DevError(f"第 {index} 个证据来源 origin 端口非法") from error
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or (port is not None and not 1 <= port <= 65535)
+            or origin != f"{parsed.scheme}://{parsed.netloc}"
+            or not EVIDENCE_ORIGIN_PATTERN.fullmatch(origin)
+        ):
+            raise DevError(
+                f"第 {index} 个证据来源 origin 必须是单一 HTTP(S) origin，且不含路径/凭据/查询/片段"
+            )
+        if parsed.scheme == "http" and protocol != "http":
+            raise DevError("HTTP 证据来源 origin 只允许用于 HTTP 本地入口")
+        if origin not in origins:
+            origins.append(origin)
+    return origins
+
+
+def inject_csp_evidence_origins(text: str, origins: list[str]) -> str:
+    """把来源 origin 追加到网关 CSP 的 connect-src/media-src，保留其余指令与顺序。"""
+    if not origins:
+        return text
+    token = " ".join(origins)
+
+    def replace(match: re.Match[str]) -> str:
+        csp = match.group(1)
+        for directive in CSP_EVIDENCE_DIRECTIVES:
+            pattern = re.compile(rf"({directive} [^;]*)")
+            csp, count = pattern.subn(lambda item: f"{item.group(1)} {token}", csp, count=1)
+            if count != 1:
+                raise DevError(f"内容安全策略缺少唯一的 {directive} 指令，无法追加证据来源")
+        return f'add_header Content-Security-Policy "{csp}" always;'
+
+    replaced, count = CSP_ADD_HEADER_PATTERN.subn(replace, text)
+    if count != 1:
+        raise DevError("已配置证据来源 origin，但网关模板缺少唯一的 Content-Security-Policy 指令")
+    return replaced
+
+
+def render_gateway_config(
+    item: DevPaths,
+    *,
+    source: Path,
+    protocol: str,
+    environ: Mapping[str, str] | None = None,
+) -> Path | None:
     """按协议渲染 Nginx 入口；HTTP 不读取也不要求证书，HTTPS 只接受显式外部材料。"""
     if protocol not in SUPPORTED_PROTOCOLS:
         raise DevError(f"不支持的开发协议：{protocol}")
@@ -912,6 +1009,8 @@ def render_gateway_config(item: DevPaths, *, source: Path, protocol: str) -> Pat
     text = template.read_text(encoding="utf-8")
     if "__NVSOP_LISTEN_SUFFIX__" not in text or "# __NVSOP_TLS_DIRECTIVES__" not in text:
         raise DevError(f"开发网关配置缺少协议占位符：{template}")
+    origins = evidence_source_origins(os.environ if environ is None else environ, protocol=protocol)
+    text = inject_csp_evidence_origins(text, origins)
     ca: Path | None = None
     if protocol == "https":
         ca = prepare_tls(item)

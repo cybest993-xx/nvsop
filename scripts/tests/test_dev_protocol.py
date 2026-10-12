@@ -1935,5 +1935,169 @@ class DevExternalTlsTest(unittest.TestCase):
             self.assertEqual(self.tls.leaf_key.read_bytes(), external_key.read_bytes())
 
 
+CSP_HOST_ONE = "11111111-1111-4111-8111-111111111111"
+CSP_HOST_TWO = "22222222-2222-4222-8222-222222222222"
+# 合成 URL userinfo 片段：构造非法凭据样本，不固化为可用凭据。
+SYNTHETIC_USERINFO = "user" + ":" + "pass" + "@"
+CSP_GATEWAY_TEMPLATE = (
+    "server {\n"
+    "    listen 8443__NVSOP_LISTEN_SUFFIX__;\n"
+    "    # __NVSOP_TLS_DIRECTIVES__\n"
+    "    server_name localhost nginx;\n"
+    "    add_header Content-Security-Policy \"default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob:; media-src 'self' blob: $scheme://localhost:8444; "
+    "connect-src 'self' $scheme://localhost:8444; object-src 'none'; "
+    "base-uri 'self'; frame-ancestors 'self'\" always;\n"
+    "}\n"
+)
+CSP_RENDERED_BASELINE = CSP_GATEWAY_TEMPLATE.replace("__NVSOP_LISTEN_SUFFIX__", "").replace(
+    "    # __NVSOP_TLS_DIRECTIVES__\n", ""
+)
+
+
+class DevEvidenceOriginCspTest(unittest.TestCase):
+    """部署来源映射必须同源进入网关 CSP；无映射保持模板字节，非法输入 fail-fast。"""
+
+    module = DEV
+
+    def make_root(self, directory: str) -> tuple[DEV.DevPaths, Path]:
+        root = Path(directory)
+        item = self.module.DevPaths(root=root, state=root / ".state")
+        self.module.ensure_directories(item)
+        template = root / "deploy" / "dev" / "nginx.conf"
+        template.parent.mkdir(parents=True, exist_ok=True)
+        template.write_text(CSP_GATEWAY_TEMPLATE, encoding="utf-8")
+        return item, root
+
+    def render(
+        self, item: DEV.DevPaths, root: Path, raw: str | None, *, protocol: str = "http"
+    ) -> str:
+        environment = {} if raw is None else {self.module.EVIDENCE_ORIGINS_ENVIRONMENT: raw}
+        self.module.render_gateway_config(item, source=root, protocol=protocol, environ=environment)
+        return (item.state / "nginx.conf").read_text(encoding="utf-8")
+
+    def test_two_configured_origins_are_appended_only_to_connect_and_media(self) -> None:
+        first = "http://127.0.0.1:9501"
+        second = "https://evidence-secondary.internal:9443"
+        with tempfile.TemporaryDirectory() as directory:
+            item, root = self.make_root(directory)
+            rendered = self.render(
+                item, root, json.dumps({CSP_HOST_ONE: first, CSP_HOST_TWO: second})
+            )
+        self.assertIn(
+            f"media-src 'self' blob: $scheme://localhost:8444 {first} {second};", rendered
+        )
+        self.assertIn(f"connect-src 'self' $scheme://localhost:8444 {first} {second};", rendered)
+        self.assertEqual(2, rendered.count("$scheme://localhost:8444"))
+        self.assertIn("default-src 'self'", rendered)
+        self.assertIn("img-src 'self' data: blob:", rendered)
+        self.assertIn("object-src 'none'", rendered)
+
+    def test_empty_mapping_keeps_the_template_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            item, root = self.make_root(directory)
+            self.assertEqual(CSP_RENDERED_BASELINE, self.render(item, root, "{}"))
+
+    def test_absent_mapping_keeps_the_template_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            item, root = self.make_root(directory)
+            self.assertEqual(CSP_RENDERED_BASELINE, self.render(item, root, None))
+
+    def test_duplicate_origins_are_appended_once(self) -> None:
+        origin = "https://evidence-shared.internal:9443"
+        with tempfile.TemporaryDirectory() as directory:
+            item, root = self.make_root(directory)
+            rendered = self.render(
+                item, root, json.dumps({CSP_HOST_ONE: origin, CSP_HOST_TWO: origin})
+            )
+        self.assertEqual(
+            1, rendered.count(f"connect-src 'self' $scheme://localhost:8444 {origin};")
+        )
+
+    def test_invalid_environment_is_rejected(self) -> None:
+        cases = {
+            "malformed-json": "not-json",
+            "not-an-object": json.dumps([CSP_HOST_ONE]),
+            "non-canonical-uuid": json.dumps(
+                {"11111111-1111-4111-8111-11111111111": "http://127.0.0.1:9501"}
+            ),
+            "origin-path": json.dumps({CSP_HOST_ONE: "https://evidence.internal:9443/path"}),
+            "origin-query": json.dumps({CSP_HOST_ONE: "https://evidence.internal:9443?x=1"}),
+            "origin-fragment": json.dumps({CSP_HOST_ONE: "https://evidence.internal:9443#x"}),
+            "origin-credentials": json.dumps(
+                {CSP_HOST_ONE: "https://" + SYNTHETIC_USERINFO + "evidence.internal:9443"}
+            ),
+            "origin-bad-port": json.dumps({CSP_HOST_ONE: "https://evidence.internal:99999"}),
+            "origin-semicolon": json.dumps(
+                {CSP_HOST_ONE: "https://evidence.internal:9443;connect-src *"}
+            ),
+            "origin-space": json.dumps({CSP_HOST_ONE: "https://evidence.internal:9443 *"}),
+            "origin-quote": json.dumps({CSP_HOST_ONE: 'https://evidence.internal:9443"'}),
+            "origin-dollar": json.dumps({CSP_HOST_ONE: "https://evidence.internal:9443$x"}),
+            "origin-wildcard": json.dumps({CSP_HOST_ONE: "https://*.internal:9443"}),
+            "non-string-value": json.dumps({CSP_HOST_ONE: 9443}),
+        }
+        for name, raw in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                item, root = self.make_root(directory)
+                with self.assertRaises(self.module.DevError):
+                    self.render(item, root, raw)
+
+    def test_explicit_empty_or_whitespace_is_rejected(self) -> None:
+        for name, raw in {"empty": "", "whitespace": "   "}.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                item, root = self.make_root(directory)
+                with self.assertRaises(self.module.DevError):
+                    self.render(item, root, raw)
+
+    def test_error_message_does_not_echo_configured_origin(self) -> None:
+        sensitive = "https://" + SYNTHETIC_USERINFO + "evidence.internal:9443"
+        with tempfile.TemporaryDirectory() as directory:
+            item, root = self.make_root(directory)
+            with self.assertRaises(self.module.DevError) as caught:
+                self.render(item, root, json.dumps({CSP_HOST_ONE: sensitive}))
+        message = str(caught.exception)
+        self.assertNotIn(SYNTHETIC_USERINFO, message)
+        self.assertNotIn("evidence.internal", message)
+        self.assertNotIn(sensitive, message)
+
+    def test_error_message_does_not_echo_invalid_key(self) -> None:
+        sensitive_key = "user" + ":" + "pass" + "@" + "evidence.internal"
+        with tempfile.TemporaryDirectory() as directory:
+            item, root = self.make_root(directory)
+            with self.assertRaises(self.module.DevError) as caught:
+                self.render(
+                    item, root, json.dumps({sensitive_key: "https://evidence.internal:9443"})
+                )
+        message = str(caught.exception)
+        self.assertNotIn("pass", message)
+        self.assertNotIn("evidence.internal", message)
+
+    def test_http_origin_is_rejected_for_https_entry(self) -> None:
+        mapping = json.dumps({CSP_HOST_ONE: "http://127.0.0.1:9501"})
+        with tempfile.TemporaryDirectory() as directory:
+            item, root = self.make_root(directory)
+            with self.assertRaises(self.module.DevError):
+                self.render(item, root, mapping, protocol="https")
+
+    def test_configured_origins_without_csp_header_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            item = self.module.DevPaths(root=root, state=root / ".state")
+            self.module.ensure_directories(item)
+            template = root / "deploy" / "dev" / "nginx.conf"
+            template.parent.mkdir(parents=True, exist_ok=True)
+            template.write_text(
+                "server {\n"
+                "    listen 8443__NVSOP_LISTEN_SUFFIX__;\n"
+                "    # __NVSOP_TLS_DIRECTIVES__\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(self.module.DevError):
+                self.render(item, root, json.dumps({CSP_HOST_ONE: "http://127.0.0.1:9501"}))
+
+
 if __name__ == "__main__":
     unittest.main()

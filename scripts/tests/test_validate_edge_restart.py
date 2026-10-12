@@ -537,6 +537,43 @@ class ValidateEdgeRestartTest(unittest.TestCase):
         self.assertEqual(1, result.returncode)
         self.assertIn("media_intact", result.stdout)
 
+    def test_replay_rejects_new_local_disposal_and_evidence_identities(self) -> None:
+        env, _ = self._fake_psql()
+        before = self.root / "before.json"
+        after = self.root / "after.json"
+        after_db = self._after_database(interrupted=True)
+        connection = sqlite3.connect(after_db)
+        try:
+            # 暂停新输入的固定确认阶段若又新建本机处置/证据待办，必须被判为不通过。
+            connection.execute(
+                "INSERT INTO local_disposal "
+                "(disposal_id, station_id, idempotency_key, action_kind, actor, result_kind, "
+                " result_at, attempts) VALUES (?,?,?,?,?,?,?,?)",
+                (10, STATION, "idem-2", "write_output", "supervisor", None, None, 0),
+            )
+            connection.execute(
+                "INSERT INTO local_evidence_queue "
+                "(queue_id, station_id, instance_id, anchor, window_from, window_to) "
+                "VALUES (?,?,?,?,?,?)",
+                (8, STATION, 10, 5.0, 4.0, 6.0),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        self._snapshot(before, role="before", center=True, env=env)
+        self._snapshot(
+            after, role="after", center=True, env=env, db=after_db, evidence=self._after_evidence()
+        )
+
+        result = _run(
+            "compare", "--scenario", "replay", "--before", str(before), "--after", str(after)
+        )
+
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        # 两项新增身份都必须被识别（而非只命中其一）。
+        self.assertIn(f"disposal:{STATION}:idem-2", result.stdout)
+        self.assertIn(f"evidence:{STATION}:10:5.0", result.stdout)
+
     def _after_database(self, *, interrupted: bool, config_revision: int = 3) -> Path:
         closed = self.root / f"after-{interrupted}-{config_revision}.sqlite3"
         _database(

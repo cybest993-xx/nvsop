@@ -709,6 +709,16 @@ def _configuration_check(before: dict[str, Any], after: dict[str, Any]) -> tuple
     return "fail", "last confirmed configuration revision or digest changed"
 
 
+def _replay_local_identity_check(before: dict[str, Any], after: dict[str, Any]) -> tuple[bool, str]:
+    """replay 固定确认阶段只允许确认既有积压，不应新建本机处置/证据待办身份。"""
+    new: list[str] = []
+    for queue in ("evidence", "disposal"):
+        known = {item["key"] for item in before["sqlite"]["queue_identities"].get(queue, [])}
+        current = {item["key"] for item in after["sqlite"]["queue_identities"].get(queue, [])}
+        new.extend(sorted(current - known))
+    return not new, f"new local evidence/disposal identities during fixed replay: {new[:5]}"
+
+
 def _center_check(before: dict[str, Any], after: dict[str, Any], scenario: str) -> tuple[str, str]:
     if before["center"]["status"] != "collected" or after["center"]["status"] != "collected":
         return "needs_field", "center PostgreSQL evidence not collected in both snapshots"
@@ -787,6 +797,12 @@ def compare_snapshots(
         checks.append(_check("interrupted_closed", "pass" if passed else "fail", detail))
         configuration_status, configuration_detail = _configuration_check(before, after)
         checks.append(_check("configuration_effective", configuration_status, configuration_detail))
+
+    if scenario == "replay":
+        passed, detail = _replay_local_identity_check(before, after)
+        checks.append(
+            _check("replay_local_identities_stable", "pass" if passed else "fail", detail)
+        )
 
     center_status, center_detail = _center_check(before, after, scenario)
     checks.append(_check("center_mirror", center_status, center_detail))

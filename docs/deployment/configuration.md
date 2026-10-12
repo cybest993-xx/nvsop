@@ -44,7 +44,7 @@ uvicorn --factory factory_sop.entrypoint:build
 
 ### 证据访问授权
 
-`SOP_EVIDENCE_HOST_ORIGINS` 是中心部署配置的 JSON 对象：键为已登记来源推理机的规范 UUID，值为浏览器可达的证据服务 HTTP(S) origin（不得含路径、凭据、查询或片段）。缺省为空；缺少该主机映射时签发返回 `source_host_unconfigured`，不能从浏览器参数、主机地址或猜测端口补齐。HTTP 只可用于 `fixed_main` + `allow_http` 本地部署。
+`SOP_EVIDENCE_HOST_ORIGINS` 是中心部署配置的 JSON 对象：键为已登记来源推理机的规范 UUID，值为浏览器可达的证据服务 HTTP(S) origin（不得含路径、凭据、查询或片段）。缺省为空；缺少该主机映射时签发返回 `source_host_unconfigured`，不能从浏览器参数、主机地址或猜测端口补齐。HTTP 只可用于 `fixed_main` + `allow_http` 本地部署。开发 Compose 的同一变量既送入中心进程环境，也由 `scripts/dev.py` 在渲染 `deploy/dev/nginx.conf` 时写入 `connect-src`/`media-src`，使浏览器能直连已配置来源；未配置来源仍被 CSP 拒绝。畸形 JSON、非规范 UUID、非法 origin 或注入字符在渲染阶段 fail-fast，不做弱默认降级。
 
 用户须有 `evidence.evidence.view` 权限。中心只签发绑定具体证据 ID、来源主机、会话指纹和短有效期的上下文，不返回媒体字节；来源主机每次读取均通过签名 `POST /api/v1/evidence/access-check` 复核当前会话与权限。登出、会话过期和撤权使旧上下文无法继续读取，上下文不延长会话。
 

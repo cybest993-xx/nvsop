@@ -23,6 +23,9 @@ x-center-environment: &center-environment
   SOP_MEDIA_PROBE_TIMEOUT_SECONDS: "60"
   SOP_ANNOTATION_BACKEND_URL: http://annotation-backend:8100
   SOP_ANNOTATION_MEDIA_ORIGIN: ${NVSOP_DEV_MEDIA_URL:-http://localhost:8444}
+  # 已登记来源推理机 UUID→origin；同一映射由 scripts/dev.py 渲染进网关 CSP，
+  # 中心用它签发证据访问上下文。空映射保持既有行为。
+  SOP_EVIDENCE_HOST_ORIGINS: ${SOP_EVIDENCE_HOST_ORIGINS-{}}
   SOP_ANNOTATION_DATA_ROOT: /var/lib/nvsop/annotation-data
   SOP_ANNOTATION_HTTP_TIMEOUT_SECONDS: "120"
   SOP_MEDIA_PROBE_BINARY: ffprobe

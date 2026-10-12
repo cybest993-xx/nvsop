@@ -49,6 +49,7 @@ SOURCE_REPLACEMENTS = {
         "fanshiqing/grouped_gemm@172fada89fa7364fe5d026b3a0dfab58b591ffdd"
     ),
     "ARG DEEPEP_REF=567632d": "ARG DEEPEP_REF=567632dd59810d77b3cc05553df953cc0f779799",
+    "transformer_engine[pytorch]==2.14.1": "transformer_engine[pytorch]==2.13.0",
 }
 
 

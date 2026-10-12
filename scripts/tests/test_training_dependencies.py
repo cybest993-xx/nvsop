@@ -96,3 +96,12 @@ class TrainingLockTest(unittest.TestCase):
                     self.assertEqual(
                         (context / "nvsop-runtime.lock").read_text(), "torchao==0.15.0\n"
                     )
+                    locked = dict(
+                        line.split("==", 1)
+                        for line in (ROOT / OWNER / "training-cr.lock").read_text().splitlines()
+                    )
+                    self.assertIn(
+                        f"transformer_engine[pytorch]=={locked['transformer-engine']}",
+                        generated,
+                    )
+                    self.assertNotIn("transformer_engine[pytorch]==2.14.1", generated)

@@ -76,7 +76,8 @@ def test_host_signed_machine_routes_bypass_only_browser_auth_and_preserve_signat
             "inference-hosts/",
             "/configuration",
             "confirmed-configuration",
-            "monitor/(?:reported-decisions|reported-instances|reported-observations|health)",
+            "monitor/(?:reported-decisions(?:/enveloped)?|reported-disposals|reported-instances|"
+            "reported-observations|health)",
             "device-commands/(?:next|reclip/next|",
             "(?:result|reclip-result))",
             "templates/configuration-reports",

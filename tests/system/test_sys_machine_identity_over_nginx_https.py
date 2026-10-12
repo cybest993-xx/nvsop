@@ -12,6 +12,7 @@ from io import BytesIO
 from itertools import count
 from pathlib import Path
 from random import Random
+from typing import cast
 from unittest.mock import patch
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -28,8 +29,13 @@ from conftest import (
 from httpx2 import Client, HTTPError, Response
 
 from nvsop_contracts import (
+    ConfigurationBundle,
     HostIdentityRequest,
+    ReportBackendProvenance,
+    ReportedDecision,
+    ReportEvidence,
     generate_host_identity_key_pair,
+    reported_decision_to_wire,
     sign_host_identity_request,
 )
 
@@ -617,6 +623,111 @@ def test_host_signed_machine_api_crosses_real_nginx_gateway_without_browser_sess
                 method="POST",
                 path=decision_path,
                 body=decision,
+                success_status=200,
+            )
+
+            # Edge 生产上报另两条入口：v2 envelope 判定与处置结果。
+            bundle = ConfigurationBundle.from_wire(configuration_body)
+            stations = cast(list[dict[str, object]], configuration_body["stations"])
+            station_slice = next(item for item in stations if item["station_id"] == station_id)
+            station_template = cast(dict[str, object] | None, station_slice["template"])
+            envelope_path = "/api/v1/monitor/reported-decisions/enveloped"
+            envelope: dict[str, object] = {
+                "decision": reported_decision_to_wire(
+                    ReportedDecision(
+                        contract_version=2,
+                        event_id=f"sys-nginx-enveloped-{gateway_scheme}",
+                        trace_id=f"sys-nginx-trace-enveloped-{gateway_scheme}",
+                        host_id=host_id,
+                        station_id=station_id,
+                        backend_id=None,
+                        instance_id=1,
+                        verdict="pass",
+                        reason_codes=(),
+                        violations=(),
+                        lifecycle="closed",
+                        evidence=ReportEvidence(anchor=None, start=None, end=None),
+                        template_version_id=(
+                            None
+                            if station_template is None
+                            else str(station_template["version_id"])
+                        ),
+                        template_sha256=(
+                            None
+                            if station_template is None
+                            else str(station_template["version_sha256"])
+                        ),
+                        model_ids=(),
+                        reported_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                        backend_provenance=(
+                            ReportBackendProvenance(
+                                backend_id=str(station_slice["backend_id"]),
+                                model_ids=tuple(cast(list[str], station_slice["model_ids"])),
+                            ),
+                        ),
+                        configuration_revision=bundle.config_revision,
+                        configuration_sha256=bundle.effective_sha256,
+                    )
+                ),
+                "latched_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                "realtime": True,
+            }
+            disposal_path = "/api/v1/monitor/reported-disposals"
+            disposal: dict[str, object] = {
+                "contract_version": 1,
+                "event_id": f"sys-nginx-disposal-{gateway_scheme}",
+                "host_id": host_id,
+                "station_id": station_id,
+                "instance_id": 1,
+                "idempotency_key": f"sys-nginx-disposal-key-{gateway_scheme}",
+                "violation_ref": "1:MISSED_STEP:step-1",
+                "action_kind": "alert",
+                "actor": "supervisor",
+                "source": "station_policy:stop",
+                "result_kind": "stored",
+                "result_detail": None,
+                "result_at": 1.0,
+                "attempts": 1,
+                "reported_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            }
+
+            # 先取证两条入口的直达可达性：被网关 session 拦截时同时暴露为 401。
+            observed: dict[str, int] = {}
+            for path, payload in ((envelope_path, envelope), (disposal_path, disposal)):
+                response = edge.post(
+                    path,
+                    json=payload,
+                    headers=_signed_headers(
+                        host_id=host_id,
+                        private_key=private_key,
+                        method="POST",
+                        path=path,
+                        body=payload,
+                    ),
+                )
+                observed[path] = response.status_code
+            assert observed == {envelope_path: 200, disposal_path: 200}, observed
+            # 浏览器 monitor 路由仍只接受 session：白名单没有放开它们。
+            assert edge.get("/api/v1/monitor/violations").status_code == 401
+            assert edge.get("/api/v1/monitor/disposals").status_code == 401
+
+            # 主机签名边界仍完整：两条新路径都拒绝五类无效身份。
+            _assert_signature_rejection_matrix(
+                edge,
+                host_id=host_id,
+                private_key=private_key,
+                method="POST",
+                path=envelope_path,
+                body=envelope,
+                success_status=200,
+            )
+            _assert_signature_rejection_matrix(
+                edge,
+                host_id=host_id,
+                private_key=private_key,
+                method="POST",
+                path=disposal_path,
+                body=disposal,
                 success_status=200,
             )
 

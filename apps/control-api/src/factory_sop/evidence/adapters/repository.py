@@ -76,6 +76,21 @@ class PostgresEvidenceRepository(EvidenceRepository):
                     else table.c.reference == expected_registration.reference
                 ),
                 (
+                    table.c.wall_offset.is_(None)
+                    if expected_registration.wall_offset is None
+                    else table.c.wall_offset == expected_registration.wall_offset
+                ),
+                (
+                    table.c.required_from.is_(None)
+                    if expected_registration.required_from is None
+                    else table.c.required_from == expected_registration.required_from
+                ),
+                (
+                    table.c.required_to.is_(None)
+                    if expected_registration.required_to is None
+                    else table.c.required_to == expected_registration.required_to
+                ),
+                (
                     table.c.failure_reason.is_(None)
                     if expected.failure_reason is None
                     else table.c.failure_reason == expected.failure_reason
@@ -86,6 +101,10 @@ class PostgresEvidenceRepository(EvidenceRepository):
                 sha256=registration.sha256,
                 size=registration.size,
                 reference=registration.reference,
+                # 冻结三元数据不是身份，只随登记状态提升（PENDING/FAILED→AVAILABLE）落库。
+                wall_offset=registration.wall_offset,
+                required_from=registration.required_from,
+                required_to=registration.required_to,
                 status=value.status.value,
                 failure_reason=value.failure_reason,
                 received_at=value.received_at,

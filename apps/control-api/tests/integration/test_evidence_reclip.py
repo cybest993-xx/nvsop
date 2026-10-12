@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
@@ -22,6 +22,13 @@ from factory_sop.auth.adapters.cookies import CSRF_COOKIE, CSRF_HEADER
 from factory_sop.auth.adapters.repository import PostgresRoleRepository
 from factory_sop.auth.model import Role, User
 from factory_sop.auth.permissions import Permission
+from factory_sop.evidence.adapters.repository import PostgresEvidenceRepository
+from factory_sop.evidence.model import (
+    EvidenceKind,
+    EvidenceOrigin,
+    EvidenceRegistration,
+)
+from factory_sop.evidence.usecases import register_evidence
 from factory_sop.identifiers import new_id
 from factory_sop.persistence import session_factory
 
@@ -265,6 +272,107 @@ def test_reclip_rejects_non_finite_margins_before_writing(
             connection.execute(
                 text("DELETE FROM device_pending_command WHERE host_id = :host_id"),
                 {"host_id": runtime_topology.host.id},
+            )
+            connection.execute(text("TRUNCATE auth_user CASCADE"))
+            connection.execute(
+                text("DELETE FROM auth_role WHERE code = :code"), {"code": ROLE_CODE}
+            )
+
+
+class _Owner:
+    """仅用于播种 PENDING 证据的公开登记 seam；提升仍走真实主机签名 HTTP。"""
+
+    def owns_station(self, *, host_id: UUID, station_id: UUID) -> bool:
+        return True
+
+
+def _pending_registration(topology: RuntimeTopology, evidence_id: str) -> EvidenceRegistration:
+    """旧式登记：只报身份，无 material 与冻结三列；登记路由对非 AVAILABLE 返回 422。"""
+    return EvidenceRegistration(
+        evidence_id=evidence_id,
+        host_id=str(topology.host.id).upper(),
+        station_id=str(topology.station.id),
+        instance_id=7,
+        violation_id=None,
+        kind=EvidenceKind.CLIP,
+        origin=EvidenceOrigin.AUTOMATIC,
+        anchor=100.0,
+        window_start=95.0,
+        window_end=105.0,
+        generation="original",
+    )
+
+
+def test_reclip_metadata_persists_when_a_pending_registration_is_promoted(
+    engine: Engine, runtime_topology: RuntimeTopology
+) -> None:
+    """旧式 PENDING 提升为同身份 AVAILABLE 时，新 material 与冻结三元数据必须落库。
+
+    登记路由对非 AVAILABLE 返回 422 并回滚，故 PENDING 用公开 ``register_evidence`` seam 播种；
+    提升与读取都走真实主机签名 HTTP 与新请求事务，证明的是数据库事实而非首次成功响应。
+    """
+    _grant(engine)
+    host_id = str(runtime_topology.host.id)
+    station_id = str(runtime_topology.station.id)
+    evidence_id = f"{host_id}/promoted.mp4"
+    wall_offset = datetime.now(UTC).timestamp() - 100.0
+    app = create_app(settings(), session_factory=session_factory(engine))
+    try:
+        with session_factory(engine)() as session:
+            register_evidence(
+                _pending_registration(runtime_topology, evidence_id),
+                received_at=datetime.now(UTC),
+                evidence=PostgresEvidenceRepository(session),
+                host_gateway=_Owner(),
+            )
+            session.commit()
+        with (
+            TestClient(app, base_url="https://testserver") as browser,
+            TestClient(app, base_url="https://testserver") as host,
+        ):
+            assert browser.post(SESSION_PATH, json=CREDENTIALS).status_code == 201
+            listing = browser.get(
+                f"{API_PREFIX}/evidence",
+                params={"station_id": station_id, "instance_id": 7},
+            ).json()
+            row = next(item for item in listing if item["evidence_id"] == evidence_id)
+            assert row["status"] == "pending"
+            assert row["reclip_deadline"] is None
+
+            promoted = _post_as_host(
+                host,
+                runtime_topology,
+                path=REGISTRATIONS,
+                body=_registration(
+                    runtime_topology,
+                    evidence_id,
+                    wall_offset=wall_offset,
+                    required_from=90.0,
+                    required_to=110.0,
+                ),
+            )
+            assert promoted.status_code == 200, promoted.text
+            assert promoted.json()["status"] == "available"
+
+            # 新请求事务读回：material 与冻结三元数据都已持久化，截止非空。
+            listing = browser.get(
+                f"{API_PREFIX}/evidence",
+                params={"station_id": station_id, "instance_id": 7},
+            ).json()
+            row = next(item for item in listing if item["evidence_id"] == evidence_id)
+            assert row["status"] == "available"
+            assert row["sha256"] == "a" * 64
+            assert row["size"] == 10
+            assert row["reference"] == "artifact/camera-a.mp4"
+            assert row["wall_offset"] == wall_offset
+            assert row["required_from"] == 90.0
+            assert row["required_to"] == 110.0
+            assert row["reclip_available"] is True
+            assert row["reclip_deadline"] == 90.0 + wall_offset + WINDOW_SECONDS
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM evidence_evidence WHERE evidence_id = :id"), {"id": evidence_id}
             )
             connection.execute(text("TRUNCATE auth_user CASCADE"))
             connection.execute(

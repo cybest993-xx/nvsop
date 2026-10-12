@@ -113,7 +113,8 @@ class EvidenceRegistration:
     def identity(self) -> tuple[object, ...]:
         """不可变登记身份；再次切片追加新引用，不覆盖已有身份。
 
-        冻结时间元数据不进身份：它可随来源机升级在重复登记时补齐，旧登记缺失时仍合法。
+        冻结时间元数据不进身份：它不是登记身份的一部分，只在已有登记状态提升
+        （PENDING/FAILED→AVAILABLE）时随该次登记持久化，不会回填已是 AVAILABLE 的旧记录。
         """
         return (
             self.evidence_id,

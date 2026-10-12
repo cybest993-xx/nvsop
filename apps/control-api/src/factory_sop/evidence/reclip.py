@@ -13,6 +13,7 @@ from uuid import UUID
 
 from factory_sop.auth.api import Caller, Permission, authorize
 from factory_sop.evidence.model import (
+    EvidenceKind,
     EvidenceOrigin,
     EvidenceReclipRequest,
     EvidenceRegistration,
@@ -175,7 +176,8 @@ def settle_reclip_success(
 ) -> EvidenceReclipRequest:
     """把一条已领取再切片命令的成功结果结案为请求 ``SUCCEEDED`` 并记录新引用。
 
-    新引用必须已登记、来源为 reclip、且属于同一主机与锚点，否则拒绝，不追加伪造代次。
+    新引用必须已登记、来源为 reclip、属于同一主机与锚点, 且与原证据的工位/实例及本请求的
+    精确并集窗口一致; 否则拒绝, 不追加伪造代次, 也不把另一请求的结果算到本请求上。
     """
     request = requests.find_by_command_id(command_id)
     if request is None:
@@ -185,10 +187,29 @@ def settle_reclip_success(
     reference = evidence.find(evidence_id)
     if reference is None or reference.registration.origin is not EvidenceOrigin.RECLIP:
         raise EvidenceReclipRefusedError(409, "reclip_result_unregistered")
-    if UUID(reference.registration.host_id) != host_id:
+    registration = reference.registration
+    if UUID(registration.host_id) != host_id:
         raise EvidenceReclipRefusedError(409, "reclip_result_host_mismatch")
-    if reference.registration.anchor != request.anchor:
+    if registration.anchor != request.anchor:
         raise EvidenceReclipRefusedError(409, "reclip_result_anchor_mismatch")
+    original = evidence.find(request.evidence_id)
+    if original is None:
+        raise EvidenceReclipRefusedError(409, "reclip_source_unregistered")
+    if (
+        registration.kind is not EvidenceKind.CLIP
+        or reference.status is not EvidenceStatus.AVAILABLE
+    ):
+        raise EvidenceReclipRefusedError(409, "reclip_result_unsuitable")
+    if (
+        registration.station_id != original.registration.station_id
+        or registration.instance_id != original.registration.instance_id
+    ):
+        raise EvidenceReclipRefusedError(409, "reclip_result_scope_mismatch")
+    if (
+        abs(registration.window_start - request.window_start) > 1e-6
+        or abs(registration.window_end - request.window_end) > 1e-6
+    ):
+        raise EvidenceReclipRefusedError(409, "reclip_result_window_mismatch")
     if request.status is ReclipRequestStatus.SUCCEEDED:
         if request.result_evidence_id == evidence_id:
             return request

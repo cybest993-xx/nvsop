@@ -11,6 +11,7 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 from typing import cast
+from unittest.mock import patch
 
 from nvsop_contracts import ReclipEvidenceClaim, ReclipEvidenceCommand, ReclipEvidenceResult
 from store_harness import ANCHOR, STATION, opening_state
@@ -24,7 +25,7 @@ from edge_runtime.evidence_reporting import REGISTRATION_PATH
 from edge_runtime.judgment.evidence import EvidenceClip
 from edge_runtime.judgment.model import Decision, EvidenceSpan, HostInstant, Instance, Lifecycle
 from edge_runtime.judgment.reasons import Verdict
-from edge_runtime.local_state import EvidenceSource, LocalState, open_local_state
+from edge_runtime.local_state import EvidenceSource, LocalState, StationStore, open_local_state
 from edge_runtime.local_state.queues import PendingEvidence
 from edge_runtime.supervisor.reclip import (
     ReclipCommandRunner,
@@ -129,13 +130,15 @@ class FakeReclipTransport:
         self.reports.append((claim, result))
 
 
-def claim(request_id: str, *, start: float, end: float) -> ReclipEvidenceClaim:
+def claim(
+    request_id: str, *, start: float, end: float, instance_id: int = 1
+) -> ReclipEvidenceClaim:
     return ReclipEvidenceClaim(
         command=ReclipEvidenceCommand(
             command_id=f"command-{request_id}",
             request_id=request_id,
             station_id=STATION,
-            instance_id=1,
+            instance_id=instance_id,
             anchor=ANCHOR,
             window_start=start,
             window_end=end,
@@ -316,6 +319,130 @@ class ReclipExecutionTest(unittest.TestCase):
         )
         self.assertEqual(transport.reports, [])
         self.assertEqual(self.center.posts, [])
+        # 来源映射缺失也要持久化可查询原因, 不伪造墙钟/相机映射, 也不静默丢弃待办。
+        record = state.station(STATION).reclip_request("req-3")
+        assert record is not None
+        self.assertIn("reclip_source_missing", record.last_error or "")
+        self.assertIsNone(record.wall_offset)
+        self.assertEqual(record.sources, ())
+        self.assertIsNone(record.identity)
+        self.assertIsNone(record.media_results)
+
+        # 重启后同一请求仍带原因; 重复领取既不登记也不重切。
+        state.close()
+        reopened = self.open_state("unmapped.sqlite")
+        self.addCleanup(reopened.close)
+        retry = FakeReclipTransport([claim("req-3", start=ANCHOR - 8, end=ANCHOR + 8)])
+        self.assertTrue(
+            ReclipCommandRunner(transport=retry, executor=self.executor(reopened)).run_once()
+        )
+        self.assertEqual(retry.reports, [])
+        self.assertEqual(self.center.posts, [])
+        recovered = reopened.station(STATION).reclip_request("req-3")
+        assert recovered is not None
+        self.assertIn("reclip_source_missing", recovered.last_error or "")
+
+    def test_missing_evidence_row_is_persisted_as_source_missing(self) -> None:
+        # 本机没有该实例/锚点的冻结证据行: 仍要留下可查询失败原因, 不凭空造映射。
+        state = self.open_state("row-missing.sqlite")
+        self.addCleanup(state.close)
+        enqueue(state)
+        transport = FakeReclipTransport(
+            [claim("req-4", start=ANCHOR - 8, end=ANCHOR + 8, instance_id=9)]
+        )
+        self.assertTrue(
+            ReclipCommandRunner(transport=transport, executor=self.executor(state)).run_once()
+        )
+        self.assertEqual(transport.reports, [])
+        self.assertEqual(self.center.posts, [])
+        record = state.station(STATION).reclip_request("req-4")
+        assert record is not None
+        self.assertIn("reclip_source_missing", record.last_error or "")
+        self.assertIsNone(record.wall_offset)
+        self.assertEqual(record.sources, ())
+        self.assertIsNone(record.identity)
+
+    def test_lost_sql_index_recovers_the_finalized_artifact_without_reslicing(self) -> None:
+        # 进程在原子定稿后、写 SQL 前崩溃: 产物目录已在, 但本机索引 media_results 仍为 NULL。
+        original_dirs = {directory for directory in self.evidence.iterdir() if directory.is_dir()}
+
+        def crash_after_publish(_store: StationStore, _request_id: str, **_kwargs: object) -> None:
+            raise RuntimeError("process loss after atomic publish")
+
+        with patch.object(StationStore, "record_reclip_slice", crash_after_publish):
+            transport = FakeReclipTransport([claim("req-2b", start=ANCHOR - 8, end=ANCHOR + 8)])
+            with self.assertRaises(RuntimeError):
+                ReclipCommandRunner(transport=transport, executor=self.executor()).run_once()
+        record = self.state.station(STATION).reclip_request("req-2b")
+        assert record is not None
+        self.assertIsNone(record.media_results)
+        self.assertIsNotNone(record.identity)
+        finalized = {
+            directory for directory in self.evidence.iterdir() if directory.is_dir()
+        } - original_dirs
+        self.assertEqual(len(finalized), 1)
+
+        # 重试前滚动素材消失; 恢复必须复用已定稿产物, 而不是重新查询分段。
+        shutil.rmtree(self.recording)
+        retry = FakeReclipTransport([claim("req-2b", start=ANCHOR - 8, end=ANCHOR + 8)])
+        self.assertTrue(ReclipCommandRunner(transport=retry, executor=self.executor()).run_once())
+        self.assertEqual(len(retry.reports), 1)
+        recovered = self.state.station(STATION).reclip_request("req-2b")
+        assert recovered is not None
+        self.assertEqual(recovered.evidence_id, retry.reports[0][1].evidence_id)
+        self.assertIn(recovered.evidence_id, self.center.records)
+        # 产物目录集合不变: 恢复不覆盖也不新建权威目录。
+        self.assertEqual(
+            {directory for directory in self.evidence.iterdir() if directory.is_dir()},
+            original_dirs | finalized,
+        )
+
+    def test_tampered_or_missing_finalized_media_is_observable_without_reslicing(self) -> None:
+        # 登记确认丢失后媒体仍在; 之后定稿媒体被篡改/删除, 登记准备失败必须折叠为可观察失败。
+        self.center.drop_reply = True
+        transport = FakeReclipTransport([claim("req-7", start=ANCHOR - 8, end=ANCHOR + 8)])
+        self.assertTrue(
+            ReclipCommandRunner(transport=transport, executor=self.executor()).run_once()
+        )
+        self.assertEqual(transport.reports, [])
+        record = self.state.station(STATION).reclip_request("req-7")
+        assert record is not None
+        assert record.media_results is not None
+        assert record.identity is not None
+        media = cast(list[dict[str, object]], json.loads(record.media_results))
+        artifact = next(
+            directory
+            for directory in self.evidence.iterdir()
+            if directory.is_dir() and directory.name.startswith(f"{record.identity}-")
+        )
+        clip = artifact / cast(str, media[0]["clip_file"])
+        finalized = {directory for directory in self.evidence.iterdir() if directory.is_dir()}
+        posts_after_first = list(self.center.posts)
+
+        clip.write_bytes(clip.read_bytes() + b"tamper")
+        tampered = FakeReclipTransport([claim("req-7", start=ANCHOR - 8, end=ANCHOR + 8)])
+        self.assertTrue(
+            ReclipCommandRunner(transport=tampered, executor=self.executor()).run_once()
+        )
+        self.assertEqual(tampered.reports, [])
+        tampered_record = self.state.station(STATION).reclip_request("req-7")
+        assert tampered_record is not None
+        self.assertIn("ValueError", tampered_record.last_error or "")
+        self.assertIsNone(tampered_record.evidence_id)
+
+        clip.unlink()
+        removed = FakeReclipTransport([claim("req-7", start=ANCHOR - 8, end=ANCHOR + 8)])
+        self.assertTrue(ReclipCommandRunner(transport=removed, executor=self.executor()).run_once())
+        self.assertEqual(removed.reports, [])
+        removed_record = self.state.station(STATION).reclip_request("req-7")
+        assert removed_record is not None
+        self.assertIn("FileNotFoundError", removed_record.last_error or "")
+        self.assertIsNone(removed_record.evidence_id)
+        # 不重切、不覆盖、不追加新引用。
+        self.assertEqual(
+            {directory for directory in self.evidence.iterdir() if directory.is_dir()}, finalized
+        )
+        self.assertEqual(self.center.posts, posts_after_first)
 
 
 def _media(pending: PendingEvidence) -> list[dict[str, object]]:

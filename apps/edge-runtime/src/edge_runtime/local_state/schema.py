@@ -449,6 +449,8 @@ _V17 = ("ALTER TABLE local_evidence_queue ADD COLUMN registered_at REAL",)
 
 # S038 再切片执行需要按稳定请求 ID 持久化已定稿产物, 使重启/重复领取/登记确认丢失时不重切
 # 已过期或被压缩的滚动素材, 也不产生冲突代次。该表只索引本机证据目录内的权威文件, 不复制文件。
+# 来源事实缺失 (无冻结映射/相机路径) 时仍要留下可查询失败原因, 因此这些列可为 NULL,
+# 不伪造 0 或默认相机。
 _V18 = (
     """
     CREATE TABLE local_reclip_request (
@@ -458,11 +460,11 @@ _V18 = (
         anchor           REAL    NOT NULL,
         window_from      REAL    NOT NULL,
         window_to        REAL    NOT NULL,
-        wall_offset      REAL    NOT NULL,
-        sources          TEXT    NOT NULL,
+        wall_offset      REAL,
+        sources          TEXT,
         required_from    REAL,
         required_to      REAL,
-        identity         TEXT    NOT NULL,
+        identity         TEXT,
         media_results    TEXT,
         covered_from     REAL,
         covered_to       REAL,

@@ -25,6 +25,7 @@ from edge_runtime.evidence_media import (
     EvidenceMediaError,
     evidence_registration_payloads,
     reclip_evidence_identity,
+    recover_finalized_clip_set,
     slice_evidence,
 )
 from edge_runtime.evidence_reporting import register_evidence_payloads
@@ -105,6 +106,11 @@ class ReclipEvidenceExecutor:
         station = self._state.station(command.station_id)
         record = station.reclip_request(command.request_id) or self._begin(station, command)
         now = HostInstant(self._clock())
+        if record.wall_offset is None or not record.sources or record.identity is None:
+            # 来源事实缺失已在 _begin 持久化; 重复领取保持同一可观察失败, 不重切也不登记。
+            raise ReclipEvidenceError(
+                "reclip_source_missing", record.last_error or "no frozen local material mapping"
+            )
         if not _covers_frozen_span(record):
             station.record_reclip_failure(
                 command.request_id,
@@ -120,10 +126,11 @@ class ReclipEvidenceExecutor:
             return ReclipEvidenceResult(evidence_id=record.evidence_id)
         if record.media_results is None:
             record = self._slice(station, record, now)
-        payloads = self._payloads(record)
         try:
+            payloads = self._payloads(record)
             register_evidence_payloads(self._client, payloads)
-        except (CenterUnreachableError, ValueError) as error:
+        except (CenterUnreachableError, ValueError, OSError) as error:
+            # 登记准备 (文件缺失/摘要不符) 与中心拒绝一样折叠为可观察失败, 不重切、不冒成功。
             station.record_reclip_failure(
                 command.request_id, at=now, error=f"{type(error).__name__}: {error}"[:255]
             )
@@ -134,10 +141,17 @@ class ReclipEvidenceExecutor:
 
     def _begin(self, station: StationStore, command: ReclipEvidenceCommand) -> PendingReclip:
         row = station.evidence_at(instance_id=command.instance_id, anchor=command.anchor)
-        if row is None or row.wall_offset is None or not row.sources:
-            raise ReclipEvidenceError(
-                "reclip_source_missing",
-                "no frozen local material mapping for the requested anchor",
+        if row is None:
+            return self._source_missing(
+                station, command, "no frozen evidence row for the requested anchor"
+            )
+        if row.wall_offset is None:
+            return self._source_missing(
+                station, command, "evidence row has no frozen wall clock mapping"
+            )
+        if not row.sources:
+            return self._source_missing(
+                station, command, "evidence row has no frozen recording sources"
             )
         identity = reclip_evidence_identity(self._host_id, row.queue_id, command.request_id)
         return station.record_reclip_intent(
@@ -153,11 +167,32 @@ class ReclipEvidenceExecutor:
             identity=identity,
         )
 
+    def _source_missing(
+        self, station: StationStore, command: ReclipEvidenceCommand, detail: str
+    ) -> PendingReclip:
+        """来源事实缺失时持久化可查询原因, 不伪造墙钟/相机映射 (S038 AC3)。"""
+        return station.record_reclip_intent_failure(
+            request_id=command.request_id,
+            instance_id=command.instance_id,
+            anchor=command.anchor,
+            window_from=command.window_start,
+            window_to=command.window_end,
+            error=f"reclip_source_missing: {detail}",
+        )
+
     def _slice(
         self, station: StationStore, record: PendingReclip, now: HostInstant
     ) -> PendingReclip:
+        assert record.identity is not None
         try:
-            clip_set = slice_evidence(
+            # SQL 索引丢失时先按稳定身份复用已定稿产物, 不重新查询可能已消失/被压缩的素材。
+            recovered = recover_finalized_clip_set(
+                _pending_evidence(record),
+                host_id=self._host_id,
+                directory=self._configuration.evidence_directory,
+                identity=record.identity,
+            )
+            clip_set = recovered or slice_evidence(
                 _pending_evidence(record),
                 host_id=self._host_id,
                 recording_directory=self._recording_directory,

@@ -69,7 +69,7 @@
 | Observation report | `ReportedObservation` 严格 `OBSERVATION_REPORT_CONTRACT_VERSION=1`，只归档产生时内容 | 当前无并行 generation；主机签名上报按当前拓扑归属校验（与 Health report 同），归 monitor/reporting owner |
 | Execution-authority report | `ReportedExecutionAuthority` 严格 `EXECUTION_AUTHORITY_REPORT_CONTRACT_VERSION=1`，只镜像 Edge 本机写入门禁当前状态 | 新 Edge 向 `/monitor/execution-authority` 上报；旧 Center 返回 404 时 Edge 仅在本进程停用该 advisory 展示上报，不重试制造噪声，也绝不改变本地租约/写入门禁/判定。兼容 Center 未取得 Edge 状态时 Web 保守显示未知/过期而不是可写；归 monitor/reporting owner |
 | Delegated connection-test command | 无数字 generation；以严格 `command_type` + 固定字段解析，未知字段拒绝 | 当前单一 shape；需要新命令行为时新增显式 command type/协商，不把任意字段塞入现有 payload，归 delegated-command owner |
-| Delegated reclip command | 无数字 generation；严格 `command_type=reclip_evidence` + 固定字段（`command_id`/`request_id`/`station_id`/`instance_id`/`anchor`/`window_start`/`window_end`），未知字段拒绝；成功回报严格 `{evidence_id}` | S038 新增；载荷由 evidence 请求与原始证据事实派生，领取走 device 队列的类型收窄，默认 `/device-commands/next` 不领取且专用端点默认不挂载；失败结案属 S039，归 delegated-command/evidence owner |
+| Delegated reclip command | 无数字 generation；严格 `command_type=reclip_evidence` + 固定字段（`command_id`/`request_id`/`station_id`/`instance_id`/`anchor`/`window_start`/`window_end`），未知字段拒绝；成功回报严格 `{evidence_id}` | S038 新增；载荷由 evidence 请求与原始证据事实派生，领取走 device 队列的类型收窄，默认 `/device-commands/next` 不领取且专用端点默认不挂载；成功回报要求结果引用与原证据的工位/实例/主机/锚点及本请求的并集窗口精确匹配，否则拒绝并回滚命令结案；失败结案属 S039，归 delegated-command/evidence owner |
 
 **判定投递信封**：`ReportedDecision` 严格 v1/v2 格式不变。`/monitor/reported-decisions/enveloped` 接收被同一主机身份签名覆盖的 `decision`、`latched_at` 与 `realtime`；后两者属于投递/归档元数据，不进入不可变的判定 payload。新 Edge 在旧 Center 的该入口返回 404 时退回原 v2 归档路径（不保留“实时”资格）；旧 Edge/历史 SQLite 没有可证明的锁存时刻时也沿用原上报，仅归档。每个事件首次入库的元数据保留，后续重发不可覆盖。协议扩展不引入新判定版本或第二判定权威。
 

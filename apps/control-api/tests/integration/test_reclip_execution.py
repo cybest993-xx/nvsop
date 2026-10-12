@@ -38,19 +38,26 @@ def _reclip_app(engine: Engine) -> FastAPI:
 
 
 def _reclip_registration(
-    topology: RuntimeTopology, evidence_id: str, *, origin: str = "reclip"
+    topology: RuntimeTopology,
+    evidence_id: str,
+    *,
+    origin: str = "reclip",
+    instance_id: int = 7,
+    anchor: float = 100.0,
+    window_start: float = 90.0,
+    window_end: float = 110.0,
 ) -> dict[str, object]:
     return {
         "evidence_id": evidence_id,
         "host_id": str(topology.host.id).upper(),
         "station_id": str(topology.station.id),
-        "instance_id": 7,
+        "instance_id": instance_id,
         "violation_id": None,
         "kind": "clip",
         "origin": origin,
-        "anchor": 100.0,
-        "window_start": 90.0,
-        "window_end": 110.0,
+        "anchor": anchor,
+        "window_start": window_start,
+        "window_end": window_end,
         "generation": "original",
         "sha256": "b" * 64,
         "size": 20,
@@ -204,6 +211,170 @@ def test_signed_reclip_claim_appends_reference_and_settles_success(
             connection.execute(
                 text("DELETE FROM evidence_evidence WHERE evidence_id IN (:a, :b)"),
                 {"a": original_id, "b": new_id},
+            )
+            connection.execute(
+                text("DELETE FROM device_pending_command WHERE host_id = :host_id"),
+                {"host_id": runtime_topology.host.id},
+            )
+            connection.execute(text("TRUNCATE auth_user CASCADE"))
+            connection.execute(
+                text("DELETE FROM auth_role WHERE code = :code"), {"code": ROLE_CODE}
+            )
+
+
+def test_reclip_settlement_requires_the_matching_request_scope(
+    engine: Engine, runtime_topology: RuntimeTopology
+) -> None:
+    """成功回报必须匹配本请求的工位/实例/锚点/并集窗口; 另一请求的合法结果不能结案本请求。"""
+    _grant(engine)
+    host_id = str(runtime_topology.host.id)
+    source_a = f"{host_id}/reclip-source-a.mp4"
+    source_b = f"{host_id}/reclip-source-b.mp4"
+    result_a = f"{host_id}/reclip-result-a.mp4"
+    result_b = f"{host_id}/reclip-result-b.mp4"
+    request_a, request_b = uuid4(), uuid4()
+    wall_offset = datetime.now(UTC).timestamp() - 100.0
+    # A 与 B 同主机同锚点: A=实例 7 并集窗口 (90,110), B=实例 8 并集窗口 (80,120)。
+    cases = (
+        (source_a, request_a, 7, 90.0, 110.0),
+        (source_b, request_b, 8, 80.0, 120.0),
+    )
+    app = _reclip_app(engine)
+    body = {"generation": "original", "before_seconds": 2.0, "after_seconds": 3.0}
+    try:
+        with (
+            TestClient(app, base_url="https://testserver") as browser,
+            TestClient(app, base_url="https://testserver") as host,
+        ):
+            for source, _request_id, instance_id, required_from, required_to in cases:
+                registered = _post_as_host(
+                    host,
+                    runtime_topology,
+                    path=REGISTRATIONS,
+                    body=_registration(
+                        runtime_topology,
+                        source,
+                        wall_offset=wall_offset,
+                        required_from=required_from,
+                        required_to=required_to,
+                    )
+                    | {"instance_id": instance_id},
+                )
+                assert registered.status_code == 200, registered.text
+            assert browser.post(SESSION_PATH, json=CREDENTIALS).status_code == 201
+            csrf = {CSRF_HEADER: browser.cookies[CSRF_COOKIE]}
+            for source, request_id, _instance_id, _required_from, _required_to in cases:
+                created = browser.post(
+                    f"{API_PREFIX}/evidence/{source}/reclip-requests",
+                    json=body | {"request_id": str(request_id)},
+                    headers=csrf,
+                )
+                assert created.status_code == 200, created.text
+                assert created.json()["status"] == "pending"
+
+            claim_a = reclip_evidence_claim_from_wire(
+                host.get(
+                    RECLIP_CLAIM_PATH,
+                    headers=_host_headers(runtime_topology, method="GET", path=RECLIP_CLAIM_PATH),
+                ).json()
+            )
+            claim_b = reclip_evidence_claim_from_wire(
+                host.get(
+                    RECLIP_CLAIM_PATH,
+                    headers=_host_headers(runtime_topology, method="GET", path=RECLIP_CLAIM_PATH),
+                ).json()
+            )
+            assert claim_a.command.request_id == str(request_a)
+            assert claim_b.command.request_id == str(request_b)
+
+            # B 的合法新引用已登记, 但它不属于 A。
+            registered_b = _post_as_host(
+                host,
+                runtime_topology,
+                path=REGISTRATIONS,
+                body=_reclip_registration(
+                    runtime_topology, result_b, instance_id=8, window_start=80.0, window_end=120.0
+                ),
+            )
+            assert registered_b.status_code == 200, registered_b.text
+
+            path_a = f"{API_PREFIX}/device-commands/{claim_a.command.command_id}/reclip-result"
+            rejected = host.post(
+                path_a,
+                json={"evidence_id": result_b},
+                headers=_host_headers(
+                    runtime_topology, method="POST", path=path_a, body={"evidence_id": result_b}
+                )
+                | {"X-Command-Claim-Token": claim_a.claim_token},
+            )
+            assert rejected.status_code == 409, rejected.text
+            # 命令结案与请求结案在同一请求事务; 拒绝必须回滚, 不留半结案成功事实。
+            with engine.begin() as connection:
+                command_status = connection.execute(
+                    text("SELECT status FROM device_pending_command WHERE id = :id"),
+                    {"id": claim_a.command.command_id},
+                ).scalar_one()
+                request_status = connection.execute(
+                    text("SELECT status FROM evidence_reclip_request WHERE request_id = :id"),
+                    {"id": request_a},
+                ).scalar_one()
+                untouched = connection.execute(
+                    text(
+                        "SELECT count(*) FROM evidence_evidence "
+                        "WHERE evidence_id IN (:a, :b, :c) AND status = 'available'"
+                    ),
+                    {"a": source_a, "b": source_b, "c": result_b},
+                ).scalar_one()
+            assert command_status == "claimed"
+            assert request_status == "pending"
+            assert untouched == 3
+
+            # 与 A 精确匹配的结果被接受; 同一结果重放幂等, 换结果冲突。
+            registered_a = _post_as_host(
+                host,
+                runtime_topology,
+                path=REGISTRATIONS,
+                body=_reclip_registration(
+                    runtime_topology, result_a, instance_id=7, window_start=90.0, window_end=110.0
+                ),
+            )
+            assert registered_a.status_code == 200, registered_a.text
+            settle_body: dict[str, object] = {"evidence_id": result_a}
+            settled = host.post(
+                path_a,
+                json=settle_body,
+                headers=_host_headers(
+                    runtime_topology, method="POST", path=path_a, body=settle_body
+                )
+                | {"X-Command-Claim-Token": claim_a.claim_token},
+            )
+            assert settled.status_code == 200, settled.text
+            assert settled.json()["status"] == "succeeded"
+            assert settled.json()["evidence_id"] == result_a
+            replay = host.post(
+                path_a,
+                json=settle_body,
+                headers=_host_headers(
+                    runtime_topology, method="POST", path=path_a, body=settle_body
+                )
+                | {"X-Command-Claim-Token": claim_a.claim_token},
+            )
+            assert replay.status_code == 200, replay.text
+            assert replay.json() == settled.json()
+            conflict = host.post(
+                path_a,
+                json={"evidence_id": result_b},
+                headers=_host_headers(
+                    runtime_topology, method="POST", path=path_a, body={"evidence_id": result_b}
+                )
+                | {"X-Command-Claim-Token": claim_a.claim_token},
+            )
+            assert conflict.status_code == 409, conflict.text
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM evidence_evidence WHERE evidence_id IN (:a, :b, :c, :d)"),
+                {"a": source_a, "b": source_b, "c": result_a, "d": result_b},
             )
             connection.execute(
                 text("DELETE FROM device_pending_command WHERE host_id = :host_id"),

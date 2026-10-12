@@ -134,8 +134,23 @@ function reclipState(
   return { text: `可再切片截止：${at}`, enabled: true, reason: '' }
 }
 
-const reclipStatusLabel = (row: EvidenceReclip) =>
-  row.status === 'failed' ? `失败：${row.failure_reason ?? '原因未知'}` : '等待来源推理机执行'
+const reclipStatusLabel = (row: EvidenceReclip): string => {
+  switch (row.status) {
+    case 'succeeded':
+      return '已完成：来源推理机已追加新证据引用'
+    case 'failed':
+      return `失败：${row.failure_reason ?? '原因未知'}`
+    case 'pending':
+      return '等待来源推理机执行'
+  }
+}
+
+// 提交回执的状态文案；三种终态/等待态各自渲染，不把已完成说成仍在等待。
+const reclipNoticeStatus: Record<EvidenceReclip['status'], string> = {
+  pending: '等待中',
+  succeeded: '已完成',
+  failed: '失败',
+}
 
 /** 作废当前再切片提交意图与迟到的查询；换证据/余量/权限时调用。 */
 function invalidateReclip(): void {
@@ -212,7 +227,7 @@ async function submitReclip(): Promise<void> {
     reclipId = null
     reclipIntent = ''
     reclipNotice.value = `已登记再切片请求：等待来源推理机拉取执行（请求 ${record.request_id}，状态 ${
-      record.status === 'failed' ? '失败' : '等待中'
+      reclipNoticeStatus[record.status]
     }）。`
     await nextTick()
     reclipRef.value?.focus()

@@ -236,11 +236,11 @@ class PendingReclip:
     anchor: float
     window_from: float
     window_to: float
-    wall_offset: float
+    wall_offset: float | None
     sources: tuple[str, ...]
     required_from: float | None
     required_to: float | None
-    identity: str
+    identity: str | None
     media_results: str | None
     covered_from: float | None
     covered_to: float | None
@@ -855,6 +855,47 @@ class StationQueues:
             raise ValueError("reclip intent was not persisted")
         return self._reclip_from_row(row)
 
+    def record_reclip_intent_failure(
+        self,
+        *,
+        request_id: str,
+        instance_id: int,
+        anchor: float,
+        window_from: float,
+        window_to: float,
+        error: str,
+    ) -> PendingReclip:
+        """来源事实缺失时也持久化一条可查询失败意图; 不伪造墙钟/相机映射 (S038 AC3)。
+
+        命令窗口仍按中心签发值冻结, 但 ``wall_offset``/``sources``/``identity`` 保持 NULL, 使
+        重启或重复领取能读到同一原因, 且不会被当作可切片的已冻结意图。
+        """
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT OR IGNORE INTO local_reclip_request (
+                    request_id, station_id, instance_id, anchor, window_from, window_to,
+                    attempts, last_error
+                ) VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+                """,
+                (
+                    request_id,
+                    self._station_id,
+                    instance_id,
+                    anchor,
+                    window_from,
+                    window_to,
+                    error,
+                ),
+            )
+            row = self._connection.execute(
+                "SELECT * FROM local_reclip_request WHERE station_id = ? AND request_id = ?",
+                (self._station_id, request_id),
+            ).fetchone()
+        if row is None:
+            raise ValueError("reclip intent failure was not persisted")
+        return self._reclip_from_row(row)
+
     def record_reclip_slice(
         self,
         request_id: str,
@@ -907,11 +948,11 @@ class StationQueues:
             anchor=float(row["anchor"]),
             window_from=float(row["window_from"]),
             window_to=float(row["window_to"]),
-            wall_offset=float(row["wall_offset"]),
-            sources=tuple(json.loads(row["sources"])),
+            wall_offset=None if row["wall_offset"] is None else float(row["wall_offset"]),
+            sources=() if row["sources"] is None else tuple(json.loads(row["sources"])),
             required_from=None if row["required_from"] is None else float(row["required_from"]),
             required_to=None if row["required_to"] is None else float(row["required_to"]),
-            identity=str(row["identity"]),
+            identity=row["identity"],
             media_results=row["media_results"],
             covered_from=None if row["covered_from"] is None else float(row["covered_from"]),
             covered_to=None if row["covered_to"] is None else float(row["covered_to"]),

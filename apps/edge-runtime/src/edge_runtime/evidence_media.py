@@ -195,6 +195,60 @@ def slice_evidence(
         raise
 
 
+def recover_finalized_clip_set(
+    pending: PendingEvidence,
+    *,
+    host_id: str,
+    directory: Path,
+    identity: str,
+) -> EvidenceClipSet | None:
+    """SQL 索引丢失时按稳定身份发现唯一已定稿产物, 复用其权威元数据而不重切滚动素材 (S038)。
+
+    只在证据目录内按 ``identity`` 前缀发现候选, 并校验元数据身份、冻结意图与文件完整; 多个候选或
+    与冻结意图不匹配即显式失败, 不猜选、不覆盖、不回退重切。无候选返回 ``None`` 交给正常切片。
+    """
+    if not directory.is_dir():
+        return None
+    candidates = sorted(
+        entry
+        for entry in directory.iterdir()
+        if entry.is_dir() and entry.name.startswith(f"{identity}-")
+    )
+    if not candidates:
+        return None
+    if len(candidates) != 1:
+        raise EvidenceMediaError(
+            "finalize_conflict",
+            f"{len(candidates)} finalized artifacts exist for one reclip identity",
+        )
+    final = candidates[0]
+    metadata, media = _read_metadata_document(final)
+    try:
+        matches = (
+            metadata["evidence_id"] == identity
+            and metadata["host_id"] == host_id
+            and _number(metadata["anchor"]) == pending.anchor.seconds
+            and _number(metadata["window_from"]) == pending.start.seconds
+            and _number(metadata["window_to"]) == pending.end.seconds
+        )
+        covered_from = _number(metadata["covered_from"])
+        covered_to = _number(metadata["covered_to"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise EvidenceMediaError(
+            "finalize_conflict", f"finalized artifact {final.name} has unreadable metadata"
+        ) from error
+    if not matches or covered_from > pending.start.seconds or covered_to < pending.end.seconds:
+        raise EvidenceMediaError(
+            "finalize_conflict",
+            f"finalized artifact {final.name} does not match the frozen reclip intent",
+        )
+    return EvidenceClipSet(
+        covered_from=covered_from,
+        covered_to=covered_to,
+        media_json=json.dumps(media, separators=(",", ":")),
+    )
+
+
 def _slice_source(
     source: str,
     *,
@@ -337,7 +391,9 @@ def _publish(work: Path, final: Path) -> bool:
     return True
 
 
-def _read_metadata(directory: Path) -> tuple[float, float, list[dict[str, object]]]:
+def _read_metadata_document(
+    directory: Path,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
     try:
         metadata = _object(
             json.loads((directory / "metadata.json").read_text(encoding="utf-8")),
@@ -357,6 +413,11 @@ def _read_metadata(directory: Path) -> tuple[float, float, list[dict[str, object
         raise EvidenceMediaError(
             "finalize_failed", f"existing artifact {directory.name} incomplete"
         )
+    return metadata, media
+
+
+def _read_metadata(directory: Path) -> tuple[float, float, list[dict[str, object]]]:
+    metadata, media = _read_metadata_document(directory)
     return _number(metadata["covered_from"]), _number(metadata["covered_to"]), media
 
 

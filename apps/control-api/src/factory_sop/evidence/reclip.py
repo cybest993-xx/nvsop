@@ -1,7 +1,7 @@
 """再切片请求：锚点与来源主机冻结，命令交付走 device 队列，本模块只拥有请求与状态（§5.20）。
 
-本票只登记请求、计算可再切片截止时刻并做权限/窗口校验；真正的 Edge 切片执行、失败结案与
-新证据追加属后续 S038/S039，命令因此不可领取，绝不下发给旧严格命令消费者。
+本模块登记请求、计算可再切片截止时刻、做权限/窗口校验并结案终局结果；真正的 Edge 切片执行与
+回报走专用签名端点，命令因此只由该端点领取，默认 `/device-commands/next` 不下发。
 """
 
 from __future__ import annotations
@@ -231,10 +231,49 @@ def settle_reclip_success(
     return updated
 
 
+def settle_reclip_failure(
+    *,
+    command_id: UUID,
+    failure_code: str,
+    detail: str | None,
+    requests: EvidenceReclipRequestRepository,
+) -> EvidenceReclipRequest:
+    """把一条已领取再切片命令的终局失败结案为请求 ``FAILED`` 并记录可查询的机器原因。
+
+    只登记来源机给出的具体原因, 不发明错误分类; 失败不得覆盖已成功或已失败的终态, 重复失败
+    重放按同一原因幂等, 原证据、复核记录与成功代次都不被触碰 (S039/AC2)。
+    """
+    if not isinstance(failure_code, str) or not failure_code or len(failure_code) > 64:
+        raise EvidenceReclipRefusedError(422, "reclip_failure_code_invalid")
+    request = requests.find_by_command_id(command_id)
+    if request is None:
+        raise EvidenceReclipRefusedError(404, "reclip_request_unregistered")
+    if request.status is ReclipRequestStatus.SUCCEEDED:
+        raise EvidenceReclipRefusedError(409, "reclip_request_conflict")
+    if request.status is ReclipRequestStatus.FAILED:
+        if request.failure_reason == failure_code:
+            return request
+        raise EvidenceReclipRefusedError(409, "reclip_request_conflict")
+    if not requests.mark_failed(request.request_id, failure_reason=failure_code):
+        current = requests.find(request.request_id)
+        if (
+            current is not None
+            and current.status is ReclipRequestStatus.FAILED
+            and current.failure_reason == failure_code
+        ):
+            return current
+        raise EvidenceReclipRefusedError(409, "reclip_request_conflict")
+    updated = requests.find(request.request_id)
+    if updated is None:
+        raise RuntimeError("reclip request disappeared after failure settlement")
+    return updated
+
+
 __all__ = [
     "EvidenceReclipRefusedError",
     "create_reclip_request",
     "list_reclip_requests",
     "reclip_availability",
+    "settle_reclip_failure",
     "settle_reclip_success",
 ]

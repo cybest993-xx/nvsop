@@ -317,7 +317,7 @@ class ReclipHandler(BaseHTTPRequestHandler):
 
 
 class HttpReclipCommandTransportTest(unittest.TestCase):
-    """专用再切片端点的主机签名领取/回报线契约, 默认不挂载于生产应用。"""
+    """专用再切片端点的主机签名领取/回报线契约; 生产 ``create_app`` 挂载该端点。"""
 
     server: ThreadingHTTPServer
     thread: threading.Thread
@@ -346,6 +346,7 @@ class HttpReclipCommandTransportTest(unittest.TestCase):
                 anchor=100.0,
                 window_start=90.0,
                 window_end=110.0,
+                available_until=1_700_000_000.0,
             ),
             claim_token="claim-1",
             lease_expires_at="2026-10-09T00:05:00Z",
@@ -409,6 +410,47 @@ class HttpReclipCommandTransportTest(unittest.TestCase):
             )
         )
         self.assertEqual(payload, {"evidence_id": "host-1-reclip/camera-a.mp4"})
+
+    def test_failure_report_uses_the_shared_wire_contract(self) -> None:
+        transport = self._transport()
+
+        claim = transport.claim_next()
+        assert claim is not None
+        transport.report(
+            claim,
+            ReclipEvidenceResult(
+                failure_code="material_missing",
+                detail="no recording segment overlaps the window",
+            ),
+        )
+
+        post_method, post_headers, payload = ReclipHandler.requests[1]
+        self.assertEqual("POST", post_method)
+        self.assertEqual("claim-1", post_headers["x-command-claim-token"])
+        post_path = "/api/v1/device-commands/command-1/reclip-result"
+        post_identity = HostIdentityRequest(
+            method="POST",
+            path=post_path,
+            host_id="host-1",
+            timestamp=int(post_headers["x-inference-host-timestamp"]),
+            nonce=post_headers["x-inference-host-nonce"],
+            body=payload,
+        )
+        self.assertTrue(
+            verify_host_identity_request(
+                post_identity,
+                public_key=HOST_IDENTITY.public_key,
+                signature=post_headers["x-inference-host-signature"],
+            )
+        )
+        self.assertEqual(
+            payload,
+            {
+                "evidence_id": None,
+                "failure_code": "material_missing",
+                "detail": "no recording segment overlaps the window",
+            },
+        )
 
     def test_empty_queue_is_not_an_error(self) -> None:
         ReclipHandler.return_empty = True

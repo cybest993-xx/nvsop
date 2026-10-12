@@ -78,7 +78,7 @@ class HttpCommandTransport(CommandTransport):
 
 
 class HttpReclipCommandTransport(ReclipCommandTransport):
-    """通过中心专用再切片端点领取和回报; 生产默认不挂载该端点 (S038 边界)。"""
+    """通过中心专用再切片端点领取和回报; 该端点由生产 ``create_app`` 挂载。"""
 
     def __init__(self, *, client: CenterClient) -> None:
         self._client = client

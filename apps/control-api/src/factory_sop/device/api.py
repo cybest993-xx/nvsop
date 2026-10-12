@@ -174,7 +174,7 @@ class DeviceEvidenceGateway(Protocol):
         """返回中心保存的该推理机录像滚动窗口秒数；主机不存在时为 ``None``。
 
         这是配置值，不是“来源机已实际应用”的证明：中心只能算理论截止，执行时素材
-        是否真的还在由再切片执行（S039）按真实结果结案。
+        是否真的还在由再切片执行按真实结果结案。
         """
         ...
 
@@ -187,7 +187,7 @@ class DeviceEvidenceGateway(Protocol):
         actor_id: UUID,
         now: datetime,
     ) -> UUID:
-        """在同一请求事务内登记一条不可领取的再切片委托，返回命令 ID。"""
+        """在同一请求事务内登记一条再切片委托，返回命令 ID。"""
         ...
 
     def claim_reclip_command(
@@ -203,8 +203,30 @@ class DeviceEvidenceGateway(Protocol):
         host: InferenceHostIdentity,
         claim_token: str,
         now: datetime,
+        failure_code: str | None = None,
+        detail: str | None = None,
     ) -> None:
-        """认证领取主机后把一条再切片命令结案为 ``SUCCEEDED``。"""
+        """认证领取主机后把一条再切片命令结案为 ``SUCCEEDED`` 或终局 ``FAILED``。
+
+        ``failure_code`` 为空表示成功；携带时以该机器可读原因终局失败, 不覆盖已成功结案。
+        认证始终执行, 没有跳过开关。
+        """
+        ...
+
+    def fail_claimed_reclip_command(
+        self,
+        *,
+        claimed: ClaimedReclipCommand,
+        host_id: UUID,
+        failure_code: str,
+        detail: str | None,
+        now: datetime,
+    ) -> None:
+        """把同一请求内刚领取的再切片命令终局失败。
+
+        领取已完成主机认证；本入口只接受那条领取回执, 仍走同一结案校验, 不重复认证也不放开
+        跳过开关。仅供领取端点发现请求/来源消失时使用。
+        """
         ...
 
 

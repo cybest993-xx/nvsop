@@ -77,6 +77,13 @@ class EvidenceReclipRequestRepository(Protocol):
         """仅在仍为 ``PENDING`` 时原子转为 ``SUCCEEDED`` 并记录新引用；CAS 失败返回 ``False``。"""
         ...
 
+    def mark_failed(self, request_id: UUID, *, failure_reason: str) -> bool:
+        """仅在仍为 ``PENDING`` 时原子转为 ``FAILED`` 并记录可查询原因；CAS 失败返回 ``False``。
+
+        失败结案不覆盖已成功或已失败的终态, 也不触碰原证据与复核记录。
+        """
+        ...
+
 
 class EvidenceReviewRepository(Protocol):
     """人工复核结论的只追加 seam；不提供更新或删除。"""

@@ -77,8 +77,8 @@ def test_host_signed_machine_routes_bypass_only_browser_auth_and_preserve_signat
             "/configuration",
             "confirmed-configuration",
             "monitor/(?:reported-decisions|reported-instances|reported-observations|health)",
-            "device-commands/(?:next|",
-            "/result)",
+            "device-commands/(?:next|reclip/next|",
+            "(?:result|reclip-result))",
             "templates/configuration-reports",
             "evidence/(?:registrations|access-check)",
         ):

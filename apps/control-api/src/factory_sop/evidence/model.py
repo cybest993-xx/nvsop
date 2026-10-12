@@ -199,7 +199,7 @@ class EvidenceReview:
 
 
 class ReclipRequestStatus(StrEnum):
-    """再切片委托的生命周期状态；成功追加新引用，终态失败由后续执行票写入。"""
+    """再切片委托的生命周期状态；成功追加新引用，终局失败记录可查询原因。"""
 
     PENDING = "pending"
     SUCCEEDED = "succeeded"

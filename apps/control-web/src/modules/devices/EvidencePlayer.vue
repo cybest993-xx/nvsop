@@ -139,11 +139,30 @@ const reclipStatusLabel = (row: EvidenceReclip): string => {
     case 'succeeded':
       return '已完成：来源推理机已追加新证据引用'
     case 'failed':
-      return `失败：${row.failure_reason ?? '原因未知'}`
+      return `失败：${reclipFailureText(row.failure_reason)}`
     case 'pending':
       return '等待来源推理机执行'
   }
 }
+
+// 来源机再切片终局失败的机器原因；未知原因码按 ADR-0003 显示原始码，不当作成功。
+const reclipFailures: Record<string, string> = {
+  reclip_source_missing: '来源推理机缺少该判定的冻结素材映射，无法定位原始录像。',
+  reclip_source_host_unavailable: '来源推理机当前不可用或未配置滚动录像窗口。',
+  reclip_window_incomplete: '请求窗口未覆盖该判定的核心必需跨度，已拒绝切片。',
+  archive_expired: '已过可再切片截止时刻，来源机滚动录像可能已回收，未产出新片段。',
+  material_missing: '来源推理机的滚动录像已回收或缺失该片段。',
+  material_overlap: '相邻录像分段重叠超出容限，无法拼接。',
+  material_provenance_invalid: '录像分段的素材代次声明非法或未知，已拒绝切片。',
+  ffmpeg_failed: '来源推理机切片命令执行失败。',
+  finalize_failed: '证据片段定稿失败。',
+  finalize_conflict: '同一请求的定稿产物冲突或不匹配。',
+  media_io_failed: '来源推理机媒体读写失败。',
+  mapping_missing: '缺少冻结的录像映射，无法定位素材。',
+  reclip_registration_failed: '新证据引用登记失败。',
+}
+const reclipFailureText = (code: string | null | undefined): string =>
+  code == null || code === '' ? '原因未知' : (reclipFailures[code] ?? code)
 
 // 提交回执的状态文案；三种终态/等待态各自渲染，不把已完成说成仍在等待。
 const reclipNoticeStatus: Record<EvidenceReclip['status'], string> = {
@@ -176,6 +195,13 @@ async function loadReclips(item: EvidenceReference, guard: number): Promise<void
   } finally {
     if (guard === revision) reclipsLoading.value = false
   }
+}
+
+/** 手动刷新所选证据的再切片状态；委托是异步拉取，不做自动轮询。 */
+async function refreshReclips(): Promise<void> {
+  const item = selected.value
+  if (!item || !mayView.value || reclipsLoading.value) return
+  await loadReclips(item, revision)
 }
 
 /** 按 request_id 去重合并，保持请求时刻升序；本地已确认回执优先于可能过期的历史快照。 */
@@ -589,6 +615,14 @@ onUnmounted(() => {
       </p>
       <p v-if="reclipsLoading" class="muted">正在读取再切片请求…</p>
       <p v-if="reclipsError" role="alert">{{ reclipsError }}</p>
+      <button
+        type="button"
+        class="evidence__refresh-reclip"
+        :disabled="reclipsLoading"
+        @click="refreshReclips"
+      >
+        {{ reclipsLoading ? '正在刷新…' : '刷新再切片状态' }}
+      </button>
       <ul v-if="reclips.length" class="evidence__reclips">
         <li v-for="row in reclips" :key="row.request_id">
           请求 {{ row.request_id }}：{{ reclipStatusLabel(row) }}（新余量 {{ row.before_seconds }}s

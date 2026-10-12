@@ -170,76 +170,132 @@ def complete_reclip_command(
     now: datetime,
     hosts: InferenceHostRepository,
     commands: PendingCommandRepository,
+    failure_code: str | None = None,
+    detail: str | None = None,
 ) -> PendingCommand:
-    """认证领取主机后把一条再切片命令结案为 ``SUCCEEDED``；同一令牌重放幂等。
+    """认证领取主机后把一条再切片命令结案为 ``SUCCEEDED`` 或终局 ``FAILED``。
 
-    失败结案属 S039，本票只登记成功；命令类型不匹配或令牌/租约非法时明确拒绝。
+    失败结案带来源机给出的机器可读原因；同一令牌的相同结案重放幂等，失败不得覆盖已成功结案，
+    命令类型不匹配或令牌/租约非法时明确拒绝。认证始终执行, 不提供跳过开关。
     """
     authenticate_command_host(host=host, now=now, hosts=hosts)
+    return _settle_reclip_command(
+        command_id=command_id,
+        host_id=host.host_id,
+        claim_token=claim_token,
+        now=now,
+        commands=commands,
+        failure_code=failure_code,
+        detail=detail,
+    )
+
+
+def fail_claimed_reclip_command(
+    *,
+    claimed: ClaimedReclipCommand,
+    host_id: UUID,
+    failure_code: str,
+    detail: str | None,
+    now: datetime,
+    commands: PendingCommandRepository,
+) -> PendingCommand:
+    """把同一请求内刚领取的再切片命令终局失败。
+
+    领取已由 ``claim_next_command`` 完成主机认证；本入口只接受那条领取回执, 仍走同一结案校验
+    （主机/令牌/租约/类型/终态), 不重复认证也不放开跳过开关。仅供领取端点发现请求/来源消失。
+    """
+    return _settle_reclip_command(
+        command_id=claimed.command_id,
+        host_id=host_id,
+        claim_token=claimed.claim_token,
+        now=now,
+        commands=commands,
+        failure_code=failure_code,
+        detail=detail,
+    )
+
+
+def _settle_reclip_command(
+    *,
+    command_id: UUID,
+    host_id: UUID,
+    claim_token: str,
+    now: datetime,
+    commands: PendingCommandRepository,
+    failure_code: str | None,
+    detail: str | None,
+) -> PendingCommand:
+    """认证后的再切片命令结案唯一实现; 主机/令牌/租约/类型/终态校验在此一处维护。"""
+    status = (
+        PendingCommandStatus.FAILED if failure_code is not None else PendingCommandStatus.SUCCEEDED
+    )
     command = _existing_command_for_update(command_id, commands)
-    if command.host_id != host.host_id:
+    if command.host_id != host_id:
         refuse(
             _REFUSAL_EVENT,
             DeviceRefusalCode.COMMAND_HOST_MISMATCH,
             command_id=str(command_id),
-            host_id=str(host.host_id),
+            host_id=str(host_id),
         )
     if command.command_type is not PendingCommandType.RECLIP_EVIDENCE:
         refuse(_REFUSAL_EVENT, DeviceRefusalCode.COMMAND_NOT_FOUND, command_id=str(command_id))
-    if command.status is PendingCommandStatus.SUCCEEDED:
-        if command.claim_token == claim_token:
+    if command.status in {
+        PendingCommandStatus.SUCCEEDED,
+        PendingCommandStatus.FAILED,
+        PendingCommandStatus.REJECTED,
+    }:
+        if (
+            command.claim_token == claim_token
+            and command.status is status
+            and command.failure_code == failure_code
+            and command.result_detail == detail
+        ):
             return command
         refuse(
             _REFUSAL_EVENT,
             DeviceRefusalCode.COMMAND_ALREADY_COMPLETED,
             command_id=str(command_id),
-            host_id=str(host.host_id),
-        )
-    if command.status in {PendingCommandStatus.FAILED, PendingCommandStatus.REJECTED}:
-        refuse(
-            _REFUSAL_EVENT,
-            DeviceRefusalCode.COMMAND_ALREADY_COMPLETED,
-            command_id=str(command_id),
-            host_id=str(host.host_id),
+            host_id=str(host_id),
         )
     if command.status is not PendingCommandStatus.CLAIMED:
         refuse(
             _REFUSAL_EVENT,
             DeviceRefusalCode.COMMAND_CLAIM_REQUIRED,
             command_id=str(command_id),
-            host_id=str(host.host_id),
+            host_id=str(host_id),
         )
     if command.claim_token != claim_token:
         refuse(
             _REFUSAL_EVENT,
             DeviceRefusalCode.COMMAND_CLAIM_TOKEN_INVALID,
             command_id=str(command_id),
-            host_id=str(host.host_id),
+            host_id=str(host_id),
         )
     if command.lease_expires_at is None or now >= command.lease_expires_at:
         refuse(
             _REFUSAL_EVENT,
             DeviceRefusalCode.COMMAND_CLAIM_EXPIRED,
             command_id=str(command_id),
-            host_id=str(host.host_id),
+            host_id=str(host_id),
         )
     completed = commands.complete(
         PendingCommandCompletion(
             command_id=command.id,
-            host_id=host.host_id,
+            host_id=host_id,
             claim_token=claim_token,
-            status=PendingCommandStatus.SUCCEEDED,
+            status=status,
             result=None,
-            result_detail=None,
-            failure_code=None,
+            result_detail=detail,
+            failure_code=failure_code,
             completed_at=now,
         )
     )
     _logger.info(
         "device.pending_command.completed",
         command_id=str(command.id),
-        host_id=str(host.host_id),
-        outcome="reclip_succeeded",
+        host_id=str(host_id),
+        outcome="reclip_succeeded" if status is PendingCommandStatus.SUCCEEDED else "reclip_failed",
+        error_code=failure_code,
     )
     return completed
 
@@ -532,8 +588,8 @@ def _existing_connector(connector_id: UUID, connectors: ConnectorRepository) -> 
 class RepositoryDeviceEvidenceGateway:
     """`evidence` 再切片请求所需的 device 最小事实：来源主机滚动窗口与委托命令登记。
 
-    命令在调用方的请求事务内写入同一队列；本票保持不可领取（领取按命令类型收窄），故
-    `target_revision` 无对应配置，固定 1 保留队列非空语义，不猜来源主机状态。
+    命令在调用方的请求事务内写入同一队列；领取只走专用再切片签名端点（按命令类型收窄，默认
+    `/device-commands/next` 不取），故 `target_revision` 无对应配置，固定 1 保留队列非空语义。
     """
 
     def __init__(
@@ -618,6 +674,8 @@ class RepositoryDeviceEvidenceGateway:
         host: InferenceHostIdentity,
         claim_token: str,
         now: datetime,
+        failure_code: str | None = None,
+        detail: str | None = None,
     ) -> None:
         complete_reclip_command(
             command_id=command_id,
@@ -625,5 +683,25 @@ class RepositoryDeviceEvidenceGateway:
             claim_token=claim_token,
             now=now,
             hosts=self._hosts,
+            commands=self._commands,
+            failure_code=failure_code,
+            detail=detail,
+        )
+
+    def fail_claimed_reclip_command(
+        self,
+        *,
+        claimed: ClaimedReclipCommand,
+        host_id: UUID,
+        failure_code: str,
+        detail: str | None,
+        now: datetime,
+    ) -> None:
+        fail_claimed_reclip_command(
+            claimed=claimed,
+            host_id=host_id,
+            failure_code=failure_code,
+            detail=detail,
+            now=now,
             commands=self._commands,
         )

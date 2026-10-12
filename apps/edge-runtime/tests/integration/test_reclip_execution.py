@@ -20,6 +20,7 @@ from edge_runtime.center_client import CenterClient, CenterResponse, CenterUnrea
 from edge_runtime.evidence_media import (
     EvidenceMediaConfiguration,
     EvidenceMediaWorker,
+    reclip_evidence_identity,
 )
 from edge_runtime.evidence_reporting import REGISTRATION_PATH
 from edge_runtime.judgment.evidence import EvidenceClip
@@ -27,6 +28,7 @@ from edge_runtime.judgment.model import Decision, EvidenceSpan, HostInstant, Ins
 from edge_runtime.judgment.reasons import Verdict
 from edge_runtime.local_state import EvidenceSource, LocalState, StationStore, open_local_state
 from edge_runtime.local_state.queues import PendingEvidence
+from edge_runtime.runtime import ReclipCommandLoop, build_reclip_loop
 from edge_runtime.supervisor.reclip import (
     ReclipCommandRunner,
     ReclipEvidenceExecutor,
@@ -35,6 +37,8 @@ from edge_runtime.supervisor.reclip import (
 FFMPEG, FFPROBE = Path("/usr/bin/ffmpeg"), Path("/usr/bin/ffprobe")
 HOST = "019937d8-0d10-7b31-8d2d-4e60c8f4f401"
 CAMERA = "camera-a"
+# 合成墙钟基准; 测试通过它控制中心截止是否已过。
+WALL_NOW = 1_700_000_000.0
 _SEGMENTS = [
     "-hide_banner",
     "-loglevel",
@@ -131,7 +135,12 @@ class FakeReclipTransport:
 
 
 def claim(
-    request_id: str, *, start: float, end: float, instance_id: int = 1
+    request_id: str,
+    *,
+    start: float,
+    end: float,
+    instance_id: int = 1,
+    available_until: float = WALL_NOW + 1000.0,
 ) -> ReclipEvidenceClaim:
     return ReclipEvidenceClaim(
         command=ReclipEvidenceCommand(
@@ -142,6 +151,7 @@ def claim(
             anchor=ANCHOR,
             window_start=start,
             window_end=end,
+            available_until=available_until,
         ),
         claim_token=f"token-{request_id}",
         lease_expires_at="2026-10-09T00:05:00Z",
@@ -195,6 +205,7 @@ class ReclipExecutionTest(unittest.TestCase):
             configuration=self.config(),
             client=cast(CenterClient, self.center),
             clock=lambda: ANCHOR + 20,
+            wall_clock=lambda: WALL_NOW,
         )
 
     def row(self, state: LocalState | None = None) -> PendingEvidence:
@@ -214,9 +225,11 @@ class ReclipExecutionTest(unittest.TestCase):
 
         (report_claim, result) = transport.reports[0]
         self.assertEqual(report_claim.command.request_id, "req-1")
-        self.assertIn("req-1", result.evidence_id)
+        result_evidence_id = result.evidence_id
+        assert result_evidence_id is not None
+        self.assertIn("req-1", result_evidence_id)
         # 原锚点固定、窗口是并集, 且来源标注为 reclip。
-        payloads = [self.center.records[result.evidence_id]]
+        payloads = [self.center.records[result_evidence_id]]
         clip_payload = next(p for p in payloads if p["kind"] == "clip")
         self.assertEqual(clip_payload["anchor"], ANCHOR)
         self.assertEqual(
@@ -270,6 +283,31 @@ class ReclipExecutionTest(unittest.TestCase):
         self.assertEqual(len(retry.reports), 1)
         self.assertIn(retry.reports[0][1].evidence_id, self.center.posts)
 
+    def test_center_registration_rejection_waits_for_recovery(self) -> None:
+        # 中心在重启窗口拒绝登记 (503): 这是等待恢复, 不是不可恢复的素材过期 (Issue 201)。
+        # 基线行为: 任何未成功的中心登记都保留本机待办下一轮重试, 不结案成终局失败。
+        self.center.status = 503
+        transport = FakeReclipTransport([claim("req-503", start=ANCHOR - 8, end=ANCHOR + 8)])
+        self.assertTrue(
+            ReclipCommandRunner(transport=transport, executor=self.executor()).run_once()
+        )
+        # 中心拒绝时不回报终局失败, 本机再切片记录留下可观察原因等待恢复。
+        self.assertEqual(transport.reports, [])
+        record = self.state.station(STATION).reclip_request("req-503")
+        assert record is not None
+        self.assertIsNone(record.terminal_error_code)
+        self.assertIn("HTTP 503", record.last_error or "")
+        self.assertIsNone(record.evidence_id)
+        # 中心恢复后同一待办重试即可登记成功, 复用已定稿产物, 不重切也不新建代次。
+        self.center.status = 200
+        retry = FakeReclipTransport([claim("req-503", start=ANCHOR - 8, end=ANCHOR + 8)])
+        self.assertTrue(ReclipCommandRunner(transport=retry, executor=self.executor()).run_once())
+        self.assertEqual(len(retry.reports), 1)
+        self.assertIn(retry.reports[0][1].evidence_id, self.center.posts)
+        recovered = self.state.station(STATION).reclip_request("req-503")
+        assert recovered is not None
+        self.assertIsNone(recovered.terminal_error_code)
+
     def test_finalized_artifact_is_reused_after_recording_is_gone(self) -> None:
         # 首轮登记确认丢失: 产物已定稿并落盘, 但中心未确认。删除整段滚动录像后重试,
         # 必须直接从本机再切片记录复用已定稿产物, 不再查询/重切已消失的素材。
@@ -296,18 +334,221 @@ class ReclipExecutionTest(unittest.TestCase):
         self.assertEqual({d for d in self.evidence.iterdir() if d.is_dir()}, finalized)
 
     def test_window_not_covering_frozen_span_is_rejected_and_observable(self) -> None:
-        # 伪造/被裁剪的窗口不含本机冻结锚点时必须拒绝, 不切片也不登记。
+        # 伪造/被裁剪的窗口不含本机冻结锚点时必须拒绝, 不切片, 也不登记中心引用。
         transport = FakeReclipTransport([claim("req-10", start=ANCHOR + 1, end=ANCHOR + 9)])
         self.assertTrue(
             ReclipCommandRunner(transport=transport, executor=self.executor()).run_once()
         )
-        self.assertEqual(transport.reports, [])
+        # 终局失败必须回报中心结案, 且带具体可查询原因 (S039/AC1)。
+        self.assertEqual(len(transport.reports), 1)
+        self.assertEqual(transport.reports[0][1].failure_code, "reclip_window_incomplete")
         self.assertEqual(self.center.posts, [])
         record = self.state.station(STATION).reclip_request("req-10")
         assert record is not None
         self.assertIn("reclip_window_incomplete", record.last_error or "")
         self.assertIsNone(record.evidence_id)
         self.assertIsNone(record.media_results)
+
+    def test_missing_archived_material_reports_a_terminal_failure(self) -> None:
+        # 排队等待期间滚动录像被回收: 素材缺失是终局失败, 必须回报具体原因 (S039/AC1)。
+        shutil.rmtree(self.recording)
+        transport = FakeReclipTransport([claim("req-11", start=ANCHOR - 8, end=ANCHOR + 8)])
+        self.assertTrue(
+            ReclipCommandRunner(transport=transport, executor=self.executor()).run_once()
+        )
+        self.assertEqual(len(transport.reports), 1)
+        self.assertEqual(transport.reports[0][1].failure_code, "material_missing")
+        self.assertIsNone(transport.reports[0][1].evidence_id)
+        self.assertEqual(self.center.posts, [])
+        record = self.state.station(STATION).reclip_request("req-11")
+        assert record is not None
+        self.assertIn("material_missing", record.last_error or "")
+        self.assertEqual(record.terminal_error_code, "material_missing")
+        self.assertIsNone(record.evidence_id)
+        self.assertIsNone(record.media_results)
+
+    def test_terminal_failure_is_frozen_across_restart_and_restored_material(self) -> None:
+        # 排队期间素材缺失 -> 终局失败; 即使之后素材恢复/重复领取, 也复用同一原因, 不重切 (AC1)。
+        shutil.rmtree(self.recording)
+        transport = FakeReclipTransport([claim("req-12", start=ANCHOR - 8, end=ANCHOR + 8)])
+        self.assertTrue(
+            ReclipCommandRunner(transport=transport, executor=self.executor()).run_once()
+        )
+        self.assertEqual(transport.reports[0][1].failure_code, "material_missing")
+        frozen = self.state.station(STATION).reclip_request("req-12")
+        assert frozen is not None
+        self.assertEqual(frozen.terminal_error_code, "material_missing")
+
+        # 素材后来恢复: 重启后重复领取仍复用冻结原因, 不产生新产物也不改原因。
+        segments(self.recording / CAMERA, ANCHOR - 12, 12)
+        self.state.close()
+        reopened = self.open_state()
+        self.addCleanup(reopened.close)
+        retry = FakeReclipTransport([claim("req-12", start=ANCHOR - 8, end=ANCHOR + 8)])
+        self.assertTrue(
+            ReclipCommandRunner(transport=retry, executor=self.executor(reopened)).run_once()
+        )
+        self.assertEqual(len(retry.reports), 1)
+        self.assertEqual(retry.reports[0][1].failure_code, "material_missing")
+        self.assertIsNone(retry.reports[0][1].evidence_id)
+        self.assertEqual(self.center.posts, [])
+        recovered = reopened.station(STATION).reclip_request("req-12")
+        assert recovered is not None
+        self.assertEqual(recovered.terminal_error_code, "material_missing")
+        self.assertIsNone(recovered.evidence_id)
+        self.assertIsNone(recovered.media_results)
+
+    def test_expired_archive_reports_a_terminal_failure_before_slicing(self) -> None:
+        # 中心截止已过且尚未产出任何产物: 明确报归档过期, 不切片 (AC1)。
+        transport = FakeReclipTransport(
+            [claim("req-expired", start=ANCHOR - 8, end=ANCHOR + 8, available_until=WALL_NOW - 1.0)]
+        )
+        self.assertTrue(
+            ReclipCommandRunner(transport=transport, executor=self.executor()).run_once()
+        )
+        self.assertEqual(len(transport.reports), 1)
+        self.assertEqual(transport.reports[0][1].failure_code, "archive_expired")
+        self.assertEqual(self.center.posts, [])
+        record = self.state.station(STATION).reclip_request("req-expired")
+        assert record is not None
+        self.assertEqual(record.terminal_error_code, "archive_expired")
+        self.assertIsNone(record.media_results)
+
+    def test_expired_archive_still_reuses_a_finalized_artifact(self) -> None:
+        # 已定稿产物优先于过期判定: 登记确认丢失后即使中心截止已过, 也复用产物而不报过期。
+        self.center.drop_reply = True
+        transport = FakeReclipTransport([claim("req-final", start=ANCHOR - 8, end=ANCHOR + 8)])
+        self.assertTrue(
+            ReclipCommandRunner(transport=transport, executor=self.executor()).run_once()
+        )
+        self.assertEqual(transport.reports, [])
+        record = self.state.station(STATION).reclip_request("req-final")
+        assert record is not None and record.media_results is not None
+        shutil.rmtree(self.recording)
+        retry = FakeReclipTransport(
+            [claim("req-final", start=ANCHOR - 8, end=ANCHOR + 8, available_until=WALL_NOW - 1.0)]
+        )
+        self.assertTrue(ReclipCommandRunner(transport=retry, executor=self.executor()).run_once())
+        self.assertEqual(len(retry.reports), 1)
+        self.assertIsNotNone(retry.reports[0][1].evidence_id)
+        recovered = self.state.station(STATION).reclip_request("req-final")
+        assert recovered is not None
+        self.assertIsNone(recovered.terminal_error_code)
+
+    def test_reclip_command_loop_runs_the_runner_each_tick(self) -> None:
+        transport = FakeReclipTransport([claim("req-loop", start=ANCHOR - 8, end=ANCHOR + 8)])
+        loop = ReclipCommandLoop(
+            runner=ReclipCommandRunner(transport=transport, executor=self.executor()),
+            poll_interval=0.001,
+        )
+        self.assertTrue(loop.run_once())
+        self.assertEqual(len(transport.reports), 1)
+        self.assertEqual(transport.reports[0][1].failure_code, None)
+        # 无待办时 run_forever 也不报错, 由外层 should_stop 结束本轮。
+        rounds = iter(range(3))
+        loop.run_forever(should_stop=lambda: next(rounds, None) is None)
+
+    def test_build_reclip_loop_composes_the_production_tick(self) -> None:
+        loop = build_reclip_loop(
+            center_url="http://127.0.0.1:1",
+            host_id=HOST,
+            host_private_key="unused",  # pragma: allowlist secret
+            command_timeout=1.0,
+            command_poll_interval=1.0,
+            state=self.state,
+            recording_directory=self.recording,
+            ffmpeg_binary=FFMPEG,
+            evidence_configuration=self.config(),
+        )
+        self.assertIsInstance(loop, ReclipCommandLoop)
+
+    def test_internal_recording_gap_is_terminal_not_reported_success(self) -> None:
+        # 同源录像内部有缺口 (删除中间分段): 拼接片段会短于请求窗口, 必须终局失败 (AC3)。
+        # `_select_segments` 对窗口内缺口报 material_missing; 本票不改变首次切片的允许部分覆盖语义。
+        directory = self.recording / CAMERA
+        middle = sorted(directory.glob("*.mp4"))[6]
+        middle.unlink()
+        transport = FakeReclipTransport([claim("req-gap", start=ANCHOR - 8, end=ANCHOR + 8)])
+        self.assertTrue(
+            ReclipCommandRunner(transport=transport, executor=self.executor()).run_once()
+        )
+        self.assertEqual(len(transport.reports), 1)
+        self.assertEqual(transport.reports[0][1].failure_code, "material_missing")
+        self.assertEqual(self.center.posts, [])
+        record = self.state.station(STATION).reclip_request("req-gap")
+        assert record is not None
+        self.assertEqual(record.terminal_error_code, "material_missing")
+        self.assertIsNone(record.evidence_id)
+        self.assertIsNone(record.media_results)
+
+    def test_partial_frozen_sources_are_terminal_not_reported_success(self) -> None:
+        # 冻结来源有两路相机, 已定稿产物只覆盖一路: 不得冒充成功 (AC3)。
+        station = self.state.station(STATION)
+        row = station.evidence_at(instance_id=1, anchor=ANCHOR)
+        assert row is not None and row.wall_offset is not None
+        identity = reclip_evidence_identity(HOST, row.queue_id, "req-partial")
+        station.record_reclip_intent(
+            request_id="req-partial",
+            instance_id=1,
+            anchor=ANCHOR,
+            window_from=ANCHOR - 8,
+            window_to=ANCHOR + 8,
+            wall_offset=row.wall_offset,
+            sources=(CAMERA, "camera-b"),
+            required_from=row.required_from,
+            required_to=row.required_to,
+            identity=identity,
+        )
+        # 只落一路相机的已定稿产物: 窗口覆盖但冻结的第二路来源缺失。
+        original_dir = self.original_dir()
+        media = _media(self.row())[0]
+        clip_name = cast(str, media["clip_file"])
+        keyframe_name = cast(str, media["keyframe_file"])
+        artifact = (
+            self.evidence / f"{identity}-{round((ANCHOR - 8) * 1000)}-{round((ANCHOR + 8) * 1000)}"
+        )
+        artifact.mkdir()
+        shutil.copy(original_dir / clip_name, artifact / clip_name)
+        shutil.copy(original_dir / keyframe_name, artifact / keyframe_name)
+        (artifact / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "evidence_id": identity,
+                    "host_id": HOST,
+                    "anchor": ANCHOR,
+                    "window_from": ANCHOR - 8,
+                    "window_to": ANCHOR + 8,
+                    "wall_offset": row.wall_offset,
+                    "covered_from": ANCHOR - 8,
+                    "covered_to": ANCHOR + 8,
+                    "media": [
+                        {
+                            "media_path": CAMERA,
+                            "clip_file": clip_name,
+                            "keyframe_file": keyframe_name,
+                            "actual_from": ANCHOR - 8,
+                            "actual_to": ANCHOR + 8,
+                            "material_generation": "original",
+                            "segment_generations": {"original": 1},
+                            "sha256": media["sha256"],
+                            "size_bytes": media["size_bytes"],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        transport = FakeReclipTransport([claim("req-partial", start=ANCHOR - 8, end=ANCHOR + 8)])
+        self.assertTrue(
+            ReclipCommandRunner(transport=transport, executor=self.executor()).run_once()
+        )
+        self.assertEqual(len(transport.reports), 1)
+        self.assertEqual(transport.reports[0][1].failure_code, "reclip_source_missing")
+        self.assertEqual(self.center.posts, [])
+        record = station.reclip_request("req-partial")
+        assert record is not None
+        self.assertEqual(record.terminal_error_code, "reclip_source_missing")
+        self.assertIsNone(record.evidence_id)
 
     def test_missing_frozen_source_is_observable_and_not_registered(self) -> None:
         state = open_local_state(str(self.root / "unmapped.sqlite"))
@@ -317,7 +558,8 @@ class ReclipExecutionTest(unittest.TestCase):
         self.assertTrue(
             ReclipCommandRunner(transport=transport, executor=self.executor(state)).run_once()
         )
-        self.assertEqual(transport.reports, [])
+        self.assertEqual(len(transport.reports), 1)
+        self.assertEqual(transport.reports[0][1].failure_code, "reclip_source_missing")
         self.assertEqual(self.center.posts, [])
         # 来源映射缺失也要持久化可查询原因, 不伪造墙钟/相机映射, 也不静默丢弃待办。
         record = state.station(STATION).reclip_request("req-3")
@@ -328,7 +570,7 @@ class ReclipExecutionTest(unittest.TestCase):
         self.assertIsNone(record.identity)
         self.assertIsNone(record.media_results)
 
-        # 重启后同一请求仍带原因; 重复领取既不登记也不重切。
+        # 重启后同一请求仍带原因; 重复领取既不登记也不重切, 仍回报同一终局原因。
         state.close()
         reopened = self.open_state("unmapped.sqlite")
         self.addCleanup(reopened.close)
@@ -336,7 +578,8 @@ class ReclipExecutionTest(unittest.TestCase):
         self.assertTrue(
             ReclipCommandRunner(transport=retry, executor=self.executor(reopened)).run_once()
         )
-        self.assertEqual(retry.reports, [])
+        self.assertEqual(len(retry.reports), 1)
+        self.assertEqual(retry.reports[0][1].failure_code, "reclip_source_missing")
         self.assertEqual(self.center.posts, [])
         recovered = reopened.station(STATION).reclip_request("req-3")
         assert recovered is not None
@@ -353,7 +596,8 @@ class ReclipExecutionTest(unittest.TestCase):
         self.assertTrue(
             ReclipCommandRunner(transport=transport, executor=self.executor(state)).run_once()
         )
-        self.assertEqual(transport.reports, [])
+        self.assertEqual(len(transport.reports), 1)
+        self.assertEqual(transport.reports[0][1].failure_code, "reclip_source_missing")
         self.assertEqual(self.center.posts, [])
         record = state.station(STATION).reclip_request("req-4")
         assert record is not None
@@ -424,7 +668,9 @@ class ReclipExecutionTest(unittest.TestCase):
         self.assertTrue(
             ReclipCommandRunner(transport=tampered, executor=self.executor()).run_once()
         )
-        self.assertEqual(tampered.reports, [])
+        # 已定稿媒体损坏: 重试无法恢复, 终局失败回报中心结案 (S039)。
+        self.assertEqual(len(tampered.reports), 1)
+        self.assertEqual(tampered.reports[0][1].failure_code, "reclip_registration_failed")
         tampered_record = self.state.station(STATION).reclip_request("req-7")
         assert tampered_record is not None
         self.assertIn("ValueError", tampered_record.last_error or "")
@@ -433,10 +679,14 @@ class ReclipExecutionTest(unittest.TestCase):
         clip.unlink()
         removed = FakeReclipTransport([claim("req-7", start=ANCHOR - 8, end=ANCHOR + 8)])
         self.assertTrue(ReclipCommandRunner(transport=removed, executor=self.executor()).run_once())
-        self.assertEqual(removed.reports, [])
+        self.assertEqual(len(removed.reports), 1)
+        # 首次终局原因已冻结: 后续媒体删除只复用同一结案, 不改因也不重切 (S039/AC1)。
+        self.assertEqual(removed.reports[0][1].failure_code, "reclip_registration_failed")
+        self.assertEqual(removed.reports[0][1].detail, tampered.reports[0][1].detail)
         removed_record = self.state.station(STATION).reclip_request("req-7")
         assert removed_record is not None
-        self.assertIn("FileNotFoundError", removed_record.last_error or "")
+        self.assertEqual(removed_record.terminal_error_code, "reclip_registration_failed")
+        self.assertIn("ValueError", removed_record.last_error or "")
         self.assertIsNone(removed_record.evidence_id)
         # 不重切、不覆盖、不追加新引用。
         self.assertEqual(

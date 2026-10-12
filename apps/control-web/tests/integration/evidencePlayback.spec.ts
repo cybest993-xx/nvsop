@@ -452,6 +452,54 @@ describe('证据回看', () => {
     expect(rows.some((text) => text.includes('失败：素材已过期'))).toBe(true)
   })
 
+  it('refreshes reclip state on demand when a pending request later terminates', async () => {
+    vi.stubGlobal('fetch', probeOk())
+    signIn(REVIEW_PERMISSIONS)
+    api.readEvidenceReclipRequests.mockResolvedValueOnce([
+      { ...RECLIP_RECORD, request_id: 'pending-1', status: 'pending' as const },
+    ])
+    const wrapper = mountPlayer()
+    await flushPromises()
+    await wrapper.find('.evidence__list button').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('等待来源推理机执行')
+
+    // 手动刷新读取真实终态；不做自动轮询框架。
+    api.readEvidenceReclipRequests.mockResolvedValueOnce([
+      {
+        ...RECLIP_RECORD,
+        request_id: 'pending-1',
+        status: 'failed' as const,
+        failure_reason: 'archive_expired',
+      },
+    ])
+    await wrapper.find('.evidence__refresh-reclip').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('已过可再切片截止时刻')
+  })
+
+  it('explains a known reclip failure code and keeps the original request', async () => {
+    vi.stubGlobal('fetch', probeOk())
+    signIn(REVIEW_PERMISSIONS)
+    api.readEvidenceReclipRequests.mockResolvedValue([
+      {
+        ...RECLIP_RECORD,
+        request_id: 'failed-material',
+        status: 'failed' as const,
+        failure_reason: 'material_missing',
+      },
+    ])
+    const wrapper = mountPlayer()
+    await flushPromises()
+    await wrapper.find('.evidence__list button').trigger('click')
+    await flushPromises()
+
+    // 已知机器原因映射为人类可读解释；原始请求（锚点不变、新余量）仍保留展示。
+    const row = wrapper.find('.evidence__reclips li').text()
+    expect(row).toContain('失败：来源推理机的滚动录像已回收或缺失该片段。')
+    expect(row).toContain('2s / 3s')
+  })
+
   it('offers no reclip submit control to a view-only session', async () => {
     vi.stubGlobal('fetch', probeOk())
     signIn(['monitor.report.view', 'evidence.evidence.view'])

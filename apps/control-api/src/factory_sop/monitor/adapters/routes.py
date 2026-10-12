@@ -548,7 +548,12 @@ def stream_monitor_events(
             # 响应头已经发送，不能再改成 401/403；关闭流，重连仍走原认证语义。
             return
 
-    return StreamingResponse(events(), media_type="text/event-stream")
+    # 上游网关默认 proxy_buffering 会攒缓冲；显式免缓冲让看板首帧即时到达。
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"X-Accel-Buffering": "no"},
+    )
 
 
 def _authenticate_report_host(

@@ -1765,9 +1765,25 @@ export type EvidenceListing = {
    */
   origin: 'automatic' | 'reclip'
   /**
+   * Reclip Available
+   */
+  reclip_available?: boolean
+  /**
+   * Reclip Deadline
+   */
+  reclip_deadline?: number | null
+  /**
    * Reference
    */
   reference?: string | null
+  /**
+   * Required From
+   */
+  required_from?: number | null
+  /**
+   * Required To
+   */
+  required_to?: number | null
   /**
    * Sha256
    */
@@ -1785,6 +1801,10 @@ export type EvidenceListing = {
    * Violation Id
    */
   violation_id: string | null
+  /**
+   * Wall Offset
+   */
+  wall_offset?: number | null
   /**
    * Window End
    */
@@ -1812,6 +1832,89 @@ export type EvidenceMedia = {
    * Size
    */
   size: number
+}
+
+/**
+ * EvidenceReclipBody
+ *
+ * 一次再切片请求：稳定幂等 ID、证据代次与新前后余量；锚点/主机/窗口不接受覆写。
+ */
+export type EvidenceReclipBody = {
+  /**
+   * After Seconds
+   */
+  after_seconds: number
+  /**
+   * Before Seconds
+   */
+  before_seconds: number
+  /**
+   * Generation
+   */
+  generation: string
+  /**
+   * Request Id
+   */
+  request_id: string
+}
+
+/**
+ * EvidenceReclipRecord
+ */
+export type EvidenceReclipRecord = {
+  /**
+   * After Seconds
+   */
+  after_seconds: number
+  /**
+   * Anchor
+   */
+  anchor: number
+  /**
+   * Before Seconds
+   */
+  before_seconds: number
+  /**
+   * Command Id
+   */
+  command_id: string
+  /**
+   * Evidence Id
+   */
+  evidence_id: string
+  /**
+   * Failure Reason
+   */
+  failure_reason?: string | null
+  /**
+   * Generation
+   */
+  generation: string
+  /**
+   * Host Id
+   */
+  host_id: string
+  /**
+   * Request Id
+   */
+  request_id: string
+  /**
+   * Requested At
+   */
+  requested_at: string
+  /**
+   * Requested By
+   */
+  requested_by: string
+  status: ReclipRequestStatus
+  /**
+   * Window End
+   */
+  window_end: number
+  /**
+   * Window Start
+   */
+  window_start: number
 }
 
 /**
@@ -2896,7 +2999,7 @@ export type PendingCommandStatus = 'pending' | 'claimed' | 'succeeded' | 'failed
  *
  * 推理机从中心领取的设备命令类型。
  */
-export type PendingCommandType = 'test_connector_connection'
+export type PendingCommandType = 'test_connector_connection' | 'reclip_evidence'
 
 /**
  * PendingCommandView
@@ -3132,6 +3235,13 @@ export type ReasonCode =
   | 'WRONG_STEP'
   | 'OUT_OF_ORDER'
   | 'DEADLINE_EXCEEDED'
+
+/**
+ * ReclipRequestStatus
+ *
+ * 再切片委托的生命周期状态；本票只创建``PENDING``，失败由后续执行票写入。
+ */
+export type ReclipRequestStatus = 'pending' | 'failed'
 
 /**
  * RecordingMode
@@ -6414,6 +6524,80 @@ export type CreateEvidenceAccessContextResponses = {
 
 export type CreateEvidenceAccessContextResponse =
   CreateEvidenceAccessContextResponses[keyof CreateEvidenceAccessContextResponses]
+
+export type ReadEvidenceReclipRequestsData = {
+  body?: never
+  path: {
+    /**
+     * Evidence Id
+     */
+    evidence_id: string
+  }
+  query?: never
+  url: '/api/v1/evidence/{evidence_id}/reclip-requests'
+}
+
+export type ReadEvidenceReclipRequestsErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadEvidenceReclipRequestsError =
+  ReadEvidenceReclipRequestsErrors[keyof ReadEvidenceReclipRequestsErrors]
+
+export type ReadEvidenceReclipRequestsResponses = {
+  /**
+   * Response Readevidencerecliprequests
+   *
+   * Successful Response
+   */
+  200: Array<EvidenceReclipRecord>
+}
+
+export type ReadEvidenceReclipRequestsResponse =
+  ReadEvidenceReclipRequestsResponses[keyof ReadEvidenceReclipRequestsResponses]
+
+export type CreateEvidenceReclipRequestData = {
+  body: EvidenceReclipBody
+  path: {
+    /**
+     * Evidence Id
+     */
+    evidence_id: string
+  }
+  query?: never
+  url: '/api/v1/evidence/{evidence_id}/reclip-requests'
+}
+
+export type CreateEvidenceReclipRequestErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CreateEvidenceReclipRequestError =
+  CreateEvidenceReclipRequestErrors[keyof CreateEvidenceReclipRequestErrors]
+
+export type CreateEvidenceReclipRequestResponses = {
+  /**
+   * Successful Response
+   */
+  200: EvidenceReclipRecord
+}
+
+export type CreateEvidenceReclipRequestResponse =
+  CreateEvidenceReclipRequestResponses[keyof CreateEvidenceReclipRequestResponses]
 
 export type ReadEvidenceReviewsData = {
   body?: never

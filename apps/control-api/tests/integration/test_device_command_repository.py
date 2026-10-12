@@ -333,6 +333,7 @@ def test_concurrent_claims_for_one_host_return_one_command(engine: Engine) -> No
             with DatabaseSession(engine) as session:
                 barrier.wait()
                 claimed = PostgresPendingCommandRepository(session).claim_next(
+                    command_type=PendingCommandType.TEST_CONNECTOR_CONNECTION,
                     host_id=host.id,
                     claim_token=token,
                     claimed_at=NOW,
@@ -441,6 +442,7 @@ def test_duplicate_completed_report_is_idempotent_across_sessions(engine: Engine
 
         with DatabaseSession(engine) as claiming:
             claimed = claim_next_command(
+                command_type=PendingCommandType.TEST_CONNECTOR_CONNECTION,
                 host=host_identity(host.id, HOST_A_IDENTITY.private_key),
                 now=NOW,
                 lease_duration=timedelta(minutes=1),
@@ -596,6 +598,7 @@ def test_failed_report_rolls_back_connector_health_and_command_state(engine: Eng
 
         with DatabaseSession(engine) as claiming:
             claimed = claim_next_command(
+                command_type=PendingCommandType.TEST_CONNECTOR_CONNECTION,
                 host=host_identity(host.id, HOST_A_IDENTITY.private_key),
                 now=NOW,
                 lease_duration=timedelta(minutes=1),
@@ -771,6 +774,7 @@ def test_claim_is_host_scoped_reclaimed_after_expiry_and_persists_rejection(
 
         with DatabaseSession(engine) as claiming:
             claimed = claim_next_command(
+                command_type=PendingCommandType.TEST_CONNECTOR_CONNECTION,
                 host=host_identity(host_a.id, HOST_A_IDENTITY.private_key),
                 now=NOW,
                 lease_duration=timedelta(seconds=1),
@@ -784,6 +788,7 @@ def test_claim_is_host_scoped_reclaimed_after_expiry_and_persists_rejection(
 
         with DatabaseSession(engine) as other_host:
             other_claimed = claim_next_command(
+                command_type=PendingCommandType.TEST_CONNECTOR_CONNECTION,
                 host=host_identity(
                     host_b.id,
                     HOST_B_IDENTITY.private_key,
@@ -803,6 +808,7 @@ def test_claim_is_host_scoped_reclaimed_after_expiry_and_persists_rejection(
         with DatabaseSession(engine) as before_expiry:
             assert (
                 claim_next_command(
+                    command_type=PendingCommandType.TEST_CONNECTOR_CONNECTION,
                     host=host_identity(
                         host_a.id,
                         HOST_A_IDENTITY.private_key,
@@ -819,6 +825,7 @@ def test_claim_is_host_scoped_reclaimed_after_expiry_and_persists_rejection(
 
         with DatabaseSession(engine) as recovered:
             retried = claim_next_command(
+                command_type=PendingCommandType.TEST_CONNECTOR_CONNECTION,
                 host=host_identity(
                     host_a.id, HOST_A_IDENTITY.private_key, at=NOW + timedelta(seconds=2)
                 ),

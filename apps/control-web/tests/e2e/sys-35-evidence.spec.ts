@@ -146,6 +146,28 @@ test('SYS-35 — 浏览器经真实来源解码证据片段与关键帧', async 
   expect(saved.reviewed_at).toBeTruthy()
   expect(saved.reviewer_name).toBeTruthy()
 
+  // 再切片：真实 Center 给出绝对截止，登记后按异步等待状态查询，不假装同步切片成功。
+  await expect(page.locator('#evidence-reclip-heading')).toBeVisible()
+  await expect(page.locator('.evidence__reclip .evidence__deadline')).toContainText('可再切片截止')
+  await page.getByLabel('锚点前余量（秒）').fill('2')
+  await page.getByLabel('锚点后余量（秒）').fill('3')
+  await page.getByRole('button', { name: '登记再切片请求' }).click()
+  await expect(page.getByRole('status').filter({ hasText: '已登记再切片请求' })).toBeVisible()
+  const reclipListed = await page.request.get(
+    `/api/v1/evidence/${encodeURIComponent(evidenceId)}/reclip-requests`,
+  )
+  expect(reclipListed.status()).toBe(200)
+  const reclipRecord = (await reclipListed.json()).find(
+    (row: { evidence_id: string }) => row.evidence_id === evidenceId,
+  )
+  expect(reclipRecord).toMatchObject({
+    generation: 'original',
+    before_seconds: 2,
+    after_seconds: 3,
+    status: 'pending',
+  })
+  expect(reclipRecord.request_id).toBeTruthy()
+
   // 关键帧：真实来源读取并解码。
   await page
     .getByRole('button', { name: /锚点关键帧/ })

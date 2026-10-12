@@ -16,20 +16,36 @@ from factory_sop.auth.api import (
     needs,
 )
 from factory_sop.device.api import (
+    DeviceEvidenceGateway,
     DeviceHostGateway,
     DeviceMonitorGateway,
     host_identity_from_headers,
 )
 from factory_sop.evidence.adapters import dependencies
 from factory_sop.evidence.adapters.routes import EvidenceRegistrationBody
-from factory_sop.evidence.model import EvidenceKind, EvidenceStatus, ReviewConclusion
+from factory_sop.evidence.model import (
+    EvidenceKind,
+    EvidenceStatus,
+    ReclipRequestStatus,
+    ReviewConclusion,
+)
 from factory_sop.evidence.playback import (
     EvidenceAccessRefusedError,
     check_access_context,
     evidence_for_instance,
     issue_access_context,
 )
-from factory_sop.evidence.repository import EvidenceRepository, EvidenceReviewRepository
+from factory_sop.evidence.reclip import (
+    EvidenceReclipRefusedError,
+    create_reclip_request,
+    list_reclip_requests,
+    reclip_availability,
+)
+from factory_sop.evidence.repository import (
+    EvidenceReclipRequestRepository,
+    EvidenceRepository,
+    EvidenceReviewRepository,
+)
 from factory_sop.evidence.reviews import (
     EvidenceReviewRefusedError,
     list_reviews,
@@ -41,12 +57,17 @@ from factory_sop.settings import Settings
 router = APIRouter(prefix="/evidence", tags=["evidence"])
 Repository = Annotated[EvidenceRepository, Depends(dependencies.evidence)]
 ReviewRepository = Annotated[EvidenceReviewRepository, Depends(dependencies.reviews)]
+ReclipRepository = Annotated[EvidenceReclipRequestRepository, Depends(dependencies.reclip_requests)]
+ReclipGateway = Annotated[DeviceEvidenceGateway, Depends(dependencies.reclip_gateway)]
 HostAuthenticator = Annotated[DeviceHostGateway, Depends(dependencies.host_gateway)]
 HostRegistry = Annotated[DeviceMonitorGateway, Depends(dependencies.registered_hosts)]
 
 
 class EvidenceListing(EvidenceRegistrationBody):
     status: EvidenceStatus
+    # 可再切片截止时刻（来源机墙钟 epoch 秒）与当前是否仍可再切片；旧登记缺冻结元数据时为未知。
+    reclip_deadline: float | None = None
+    reclip_available: bool = False
 
 
 class EvidenceAccessContext(BaseModel):
@@ -91,6 +112,34 @@ class EvidenceReviewRecord(BaseModel):
     conclusion: ReviewConclusion
 
 
+class EvidenceReclipBody(BaseModel):
+    """一次再切片请求：稳定幂等 ID、证据代次与新前后余量；锚点/主机/窗口不接受覆写。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    request_id: UUID = Field(strict=False)
+    generation: str
+    before_seconds: float = Field(allow_inf_nan=False)
+    after_seconds: float = Field(allow_inf_nan=False)
+
+
+class EvidenceReclipRecord(BaseModel):
+    request_id: UUID
+    evidence_id: str
+    generation: str
+    host_id: UUID
+    anchor: float
+    before_seconds: float
+    after_seconds: float
+    window_start: float
+    window_end: float
+    requested_by: UUID
+    requested_at: datetime
+    command_id: UUID
+    status: ReclipRequestStatus
+    failure_reason: str | None = None
+
+
 @router.get(
     "",
     operation_id="readEvidence",
@@ -98,14 +147,37 @@ class EvidenceReviewRecord(BaseModel):
     openapi_extra=needs(Permission.EVIDENCE_VIEW),
 )
 def read_evidence(
-    caller: Authorized, evidence: Repository, station_id: UUID, instance_id: int
+    caller: Authorized,
+    evidence: Repository,
+    gateway: ReclipGateway,
+    station_id: UUID,
+    instance_id: int,
 ) -> list[dict[str, object]]:
-    return [
-        asdict(row.registration) | {"status": row.status}
-        for row in evidence_for_instance(
-            caller, evidence=evidence, station_id=str(station_id), instance_id=instance_id
+    rows = evidence_for_instance(
+        caller, evidence=evidence, station_id=str(station_id), instance_id=instance_id
+    )
+    now = datetime.now(UTC).timestamp()
+    windows: dict[UUID, int | None] = {}
+    result: list[dict[str, object]] = []
+    for row in rows:
+        host_id = UUID(row.registration.host_id)
+        if host_id not in windows:
+            windows[host_id] = gateway.recording_window_seconds(host_id=host_id)
+        deadline, available = reclip_availability(
+            row.registration,
+            status=row.status,
+            recording_window_seconds=windows[host_id],
+            now=now,
         )
-    ]
+        result.append(
+            asdict(row.registration)
+            | {
+                "status": row.status,
+                "reclip_deadline": deadline,
+                "reclip_available": available,
+            }
+        )
+    return result
 
 
 @router.get(
@@ -183,6 +255,75 @@ def register_review(
         }[error.code]
         return problem_response(status=error.status, title=title, error_code=error_code)
     return asdict(record)
+
+
+@router.post(
+    "/{evidence_id:path}/reclip-requests",
+    operation_id="createEvidenceReclipRequest",
+    response_model=EvidenceReclipRecord,
+    openapi_extra=needs(Permission.EVIDENCE_VIEW, Permission.EVIDENCE_REVIEW_EDIT),
+)
+def request_reclip(
+    evidence_id: str,
+    body: EvidenceReclipBody,
+    caller: Authorized,
+    evidence: Repository,
+    requests: ReclipRepository,
+    gateway: ReclipGateway,
+) -> dict[str, object] | Response:
+    """登记一次再切片请求，并在同一事务内委托给来源主机的不可领取命令队列。"""
+    try:
+        record = create_reclip_request(
+            caller,
+            request_id=body.request_id,
+            evidence_id=evidence_id,
+            generation=body.generation,
+            before_seconds=body.before_seconds,
+            after_seconds=body.after_seconds,
+            now=datetime.now(UTC),
+            evidence=evidence,
+            requests=requests,
+            gateway=gateway,
+        )
+    except EvidenceReclipRefusedError as error:
+        error_code, title = {
+            "evidence_unregistered": (ApiErrorCode.OBJECT_NOT_FOUND, "证据未登记"),
+            "evidence_generation_mismatch": (ApiErrorCode.RESOURCE_MISMATCH, "证据代次不匹配"),
+            "evidence_unavailable": (ApiErrorCode.STATE_CONFLICT, "证据当前不可用，无法再切片"),
+            "reclip_metadata_unavailable": (
+                ApiErrorCode.RESOURCE_MISMATCH,
+                "缺少来源机冻结的时间信息，不可再切片",
+            ),
+            "reclip_source_host_unavailable": (
+                ApiErrorCode.RESOURCE_MISMATCH,
+                "来源推理机当前不可用",
+            ),
+            "reclip_window_expired": (ApiErrorCode.STATE_CONFLICT, "录像已过可再切片截止时刻"),
+            "reclip_window_too_long": (ApiErrorCode.REQUEST_INVALID, "请求窗口超过录像滚动窗口"),
+            "reclip_margins_invalid": (ApiErrorCode.REQUEST_INVALID, "再切片余量非法"),
+            "reclip_request_conflict": (
+                ApiErrorCode.IDEMPOTENCY_CONFLICT,
+                "再切片请求与既有请求冲突",
+            ),
+        }[error.code]
+        return problem_response(status=error.status, title=title, error_code=error_code)
+    return asdict(record)
+
+
+@router.get(
+    "/{evidence_id:path}/reclip-requests",
+    operation_id="readEvidenceReclipRequests",
+    response_model=list[EvidenceReclipRecord],
+    openapi_extra=needs(Permission.EVIDENCE_VIEW),
+)
+def read_reclip_requests(
+    evidence_id: str, caller: Authorized, requests: ReclipRepository
+) -> list[dict[str, object]]:
+    """列出该证据的全部再切片请求；等待/失败状态可查，不隐含编辑。"""
+    return [
+        asdict(row)
+        for row in list_reclip_requests(caller, evidence_id=evidence_id, requests=requests)
+    ]
 
 
 @router.post("/access-check", operation_id="checkEvidenceAccess", response_model=EvidenceMedia)

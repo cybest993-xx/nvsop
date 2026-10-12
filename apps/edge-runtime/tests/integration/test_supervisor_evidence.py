@@ -82,12 +82,10 @@ class JudgmentEffectsPersistenceTest(unittest.TestCase):
     def assert_clips(
         self, clips: tuple[PendingEvidence, ...], expected: tuple[EvidenceClip, ...]
     ) -> None:
+        # 只比较窗口身份与余量结果; 冻结核心跨度由证据登记测试单独证明 (S037)。
         self.assertEqual(
-            clips,
-            tuple(
-                PendingEvidence(i, clip.instance_id, clip.anchor, clip.start, clip.end, 0, None)
-                for i, clip in enumerate(expected, start=1)
-            ),
+            tuple((c.instance_id, c.anchor, c.start, c.end) for c in clips),
+            tuple((clip.instance_id, clip.anchor, clip.start, clip.end) for clip in expected),
         )
 
     def test_a_passing_close_records_the_decision_clips_and_closes(self) -> None:

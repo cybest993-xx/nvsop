@@ -73,10 +73,11 @@ from factory_sop.device.errors import DeviceRefusalCode, DeviceRefusedError
 from factory_sop.device.model import (
     PendingCommand,
     PendingCommandCompletion,
+    PendingCommandType,
     PointDirection,
 )
 from factory_sop.evidence.adapters import dependencies as evidence_dependencies
-from factory_sop.evidence.model import EvidenceReview
+from factory_sop.evidence.model import EvidenceReclipRequest, EvidenceReview
 from factory_sop.execution.adapters import dependencies as execution_dependencies
 from factory_sop.execution.model import HANDOVER_RISK_STATEMENT, HandoverConfirmation
 from factory_sop.identifiers import new_id
@@ -505,6 +506,16 @@ ROUTES = [
         "/evidence/{evidence_id}/reviews",
         {"review_id": str(REVIEW_ID), "generation": "original", "conclusion": "confirmed"},
     ),
+    Target(
+        "POST",
+        "/evidence/{evidence_id}/reclip-requests",
+        {
+            "request_id": str(REVIEW_ID),
+            "generation": "original",
+            "before_seconds": 1.0,
+            "after_seconds": 1.0,
+        },
+    ),
 ]
 
 # The session resource: no permission, by design, and therefore not part of the check above.
@@ -538,11 +549,12 @@ class AuthorizationPendingCommands(FakePendingCommands):
         self,
         *,
         host_id: UUID,
+        command_type: PendingCommandType,
         claim_token: str,
         claimed_at: datetime,
         lease_expires_at: datetime,
     ) -> PendingCommand | None:
-        del host_id, claim_token, claimed_at, lease_expires_at
+        del host_id, command_type, claim_token, claimed_at, lease_expires_at
         return None
 
     def complete(self, completion: PendingCommandCompletion) -> PendingCommand:
@@ -637,6 +649,45 @@ class FakeEvidenceReviews:
 
     def list_for_evidence(self, evidence_id: str) -> tuple[EvidenceReview, ...]:
         return tuple(row for row in self.records.values() if row.evidence_id == evidence_id)
+
+
+class FakeEvidenceReclipRequests:
+    """内存再切片请求仓储，足够让授权用例跑到真实拒绝/成功分支。"""
+
+    def __init__(self) -> None:
+        self.records: dict[UUID, EvidenceReclipRequest] = {}
+
+    def insert(self, value: EvidenceReclipRequest) -> bool:
+        if value.request_id in self.records:
+            return False
+        self.records[value.request_id] = value
+        return True
+
+    def find(self, request_id: UUID) -> EvidenceReclipRequest | None:
+        return self.records.get(request_id)
+
+    def list_for_evidence(self, evidence_id: str) -> tuple[EvidenceReclipRequest, ...]:
+        return tuple(row for row in self.records.values() if row.evidence_id == evidence_id)
+
+
+class FakeEvidenceReclipGateway:
+    """授权机械测试只解析依赖；证据缺冻结元数据时用例不会触及网关。"""
+
+    def recording_window_seconds(self, *, host_id: UUID) -> int | None:
+        del host_id
+        return 604800
+
+    def enqueue_reclip_command(
+        self,
+        *,
+        host_id: UUID,
+        request_id: UUID,
+        idempotency_key: str,
+        actor_id: UUID,
+        now: object,
+    ) -> UUID:
+        del host_id, idempotency_key, actor_id, now
+        return request_id
 
 
 class Backend:
@@ -754,6 +805,8 @@ class Backend:
         self.evidence = MemoryEvidence()
         register_evidence_reference(self.evidence, evidence_registration(evidence_id=EVIDENCE_ID))
         self.evidence_reviews = FakeEvidenceReviews()
+        self.evidence_reclip_requests = FakeEvidenceReclipRequests()
+        self.evidence_reclip_gateway = FakeEvidenceReclipGateway()
 
         self.app.dependency_overrides[dependencies.users] = lambda: self.users
         self.app.dependency_overrides[dependencies.sessions] = lambda: self.sessions
@@ -784,6 +837,12 @@ class Backend:
         self.app.dependency_overrides[execution_dependencies.handovers] = lambda: self.handovers
         self.app.dependency_overrides[evidence_dependencies.evidence] = lambda: self.evidence
         self.app.dependency_overrides[evidence_dependencies.reviews] = lambda: self.evidence_reviews
+        self.app.dependency_overrides[evidence_dependencies.reclip_requests] = lambda: (
+            self.evidence_reclip_requests
+        )
+        self.app.dependency_overrides[evidence_dependencies.reclip_gateway] = lambda: (
+            self.evidence_reclip_gateway
+        )
         self.app.dependency_overrides[auth_handover_authority] = lambda: self.handover_authority
         self.app.dependency_overrides[request_session] = StubRequestSession
         self.client = TestClient(self.app, base_url="https://testserver")

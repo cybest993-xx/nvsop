@@ -9,9 +9,22 @@ from sqlalchemy import CursorResult, Table, func, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.orm import Session
 
-from factory_sop.evidence.adapters.tables import EvidenceReferenceRow, EvidenceReviewRow
-from factory_sop.evidence.model import EvidenceReference, EvidenceReview, EvidenceStatus
-from factory_sop.evidence.repository import EvidenceRepository, EvidenceReviewRepository
+from factory_sop.evidence.adapters.tables import (
+    EvidenceReclipRequestRow,
+    EvidenceReferenceRow,
+    EvidenceReviewRow,
+)
+from factory_sop.evidence.model import (
+    EvidenceReclipRequest,
+    EvidenceReference,
+    EvidenceReview,
+    EvidenceStatus,
+)
+from factory_sop.evidence.repository import (
+    EvidenceReclipRequestRepository,
+    EvidenceRepository,
+    EvidenceReviewRepository,
+)
 
 
 class PostgresEvidenceRepository(EvidenceRepository):
@@ -63,6 +76,21 @@ class PostgresEvidenceRepository(EvidenceRepository):
                     else table.c.reference == expected_registration.reference
                 ),
                 (
+                    table.c.wall_offset.is_(None)
+                    if expected_registration.wall_offset is None
+                    else table.c.wall_offset == expected_registration.wall_offset
+                ),
+                (
+                    table.c.required_from.is_(None)
+                    if expected_registration.required_from is None
+                    else table.c.required_from == expected_registration.required_from
+                ),
+                (
+                    table.c.required_to.is_(None)
+                    if expected_registration.required_to is None
+                    else table.c.required_to == expected_registration.required_to
+                ),
+                (
                     table.c.failure_reason.is_(None)
                     if expected.failure_reason is None
                     else table.c.failure_reason == expected.failure_reason
@@ -73,6 +101,10 @@ class PostgresEvidenceRepository(EvidenceRepository):
                 sha256=registration.sha256,
                 size=registration.size,
                 reference=registration.reference,
+                # 冻结三元数据不是身份，只随登记状态提升（PENDING/FAILED→AVAILABLE）落库。
+                wall_offset=registration.wall_offset,
+                required_from=registration.required_from,
+                required_to=registration.required_to,
                 status=value.status.value,
                 failure_reason=value.failure_reason,
                 received_at=value.received_at,
@@ -109,7 +141,9 @@ class PostgresEvidenceRepository(EvidenceRepository):
         return tuple(row.to_domain() for row in rows), int(total or 0)
 
 
-def _columns(row: EvidenceReferenceRow | EvidenceReviewRow) -> dict[str, object]:
+def _columns(
+    row: EvidenceReferenceRow | EvidenceReviewRow | EvidenceReclipRequestRow,
+) -> dict[str, object]:
     return {column.name: getattr(row, column.key) for column in row.__table__.columns}
 
 
@@ -147,4 +181,45 @@ class PostgresEvidenceReviewRepository(EvidenceReviewRepository):
         return tuple(row.to_domain() for row in rows)
 
 
-__all__ = ["PostgresEvidenceRepository", "PostgresEvidenceReviewRepository"]
+class PostgresEvidenceReclipRequestRepository(EvidenceReclipRequestRepository):
+    """再切片请求的 PostgreSQL 只追加仓储；命令由 device 队列在同一事务内登记。"""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def insert(self, value: EvidenceReclipRequest) -> bool:
+        row = EvidenceReclipRequestRow.from_domain(value)
+        table = cast(Table, EvidenceReclipRequestRow.__table__)
+        statement = (
+            postgres_insert(table)
+            .values(**_columns(row))
+            .on_conflict_do_nothing(index_elements=[table.c.request_id])
+            .returning(table.c.request_id)
+        )
+        return self._session.execute(statement).scalar_one_or_none() is not None
+
+    def find(self, request_id: UUID) -> EvidenceReclipRequest | None:
+        row = self._session.scalar(
+            select(EvidenceReclipRequestRow)
+            .where(EvidenceReclipRequestRow.request_id == request_id)
+            .execution_options(populate_existing=True)
+        )
+        return None if row is None else row.to_domain()
+
+    def list_for_evidence(self, evidence_id: str) -> tuple[EvidenceReclipRequest, ...]:
+        rows = self._session.scalars(
+            select(EvidenceReclipRequestRow)
+            .where(EvidenceReclipRequestRow.evidence_id == evidence_id)
+            .order_by(
+                EvidenceReclipRequestRow.requested_at.asc(),
+                EvidenceReclipRequestRow.request_id.asc(),
+            )
+        ).all()
+        return tuple(row.to_domain() for row in rows)
+
+
+__all__ = [
+    "PostgresEvidenceReclipRequestRepository",
+    "PostgresEvidenceRepository",
+    "PostgresEvidenceReviewRepository",
+]

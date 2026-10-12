@@ -2873,6 +2873,22 @@
             "title": "Origin",
             "type": "string"
           },
+          "reclip_available": {
+            "default": false,
+            "title": "Reclip Available",
+            "type": "boolean"
+          },
+          "reclip_deadline": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reclip Deadline"
+          },
           "reference": {
             "anyOf": [
               {
@@ -2883,6 +2899,28 @@
               }
             ],
             "title": "Reference"
+          },
+          "required_from": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required From"
+          },
+          "required_to": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required To"
           },
           "sha256": {
             "anyOf": [
@@ -2923,6 +2961,17 @@
               }
             ],
             "title": "Violation Id"
+          },
+          "wall_offset": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wall Offset"
           },
           "window_end": {
             "title": "Window End",
@@ -2975,6 +3024,125 @@
           "kind"
         ],
         "title": "EvidenceMedia",
+        "type": "object"
+      },
+      "EvidenceReclipBody": {
+        "additionalProperties": false,
+        "description": "一次再切片请求：稳定幂等 ID、证据代次与新前后余量；锚点/主机/窗口不接受覆写。",
+        "properties": {
+          "after_seconds": {
+            "title": "After Seconds",
+            "type": "number"
+          },
+          "before_seconds": {
+            "title": "Before Seconds",
+            "type": "number"
+          },
+          "generation": {
+            "title": "Generation",
+            "type": "string"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "generation",
+          "before_seconds",
+          "after_seconds"
+        ],
+        "title": "EvidenceReclipBody",
+        "type": "object"
+      },
+      "EvidenceReclipRecord": {
+        "properties": {
+          "after_seconds": {
+            "title": "After Seconds",
+            "type": "number"
+          },
+          "anchor": {
+            "title": "Anchor",
+            "type": "number"
+          },
+          "before_seconds": {
+            "title": "Before Seconds",
+            "type": "number"
+          },
+          "command_id": {
+            "format": "uuid",
+            "title": "Command Id",
+            "type": "string"
+          },
+          "evidence_id": {
+            "title": "Evidence Id",
+            "type": "string"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "generation": {
+            "title": "Generation",
+            "type": "string"
+          },
+          "host_id": {
+            "format": "uuid",
+            "title": "Host Id",
+            "type": "string"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "requested_at": {
+            "format": "date-time",
+            "title": "Requested At",
+            "type": "string"
+          },
+          "requested_by": {
+            "format": "uuid",
+            "title": "Requested By",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReclipRequestStatus"
+          },
+          "window_end": {
+            "title": "Window End",
+            "type": "number"
+          },
+          "window_start": {
+            "title": "Window Start",
+            "type": "number"
+          }
+        },
+        "required": [
+          "request_id",
+          "evidence_id",
+          "generation",
+          "host_id",
+          "anchor",
+          "before_seconds",
+          "after_seconds",
+          "window_start",
+          "window_end",
+          "requested_by",
+          "requested_at",
+          "command_id",
+          "status"
+        ],
+        "title": "EvidenceReclipRecord",
         "type": "object"
       },
       "EvidenceReviewBody": {
@@ -4691,7 +4859,8 @@
       "PendingCommandType": {
         "description": "推理机从中心领取的设备命令类型。",
         "enum": [
-          "test_connector_connection"
+          "test_connector_connection",
+          "reclip_evidence"
         ],
         "title": "PendingCommandType",
         "type": "string"
@@ -5121,6 +5290,15 @@
           "TIMESTAMP_DISCONTINUITY": "时间轴不连续",
           "WRONG_STEP": "出现了错误步骤"
         }
+      },
+      "ReclipRequestStatus": {
+        "description": "再切片委托的生命周期状态；本票只创建``PENDING``，失败由后续执行票写入。",
+        "enum": [
+          "pending",
+          "failed"
+        ],
+        "title": "ReclipRequestStatus",
+        "type": "string"
       },
       "RecordingMode": {
         "description": "相机是否只在观看时取流，还是持续录制。",
@@ -11177,6 +11355,129 @@
           "evidence"
         ],
         "x-required-permission": "evidence.evidence.view"
+      }
+    },
+    "/api/v1/evidence/{evidence_id}/reclip-requests": {
+      "get": {
+        "description": "列出该证据的全部再切片请求；等待/失败状态可查，不隐含编辑。",
+        "operationId": "readEvidenceReclipRequests",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "evidence_id",
+            "required": true,
+            "schema": {
+              "title": "Evidence Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/EvidenceReclipRecord"
+                  },
+                  "title": "Response Readevidencerecliprequests",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Read Reclip Requests",
+        "tags": [
+          "evidence"
+        ],
+        "x-required-permission": "evidence.evidence.view"
+      },
+      "post": {
+        "description": "登记一次再切片请求，并在同一事务内委托给来源主机的不可领取命令队列。",
+        "operationId": "createEvidenceReclipRequest",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "evidence_id",
+            "required": true,
+            "schema": {
+              "title": "Evidence Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceReclipBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceReclipRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Request Reclip",
+        "tags": [
+          "evidence"
+        ],
+        "x-required-permission": [
+          "evidence.evidence.view",
+          "evidence.review.edit"
+        ]
       }
     },
     "/api/v1/evidence/{evidence_id}/reviews": {

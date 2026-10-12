@@ -407,7 +407,12 @@ def _path(value: object, name: str) -> Path:
 def evidence_registration_payloads(
     pending: PendingEvidence, *, host_id: str, station_id: str, directory: Path
 ) -> tuple[dict[str, object], ...]:
-    """从已定稿证据构造不可变中心引用; 扩窗以新产物目录形成新证据身份。"""
+    """从已定稿证据构造不可变中心引用; 扩窗以新产物目录形成新证据身份。
+
+    同时上报入队时冻结的录像墙钟映射与同锚点核心必需跨度, 供中心计算可再切片截止时刻。
+    旧行缺任一冻结事实时整组省略, 中心登记为"截止未知、不可再切片", 不猜墙钟。新增字段为
+    Center-first 部署: 旧 Center 的严格解码会拒绝整条登记, 对账器保留本机待办与媒体。
+    """
     if pending.media_results is None or pending.covered_from is None or pending.covered_to is None:
         raise ValueError("evidence media has not been finalized")
     if pending.covered_from > pending.start.seconds or pending.covered_to < pending.end.seconds:
@@ -415,6 +420,17 @@ def evidence_registration_payloads(
     artifact = _artifact_name(
         _evidence_id(host_id, pending.queue_id), pending.covered_from, pending.covered_to
     )
+    frozen: dict[str, object] = {}
+    if (
+        pending.wall_offset is not None
+        and pending.required_from is not None
+        and pending.required_to is not None
+    ):
+        frozen = {
+            "wall_offset": pending.wall_offset,
+            "required_from": pending.required_from,
+            "required_to": pending.required_to,
+        }
     media = json.loads(pending.media_results)
     results: list[dict[str, object]] = []
     for item in media:
@@ -444,6 +460,7 @@ def evidence_registration_payloads(
                     "sha256": digest,
                     "size": size,
                     "reference": reference,
+                    **frozen,
                 }
             )
     return tuple(results)

@@ -52,6 +52,8 @@ import {
   readEvidence as generatedReadEvidence,
   readEvidenceReviews as generatedReadEvidenceReviews,
   registerEvidenceReview as generatedRegisterEvidenceReview,
+  createEvidenceReclipRequest as generatedCreateEvidenceReclipRequest,
+  readEvidenceReclipRequests as generatedReadEvidenceReclipRequests,
   createEvidenceAccessContext as generatedCreateEvidenceAccessContext,
   listPermissions as generatedListPermissions,
   listPoints as generatedListPoints,
@@ -136,6 +138,8 @@ import {
   type DownloadTemplateImportResponse,
   type EvidenceAccessContext,
   type EvidenceListing,
+  type EvidenceReclipBody,
+  type EvidenceReclipRecord,
   type EvidenceReviewBody,
   type EvidenceReviewRecord,
   type DownloadTemplateVersionArtifactResponse,
@@ -477,6 +481,25 @@ export function registerEvidenceReview(
   return execute(
     generatedRegisterEvidenceReview({ path: { evidence_id: evidenceId }, body: submitted }),
   )
+}
+
+/** 一条再切片请求；状态由服务器拥有，中心只登记并委托来源推理机。 */
+export type EvidenceReclip = EvidenceReclipRecord
+export type EvidenceReclipInput = EvidenceReclipBody
+
+/** 登记一次再切片请求；锚点与来源主机由证据事实派生，调用方按同一 `request_id` 安全重放。 */
+export function createEvidenceReclipRequest(
+  evidenceId: string,
+  submitted: EvidenceReclipBody,
+): Promise<EvidenceReclip> {
+  return execute(
+    generatedCreateEvidenceReclipRequest({ path: { evidence_id: evidenceId }, body: submitted }),
+  )
+}
+
+/** 读取该证据的全部再切片请求；查询复用查看权限，不隐含编辑。 */
+export function readEvidenceReclipRequests(evidenceId: string): Promise<EvidenceReclip[]> {
+  return execute(generatedReadEvidenceReclipRequests({ path: { evidence_id: evidenceId } }))
 }
 
 /** 中心归档已经按稳定事件身份幂等去重；这里只读取，不重新判定。 */

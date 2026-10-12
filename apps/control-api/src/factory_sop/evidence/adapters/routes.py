@@ -43,6 +43,10 @@ class EvidenceRegistrationBody(BaseModel):
     sha256: str | None = None
     size: int | None = None
     reference: str | None = None
+    # 可选：来源机冻结的录像墙钟映射与核心必需跨度。旧 Edge 不发送即截止未知，不可再切片。
+    wall_offset: float | None = None
+    required_from: float | None = None
+    required_to: float | None = None
 
 
 @router.post("/registrations", operation_id="registerEvidenceReference")

@@ -5,7 +5,12 @@ from __future__ import annotations
 from typing import Protocol
 from uuid import UUID
 
-from factory_sop.evidence.model import EvidenceReference, EvidenceReview, EvidenceStatus
+from factory_sop.evidence.model import (
+    EvidenceReclipRequest,
+    EvidenceReference,
+    EvidenceReview,
+    EvidenceStatus,
+)
 
 
 class EvidenceRepository(Protocol):
@@ -36,6 +41,22 @@ class EvidenceRepository(Protocol):
         ...
 
 
+class EvidenceReclipRequestRepository(Protocol):
+    """再切片请求的只追加 seam；状态由 evidence 拥有，不提供删除。"""
+
+    def insert(self, value: EvidenceReclipRequest) -> bool:
+        """仅在 ``request_id`` 尚未存在时插入；已有行时返回 ``False``，不覆盖。"""
+        ...
+
+    def find(self, request_id: UUID) -> EvidenceReclipRequest | None:
+        """按稳定请求 ID 读取一条请求，不存在时返回 ``None``。"""
+        ...
+
+    def list_for_evidence(self, evidence_id: str) -> tuple[EvidenceReclipRequest, ...]:
+        """返回该证据的全部再切片请求，按请求时刻升序。"""
+        ...
+
+
 class EvidenceReviewRepository(Protocol):
     """人工复核结论的只追加 seam；不提供更新或删除。"""
 
@@ -52,4 +73,8 @@ class EvidenceReviewRepository(Protocol):
         ...
 
 
-__all__ = ["EvidenceRepository", "EvidenceReviewRepository"]
+__all__ = [
+    "EvidenceReclipRequestRepository",
+    "EvidenceRepository",
+    "EvidenceReviewRepository",
+]

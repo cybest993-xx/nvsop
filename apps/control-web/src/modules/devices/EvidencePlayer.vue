@@ -3,9 +3,12 @@ import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import {
   ControlPlaneError,
   createEvidenceAccessContext,
+  createEvidenceReclipRequest,
   readEvidence,
+  readEvidenceReclipRequests,
   readEvidenceReviews,
   registerEvidenceReview,
+  type EvidenceReclip,
   type EvidenceReference,
   type EvidenceReview,
   type ReviewConclusion,
@@ -42,6 +45,27 @@ let reviewToken = 0
 let reviewId: string | null = null
 let reviewIntent = ''
 
+// 再切片请求：状态由服务器拥有；只有同步回执才表示已登记，等待/失败均按真实记录展示。
+const reclips = ref<EvidenceReclip[]>([])
+const reclipsLoading = ref(false)
+const reclipsError = ref('')
+const beforeSeconds = ref(5)
+const afterSeconds = ref(5)
+const reclipSaving = ref(false)
+const reclipError = ref('')
+const reclipNotice = ref('')
+const reclipRef = ref<HTMLElement | null>(null)
+// 一次提交意图由（证据、代次、前后余量）定义；同一意图重试复用同一 request_id。
+let reclipToken = 0
+let reclipId: string | null = null
+let reclipIntent = ''
+
+// 截止必须随真实时间推进：同一页面不重新拉取，也要在到期后置灰并说明。
+const now = ref(Date.now())
+const deadlineClock = setInterval(() => {
+  now.value = Date.now()
+}, 1000)
+
 // 每次切换或重新播放都递增，迟到的响应不得复活已被替换的播放器。
 let revision = 0
 let controller: AbortController | undefined
@@ -68,6 +92,140 @@ const referenceState = (item: EvidenceReference) =>
   item.status === 'failed' ? '登记失败' : '尚未对账'
 const reviewTime = (value: string) =>
   new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+const deadlineTime = (value: number) =>
+  new Date(value * 1000).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+
+/**
+ * 一条证据的可再切片状态：具体绝对截止、过期原因与缺元数据未知。
+ * 截止时刻由中心保存的滚动录像窗口算出，只是理论边界，不代表来源机已实际应用或素材仍在。
+ */
+function reclipState(
+  item: EvidenceReference,
+  nowMs: number = now.value,
+): {
+  text: string
+  enabled: boolean
+  reason: string
+} {
+  if (item.status !== 'available') {
+    return {
+      text: '可再切片截止时刻：未知（引用不可用）',
+      enabled: false,
+      reason: '该引用未登记成功或尚未对账，不能发起再切片。',
+    }
+  }
+  const deadline = item.reclip_deadline ?? null
+  if (deadline === null) {
+    return {
+      text: '可再切片截止时刻：未知',
+      enabled: false,
+      reason:
+        '旧登记缺少来源推理机冻结的录像时间元数据，或来源机滚动录像窗口未配置，中心配置不适用，无法确定截止时刻。',
+    }
+  }
+  const at = deadlineTime(deadline)
+  if (!item.reclip_available || nowMs >= deadline * 1000) {
+    return {
+      text: `可再切片截止：${at}（已过期）`,
+      enabled: false,
+      reason: `已过 ${at}，来源机滚动录像可能已回收该片段，不能再切片。`,
+    }
+  }
+  return { text: `可再切片截止：${at}`, enabled: true, reason: '' }
+}
+
+const reclipStatusLabel = (row: EvidenceReclip) =>
+  row.status === 'failed' ? `失败：${row.failure_reason ?? '原因未知'}` : '等待来源推理机执行'
+
+/** 作废当前再切片提交意图与迟到的查询；换证据/余量/权限时调用。 */
+function invalidateReclip(): void {
+  reclipToken += 1
+  reclipId = null
+  reclipIntent = ''
+  reclipSaving.value = false
+  reclipError.value = ''
+  reclipNotice.value = ''
+}
+
+async function loadReclips(item: EvidenceReference, guard: number): Promise<void> {
+  reclipsError.value = ''
+  reclipsLoading.value = true
+  try {
+    const rows = await readEvidenceReclipRequests(item.evidence_id)
+    if (guard !== revision) return
+    reclips.value = mergeReclips(rows)
+  } catch (error) {
+    if (guard !== revision) return
+    reclipsError.value =
+      error instanceof ControlPlaneError ? (error.detail ?? error.message) : '再切片请求读取失败'
+  } finally {
+    if (guard === revision) reclipsLoading.value = false
+  }
+}
+
+/** 按 request_id 去重合并，保持请求时刻升序；本地已确认回执优先于可能过期的历史快照。 */
+function mergeReclips(incoming: EvidenceReclip[]): EvidenceReclip[] {
+  const merged = new Map(reclips.value.map((row) => [row.request_id, row]))
+  for (const row of incoming) merged.set(row.request_id, row)
+  return [...merged.values()].sort((a, b) =>
+    a.requested_at === b.requested_at
+      ? a.request_id.localeCompare(b.request_id)
+      : a.requested_at.localeCompare(b.requested_at),
+  )
+}
+
+async function submitReclip(): Promise<void> {
+  const item = selected.value
+  if (!item || !mayReview.value || reclipSaving.value) return
+  const before = Number(beforeSeconds.value)
+  const after = Number(afterSeconds.value)
+  if (!Number.isFinite(before) || !Number.isFinite(after) || before < 0 || after < 0) {
+    reclipError.value = '新前后余量必须是非负有限数字。'
+    return
+  }
+  // 提交瞬间按当前时间复核：反应式时钟可能尚未推进，不能凭已渲染的表单放行过期请求。
+  const state = reclipState(item, Date.now())
+  if (!state.enabled) {
+    reclipError.value = state.reason
+    return
+  }
+  const intent = `${item.evidence_id}\u0000${item.generation}\u0000${before}\u0000${after}`
+  if (reclipId === null || reclipIntent !== intent) {
+    reclipId = crypto.randomUUID()
+    reclipIntent = intent
+  }
+  const submittedId = reclipId
+  const token = reclipToken
+  reclipSaving.value = true
+  reclipError.value = ''
+  reclipNotice.value = ''
+  try {
+    const record = await createEvidenceReclipRequest(item.evidence_id, {
+      request_id: submittedId,
+      generation: item.generation,
+      before_seconds: before,
+      after_seconds: after,
+    })
+    if (token !== reclipToken) return
+    // 只有同步持久化回执才显示已登记；等待与失败状态由服务器记录，不假装切片已完成。
+    reclips.value = mergeReclips([record])
+    reclipId = null
+    reclipIntent = ''
+    reclipNotice.value = `已登记再切片请求：等待来源推理机拉取执行（请求 ${record.request_id}，状态 ${
+      record.status === 'failed' ? '失败' : '等待中'
+    }）。`
+    await nextTick()
+    reclipRef.value?.focus()
+  } catch (error) {
+    if (token !== reclipToken) return
+    reclipError.value =
+      error instanceof ControlPlaneError
+        ? (error.detail ?? error.message)
+        : '再切片请求未能登记，请检查网络后按同一意图重试。'
+  } finally {
+    if (token === reclipToken) reclipSaving.value = false
+  }
+}
 
 /** 作废当前提交意图与迟到的复核响应；换证据/结论/权限/主体时调用。 */
 function invalidateReview(): void {
@@ -159,6 +317,10 @@ async function load(): Promise<void> {
   const current = ++revision
   teardown()
   invalidateReview()
+  invalidateReclip()
+  reclips.value = []
+  reclipsError.value = ''
+  reclipsLoading.value = false
   selected.value = null
   items.value = []
   listError.value = ''
@@ -183,13 +345,19 @@ async function load(): Promise<void> {
 async function play(item: EvidenceReference): Promise<void> {
   teardown()
   invalidateReview()
+  invalidateReclip()
   selected.value = item
   reviews.value = []
   reviewsError.value = ''
   reviewsLoading.value = false
+  reclips.value = []
+  reclipsError.value = ''
+  reclipsLoading.value = false
   const current = ++revision
   // 复核编辑权限才自动读取历史；只查看权限经显式按钮查询。
   if (mayReview.value) void loadReviews(item, current)
+  // 再切片请求查询只要求查看权限，因此总是读取真实等待/失败状态。
+  void loadReclips(item, current)
   let context
   try {
     context = await createEvidenceAccessContext(item.evidence_id)
@@ -274,8 +442,10 @@ watch(
 watch(conclusion, () => invalidateReview())
 // 卸载同样作废 revision：迟到的 createContext/readEvidence 不能再发起来源请求。
 onUnmounted(() => {
+  clearInterval(deadlineClock)
   revision += 1
   invalidateReview()
+  invalidateReclip()
   teardown()
 })
 </script>
@@ -293,6 +463,15 @@ onUnmounted(() => {
         </button>
         <span v-else class="muted">
           {{ kindLabel(item) }}：引用{{ referenceState(item) }}，不可回看。
+        </span>
+        <span
+          class="evidence__deadline"
+          :class="{ 'evidence__deadline--disabled': !reclipState(item).enabled }"
+        >
+          {{ reclipState(item).text }}
+        </span>
+        <span v-if="reclipState(item).reason" class="muted">
+          {{ reclipState(item).reason }}
         </span>
       </li>
     </ul>
@@ -380,6 +559,63 @@ onUnmounted(() => {
       <p v-if="saveError" role="alert">{{ saveError }}</p>
       <p v-if="savedNotice" ref="savedRef" role="status" tabindex="-1">{{ savedNotice }}</p>
     </div>
+    <div v-if="selected" class="evidence__reclip" aria-labelledby="evidence-reclip-heading">
+      <h5 id="evidence-reclip-heading">再切片（复核期，异步委托）</h5>
+      <p
+        class="evidence__deadline"
+        :class="{ 'evidence__deadline--disabled': !reclipState(selected).enabled }"
+      >
+        {{ reclipState(selected).text }}
+      </p>
+      <p v-if="reclipState(selected).reason" class="muted">{{ reclipState(selected).reason }}</p>
+      <p class="muted">
+        截止时刻由中心保存的滚动录像窗口计算，仅表示理论边界，不代表来源机已实际应用该窗口或素材仍在；
+        实际切片结果以来源推理机执行为准，失败由后续任务结案。
+      </p>
+      <p v-if="reclipsLoading" class="muted">正在读取再切片请求…</p>
+      <p v-if="reclipsError" role="alert">{{ reclipsError }}</p>
+      <ul v-if="reclips.length" class="evidence__reclips">
+        <li v-for="row in reclips" :key="row.request_id">
+          请求 {{ row.request_id }}：{{ reclipStatusLabel(row) }}（新余量 {{ row.before_seconds }}s
+          / {{ row.after_seconds }}s，{{ reviewTime(row.requested_at) }}）
+        </li>
+      </ul>
+      <p v-else-if="!reclipsLoading && !reclipsError" class="muted">该证据尚无再切片请求。</p>
+      <form
+        v-if="mayReview && reclipState(selected).enabled"
+        class="evidence__reclip-form"
+        @submit.prevent="submitReclip"
+      >
+        <fieldset :disabled="reclipSaving">
+          <legend>发起再切片</legend>
+          <label for="reclip-before">
+            锚点前余量（秒）
+            <input
+              id="reclip-before"
+              v-model.number="beforeSeconds"
+              type="number"
+              min="0"
+              step="0.5"
+            />
+          </label>
+          <label for="reclip-after">
+            锚点后余量（秒）
+            <input
+              id="reclip-after"
+              v-model.number="afterSeconds"
+              type="number"
+              min="0"
+              step="0.5"
+            />
+          </label>
+          <button type="submit">{{ reclipSaving ? '正在登记…' : '登记再切片请求' }}</button>
+        </fieldset>
+      </form>
+      <p v-else-if="mayReview" class="muted">该证据当前不可再切片，不能发起请求。</p>
+      <p v-else class="muted">当前会话只有查看权限，不能发起再切片。</p>
+      <p v-if="reclipError" role="alert">{{ reclipError }}</p>
+      <p v-if="reclipNotice" ref="reclipRef" role="status" tabindex="-1">{{ reclipNotice }}</p>
+    </div>
   </section>
 </template>
 
@@ -398,8 +634,30 @@ onUnmounted(() => {
 .evidence__player img {
   max-width: 100%;
 }
+.evidence__list li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  align-items: flex-start;
+}
+.evidence__deadline--disabled {
+  color: var(--el-text-color-disabled);
+}
 .evidence__review {
   margin-top: 0.75rem;
+}
+.evidence__reclip {
+  margin-top: 0.75rem;
+}
+.evidence__reclips {
+  list-style: none;
+  padding: 0;
+}
+.evidence__reclip-form fieldset {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
 }
 .evidence__reviews {
   list-style: none;

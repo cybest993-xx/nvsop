@@ -1,0 +1,2 @@
+# 原 CR no-efa-base 的阶段约束；最终 package 阶段保持 0.15.0。
+torchao==0.16.0

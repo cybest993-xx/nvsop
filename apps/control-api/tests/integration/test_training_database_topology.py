@@ -11,6 +11,7 @@ PostgreSQL 上 Center Alembic 只落 `nvsop`，训练连接实际落在 `trainin
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from collections.abc import Iterator
@@ -44,8 +45,7 @@ TRAINING_PROCESS_SERVICES = (
     "evaluation-microservice",
     "annotation-backend",
 )
-# 本票只部署 annotation-backend；其余四类训练进程不在此启动。
-UNDEPLOYED_TRAINING_SERVICES = TRAINING_PROCESS_SERVICES[:4]
+INTERNAL_TRAINING_SERVICES = ("augmentation", "vlm-training", "ddm-training", "evaluation")
 
 
 def _require_docker() -> None:
@@ -61,11 +61,21 @@ def _require_docker() -> None:
             docker_client.close()
 
 
-def _dev_compose_services() -> dict[str, dict[str, Any]]:
+def _dev_compose_services(*, gpu: bool = False) -> dict[str, dict[str, Any]]:
     """用 Compose 自身解析部署文件，顺带验证服务图引用完整。"""
     result = subprocess.run(
-        ["docker", "compose", "-f", str(COMPOSE), "config", "--format", "json"],
+        [
+            "docker",
+            "compose",
+            *(["--profile", "training-gpu"] if gpu else []),
+            "-f",
+            str(COMPOSE),
+            "config",
+            "--format",
+            "json",
+        ],
         cwd=REPO_ROOT,
+        env={**os.environ, "COMPOSE_PROFILES": ""},
         capture_output=True,
         text=True,
         check=False,
@@ -83,7 +93,11 @@ def _service_block(source: str, name: str) -> str:
 
 
 def test_dev_compose_runs_one_postgres_instance_for_center_and_training() -> None:
-    services = _dev_compose_services()
+    core = _dev_compose_services()
+    assert not (set(INTERNAL_TRAINING_SERVICES) & core.keys())
+    for name in ("center-api", "worker", "gateway", "annotation-backend", "annotation-frontend"):
+        assert name in core
+    services = _dev_compose_services(gpu=True)
 
     # 不再有第二个 PostgreSQL 服务或第二套 metadata_db。
     assert "annotation-db" not in services
@@ -156,10 +170,24 @@ def test_dev_compose_runs_one_postgres_instance_for_center_and_training() -> Non
         "vendor/sop-monitoring-blueprints/microservices/sop-training-bp/db-init-scripts/01-init-tables.sql"
     )
 
-    # 本票只部署 annotation-backend；其余四类训练进程与第二套 metadata_db/adminer 不在此启动。
     assert "annotation-backend" in services
-    for absent in (*UNDEPLOYED_TRAINING_SERVICES, "metadata_db", "adminer"):
+    for absent in ("metadata_db", "adminer"):
         assert absent not in services
+    for name in INTERNAL_TRAINING_SERVICES:
+        service = services[name]
+        assert not service.get("ports")
+        assert service["profiles"] == ["training-gpu"]
+        environment = service["environment"]
+        assert environment["POSTGRES_HOST"] == "center-db"
+        assert environment["POSTGRES_DB"] == "training"
+        assert environment["POSTGRES_USER"] == "training_runtime"
+        assert environment["POSTGRES_PASSWORD_FILE"] == "/run/secrets/training-runtime-password"
+        assert (
+            service["depends_on"]["training-objects-install"]["condition"]
+            == "service_completed_successfully"
+        )
+        for caller in ("gateway", "worker"):
+            assert name not in services[caller]["depends_on"]
 
 
 def test_vendor_training_processes_share_the_postgres_db_seam() -> None:

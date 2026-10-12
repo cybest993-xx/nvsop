@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime
+from posixpath import normpath
 from typing import Annotated, Any, Literal
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Request, Response, status
@@ -76,9 +77,34 @@ def authorize_annotation_gateway(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+def _gateway_path(original_uri: str) -> str:
+    # Nginx 先解码、合并斜线和移除 dot segments；权限与资源必须按同一路径判定。
+    raw_path = (
+        original_uri.split("?", 1)[0]
+        if original_uri.startswith("/")
+        else urlsplit(original_uri).path
+    )
+    # 请求行里的字面 '#' 是 Nginx 的 URI 终点（ngx_http_parse_complex_uri 走 done），
+    # 但 %23 解码后是普通路径字节；只能在解码前切掉字面 fragment。
+    raw_path = raw_path.split("#", 1)[0]
+    path = unquote(raw_path)
+    normalized = normpath("/" + path.lstrip("/"))
+    if path.endswith(("/", "/.", "/..")) and normalized != "/":
+        normalized += "/"
+    return normalized
+
+
 def _gateway_permission(original_uri: str, method: str) -> Permission | None:
     """为标注和数据集路径选择前置权限；其他控制面请求只在此处校验会话。"""
-    path = urlsplit(original_uri).path.rstrip("/")
+    path = _gateway_path(original_uri)
+    if method == "GET" and path in {
+        "/api/augmentation/health/ready",
+        "/api/vlm-training/health/ready",
+        "/api/ddm-training/health/ready",
+        "/api/evaluation/health/ready",
+    }:
+        return Permission.DATASET_VIEW
+    path = path.rstrip("/")
     dataset_root = f"{_CONTROL_API_PREFIX}/training-datasets"
     if path == dataset_root or path.startswith(dataset_root + "/"):
         if _is_dataset_import_path(path, dataset_root, method):
@@ -121,7 +147,7 @@ def _is_dataset_import_path(path: str, dataset_root: str, method: str) -> bool:
 
 
 def _gateway_resource_from_uri(original_uri: str) -> AnnotationGatewayResource:
-    path = urlsplit(original_uri).path
+    path = _gateway_path(original_uri)
     if path.startswith("/api/v1/training-datasets/"):
         parts = path.split("/")
         dataset_id = _parse_gateway_uuid(parts, 4)

@@ -11,6 +11,7 @@ const api = vi.hoisted(() => ({
   createEvidenceAccessContext: vi.fn(),
   readEvidenceReviews: vi.fn(),
   registerEvidenceReview: vi.fn(),
+  readEvidenceReclipRequests: vi.fn(),
 }))
 
 vi.mock('@/api/controlPlane', async (importOriginal) => ({
@@ -78,6 +79,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   api.readEvidence.mockResolvedValue([LISTING])
   api.readEvidenceReviews.mockResolvedValue([])
+  api.readEvidenceReclipRequests.mockResolvedValue([])
   api.createEvidenceAccessContext.mockResolvedValue({
     context: 'signed.ticket',
     origin: 'https://edge.internal:8765',

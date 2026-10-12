@@ -87,11 +87,12 @@ class EvidenceRegistration:
             item is not None for item in frozen
         ):
             raise ValueError("evidence frozen time metadata must be supplied together")
-        if self.wall_offset is not None:
+        wall_offset, required_from, required_to = frozen
+        if wall_offset is not None and required_from is not None and required_to is not None:
             for name, value in (
-                ("wall_offset", self.wall_offset),
-                ("required_from", self.required_from),
-                ("required_to", self.required_to),
+                ("wall_offset", wall_offset),
+                ("required_from", required_from),
+                ("required_to", required_to),
             ):
                 if (
                     isinstance(value, bool)
@@ -99,7 +100,7 @@ class EvidenceRegistration:
                     or not math.isfinite(float(value))
                 ):
                     raise ValueError(f"evidence {name} must be a finite number")
-            if not self.required_from <= self.anchor <= self.required_to:
+            if not required_from <= self.anchor <= required_to:
                 raise ValueError("evidence required span must contain the anchor")
         if self.sha256 is not None:
             if not self._is_sha256(self.sha256):

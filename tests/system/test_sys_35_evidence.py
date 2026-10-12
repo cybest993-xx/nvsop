@@ -221,7 +221,7 @@ def _registration(
     size: int,
     reference: str,
 ) -> dict[str, object]:
-    """来源推理机登记的最小受控引用：相对路径 + 摘要 + 大小。"""
+    """来源推理机登记的最小受控引用：相对路径 + 摘要 + 大小 + 冻结录像时间元数据。"""
     return {
         "evidence_id": evidence_id,
         "host_id": str(UUID(host_id)).upper(),
@@ -237,6 +237,10 @@ def _registration(
         "sha256": digest,
         "size": size,
         "reference": reference,
+        # 冻结的墙钟映射与核心必需跨度：截止落在未来，使再切片在浏览器场景中可用。
+        "wall_offset": time.time() - 100.0,
+        "required_from": 0.0,
+        "required_to": 2.0,
     }
 
 

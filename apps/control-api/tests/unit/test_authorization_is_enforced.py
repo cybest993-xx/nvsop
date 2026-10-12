@@ -77,7 +77,7 @@ from factory_sop.device.model import (
     PointDirection,
 )
 from factory_sop.evidence.adapters import dependencies as evidence_dependencies
-from factory_sop.evidence.model import EvidenceReview
+from factory_sop.evidence.model import EvidenceReclipRequest, EvidenceReview
 from factory_sop.execution.adapters import dependencies as execution_dependencies
 from factory_sop.execution.model import HANDOVER_RISK_STATEMENT, HandoverConfirmation
 from factory_sop.identifiers import new_id
@@ -655,19 +655,18 @@ class FakeEvidenceReclipRequests:
     """内存再切片请求仓储，足够让授权用例跑到真实拒绝/成功分支。"""
 
     def __init__(self) -> None:
-        self.records: dict[UUID, object] = {}
+        self.records: dict[UUID, EvidenceReclipRequest] = {}
 
-    def insert(self, value: object) -> bool:
-        request_id = getattr(value, "request_id")
-        if request_id in self.records:
+    def insert(self, value: EvidenceReclipRequest) -> bool:
+        if value.request_id in self.records:
             return False
-        self.records[request_id] = value
+        self.records[value.request_id] = value
         return True
 
-    def find(self, request_id: UUID) -> object | None:
+    def find(self, request_id: UUID) -> EvidenceReclipRequest | None:
         return self.records.get(request_id)
 
-    def list_for_evidence(self, evidence_id: str) -> tuple[object, ...]:
+    def list_for_evidence(self, evidence_id: str) -> tuple[EvidenceReclipRequest, ...]:
         return tuple(row for row in self.records.values() if row.evidence_id == evidence_id)
 
 

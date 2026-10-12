@@ -1696,8 +1696,8 @@ class MigrationTest(unittest.TestCase):
             digest,
         )
 
-    def test_v16_pause_database_upgrades_to_v17_without_losing_evidence(self) -> None:
-        """已部署的暂停控制 V16 数据保留, 新版只追加引用登记确认字段。"""
+    def test_v16_pause_database_upgrades_to_latest_without_losing_evidence(self) -> None:
+        """已部署的暂停控制 V16 数据保留, 新版追加引用登记确认字段与再切片记录表。"""
         with TemporaryDirectory() as directory:
             path = str(Path(directory) / "v16.sqlite3")
             with sqlite3.connect(path, isolation_level=None) as connection:
@@ -1731,7 +1731,9 @@ class MigrationTest(unittest.TestCase):
             upgraded.close()
 
             with sqlite3.connect(path) as connection:
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 17)
+                self.assertEqual(
+                    connection.execute("PRAGMA user_version").fetchone()[0], len(MIGRATIONS)
+                )
                 self.assertEqual(
                     connection.execute(
                         "SELECT paused FROM local_station_judgment_control WHERE station_id = ?",

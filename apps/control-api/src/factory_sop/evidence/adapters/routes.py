@@ -20,6 +20,7 @@ from factory_sop.evidence.api import (
     EvidenceStatus,
     register_evidence,
 )
+from factory_sop.evidence.repository import EvidenceReclipRequestRepository
 
 router = APIRouter(prefix="/evidence", tags=["evidence"])
 
@@ -54,6 +55,9 @@ def report_evidence_reference(
     request: Request,
     body: dict[str, object],
     evidence: Annotated[EvidenceRepository, Depends(dependencies.evidence)],
+    reclip_requests: Annotated[
+        EvidenceReclipRequestRepository, Depends(dependencies.reclip_requests)
+    ],
     host_gateway: Annotated[DeviceHostGateway, Depends(dependencies.host_gateway)],
 ) -> dict[str, object]:
     try:
@@ -75,6 +79,17 @@ def report_evidence_reference(
         signature=request.headers.get("X-Inference-Host-Signature"),
     )
     host_gateway.authenticate(host=identity, now=datetime.now(UTC))
+
+    # 非自动来源必须对应一条真实再切片请求, 防止伪造的 reclip 代次被追加。
+    if payload.origin == "reclip" and not reclip_requests.has_for(
+        host_id=host_id,
+        station_id=payload.station_id,
+        instance_id=payload.instance_id,
+        anchor=payload.anchor,
+        window_start=payload.window_start,
+        window_end=payload.window_end,
+    ):
+        raise HTTPException(status_code=409, detail="reclip request not registered")
 
     registration_data = payload.model_dump()
     registration_data["kind"] = EvidenceKind(payload.kind)

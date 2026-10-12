@@ -18,16 +18,25 @@ from nvsop_contracts import (
     ConnectionTestResult,
     HostIdentityKeyPair,
     HostIdentityRequest,
+    ReclipEvidenceClaim,
+    ReclipEvidenceCommand,
+    ReclipEvidenceResult,
     Unverified,
     connection_test_claim_to_wire,
     generate_host_identity_key_pair,
+    reclip_evidence_claim_to_wire,
     verify_host_identity_request,
 )
 
 from edge_runtime.center_client import CenterClient
 from edge_runtime.connectors.hikvision import CANDIDATE_PROFILE
 from edge_runtime.runtime import LocalIsapiConnectorConfiguration, build_connection_test_loop
-from edge_runtime.supervisor.delegated_transport import CommandTransportError, HttpCommandTransport
+from edge_runtime.supervisor.delegated_transport import (
+    RECLIP_CLAIM_PATH,
+    CommandTransportError,
+    HttpCommandTransport,
+    HttpReclipCommandTransport,
+)
 
 
 def _fixture_host_identity(seed: int) -> HostIdentityKeyPair:
@@ -269,6 +278,142 @@ class HttpCommandTransportTest(unittest.TestCase):
             transport.claim_next()
 
         self.assertEqual(raised.exception.status, 401)
+
+
+class ReclipHandler(BaseHTTPRequestHandler):
+    claim: ClassVar[ReclipEvidenceClaim]
+    requests: ClassVar[list[tuple[str, dict[str, str], dict[str, object] | None]]] = []
+    return_empty: ClassVar[bool] = False
+
+    def do_GET(self) -> None:
+        if self.path != RECLIP_CLAIM_PATH:
+            self.send_error(404)
+            return
+        headers = {key.lower(): value for key, value in self.headers.items()}
+        self.requests.append((self.command, headers, None))
+        if self.return_empty:
+            self.send_response(204)
+            self.end_headers()
+            return
+        self._write_json(reclip_evidence_claim_to_wire(self.claim))
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(length))
+        headers = {key.lower(): value for key, value in self.headers.items()}
+        self.requests.append((self.command, headers, payload))
+        self._write_json({"accepted": True})
+
+    def log_message(self, format_string: str, *args: object) -> None:
+        del format_string, args
+
+    def _write_json(self, payload: dict[str, object]) -> None:
+        encoded = json.dumps(payload).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+
+class HttpReclipCommandTransportTest(unittest.TestCase):
+    """专用再切片端点的主机签名领取/回报线契约, 默认不挂载于生产应用。"""
+
+    server: ThreadingHTTPServer
+    thread: threading.Thread
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), ReclipHandler)
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.server.shutdown()
+        cls.thread.join(timeout=5)
+        cls.server.server_close()
+
+    def setUp(self) -> None:
+        ReclipHandler.requests = []
+        ReclipHandler.return_empty = False
+        ReclipHandler.claim = ReclipEvidenceClaim(
+            command=ReclipEvidenceCommand(
+                command_id="command-1",
+                request_id="request-1",
+                station_id="station-1",
+                instance_id=7,
+                anchor=100.0,
+                window_start=90.0,
+                window_end=110.0,
+            ),
+            claim_token="claim-1",
+            lease_expires_at="2026-10-09T00:05:00Z",
+        )
+
+    def _transport(self) -> HttpReclipCommandTransport:
+        return HttpReclipCommandTransport(
+            client=CenterClient(
+                center_url=f"http://127.0.0.1:{self.server.server_port}",
+                host_id="host-1",
+                host_private_key=HOST_IDENTITY.private_key,
+                timeout=2.0,
+            )
+        )
+
+    def test_claim_and_report_use_the_shared_wire_contract_and_host_identity(self) -> None:
+        transport = self._transport()
+
+        claim = transport.claim_next()
+        self.assertEqual(ReclipHandler.claim, claim)
+        assert claim is not None
+        transport.report(claim, ReclipEvidenceResult(evidence_id="host-1-reclip/camera-a.mp4"))
+
+        self.assertEqual(2, len(ReclipHandler.requests))
+        get_method, get_headers, _ = ReclipHandler.requests[0]
+        self.assertEqual("GET", get_method)
+        self.assertEqual("host-1", get_headers["x-inference-host-id"])
+        get_identity = HostIdentityRequest(
+            method="GET",
+            path=RECLIP_CLAIM_PATH,
+            host_id="host-1",
+            timestamp=int(get_headers["x-inference-host-timestamp"]),
+            nonce=get_headers["x-inference-host-nonce"],
+            body=None,
+        )
+        self.assertTrue(
+            verify_host_identity_request(
+                get_identity,
+                public_key=HOST_IDENTITY.public_key,
+                signature=get_headers["x-inference-host-signature"],
+            )
+        )
+
+        post_method, post_headers, payload = ReclipHandler.requests[1]
+        self.assertEqual("POST", post_method)
+        self.assertEqual("claim-1", post_headers["x-command-claim-token"])
+        post_path = "/api/v1/device-commands/command-1/reclip-result"
+        post_identity = HostIdentityRequest(
+            method="POST",
+            path=post_path,
+            host_id="host-1",
+            timestamp=int(post_headers["x-inference-host-timestamp"]),
+            nonce=post_headers["x-inference-host-nonce"],
+            body=payload,
+        )
+        self.assertTrue(
+            verify_host_identity_request(
+                post_identity,
+                public_key=HOST_IDENTITY.public_key,
+                signature=post_headers["x-inference-host-signature"],
+            )
+        )
+        self.assertEqual(payload, {"evidence_id": "host-1-reclip/camera-a.mp4"})
+
+    def test_empty_queue_is_not_an_error(self) -> None:
+        ReclipHandler.return_empty = True
+
+        self.assertIsNone(self._transport().claim_next())
 
 
 if __name__ == "__main__":

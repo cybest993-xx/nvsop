@@ -162,6 +162,8 @@ class EvidenceReclipRequestRow(Table):
     command_id: Mapped[UUID] = mapped_column(Uuid(), index=True)
     status: Mapped[str] = mapped_column(String(32), index=True)
     failure_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # 成功追加后记录的新引用身份；未成功为 NULL。
+    result_evidence_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     def to_domain(self) -> EvidenceReclipRequest:
         return EvidenceReclipRequest(
@@ -179,6 +181,7 @@ class EvidenceReclipRequestRow(Table):
             command_id=self.command_id,
             status=ReclipRequestStatus(self.status),
             failure_reason=self.failure_reason,
+            result_evidence_id=self.result_evidence_id,
         )
 
     @classmethod
@@ -198,6 +201,7 @@ class EvidenceReclipRequestRow(Table):
             command_id=value.command_id,
             status=value.status.value,
             failure_reason=value.failure_reason,
+            result_evidence_id=value.result_evidence_id,
         )
 
 

@@ -13,6 +13,7 @@ from uuid import UUID
 
 from factory_sop.auth.api import Caller, Permission, authorize
 from factory_sop.evidence.model import (
+    EvidenceOrigin,
     EvidenceReclipRequest,
     EvidenceRegistration,
     EvidenceStatus,
@@ -164,9 +165,55 @@ def list_reclip_requests(
     return requests.list_for_evidence(evidence_id)
 
 
+def settle_reclip_success(
+    *,
+    command_id: UUID,
+    evidence_id: str,
+    host_id: UUID,
+    evidence: EvidenceRepository,
+    requests: EvidenceReclipRequestRepository,
+) -> EvidenceReclipRequest:
+    """把一条已领取再切片命令的成功结果结案为请求 ``SUCCEEDED`` 并记录新引用。
+
+    新引用必须已登记、来源为 reclip、且属于同一主机与锚点，否则拒绝，不追加伪造代次。
+    """
+    request = requests.find_by_command_id(command_id)
+    if request is None:
+        raise EvidenceReclipRefusedError(404, "reclip_request_unregistered")
+    if request.host_id != host_id:
+        raise EvidenceReclipRefusedError(409, "reclip_request_host_mismatch")
+    reference = evidence.find(evidence_id)
+    if reference is None or reference.registration.origin is not EvidenceOrigin.RECLIP:
+        raise EvidenceReclipRefusedError(409, "reclip_result_unregistered")
+    if UUID(reference.registration.host_id) != host_id:
+        raise EvidenceReclipRefusedError(409, "reclip_result_host_mismatch")
+    if reference.registration.anchor != request.anchor:
+        raise EvidenceReclipRefusedError(409, "reclip_result_anchor_mismatch")
+    if request.status is ReclipRequestStatus.SUCCEEDED:
+        if request.result_evidence_id == evidence_id:
+            return request
+        raise EvidenceReclipRefusedError(409, "reclip_request_conflict")
+    if request.status is ReclipRequestStatus.FAILED:
+        raise EvidenceReclipRefusedError(409, "reclip_request_conflict")
+    if not requests.mark_succeeded(request.request_id, result_evidence_id=evidence_id):
+        current = requests.find(request.request_id)
+        if (
+            current is not None
+            and current.status is ReclipRequestStatus.SUCCEEDED
+            and current.result_evidence_id == evidence_id
+        ):
+            return current
+        raise EvidenceReclipRefusedError(409, "reclip_request_conflict")
+    updated = requests.find(request.request_id)
+    if updated is None:
+        raise RuntimeError("reclip request disappeared after success settlement")
+    return updated
+
+
 __all__ = [
     "EvidenceReclipRefusedError",
     "create_reclip_request",
     "list_reclip_requests",
     "reclip_availability",
+    "settle_reclip_success",
 ]

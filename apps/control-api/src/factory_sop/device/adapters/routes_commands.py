@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, Self, cast
 from uuid import UUID
 
@@ -18,6 +18,8 @@ from factory_sop.auth.api import Authorized, Permission, needs
 from factory_sop.device.adapters import route_support
 from factory_sop.device.adapters.dependencies import connectors, hosts, pending_commands
 from factory_sop.device.api import (
+    COMMAND_CLAIM_TOKEN_HEADER,
+    COMMAND_LEASE_DURATION,
     INFERENCE_HOST_ID_HEADER,
     INFERENCE_HOST_NONCE_HEADER,
     INFERENCE_HOST_SIGNATURE_HEADER,
@@ -71,11 +73,8 @@ _EDGE_RESPONSES: ProblemResponses = {
     409: route_support._CONFLICT_RESPONSES[409],
 }
 
-# 领取租约只覆盖一次有限的真实设备请求; 过期后由 PostgreSQL 适配器回收为 pending。
-COMMAND_LEASE_DURATION = timedelta(minutes=5)
 # 旧 bearer 头仅保留为可选兼容输入，不参与认证，也不写入中心。
 INFERENCE_HOST_TOKEN_HEADER = "X-Inference-Host-Token"
-COMMAND_CLAIM_TOKEN_HEADER = "X-Command-Claim-Token"
 
 
 class PendingCommandView(BaseModel):

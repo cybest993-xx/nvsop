@@ -8,14 +8,20 @@ from collections.abc import Callable, Mapping
 from nvsop_contracts import (
     ConnectionTestClaim,
     ConnectionTestResult,
+    ReclipEvidenceClaim,
+    ReclipEvidenceResult,
     connection_test_claim_from_wire,
     connection_test_result_to_wire,
+    reclip_evidence_claim_from_wire,
+    reclip_evidence_result_to_wire,
 )
 
 from edge_runtime.center_client import CenterClient, CenterResponse, CenterUnreachableError
 from edge_runtime.supervisor.delegated_commands import CommandTransport
+from edge_runtime.supervisor.reclip import ReclipCommandTransport
 
 COMMAND_CLAIM_TOKEN_HEADER = "X-Command-Claim-Token"
+RECLIP_CLAIM_PATH = "/api/v1/device-commands/reclip/next"
 
 
 class CommandTransportError(RuntimeError):
@@ -71,8 +77,53 @@ class HttpCommandTransport(CommandTransport):
             raise CommandTransportError("中心命令接口暂时不可达") from error
 
 
+class HttpReclipCommandTransport(ReclipCommandTransport):
+    """通过中心专用再切片端点领取和回报; 生产默认不挂载该端点 (S038 边界)。"""
+
+    def __init__(self, *, client: CenterClient) -> None:
+        self._client = client
+
+    def claim_next(self) -> ReclipEvidenceClaim | None:
+        response = self._call(lambda: self._client.get(RECLIP_CLAIM_PATH))
+        if response.status == 204:
+            return None
+        if response.status != 200:
+            raise CommandTransportError("中心领取再切片命令失败", status=response.status)
+        try:
+            document = json.loads(response.body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise CommandTransportError("中心再切片领取响应不是有效 JSON") from error
+        if not isinstance(document, Mapping):
+            raise CommandTransportError("中心再切片领取响应不是对象")
+        try:
+            return reclip_evidence_claim_from_wire(document)
+        except ValueError as error:
+            raise CommandTransportError("中心再切片领取响应不符合委托命令契约") from error
+
+    def report(self, claim: ReclipEvidenceClaim, result: ReclipEvidenceResult) -> None:
+        path = f"/api/v1/device-commands/{claim.command.command_id}/reclip-result"
+        response = self._call(
+            lambda: self._client.post(
+                path,
+                reclip_evidence_result_to_wire(result),
+                headers={COMMAND_CLAIM_TOKEN_HEADER: claim.claim_token},
+            )
+        )
+        if response.status != 200:
+            raise CommandTransportError("中心再切片回报失败", status=response.status)
+
+    @staticmethod
+    def _call(send: Callable[[], CenterResponse]) -> CenterResponse:
+        try:
+            return send()
+        except CenterUnreachableError as error:
+            raise CommandTransportError("中心再切片命令接口暂时不可达") from error
+
+
 __all__ = [
     "COMMAND_CLAIM_TOKEN_HEADER",
+    "RECLIP_CLAIM_PATH",
     "CommandTransportError",
     "HttpCommandTransport",
+    "HttpReclipCommandTransport",
 ]

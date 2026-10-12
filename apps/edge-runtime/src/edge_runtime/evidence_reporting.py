@@ -15,6 +15,24 @@ from edge_runtime.local_state import LocalState
 REGISTRATION_PATH = "/api/v1/evidence/registrations"
 
 
+def register_evidence_payloads(
+    client: CenterClient, payloads: tuple[dict[str, object], ...]
+) -> None:
+    """逐个登记引用并校验中心确认; 任一失败即抛出, 保留本机待办与媒体 (S034/S038)。"""
+    for payload in payloads:
+        response = client.post(REGISTRATION_PATH, payload)
+        if response.status not in (200, 201):
+            raise ValueError(f"center registration rejected: HTTP {response.status}")
+        ack = json.loads(response.body)
+        if (
+            not isinstance(ack, dict)
+            or ack.get("accepted") is not True
+            or ack.get("evidence_id") != payload["evidence_id"]
+            or ack.get("status") != "available"
+        ):
+            raise ValueError("center did not confirm the registered reference")
+
+
 class EvidenceReferenceReconciler:
     """从 SQLite 本机积压跨工位上报, 丢确认后依靠中心稳定 ID 幂等对账。"""
 
@@ -66,20 +84,7 @@ class EvidenceReferenceReconciler:
                         station_id=station_id,
                         directory=self._directory,
                     )
-                    for payload in payloads:
-                        response = self._client.post(REGISTRATION_PATH, payload)
-                        if response.status not in (200, 201):
-                            raise ValueError(
-                                f"center registration rejected: HTTP {response.status}"
-                            )
-                        ack = json.loads(response.body)
-                        if (
-                            not isinstance(ack, dict)
-                            or ack.get("accepted") is not True
-                            or ack.get("evidence_id") != payload["evidence_id"]
-                            or ack.get("status") != "available"
-                        ):
-                            raise ValueError("center did not confirm the registered reference")
+                    register_evidence_payloads(self._client, payloads)
                     if station.mark_evidence_registered(
                         pending.queue_id, at=now, expected_media_results=pending.media_results
                     ):
@@ -101,4 +106,4 @@ class EvidenceReferenceReconciler:
                 sleep(0.05)
 
 
-__all__ = ["EvidenceReferenceReconciler"]
+__all__ = ["REGISTRATION_PATH", "EvidenceReferenceReconciler", "register_evidence_payloads"]

@@ -118,6 +118,7 @@ class SseStationInputSource(StationInputSource):
         self._timeout = timeout
         self._events: Queue[SupervisorInput | _Disconnected] = Queue(maxsize=queue_size)
         self._reader: Thread | None = None
+        self._lifecycle_lock = Lock()
         self._closed = False
         self._ended = False
         self._next_retry_at = 0.0
@@ -134,9 +135,11 @@ class SseStationInputSource(StationInputSource):
         self, *, timeout: float | None
     ) -> SupervisorInput | ProvenancedSupervisorInput | InputWaitExpired | None:
         """在核心 deadline 到达时返回 None, 而不是阻塞在网络读取上。"""
-        if self._closed:
-            return None
-        if self._reader is None:
+        with self._lifecycle_lock:
+            if self._closed:
+                return None
+            reader_started = self._reader is not None
+        if not reader_started:
             if not self._wait_for_retry(timeout):
                 return None if self._closed else InputWaitExpired()
             self._start_reader()
@@ -150,8 +153,9 @@ class SseStationInputSource(StationInputSource):
                 return InputWaitExpired()
             return InputWaitExpired()
         if isinstance(arriving, _Disconnected):
-            if not self._closed:
-                self._reader = None
+            with self._lifecycle_lock:
+                if not self._closed:
+                    self._reader = None
             self._timeout_reported = False
             if self._closed:
                 return None
@@ -176,7 +180,10 @@ class SseStationInputSource(StationInputSource):
 
     def close(self) -> None:
         """关闭当前连接并禁止后续重连。"""
-        self._closed = True
+        # 与 reader 启动共用生命周期锁: close 只可能拿到已成功 start 的 reader。
+        with self._lifecycle_lock:
+            self._closed = True
+            reader = self._reader
         self._ended = True
         self._retry_wakeup.set()
         self._timeout_reported = False
@@ -185,12 +192,13 @@ class SseStationInputSource(StationInputSource):
         except Full:
             self._discard_events()
             self._events.put_nowait(_Disconnected(StreamFact.STREAM_ENDED))
-        reader = self._reader
+        # join 与网络读取都在锁外, 避免 close 等待 reader 时阻塞启动路径。
         if reader is not None and reader is not current_thread():
             reader.join(timeout=self._timeout + 0.1)
             if reader.is_alive():
                 raise RuntimeError("station SSE reader did not stop after close")
-            self._reader = None
+            with self._lifecycle_lock:
+                self._reader = None
 
     def _wait_for_retry(self, timeout: float | None) -> bool:
         delay = max(0.0, self._next_retry_at - monotonic())
@@ -203,9 +211,13 @@ class SseStationInputSource(StationInputSource):
         return not self._closed
 
     def _start_reader(self) -> None:
-        reader = Thread(target=self._read_stream, name="edge-sse-reader", daemon=True)
-        self._reader = reader
-        reader.start()
+        # start 成功后才发布 reader: 失败不留未启动指针, 已关闭后不再新启动。
+        with self._lifecycle_lock:
+            if self._closed:
+                return
+            reader = Thread(target=self._read_stream, name="edge-sse-reader", daemon=True)
+            reader.start()
+            self._reader = reader
 
     def _read_stream(self) -> None:
         response: _SseResponse | None = None

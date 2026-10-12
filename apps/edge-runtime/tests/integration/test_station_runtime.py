@@ -581,6 +581,81 @@ class RealSseStationInputSourceTest(unittest.TestCase):
             self.assertFalse(reader.is_alive())
             self.assertEqual([None], result)
 
+    def test_close_does_not_join_a_reader_whose_start_is_still_pending(self) -> None:
+        """close 与懒启动并发: 成功 start 前 reader 不应对 close 可见。"""
+        with _sse_server([b"data: [DONE]\n\n"]) as url:
+            source = SseStationInputSource(
+                inference_url=url,
+                request_body={"stream": True},
+                timeout=1.0,
+            )
+            start_pending = Event()
+            allow_start = Event()
+
+            class _PausingStartThread(threading.Thread):
+                def start(self) -> None:
+                    start_pending.set()
+                    # 有界等待是 deadlock guard: 超时即测试错误, 不能静默放行真实 start。
+                    if not allow_start.wait(5.0):
+                        raise AssertionError("test never released the paused reader start")
+                    super().start()
+
+            input_errors: list[BaseException] = []
+            close_errors: list[BaseException] = []
+            close_finished = Event()
+
+            def read_input() -> None:
+                try:
+                    source.next_input(timeout=None)
+                except BaseException as error:
+                    input_errors.append(error)
+
+            def close_source() -> None:
+                try:
+                    source.close()
+                except BaseException as error:
+                    close_errors.append(error)
+                finally:
+                    close_finished.set()
+
+            input_thread = threading.Thread(target=read_input, daemon=True)
+            closer = threading.Thread(target=close_source, daemon=True)
+            closer_started = False
+            finished_before_release = False
+            try:
+                with patch("edge_runtime.station_runtime.Thread", _PausingStartThread):
+                    input_thread.start()
+                    self.assertTrue(start_pending.wait(5.0), "reader start never paused")
+                    closer.start()
+                    closer_started = True
+                    # base: closer 立即 join 未 start 的 reader 并失败; 修复后: 被生命周期锁串行化。
+                    finished_before_release = close_finished.wait(0.5)
+                    allow_start.set()
+            finally:
+                allow_start.set()
+                if closer_started:
+                    closer.join(timeout=5.0)
+                input_thread.join(timeout=5.0)
+                source.close()
+            self.assertEqual([], close_errors)
+            self.assertFalse(finished_before_release)
+            self.assertFalse(closer.is_alive())
+            self.assertFalse(input_thread.is_alive())
+            self.assertEqual([], input_errors)
+            self.assertTrue(source.ended)
+
+    def test_close_before_first_input_never_starts_a_reader(self) -> None:
+        """close 先发生时, 后续 next_input 不再启动或重连 reader。"""
+        with _sse_server([]) as url:
+            source = SseStationInputSource(
+                inference_url=url,
+                request_body={"stream": True},
+                timeout=1.0,
+            )
+            source.close()
+            self.assertIsNone(source.next_input(timeout=0.1))
+            self.assertEqual([], _SseHandler.request_bodies)
+
     def test_close_is_bounded_when_real_http_sse_never_finishes_a_line(self) -> None:
         with _trickling_sse_server() as url:
             source = SseStationInputSource(

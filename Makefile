@@ -7,7 +7,7 @@
 	web-install web-format web-lint web-type web-unit web-e2e web-e2e-whep web-build \
 	dev-setup dev dev-status dev-logs dev-refresh dev-smoke dev-test-ui dev-down
 
-.PHONY: annotation-lock annotation-lock-check annotation-image
+.PHONY: annotation-lock annotation-lock-check annotation-image training-lock training-lock-check training-build-inputs
 .PHONY: task-cleanup task-abandon
 
 LOCAL_STATE := $(CURDIR)/.nvsop
@@ -117,7 +117,7 @@ issue-check:
 UV ?= $(or $(shell command -v uv 2>/dev/null),$(HOME)/.local/bin/uv)
 
 # A dependency change and its lockfile update land together. Frozen checks refuse stale locks.
-lockfile: annotation-lock-check
+lockfile: annotation-lock-check training-lock-check
 	$(UV) lock --check
 
 # 标注解释器与根工作区隔离，锁由基座 requirements 和部署约束共同生成。
@@ -126,6 +126,15 @@ annotation-lock:
 
 annotation-lock-check:
 	python3 scripts/annotation_dependencies.py --uv "$(UV)"
+
+training-lock:
+	python3 scripts/training_dependencies.py --uv "$(UV)" --write
+
+training-lock-check:
+	python3 scripts/training_dependencies.py --uv "$(UV)"
+
+training-build-inputs: training-lock-check
+	python3 scripts/training_dependencies.py --prepare
 
 annotation-image: sync annotation-lock-check
 	$(PYTHON) scripts/test_annotation_image.py $(if $(NVSOP_DEV_BUILD_NETWORK),--build-network "$(NVSOP_DEV_BUILD_NETWORK)")

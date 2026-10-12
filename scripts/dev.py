@@ -1558,8 +1558,24 @@ def build_target(
     environment = runtime_environment(item, sha=sha, source=source, protocol=protocol)
     log_path = item.logs / f"build-{sha}.log"
     with log_path.open("wb") as log:
+        arguments = ["build", "--parallel"]
+        profiles = set(environment.get("COMPOSE_PROFILES", "").split(","))
+        if profiles & {"training-gpu", "*"}:
+            prepared = run_checked(
+                [sys.executable, str(source / "scripts/training_dependencies.py"), "--prepare"],
+                cwd=source,
+                env=environment,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                stop_event=stop_event,
+            )
+            if prepared.returncode != 0:
+                return None
+            # CUDA 扩展和 GPU 镜像构建串行；默认 core 构建保持原行为。
+            environment["COMPOSE_PARALLEL_LIMIT"] = "1"
+            arguments = ["build"]
         result = run_checked(
-            compose_command(item, "build", "--parallel", source=source),
+            compose_command(item, *arguments, source=source),
             cwd=source,
             env=environment,
             stdout=log,

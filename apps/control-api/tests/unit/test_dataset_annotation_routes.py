@@ -945,3 +945,60 @@ def test_legacy_split_is_async_and_video_access_redirects_to_separate_media_orig
         "detail": "RESOURCE_MISMATCH",
     }
     assert len(datasets.executions) == before_retry
+
+
+@pytest.mark.parametrize("service", ["augmentation", "vlm-training", "ddm-training", "evaluation"])
+def test_training_readiness_requires_dataset_view_at_gateway_usecase(service: str) -> None:
+    headers = {"X-Original-URI": f"/api/{service}/health/ready", "X-Original-Method": "GET"}
+    denied, _, _ = backend(permissions=frozenset({Permission.TEMPLATE_DRAFT_EDIT}))
+    assert (
+        denied.get(f"{API_PREFIX}/annotation/gateway-authorize", headers=headers).status_code == 403
+    )
+    allowed, _, _ = backend(permissions=frozenset({Permission.DATASET_VIEW}))
+    assert (
+        allowed.get(f"{API_PREFIX}/annotation/gateway-authorize", headers=headers).status_code
+        == 204
+    )
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "/api/augment%61tion/health/ready",
+        "/api%2faugmentation/health/ready",
+        "/api/augmentation/%2e/health/ready",
+        "/api/augmentation/debug/%2e%2e/health/ready",
+        "//api//augmentation//health//ready",
+        "/api/augmentation/health/ready#suffix",
+    ],
+)
+def test_gateway_checks_dataset_view_for_nginx_normalized_readiness_aliases(uri: str) -> None:
+    headers = {"X-Original-URI": uri, "X-Original-Method": "GET"}
+    denied, _, _ = backend(permissions=frozenset({Permission.TEMPLATE_DRAFT_EDIT}))
+    assert (
+        denied.get(f"{API_PREFIX}/annotation/gateway-authorize", headers=headers).status_code == 403
+    )
+    allowed, _, _ = backend(permissions=frozenset({Permission.DATASET_VIEW}))
+    assert (
+        allowed.get(f"{API_PREFIX}/annotation/gateway-authorize", headers=headers).status_code
+        == 204
+    )
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        f"/api/v1/training%2ddatasets/{DATASET_ID}/members/{UUID(int=1000)}",
+        "/api/annot%61tion/api/v1/videos/not-a-context/download",
+        "/api/annotation/%2e/api/v1/videos/not-a-context/download",
+    ],
+)
+def test_gateway_normalizes_resource_scope_as_well_as_permission(uri: str) -> None:
+    client, _, _ = backend(permissions=frozenset({Permission.DATASET_VIEW}))
+    assert (
+        client.get(
+            f"{API_PREFIX}/annotation/gateway-authorize",
+            headers={"X-Original-URI": uri, "X-Original-Method": "GET"},
+        ).status_code
+        == 403
+    )

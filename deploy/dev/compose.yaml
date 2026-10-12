@@ -279,6 +279,138 @@ services:
       timeout: 5s
       retries: 30
 
+  augmentation:
+    profiles: [training-gpu]
+    image: nvsop-dev-main/augmentation:${NVSOP_TARGET_SHA:-local}
+    build:
+      network: ${NVSOP_DEV_BUILD_NETWORK:-default}
+      context: ${NVSOP_SOURCE_DIR:-.}/.nvsop/artifacts/training-build/augmentation
+      args:
+        MAX_JOBS: "1"
+    depends_on:
+      training-objects-install:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_HOST: center-db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: training
+      POSTGRES_USER: training_runtime
+      POSTGRES_PASSWORD_FILE: /run/secrets/training-runtime-password
+      SERVICE_PORT: "32070"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    secrets:
+      - training-runtime-password
+    healthcheck:
+      test: ["CMD", "curl", "--noproxy", "*", "-fsS", "http://127.0.0.1:32070/health/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  vlm-training:
+    profiles: [training-gpu]
+    image: nvsop-dev-main/vlm-training:${NVSOP_TARGET_SHA:-local}
+    build:
+      network: ${NVSOP_DEV_BUILD_NETWORK:-default}
+      context: ${NVSOP_SOURCE_DIR:-.}/.nvsop/artifacts/training-build/cr
+      args:
+        MAX_JOBS: "1"
+    depends_on:
+      training-objects-install:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_HOST: center-db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: training
+      POSTGRES_USER: training_runtime
+      POSTGRES_PASSWORD_FILE: /run/secrets/training-runtime-password
+      SERVICE_PORT: "32080"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    secrets:
+      - training-runtime-password
+    healthcheck:
+      test: ["CMD", "curl", "--noproxy", "*", "-fsS", "http://127.0.0.1:32080/health/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  ddm-training:
+    profiles: [training-gpu]
+    image: nvsop-dev-main/ddm-training:${NVSOP_TARGET_SHA:-local}
+    build:
+      network: ${NVSOP_DEV_BUILD_NETWORK:-default}
+      context: ${NVSOP_SOURCE_DIR:-.}/.nvsop/artifacts/training-build/ddm
+      args:
+        MAX_JOBS: "1"
+    depends_on:
+      training-objects-install:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_HOST: center-db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: training
+      POSTGRES_USER: training_runtime
+      POSTGRES_PASSWORD_FILE: /run/secrets/training-runtime-password
+      SERVICE_PORT: "32090"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    secrets:
+      - training-runtime-password
+    healthcheck:
+      test: ["CMD", "curl", "--noproxy", "*", "-fsS", "http://127.0.0.1:32090/health/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  evaluation:
+    profiles: [training-gpu]
+    image: nvsop-dev-main/evaluation:${NVSOP_TARGET_SHA:-local}
+    build:
+      network: ${NVSOP_DEV_BUILD_NETWORK:-default}
+      context: ${NVSOP_SOURCE_DIR:-.}/.nvsop/artifacts/training-build/evaluation
+      args:
+        MAX_JOBS: "1"
+    depends_on:
+      training-objects-install:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_HOST: center-db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: training
+      POSTGRES_USER: training_runtime
+      POSTGRES_PASSWORD_FILE: /run/secrets/training-runtime-password
+      SERVICE_PORT: "32100"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    secrets:
+      - training-runtime-password
+    healthcheck:
+      test: ["CMD", "curl", "--noproxy", "*", "-fsS", "http://127.0.0.1:32100/health/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
   annotation-frontend:
     image: nvsop-dev-main/annotation-frontend:${NVSOP_TARGET_SHA:-local}
     build:

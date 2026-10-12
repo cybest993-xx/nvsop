@@ -199,3 +199,18 @@ RestartSec=2
 maintenance loop 按 `command_poll_interval_seconds` 继续拉取。相同 revision + 相同 effective digest 的元数据刷新不重组 runtime；revision 改变时即使 effective digest 相同，也按新的 assignment 身份完成切换/确认。中心不可达不会进入实时判定进度。历史 SQLite 中已确认的配置 v1/v2 只在 `edge_runtime.local_state` 内归一化读取；共享 HTTP 契约不再接受旧 generation，下一次成功确认始终写当前格式。
 
 因此配置变更按所有权分两条路径：中心拥有的拓扑、模板、版本、点位和运行参数通过中心数据与配置同步生效；本机推理地址、请求体、adapter profile、设备秘密等主机本地信息通过受管本地 JSON/secret 文件变更，并按部署流程重启或重新装配。不要直接修改 SQLite 来制造确认状态。
+
+## 五个训练服务统一入口（S068）
+
+[`deploy/dev/compose.yaml`](../../deploy/dev/compose.yaml) 是部署组合入口：原标注服务及四个原 Vendor FastAPI app 共享 `center-db/training`，以 `training_runtime` 运行，密码仅由 `training-runtime-password` secret 文件提供。四个新服务由标准 Compose `training-gpu` profile 显式启用；默认 core 构建/启动仍只运行原 CPU 服务，不运行四套 CUDA 构建或要求 NVIDIA 设备。新服务不发布宿主端口，也不是 gateway/worker 的健康前置条件。GPU 镜像保留原计算源码、CUDA 构建和 GPU 设备请求；仅部署接入不代表训练业务已开放。
+
+业务网关只开放下列四个 **GET**，经原会话授权链要求 `dataset.dataset.view`：
+
+- `/api/augmentation/health/ready` → `augmentation:32070`
+- `/api/vlm-training/health/ready` → `vlm-training:32080`
+- `/api/ddm-training/health/ready` → `ddm-training:32090`
+- `/api/evaluation/health/ready` → `evaluation:32100`
+
+每个 readiness 在原 app 进程查询原 DB engine；DB 不可达返回 503。Nginx 运行时解析固定服务名，进程/DNS 不可用返回真实网关失败，不阻塞网关启动、不回退健康响应。上述四前缀的其他路径（含原静态 health、debug、clear 和训练写操作）仍拒绝。浏览器不能指定目标 host 或上游 URL。React 标注、媒体授权、源视频上传与结果读取继续使用既有入口，没有新增通用视频代理。
+
+四环境的冻结、构建和 CPU 部署证据命令及限制见[标注组合证据运行说明](annotation-evidence.md#训练环境冻结与统一入口验证s068)。GPU/完整生产安装兼容性、浏览器及离线制品验证不由 CPU readiness 证据替代。

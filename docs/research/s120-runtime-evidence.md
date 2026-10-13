@@ -7,6 +7,17 @@ Status: **dated evidence**（记录受控环境实测，不定义产品要求，
 - 本轮代码提交：`38c903e49cfdb8246bea726f9ae74af38a6bdc04`（source commit；本记录随后单独提交，source 未再改动）。
 - 历史产品基线：`main@079af6854deaffd4fad67dcb06f43e8f8fddaff2`（base79，CSP 阻塞轮）与 `main@d67e9fa0ef37678f1a11e8f0b23372218d97ce5d`；其结论只作历史，不与本轮混用。
 
+## 交付刷新（2026-10-13，product base `main@1561ff3…`）
+
+对已接受 main 的无冲突快进已在交付前完成，本段是同一 candidate 的交付刷新记录。
+
+- 刷新日期：2026-10-13（`date -u` 确认）。
+- 产品基线：`main@1561ff3e2dd1d2f822e2be88455dd55f6860a14e`（[PR #490](https://github.com/cybest993-xx/nvsop/pull/490)，仅 dataset 变更）。
+- merge candidate：`a3190147061635ef636b719520ed4aaf6244169b`（原生 `git merge --no-edit --no-overwrite-ignore origin/main`，`merge-tree` 预检退出 0，无冲突；保留原 `38c903e`/`6d2510b` 提交，未改写历史）。
+- source hash 不变：py `7114657bbca118ab5af2d29e813748284be4ea23d2e3df777de9e35b9b9e3318`、spec `7a218a50db7ab489494dcde2a8fda67a9d33a0ae188ff806124ec56935af686c`、fixture `78b067bc9f90322ee15c5b44f5e799d6ba23f1c6f5635603341aae7aa9ad27ae`。
+- 新基线验证：`NVSOP_EVIDENCE_BROWSER=1 PYTHONPATH=apps/control-api/src:apps/edge-runtime/src:packages/contracts/src .nvsop/venv/bin/pytest tests/system/test_s120_runtime_evidence.py -v -p no:cacheprovider` exit 0，`3 passed in 80.77s`（AC1/AC2/AC3 各 PASSED；AC3 内 live+offline 浏览器各 `1 passed`）。raw：`.nvsop/artifacts/s120/refresh-1561ff3-1vuokwpc/pytest-s120.log`、`playwright.live.stdout`、`playwright.offline.stdout`。
+- 复用理由（准确）：新 main 仅改 `apps/control-api/src/factory_sop/dataset/adapters/storage.py`、`api.py`、`usecases/usage.py` 与两个 dataset 单测，与 S120 共享网关夹具/monitor/evidence/edge/ui/deploy/contracts/locks/CI 及公开 app composition 无关，source/config/deps 未变；故复用 622 基线的完整 `make check` exit 0、12 个共享夹具回归 pass 及既有独立评审。本轮**未**重跑完整 `make check`/fixture 12，也未 `make sync`；`make web-build` 产物（`.nvsop/artifacts/web/dist`）按 source/config/deps 未变复用。
+
 ## 目的与范围
 
 验证推理机本地证据→主机签名上报→中心 monitor 镜像/SSE→授权读取→人工复核的跨模块归属。

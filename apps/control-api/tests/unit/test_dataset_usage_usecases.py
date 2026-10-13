@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from types import SimpleNamespace
 from typing import BinaryIO, cast
 from uuid import UUID
@@ -1633,7 +1633,8 @@ def test_materialize_vlm_input_is_consumed_by_original_reader_without_manifest(
     contract_spec = importlib.util.spec_from_file_location(
         "nvsop_vlm_contract_stubs", contract_path
     )
-    assert contract_spec is not None and contract_spec.loader is not None
+    assert contract_spec is not None
+    assert contract_spec.loader is not None
     contract = importlib.util.module_from_spec(contract_spec)
     contract_spec.loader.exec_module(contract)
     captured: dict[str, object] = {}
@@ -1643,7 +1644,8 @@ def test_materialize_vlm_input_is_consumed_by_original_reader_without_manifest(
         reader_spec = importlib.util.spec_from_file_location(
             "nvsop_materialized_vlm_reader", contract.MODULE_PATH
         )
-        assert reader_spec is not None and reader_spec.loader is not None
+        assert reader_spec is not None
+        assert reader_spec.loader is not None
         reader = importlib.util.module_from_spec(reader_spec)
         reader_spec.loader.exec_module(reader)
         config = SimpleNamespace(

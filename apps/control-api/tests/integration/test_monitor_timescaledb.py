@@ -71,7 +71,7 @@ def _health_compression_job_and_chunk(engine: Engine) -> tuple[int, str]:
     return int(job_id), str(chunk)
 
 
-def _health_chunk_is_columnstore(engine: Engine, chunk: str) -> bool:
+def _chunk_is_columnstore(engine: Engine, chunk: str) -> bool:
     """目标 chunk 是否为原生 columnstore；按限定名定位，不依赖 chunk 顺序。"""
     with engine.connect() as connection:
         compressed = connection.scalar(
@@ -81,11 +81,25 @@ def _health_chunk_is_columnstore(engine: Engine, chunk: str) -> bool:
             ),
             {"chunk": chunk},
         )
-    assert compressed is not None, "health chunk missing"
+    assert compressed is not None, "target chunk missing"
     return bool(compressed)
 
 
-def _health_native_advisory_holders(engine: Engine, job_id: int) -> list[int]:
+def _native_job_ids(engine: Engine) -> list[int]:
+    """0051 拥有的三张事实表原生压缩策略 job。"""
+    with engine.connect() as connection:
+        return [
+            int(job_id)
+            for job_id in connection.execute(
+                text(
+                    "SELECT job_id FROM timescaledb_information.jobs "
+                    "WHERE proc_name = 'policy_compression' ORDER BY job_id"
+                )
+            ).scalars()
+        ]
+
+
+def _native_advisory_holders(engine: Engine, job_id: int) -> list[int]:
     """pg_locks 中持该 job 原生 advisory 的 pid；field4 落在 objsubid 列。"""
     with engine.connect() as connection:
         return [
@@ -100,13 +114,94 @@ def _health_native_advisory_holders(engine: Engine, job_id: int) -> list[int]:
         ]
 
 
+def _native_run_succeeded(engine: Engine, job_id: int) -> bool:
+    """该策略是否已成功跑完一次；运行期间 job_stats 尚无成功计数，失败运行不能算"已落地"
+    （失败会保留 retry_period 并可能在准备阶段再次触发）。"""
+    with engine.connect() as connection:
+        succeeded = connection.scalar(
+            text(
+                "SELECT total_successes >= 1 FROM timescaledb_information.job_stats "
+                "WHERE job_id = :job"
+            ),
+            {"job": job_id},
+        )
+    return bool(succeeded)
+
+
+def _native_job_report(engine: Engine, job_id: int) -> str:
+    """该 job 的真实状态：catalog 行、job_stats、job_errors 与 advisory 持有者。失败结论必须能区分
+    "调度未启动"、"运行跳过 chunk"与"运行失败"。"""
+    with engine.connect() as connection:
+        job = connection.execute(
+            text(
+                "SELECT scheduled, next_start::text, retry_period::text, "
+                "config ->> 'compress_after' FROM timescaledb_information.jobs WHERE job_id = :job"
+            ),
+            {"job": job_id},
+        ).one_or_none()
+        stats = connection.execute(
+            text(
+                "SELECT total_runs, total_successes, total_failures, job_status, "
+                "last_run_status, last_run_started_at::text "
+                "FROM timescaledb_information.job_stats WHERE job_id = :job"
+            ),
+            {"job": job_id},
+        ).one_or_none()
+        errors = (
+            connection.execute(
+                text(
+                    "SELECT err_message FROM timescaledb_information.job_errors WHERE job_id = :job"
+                ),
+                {"job": job_id},
+            )
+            .scalars()
+            .all()
+        )
+        holders = _native_advisory_holders(engine, job_id)
+    return (
+        f"job_id={job_id} catalog={tuple(job) if job is not None else None} "
+        f"stats={tuple(stats) if stats is not None else None} errors={list(errors)} "
+        f"advisory_holders={holders}"
+    )
+
+
+def _wait_for_native_compression_runs(engine: Engine, *, timeout: float = 30.0) -> None:
+    """等 0051 三条策略的首轮自动运行成功结束并释放 advisory。0051 建策略时 next_start 即为到期，
+    scheduler 会在数秒内自行运行一次并压缩所有到期 chunk；不等它落地，随后对 chunk 的原生转换、
+    触发或降级都会与这次自动运行争同一个 chunk（重复压缩错误或锁序死锁）。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        jobs = _native_job_ids(engine)
+        if (
+            len(jobs) == len(FACTS)
+            and all(_native_run_succeeded(engine, job) for job in jobs)
+            and not any(_native_advisory_holders(engine, job) for job in jobs)
+        ):
+            return
+        time.sleep(0.1)
+    pytest.fail(
+        "native compression policies did not complete their first scheduled run: "
+        + "; ".join(_native_job_report(engine, job) for job in _native_job_ids(engine))
+    )
+
+
+def _restore_chunk_to_rowstore(engine: Engine, chunk: str) -> None:
+    """把目标 chunk 原生还原为 rowstore；仅在实际已压缩时转换，重复转换会被 TimescaleDB 拒绝。"""
+    if not _chunk_is_columnstore(engine, chunk):
+        return
+    with engine.begin() as connection:
+        connection.execute(
+            text("CALL convert_to_rowstore(CAST(:chunk AS regclass))"), {"chunk": chunk}
+        )
+
+
 def _wait_for_blocked_health_worker(
     engine: Engine, job_id: int, chunk: str, *, timeout: float = 30.0
 ) -> None:
     """有界等待真实 scheduler 启动的 health worker 持 job advisory 且阻塞在该 chunk。"""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        holders = _health_native_advisory_holders(engine, job_id)
+        holders = _native_advisory_holders(engine, job_id)
         if holders:
             with engine.connect() as connection:
                 waiting = connection.scalar(
@@ -120,7 +215,9 @@ def _wait_for_blocked_health_worker(
                 return
         time.sleep(0.1)
     pytest.fail(
-        "health native compression worker did not hold its job advisory while waiting on the chunk"
+        "health native compression worker did not hold its job advisory while waiting on the "
+        f"chunk {chunk}: columnstore={_chunk_is_columnstore(engine, chunk)} "
+        f"{_native_job_report(engine, job_id)}"
     )
 
 
@@ -139,7 +236,7 @@ def _wait_for_advisory_release(engine: Engine, job_id: int, *, timeout: float = 
     """有界等待 worker 退出并释放 job advisory，避免 teardown 时仍有 session 占用数据库。"""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if not _health_native_advisory_holders(engine, job_id):
+        if not _native_advisory_holders(engine, job_id):
             return True
         time.sleep(0.1)
     return False
@@ -357,14 +454,20 @@ def test_native_columnstore_preserves_reports_identity_and_sse_cursor(
 ) -> None:
     """S021 AC2：真实 chunk 压缩后仍可读、幂等入库，SSE 序号持续且引用身份不被删除。"""
     engine, ids, sequences = migration.engine, migration.ids, migration.sequences
-    with engine.begin() as connection:
-        for fact in FACTS:
+    # 策略首轮自动运行可能已把这三张表的 chunk 压过；先等它落地，避免与本次原生转换争同一 chunk。
+    _wait_for_native_compression_runs(engine)
+    for fact in FACTS:
+        with engine.connect() as connection:
             chunk = connection.scalar(text(f"SELECT tableoid::regclass::text FROM {fact} LIMIT 1"))
-            assert chunk is not None
-            connection.execute(
-                text("CALL convert_to_columnstore(CAST(:chunk AS regclass))"),
-                {"chunk": chunk},
-            )
+        assert chunk is not None
+        if not _chunk_is_columnstore(engine, chunk):
+            with engine.begin() as connection:
+                connection.execute(
+                    text("CALL convert_to_columnstore(CAST(:chunk AS regclass))"),
+                    {"chunk": chunk},
+                )
+        assert _chunk_is_columnstore(engine, chunk)
+        with engine.connect() as connection:
             assert (
                 connection.scalar(
                     text(
@@ -465,41 +568,20 @@ def test_native_policies_use_existing_configured_age_on_upgrade(
     assert all(job.age == timedelta(days=2) for job in jobs)
 
 
-@pytest.mark.parametrize("initial_storage", ["rowstore", "columnstore"])
 def test_downgrade_does_not_deadlock_against_running_native_compression(
-    migration: MigrationFixture, initial_storage: str
+    migration: MigrationFixture,
 ) -> None:
     """CI 37884171294：真实 scheduler 启动的 health worker 持 job advisory 等 chunk 时，降级删策略
-    不得形成 advisory↔bgw_job_stat 死锁。旧实现同一事务连续 remove 会稳定复现该死锁。"""
+    不得形成 advisory↔bgw_job_stat 死锁。旧实现同一事务连续 remove 会稳定复现该死锁。
+
+    0051 建策略时 next_start 即为到期，scheduler 会在数秒内自行压缩所有到期 chunk；本测试先等这次
+    运行结束，再把目标 chunk 还原为 rowstore 并持锁触发唯一一次竞争运行，不与自动调度抢时序。"""
     engine, config = migration.engine, migration.configuration
     job_id, chunk = _health_compression_job_and_chunk(engine)
 
-    # 策略已跑过时目标 chunk 可能已是 columnstore；预压缩场景显式种下该状态。
-    if initial_storage == "columnstore":
-        with engine.begin() as connection:
-            connection.execute(
-                text("CALL convert_to_columnstore(CAST(:chunk AS regclass))"),
-                {"chunk": chunk},
-            )
-        assert _health_chunk_is_columnstore(engine, chunk)
-
-    # 先关闭 job 并等在途 worker 退出，确保随后恢复 chunk 存储时不与压缩竞争。
-    with engine.connect() as connection:
-        connection = connection.execution_options(isolation_level="AUTOCOMMIT")
-        connection.execute(text("SELECT alter_job(:job, scheduled => false)"), {"job": job_id})
-    assert _wait_for_advisory_release(engine, job_id), (
-        "in-flight health worker did not release its job advisory"
-    )
-
-    # 无论初始是 rowstore 还是已被策略压过，都还原为 rowstore，使真实 worker 必然尝试压缩并阻塞。
-    with engine.begin() as connection:
-        connection.execute(
-            text("CALL convert_to_rowstore(CAST(:chunk AS regclass))"),
-            {"chunk": chunk},
-        )
-    assert not _health_chunk_is_columnstore(engine, chunk), (
-        "health chunk was not restored to rowstore"
-    )
+    _wait_for_native_compression_runs(engine)
+    _restore_chunk_to_rowstore(engine, chunk)
+    assert not _chunk_is_columnstore(engine, chunk), "health chunk was not restored to rowstore"
 
     # 持 health chunk 的 ACCESS EXCLUSIVE，使真实 worker 在压缩该 chunk 前停住，
     # 并持 native job advisory。
@@ -511,7 +593,7 @@ def test_downgrade_does_not_deadlock_against_running_native_compression(
         with engine.connect() as connection:
             connection = connection.execution_options(isolation_level="AUTOCOMMIT")
             connection.execute(
-                text("SELECT alter_job(:job, scheduled => true, next_start => now())"),
+                text("SELECT alter_job(:job, next_start => now())"),
                 {"job": job_id},
             )
             # alter_job 只改 catalog；SIGHUP 唤醒 scheduler 重读 next_start 并立即启动真实 worker。

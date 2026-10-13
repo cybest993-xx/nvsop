@@ -213,6 +213,43 @@ class PostgresJobRepository:
             now=now,
         )
 
+    def get_or_create_ddm_training(
+        self, *, dataset_id: UUID, command_id: UUID, now: datetime
+    ) -> ApplicationJob:
+        """为一条 DDM 训练命令创建或复用待派发任务。
+
+        S073/S074 安全派发就绪前，命令任务只在 PostgreSQL outbox 中保持 ``pending``；
+        这里登记提交后唤醒，但 dispatcher 会识别该类型并显式不投递，也不重开同一条
+        已失败命令（显式重试必须用新的命令身份）。
+        """
+        job_type = JobType.DATASET_DDM_TRAINING
+        existing = self._by_attempt_type(attempt_id=command_id, job_type=job_type)
+        if existing is not None:
+            self._remember_for_dispatch(existing.id)
+            return existing
+        candidate = ApplicationJob(
+            id=new_id(),
+            job_type=job_type,
+            status=JobStatus.PENDING,
+            member_id=dataset_id,
+            attempt_id=command_id,
+            dataset_id=dataset_id,
+            created_at=now,
+            updated_at=now,
+            failure_code=None,
+        )
+        try:
+            with self._session.begin_nested():
+                self.add(candidate)
+        except IntegrityError:
+            existing = self._by_attempt_type(attempt_id=command_id, job_type=job_type)
+            if existing is None:
+                raise
+            self._remember_for_dispatch(existing.id)
+            return existing
+        self._remember_for_dispatch(candidate.id)
+        return candidate
+
     def _get_or_create_dataset_task(
         self,
         *,
@@ -439,6 +476,8 @@ class PostgresJobRepository:
         return result.rowcount == 1
 
     def pending(self, *, limit: int) -> list[ApplicationJob]:
+        # held 类型（DDM 训练命令）由已知派发放行策略保留为 pending；扫描器在 ORDER/LIMIT
+        # 之前排除它，避免大量 held 行占满窗口并饿死后面可执行的任务。
         rows = self._session.scalars(
             select(ApplicationJobRow)
             .where(ApplicationJobRow.outbox_status == "pending")
@@ -447,6 +486,7 @@ class PostgresJobRepository:
                     (JobStatus.SUCCEEDED.value, JobStatus.FAILED.value, JobStatus.SUPERSEDED.value)
                 )
             )
+            .where(ApplicationJobRow.job_type != JobType.DATASET_DDM_TRAINING.value)
             .order_by(ApplicationJobRow.created_at, ApplicationJobRow.id)
             .limit(limit)
         ).all()
@@ -507,6 +547,15 @@ class PostgresUsageJobQueue:
         return self._repository.get_or_create_artifact(
             dataset_id=dataset_id,
             artifact_id=artifact_id,
+            now=now,
+        )
+
+    def get_or_create_ddm_training(
+        self, *, dataset_id: UUID, command_id: UUID, now: datetime
+    ) -> ApplicationJob:
+        return self._repository.get_or_create_ddm_training(
+            dataset_id=dataset_id,
+            command_id=command_id,
             now=now,
         )
 

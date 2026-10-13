@@ -32,6 +32,8 @@ from factory_sop.dataset.model import (
     ArtifactStatus,
     DatasetArtifact,
     DatasetMember,
+    DdmTrainingCommand,
+    DdmTrainingCommandStatus,
     TrainingDataset,
     UploadAttempt,
     UsageCheck,
@@ -699,6 +701,58 @@ class DatasetArtifactRow(Table):
             failure_detail=value.failure_detail,
             retryable=value.retryable,
             recovery_action=value.recovery_action,
+            job_id=value.job_id,
+            created_by=value.created_by,
+            created_at=value.created_at,
+            updated_at=value.updated_at,
+        )
+
+
+class DdmTrainingCommandRow(Table):
+    """已受理的 DDM 训练应用命令及其冻结负载。"""
+
+    __tablename__ = "dataset_ddm_training_command"
+    __table_args__ = (
+        UniqueConstraint("dataset_id", "idempotency_key"),
+        UniqueConstraint("job_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
+    dataset_id: Mapped[UUID] = mapped_column(
+        Uuid(), ForeignKey("dataset_training_dataset.id", ondelete="CASCADE"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(32))
+    idempotency_key: Mapped[str] = mapped_column(String(255))
+    request_digest: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB())
+    job_id: Mapped[UUID | None] = mapped_column(Uuid())
+    created_by: Mapped[UUID] = mapped_column(Uuid())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    def to_domain(self) -> DdmTrainingCommand:
+        return DdmTrainingCommand(
+            id=self.id,
+            dataset_id=self.dataset_id,
+            status=DdmTrainingCommandStatus(self.status),
+            idempotency_key=self.idempotency_key,
+            request_digest=self.request_digest,
+            payload=dict(self.payload),
+            job_id=self.job_id,
+            created_by=self.created_by,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+        )
+
+    @classmethod
+    def from_domain(cls, value: DdmTrainingCommand) -> DdmTrainingCommandRow:
+        return cls(
+            id=value.id,
+            dataset_id=value.dataset_id,
+            status=value.status.value,
+            idempotency_key=value.idempotency_key,
+            request_digest=value.request_digest,
+            payload=dict(value.payload),
             job_id=value.job_id,
             created_by=value.created_by,
             created_at=value.created_at,

@@ -75,7 +75,12 @@ class ArqJobDispatcher:
         """异步投递一个已提交任务；失败时保持本次 pending generation 可补投。"""
         expected_updated_at: datetime | None = None
         try:
-            function, expected_updated_at = self._worker_target(job_id)
+            target = self._worker_target(job_id)
+            if target is None:
+                # 已知延后类型（DDM 训练命令）：S073 安全派发就绪前不向 ARQ 投递，
+                # 也不把它误报为投递失败。
+                return
+            function, expected_updated_at = target
             accepted = await self._dispatch(
                 job_id,
                 function=function,
@@ -114,14 +119,18 @@ class ArqJobDispatcher:
         finally:
             await pool.close()
 
-    def _worker_target(self, job_id: UUID) -> tuple[str, datetime]:
-        """读取投递入口及其 pending generation 的 CAS 时间戳。"""
+    def _worker_target(self, job_id: UUID) -> tuple[str, datetime] | None:
+        """读取投递入口及其 pending generation 的 CAS 时间戳；延后类型返回 ``None``。"""
         if self._session_factory is None:
             raise RuntimeError("任务 dispatcher 未配置数据库 session factory")
         with self._session_factory() as session:
             job = PostgresJobRepository(session).by_id(job_id)
         if job is None:
             raise ValueError(f"任务不存在：{job_id}")
+        if job.job_type is JobType.DATASET_DDM_TRAINING:
+            # S073/S074 安全派发与结果登记就绪前，DDM 训练命令只保留 outbox 事实，
+            # 不注册、不投递可实际 start 的函数；命令仍为 pending 可被现有扫描器接管。
+            return None
         if job.job_type is JobType.DATASET_ANNOTATION_PREPARATION:
             return "prepare_annotation_context_job", job.updated_at
         if job.job_type is JobType.DATASET_ANNOTATION:

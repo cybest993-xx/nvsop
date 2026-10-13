@@ -14,6 +14,7 @@ from factory_sop.dataset.model import (
     AnnotationSubmission,
     DatasetArtifact,
     DatasetMember,
+    DdmTrainingCommand,
     TrainingDataset,
     UploadAttempt,
     UsageCheck,
@@ -234,4 +235,28 @@ class UsageDatasetRepository(DatasetRepository, Protocol):
 
     def save_artifact(self, value: DatasetArtifact, *, expected_updated_at: datetime) -> bool:
         """按执行租约写回制品。"""
+        ...
+
+
+class DdmTrainingCommandRepository(UsageDatasetRepository, Protocol):
+    """DDM 训练命令受理额外依赖的仓储方法，不扩张既有用途/制品测试 seam。"""
+
+    def add_ddm_training_command(self, value: DdmTrainingCommand) -> bool:
+        """按数据集范围的幂等键条件追加 DDM 训练命令；键已被并发占用时返回 ``False``。"""
+        ...
+
+    def ddm_training_command_by_idempotency(
+        self, *, dataset_id: UUID, idempotency_key: str
+    ) -> DdmTrainingCommand | None:
+        """按数据集范围的幂等键读取 DDM 训练命令。"""
+        ...
+
+    def ddm_training_command_by_id(self, command_id: UUID) -> DdmTrainingCommand | None:
+        """按命令身份读取 DDM 训练命令。"""
+        ...
+
+    def save_ddm_training_command(
+        self, value: DdmTrainingCommand, *, expected_updated_at: datetime
+    ) -> bool:
+        """只在租约仍匹配时绑定命令的 job 身份，防止过期写入覆盖获胜结果。"""
         ...

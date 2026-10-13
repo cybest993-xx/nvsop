@@ -26,6 +26,7 @@ from factory_sop.dataset.model import (
     AnnotationSubmission,
     DatasetArtifact,
     DatasetMember,
+    DdmTrainingCommand,
     MemberStatus,
     ObjectStat,
     RetryMode,
@@ -280,6 +281,11 @@ class FakeDatasets:
 
     def artifact_by_id(self, artifact_id: UUID) -> DatasetArtifact | None:
         return self.artifacts.get(artifact_id)
+
+    def ddm_training_command_by_id(self, command_id: UUID) -> DdmTrainingCommand | None:
+        """路由资源归属查询：本套件不构造 DDM 训练命令。"""
+        del command_id
+        return None
 
     def artifact_by_input(self, *, dataset_id: UUID, input_digest: str) -> DatasetArtifact | None:
         return next(

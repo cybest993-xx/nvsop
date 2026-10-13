@@ -333,6 +333,7 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
         "dataset_vlm_candidate",
         "dataset_usage_check",
         "dataset_artifact",
+        "dataset_ddm_training_command",
     } <= _tables(database_at_0023)
     assert {
         "id",
@@ -441,7 +442,7 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
 
     with database_at_0023.connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0060"
+    assert version == "0061"
     assert "evidence.evidence.view" in _permission_codes(database_at_0023)
     assert "evidence.review.edit" in _permission_codes(database_at_0023)
     assert "evidence_review" in _tables(database_at_0023)
@@ -457,6 +458,7 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
     assert "dataset.dataset.edit" in _permission_codes(database_at_0023)
 
     command.downgrade(configuration, "0025")
+    assert "dataset_ddm_training_command" not in _tables(database_at_0023)
     assert "evidence.evidence.view" not in _permission_codes(database_at_0023)
     assert "evidence.review.edit" not in _permission_codes(database_at_0023)
     assert "evidence_review" not in _tables(database_at_0023)

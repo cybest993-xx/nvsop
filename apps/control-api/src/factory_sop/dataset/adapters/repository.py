@@ -19,6 +19,7 @@ from factory_sop.dataset.adapters.tables import (
     AnnotationSubmissionRow,
     DatasetArtifactRow,
     DatasetMemberRow,
+    DdmTrainingCommandRow,
     TrainingDatasetRow,
     UploadAttemptRow,
     UsageCheckRow,
@@ -31,6 +32,7 @@ from factory_sop.dataset.model import (
     AnnotationSubmission,
     DatasetArtifact,
     DatasetMember,
+    DdmTrainingCommand,
     TrainingDataset,
     UploadAttempt,
     UsageCheck,
@@ -533,6 +535,67 @@ class PostgresDatasetRepository:
                     failure_detail=value.failure_detail,
                     retryable=value.retryable,
                     recovery_action=value.recovery_action,
+                    job_id=value.job_id,
+                    updated_at=value.updated_at,
+                )
+            ),
+        )
+        return result.rowcount == 1
+
+    def add_ddm_training_command(self, value: DdmTrainingCommand) -> bool:
+        """按数据集幂等键追加 DDM 训练命令；并发占用同一键时不覆盖已存在命令。"""
+        statement = (
+            postgres_insert(DdmTrainingCommandRow)
+            .values(
+                id=value.id,
+                dataset_id=value.dataset_id,
+                status=value.status.value,
+                idempotency_key=value.idempotency_key,
+                request_digest=value.request_digest,
+                payload=dict(value.payload),
+                job_id=value.job_id,
+                created_by=value.created_by,
+                created_at=value.created_at,
+                updated_at=value.updated_at,
+            )
+            .on_conflict_do_nothing(
+                index_elements=[
+                    DdmTrainingCommandRow.dataset_id,
+                    DdmTrainingCommandRow.idempotency_key,
+                ]
+            )
+            .returning(DdmTrainingCommandRow.id)
+        )
+        return self._session.execute(statement).scalar_one_or_none() is not None
+
+    def ddm_training_command_by_idempotency(
+        self, *, dataset_id: UUID, idempotency_key: str
+    ) -> DdmTrainingCommand | None:
+        row = self._session.scalar(
+            select(DdmTrainingCommandRow).where(
+                DdmTrainingCommandRow.dataset_id == dataset_id,
+                DdmTrainingCommandRow.idempotency_key == idempotency_key,
+            )
+        )
+        return row.to_domain() if row is not None else None
+
+    def ddm_training_command_by_id(self, command_id: UUID) -> DdmTrainingCommand | None:
+        row = self._session.get(DdmTrainingCommandRow, command_id)
+        return row.to_domain() if row is not None else None
+
+    def save_ddm_training_command(
+        self, value: DdmTrainingCommand, *, expected_updated_at: datetime
+    ) -> bool:
+        """只在租约仍匹配时绑定命令的 job 身份；S072 不存在运行时状态跃迁。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(DdmTrainingCommandRow)
+                .where(
+                    DdmTrainingCommandRow.id == value.id,
+                    DdmTrainingCommandRow.updated_at == expected_updated_at,
+                )
+                .values(
                     job_id=value.job_id,
                     updated_at=value.updated_at,
                 )

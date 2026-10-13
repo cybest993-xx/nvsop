@@ -50,6 +50,7 @@ from factory_sop.dataset.adapters.annotation_routes import (
 from factory_sop.dataset.adapters.annotation_routes import (
     router as annotation_router,
 )
+from factory_sop.dataset.adapters.routes import ddm_result_router
 from factory_sop.dataset.adapters.routes import router as dataset_router
 from factory_sop.dataset.api import summary as dataset_summary
 from factory_sop.dataset.errors import DatasetRefusedError
@@ -238,6 +239,7 @@ def create_app(
     app.include_router(auth_user_administration.router, prefix=API_PREFIX)
     app.include_router(template_router, prefix=API_PREFIX)
     app.include_router(dataset_router, prefix=API_PREFIX)
+    app.include_router(ddm_result_router, prefix=API_PREFIX)
     app.include_router(annotation_router, prefix=API_PREFIX)
     app.include_router(annotation_context_router, prefix=API_PREFIX)
     app.include_router(annotation_gateway_router, prefix=API_PREFIX)

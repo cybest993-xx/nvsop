@@ -9,6 +9,7 @@ from factory_sop.auth.adapters.current_caller import current_caller_resolver
 from factory_sop.dataset.adapters.dependencies import (
     annotation_runtime,
     artifact_executor,
+    ddm_executor,
     usage_runtime,
     validation_runtime,
 )
@@ -23,6 +24,7 @@ def run_worker(environment: Mapping[str, str]) -> None:
         runtime_factory=validation_runtime,
         usage_runtime_factory=usage_runtime,
         annotation_runtime_factory=annotation_runtime,
+        ddm_executor_factory=ddm_executor,
         current_caller_resolver_factory=current_caller_resolver,
     )
 

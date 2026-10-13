@@ -7,19 +7,22 @@ import os
 import threading
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import timedelta
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, BinaryIO, cast
 from uuid import UUID, uuid4
 
 import pytest
+import yaml  # type: ignore[import-untyped]
 from _integration_support import cleanup_dataset
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 from test_ddm_training_command import NOW, _caller, _FakeStorage, _seed_passing_ddm, _submit
 
 from factory_sop.auth.api import Caller, Permission
-from factory_sop.dataset.adapters.ddm import NvidiaDdmAnnotationGenerator
+from factory_sop.dataset.adapters.ddm import LocalDdmResultVolume, NvidiaDdmAnnotationGenerator
 from factory_sop.dataset.adapters.ddm_execution import (
     DdmTrainingBackend,
     DdmTrainingDispatchOutcome,
@@ -28,6 +31,8 @@ from factory_sop.dataset.adapters.ddm_execution import (
     PostgresDdmTrainingExecutor,
 )
 from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
+from factory_sop.dataset.adapters.storage import LocalFileObjectStorage
+from factory_sop.dataset.api import DdmTrainingJobResult
 from factory_sop.dataset.model import DdmTrainingCommand, DdmTrainingCommandStatus
 from factory_sop.dataset.storage import ObjectStorage
 from factory_sop.dataset.usecases.usage import (
@@ -35,6 +40,8 @@ from factory_sop.dataset.usecases.usage import (
     DDM_VALIDATION_CONSUMER_PARAMETERS,
     DdmInputSelection,
 )
+from factory_sop.job.adapters.repository import PostgresJobRepository
+from factory_sop.job.api import JobStatus, JobType
 from factory_sop.persistence import session_factory
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -667,3 +674,496 @@ def test_revocation_failure_record_commit_uncertain_still_cleans_own_workcopies(
         assert not (tmp_path / submitted.command.payload["input_id"]).exists()
         assert not (tmp_path / f"ddm-{submitted.command.id}-training").exists()
         assert not (tmp_path / f"ddm-{submitted.command.id}-validation").exists()
+
+
+def _write_base_result_files(
+    *,
+    results_root: Path,
+    dataset_root: Path,
+    base_job_id: str,
+    training_dataset_id: str,
+    validation_dataset_id: str,
+    checkpoint_bytes: bytes = b"real-checkpoint-bytes",
+    include_checkpoint: bool = True,
+    reader_overrides: Mapping[str, object] | None = None,
+) -> None:
+    """复刻基座真实落盘布局：job 配置 + 合并 config.yaml + last.ckpt。"""
+    job_directory = results_root / base_job_id
+    train_directory = job_directory / "train" / base_job_id
+    train_directory.mkdir(parents=True)
+    dataset_config: dict[str, object] = {
+        "dataset": "DDMDataset",
+        "num_classes": 2,
+        "frames_per_side": 5,
+        "downsample": 1,
+        "min_change_dur": 0.3,
+        "video_backend": "pyav",
+        "train_config": {
+            "data_root": str(dataset_root / training_dataset_id),
+            "anno_path": str(dataset_root / training_dataset_id / "ddm_train_annotation.json"),
+            "mode": "train",
+        },
+        "val_config": {
+            "data_root": str(dataset_root / validation_dataset_id),
+            "anno_path": str(dataset_root / validation_dataset_id / "ddm_val_annotation.json"),
+            "mode": "val",
+            "temporal_stride": 1,
+        },
+    }
+    if reader_overrides:
+        dataset_config.update(reader_overrides)
+    document = {
+        "dataset_config": dataset_config,
+        "model_config": {"num_classes": 2},
+        "training_config": {"output": str(job_directory), "exp_name": base_job_id},
+    }
+    (job_directory / f"{base_job_id}.yaml").write_text(yaml.safe_dump(document), encoding="utf-8")
+    (train_directory / "config.yaml").write_text(yaml.safe_dump(document), encoding="utf-8")
+    if include_checkpoint:
+        (train_directory / "last.ckpt").write_bytes(checkpoint_bytes)
+
+
+def _result_executor(
+    engine: Engine,
+    root: Path,
+    server: Any,  # noqa: ANN401 — 动态加载的 HTTP fixture
+    *,
+    results_root: Path,
+    objects_root: Path,
+) -> PostgresDdmTrainingExecutor:
+    return PostgresDdmTrainingExecutor(
+        factory=session_factory(engine),
+        storage_factory=lambda: LocalFileObjectStorage(objects_root),
+        generate=NvidiaDdmAnnotationGenerator().generate,
+        backend=HttpDdmTrainingBackend(base_url=server.url, timeout_seconds=2),
+        backend_target=server.url,
+        dataset_root=root,
+        training_consumer_parameters=DDM_CONSUMER_PARAMETERS,
+        validation_consumer_parameters=DDM_VALIDATION_CONSUMER_PARAMETERS,
+        result_volume=LocalDdmResultVolume(results_root=results_root, dataset_root=root),
+    )
+
+
+def _reload(engine: Engine, command_id: UUID) -> DdmTrainingCommand:
+    with session_factory(engine)() as session:
+        command = PostgresDatasetRepository(session).ddm_training_command_by_id(command_id)
+    assert command is not None
+    return command
+
+
+def test_base_completed_registers_real_config_and_checkpoint_then_releases_guard(
+    engine: Engine,
+    tmp_path: Path,
+    selections: tuple[DdmInputSelection, DdmInputSelection],
+) -> None:
+    submitted = _submit(
+        engine, idempotency_key="result-ok", training=selections[0], validation=selections[1]
+    )
+    results_root = tmp_path / "results"
+    objects_root = tmp_path / "objects"
+    with DdmHttpServer() as server:
+        bound = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert bound.outcome is DdmTrainingDispatchOutcome.BOUND
+        assert bound.command is not None
+        base_job_id = bound.command.base_job_id
+        assert base_job_id is not None
+        _write_base_result_files(
+            results_root=results_root,
+            dataset_root=tmp_path,
+            base_job_id=base_job_id,
+            training_dataset_id=f"ddm-{submitted.command.id}-training",
+            validation_dataset_id=f"ddm-{submitted.command.id}-validation",
+        )
+        server.jobs[base_job_id].status = "completed"
+        worker = _result_executor(
+            engine, tmp_path, server, results_root=results_root, objects_root=objects_root
+        )
+        result = run(worker, submitted.command.id)
+        assert result.outcome is DdmTrainingDispatchOutcome.BOUND
+        stored = _reload(engine, submitted.command.id)
+        assert stored.status is DdmTrainingCommandStatus.COMPLETED
+        assert stored.result_status == "registered"
+        assert stored.result_registered_at is not None
+        assert stored.result_generation == 1
+        assert stored.result_config_object_key is not None
+        assert stored.result_checkpoint_object_key is not None
+        config_path = objects_root / stored.result_config_object_key
+        checkpoint_path = objects_root / stored.result_checkpoint_object_key
+        assert config_path.is_file()
+        assert checkpoint_path.is_file()
+        assert stored.result_config_size == config_path.stat().st_size
+        assert stored.result_config_sha256 == sha256(config_path.read_bytes()).hexdigest()
+        assert stored.result_checkpoint_sha256 == sha256(checkpoint_path.read_bytes()).hexdigest()
+        # 已发布终态：再次投递不再观察、不重发 start。
+        queries_before = list(server.queries)
+        run(worker, submitted.command.id)
+        assert len(server.starts) == 1
+        assert server.queries == queries_before
+
+
+def test_completed_without_readable_checkpoint_keeps_guard_and_records_diagnostic(
+    engine: Engine,
+    tmp_path: Path,
+    selections: tuple[DdmInputSelection, DdmInputSelection],
+) -> None:
+    submitted = _submit(
+        engine, idempotency_key="result-empty", training=selections[0], validation=selections[1]
+    )
+    results_root = tmp_path / "results"
+    objects_root = tmp_path / "objects"
+    with DdmHttpServer() as server:
+        bound = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert bound.command is not None
+        assert bound.command.base_job_id is not None
+        base_job_id = bound.command.base_job_id
+        # 空 checkpoint：绝不登记为空/假结果。
+        _write_base_result_files(
+            results_root=results_root,
+            dataset_root=tmp_path,
+            base_job_id=base_job_id,
+            training_dataset_id=f"ddm-{submitted.command.id}-training",
+            validation_dataset_id=f"ddm-{submitted.command.id}-validation",
+            checkpoint_bytes=b"",
+        )
+        server.jobs[base_job_id].status = "completed"
+        worker = _result_executor(
+            engine, tmp_path, server, results_root=results_root, objects_root=objects_root
+        )
+        run(worker, submitted.command.id)
+        stored = _reload(engine, submitted.command.id)
+        assert stored.status is DdmTrainingCommandStatus.BOUND
+        assert stored.result_status == "not_registered"
+        assert stored.result_failure_code is not None
+        assert stored.base_observation is not None
+        assert stored.base_observation["status"] == "completed"
+        assert len(server.starts) == 1
+
+
+def test_reader_parameter_mismatch_never_registers_result(
+    engine: Engine,
+    tmp_path: Path,
+    selections: tuple[DdmInputSelection, DdmInputSelection],
+) -> None:
+    submitted = _submit(
+        engine, idempotency_key="result-mismatch", training=selections[0], validation=selections[1]
+    )
+    results_root = tmp_path / "results"
+    objects_root = tmp_path / "objects"
+    with DdmHttpServer() as server:
+        bound = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert bound.command is not None
+        assert bound.command.base_job_id is not None
+        base_job_id = bound.command.base_job_id
+        _write_base_result_files(
+            results_root=results_root,
+            dataset_root=tmp_path,
+            base_job_id=base_job_id,
+            training_dataset_id=f"ddm-{submitted.command.id}-training",
+            validation_dataset_id=f"ddm-{submitted.command.id}-validation",
+            reader_overrides={"frames_per_side": 999},
+        )
+        server.jobs[base_job_id].status = "completed"
+        worker = _result_executor(
+            engine, tmp_path, server, results_root=results_root, objects_root=objects_root
+        )
+        run(worker, submitted.command.id)
+        stored = _reload(engine, submitted.command.id)
+        assert stored.result_status == "not_registered"
+        assert stored.result_failure_code == "RESULT_UNREADABLE"
+        assert not (objects_root / "ddm-results" / str(submitted.command.id)).exists()
+
+
+def test_late_result_writer_cannot_replace_registered_result(
+    engine: Engine,
+    tmp_path: Path,
+    selections: tuple[DdmInputSelection, DdmInputSelection],
+) -> None:
+    submitted = _submit(
+        engine, idempotency_key="result-late", training=selections[0], validation=selections[1]
+    )
+    results_root = tmp_path / "results"
+    objects_root = tmp_path / "objects"
+    with DdmHttpServer() as server:
+        bound = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert bound.command is not None
+        assert bound.command.base_job_id is not None
+        base_job_id = bound.command.base_job_id
+        _write_base_result_files(
+            results_root=results_root,
+            dataset_root=tmp_path,
+            base_job_id=base_job_id,
+            training_dataset_id=f"ddm-{submitted.command.id}-training",
+            validation_dataset_id=f"ddm-{submitted.command.id}-validation",
+        )
+        server.jobs[base_job_id].status = "completed"
+        worker = _result_executor(
+            engine, tmp_path, server, results_root=results_root, objects_root=objects_root
+        )
+        run(worker, submitted.command.id)
+        original = _reload(engine, submitted.command.id)
+        assert original.result_status == "registered"
+        with session_factory(engine)() as session:
+            replaced = PostgresDatasetRepository(session).register_ddm_training_result(
+                command_id=submitted.command.id,
+                base_job_id=base_job_id,
+                config_object_key="ddm-results/late/config.yaml",
+                config_sha256="f" * 64,
+                config_size=1,
+                checkpoint_object_key="ddm-results/late/checkpoint.ckpt",
+                checkpoint_sha256="e" * 64,
+                checkpoint_size=1,
+                now=NOW,
+            )
+            session.commit()
+        assert replaced is False
+        after = _reload(engine, submitted.command.id)
+        assert after.result_config_sha256 == original.result_config_sha256
+        assert after.result_generation == original.result_generation
+        assert after.result_checkpoint_object_key is not None
+        checkpoint_path = objects_root / after.result_checkpoint_object_key
+        assert checkpoint_path.is_file()
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "missing-parameter",
+        "annotation-path",
+        "mutated-media",
+        "checkpoint-symlink",
+        "merged-identity",
+    ],
+)
+def test_result_requires_actual_frozen_inputs_and_safe_source(
+    engine: Engine,
+    tmp_path: Path,
+    selections: tuple[DdmInputSelection, DdmInputSelection],
+    damage: str,
+) -> None:
+    submitted = _submit(
+        engine, idempotency_key=f"source-{damage}", training=selections[0], validation=selections[1]
+    )
+    results_root, objects_root = tmp_path / "results", tmp_path / "objects"
+    with DdmHttpServer() as server:
+        bound = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert bound.command is not None
+        assert bound.command.base_job_id is not None
+        job_id = bound.command.base_job_id
+        training_id = f"ddm-{submitted.command.id}-training"
+        _write_base_result_files(
+            results_root=results_root,
+            dataset_root=tmp_path,
+            base_job_id=job_id,
+            training_dataset_id=training_id,
+            validation_dataset_id=f"ddm-{submitted.command.id}-validation",
+        )
+        config_path = results_root / job_id / "train" / job_id / "config.yaml"
+        doc = yaml.safe_load(config_path.read_text())
+        if damage == "missing-parameter":
+            del doc["dataset_config"]["frames_per_side"]
+        elif damage == "annotation-path":
+            doc["dataset_config"]["train_config"]["anno_path"] = "/outside/annotation.json"
+        elif damage == "merged-identity":
+            doc["training_config"]["exp_name"] = str(uuid4())
+        elif damage == "mutated-media":
+            next((tmp_path / training_id).glob("*.mp4")).write_bytes(b"different-media")
+        else:
+            checkpoint = config_path.parent / "last.ckpt"
+            checkpoint.unlink()
+            outside = tmp_path / "outside.ckpt"
+            outside.write_bytes(b"unrelated-checkpoint")
+            checkpoint.symlink_to(outside)
+        config_path.write_text(yaml.safe_dump(doc))
+        server.jobs[job_id].status = "completed"
+        run(
+            _result_executor(
+                engine, tmp_path, server, results_root=results_root, objects_root=objects_root
+            ),
+            submitted.command.id,
+        )
+        observed = _reload(engine, submitted.command.id)
+        assert observed.status is DdmTrainingCommandStatus.BOUND
+        assert observed.result_status == "not_registered"
+        assert observed.result_failure_code == "RESULT_UNREADABLE"
+
+
+def test_job_finish_rejection_rolls_back_result_and_late_writer_preserves_winner(
+    engine: Engine,
+    tmp_path: Path,
+    selections: tuple[DdmInputSelection, DdmInputSelection],
+) -> None:
+    submitted = _submit(
+        engine, idempotency_key="fenced-result", training=selections[0], validation=selections[1]
+    )
+    results_root, objects_root = tmp_path / "results", tmp_path / "objects"
+    with DdmHttpServer() as server:
+        bound = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert bound.command is not None
+        assert bound.command.base_job_id is not None
+        job_id = bound.command.base_job_id
+        _write_base_result_files(
+            results_root=results_root,
+            dataset_root=tmp_path,
+            base_job_id=job_id,
+            training_dataset_id=f"ddm-{submitted.command.id}-training",
+            validation_dataset_id=f"ddm-{submitted.command.id}-validation",
+        )
+        server.jobs[job_id].status = "completed"
+        winner = _result_executor(
+            engine, tmp_path, server, results_root=results_root, objects_root=objects_root
+        )
+
+        def commit(session: object) -> bool:
+            cast(Session, session).commit()
+            return True
+
+        with session_factory(engine).begin() as session:
+            jobs = PostgresJobRepository(session)
+            old_lease = jobs.mark_running(job_id=submitted.job.id, now=NOW)
+            assert old_lease is not None
+            jobs.recover_stale_running(
+                job_type=JobType.DATASET_DDM_TRAINING,
+                now=NOW + timedelta(seconds=2),
+                stale_after_seconds=1,
+            )
+            current_lease = jobs.mark_running(
+                job_id=submitted.job.id, now=NOW + timedelta(seconds=3)
+            )
+            assert current_lease is not None
+
+        def finish_old(session: object, result: DdmTrainingJobResult) -> bool:
+            return PostgresJobRepository(cast(Session, session)).finish(
+                job_id=submitted.job.id,
+                status=JobStatus.SUCCEEDED.value,
+                failure_code=None,
+                now=NOW + timedelta(seconds=10),
+                expected_updated_at=old_lease.updated_at,
+            )
+
+        def finish_current(session: object, result: DdmTrainingJobResult) -> bool:
+            return PostgresJobRepository(cast(Session, session)).finish(
+                job_id=submitted.job.id,
+                status=JobStatus.SUCCEEDED.value,
+                failure_code=None,
+                now=NOW + timedelta(seconds=11),
+                expected_updated_at=current_lease.updated_at,
+            )
+
+        winner.execute_job(
+            command_id=submitted.command.id,
+            now=NOW + timedelta(seconds=5),
+            resolve_current_caller=lambda _: _caller(Permission.DATASET_EDIT),
+            finish_job=finish_old,
+            commit_transaction=commit,
+        )
+        rejected = _reload(engine, submitted.command.id)
+        assert rejected.status is DdmTrainingCommandStatus.BOUND
+        assert rejected.result_status == "not_registered"
+        assert not list(objects_root.rglob("*.ckpt"))
+
+        class LateStorage(LocalFileObjectStorage):
+            @contextmanager
+            def writing(self, *, object_key: str) -> Iterator[BinaryIO]:
+                if object_key.endswith("checkpoint.ckpt"):
+                    winner.execute_job(
+                        command_id=submitted.command.id,
+                        now=NOW + timedelta(seconds=11),
+                        resolve_current_caller=lambda _: _caller(Permission.DATASET_EDIT),
+                        finish_job=finish_current,
+                        commit_transaction=commit,
+                    )
+                    (results_root / job_id / "train" / job_id / "last.ckpt").write_bytes(
+                        b"late-bytes"
+                    )
+                with super().writing(object_key=object_key) as sink:
+                    yield sink
+
+        late = executor(
+            engine,
+            tmp_path,
+            server,
+            result_volume=LocalDdmResultVolume(results_root=results_root, dataset_root=tmp_path),
+            storage_factory=lambda: LateStorage(objects_root),
+        )
+        late.execute_job(
+            command_id=submitted.command.id,
+            now=NOW + timedelta(seconds=10),
+            resolve_current_caller=lambda _: _caller(Permission.DATASET_EDIT),
+            finish_job=finish_old,
+            commit_transaction=commit,
+        )
+        published = _reload(engine, submitted.command.id)
+        assert published.status is DdmTrainingCommandStatus.COMPLETED
+        assert published.result_checkpoint_object_key is not None
+        assert (
+            objects_root / published.result_checkpoint_object_key
+        ).read_bytes() == b"real-checkpoint-bytes"
+        assert published.result_checkpoint_sha256 == sha256(b"real-checkpoint-bytes").hexdigest()
+        assert len(list(objects_root.rglob("*.ckpt"))) == 1
+
+
+def test_cancelled_metadata_keeps_original_job_and_inflight_guard(
+    engine: Engine,
+    tmp_path: Path,
+    selections: tuple[DdmInputSelection, DdmInputSelection],
+) -> None:
+    submitted = _submit(
+        engine,
+        idempotency_key="cancel-unverified",
+        training=selections[0],
+        validation=selections[1],
+    )
+    with DdmHttpServer() as server:
+        bound = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert bound.command is not None
+        assert bound.command.base_job_id is not None
+        job_id = bound.command.base_job_id
+        server.jobs[job_id].status = "cancelled"
+        cancelled = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert cancelled.command is not None
+        assert cancelled.command.status is DdmTrainingCommandStatus.BOUND
+        stored = _reload(engine, submitted.command.id)
+        assert stored.base_observation is not None
+        assert stored.base_observation["status"] == "cancelled"
+        assert stored.observation_failure_code == "BASE_CANCELLATION_UNVERIFIED"
+        server.jobs[job_id].status = "running"
+        run(executor(engine, tmp_path, server), submitted.command.id)
+        resumed = _reload(engine, submitted.command.id)
+        assert resumed.status is DdmTrainingCommandStatus.BOUND
+        assert resumed.base_observation is not None
+        assert resumed.base_observation["status"] == "running"
+        assert resumed.observation_failure_code is None
+        assert len(server.starts) == 1
+
+
+def test_observation_failure_preserves_last_observation_and_raw_status(
+    engine: Engine,
+    tmp_path: Path,
+    selections: tuple[DdmInputSelection, DdmInputSelection],
+) -> None:
+    submitted = _submit(
+        engine, idempotency_key="observe-fail", training=selections[0], validation=selections[1]
+    )
+    with DdmHttpServer() as server:
+        bound = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert bound.command is not None
+        assert bound.command.base_job_id is not None
+        base_job_id = bound.command.base_job_id
+        server.jobs[base_job_id].status = "running"
+        run(executor(engine, tmp_path, server), submitted.command.id)
+        observed = _reload(engine, submitted.command.id)
+        assert observed.base_observation is not None
+        assert observed.base_observation["status"] == "running"
+        last_observed = observed.last_observed_at
+        assert last_observed is not None
+        server.query_error = True
+        failed = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert failed.outcome is DdmTrainingDispatchOutcome.RESULT_UNKNOWN
+        stored = _reload(engine, submitted.command.id)
+        # 查询失败不清空基座原状态与最后成功观测时刻，也不表示完成。
+        assert stored.status is DdmTrainingCommandStatus.BOUND
+        assert stored.base_observation is not None
+        assert stored.base_observation["status"] == "running"
+        assert stored.last_observed_at == last_observed
+        assert stored.observation_failure_code == "BASE_OBSERVATION_UNAVAILABLE"
+        assert len(server.starts) == 1

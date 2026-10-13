@@ -44,6 +44,7 @@ import {
   listDatasetActionListVersions as generatedListDatasetActionListVersions,
   listDatasetArtifacts as generatedListDatasetArtifacts,
   listDatasetUsageChecks as generatedListDatasetUsageChecks,
+  listDdmTrainingCommands as generatedListDdmTrainingCommands,
   listVlmCandidates as generatedListVlmCandidates,
   listConnectors as generatedListConnectors,
   listDatasetMembers as generatedListDatasetMembers,
@@ -78,6 +79,8 @@ import {
   readTrainingDataset as generatedReadTrainingDataset,
   readDatasetArtifact as generatedReadDatasetArtifact,
   readDatasetUsageCheck as generatedReadDatasetUsageCheck,
+  readDdmTrainingCommand as generatedReadDdmTrainingCommand,
+  readDdmTrainingResult as generatedReadDdmTrainingResult,
   readTemplateDraft as generatedReadTemplateDraft,
   readVlmCandidate as generatedReadVlmCandidate,
   readTemplateImport as generatedReadTemplateImport,
@@ -134,6 +137,8 @@ import {
   type CreateUserData,
   type DatasetMemberView,
   type DatasetView,
+  type DdmTrainingCommandView,
+  type DdmTrainingResultView,
   type DeviceStatus,
   type DownloadTemplateImportResponse,
   type EvidenceAccessContext,
@@ -151,6 +156,7 @@ import {
   type ItemPageConnectorView,
   type ItemPageDatasetMemberView,
   type ItemPageDatasetView,
+  type ItemPageDdmTrainingCommandView,
   type ItemPageInferenceHostView,
   type ItemPagePointView,
   type ItemPageUsageCheckView,
@@ -226,6 +232,8 @@ export type {
   DatasetView,
   DeviceStatus,
   DownloadTemplateVersionArtifactResponse,
+  DdmTrainingCommandView,
+  DdmTrainingResultView,
   EvidenceReviewRecord,
   ReviewConclusion,
   HandoverConfirmationInput,
@@ -237,6 +245,7 @@ export type {
   ItemPageConnectorView,
   ItemPageDatasetMemberView,
   ItemPageDatasetView,
+  ItemPageDdmTrainingCommandView,
   ItemPageInferenceHostView,
   ItemPagePointView,
   ItemPageStationView,
@@ -933,6 +942,47 @@ export function readDatasetArtifact(
 ): Promise<DatasetArtifact> {
   return execute(
     generatedReadDatasetArtifact({ path: { dataset_id: datasetId, artifact_id: artifactId } }),
+  )
+}
+
+export type DdmTrainingCommand = DdmTrainingCommandView
+export type DdmTrainingResult = DdmTrainingResultView
+
+/** 按数据集读取持久 DDM 训练命令；重开页面恢复原命令，不依赖页面内缓存，也不启动训练。 */
+export function listDdmTrainingCommands(
+  datasetId: string,
+  page = 1,
+  pageSize = 50,
+): Promise<ItemPageDdmTrainingCommandView> {
+  return execute(
+    generatedListDdmTrainingCommands({
+      path: { dataset_id: datasetId },
+      query: { page, page_size: pageSize },
+    }),
+  )
+}
+
+/** 读取一条命令的应用接受/基座原状态/结果登记事实；未知状态按原值返回，不映射为完成。 */
+export function readDdmTrainingCommand(
+  datasetId: string,
+  commandId: string,
+): Promise<DdmTrainingCommand> {
+  return execute(
+    generatedReadDdmTrainingCommand({
+      path: { dataset_id: datasetId, command_id: commandId },
+    }),
+  )
+}
+
+/** 读取结果登记事实与已授权数据通道地址；结果字节不经控制面中转。 */
+export function readDdmTrainingResult(
+  datasetId: string,
+  commandId: string,
+): Promise<DdmTrainingResult> {
+  return execute(
+    generatedReadDdmTrainingResult({
+      path: { dataset_id: datasetId, command_id: commandId },
+    }),
   )
 }
 

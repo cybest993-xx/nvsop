@@ -93,6 +93,7 @@ class FakeDatasets:
     vlm_candidates: dict[UUID, VlmCandidate] = field(default_factory=dict)
     usage_checks: dict[UUID, UsageCheck] = field(default_factory=dict)
     artifacts: dict[UUID, DatasetArtifact] = field(default_factory=dict)
+    ddm_commands: dict[UUID, DdmTrainingCommand] = field(default_factory=dict)
 
     def dataset_by_id(self, dataset_id: UUID) -> TrainingDataset | None:
         return self.datasets.get(dataset_id)
@@ -283,9 +284,35 @@ class FakeDatasets:
         return self.artifacts.get(artifact_id)
 
     def ddm_training_command_by_id(self, command_id: UUID) -> DdmTrainingCommand | None:
-        """路由资源归属查询：本套件不构造 DDM 训练命令。"""
-        del command_id
-        return None
+        return self.ddm_commands.get(command_id)
+
+    def ddm_training_command_by_idempotency(
+        self, *, dataset_id: UUID, idempotency_key: str
+    ) -> DdmTrainingCommand | None:
+        return next(
+            (
+                command
+                for command in self.ddm_commands.values()
+                if command.dataset_id == dataset_id and command.idempotency_key == idempotency_key
+            ),
+            None,
+        )
+
+    def list_ddm_training_commands(self, dataset_id: UUID) -> list[DdmTrainingCommand]:
+        return [
+            command for command in self.ddm_commands.values() if command.dataset_id == dataset_id
+        ]
+
+    def add_ddm_training_command(self, value: DdmTrainingCommand) -> bool:
+        self.ddm_commands[value.id] = value
+        return True
+
+    def save_ddm_training_command(
+        self, value: DdmTrainingCommand, *, expected_updated_at: datetime
+    ) -> bool:
+        del expected_updated_at
+        self.ddm_commands[value.id] = value
+        return True
 
     def artifact_by_input(self, *, dataset_id: UUID, input_digest: str) -> DatasetArtifact | None:
         return next(

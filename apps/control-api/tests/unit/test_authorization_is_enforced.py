@@ -483,6 +483,23 @@ ROUTES = [
     ),
     Target(
         "POST",
+        "/training-datasets/{dataset_id}/ddm-training-commands",
+        {
+            "training": {
+                "dataset_id": "019937d8-0d10-7b31-8d2d-4e60c8f4f101",
+                "usage_check_id": "019937d8-0d10-7b31-8d2d-4e60c8f4f302",
+                "artifact_id": "019937d8-0d10-7b31-8d2d-4e60c8f4f303",
+            },
+            "validation": {
+                "dataset_id": "019937d8-0d10-7b31-8d2d-4e60c8f4f304",
+                "usage_check_id": "019937d8-0d10-7b31-8d2d-4e60c8f4f305",
+                "artifact_id": "019937d8-0d10-7b31-8d2d-4e60c8f4f306",
+            },
+        },
+        headers={"Idempotency-Key": "authz-ddm"},
+    ),
+    Target(
+        "POST",
         "/execution/handovers",
         {
             "station_id": "{station_id}",

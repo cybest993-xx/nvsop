@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, case, select, update
+from sqlalchemy import CursorResult, case, select, true, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DatabaseSession
 
@@ -475,7 +475,26 @@ class PostgresJobRepository:
         )
         return result.rowcount == 1
 
-    def pending(self, *, limit: int) -> list[ApplicationJob]:
+    def defer_ddm_training_poll(
+        self, *, job_id: UUID, expected_updated_at: datetime, now: datetime
+    ) -> bool:
+        """原任务观测未终结：归还当前租约，下一 outbox 扫描只查询同一命令。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(ApplicationJobRow)
+                .where(
+                    ApplicationJobRow.id == job_id,
+                    ApplicationJobRow.job_type == JobType.DATASET_DDM_TRAINING.value,
+                    ApplicationJobRow.status == JobStatus.RUNNING.value,
+                    ApplicationJobRow.updated_at == expected_updated_at,
+                )
+                .values(status=JobStatus.PENDING.value, outbox_status="pending", updated_at=now)
+            ),
+        )
+        return result.rowcount == 1
+
+    def pending(self, *, limit: int, include_ddm_training: bool = False) -> list[ApplicationJob]:
         # held 类型（DDM 训练命令）由已知派发放行策略保留为 pending；扫描器在 ORDER/LIMIT
         # 之前排除它，避免大量 held 行占满窗口并饿死后面可执行的任务。
         rows = self._session.scalars(
@@ -486,7 +505,11 @@ class PostgresJobRepository:
                     (JobStatus.SUCCEEDED.value, JobStatus.FAILED.value, JobStatus.SUPERSEDED.value)
                 )
             )
-            .where(ApplicationJobRow.job_type != JobType.DATASET_DDM_TRAINING.value)
+            .where(
+                true()
+                if include_ddm_training
+                else ApplicationJobRow.job_type != JobType.DATASET_DDM_TRAINING.value
+            )
             .order_by(ApplicationJobRow.created_at, ApplicationJobRow.id)
             .limit(limit)
         ).all()

@@ -29,6 +29,10 @@ x-center-environment: &center-environment
   SOP_ANNOTATION_DATA_ROOT: /var/lib/nvsop/annotation-data
   SOP_ANNOTATION_HTTP_TIMEOUT_SECONDS: "120"
   SOP_MEDIA_PROBE_BINARY: ffprobe
+  SOP_DDM_TRAINING_BACKEND_URL: http://ddm-training:32090
+  SOP_DDM_TRAINING_DATASET_ROOT: /workspace/sop-ddm-ftms/assets/data
+  SOP_DDM_TRAINING_RESULTS_ROOT: /workspace/sop-ddm-ftms/assets/results
+  SOP_DDM_TRAINING_CONFIG_PATH: /workspace/sop-ddm-ftms/assets/config/ddm_train_config.yaml
   SOP_WORKER_HEALTH_CHECK_INTERVAL_SECONDS: "5"
   SOP_LOG_LEVEL: info
   NO_PROXY: center-db,redis,annotation-backend,localhost,127.0.0.1
@@ -239,6 +243,9 @@ services:
     volumes:
       - dataset-media:/var/lib/nvsop/dataset-files
       - annotation-media:/var/lib/nvsop/annotation-data:ro
+      - ddm-dataset:/workspace/sop-ddm-ftms/assets/data
+      - ddm-results:/workspace/sop-ddm-ftms/assets/results:ro
+      - ${NVSOP_SOURCE_DIR:-.}/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/assets/config:/workspace/sop-ddm-ftms/assets/config:ro
     secrets:
       - nvsop-runtime-password
       - redis-url
@@ -363,6 +370,14 @@ services:
       POSTGRES_USER: training_runtime
       POSTGRES_PASSWORD_FILE: /run/secrets/training-runtime-password
       SERVICE_PORT: "32090"
+      CONFIG_PATH: /workspace/sop-ddm-ftms/assets/config
+      TRAIN_CONFIG_NAME: ddm_train_config.yaml
+      DATASET_ROOT: /workspace/sop-ddm-ftms/assets/data
+      RESULTS_ROOT: /workspace/sop-ddm-ftms/assets/results
+    volumes:
+      - ddm-dataset:/workspace/sop-ddm-ftms/assets/data
+      - ddm-results:/workspace/sop-ddm-ftms/assets/results
+      - ${NVSOP_SOURCE_DIR:-.}/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/assets/config:/workspace/sop-ddm-ftms/assets/config:ro
     deploy:
       resources:
         reservations:
@@ -454,6 +469,7 @@ services:
     volumes:
       - ${NVSOP_DEV_NGINX_CONFIG:-.nvsop/dev-main/nginx.conf}:/etc/nginx/conf.d/default.conf:ro
       - ${NVSOP_DEV_STATE_DIR:-.nvsop/dev-main}/tls:/etc/nginx/tls:ro
+      - dataset-media:/var/lib/nvsop/dataset-files:ro
     healthcheck:
       # curl 真实校验证书；仅显式自定义 CA 时由 NVSOP_DEV_TLS_HEALTHCHECK_ARGS 传入 --cacert。
       test: ["CMD-SHELL", "curl -fsS --noproxy '*' ${NVSOP_DEV_TLS_HEALTHCHECK_ARGS} ${NVSOP_DEV_PROTOCOL:-http}://localhost:8443/api/v1/liveness >/dev/null"]
@@ -470,6 +486,10 @@ volumes:
     name: nvsop-dev-main-dataset-media
   annotation-media:
     name: nvsop-dev-main-annotation-media
+  ddm-dataset:
+    name: nvsop-dev-main-ddm-dataset
+  ddm-results:
+    name: nvsop-dev-main-ddm-results
 
 secrets:
   center-db-password:

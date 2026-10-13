@@ -44,11 +44,14 @@ def test_stale_recovery_preserves_existing_worker_timeout(
             recovered.append((job_type, stale_after_seconds))
             return 0
 
-        def pending(self, *, limit: int) -> tuple[object, ...]:
+        def pending(self, *, limit: int, include_ddm_training: bool) -> tuple[object, ...]:
             assert limit == 100
+            assert include_ddm_training is False
             return ()
 
     class FakeDispatcher:
+        ddm_training_configured = False
+
         async def dispatch_async(self, job_id: object) -> None:
             raise AssertionError(f"no pending jobs expected: {job_id}")
 
@@ -96,6 +99,7 @@ def test_worker_preserves_existing_uniform_timeout(
         usage_runtime=cast(Any, object()),
         artifact_executor=cast(Any, object()),
         annotation_runtime=cast(Any, object()),
+        ddm_executor=cast(Any, object()),
         current_caller_resolver=cast(Any, object()),
     )
 
@@ -105,6 +109,7 @@ def test_worker_preserves_existing_uniform_timeout(
         "generate_dataset_artifact_job",
         "prepare_annotation_context_job",
         "annotate_dataset_job",
+        "dispatch_ddm_training_job",
         "cron:dispatch_pending_jobs",
     }
     assert all(function.timeout_s is None for function in worker.functions.values())

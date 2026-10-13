@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import importlib.util
+import os
 import shutil
 import subprocess
+import sys
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -23,7 +26,6 @@ from conftest import (
     ADMIN_CREDENTIALS,
     BootstrapCommand,
     _free_port,
-    _make_tls_certificate,
     csrf_header,
 )
 from httpx2 import Client, HTTPError, Response
@@ -51,6 +53,16 @@ COMMANDS = "/api/v1/device-commands"
 TEMPLATES = "/api/v1/templates"
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _NONCES = count()
+
+# 夹具网关与生产共用同一公开渲染入口：来源映射经进程环境进入网关 CSP。
+_DEV_SPEC = importlib.util.spec_from_file_location(
+    "nvsop_dev_script_gateway", REPO_ROOT / "scripts" / "dev.py"
+)
+assert _DEV_SPEC is not None
+assert _DEV_SPEC.loader is not None
+DEV = importlib.util.module_from_spec(_DEV_SPEC)
+sys.modules[_DEV_SPEC.name] = DEV
+_DEV_SPEC.loader.exec_module(DEV)
 
 
 def _fixture_host_identity() -> tuple[str, str]:
@@ -102,6 +114,42 @@ def _free_gateway_ports() -> tuple[int, int]:
     return ports[0], ports[1]
 
 
+def _make_gateway_certificate(directory: Path) -> tuple[Path, Path]:
+    """生成 loopback 自签证书（同时覆盖 127.0.0.1 与 localhost）。
+
+    正式渲染入口会以 `openssl verify -verify_hostname localhost` 校验显式 TLS 材料，
+    因此夹具证书必须覆盖 localhost，不能只保留旧的 CN=127.0.0.1。
+    """
+    certificate = directory / "uvicorn.crt"
+    key = directory / "uvicorn.key"
+    result = subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            str(key),
+            "-out",
+            str(certificate),
+            "-days",
+            "1",
+            "-subj",
+            "/CN=localhost",
+            "-addext",
+            "subjectAltName=IP:127.0.0.1,DNS:localhost",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"could not create the gateway TLS certificate: {result.stderr}")
+    return certificate, key
+
+
 def _render_nginx_config(
     center: Client, tmp_path: Path, *, gateway_scheme: str
 ) -> tuple[Path, Path | None, int]:
@@ -110,39 +158,42 @@ def _render_nginx_config(
     assert parsed.port is not None
     gateway_port, media_port = _free_gateway_ports()
 
-    source = (
+    # 经公开渲染入口生成网关配置：测试只提供地址/端口与显式 TLS 材料，不改写 CSP。
+    source = tmp_path / f"nginx-source-{gateway_scheme}"
+    (source / "deploy" / "dev").mkdir(parents=True, exist_ok=True)
+    template = (
         NGINX_CONFIG.read_text(encoding="utf-8")
         .replace("center-api:8000", f"127.0.0.1:{parsed.port}")
         .replace("web:8080", "127.0.0.1:9")
         .replace("annotation-backend:8100", "127.0.0.1:9")
         .replace("annotation-frontend:80", "127.0.0.1:9")
         .replace("proxy_pass http://nvsop_center_api", "proxy_pass https://nvsop_center_api")
+        .replace("8443__NVSOP_LISTEN_SUFFIX__", f"{gateway_port}__NVSOP_LISTEN_SUFFIX__")
+        .replace("8444__NVSOP_LISTEN_SUFFIX__", f"{media_port}__NVSOP_LISTEN_SUFFIX__")
     )
+    (source / "deploy" / "dev" / "nginx.conf").write_text(template, encoding="utf-8")
+    item = DEV.DevPaths(root=source, state=tmp_path / f"nginx-state-{gateway_scheme}")
+    DEV.ensure_directories(item)
     tls: Path | None = None
+    tls_environ: dict[str, str] = {}
     if gateway_scheme == "https":
         tls = tmp_path / "nginx-tls"
-        tls.mkdir()
-        _make_tls_certificate(tls)
-        source = (
-            source.replace("8443__NVSOP_LISTEN_SUFFIX__", f"{gateway_port} ssl")
-            .replace("8444__NVSOP_LISTEN_SUFFIX__", f"{media_port} ssl")
-            .replace(
-                "    # __NVSOP_TLS_DIRECTIVES__\n",
-                "    ssl_certificate /nvsop-tls/uvicorn.crt;\n"
-                "    ssl_certificate_key /nvsop-tls/uvicorn.key;\n",
-            )
-        )
+        tls.mkdir(exist_ok=True)
+        certificate, key = _make_gateway_certificate(tls)
+        # 校验用的 CA 就是夹具自签证书：仍做完整 openssl 校验，不关闭产品 TLS 校验。
+        tls_environ = {
+            DEV.TLS_CERT_ENVIRONMENT: str(certificate),
+            DEV.TLS_KEY_ENVIRONMENT: str(key),
+            DEV.TLS_CA_ENVIRONMENT: str(certificate),
+        }
     else:
         assert gateway_scheme == "http"
-        source = (
-            source.replace("8443__NVSOP_LISTEN_SUFFIX__", str(gateway_port))
-            .replace("8444__NVSOP_LISTEN_SUFFIX__", str(media_port))
-            .replace("    # __NVSOP_TLS_DIRECTIVES__\n", "")
-        )
-
-    rendered = tmp_path / f"nginx-{gateway_scheme}.conf"
-    rendered.write_text(source, encoding="utf-8")
-    return rendered, tls, gateway_port
+    with patch.dict(os.environ, tls_environ, clear=False):
+        DEV.render_gateway_config(item, source=source, protocol=gateway_scheme)
+    rendered = item.state / "nginx.conf"
+    target = tmp_path / f"nginx-{gateway_scheme}.conf"
+    target.write_text(rendered.read_text(encoding="utf-8"), encoding="utf-8")
+    return target, (item.tls if tls is not None else None), gateway_port
 
 
 @contextmanager
@@ -165,7 +216,7 @@ def _nginx_gateway(center: Client, tmp_path: Path, *, gateway_scheme: str) -> It
         f"{config}:/etc/nginx/conf.d/default.conf:ro",
     ]
     if tls is not None:
-        command.extend(["-v", f"{tls}:/nvsop-tls:ro"])
+        command.extend(["-v", f"{tls}:/etc/nginx/tls:ro"])
     command.append(NGINX_IMAGE)
     process = subprocess.Popen(
         command,

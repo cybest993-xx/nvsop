@@ -67,11 +67,17 @@ from factory_sop.dataset.model import (
     UsageCheckStatus,
     UsageKind,
 )
+from factory_sop.dataset.usage import VLM_CONSUMER_PARAMETERS
 from factory_sop.dataset.usecases import confirm_video_upload, request_video_upload
 from factory_sop.dataset.usecases.usage import (
     BASE_COMMIT,
     DDM_CONSUMER_PARAMETERS,
     DDM_CONTRACT_VERSION,
+    VLM_MANIFEST_FILENAME,
+    VLM_RECORDS_FILENAME,
+    VlmInputSelection,
+    freeze_vlm_input,
+    materialize_vlm_input,
     request_artifact,
 )
 from factory_sop.identifiers import new_id
@@ -1041,6 +1047,37 @@ def test_real_vlm_candidate_check_uses_explicit_media_mapping(
             assert checked_body["status"] == "passed"
             assert checked_body["is_current"] is True
             assert checked_body["summary"] == {"record_count": 1, "media_count": 1}
+
+            # 复用同一真实 PostgreSQL 快照与中心本地卷，验证受检 VLM 输入的材料化边界。
+            runtime = usage_runtime(settings)
+            with session_factory(engine)() as session:
+                frozen = freeze_vlm_input(
+                    selection=VlmInputSelection(
+                        dataset_id=dataset_id,
+                        usage_check_id=UUID(check_body["check"]["id"]),
+                    ),
+                    caller=Caller(
+                        user=caller().user,
+                        granted=frozenset({Permission.DATASET_EDIT}),
+                    ),
+                    datasets=runtime.repository(session),
+                )
+            materialized = materialize_vlm_input(
+                frozen=frozen,
+                storage=runtime.storage(),
+                annotation_volume=None,
+                root=tmp_path / "vlm-materialized",
+            )
+            assert (
+                materialized.reader_directory / VLM_RECORDS_FILENAME
+            ).read_bytes() == frozen.records_bytes
+            assert (
+                materialized.reader_directory / "vlm-source.mp4"
+            ).read_bytes() == real_video_bytes
+            assert not (materialized.reader_directory / VLM_MANIFEST_FILENAME).exists()
+            assert json.loads(materialized.manifest_path.read_bytes())[
+                "consumer_parameters"
+            ] == dict(VLM_CONSUMER_PARAMETERS)
         finally:
             cleanup_dataset(engine, dataset_id)
 

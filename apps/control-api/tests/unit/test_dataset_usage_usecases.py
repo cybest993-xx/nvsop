@@ -15,9 +15,10 @@ from uuid import UUID
 
 import pytest
 
-from factory_sop.auth.authorization import Caller
+from factory_sop.auth.authorization import AuthorizationRefusedError, Caller
 from factory_sop.auth.model import User, UserStatus
 from factory_sop.auth.permissions import Permission
+from factory_sop.dataset.adapters.storage import LocalFileObjectStorage
 from factory_sop.dataset.api import CheckedDatasetInput, checked_input_reader
 from factory_sop.dataset.errors import DatasetRefusalCode, DatasetRefusedError
 from factory_sop.dataset.media import MediaMetadata
@@ -54,6 +55,8 @@ from factory_sop.dataset.usecases.usage import (
     DDM_CONSUMER_PARAMETERS,
     DDM_CONTRACT_VERSION,
     VLM_CONTRACT_VERSION,
+    DdmInputSelection,
+    FrozenDdmInput,
     UsageCheckTarget,
     apply_usage_check_currentness,
     begin_artifact_generation,
@@ -62,6 +65,8 @@ from factory_sop.dataset.usecases.usage import (
     complete_usage_check,
     fail_artifact,
     fail_usage_check,
+    freeze_ddm_input,
+    materialize_ddm_input,
     register_vlm_candidate,
     render_ddm_artifact_with_base,
     request_artifact,
@@ -210,28 +215,28 @@ class FakeUsageDatasets:
     artifacts: dict[UUID, DatasetArtifact] = field(default_factory=dict)
 
     def dataset_by_id(self, dataset_id: UUID) -> TrainingDataset | None:
-        return self.dataset if dataset_id == DATASET_ID else None
+        return self.dataset if dataset_id == self.dataset.id else None
 
     def list_members(self, *, dataset_id: UUID) -> list[DatasetMember]:
-        return [self.member] if dataset_id == DATASET_ID else []
+        return [self.member] if dataset_id == self.dataset.id else []
 
     def member_by_id(self, member_id: UUID) -> DatasetMember | None:
-        return self.member if member_id == MEMBER_ID else None
+        return self.member if member_id == self.member.id else None
 
     def latest_action_list(self, dataset_id: UUID) -> ActionListRevision | None:
-        return self.action_list if dataset_id == DATASET_ID else None
+        return self.action_list if dataset_id == self.dataset.id else None
 
     def action_list_by_revision(
         self, *, dataset_id: UUID, revision: int
     ) -> ActionListRevision | None:
         return (
             self.action_list
-            if dataset_id == DATASET_ID and revision == self.action_list.revision
+            if dataset_id == self.dataset.id and revision == self.action_list.revision
             else None
         )
 
     def latest_annotation_submission(self, *, member_id: UUID) -> AnnotationSubmission | None:
-        return self.submission if member_id == MEMBER_ID else None
+        return self.submission if member_id == self.member.id else None
 
     def annotation_submission_by_id(self, submission_id: UUID) -> AnnotationSubmission | None:
         return self.submission if submission_id == self.submission.id else None
@@ -1450,3 +1455,419 @@ def test_ddm_check_freezes_sources_runs_async_and_generates_stable_artifact() ->
     )
     assert replay.artifact.id == artifact.id
     assert len(datasets.artifacts) == 1
+
+
+VALIDATION_DATASET_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f331")
+VALIDATION_MEMBER_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f332")
+VALIDATION_SUBMISSION_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f333")
+VALIDATION_EXECUTION_ID = UUID("019937d8-0d10-7b31-8d2d-4e60c8f4f334")
+
+
+def _validation_datasets() -> FakeUsageDatasets:
+    datasets = FakeUsageDatasets()
+    datasets.dataset = replace(datasets.dataset, id=VALIDATION_DATASET_ID, name="验证数据集")
+    datasets.member = replace(
+        datasets.member, id=VALIDATION_MEMBER_ID, dataset_id=VALIDATION_DATASET_ID
+    )
+    datasets.submission = replace(
+        datasets.submission,
+        id=VALIDATION_SUBMISSION_ID,
+        dataset_id=VALIDATION_DATASET_ID,
+        member_id=VALIDATION_MEMBER_ID,
+    )
+    datasets.execution = replace(
+        datasets.execution, id=VALIDATION_EXECUTION_ID, submission_id=VALIDATION_SUBMISSION_ID
+    )
+    datasets.action_list = replace(datasets.action_list, dataset_id=VALIDATION_DATASET_ID)
+    return datasets
+
+
+def _passing_ddm_artifact(
+    datasets: FakeUsageDatasets, jobs: FakeUsageJobs
+) -> tuple[DatasetArtifact, bytes]:
+    source_digest = hashlib.sha256(b"a" * 100).hexdigest()
+    datasets.member = replace(datasets.member, actual_sha256=source_digest)
+    datasets.submission = replace(datasets.submission, source_sha256=source_digest)
+    requested = request_usage_check(
+        dataset_id=datasets.dataset.id,
+        kind=UsageKind.DDM,
+        candidate_id=None,
+        caller=caller(Permission.DATASET_EDIT),
+        now=NOW,
+        datasets=cast(UsageDatasetRepository, datasets),
+        jobs=cast(UsageJobQueue, jobs),
+    )
+    target = begin_usage_check(
+        job=requested.job,
+        datasets=cast(UsageDatasetRepository, datasets),
+        now=NOW + timedelta(seconds=1),
+    )
+    assert target is not None
+    validation = run_usage_check(
+        target=target,
+        storage=cast(ObjectStorage, FakeStorage()),
+        media_probe=FakeMediaProbe(),
+        annotation_volume=FakeAnnotationVolume(),
+        ddm_reader=RecordingDdmReader(),
+    )
+    check = complete_usage_check(
+        target=target,
+        validation=validation,
+        now=NOW + timedelta(seconds=2),
+        datasets=cast(UsageDatasetRepository, datasets),
+    )
+    requested_artifact = request_artifact(
+        dataset_id=datasets.dataset.id,
+        check_id=check.id,
+        caller=caller(Permission.DATASET_EDIT),
+        now=NOW + timedelta(seconds=3),
+        datasets=cast(UsageDatasetRepository, datasets),
+        jobs=cast(UsageJobQueue, jobs),
+    )
+    artifact_target = begin_artifact_generation(
+        job=requested_artifact.job,
+        datasets=cast(UsageDatasetRepository, datasets),
+        now=NOW + timedelta(seconds=4),
+    )
+    assert artifact_target is not None
+
+    def generate(_workspace: Path, _output_filename: str) -> bytes:
+        return json.dumps(
+            {
+                str(datasets.member.id): [
+                    {
+                        "action": 1,
+                        "description": "(1) 取料",
+                        "start_timestamp": 0.0,
+                        "end_timestamp": 5.0,
+                    },
+                    {
+                        "action": 2,
+                        "description": "(2) 安装",
+                        "start_timestamp": 5.0,
+                        "end_timestamp": 10.0,
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        ).encode()
+
+    content, manifest = render_ddm_artifact_with_base(
+        artifact_target,
+        storage=cast(ObjectStorage, FakeStorage()),
+        generate=generate,
+    )
+    artifact = complete_artifact(
+        target=artifact_target,
+        object_key=f"training-datasets/{datasets.member.id}/artifact/annotation.json",
+        artifact_sha256=str(manifest["artifact_sha256"]),
+        artifact_size=len(content),
+        manifest=manifest,
+        now=NOW + timedelta(seconds=5),
+        datasets=cast(UsageDatasetRepository, datasets),
+    )
+    return artifact, content
+
+
+class TwoSetDatasets:
+    """按数据集/成员身份路由到单个 FakeUsageDatasets 的双集仓储。"""
+
+    def __init__(self, *sets: FakeUsageDatasets) -> None:
+        self._sets = tuple(sets)
+
+    def _for_dataset(self, dataset_id: UUID) -> FakeUsageDatasets | None:
+        return next((item for item in self._sets if item.dataset.id == dataset_id), None)
+
+    def _for_member(self, member_id: UUID) -> FakeUsageDatasets | None:
+        return next((item for item in self._sets if item.member.id == member_id), None)
+
+    def _for_check(self, check_id: UUID) -> FakeUsageDatasets | None:
+        return next((item for item in self._sets if check_id in item.checks), None)
+
+    def _for_artifact(self, artifact_id: UUID) -> FakeUsageDatasets | None:
+        return next((item for item in self._sets if artifact_id in item.artifacts), None)
+
+    def dataset_by_id(self, dataset_id: UUID) -> TrainingDataset | None:
+        owner = self._for_dataset(dataset_id)
+        return owner.dataset if owner is not None else None
+
+    def list_members(self, *, dataset_id: UUID) -> list[DatasetMember]:
+        owner = self._for_dataset(dataset_id)
+        return [owner.member] if owner is not None else []
+
+    def member_by_id(self, member_id: UUID) -> DatasetMember | None:
+        owner = self._for_member(member_id)
+        return owner.member if owner is not None else None
+
+    def latest_action_list(self, dataset_id: UUID) -> ActionListRevision | None:
+        owner = self._for_dataset(dataset_id)
+        return owner.action_list if owner is not None else None
+
+    def latest_annotation_submission(self, *, member_id: UUID) -> AnnotationSubmission | None:
+        owner = self._for_member(member_id)
+        return owner.submission if owner is not None else None
+
+    def latest_annotation_execution(self, submission_id: UUID) -> AnnotationExecution | None:
+        return next(
+            (item.execution for item in self._sets if item.submission.id == submission_id), None
+        )
+
+    def usage_check_by_id(self, check_id: UUID) -> UsageCheck | None:
+        owner = self._for_check(check_id)
+        return owner.checks.get(check_id) if owner is not None else None
+
+    def artifact_by_id(self, artifact_id: UUID) -> DatasetArtifact | None:
+        owner = self._for_artifact(artifact_id)
+        return owner.artifacts.get(artifact_id) if owner is not None else None
+
+
+def _frozen_selection(datasets: FakeUsageDatasets, artifact: DatasetArtifact) -> DdmInputSelection:
+    return DdmInputSelection(
+        dataset_id=datasets.dataset.id,
+        usage_check_id=artifact.usage_check_id,
+        artifact_id=artifact.id,
+    )
+
+
+def _seeded_storage(root: Path, objects: Mapping[str, bytes]) -> LocalFileObjectStorage:
+    storage = LocalFileObjectStorage(root)
+    for object_key, content in objects.items():
+        with storage.writing(object_key=object_key) as sink:
+            sink.write(content)
+    return storage
+
+
+def _artifact_key(artifact: DatasetArtifact) -> str:
+    assert artifact.object_key is not None
+    return artifact.object_key
+
+
+def _two_frozen_sets() -> tuple[FakeUsageDatasets, FakeUsageDatasets, FrozenDdmInput, bytes, bytes]:
+    training = FakeUsageDatasets()
+    validation = _validation_datasets()
+    jobs = FakeUsageJobs()
+    training_artifact, training_content = _passing_ddm_artifact(training, jobs)
+    validation_artifact, validation_content = _passing_ddm_artifact(validation, jobs)
+    datasets = TwoSetDatasets(training, validation)
+    frozen = freeze_ddm_input(
+        training=_frozen_selection(training, training_artifact),
+        validation=_frozen_selection(validation, validation_artifact),
+        caller=caller(Permission.DATASET_EDIT),
+        datasets=cast(UsageDatasetRepository, datasets),
+    )
+    return training, validation, frozen, training_content, validation_content
+
+
+def test_freeze_ddm_input_freezes_two_independent_sets() -> None:
+    training = FakeUsageDatasets()
+    validation = _validation_datasets()
+    jobs = FakeUsageJobs()
+    training_artifact, _ = _passing_ddm_artifact(training, jobs)
+    validation_artifact, _ = _passing_ddm_artifact(validation, jobs)
+    datasets = TwoSetDatasets(training, validation)
+
+    frozen = freeze_ddm_input(
+        training=_frozen_selection(training, training_artifact),
+        validation=_frozen_selection(validation, validation_artifact),
+        caller=caller(Permission.DATASET_EDIT),
+        datasets=cast(UsageDatasetRepository, datasets),
+    )
+
+    assert frozen.training.dataset_id == training.dataset.id
+    assert frozen.validation.dataset_id == validation.dataset.id
+    assert frozen.training.artifact_id == training_artifact.id
+    assert frozen.validation.artifact_id == validation_artifact.id
+    assert frozen.training.input_digest == training_artifact.input_digest
+    assert frozen.training.base_commit == BASE_COMMIT
+    assert frozen.training.contract_version == DDM_CONTRACT_VERSION
+    assert frozen.training.consumer_parameters == dict(DDM_CONSUMER_PARAMETERS)
+    assert frozen.training.artifact_object_key == training_artifact.object_key
+    assert frozen.training.artifact_sha256 == training_artifact.artifact_sha256
+    assert len(frozen.training.members) == 1
+    assert frozen.training.members[0].member_id == training.member.id
+    assert frozen.training.members[0].annotation_bytes == FakeAnnotationVolume().annotation_bytes
+
+
+def test_freeze_ddm_input_exposes_immutable_consumer_parameters() -> None:
+    training = FakeUsageDatasets()
+    validation = _validation_datasets()
+    jobs = FakeUsageJobs()
+    training_artifact, _ = _passing_ddm_artifact(training, jobs)
+    validation_artifact, _ = _passing_ddm_artifact(validation, jobs)
+    datasets = TwoSetDatasets(training, validation)
+
+    frozen = freeze_ddm_input(
+        training=_frozen_selection(training, training_artifact),
+        validation=_frozen_selection(validation, validation_artifact),
+        caller=caller(Permission.DATASET_EDIT),
+        datasets=cast(UsageDatasetRepository, datasets),
+    )
+
+    assert dict(frozen.training.consumer_parameters) == dict(DDM_CONSUMER_PARAMETERS)
+    with pytest.raises(TypeError):
+        cast(dict[str, object], frozen.training.consumer_parameters)["mode"] = "eval"
+
+
+def test_freeze_ddm_input_requires_dataset_edit_permission() -> None:
+    training = FakeUsageDatasets()
+    validation = _validation_datasets()
+    jobs = FakeUsageJobs()
+    training_artifact, _ = _passing_ddm_artifact(training, jobs)
+    validation_artifact, _ = _passing_ddm_artifact(validation, jobs)
+    datasets = TwoSetDatasets(training, validation)
+
+    with pytest.raises(AuthorizationRefusedError):
+        freeze_ddm_input(
+            training=_frozen_selection(training, training_artifact),
+            validation=_frozen_selection(validation, validation_artifact),
+            caller=caller(Permission.DATASET_VIEW),
+            datasets=cast(UsageDatasetRepository, datasets),
+        )
+
+
+def test_freeze_ddm_input_rejects_the_same_dataset_for_both_sets() -> None:
+    training = FakeUsageDatasets()
+    jobs = FakeUsageJobs()
+    artifact, _ = _passing_ddm_artifact(training, jobs)
+    datasets = TwoSetDatasets(training)
+
+    with pytest.raises(DatasetRefusedError) as refused:
+        freeze_ddm_input(
+            training=_frozen_selection(training, artifact),
+            validation=_frozen_selection(training, artifact),
+            caller=caller(Permission.DATASET_EDIT),
+            datasets=cast(UsageDatasetRepository, datasets),
+        )
+    assert refused.value.code is DatasetRefusalCode.USAGE_STATE_CONFLICT
+
+
+def test_freeze_ddm_input_rejects_an_artifact_from_another_check() -> None:
+    training = FakeUsageDatasets()
+    validation = _validation_datasets()
+    jobs = FakeUsageJobs()
+    training_artifact, _ = _passing_ddm_artifact(training, jobs)
+    validation_artifact, _ = _passing_ddm_artifact(validation, jobs)
+    datasets = TwoSetDatasets(training, validation)
+
+    with pytest.raises(DatasetRefusedError):
+        freeze_ddm_input(
+            training=_frozen_selection(training, training_artifact),
+            validation=_frozen_selection(validation, training_artifact),
+            caller=caller(Permission.DATASET_EDIT),
+            datasets=cast(UsageDatasetRepository, datasets),
+        )
+    assert validation_artifact.id != training_artifact.id
+
+
+def test_freeze_ddm_input_rejects_a_changed_input() -> None:
+    training = FakeUsageDatasets()
+    validation = _validation_datasets()
+    jobs = FakeUsageJobs()
+    training_artifact, _ = _passing_ddm_artifact(training, jobs)
+    validation_artifact, _ = _passing_ddm_artifact(validation, jobs)
+    datasets = TwoSetDatasets(training, validation)
+    training.member = replace(training.member, object_key="training-datasets/changed.mp4")
+
+    with pytest.raises(DatasetRefusedError) as refused:
+        freeze_ddm_input(
+            training=_frozen_selection(training, training_artifact),
+            validation=_frozen_selection(validation, validation_artifact),
+            caller=caller(Permission.DATASET_EDIT),
+            datasets=cast(UsageDatasetRepository, datasets),
+        )
+    assert refused.value.code is DatasetRefusalCode.USAGE_STATE_CONFLICT
+
+
+def test_freeze_ddm_input_rejects_an_inapplicable_base() -> None:
+    training = FakeUsageDatasets()
+    validation = _validation_datasets()
+    jobs = FakeUsageJobs()
+    training_artifact, _ = _passing_ddm_artifact(training, jobs)
+    validation_artifact, _ = _passing_ddm_artifact(validation, jobs)
+    datasets = TwoSetDatasets(training, validation)
+    stored = training.checks[training_artifact.usage_check_id]
+    training.checks[training_artifact.usage_check_id] = replace(
+        stored, base_commit="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+    )
+
+    with pytest.raises(DatasetRefusedError) as refused:
+        freeze_ddm_input(
+            training=_frozen_selection(training, training_artifact),
+            validation=_frozen_selection(validation, validation_artifact),
+            caller=caller(Permission.DATASET_EDIT),
+            datasets=cast(UsageDatasetRepository, datasets),
+        )
+    assert refused.value.code is DatasetRefusalCode.USAGE_STATE_CONFLICT
+
+
+def test_materialize_ddm_input_writes_vendor_layout_and_artifact_bytes(tmp_path: Path) -> None:
+    training, validation, frozen, training_content, validation_content = _two_frozen_sets()
+    training_artifact = next(iter(training.artifacts.values()))
+    validation_artifact = next(iter(validation.artifacts.values()))
+    storage = _seeded_storage(
+        tmp_path / "objects",
+        {
+            "datasets/source-a.mp4": b"a" * 100,
+            _artifact_key(training_artifact): training_content,
+            _artifact_key(validation_artifact): validation_content,
+        },
+    )
+
+    materialized = materialize_ddm_input(frozen=frozen, storage=storage, root=tmp_path / "input")
+
+    assert materialized.training_directory != materialized.validation_directory
+    train = materialized.training_directory
+    assert (train / f"{training.member.id}.mp4").read_bytes() == b"a" * 100
+    assert (
+        train / str(training.member.id) / f"{training.member.id}_annotation.json"
+    ).read_bytes() == FakeAnnotationVolume().annotation_bytes
+    assert (train / "annotation.json").read_bytes() == training_content
+    validate = materialized.validation_directory
+    assert (validate / "annotation.json").read_bytes() == validation_content
+    assert (validate / f"{validation.member.id}.mp4").read_bytes() == b"a" * 100
+
+
+def test_materialize_ddm_input_does_not_change_an_in_flight_copy(tmp_path: Path) -> None:
+    training, validation, frozen, training_content, validation_content = _two_frozen_sets()
+    training_artifact = next(iter(training.artifacts.values()))
+    validation_artifact = next(iter(validation.artifacts.values()))
+    storage = _seeded_storage(
+        tmp_path / "objects",
+        {
+            "datasets/source-a.mp4": b"a" * 100,
+            _artifact_key(training_artifact): training_content,
+            _artifact_key(validation_artifact): validation_content,
+        },
+    )
+
+    first = materialize_ddm_input(frozen=frozen, storage=storage, root=tmp_path / "input")
+    first_bytes = (first.training_directory / "annotation.json").read_bytes()
+    # 另一命令用同一冻结身份准备时被拒绝，不改动在途副本。
+    with pytest.raises(DatasetRefusedError):
+        materialize_ddm_input(frozen=frozen, storage=storage, root=tmp_path / "input")
+
+    assert (first.training_directory / "annotation.json").read_bytes() == first_bytes
+
+
+def test_materialize_ddm_input_fails_closed_without_leaving_partial(tmp_path: Path) -> None:
+    training, validation, frozen, training_content, _validation_content = _two_frozen_sets()
+    training_artifact = next(iter(training.artifacts.values()))
+    validation_artifact = next(iter(validation.artifacts.values()))
+    storage = _seeded_storage(
+        tmp_path / "objects",
+        {
+            "datasets/source-a.mp4": b"a" * 100,
+            _artifact_key(training_artifact): training_content,
+            _artifact_key(validation_artifact): b"wrong-bytes",
+        },
+    )
+
+    with pytest.raises(DatasetRefusedError):
+        materialize_ddm_input(frozen=frozen, storage=storage, root=tmp_path / "input")
+
+    assert not (tmp_path / "input" / str(frozen.input_id)).exists()
+    # 历史 available 制品与原媒体保持可读。
+    assert (
+        tmp_path / "objects" / _artifact_key(validation_artifact)
+    ).read_bytes() == b"wrong-bytes"
+    assert (tmp_path / "objects" / "datasets/source-a.mp4").read_bytes() == b"a" * 100

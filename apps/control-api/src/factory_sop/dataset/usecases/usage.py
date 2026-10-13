@@ -17,6 +17,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
+from types import MappingProxyType
 from typing import Any, assert_never
 from uuid import UUID
 
@@ -153,6 +154,65 @@ class ArtifactTarget:
     job: ApplicationJob
     artifact: DatasetArtifact
     check: UsageCheck
+
+
+@dataclass(frozen=True, slots=True)
+class DdmInputSelection:
+    """一个训练/验证输入集合要引用的已检查用途来源。"""
+
+    dataset_id: UUID
+    usage_check_id: UUID
+    artifact_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenDdmMemberInput:
+    """冻结的一段登记媒体及其不可变标注副本。"""
+
+    member_id: UUID
+    object_key: str
+    source_sha256: str
+    actual_size: int
+    action_list_revision: int
+    annotation_revision: int
+    annotation_bytes: bytes
+    annotation_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenDdmInputSet:
+    """冻结的一套 DDM 输入集合及其可追溯来源。"""
+
+    dataset_id: UUID
+    usage_check_id: UUID
+    artifact_id: UUID
+    input_digest: str
+    base_commit: str
+    contract_version: str
+    consumer_parameters: Mapping[str, Any]
+    artifact_object_key: str
+    artifact_sha256: str
+    artifact_size: int
+    members: tuple[FrozenDdmMemberInput, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenDdmInput:
+    """一次 DDM 训练输入准备冻结的独立训练集与验证集。"""
+
+    input_id: UUID
+    training: FrozenDdmInputSet
+    validation: FrozenDdmInputSet
+
+
+@dataclass(frozen=True, slots=True)
+class MaterializedDdmInput:
+    """已经把冻结值材料化到独立受限副本的双集结果。"""
+
+    input_id: UUID
+    root: Path
+    training_directory: Path
+    validation_directory: Path
 
 
 def register_vlm_candidate(
@@ -3242,3 +3302,353 @@ def _candidate_for_check(
 def _require_dataset(dataset_id: UUID, datasets: DatasetRepository) -> None:
     if datasets.dataset_by_id(dataset_id) is None:
         raise DatasetRefusedError(DatasetRefusalCode.DATASET_NOT_FOUND)
+
+
+def freeze_ddm_input(
+    *,
+    training: DdmInputSelection,
+    validation: DdmInputSelection,
+    caller: Caller,
+    datasets: DatasetRepository,
+) -> FrozenDdmInput:
+    """在派发前检查适用性并冻结独立的训练/验证来源。
+
+    只在这次短读取边界里核对归属、适用范围与制品清单；返回的结构只持有标量、UUID 与
+    不可变标注字节，后续编辑或另一命令准备都不会改变在途消费内容。
+    """
+    authorize(caller, Permission.DATASET_EDIT)
+    if training.dataset_id == validation.dataset_id:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="训练集与独立验证集必须来自不同数据集",
+        )
+    training_set = _freeze_ddm_input_set(selection=training, datasets=datasets)
+    validation_set = _freeze_ddm_input_set(selection=validation, datasets=datasets)
+    return FrozenDdmInput(
+        input_id=new_id(),
+        training=training_set,
+        validation=validation_set,
+    )
+
+
+def _freeze_ddm_input_set(
+    *, selection: DdmInputSelection, datasets: DatasetRepository
+) -> FrozenDdmInputSet:
+    if datasets.dataset_by_id(selection.dataset_id) is None:
+        raise DatasetRefusedError(DatasetRefusalCode.DATASET_NOT_FOUND)
+    check = datasets.usage_check_by_id(selection.usage_check_id)
+    if check is None:
+        raise DatasetRefusedError(DatasetRefusalCode.USAGE_CHECK_NOT_FOUND)
+    if check.dataset_id != selection.dataset_id:
+        raise DatasetRefusedError(DatasetRefusalCode.RESOURCE_MISMATCH)
+    if check.kind is not UsageKind.DDM:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="只有 DDM 用途检查可以准备训练输入",
+        )
+    if check.status is not UsageCheckStatus.PASSED:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="用途检查尚未通过，不能准备训练输入",
+        )
+    if not usage_check_is_current(check=check, datasets=datasets):
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="用途检查输入已变化或缺少标注，请重新检查",
+        )
+    snapshot = check.input_snapshot
+    if str(snapshot.get("dataset_id")) != str(selection.dataset_id):
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="冻结输入不属于所选数据集",
+        )
+    artifact = datasets.artifact_by_id(selection.artifact_id)
+    if artifact is None:
+        raise DatasetRefusedError(DatasetRefusalCode.ARTIFACT_NOT_FOUND)
+    object_key, artifact_sha256, artifact_size = _require_available_ddm_artifact(
+        artifact=artifact, check=check
+    )
+    return FrozenDdmInputSet(
+        dataset_id=check.dataset_id,
+        usage_check_id=check.id,
+        artifact_id=artifact.id,
+        input_digest=check.input_digest,
+        base_commit=check.base_commit,
+        contract_version=check.contract_version,
+        consumer_parameters=MappingProxyType(dict(DDM_CONSUMER_PARAMETERS)),
+        artifact_object_key=object_key,
+        artifact_sha256=artifact_sha256,
+        artifact_size=artifact_size,
+        members=_freeze_ddm_members(snapshot),
+    )
+
+
+def _require_available_ddm_artifact(
+    *, artifact: DatasetArtifact, check: UsageCheck
+) -> tuple[str, str, int]:
+    """核对制品与检查的归属、摘要及清单，并返回可材料化的不可变身份。"""
+    if (
+        artifact.dataset_id != check.dataset_id
+        or artifact.usage_check_id != check.id
+        or artifact.kind is not UsageKind.DDM
+        or artifact.status is not ArtifactStatus.AVAILABLE
+        or artifact.input_digest != check.input_digest
+    ):
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="制品与用途检查归属不一致",
+        )
+    object_key = artifact.object_key
+    artifact_sha256 = artifact.artifact_sha256
+    artifact_size = artifact.artifact_size
+    if (
+        not isinstance(object_key, str)
+        or not object_key
+        or not isinstance(artifact_sha256, str)
+        or not isinstance(artifact_size, int)
+        or artifact_size <= 0
+    ):
+        raise DatasetRefusedError(
+            DatasetRefusalCode.ARTIFACT_UNAVAILABLE,
+            detail="制品缺少不可变对象身份",
+        )
+    manifest = artifact.manifest
+    if (
+        manifest.get("input_digest") != check.input_digest
+        or manifest.get("base_commit") != check.base_commit
+        or manifest.get("contract_version") != check.contract_version
+        or manifest.get("consumer_parameters") != dict(DDM_CONSUMER_PARAMETERS)
+        or manifest.get("artifact_sha256") != artifact_sha256
+        or manifest.get("artifact_size") != artifact_size
+    ):
+        raise DatasetRefusedError(
+            DatasetRefusalCode.ARTIFACT_UNAVAILABLE,
+            detail="制品清单与用途检查参数不一致",
+        )
+    return object_key, artifact_sha256, artifact_size
+
+
+def _freeze_ddm_members(snapshot: Mapping[str, Any]) -> tuple[FrozenDdmMemberInput, ...]:
+    """从冻结快照深拷贝可材料化的登记媒体与不可变标注副本。"""
+    raw_videos = snapshot.get("videos")
+    raw_scope = snapshot.get("scope")
+    raw_sources = snapshot.get("annotation_sources")
+    if (
+        not isinstance(raw_videos, list)
+        or not isinstance(raw_scope, list)
+        or not isinstance(raw_sources, dict)
+    ):
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="冻结输入缺少可材料化来源",
+        )
+    scope_by_member = {
+        str(item["member_id"]): item
+        for item in raw_scope
+        if isinstance(item, dict)
+        and item.get("member_id") is not None
+        and item.get("status") == MemberStatus.REGISTERED.value
+    }
+    members: list[FrozenDdmMemberInput] = []
+    for video in raw_videos:
+        if not isinstance(video, dict) or video.get("member_id") is None:
+            raise DatasetRefusedError(
+                DatasetRefusalCode.USAGE_STATE_CONFLICT,
+                detail="冻结视频身份无效",
+            )
+        member_key = str(video["member_id"])
+        scope = scope_by_member.get(member_key)
+        source = raw_sources.get(member_key)
+        if not isinstance(scope, dict) or not isinstance(source, dict):
+            raise DatasetRefusedError(
+                DatasetRefusalCode.USAGE_STATE_CONFLICT,
+                detail="冻结输入缺少登记媒体或不可变标注副本",
+            )
+        try:
+            member_id = UUID(member_key)
+            action_list_revision = int(video["action_list_revision"])
+            annotation_revision = int(video["annotation_revision"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise DatasetRefusedError(
+                DatasetRefusalCode.USAGE_STATE_CONFLICT,
+                detail="冻结视频修订无效",
+            ) from error
+        object_key = video.get("object_version_id")
+        source_sha256 = video.get("source_sha256")
+        actual_size = scope.get("actual_size")
+        if not isinstance(object_key, str) or not safe_media_key(object_key):
+            raise DatasetRefusedError(
+                DatasetRefusalCode.USAGE_STATE_CONFLICT,
+                detail="冻结媒体对象键不是安全的相对键",
+            )
+        if (
+            not isinstance(source_sha256, str)
+            or len(source_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in source_sha256.lower())
+        ):
+            raise DatasetRefusedError(
+                DatasetRefusalCode.USAGE_STATE_CONFLICT,
+                detail="冻结媒体摘要无效",
+            )
+        if not isinstance(actual_size, int) or isinstance(actual_size, bool) or actual_size <= 0:
+            raise DatasetRefusedError(
+                DatasetRefusalCode.USAGE_STATE_CONFLICT,
+                detail="冻结媒体大小无效",
+            )
+        encoded = source.get("content_base64")
+        annotation_sha256 = source.get("sha256")
+        if not isinstance(encoded, str) or not isinstance(annotation_sha256, str):
+            raise DatasetRefusedError(
+                DatasetRefusalCode.USAGE_STATE_CONFLICT,
+                detail="冻结标注副本不完整",
+            )
+        try:
+            annotation_bytes = base64.b64decode(encoded, validate=True)
+        except (ValueError, TypeError) as error:
+            raise DatasetRefusedError(
+                DatasetRefusalCode.USAGE_STATE_CONFLICT,
+                detail="冻结标注副本不是有效 base64",
+            ) from error
+        if hashlib.sha256(annotation_bytes).hexdigest() != annotation_sha256:
+            raise DatasetRefusedError(
+                DatasetRefusalCode.ARTIFACT_INTEGRITY_FAILURE,
+                detail="冻结标注副本摘要不一致",
+            )
+        members.append(
+            FrozenDdmMemberInput(
+                member_id=member_id,
+                object_key=object_key,
+                source_sha256=source_sha256,
+                actual_size=actual_size,
+                action_list_revision=action_list_revision,
+                annotation_revision=annotation_revision,
+                annotation_bytes=annotation_bytes,
+                annotation_sha256=annotation_sha256,
+            )
+        )
+    if not members or {str(member.member_id) for member in members} != set(scope_by_member):
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="冻结范围与登记媒体不完整或含缺标注项",
+        )
+    return tuple(members)
+
+
+def materialize_ddm_input(
+    *, frozen: FrozenDdmInput, storage: ObjectStorage, root: Path
+) -> MaterializedDdmInput:
+    """只消费冻结值，把双集材料化到 root 下独立受限副本。
+
+    不重新读取数据库当前修订；每个 input_id 独占一个新建目录，已存在时拒绝，失败只清理
+    本次新建的候选，历史 available 制品与原媒体保持可读。root 由受信组合调用者注入。
+    """
+    input_root = root / str(frozen.input_id)
+    try:
+        input_root.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="该准备身份已存在，不能覆盖在途输入",
+        ) from error
+    except OSError as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.STORAGE_UNAVAILABLE,
+            detail="无法创建训练输入工作副本",
+        ) from error
+    try:
+        training_directory = _materialize_ddm_set(
+            set_input=frozen.training,
+            set_directory=input_root / "training",
+            storage=storage,
+        )
+        validation_directory = _materialize_ddm_set(
+            set_input=frozen.validation,
+            set_directory=input_root / "validation",
+            storage=storage,
+        )
+    except BaseException:
+        shutil.rmtree(input_root, ignore_errors=True)
+        raise
+    return MaterializedDdmInput(
+        input_id=frozen.input_id,
+        root=input_root,
+        training_directory=training_directory,
+        validation_directory=validation_directory,
+    )
+
+
+def _materialize_ddm_set(
+    *,
+    set_input: FrozenDdmInputSet,
+    set_directory: Path,
+    storage: ObjectStorage,
+) -> Path:
+    set_directory.mkdir()
+    for member in set_input.members:
+        video_path = set_directory / f"{member.member_id}.mp4"
+        _download_frozen_object(
+            storage=storage,
+            object_key=member.object_key,
+            destination=video_path,
+            missing_detail="冻结的登记媒体不存在",
+        )
+        _verify_frozen_file(
+            video_path,
+            expected_size=member.actual_size,
+            expected_sha256=member.source_sha256,
+            detail="下载的登记媒体与冻结事实不一致",
+        )
+        if hashlib.sha256(member.annotation_bytes).hexdigest() != member.annotation_sha256:
+            raise DatasetRefusedError(
+                DatasetRefusalCode.ARTIFACT_INTEGRITY_FAILURE,
+                detail="冻结标注副本摘要不一致",
+            )
+        annotation_directory = set_directory / str(member.member_id)
+        annotation_directory.mkdir()
+        (annotation_directory / f"{member.member_id}_annotation.json").write_bytes(
+            member.annotation_bytes
+        )
+    artifact_path = set_directory / "annotation.json"
+    _download_frozen_object(
+        storage=storage,
+        object_key=set_input.artifact_object_key,
+        destination=artifact_path,
+        missing_detail="冻结的已发布聚合制品不存在",
+    )
+    _verify_frozen_file(
+        artifact_path,
+        expected_size=set_input.artifact_size,
+        expected_sha256=set_input.artifact_sha256,
+        detail="已发布聚合制品与冻结摘要不一致",
+    )
+    return set_directory
+
+
+def _download_frozen_object(
+    *, storage: ObjectStorage, object_key: str, destination: Path, missing_detail: str
+) -> None:
+    try:
+        with destination.open("wb") as sink:
+            storage.download_to(object_key=object_key, destination=sink)
+    except ObjectNotFoundError as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.OBJECT_NOT_FOUND, detail=missing_detail
+        ) from error
+    except ObjectStorageUnavailableError as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.STORAGE_UNAVAILABLE,
+            detail="训练素材存储暂时不可用",
+        ) from error
+
+
+def _verify_frozen_file(
+    path: Path, *, expected_size: int, expected_sha256: str, detail: str
+) -> None:
+    try:
+        size = path.stat().st_size
+    except OSError as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.ARTIFACT_INTEGRITY_FAILURE, detail=detail
+        ) from error
+    if size != expected_size or _file_sha256(path) != expected_sha256:
+        raise DatasetRefusedError(DatasetRefusalCode.ARTIFACT_INTEGRITY_FAILURE, detail=detail)

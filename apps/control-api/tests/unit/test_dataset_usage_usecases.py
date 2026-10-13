@@ -2334,7 +2334,7 @@ def test_request_ddm_training_command_replay_same_content_returns_original_comma
     first = submit()
     second = submit()
 
-    # 两次都是真实冻结（服务端输入身份不同），同内容重放仍必须返回原命令且保留原输入身份。
+    # 相同幂等身份与选择在冻结前直接重放，不产生第二次冻结，也不改变原输入身份。
     assert second.command == first.command
     assert second.job == first.job
     assert second.command.payload["input_id"] == first.command.payload["input_id"]

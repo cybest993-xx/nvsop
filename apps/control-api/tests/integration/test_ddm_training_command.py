@@ -23,10 +23,10 @@ import pytest
 from _integration_support import RedisServer, cleanup_dataset, row, settings_for
 from fastapi import Request
 from redis import Redis
-from sqlalchemy import Engine
+from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session as DatabaseSession
 
-from factory_sop.auth.authorization import Caller
+from factory_sop.auth.authorization import AuthorizationRefusedError, Caller
 from factory_sop.auth.model import User, UserStatus
 from factory_sop.auth.permissions import Permission
 from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
@@ -66,8 +66,9 @@ from factory_sop.dataset.usecases.usage import (
     run_usage_check,
 )
 from factory_sop.job.adapters.dispatcher import ArqJobDispatcher
-from factory_sop.job.adapters.repository import PostgresUsageJobQueue
+from factory_sop.job.adapters.repository import PostgresJobRepository, PostgresUsageJobQueue
 from factory_sop.job.adapters.worker import dispatch_pending_jobs
+from factory_sop.job.api import ApplicationJob, JobStatus, JobType
 from factory_sop.persistence import request_session, session_factory
 
 NOW = datetime(2026, 10, 13, 1, 0, tzinfo=UTC)
@@ -662,3 +663,187 @@ def test_ddm_command_replay_conflict_and_concurrent_submission(
         cleanup_dataset(engine, training_id)
         cleanup_dataset(engine, validation_id)
         cleanup_dataset(engine, other_validation_id)
+
+
+def test_ddm_command_replay_survives_source_current_revision_change(
+    engine: Engine,
+    dataset_storage_root: Path,
+) -> None:
+    """来源当前修订变化后，同键同选择仍重放原命令；新键或新选择才重新判定。"""
+    del dataset_storage_root
+    training_id, validation_id, other_validation_id = uuid4(), uuid4(), uuid4()
+    with session_factory(engine).begin() as session:
+        train_check, train_artifact = _seed_passing_ddm(
+            session,
+            label="stale-train",
+            dataset_id=training_id,
+            member_id=uuid4(),
+            context_id=uuid4(),
+            submission_id=uuid4(),
+            execution_id=uuid4(),
+            now=NOW,
+        )
+        val_check, val_artifact = _seed_passing_ddm(
+            session,
+            label="stale-val",
+            dataset_id=validation_id,
+            member_id=uuid4(),
+            context_id=uuid4(),
+            submission_id=uuid4(),
+            execution_id=uuid4(),
+            now=NOW + timedelta(seconds=10),
+        )
+        other_check, other_artifact = _seed_passing_ddm(
+            session,
+            label="stale-other",
+            dataset_id=other_validation_id,
+            member_id=uuid4(),
+            context_id=uuid4(),
+            submission_id=uuid4(),
+            execution_id=uuid4(),
+            now=NOW + timedelta(seconds=20),
+        )
+    training = DdmInputSelection(
+        dataset_id=training_id, usage_check_id=train_check, artifact_id=train_artifact
+    )
+    validation = DdmInputSelection(
+        dataset_id=validation_id, usage_check_id=val_check, artifact_id=val_artifact
+    )
+    changed_validation = DdmInputSelection(
+        dataset_id=other_validation_id, usage_check_id=other_check, artifact_id=other_artifact
+    )
+    try:
+        first = _submit(
+            engine, idempotency_key="ddm-stale", training=training, validation=validation
+        )
+
+        # 训练数据集出现新动作清单修订，令已通过用途检查不再是当前输入。
+        with session_factory(engine).begin() as session:
+            assert PostgresDatasetRepository(session).add_action_list(
+                ActionListRevision(
+                    dataset_id=training_id,
+                    revision=2,
+                    actions=("(1) 取料", "(2) 安装", "(3) 复核"),
+                    created_by=ACTOR_ID,
+                    created_at=NOW + timedelta(seconds=30),
+                )
+            )
+
+        # 相同键与选择：在冻结前重放首次命令，不重新冻结、不因当前性变化被拒。
+        replay = _submit(
+            engine, idempotency_key="ddm-stale", training=training, validation=validation
+        )
+        assert replay.command.id == first.command.id
+        assert replay.job.id == first.job.id
+        assert replay.command.payload["input_id"] == first.command.payload["input_id"]
+
+        # 新键：仍执行完整冻结与当前性校验，过期来源必须被拒。
+        with pytest.raises(DatasetRefusedError) as stale:
+            _submit(
+                engine,
+                idempotency_key="ddm-stale-fresh",
+                training=training,
+                validation=validation,
+            )
+        assert stale.value.code is DatasetRefusalCode.USAGE_STATE_CONFLICT
+
+        # 相同键但选择变化：冲突，不静默重绑定到另一份来源。
+        with pytest.raises(DatasetRefusedError) as conflict:
+            _submit(
+                engine,
+                idempotency_key="ddm-stale",
+                training=training,
+                validation=changed_validation,
+            )
+        assert conflict.value.code is DatasetRefusalCode.IDEMPOTENCY_CONFLICT
+
+        # 未授权者不能借重放读取或恢复已受理命令。
+        with session_factory(engine)() as session, pytest.raises(AuthorizationRefusedError):
+            request_ddm_training_command(
+                training=training,
+                validation=validation,
+                idempotency_key="ddm-stale",
+                caller=_caller(Permission.DATASET_VIEW),
+                now=datetime.now(UTC),
+                datasets=PostgresDatasetRepository(session),
+                jobs=PostgresUsageJobQueue(session, _noop_dispatch),
+            )
+    finally:
+        cleanup_dataset(engine, training_id)
+        cleanup_dataset(engine, validation_id)
+        cleanup_dataset(engine, other_validation_id)
+
+
+def _assert_redis_job(redis_client: Redis, job_id: UUID) -> None:
+    marker = str(job_id).encode()
+    assert any(marker in key for key in cast("list[bytes]", redis_client.keys("arq:*")))
+
+
+def test_outbox_scan_skips_held_ddm_jobs_and_dispatches_later_executable_job(
+    engine: Engine,
+    dataset_storage_root: Path,
+    redis_server: RedisServer,
+    redis_client: Redis,
+) -> None:
+    """held 的 DDM 行不得占满补投窗口，窗口之后的可执行任务仍要被真实投递。"""
+    settings = settings_for(engine, storage_root=dataset_storage_root, redis_url=redis_server.url)
+    held_dataset_id = uuid4()
+    executable_member_id = uuid4()
+    held_jobs = [
+        ApplicationJob(
+            id=uuid4(),
+            job_type=JobType.DATASET_DDM_TRAINING,
+            status=JobStatus.PENDING,
+            member_id=held_dataset_id,
+            attempt_id=uuid4(),
+            created_at=NOW - timedelta(minutes=5) + timedelta(seconds=index),
+            updated_at=NOW - timedelta(minutes=5) + timedelta(seconds=index),
+            failure_code=None,
+            dataset_id=held_dataset_id,
+        )
+        for index in range(100)
+    ]
+    try:
+        with session_factory(engine).begin() as session:
+            repository = PostgresJobRepository(session)
+            for job in held_jobs:
+                repository.add(job)
+            executable = repository.get_or_create_validation(
+                member_id=executable_member_id,
+                attempt_id=uuid4(),
+                now=NOW,
+            )
+        dispatcher = ArqJobDispatcher.from_settings(
+            settings, session_factory=session_factory(engine)
+        )
+        context: dict[str, Any] = {
+            "dispatcher": dispatcher,
+            "settings": settings,
+            "session_factory": session_factory(engine),
+        }
+        asyncio.run(dispatch_pending_jobs(context))
+
+        _assert_redis_job(redis_client, executable.id)
+        for held in held_jobs:
+            _assert_no_redis_job(redis_client, held.id)
+        assert row(
+            engine,
+            "SELECT status, outbox_status FROM job_application_job WHERE id = :job_id",
+            job_id=executable.id,
+        ) == ("enqueued", "dispatched")
+        for held in held_jobs:
+            assert row(
+                engine,
+                "SELECT status, outbox_status FROM job_application_job WHERE id = :job_id",
+                job_id=held.id,
+            ) == ("pending", "pending")
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM job_application_job WHERE dataset_id = :dataset_id"),
+                {"dataset_id": held_dataset_id},
+            )
+            connection.execute(
+                text("DELETE FROM job_application_job WHERE member_id = :member_id"),
+                {"member_id": executable_member_id},
+            )

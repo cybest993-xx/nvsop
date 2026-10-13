@@ -476,6 +476,8 @@ class PostgresJobRepository:
         return result.rowcount == 1
 
     def pending(self, *, limit: int) -> list[ApplicationJob]:
+        # held 类型（DDM 训练命令）由已知派发放行策略保留为 pending；扫描器在 ORDER/LIMIT
+        # 之前排除它，避免大量 held 行占满窗口并饿死后面可执行的任务。
         rows = self._session.scalars(
             select(ApplicationJobRow)
             .where(ApplicationJobRow.outbox_status == "pending")
@@ -484,6 +486,7 @@ class PostgresJobRepository:
                     (JobStatus.SUCCEEDED.value, JobStatus.FAILED.value, JobStatus.SUPERSEDED.value)
                 )
             )
+            .where(ApplicationJobRow.job_type != JobType.DATASET_DDM_TRAINING.value)
             .order_by(ApplicationJobRow.created_at, ApplicationJobRow.id)
             .limit(limit)
         ).all()

@@ -2,7 +2,7 @@
 
 S072 只受理命令并把命令与 outbox 事实写入同一请求事务，命令保持 ``pending``；不注册
 可实际 start 的公开操作，也不伪称训练开始。真正的派发（S073）与结果登记（S074）就绪后
-再释放并投递该命令。冻结负载由 dataset 拥有的窄 codec 编解码，`job` owner 不接触其中
+再释放并投递该命令。冻结负载由 dataset 拥有的窄编码器编码，`job` owner 不接触其中
 的 JSON 细节。
 """
 
@@ -57,12 +57,29 @@ def request_ddm_training_command(
 
     授权先于任何读取与重放判断；只做短事务的业务读取与写入，耗时的材料化/HTTP 派发属于
     后续 S073 阶段，不占请求事务。返回 ``pending`` 命令表示已受理，绝不表示训练已开始。
+    已受理幂等身份先于冻结重放首次命令，来源数据集当前修订变化不会改写已受理内容。
     """
     authorize(caller, Permission.DATASET_EDIT)
     if not idempotency_key.strip() or len(idempotency_key) > _MAX_IDEMPOTENCY_KEY_LENGTH:
         raise DatasetRefusedError(
             DatasetRefusalCode.IDEMPOTENCY_CONFLICT,
             detail="DDM 训练命令幂等键不能为空且不能超过 255 个字符",
+        )
+    dataset_id = training.dataset_id
+    # 幂等身份在冻结之前裁决：已受理命令按首次冻结内容重放，不因来源数据集当前
+    # 修订/标注/成员变化而重新冻结成“新内容”，也不对重放重复执行当前性校验。
+    existing = datasets.ddm_training_command_by_idempotency(
+        dataset_id=dataset_id,
+        idempotency_key=idempotency_key,
+    )
+    if existing is not None:
+        return _replay_command(
+            existing=existing,
+            training=training,
+            validation=validation,
+            dataset_id=dataset_id,
+            now=now,
+            jobs=jobs,
         )
     frozen = freeze_ddm_input(
         training=training,
@@ -72,19 +89,6 @@ def request_ddm_training_command(
     )
     payload = encode_frozen_ddm_input(frozen)
     digest = request_digest(payload)
-    dataset_id = training.dataset_id
-    existing = datasets.ddm_training_command_by_idempotency(
-        dataset_id=dataset_id,
-        idempotency_key=idempotency_key,
-    )
-    if existing is not None:
-        return _replay_command(
-            existing=existing,
-            digest=digest,
-            dataset_id=dataset_id,
-            now=now,
-            jobs=jobs,
-        )
     command = DdmTrainingCommand(
         id=new_id(),
         dataset_id=dataset_id,
@@ -110,7 +114,8 @@ def request_ddm_training_command(
             )
         return _replay_command(
             existing=existing,
-            digest=digest,
+            training=training,
+            validation=validation,
             dataset_id=dataset_id,
             now=now,
             jobs=jobs,
@@ -140,13 +145,22 @@ def request_ddm_training_command(
 def _replay_command(
     *,
     existing: DdmTrainingCommand,
-    digest: str,
+    training: DdmInputSelection,
+    validation: DdmInputSelection,
     dataset_id: UUID,
     now: datetime,
     jobs: DdmTrainingJobQueue,
 ) -> DdmTrainingCommandResult:
-    """同一幂等身份同内容返回原命令；内容不同立即冲突，不静默改写已受理命令。"""
-    if existing.request_digest != digest:
+    """同一幂等身份且调用者选择的训练/验证来源不变时返回原命令；否则冲突。
+
+    只比较调用者提供的选择三元组与首次受理时冻结的载荷，不重新冻结，也不复核来源数据集的
+    当前修订/标注/成员；服务端固定的消费参数与派生身份保持首次受理事实。
+    """
+    if not _matches_recorded_selection(
+        existing=existing,
+        training=training,
+        validation=validation,
+    ):
         raise DatasetRefusedError(
             DatasetRefusalCode.IDEMPOTENCY_CONFLICT,
             detail="幂等键已对应另一份 DDM 训练命令内容",
@@ -157,6 +171,35 @@ def _replay_command(
         now=now,
     )
     return DdmTrainingCommandResult(command=existing, job=job)
+
+
+def _matches_recorded_selection(
+    *,
+    existing: DdmTrainingCommand,
+    training: DdmInputSelection,
+    validation: DdmInputSelection,
+) -> bool:
+    """比较调用者选择三元组与已冻结负载，不读来源数据集的当前状态。"""
+    payload = existing.payload
+    training_set = payload.get("training")
+    validation_set = payload.get("validation")
+    if not isinstance(training_set, Mapping) or not isinstance(validation_set, Mapping):
+        return False
+    return _recorded_triple(training_set) == _selection_triple(training) and _recorded_triple(
+        validation_set
+    ) == _selection_triple(validation)
+
+
+def _recorded_triple(value: Mapping[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(value.get("dataset_id")),
+        str(value.get("usage_check_id")),
+        str(value.get("artifact_id")),
+    )
+
+
+def _selection_triple(value: DdmInputSelection) -> tuple[str, str, str]:
+    return (str(value.dataset_id), str(value.usage_check_id), str(value.artifact_id))
 
 
 def encode_frozen_ddm_input(frozen: FrozenDdmInput) -> dict[str, Any]:

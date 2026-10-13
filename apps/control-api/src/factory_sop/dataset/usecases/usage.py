@@ -84,6 +84,15 @@ DDM_CONSUMER_PARAMETERS: Mapping[str, object] = {
     "min_change_dur": 0.3,
     "video_backend": "pyav",
 }
+# 真实验证读取器 DDMValStreamingDataset 消费的按角色输入参数：固定 base 的
+# pl_ddm_datamodule.setup 从 dataset_config 与 val_config 取值（temporal_stride
+# 默认 1，min_change_dur 同样传给验证）；不纳入 augmentation 与 model_config。
+DDM_VALIDATION_CONSUMER_PARAMETERS: Mapping[str, object] = {
+    "frames_per_side": 5,
+    "downsample": 1,
+    "temporal_stride": 1,
+    "min_change_dur": 0.3,
+}
 # 基座 ddm-training-ms 在开始微调时分别生成并让训练/验证读取的聚合文件名
 # （utils/constant.py 的 DDM_TRAIN_ANNOTATION_NAME / DDM_VAL_ANNOTATION_NAME）；
 # 校验必须核对这两个真实消费文件，而不是仅核对冻结输入清单。
@@ -210,6 +219,9 @@ class FrozenDdmInput:
     input_id: UUID
     training: FrozenDdmInputSet
     validation: FrozenDdmInputSet
+    # 仅 owner 内存态的验证读取器参数，从固定 base 的实际验证 reader 参数冻结；
+    # 不进入既有训练 artifact/check 的 consumer_parameters 协议。
+    validation_consumer_parameters: Mapping[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -3361,6 +3373,7 @@ def freeze_ddm_input(
         input_id=new_id(),
         training=training_set,
         validation=validation_set,
+        validation_consumer_parameters=MappingProxyType(dict(DDM_VALIDATION_CONSUMER_PARAMETERS)),
     )
 
 
@@ -3691,16 +3704,26 @@ def verify_ddm_input_consumption(
     *,
     frozen: FrozenDdmInput,
     materialized: MaterializedDdmInput,
+    training_consumer_parameters: Mapping[str, object],
+    validation_consumer_parameters: Mapping[str, object],
     generate: Callable[[Path, str], bytes],
 ) -> DdmInputConsumption:
     """在受限工作副本上运行原聚合器，核对训练/验证实际消费的文件与冻结清单一致。
 
     基座读取器会静默跳过缺失视频，原聚合器会静默跳过缺标注视频，训练服务在验证
-    annotation 缺失或无效时还会回退训练集；只核对冻结输入清单发现不了这些情况。这里对
-    每个角色运行真实的 generate_ddm_annotation，读取它实际写出的、训练所消费的 annotation
-    文件，与冻结来源逐项比对；任一不一致立即拒绝，绝不把部分输入登记为有效训练准备。
-    校验只读工作副本，不改写原不可变制品，历史成功也不因失败重写。
+    annotation 缺失或无效时还会回退训练集；只核对冻结输入清单发现不了这些情况。实际
+    调用者必须显式传入两个 reader 实际将消费的按角色参数：每个角色运行真实的
+    generate_ddm_annotation，读取它实际写出的、训练所消费的 annotation 文件，与冻结来源
+    逐项比对；任一不一致（含验证 temporal_stride 等参数不同）立即拒绝，绝不把部分输入
+    登记为有效训练准备。校验只读工作副本，不改写原不可变制品，历史成功也不因失败重写。
     """
+    if (materialized.root / DDM_CONSUMPTION_RECORD_FILENAME).exists():
+        # 成功根上重复生成会覆盖已写的消费文件，使旧成功记录的摘要失配；
+        # 在任何原聚合器写入前就拒绝，新准备必须使用新的输入身份与目录。
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="该准备目录已有成功消费记录，请用新的输入身份与目录准备",
+        )
     if materialized.input_id != frozen.input_id:
         raise DatasetRefusedError(
             DatasetRefusalCode.USAGE_STATE_CONFLICT,
@@ -3717,6 +3740,16 @@ def verify_ddm_input_consumption(
         raise DatasetRefusedError(
             DatasetRefusalCode.USAGE_STATE_CONFLICT,
             detail="训练集与验证集必须是非空、互不重叠的独立来源",
+        )
+    if dict(training_consumer_parameters) != dict(frozen.training.consumer_parameters):
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="实际训练消费参数与冻结值不一致",
+        )
+    if dict(validation_consumer_parameters) != dict(frozen.validation_consumer_parameters):
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="实际验证消费参数与冻结值不一致",
         )
     digests: dict[str, str] = {}
     consumed: list[ConsumedDdmFile] = []
@@ -3759,18 +3792,31 @@ def verify_ddm_input_consumption(
         validation_annotation_sha256=digests["validation"],
         consumed_files=tuple(consumed),
     )
-    _write_ddm_consumption_record(materialized.root, consumption)
+    _write_ddm_consumption_record(
+        materialized.root,
+        consumption,
+        training_consumer_parameters=training_consumer_parameters,
+        validation_consumer_parameters=validation_consumer_parameters,
+    )
     return consumption
 
 
-def _write_ddm_consumption_record(root: Path, result: DdmInputConsumption) -> None:
-    """把实际消费来源与摘要写成 owner 工作目录内可复验的记录，不新增表。"""
+def _write_ddm_consumption_record(
+    root: Path,
+    result: DdmInputConsumption,
+    *,
+    training_consumer_parameters: Mapping[str, object],
+    validation_consumer_parameters: Mapping[str, object],
+) -> None:
+    """把实际消费来源、按角色参数与摘要写成 owner 工作目录内可复验的记录，不新增表。"""
     record = {
         "input_id": str(result.input_id),
         "training_annotation_filename": result.training_annotation_filename,
         "training_annotation_sha256": result.training_annotation_sha256,
         "validation_annotation_filename": result.validation_annotation_filename,
         "validation_annotation_sha256": result.validation_annotation_sha256,
+        "training_consumer_parameters": dict(training_consumer_parameters),
+        "validation_consumer_parameters": dict(validation_consumer_parameters),
         "consumed_files": [
             {
                 "role": item.role,
@@ -3786,12 +3832,7 @@ def _write_ddm_consumption_record(root: Path, result: DdmInputConsumption) -> No
 
 
 def _require_consumable_ddm_set(*, set_input: FrozenDdmInputSet, directory: Path) -> None:
-    """核对工作副本持有该角色全部登记媒体与不可变标注副本，且消费参数与冻结值一致。"""
-    if dict(set_input.consumer_parameters) != dict(DDM_CONSUMER_PARAMETERS):
-        raise DatasetRefusedError(
-            DatasetRefusalCode.USAGE_STATE_CONFLICT,
-            detail="训练消费参数与冻结参数不一致",
-        )
+    """核对工作副本持有该角色全部登记媒体与不可变标注副本，且基座与契约版本一致。"""
     if set_input.contract_version != DDM_CONTRACT_VERSION or set_input.base_commit != BASE_COMMIT:
         raise DatasetRefusedError(
             DatasetRefusalCode.USAGE_STATE_CONFLICT,

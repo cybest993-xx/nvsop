@@ -55,6 +55,7 @@ from factory_sop.dataset.usecases.usage import (
     BASE_COMMIT,
     DDM_CONSUMER_PARAMETERS,
     DDM_CONTRACT_VERSION,
+    DDM_VALIDATION_CONSUMER_PARAMETERS,
     VLM_CONTRACT_VERSION,
     ConsumedDdmFile,
     DdmInputConsumption,
@@ -1896,6 +1897,14 @@ def _materialized_two_sets(
     return training, validation, frozen, materialized
 
 
+def _ddm_role_parameters() -> dict[str, Mapping[str, object]]:
+    """实际调用者应显式供给的按角色 reader 参数（与冻结值一致）。"""
+    return {
+        "training_consumer_parameters": dict(DDM_CONSUMER_PARAMETERS),
+        "validation_consumer_parameters": dict(DDM_VALIDATION_CONSUMER_PARAMETERS),
+    }
+
+
 def test_verify_ddm_input_consumption_runs_real_base_aggregation(tmp_path: Path) -> None:
     training, validation, frozen, materialized = _materialized_two_sets(tmp_path)
 
@@ -1903,12 +1912,15 @@ def test_verify_ddm_input_consumption_runs_real_base_aggregation(tmp_path: Path)
         frozen=frozen,
         materialized=materialized,
         generate=NvidiaDdmAnnotationGenerator().generate,
+        **_ddm_role_parameters(),
     )
 
     assert isinstance(consumption, DdmInputConsumption)
     assert consumption.input_id == frozen.input_id
     assert consumption.training_annotation_filename == "ddm_train_annotation.json"
     assert consumption.validation_annotation_filename == "ddm_val_annotation.json"
+    # 冻结值来自固定 base 的实际验证 reader 参数。
+    assert dict(frozen.validation_consumer_parameters) == dict(DDM_VALIDATION_CONSUMER_PARAMETERS)
     # 真实基座聚合器写出的训练/验证消费文件各自只覆盖本集合的冻结成员。
     training_document = json.loads(
         (materialized.training_directory / "ddm_train_annotation.json").read_bytes()
@@ -1941,6 +1953,8 @@ def test_verify_ddm_input_consumption_runs_real_base_aggregation(tmp_path: Path)
     record = json.loads((materialized.root / "ddm_input_consumption.json").read_bytes())
     assert record["training_annotation_sha256"] == consumption.training_annotation_sha256
     assert record["validation_annotation_sha256"] == consumption.validation_annotation_sha256
+    assert record["training_consumer_parameters"] == dict(DDM_CONSUMER_PARAMETERS)
+    assert record["validation_consumer_parameters"] == dict(DDM_VALIDATION_CONSUMER_PARAMETERS)
     assert {item["filename"] for item in record["consumed_files"]} == {
         f"{training.member.id}.mp4",
         f"{validation.member.id}.mp4",
@@ -1970,6 +1984,7 @@ def test_verify_ddm_input_consumption_rejects_changed_segment_content(tmp_path: 
             frozen=frozen,
             materialized=materialized,
             generate=NvidiaDdmAnnotationGenerator().generate,
+            **_ddm_role_parameters(),
         )
 
     assert refused.value.code is DatasetRefusalCode.ARTIFACT_UNAVAILABLE
@@ -1986,6 +2001,7 @@ def test_verify_ddm_input_consumption_rejects_a_video_the_base_would_skip(tmp_pa
             frozen=frozen,
             materialized=materialized,
             generate=NvidiaDdmAnnotationGenerator().generate,
+            **_ddm_role_parameters(),
         )
 
     assert refused.value.code is DatasetRefusalCode.ARTIFACT_UNAVAILABLE
@@ -2003,6 +2019,7 @@ def test_verify_ddm_input_consumption_rejects_a_shared_validation_copy(tmp_path:
                 materialized, validation_directory=materialized.training_directory
             ),
             generate=NvidiaDdmAnnotationGenerator().generate,
+            **_ddm_role_parameters(),
         )
 
     assert refused.value.code is DatasetRefusalCode.USAGE_STATE_CONFLICT
@@ -2023,6 +2040,112 @@ def test_verify_ddm_input_consumption_rejects_changed_consumer_parameters(tmp_pa
             frozen=changed,
             materialized=materialized,
             generate=NvidiaDdmAnnotationGenerator().generate,
+            **_ddm_role_parameters(),
         )
 
     assert refused.value.code is DatasetRefusalCode.USAGE_STATE_CONFLICT
+
+
+def test_verify_ddm_input_consumption_refuses_to_overwrite_a_successful_root(
+    tmp_path: Path,
+) -> None:
+    _training, _validation, frozen, materialized = _materialized_two_sets(tmp_path)
+    real_generate = NvidiaDdmAnnotationGenerator().generate
+    calls: list[tuple[Path, str]] = []
+
+    def counting_generate(directory: Path, filename: str) -> bytes:
+        calls.append((directory, filename))
+        return real_generate(directory, filename)
+
+    first = verify_ddm_input_consumption(
+        frozen=frozen,
+        materialized=materialized,
+        generate=counting_generate,
+        **_ddm_role_parameters(),
+    )
+    calls_after_first = len(calls)
+    annotation_path = materialized.training_directory / "ddm_train_annotation.json"
+    saved_annotation = annotation_path.read_bytes()
+    record_path = materialized.root / "ddm_input_consumption.json"
+    saved_record = record_path.read_bytes()
+    training_artifact_key = frozen.training.artifact_object_key
+    saved_artifact = (tmp_path / "objects" / training_artifact_key).read_bytes()
+    saved_sha = json.loads(saved_record)["training_annotation_sha256"]
+
+    # 篡改成员标注：若再次生成，会写出一份与旧成功记录 SHA 不符的新消费文件。
+    member = frozen.training.members[0]
+    annotation_directory = materialized.training_directory / str(member.member_id)
+    (annotation_directory / f"{member.member_id}_annotation.json").write_text(
+        json.dumps(
+            [
+                {
+                    "action": 1,
+                    "description": "(1) 取料",
+                    "start_timestamp": 0.0,
+                    "end_timestamp": 3.0,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DatasetRefusedError) as refused:
+        verify_ddm_input_consumption(
+            frozen=frozen,
+            materialized=materialized,
+            generate=counting_generate,
+            **_ddm_role_parameters(),
+        )
+
+    assert refused.value.code is DatasetRefusalCode.USAGE_STATE_CONFLICT
+    # 任何原聚合器写入之前就拒绝，历史成功产物、记录与不可变制品均未被覆盖。
+    assert len(calls) == calls_after_first
+    assert annotation_path.read_bytes() == saved_annotation
+    assert record_path.read_bytes() == saved_record
+    assert (tmp_path / "objects" / training_artifact_key).read_bytes() == saved_artifact
+    assert saved_sha == first.training_annotation_sha256
+
+
+def test_verify_ddm_input_consumption_rejects_changed_validation_temporal_stride(
+    tmp_path: Path,
+) -> None:
+    _training, _validation, frozen, materialized = _materialized_two_sets(tmp_path)
+    parameters = _ddm_role_parameters()
+    parameters["validation_consumer_parameters"] = {
+        **parameters["validation_consumer_parameters"],
+        "temporal_stride": 2,
+    }
+
+    with pytest.raises(DatasetRefusedError) as refused:
+        verify_ddm_input_consumption(
+            frozen=frozen,
+            materialized=materialized,
+            generate=NvidiaDdmAnnotationGenerator().generate,
+            **parameters,
+        )
+
+    assert refused.value.code is DatasetRefusalCode.USAGE_STATE_CONFLICT
+    # 参数不符时不得落下成功消费记录。
+    assert not (materialized.root / "ddm_input_consumption.json").exists()
+
+
+def test_verify_ddm_input_consumption_rejects_changed_training_parameter(
+    tmp_path: Path,
+) -> None:
+    _training, _validation, frozen, materialized = _materialized_two_sets(tmp_path)
+    parameters = _ddm_role_parameters()
+    parameters["training_consumer_parameters"] = {
+        **parameters["training_consumer_parameters"],
+        "frames_per_side": 3,
+    }
+
+    with pytest.raises(DatasetRefusedError) as refused:
+        verify_ddm_input_consumption(
+            frozen=frozen,
+            materialized=materialized,
+            generate=NvidiaDdmAnnotationGenerator().generate,
+            **parameters,
+        )
+
+    assert refused.value.code is DatasetRefusalCode.USAGE_STATE_CONFLICT
+    assert not (materialized.root / "ddm_input_consumption.json").exists()

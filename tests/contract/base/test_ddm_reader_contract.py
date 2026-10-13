@@ -356,6 +356,8 @@ class DdmReaderContractTest(unittest.TestCase):
         self.assertIn('downsample=self.dataset_config["downsample"]', setup)
         self.assertIn('temporal_stride=self.dataset_config["val_config"]["temporal_stride"]', setup)
         self.assertIn("DDMDataset(", setup)
+        # min_change_dur 同时传给训练与验证 reader。
+        self.assertEqual(setup.count('min_change_dur=self.dataset_config["min_change_dur"]'), 2)
         self.assertIn('anno_path=self.dataset_config["train_config"]["anno_path"]', setup)
         self.assertIn('data_root=self.dataset_config["train_config"]["data_root"]', setup)
 

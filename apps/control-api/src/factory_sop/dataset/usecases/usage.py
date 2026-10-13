@@ -57,6 +57,7 @@ from factory_sop.dataset.storage import (
     ObjectStorageUnavailableError,
 )
 from factory_sop.dataset.usage import (
+    VLM_CONSUMER_PARAMETERS,
     DdmReaderInputError,
     DdmReaderUnavailableError,
     DdmSampleClassEmptyError,
@@ -100,6 +101,9 @@ DDM_TRAINING_ANNOTATION_FILENAME = "ddm_train_annotation.json"
 DDM_VALIDATION_ANNOTATION_FILENAME = "ddm_val_annotation.json"
 # 实际消费来源与摘要的可复验记录，写在 owner 的工作副本根目录，不新增表。
 DDM_CONSUMPTION_RECORD_FILENAME = "ddm_input_consumption.json"
+# 真实递归发现消费的候选记录文件名；管理清单写在发现目录之外，不进入训练读取。
+VLM_RECORDS_FILENAME = "vlm_candidate_records.json"
+VLM_MANIFEST_FILENAME = "vlm_input_manifest.json"
 _EPSILON = 1e-6
 _logger = get_logger("dataset")
 
@@ -258,6 +262,60 @@ class DdmInputConsumption:
     validation_annotation_filename: str
     validation_annotation_sha256: str
     consumed_files: tuple[ConsumedDdmFile, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class VlmInputSelection:
+    """一个要材料化的已检查 VLM 来源。"""
+
+    dataset_id: UUID
+    usage_check_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenVlmMediaInput:
+    """冻结的一条 VLM 媒体映射及其不可变来源身份。"""
+
+    key: str
+    member_id: UUID
+    is_annotation_clip: bool
+    object_key: str
+    source_sha256: str
+    actual_size: int
+    upstream_data_id: str | None
+    upstream_video_id: str | None
+    clip_filename: str | None
+    derived_video_sha256: str | None
+    derived_video_size: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenVlmInput:
+    """一次 VLM 输入准备冻结的候选记录与媒体来源。"""
+
+    input_id: UUID
+    dataset_id: UUID
+    usage_check_id: UUID
+    candidate_id: UUID
+    candidate_kind: str
+    input_digest: str
+    base_commit: str
+    contract_version: str
+    consumer_parameters: Mapping[str, Any]
+    # 记录冻结为不可变字节，后续候选/动作列表编辑不会改变在途消费内容。
+    records_bytes: bytes
+    records_sha256: str
+    media: tuple[FrozenVlmMediaInput, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MaterializedVlmInput:
+    """已经把冻结值材料化到独立受限副本的结果。"""
+
+    input_id: UUID
+    root: Path
+    reader_directory: Path
+    manifest_path: Path
 
 
 def register_vlm_candidate(
@@ -594,6 +652,7 @@ def _freeze_vlm(
     snapshot["actions"] = list(actions.actions)
     snapshot["base_commit"] = BASE_COMMIT
     snapshot["contract_version"] = VLM_CONTRACT_VERSION
+    snapshot["consumer_parameters"] = json.loads(canonical_json(VLM_CONSUMER_PARAMETERS))
     scope: list[dict[str, Any]] = []
     for item in candidate.media:
         member = datasets.member_by_id(item.member_id)
@@ -1145,6 +1204,8 @@ def _snapshot_is_current(
             pass
         case _:
             assert_never(kind)
+    if snapshot.get("consumer_parameters") != json.loads(canonical_json(VLM_CONSUMER_PARAMETERS)):
+        return False
     candidate_id = snapshot.get("candidate_id")
     dataset_id = snapshot.get("dataset_id")
     raw_action_list_revision = snapshot.get("action_list_revision")
@@ -3903,3 +3964,431 @@ def _consume_ddm_set(
             )
     # 只对真实写出的消费文件取一次摘要并登记；原制品摘要仍是原制品的，不当实际摘要用。
     return hashlib.sha256(content).hexdigest()
+
+
+def freeze_vlm_input(
+    *,
+    selection: VlmInputSelection,
+    caller: Caller,
+    datasets: DatasetRepository,
+) -> FrozenVlmInput:
+    """在派发前检查适用性并冻结已通过的 VLM 候选与媒体来源。
+
+    只读这次短边界内的归属、当前性与持久化快照；返回结构只持有标量、UUID 与不可变记录
+    字节，后续编辑候选、动作列表或另一命令准备都不会改变在途消费内容。
+    """
+    authorize(caller, Permission.DATASET_EDIT)
+    check = _require_vlm_input_check(selection=selection, datasets=datasets)
+    snapshot = check.input_snapshot
+    if check.candidate_id is None:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="VLM 用途检查缺少候选身份",
+        )
+    records_bytes = _frozen_vlm_records(snapshot)
+    return FrozenVlmInput(
+        input_id=new_id(),
+        dataset_id=check.dataset_id,
+        usage_check_id=check.id,
+        candidate_id=check.candidate_id,
+        candidate_kind=str(snapshot.get("candidate_kind") or snapshot.get("kind") or ""),
+        input_digest=check.input_digest,
+        base_commit=check.base_commit,
+        contract_version=check.contract_version,
+        consumer_parameters=MappingProxyType(
+            {
+                **snapshot["consumer_parameters"],
+                "vision": MappingProxyType(dict(snapshot["consumer_parameters"]["vision"])),
+            }
+        ),
+        records_bytes=records_bytes,
+        records_sha256=hashlib.sha256(records_bytes).hexdigest(),
+        media=_freeze_vlm_media(snapshot),
+    )
+
+
+def _require_vlm_input_check(
+    *, selection: VlmInputSelection, datasets: DatasetRepository
+) -> UsageCheck:
+    if datasets.dataset_by_id(selection.dataset_id) is None:
+        raise DatasetRefusedError(DatasetRefusalCode.DATASET_NOT_FOUND)
+    check = datasets.usage_check_by_id(selection.usage_check_id)
+    if check is None:
+        raise DatasetRefusedError(DatasetRefusalCode.USAGE_CHECK_NOT_FOUND)
+    if check.dataset_id != selection.dataset_id:
+        raise DatasetRefusedError(DatasetRefusalCode.RESOURCE_MISMATCH)
+    if check.kind is not UsageKind.VLM:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="只有 VLM 用途检查可以准备训练输入",
+        )
+    if check.status is not UsageCheckStatus.PASSED:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="用途检查尚未通过，不能准备训练输入",
+        )
+    if not usage_check_is_current(check=check, datasets=datasets):
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="用途检查输入已变化，请重新检查",
+        )
+    if str(check.input_snapshot.get("dataset_id")) != str(selection.dataset_id):
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="冻结输入不属于所选数据集",
+        )
+    return check
+
+
+def _frozen_vlm_records(snapshot: Mapping[str, Any]) -> bytes:
+    """把冻结候选记录序列化为不可变字节；不使用后续可变字典。"""
+    raw_records = snapshot.get("records")
+    if not isinstance(raw_records, list) or any(
+        not isinstance(item, Mapping) for item in raw_records
+    ):
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="冻结输入缺少可材料化的候选记录",
+        )
+    try:
+        return canonical_json(raw_records)
+    except (TypeError, ValueError) as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="冻结候选记录不是有限 JSON 值",
+        ) from error
+
+
+def _freeze_vlm_media(snapshot: Mapping[str, Any]) -> tuple[FrozenVlmMediaInput, ...]:
+    """从冻结快照深拷贝每条媒体映射的不可变来源事实。"""
+    raw_media = snapshot.get("media")
+    raw_scope = snapshot.get("scope")
+    if not isinstance(raw_media, list) or not isinstance(raw_scope, list):
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="冻结输入缺少可材料化媒体来源",
+        )
+    scope_by_key: dict[str, Mapping[str, Any]] = {}
+    for item in raw_scope:
+        if not isinstance(item, dict) or item.get("status") != MemberStatus.REGISTERED.value:
+            continue
+        key = item.get("key")
+        if isinstance(key, str):
+            scope_by_key[key] = item
+    frozen: list[FrozenVlmMediaInput] = []
+    seen_keys: set[str] = set()
+    for item in raw_media:
+        if not isinstance(item, dict):
+            raise DatasetRefusedError(
+                DatasetRefusalCode.USAGE_STATE_CONFLICT,
+                detail="冻结媒体映射必须是 JSON 对象",
+            )
+        key = item.get("key")
+        if not isinstance(key, str) or not safe_media_key(key) or key in seen_keys:
+            raise DatasetRefusedError(
+                DatasetRefusalCode.USAGE_STATE_CONFLICT,
+                detail="冻结媒体映射键不是安全且唯一的相对键",
+            )
+        seen_keys.add(key)
+        scope = scope_by_key.get(key)
+        if scope is None:
+            raise DatasetRefusedError(
+                DatasetRefusalCode.USAGE_STATE_CONFLICT,
+                detail="冻结媒体映射缺少可材料化来源事实",
+            )
+        frozen.append(_frozen_vlm_media(key=key, scope=scope))
+    if not frozen or set(scope_by_key) != seen_keys:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="冻结范围与媒体映射不完整",
+        )
+    return tuple(sorted(frozen, key=lambda item: item.key))
+
+
+def _frozen_vlm_media(*, key: str, scope: Mapping[str, Any]) -> FrozenVlmMediaInput:
+    try:
+        member_id = UUID(str(scope["member_id"]))
+    except (KeyError, TypeError, ValueError) as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="冻结媒体缺少登记视频身份",
+        ) from error
+    is_clip = scope.get("annotation_execution_id") is not None
+    object_key = scope.get("object_key")
+    source_sha256 = scope.get("source_sha256")
+    actual_size = scope.get("actual_size")
+    if not isinstance(object_key, str) or not safe_media_key(object_key):
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="冻结媒体对象键不是安全的相对键",
+        )
+    if not isinstance(source_sha256, str) or not _is_frozen_sha256(source_sha256):
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="冻结媒体摘要无效",
+        )
+    if not isinstance(actual_size, int) or isinstance(actual_size, bool) or actual_size <= 0:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="冻结媒体大小无效",
+        )
+    upstream_data_id: str | None = None
+    upstream_video_id: str | None = None
+    clip_filename: str | None = None
+    derived_video_sha256: str | None = None
+    derived_video_size: int | None = None
+    if is_clip:
+        upstream_data_id = scope.get("upstream_data_id")
+        upstream_video_id = scope.get("upstream_video_id")
+        clip_filename = scope.get("clip_filename")
+        derived_video_sha256 = scope.get("derived_video_sha256")
+        derived_video_size = scope.get("derived_video_size")
+        if not (
+            isinstance(upstream_data_id, str)
+            and upstream_data_id
+            and isinstance(upstream_video_id, str)
+            and upstream_video_id
+            and isinstance(clip_filename, str)
+            and clip_filename
+        ):
+            raise DatasetRefusedError(
+                DatasetRefusalCode.USAGE_STATE_CONFLICT,
+                detail="冻结标注切片缺少基座文件身份",
+            )
+        if not _is_frozen_sha256(derived_video_sha256):
+            raise DatasetRefusedError(
+                DatasetRefusalCode.USAGE_STATE_CONFLICT,
+                detail="冻结标注切片缺少有效摘要",
+            )
+        if (
+            not isinstance(derived_video_size, int)
+            or isinstance(derived_video_size, bool)
+            or derived_video_size <= 0
+        ):
+            raise DatasetRefusedError(
+                DatasetRefusalCode.USAGE_STATE_CONFLICT,
+                detail="冻结标注切片缺少有效大小",
+            )
+    return FrozenVlmMediaInput(
+        key=key,
+        member_id=member_id,
+        is_annotation_clip=is_clip,
+        object_key=object_key,
+        source_sha256=source_sha256,
+        actual_size=actual_size,
+        upstream_data_id=upstream_data_id,
+        upstream_video_id=upstream_video_id,
+        clip_filename=clip_filename,
+        derived_video_sha256=derived_video_sha256,
+        derived_video_size=derived_video_size,
+    )
+
+
+def _is_frozen_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value.lower())
+    )
+
+
+def materialize_vlm_input(
+    *,
+    frozen: FrozenVlmInput,
+    storage: ObjectStorage,
+    annotation_volume: AnnotationDataVolume | None,
+    root: Path,
+) -> MaterializedVlmInput:
+    """只消费冻结值，把候选记录与媒体材料化到 root/<input_id>/reader。
+
+    管理清单写在 input_id 根目录，处于递归发现目录之外，不进入训练读取；不重新读取数据库
+    当前修订。root 由受信组合调用者注入。input_id 独占新建目录，已存在（含符号链接）时
+    拒绝；失败只清理本次新建候选，原媒体与历史成功制品保持可读。
+    """
+    if dict(frozen.consumer_parameters) != dict(VLM_CONSUMER_PARAMETERS):
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="冻结消费参数与当前 VLM 读取器不一致",
+        )
+    if frozen.contract_version != VLM_CONTRACT_VERSION or frozen.base_commit != BASE_COMMIT:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="冻结基座或契约版本与当前不一致",
+        )
+    if not frozen.media:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="冻结输入没有可材料化媒体",
+        )
+    input_root = root / str(frozen.input_id)
+    try:
+        input_root.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="该准备身份已存在，不能覆盖在途输入",
+        ) from error
+    except OSError as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.STORAGE_UNAVAILABLE,
+            detail="无法创建 VLM 输入工作副本",
+        ) from error
+    try:
+        reader_directory = input_root / "reader"
+        reader_directory.mkdir()
+        records_path = reader_directory / VLM_RECORDS_FILENAME
+        records_path.write_bytes(frozen.records_bytes)
+        _verify_frozen_file(
+            records_path,
+            expected_size=len(frozen.records_bytes),
+            expected_sha256=frozen.records_sha256,
+            detail="候选记录与冻结字节不一致",
+        )
+        for media in frozen.media:
+            _materialize_vlm_media(
+                media=media,
+                directory=reader_directory,
+                storage=storage,
+                annotation_volume=annotation_volume,
+            )
+        manifest_path = input_root / VLM_MANIFEST_FILENAME
+        manifest_path.write_bytes(_vlm_manifest_bytes(frozen))
+    except OSError as error:
+        shutil.rmtree(input_root, ignore_errors=True)
+        raise DatasetRefusedError(
+            DatasetRefusalCode.STORAGE_UNAVAILABLE,
+            detail="无法写入 VLM 输入工作副本",
+        ) from error
+    except BaseException:
+        shutil.rmtree(input_root, ignore_errors=True)
+        raise
+    return MaterializedVlmInput(
+        input_id=frozen.input_id,
+        root=input_root,
+        reader_directory=reader_directory,
+        manifest_path=manifest_path,
+    )
+
+
+def _materialize_vlm_media(
+    *,
+    media: FrozenVlmMediaInput,
+    directory: Path,
+    storage: ObjectStorage,
+    annotation_volume: AnnotationDataVolume | None,
+) -> None:
+    """把一个冻结媒体映射按 basename 写入读取目录，并复核冻结身份/摘要/大小。"""
+    destination = _safe_output_path(directory, PurePosixPath(media.key).name)
+    try:
+        with destination.open("xb") as sink:
+            if media.is_annotation_clip:
+                if annotation_volume is None:
+                    raise DatasetRefusedError(
+                        DatasetRefusalCode.STORAGE_UNAVAILABLE,
+                        detail="标注数据卷暂时不可用，不能材料化固定切片",
+                    )
+                annotation_volume.read_video(
+                    data_id=str(media.upstream_data_id),
+                    video_id=str(media.upstream_video_id),
+                    filename=media.clip_filename,
+                    destination=sink,
+                )
+            else:
+                storage.download_to(object_key=media.object_key, destination=sink)
+    except FileExistsError as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="材料化媒体文件名冲突，不能覆盖",
+        ) from error
+    except ObjectNotFoundError as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.OBJECT_NOT_FOUND,
+            detail="冻结的登记媒体不存在",
+        ) from error
+    except ObjectStorageUnavailableError as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.STORAGE_UNAVAILABLE,
+            detail="训练素材存储暂时不可用",
+        ) from error
+    except AnnotationDataVolumeInputError as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.OBJECT_NOT_FOUND,
+            detail="冻结的标注切片不存在或映射无效",
+        ) from error
+    except (
+        AnnotationDataVolumeReadError,
+        AnnotationDataVolumeUnavailableError,
+    ) as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.STORAGE_UNAVAILABLE,
+            detail="标注数据卷暂时不可读取",
+        ) from error
+    if media.is_annotation_clip:
+        expected_sha256 = media.derived_video_sha256
+        expected_size = media.derived_video_size
+        assert expected_sha256 is not None
+        assert expected_size is not None
+        _verify_frozen_file(
+            destination,
+            expected_size=expected_size,
+            expected_sha256=expected_sha256,
+            detail="冻结标注切片与摘要或大小不一致",
+        )
+    else:
+        _verify_frozen_file(
+            destination,
+            expected_size=media.actual_size,
+            expected_sha256=media.source_sha256,
+            detail="下载的登记媒体与冻结事实不一致",
+        )
+
+
+def _safe_output_path(directory: Path, name: str) -> Path:
+    """拒绝空名、分隔符和越出工作副本的输出文件名。"""
+    if not name or name in {".", ".."} or "/" in name or "\\" in name or "\x00" in name:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="冻结媒体键不能映射为安全文件名",
+        )
+    destination = directory / name
+    try:
+        destination.resolve(strict=False).relative_to(directory.resolve())
+    except (OSError, ValueError) as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="冻结媒体输出路径越出工作副本",
+        ) from error
+    return destination
+
+
+def _vlm_manifest_bytes(frozen: FrozenVlmInput) -> bytes:
+    """把准备身份、消费参数与冻结媒体事实写成发现目录外的管理清单。"""
+    document = {
+        "input_id": str(frozen.input_id),
+        "dataset_id": str(frozen.dataset_id),
+        "usage_check_id": str(frozen.usage_check_id),
+        "candidate_id": str(frozen.candidate_id),
+        "candidate_kind": frozen.candidate_kind,
+        "input_digest": frozen.input_digest,
+        "base_commit": frozen.base_commit,
+        "contract_version": frozen.contract_version,
+        "consumer_parameters": dict(frozen.consumer_parameters),
+        "records_filename": VLM_RECORDS_FILENAME,
+        "records_sha256": frozen.records_sha256,
+        "records_size": len(frozen.records_bytes),
+        "media": [
+            {
+                "key": item.key,
+                "filename": PurePosixPath(item.key).name,
+                "member_id": str(item.member_id),
+                "annotation_clip": item.is_annotation_clip,
+                "source_object_key": item.object_key,
+                "source_sha256": item.source_sha256,
+                "actual_size": item.actual_size,
+                "derived_video_sha256": item.derived_video_sha256,
+                "derived_video_size": item.derived_video_size,
+            }
+            for item in frozen.media
+        ],
+    }
+    return canonical_json(document)

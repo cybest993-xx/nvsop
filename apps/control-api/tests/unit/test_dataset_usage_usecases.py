@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import importlib.util
 import json
+import sys
 from collections.abc import Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import BinaryIO, cast
 from uuid import UUID
 
@@ -48,10 +51,12 @@ from factory_sop.dataset.model import (
 from factory_sop.dataset.repository import DdmTrainingCommandRepository, UsageDatasetRepository
 from factory_sop.dataset.storage import ObjectStorage
 from factory_sop.dataset.usage import (
+    VLM_CONSUMER_PARAMETERS,
     DdmReaderInputError,
     DdmReaderUnavailableError,
     UsageIssue,
     UsageValidationResult,
+    canonical_json,
 )
 from factory_sop.dataset.usecases.ddm_command import (
     DdmTrainingCommandResult,
@@ -64,12 +69,16 @@ from factory_sop.dataset.usecases.usage import (
     DDM_CONTRACT_VERSION,
     DDM_VALIDATION_CONSUMER_PARAMETERS,
     VLM_CONTRACT_VERSION,
+    VLM_MANIFEST_FILENAME,
+    VLM_RECORDS_FILENAME,
     ConsumedDdmFile,
     DdmInputConsumption,
     DdmInputSelection,
     FrozenDdmInput,
+    FrozenVlmInput,
     MaterializedDdmInput,
     UsageCheckTarget,
+    VlmInputSelection,
     apply_usage_check_currentness,
     begin_artifact_generation,
     begin_usage_check,
@@ -78,7 +87,9 @@ from factory_sop.dataset.usecases.usage import (
     fail_artifact,
     fail_usage_check,
     freeze_ddm_input,
+    freeze_vlm_input,
     materialize_ddm_input,
+    materialize_vlm_input,
     register_vlm_candidate,
     render_ddm_artifact_with_base,
     request_artifact,
@@ -1312,6 +1323,515 @@ def test_vlm_check_rejects_changed_annotation_clip_before_reader(
     assert any(issue.code == expected_issue for issue in result.issues)
     assert media_probe.calls == []
     assert reader.calls == []
+
+
+_VLM_SOURCE_DIGEST = hashlib.sha256(b"a" * 100).hexdigest()
+
+
+def _vlm_records_for(video_key: str) -> tuple[dict[str, object], ...]:
+    return (
+        {
+            "conversations": [
+                {"from": "human", "value": "<video>问题"},
+                {"from": "gpt", "value": "取料"},
+            ],
+            "video": video_key,
+        },
+    )
+
+
+def _fresh_vlm_datasets() -> FakeUsageDatasets:
+    """已确认媒体摘要与 VLM 检查一致的候选仓储。"""
+    datasets = FakeUsageDatasets()
+    datasets.member = replace(datasets.member, actual_sha256=_VLM_SOURCE_DIGEST)
+    datasets.submission = replace(datasets.submission, source_sha256=_VLM_SOURCE_DIGEST)
+    return datasets
+
+
+def _whole_video_media(*, key: str = "vlm-source.mp4") -> VlmMediaReference:
+    return VlmMediaReference(
+        key=key,
+        member_id=MEMBER_ID,
+        source_object_key="datasets/source-a.mp4",
+        source_sha256=_VLM_SOURCE_DIGEST,
+    )
+
+
+def _passing_vlm_check(
+    datasets: FakeUsageDatasets,
+    *,
+    media: VlmMediaReference,
+    annotation_volume: FakeAnnotationVolume | None = None,
+    media_probe: FakeMediaProbe | None = None,
+    records: tuple[dict[str, object], ...] | None = None,
+    kind: VlmCandidateKind = VlmCandidateKind.GQA,
+    expected_revision: int = 0,
+) -> UsageCheck:
+    """用显式媒体事实产生一个已通过且当前可用的 VLM 用途检查。"""
+    candidate = register_vlm_candidate(
+        dataset_id=DATASET_ID,
+        kind=kind,
+        action_list_revision=1,
+        records=records if records is not None else _vlm_records_for(media.key),
+        media=(media,),
+        expected_revision=expected_revision,
+        caller=caller(Permission.DATASET_EDIT),
+        now=NOW,
+        datasets=cast(UsageDatasetRepository, datasets),
+    )
+    requested = request_usage_check(
+        dataset_id=DATASET_ID,
+        kind=UsageKind.VLM,
+        candidate_id=candidate.id,
+        caller=caller(Permission.DATASET_EDIT),
+        now=NOW,
+        datasets=cast(UsageDatasetRepository, datasets),
+        jobs=cast(UsageJobQueue, FakeUsageJobs()),
+    )
+    target = begin_usage_check(
+        job=requested.job,
+        datasets=cast(UsageDatasetRepository, datasets),
+        now=NOW + timedelta(seconds=1),
+    )
+    assert target is not None
+    validation = run_usage_check(
+        target=target,
+        storage=cast(ObjectStorage, FakeStorage()),
+        media_probe=media_probe if media_probe is not None else FakeMediaProbe(),
+        annotation_volume=annotation_volume,
+        vlm_reader=RecordingVlmReader(),
+    )
+    assert validation.passed is True, validation.issues
+    return complete_usage_check(
+        target=target,
+        validation=validation,
+        now=NOW + timedelta(seconds=2),
+        datasets=cast(UsageDatasetRepository, datasets),
+    )
+
+
+def test_freeze_vlm_input_freezes_records_bytes_and_media_provenance() -> None:
+    datasets = _fresh_vlm_datasets()
+    check = _passing_vlm_check(datasets, media=_whole_video_media())
+
+    frozen = freeze_vlm_input(
+        selection=VlmInputSelection(dataset_id=DATASET_ID, usage_check_id=check.id),
+        caller=caller(Permission.DATASET_EDIT),
+        datasets=cast(UsageDatasetRepository, datasets),
+    )
+
+    assert frozen.dataset_id == DATASET_ID
+    assert frozen.usage_check_id == check.id
+    assert frozen.candidate_id == check.candidate_id
+    assert frozen.input_digest == check.input_digest
+    assert frozen.base_commit == BASE_COMMIT
+    assert frozen.contract_version == VLM_CONTRACT_VERSION
+    assert check.input_snapshot["consumer_parameters"] == {"vision": {}, "system_prompt": ""}
+    assert dict(frozen.consumer_parameters) == check.input_snapshot["consumer_parameters"]
+    # 记录冻结为字节而不是可变字典，摘要独立可复验。
+    assert frozen.records_bytes == canonical_json(check.input_snapshot["records"])
+    assert frozen.records_sha256 == hashlib.sha256(frozen.records_bytes).hexdigest()
+    assert len(frozen.media) == 1
+    media = frozen.media[0]
+    assert (media.key, media.member_id) == ("vlm-source.mp4", MEMBER_ID)
+    assert media.is_annotation_clip is False
+    assert media.object_key == "datasets/source-a.mp4"
+    assert media.source_sha256 == _VLM_SOURCE_DIGEST
+    assert media.actual_size == 100
+    assert media.derived_video_sha256 is None
+
+
+def test_frozen_vlm_consumer_parameters_have_no_shared_mutable_substructure() -> None:
+    datasets = _fresh_vlm_datasets()
+    check = _passing_vlm_check(datasets, media=_whole_video_media())
+    first = _frozen_vlm_input(datasets, check)
+    second = _frozen_vlm_input(datasets, check)
+    check.input_snapshot["consumer_parameters"]["vision"]["fps"] = 8
+
+    first_vision = cast(dict[str, object], first.consumer_parameters)["vision"]
+    with pytest.raises(TypeError):
+        cast(dict[str, object], first_vision)["fps"] = 8
+    constant_vision = cast(dict[str, object], VLM_CONSUMER_PARAMETERS)["vision"]
+    with pytest.raises(TypeError):
+        cast(dict[str, object], constant_vision)["fps"] = 8
+
+    # 两份冻结输入与常量不共享可变的 vision 子映射。
+    assert dict(first.consumer_parameters) == dict(second.consumer_parameters)
+    assert dict(first.consumer_parameters) == dict(VLM_CONSUMER_PARAMETERS)
+
+
+@pytest.mark.parametrize("parameters", [None, {"vision": {"fps": 8}, "system_prompt": ""}])
+def test_freeze_vlm_input_rejects_missing_or_changed_checked_parameters(
+    parameters: dict[str, object] | None,
+) -> None:
+    datasets = _fresh_vlm_datasets()
+    check = _passing_vlm_check(datasets, media=_whole_video_media())
+    snapshot = json.loads(canonical_json(check.input_snapshot))
+    if parameters is None:
+        snapshot.pop("consumer_parameters", None)
+    else:
+        snapshot["consumer_parameters"] = parameters
+    datasets.checks[check.id] = replace(check, input_snapshot=snapshot)
+
+    with pytest.raises(DatasetRefusedError) as refused:
+        _frozen_vlm_input(datasets, check)
+    assert refused.value.code is DatasetRefusalCode.USAGE_STATE_CONFLICT
+
+
+def test_freeze_vlm_input_requires_dataset_edit_permission() -> None:
+    datasets = _fresh_vlm_datasets()
+    check = _passing_vlm_check(datasets, media=_whole_video_media())
+
+    with pytest.raises(AuthorizationRefusedError):
+        freeze_vlm_input(
+            selection=VlmInputSelection(dataset_id=DATASET_ID, usage_check_id=check.id),
+            caller=caller(Permission.DATASET_VIEW),
+            datasets=cast(UsageDatasetRepository, datasets),
+        )
+
+
+def test_freeze_vlm_input_rejects_an_inapplicable_check() -> None:
+    datasets = FakeUsageDatasets()
+    jobs = FakeUsageJobs()
+    artifact, _ = _passing_ddm_artifact(datasets, jobs)
+
+    with pytest.raises(DatasetRefusedError) as refused:
+        freeze_vlm_input(
+            selection=VlmInputSelection(
+                dataset_id=DATASET_ID, usage_check_id=artifact.usage_check_id
+            ),
+            caller=caller(Permission.DATASET_EDIT),
+            datasets=cast(UsageDatasetRepository, datasets),
+        )
+    assert refused.value.code is DatasetRefusalCode.USAGE_STATE_CONFLICT
+
+
+def test_freeze_vlm_input_rejects_a_changed_candidate_revision() -> None:
+    datasets = _fresh_vlm_datasets()
+    check = _passing_vlm_check(datasets, media=_whole_video_media())
+    register_vlm_candidate(
+        dataset_id=DATASET_ID,
+        kind=VlmCandidateKind.GQA,
+        action_list_revision=1,
+        records=_vlm_records_for("vlm-source.mp4"),
+        media=(_whole_video_media(),),
+        expected_revision=1,
+        caller=caller(Permission.DATASET_EDIT),
+        now=NOW + timedelta(seconds=3),
+        datasets=cast(UsageDatasetRepository, datasets),
+    )
+
+    with pytest.raises(DatasetRefusedError) as refused:
+        freeze_vlm_input(
+            selection=VlmInputSelection(dataset_id=DATASET_ID, usage_check_id=check.id),
+            caller=caller(Permission.DATASET_EDIT),
+            datasets=cast(UsageDatasetRepository, datasets),
+        )
+    assert refused.value.code is DatasetRefusalCode.USAGE_STATE_CONFLICT
+
+
+def test_freeze_vlm_input_rejects_an_escaping_media_key() -> None:
+    datasets = _fresh_vlm_datasets()
+    check = _passing_vlm_check(datasets, media=_whole_video_media())
+    stored = datasets.checks[check.id]
+    snapshot = json.loads(json.dumps(stored.input_snapshot))
+    snapshot["media"][0]["key"] = "../escape.mp4"
+    datasets.checks[check.id] = replace(stored, input_snapshot=snapshot)
+
+    with pytest.raises(DatasetRefusedError) as refused:
+        freeze_vlm_input(
+            selection=VlmInputSelection(dataset_id=DATASET_ID, usage_check_id=check.id),
+            caller=caller(Permission.DATASET_EDIT),
+            datasets=cast(UsageDatasetRepository, datasets),
+        )
+    assert refused.value.code is DatasetRefusalCode.USAGE_STATE_CONFLICT
+
+
+_VENDOR_VLM_JSON_DISCOVERY = (
+    Path(__file__).resolve().parents[4]
+    / "vendor/sop-monitoring-blueprints/microservices/sop-training-bp"
+    / "microservices/cr-training-ms/utils/dataset_utils.py"
+)
+
+
+def _base_json_discovery(dataset_path: Path) -> list[str]:
+    """调用 NVIDIA 真实递归 JSON 发现函数，而不是自建目录扫描。"""
+    spec = importlib.util.spec_from_file_location(
+        "nvsop_base_vlm_json_discovery", _VENDOR_VLM_JSON_DISCOVERY
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return [str(path) for path in module.get_all_json_paths(str(dataset_path))]
+
+
+def _frozen_vlm_input(datasets: FakeUsageDatasets, check: UsageCheck) -> FrozenVlmInput:
+    return freeze_vlm_input(
+        selection=VlmInputSelection(dataset_id=DATASET_ID, usage_check_id=check.id),
+        caller=caller(Permission.DATASET_EDIT),
+        datasets=cast(UsageDatasetRepository, datasets),
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "prompt", "response"),
+    [
+        (VlmCandidateKind.GQA, "问题", "取料"),
+        (VlmCandidateKind.BCQ, "是否取料", "是"),
+        (VlmCandidateKind.MCQ, "选择动作\n(1) 取料\n(2) 安装", "(1) 取料"),
+        (VlmCandidateKind.GOLDEN_GQA, "黄金问题", "取料"),
+    ],
+)
+def test_materialize_vlm_input_is_consumed_by_original_reader_without_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: VlmCandidateKind,
+    prompt: str,
+    response: str,
+) -> None:
+    datasets = _fresh_vlm_datasets()
+    record: dict[str, object] = {
+        "conversations": [
+            {"from": "human", "value": "<video>\n" + prompt},
+            {"from": "gpt", "value": response},
+        ],
+        "video": "registered/vlm-source.mp4",
+    }
+    if kind is VlmCandidateKind.MCQ:
+        record["action_indices"] = [1]
+    check = _passing_vlm_check(
+        datasets,
+        media=_whole_video_media(key="registered/vlm-source.mp4"),
+        kind=kind,
+        records=(record,),
+    )
+    frozen = _frozen_vlm_input(datasets, check)
+    storage = _seeded_storage(tmp_path / "objects", {"datasets/source-a.mp4": b"a" * 100})
+
+    materialized = materialize_vlm_input(
+        frozen=frozen, storage=storage, annotation_volume=None, root=tmp_path / "input"
+    )
+
+    assert materialized.reader_directory == tmp_path / "input" / str(frozen.input_id) / "reader"
+    assert (
+        materialized.reader_directory / VLM_RECORDS_FILENAME
+    ).read_bytes() == frozen.records_bytes
+    assert (materialized.reader_directory / "vlm-source.mp4").read_bytes() == b"a" * 100
+    manifest = json.loads(materialized.manifest_path.read_bytes())
+    assert manifest["input_digest"] == check.input_digest
+    assert manifest["consumer_parameters"] == dict(VLM_CONSUMER_PARAMETERS)
+    assert manifest["records_sha256"] == frozen.records_sha256
+    assert [item["filename"] for item in manifest["media"]] == ["vlm-source.mp4"]
+    # 管理清单写在 input_id 根目录，真实递归发现只拿到候选记录。
+    assert not (materialized.reader_directory / VLM_MANIFEST_FILENAME).exists()
+    discovered = _base_json_discovery(materialized.reader_directory)
+    assert discovered == [str(materialized.reader_directory / VLM_RECORDS_FILENAME)]
+    contract_path = (
+        Path(__file__).resolve().parents[4] / "tests/contract/base/test_vlm_reader_contract.py"
+    )
+    contract_spec = importlib.util.spec_from_file_location(
+        "nvsop_vlm_contract_stubs", contract_path
+    )
+    assert contract_spec is not None and contract_spec.loader is not None
+    contract = importlib.util.module_from_spec(contract_spec)
+    contract_spec.loader.exec_module(contract)
+    captured: dict[str, object] = {}
+    with monkeypatch.context() as context:
+        for name, module_stub in contract._module_stubs(captured).items():
+            context.setitem(sys.modules, name, module_stub)
+        reader_spec = importlib.util.spec_from_file_location(
+            "nvsop_materialized_vlm_reader", contract.MODULE_PATH
+        )
+        assert reader_spec is not None and reader_spec.loader is not None
+        reader = importlib.util.module_from_spec(reader_spec)
+        reader_spec.loader.exec_module(reader)
+        config = SimpleNamespace(
+            train=SimpleNamespace(
+                train_policy=SimpleNamespace(
+                    dataset=SimpleNamespace(name=discovered, split=["train"])
+                )
+            )
+        )
+        custom_config = SimpleNamespace(
+            vision=SimpleNamespace(
+                model_dump=lambda exclude_none=True: dict(
+                    cast(Mapping[str, object], frozen.consumer_parameters["vision"])
+                )
+            ),
+            system_prompt=frozen.consumer_parameters["system_prompt"],
+        )
+        dataset = reader.CosmosSFTDataset(config=config, custom_config=custom_config)
+        assert len(dataset) == 1
+        dataset[0]
+        assert captured["user_prompt"] == prompt
+        assert captured["response"] == response
+        assert captured["videos"] == [str(materialized.reader_directory / "vlm-source.mp4")]
+        assert captured["system_prompt"] == ""
+        assert captured["vision_kwargs"] == {}
+
+
+def test_materialize_vlm_input_refuses_overwrite_and_preserves_in_flight_bytes(
+    tmp_path: Path,
+) -> None:
+    datasets = _fresh_vlm_datasets()
+    check = _passing_vlm_check(datasets, media=_whole_video_media())
+    frozen = _frozen_vlm_input(datasets, check)
+    storage = _seeded_storage(tmp_path / "objects", {"datasets/source-a.mp4": b"a" * 100})
+
+    first = materialize_vlm_input(
+        frozen=frozen, storage=storage, annotation_volume=None, root=tmp_path / "input"
+    )
+    in_flight = (first.reader_directory / "vlm-source.mp4").read_bytes()
+
+    with pytest.raises(DatasetRefusedError) as refused:
+        materialize_vlm_input(
+            frozen=frozen, storage=storage, annotation_volume=None, root=tmp_path / "input"
+        )
+    assert refused.value.code is DatasetRefusalCode.USAGE_STATE_CONFLICT
+    assert (first.reader_directory / "vlm-source.mp4").read_bytes() == in_flight
+
+
+def test_materialize_vlm_input_keeps_prior_preparation_after_candidate_edit(
+    tmp_path: Path,
+) -> None:
+    datasets = _fresh_vlm_datasets()
+    first_check = _passing_vlm_check(datasets, media=_whole_video_media())
+    first_frozen = _frozen_vlm_input(datasets, first_check)
+    storage = _seeded_storage(tmp_path / "objects", {"datasets/source-a.mp4": b"a" * 100})
+    first = materialize_vlm_input(
+        frozen=first_frozen, storage=storage, annotation_volume=None, root=tmp_path / "input"
+    )
+    history = {path: path.read_bytes() for path in first.root.rglob("*") if path.is_file()}
+    changed_records: tuple[dict[str, object], ...] = (
+        {
+            "conversations": [
+                {"from": "human", "value": "<video>修改后问题"},
+                {"from": "gpt", "value": "安装"},
+            ],
+            "video": "vlm-source.mp4",
+        },
+    )
+    second_check = _passing_vlm_check(
+        datasets, media=_whole_video_media(), records=changed_records, expected_revision=1
+    )
+    second_frozen = _frozen_vlm_input(datasets, second_check)
+    second = materialize_vlm_input(
+        frozen=second_frozen, storage=storage, annotation_volume=None, root=tmp_path / "input"
+    )
+    assert first_frozen.input_id != second_frozen.input_id
+    assert first_frozen.candidate_id != second_frozen.candidate_id
+    assert first_frozen.input_digest != second_frozen.input_digest
+    assert first_frozen.records_bytes != second_frozen.records_bytes
+    assert (second.reader_directory / VLM_RECORDS_FILENAME).read_bytes() == canonical_json(
+        changed_records
+    )
+    assert all(path.read_bytes() == content for path, content in history.items())
+    assert (
+        first.reader_directory / VLM_RECORDS_FILENAME
+    ).read_bytes() == first_frozen.records_bytes
+    assert (tmp_path / "objects/datasets/source-a.mp4").read_bytes() == b"a" * 100
+
+
+def test_materialize_vlm_input_refuses_a_symlinked_input_identity(tmp_path: Path) -> None:
+    datasets = _fresh_vlm_datasets()
+    check = _passing_vlm_check(datasets, media=_whole_video_media())
+    frozen = _frozen_vlm_input(datasets, check)
+    storage = _seeded_storage(tmp_path / "objects", {"datasets/source-a.mp4": b"a" * 100})
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    root = tmp_path / "input"
+    root.mkdir()
+    (root / str(frozen.input_id)).symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(DatasetRefusedError):
+        materialize_vlm_input(frozen=frozen, storage=storage, annotation_volume=None, root=root)
+    assert list(outside.iterdir()) == []
+
+
+def test_materialize_vlm_input_fails_closed_without_partial_output(tmp_path: Path) -> None:
+    datasets = _fresh_vlm_datasets()
+    check = _passing_vlm_check(datasets, media=_whole_video_media())
+    frozen = _frozen_vlm_input(datasets, check)
+    storage = _seeded_storage(tmp_path / "objects", {"datasets/source-a.mp4": b"wrong-bytes"})
+
+    with pytest.raises(DatasetRefusedError) as refused:
+        materialize_vlm_input(
+            frozen=frozen, storage=storage, annotation_volume=None, root=tmp_path / "input"
+        )
+    assert refused.value.code is DatasetRefusalCode.ARTIFACT_INTEGRITY_FAILURE
+    assert not (tmp_path / "input" / str(frozen.input_id)).exists()
+    assert (tmp_path / "objects" / "datasets/source-a.mp4").read_bytes() == b"wrong-bytes"
+
+
+def test_materialize_vlm_input_reports_write_failure_and_preserves_history(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    datasets = _fresh_vlm_datasets()
+    check = _passing_vlm_check(datasets, media=_whole_video_media())
+    storage = _seeded_storage(tmp_path / "objects", {"datasets/source-a.mp4": b"a" * 100})
+    first = materialize_vlm_input(
+        frozen=_frozen_vlm_input(datasets, check),
+        storage=storage,
+        annotation_volume=None,
+        root=tmp_path / "input",
+    )
+    history = {path: path.read_bytes() for path in first.root.rglob("*") if path.is_file()}
+    frozen = _frozen_vlm_input(datasets, check)
+    original_write = Path.write_bytes
+
+    def write_bytes(path: Path, content: bytes) -> int:
+        if path == tmp_path / "input" / str(frozen.input_id) / VLM_MANIFEST_FILENAME:
+            raise OSError("synthetic disk full")
+        return original_write(path, content)
+
+    monkeypatch.setattr(Path, "write_bytes", write_bytes)
+    with pytest.raises(DatasetRefusedError) as refused:
+        materialize_vlm_input(
+            frozen=frozen, storage=storage, annotation_volume=None, root=tmp_path / "input"
+        )
+    assert refused.value.code is DatasetRefusalCode.STORAGE_UNAVAILABLE
+    assert not (tmp_path / "input" / str(frozen.input_id)).exists()
+    assert all(path.read_bytes() == content for path, content in history.items())
+    assert (tmp_path / "objects/datasets/source-a.mp4").read_bytes() == b"a" * 100
+
+
+def test_materialize_vlm_input_uses_the_fixed_annotation_clip(tmp_path: Path) -> None:
+    datasets = _fresh_vlm_datasets()
+    datasets.execution = replace(
+        datasets.execution,
+        derived_video_size=100,
+        derived_video_sha256=_VLM_SOURCE_DIGEST,
+    )
+    media = VlmMediaReference(
+        key="clip-key.mp4",
+        member_id=MEMBER_ID,
+        source_object_key="datasets/source-a.mp4",
+        source_sha256=_VLM_SOURCE_DIGEST,
+        annotation_submission_id=SUBMISSION_ID,
+        annotation_execution_id=EXECUTION_ID,
+        clip_index=0,
+    )
+    check = _passing_vlm_check(
+        datasets,
+        media=media,
+        annotation_volume=FakeAnnotationVolume(),
+        media_probe=ClipMediaProbe(),
+    )
+    frozen = _frozen_vlm_input(datasets, check)
+    assert frozen.media[0].is_annotation_clip is True
+
+    materialize_volume = FakeAnnotationVolume()
+    materialized = materialize_vlm_input(
+        frozen=frozen,
+        storage=cast(ObjectStorage, FakeStorage()),
+        annotation_volume=materialize_volume,
+        root=tmp_path / "input",
+    )
+
+    assert (materialized.reader_directory / "clip-key.mp4").read_bytes() == b"a" * 100
+    assert materialize_volume.video_reads == [("data-1", "video-1", "01_line-a_1_1.mp4")]
 
 
 def test_complete_usage_check_persists_recovery_metadata() -> None:

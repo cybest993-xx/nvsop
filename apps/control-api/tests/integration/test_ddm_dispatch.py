@@ -630,3 +630,40 @@ def test_begin_cas_loss_to_definite_failure_cleans_own_workcopies(
         assert not (tmp_path / submitted.command.payload["input_id"]).exists()
         assert not (tmp_path / f"ddm-{submitted.command.id}-training").exists()
         assert not (tmp_path / f"ddm-{submitted.command.id}-validation").exists()
+
+
+def test_revocation_failure_record_commit_uncertain_still_cleans_own_workcopies(
+    engine: Engine,
+    tmp_path: Path,
+    selections: tuple[DdmInputSelection, DdmInputSelection],
+) -> None:
+    """失败记录真的提交为 FAILED 后才抛错：权威重读确认 FAILED，仍须清理本次新建工作副本。"""
+    submitted = _submit(
+        engine,
+        idempotency_key="revoked-commit-fault",
+        training=selections[0],
+        validation=selections[1],
+    )
+    with DdmHttpServer() as server:
+        calls = {"count": 0}
+
+        def resolve(user_id: UUID) -> Caller:
+            del user_id
+            calls["count"] += 1
+            if calls["count"] == 1:
+                return _caller(Permission.DATASET_EDIT)
+            return _caller(Permission.DATASET_VIEW)
+
+        failing_factory = sessionmaker(bind=engine, class_=_IntentCommitUncertainSession)
+        worker = executor(engine, tmp_path, server, factory=failing_factory)
+        result = worker.execute(
+            command_id=submitted.command.id,
+            now=NOW,
+            resolve_current_caller=resolve,
+        )
+        assert result.outcome is DdmTrainingDispatchOutcome.FAILED
+        assert result.failure_code == "PERMISSION_REVOKED"
+        assert server.starts == []
+        assert not (tmp_path / submitted.command.payload["input_id"]).exists()
+        assert not (tmp_path / f"ddm-{submitted.command.id}-training").exists()
+        assert not (tmp_path / f"ddm-{submitted.command.id}-validation").exists()

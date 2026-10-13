@@ -582,7 +582,7 @@ class PostgresDdmTrainingExecutor:
                 backend_target=self._backend_target,
             )
             return self._reload_result(
-                command_id, now=now, fallback_code=code, fallback_detail=detail
+                command_id, now=now, fallback_code=code, fallback_detail=detail, owned=owned
             )
         current = self._load(command_id)
         if current is None:
@@ -617,6 +617,7 @@ class PostgresDdmTrainingExecutor:
         now: datetime,
         fallback_code: str,
         fallback_detail: str,
+        owned: _AllocatedWorkcopies | None = None,
     ) -> DdmTrainingDispatchResult:
         current = self._load(command_id)
         if current is None:
@@ -624,6 +625,9 @@ class PostgresDdmTrainingExecutor:
         if current.status is DdmTrainingCommandStatus.BOUND:
             return self._observe(current, now=now)
         if current.status is DdmTrainingCommandStatus.FAILED:
+            # 异常本身不授权删除；权威重读确证 FAILED 才清理，且只处理调用方提供的本地路径。
+            if owned is not None:
+                self._discard_workcopies(command_id=command_id, owned=owned)
             return self._failed(current)
         if current.status is DdmTrainingCommandStatus.RESULT_UNKNOWN:
             return DdmTrainingDispatchResult(

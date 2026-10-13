@@ -522,6 +522,8 @@ export type ApiErrorCode =
   | 'USAGE_STATE_CONFLICT'
   | 'ARTIFACT_NOT_FOUND'
   | 'ARTIFACT_UNAVAILABLE'
+  | 'DDM_TRAINING_COMMAND_NOT_FOUND'
+  | 'DDM_TRAINING_RESULT_NOT_FOUND'
   | 'JOB_NOT_FOUND'
   | 'JOB_RESOURCE_NOT_FOUND'
   | 'ACTIVE_GRANT_EXISTS'
@@ -1587,6 +1589,212 @@ export type DatasetView = {
 }
 
 /**
+ * DdmInputSelectionInput
+ *
+ * 一次 DDM 训练选择的一套已通过输入来源。
+ */
+export type DdmInputSelectionInput = {
+  /**
+   * Artifact Id
+   */
+  artifact_id: string
+  /**
+   * Dataset Id
+   */
+  dataset_id: string
+  /**
+   * Usage Check Id
+   */
+  usage_check_id: string
+}
+
+/**
+ * DdmResultAccessView
+ *
+ * 已授权数据通道的访问地址；控制面从不中转大体积字节。
+ */
+export type DdmResultAccessView = {
+  /**
+   * Checkpoint Url
+   */
+  checkpoint_url: string
+  /**
+   * Config Url
+   */
+  config_url: string
+}
+
+/**
+ * DdmResultFileView
+ */
+export type DdmResultFileView = {
+  /**
+   * Sha256
+   */
+  sha256: string
+  /**
+   * Size
+   */
+  size: number
+}
+
+/**
+ * DdmTrainingCommandAcceptedView
+ */
+export type DdmTrainingCommandAcceptedView = {
+  command: DdmTrainingCommandView
+  job: UsageJobView
+}
+
+/**
+ * DdmTrainingCommandView
+ *
+ * DDM 训练命令的公开事实。
+ *
+ * 只暴露应用状态、基座原状态/观测时刻/查询诊断与结果登记事实；冻结负载、内部路径、
+ * 媒体身份与消费摘要不进入公开响应。
+ */
+export type DdmTrainingCommandView = {
+  /**
+   * Base Current Step
+   */
+  base_current_step: number | null
+  /**
+   * Base Job Id
+   */
+  base_job_id: string | null
+  /**
+   * Base Progress
+   */
+  base_progress: number | null
+  /**
+   * Base Status
+   */
+  base_status: string | null
+  /**
+   * Base Total Steps
+   */
+  base_total_steps: number | null
+  /**
+   * Created At
+   */
+  created_at: string | null
+  /**
+   * Created By
+   */
+  created_by: string
+  /**
+   * Dataset Id
+   */
+  dataset_id: string
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  /**
+   * Failure Detail
+   */
+  failure_detail: string | null
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Last Observed At
+   */
+  last_observed_at: string | null
+  /**
+   * Observation Failure Code
+   */
+  observation_failure_code: string | null
+  /**
+   * Observation Failure Detail
+   */
+  observation_failure_detail: string | null
+  /**
+   * Request Digest
+   */
+  request_digest: string
+  /**
+   * Result Checkpoint Sha256
+   */
+  result_checkpoint_sha256: string | null
+  /**
+   * Result Checkpoint Size
+   */
+  result_checkpoint_size: number | null
+  /**
+   * Result Config Sha256
+   */
+  result_config_sha256: string | null
+  /**
+   * Result Config Size
+   */
+  result_config_size: number | null
+  /**
+   * Result Failure Code
+   */
+  result_failure_code: string | null
+  /**
+   * Result Failure Detail
+   */
+  result_failure_detail: string | null
+  /**
+   * Result Generation
+   */
+  result_generation: number
+  /**
+   * Result Registered At
+   */
+  result_registered_at: string | null
+  /**
+   * Result Status
+   */
+  result_status: string
+  /**
+   * Status
+   */
+  status: string
+  /**
+   * Updated At
+   */
+  updated_at: string | null
+}
+
+/**
+ * DdmTrainingResultView
+ */
+export type DdmTrainingResultView = {
+  access: DdmResultAccessView | null
+  checkpoint: DdmResultFileView | null
+  /**
+   * Command Id
+   */
+  command_id: string
+  config: DdmResultFileView | null
+  /**
+   * Dataset Id
+   */
+  dataset_id: string
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  /**
+   * Failure Detail
+   */
+  failure_detail: string | null
+  /**
+   * Registered At
+   */
+  registered_at: string | null
+  /**
+   * Status
+   */
+  status: string
+}
+
+/**
  * DesiredTemplateBindingView
  */
 export type DesiredTemplateBindingView = {
@@ -2561,6 +2769,28 @@ export type ItemPageDatasetView = {
 }
 
 /**
+ * ItemPage[DdmTrainingCommandView]
+ */
+export type ItemPageDdmTrainingCommandView = {
+  /**
+   * Items
+   */
+  items: Array<DdmTrainingCommandView>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
  * ItemPage[InferenceBackendView]
  */
 export type ItemPageInferenceBackendView = {
@@ -3271,6 +3501,16 @@ export type RegisterVlmCandidateInput = {
   records: Array<{
     [key: string]: unknown
   }>
+}
+
+/**
+ * RequestDdmTrainingCommandInput
+ *
+ * 受理一条 DDM 训练命令所需的独立训练/验证来源。
+ */
+export type RequestDdmTrainingCommandInput = {
+  training: DdmInputSelectionInput
+  validation: DdmInputSelectionInput
 }
 
 /**
@@ -10754,6 +10994,253 @@ export type DownloadDatasetArtifactResponses = {
 
 export type DownloadDatasetArtifactResponse =
   DownloadDatasetArtifactResponses[keyof DownloadDatasetArtifactResponses]
+
+export type ListDdmTrainingCommandsData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands'
+}
+
+export type ListDdmTrainingCommandsErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ListDdmTrainingCommandsError =
+  ListDdmTrainingCommandsErrors[keyof ListDdmTrainingCommandsErrors]
+
+export type ListDdmTrainingCommandsResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageDdmTrainingCommandView
+}
+
+export type ListDdmTrainingCommandsResponse =
+  ListDdmTrainingCommandsResponses[keyof ListDdmTrainingCommandsResponses]
+
+export type RequestDdmTrainingCommandData = {
+  body: RequestDdmTrainingCommandInput
+  headers: {
+    /**
+     * Idempotency-Key
+     */
+    'Idempotency-Key': string
+  }
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands'
+}
+
+export type RequestDdmTrainingCommandErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type RequestDdmTrainingCommandError =
+  RequestDdmTrainingCommandErrors[keyof RequestDdmTrainingCommandErrors]
+
+export type RequestDdmTrainingCommandResponses = {
+  /**
+   * Successful Response
+   */
+  202: DdmTrainingCommandAcceptedView
+}
+
+export type RequestDdmTrainingCommandResponse =
+  RequestDdmTrainingCommandResponses[keyof RequestDdmTrainingCommandResponses]
+
+export type ReadDdmTrainingCommandData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands/{command_id}'
+}
+
+export type ReadDdmTrainingCommandErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ReadDdmTrainingCommandError =
+  ReadDdmTrainingCommandErrors[keyof ReadDdmTrainingCommandErrors]
+
+export type ReadDdmTrainingCommandResponses = {
+  /**
+   * Successful Response
+   */
+  200: DdmTrainingCommandView
+}
+
+export type ReadDdmTrainingCommandResponse =
+  ReadDdmTrainingCommandResponses[keyof ReadDdmTrainingCommandResponses]
+
+export type ReadDdmTrainingResultData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands/{command_id}/result'
+}
+
+export type ReadDdmTrainingResultErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ReadDdmTrainingResultError =
+  ReadDdmTrainingResultErrors[keyof ReadDdmTrainingResultErrors]
+
+export type ReadDdmTrainingResultResponses = {
+  /**
+   * Successful Response
+   */
+  200: DdmTrainingResultView
+}
+
+export type ReadDdmTrainingResultResponse =
+  ReadDdmTrainingResultResponses[keyof ReadDdmTrainingResultResponses]
 
 export type ListDatasetMembersData = {
   body?: never

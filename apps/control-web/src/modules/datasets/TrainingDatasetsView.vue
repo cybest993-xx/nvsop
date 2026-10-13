@@ -13,9 +13,11 @@ import {
   listDatasetActionListVersions,
   listDatasetArtifacts,
   listDatasetUsageChecks,
+  listDdmTrainingCommands,
   listVlmCandidates,
   readAnnotationContext,
   readDatasetMembers,
+  readDdmTrainingResult,
   readJob,
   readTrainingDatasets,
   registerDatasetActionList,
@@ -29,6 +31,8 @@ import {
   type DatasetActionListHistory,
   type DatasetUsageCheck,
   type DatasetVlmCandidate,
+  type DdmTrainingCommand,
+  type DdmTrainingResult,
   type AnnotationHistoryView,
   type AnnotationSubmissionView,
   type DatasetRetry,
@@ -137,6 +141,12 @@ const loadingActionListHistory = ref(false)
 const usageChecks = ref<DatasetUsageCheck[]>([])
 const candidates = ref<DatasetVlmCandidate[]>([])
 const artifacts = ref<DatasetArtifact[]>([])
+const ddmCommands = ref<DdmTrainingCommand[]>([])
+const ddmResult = ref<DdmTrainingResult | null>(null)
+const selectedDdmCommandId = ref('')
+const loadingDdmCommands = ref(false)
+const loadingDdmResult = ref(false)
+const ddmCommandsFailed = ref(false)
 const loadingUsage = ref(false)
 const candidateKind = ref<RegisterVlmCandidateInput['kind']>('gqa')
 const candidateActionListRevision = ref(1)
@@ -149,6 +159,8 @@ const generatingArtifact = ref(false)
 let datasetRequestGeneration = 0
 let memberRequestGeneration = 0
 let usageRequestGeneration = 0
+let ddmRequestGeneration = 0
+let ddmResultRequestGeneration = 0
 let annotationRequestGeneration = 0
 let annotationPreparationTimer: number | null = null
 let annotationPreparationWake: (() => void) | null = null
@@ -421,6 +433,68 @@ function artifactRecoveryLabel(code: string | null, action: string | null): stri
   }
 }
 
+function ddmCommandStatusLabel(status: string): string {
+  switch (status) {
+    case 'pending':
+      return '已受理，待派发'
+    case 'result_unknown':
+      return '派发结果待核实'
+    case 'bound':
+      return '已绑定基座任务'
+    case 'completed':
+      return '已完成并登记结果'
+    case 'failed':
+      return '已失败'
+    default:
+      return `未知应用状态（${status}）`
+  }
+}
+
+function ddmCommandStatusTag(status: string): 'success' | 'warning' | 'danger' | 'info' {
+  switch (status) {
+    case 'completed':
+      return 'success'
+    case 'failed':
+      return 'danger'
+    case 'pending':
+    case 'result_unknown':
+    case 'bound':
+      return 'warning'
+    default:
+      return 'info'
+  }
+}
+
+function ddmBaseStatusLabel(status: string | null): string {
+  switch (status) {
+    case null:
+      return '尚未观测到基座状态'
+    case 'queued':
+      return '排队中'
+    case 'running':
+      return '运行中'
+    case 'completed':
+      return '基座完成'
+    case 'cancelled':
+      return '基座报告已取消（缺停止证明）'
+    case 'failed':
+      return '基座失败'
+    default:
+      return `未知基座状态（${status}）`
+  }
+}
+
+function ddmResultStatusLabel(status: string): string {
+  switch (status) {
+    case 'not_registered':
+      return '结果未登记'
+    case 'registered':
+      return '结果已登记'
+    default:
+      return `未知结果状态（${status}）`
+  }
+}
+
 function centerPhaseLabel(): string {
   if (transferPhase.value === 'requesting') return '正在申请上传授权…'
   if (transferPhase.value === 'uploading') return '尚未通知中心校验'
@@ -492,6 +566,7 @@ async function loadDatasets(pageNumber = 1): Promise<void> {
         return
       }
       await loadUsageData()
+      await loadDdmCommands()
     }
   } catch (error) {
     if (requestGeneration === datasetRequestGeneration) recordFailure(error)
@@ -555,8 +630,15 @@ function chooseDataset(): void {
   members.value = []
   memberTotal.value = 0
   memberPageNumber.value = 1
+  ddmCommands.value = []
+  ddmResult.value = null
+  selectedDdmCommandId.value = ''
+  ddmCommandsFailed.value = false
+  // 切换数据集立即失效在途的结果读取，避免迟到响应填充新页面。
+  ddmResultRequestGeneration += 1
   void loadMembers(1)
   void loadUsageData()
+  void loadDdmCommands()
 }
 
 function selectDataset(datasetId: string): void {
@@ -622,6 +704,90 @@ async function loadUsageData(): Promise<void> {
       loadingUsage.value = false
       syncPolling()
     }
+  }
+}
+
+async function loadDdmCommands(): Promise<boolean> {
+  const requestGeneration = ++ddmRequestGeneration
+  const datasetId = selectedDatasetId.value
+  if (!mayView.value || !datasetId) {
+    ddmCommands.value = []
+    ddmResult.value = null
+    selectedDdmCommandId.value = ''
+    ddmCommandsFailed.value = false
+    loadingDdmCommands.value = false
+    return true
+  }
+  loadingDdmCommands.value = true
+  ddmCommandsFailed.value = false
+  try {
+    const commands = await loadAllPages((page, pageSize) =>
+      listDdmTrainingCommands(datasetId, page, pageSize),
+    )
+    if (requestGeneration !== ddmRequestGeneration || selectedDatasetId.value !== datasetId) {
+      return false
+    }
+    ddmCommands.value = commands
+    // 选择只保留仍然存在的命令；不把已不存在的命令结果留在页面上。
+    if (!commands.some((command) => command.id === selectedDdmCommandId.value)) {
+      selectedDdmCommandId.value = ''
+      ddmResult.value = null
+    }
+    return true
+  } catch (error) {
+    if (requestGeneration === ddmRequestGeneration && selectedDatasetId.value === datasetId) {
+      // 读取失败时丢弃旧列表：不能再把上一次的命令当作当前事实。
+      ddmCommands.value = []
+      ddmResult.value = null
+      selectedDdmCommandId.value = ''
+      ddmCommandsFailed.value = true
+      recordFailure(error)
+    }
+    return false
+  } finally {
+    if (requestGeneration === ddmRequestGeneration) loadingDdmCommands.value = false
+  }
+}
+
+/** 手动刷新只重新读取命令与当前结果；不提供也不触发任何启动、取消或重试训练操作。 */
+async function refreshDdmCommands(): Promise<void> {
+  if (!mayView.value || !selectedDatasetId.value) return
+  resetFailure()
+  const loaded = await loadDdmCommands()
+  // 列表读取失败时保留可见失败态，不继续读取依赖的命令结果。
+  if (!loaded || !selectedDdmCommandId.value) return
+  await loadDdmResult(selectedDdmCommandId.value)
+}
+
+async function loadDdmResult(commandId: string): Promise<void> {
+  const datasetId = selectedDatasetId.value
+  if (!mayView.value || !datasetId) return
+  const requestGeneration = ++ddmResultRequestGeneration
+  resetFailure()
+  selectedDdmCommandId.value = commandId
+  loadingDdmResult.value = true
+  try {
+    const result = await readDdmTrainingResult(datasetId, commandId)
+    // 数据集/命令/代次任一变化都丢弃迟到响应，不让旧结果填充新页面。
+    if (
+      requestGeneration !== ddmResultRequestGeneration ||
+      selectedDatasetId.value !== datasetId ||
+      selectedDdmCommandId.value !== commandId
+    ) {
+      return
+    }
+    ddmResult.value = result
+  } catch (error) {
+    if (
+      requestGeneration === ddmResultRequestGeneration &&
+      selectedDatasetId.value === datasetId &&
+      selectedDdmCommandId.value === commandId
+    ) {
+      ddmResult.value = null
+      recordFailure(error)
+    }
+  } finally {
+    if (requestGeneration === ddmResultRequestGeneration) loadingDdmResult.value = false
   }
 }
 
@@ -1338,6 +1504,8 @@ onUnmounted(() => {
   datasetRequestGeneration += 1
   memberRequestGeneration += 1
   usageRequestGeneration += 1
+  ddmRequestGeneration += 1
+  ddmResultRequestGeneration += 1
   clearPolling()
   cancelAnnotationPreparation()
 })
@@ -1754,6 +1922,137 @@ onUnmounted(() => {
       </div>
     </section>
 
+    <section
+      v-if="mayView && selectedDatasetId"
+      class="datasets__ddm"
+      aria-labelledby="ddm-commands-heading"
+    >
+      <div class="datasets__section-head">
+        <div>
+          <h2 id="ddm-commands-heading">DDM 训练命令</h2>
+          <p>
+            应用受理、基座原状态与结果登记是三个独立事实；未知状态按原值显示。本页只读，不启动或取消训练。
+          </p>
+        </div>
+        <ElButton link type="primary" :disabled="loadingDdmCommands" @click="refreshDdmCommands">
+          {{ loadingDdmCommands ? '正在刷新…' : '手动刷新' }}
+        </ElButton>
+      </div>
+      <p v-if="ddmCommandsFailed" class="datasets__muted">DDM 训练命令读取失败，请手动刷新。</p>
+      <p v-else-if="!loadingDdmCommands && ddmCommands.length === 0" class="datasets__empty">
+        当前数据集还没有 DDM 训练命令。
+      </p>
+      <table v-if="ddmCommands.length" class="datasets__table datasets__ddm-table">
+        <caption class="datasets__caption">
+          DDM 训练命令状态
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">命令</th>
+            <th scope="col">应用状态</th>
+            <th scope="col">基座原状态与观测</th>
+            <th scope="col">查询诊断</th>
+            <th scope="col">结果登记</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="command in ddmCommands" :key="command.id">
+            <th scope="row">
+              <code class="datasets__digest">{{ command.id }}</code>
+              <small>请求摘要：{{ command.request_digest }}</small>
+              <small>基座任务：{{ command.base_job_id ?? '尚未绑定' }}</small>
+            </th>
+            <td>
+              <ElTag :type="ddmCommandStatusTag(command.status)" disable-transitions>
+                {{ ddmCommandStatusLabel(command.status) }}
+              </ElTag>
+              <small v-if="command.failure_code" class="datasets__failure-code">
+                {{ command.failure_code }}：{{ command.failure_detail }}
+              </small>
+            </td>
+            <td>
+              <small>基座状态：{{ ddmBaseStatusLabel(command.base_status) }}</small>
+              <small>
+                进度：{{ command.base_progress ?? '—' }}
+                <template
+                  v-if="command.base_current_step !== null || command.base_total_steps !== null"
+                >
+                  （{{ command.base_current_step ?? '—' }}/{{ command.base_total_steps ?? '—' }}）
+                </template>
+              </small>
+              <small>
+                最后成功观测：
+                {{
+                  command.last_observed_at ? formatTime(command.last_observed_at) : '尚未成功观测'
+                }}
+              </small>
+            </td>
+            <td>
+              <template v-if="command.observation_failure_code">
+                <ElTag type="warning" disable-transitions>
+                  {{ command.observation_failure_code }}
+                </ElTag>
+                <small>{{ command.observation_failure_detail }}</small>
+              </template>
+              <span v-else-if="command.last_observed_at" class="datasets__muted"
+                >最近一次查询成功</span
+              >
+              <span v-else class="datasets__muted">尚未成功观测</span>
+            </td>
+            <td>
+              <ElTag
+                :type="command.result_status === 'registered' ? 'success' : 'info'"
+                disable-transitions
+              >
+                {{ ddmResultStatusLabel(command.result_status) }}
+              </ElTag>
+              <small v-if="command.result_registered_at">
+                登记时间：{{ formatTime(command.result_registered_at) }}
+              </small>
+              <small v-if="command.result_failure_code" class="datasets__failure-code">
+                {{ command.result_failure_code }}：{{ command.result_failure_detail }}
+              </small>
+              <ElButton
+                v-if="command.result_status === 'registered'"
+                link
+                type="primary"
+                :disabled="loadingDdmResult"
+                @click="loadDdmResult(command.id)"
+              >
+                读取结果
+              </ElButton>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-if="ddmResult" class="datasets__ddm-result" role="status" aria-live="polite">
+        <h3>结果读取（命令 {{ ddmResult.command_id }}）</h3>
+        <template v-if="ddmResult.status === 'registered'">
+          <p>
+            配置：SHA-256 {{ ddmResult.config?.sha256 ?? '—' }}；大小
+            {{ formatBytes(ddmResult.config?.size ?? null) }}
+          </p>
+          <p>
+            Checkpoint：SHA-256 {{ ddmResult.checkpoint?.sha256 ?? '—' }}；大小
+            {{ formatBytes(ddmResult.checkpoint?.size ?? null) }}
+          </p>
+          <template v-if="ddmResult.access">
+            <a :href="ddmResult.access.config_url" target="_blank" rel="noreferrer">
+              经授权数据通道读取 config.yaml
+            </a>
+            <a :href="ddmResult.access.checkpoint_url" target="_blank" rel="noreferrer">
+              经授权数据通道读取 checkpoint
+            </a>
+          </template>
+          <p v-else>结果已登记，但当前部署尚未配置结果读取入口。</p>
+        </template>
+        <p v-else>
+          结果尚未登记；{{ ddmResult.failure_code ?? '无失败码'
+          }}<template v-if="ddmResult.failure_detail">：{{ ddmResult.failure_detail }}</template>
+        </p>
+      </div>
+    </section>
+
     <section v-if="mayView" class="datasets__catalog" aria-labelledby="catalog-heading">
       <div class="datasets__section-head">
         <div>
@@ -2164,6 +2463,7 @@ onUnmounted(() => {
 .datasets__card,
 .datasets__action-list,
 .datasets__usage,
+.datasets__ddm,
 .datasets__catalog,
 .datasets__members,
 .datasets__import-only {
@@ -2218,7 +2518,8 @@ onUnmounted(() => {
 
 .datasets__card:nth-child(2),
 .datasets__members,
-.datasets__usage {
+.datasets__usage,
+.datasets__ddm {
   border-top-color: var(--dataset-teal);
 }
 
@@ -2297,7 +2598,8 @@ onUnmounted(() => {
 
 .datasets__catalog,
 .datasets__members,
-.datasets__usage {
+.datasets__usage,
+.datasets__ddm {
   margin-bottom: 1.5rem;
 }
 
@@ -2419,6 +2721,32 @@ onUnmounted(() => {
 
 .datasets__usage-table {
   margin-bottom: 1rem;
+}
+
+.datasets__ddm-table th,
+.datasets__ddm-table td {
+  font-size: 0.9rem;
+}
+
+.datasets__ddm-result {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0 1.15rem 1rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--dataset-rule);
+  border-left: 3px solid var(--dataset-teal);
+  background: var(--dataset-paper);
+}
+
+.datasets__ddm-result h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.datasets__ddm-result p {
+  margin: 0;
+  color: #68717c;
+  line-height: 1.45;
 }
 
 .datasets__usage-table th,

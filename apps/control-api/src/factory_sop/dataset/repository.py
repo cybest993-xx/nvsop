@@ -255,6 +255,10 @@ class DdmTrainingCommandRepository(UsageDatasetRepository, Protocol):
         """按命令身份读取 DDM 训练命令。"""
         ...
 
+    def list_ddm_training_commands(self, dataset_id: UUID) -> Sequence[DdmTrainingCommand]:
+        """按创建顺序读取数据集全部 DDM 训练命令。"""
+        ...
+
     def save_ddm_training_command(
         self, value: DdmTrainingCommand, *, expected_updated_at: datetime
     ) -> bool:

@@ -171,6 +171,9 @@ import type {
   ListDatasetUsageChecksData,
   ListDatasetUsageChecksErrors,
   ListDatasetUsageChecksResponses,
+  ListDdmTrainingCommandsData,
+  ListDdmTrainingCommandsErrors,
+  ListDdmTrainingCommandsResponses,
   ListInferenceBackendsData,
   ListInferenceBackendsErrors,
   ListInferenceBackendsResponses,
@@ -255,6 +258,12 @@ import type {
   ReadDatasetUsageCheckData,
   ReadDatasetUsageCheckErrors,
   ReadDatasetUsageCheckResponses,
+  ReadDdmTrainingCommandData,
+  ReadDdmTrainingCommandErrors,
+  ReadDdmTrainingCommandResponses,
+  ReadDdmTrainingResultData,
+  ReadDdmTrainingResultErrors,
+  ReadDdmTrainingResultResponses,
   ReadDeviceCommandData,
   ReadDeviceCommandErrors,
   ReadDeviceCommandResponses,
@@ -360,6 +369,9 @@ import type {
   RequestDatasetUsageCheckData,
   RequestDatasetUsageCheckErrors,
   RequestDatasetUsageCheckResponses,
+  RequestDdmTrainingCommandData,
+  RequestDdmTrainingCommandErrors,
+  RequestDdmTrainingCommandResponses,
   RequestVideoUploadData,
   RequestVideoUploadErrors,
   RequestVideoUploadResponses,
@@ -2420,6 +2432,77 @@ export const downloadDatasetArtifact = <ThrowOnError extends boolean = false>(
     DownloadDatasetArtifactErrors,
     ThrowOnError
   >({ url: '/api/v1/training-datasets/{dataset_id}/artifacts/{artifact_id}/download', ...options })
+
+/**
+ * List The Ddm Training Commands
+ *
+ * 重新打开页面后按数据集恢复原命令，不依赖页面内缓存。
+ */
+export const listDdmTrainingCommands = <ThrowOnError extends boolean = false>(
+  options: Options<ListDdmTrainingCommandsData, ThrowOnError>,
+): RequestResult<ListDdmTrainingCommandsResponses, ListDdmTrainingCommandsErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ListDdmTrainingCommandsResponses,
+    ListDdmTrainingCommandsErrors,
+    ThrowOnError
+  >({ url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands', ...options })
+
+/**
+ * Request A Ddm Training Command
+ *
+ * 受理一条 DDM 训练命令；返回 ``pending`` 只表示已受理，绝不表示训练已开始。
+ */
+export const requestDdmTrainingCommand = <ThrowOnError extends boolean = false>(
+  options: Options<RequestDdmTrainingCommandData, ThrowOnError>,
+): RequestResult<
+  RequestDdmTrainingCommandResponses,
+  RequestDdmTrainingCommandErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    RequestDdmTrainingCommandResponses,
+    RequestDdmTrainingCommandErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read A Ddm Training Command
+ */
+export const readDdmTrainingCommand = <ThrowOnError extends boolean = false>(
+  options: Options<ReadDdmTrainingCommandData, ThrowOnError>,
+): RequestResult<ReadDdmTrainingCommandResponses, ReadDdmTrainingCommandErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadDdmTrainingCommandResponses,
+    ReadDdmTrainingCommandErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands/{command_id}',
+    ...options,
+  })
+
+/**
+ * Read A Ddm Training Result
+ *
+ * 返回结果登记事实与已授权数据通道地址；不在此中转大体积字节。
+ */
+export const readDdmTrainingResult = <ThrowOnError extends boolean = false>(
+  options: Options<ReadDdmTrainingResultData, ThrowOnError>,
+): RequestResult<ReadDdmTrainingResultResponses, ReadDdmTrainingResultErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadDdmTrainingResultResponses,
+    ReadDdmTrainingResultErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands/{command_id}/result',
+    ...options,
+  })
 
 /**
  * List The Dataset Members

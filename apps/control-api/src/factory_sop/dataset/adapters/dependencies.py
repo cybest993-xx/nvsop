@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, cast
 from uuid import UUID
@@ -10,21 +11,36 @@ from fastapi import Depends, Request
 from sqlalchemy.orm import Session as DatabaseSession
 from sqlalchemy.orm import sessionmaker
 
+from factory_sop.auth.api import CurrentCallerResolver
 from factory_sop.dataset.adapters.annotation import HttpAnnotationBackend
 from factory_sop.dataset.adapters.annotation_volume import LocalAnnotationDataVolume
 from factory_sop.dataset.adapters.artifact_execution import PostgresDatasetArtifactExecutor
-from factory_sop.dataset.adapters.ddm import NvidiaDdmAnnotationGenerator, NvidiaDdmReader
+from factory_sop.dataset.adapters.ddm import (
+    LocalDdmResultVolume,
+    NvidiaDdmAnnotationGenerator,
+    NvidiaDdmReader,
+    load_ddm_reader_parameters,
+)
+from factory_sop.dataset.adapters.ddm_execution import (
+    HttpDdmTrainingBackend,
+    PostgresDdmTrainingExecutor,
+)
 from factory_sop.dataset.adapters.media import FfprobeMediaProbe
 from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
 from factory_sop.dataset.adapters.storage import LocalFileObjectStorage
 from factory_sop.dataset.adapters.vlm import NvidiaVlmReader
 from factory_sop.dataset.annotation import AnnotationBackend
 from factory_sop.dataset.api import (
+    ArtifactTransactionCommitter,
     DatasetAnnotationRuntime,
     DatasetArtifactExecutor,
     DatasetResourceLookup,
     DatasetUsageRuntime,
     DatasetValidationRuntime,
+    DdmTrainingJobExecutor,
+    DdmTrainingJobFinisher,
+    DdmTrainingJobOutcome,
+    DdmTrainingJobResult,
 )
 from factory_sop.dataset.media import MediaProbe
 from factory_sop.dataset.repository import (
@@ -216,6 +232,55 @@ def artifact_executor(
         generate=lambda workspace, output_filename: NvidiaDdmAnnotationGenerator().generate(
             workspace,
             output_filename,
+        ),
+    )
+
+
+class _UnconfiguredDdmTrainingExecutor:
+    """未配置 DDM 基座时的占位执行器：绝不静默开始训练。"""
+
+    def execute_job(
+        self,
+        *,
+        command_id: UUID,
+        now: datetime,
+        resolve_current_caller: CurrentCallerResolver,
+        finish_job: DdmTrainingJobFinisher,
+        commit_transaction: ArtifactTransactionCommitter,
+    ) -> DdmTrainingJobResult:
+        return DdmTrainingJobResult(DdmTrainingJobOutcome.PENDING, "DDM_UNCONFIGURED")
+
+
+def ddm_executor(
+    settings: Settings,
+    factory: sessionmaker[DatabaseSession],
+) -> DdmTrainingJobExecutor:
+    """构造 DDM 训练命令执行器；未配置时返回不开始训练的占位实现。
+
+    配置但服务不可达一律由执行器记诊断，不影响登录、模板、设备与控制面启动。
+    """
+    if settings.ddm_training_backend_url is None or settings.ddm_training_config_path is None:
+        return _UnconfiguredDdmTrainingExecutor()
+    config_path = Path(settings.ddm_training_config_path)
+    assert settings.ddm_training_dataset_root is not None
+    assert settings.ddm_training_results_root is not None
+    dataset_root = Path(settings.ddm_training_dataset_root)
+    return PostgresDdmTrainingExecutor(
+        factory=factory,
+        storage_factory=lambda: LocalFileObjectStorage.from_settings(settings),
+        generate=NvidiaDdmAnnotationGenerator().generate,
+        backend=HttpDdmTrainingBackend(
+            base_url=settings.ddm_training_backend_url,
+            timeout_seconds=settings.ddm_training_http_timeout_seconds,
+        ),
+        backend_target=settings.ddm_training_backend_url,
+        dataset_root=dataset_root,
+        training_consumer_parameters={},
+        validation_consumer_parameters={},
+        reader_parameters=lambda: load_ddm_reader_parameters(config_path),
+        result_volume=LocalDdmResultVolume(
+            results_root=Path(settings.ddm_training_results_root),
+            dataset_root=dataset_root,
         ),
     )
 

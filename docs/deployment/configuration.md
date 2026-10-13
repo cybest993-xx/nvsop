@@ -30,6 +30,7 @@ uvicorn --factory factory_sop.entrypoint:build
 | SSE 订阅 | `SOP_MONITOR_MAX_SUBSCRIPTIONS` | 每个 API 进程的独立监听连接预算；默认值与上限由 Settings 拥有，超限返回 503 |
 | Session/CSRF | `SOP_SESSION_*`, `SOP_CSRF_SECRET_FILE` | absolute lifetime 不得短于 idle timeout |
 | 训练素材 | `SOP_DATASET_STORAGE_ROOT` | 必须是中心机上的绝对路径；写入经正式 API 流式完成 |
+| DDM 训练 | `SOP_DDM_TRAINING_BACKEND_URL`, `SOP_DDM_TRAINING_DATASET_ROOT`, `SOP_DDM_TRAINING_RESULTS_ROOT`, `SOP_DDM_TRAINING_CONFIG_PATH`, `SOP_DDM_TRAINING_HTTP_TIMEOUT_SECONDS` | URL/两个绝对根目录须成组；配置路径绑定基座实际训练配置，HTTP timeout 只约束查询/派发，不是训练时限。未配置 URL 或配置路径时任务保持 held |
 | Redis | `SOP_REDIS_URL_FILE` | URL 必须是带主机的 `redis://` 或 `rediss://`；库号只能写在路径中（`redis://host:port/N`），URL 的 `db` 查询参数不会被读取 |
 | Dataset | upload TTL、max bytes、supported codecs | codec 列表不能为空 |
 | Media probe | binary、timeout | 默认开发镜像使用 `ffprobe` |
@@ -41,6 +42,12 @@ uvicorn --factory factory_sop.entrypoint:build
 开发 Compose 默认使用 `SOP_DEPLOYMENT_MODE=fixed_main` + `SOP_SESSION_COOKIE_TRANSPORT=allow_http`。annotation 本地入口是 `http://localhost:8444`；训练视频经同一个业务网关 `http://localhost:8443` 流式上传，不再有独立对象存储上传入口。`allow_http` 仍只允许与 `fixed_main` 联用；生产部署使用 HTTPS 安全边界。
 
 开发 Compose 中的完整当前变量集合见 [`../../deploy/dev/compose.yaml`](../../deploy/dev/compose.yaml)，不要把其中的开发值复制成生产默认值。
+
+### DDM 共享路径与读取边界
+
+DDM 的 `DATASET_ROOT`/`RESULTS_ROOT` 与 worker 的对应 SOP 根目录必须是**同一卷、同一容器内绝对路径**：基座把路径写入训练配置，结果核对不能用另一条映射路径猜测。worker 对输入卷可写、结果卷只读；DDM 对结果卷可写。`SOP_DDM_TRAINING_CONFIG_PATH` 指向与 DDM `CONFIG_PATH` + `TRAIN_CONFIG_NAME` 相同的受信部署文件，挂载只读。worker 在执行前才读实际 reader 字段并与冻结的每角色参数比较；缺文件/字段或不匹配产生持久诊断，不启动训练。配置文件读取和基座连通性不作为中心/worker 启动前提，DDM 离线不阻止登录、模板及其他控制 API。
+
+已经登记的结果保存在 `SOP_DATASET_STORAGE_ROOT`；Nginx 的 8444 数据服务只读挂载此卷，经当前会话与数据集查看权限授权后读取精确登记对象，控制 API 不传结果字节。规则见 [ADR-0011](../adr/0011-annotation-derived-media-gateway.md)，配置见 [Nginx 示例](nginx-annotation.conf.example)；本地 Compose 接线见[开发部署](development.md#ddm-训练的可选部署)。
 
 ### 证据访问授权
 

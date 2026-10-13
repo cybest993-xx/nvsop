@@ -36,6 +36,7 @@ from factory_sop.dataset.model import (
     DatasetMember,
     DdmTrainingCommand,
     DdmTrainingCommandStatus,
+    DdmTrainingResultStatus,
     TrainingDataset,
     UploadAttempt,
     UsageCheck,
@@ -742,6 +743,21 @@ class DdmTrainingCommandRow(Table):
     base_observation: Mapped[dict[str, Any] | None] = mapped_column(JSONB())
     failure_code: Mapped[str | None] = mapped_column(String(64))
     failure_detail: Mapped[str | None] = mapped_column(String(1024))
+    last_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    observation_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    observation_failure_code: Mapped[str | None] = mapped_column(String(64))
+    observation_failure_detail: Mapped[str | None] = mapped_column(String(1024))
+    result_status: Mapped[str] = mapped_column(String(32), default="not_registered")
+    result_generation: Mapped[int] = mapped_column(Integer(), default=0)
+    result_config_object_key: Mapped[str | None] = mapped_column(String(512))
+    result_config_sha256: Mapped[str | None] = mapped_column(String(64))
+    result_config_size: Mapped[int | None] = mapped_column(BigInteger())
+    result_checkpoint_object_key: Mapped[str | None] = mapped_column(String(512))
+    result_checkpoint_sha256: Mapped[str | None] = mapped_column(String(64))
+    result_checkpoint_size: Mapped[int | None] = mapped_column(BigInteger())
+    result_failure_code: Mapped[str | None] = mapped_column(String(64))
+    result_failure_detail: Mapped[str | None] = mapped_column(String(1024))
+    result_registered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[UUID] = mapped_column(Uuid())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -765,6 +781,20 @@ class DdmTrainingCommandRow(Table):
             base_observation=self.base_observation,
             failure_code=self.failure_code,
             failure_detail=self.failure_detail,
+            last_observed_at=self.last_observed_at,
+            observation_failure_code=self.observation_failure_code,
+            observation_failure_detail=self.observation_failure_detail,
+            result_status=DdmTrainingResultStatus(self.result_status),
+            result_generation=self.result_generation,
+            result_config_object_key=self.result_config_object_key,
+            result_config_sha256=self.result_config_sha256,
+            result_config_size=self.result_config_size,
+            result_checkpoint_object_key=self.result_checkpoint_object_key,
+            result_checkpoint_sha256=self.result_checkpoint_sha256,
+            result_checkpoint_size=self.result_checkpoint_size,
+            result_failure_code=self.result_failure_code,
+            result_failure_detail=self.result_failure_detail,
+            result_registered_at=self.result_registered_at,
         )
 
     @classmethod
@@ -786,6 +816,20 @@ class DdmTrainingCommandRow(Table):
             else None,
             failure_code=value.failure_code,
             failure_detail=value.failure_detail,
+            last_observed_at=value.last_observed_at,
+            observation_failure_code=value.observation_failure_code,
+            observation_failure_detail=value.observation_failure_detail,
+            result_status=value.result_status.value,
+            result_generation=value.result_generation,
+            result_config_object_key=value.result_config_object_key,
+            result_config_sha256=value.result_config_sha256,
+            result_config_size=value.result_config_size,
+            result_checkpoint_object_key=value.result_checkpoint_object_key,
+            result_checkpoint_sha256=value.result_checkpoint_sha256,
+            result_checkpoint_size=value.result_checkpoint_size,
+            result_failure_code=value.result_failure_code,
+            result_failure_detail=value.result_failure_detail,
+            result_registered_at=value.result_registered_at,
             created_by=value.created_by,
             created_at=value.created_at,
             updated_at=value.updated_at,

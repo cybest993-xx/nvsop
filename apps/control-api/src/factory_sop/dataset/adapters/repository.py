@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, func, select, update
+from sqlalchemy import CursorResult, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DatabaseSession
@@ -34,6 +34,7 @@ from factory_sop.dataset.model import (
     DatasetMember,
     DdmTrainingCommand,
     DdmTrainingCommandStatus,
+    DdmTrainingResultStatus,
     TrainingDataset,
     UploadAttempt,
     UsageCheck,
@@ -584,6 +585,15 @@ class PostgresDatasetRepository:
         row = self._session.get(DdmTrainingCommandRow, command_id)
         return row.to_domain() if row is not None else None
 
+    def list_ddm_training_commands(self, dataset_id: UUID) -> Sequence[DdmTrainingCommand]:
+        """按创建时间读取数据集全部 DDM 训练命令，供重新打开页面后恢复。"""
+        rows = self._session.scalars(
+            select(DdmTrainingCommandRow)
+            .where(DdmTrainingCommandRow.dataset_id == dataset_id)
+            .order_by(DdmTrainingCommandRow.created_at.asc(), DdmTrainingCommandRow.id.asc())
+        ).all()
+        return [row.to_domain() for row in rows]
+
     def save_ddm_training_command(
         self, value: DdmTrainingCommand, *, expected_updated_at: datetime
     ) -> bool:
@@ -704,16 +714,191 @@ class PostgresDatasetRepository:
         observation: dict[str, Any],
         now: datetime,
     ) -> None:
-        """窄状态观察不发布结果，不释放在途约束。"""
+        """窄状态观察不发布结果；成功观察单独记录时刻并清除旧查询失败诊断。"""
         self._session.execute(
             update(DdmTrainingCommandRow)
             .where(
                 DdmTrainingCommandRow.id == command_id,
                 DdmTrainingCommandRow.status == DdmTrainingCommandStatus.BOUND.value,
                 DdmTrainingCommandRow.base_job_id == base_job_id,
+                or_(
+                    DdmTrainingCommandRow.observation_attempted_at.is_(None),
+                    DdmTrainingCommandRow.observation_attempted_at <= now,
+                ),
             )
-            .values(base_observation=observation, updated_at=now)
+            .values(
+                base_observation=observation,
+                observation_attempted_at=now,
+                last_observed_at=now,
+                observation_failure_code=None,
+                observation_failure_detail=None,
+                updated_at=now,
+            )
         )
+
+    def record_ddm_training_observation_failure(
+        self,
+        *,
+        command_id: UUID,
+        base_job_id: str,
+        failure_code: str,
+        failure_detail: str,
+        now: datetime,
+    ) -> None:
+        """记录查询失败诊断；绝不改写基座原状态或最后成功观测时刻，也不释放保护。"""
+        self._session.execute(
+            update(DdmTrainingCommandRow)
+            .where(
+                DdmTrainingCommandRow.id == command_id,
+                DdmTrainingCommandRow.status == DdmTrainingCommandStatus.BOUND.value,
+                DdmTrainingCommandRow.base_job_id == base_job_id,
+                or_(
+                    DdmTrainingCommandRow.observation_attempted_at.is_(None),
+                    DdmTrainingCommandRow.observation_attempted_at <= now,
+                ),
+            )
+            .values(
+                observation_failure_code=failure_code,
+                observation_failure_detail=failure_detail,
+                observation_attempted_at=now,
+                updated_at=now,
+            )
+        )
+
+    def register_ddm_training_result(
+        self,
+        *,
+        command_id: UUID,
+        base_job_id: str,
+        config_object_key: str,
+        config_sha256: str,
+        config_size: int,
+        checkpoint_object_key: str,
+        checkpoint_sha256: str,
+        checkpoint_size: int,
+        now: datetime,
+    ) -> bool:
+        """首次登记获胜：同一命令的迟到/重复登记不覆盖已发布结果。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(DdmTrainingCommandRow)
+                .where(
+                    DdmTrainingCommandRow.id == command_id,
+                    DdmTrainingCommandRow.status == DdmTrainingCommandStatus.BOUND.value,
+                    DdmTrainingCommandRow.base_job_id == base_job_id,
+                    DdmTrainingCommandRow.result_status
+                    == DdmTrainingResultStatus.NOT_REGISTERED.value,
+                    or_(
+                        DdmTrainingCommandRow.observation_attempted_at.is_(None),
+                        DdmTrainingCommandRow.observation_attempted_at <= now,
+                    ),
+                )
+                .values(
+                    result_status=DdmTrainingResultStatus.REGISTERED.value,
+                    result_generation=DdmTrainingCommandRow.result_generation + 1,
+                    result_config_object_key=config_object_key,
+                    result_config_sha256=config_sha256,
+                    result_config_size=config_size,
+                    result_checkpoint_object_key=checkpoint_object_key,
+                    result_checkpoint_sha256=checkpoint_sha256,
+                    result_checkpoint_size=checkpoint_size,
+                    result_failure_code=None,
+                    result_failure_detail=None,
+                    result_registered_at=now,
+                    updated_at=now,
+                )
+            ),
+        )
+        return result.rowcount == 1
+
+    def record_ddm_training_result_failure(
+        self,
+        *,
+        command_id: UUID,
+        base_job_id: str,
+        failure_code: str,
+        failure_detail: str,
+        now: datetime,
+    ) -> None:
+        """结果不可读/登记失败按可恢复诊断记录，绝不释放保护或重发训练。"""
+        self._session.execute(
+            update(DdmTrainingCommandRow)
+            .where(
+                DdmTrainingCommandRow.id == command_id,
+                DdmTrainingCommandRow.status == DdmTrainingCommandStatus.BOUND.value,
+                DdmTrainingCommandRow.base_job_id == base_job_id,
+                DdmTrainingCommandRow.result_status == DdmTrainingResultStatus.NOT_REGISTERED.value,
+                or_(
+                    DdmTrainingCommandRow.observation_attempted_at.is_(None),
+                    DdmTrainingCommandRow.observation_attempted_at <= now,
+                ),
+            )
+            .values(
+                result_failure_code=failure_code,
+                result_failure_detail=failure_detail,
+                updated_at=now,
+            )
+        )
+
+    def complete_ddm_training_command(
+        self,
+        *,
+        command_id: UUID,
+        base_job_id: str,
+        now: datetime,
+    ) -> bool:
+        """基座成功且结果已登记才进入发布终态，安全释放后端在途保护。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(DdmTrainingCommandRow)
+                .where(
+                    DdmTrainingCommandRow.id == command_id,
+                    DdmTrainingCommandRow.status == DdmTrainingCommandStatus.BOUND.value,
+                    DdmTrainingCommandRow.base_job_id == base_job_id,
+                    DdmTrainingCommandRow.result_status == DdmTrainingResultStatus.REGISTERED.value,
+                )
+                .values(
+                    status=DdmTrainingCommandStatus.COMPLETED.value,
+                    updated_at=now,
+                )
+            ),
+        )
+        return result.rowcount == 1
+
+    def fail_ddm_training_command(
+        self,
+        *,
+        command_id: UUID,
+        base_job_id: str,
+        failure_code: str,
+        failure_detail: str,
+        now: datetime,
+    ) -> bool:
+        """基座明确失败才进入失败终态；raw cancelled 不构成停止证明。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(DdmTrainingCommandRow)
+                .where(
+                    DdmTrainingCommandRow.id == command_id,
+                    DdmTrainingCommandRow.status == DdmTrainingCommandStatus.BOUND.value,
+                    DdmTrainingCommandRow.base_job_id == base_job_id,
+                    or_(
+                        DdmTrainingCommandRow.observation_attempted_at.is_(None),
+                        DdmTrainingCommandRow.observation_attempted_at <= now,
+                    ),
+                )
+                .values(
+                    status=DdmTrainingCommandStatus.FAILED.value,
+                    failure_code=failure_code,
+                    failure_detail=failure_detail,
+                    updated_at=now,
+                )
+            ),
+        )
+        return result.rowcount == 1
 
 
 def _member_values(member: DatasetMember) -> dict[str, object]:

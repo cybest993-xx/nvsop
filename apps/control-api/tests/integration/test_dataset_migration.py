@@ -443,7 +443,7 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
 
     with database_at_0023.connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0062"
+    assert version == "0063"
     assert {
         "backend_target",
         "base_job_id",
@@ -452,6 +452,20 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
         "base_observation",
         "failure_code",
         "failure_detail",
+        "last_observed_at",
+        "observation_failure_code",
+        "observation_failure_detail",
+        "result_status",
+        "result_generation",
+        "result_config_object_key",
+        "result_config_sha256",
+        "result_config_size",
+        "result_checkpoint_object_key",
+        "result_checkpoint_sha256",
+        "result_checkpoint_size",
+        "result_failure_code",
+        "result_failure_detail",
+        "result_registered_at",
     } <= _columns(database_at_0023, "dataset_ddm_training_command")
     with database_at_0023.connect() as connection:
         inflight_index = connection.execute(

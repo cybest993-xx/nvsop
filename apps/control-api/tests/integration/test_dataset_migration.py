@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -442,7 +443,27 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
 
     with database_at_0023.connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0061"
+    assert version == "0062"
+    assert {
+        "backend_target",
+        "base_job_id",
+        "baseline_job_ids",
+        "dispatch_facts",
+        "base_observation",
+        "failure_code",
+        "failure_detail",
+    } <= _columns(database_at_0023, "dataset_ddm_training_command")
+    with database_at_0023.connect() as connection:
+        inflight_index = connection.execute(
+            text("SELECT indexdef FROM pg_indexes WHERE tablename = :table AND indexname = :index"),
+            {
+                "table": "dataset_ddm_training_command",
+                "index": "uq_dataset_ddm_training_command_backend_target_inflight",
+            },
+        ).scalar_one()
+    assert "UNIQUE" in inflight_index
+    assert "result_unknown" in inflight_index
+    assert "bound" in inflight_index
     assert "evidence.evidence.view" in _permission_codes(database_at_0023)
     assert "evidence.review.edit" in _permission_codes(database_at_0023)
     assert "evidence_review" in _tables(database_at_0023)
@@ -490,6 +511,106 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
     )
     command.downgrade(configuration, "0022")
     assert "job_application_job" not in _tables(database_at_0023)
+
+
+def test_0062_ddm_dispatch_upgrade_preserves_pending_payload_and_inflight_index(
+    database_at_0023: Engine,
+) -> None:
+    """0061 pending 命令升级 0062：负载与 job 身份不变，新列为空，在途唯一索引生效。"""
+    configuration = Config(str(CONTROL_API / "alembic.ini"))
+    configuration.set_main_option("script_location", str(CONTROL_API / "migrations"))
+    configuration.set_main_option(
+        "sqlalchemy.url", database_at_0023.url.render_as_string(hide_password=False)
+    )
+    command.upgrade(configuration, "0061")
+
+    actor, dataset_id, command_id, job_id = uuid4(), uuid4(), uuid4(), uuid4()
+    payload = {"input_id": str(uuid4()), "training": {}, "validation": {}}
+    with database_at_0023.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO dataset_training_dataset "
+                "(id, name, created_by, updated_by, created_at, updated_at) "
+                "VALUES (:id, :name, :actor, :actor, now(), now())"
+            ),
+            {"id": dataset_id, "name": "ddm-0062", "actor": actor},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO dataset_ddm_training_command "
+                "(id, dataset_id, status, idempotency_key, request_digest, payload, job_id, "
+                " created_by, created_at, updated_at) "
+                "VALUES (:id, :dataset_id, 'pending', 'existing', :digest, "
+                " CAST(:payload AS jsonb), :job_id, :actor, now(), now())"
+            ),
+            {
+                "id": command_id,
+                "dataset_id": dataset_id,
+                "digest": "a" * 64,
+                "payload": json.dumps(payload),
+                "job_id": job_id,
+                "actor": actor,
+            },
+        )
+
+    command.upgrade(configuration, "0062")
+
+    with database_at_0023.connect() as connection:
+        row = connection.execute(
+            text(
+                "SELECT status, payload, job_id, backend_target, base_job_id, baseline_job_ids, "
+                "dispatch_facts, base_observation, failure_code, failure_detail "
+                "FROM dataset_ddm_training_command WHERE id = :id"
+            ),
+            {"id": command_id},
+        ).one()
+        version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    assert version == "0062"
+    assert row.status == "pending"
+    assert row.payload == payload
+    assert row.job_id == job_id
+    assert row.backend_target is None
+    assert row.base_job_id is None
+    assert row.baseline_job_ids is None
+    assert row.dispatch_facts is None
+    assert row.base_observation is None
+    assert row.failure_code is None
+    assert row.failure_detail is None
+
+    # pending 不占在途保护；同一 backend_target 的第二条 result_unknown 被部分唯一索引拒绝。
+    with database_at_0023.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO dataset_ddm_training_command "
+                "(id, dataset_id, status, idempotency_key, request_digest, payload, "
+                " created_by, created_at, updated_at) "
+                "VALUES (:id, :dataset_id, 'pending', 'second-pending', :digest, "
+                " '{}'::jsonb, :actor, now(), now())"
+            ),
+            {"id": uuid4(), "dataset_id": dataset_id, "digest": "b" * 64, "actor": actor},
+        )
+    with database_at_0023.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO dataset_ddm_training_command "
+                "(id, dataset_id, status, idempotency_key, request_digest, payload, "
+                " backend_target, created_by, created_at, updated_at) "
+                "VALUES (:id, :dataset_id, 'result_unknown', 'inflight-1', :digest, "
+                " '{}'::jsonb, 'target', :actor, now(), now())"
+            ),
+            {"id": uuid4(), "dataset_id": dataset_id, "digest": "c" * 64, "actor": actor},
+        )
+    with pytest.raises(IntegrityError), database_at_0023.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO dataset_ddm_training_command "
+                "(id, dataset_id, status, idempotency_key, request_digest, payload, "
+                " backend_target, created_by, created_at, updated_at) "
+                "VALUES (:id, :dataset_id, 'result_unknown', 'inflight-2', :digest, "
+                " '{}'::jsonb, 'target', :actor, now(), now())"
+            ),
+            {"id": uuid4(), "dataset_id": dataset_id, "digest": "d" * 64, "actor": actor},
+        )
 
 
 def test_0050_handover_history_survives_device_deletion(database_at_0023: Engine) -> None:

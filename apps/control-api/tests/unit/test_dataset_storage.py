@@ -122,3 +122,48 @@ def test_from_settings_refuses_a_missing_root() -> None:
 
     with pytest.raises(ObjectStorageUnavailableError):
         LocalFileObjectStorage.from_settings(settings)
+
+
+def test_symlinked_object_paths_outside_the_root_are_refused(tmp_path: Path) -> None:
+    storage = _storage(tmp_path)
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    (outside / "video").write_bytes(b"content")
+    (tmp_path / "escape").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ObjectStorageUnavailableError):
+        storage.stat(object_key="escape/video")
+    with pytest.raises(ObjectStorageUnavailableError):
+        storage.download_to(object_key="escape/video", destination=BytesIO())
+    with pytest.raises(ObjectStorageUnavailableError):
+        storage.delete(object_key="escape/video")
+
+
+def test_symlink_loops_are_refused_as_storage_unavailable(tmp_path: Path) -> None:
+    storage = _storage(tmp_path)
+    (tmp_path / "loop").symlink_to("loop", target_is_directory=True)
+
+    with pytest.raises(ObjectStorageUnavailableError):
+        storage.stat(object_key="loop/video")
+    with pytest.raises(ObjectStorageUnavailableError):
+        storage.download_to(object_key="loop/video", destination=BytesIO())
+    with pytest.raises(ObjectStorageUnavailableError):
+        storage.delete(object_key="loop/video")
+
+
+@pytest.mark.parametrize(
+    "object_key",
+    [
+        "http://evil.example/video",
+        "http://[",
+        "filesystem:video",
+        "training-datasets\\video",
+    ],
+)
+def test_object_keys_that_are_not_safe_relative_paths_are_refused(
+    tmp_path: Path, object_key: str
+) -> None:
+    storage = _storage(tmp_path)
+
+    with pytest.raises(ObjectStorageUnavailableError):
+        storage.stat(object_key=object_key)

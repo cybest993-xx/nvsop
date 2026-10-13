@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import importlib.util
+from collections.abc import Mapping
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import cast
 
-from factory_sop.dataset.usage import VlmReaderInputError, VlmReaderUnavailableError
+from factory_sop.dataset.usage import (
+    VLM_CONSUMER_PARAMETERS,
+    VlmReaderInputError,
+    VlmReaderUnavailableError,
+)
 
 _BASE_READER = (
     "sop-monitoring-blueprints/microservices/sop-training-bp/assets/tools/cosmos_custom_dataset.py"
@@ -47,8 +53,12 @@ class NvidiaVlmReader:
             )
         )
         custom_config = SimpleNamespace(
-            vision=SimpleNamespace(model_dump=lambda exclude_none=True: {}),
-            system_prompt="",
+            vision=SimpleNamespace(
+                model_dump=lambda exclude_none=True: dict(
+                    cast(Mapping[str, object], VLM_CONSUMER_PARAMETERS["vision"])
+                )
+            ),
+            system_prompt=cast(str, VLM_CONSUMER_PARAMETERS["system_prompt"]),
         )
         try:
             dataset = reader(config=config, custom_config=custom_config)

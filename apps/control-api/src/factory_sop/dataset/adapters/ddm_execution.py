@@ -24,8 +24,9 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import shutil
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
@@ -110,6 +111,18 @@ class _PreparedDispatch:
     consumption: DdmInputConsumption
 
 
+@dataclass(slots=True)
+class _AllocatedWorkcopies:
+    """本次调用实际新建、可确证属于本命令的工作副本路径。
+
+    ``root`` 只在材料化返回后记录，平铺目标只在每次成功 move 后记录；预存在的目标不进入
+    此集合。只有命令确证 FAILED 时才删除这些路径。
+    """
+
+    root: Path | None = None
+    flat_targets: list[Path] = field(default_factory=list)
+
+
 class PostgresDdmTrainingExecutor:
     """在真实 PostgreSQL 上执行 DDM 训练命令的派发与恢复。"""
 
@@ -177,12 +190,13 @@ class PostgresDdmTrainingExecutor:
         now: datetime,
         resolve_current_caller: CurrentCallerResolver,
     ) -> DdmTrainingDispatchResult:
+        owned = _AllocatedWorkcopies()
         denied = self._reject_if_unauthorized(
-            command, resolve_current_caller=resolve_current_caller, now=now
+            command, resolve_current_caller=resolve_current_caller, now=now, owned=owned
         )
         if denied is not None:
             return denied
-        prepared = self._prepare(command, now=now)
+        prepared = self._prepare(command, now=now, owned=owned)
         if isinstance(prepared, DdmTrainingDispatchResult):
             return prepared
         try:
@@ -193,10 +207,11 @@ class PostgresDdmTrainingExecutor:
                 now=now,
                 code="BASE_UNREACHABLE",
                 detail="无法在发送前核对基座任务集合",
+                owned=owned,
             )
         # 长准备/查询期间权限可能已被撤销：发送前必须按当前账号再次复核，意图落库后不再回退。
         denied = self._reject_if_unauthorized(
-            command, resolve_current_caller=resolve_current_caller, now=now
+            command, resolve_current_caller=resolve_current_caller, now=now, owned=owned
         )
         if denied is not None:
             return denied
@@ -218,11 +233,15 @@ class PostgresDdmTrainingExecutor:
                     "DISPATCH_IN_FLIGHT",
                     "同一训练基座已有在途命令，等待其身份确认",
                 )
+            if current.status is DdmTrainingCommandStatus.FAILED:
+                # 意图 CAS 落空且权威状态已 FAILED：本次新建的自身工作副本不再需要，必须清理。
+                self._discard_workcopies(command_id=current.id, owned=owned)
+                return self._failed(current)
             return self._advance(current, now=now, resolve_current_caller=resolve_current_caller)
         return self._send(begun, prepared=prepared, baseline_ids=baseline_ids, now=now)
 
     def _prepare(
-        self, command: DdmTrainingCommand, *, now: datetime
+        self, command: DdmTrainingCommand, *, now: datetime, owned: _AllocatedWorkcopies
     ) -> _PreparedDispatch | DdmTrainingDispatchResult:
         try:
             frozen = decode_frozen_ddm_input(command.payload)
@@ -252,6 +271,7 @@ class PostgresDdmTrainingExecutor:
                 code="STORAGE_UNAVAILABLE",
                 detail="训练输入工作副本准备失败",
             )
+        owned.root = materialized.root
         try:
             consumption = verify_ddm_input_consumption(
                 frozen=frozen,
@@ -262,7 +282,11 @@ class PostgresDdmTrainingExecutor:
             )
         except DatasetRefusedError as error:
             return self._fail(
-                command_id=command.id, now=now, code=error.code.value, detail=error.detail
+                command_id=command.id,
+                now=now,
+                code=error.code.value,
+                detail=error.detail,
+                owned=owned,
             )
         except (ObjectStorageUnavailableError, OSError):
             return self._fail(
@@ -270,6 +294,7 @@ class PostgresDdmTrainingExecutor:
                 now=now,
                 code="STORAGE_UNAVAILABLE",
                 detail="训练输入消费核对失败",
+                owned=owned,
             )
         training_id = self._training_directory_id(command.id)
         validation_id = self._validation_directory_id(command.id)
@@ -278,13 +303,18 @@ class PostgresDdmTrainingExecutor:
                 sources=(
                     (materialized.training_directory, self._dataset_root / training_id),
                     (materialized.validation_directory, self._dataset_root / validation_id),
-                )
+                ),
+                owned=owned,
             )
         except DatasetRefusedError as error:
             if error.code is DatasetRefusalCode.USAGE_STATE_CONFLICT:
                 return self._blocked_on_preparation(command, now=now)
             return self._fail(
-                command_id=command.id, now=now, code=error.code.value, detail=error.detail
+                command_id=command.id,
+                now=now,
+                code=error.code.value,
+                detail=error.detail,
+                owned=owned,
             )
         except OSError:
             return self._fail(
@@ -292,6 +322,7 @@ class PostgresDdmTrainingExecutor:
                 now=now,
                 code="STORAGE_UNAVAILABLE",
                 detail="训练输入工作副本暴露失败",
+                owned=owned,
             )
         return _PreparedDispatch(
             frozen=frozen,
@@ -306,6 +337,7 @@ class PostgresDdmTrainingExecutor:
         *,
         resolve_current_caller: CurrentCallerResolver,
         now: datetime,
+        owned: _AllocatedWorkcopies,
     ) -> DdmTrainingDispatchResult | None:
         try:
             require_current_actor(
@@ -319,6 +351,7 @@ class PostgresDdmTrainingExecutor:
                 now=now,
                 code="PERMISSION_REVOKED",
                 detail="执行者已无权派发 DDM 训练命令",
+                owned=owned,
             )
         return None
 
@@ -529,6 +562,7 @@ class PostgresDdmTrainingExecutor:
         now: datetime,
         code: str,
         detail: str,
+        owned: _AllocatedWorkcopies | None = None,
     ) -> DdmTrainingDispatchResult:
         """意图落库前的确定失败可以终止命令并释放保护；意图之后绝不走这里。"""
         try:
@@ -554,6 +588,9 @@ class PostgresDdmTrainingExecutor:
         if current is None:
             return DdmTrainingDispatchResult(DdmTrainingDispatchOutcome.NOT_FOUND, None)
         if current.status is DdmTrainingCommandStatus.FAILED:
+            # 只在权威状态确证 FAILED 后清理本次新建的自身工作副本；BLOCKED/UNKNOWN/BOUND 保留。
+            if owned is not None:
+                self._discard_workcopies(command_id=command_id, owned=owned)
             _logger.warning(
                 "dataset.ddm_training_dispatch.failed",
                 command_id=str(current.id),
@@ -668,7 +705,12 @@ class PostgresDdmTrainingExecutor:
             command.failure_detail,
         )
 
-    def _expose(self, *, sources: Sequence[tuple[Path, Path]]) -> None:
+    def _expose(
+        self,
+        *,
+        sources: Sequence[tuple[Path, Path]],
+        owned: _AllocatedWorkcopies,
+    ) -> None:
         """把已验证的双集工作副本移动到基座可读的平铺目录，目标已存在即拒绝。"""
         for _source, target in sources:
             if target.exists():
@@ -678,6 +720,28 @@ class PostgresDdmTrainingExecutor:
                 )
         for source, target in sources:
             os.replace(source, target)
+            # 只有本次成功 move 出来的目标才属于本命令；预存在目标在 preflight 已拒绝。
+            owned.flat_targets.append(target)
+
+    def _discard_workcopies(self, *, command_id: UUID, owned: _AllocatedWorkcopies) -> None:
+        """命令确证 FAILED 后只删除本次调用新建的工作副本。
+
+        删除失败只记录，不重试、不声称已删除，也不改变返回的原始失败诊断。
+        """
+        paths = [*owned.flat_targets]
+        if owned.root is not None:
+            paths.append(owned.root)
+        for path in paths:
+            try:
+                shutil.rmtree(path)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                _logger.warning(
+                    "dataset.ddm_training_dispatch.workcopy_cleanup_failed",
+                    command_id=str(command_id),
+                    path=str(path),
+                )
 
     @staticmethod
     def _training_directory_id(command_id: UUID) -> str:

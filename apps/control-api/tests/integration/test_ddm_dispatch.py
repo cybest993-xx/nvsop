@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import threading
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -27,7 +28,7 @@ from factory_sop.dataset.adapters.ddm_execution import (
     PostgresDdmTrainingExecutor,
 )
 from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
-from factory_sop.dataset.model import DdmTrainingCommand
+from factory_sop.dataset.model import DdmTrainingCommand, DdmTrainingCommandStatus
 from factory_sop.dataset.storage import ObjectStorage
 from factory_sop.dataset.usecases.usage import (
     DDM_CONSUMER_PARAMETERS,
@@ -156,6 +157,10 @@ def test_normal_response_and_redelivery_only_poll_original_job(
         assert first.outcome is DdmTrainingDispatchOutcome.BOUND
         assert first.command is not None
         assert first.command.base_job_id in server.jobs
+        # BOUND 后成功在途输入必须保留：清理绝不能销毁基座正在读取的输入。
+        assert (tmp_path / submitted.command.payload["input_id"]).is_dir()
+        assert (tmp_path / f"ddm-{submitted.command.id}-training").is_dir()
+        assert (tmp_path / f"ddm-{submitted.command.id}-validation").is_dir()
         server.queries.clear()
         second = run(executor(engine, tmp_path, server), submitted.command.id)
         assert second.command is not None
@@ -215,6 +220,10 @@ def test_post_send_errors_are_unknown_then_only_unique_new_job_binds(
         server.start_error = http_error
         result = run(executor(engine, tmp_path, server), submitted.command.id)
         assert result.outcome is DdmTrainingDispatchOutcome.RESULT_UNKNOWN
+        # result_unknown 期间必须保留本次准备的在途输入，等待唯一恢复绑定。
+        assert (tmp_path / submitted.command.payload["input_id"]).is_dir()
+        assert (tmp_path / f"ddm-{submitted.command.id}-training").is_dir()
+        assert (tmp_path / f"ddm-{submitted.command.id}-validation").is_dir()
         recovered = run(executor(engine, tmp_path, server), submitted.command.id)
         assert recovered.outcome is DdmTrainingDispatchOutcome.BOUND
         assert recovered.command is not None
@@ -410,6 +419,10 @@ def test_permission_revoked_during_preparation_never_sends(
         assert result.outcome is DdmTrainingDispatchOutcome.FAILED
         assert result.failure_code == "PERMISSION_REVOKED"
         assert server.starts == []
+        # 完整准备后权限撤销：本次新建的 own root 与两个已平铺目录都必须清理。
+        assert not (tmp_path / submitted.command.payload["input_id"]).exists()
+        assert not (tmp_path / f"ddm-{submitted.command.id}-training").exists()
+        assert not (tmp_path / f"ddm-{submitted.command.id}-validation").exists()
 
 
 def test_reader_parameter_mismatch_never_sends(
@@ -427,6 +440,41 @@ def test_reader_parameter_mismatch_never_sends(
         result = run(worker, submitted.command.id)
         assert result.outcome is DdmTrainingDispatchOutcome.FAILED
         assert server.starts == []
+        # 确定失败后本次新建的工作副本必须清理，不能留下孤儿目录。
+        assert not (tmp_path / submitted.command.payload["input_id"]).exists()
+
+
+def test_partial_exposure_failure_cleans_only_own_workcopies(
+    engine: Engine,
+    tmp_path: Path,
+    selections: tuple[DdmInputSelection, DdmInputSelection],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """第二个平铺 move 失败：只删除 own root 与已移动的自身目标，无关哨兵保留。"""
+    submitted = _submit(
+        engine, idempotency_key="partial-expose", training=selections[0], validation=selections[1]
+    )
+    with DdmHttpServer() as server:
+        sentinel = tmp_path / "unrelated-sentinel"
+        sentinel.write_text("keep")
+        real_replace = os.replace
+        moved: list[Path] = []
+
+        def flaky_replace(source: str | Path, target: str | Path) -> None:
+            if len(moved) == 1:
+                raise OSError("simulated partial exposure failure")
+            real_replace(source, target)
+            moved.append(Path(target))
+
+        monkeypatch.setattr(os, "replace", flaky_replace)
+        result = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert result.outcome is DdmTrainingDispatchOutcome.FAILED
+        assert result.failure_code == "STORAGE_UNAVAILABLE"
+        assert server.starts == []
+        assert len(moved) == 1
+        assert not (tmp_path / submitted.command.payload["input_id"]).exists()
+        assert not moved[0].exists()
+        assert sentinel.read_text() == "keep"
 
 
 def test_recovery_refuses_mismatched_backend_target(
@@ -539,3 +587,46 @@ def test_uncertain_intent_commit_never_sends(
         redelivery = run(executor(engine, tmp_path, server), submitted.command.id)
         assert redelivery.outcome is DdmTrainingDispatchOutcome.RESULT_UNKNOWN
         assert server.starts == []
+
+
+def test_begin_cas_loss_to_definite_failure_cleans_own_workcopies(
+    engine: Engine,
+    tmp_path: Path,
+    selections: tuple[DdmInputSelection, DdmInputSelection],
+) -> None:
+    """准备快照过期：第二个 current actor 复核时命令已被其它 worker 按 pending->FAILED 终结。
+
+    此时 ``_begin`` 的 pending CAS 落空、权威状态为 FAILED，本次新建的工作副本必须清理。
+    """
+    submitted = _submit(
+        engine, idempotency_key="begin-cas-lost", training=selections[0], validation=selections[1]
+    )
+    with DdmHttpServer() as server:
+        calls = {"count": 0}
+
+        def resolve(user_id: UUID) -> Caller:
+            del user_id
+            calls["count"] += 1
+            if calls["count"] == 2:
+                with session_factory(engine)() as session:
+                    PostgresDatasetRepository(session).record_ddm_training_failure(
+                        command_id=submitted.command.id,
+                        expected_status=DdmTrainingCommandStatus.PENDING,
+                        failure_code="SIMULATED_TERMINAL",
+                        failure_detail="其它 worker 已确定失败",
+                        now=NOW,
+                    )
+                    session.commit()
+            return _caller(Permission.DATASET_EDIT)
+
+        result = executor(engine, tmp_path, server).execute(
+            command_id=submitted.command.id,
+            now=NOW,
+            resolve_current_caller=resolve,
+        )
+        assert result.outcome is DdmTrainingDispatchOutcome.FAILED
+        assert result.failure_code == "SIMULATED_TERMINAL"
+        assert server.starts == []
+        assert not (tmp_path / submitted.command.payload["input_id"]).exists()
+        assert not (tmp_path / f"ddm-{submitted.command.id}-training").exists()
+        assert not (tmp_path / f"ddm-{submitted.command.id}-validation").exists()

@@ -33,6 +33,7 @@ from factory_sop.dataset.model import (
     DatasetArtifact,
     DatasetMember,
     DdmTrainingCommand,
+    DdmTrainingCommandStatus,
     TrainingDataset,
     UploadAttempt,
     UsageCheck,
@@ -602,6 +603,117 @@ class PostgresDatasetRepository:
             ),
         )
         return result.rowcount == 1
+
+    def begin_ddm_training_dispatch(
+        self,
+        *,
+        command_id: UUID,
+        backend_target: str,
+        baseline_job_ids: Sequence[str],
+        dispatch_facts: dict[str, Any],
+        now: datetime,
+    ) -> DdmTrainingCommand | None:
+        """完整意图一次冻结；唯一状态转换获胜者才可发送，时间戳不作执行权。"""
+        try:
+            with self._session.begin_nested():
+                result = cast(
+                    "CursorResult[Any]",
+                    self._session.execute(
+                        update(DdmTrainingCommandRow)
+                        .where(
+                            DdmTrainingCommandRow.id == command_id,
+                            DdmTrainingCommandRow.status == DdmTrainingCommandStatus.PENDING.value,
+                        )
+                        .values(
+                            status=DdmTrainingCommandStatus.RESULT_UNKNOWN.value,
+                            backend_target=backend_target,
+                            baseline_job_ids=list(baseline_job_ids),
+                            dispatch_facts=dispatch_facts,
+                            updated_at=now,
+                            failure_code="DISPATCH_RESULT_UNVERIFIED",
+                            failure_detail="启动意图已持久化，尚未确认基座任务身份；不得重发 start",
+                        )
+                    ),
+                )
+        except IntegrityError:
+            return None
+        return self.ddm_training_command_by_id(command_id) if result.rowcount == 1 else None
+
+    def bind_ddm_training_base_job(
+        self,
+        *,
+        command_id: UUID,
+        base_job_id: str,
+        now: datetime,
+    ) -> None:
+        """未知结果只能绑定一次；迟到 worker 不得替换获胜身份。"""
+        self._session.execute(
+            update(DdmTrainingCommandRow)
+            .where(
+                DdmTrainingCommandRow.id == command_id,
+                DdmTrainingCommandRow.status == DdmTrainingCommandStatus.RESULT_UNKNOWN.value,
+                DdmTrainingCommandRow.base_job_id.is_(None),
+            )
+            .values(
+                status=DdmTrainingCommandStatus.BOUND.value,
+                base_job_id=base_job_id,
+                failure_code=None,
+                failure_detail=None,
+                updated_at=now,
+            )
+        )
+
+    def record_ddm_training_failure(
+        self,
+        *,
+        command_id: UUID,
+        expected_status: DdmTrainingCommandStatus,
+        failure_code: str,
+        failure_detail: str,
+        now: datetime,
+    ) -> None:
+        """只有意图前的 pending 可失败；未知结果仅更新诊断，绝不释放保护。"""
+        if expected_status not in {
+            DdmTrainingCommandStatus.PENDING,
+            DdmTrainingCommandStatus.RESULT_UNKNOWN,
+        }:
+            raise ValueError("不能覆盖已绑定的派发事实")
+        self._session.execute(
+            update(DdmTrainingCommandRow)
+            .where(
+                DdmTrainingCommandRow.id == command_id,
+                DdmTrainingCommandRow.status == expected_status.value,
+            )
+            .values(
+                status=(
+                    DdmTrainingCommandStatus.FAILED.value
+                    if expected_status is DdmTrainingCommandStatus.PENDING
+                    else expected_status.value
+                ),
+                failure_code=failure_code,
+                failure_detail=failure_detail,
+                updated_at=now,
+            )
+        )
+
+    def observe_ddm_training_base_job(
+        self,
+        *,
+        command_id: UUID,
+        base_job_id: str,
+        observation: dict[str, Any],
+        now: datetime,
+    ) -> None:
+        """窄状态观察不发布结果，不释放在途约束。"""
+        self._session.execute(
+            update(DdmTrainingCommandRow)
+            .where(
+                DdmTrainingCommandRow.id == command_id,
+                DdmTrainingCommandRow.status == DdmTrainingCommandStatus.BOUND.value,
+                DdmTrainingCommandRow.base_job_id == base_job_id,
+            )
+            .values(base_observation=observation, updated_at=now)
+        )
 
 
 def _member_values(member: DatasetMember) -> dict[str, object]:

@@ -13,6 +13,7 @@ import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
+from types import MappingProxyType
 from typing import Any
 from uuid import UUID
 
@@ -25,6 +26,7 @@ from factory_sop.dataset.usecases.usage import (
     DdmInputSelection,
     FrozenDdmInput,
     FrozenDdmInputSet,
+    FrozenDdmMemberInput,
     freeze_ddm_input,
 )
 from factory_sop.identifiers import new_id
@@ -220,6 +222,63 @@ def request_digest(payload: Mapping[str, Any]) -> str:
     """
     content = {key: value for key, value in payload.items() if key != "input_id"}
     return hashlib.sha256(canonical_json(content)).hexdigest()
+
+
+def decode_frozen_ddm_input(payload: Mapping[str, Any]) -> FrozenDdmInput:
+    """把已受理命令的持久负载还原为派发时可独立材料化的冻结输入。
+
+    只读取持久事实，不重新读取数据库当前修订；派发与恢复必须基于首次受理的同一份内容。
+    """
+    training = payload.get("training")
+    validation = payload.get("validation")
+    parameters = payload.get("validation_consumer_parameters")
+    if (
+        not isinstance(training, Mapping)
+        or not isinstance(validation, Mapping)
+        or not isinstance(parameters, Mapping)
+    ):
+        raise ValueError("DDM 训练命令冻结负载不完整")
+    return FrozenDdmInput(
+        input_id=UUID(str(payload["input_id"])),
+        training=_decode_set(training),
+        validation=_decode_set(validation),
+        validation_consumer_parameters=MappingProxyType(dict(parameters)),
+    )
+
+
+def _decode_set(value: Mapping[str, Any]) -> FrozenDdmInputSet:
+    raw_members = value.get("members")
+    if not isinstance(raw_members, list):
+        raise ValueError("DDM 训练命令冻结成员不完整")
+    members = tuple(_decode_member(member) for member in raw_members if isinstance(member, Mapping))
+    if len(members) != len(raw_members):
+        raise ValueError("DDM 训练命令冻结成员不完整")
+    return FrozenDdmInputSet(
+        dataset_id=UUID(str(value["dataset_id"])),
+        usage_check_id=UUID(str(value["usage_check_id"])),
+        artifact_id=UUID(str(value["artifact_id"])),
+        input_digest=str(value["input_digest"]),
+        base_commit=str(value["base_commit"]),
+        contract_version=str(value["contract_version"]),
+        consumer_parameters=MappingProxyType(dict(value["consumer_parameters"])),
+        artifact_object_key=str(value["artifact_object_key"]),
+        artifact_sha256=str(value["artifact_sha256"]),
+        artifact_size=int(value["artifact_size"]),
+        members=members,
+    )
+
+
+def _decode_member(value: Mapping[str, Any]) -> FrozenDdmMemberInput:
+    return FrozenDdmMemberInput(
+        member_id=UUID(str(value["member_id"])),
+        object_key=str(value["object_key"]),
+        source_sha256=str(value["source_sha256"]),
+        actual_size=int(value["actual_size"]),
+        action_list_revision=int(value["action_list_revision"]),
+        annotation_revision=int(value["annotation_revision"]),
+        annotation_bytes=base64.b64decode(str(value["annotation_bytes_base64"]), validate=True),
+        annotation_sha256=str(value["annotation_sha256"]),
+    )
 
 
 def _encode_set(value: FrozenDdmInputSet) -> dict[str, Any]:

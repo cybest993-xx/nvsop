@@ -314,6 +314,7 @@ def _seed_passing_ddm(
     submission_id: UUID,
     execution_id: UUID,
     now: datetime,
+    artifact_content: bytes | None = None,
 ) -> tuple[UUID, UUID]:
     """把一套合成输入跑过真实用途/制品用例，返回 (passed check id, available artifact id)。"""
     _seed_ddm_rows(
@@ -366,8 +367,8 @@ def _seed_passing_ddm(
         now=now + timedelta(seconds=4),
     )
     assert artifact_target is not None
-    artifact_sha256 = hashlib.sha256(f"{label}-artifact".encode()).hexdigest()
-    artifact_size = 128
+    artifact_sha256 = hashlib.sha256(artifact_content or f"{label}-artifact".encode()).hexdigest()
+    artifact_size = len(artifact_content) if artifact_content is not None else 128
     artifact = complete_artifact(
         target=artifact_target,
         object_key=f"artifacts/{label}.json",

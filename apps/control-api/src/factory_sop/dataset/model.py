@@ -103,10 +103,15 @@ class ArtifactStatus(StrEnum):
 class DdmTrainingCommandStatus(StrEnum):
     """DDM 训练应用命令的持久化状态。
 
-    S072 只受理命令，命令在安全派发（S073）与结果登记（S074）就绪前保持待派发。
+    S073 把「发送前的持久派发意图」与「真实基座任务身份」落到命令行；训练进度、结果发布
+    与在途约束释放属于 S074。``bound`` 与 ``result_unknown`` 都是仍在途的保护状态，
+    ``failed`` 只表示可以证明基座未开始的确定失败。
     """
 
     PENDING = "pending"
+    RESULT_UNKNOWN = "result_unknown"
+    BOUND = "bound"
+    FAILED = "failed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,6 +221,15 @@ class DdmTrainingCommand:
     created_by: UUID
     created_at: datetime
     updated_at: datetime
+    # 派发事实：冻结的逻辑基座目标既是在途保护的范围键，也是「同一任务库」的可追溯声明；
+    # base_job_id 只在真实响应或唯一 all_jobs 匹配后写入，一旦写入不再替换。
+    backend_target: str | None = None
+    base_job_id: str | None = None
+    baseline_job_ids: tuple[str, ...] = ()
+    dispatch_facts: Mapping[str, Any] | None = None
+    base_observation: Mapping[str, Any] | None = None
+    failure_code: str | None = None
+    failure_detail: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

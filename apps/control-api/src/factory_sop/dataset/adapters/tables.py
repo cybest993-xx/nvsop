@@ -12,10 +12,12 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -709,12 +711,19 @@ class DatasetArtifactRow(Table):
 
 
 class DdmTrainingCommandRow(Table):
-    """已受理的 DDM 训练应用命令及其冻结负载。"""
+    """已受理的 DDM 训练应用命令及其冻结负载与派发事实。"""
 
     __tablename__ = "dataset_ddm_training_command"
     __table_args__ = (
         UniqueConstraint("dataset_id", "idempotency_key"),
         UniqueConstraint("job_id"),
+        # 每个逻辑基座目标最多一条在途命令：pending/failed 不占保护，其余状态持有。
+        Index(
+            "uq_dataset_ddm_training_command_backend_target_inflight",
+            "backend_target",
+            unique=True,
+            postgresql_where=text("status IN ('result_unknown', 'bound')"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
@@ -726,6 +735,13 @@ class DdmTrainingCommandRow(Table):
     request_digest: Mapped[str] = mapped_column(String(64))
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB())
     job_id: Mapped[UUID | None] = mapped_column(Uuid())
+    backend_target: Mapped[str | None] = mapped_column(String(255))
+    base_job_id: Mapped[str | None] = mapped_column(String(255))
+    baseline_job_ids: Mapped[list[str] | None] = mapped_column(JSONB())
+    dispatch_facts: Mapped[dict[str, Any] | None] = mapped_column(JSONB())
+    base_observation: Mapped[dict[str, Any] | None] = mapped_column(JSONB())
+    failure_code: Mapped[str | None] = mapped_column(String(64))
+    failure_detail: Mapped[str | None] = mapped_column(String(1024))
     created_by: Mapped[UUID] = mapped_column(Uuid())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -742,6 +758,13 @@ class DdmTrainingCommandRow(Table):
             created_by=self.created_by,
             created_at=self.created_at,
             updated_at=self.updated_at,
+            backend_target=self.backend_target,
+            base_job_id=self.base_job_id,
+            baseline_job_ids=tuple(self.baseline_job_ids or ()),
+            dispatch_facts=self.dispatch_facts,
+            base_observation=self.base_observation,
+            failure_code=self.failure_code,
+            failure_detail=self.failure_detail,
         )
 
     @classmethod
@@ -754,6 +777,15 @@ class DdmTrainingCommandRow(Table):
             request_digest=value.request_digest,
             payload=dict(value.payload),
             job_id=value.job_id,
+            backend_target=value.backend_target,
+            base_job_id=value.base_job_id,
+            baseline_job_ids=list(value.baseline_job_ids),
+            dispatch_facts=dict(value.dispatch_facts) if value.dispatch_facts is not None else None,
+            base_observation=dict(value.base_observation)
+            if value.base_observation is not None
+            else None,
+            failure_code=value.failure_code,
+            failure_detail=value.failure_detail,
             created_by=value.created_by,
             created_at=value.created_at,
             updated_at=value.updated_at,

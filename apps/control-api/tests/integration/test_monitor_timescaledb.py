@@ -71,6 +71,20 @@ def _health_compression_job_and_chunk(engine: Engine) -> tuple[int, str]:
     return int(job_id), str(chunk)
 
 
+def _health_chunk_is_columnstore(engine: Engine, chunk: str) -> bool:
+    """目标 chunk 是否为原生 columnstore；按限定名定位，不依赖 chunk 顺序。"""
+    with engine.connect() as connection:
+        compressed = connection.scalar(
+            text(
+                "SELECT is_compressed FROM timescaledb_information.chunks "
+                "WHERE chunk_schema || '.' || chunk_name = :chunk"
+            ),
+            {"chunk": chunk},
+        )
+    assert compressed is not None, "health chunk missing"
+    return bool(compressed)
+
+
 def _health_native_advisory_holders(engine: Engine, job_id: int) -> list[int]:
     """pg_locks 中持该 job 原生 advisory 的 pid；field4 落在 objsubid 列。"""
     with engine.connect() as connection:
@@ -451,13 +465,41 @@ def test_native_policies_use_existing_configured_age_on_upgrade(
     assert all(job.age == timedelta(days=2) for job in jobs)
 
 
+@pytest.mark.parametrize("initial_storage", ["rowstore", "columnstore"])
 def test_downgrade_does_not_deadlock_against_running_native_compression(
-    migration: MigrationFixture,
+    migration: MigrationFixture, initial_storage: str
 ) -> None:
     """CI 37884171294：真实 scheduler 启动的 health worker 持 job advisory 等 chunk 时，降级删策略
     不得形成 advisory↔bgw_job_stat 死锁。旧实现同一事务连续 remove 会稳定复现该死锁。"""
     engine, config = migration.engine, migration.configuration
     job_id, chunk = _health_compression_job_and_chunk(engine)
+
+    # 策略已跑过时目标 chunk 可能已是 columnstore；预压缩场景显式种下该状态。
+    if initial_storage == "columnstore":
+        with engine.begin() as connection:
+            connection.execute(
+                text("CALL convert_to_columnstore(CAST(:chunk AS regclass))"),
+                {"chunk": chunk},
+            )
+        assert _health_chunk_is_columnstore(engine, chunk)
+
+    # 先关闭 job 并等在途 worker 退出，确保随后恢复 chunk 存储时不与压缩竞争。
+    with engine.connect() as connection:
+        connection = connection.execution_options(isolation_level="AUTOCOMMIT")
+        connection.execute(text("SELECT alter_job(:job, scheduled => false)"), {"job": job_id})
+    assert _wait_for_advisory_release(engine, job_id), (
+        "in-flight health worker did not release its job advisory"
+    )
+
+    # 无论初始是 rowstore 还是已被策略压过，都还原为 rowstore，使真实 worker 必然尝试压缩并阻塞。
+    with engine.begin() as connection:
+        connection.execute(
+            text("CALL convert_to_rowstore(CAST(:chunk AS regclass))"),
+            {"chunk": chunk},
+        )
+    assert not _health_chunk_is_columnstore(engine, chunk), (
+        "health chunk was not restored to rowstore"
+    )
 
     # 持 health chunk 的 ACCESS EXCLUSIVE，使真实 worker 在压缩该 chunk 前停住，
     # 并持 native job advisory。
@@ -468,7 +510,10 @@ def test_downgrade_does_not_deadlock_against_running_native_compression(
     try:
         with engine.connect() as connection:
             connection = connection.execution_options(isolation_level="AUTOCOMMIT")
-            connection.execute(text("SELECT alter_job(:job, next_start => now())"), {"job": job_id})
+            connection.execute(
+                text("SELECT alter_job(:job, scheduled => true, next_start => now())"),
+                {"job": job_id},
+            )
             # alter_job 只改 catalog；SIGHUP 唤醒 scheduler 重读 next_start 并立即启动真实 worker。
             connection.execute(text("SELECT pg_reload_conf()"))
         _wait_for_blocked_health_worker(engine, job_id, chunk)

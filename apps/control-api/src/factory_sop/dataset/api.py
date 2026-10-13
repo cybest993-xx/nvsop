@@ -60,6 +60,8 @@ from factory_sop.dataset.usecases.annotation import (
     save_annotation_execution_copy,
 )
 from factory_sop.dataset.usecases.usage import (
+    ConsumedDdmFile,
+    DdmInputConsumption,
     DdmInputSelection,
     FrozenDdmInput,
     FrozenDdmInputSet,
@@ -73,6 +75,7 @@ from factory_sop.dataset.usecases.usage import (
     freeze_ddm_input,
     materialize_ddm_input,
     run_usage_check,
+    verify_ddm_input_consumption,
 )
 from factory_sop.job.api import ApplicationJob
 
@@ -362,6 +365,7 @@ __all__ = [
     "ArtifactJobFinisher",
     "ArtifactTransactionCommitter",
     "CheckedDatasetInput",
+    "ConsumedDdmFile",
     "DatasetAnnotationRuntime",
     "DatasetArtifactExecutor",
     "DatasetCheckedInputReader",
@@ -370,6 +374,7 @@ __all__ = [
     "DatasetResourceLookup",
     "DatasetUsageRuntime",
     "DatasetValidationRuntime",
+    "DdmInputConsumption",
     "DdmInputSelection",
     "DdmReader",
     "FrozenDdmInput",
@@ -411,4 +416,5 @@ __all__ = [
     "save_annotation_execution_copy",
     "summary",
     "validate_video_upload",
+    "verify_ddm_input_consumption",
 ]

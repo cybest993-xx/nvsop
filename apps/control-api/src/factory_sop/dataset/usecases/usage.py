@@ -84,6 +84,22 @@ DDM_CONSUMER_PARAMETERS: Mapping[str, object] = {
     "min_change_dur": 0.3,
     "video_backend": "pyav",
 }
+# 真实验证读取器 DDMValStreamingDataset 消费的按角色输入参数：固定 base 的
+# pl_ddm_datamodule.setup 从 dataset_config 与 val_config 取值（temporal_stride
+# 默认 1，min_change_dur 同样传给验证）；不纳入 augmentation 与 model_config。
+DDM_VALIDATION_CONSUMER_PARAMETERS: Mapping[str, object] = {
+    "frames_per_side": 5,
+    "downsample": 1,
+    "temporal_stride": 1,
+    "min_change_dur": 0.3,
+}
+# 基座 ddm-training-ms 在开始微调时分别生成并让训练/验证读取的聚合文件名
+# （utils/constant.py 的 DDM_TRAIN_ANNOTATION_NAME / DDM_VAL_ANNOTATION_NAME）；
+# 校验必须核对这两个真实消费文件，而不是仅核对冻结输入清单。
+DDM_TRAINING_ANNOTATION_FILENAME = "ddm_train_annotation.json"
+DDM_VALIDATION_ANNOTATION_FILENAME = "ddm_val_annotation.json"
+# 实际消费来源与摘要的可复验记录，写在 owner 的工作副本根目录，不新增表。
+DDM_CONSUMPTION_RECORD_FILENAME = "ddm_input_consumption.json"
 _EPSILON = 1e-6
 _logger = get_logger("dataset")
 
@@ -203,6 +219,9 @@ class FrozenDdmInput:
     input_id: UUID
     training: FrozenDdmInputSet
     validation: FrozenDdmInputSet
+    # 仅 owner 内存态的验证读取器参数，从固定 base 的实际验证 reader 参数冻结；
+    # 不进入既有训练 artifact/check 的 consumer_parameters 协议。
+    validation_consumer_parameters: Mapping[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,6 +232,32 @@ class MaterializedDdmInput:
     root: Path
     training_directory: Path
     validation_directory: Path
+
+
+@dataclass(frozen=True, slots=True)
+class ConsumedDdmFile:
+    """实际参与某一角色训练/验证消费的一个文件及其冻结来源。"""
+
+    role: str
+    filename: str
+    source_object_key: str
+    source_sha256: str
+    size: int
+
+
+@dataclass(frozen=True, slots=True)
+class DdmInputConsumption:
+    """在受限副本上核对真实消费文件后的登记结果。
+
+    供命令绑定“实际消费来源”，而不是只信冻结输入清单。
+    """
+
+    input_id: UUID
+    training_annotation_filename: str
+    training_annotation_sha256: str
+    validation_annotation_filename: str
+    validation_annotation_sha256: str
+    consumed_files: tuple[ConsumedDdmFile, ...]
 
 
 def register_vlm_candidate(
@@ -3328,6 +3373,7 @@ def freeze_ddm_input(
         input_id=new_id(),
         training=training_set,
         validation=validation_set,
+        validation_consumer_parameters=MappingProxyType(dict(DDM_VALIDATION_CONSUMER_PARAMETERS)),
     )
 
 
@@ -3652,3 +3698,208 @@ def _verify_frozen_file(
         ) from error
     if size != expected_size or _file_sha256(path) != expected_sha256:
         raise DatasetRefusedError(DatasetRefusalCode.ARTIFACT_INTEGRITY_FAILURE, detail=detail)
+
+
+def verify_ddm_input_consumption(
+    *,
+    frozen: FrozenDdmInput,
+    materialized: MaterializedDdmInput,
+    training_consumer_parameters: Mapping[str, object],
+    validation_consumer_parameters: Mapping[str, object],
+    generate: Callable[[Path, str], bytes],
+) -> DdmInputConsumption:
+    """在受限工作副本上运行原聚合器，核对训练/验证实际消费的文件与冻结清单一致。
+
+    基座读取器会静默跳过缺失视频，原聚合器会静默跳过缺标注视频，训练服务在验证
+    annotation 缺失或无效时还会回退训练集；只核对冻结输入清单发现不了这些情况。实际
+    调用者必须显式传入两个 reader 实际将消费的按角色参数：每个角色运行真实的
+    generate_ddm_annotation，读取它实际写出的、训练所消费的 annotation 文件，与冻结来源
+    逐项比对；任一不一致（含验证 temporal_stride 等参数不同）立即拒绝，绝不把部分输入
+    登记为有效训练准备。校验只读工作副本，不改写原不可变制品，历史成功也不因失败重写。
+    """
+    if (materialized.root / DDM_CONSUMPTION_RECORD_FILENAME).exists():
+        # 成功根上重复生成会覆盖已写的消费文件，使旧成功记录的摘要失配；
+        # 在任何原聚合器写入前就拒绝，新准备必须使用新的输入身份与目录。
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="该准备目录已有成功消费记录，请用新的输入身份与目录准备",
+        )
+    if materialized.input_id != frozen.input_id:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="材料化工作副本与冻结输入身份不一致",
+        )
+    if materialized.training_directory == materialized.validation_directory:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="训练集与验证集不能共用同一工作副本",
+        )
+    training_ids = {str(member.member_id) for member in frozen.training.members}
+    validation_ids = {str(member.member_id) for member in frozen.validation.members}
+    if not training_ids or not validation_ids or not training_ids.isdisjoint(validation_ids):
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="训练集与验证集必须是非空、互不重叠的独立来源",
+        )
+    if dict(training_consumer_parameters) != dict(frozen.training.consumer_parameters):
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="实际训练消费参数与冻结值不一致",
+        )
+    if dict(validation_consumer_parameters) != dict(frozen.validation_consumer_parameters):
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="实际验证消费参数与冻结值不一致",
+        )
+    digests: dict[str, str] = {}
+    consumed: list[ConsumedDdmFile] = []
+    for role, set_input, directory, filename in (
+        (
+            "training",
+            frozen.training,
+            materialized.training_directory,
+            DDM_TRAINING_ANNOTATION_FILENAME,
+        ),
+        (
+            "validation",
+            frozen.validation,
+            materialized.validation_directory,
+            DDM_VALIDATION_ANNOTATION_FILENAME,
+        ),
+    ):
+        _require_consumable_ddm_set(set_input=set_input, directory=directory)
+        digests[role] = _consume_ddm_set(
+            set_input=set_input,
+            directory=directory,
+            filename=filename,
+            generate=generate,
+        )
+        consumed.extend(
+            ConsumedDdmFile(
+                role=role,
+                filename=f"{member.member_id}.mp4",
+                source_object_key=member.object_key,
+                source_sha256=member.source_sha256,
+                size=member.actual_size,
+            )
+            for member in set_input.members
+        )
+    consumption = DdmInputConsumption(
+        input_id=frozen.input_id,
+        training_annotation_filename=DDM_TRAINING_ANNOTATION_FILENAME,
+        training_annotation_sha256=digests["training"],
+        validation_annotation_filename=DDM_VALIDATION_ANNOTATION_FILENAME,
+        validation_annotation_sha256=digests["validation"],
+        consumed_files=tuple(consumed),
+    )
+    _write_ddm_consumption_record(
+        materialized.root,
+        consumption,
+        training_consumer_parameters=training_consumer_parameters,
+        validation_consumer_parameters=validation_consumer_parameters,
+    )
+    return consumption
+
+
+def _write_ddm_consumption_record(
+    root: Path,
+    result: DdmInputConsumption,
+    *,
+    training_consumer_parameters: Mapping[str, object],
+    validation_consumer_parameters: Mapping[str, object],
+) -> None:
+    """把实际消费来源、按角色参数与摘要写成 owner 工作目录内可复验的记录，不新增表。"""
+    record = {
+        "input_id": str(result.input_id),
+        "training_annotation_filename": result.training_annotation_filename,
+        "training_annotation_sha256": result.training_annotation_sha256,
+        "validation_annotation_filename": result.validation_annotation_filename,
+        "validation_annotation_sha256": result.validation_annotation_sha256,
+        "training_consumer_parameters": dict(training_consumer_parameters),
+        "validation_consumer_parameters": dict(validation_consumer_parameters),
+        "consumed_files": [
+            {
+                "role": item.role,
+                "filename": item.filename,
+                "source_object_key": item.source_object_key,
+                "source_sha256": item.source_sha256,
+                "size": item.size,
+            }
+            for item in result.consumed_files
+        ],
+    }
+    (root / DDM_CONSUMPTION_RECORD_FILENAME).write_bytes(canonical_json(record))
+
+
+def _require_consumable_ddm_set(*, set_input: FrozenDdmInputSet, directory: Path) -> None:
+    """核对工作副本持有该角色全部登记媒体与不可变标注副本，且基座与契约版本一致。"""
+    if set_input.contract_version != DDM_CONTRACT_VERSION or set_input.base_commit != BASE_COMMIT:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="训练基座或契约版本与冻结值不一致",
+        )
+    for member in set_input.members:
+        video = directory / f"{member.member_id}.mp4"
+        annotation = directory / str(member.member_id) / f"{member.member_id}_annotation.json"
+        if not video.is_file() or video.stat().st_size <= 0 or not annotation.is_file():
+            raise DatasetRefusedError(
+                DatasetRefusalCode.ARTIFACT_UNAVAILABLE,
+                detail="受限工作副本缺少基座消费所需的登记媒体或标注",
+            )
+
+
+def _consume_ddm_set(
+    *,
+    set_input: FrozenDdmInputSet,
+    directory: Path,
+    filename: str,
+    generate: Callable[[Path, str], bytes],
+) -> str:
+    """运行原聚合器并读取它实际写出的消费文件，核对视频集合与冻结清单一致。"""
+    try:
+        generate(directory, filename)
+    except (FileNotFoundError, OSError, RuntimeError, ValueError) as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.ARTIFACT_UNAVAILABLE,
+            detail="原聚合器无法从受限工作副本生成训练 annotation",
+        ) from error
+    path = directory / filename
+    try:
+        content = path.read_bytes()
+    except OSError as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.ARTIFACT_UNAVAILABLE,
+            detail="原聚合器没有写出训练所消费的 annotation 文件",
+        ) from error
+    try:
+        document = json.loads(content)
+    except (TypeError, ValueError, UnicodeDecodeError) as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.ARTIFACT_UNAVAILABLE,
+            detail="原聚合器写出的 annotation 不是有效 JSON",
+        ) from error
+    if not isinstance(document, dict) or not document:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.ARTIFACT_UNAVAILABLE,
+            detail="原聚合器写出的 annotation 为空",
+        )
+    if set(document) != {str(member.member_id) for member in set_input.members}:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.ARTIFACT_UNAVAILABLE,
+            detail="实际消费的视频来源与冻结清单不一致，可能跳过缺失视频或回退其他来源",
+        )
+    for member in set_input.members:
+        try:
+            expected = json.loads(member.annotation_bytes)
+        except (TypeError, ValueError, UnicodeDecodeError) as error:
+            raise DatasetRefusedError(
+                DatasetRefusalCode.ARTIFACT_INTEGRITY_FAILURE,
+                detail="冻结标注副本不是有效 JSON",
+            ) from error
+        if document[str(member.member_id)] != expected:
+            raise DatasetRefusedError(
+                DatasetRefusalCode.ARTIFACT_UNAVAILABLE,
+                detail="实际聚合内容与冻结每成员标注不一致",
+            )
+    # 只对真实写出的消费文件取一次摘要并登记；原制品摘要仍是原制品的，不当实际摘要用。
+    return hashlib.sha256(content).hexdigest()

@@ -48,6 +48,7 @@
 |---|---|
 | [已实测事实](design/measured-facts.md) | 带证据出处的设计前提，按记录的提交和环境解读 |
 | [基座能力核验](research/nvidia-base-capability-boundary.md) | 指定 NVIDIA 提交的能力研究，不替代后续产品决策 |
+| [S120 跨模块证据验证](research/s120-runtime-evidence.md) | 推理机本地证据→主机签名上报→中心镜像→授权读取/复核的一次受控实测（软件路径） |
 | [基座验证台账](base/verified-commits.md) | 验证过的上游提交、受控补丁及已知上游问题 |
 
 文档维护规则集中在[文档管理](engineering/documentation.md)，每项事实维护一个主要位置。任务当前状态与依赖留在 GitHub，旧实施计划迁移有效事实后由 Git 历史保留，不形成第二套现行指导。

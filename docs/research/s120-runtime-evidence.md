@@ -9,7 +9,7 @@ Status: **dated evidence**（记录受控环境实测，不定义产品要求，
 
 ## 交付刷新（2026-10-13，product base `main@1561ff3…`）
 
-对已接受 main 的无冲突快进已在交付前完成，本段是同一 candidate 的交付刷新记录。
+交付前已原生、无冲突合入已接受的 main；本段记录测试源不变的后继候选验证结果。
 
 - 刷新日期：2026-10-13（`date -u` 确认）。
 - 产品基线：`main@1561ff3e2dd1d2f822e2be88455dd55f6860a14e`（[PR #490](https://github.com/cybest993-xx/nvsop/pull/490)，仅 dataset 变更）。

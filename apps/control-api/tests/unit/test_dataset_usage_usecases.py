@@ -18,6 +18,7 @@ import pytest
 from factory_sop.auth.authorization import AuthorizationRefusedError, Caller
 from factory_sop.auth.model import User, UserStatus
 from factory_sop.auth.permissions import Permission
+from factory_sop.dataset.adapters.ddm import NvidiaDdmAnnotationGenerator
 from factory_sop.dataset.adapters.storage import LocalFileObjectStorage
 from factory_sop.dataset.api import CheckedDatasetInput, checked_input_reader
 from factory_sop.dataset.errors import DatasetRefusalCode, DatasetRefusedError
@@ -55,8 +56,11 @@ from factory_sop.dataset.usecases.usage import (
     DDM_CONSUMER_PARAMETERS,
     DDM_CONTRACT_VERSION,
     VLM_CONTRACT_VERSION,
+    ConsumedDdmFile,
+    DdmInputConsumption,
     DdmInputSelection,
     FrozenDdmInput,
+    MaterializedDdmInput,
     UsageCheckTarget,
     apply_usage_check_currentness,
     begin_artifact_generation,
@@ -73,6 +77,7 @@ from factory_sop.dataset.usecases.usage import (
     request_usage_check,
     run_usage_check,
     usage_check_is_current,
+    verify_ddm_input_consumption,
 )
 from factory_sop.identifiers import new_id
 from factory_sop.job.api import ApplicationJob, JobStatus, JobType, UsageJobQueue
@@ -1871,3 +1876,153 @@ def test_materialize_ddm_input_fails_closed_without_leaving_partial(tmp_path: Pa
         tmp_path / "objects" / _artifact_key(validation_artifact)
     ).read_bytes() == b"wrong-bytes"
     assert (tmp_path / "objects" / "datasets/source-a.mp4").read_bytes() == b"a" * 100
+
+
+def _materialized_two_sets(
+    tmp_path: Path,
+) -> tuple[FakeUsageDatasets, FakeUsageDatasets, FrozenDdmInput, MaterializedDdmInput]:
+    training, validation, frozen, training_content, validation_content = _two_frozen_sets()
+    training_artifact = next(iter(training.artifacts.values()))
+    validation_artifact = next(iter(validation.artifacts.values()))
+    storage = _seeded_storage(
+        tmp_path / "objects",
+        {
+            "datasets/source-a.mp4": b"a" * 100,
+            _artifact_key(training_artifact): training_content,
+            _artifact_key(validation_artifact): validation_content,
+        },
+    )
+    materialized = materialize_ddm_input(frozen=frozen, storage=storage, root=tmp_path / "input")
+    return training, validation, frozen, materialized
+
+
+def test_verify_ddm_input_consumption_runs_real_base_aggregation(tmp_path: Path) -> None:
+    training, validation, frozen, materialized = _materialized_two_sets(tmp_path)
+
+    consumption = verify_ddm_input_consumption(
+        frozen=frozen,
+        materialized=materialized,
+        generate=NvidiaDdmAnnotationGenerator().generate,
+    )
+
+    assert isinstance(consumption, DdmInputConsumption)
+    assert consumption.input_id == frozen.input_id
+    assert consumption.training_annotation_filename == "ddm_train_annotation.json"
+    assert consumption.validation_annotation_filename == "ddm_val_annotation.json"
+    # 真实基座聚合器写出的训练/验证消费文件各自只覆盖本集合的冻结成员。
+    training_document = json.loads(
+        (materialized.training_directory / "ddm_train_annotation.json").read_bytes()
+    )
+    validation_document = json.loads(
+        (materialized.validation_directory / "ddm_val_annotation.json").read_bytes()
+    )
+    assert set(training_document) == {str(training.member.id)}
+    assert set(validation_document) == {str(validation.member.id)}
+    assert all(isinstance(item, ConsumedDdmFile) for item in consumption.consumed_files)
+    assert {
+        (item.role, item.filename, item.source_object_key) for item in consumption.consumed_files
+    } == {
+        ("training", f"{training.member.id}.mp4", "datasets/source-a.mp4"),
+        ("validation", f"{validation.member.id}.mp4", "datasets/source-a.mp4"),
+    }
+    # 登记的是真实写出文件的摘要，不是原制品摘要。
+    assert (
+        consumption.training_annotation_sha256
+        == hashlib.sha256(
+            (materialized.training_directory / "ddm_train_annotation.json").read_bytes()
+        ).hexdigest()
+    )
+    assert (
+        consumption.validation_annotation_sha256
+        == hashlib.sha256(
+            (materialized.validation_directory / "ddm_val_annotation.json").read_bytes()
+        ).hexdigest()
+    )
+    record = json.loads((materialized.root / "ddm_input_consumption.json").read_bytes())
+    assert record["training_annotation_sha256"] == consumption.training_annotation_sha256
+    assert record["validation_annotation_sha256"] == consumption.validation_annotation_sha256
+    assert {item["filename"] for item in record["consumed_files"]} == {
+        f"{training.member.id}.mp4",
+        f"{validation.member.id}.mp4",
+    }
+
+
+def test_verify_ddm_input_consumption_rejects_changed_segment_content(tmp_path: Path) -> None:
+    _training, _validation, frozen, materialized = _materialized_two_sets(tmp_path)
+    member = frozen.training.members[0]
+    kept_ids_but_changed = [
+        {
+            "action": 1,
+            "description": "(1) 取料",
+            "start_timestamp": 0.0,
+            "end_timestamp": 3.0,
+        }
+    ]
+    annotation_path = (
+        materialized.training_directory
+        / str(member.member_id)
+        / f"{member.member_id}_annotation.json"
+    )
+    annotation_path.write_text(json.dumps(kept_ids_but_changed), encoding="utf-8")
+
+    with pytest.raises(DatasetRefusedError) as refused:
+        verify_ddm_input_consumption(
+            frozen=frozen,
+            materialized=materialized,
+            generate=NvidiaDdmAnnotationGenerator().generate,
+        )
+
+    assert refused.value.code is DatasetRefusalCode.ARTIFACT_UNAVAILABLE
+
+
+def test_verify_ddm_input_consumption_rejects_a_video_the_base_would_skip(tmp_path: Path) -> None:
+    _training, _validation, frozen, materialized = _materialized_two_sets(tmp_path)
+    training_artifact_key = frozen.training.artifact_object_key
+    before = (tmp_path / "objects" / training_artifact_key).read_bytes()
+    (materialized.training_directory / f"{frozen.training.members[0].member_id}.mp4").unlink()
+
+    with pytest.raises(DatasetRefusedError) as refused:
+        verify_ddm_input_consumption(
+            frozen=frozen,
+            materialized=materialized,
+            generate=NvidiaDdmAnnotationGenerator().generate,
+        )
+
+    assert refused.value.code is DatasetRefusalCode.ARTIFACT_UNAVAILABLE
+    # 失败不重写不可变制品。
+    assert (tmp_path / "objects" / training_artifact_key).read_bytes() == before
+
+
+def test_verify_ddm_input_consumption_rejects_a_shared_validation_copy(tmp_path: Path) -> None:
+    _training, _validation, frozen, materialized = _materialized_two_sets(tmp_path)
+
+    with pytest.raises(DatasetRefusedError) as refused:
+        verify_ddm_input_consumption(
+            frozen=frozen,
+            materialized=replace(
+                materialized, validation_directory=materialized.training_directory
+            ),
+            generate=NvidiaDdmAnnotationGenerator().generate,
+        )
+
+    assert refused.value.code is DatasetRefusalCode.USAGE_STATE_CONFLICT
+
+
+def test_verify_ddm_input_consumption_rejects_changed_consumer_parameters(tmp_path: Path) -> None:
+    _training, _validation, frozen, materialized = _materialized_two_sets(tmp_path)
+    changed = replace(
+        frozen,
+        training=replace(
+            frozen.training,
+            consumer_parameters={**DDM_CONSUMER_PARAMETERS, "mode": "eval"},
+        ),
+    )
+
+    with pytest.raises(DatasetRefusedError) as refused:
+        verify_ddm_input_consumption(
+            frozen=changed,
+            materialized=materialized,
+            generate=NvidiaDdmAnnotationGenerator().generate,
+        )
+
+    assert refused.value.code is DatasetRefusalCode.USAGE_STATE_CONFLICT

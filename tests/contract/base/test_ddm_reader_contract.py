@@ -14,6 +14,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+from base_harness import function_source
+
 BASE = Path(__file__).resolve().parents[3] / "vendor/sop-monitoring-blueprints"
 MODULE_PATH = (
     BASE / "microservices/sop-training-bp/microservices/ddm-training-ms/ddm/"
@@ -22,6 +24,10 @@ MODULE_PATH = (
 UTILITY_PATH = (
     BASE / "microservices/sop-training-bp/microservices/ddm-training-ms/utils/dataset_utils.py"
 )
+TRAINING_ROOT = BASE / "microservices/sop-training-bp/microservices/ddm-training-ms"
+CONSTANT_PATH = TRAINING_ROOT / "utils/constant.py"
+APP_PATH = TRAINING_ROOT / "app.py"
+DATAMODULE_PATH = TRAINING_ROOT / "ddm/DDM-Net/pl_ddm_datamodule.py"
 
 
 class _NumArray(list[int]):
@@ -79,6 +85,22 @@ class _Transforms:
     @staticmethod
     def Normalize(**_kwargs: Any) -> Any:
         return lambda value: value
+
+
+class _StubDecoder:
+    metadata = types.SimpleNamespace(average_fps=10.0, duration_seconds=1.0)
+
+    def __init__(self, _path: str) -> None:
+        return None
+
+    def __len__(self) -> int:
+        return 10
+
+    def get_frames_at(self, indices: Any, return_pil: bool = False) -> Any:
+        return types.SimpleNamespace(data=_Tensor(list(indices)), pil=[])
+
+    def close(self) -> None:
+        return None
 
 
 def _numpy_module() -> types.ModuleType:
@@ -251,6 +273,102 @@ class DdmReaderContractTest(unittest.TestCase):
                     sys.modules.pop(name, None)
                 else:
                     sys.modules[name] = value
+
+    def test_base_consumes_materialized_video_and_annotation_layout(self) -> None:
+        """NVSOP 材料化的视频/标注布局必须能被真实聚合器与训练读取器消费。"""
+        stubs = _stubs()
+        previous = {name: sys.modules.get(name) for name in stubs}
+        sys.modules.update(stubs)
+        try:
+            with TemporaryDirectory() as directory:
+                root = Path(directory)
+                video_id = "video-a"
+                (root / f"{video_id}.mp4").write_bytes(b"synthetic")
+                annotation_directory = root / video_id
+                annotation_directory.mkdir()
+                (annotation_directory / f"{video_id}_annotation.json").write_text(
+                    json.dumps(
+                        [
+                            {
+                                "action": 1,
+                                "description": "(1) 取料",
+                                "start_timestamp": 0.0,
+                                "end_timestamp": 0.4,
+                            },
+                            {
+                                "action": 2,
+                                "description": "(2) 安装",
+                                "start_timestamp": 0.6,
+                                "end_timestamp": 1.0,
+                            },
+                        ]
+                    ),
+                    encoding="utf-8",
+                )
+
+                utility_spec = importlib.util.spec_from_file_location(
+                    "nvsop_base_ddm_utils_layout", UTILITY_PATH
+                )
+                assert utility_spec is not None and utility_spec.loader is not None
+                utility = importlib.util.module_from_spec(utility_spec)
+                utility_spec.loader.exec_module(utility)
+                output = utility.generate_ddm_annotation(str(root), "ddm_train_annotation.json")
+                aggregate = json.loads(Path(output).read_text(encoding="utf-8"))
+                self.assertEqual(set(aggregate), {video_id})
+
+                reader_spec = importlib.util.spec_from_file_location(
+                    "nvsop_base_ddm_reader_layout", MODULE_PATH
+                )
+                assert reader_spec is not None and reader_spec.loader is not None
+                module = importlib.util.module_from_spec(reader_spec)
+                reader_spec.loader.exec_module(module)
+                module.PyAVVideoDecoder = _StubDecoder
+                module.PYAV_AVAILABLE = True
+                dataset = module.DDMDataset(
+                    mode="train",
+                    anno_path=output,
+                    data_root=root,
+                    frames_per_side=1,
+                    downsample=1,
+                    min_change_dur=0.1,
+                    video_backend="pyav",
+                )
+                self.assertEqual(set(dataset.video_info), {video_id})
+                self.assertEqual({int(item["label"]) for item in dataset.seqs}, {0, 1})
+        finally:
+            for name, value in previous.items():
+                if value is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = value
+
+    def test_existing_training_path_reads_distinct_train_and_validation_files(self) -> None:
+        """核对基座真实 train/val 读取器的文件与参数来源，NVSOP 准备的文件名必须与其一致。"""
+        constants = CONSTANT_PATH.read_text(encoding="utf-8")
+        self.assertIn('DDM_TRAIN_ANNOTATION_NAME = "ddm_train_annotation.json"', constants)
+        self.assertIn('DDM_VAL_ANNOTATION_NAME = "ddm_val_annotation.json"', constants)
+
+        setup = function_source(DATAMODULE_PATH, "setup")
+        self.assertIn("DDMValStreamingDataset(", setup)
+        self.assertIn('annotation_file=self.dataset_config["val_config"]["anno_path"]', setup)
+        self.assertIn('video_root=self.dataset_config["val_config"]["data_root"]', setup)
+        self.assertIn('frames_per_side=self.dataset_config["frames_per_side"]', setup)
+        self.assertIn('downsample=self.dataset_config["downsample"]', setup)
+        self.assertIn('temporal_stride=self.dataset_config["val_config"]["temporal_stride"]', setup)
+        self.assertIn("DDMDataset(", setup)
+        self.assertIn('anno_path=self.dataset_config["train_config"]["anno_path"]', setup)
+        self.assertIn('data_root=self.dataset_config["train_config"]["data_root"]', setup)
+
+        run = function_source(APP_PATH, "run_fine_tuning")
+        self.assertIn(
+            "val_annotation_path = os.path.join(validation_dataset_path, "
+            "const.DDM_VAL_ANNOTATION_NAME)",
+            run,
+        )
+        self.assertIn(
+            'train_config["dataset_config"]["val_config"]["anno_path"] = train_annotation_path',
+            run,
+        )
 
 
 if __name__ == "__main__":

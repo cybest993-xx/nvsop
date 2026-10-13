@@ -17,6 +17,7 @@ class JobType(StrEnum):
     DATASET_ANNOTATION_PREPARATION = "dataset_annotation_preparation"
     DATASET_USAGE_CHECK = "dataset_usage_check"
     DATASET_ARTIFACT = "dataset_artifact"
+    DATASET_DDM_TRAINING = "dataset_ddm_training"
 
 
 class JobStatus(StrEnum):
@@ -84,6 +85,16 @@ class UsageJobQueue(Protocol):
         self, *, dataset_id: UUID, artifact_id: UUID, now: datetime
     ) -> ApplicationJob:
         """为一份派生制品创建或复用异步任务。"""
+        ...
+
+
+class DdmTrainingJobQueue(Protocol):
+    """`dataset` 受理 DDM 训练命令时使用的待派发任务创建接口。"""
+
+    def get_or_create_ddm_training(
+        self, *, dataset_id: UUID, command_id: UUID, now: datetime
+    ) -> ApplicationJob:
+        """为一条 DDM 训练命令创建或复用待派发任务。"""
         ...
 
 

@@ -27,7 +27,11 @@ from factory_sop.dataset.api import (
     DatasetValidationRuntime,
 )
 from factory_sop.dataset.media import MediaProbe
-from factory_sop.dataset.repository import DatasetRepository, UsageDatasetRepository
+from factory_sop.dataset.repository import (
+    DatasetRepository,
+    DdmTrainingCommandRepository,
+    UsageDatasetRepository,
+)
 from factory_sop.dataset.storage import ObjectStorage
 from factory_sop.job.api import AnnotationJobQueue, UsageJobQueue, ValidationJobQueue
 from factory_sop.persistence import RequestSession
@@ -42,7 +46,7 @@ def datasets(session: RequestSession) -> DatasetRepository:
 class _DatasetResourceLookup:
     """用数据集仓储确认任务资源仍然有效。"""
 
-    def __init__(self, datasets: UsageDatasetRepository) -> None:
+    def __init__(self, datasets: DdmTrainingCommandRepository) -> None:
         self._datasets = datasets
 
     def resource_exists(self, member_id: UUID, attempt_id: UUID) -> bool:
@@ -56,10 +60,11 @@ class _DatasetResourceLookup:
         ) or self._datasets.annotation_execution_exists(member_id, attempt_id)
 
     def dataset_resource_exists(self, dataset_id: UUID, resource_id: UUID) -> bool:
-        """确认用途检查或制品属于数据集。"""
+        """确认用途检查、制品或 DDM 训练命令属于数据集。"""
         for value in (
             self._datasets.usage_check_by_id(resource_id),
             self._datasets.artifact_by_id(resource_id),
+            self._datasets.ddm_training_command_by_id(resource_id),
         ):
             if value is not None and value.dataset_id == dataset_id:
                 return True
@@ -67,7 +72,7 @@ class _DatasetResourceLookup:
 
 
 def dataset_resource(
-    datasets: Annotated[UsageDatasetRepository, Depends(datasets)],
+    datasets: Annotated[DdmTrainingCommandRepository, Depends(datasets)],
 ) -> DatasetResourceLookup:
     """提供 job 查询任务资源归属所需的最小数据集契约。"""
     return _DatasetResourceLookup(datasets)

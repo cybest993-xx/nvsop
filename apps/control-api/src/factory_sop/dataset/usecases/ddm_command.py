@@ -1,0 +1,209 @@
+"""DDM 训练命令：把授权上下文、独立训练/验证冻结输入与消费参数持久绑定到应用命令。
+
+S072 只受理命令并把命令与 outbox 事实写入同一请求事务，命令保持 ``pending``；不注册
+可实际 start 的公开操作，也不伪称训练开始。真正的派发（S073）与结果登记（S074）就绪后
+再释放并投递该命令。冻结负载由 dataset 拥有的窄 codec 编解码，`job` owner 不接触其中
+的 JSON 细节。
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
+from datetime import datetime
+from typing import Any
+from uuid import UUID
+
+from factory_sop.auth.api import Caller, Permission, authorize
+from factory_sop.dataset.errors import DatasetRefusalCode, DatasetRefusedError
+from factory_sop.dataset.model import DdmTrainingCommand, DdmTrainingCommandStatus
+from factory_sop.dataset.repository import DdmTrainingCommandRepository
+from factory_sop.dataset.usage import canonical_json
+from factory_sop.dataset.usecases.usage import (
+    DdmInputSelection,
+    FrozenDdmInput,
+    FrozenDdmInputSet,
+    freeze_ddm_input,
+)
+from factory_sop.identifiers import new_id
+from factory_sop.job.api import ApplicationJob, DdmTrainingJobQueue
+from factory_sop.observability import get_logger
+
+_logger = get_logger("dataset")
+_MAX_IDEMPOTENCY_KEY_LENGTH = 255
+
+
+@dataclass(frozen=True, slots=True)
+class DdmTrainingCommandResult:
+    """受理 DDM 训练命令返回的持久命令和待派发的异步任务。"""
+
+    command: DdmTrainingCommand
+    job: ApplicationJob
+
+
+def request_ddm_training_command(
+    *,
+    training: DdmInputSelection,
+    validation: DdmInputSelection,
+    idempotency_key: str,
+    caller: Caller,
+    now: datetime,
+    datasets: DdmTrainingCommandRepository,
+    jobs: DdmTrainingJobQueue,
+) -> DdmTrainingCommandResult:
+    """受理一条 DDM 训练命令：冻结两套独立输入，并与 outbox 事实同事务持久化。
+
+    授权先于任何读取与重放判断；只做短事务的业务读取与写入，耗时的材料化/HTTP 派发属于
+    后续 S073 阶段，不占请求事务。返回 ``pending`` 命令表示已受理，绝不表示训练已开始。
+    """
+    authorize(caller, Permission.DATASET_EDIT)
+    if not idempotency_key.strip() or len(idempotency_key) > _MAX_IDEMPOTENCY_KEY_LENGTH:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.IDEMPOTENCY_CONFLICT,
+            detail="DDM 训练命令幂等键不能为空且不能超过 255 个字符",
+        )
+    frozen = freeze_ddm_input(
+        training=training,
+        validation=validation,
+        caller=caller,
+        datasets=datasets,
+    )
+    payload = encode_frozen_ddm_input(frozen)
+    digest = request_digest(payload)
+    dataset_id = training.dataset_id
+    existing = datasets.ddm_training_command_by_idempotency(
+        dataset_id=dataset_id,
+        idempotency_key=idempotency_key,
+    )
+    if existing is not None:
+        return _replay_command(
+            existing=existing,
+            digest=digest,
+            dataset_id=dataset_id,
+            now=now,
+            jobs=jobs,
+        )
+    command = DdmTrainingCommand(
+        id=new_id(),
+        dataset_id=dataset_id,
+        status=DdmTrainingCommandStatus.PENDING,
+        idempotency_key=idempotency_key,
+        request_digest=digest,
+        payload=payload,
+        job_id=None,
+        created_by=caller.user.id,
+        created_at=now,
+        updated_at=now,
+    )
+    if not datasets.add_ddm_training_command(command):
+        # 并发提交由唯一键裁决：读取已提交的获胜命令，只产生一个逻辑命令。
+        existing = datasets.ddm_training_command_by_idempotency(
+            dataset_id=dataset_id,
+            idempotency_key=idempotency_key,
+        )
+        if existing is None:
+            raise DatasetRefusedError(
+                DatasetRefusalCode.USAGE_STATE_CONFLICT,
+                detail="DDM 训练命令并发受理失败，请重试",
+            )
+        return _replay_command(
+            existing=existing,
+            digest=digest,
+            dataset_id=dataset_id,
+            now=now,
+            jobs=jobs,
+        )
+    job = jobs.get_or_create_ddm_training(
+        dataset_id=dataset_id,
+        command_id=command.id,
+        now=now,
+    )
+    command = replace(command, job_id=job.id)
+    if not datasets.save_ddm_training_command(command, expected_updated_at=now):
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="DDM 训练命令保存失败",
+        )
+    _logger.info(
+        "dataset.ddm_training_command.accepted",
+        dataset_id=str(dataset_id),
+        command_id=str(command.id),
+        request_digest=digest,
+        actor_id=str(caller.user.id),
+        result=command.status.value,
+    )
+    return DdmTrainingCommandResult(command=command, job=job)
+
+
+def _replay_command(
+    *,
+    existing: DdmTrainingCommand,
+    digest: str,
+    dataset_id: UUID,
+    now: datetime,
+    jobs: DdmTrainingJobQueue,
+) -> DdmTrainingCommandResult:
+    """同一幂等身份同内容返回原命令；内容不同立即冲突，不静默改写已受理命令。"""
+    if existing.request_digest != digest:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.IDEMPOTENCY_CONFLICT,
+            detail="幂等键已对应另一份 DDM 训练命令内容",
+        )
+    job = jobs.get_or_create_ddm_training(
+        dataset_id=dataset_id,
+        command_id=existing.id,
+        now=now,
+    )
+    return DdmTrainingCommandResult(command=existing, job=job)
+
+
+def encode_frozen_ddm_input(frozen: FrozenDdmInput) -> dict[str, Any]:
+    """把冻结输入编码为可持久化、可复验的 JSON 值。"""
+    return {
+        "input_id": str(frozen.input_id),
+        "training": _encode_set(frozen.training),
+        "validation": _encode_set(frozen.validation),
+        "validation_consumer_parameters": dict(frozen.validation_consumer_parameters),
+    }
+
+
+def request_digest(payload: Mapping[str, Any]) -> str:
+    """对调用者内容取稳定摘要，作为幂等身份的内容事实。
+
+    服务端在每次冻结时生成的 ``input_id`` 不属于调用者内容：重放同一幂等身份时必须得到同一
+    摘要，否则同内容重放会被误判为内容变化。冻结输入本身仍原样保留首次受理时的 ``input_id``。
+    """
+    content = {key: value for key, value in payload.items() if key != "input_id"}
+    return hashlib.sha256(canonical_json(content)).hexdigest()
+
+
+def _encode_set(value: FrozenDdmInputSet) -> dict[str, Any]:
+    return {
+        "dataset_id": str(value.dataset_id),
+        "usage_check_id": str(value.usage_check_id),
+        "artifact_id": str(value.artifact_id),
+        "input_digest": value.input_digest,
+        "base_commit": value.base_commit,
+        "contract_version": value.contract_version,
+        "consumer_parameters": dict(value.consumer_parameters),
+        "artifact_object_key": value.artifact_object_key,
+        "artifact_sha256": value.artifact_sha256,
+        "artifact_size": value.artifact_size,
+        "members": [
+            {
+                "member_id": str(member.member_id),
+                "object_key": member.object_key,
+                "source_sha256": member.source_sha256,
+                "actual_size": member.actual_size,
+                "action_list_revision": member.action_list_revision,
+                "annotation_revision": member.annotation_revision,
+                "annotation_bytes_base64": base64.b64encode(member.annotation_bytes).decode(
+                    "ascii"
+                ),
+                "annotation_sha256": member.annotation_sha256,
+            }
+            for member in value.members
+        ],
+    }

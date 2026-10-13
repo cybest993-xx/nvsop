@@ -100,6 +100,15 @@ class ArtifactStatus(StrEnum):
     FAILED = "failed"
 
 
+class DdmTrainingCommandStatus(StrEnum):
+    """DDM 训练应用命令的持久化状态。
+
+    S072 只受理命令，命令在安全派发（S073）与结果登记（S074）就绪前保持待派发。
+    """
+
+    PENDING = "pending"
+
+
 @dataclass(frozen=True, slots=True)
 class DdmVideoInput:
     """一次 DDM 检查冻结的一段完整源视频和动作时间段。"""
@@ -187,6 +196,26 @@ class DatasetArtifact:
     updated_at: datetime
     retryable: bool = False
     recovery_action: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DdmTrainingCommand:
+    """一次已受理的 DDM 训练应用命令及其冻结输入事实。
+
+    `payload` 是 dataset 拥有的冻结负载（独立训练/验证输入与按角色消费参数）；
+    `status` 为 `pending` 表示已受理但尚未派发，不得解释为训练已开始。
+    """
+
+    id: UUID
+    dataset_id: UUID
+    status: DdmTrainingCommandStatus
+    idempotency_key: str
+    request_digest: str
+    payload: Mapping[str, Any]
+    job_id: UUID | None
+    created_by: UUID
+    created_at: datetime
+    updated_at: datetime
 
 
 @dataclass(frozen=True, slots=True)

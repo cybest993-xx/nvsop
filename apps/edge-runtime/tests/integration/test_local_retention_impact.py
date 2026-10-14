@@ -13,13 +13,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import cast
 
-from edge_runtime.center_client import CenterClient, CenterResponse
-from edge_runtime.evidence_access import create_server
-from edge_runtime.local_state import open_local_state
-from edge_runtime.local_state.retention import (
-    ReportedImpactUnavailableError,
-    read_reported_impact,
-)
 from nvsop_contracts import (
     RETENTION_STATION_POLICY_CAPABILITY,
     ResolvedRetentionPolicy,
@@ -27,6 +20,14 @@ from nvsop_contracts import (
 )
 from nvsop_contracts.retention_impact import ReportedImpactQuery
 from test_confirmed_runtime_composition import _bundle
+
+from edge_runtime.center_client import CenterClient, CenterResponse
+from edge_runtime.evidence_access import create_server
+from edge_runtime.local_state import open_local_state
+from edge_runtime.local_state.retention import (
+    ReportedImpactUnavailableError,
+    read_reported_impact,
+)
 
 
 class LocalRetentionImpactTests(unittest.TestCase):

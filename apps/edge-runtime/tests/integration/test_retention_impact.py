@@ -1,4 +1,4 @@
-"""S042：SQLite 以真实中心确认 UTC 作为已上报保留期的年龄事实。"""
+"""S042:SQLite 以真实中心确认 UTC 作为已上报保留期的年龄事实。"""
 
 from __future__ import annotations
 
@@ -11,12 +11,11 @@ from unittest.mock import patch
 import httpx2
 
 from edge_runtime.center_client import CenterClient
+from edge_runtime.judgment.model import HostInstant
+from edge_runtime.local_state import ReportContext, open_local_state
 from edge_runtime.local_state.schema import MIGRATIONS, apply_migrations
 from edge_runtime.reporting import HostReportReconciler
 from edge_runtime.reporting_transport import HttpDecisionReportTransport
-
-from edge_runtime.judgment.model import HostInstant
-from edge_runtime.local_state import ReportContext, open_local_state
 
 ACK = "2026-10-14T09:00:00+00:00"
 LATER = "2026-10-15T09:00:00+00:00"
@@ -80,7 +79,8 @@ class RetentionAcknowledgementTests(unittest.TestCase):
                 connection.execute(
                     """INSERT INTO local_health_queue
                        (station_id, status, occurred_at, report_host_id, sent_at)
-                       VALUES ('station-a', 'healthy', '2026-10-01T00:00:00+00:00', 'host-a', 777)"""
+                       VALUES ('station-a', 'healthy',
+                               '2026-10-01T00:00:00+00:00', 'host-a', 777)"""
                 )
             state = open_local_state(str(path))
             state.close()
@@ -133,8 +133,8 @@ class RetentionAcknowledgementTests(unittest.TestCase):
                 client = CenterClient(
                     center_url="http://center.example",
                     host_id="host-a",
-                    host_private_key="unused",
-                    timeout=1.0,  # pragma: allowlist secret
+                    host_private_key="unused",  # pragma: allowlist secret
+                    timeout=1.0,
                     transport=httpx2.MockTransport(respond),
                 )
                 reconciler = HostReportReconciler(
@@ -159,7 +159,8 @@ class RetentionAcknowledgementTests(unittest.TestCase):
                 with sqlite3.connect(path) as connection:
                     self.assertEqual(
                         connection.execute(
-                            "SELECT sent_at, acknowledged_at, report_reported_at FROM local_health_queue"
+                            "SELECT sent_at, acknowledged_at, report_reported_at "
+                            "FROM local_health_queue"
                         ).fetchone(),
                         (901.0, ACK, LATER),
                     )

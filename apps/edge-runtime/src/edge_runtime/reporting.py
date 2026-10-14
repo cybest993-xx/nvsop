@@ -97,7 +97,7 @@ EXECUTION_AUTHORITY_HEARTBEAT_SECONDS = 60.0
 
 
 def _utc_now() -> str:
-    """在成功响应之后读取确认墙钟，不复用可能经历长时间重试的上报时刻。"""
+    """在成功响应之后读取确认墙钟,不复用可能经历长时间重试的上报时刻。"""
     return datetime.now(UTC).isoformat()
 
 

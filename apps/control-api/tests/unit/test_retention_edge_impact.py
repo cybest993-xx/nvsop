@@ -34,7 +34,7 @@ DAY = 86400
 QUERY = ReportedImpactQuery(str(HOST), 7, "a" * 64, None, (str(OTHER),), 14 * DAY, DAY, NOW)
 EDIT = caller_holding(Permission.RETENTION_POLICY_EDIT)
 # 仅用于合成测试,不是部署凭据。
-SECRET = "synthetic-retention-context-key"
+SECRET = "synthetic-retention-context-key"  # pragma: allowlist secret
 
 
 def test_context_rechecks_current_permission_and_expires_at_configured_boundary() -> None:

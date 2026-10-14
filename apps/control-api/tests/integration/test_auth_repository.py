@@ -336,39 +336,47 @@ def test_session_refresh_after_released_read_transaction_preserves_renewal_and_r
     token = SessionToken.issue()
     previous = datetime.now(UTC) - timedelta(minutes=5)
     stored = Session(new_id(), user.id, fingerprint(token), previous, previous)
-    with DatabaseSession(engine) as initial:
-        PostgresUserRepository(initial).add(user)
-        PostgresSessionRepository(initial).add(stored)
-        initial.commit()
-    app = FastAPI()
-    request = Request(
-        {
-            "type": "http",
-            "app": app,
-            "headers": [(b"cookie", f"{SESSION_COOKIE}={token.value}".encode())],
-        }
-    )
-    policy = SessionPolicy(timedelta(minutes=30), timedelta(hours=8))
-    with DatabaseSession(engine) as current:
-        users = PostgresUserRepository(current)
-        sessions = PostgresSessionRepository(current)
-        roles = PostgresRoleRepository(current)
-        refresh = session_refresh(request, users, sessions, roles, policy)
-        authenticated_caller(request, users, sessions, policy)
-        current.rollback()
-        with DatabaseSession(engine) as probe:
-            unchanged = PostgresSessionRepository(probe).by_token_fingerprint(fingerprint(token))
-            assert unchanged is not None
-            assert unchanged.last_used_at == previous
-        refreshed = refresh()
-        assert refreshed.user.id == user.id
-        assert current.in_transaction()
-        current.commit()
-        with DatabaseSession(engine) as probe:
-            persisted = PostgresSessionRepository(probe).by_token_fingerprint(fingerprint(token))
-            assert persisted is not None
-            assert persisted.last_used_at > previous
-            PostgresSessionRepository(probe).remove(persisted)
-            probe.commit()
-        with pytest.raises(AuthenticationRefusedError):
-            refresh()
+    try:
+        with DatabaseSession(engine) as initial:
+            PostgresUserRepository(initial).add(user)
+            PostgresSessionRepository(initial).add(stored)
+            initial.commit()
+        app = FastAPI()
+        request = Request(
+            {
+                "type": "http",
+                "app": app,
+                "headers": [(b"cookie", f"{SESSION_COOKIE}={token.value}".encode())],
+            }
+        )
+        policy = SessionPolicy(timedelta(minutes=30), timedelta(hours=8))
+        with DatabaseSession(engine) as current:
+            users = PostgresUserRepository(current)
+            sessions = PostgresSessionRepository(current)
+            roles = PostgresRoleRepository(current)
+            refresh = session_refresh(request, users, sessions, roles, policy)
+            authenticated_caller(request, users, sessions, policy)
+            current.rollback()
+            with DatabaseSession(engine) as probe:
+                unchanged = PostgresSessionRepository(probe).by_token_fingerprint(
+                    fingerprint(token)
+                )
+                assert unchanged is not None
+                assert unchanged.last_used_at == previous
+            refreshed = refresh()
+            assert refreshed.user.id == user.id
+            assert current.in_transaction()
+            current.commit()
+            with DatabaseSession(engine) as probe:
+                persisted = PostgresSessionRepository(probe).by_token_fingerprint(
+                    fingerprint(token)
+                )
+                assert persisted is not None
+                assert persisted.last_used_at > previous
+                PostgresSessionRepository(probe).remove(persisted)
+                probe.commit()
+            with pytest.raises(AuthenticationRefusedError):
+                refresh()
+    finally:
+        with engine.begin() as connection:
+            connection.execute(delete(UserRow).where(UserRow.id == user.id))

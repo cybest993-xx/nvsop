@@ -203,6 +203,18 @@ RestartSec=2
 
 分段文件名来自 MediaMTX `recordPath`，其时间戳是 MediaMTX 进程的本机时区。**部署必须保证 MediaMTX 与边缘运行时同一时区，或用 `recording_timezone` 显式声明 MediaMTX 的时区**，否则证据窗口会错位。入队时冻结录像墙钟映射与当时参与 SOP 的连续录像相机路径，重启或改绑后历史待办仍按当时来源切片。
 
+### 本机录像压缩
+
+可选的录像压缩归档由 `media` 的压缩字段启用；它复用 `evidence` 段已配置的 `ffprobe_binary`、`slice_timeout_seconds` 与 `recording_timezone`，因此需要同时启用证据切片，未配置证据切片的主机不执行压缩：
+
+| 字段 | 默认 | 含义 |
+|---|---|---|
+| `recording_compression_enabled` | `false` | 是否为已出原始素材窗口的录像分段生成候选压缩文件 |
+| `recording_compression_age_seconds` | `86400` | 原始素材窗口；整段录像时间都在窗口外的分段才可压缩 |
+| `recording_compression_crf` | `28`（占位） | H.264 质量档，取值 0–51。默认档须由目标子码流实测扫档确定（§5.19 约束 5），照抄占位值不是实测结论 |
+
+默认关闭：候选压缩文件与原件并存，而校验后的原子替换尚未实现，开启前须按磁盘水位评估额外占用。候选由本机 ffmpeg 真实重编码为 H.264，并校验时长、完整解码与帧数容差，编码参数与摘要写入分段旁的 `<segment>.compressed.json`；失败删除候选、保留原件并记录 `edge.recording_compression.failed`。压缩任务只读原件，不替代 MediaMTX 的窗口回收，证据切片与证据媒体字节不受影响。
+
 ### 本机存储分离与已上报队列裁剪
 
 `media.recording_directory` 不得包含 `local_state_path`；启用 `evidence` 时必须与 `evidence.evidence_directory` 分离。比较使用 canonical 路径，因此 symlink 别名也会被拒绝。根配置加载只要存在 `media` 就在写入者/MediaMTX 与切片启动前拒绝这类配置；证据切片在落盘前再次执行同一 owner 校验。滚动录像的年龄回收仍由 MediaMTX 既有窗口负责，这里不新增清理守护进程，也不建立第二份文件索引。

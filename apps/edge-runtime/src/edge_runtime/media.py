@@ -50,8 +50,14 @@ class RecordingMode(StrEnum):
     CONTINUOUS = "continuous"
 
 
-# 原始素材窗口默认 24 小时, 只在此定义一次 (§5.19); 压缩执行不在本阶段。
+# 原始素材窗口默认 24 小时, 只在此定义一次 (§5.19)。
 DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS = 24 * 60 * 60
+# 归档压缩默认值。CRF 必须由目标子码流实测扫档后确定 (§5.19 约束 5, 路线图 P5); 这里的值
+# 只是实测前的占位默认, 不是实测结论, 部署用本机配置覆盖它。
+DEFAULT_RECORDING_COMPRESSION_CRF = 28
+# 默认关闭: 候选压缩文件与原件并存, 而校验后原子替换 (S048) 尚未实现; 开启前须按磁盘水位
+# 评估额外占用, 并按 P5 实测确定质量档。
+DEFAULT_RECORDING_COMPRESSION_ENABLED = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,8 +101,10 @@ class MediaRuntimeConfiguration:
     transcode_threads: int
     recording_window_confirmation: RecordingImpact | None
     cameras: tuple[LocalMediaCamera, ...]
-    # 已老化出原始素材窗口的分段才可被压缩归档 (§5.19); 本阶段只持有配置, 不执行压缩。
+    # 已老化出原始素材窗口的分段才可被压缩归档 (§5.19); 默认不启用, 启用后也只生成候选。
     recording_compression_age_seconds: int = DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS
+    recording_compression_enabled: bool = DEFAULT_RECORDING_COMPRESSION_ENABLED
+    recording_compression_crf: int = DEFAULT_RECORDING_COMPRESSION_CRF
 
 
 class _Process(Protocol):
@@ -135,7 +143,12 @@ def load_media_runtime_configuration(value: object) -> MediaRuntimeConfiguration
             "transcode_threads",
             "cameras",
         },
-        optional={"recording_window_confirmation", "recording_compression_age_seconds"},
+        optional={
+            "recording_window_confirmation",
+            "recording_compression_age_seconds",
+            "recording_compression_enabled",
+            "recording_compression_crf",
+        },
     )
     cameras = tuple(
         _camera(item, host_id=_string(config["host_id"], "host_id"))
@@ -166,6 +179,16 @@ def load_media_runtime_configuration(value: object) -> MediaRuntimeConfiguration
         )
         if "recording_compression_age_seconds" in config
         else DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS
+    )
+    compression_enabled = (
+        _boolean(config["recording_compression_enabled"], "recording_compression_enabled")
+        if "recording_compression_enabled" in config
+        else DEFAULT_RECORDING_COMPRESSION_ENABLED
+    )
+    compression_crf = (
+        _crf(config["recording_compression_crf"], "recording_compression_crf")
+        if "recording_compression_crf" in config
+        else DEFAULT_RECORDING_COMPRESSION_CRF
     )
     allow_origins = tuple(
         _origin(item, "allow_origins item")
@@ -204,6 +227,8 @@ def load_media_runtime_configuration(value: object) -> MediaRuntimeConfiguration
         recording_window_confirmation=confirmation,
         cameras=cameras,
         recording_compression_age_seconds=compression_age,
+        recording_compression_enabled=compression_enabled,
+        recording_compression_crf=compression_crf,
     )
     return configuration
 
@@ -613,6 +638,8 @@ def _validate_configuration(configuration: MediaRuntimeConfiguration) -> None:
     _positive_integer(
         configuration.recording_compression_age_seconds, "recording_compression_age_seconds"
     )
+    _boolean(configuration.recording_compression_enabled, "recording_compression_enabled")
+    _crf(configuration.recording_compression_crf, "recording_compression_crf")
     _positive_integer(
         configuration.record_segment_duration_seconds, "record_segment_duration_seconds"
     )
@@ -867,6 +894,13 @@ def _enum(value: object, enum_type: type[EnumT], name: str) -> EnumT:
         raise ValueError(f"{name} is unsupported") from error
 
 
+def _crf(value: object, name: str) -> int:
+    """x264 CRF 的真实区间是 0-51 (0 为无损); 越界即配置错误, 不悄悄夹取。"""
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 51:
+        raise ValueError(f"{name} must be an integer between 0 and 51")
+    return value
+
+
 def _non_negative_integer(value: object, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f"{name} must be a non-negative integer")
@@ -980,6 +1014,8 @@ def _stream_path(value: str) -> None:
 
 __all__ = [
     "DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS",
+    "DEFAULT_RECORDING_COMPRESSION_CRF",
+    "DEFAULT_RECORDING_COMPRESSION_ENABLED",
     "LocalMediaCamera",
     "MediaPathMode",
     "MediaRuntime",

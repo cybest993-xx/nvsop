@@ -29,6 +29,8 @@ _STATIC_MEDIA_KEYS = frozenset(
         "startup_timeout_seconds",
         "transcode_threads",
         "recording_compression_age_seconds",
+        "recording_compression_enabled",
+        "recording_compression_crf",
     }
 )
 _EXPORT_KEYS = frozenset(
@@ -101,8 +103,13 @@ def apply_export(
     _require_keys(export, _EXPORT_KEYS, "center export")
     edge = _object(json.loads(edge_path.read_text(encoding="utf-8")), "edge configuration")
     local_media = _object(edge.get("media"), "edge media configuration")
-    # 原始素材窗口是本机可选配置；旧配置没有该键时不要求补齐，由边缘加载器给单处默认值。
-    missing = (_STATIC_MEDIA_KEYS - {"recording_compression_age_seconds"}) - local_media.keys()
+    # 压缩相关键是本机可选配置；旧配置没有它们时不要求补齐，由边缘加载器给单处默认值。
+    compression_keys = {
+        "recording_compression_age_seconds",
+        "recording_compression_enabled",
+        "recording_compression_crf",
+    }
+    missing = (_STATIC_MEDIA_KEYS - compression_keys) - local_media.keys()
     if missing:
         raise ValueError(f"edge media configuration is missing: {', '.join(sorted(missing))}")
 

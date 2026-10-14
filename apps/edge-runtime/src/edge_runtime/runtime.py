@@ -84,6 +84,10 @@ from edge_runtime.media import (
     RecordingMode,
     validate_sop_camera_bindings,
 )
+from edge_runtime.recording_compression import (
+    RecordingCompressionConfiguration,
+    RecordingCompressionWorker,
+)
 from edge_runtime.reporting import HostReportReconciler
 from edge_runtime.reporting_transport import HttpDecisionReportTransport
 from edge_runtime.runtime_configuration import (
@@ -881,6 +885,12 @@ class _RuntimeCycleRunner:
             return
         evidence.run_forever(should_stop=self._stop_requested)
 
+    def _run_compression(self) -> None:
+        compression = self._runtime._compression
+        if compression is None:
+            return
+        compression.run_forever(should_stop=self._stop_requested)
+
     def _run_evidence_registration(self) -> None:
         worker = self._runtime._evidence_registration
         if worker is not None:
@@ -998,6 +1008,18 @@ class _RuntimeCycleRunner:
                 [
                     threading.Thread(
                         target=self._guard,
+                        args=(self._run_compression,),
+                        name="edge-recording-compression",
+                        daemon=True,
+                    )
+                ]
+                if runtime._compression is not None
+                else []
+            ),
+            *(
+                [
+                    threading.Thread(
+                        target=self._guard,
                         args=(
                             lambda: self._isolate_center_worker(
                                 "evidence_registration", self._run_evidence_registration
@@ -1081,6 +1103,7 @@ class AutonomousRuntime:
         state: LocalState,
         media: MediaRuntime | None = None,
         evidence: EvidenceMediaWorker | None = None,
+        compression: RecordingCompressionWorker | None = None,
         evidence_registration: EvidenceReferenceReconciler | None = None,
         reclip_loop: ReclipCommandLoop | None = None,
         report_reconciler: HostReportReconciler | None = None,
@@ -1100,6 +1123,7 @@ class AutonomousRuntime:
         self._state = state
         self._media = media
         self._evidence = evidence
+        self._compression = compression
         self._evidence_registration = evidence_registration
         self._reclip_loop = reclip_loop
         self._report_reconciler = report_reconciler
@@ -1286,6 +1310,8 @@ _REPORT_WORK_BUDGET = 32
 _REPORT_RETRY_INTERVAL_SECONDS = 1.0
 _CENTER_WORKER_RESTART_BASE_SECONDS = 0.5
 _CENTER_WORKER_RESTART_MAX_SECONDS = 30.0
+# 压缩是低优先级后台任务: 两轮之间至少等待这么久, 避免反复扫描整个录像目录。
+_RECORDING_COMPRESSION_INTERVAL_SECONDS = 30.0
 
 
 def _log_write_attempt(event: WriteAttempted) -> None:
@@ -1840,6 +1866,26 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
             if media_configuration is not None and evidence_configuration is not None
             else None
         )
+        compression_worker = (
+            RecordingCompressionWorker(
+                configuration=RecordingCompressionConfiguration(
+                    recording_directory=media_configuration.recording_directory,
+                    ffmpeg_binary=media_configuration.ffmpeg_binary,
+                    # 压缩复用本机证据切片已拥有的探测二进制/超时/录像时区, 不复制第二份配置。
+                    ffprobe_binary=evidence_configuration.ffprobe_binary,
+                    compression_age_seconds=(media_configuration.recording_compression_age_seconds),
+                    segment_duration_seconds=(media_configuration.record_segment_duration_seconds),
+                    crf=media_configuration.recording_compression_crf,
+                    timeout_seconds=evidence_configuration.slice_timeout_seconds,
+                    recording_timezone=evidence_configuration.recording_timezone,
+                ),
+                interval=max(_RECORDING_COMPRESSION_INTERVAL_SECONDS, config.command_poll_interval),
+            )
+            if media_configuration is not None
+            and evidence_configuration is not None
+            and media_configuration.recording_compression_enabled
+            else None
+        )
         reclip_loop = (
             build_reclip_loop(
                 center_url=config.center_url,
@@ -1862,6 +1908,7 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
             state=state,
             media=MediaRuntime(config.media) if config.media is not None else None,
             evidence=evidence_worker,
+            compression=compression_worker,
             evidence_registration=(
                 EvidenceReferenceReconciler(
                     state=state,

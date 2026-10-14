@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from datetime import datetime
+from typing import Annotated, Protocol
+from uuid import UUID
 
 from fastapi import Depends, Request
 
 from factory_sop.auth.api import Authorized, CurrentSessionFingerprint, SessionRefresh
-from factory_sop.device.api import DeviceHostGateway
 from factory_sop.persistence import RequestSession
 from factory_sop.retention.adapters.edge_impact import HttpEdgeImpactGateway
 from factory_sop.retention.adapters.repository import (
@@ -64,7 +65,15 @@ def edge_sources() -> EdgeImpactSourcesGateway:
     raise RuntimeError("retention edge sources dependency was not wired")
 
 
-def host_authenticator() -> DeviceHostGateway:
+class RetentionHostAuthenticator(Protocol):
+    """统计回查 transport 所需的窄机器认证接口；device 身份转换由组合根负责。"""
+
+    def __call__(
+        self, *, request: Request, host_id: UUID, body: dict[str, object], now: datetime
+    ) -> None: ...
+
+
+def host_authenticator() -> RetentionHostAuthenticator:
     """组合根接到现有主机签名认证。"""
     raise RuntimeError("retention host authenticator dependency was not wired")
 
@@ -100,6 +109,7 @@ def configuration_gateway(session: RequestSession) -> StationRetentionProjection
 
 
 __all__ = [
+    "RetentionHostAuthenticator",
     "configuration_gateway",
     "edge_impact",
     "edge_sources",

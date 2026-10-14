@@ -5,10 +5,12 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
+from factory_sop.evidence.model import EvidenceImpactCount
 from factory_sop.evidence.repository import EvidenceImpactRepository
 from factory_sop.retention.api import (
     EvidenceImpactGateway,
     EvidenceInstanceUsage,
+    ImpactAggregate,
 )
 
 
@@ -25,11 +27,30 @@ class RepositoryEvidenceImpact(EvidenceImpactGateway):
         exposed_from: datetime | None,
         exposed_to: datetime,
     ) -> tuple[EvidenceInstanceUsage, ...]:
-        return self._repository.evidence_usage(
-            station_id=None if station_id is None else str(station_id),
-            exposed_from=exposed_from,
-            exposed_to=exposed_to,
+        return tuple(
+            EvidenceInstanceUsage(
+                host_id=value.host_id,
+                station_id=value.station_id,
+                instance_id=value.instance_id,
+                unlinked=_aggregate(value.unlinked),
+                linked=_aggregate(value.linked),
+            )
+            for value in self._repository.evidence_usage(
+                station_id=None if station_id is None else str(station_id),
+                exposed_from=exposed_from,
+                exposed_to=exposed_to,
+            )
         )
+
+
+def _aggregate(value: EvidenceImpactCount) -> ImpactAggregate:
+    return ImpactAggregate(
+        objects=value.objects,
+        known_bytes=value.known_bytes,
+        unknown_size_objects=value.unknown_size_objects,
+        earliest=value.earliest,
+        latest=value.latest,
+    )
 
 
 __all__ = ["RepositoryEvidenceImpact"]

@@ -16,6 +16,8 @@ from factory_sop.evidence.adapters.tables import (
     EvidenceReviewRow,
 )
 from factory_sop.evidence.model import (
+    EvidenceImpactCount,
+    EvidenceInstanceCount,
     EvidenceReclipRequest,
     EvidenceReference,
     EvidenceReview,
@@ -28,7 +30,6 @@ from factory_sop.evidence.repository import (
     EvidenceRepository,
     EvidenceReviewRepository,
 )
-from factory_sop.retention.api import EvidenceInstanceUsage, ImpactAggregate, empty_aggregate
 
 
 class PostgresEvidenceRepository(EvidenceRepository):
@@ -310,7 +311,7 @@ class PostgresEvidenceImpactRepository(EvidenceImpactRepository):
         station_id: str | None,
         exposed_from: datetime | None,
         exposed_to: datetime,
-    ) -> tuple[EvidenceInstanceUsage, ...]:
+    ) -> tuple[EvidenceInstanceCount, ...]:
         table = cast(Table, EvidenceReferenceRow.__table__)
         linked = table.c.violation_id.is_not(None)
         conditions = [table.c.received_at <= exposed_to]
@@ -336,9 +337,9 @@ class PostgresEvidenceImpactRepository(EvidenceImpactRepository):
             .where(*conditions)
             .group_by(table.c.host_id, table.c.station_id, instance_id, linked)
         )
-        grouped: dict[tuple[str, str, int], dict[bool, ImpactAggregate]] = {}
+        grouped: dict[tuple[str, str, int], dict[bool, EvidenceImpactCount]] = {}
         for row in self._session.execute(statement).all():
-            aggregate = ImpactAggregate(
+            aggregate = EvidenceImpactCount(
                 objects=int(row.objects),
                 known_bytes=int(row.known_bytes),
                 unknown_size_objects=int(row.unknown_size_objects),
@@ -348,9 +349,9 @@ class PostgresEvidenceImpactRepository(EvidenceImpactRepository):
             grouped.setdefault((str(row.host_id), str(row.station_id), int(row.instance_id)), {})[
                 bool(row.linked)
             ] = aggregate
-        empty = empty_aggregate(measurable_bytes=True)
+        empty = EvidenceImpactCount(0, 0, 0, None, None)
         return tuple(
-            EvidenceInstanceUsage(
+            EvidenceInstanceCount(
                 host_id=_as_uuid(host),
                 station_id=_as_uuid(station),
                 instance_id=instance,

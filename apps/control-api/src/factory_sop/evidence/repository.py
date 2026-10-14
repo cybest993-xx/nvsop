@@ -7,12 +7,12 @@ from typing import Protocol
 from uuid import UUID
 
 from factory_sop.evidence.model import (
+    EvidenceInstanceCount,
     EvidenceReclipRequest,
     EvidenceReference,
     EvidenceReview,
     EvidenceStatus,
 )
-from factory_sop.retention.api import EvidenceInstanceUsage
 
 
 class EvidenceRepository(Protocol):
@@ -112,8 +112,10 @@ class EvidenceImpactRepository(Protocol):
         station_id: str | None,
         exposed_from: datetime | None,
         exposed_to: datetime,
-    ) -> tuple[EvidenceInstanceUsage, ...]:
-        """按 ``(host_id, station_id, instance_id)`` 返回接收时刻落在 ``(exposed_from, exposed_to]`` 的计数。
+    ) -> tuple[EvidenceInstanceCount, ...]:
+        """按 ``(host_id, station_id, instance_id)`` 返回计数。
+
+        接收时刻落在 ``(exposed_from, exposed_to]`` 内。
 
         ``linked`` 是带 ``violation_id``（已锁存违规）的引用，``unlinked`` 是其余引用；两者不重叠。
         """

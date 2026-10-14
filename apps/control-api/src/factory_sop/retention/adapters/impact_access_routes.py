@@ -8,12 +8,14 @@ from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, ConfigDict
 
 from factory_sop.auth.api import SessionFingerprintRecheck
-from factory_sop.device.api import DeviceHostGateway, host_identity_from_headers
 from factory_sop.retention.access import (
     ReportedImpactAccessRefusedError,
     check_reported_impact_context,
 )
-from factory_sop.retention.adapters.dependencies import host_authenticator
+from factory_sop.retention.adapters.dependencies import (
+    RetentionHostAuthenticator,
+    host_authenticator,
+)
 from factory_sop.settings import Settings
 
 router = APIRouter(prefix="/retention/reported-impact", tags=["retention"])
@@ -32,7 +34,7 @@ def check_impact_access(
     request: Request,
     response: Response,
     body: ImpactAccessRequest,
-    gateway: Annotated[DeviceHostGateway, Depends(host_authenticator)],
+    authenticate: Annotated[RetentionHostAuthenticator, Depends(host_authenticator)],
     recheck: SessionFingerprintRecheck,
 ) -> dict[str, object] | Response:
     response.headers["Cache-Control"] = "no-store"
@@ -46,18 +48,7 @@ def check_impact_access(
             headers={"Cache-Control": "no-store"},
         )
     now = datetime.now(UTC)
-    gateway.authenticate(
-        host=host_identity_from_headers(
-            host_id=host_id,
-            method=request.method,
-            path=request.url.path,
-            body=body.model_dump(),
-            timestamp=request.headers.get("X-Inference-Host-Timestamp"),
-            nonce=request.headers.get("X-Inference-Host-Nonce"),
-            signature=request.headers.get("X-Inference-Host-Signature"),
-        ),
-        now=now,
-    )
+    authenticate(request=request, host_id=host_id, body=body.model_dump(), now=now)
     settings: Settings = request.app.state.settings
     try:
         query = check_reported_impact_context(

@@ -196,7 +196,7 @@ class RecordingCompressionTest(unittest.TestCase):
         source = next(directory.glob("*.mp4"))
         original = digest(source)
 
-        for field in ("nb_read_frames", "duration"):
+        for field in ("nb_read_frames", "duration", "codec_name"):
             with self.subTest(field=field):
                 with self.assertLogs("edge_runtime", level="ERROR") as logs:
                     summary = compress_aged_segments(
@@ -219,18 +219,29 @@ class RecordingCompressionTest(unittest.TestCase):
         recovered = compress_aged_segments(self.configuration())
 
         self.assertEqual((recovered.created, recovered.failed), (1, 0))
-        verified = validated_candidate(source)
-        self.assertIsNotNone(verified)
+        self.assertIsNotNone(validated_candidate(source))
         decode(candidate)
-        candidate.write_bytes(candidate.read_bytes() + b"tampered")
-        # 摘要不符即不是可消费产物; 调用方不得替换, 下一轮重新编码修复。
+
+        # 同尺寸覆盖: 字节数不变而摘要已变, 未变化判定必须靠留痕记录的写入时刻发现它。
+        length = candidate.stat().st_size
+        candidate.write_bytes(b"\0" * length)
         self.assertIsNone(validated_candidate(source))
-        repaired = compress_aged_segments(self.configuration())
-        self.assertEqual((repaired.created, repaired.failed), (1, 0))
+        overwritten = compress_aged_segments(self.configuration())
+        self.assertEqual((overwritten.created, overwritten.failed), (1, 0))
         repaired_candidate = validated_candidate(source)
         assert repaired_candidate is not None
-        self.assertFalse(candidate.read_bytes().endswith(b"tampered"))
         self.assertEqual(digest(candidate), repaired_candidate.candidate_sha256)
+        self.assertNotEqual(candidate.read_bytes(), b"\0" * length)
+
+        # 留痕里的 CRF 越界同样不是可消费产物 (与配置侧共用同一条 0-51 规则)。
+        provenance = source.with_suffix(".compressed.json")
+        document = json.loads(provenance.read_text(encoding="utf-8"))
+        document["crf"] = 99
+        provenance.write_text(json.dumps(document), encoding="utf-8")
+        self.assertIsNone(validated_candidate(source))
+        rejected = compress_aged_segments(self.configuration())
+        self.assertEqual((rejected.created, rejected.failed), (1, 0))
+        self.assertIsNotNone(validated_candidate(source))
 
     def test_unreadable_recording_directory_alerts_without_failing_the_pass(self) -> None:
         segments(self.recording / CAMERA, time() - 3 * RAW_WINDOW_SECONDS, 1)
@@ -365,6 +376,8 @@ class RecordingCompressionTest(unittest.TestCase):
             'if sys.argv[-1].endswith(".candidate.mp4"):\n'
             '    if FIELD == "nb_read_frames":\n'
             '        payload["streams"][0]["nb_read_frames"] = "1"\n'
+            '    elif FIELD == "codec_name":\n'
+            '        payload["streams"][0]["codec_name"] = "hevc"\n'
             "    else:\n"
             '        duration = float(payload["format"]["duration"])\n'
             '        payload["format"]["duration"] = str(duration + 60)\n'

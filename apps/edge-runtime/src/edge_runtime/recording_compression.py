@@ -4,8 +4,8 @@
 并按"时长一致、严格可解码、帧数在容差内"校验。通过后候选文件与 `<segment>.compressed.json`
 参数/代次留痕一起落盘; 失败则删除候选、保留原件并记录 `edge.recording_compression.failed` 告警。
 
-未校验候选不得被当作安全替代品: 只有 `validated_candidate` 逐字节复核摘要后返回的候选才可由
-后续的原子替换 (S048) 消费, 留痕不匹配或校验失败的候选会被移除。证据媒体本身不重编码。
+未校验候选不得被当作安全替代品: 生产者在发现留痕不匹配或校验失败时移除候选, 而消费边界
+`validated_candidate` 只把逐字节复核摘要通过的候选交给后续的原子替换 (S048)。证据媒体本身不重编码。
 标准库 + 本机 ffmpeg/ffprobe。
 """
 
@@ -25,6 +25,7 @@ from time import monotonic, sleep, time
 from typing import cast
 
 from edge_runtime.configuration_values import (
+    _crf_value,
     _non_empty_string,
     _object,
     _positive_integer,
@@ -38,7 +39,6 @@ from edge_runtime.evidence_media import (
     recording_segment_generation,
     recording_segment_start,
 )
-from edge_runtime.media import crf_value
 
 _logger = logging.getLogger("edge_runtime")
 
@@ -108,6 +108,7 @@ class RecordingCompressionCandidate:
     candidate_duration_seconds: float
     source_frames: int
     candidate_frames: int
+    candidate_mtime_ns: int
     crf: int
     encoder: str
     preset: str
@@ -265,18 +266,24 @@ def _already_archived(segment: Path) -> bool:
 
 
 def _candidate_is_current(segment: Path, configuration: RecordingCompressionConfiguration) -> bool:
-    """留痕与当前原件/候选仍一致时跳过重编码; 否则移除无法证明的候选。"""
+    """留痕与当前原件/候选的字节数和写入时刻都一致时跳过重编码。
+
+    这是便宜的"没有变化"判定, 只用来避免重复编码; 候选能否被消费由 `validated_candidate`
+    的逐字节复核决定, 两者不是同一条规则。判定不成立即移除无法证明的候选。
+    """
     candidate = _candidate_path(segment)
     provenance = _provenance_path(segment)
     if not candidate.is_file() and not provenance.is_file():
         return False
     try:
         document = _read_provenance(provenance)
+        candidate_stat = candidate.stat()
         matches = (
             document.source == segment.name
             and document.candidate == candidate.name
             and document.source_size_bytes == segment.stat().st_size
-            and document.candidate_size_bytes == candidate.stat().st_size
+            and document.candidate_size_bytes == candidate_stat.st_size
+            and document.candidate_mtime_ns == candidate_stat.st_mtime_ns
             and document.crf == configuration.crf
             and document.encoder == _ENCODER
             and document.preset == _PRESET
@@ -317,6 +324,8 @@ def _compress_segment(
             candidate_sha256=file_sha256(work),
             source_size_bytes=segment.stat().st_size,
             candidate_size_bytes=work.stat().st_size,
+            # os.replace 保留 mtime, 所以在替换前取临时文件的实际写入时刻即为候选的写入时刻。
+            candidate_mtime_ns=work.stat().st_mtime_ns,
             source_duration_seconds=source_probe.duration,
             candidate_duration_seconds=candidate_probe.duration,
             source_frames=source_probe.frames,
@@ -513,6 +522,9 @@ def _read_provenance(path: Path) -> RecordingCompressionCandidate:
         candidate_size_bytes=_positive_integer(
             document["candidate_size_bytes"], "provenance candidate_size_bytes"
         ),
+        candidate_mtime_ns=_positive_integer(
+            document["candidate_mtime_ns"], "provenance candidate_mtime_ns"
+        ),
         source_duration_seconds=_positive_number(
             document["source_duration_seconds"], "provenance source_duration_seconds"
         ),
@@ -523,7 +535,7 @@ def _read_provenance(path: Path) -> RecordingCompressionCandidate:
         candidate_frames=_positive_integer(
             document["candidate_frames"], "provenance candidate_frames"
         ),
-        crf=crf_value(document["crf"], "compression provenance crf"),
+        crf=_crf_value(document["crf"], "compression provenance crf"),
         encoder=_non_empty_string(document["encoder"], "provenance encoder"),
         preset=_non_empty_string(document["preset"], "provenance preset"),
         generation=generation,

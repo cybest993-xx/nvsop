@@ -4,7 +4,6 @@ import sqlite3
 import unittest
 from collections.abc import Callable
 from datetime import datetime
-from pathlib import Path
 from threading import Event, Thread
 from time import monotonic, sleep
 from typing import cast
@@ -16,10 +15,7 @@ from edge_runtime.connectors.runtime import ConnectorRuntimeSet
 from edge_runtime.local_state import DEFAULT_RECLAIM_LIMIT, ReclaimedQueue, ReportedReclamation
 from edge_runtime.local_state.store import LocalState, QueueCapacityError, QueueStatus
 from edge_runtime.media import MediaRuntime
-from edge_runtime.recording_compression import (
-    RecordingCompressionConfiguration,
-    RecordingCompressionWorker,
-)
+from edge_runtime.recording_compression import RecordingCompressionWorker
 from edge_runtime.reporting import HostReportReconciler
 from edge_runtime.runtime import (
     AutonomousRuntime,
@@ -256,23 +252,10 @@ class _BrokenStoreSynchronizer(_Synchronizer):
         raise sqlite3.OperationalError("synthetic local configuration store failure")
 
 
-class _CompressionWorker(RecordingCompressionWorker):
+class _CompressionWorker:
     """记录 run_forever 是否被调用的替身; 真实压缩行为由录像压缩集成测试覆盖。"""
 
     def __init__(self) -> None:
-        super().__init__(
-            configuration=RecordingCompressionConfiguration(
-                recording_directory=Path("/var/lib/nvsop/recordings"),
-                ffmpeg_binary=Path("/usr/bin/ffmpeg"),
-                ffprobe_binary=Path("/usr/bin/ffprobe"),
-                compression_age_seconds=3600,
-                segment_duration_seconds=60,
-                crf=28,
-                timeout_seconds=30.0,
-                recording_timezone=None,
-            ),
-            interval=30.0,
-        )
         self.calls = 0
 
     def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
@@ -587,7 +570,7 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
             command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
             stations=(),
             state=cast(LocalState, _State()),
-            compression=worker,
+            compression=cast(RecordingCompressionWorker, worker),
         )
         runner = _RuntimeCycleRunner(
             runtime=runtime, runtime_stop=Event(), should_stop=lambda: True

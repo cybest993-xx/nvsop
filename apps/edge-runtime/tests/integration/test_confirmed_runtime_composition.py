@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import subprocess
 import tempfile
 import unittest
 from dataclasses import replace
-from datetime import datetime
 from pathlib import Path
 from random import Random
 from time import time
@@ -29,6 +27,9 @@ from nvsop_contracts import (
 # The real loopback ISAPI fixture is shared with test_output_safety.py, so the composed adapter is
 # exercised over real HTTP rather than a mocked concrete write.
 from test_output_safety import TRIGGER_PATH, IsapiLoopbackServer
+
+# 合成录像分段夹具与压缩测试共用同一 recipe, 不在本文件再造第四份。
+from test_recording_compression import segments as recording_segments
 
 from edge_runtime.configuration_sync import ConfigurationPullError
 from edge_runtime.connectors.hikvision import CANDIDATE_PROFILE
@@ -478,7 +479,8 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
             private_key_file.write_text(identity.private_key, encoding="utf-8")
             camera = directory / "recordings" / "camera-a"
             camera.mkdir(parents=True)
-            source = _aged_segment(camera)
+            recording_segments(camera, time() - 3 * 3600, 1)
+            source = next(camera.glob("*.mp4"))
 
             enabled = _local_config(directory, private_key_file)
             enabled["media"] = _local_media(directory, enabled=True)
@@ -502,6 +504,11 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
                 summary = worker.drain()
                 self.assertEqual((summary.created, summary.failed), (1, 0))
                 self.assertTrue(source.with_suffix(".compressed.mp4").is_file())
+                # 本机配置的 CRF 必须真的进入候选留痕, 而不是回落到默认档。
+                document = json.loads(
+                    source.with_suffix(".compressed.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(30, document["crf"])
             finally:
                 runtime.close()
 
@@ -664,35 +671,6 @@ def _command_runtime(directory: Path) -> tuple[AutonomousRuntime, _PendingConfig
         runtime._configuration_resolver(candidate),
         3.0,
     )
-
-
-def _aged_segment(directory: Path) -> Path:
-    """真实 ffmpeg 生成一个 2s 分段, 并按已出原始素材窗口的录像墙钟命名。"""
-    produced = directory / "p000.mp4"
-    subprocess.run(
-        [
-            "/usr/bin/ffmpeg",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc2=size=160x120:rate=10",
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
-            "-t",
-            "2",
-            str(produced),
-        ],
-        check=True,
-    )
-    stamp = datetime.fromtimestamp(time() - 3 * 3600).strftime("%Y-%m-%d_%H-%M-%S-%f")
-    target = directory / f"{stamp}.mp4"
-    produced.rename(target)
-    return target
 
 
 def _local_media(directory: Path, *, enabled: bool) -> dict[str, object]:

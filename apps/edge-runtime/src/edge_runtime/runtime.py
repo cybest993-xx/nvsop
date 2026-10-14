@@ -1879,7 +1879,7 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
                     timeout_seconds=evidence_configuration.slice_timeout_seconds,
                     recording_timezone=evidence_configuration.recording_timezone,
                 ),
-                interval=max(_RECORDING_COMPRESSION_INTERVAL_SECONDS, config.command_poll_interval),
+                interval=_RECORDING_COMPRESSION_INTERVAL_SECONDS,
             )
             if media_configuration is not None
             and evidence_configuration is not None

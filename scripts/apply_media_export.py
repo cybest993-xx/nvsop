@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
-# 压缩相关键是本机可选配置；旧配置没有它们时不要求补齐，由边缘加载器给单处默认值。
+# 压缩相关键是本机可选配置：旧配置没有它们时不要求补齐（加载器给默认值），
+# 但它们必须参与合并，否则本机已设置的压缩策略会在下一次应用中心导出时被丢弃。
 _OPTIONAL_MEDIA_KEYS = frozenset(
     {
         "recording_compression_age_seconds",

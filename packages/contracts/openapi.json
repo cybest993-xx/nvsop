@@ -792,7 +792,11 @@
           "HANDOVER_SOURCE_MISMATCH",
           "HANDOVER_SAME_HOST",
           "RETENTION_POLICY_CONFLICT",
-          "RETENTION_POLICY_INVALID"
+          "RETENTION_POLICY_INVALID",
+          "RETENTION_ESTIMATE_REQUIRED",
+          "RETENTION_ESTIMATE_STALE",
+          "RETENTION_ESTIMATE_INCOMPLETE",
+          "RETENTION_ESTIMATE_TTL_UNCONFIGURED"
         ],
         "title": "ApiErrorCode",
         "type": "string"
@@ -3197,6 +3201,44 @@
         "title": "DeviceSummaryData",
         "type": "object"
       },
+      "EdgeImpactSourceView": {
+        "properties": {
+          "configuration_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configuration Revision"
+          },
+          "configuration_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configuration Sha256"
+          },
+          "host_id": {
+            "format": "uuid",
+            "title": "Host Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "host_id",
+          "configuration_revision",
+          "configuration_sha256"
+        ],
+        "title": "EdgeImpactSourceView",
+        "type": "object"
+      },
       "EditedRole": {
         "properties": {
           "name": {
@@ -4218,6 +4260,77 @@
           "status"
         ],
         "title": "HostStatus",
+        "type": "object"
+      },
+      "ImpactAccessRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "context": {
+            "title": "Context",
+            "type": "string"
+          }
+        },
+        "required": [
+          "context"
+        ],
+        "title": "ImpactAccessRequest",
+        "type": "object"
+      },
+      "ImpactAggregateView": {
+        "description": "一个时段内一组对象的真实计数；`known_bytes` 为空表示该拥有者无法度量字节。",
+        "properties": {
+          "earliest": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Earliest"
+          },
+          "known_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Known Bytes"
+          },
+          "latest": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest"
+          },
+          "objects": {
+            "title": "Objects",
+            "type": "integer"
+          },
+          "unknown_size_objects": {
+            "title": "Unknown Size Objects",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "objects",
+          "known_bytes",
+          "unknown_size_objects",
+          "earliest",
+          "latest"
+        ],
+        "title": "ImpactAggregateView",
         "type": "object"
       },
       "ImportStatus": {
@@ -5981,6 +6094,214 @@
         ],
         "title": "ResourceSummary",
         "type": "object"
+      },
+      "RetentionCategory": {
+        "enum": [
+          "pass",
+          "fail",
+          "indeterminate"
+        ],
+        "title": "RetentionCategory",
+        "type": "string"
+      },
+      "RetentionFactOwner": {
+        "description": "字段影响事实的拥有者；缺任一拥有者的当前事实即估算不完整。",
+        "enum": [
+          "evidence",
+          "monitor",
+          "edge"
+        ],
+        "title": "RetentionFactOwner",
+        "type": "string"
+      },
+      "RetentionFieldImpactView": {
+        "description": "单个保留字段的影响：有真实计数，或明确不可估算的原因；两者恰有其一。",
+        "properties": {
+          "bytes_basis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bytes Basis"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RetentionCategory"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exposed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImpactAggregateView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exposed_from": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exposed From"
+          },
+          "exposed_to": {
+            "format": "date-time",
+            "title": "Exposed To",
+            "type": "string"
+          },
+          "field": {
+            "$ref": "#/components/schemas/RetentionImpactField"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/RetentionFactOwner"
+          },
+          "protected": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImpactAggregateView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "removes_objects": {
+            "title": "Removes Objects",
+            "type": "boolean"
+          },
+          "savings_unknown": {
+            "title": "Savings Unknown",
+            "type": "boolean"
+          },
+          "source_configurations": {
+            "items": {
+              "$ref": "#/components/schemas/EdgeImpactSourceView"
+            },
+            "title": "Source Configurations",
+            "type": "array"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          }
+        },
+        "required": [
+          "field",
+          "owner",
+          "category",
+          "removes_objects",
+          "exposed_from",
+          "exposed_to",
+          "exposed",
+          "protected",
+          "unavailable_reason",
+          "savings_unknown",
+          "bytes_basis",
+          "source_configurations"
+        ],
+        "title": "RetentionFieldImpactView",
+        "type": "object"
+      },
+      "RetentionImpactEstimateView": {
+        "description": "一次保留变更的逐字段影响估算；`complete` 为假时不得确认。",
+        "properties": {
+          "baseline_revision": {
+            "title": "Baseline Revision",
+            "type": "integer"
+          },
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "estimate_token": {
+            "title": "Estimate Token",
+            "type": "string"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/RetentionFieldImpactView"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "incomplete_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Incomplete Reasons",
+            "type": "array"
+          },
+          "proposed": {
+            "$ref": "#/components/schemas/RetentionPolicyView"
+          },
+          "reference_time": {
+            "format": "date-time",
+            "title": "Reference Time",
+            "type": "string"
+          },
+          "station_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Station Id"
+          }
+        },
+        "required": [
+          "baseline_revision",
+          "proposed",
+          "station_id",
+          "fields",
+          "reference_time",
+          "incomplete_reasons",
+          "complete",
+          "estimate_token"
+        ],
+        "title": "RetentionImpactEstimateView",
+        "type": "object"
+      },
+      "RetentionImpactField": {
+        "description": "一次保留变更影响估算逐字段覆盖的保留字段；八个字段各有一个拥有者口径。",
+        "enum": [
+          "evidence_pass",
+          "evidence_fail",
+          "evidence_indeterminate",
+          "record_detail",
+          "record_compression_age",
+          "record_aggregate_age",
+          "disposal",
+          "local_reported"
+        ],
+        "title": "RetentionImpactField",
+        "type": "string"
       },
       "RetentionMode": {
         "enum": [
@@ -16970,7 +17291,7 @@
         "x-required-permission": "retention.policy.view"
       },
       "put": {
-        "description": "整组替换全局默认策略；只改变后续回收依据，不同步删除任何数据。",
+        "description": "整组替换全局默认策略；只改变后续回收依据，不同步删除任何数据。\n\n必须携带来自影响估算的确认令牌；不完整、基准/目标/计数变化都会使令牌无效或禁止确认。",
         "operationId": "updateRetentionPolicy",
         "parameters": [
           {
@@ -16981,6 +17302,22 @@
               "minimum": 0,
               "title": "If-Match",
               "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Retention-Estimate",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retention-Estimate"
             }
           }
         ],
@@ -17025,6 +17362,16 @@
             },
             "description": "Permission denied or CSRF token invalid"
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Station not found"
+          },
           "409": {
             "content": {
               "application/problem+json": {
@@ -17033,7 +17380,7 @@
                 }
               }
             },
-            "description": "Retention policy conflict"
+            "description": "Retention policy conflict, stale estimate or incomplete estimate"
           },
           "422": {
             "content": {
@@ -17061,6 +17408,138 @@
           "retention"
         ],
         "x-required-permission": "retention.policy.edit"
+      }
+    },
+    "/api/v1/retention/policy/impact-estimate": {
+      "post": {
+        "description": "逐字段按数据拥有者的真实事实估算新暴露的对象/空间/时刻；只读，不写策略。\n\n全局变更只影响整组跟随全局的工位：带自定义整组的工位不在本次影响范围内。",
+        "operationId": "estimateRetentionPolicyImpact",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GlobalRetentionPolicyUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionImpactEstimateView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Station not found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Retention policy group is invalid"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Estimate Retention Policy Impact",
+        "tags": [
+          "retention"
+        ],
+        "x-required-permission": "retention.policy.edit"
+      }
+    },
+    "/api/v1/retention/reported-impact/access-check": {
+      "post": {
+        "operationId": "checkRetentionReportedImpactAccess",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImpactAccessRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Check Impact Access",
+        "tags": [
+          "retention"
+        ]
       }
     },
     "/api/v1/retention/stations/{station_id}": {
@@ -17148,7 +17627,7 @@
         "x-required-permission": "retention.policy.view"
       },
       "put": {
-        "description": "整组替换工位保留覆盖；If-Match 是该工位覆盖记录版本，0 表示首次建立。",
+        "description": "整组替换工位保留覆盖；If-Match 是该工位覆盖记录版本，0 表示首次建立。\n\n必须先做本工位影响估算并带回确认令牌；不完整、基准/目标/计数变化都会使令牌无效或禁止确认。",
         "operationId": "updateStationRetention",
         "parameters": [
           {
@@ -17169,6 +17648,22 @@
               "minimum": 0,
               "title": "If-Match",
               "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Retention-Estimate",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retention-Estimate"
             }
           }
         ],
@@ -17231,7 +17726,7 @@
                 }
               }
             },
-            "description": "Retention policy conflict"
+            "description": "Retention policy conflict, stale estimate or incomplete estimate"
           },
           "422": {
             "content": {
@@ -17255,6 +17750,101 @@
           }
         },
         "summary": "Update Station Retention Policy",
+        "tags": [
+          "retention"
+        ],
+        "x-required-permission": "retention.policy.edit"
+      }
+    },
+    "/api/v1/retention/stations/{station_id}/impact-estimate": {
+      "post": {
+        "description": "逐字段估算替换该工位覆盖后新暴露的本工位对象/空间/时刻；只读，不写记录。",
+        "operationId": "estimateStationRetentionImpact",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "station_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Station Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StationRetentionUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionImpactEstimateView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Station not found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Retention policy group is invalid"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Estimate Station Retention Impact",
         "tags": [
           "retention"
         ],

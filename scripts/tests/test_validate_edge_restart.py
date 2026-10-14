@@ -22,7 +22,7 @@ from edge_runtime.local_state.schema import migrate
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "validate_edge_restart.py"
-EXPECTED_SCHEMA_VERSION = 19
+EXPECTED_SCHEMA_VERSION = 20
 CANDIDATE = "544e41a30c8c75bb1d8bd5fbf07f95b75d3ed34b"  # pragma: allowlist secret
 HOST = "018f0000-0000-7000-8000-0000000000aa"
 OTHER_HOST = "018f0000-0000-7000-8000-0000000000bb"

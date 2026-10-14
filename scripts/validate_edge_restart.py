@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-EXPECTED_SCHEMA_VERSION = 19
+EXPECTED_SCHEMA_VERSION = 20
 SNAPSHOT_SCHEMA = 1
 TOOL_VERSION = 1
 CANDIDATE_SHA = re.compile(r"[0-9a-f]{40}")

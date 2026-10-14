@@ -14,11 +14,16 @@ from factory_sop.device.api import (
     DeviceMonitorGateway,
 )
 from factory_sop.execution.api import ExecutionGrantViewGateway
-from factory_sop.monitor.adapters.repository import PostgresMonitorRepository
+from factory_sop.monitor.adapters.repository import (
+    PostgresMonitorImpactRepository,
+    PostgresMonitorRepository,
+)
 from factory_sop.monitor.adapters.streaming import PostgresMonitorStreamSource
 from factory_sop.monitor.repository import MonitorRepository, MonitorStreamSource
+from factory_sop.monitor.retention import RepositoryMonitorImpact
 from factory_sop.monitor.usecases import HOST_SILENCE_THRESHOLD_SECONDS
 from factory_sop.persistence import RequestSession
+from factory_sop.retention.api import MonitorImpactGateway
 
 
 def monitor(session: RequestSession) -> MonitorRepository:
@@ -72,3 +77,8 @@ def monitor_stream_source(
         yield source
     finally:
         source.close()
+
+
+def retention_impact(session: RequestSession) -> MonitorImpactGateway:
+    """请求事务中的镜像事实计数 seam，供 retention 影响估算使用。"""
+    return RepositoryMonitorImpact(repository=PostgresMonitorImpactRepository(session))

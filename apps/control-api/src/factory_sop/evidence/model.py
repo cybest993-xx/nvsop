@@ -283,7 +283,31 @@ class EvidenceReclipRequest:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class EvidenceImpactCount:
+    """证据 owner 的只读计数；大小来自登记事实，不读取媒体文件。"""
+
+    objects: int
+    known_bytes: int
+    unknown_size_objects: int
+    earliest: datetime | None
+    latest: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceInstanceCount:
+    """同一来源/工位/实例的引用计数；linked 与 unlinked 互斥。"""
+
+    host_id: UUID
+    station_id: UUID
+    instance_id: int
+    unlinked: EvidenceImpactCount
+    linked: EvidenceImpactCount
+
+
 __all__ = [
+    "EvidenceImpactCount",
+    "EvidenceInstanceCount",
     "EvidenceKind",
     "EvidenceOrigin",
     "EvidenceReclipRequest",

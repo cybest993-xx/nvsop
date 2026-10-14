@@ -9,6 +9,9 @@ import type {
   CheckEvidenceAccessData,
   CheckEvidenceAccessErrors,
   CheckEvidenceAccessResponses,
+  CheckRetentionReportedImpactAccessData,
+  CheckRetentionReportedImpactAccessErrors,
+  CheckRetentionReportedImpactAccessResponses,
   ClaimNextDeviceCommandData,
   ClaimNextDeviceCommandErrors,
   ClaimNextDeviceCommandResponses,
@@ -135,6 +138,12 @@ import type {
   EnqueueConnectorConnectionTestData,
   EnqueueConnectorConnectionTestErrors,
   EnqueueConnectorConnectionTestResponses,
+  EstimateRetentionPolicyImpactData,
+  EstimateRetentionPolicyImpactErrors,
+  EstimateRetentionPolicyImpactResponses,
+  EstimateStationRetentionImpactData,
+  EstimateStationRetentionImpactErrors,
+  EstimateStationRetentionImpactResponses,
   ExportInferenceHostMediaConfigurationData,
   ExportInferenceHostMediaConfigurationErrors,
   ExportInferenceHostMediaConfigurationResponses,
@@ -1979,6 +1988,8 @@ export const readRetentionPolicy = <ThrowOnError extends boolean = false>(
  * Update The Retention Policy
  *
  * 整组替换全局默认策略；只改变后续回收依据，不同步删除任何数据。
+ *
+ * 必须携带来自影响估算的确认令牌；不完整、基准/目标/计数变化都会使令牌无效或禁止确认。
  */
 export const updateRetentionPolicy = <ThrowOnError extends boolean = false>(
   options: Options<UpdateRetentionPolicyData, ThrowOnError>,
@@ -1989,6 +2000,56 @@ export const updateRetentionPolicy = <ThrowOnError extends boolean = false>(
     ThrowOnError
   >({
     url: '/api/v1/retention/policy',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Estimate Retention Policy Impact
+ *
+ * 逐字段按数据拥有者的真实事实估算新暴露的对象/空间/时刻；只读，不写策略。
+ *
+ * 全局变更只影响整组跟随全局的工位：带自定义整组的工位不在本次影响范围内。
+ */
+export const estimateRetentionPolicyImpact = <ThrowOnError extends boolean = false>(
+  options: Options<EstimateRetentionPolicyImpactData, ThrowOnError>,
+): RequestResult<
+  EstimateRetentionPolicyImpactResponses,
+  EstimateRetentionPolicyImpactErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    EstimateRetentionPolicyImpactResponses,
+    EstimateRetentionPolicyImpactErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/retention/policy/impact-estimate',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Check Impact Access
+ */
+export const checkRetentionReportedImpactAccess = <ThrowOnError extends boolean = false>(
+  options: Options<CheckRetentionReportedImpactAccessData, ThrowOnError>,
+): RequestResult<
+  CheckRetentionReportedImpactAccessResponses,
+  CheckRetentionReportedImpactAccessErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    CheckRetentionReportedImpactAccessResponses,
+    CheckRetentionReportedImpactAccessErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/retention/reported-impact/access-check',
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -2014,6 +2075,8 @@ export const readStationRetention = <ThrowOnError extends boolean = false>(
  * Update Station Retention Policy
  *
  * 整组替换工位保留覆盖；If-Match 是该工位覆盖记录版本，0 表示首次建立。
+ *
+ * 必须先做本工位影响估算并带回确认令牌；不完整、基准/目标/计数变化都会使令牌无效或禁止确认。
  */
 export const updateStationRetention = <ThrowOnError extends boolean = false>(
   options: Options<UpdateStationRetentionData, ThrowOnError>,
@@ -2024,6 +2087,31 @@ export const updateStationRetention = <ThrowOnError extends boolean = false>(
     ThrowOnError
   >({
     url: '/api/v1/retention/stations/{station_id}',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Estimate Station Retention Impact
+ *
+ * 逐字段估算替换该工位覆盖后新暴露的本工位对象/空间/时刻；只读，不写记录。
+ */
+export const estimateStationRetentionImpact = <ThrowOnError extends boolean = false>(
+  options: Options<EstimateStationRetentionImpactData, ThrowOnError>,
+): RequestResult<
+  EstimateStationRetentionImpactResponses,
+  EstimateStationRetentionImpactErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    EstimateStationRetentionImpactResponses,
+    EstimateStationRetentionImpactErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/retention/stations/{station_id}/impact-estimate',
     ...options,
     headers: {
       'Content-Type': 'application/json',

@@ -2,6 +2,7 @@
 
 from factory_sop.device.api import DeviceEvidenceGateway, DeviceHostGateway, DeviceMonitorGateway
 from factory_sop.evidence.adapters.repository import (
+    PostgresEvidenceImpactRepository,
     PostgresEvidenceReclipRequestRepository,
     PostgresEvidenceRepository,
     PostgresEvidenceReviewRepository,
@@ -11,7 +12,9 @@ from factory_sop.evidence.repository import (
     EvidenceRepository,
     EvidenceReviewRepository,
 )
+from factory_sop.evidence.retention import RepositoryEvidenceImpact
 from factory_sop.persistence import RequestSession
+from factory_sop.retention.api import EvidenceImpactGateway
 
 
 def evidence(session: RequestSession) -> EvidenceRepository:
@@ -39,3 +42,8 @@ def host_gateway() -> DeviceHostGateway:
 def registered_hosts() -> DeviceMonitorGateway:
     """签发仅认 device owner 当前登记的来源主机。"""
     raise RuntimeError("evidence host registry dependency was not wired")
+
+
+def retention_impact(session: RequestSession) -> EvidenceImpactGateway:
+    """请求事务中的证据引用计数 seam，供 retention 影响估算使用。"""
+    return RepositoryEvidenceImpact(repository=PostgresEvidenceImpactRepository(session))

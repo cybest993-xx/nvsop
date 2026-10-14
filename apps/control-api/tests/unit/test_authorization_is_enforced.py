@@ -86,8 +86,12 @@ from factory_sop.persistence import request_session
 from factory_sop.retention.adapters import dependencies as retention_dependencies
 from factory_sop.retention.api import (
     DEFAULT_RETENTION_POLICY,
+    EvidenceInstanceUsage,
+    ImpactAggregate,
+    InstanceRetentionFact,
     RetentionPolicyState,
     StationRetentionRecord,
+    StationUsage,
 )
 from factory_sop.settings import Settings
 from factory_sop.template.adapters import dependencies as template_dependencies
@@ -116,6 +120,7 @@ def settings() -> Settings:
         session_cookie_transport="require_https",
         csrf_secret=SecretStr("csrf-secret"),
         redis_url=SecretStr("redis://127.0.0.1:1/0"),
+        retention_estimate_ttl_seconds=60,
     )
 
 
@@ -541,16 +546,26 @@ ROUTES = [
         },
     ),
     Target(
+        "POST",
+        "/retention/policy/impact-estimate",
+        {"policy": DEFAULT_RETENTION_POLICY.to_wire()},
+    ),
+    Target(
+        "POST",
+        "/retention/stations/{station_id}/impact-estimate",
+        {"mode": "custom", "overrides": DEFAULT_RETENTION_POLICY.to_wire()},
+    ),
+    Target(
         "PUT",
         "/retention/policy",
         {"policy": DEFAULT_RETENTION_POLICY.to_wire()},
-        headers={"If-Match": "0"},
+        headers={"If-Match": "0", "X-Retention-Estimate": "not-a-token"},
     ),
     Target(
         "PUT",
         "/retention/stations/{station_id}",
         {"mode": "custom", "overrides": DEFAULT_RETENTION_POLICY.to_wire()},
-        headers={"If-Match": "0"},
+        headers={"If-Match": "0", "X-Retention-Estimate": "not-a-token"},
     ),
 ]
 
@@ -578,6 +593,7 @@ EXEMPT = {
     ("POST", f"{API_PREFIX}/evidence/registrations"),
     # 来源机逐次回查要求主机签名，同时复核票据绑定的真实会话与权限。
     ("POST", f"{API_PREFIX}/evidence/access-check"),
+    ("POST", f"{API_PREFIX}/retention/reported-impact/access-check"),
 }
 
 
@@ -627,6 +643,9 @@ class FakeStationRetentionOverrides:
     def get(self, station_id: UUID) -> StationRetentionRecord | None:
         return self.records.get(station_id)
 
+    def list_all(self) -> tuple[StationRetentionRecord, ...]:
+        return tuple(self.records.values())
+
     def insert_if_absent(self, record: StationRetentionRecord) -> bool:
         if record.station_id in self.records:
             return False
@@ -639,6 +658,55 @@ class FakeStationRetentionOverrides:
             return False
         self.records[record.station_id] = record
         return True
+
+
+def _empty_aggregate(*, bytes_measurable: bool) -> ImpactAggregate:
+    return ImpactAggregate(
+        objects=0,
+        known_bytes=0 if bytes_measurable else None,
+        unknown_size_objects=0,
+        earliest=None,
+        latest=None,
+    )
+
+
+class FakeEvidenceImpact:
+    """授权机械测试只需解析依赖；估算返回零影响，不触碰真实证据。"""
+
+    def evidence_usage(
+        self, *, station_id: object, exposed_from: object, exposed_to: object
+    ) -> tuple[EvidenceInstanceUsage, ...]:
+        del station_id, exposed_from, exposed_to
+        return ()
+
+
+class FakeMonitorImpact:
+    """授权机械测试只需解析依赖；实例事实与记录/处置计数都返回零影响。"""
+
+    def instance_facts(
+        self, *, instance_ids: tuple[tuple[UUID, UUID, int], ...]
+    ) -> tuple[InstanceRetentionFact, ...]:
+        del instance_ids
+        return ()
+
+    def record_usage(
+        self, *, station_id: object, exposed_from: object, exposed_to: object
+    ) -> tuple[StationUsage, ...]:
+        del station_id, exposed_from, exposed_to
+        station = new_id()
+        return (
+            StationUsage(
+                station_id=station,
+                exposed=_empty_aggregate(bytes_measurable=True),
+                protected=_empty_aggregate(bytes_measurable=True),
+            ),
+        )
+
+    def disposal_usage(
+        self, *, station_id: object, exposed_from: object, exposed_to: object
+    ) -> tuple[StationUsage, ...]:
+        del station_id, exposed_from, exposed_to
+        return ()
 
 
 class TemplateStore:
@@ -935,6 +1003,19 @@ class Backend:
         # 组合根把工位存在/启用事实 seam 接到 device owner；这里把它接到内存工位存储。
         self.app.dependency_overrides[retention_dependencies.station_facts] = lambda: (
             RepositoryDeviceStationFacts(stations=self.stations)
+        )
+        # 影响估算的 owner 计数 seam 同样在测试里接到内存替身。
+        self.evidence_impact = FakeEvidenceImpact()
+        self.monitor_impact = FakeMonitorImpact()
+        from test_retention_impact import FakeEdgeImpact
+
+        self.edge_impact = FakeEdgeImpact()
+        self.app.dependency_overrides[retention_dependencies.edge_impact] = lambda: self.edge_impact
+        self.app.dependency_overrides[retention_dependencies.evidence_impact] = lambda: (
+            self.evidence_impact
+        )
+        self.app.dependency_overrides[retention_dependencies.monitor_impact] = lambda: (
+            self.monitor_impact
         )
         self.app.dependency_overrides[request_session] = StubRequestSession
         self.client = TestClient(self.app, base_url="https://testserver")

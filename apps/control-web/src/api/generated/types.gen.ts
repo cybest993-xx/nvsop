@@ -539,6 +539,10 @@ export type ApiErrorCode =
   | 'HANDOVER_SAME_HOST'
   | 'RETENTION_POLICY_CONFLICT'
   | 'RETENTION_POLICY_INVALID'
+  | 'RETENTION_ESTIMATE_REQUIRED'
+  | 'RETENTION_ESTIMATE_STALE'
+  | 'RETENTION_ESTIMATE_INCOMPLETE'
+  | 'RETENTION_ESTIMATE_TTL_UNCONFIGURED'
 
 /**
  * ArtifactAcceptedView
@@ -1876,6 +1880,24 @@ export type DeviceSummaryData = {
 }
 
 /**
+ * EdgeImpactSourceView
+ */
+export type EdgeImpactSourceView = {
+  /**
+   * Configuration Revision
+   */
+  configuration_revision: number | null
+  /**
+   * Configuration Sha256
+   */
+  configuration_sha256: string | null
+  /**
+   * Host Id
+   */
+  host_id: string
+}
+
+/**
  * EditedRole
  */
 export type EditedRole = {
@@ -2516,6 +2538,44 @@ export type HostMediaConfigurationView = {
  */
 export type HostStatus = {
   status: DeviceStatus
+}
+
+/**
+ * ImpactAccessRequest
+ */
+export type ImpactAccessRequest = {
+  /**
+   * Context
+   */
+  context: string
+}
+
+/**
+ * ImpactAggregateView
+ *
+ * 一个时段内一组对象的真实计数；`known_bytes` 为空表示该拥有者无法度量字节。
+ */
+export type ImpactAggregateView = {
+  /**
+   * Earliest
+   */
+  earliest: string | null
+  /**
+   * Known Bytes
+   */
+  known_bytes: number | null
+  /**
+   * Latest
+   */
+  latest: string | null
+  /**
+   * Objects
+   */
+  objects: number
+  /**
+   * Unknown Size Objects
+   */
+  unknown_size_objects: number
 }
 
 /**
@@ -3601,6 +3661,111 @@ export type ResourceSummary = {
    */
   unknown: number
 }
+
+/**
+ * RetentionCategory
+ */
+export type RetentionCategory = 'pass' | 'fail' | 'indeterminate'
+
+/**
+ * RetentionFactOwner
+ *
+ * 字段影响事实的拥有者；缺任一拥有者的当前事实即估算不完整。
+ */
+export type RetentionFactOwner = 'evidence' | 'monitor' | 'edge'
+
+/**
+ * RetentionFieldImpactView
+ *
+ * 单个保留字段的影响：有真实计数，或明确不可估算的原因；两者恰有其一。
+ */
+export type RetentionFieldImpactView = {
+  /**
+   * Bytes Basis
+   */
+  bytes_basis: string | null
+  category: RetentionCategory | null
+  exposed: ImpactAggregateView | null
+  /**
+   * Exposed From
+   */
+  exposed_from: string | null
+  /**
+   * Exposed To
+   */
+  exposed_to: string
+  field: RetentionImpactField
+  owner: RetentionFactOwner
+  protected: ImpactAggregateView | null
+  /**
+   * Removes Objects
+   */
+  removes_objects: boolean
+  /**
+   * Savings Unknown
+   */
+  savings_unknown: boolean
+  /**
+   * Source Configurations
+   */
+  source_configurations: Array<EdgeImpactSourceView>
+  /**
+   * Unavailable Reason
+   */
+  unavailable_reason: string | null
+}
+
+/**
+ * RetentionImpactEstimateView
+ *
+ * 一次保留变更的逐字段影响估算；`complete` 为假时不得确认。
+ */
+export type RetentionImpactEstimateView = {
+  /**
+   * Baseline Revision
+   */
+  baseline_revision: number
+  /**
+   * Complete
+   */
+  complete: boolean
+  /**
+   * Estimate Token
+   */
+  estimate_token: string
+  /**
+   * Fields
+   */
+  fields: Array<RetentionFieldImpactView>
+  /**
+   * Incomplete Reasons
+   */
+  incomplete_reasons: Array<string>
+  proposed: RetentionPolicyView
+  /**
+   * Reference Time
+   */
+  reference_time: string
+  /**
+   * Station Id
+   */
+  station_id: string | null
+}
+
+/**
+ * RetentionImpactField
+ *
+ * 一次保留变更影响估算逐字段覆盖的保留字段；八个字段各有一个拥有者口径。
+ */
+export type RetentionImpactField =
+  | 'evidence_pass'
+  | 'evidence_fail'
+  | 'evidence_indeterminate'
+  | 'record_detail'
+  | 'record_compression_age'
+  | 'record_aggregate_age'
+  | 'disposal'
+  | 'local_reported'
 
 /**
  * RetentionMode
@@ -9442,6 +9607,10 @@ export type UpdateRetentionPolicyData = {
      * If-Match
      */
     'If-Match': number
+    /**
+     * X-Retention-Estimate
+     */
+    'X-Retention-Estimate'?: string | null
   }
   path?: never
   query?: never
@@ -9458,7 +9627,11 @@ export type UpdateRetentionPolicyErrors = {
    */
   403: ProblemDocument
   /**
-   * Retention policy conflict
+   * Station not found
+   */
+  404: ProblemDocument
+  /**
+   * Retention policy conflict, stale estimate or incomplete estimate
    */
   409: ProblemDocument
   /**
@@ -9483,6 +9656,77 @@ export type UpdateRetentionPolicyResponses = {
 
 export type UpdateRetentionPolicyResponse =
   UpdateRetentionPolicyResponses[keyof UpdateRetentionPolicyResponses]
+
+export type EstimateRetentionPolicyImpactData = {
+  body: GlobalRetentionPolicyUpdate
+  path?: never
+  query?: never
+  url: '/api/v1/retention/policy/impact-estimate'
+}
+
+export type EstimateRetentionPolicyImpactErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Station not found
+   */
+  404: ProblemDocument
+  /**
+   * Retention policy group is invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type EstimateRetentionPolicyImpactError =
+  EstimateRetentionPolicyImpactErrors[keyof EstimateRetentionPolicyImpactErrors]
+
+export type EstimateRetentionPolicyImpactResponses = {
+  /**
+   * Successful Response
+   */
+  200: RetentionImpactEstimateView
+}
+
+export type EstimateRetentionPolicyImpactResponse =
+  EstimateRetentionPolicyImpactResponses[keyof EstimateRetentionPolicyImpactResponses]
+
+export type CheckRetentionReportedImpactAccessData = {
+  body: ImpactAccessRequest
+  path?: never
+  query?: never
+  url: '/api/v1/retention/reported-impact/access-check'
+}
+
+export type CheckRetentionReportedImpactAccessErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CheckRetentionReportedImpactAccessError =
+  CheckRetentionReportedImpactAccessErrors[keyof CheckRetentionReportedImpactAccessErrors]
+
+export type CheckRetentionReportedImpactAccessResponses = {
+  /**
+   * Successful Response
+   */
+  200: unknown
+}
 
 export type ReadStationRetentionData = {
   body?: never
@@ -9538,6 +9782,10 @@ export type UpdateStationRetentionData = {
      * If-Match
      */
     'If-Match': number
+    /**
+     * X-Retention-Estimate
+     */
+    'X-Retention-Estimate'?: string | null
   }
   path: {
     /**
@@ -9563,7 +9811,7 @@ export type UpdateStationRetentionErrors = {
    */
   404: ProblemDocument
   /**
-   * Retention policy conflict
+   * Retention policy conflict, stale estimate or incomplete estimate
    */
   409: ProblemDocument
   /**
@@ -9588,6 +9836,54 @@ export type UpdateStationRetentionResponses = {
 
 export type UpdateStationRetentionResponse =
   UpdateStationRetentionResponses[keyof UpdateStationRetentionResponses]
+
+export type EstimateStationRetentionImpactData = {
+  body: StationRetentionUpdate
+  path: {
+    /**
+     * Station Id
+     */
+    station_id: string
+  }
+  query?: never
+  url: '/api/v1/retention/stations/{station_id}/impact-estimate'
+}
+
+export type EstimateStationRetentionImpactErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Station not found
+   */
+  404: ProblemDocument
+  /**
+   * Retention policy group is invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type EstimateStationRetentionImpactError =
+  EstimateStationRetentionImpactErrors[keyof EstimateStationRetentionImpactErrors]
+
+export type EstimateStationRetentionImpactResponses = {
+  /**
+   * Successful Response
+   */
+  200: RetentionImpactEstimateView
+}
+
+export type EstimateStationRetentionImpactResponse =
+  EstimateStationRetentionImpactResponses[keyof EstimateStationRetentionImpactResponses]
 
 export type ListStationsData = {
   body?: never

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
 from factory_sop.evidence.model import (
+    EvidenceInstanceCount,
     EvidenceReclipRequest,
     EvidenceReference,
     EvidenceReview,
@@ -101,7 +103,27 @@ class EvidenceReviewRepository(Protocol):
         ...
 
 
+class EvidenceImpactRepository(Protocol):
+    """保留变更影响估算所需的证据引用只读计数 seam；不读取媒体字节（ADR-0012）。"""
+
+    def evidence_usage(
+        self,
+        *,
+        station_id: str | None,
+        exposed_from: datetime | None,
+        exposed_to: datetime,
+    ) -> tuple[EvidenceInstanceCount, ...]:
+        """按 ``(host_id, station_id, instance_id)`` 返回计数。
+
+        接收时刻落在 ``(exposed_from, exposed_to]`` 内。
+
+        ``linked`` 是带 ``violation_id``（已锁存违规）的引用，``unlinked`` 是其余引用；两者不重叠。
+        """
+        ...
+
+
 __all__ = [
+    "EvidenceImpactRepository",
     "EvidenceReclipRequestRepository",
     "EvidenceRepository",
     "EvidenceReviewRepository",

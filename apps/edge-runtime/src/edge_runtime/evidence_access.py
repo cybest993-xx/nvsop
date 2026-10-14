@@ -11,13 +11,21 @@ import argparse
 import json
 import os
 import re
+import sqlite3
 import stat
 from contextlib import suppress
+from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from nvsop_contracts.retention_impact import ReportedImpactQuery
+
 from edge_runtime.center_client import CenterClient, CenterUnreachableError
+from edge_runtime.local_state.retention import (
+    ReportedImpactUnavailableError,
+    read_reported_impact,
+)
 
 # 中心签发票据的长度上限(见中心 check_access_context);超过即非本服务产生的票据。
 _CONTEXT_LIMIT = 4096
@@ -106,7 +114,12 @@ def _center_refusal(status: int, body: bytes) -> tuple[int, str]:
 
 
 def create_server(
-    *, address: tuple[str, int], client: CenterClient, directory: Path, web_origin: str
+    *,
+    address: tuple[str, int],
+    client: CenterClient,
+    directory: Path,
+    web_origin: str,
+    local_state_path: Path | None = None,
 ) -> ThreadingHTTPServer:
     if not _valid_origin(web_origin):
         raise ValueError("web_origin must be one HTTP(S) origin without credentials or suffixes")
@@ -203,8 +216,67 @@ def create_server(
                 raise _AccessError(503, "invalid_authorization") from error
             return size, reference, kind
 
+        def _reported_impact(self) -> None:
+            # 独立统计授权作用域;媒体读取授权不能提供统计请求。
+            try:
+                if self.command != "GET":
+                    raise _AccessError(405, "method_not_allowed")
+                parsed = urlsplit(self.path)
+                try:
+                    values = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+                except ValueError as error:
+                    raise _AccessError(400, "invalid_request") from error
+                if set(values) != {"context"} or len(values["context"]) != 1:
+                    raise _AccessError(400, "invalid_request")
+                context = values["context"][0]
+                if not context or len(context) > _CONTEXT_LIMIT:
+                    raise _AccessError(400, "invalid_request")
+                if local_state_path is None:
+                    raise _AccessError(503, "local_state_unconfigured")
+                try:
+                    grant = client.post(
+                        "/api/v1/retention/reported-impact/access-check", {"context": context}
+                    )
+                except CenterUnreachableError as error:
+                    raise _AccessError(503, "center_unavailable") from error
+                if grant.status != 200:
+                    raise _AccessError(*_center_refusal(grant.status, grant.body))
+                try:
+                    record = json.loads(grant.body)
+                    if not isinstance(record, dict):
+                        raise ValueError
+                    query = ReportedImpactQuery.from_wire(record)
+                except (ValueError, TypeError) as error:
+                    raise _AccessError(503, "invalid_authorization") from error
+                try:
+                    result = read_reported_impact(local_state_path, query=query)
+                except ReportedImpactUnavailableError as error:
+                    raise _AccessError(409, str(error)) from error
+                except (sqlite3.Error, OSError) as error:
+                    raise _AccessError(503, "local_state_unavailable") from error
+            except _AccessError as error:
+                self._error(error.status, error.code)
+                return
+            payload = {
+                "query": query.to_wire(),
+                "bytes_basis": result.bytes_basis,
+                "exposed": asdict(result.exposed),
+                "protected": asdict(result.protected),
+            }
+            encoded = json.dumps(payload, default=lambda value: value.isoformat()).encode()
+            self.send_response(200)
+            self._common_headers()
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            with suppress(OSError):
+                self.wfile.write(encoded)
+
         def _serve(self, body: bool) -> None:
             if not self._cors():
+                return
+            if urlsplit(self.path).path == "/retention/reported-impact":
+                self._reported_impact()
                 return
             try:
                 size, reference, kind = self._authorize()
@@ -275,6 +347,7 @@ def main() -> None:
     parser.add_argument("--private-key-file", required=True, type=Path)
     parser.add_argument("--evidence-directory", required=True, type=Path)
     parser.add_argument("--web-origin", required=True)
+    parser.add_argument("--local-state", type=Path)
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--timeout", type=float, default=5.0)
@@ -288,6 +361,7 @@ def main() -> None:
         client=client,
         directory=args.evidence_directory,
         web_origin=args.web_origin,
+        local_state_path=args.local_state,
     )
     try:
         server.serve_forever()

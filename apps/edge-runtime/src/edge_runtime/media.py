@@ -21,6 +21,7 @@ from edge_runtime.configuration_values import (
     _array,
     _boolean,
     _crf_value,
+    _non_negative_integer,
     _object,
     _positive_integer,
     _positive_number,
@@ -893,12 +894,6 @@ def _enum(value: object, enum_type: type[EnumT], name: str) -> EnumT:
         return enum_type(_string(value, name))
     except ValueError as error:
         raise ValueError(f"{name} is unsupported") from error
-
-
-def _non_negative_integer(value: object, name: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ValueError(f"{name} must be a non-negative integer")
-    return value
 
 
 def _path(value: object, name: str) -> Path:

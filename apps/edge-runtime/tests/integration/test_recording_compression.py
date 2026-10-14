@@ -243,6 +243,14 @@ class RecordingCompressionTest(unittest.TestCase):
         self.assertEqual((rejected.created, rejected.failed), (1, 0))
         self.assertIsNotNone(validated_candidate(source))
 
+        # 写入时刻被清零(归档/清洗工具)是合法事实: 不能误判成非法留痕并每轮重编码。
+        os.utime(candidate, ns=(0, 0))
+        document = json.loads(provenance.read_text(encoding="utf-8"))
+        document["candidate_mtime_ns"] = 0
+        provenance.write_text(json.dumps(document), encoding="utf-8")
+        self.assertIsNotNone(validated_candidate(source))
+        self.assertEqual(compress_aged_segments(self.configuration()).skipped, 1)
+
     def test_unreadable_recording_directory_alerts_without_failing_the_pass(self) -> None:
         segments(self.recording / CAMERA, time() - 3 * RAW_WINDOW_SECONDS, 1)
 

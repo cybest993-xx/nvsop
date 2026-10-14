@@ -110,6 +110,12 @@ def _non_negative_number(value: object, name: str) -> float:
     return result
 
 
+def _non_negative_integer(value: object, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+    return value
+
+
 def _crf_value(value: object, name: str) -> int:
     """x264 CRF 的真实区间是 0-51 (0 为无损); 越界即配置错误, 不悄悄夹取。
 

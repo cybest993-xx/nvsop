@@ -27,6 +27,7 @@ from typing import cast
 from edge_runtime.configuration_values import (
     _crf_value,
     _non_empty_string,
+    _non_negative_integer,
     _object,
     _positive_integer,
     _positive_number,
@@ -269,7 +270,8 @@ def _candidate_is_current(segment: Path, configuration: RecordingCompressionConf
     """留痕与当前原件/候选的字节数和写入时刻都一致时跳过重编码。
 
     这是便宜的"没有变化"判定, 只用来避免重复编码; 候选能否被消费由 `validated_candidate`
-    的逐字节复核决定, 两者不是同一条规则。判定不成立即移除无法证明的候选。
+    的逐字节复核决定, 两者不是同一条规则。判定不成立即移除无法证明的候选。它不重算摘要,
+    因此只改写留痕里的摘要字段不会触发重编码; 该候选仍无法通过消费边界复核, 不会被替换。
     """
     candidate = _candidate_path(segment)
     provenance = _provenance_path(segment)
@@ -522,7 +524,7 @@ def _read_provenance(path: Path) -> RecordingCompressionCandidate:
         candidate_size_bytes=_positive_integer(
             document["candidate_size_bytes"], "provenance candidate_size_bytes"
         ),
-        candidate_mtime_ns=_positive_integer(
+        candidate_mtime_ns=_non_negative_integer(
             document["candidate_mtime_ns"], "provenance candidate_mtime_ns"
         ),
         source_duration_seconds=_positive_number(

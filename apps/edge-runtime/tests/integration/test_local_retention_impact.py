@@ -128,6 +128,41 @@ class LocalRetentionImpactTests(unittest.TestCase):
                 1,
             )
 
+    def test_only_pending_evidence_registration_protects_reported_structured_rows(self) -> None:
+        with sqlite3.connect(self.path) as connection:
+            connection.execute(
+                """INSERT INTO local_sop_instance
+                (station_id,instance_id,opened_at,last_observation_at,seen,expected_index,
+                 impairments,settled,closed_at,lifecycle)
+                VALUES ('station-a',123,1,2,'[]',0,'[]','[]',2,'closed')"""
+            )
+            connection.execute(
+                """INSERT INTO local_observation_queue
+                (station_id,instance_id,source,signal,observed_at,report_host_id,
+                 sent_at,acknowledged_at)
+                VALUES ('station-a',123,'fixture','action',1,'host-a',10,
+                        '2026-10-10T12:00:00Z')"""
+            )
+            connection.execute(
+                """INSERT INTO local_evidence_queue
+                (station_id,instance_id,anchor,window_from,window_to)
+                VALUES ('station-a',123,2,1,3)"""
+            )
+        before = read_reported_impact(self.path, query=self.query)
+        self.assertEqual((before.exposed.objects, before.protected.objects), (0, 1))
+        with sqlite3.connect(self.path) as connection:
+            connection.execute("UPDATE local_evidence_queue SET registered_at=20")
+        media = self.path.parent / "registered-evidence.mp4"
+        media.write_bytes(b"synthetic registered evidence remains authoritative locally")
+        database_before = self.path.read_bytes()
+        after = read_reported_impact(self.path, query=self.query)
+        self.assertEqual((after.exposed.objects, after.protected.objects), (1, 0))
+        self.assertEqual(after.exposed.known_bytes, before.protected.known_bytes)
+        self.assertEqual(self.path.read_bytes(), database_before)
+        self.assertEqual(
+            media.read_bytes(), b"synthetic registered evidence remains authoritative locally"
+        )
+
     def test_unknown_acknowledgement_and_stale_configuration_are_refusals_not_zero(self) -> None:
         with sqlite3.connect(self.path) as connection:
             self._health(connection, ack=None)

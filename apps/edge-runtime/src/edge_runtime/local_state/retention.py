@@ -133,7 +133,8 @@ def read_reported_impact(path: Path, *, query: ReportedImpactQuery) -> ReportedI
                 OR EXISTS (SELECT 1 FROM local_violation v
                     WHERE v.station_id=q.station_id AND v.instance_id={instance})
                 OR EXISTS (SELECT 1 FROM local_evidence_queue e
-                    WHERE e.station_id=q.station_id AND e.instance_id={instance})
+                    WHERE e.station_id=q.station_id AND e.instance_id={instance}
+                    AND e.registered_at IS NULL)
             )"""
             )
             if table == "local_disposal":

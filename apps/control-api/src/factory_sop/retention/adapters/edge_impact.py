@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from http.client import HTTPConnection, HTTPException, HTTPSConnection
 from typing import Literal
@@ -19,6 +19,7 @@ from factory_sop.retention.access import (
 from factory_sop.retention.api import (
     EdgeImpactGateway,
     EdgeImpactResult,
+    EdgeImpactSource,
     EdgeImpactSourcesGateway,
     ImpactAggregate,
     RetentionImpactBreakdown,
@@ -76,6 +77,8 @@ class HttpEdgeImpactGateway(EdgeImpactGateway):
         self,
         *,
         sources: EdgeImpactSourcesGateway,
+        release_connection: Callable[[], None],
+        refresh_caller: Callable[[], Caller],
         origins: Mapping[str, str],
         caller: Caller,
         fingerprint: str,
@@ -84,6 +87,7 @@ class HttpEdgeImpactGateway(EdgeImpactGateway):
         timeout_seconds: float | None,
     ) -> None:
         self._sources, self._origins = sources, origins
+        self._release_connection, self._refresh_caller = release_connection, refresh_caller
         self._caller, self._fingerprint, self._secret = caller, fingerprint, secret
         self._ttl, self._timeout = ttl_seconds, timeout_seconds
 
@@ -98,13 +102,12 @@ class HttpEdgeImpactGateway(EdgeImpactGateway):
     ) -> EdgeImpactResult:
         authorize(self._caller, Permission.RETENTION_POLICY_EDIT)
         sources = self._sources.sources(station_id=station_id)
-        exposed = empty_aggregate(measurable_bytes=True)
-        protected = empty_aggregate(measurable_bytes=True)
+        if not sources:
+            return EdgeImpactResult(None, "edge_sources_unknown", sources)
+        if self._ttl is None or self._timeout is None:
+            return EdgeImpactResult(None, "edge_estimate_transport_unconfigured", sources)
         for source in sources:
-            if self._ttl is None or self._timeout is None:
-                return EdgeImpactResult(None, "edge_estimate_transport_unconfigured", sources)
-            origin = self._origins.get(str(source.host_id))
-            if origin is None:
+            if str(source.host_id) not in self._origins:
                 return EdgeImpactResult(None, "edge_source_unconfigured", sources)
             if (
                 source.configuration_revision is None
@@ -112,6 +115,40 @@ class HttpEdgeImpactGateway(EdgeImpactGateway):
                 or source.configuration_sha256 is None
             ):
                 return EdgeImpactResult(None, "edge_configuration_unknown", sources)
+        # 来源已复制为不可变值；等待远端签名回查时不占用请求连接或会话行锁。
+        self._release_connection()
+        try:
+            result = self._read_sources(
+                sources=sources,
+                station_id=station_id,
+                excluded_stations=excluded_stations,
+                baseline_seconds=baseline_seconds,
+                proposed_seconds=proposed_seconds,
+                reference_time=reference_time,
+            )
+        finally:
+            # rollback 也撤销了最初的会话续期；成功/不完整响应都须重新验证并续期。
+            self._caller = self._refresh_caller()
+            authorize(self._caller, Permission.RETENTION_POLICY_EDIT)
+        if self._sources.sources(station_id=station_id) != sources:
+            return EdgeImpactResult(None, "edge_sources_changed", sources)
+        return result
+
+    def _read_sources(
+        self,
+        *,
+        sources: tuple[EdgeImpactSource, ...],
+        station_id: UUID | None,
+        excluded_stations: frozenset[UUID],
+        baseline_seconds: int | None,
+        proposed_seconds: int,
+        reference_time: datetime,
+    ) -> EdgeImpactResult:
+        exposed = empty_aggregate(measurable_bytes=True)
+        protected = empty_aggregate(measurable_bytes=True)
+        for source in sources:
+            assert source.configuration_revision is not None
+            assert source.configuration_sha256 is not None
             query = ReportedImpactQuery(
                 host_id=str(source.host_id),
                 configuration_revision=source.configuration_revision,
@@ -123,7 +160,7 @@ class HttpEdgeImpactGateway(EdgeImpactGateway):
                 reference_time=reference_time,
             )
             try:
-                response = self._read(origin=origin, query=query)
+                response = self._read(origin=self._origins[str(source.host_id)], query=query)
             except ReportedImpactAccessRefusedError as error:
                 return EdgeImpactResult(None, error.code, sources)
             exposed = exposed.plus(response.exposed.to_domain())

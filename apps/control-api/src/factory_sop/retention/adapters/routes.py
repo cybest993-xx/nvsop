@@ -390,7 +390,7 @@ def update_the_retention_policy(
     )
     if token is None:
         raise RetentionRefusedError(RetentionRefusalCode.POLICY_ESTIMATE_REQUIRED)
-    _require_confirmable(estimate, ttl_seconds=ttl_seconds, now=now)
+    _require_confirmable(estimate, ttl_seconds=ttl_seconds, now=datetime.now(UTC))
     if impact_digest(estimate) != token.digest:
         raise RetentionRefusedError(RetentionRefusalCode.POLICY_ESTIMATE_STALE)
     before = default_retention_policy(policies)
@@ -511,7 +511,7 @@ def update_station_retention_policy(
     )
     if token is None:
         raise RetentionRefusedError(RetentionRefusalCode.POLICY_ESTIMATE_REQUIRED)
-    _require_confirmable(estimate, ttl_seconds=ttl_seconds, now=now)
+    _require_confirmable(estimate, ttl_seconds=ttl_seconds, now=datetime.now(UTC))
     if impact_digest(estimate) != token.digest:
         raise RetentionRefusedError(RetentionRefusalCode.POLICY_ESTIMATE_STALE)
     try:

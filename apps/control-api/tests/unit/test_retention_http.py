@@ -339,7 +339,10 @@ def test_missing_confirmation_ttl_refuses_shortening_but_allows_extension() -> N
 
 
 @pytest.mark.parametrize("station_scope", [False, True])
-def test_confirmation_ttl_expiry_requires_a_fresh_estimate(station_scope: bool) -> None:
+@pytest.mark.parametrize("elapsed_during_confirmation", [0, 1])
+def test_confirmation_ttl_expiry_requires_a_fresh_estimate(
+    station_scope: bool, elapsed_during_confirmation: int
+) -> None:
     backend = Backend()
     backend.granted = _EDIT
     backend.app.state.settings = backend.app.state.settings.model_copy(
@@ -363,7 +366,10 @@ def test_confirmation_ttl_expiry_requires_a_fresh_estimate(station_scope: bool) 
                 f"{route}/impact-estimate", json=body, headers=_headers(backend)
             )
             assert estimate.status_code == 200, estimate.text
-            clock.now.return_value = start + timedelta(seconds=60)
+            clock.now.side_effect = [
+                start + timedelta(seconds=60 - elapsed_during_confirmation),
+                start + timedelta(seconds=60),
+            ]
             expired = backend.client.put(
                 route,
                 json=body,
@@ -377,6 +383,8 @@ def test_confirmation_ttl_expiry_requires_a_fresh_estimate(station_scope: bool) 
             assert expired.json()["error_code"] == "RETENTION_ESTIMATE_STALE"
             assert backend.retention_policies.state is None
             assert backend.retention_overrides.records == {}
+            clock.now.side_effect = None
+            clock.now.return_value = start + timedelta(seconds=60)
             fresh = backend.client.post(
                 f"{route}/impact-estimate", json=body, headers=_headers(backend)
             )

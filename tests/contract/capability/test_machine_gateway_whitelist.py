@@ -44,10 +44,14 @@ class MachineGatewayWhitelistTest(unittest.TestCase):
             "/api/v1/monitor/reported-decisions",
             "/api/v1/monitor/reported-decisions/enveloped",
             "/api/v1/monitor/reported-disposals",
+            "/api/v1/retention/reported-impact/access-check",
         ):
             self.assertIsNotNone(re.search(rule, uri), uri)
         for uri in (
             "/api/v1/monitor/decisions",
+            "/api/v1/retention/policy",
+            "/api/v1/retention/policy/impact-estimate",
+            "/api/v1/retention/reported-impact/access-check/extra",
             "/api/v1/monitor/violations",
             "/api/v1/monitor/reported-decisions/arbitrary-extra",
             "/api/v1/monitor/reported-decisions/enveloped/extra",

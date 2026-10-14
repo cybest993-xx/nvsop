@@ -10,7 +10,12 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+import pytest
+from fastapi import FastAPI
+from pydantic import SecretStr
+from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
+from starlette.requests import Request
 
 from factory_sop.auth.authorization import Caller
 from factory_sop.auth.model import User, UserStatus
@@ -39,6 +44,9 @@ from factory_sop.monitor.model import (
     MirroredSopInstance,
 )
 from factory_sop.monitor.retention import RepositoryMonitorImpact
+from factory_sop.retention.access import ReportedImpactAccessRefusedError
+from factory_sop.retention.adapters.dependencies import edge_impact
+from factory_sop.retention.adapters.edge_impact import HttpEdgeImpactGateway
 from factory_sop.retention.adapters.repository import (
     PostgresRetentionPolicyRepository,
     PostgresStationRetentionOverrideRepository,
@@ -47,11 +55,13 @@ from factory_sop.retention.api import (
     DEFAULT_RETENTION_POLICY,
     EDGE_LOCAL_USAGE_UNAVAILABLE,
     EdgeImpactResult,
+    EdgeImpactSource,
     RetentionImpactField,
     RetentionMode,
     RetentionRule,
     estimate_global_policy_change,
 )
+from factory_sop.settings import Settings
 from nvsop_contracts import (
     ReportBackendProvenance,
     ReportedDecision,
@@ -61,6 +71,7 @@ from nvsop_contracts import (
     ReportedSopInstance,
     ReportEvidence,
 )
+from nvsop_contracts.retention_impact import ReportedImpactQuery
 
 HOST = "00000000-0000-4000-8000-000000000001"
 NOW = datetime(2026, 10, 14, tzinfo=UTC)
@@ -438,3 +449,57 @@ class FakeEdgeImpact:
             unavailable_reason=EDGE_LOCAL_USAGE_UNAVAILABLE,
             sources=(),
         )
+
+
+def test_remote_impact_wait_releases_the_real_postgres_connection(
+    engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = FastAPI()
+    app.state.settings = Settings(
+        log_level="info",
+        database_host="unused.fixture",
+        database_port=5432,
+        database_name="fixture",
+        database_user="fixture",
+        database_password=SecretStr("synthetic-db-password"),
+        session_idle_timeout_minutes=30,
+        session_absolute_lifetime_minutes=480,
+        session_cookie_transport="require_https",
+        csrf_secret=SecretStr("synthetic-retention-resource-key"),
+        evidence_host_origins={HOST: "https://127.0.0.1:1"},
+        retention_estimate_ttl_seconds=60,
+        retention_impact_timeout_seconds=5,
+    )
+    request = Request({"type": "http", "app": app})
+    caller = _caller(Permission.RETENTION_POLICY_EDIT)
+    with Session(engine) as session:
+
+        class Sources:
+            def sources(self, *, station_id: UUID | None) -> tuple[EdgeImpactSource, ...]:
+                session.execute(text("SELECT 1"))
+                return (EdgeImpactSource(UUID(HOST), 7, "a" * 64),)
+
+        def remote(self: HttpEdgeImpactGateway, *, origin: str, query: ReportedImpactQuery) -> None:
+            assert not session.in_transaction(), "external wait holds the request transaction"
+            with engine.connect() as probe:
+                assert probe.scalar(text("SELECT 1")) == 1
+            raise ReportedImpactAccessRefusedError(503, "edge_unreachable")
+
+        monkeypatch.setattr(HttpEdgeImpactGateway, "_read", remote)
+        refreshed: list[bool] = []
+
+        def refresh() -> Caller:
+            refreshed.append(not session.in_transaction())
+            return caller
+
+        owner = edge_impact(request, caller, "session-fingerprint", session, refresh, Sources())
+        result = owner.reported_impact(
+            station_id=None,
+            excluded_stations=frozenset(),
+            baseline_seconds=14 * _DAY,
+            proposed_seconds=_DAY,
+            reference_time=NOW,
+        )
+        assert result.breakdown is None
+        assert result.unavailable_reason == "edge_unreachable"
+        assert refreshed == [True]

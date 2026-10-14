@@ -179,6 +179,8 @@ def gateway(
 
     return HttpEdgeImpactGateway(
         sources=Sources(),
+        release_connection=lambda: None,
+        refresh_caller=lambda: EDIT,
         origins={str(HOST): origin, str(OTHER): origin},
         caller=EDIT,
         fingerprint="session-fingerprint",
@@ -259,3 +261,10 @@ def test_unconfigured_transport_never_invents_a_duration_or_calls_a_source(
     assert result.breakdown is None
     assert result.unavailable_reason == "edge_estimate_transport_unconfigured"
     assert state["requests"] == []
+
+
+def test_an_empty_source_set_is_unavailable_not_a_confirmable_zero() -> None:
+    result = estimate(gateway("http://127.0.0.1:1", copies=0))
+    assert result.breakdown is None
+    assert result.unavailable_reason == "edge_sources_unknown"
+    assert result.sources == ()

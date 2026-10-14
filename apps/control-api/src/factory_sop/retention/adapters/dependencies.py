@@ -6,7 +6,7 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 
-from factory_sop.auth.api import Authorized, CurrentSessionFingerprint
+from factory_sop.auth.api import Authorized, CurrentSessionFingerprint, SessionRefresh
 from factory_sop.device.api import DeviceHostGateway
 from factory_sop.persistence import RequestSession
 from factory_sop.retention.adapters.edge_impact import HttpEdgeImpactGateway
@@ -73,11 +73,15 @@ def edge_impact(
     request: Request,
     caller: Authorized,
     fingerprint: CurrentSessionFingerprint,
+    session: RequestSession,
+    refresh: SessionRefresh,
     sources: Annotated[EdgeImpactSourcesGateway, Depends(edge_sources)],
 ) -> EdgeImpactGateway:
     settings: Settings = request.app.state.settings
     return HttpEdgeImpactGateway(
         sources=sources,
+        release_connection=session.rollback,
+        refresh_caller=refresh,
         origins=settings.evidence_host_origins,
         caller=caller,
         fingerprint=fingerprint,

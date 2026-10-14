@@ -374,19 +374,23 @@ def estimate_global_policy_change(
     authorize(caller, Permission.RETENTION_POLICY_EDIT)
     _require_expected_revision(expected_revision)
     state = policies.get_global()
-    return _estimate_impact(
+    excluded = _custom_station_ids(records)
+    estimate = _estimate_impact(
         baseline=DEFAULT_RETENTION_POLICY if state is None else state.policy,
         default_revision=0 if state is None else state.revision,
         selection_mode=None,
         baseline_revision=expected_revision,
         proposed=policy,
         station_id=None,
-        excluded_stations=_custom_station_ids(records),
+        excluded_stations=excluded,
         evidence_impact=evidence_impact,
         monitor_impact=monitor_impact,
         edge_impact=edge_impact,
         now=now,
     )
+    if policies.get_global() != state or _custom_station_ids(records) != excluded:
+        raise RetentionRefusedError(RetentionRefusalCode.POLICY_ESTIMATE_STALE)
+    return estimate
 
 
 def estimate_station_policy_change(
@@ -413,11 +417,12 @@ def estimate_station_policy_change(
         raise RetentionRefusedError(RetentionRefusalCode.POLICY_INVALID) from error
     _require_active_station(stations, station_id)
     state = policies.get_global()
-    baseline = _station_retention(station_id, policies, records.get(station_id)).effective
+    record = records.get(station_id)
+    baseline = _station_retention(station_id, policies, record).effective
     proposed = resolve_retention_policy(
         default_retention_policy(policies), mode=mode, overrides=overrides
     )
-    return _estimate_impact(
+    estimate = _estimate_impact(
         baseline=baseline,
         default_revision=0 if state is None else state.revision,
         selection_mode=mode,
@@ -430,6 +435,10 @@ def estimate_station_policy_change(
         edge_impact=edge_impact,
         now=now,
     )
+    _require_active_station(stations, station_id)
+    if policies.get_global() != state or records.get(station_id) != record:
+        raise RetentionRefusedError(RetentionRefusalCode.POLICY_ESTIMATE_STALE)
+    return estimate
 
 
 def _estimate_impact(
@@ -451,6 +460,18 @@ def _estimate_impact(
     没有缩短的字段不构成新增暴露，直接跳过；无法取得事实的字段记为不可估算原因并使整次估算
     不完整。本函数不判断删除资格，也不删除任何对象。
     """
+    # 远程 owner 先读取；运输会结束准备阶段的读事务，中心计数随后在最终事务重读。
+    edge_result: EdgeImpactResult | None = None
+    if newly_exposed_window(baseline, proposed, RetentionImpactField.LOCAL_REPORTED, now=now):
+        proposed_seconds = exposure_seconds(proposed, RetentionImpactField.LOCAL_REPORTED)
+        assert proposed_seconds is not None
+        edge_result = edge_impact.reported_impact(
+            station_id=station_id,
+            excluded_stations=excluded_stations,
+            baseline_seconds=exposure_seconds(baseline, RetentionImpactField.LOCAL_REPORTED),
+            proposed_seconds=proposed_seconds,
+            reference_time=now,
+        )
     evidence = _EvidenceFacts(
         impact=evidence_impact,
         monitor=monitor_impact,
@@ -469,17 +490,9 @@ def _estimate_impact(
         source_configurations: tuple[EdgeImpactSource, ...] = ()
         bytes_basis: str | None = None
         if policy.owner is RetentionFactOwner.EDGE:
-            proposed_seconds = exposure_seconds(proposed, field)
-            assert proposed_seconds is not None
-            result = edge_impact.reported_impact(
-                station_id=station_id,
-                excluded_stations=excluded_stations,
-                baseline_seconds=exposure_seconds(baseline, field),
-                proposed_seconds=proposed_seconds,
-                reference_time=now,
-            )
-            breakdown, reason = result.breakdown, result.unavailable_reason
-            source_configurations = result.sources
+            assert edge_result is not None
+            breakdown, reason = edge_result.breakdown, edge_result.unavailable_reason
+            source_configurations = edge_result.sources
             bytes_basis = "serialized_rows"
         elif policy.owner is RetentionFactOwner.EVIDENCE:
             assert policy.category is not None

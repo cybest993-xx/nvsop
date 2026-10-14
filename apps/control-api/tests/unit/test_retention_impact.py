@@ -37,6 +37,7 @@ from factory_sop.retention.api import (
     estimate_station_policy_change,
     impact_digest,
 )
+from factory_sop.retention.errors import RetentionRefusalCode, RetentionRefusedError
 from factory_sop.retention.model import RetentionMode
 
 HOST = UUID("00000000-0000-4000-8000-000000000001")
@@ -937,3 +938,66 @@ def test_local_reported_uses_edge_owner_and_binds_sources_even_when_empty() -> N
     assert impact_digest(first) != impact_digest(second)
     assert policies.writes == 0
     assert records.writes == 0
+
+
+@pytest.mark.parametrize("scope", ["global", "station"])
+def test_a_baseline_change_during_edge_wait_cannot_sign_a_mixed_estimate(scope: str) -> None:
+    station_id = new_id()
+    policies, records = FakePolicies(), FakeOverrides()
+    proposed = replace(
+        DEFAULT_RETENTION_POLICY,
+        local_reported=RetentionRule(RetentionMode.DURATION, _DAY),
+    )
+
+    class ChangingEdge(FakeEdgeImpact):
+        def reported_impact(
+            self,
+            *,
+            station_id: UUID | None,
+            excluded_stations: frozenset[UUID],
+            baseline_seconds: int | None,
+            proposed_seconds: int,
+            reference_time: datetime,
+        ) -> EdgeImpactResult:
+            policies.state = RetentionPolicyState(DEFAULT_RETENTION_POLICY, 1)
+            return super().reported_impact(
+                station_id=station_id,
+                excluded_stations=excluded_stations,
+                baseline_seconds=baseline_seconds,
+                proposed_seconds=proposed_seconds,
+                reference_time=reference_time,
+            )
+
+    def run_estimate() -> None:
+        if scope == "global":
+            estimate_global_policy_change(
+                edit(),
+                proposed,
+                expected_revision=0,
+                policies=policies,
+                records=records,
+                evidence_impact=FakeEvidenceImpact(),
+                monitor_impact=FakeMonitorImpact(),
+                edge_impact=ChangingEdge(),
+                now=NOW,
+            )
+        else:
+            estimate_station_policy_change(
+                edit(),
+                station_id,
+                mode=RetentionPolicyMode.CUSTOM,
+                overrides=proposed,
+                expected_revision=0,
+                policies=policies,
+                records=records,
+                stations=facts_for(station_id),
+                evidence_impact=FakeEvidenceImpact(),
+                monitor_impact=FakeMonitorImpact(),
+                edge_impact=ChangingEdge(),
+                now=NOW,
+            )
+
+    with pytest.raises(RetentionRefusedError) as stale:
+        run_estimate()
+    assert stale.value.code is RetentionRefusalCode.POLICY_ESTIMATE_STALE
+    assert policies.writes == records.writes == 0

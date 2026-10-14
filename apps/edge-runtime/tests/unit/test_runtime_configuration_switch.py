@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import unittest
 from collections.abc import Callable
+from datetime import datetime
 from threading import Event, Thread
 from time import monotonic, sleep
 from typing import cast
@@ -11,6 +12,7 @@ from nvsop_contracts import ConfigurationBundle
 
 from edge_runtime.configuration_sync import ConfigurationSynchronizer, ConfigurationSyncResult
 from edge_runtime.connectors.runtime import ConnectorRuntimeSet
+from edge_runtime.local_state import DEFAULT_RECLAIM_LIMIT, ReportedReclamation
 from edge_runtime.local_state.store import LocalState, QueueCapacityError, QueueStatus
 from edge_runtime.media import MediaRuntime
 from edge_runtime.reporting import HostReportReconciler
@@ -19,6 +21,7 @@ from edge_runtime.runtime import (
     AutonomousStation,
     ConnectionTestCommandLoop,
     RuntimeComposition,
+    _ReportLifecycleRunner,
     _RuntimeCycleRunner,
 )
 from edge_runtime.runtime_configuration import RuntimeConfiguration
@@ -33,9 +36,17 @@ class _CommandLoop:
 class _State:
     def __init__(self) -> None:
         self.closed = False
+        self.reclaim_calls = 0
 
     def queue_status(self) -> tuple[QueueStatus, ...]:
         return ()
+
+    def reclaim_reported(
+        self, *, now: datetime, limit: int = DEFAULT_RECLAIM_LIMIT
+    ) -> ReportedReclamation:
+        del now, limit
+        self.reclaim_calls += 1
+        return ReportedReclamation(rows=())
 
     def close(self) -> None:
         self.closed = True
@@ -291,6 +302,29 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
 
         self.assertTrue(reached)
         self.assertEqual(errors, [])
+
+    def test_report_lifecycle_runs_bounded_local_reclamation_without_center(self) -> None:
+        state = _State()
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            stations=(),
+            state=cast(LocalState, state),
+        )
+        calls = 0
+
+        def should_stop() -> bool:
+            nonlocal calls
+            calls += 1
+            return calls >= 2
+
+        _ReportLifecycleRunner(
+            runtime=runtime,
+            runtime_stop=Event(),
+            should_stop=should_stop,
+        )._run()
+
+        # 上报线程即使没有 Center reconciler 也执行一次有界本机裁剪。
+        self.assertEqual(1, state.reclaim_calls)
 
     def test_configuration_worker_defect_restarts_without_stopping_stations(self) -> None:
         synchronizer = _FailingOnceSynchronizer()

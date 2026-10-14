@@ -18,6 +18,7 @@ import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from datetime import datetime
 from threading import RLock
 from typing import Protocol
 
@@ -63,6 +64,11 @@ from edge_runtime.local_state.queues import (
     PendingSopInstanceReport,
     ReportContext,
     StationQueues,
+)
+from edge_runtime.local_state.retention import (
+    DEFAULT_RECLAIM_LIMIT,
+    ReportedReclamation,
+    reclaim_reported_reports,
 )
 from edge_runtime.local_state.schema import migrate
 
@@ -895,6 +901,26 @@ class LocalState:
                 _queue_status(self._connection, "observation", self._queue_capacity.observations),
                 _queue_status(self._connection, "health", self._queue_capacity.health),
             )
+
+    def reclaim_reported(
+        self, *, now: datetime, limit: int = DEFAULT_RECLAIM_LIMIT
+    ) -> ReportedReclamation:
+        """按最后确认配置裁剪本机已上报队列的逻辑行;不删除证据媒体或处置账本。
+
+        读取与删除在同一把锁和同一 ``BEGIN IMMEDIATE`` 事务内完成,不接收调用方策略;
+        每次最多检查每个队列 ``limit`` 行以保持有界。任何 SQLite 故障整体回滚并向上传播,
+        保持本地状态的致命语义。
+        """
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                result = reclaim_reported_reports(self._connection, now=now, limit=limit)
+            except Exception:
+                if self._connection.in_transaction:
+                    self._connection.execute("ROLLBACK")
+                raise
+            self._connection.execute("COMMIT")
+        return result
 
     def reports(self) -> ReportStore:
         """返回该主机 decision/instance 待上报事实的持久接缝。"""

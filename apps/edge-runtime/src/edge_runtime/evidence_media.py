@@ -93,6 +93,33 @@ def load_evidence_media_configuration(value: object) -> EvidenceMediaConfigurati
     )
 
 
+def ensure_storage_separation(
+    *,
+    recording_directory: Path,
+    evidence_directory: Path,
+    local_state_path: Path | None = None,
+) -> None:
+    """拒绝滚动录像目录与证据目录/SQLite 路径重叠(含 symlink 别名)。
+
+    这是唯一的目录安全 owner 校验: 根的配置加载在写入者启动前调用它, 切片在落盘前再检查
+    一次。滚动录像由 MediaMTX 正常窗口回收, 不允许清理到证据目录或权威 SQLite 文件。
+    """
+    recording = recording_directory.resolve()
+    evidence = evidence_directory.resolve()
+    if recording == evidence or recording in evidence.parents or evidence in recording.parents:
+        raise ValueError(
+            "recording_directory and evidence_directory must be disjoint "
+            f"(recording={recording}, evidence={evidence})"
+        )
+    if local_state_path is not None:
+        state = local_state_path.resolve()
+        if state == recording or recording in state.parents:
+            raise ValueError(
+                f"local_state_path must not be inside recording_directory "
+                f"(state={state}, recording={recording})"
+            )
+
+
 @dataclass(frozen=True, slots=True)
 class EvidenceClipSet:
     """一次定稿产物的覆盖窗口 (monotonic) 与每来源 typed 元数据 JSON。"""
@@ -133,6 +160,11 @@ def slice_evidence(
         raise EvidenceMediaError(
             "mapping_missing", "pending evidence has no frozen recording source mapping"
         )
+    # 在写入任何证据字节前再次确认存储分离; 配置加载与运行时目录不可信地变化时 fail-closed。
+    ensure_storage_separation(
+        recording_directory=recording_directory,
+        evidence_directory=configuration.evidence_directory,
+    )
     evidence_id = identity or _evidence_id(host_id, pending.queue_id)
     try:
         configuration.evidence_directory.mkdir(parents=True, exist_ok=True)

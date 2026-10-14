@@ -310,9 +310,10 @@ ignore_imports = [
 name = "configuration composition only depends on owner public seams"
 type = "forbidden"
 source_modules = ["factory_sop.configuration.composition"]
-forbidden_modules = ["factory_sop.configuration.adapters", "factory_sop.device", "factory_sop.template", "fastapi", "sqlalchemy"]
+forbidden_modules = ["factory_sop.configuration.adapters", "factory_sop.device", "factory_sop.retention", "factory_sop.template", "fastapi", "sqlalchemy"]
 ignore_imports = [
     "factory_sop.configuration.composition -> factory_sop.device.api",
+    "factory_sop.configuration.composition -> factory_sop.retention.api",
     "factory_sop.configuration.composition -> factory_sop.template.api",
 ]
 

@@ -9,6 +9,7 @@ from uuid import UUID
 from factory_sop.device.api import DeviceConfigurationError, DeviceConfigurationGateway
 from factory_sop.execution.api import ExecutionLeaseGateway, StationGrant
 from factory_sop.identifiers import new_id
+from factory_sop.retention.api import StationRetentionProjectionGateway
 from factory_sop.template.api import (
     TemplateConfigurationError,
     TemplateConfigurationGateway,
@@ -18,6 +19,7 @@ from nvsop_contracts import (
     DISPOSITION_SOUND_LIGHT_OUTPUT_CAPABILITY,
     DISPOSITION_STOP_OUTPUT_CAPABILITY,
     EXECUTION_LEASE_WRITE_GATE_CAPABILITY,
+    RETENTION_STATION_POLICY_CAPABILITY,
     SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL,
     ConfigurationBundle,
     ExecutionLease,
@@ -47,8 +49,9 @@ def configuration_for_host(
     generated_at: datetime,
     device: DeviceConfigurationGateway,
     templates: TemplateConfigurationGateway,
+    retention: StationRetentionProjectionGateway,
 ) -> ConfigurationBundle:
-    """只组合 device/template owner 提供的公开最小投影。"""
+    """只组合 device/template/retention owner 提供的公开最小投影。"""
     if generated_at.tzinfo is None or generated_at.utcoffset() != UTC.utcoffset(generated_at):
         raise ValueError("configuration generated_at must be UTC")
 
@@ -57,20 +60,32 @@ def configuration_for_host(
         stations = []
         for target in topology.targets:
             template = templates.for_station(target.station_id)
+            station_retention = retention.for_station(target.station_id)
+            if station_retention.station_id != target.station_id:
+                raise ConfigurationAssemblyError(
+                    "station retention projection belongs to another station"
+                )
             station = device.station_configuration(
                 host_id=host_id,
                 target=target,
                 runtime_defaults=template.runtime_defaults,
+                retention=station_retention.effective,
             )
             stations.append(
                 replace(
                     station,
-                    revision=max(station.revision, template.revision),
+                    # 生效保留组自身的记录版本进入工位修订：自定义覆盖变更与全局默认变更都要产生新的
+                    # assignment，不因为旧配置没变过就漏掉保留参数。
+                    revision=max(station.revision, template.revision, station_retention.revision),
                     template=template.template,
                 )
             )
 
-        required_capabilities = {EXECUTION_LEASE_WRITE_GATE_CAPABILITY}
+        # 中心按工位下发已解析生效保留组：这是显式能力门禁的行为扩展，旧 Edge 必须拒绝整个候选。
+        required_capabilities = {
+            EXECUTION_LEASE_WRITE_GATE_CAPABILITY,
+            RETENTION_STATION_POLICY_CAPABILITY,
+        }
         if any(
             station.runtime_parameters.disposition_policy == DISPOSITION_POLICY_STOP
             for station in stations
@@ -110,6 +125,7 @@ def host_configuration_pull(
     device: DeviceConfigurationGateway,
     templates: TemplateConfigurationGateway,
     execution: ExecutionLeaseGateway,
+    retention: StationRetentionProjectionGateway,
 ) -> ConfigurationBundle:
     """主机成功拉取配置的边界：组装主机切片并在同一请求内续期其执行权租约。
 
@@ -121,6 +137,7 @@ def host_configuration_pull(
         generated_at=now,
         device=device,
         templates=templates,
+        retention=retention,
     )
     leases = execution.renew_host_leases(
         host_id=host_id,

@@ -98,7 +98,8 @@
 
 中心 `evidence` 只登记证据 ID、来源推理机、锚点、窗口、素材代次、sha256、大小、访问引用与复核状态，不持有媒体字节。中心确认的是**引用/元数据已登记**，不是“已经复制到中心”；浏览器复核具体证据时按中心授权定位到拥有该文件的推理机读取。
 
-**当前实现状态（S040）**：`retention` 已作为真实 Center 模块注册，拥有全局保留策略的声明、严格完整组解码、三类证据解析与单行策略持久化/CAS（`retention_policy`）；`auth` 登记 `retention.policy.view/edit`。工位覆盖与生效解析（#204）、缩短前影响估算（#205）、引用保护（#206）、回收执行（#207）仍待各自票实现。三类证据时长、记录明细/压缩/聚合年龄、违规与处置、推理机本地已上报数据的默认值集中在 `factory_sop.retention.model`，永久为显式枚举，未设置与不保留互不混同。推理机本地已上报数据裁剪仍由边缘运行时执行，本阶段不接 HTTP/UI。
+**当前实现状态（S040–S041）**：`retention` 已作为真实 Center 模块注册，拥有全局保留策略的声明、严格完整组解码、三类证据解析与单行策略持久化/CAS（`retention_policy`）；`auth` 登记 `retention.policy.view/edit`。S041（#204）补齐工位整组覆盖与生效解析：`retention` 拥有每工位的覆盖记录（`retention_station_policy`：整组跟随全局默认或整组自定义的模式、覆盖组与记录版本；没有记录即跟随全局默认），首写用真实 CAS 建立、后续为条件更新，HTTP 面是 `/retention/policy` 与 `/retention/stations/{id}`；`device` 只为该记录提供工位存在与启用事实，`device_station` 不持有任何保留配置；
+配置组合把按工位解析后的完整生效组放进 `stations[].retention` 并声明 `retention.station-policy-v1`（兼容边界见[机器契约演进](machine-contract-evolution.md)），Edge 只消费该已解析组，不在边缘重算默认值与覆盖组的合并。录像滚动窗口仍按推理机配置（§5.19、§5.5）。缩短前影响估算（#205）、引用保护（#206）、回收执行（#207）仍待各自票实现——本阶段只下发生效组，不执行删除。三类证据时长、记录明细/压缩/聚合年龄、违规与处置、推理机本地已上报数据的默认值集中在 `factory_sop.retention.model`，永久为显式枚举，未设置与不保留互不混同。推理机本地已上报数据裁剪仍由边缘运行时执行。
 
 **当前实现状态（S020/S021）**：`monitor` 的三张镜像事实表（判定、健康、观测）按 `received_at` 分区为 TimescaleDB hypertable，并使用 TimescaleDB 原生 columnstore 与后台压缩作业；压缩起始年龄取 `retention` 已解析的记录压缩年龄，策略组写入时在同一事务中更新三张表的原生作业配置，失败则整次写入回滚。这条跨模块数据库联动由 `retention_policy` 的写入触发器调用 `monitor` 所拥有的受控压缩作业更新函数；若作业缺失则策略更新失败而不伪报成功。作业运行状态和错误可通过 `timescaledb_information.jobs`、`job_stats` 与 `job_errors` 查阅；作业不会删除仍受引用保护的身份/事实记录，记录回收仍由后续独立任务执行。hypertable 的唯一约束必须包含分区列，因此全局 `event_id` 唯一由同模块的普通身份表保留；decision/health 另有全局 `stream_sequence`，事实表用含 `stream_sequence` 的复合外键指向身份表，observation 无流序号、只按 `(event_id, received_at)` 约束；S040 的保留配置归属不变。
 

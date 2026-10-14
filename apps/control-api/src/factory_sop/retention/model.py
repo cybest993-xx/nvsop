@@ -20,6 +20,13 @@ class RetentionMode(StrEnum):
     DISCARD = "discard"
 
 
+class RetentionPolicyMode(StrEnum):
+    """工位保留组的整组来源；与运行参数同一覆盖模式（§5.19）。"""
+
+    FOLLOW_GLOBAL = "follow_global"
+    CUSTOM = "custom"
+
+
 @dataclass(frozen=True, slots=True)
 class RetentionRule:
     """单条保留规则：有界时长、永久或显式不保留。"""
@@ -127,6 +134,34 @@ class RetentionPolicyState:
             raise ValueError("retention policy revision must be a non-negative integer")
 
 
+def check_retention_selection(
+    *, mode: RetentionPolicyMode, overrides: RetentionPolicy | None
+) -> None:
+    """校验覆盖模式与覆盖组配对；不产生生效值。"""
+    if mode is RetentionPolicyMode.FOLLOW_GLOBAL:
+        if overrides is not None:
+            raise ValueError("follow-global stations must not carry a custom retention group")
+    elif mode is RetentionPolicyMode.CUSTOM:
+        if overrides is None:
+            raise ValueError("custom retention requires a complete override group")
+    else:
+        raise ValueError("retention policy mode is unsupported")
+
+
+def resolve_retention_policy(
+    default: RetentionPolicy,
+    *,
+    mode: RetentionPolicyMode,
+    overrides: RetentionPolicy | None,
+) -> RetentionPolicy:
+    """解析一组生效保留值；跟随全局整组用默认，自定义整组替换，不逐字段合并。"""
+    check_retention_selection(mode=mode, overrides=overrides)
+    if mode is RetentionPolicyMode.FOLLOW_GLOBAL:
+        return default
+    assert overrides is not None
+    return overrides
+
+
 def category_for(verdict: str, *, has_latched_violation: bool) -> RetentionCategory:
     """解析实例保留类别；锁存违规恒按不通过类保留。`has_latched_violation` 由调用方传入。"""
     if has_latched_violation:
@@ -169,8 +204,11 @@ __all__ = [
     "RetentionCategory",
     "RetentionMode",
     "RetentionPolicy",
+    "RetentionPolicyMode",
     "RetentionPolicyState",
     "RetentionRule",
     "category_for",
     "check_reslice_window",
+    "check_retention_selection",
+    "resolve_retention_policy",
 ]

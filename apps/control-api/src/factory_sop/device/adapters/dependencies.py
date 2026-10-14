@@ -39,8 +39,10 @@ from factory_sop.device.repository import (
 )
 from factory_sop.device.usecases.commands import RepositoryDeviceEvidenceGateway
 from factory_sop.device.usecases.configuration import RepositoryDeviceConfigurationGateway
+from factory_sop.device.usecases.retention import RepositoryDeviceStationFacts
 from factory_sop.device.usecases.template_binding import RepositoryDeviceTemplateBindingGateway
 from factory_sop.persistence import RequestSession
+from factory_sop.retention.api import StationFactsGateway
 
 
 def hosts(session: RequestSession) -> InferenceHostRepository:
@@ -105,6 +107,11 @@ def template_binding(session: RequestSession) -> DeviceTemplateBindingGateway:
         connectors=PostgresConnectorRepository(session),
         points=PostgresPointRepository(session),
     )
+
+
+def station_retention_facts(session: RequestSession) -> StationFactsGateway:
+    """retention 模块使用的工位存在/启用 seam；只读，不触碰保留记录。"""
+    return RepositoryDeviceStationFacts(stations=PostgresStationRepository(session))
 
 
 def configuration_gateway(session: RequestSession) -> DeviceConfigurationGateway:

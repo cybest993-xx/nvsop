@@ -13,7 +13,7 @@ from threading import Event, Lock, Thread, current_thread
 from time import monotonic
 from typing import Protocol, cast
 
-from nvsop_contracts import DISPOSITION_POLICIES
+from nvsop_contracts import DISPOSITION_POLICIES, ResolvedRetentionPolicy
 
 from edge_runtime.configuration_values import (
     _array,
@@ -54,6 +54,8 @@ class StationRuntimeConfiguration:
     template_sha256: str | None = None
     model_ids: tuple[str, ...] = ()
     disposition_policy: str | None = None
+    # 中心解析后的生效保留组; 本机不重算默认值与覆盖组的合并, 缺失时不猜默认值(§5.19)。
+    retention_policy: ResolvedRetentionPolicy | None = None
 
 
 @dataclass(frozen=True, slots=True)

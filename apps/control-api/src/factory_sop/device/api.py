@@ -36,6 +36,7 @@ from nvsop_contracts import (
     ConfiguredStation,
     HostIdentityRequest,
     PointRole,
+    ResolvedRetentionPolicy,
     ResolvedRuntimeParameters,
     Unfitness,
     unfit_for,
@@ -333,8 +334,9 @@ class DeviceConfigurationGateway(Protocol):
         host_id: UUID,
         target: DeviceConfigurationTarget,
         runtime_defaults: ResolvedRuntimeParameters | None,
+        retention: ResolvedRetentionPolicy,
     ) -> ConfiguredStation:
-        """解析 device 拥有的拓扑与工位生效运行参数。"""
+        """解析 device 拥有的拓扑、工位生效运行参数与中心已解析的生效保留组。"""
         ...
 
     def finalize_configuration(

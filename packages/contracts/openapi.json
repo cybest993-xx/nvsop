@@ -790,7 +790,9 @@
           "HANDOVER_NOT_ELIGIBLE",
           "HANDOVER_TARGET_NOT_FOUND",
           "HANDOVER_SOURCE_MISMATCH",
-          "HANDOVER_SAME_HOST"
+          "HANDOVER_SAME_HOST",
+          "RETENTION_POLICY_CONFLICT",
+          "RETENTION_POLICY_INVALID"
         ],
         "title": "ApiErrorCode",
         "type": "string"
@@ -3859,6 +3861,35 @@
         "title": "FieldError",
         "type": "object"
       },
+      "GlobalRetentionPolicyUpdate": {
+        "properties": {
+          "policy": {
+            "$ref": "#/components/schemas/RetentionPolicyView"
+          }
+        },
+        "required": [
+          "policy"
+        ],
+        "title": "GlobalRetentionPolicyUpdate",
+        "type": "object"
+      },
+      "GlobalRetentionPolicyView": {
+        "properties": {
+          "policy": {
+            "$ref": "#/components/schemas/RetentionPolicyView"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "policy",
+          "revision"
+        ],
+        "title": "GlobalRetentionPolicyView",
+        "type": "object"
+      },
       "HandoverConfirmationInput": {
         "description": "第二确认输入；必须回带被展示的同一冻结内容。",
         "properties": {
@@ -5951,6 +5982,90 @@
         "title": "ResourceSummary",
         "type": "object"
       },
+      "RetentionMode": {
+        "enum": [
+          "unset",
+          "duration",
+          "permanent",
+          "discard"
+        ],
+        "title": "RetentionMode",
+        "type": "string"
+      },
+      "RetentionPolicyMode": {
+        "description": "工位保留组的整组来源；与运行参数同一覆盖模式（§5.19）。",
+        "enum": [
+          "follow_global",
+          "custom"
+        ],
+        "title": "RetentionPolicyMode",
+        "type": "string"
+      },
+      "RetentionPolicyView": {
+        "description": "完整一组保留参数；缺字段或不合法的一律拒绝。",
+        "properties": {
+          "disposal": {
+            "$ref": "#/components/schemas/RetentionRuleView"
+          },
+          "evidence_fail": {
+            "$ref": "#/components/schemas/RetentionRuleView"
+          },
+          "evidence_indeterminate": {
+            "$ref": "#/components/schemas/RetentionRuleView"
+          },
+          "evidence_pass": {
+            "$ref": "#/components/schemas/RetentionRuleView"
+          },
+          "local_reported": {
+            "$ref": "#/components/schemas/RetentionRuleView"
+          },
+          "record_aggregate_age": {
+            "$ref": "#/components/schemas/RetentionRuleView"
+          },
+          "record_compression_age": {
+            "$ref": "#/components/schemas/RetentionRuleView"
+          },
+          "record_detail": {
+            "$ref": "#/components/schemas/RetentionRuleView"
+          }
+        },
+        "required": [
+          "evidence_pass",
+          "evidence_fail",
+          "evidence_indeterminate",
+          "record_detail",
+          "record_compression_age",
+          "record_aggregate_age",
+          "disposal",
+          "local_reported"
+        ],
+        "title": "RetentionPolicyView",
+        "type": "object"
+      },
+      "RetentionRuleView": {
+        "description": "一条保留规则的 wire 形状；生效组不出现 `unset`。",
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/RetentionMode"
+          },
+          "seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seconds"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "RetentionRuleView",
+        "type": "object"
+      },
       "RetryMode": {
         "description": "失败后的恢复动作，直接表达调用者下一步该做什么。",
         "enum": [
@@ -6218,6 +6333,71 @@
           "name"
         ],
         "title": "StationConfiguration",
+        "type": "object"
+      },
+      "StationRetentionUpdate": {
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/RetentionPolicyMode"
+          },
+          "overrides": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RetentionPolicyView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "StationRetentionUpdate",
+        "type": "object"
+      },
+      "StationRetentionView": {
+        "description": "工位保留的默认组、覆盖组与唯一生效组；不逐字段混合。",
+        "properties": {
+          "default": {
+            "$ref": "#/components/schemas/RetentionPolicyView"
+          },
+          "effective": {
+            "$ref": "#/components/schemas/RetentionPolicyView"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/RetentionPolicyMode"
+          },
+          "overrides": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RetentionPolicyView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "station_id": {
+            "format": "uuid",
+            "title": "Station Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "station_id",
+          "revision",
+          "mode",
+          "default",
+          "overrides",
+          "effective"
+        ],
+        "title": "StationRetentionView",
         "type": "object"
       },
       "StationStatus": {
@@ -16735,6 +16915,350 @@
           "device"
         ],
         "x-required-permission": "device.point.edit"
+      }
+    },
+    "/api/v1/retention/policy": {
+      "get": {
+        "description": "读取全局默认保留策略；尚未持久化时是代码默认值，不写库。",
+        "operationId": "readRetentionPolicy",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GlobalRetentionPolicyView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Read The Retention Policy",
+        "tags": [
+          "retention"
+        ],
+        "x-required-permission": "retention.policy.view"
+      },
+      "put": {
+        "description": "整组替换全局默认策略；只改变后续回收依据，不同步删除任何数据。",
+        "operationId": "updateRetentionPolicy",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "title": "If-Match",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GlobalRetentionPolicyUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GlobalRetentionPolicyView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Retention policy conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Update The Retention Policy",
+        "tags": [
+          "retention"
+        ],
+        "x-required-permission": "retention.policy.edit"
+      }
+    },
+    "/api/v1/retention/stations/{station_id}": {
+      "get": {
+        "description": "读取全局默认、工位覆盖与唯一生效组；只读，不写入。",
+        "operationId": "readStationRetention",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "station_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Station Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StationRetentionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Station not found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Read Station Retention Policy",
+        "tags": [
+          "retention"
+        ],
+        "x-required-permission": "retention.policy.view"
+      },
+      "put": {
+        "description": "整组替换工位保留覆盖；If-Match 是该工位覆盖记录版本，0 表示首次建立。",
+        "operationId": "updateStationRetention",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "station_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Station Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "title": "If-Match",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StationRetentionUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StationRetentionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Station not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Retention policy conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Update Station Retention Policy",
+        "tags": [
+          "retention"
+        ],
+        "x-required-permission": "retention.policy.edit"
       }
     },
     "/api/v1/stations": {

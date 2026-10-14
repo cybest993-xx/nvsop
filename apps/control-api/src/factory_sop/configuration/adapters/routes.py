@@ -16,6 +16,7 @@ from factory_sop.configuration.composition import (
 )
 from factory_sop.device.api import DeviceConfigurationGateway, host_identity_from_headers
 from factory_sop.execution.api import ExecutionLeaseGateway
+from factory_sop.retention.api import StationRetentionProjectionGateway
 from factory_sop.template.api import TemplateConfigurationGateway
 from nvsop_contracts import (
     DECISION_REPORT_CONTRACT_VERSION,
@@ -42,6 +43,9 @@ def pull_inference_host_configuration(
     device: Annotated[DeviceConfigurationGateway, Depends(dependencies.device_gateway)],
     templates: Annotated[TemplateConfigurationGateway, Depends(dependencies.template_gateway)],
     execution: Annotated[ExecutionLeaseGateway, Depends(dependencies.execution_gateway)],
+    retention: Annotated[
+        StationRetentionProjectionGateway, Depends(dependencies.retention_gateway)
+    ],
     inference_host_id: Annotated[str | None, Header(alias="X-Inference-Host-ID")] = None,
     inference_host_timestamp: Annotated[
         str | None, Header(alias="X-Inference-Host-Timestamp")
@@ -74,6 +78,7 @@ def pull_inference_host_configuration(
             device=device,
             templates=templates,
             execution=execution,
+            retention=retention,
         )
     except ConfigurationAssemblyError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error

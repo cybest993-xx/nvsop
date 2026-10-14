@@ -29,6 +29,7 @@ from nvsop_contracts import (
     ConfiguredConnector,
     ConfiguredPoint,
     ConfiguredStation,
+    ResolvedRetentionPolicy,
     ResolvedRuntimeParameters,
 )
 
@@ -112,6 +113,7 @@ class RepositoryDeviceConfigurationGateway(DeviceConfigurationGateway):
         host_id: UUID,
         target: DeviceConfigurationTarget,
         runtime_defaults: ResolvedRuntimeParameters | None,
+        retention: ResolvedRetentionPolicy,
     ) -> ConfiguredStation:
         host = self._hosts.by_id(host_id)
         backend = self._backends.by_id(target.backend_id)
@@ -187,6 +189,7 @@ class RepositoryDeviceConfigurationGateway(DeviceConfigurationGateway):
                 step_deadline_seconds=effective.step_deadline_seconds,
                 disposition_policy=effective.disposition_policy,
             ),
+            retention=retention,
             connectors=tuple(
                 sorted(
                     (

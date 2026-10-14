@@ -23,6 +23,10 @@ const api = vi.hoisted(() => ({
   validateTemplateBinding: vi.fn(),
   bindTemplateVersion: vi.fn(),
   updateStationRuntimeParameters: vi.fn(),
+  readRetentionPolicy: vi.fn(),
+  readStationRetention: vi.fn(),
+  updateRetentionPolicy: vi.fn(),
+  updateStationRetention: vi.fn(),
 }))
 
 vi.mock('@/api/controlPlane', async (importOriginal) => ({
@@ -109,6 +113,26 @@ const CAMERA_MEDIA = {
   recording_window_seconds: 3600,
 }
 
+const RETENTION_DEFAULT = {
+  evidence_pass: { mode: 'duration' as const, seconds: 7776000 },
+  evidence_fail: { mode: 'permanent' as const, seconds: null },
+  evidence_indeterminate: { mode: 'duration' as const, seconds: 7776000 },
+  record_detail: { mode: 'duration' as const, seconds: 7776000 },
+  record_compression_age: { mode: 'duration' as const, seconds: 604800 },
+  record_aggregate_age: { mode: 'duration' as const, seconds: 7776000 },
+  disposal: { mode: 'permanent' as const, seconds: null },
+  local_reported: { mode: 'duration' as const, seconds: 1209600 },
+}
+
+const STATION_RETENTION = {
+  station_id: 'station-1',
+  revision: 0,
+  mode: 'follow_global' as const,
+  default: RETENTION_DEFAULT,
+  overrides: null,
+  effective: RETENTION_DEFAULT,
+}
+
 afterEach(() => {
   vi.unstubAllGlobals()
 })
@@ -131,6 +155,8 @@ beforeEach(() => {
     total: 1,
   })
   api.readStationTemplateConfiguration.mockResolvedValue(STATION_CONFIGURATION)
+  api.readRetentionPolicy.mockResolvedValue({ policy: RETENTION_DEFAULT, revision: 0 })
+  api.readStationRetention.mockResolvedValue(STATION_RETENTION)
   api.readTemplateVersions.mockResolvedValue({ items: [], page: 1, page_size: 50, total: 0 })
   api.validateTemplateBinding.mockResolvedValue({
     ...STATION_CONFIGURATION,
@@ -914,5 +940,26 @@ describe('工位与设备中的相机媒体', () => {
     expect(String(request)).toContain('https://media.example.test:9996/list')
     expect(options).toEqual(expect.objectContaining({ credentials: 'omit', cache: 'no-store' }))
     expect(wrapper.text()).toContain('录像查询')
+  })
+})
+
+describe('工位与设备中的保留策略', () => {
+  it('shows the station retention default and effective group to a retention viewer', async () => {
+    const session = useSessionStore()
+    session.current = {
+      user_id: 'retention-1',
+      login_name: 'retention',
+      display_name: '保留管理员',
+      expires_at: '2026-09-07T13:00:00Z',
+      permissions: ['device.station.view', 'retention.policy.view'],
+    }
+
+    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(api.readStationRetention).toHaveBeenCalledWith('station-1')
+    expect(wrapper.text()).toContain('保留策略')
+    expect(wrapper.text()).toContain('尚未设置')
+    expect(wrapper.text()).toContain('整组等于全局默认组')
   })
 })

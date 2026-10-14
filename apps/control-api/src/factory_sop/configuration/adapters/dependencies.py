@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from factory_sop.device.api import DeviceConfigurationGateway
 from factory_sop.execution.api import ExecutionLeaseGateway
+from factory_sop.retention.api import StationRetentionProjectionGateway
 from factory_sop.template.api import TemplateConfigurationGateway
 
 
@@ -22,4 +23,9 @@ def execution_gateway() -> ExecutionLeaseGateway:
     raise RuntimeError("configuration execution gateway dependency was not wired")
 
 
-__all__ = ["device_gateway", "execution_gateway", "template_gateway"]
+def retention_gateway() -> StationRetentionProjectionGateway:
+    """由 composition root 注入 retention owner 的生效组 seam。"""
+    raise RuntimeError("configuration retention gateway dependency was not wired")
+
+
+__all__ = ["device_gateway", "execution_gateway", "retention_gateway", "template_gateway"]

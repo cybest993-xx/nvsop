@@ -108,6 +108,10 @@ from factory_sop.problem import (
     problem_openapi_response,
     problem_response,
 )
+from factory_sop.retention.adapters import dependencies as retention_dependencies
+from factory_sop.retention.adapters.routes import router as retention_router
+from factory_sop.retention.errors import RetentionRefusedError
+from factory_sop.retention.errors import refusal_problem as retention_refusal_problem
 from factory_sop.settings import Settings
 from factory_sop.template.adapters import dependencies as template_dependencies
 from factory_sop.template.adapters.routes import router as template_router
@@ -251,6 +255,7 @@ def create_app(
     app.include_router(evidence_router, prefix=API_PREFIX)
     app.include_router(evidence_playback_router, prefix=API_PREFIX)
     app.include_router(execution_routes.router, prefix=API_PREFIX)
+    app.include_router(retention_router, prefix=API_PREFIX)
     app.include_router(overview_router, prefix=API_PREFIX)
     # 组合根把跨模块查询和任务依赖接到各自模块的真实适配器。
     app.dependency_overrides[configuration_dependencies.device_gateway] = (
@@ -292,6 +297,13 @@ def create_app(
         job_dependencies.annotation_jobs
     )
     app.dependency_overrides[dataset_dependencies.usage_jobs] = job_dependencies.usage_jobs
+    # 保留策略归 retention、工位事实归 device，两者各自经对方 owner 的公开 seam 访问。
+    app.dependency_overrides[configuration_dependencies.retention_gateway] = (
+        retention_dependencies.configuration_gateway
+    )
+    app.dependency_overrides[retention_dependencies.station_facts] = (
+        device_dependencies.station_retention_facts
+    )
 
     @app.exception_handler(EvidenceAccessRefusedError)
     async def evidence_access_refused(
@@ -422,6 +434,16 @@ def create_app(
     async def execution_refused(request: Request, error: ExecutionRefusedError) -> Response:
         """报告执行权或强制改绑拒绝：状态与标题由拒绝码自己给出。"""
         status_code, title = execution_refusal_problem(error.code)
+        return problem_response(
+            status=status_code,
+            title=title,
+            error_code=ApiErrorCode(error.code.value),
+        )
+
+    @app.exception_handler(RetentionRefusedError)
+    async def retention_refused(request: Request, error: RetentionRefusedError) -> Response:
+        """报告保留策略拒绝：状态与标题由拒绝码自己给出。"""
+        status_code, title = retention_refusal_problem(error.code)
         return problem_response(
             status=status_code,
             title=title,

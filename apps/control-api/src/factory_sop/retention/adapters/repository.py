@@ -1,16 +1,32 @@
-"""retention 全局策略的 PostgreSQL 适配器；方法不提交事务。"""
+"""retention 自己的 PostgreSQL 适配器与配置投影；方法都不提交事务。"""
 
 from __future__ import annotations
 
 from typing import Any, cast
+from uuid import UUID
 
 from sqlalchemy import CursorResult, Table, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.orm import Session
 
-from factory_sop.retention.adapters.tables import RetentionPolicyRow
-from factory_sop.retention.model import RetentionPolicyState
-from factory_sop.retention.usecases import RetentionPolicyRepository
+from factory_sop.retention.adapters.tables import (
+    RetentionPolicyRow,
+    StationRetentionPolicyRow,
+)
+from factory_sop.retention.model import (
+    RetentionPolicyMode,
+    RetentionPolicyState,
+    resolve_retention_policy,
+)
+from factory_sop.retention.usecases import (
+    RetentionPolicyRepository,
+    StationRetentionOverrideRepository,
+    StationRetentionProjection,
+    StationRetentionProjectionGateway,
+    StationRetentionRecord,
+    default_retention_policy,
+)
+from nvsop_contracts import ResolvedRetentionPolicy
 
 
 class PostgresRetentionPolicyRepository(RetentionPolicyRepository):
@@ -46,4 +62,80 @@ class PostgresRetentionPolicyRepository(RetentionPolicyRepository):
         return result.rowcount == 1
 
 
-__all__ = ["PostgresRetentionPolicyRepository"]
+class PostgresStationRetentionOverrideRepository(StationRetentionOverrideRepository):
+    """`retention_station_policy` 的版本条件写；无行即该工位整组跟随全局默认。"""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def get(self, station_id: UUID) -> StationRetentionRecord | None:
+        row = self._session.scalar(
+            select(StationRetentionPolicyRow)
+            .where(StationRetentionPolicyRow.station_id == station_id)
+            .execution_options(populate_existing=True)
+        )
+        return None if row is None else row.to_domain()
+
+    def insert_if_absent(self, record: StationRetentionRecord) -> bool:
+        """expected_revision==0 的首次建立：唯一键冲突即表示并发下另一个请求已经建过。"""
+        table = cast(Table, StationRetentionPolicyRow.__table__)
+        insert_statement = (
+            postgres_insert(table)
+            .values(
+                station_id=record.station_id,
+                mode=record.mode,
+                overrides=None if record.overrides is None else record.overrides.to_wire(),
+                revision=record.revision,
+            )
+            .on_conflict_do_nothing(index_elements=[table.c.station_id])
+            .returning(table.c.station_id)
+        )
+        return self._session.execute(insert_statement).scalar_one_or_none() is not None
+
+    def replace_if_current(self, *, expected_revision: int, record: StationRetentionRecord) -> bool:
+        table = cast(Table, StationRetentionPolicyRow.__table__)
+        update_statement = (
+            update(table)
+            .where(
+                table.c.station_id == record.station_id,
+                table.c.revision == expected_revision,
+            )
+            .values(
+                mode=record.mode,
+                overrides=None if record.overrides is None else record.overrides.to_wire(),
+                revision=record.revision,
+            )
+        )
+        result = cast("CursorResult[Any]", self._session.execute(update_statement))
+        return result.rowcount == 1
+
+
+class RepositoryStationRetentionProjectionGateway(StationRetentionProjectionGateway):
+    """从 retention 自己的两张表构造配置组合所需的生效组投影；不读任何 device 表。"""
+
+    def __init__(
+        self,
+        policies: RetentionPolicyRepository,
+        overrides: StationRetentionOverrideRepository,
+    ) -> None:
+        self._policies = policies
+        self._overrides = overrides
+
+    def for_station(self, station_id: UUID) -> StationRetentionProjection:
+        record = self._overrides.get(station_id)
+        default = default_retention_policy(self._policies)
+        mode = RetentionPolicyMode.FOLLOW_GLOBAL if record is None else record.mode
+        overrides = None if record is None else record.overrides
+        effective = resolve_retention_policy(default, mode=mode, overrides=overrides)
+        return StationRetentionProjection(
+            station_id=station_id,
+            revision=0 if record is None else record.revision,
+            effective=ResolvedRetentionPolicy.from_wire(effective.to_wire()),
+        )
+
+
+__all__ = [
+    "PostgresRetentionPolicyRepository",
+    "PostgresStationRetentionOverrideRepository",
+    "RepositoryStationRetentionProjectionGateway",
+]

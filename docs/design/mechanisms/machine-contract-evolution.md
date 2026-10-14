@@ -14,12 +14,13 @@
 | `generated_at` | 信封生成时刻；诊断元数据，不参与稳定内容或运行语义身份，也不用于同 revision 的先后裁决 |
 | `sha256` | 完整 wire 信封的 canonical SHA-256，保护传输/持久化完整性 |
 | `effective_sha256` | 运行语义身份；排除 `config_revision`、`generated_at`、非行为 `producer` 与主机执行权租约 `execution_grants`，包含会改变 Edge 行为的配置与 capability requirement |
-| `station.revision` | `device` 拥有的工位配置修订，不替代 bundle assignment revision |
+| `station.revision` | `device` 拥有的工位配置修订，不替代 bundle assignment revision；Center 组合时把该工位其他 owner 的工位级修订（模板版本、保留覆盖记录版本）并入其中，使这些变更同样产生新 assignment |
 | 模板 `version_id` / `version_sha256` | `template` 拥有的不可变模板版本身份；artifact 各自保留内容 SHA-256 |
 | `model_ids` | Center 签发 bundle 时冻结的推理后端模型事实；历史判定继续使用事件时冻结的 provenance，不用当前配置回填 |
 | `producer` | 已知、可选、非行为诊断元数据；不进入 stable/effective identity |
 | `execution_grants` | 主机自己的当前工位物理执行权租约事实（`station_id`/`grant_id`/`holder_host_id`/`lease_expires_at`）；Center 在每次成功拉取配置时于同一请求内只续期该主机持有的租约。host-scoped 授权元数据：不进入 stable/effective identity，也不进入配置运行时的组合与切换；Edge 按声明的 `execution.lease-write-gate` 能力把它用作物理写入门禁，到期/缺失即拒绝写入 |
 | `required_capabilities` | 行为兼容门禁；排序且去重。Edge 不支持任一声明时显式拒绝整个候选 |
+| `stations[].retention` | 中心按工位解析后的完整生效保留组（§5.19）；行为兼容门禁为 `retention.station-policy-v1`。字段缺失表示中心尚未下发保留行为，不是默认值，Edge 不据此猜算保留期 |
 
 历史 assignment 不再发明第二个 identity。Center 的 issued-configuration 历史以 host + `config_revision` + `effective_sha256` 固定一次签发，并冻结 station/backend、模板版本/摘要和 model facts；历史上报必须指向这份实际签发事实。
 
@@ -35,6 +36,13 @@
 `disposition_policy=stop` 同样属于第 2 类行为扩展。共享 wire 仍把 `disposition_policy` 保持为既有的非空字符串，避免通过收窄字段制造隐式破坏；Center 的产品/绑定层只允许首版 `record` / `stop`。只要任一工位实际生效值为 `stop`，Center 就必须同时声明 `disposition.stop-output-v1`。新 Edge 只有在该 capability 存在、策略值受支持且确认拓扑能唯一解析 `停线联锁` 输出点时才激活物理处置；缺 capability 的旧 Center `stop` 候选也必须拒绝，防止升级后的 Edge 把历史自由文本从“记录类处置”静默重解释为物理停线。旧 Edge 不认识该 capability 时则在候选阶段拒绝整个新配置。`record` 不要求这一 capability。
 
 点位型声光动作也按第 2 类行为扩展发布。Center 只有在实际主机切片包含名为 `声光告警` 的输出点时才声明 `disposition.sound-light-output-v1`；新 Edge 只在 capability 存在且确认拓扑能唯一解析该输出点时生成声光处置，并继续复用统一输出写入门禁与本地处置账本。没有 capability 的历史 bundle 即使碰巧存在同名自由文本点位也保持原行为，不允许升级后的 Edge 静默把旧配置解释成新的物理动作；旧 Edge 不认识新 capability 时显式拒绝候选。
+
+工位生效保留组同样按第 2 类行为扩展发布。Center 把按工位解析后的完整保留组放进 `stations[].retention`，并在
+bundle 中声明 `retention.station-policy-v1`；不支持该能力的旧 Edge 显式拒绝整个候选，而不是忽略字段或自行把
+全局默认值与工位覆盖组合并。该字段在当前 wire 里是**可选**的：引入它之前写下的当前确认 payload 没有它，
+Edge 读到缺失时不猜默认值、也不产生保留行为，只在下一次成功拉取到带能力的候选后才消费生效组；反过来，
+一旦候选声明了该能力，每个站都必须携带已解析组，否则 Edge 拒绝整个候选。发布顺序因此是 Center-first：
+先部署会下发该字段的 Center，再升级消费它的 Edge。
 
 配置契约不提供 `extensions`、任意 JSON bag、插件字典或“未知字段照单全收”。核心字段仍严格必填，未知字段仍拒绝。
 

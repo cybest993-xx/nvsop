@@ -300,12 +300,18 @@ import type {
   ReadPointData,
   ReadPointErrors,
   ReadPointResponses,
+  ReadRetentionPolicyData,
+  ReadRetentionPolicyErrors,
+  ReadRetentionPolicyResponses,
   ReadSessionData,
   ReadSessionErrors,
   ReadSessionResponses,
   ReadStationData,
   ReadStationErrors,
   ReadStationResponses,
+  ReadStationRetentionData,
+  ReadStationRetentionErrors,
+  ReadStationRetentionResponses,
   ReadStationTemplateConfigurationData,
   ReadStationTemplateConfigurationErrors,
   ReadStationTemplateConfigurationResponses,
@@ -423,6 +429,12 @@ import type {
   UpdateConnectorCapabilityData,
   UpdateConnectorCapabilityErrors,
   UpdateConnectorCapabilityResponses,
+  UpdateRetentionPolicyData,
+  UpdateRetentionPolicyErrors,
+  UpdateRetentionPolicyResponses,
+  UpdateStationRetentionData,
+  UpdateStationRetentionErrors,
+  UpdateStationRetentionResponses,
   UpdateStationRuntimeParametersData,
   UpdateStationRuntimeParametersErrors,
   UpdateStationRuntimeParametersResponses,
@@ -1942,6 +1954,76 @@ export const setPointStatus = <ThrowOnError extends boolean = false>(
 ): RequestResult<SetPointStatusResponses, SetPointStatusErrors, ThrowOnError> =>
   (options.client ?? client).put<SetPointStatusResponses, SetPointStatusErrors, ThrowOnError>({
     url: '/api/v1/points/{point_id}/status',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read The Retention Policy
+ *
+ * 读取全局默认保留策略；尚未持久化时是代码默认值，不写库。
+ */
+export const readRetentionPolicy = <ThrowOnError extends boolean = false>(
+  options?: Options<ReadRetentionPolicyData, ThrowOnError>,
+): RequestResult<ReadRetentionPolicyResponses, ReadRetentionPolicyErrors, ThrowOnError> =>
+  (options?.client ?? client).get<
+    ReadRetentionPolicyResponses,
+    ReadRetentionPolicyErrors,
+    ThrowOnError
+  >({ url: '/api/v1/retention/policy', ...options })
+
+/**
+ * Update The Retention Policy
+ *
+ * 整组替换全局默认策略；只改变后续回收依据，不同步删除任何数据。
+ */
+export const updateRetentionPolicy = <ThrowOnError extends boolean = false>(
+  options: Options<UpdateRetentionPolicyData, ThrowOnError>,
+): RequestResult<UpdateRetentionPolicyResponses, UpdateRetentionPolicyErrors, ThrowOnError> =>
+  (options.client ?? client).put<
+    UpdateRetentionPolicyResponses,
+    UpdateRetentionPolicyErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/retention/policy',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read Station Retention Policy
+ *
+ * 读取全局默认、工位覆盖与唯一生效组；只读，不写入。
+ */
+export const readStationRetention = <ThrowOnError extends boolean = false>(
+  options: Options<ReadStationRetentionData, ThrowOnError>,
+): RequestResult<ReadStationRetentionResponses, ReadStationRetentionErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadStationRetentionResponses,
+    ReadStationRetentionErrors,
+    ThrowOnError
+  >({ url: '/api/v1/retention/stations/{station_id}', ...options })
+
+/**
+ * Update Station Retention Policy
+ *
+ * 整组替换工位保留覆盖；If-Match 是该工位覆盖记录版本，0 表示首次建立。
+ */
+export const updateStationRetention = <ThrowOnError extends boolean = false>(
+  options: Options<UpdateStationRetentionData, ThrowOnError>,
+): RequestResult<UpdateStationRetentionResponses, UpdateStationRetentionErrors, ThrowOnError> =>
+  (options.client ?? client).put<
+    UpdateStationRetentionResponses,
+    UpdateStationRetentionErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/retention/stations/{station_id}',
     ...options,
     headers: {
       'Content-Type': 'application/json',

@@ -537,6 +537,8 @@ export type ApiErrorCode =
   | 'HANDOVER_TARGET_NOT_FOUND'
   | 'HANDOVER_SOURCE_MISMATCH'
   | 'HANDOVER_SAME_HOST'
+  | 'RETENTION_POLICY_CONFLICT'
+  | 'RETENTION_POLICY_INVALID'
 
 /**
  * ArtifactAcceptedView
@@ -2294,6 +2296,24 @@ export type FieldError = {
 }
 
 /**
+ * GlobalRetentionPolicyUpdate
+ */
+export type GlobalRetentionPolicyUpdate = {
+  policy: RetentionPolicyView
+}
+
+/**
+ * GlobalRetentionPolicyView
+ */
+export type GlobalRetentionPolicyView = {
+  policy: RetentionPolicyView
+  /**
+   * Revision
+   */
+  revision: number
+}
+
+/**
  * HandoverConfirmationInput
  *
  * 第二确认输入；必须回带被展示的同一冻结内容。
@@ -3583,6 +3603,47 @@ export type ResourceSummary = {
 }
 
 /**
+ * RetentionMode
+ */
+export type RetentionMode = 'unset' | 'duration' | 'permanent' | 'discard'
+
+/**
+ * RetentionPolicyMode
+ *
+ * 工位保留组的整组来源；与运行参数同一覆盖模式（§5.19）。
+ */
+export type RetentionPolicyMode = 'follow_global' | 'custom'
+
+/**
+ * RetentionPolicyView
+ *
+ * 完整一组保留参数；缺字段或不合法的一律拒绝。
+ */
+export type RetentionPolicyView = {
+  disposal: RetentionRuleView
+  evidence_fail: RetentionRuleView
+  evidence_indeterminate: RetentionRuleView
+  evidence_pass: RetentionRuleView
+  local_reported: RetentionRuleView
+  record_aggregate_age: RetentionRuleView
+  record_compression_age: RetentionRuleView
+  record_detail: RetentionRuleView
+}
+
+/**
+ * RetentionRuleView
+ *
+ * 一条保留规则的 wire 形状；生效组不出现 `unset`。
+ */
+export type RetentionRuleView = {
+  mode: RetentionMode
+  /**
+   * Seconds
+   */
+  seconds?: number | null
+}
+
+/**
  * RetryMode
  *
  * 失败后的恢复动作，直接表达调用者下一步该做什么。
@@ -3755,6 +3816,34 @@ export type StationConfiguration = {
    * Tags
    */
   tags?: Array<string>
+}
+
+/**
+ * StationRetentionUpdate
+ */
+export type StationRetentionUpdate = {
+  mode: RetentionPolicyMode
+  overrides?: RetentionPolicyView | null
+}
+
+/**
+ * StationRetentionView
+ *
+ * 工位保留的默认组、覆盖组与唯一生效组；不逐字段混合。
+ */
+export type StationRetentionView = {
+  default: RetentionPolicyView
+  effective: RetentionPolicyView
+  mode: RetentionPolicyMode
+  overrides: RetentionPolicyView | null
+  /**
+   * Revision
+   */
+  revision: number
+  /**
+   * Station Id
+   */
+  station_id: string
 }
 
 /**
@@ -9311,6 +9400,194 @@ export type SetPointStatusResponses = {
 }
 
 export type SetPointStatusResponse = SetPointStatusResponses[keyof SetPointStatusResponses]
+
+export type ReadRetentionPolicyData = {
+  body?: never
+  path?: never
+  query?: never
+  url: '/api/v1/retention/policy'
+}
+
+export type ReadRetentionPolicyErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadRetentionPolicyError = ReadRetentionPolicyErrors[keyof ReadRetentionPolicyErrors]
+
+export type ReadRetentionPolicyResponses = {
+  /**
+   * Successful Response
+   */
+  200: GlobalRetentionPolicyView
+}
+
+export type ReadRetentionPolicyResponse =
+  ReadRetentionPolicyResponses[keyof ReadRetentionPolicyResponses]
+
+export type UpdateRetentionPolicyData = {
+  body: GlobalRetentionPolicyUpdate
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/retention/policy'
+}
+
+export type UpdateRetentionPolicyErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Retention policy conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type UpdateRetentionPolicyError =
+  UpdateRetentionPolicyErrors[keyof UpdateRetentionPolicyErrors]
+
+export type UpdateRetentionPolicyResponses = {
+  /**
+   * Successful Response
+   */
+  200: GlobalRetentionPolicyView
+}
+
+export type UpdateRetentionPolicyResponse =
+  UpdateRetentionPolicyResponses[keyof UpdateRetentionPolicyResponses]
+
+export type ReadStationRetentionData = {
+  body?: never
+  path: {
+    /**
+     * Station Id
+     */
+    station_id: string
+  }
+  query?: never
+  url: '/api/v1/retention/stations/{station_id}'
+}
+
+export type ReadStationRetentionErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Station not found
+   */
+  404: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadStationRetentionError = ReadStationRetentionErrors[keyof ReadStationRetentionErrors]
+
+export type ReadStationRetentionResponses = {
+  /**
+   * Successful Response
+   */
+  200: StationRetentionView
+}
+
+export type ReadStationRetentionResponse =
+  ReadStationRetentionResponses[keyof ReadStationRetentionResponses]
+
+export type UpdateStationRetentionData = {
+  body: StationRetentionUpdate
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+  }
+  path: {
+    /**
+     * Station Id
+     */
+    station_id: string
+  }
+  query?: never
+  url: '/api/v1/retention/stations/{station_id}'
+}
+
+export type UpdateStationRetentionErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Station not found
+   */
+  404: ProblemDocument
+  /**
+   * Retention policy conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type UpdateStationRetentionError =
+  UpdateStationRetentionErrors[keyof UpdateStationRetentionErrors]
+
+export type UpdateStationRetentionResponses = {
+  /**
+   * Successful Response
+   */
+  200: StationRetentionView
+}
+
+export type UpdateStationRetentionResponse =
+  UpdateStationRetentionResponses[keyof UpdateStationRetentionResponses]
 
 export type ListStationsData = {
   body?: never

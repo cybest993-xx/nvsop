@@ -76,12 +76,19 @@ from factory_sop.device.model import (
     PendingCommandType,
     PointDirection,
 )
+from factory_sop.device.usecases.retention import RepositoryDeviceStationFacts
 from factory_sop.evidence.adapters import dependencies as evidence_dependencies
 from factory_sop.evidence.model import EvidenceReclipRequest, EvidenceReview
 from factory_sop.execution.adapters import dependencies as execution_dependencies
 from factory_sop.execution.model import HANDOVER_RISK_STATEMENT, HandoverConfirmation
 from factory_sop.identifiers import new_id
 from factory_sop.persistence import request_session
+from factory_sop.retention.adapters import dependencies as retention_dependencies
+from factory_sop.retention.api import (
+    DEFAULT_RETENTION_POLICY,
+    RetentionPolicyState,
+    StationRetentionRecord,
+)
 from factory_sop.settings import Settings
 from factory_sop.template.adapters import dependencies as template_dependencies
 from factory_sop.template.model import TemplateImport
@@ -533,7 +540,20 @@ ROUTES = [
             "after_seconds": 1.0,
         },
     ),
+    Target(
+        "PUT",
+        "/retention/policy",
+        {"policy": DEFAULT_RETENTION_POLICY.to_wire()},
+        headers={"If-Match": "0"},
+    ),
+    Target(
+        "PUT",
+        "/retention/stations/{station_id}",
+        {"mode": "custom", "overrides": DEFAULT_RETENTION_POLICY.to_wire()},
+        headers={"If-Match": "0"},
+    ),
 ]
+
 
 # The session resource: no permission, by design, and therefore not part of the check above.
 EXEMPT = {
@@ -579,6 +599,46 @@ class AuthorizationPendingCommands(FakePendingCommands):
     def complete(self, completion: PendingCommandCompletion) -> PendingCommand:
         del completion
         raise AssertionError("authorization route test does not complete a command")
+
+
+class FakeRetentionPolicies:
+    """授权机械测试只需保存一次全局策略写入，不触碰数据库。"""
+
+    def __init__(self) -> None:
+        self.state: RetentionPolicyState | None = None
+
+    def get_global(self) -> RetentionPolicyState | None:
+        return self.state
+
+    def replace_if_current(self, *, expected_revision: int, value: RetentionPolicyState) -> bool:
+        current = 0 if self.state is None else self.state.revision
+        if current != expected_revision:
+            return False
+        self.state = value
+        return True
+
+
+class FakeStationRetentionOverrides:
+    """内存工位覆盖记录，让两条写路由走到真实用例而不是只解析依赖。"""
+
+    def __init__(self) -> None:
+        self.records: dict[UUID, StationRetentionRecord] = {}
+
+    def get(self, station_id: UUID) -> StationRetentionRecord | None:
+        return self.records.get(station_id)
+
+    def insert_if_absent(self, record: StationRetentionRecord) -> bool:
+        if record.station_id in self.records:
+            return False
+        self.records[record.station_id] = record
+        return True
+
+    def replace_if_current(self, *, expected_revision: int, record: StationRetentionRecord) -> bool:
+        current = self.records.get(record.station_id)
+        if current is None or current.revision != expected_revision:
+            return False
+        self.records[record.station_id] = record
+        return True
 
 
 class TemplateStore:
@@ -831,7 +891,10 @@ class Backend:
         self.app.dependency_overrides[dependencies.sessions] = lambda: self.sessions
         self.app.dependency_overrides[dependencies.roles] = lambda: self.roles
         self.app.dependency_overrides[dependencies.granted_permissions] = lambda: self.granted
+        self.retention_policies = FakeRetentionPolicies()
+        self.retention_overrides = FakeStationRetentionOverrides()
         self.app.dependency_overrides[device_dependencies.hosts] = lambda: self.hosts
+
         self.app.dependency_overrides[device_dependencies.backends] = lambda: self.backends_store
         self.app.dependency_overrides[device_dependencies.probe] = lambda: self.probe
         self.app.dependency_overrides[device_dependencies.stations] = lambda: self.stations
@@ -863,6 +926,16 @@ class Backend:
             self.evidence_reclip_gateway
         )
         self.app.dependency_overrides[auth_handover_authority] = lambda: self.handover_authority
+        self.app.dependency_overrides[retention_dependencies.policy_repository] = lambda: (
+            self.retention_policies
+        )
+        self.app.dependency_overrides[retention_dependencies.station_overrides] = lambda: (
+            self.retention_overrides
+        )
+        # 组合根把工位存在/启用事实 seam 接到 device owner；这里把它接到内存工位存储。
+        self.app.dependency_overrides[retention_dependencies.station_facts] = lambda: (
+            RepositoryDeviceStationFacts(stations=self.stations)
+        )
         self.app.dependency_overrides[request_session] = StubRequestSession
         self.client = TestClient(self.app, base_url="https://testserver")
         assert (

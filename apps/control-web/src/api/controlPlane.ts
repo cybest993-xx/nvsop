@@ -75,6 +75,8 @@ import {
   readJob as generatedReadJob,
   readPoint as generatedReadPoint,
   readSession as generatedReadSession,
+  readRetentionPolicy as generatedReadRetentionPolicy,
+  readStationRetention as generatedReadStationRetention,
   readStationTemplateConfiguration as generatedReadStationTemplateConfiguration,
   readTrainingDataset as generatedReadTrainingDataset,
   readDatasetArtifact as generatedReadDatasetArtifact,
@@ -99,6 +101,8 @@ import {
   setUserStatus as generatedSetUserStatus,
   submitAnnotation as generatedSubmitAnnotation,
   updateConnectorCapability as generatedUpdateConnectorCapability,
+  updateRetentionPolicy as generatedUpdateRetentionPolicy,
+  updateStationRetention as generatedUpdateStationRetention,
   updateStationRuntimeParameters as generatedUpdateStationRuntimeParameters,
   validatePointBinding as generatedValidatePointBinding,
   validateTemplateBinding as generatedValidateTemplateBinding,
@@ -197,6 +201,12 @@ import {
   type UploadInstructionsView,
   type UploadRequestView,
   type UsageCheckAcceptedView,
+  type GlobalRetentionPolicyView,
+  type RetentionPolicyMode,
+  type RetentionPolicyView,
+  type RetentionRuleView,
+  type StationRetentionUpdate,
+  type StationRetentionView,
   type UsageCheckInput,
   type UsageCheckView,
   type VlmCandidateView,
@@ -252,10 +262,18 @@ export type {
   PendingCommandView,
   PointConfiguration,
   PointView,
+  GlobalRetentionPolicyUpdate,
+  GlobalRetentionPolicyView,
   RegisterVlmCandidateInput,
+  RetentionMode,
+  RetentionPolicyMode,
+  RetentionPolicyView,
+  RetentionRuleView,
   RetryMode,
   RetryView,
   RoleView,
+  StationRetentionUpdate,
+  StationRetentionView,
   RuntimeParameterMode,
   RuntimeParametersInput,
   RuntimeParametersUpdateInput,
@@ -1394,4 +1412,48 @@ export function editRole(roleId: string, submitted: EditRoleData['body']): Promi
 
 export function deleteRole(roleId: string): Promise<void> {
   return execute(generatedDeleteRole({ path: { role_id: roleId } }))
+}
+
+// ——— 保留策略：全局默认与工位整组覆盖都走生成客户端。 ———
+
+export type RetentionRuleInput = RetentionRuleView
+export type RetentionPolicyInput = RetentionPolicyView
+export type RetentionPolicyModeInput = RetentionPolicyMode
+export type GlobalRetentionPolicy = GlobalRetentionPolicyView
+export type StationRetention = StationRetentionView
+export type StationRetentionInput = StationRetentionUpdate
+
+/** 读取全局默认保留组；尚未持久化时中心返回代码默认值与 revision 0。 */
+export function readRetentionPolicy(): Promise<GlobalRetentionPolicyView> {
+  return execute(generatedReadRetentionPolicy())
+}
+
+/** 整组替换全局默认保留组；If-Match 冲突时后端返回 409。 */
+export function updateRetentionPolicy(
+  policy: RetentionPolicyView,
+  revision: number,
+): Promise<GlobalRetentionPolicyView> {
+  return execute(
+    generatedUpdateRetentionPolicy({ headers: { 'If-Match': revision }, body: { policy } }),
+  )
+}
+
+/** 读取某工位的默认组、覆盖组与唯一生效组。 */
+export function readStationRetention(stationId: string): Promise<StationRetentionView> {
+  return execute(generatedReadStationRetention({ path: { station_id: stationId } }))
+}
+
+/** 整组替换工位保留覆盖；If-Match 是该工位覆盖记录版本（0 表示首次建立），冲突时后端返回 409。 */
+export function updateStationRetention(
+  stationId: string,
+  submitted: StationRetentionUpdate,
+  revision: number,
+): Promise<StationRetentionView> {
+  return execute(
+    generatedUpdateStationRetention({
+      path: { station_id: stationId },
+      headers: { 'If-Match': revision },
+      body: submitted,
+    }),
+  )
 }

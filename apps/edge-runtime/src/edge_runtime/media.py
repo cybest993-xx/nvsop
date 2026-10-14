@@ -186,7 +186,7 @@ def load_media_runtime_configuration(value: object) -> MediaRuntimeConfiguration
         else DEFAULT_RECORDING_COMPRESSION_ENABLED
     )
     compression_crf = (
-        _crf(config["recording_compression_crf"], "recording_compression_crf")
+        crf_value(config["recording_compression_crf"], "recording_compression_crf")
         if "recording_compression_crf" in config
         else DEFAULT_RECORDING_COMPRESSION_CRF
     )
@@ -639,7 +639,7 @@ def _validate_configuration(configuration: MediaRuntimeConfiguration) -> None:
         configuration.recording_compression_age_seconds, "recording_compression_age_seconds"
     )
     _boolean(configuration.recording_compression_enabled, "recording_compression_enabled")
-    _crf(configuration.recording_compression_crf, "recording_compression_crf")
+    crf_value(configuration.recording_compression_crf, "recording_compression_crf")
     _positive_integer(
         configuration.record_segment_duration_seconds, "record_segment_duration_seconds"
     )
@@ -894,8 +894,11 @@ def _enum(value: object, enum_type: type[EnumT], name: str) -> EnumT:
         raise ValueError(f"{name} is unsupported") from error
 
 
-def _crf(value: object, name: str) -> int:
-    """x264 CRF 的真实区间是 0-51 (0 为无损); 越界即配置错误, 不悄悄夹取。"""
+def crf_value(value: object, name: str) -> int:
+    """x264 CRF 的真实区间是 0-51 (0 为无损); 越界即配置错误, 不悄悄夹取。
+
+    配置读取与压缩留痕复核共用这一条规则, 不在第二处重写区间。
+    """
     if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 51:
         raise ValueError(f"{name} must be an integer between 0 and 51")
     return value
@@ -1021,6 +1024,7 @@ __all__ = [
     "MediaRuntime",
     "MediaRuntimeConfiguration",
     "RecordingMode",
+    "crf_value",
     "ffmpeg_command_for_camera",
     "load_media_runtime_configuration",
     "render_mediamtx_config",

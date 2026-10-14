@@ -17,7 +17,7 @@ import os
 import subprocess
 import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from math import ceil, isfinite
 from pathlib import Path
@@ -29,6 +29,7 @@ from edge_runtime.configuration_values import (
     _object,
     _positive_integer,
     _positive_number,
+    _require_keys,
 )
 from edge_runtime.evidence_media import (
     MATERIAL_GENERATION_COMPRESSED,
@@ -37,6 +38,7 @@ from edge_runtime.evidence_media import (
     recording_segment_generation,
     recording_segment_start,
 )
+from edge_runtime.media import crf_value
 
 _logger = logging.getLogger("edge_runtime")
 
@@ -113,24 +115,8 @@ class RecordingCompressionCandidate:
     encoded_at: str
 
     def to_wire(self) -> dict[str, object]:
-        """转换为严格的本机留痕文档; 字段集合就是被校验过的全部事实。"""
-        return {
-            "source": self.source,
-            "candidate": self.candidate,
-            "source_sha256": self.source_sha256,
-            "candidate_sha256": self.candidate_sha256,
-            "source_size_bytes": self.source_size_bytes,
-            "candidate_size_bytes": self.candidate_size_bytes,
-            "source_duration_seconds": self.source_duration_seconds,
-            "candidate_duration_seconds": self.candidate_duration_seconds,
-            "source_frames": self.source_frames,
-            "candidate_frames": self.candidate_frames,
-            "crf": self.crf,
-            "encoder": self.encoder,
-            "preset": self.preset,
-            "generation": self.generation,
-            "encoded_at": self.encoded_at,
-        }
+        """转换为本机留痕文档; 文档字段名就是这里的字段名, 只在此处定义一次。"""
+        return asdict(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,25 +137,7 @@ class _Probe:
     frames: int
 
 
-_PROVENANCE_KEYS = frozenset(
-    {
-        "source",
-        "candidate",
-        "source_sha256",
-        "candidate_sha256",
-        "source_size_bytes",
-        "candidate_size_bytes",
-        "source_duration_seconds",
-        "candidate_duration_seconds",
-        "source_frames",
-        "candidate_frames",
-        "crf",
-        "encoder",
-        "preset",
-        "generation",
-        "encoded_at",
-    }
-)
+_PROVENANCE_KEYS = frozenset(RecordingCompressionCandidate.__dataclass_fields__)
 
 
 def compress_aged_segments(
@@ -189,11 +157,7 @@ def compress_aged_segments(
                 skipped += 1
                 continue
             _compress_segment(segment, configuration, now=current)
-        except EvidenceMediaError as error:
-            failed += 1
-            _log_failure(segment.name, error.reason, error.detail)
-            continue
-        except RecordingCompressionError as error:
+        except (EvidenceMediaError, RecordingCompressionError) as error:
             failed += 1
             _log_failure(segment.name, error.reason, error.detail)
             continue
@@ -265,7 +229,7 @@ def _aged_segments(
     """按录像墙钟列出整段已出原始素材窗口的分段, 不探测任何分段。
 
     录像目录不可读只让这一个后台任务本轮失败: 记录告警并返回已列出的分段, 不让媒体目录
-    问题结束判定运行时 (edge-autonomy.md §5.11)。
+    问题结束判定运行时 (edge-autonomy.md §5.7)。
     """
     directory = configuration.recording_directory
     if not directory.is_dir():
@@ -331,12 +295,13 @@ def _compress_segment(
     *,
     now: float,
 ) -> None:
-    """编码到临时文件并校验, 通过后先落候选再落留痕; 任一步失败都不留下候选。"""
+    """编码到临时文件并校验, 通过后先落候选再落留痕; 任一步失败都不留下候选。
+
+    到达这里的候选已由 `_candidate_is_current` 判定为不存在或不可证明并移除, 因此本函数不再
+    重复清理; 失败路径只清理本次自己的临时文件。
+    """
     candidate = _candidate_path(segment)
     provenance = _provenance_path(segment)
-    # 先移除无法证明的旧候选; 未校验候选不得留在盘上冒充可消费产物。
-    _discard(candidate)
-    _discard(provenance)
     work: Path | None = None
     try:
         work = _temporary_candidate(segment)
@@ -406,26 +371,13 @@ def _encode(
         "mp4",
         str(destination),
     ]
-    _run(argv, configuration.timeout_seconds, "encode_failed")
+    _spawn(argv, configuration.timeout_seconds, "encode_failed")
 
 
 def _probe(path: Path, configuration: RecordingCompressionConfiguration) -> _Probe:
     """测量视频时长/编码/完整解码帧数; 结果不完整即失败, 不猜测量值。"""
     argv = [str(configuration.ffprobe_binary), *_FFPROBE_ARGS, str(path)]
-    try:
-        completed = subprocess.run(
-            argv, capture_output=True, timeout=configuration.timeout_seconds, check=False
-        )
-    except subprocess.TimeoutExpired as error:
-        raise RecordingCompressionError(
-            "probe_failed", f"ffprobe timed out after {configuration.timeout_seconds:g}s"
-        ) from error
-    except OSError as error:
-        raise RecordingCompressionError("probe_failed", str(error)) from error
-    if completed.returncode != 0:
-        raise RecordingCompressionError(
-            "probe_failed", f"ffprobe exit {completed.returncode} for {path.name}"
-        )
+    completed = _spawn(argv, configuration.timeout_seconds, "probe_failed")
     try:
         payload = cast(dict[str, object], json.loads(completed.stdout))
     except json.JSONDecodeError as error:
@@ -459,7 +411,7 @@ def _require_decodable(path: Path, configuration: RecordingCompressionConfigurat
         "null",
         "-",
     ]
-    _run(argv, configuration.timeout_seconds, "verification_failed")
+    _spawn(argv, configuration.timeout_seconds, "verification_failed")
 
 
 def _verify(source: _Probe, candidate: _Probe) -> None:
@@ -485,7 +437,8 @@ def _verify(source: _Probe, candidate: _Probe) -> None:
         )
 
 
-def _run(argv: list[str], timeout: float, reason: str) -> None:
+def _spawn(argv: list[str], timeout: float, reason: str) -> subprocess.CompletedProcess[bytes]:
+    """运行外部编解码命令; 超时、无法启动与非零退出都翻译成该步骤的具体原因。"""
     try:
         completed = subprocess.run(argv, capture_output=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired as error:
@@ -496,6 +449,7 @@ def _run(argv: list[str], timeout: float, reason: str) -> None:
         lines = completed.stderr.decode("utf-8", "replace").strip().splitlines()
         detail = lines[-1] if lines else "no detail"
         raise RecordingCompressionError(reason, f"exit {completed.returncode}: {detail}")
+    return completed
 
 
 def _probe_number(value: object, path: Path, name: str) -> float:
@@ -542,8 +496,7 @@ def _write_provenance(path: Path, document: RecordingCompressionCandidate) -> No
 def _read_provenance(path: Path) -> RecordingCompressionCandidate:
     """严格读取留痕; 字段集合或类型不符即拒绝, 不把无法证明的候选当已验证。"""
     document = _object(json.loads(path.read_text(encoding="utf-8")), "compression provenance")
-    if set(document) != _PROVENANCE_KEYS:
-        raise ValueError("compression provenance has unsupported fields")
+    _require_keys(document, required=_PROVENANCE_KEYS)
     generation = _non_empty_string(document["generation"], "provenance generation")
     if generation != MATERIAL_GENERATION_COMPRESSED:
         raise ValueError("compression provenance generation must be compressed")
@@ -570,18 +523,12 @@ def _read_provenance(path: Path) -> RecordingCompressionCandidate:
         candidate_frames=_positive_integer(
             document["candidate_frames"], "provenance candidate_frames"
         ),
-        crf=_provenance_crf(document["crf"]),
+        crf=crf_value(document["crf"], "compression provenance crf"),
         encoder=_non_empty_string(document["encoder"], "provenance encoder"),
         preset=_non_empty_string(document["preset"], "provenance preset"),
         generation=generation,
         encoded_at=_non_empty_string(document["encoded_at"], "provenance encoded_at"),
     )
-
-
-def _provenance_crf(value: object) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 51:
-        raise ValueError("compression provenance crf is invalid")
-    return value
 
 
 def _candidate_path(segment: Path) -> Path:

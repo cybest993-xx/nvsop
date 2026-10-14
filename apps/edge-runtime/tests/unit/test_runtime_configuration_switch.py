@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import unittest
 from collections.abc import Callable
+from datetime import datetime
 from threading import Event, Thread
 from time import monotonic, sleep
 from typing import cast
@@ -11,6 +12,7 @@ from nvsop_contracts import ConfigurationBundle
 
 from edge_runtime.configuration_sync import ConfigurationSynchronizer, ConfigurationSyncResult
 from edge_runtime.connectors.runtime import ConnectorRuntimeSet
+from edge_runtime.local_state import DEFAULT_RECLAIM_LIMIT, ReclaimedQueue, ReportedReclamation
 from edge_runtime.local_state.store import LocalState, QueueCapacityError, QueueStatus
 from edge_runtime.media import MediaRuntime
 from edge_runtime.reporting import HostReportReconciler
@@ -33,9 +35,18 @@ class _CommandLoop:
 class _State:
     def __init__(self) -> None:
         self.closed = False
+        self.reclaim_calls = 0
+        self.reclamation = ReportedReclamation(rows=())
 
     def queue_status(self) -> tuple[QueueStatus, ...]:
         return ()
+
+    def reclaim_reported(
+        self, *, now: datetime, limit: int = DEFAULT_RECLAIM_LIMIT
+    ) -> ReportedReclamation:
+        del now, limit
+        self.reclaim_calls += 1
+        return self.reclamation
 
     def close(self) -> None:
         self.closed = True
@@ -291,6 +302,57 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
 
         self.assertTrue(reached)
         self.assertEqual(errors, [])
+
+    def test_runtime_loop_logs_skip_only_reclamation_scope_without_center(self) -> None:
+        state = _State()
+        state.reclamation = ReportedReclamation(
+            rows=(
+                ReclaimedQueue(
+                    queue="health",
+                    deleted=0,
+                    skipped=2,
+                    skip_reasons=("acknowledgement_unknown", "retention_protected"),
+                    queue_id_range=(7, 9),
+                ),
+            )
+        )
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            stations=(),
+            state=cast(LocalState, state),
+        )
+        stop = Event()
+        errors: list[BaseException] = []
+
+        def run() -> None:
+            try:
+                runtime.run_forever(should_stop=stop.is_set)
+            except BaseException as error:
+                errors.append(error)
+
+        thread = Thread(target=run)
+        with self.assertLogs("edge_runtime", level="INFO") as logs:
+            thread.start()
+            deadline = monotonic() + 5.0
+            while monotonic() < deadline and not any(
+                "edge.local_reclamation.summary" in message for message in logs.output
+            ):
+                sleep(0.01)
+            stop.set()
+            thread.join(5.0)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual([], errors)
+        self.assertGreaterEqual(state.reclaim_calls, 1)
+        summary = next(
+            message for message in logs.output if "edge.local_reclamation.summary" in message
+        )
+        # 跳过非空也要记录每队列范围/删除/跳过/原因, 不声称物理磁盘回收。
+        self.assertIn("health", summary)
+        self.assertIn("range=7-9", summary)
+        self.assertIn("deleted=0", summary)
+        self.assertIn("skipped=2", summary)
+        self.assertIn("acknowledgement_unknown", summary)
 
     def test_configuration_worker_defect_restarts_without_stopping_stations(self) -> None:
         synchronizer = _FailingOnceSynchronizer()

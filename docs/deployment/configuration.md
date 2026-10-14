@@ -203,6 +203,14 @@ RestartSec=2
 
 分段文件名来自 MediaMTX `recordPath`，其时间戳是 MediaMTX 进程的本机时区。**部署必须保证 MediaMTX 与边缘运行时同一时区，或用 `recording_timezone` 显式声明 MediaMTX 的时区**，否则证据窗口会错位。入队时冻结录像墙钟映射与当时参与 SOP 的连续录像相机路径，重启或改绑后历史待办仍按当时来源切片。
 
+### 本机存储分离与已上报队列裁剪
+
+`media.recording_directory` 不得包含 `local_state_path`；启用 `evidence` 时必须与 `evidence.evidence_directory` 分离。比较使用 canonical 路径，因此 symlink 别名也会被拒绝。根配置加载只要存在 `media` 就在写入者/MediaMTX 与切片启动前拒绝这类配置；证据切片在落盘前再次执行同一 owner 校验。滚动录像的年龄回收仍由 MediaMTX 既有窗口负责，这里不新增清理守护进程，也不建立第二份文件索引。
+
+运行时按最后确认配置的每工位 `local_reported` 有界裁剪 `local_report_queue`、`local_observation_queue`、`local_health_queue` 的逻辑行：每表每次只读取一个按主键 `queue_id` 排序的 keyset 页（最多固定行数，包含待上报行并显式记为跳过），在同一次 `BEGIN IMMEDIATE` 事务内读取最后确认配置并逐行判定。只有 `sent_at` 有权威 UTC 确认时刻（`acknowledged_at`；缺失、无时区或无法解析一律不删）、超过该工位年龄、不是该表最高 `queue_id`（避免复用已上报事件身份）、且不受未结实例/已锁存违规/待登记证据引用保护的行才被删除；待上报、未知策略/来源/确认时刻与受保护行保留并记录原因。扫描位置是本进程内存中的当前页起点，只在事务成功提交后前移；一页未满表示已到表尾并回绕到最小 `queue_id`，进程重启后从各表起点重新开始；`COMMIT` 或任何 SQLite 故障整体回滚、不采纳新位置并向上传播。该设计不依赖中心可达，也不缓存保护/资格事实。
+
+待上报事实、待登记证据元数据、证据媒体、实例/判定/违规身份与处置去重账本一律不因裁剪删除；中心引用登记完成只结案队列项，不授权删除媒体。当前没有已定稿媒体删除路径，媒体删除保持 fail-closed。运行时日志 `edge.local_reclamation.summary` 在删除或跳过非空时记录每队列逻辑范围（`range=最小-最大`）、删除/跳过计数与原因，不代表 SQLite 物理回收量或磁盘节省。
+
 ## 当前配置变更与同步机制
 
 `python -m edge_runtime` 仍先读取 `NVSOP_EDGE_COMMAND_CONFIG_FILE` 指向的本地 JSON。这份文件是**已实现的 bootstrap 与主机本地配置入口**：它提供中心地址、主机身份/私钥、本地推理端点与请求体、adapter profile、设备凭据、本地 SQLite 路径，以及首次无法取得中心确认配置时的自治起点；它不是中心拥有的拓扑、模板和运行参数的第二份权威。

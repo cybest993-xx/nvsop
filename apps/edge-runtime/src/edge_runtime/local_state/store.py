@@ -18,6 +18,7 @@ import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from datetime import datetime
 from threading import RLock
 from typing import Protocol
 
@@ -63,6 +64,11 @@ from edge_runtime.local_state.queues import (
     PendingSopInstanceReport,
     ReportContext,
     StationQueues,
+)
+from edge_runtime.local_state.retention import (
+    DEFAULT_RECLAIM_LIMIT,
+    ReportedReclamation,
+    reclaim_reported_reports,
 )
 from edge_runtime.local_state.schema import migrate
 
@@ -842,6 +848,9 @@ class LocalState:
         self._notify_report_pending = notify_report_pending
         self._evidence_source = evidence_source
         self._queue_capacity = queue_capacity
+        # 已上报队列的 keyset 扫描位置(每表最后检查的 queue_id); 不是保护/资格缓存,
+        # 也不等义于任何持久化权威。进程重启后从各表最小 queue_id 重新开始。
+        self._reclaim_positions: dict[str, int] = {}
 
     def station(
         self, station_id: str, *, report_context: ReportContext | None = None
@@ -895,6 +904,33 @@ class LocalState:
                 _queue_status(self._connection, "observation", self._queue_capacity.observations),
                 _queue_status(self._connection, "health", self._queue_capacity.health),
             )
+
+    def reclaim_reported(
+        self, *, now: datetime, limit: int = DEFAULT_RECLAIM_LIMIT
+    ) -> ReportedReclamation:
+        """按最后确认配置有界裁剪本机已上报队列的逻辑行;不删除证据媒体或处置账本。
+
+        读取与删除在同一把锁和同一 ``BEGIN IMMEDIATE`` 事务内完成,不接收调用方策略;每表本轮
+        只读取一个 ``queue_id`` keyset 页(最多 ``limit`` 行,含待上报行)。扫描位置只在本事务成功
+        ``COMMIT`` 后前移;COMMIT 或任何 SQLite 故障先整体回滚并向上传播,不采纳新位置,保持本地
+        状态的致命语义。
+        """
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                result, positions = reclaim_reported_reports(
+                    self._connection,
+                    now=now,
+                    limit=limit,
+                    positions=self._reclaim_positions,
+                )
+                self._connection.execute("COMMIT")
+            except Exception:
+                if self._connection.in_transaction:
+                    self._connection.execute("ROLLBACK")
+                raise
+            self._reclaim_positions = positions
+        return result
 
     def reports(self) -> ReportStore:
         """返回该主机 decision/instance 待上报事实的持久接缝。"""

@@ -22,7 +22,7 @@ from nvsop_contracts.retention_impact import ReportedImpactQuery
 from edge_runtime.local_state.configuration import LocalConfigurationStore
 
 DEFAULT_RECLAIM_LIMIT = 256
-"""单次裁剪最多检查的逻辑行数;运行时按既有上报节奏以更小预算周期调用。"""
+"""单次裁剪每表最多检查的逻辑行数;运行时按既有上报节奏以更小预算周期调用。"""
 
 
 class ReportedImpactUnavailableError(ValueError):
@@ -64,9 +64,9 @@ class ReportedImpact:
 
 @dataclass(frozen=True, slots=True)
 class ReclaimedQueue:
-    """一个逻辑队列本轮有界裁剪的实际范围、删除/跳过计数与原因。
+    """一个逻辑队列本轮有界页的实际范围、删除/跳过计数与原因。
 
-    ``queue_id_range`` 是本轮检查过的 ``queue_id`` 闭区间;它描述逻辑行范围,
+    ``queue_id_range`` 是本轮检查页的 ``queue_id`` 闭区间;它描述逻辑行范围,
     不代表 SQLite 物理回收量或磁盘节省。
     """
 
@@ -135,7 +135,10 @@ def _protection_expression(instance_expression: str | None, *, disposal: bool) -
 
 
 def _acknowledged_utc(value: object) -> datetime | None:
-    """解析中心确认的 UTC 时刻;缺失或非法返回 None,由调用方决定拒绝还是跳过。"""
+    """解析中心确认的 UTC 时刻;缺失、无时区或非法返回 None,由调用方决定拒绝还是跳过。
+
+    这是确认时刻的唯一权威:删除资格只按本函数结果判定,SQL 只负责主键页定位。
+    """
     if not isinstance(value, str):
         return None
     try:
@@ -145,75 +148,6 @@ def _acknowledged_utc(value: object) -> datetime | None:
     if acknowledged.tzinfo is None:
         return None
     return acknowledged
-
-
-def _reclaim_eligible_expression(
-    *,
-    durations: Mapping[str, int],
-    host_id: str | None,
-    highest: int | None,
-    protection: str,
-    reference: str,
-) -> tuple[str, list[object]]:
-    """返回“按当前配置与年龄可删”的 0/1 SQL 谓词与绑定参数。
-
-    WHERE 用它分两路(可删 / 不可删)并在主键顺序上扫描,使最旧的受保护行不占用有界预算,
-    也不会为了排序而扫描整段已上报历史。
-    """
-    if host_id is None or not durations:
-        return "0", []
-    station_ids = tuple(durations)
-    placeholders = ",".join("?" for _ in station_ids)
-    case = "CASE q.station_id " + " ".join("WHEN ? THEN ?" for _ in station_ids) + " ELSE 0 END"
-    case_arguments: list[object] = []
-    for station_id in station_ids:
-        case_arguments.extend((station_id, durations[station_id]))
-    highest_clause = "" if highest is None else "q.queue_id <> ? AND "
-    expression = (
-        "q.acknowledged_at IS NOT NULL AND "
-        f"COALESCE(q.report_host_id, '') = ? AND {highest_clause}"
-        f"q.station_id IN ({placeholders}) AND "
-        f"julianday(q.acknowledged_at) <= julianday(?) - ({case} / 86400.0) AND "
-        f"NOT {protection}"
-    )
-    arguments: list[object] = [host_id]
-    if highest is not None:
-        arguments.append(highest)
-    arguments.extend(station_ids)
-    arguments.append(reference)
-    arguments.extend(case_arguments)
-    return expression, arguments
-
-
-def _reclaim_skip_reason(
-    candidate: sqlite3.Row,
-    *,
-    groups: Mapping[str, ResolvedRetentionPolicy | None],
-    host_id: str | None,
-    now: datetime,
-    highest: int | None,
-) -> str | None:
-    """返回该候选的保留原因;``None`` 表示按当前配置可删除。"""
-    group = groups.get(str(candidate["station_id"]))
-    if group is None or host_id is None:
-        return "retention_unknown"
-    if group.local_reported.mode == "permanent":
-        return "retention_permanent"
-    if group.local_reported.mode != "duration":
-        return "retention_unknown"
-    if candidate["report_host_id"] != host_id:
-        return "report_source_unknown"
-    acknowledged = _acknowledged_utc(candidate["acknowledged_at"])
-    rule = group.local_reported
-    if acknowledged is None:
-        return "acknowledgement_unknown"
-    if rule.seconds is None or acknowledged > now - timedelta(seconds=rule.seconds):
-        return "not_expired"
-    if bool(candidate["retention_protected"]):
-        return "retention_protected"
-    if highest is not None and int(candidate["queue_id"]) == highest:
-        return "identity_high_water"
-    return None
 
 
 def read_reported_impact(path: Path, *, query: ReportedImpactQuery) -> ReportedImpact:
@@ -308,14 +242,18 @@ def read_reported_impact(path: Path, *, query: ReportedImpactQuery) -> ReportedI
 
 
 def reclaim_reported_reports(
-    connection: sqlite3.Connection, *, now: datetime, limit: int
-) -> ReportedReclamation:
+    connection: sqlite3.Connection,
+    *,
+    now: datetime,
+    limit: int,
+    positions: Mapping[str, int],
+) -> tuple[ReportedReclamation, dict[str, int]]:
     """在调用方持有的写事务内按最后确认配置有界裁剪三类已上报队列。
 
-    只删除 ``sent_at`` 有中心确认时刻(``acknowledged_at``)且年龄超过该工位
-    ``local_reported`` 的逻辑行;未知策略/来源/确认时刻、仍受引用保护、以及各表最高
-    ``queue_id`` 一律保留并记录原因。每表最多检查 ``limit`` 行,``limit`` 必须为正。
-    处置账本、证据队列与媒体、实例/判定/违规身份不在本函数所有权内。
+    每表只读取一个 ``queue_id`` 主键 keyset 页(最多 ``limit`` 行, 含待上报行);按 Python
+    侧的唯一确认时刻/保护权威逐行判定, 删除过期且非最高 ``queue_id`` 的行。返回下一轮各表
+    起始位置: 页未满即本轮已到表尾并回绕到 0。调用方只能在事务成功 ``COMMIT`` 后采用新位置;
+    失败时不得采纳, 以便重试仍在同一页。
     """
     if limit <= 0:
         raise ValueError("reclaim limit must be positive")
@@ -328,22 +266,57 @@ def reclaim_reported_reports(
         else {station.station_id: station.retention for station in bundle.stations}
     )
     host_id = None if bundle is None else bundle.host_id
-    return ReportedReclamation(
-        rows=tuple(
-            _reclaim_queue(
-                connection,
-                name=name,
-                table=table,
-                instance_expression=instance,
-                groups=groups,
-                host_id=host_id,
-                now=now,
-                limit=limit,
-            )
-            for name, table, instance, prune in _REPORTED_TABLES
-            if prune
+    rows: list[ReclaimedQueue] = []
+    next_positions: dict[str, int] = {}
+    for name, table, instance, prune in _REPORTED_TABLES:
+        if not prune:
+            continue
+        reclaimed, next_position = _reclaim_queue(
+            connection,
+            name=name,
+            table=table,
+            instance_expression=instance,
+            groups=groups,
+            host_id=host_id,
+            now=now,
+            limit=limit,
+            position=int(positions.get(name, 0)),
         )
-    )
+        rows.append(reclaimed)
+        next_positions[name] = next_position
+    return ReportedReclamation(rows=tuple(rows)), next_positions
+
+
+def _reclaim_skip_reason(
+    candidate: sqlite3.Row,
+    *,
+    group: ResolvedRetentionPolicy | None,
+    host_id: str | None,
+    now: datetime,
+    highest: int | None,
+) -> str | None:
+    """返回该候选的保留原因;``None`` 表示按当前配置可删除。"""
+    if candidate["sent_at"] is None:
+        return "pending"
+    if group is None or host_id is None:
+        return "retention_unknown"
+    if group.local_reported.mode == "permanent":
+        return "retention_permanent"
+    if group.local_reported.mode != "duration":
+        return "retention_unknown"
+    if candidate["report_host_id"] != host_id:
+        return "report_source_unknown"
+    acknowledged = _acknowledged_utc(candidate["acknowledged_at"])
+    rule = group.local_reported
+    if acknowledged is None:
+        return "acknowledgement_unknown"
+    if rule.seconds is None or acknowledged > now - timedelta(seconds=rule.seconds):
+        return "not_expired"
+    if bool(candidate["retention_protected"]):
+        return "retention_protected"
+    if highest is not None and int(candidate["queue_id"]) == highest:
+        return "identity_high_water"
+    return None
 
 
 def _reclaim_queue(
@@ -356,76 +329,54 @@ def _reclaim_queue(
     host_id: str | None,
     now: datetime,
     limit: int,
-) -> ReclaimedQueue:
+    position: int,
+) -> tuple[ReclaimedQueue, int]:
     row = connection.execute(f"SELECT max(queue_id) AS highest FROM {table}").fetchone()
     highest = None if row is None or row["highest"] is None else int(row["highest"])
     protection = _protection_expression(instance_expression, disposal=False)
-    durations: dict[str, int] = {}
-    for station_id, group in groups.items():
-        if group is None or group.local_reported.mode != "duration":
-            continue
-        seconds = group.local_reported.seconds
-        if seconds is not None:
-            durations[station_id] = seconds
-    eligible_sql, eligible_arguments = _reclaim_eligible_expression(
-        durations=durations,
-        host_id=host_id,
-        highest=highest,
-        protection=protection,
-        reference=now.isoformat(),
-    )
-    # 先扫描不可删行给出跳过原因(主键倒序, 恒含最高 queue_id), 再扫描可删行; 两者都按主键
-    # 受限推进, 不排序全部已上报历史, 受保护的最旧行不占用删除预算。
-    skipped_rows = connection.execute(
+    page = connection.execute(
         f"""
         SELECT q.queue_id        AS queue_id,
                q.station_id      AS station_id,
                q.report_host_id  AS report_host_id,
                q.acknowledged_at AS acknowledged_at,
+               q.sent_at         AS sent_at,
                {protection} AS retention_protected
           FROM {table} q
-         WHERE q.sent_at IS NOT NULL AND COALESCE(({eligible_sql}), 0) = 0
-         ORDER BY q.queue_id DESC
-         LIMIT ?
-        """,
-        [*eligible_arguments, limit],
-    ).fetchall()
-    eligible_rows = connection.execute(
-        f"""
-        SELECT q.queue_id AS queue_id
-          FROM {table} q
-         WHERE q.sent_at IS NOT NULL AND COALESCE(({eligible_sql}), 0) = 1
+         WHERE q.queue_id > ?
          ORDER BY q.queue_id
          LIMIT ?
         """,
-        [*eligible_arguments, limit],
+        (position, limit),
     ).fetchall()
     deleted: list[int] = []
     skip_reasons: Counter[str] = Counter()
-    examined: list[int] = []
-    for candidate in skipped_rows:
-        queue_id = int(candidate["queue_id"])
-        examined.append(queue_id)
+    for candidate in page:
         reason = _reclaim_skip_reason(
-            candidate, groups=groups, host_id=host_id, now=now, highest=highest
+            candidate,
+            group=groups.get(str(candidate["station_id"])),
+            host_id=host_id,
+            now=now,
+            highest=highest,
         )
         if reason is None:
-            deleted.append(queue_id)
+            deleted.append(int(candidate["queue_id"]))
         else:
             skip_reasons[reason] += 1
-    for candidate in eligible_rows:
-        queue_id = int(candidate["queue_id"])
-        examined.append(queue_id)
-        deleted.append(queue_id)
     if deleted:
         placeholders = ",".join("?" for _ in deleted)
         connection.execute(f"DELETE FROM {table} WHERE queue_id IN ({placeholders})", deleted)
-    return ReclaimedQueue(
-        queue=name,
-        deleted=len(deleted),
-        skipped=sum(skip_reasons.values()),
-        skip_reasons=tuple(sorted(skip_reasons)),
-        queue_id_range=(min(examined), max(examined)) if examined else None,
+    # 页未满说明本轮已到表尾: 下一轮从最小 queue_id 重新开始; 否则从本页末继续。
+    next_position = 0 if len(page) < limit else int(page[-1]["queue_id"])
+    return (
+        ReclaimedQueue(
+            queue=name,
+            deleted=len(deleted),
+            skipped=sum(skip_reasons.values()),
+            skip_reasons=tuple(sorted(skip_reasons)),
+            queue_id_range=(int(page[0]["queue_id"]), int(page[-1]["queue_id"])) if page else None,
+        ),
+        next_position,
     )
 
 

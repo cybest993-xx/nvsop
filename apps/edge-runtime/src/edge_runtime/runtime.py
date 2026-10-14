@@ -764,12 +764,21 @@ class _ReportLifecycleRunner:
                 reclamation = self._runtime._state.reclaim_reported(
                     now=datetime.now(UTC), limit=_REPORT_WORK_BUDGET
                 )
-                if reclamation.deleted:
+                if reclamation.deleted or reclamation.skipped:
+                    scopes = ",".join(
+                        f"{row.queue}:deleted={row.deleted}:skipped={row.skipped}:range="
+                        + (
+                            "none"
+                            if row.queue_id_range is None
+                            else f"{row.queue_id_range[0]}-{row.queue_id_range[1]}"
+                        )
+                        for row in reclamation.rows
+                    )
                     _logger.info(
                         "edge.local_reclamation.summary deleted=%s skipped=%s scopes=%s reasons=%s",
                         reclamation.deleted,
                         reclamation.skipped,
-                        ",".join(f"{row.queue}:{row.deleted}" for row in reclamation.rows),
+                        scopes,
                         ",".join(reclamation.skip_reasons),
                     )
                 if self._stop_requested():

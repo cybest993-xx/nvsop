@@ -23,12 +23,12 @@ def _write_config(
     directory: Path,
     *,
     recording_directory: Path,
-    evidence_directory: Path,
+    evidence_directory: Path | None,
     local_state_path: Path,
 ) -> Path:
     key_file = directory / _KEY_FILE
     key_file.write_text(_fixture_host_identity(11).private_key + "\n", encoding="utf-8")
-    config = {
+    config: dict[str, object] = {
         "center_url": "https://center.example",
         "host_id": "host-for-test",
         "host_private_key_file": str(key_file),
@@ -72,12 +72,13 @@ def _write_config(
             "transcode_threads": 2,
             "cameras": [],
         },
-        "evidence": {
+    }
+    if evidence_directory is not None:
+        config["evidence"] = {
             "evidence_directory": str(evidence_directory),
             "ffprobe_binary": "/usr/bin/ffprobe",
             "slice_timeout_seconds": 30,
-        },
-    }
+        }
     config_file = directory / "config.json"
     config_file.write_text(json.dumps(config), encoding="utf-8")
     return config_file
@@ -145,6 +146,35 @@ class MediaStorageSeparationTests(unittest.TestCase):
                     )
                     with self.assertRaises(ValueError):
                         load_configuration(config_file, include_stations=True)
+
+    def test_production_config_rejects_sqlite_under_recording_without_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            recordings = root / "recordings"
+            recordings.mkdir()
+            config_file = _write_config(
+                root,
+                recording_directory=recordings,
+                evidence_directory=None,
+                local_state_path=recordings / "state.sqlite",
+            )
+            # 媒体单独存在时也受同一目录边界约束: 不得把权威 SQLite 放进滚动录像目录。
+            with self.assertRaises(ValueError):
+                load_configuration(config_file, include_stations=True)
+
+    def test_production_config_accepts_media_only_with_separated_storage(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            recordings = root / "recordings"
+            recordings.mkdir()
+            config_file = _write_config(
+                root,
+                recording_directory=recordings,
+                evidence_directory=None,
+                local_state_path=root / "state.sqlite",
+            )
+            # 省略 evidence 是当前合法配置, 不应被过度拒绝。
+            self.assertIsNotNone(load_configuration(config_file, include_stations=True))
 
 
 if __name__ == "__main__":

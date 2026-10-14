@@ -21,8 +21,15 @@ from nvsop_contracts import (
 )
 from test_confirmed_runtime_composition import _bundle
 
-from edge_runtime.local_state import ReportContext, open_local_state
+from edge_runtime.local_state import (
+    LocalState,
+    ReclaimedQueue,
+    ReportContext,
+    ReportedReclamation,
+    open_local_state,
+)
 from edge_runtime.local_state.disposal import DisposalIntent, StoredDisposalResult
+from edge_runtime.local_state.schema import migrate
 
 STATION = "station-a"
 OTHER_STATION = "station-b"
@@ -30,6 +37,8 @@ HOST = "host-a"
 NOW = datetime(2026, 10, 14, 12, tzinfo=UTC)
 EXPIRED_ACK = "2026-09-01T12:00:00Z"
 FRESH_ACK = "2026-10-14T11:00:00Z"
+NAIVE_ACK = "2020-01-01T00:00:00"
+"""无时区的本地时刻: SQLite julianday 可解析, 但本机权威确认语义只接受 UTC。"""
 
 
 def _retention_group(*, local_reported_seconds: int = 14 * 86400) -> ResolvedRetentionPolicy:
@@ -259,22 +268,54 @@ class LocalReportedReclamationTests(unittest.TestCase):
         # 安全重试: 第二次没有任何可删除行。
         self.assertEqual(0, self.state.reclaim_reported(now=NOW).deleted)
 
-    def test_limit_bounds_each_call_without_abandoning_older_rows(self) -> None:
+    def test_limit_is_a_keyset_page_that_progresses_past_pending_and_protected_rows(self) -> None:
         self.state.configuration().confirm(_bundle_with_retention(), confirmed_at=1.0)
         with sqlite3.connect(self.path) as connection:
-            for queue_id in (1, 2, 3):
-                _health_row(connection, queue_id, sent=10.0, acknowledged_at=EXPIRED_ACK)
+            _health_row(connection, 1, sent=None, acknowledged_at=None)  # 待上报
+            _health_row(connection, 2, sent=10.0, acknowledged_at=NAIVE_ACK)  # 非法确认时刻
+            _health_row(connection, 3, sent=10.0, acknowledged_at=EXPIRED_ACK)  # 可删
+            _health_row(connection, 4, sent=10.0, acknowledged_at=EXPIRED_ACK)  # 最高 queue_id
 
-        first = self.state.reclaim_reported(now=NOW, limit=1)
-        second = self.state.reclaim_reported(now=NOW, limit=1)
-        rest = self.state.reclaim_reported(now=NOW, limit=1)
+        def health(result: ReportedReclamation) -> ReclaimedQueue:
+            return next(row for row in result.rows if row.queue == "health")
 
-        # 有界预算逐次推进最旧的合法行, 不被最高 queue_id 或保护行永久占住。
-        self.assertEqual(1, first.deleted)
-        self.assertEqual(1, second.deleted)
-        self.assertEqual(0, rest.deleted)
-        health = next(row for row in rest.rows if row.queue == "health")
-        self.assertEqual((3, 3), health.queue_id_range)
+        # 每次至多一页 limit 行, 从最小 queue_id 起按主键推进;
+        # 待上报与非法确认行只占本页 examined 预算, 不会被跳过也不永久挡住后面的可删行。
+        first = health(self.state.reclaim_reported(now=NOW, limit=1))
+        self.assertEqual((1, 1), first.queue_id_range)
+        self.assertEqual(0, first.deleted)
+        self.assertEqual(1, first.skipped)
+        self.assertLessEqual(first.deleted + first.skipped, 1)
+        self.assertIn("pending", first.skip_reasons)
+
+        second = health(self.state.reclaim_reported(now=NOW, limit=1))
+        self.assertEqual((2, 2), second.queue_id_range)
+        self.assertEqual(0, second.deleted)
+        self.assertLessEqual(second.deleted + second.skipped, 1)
+        self.assertIn("acknowledgement_unknown", second.skip_reasons)
+
+        deleted = 0
+        for _ in range(3):
+            page = health(self.state.reclaim_reported(now=NOW, limit=1))
+            self.assertLessEqual(page.deleted + page.skipped, 1)
+            deleted += page.deleted
+        self.assertEqual(1, deleted)
+
+    def test_invalid_acknowledgement_is_never_deleted_but_valid_utc_still_is(self) -> None:
+        self.state.configuration().confirm(_bundle_with_retention(), confirmed_at=1.0)
+        with sqlite3.connect(self.path) as connection:
+            _health_row(connection, 1, sent=10.0, acknowledged_at=NAIVE_ACK)
+            _health_row(connection, 2, sent=10.0, acknowledged_at="not-a-timestamp")
+            _health_row(connection, 3, sent=10.0, acknowledged_at=None)
+            _health_row(connection, 4, sent=10.0, acknowledged_at=EXPIRED_ACK)
+            _health_row(connection, 5, sent=10.0, acknowledged_at=EXPIRED_ACK)
+
+        result = self.state.reclaim_reported(now=NOW)
+
+        # 只有能被权威 UTC 语义解析、过期且非最高 queue_id 的行可删; 缺失/无时区/无法解析一律不删。
+        self.assertEqual(1, result.deleted)
+        self.assertIn("acknowledgement_unknown", result.skip_reasons)
+        self.assertIn("identity_high_water", result.skip_reasons)
 
     def test_new_queue_rows_keep_strictly_increasing_event_identity(self) -> None:
         self.state.configuration().confirm(_bundle_with_retention(), confirmed_at=1.0)
@@ -346,6 +387,48 @@ class LocalReportedReclamationTests(unittest.TestCase):
             set(stale.skip_reasons),
         )
         self.assertEqual(0, self.state.reclaim_reported(now=NOW).deleted)
+
+
+class ReclamationTransactionFailureTests(unittest.TestCase):
+    """#208: COMMIT 基础设施失败必须回滚且不推进进度, 重试能在同一页完成。"""
+
+    def test_commit_failure_rolls_back_and_retry_deletes_the_same_page(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "state.sqlite"
+            seeding = open_local_state(str(path))
+            seeding.configuration().confirm(_bundle_with_retention(), confirmed_at=1.0)
+            seeding.close()
+            with sqlite3.connect(path) as connection:
+                _health_row(connection, 1, sent=10.0, acknowledged_at=EXPIRED_ACK)
+                _health_row(connection, 2, sent=10.0, acknowledged_at=EXPIRED_ACK)
+
+            connection = sqlite3.connect(str(path), isolation_level=None, check_same_thread=False)
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+            migrate(connection)
+            state = LocalState(connection)
+            deny_commit = True
+
+            def authorize(action: int, *arguments: object) -> int:
+                if (
+                    deny_commit
+                    and action == sqlite3.SQLITE_TRANSACTION
+                    and arguments[0] == "COMMIT"
+                ):
+                    return sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK
+
+            try:
+                connection.set_authorizer(authorize)
+                with self.assertRaises(sqlite3.DatabaseError):
+                    state.reclaim_reported(now=NOW)
+                deny_commit = False
+                connection.set_authorizer(None)
+                # 失败事务未留下活动事务, 也未推进进度: 重试在同一页删除同一可删行。
+                retry = state.reclaim_reported(now=NOW)
+                self.assertEqual(1, retry.deleted)
+            finally:
+                state.close()
 
 
 if __name__ == "__main__":

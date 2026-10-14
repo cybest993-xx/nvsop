@@ -152,11 +152,12 @@ def load_configuration(
     )
     if evidence is not None and media is None:
         raise ValueError("evidence media configuration requires the local media configuration")
-    if media is not None and evidence is not None:
+    if media is not None:
         # 单一目录安全 owner 校验: 在启动任何媒体写入者之前拒绝录像/证据/SQLite 重叠与别名。
+        # evidence 可省略(仅媒体配置), 但录像目录不得包含权威 SQLite 的边界仍然成立。
         ensure_storage_separation(
             recording_directory=media.recording_directory,
-            evidence_directory=evidence.evidence_directory,
+            evidence_directory=None if evidence is None else evidence.evidence_directory,
             local_state_path=local_state_path,
         )
     limits = (

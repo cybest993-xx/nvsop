@@ -545,7 +545,11 @@ class ConfiguredStation:
             runtime_parameters=ResolvedRuntimeParameters.from_wire(
                 _object(value["runtime_parameters"], "station runtime_parameters")
             ),
-            retention=_retention_from_wire(value.get("retention")),
+            retention=(
+                ResolvedRetentionPolicy.from_wire(_object(value["retention"], "station retention"))
+                if "retention" in value
+                else None
+            ),
             connectors=tuple(
                 ConfiguredConnector.from_wire(_object(item, "station connector"))
                 for item in raw_connectors
@@ -785,13 +789,6 @@ def _check_retention_gate(
         raise ValueError(
             "the station retention capability requires a resolved retention group per station"
         )
-
-
-def _retention_from_wire(value: object) -> ResolvedRetentionPolicy | None:
-
-    if value is None:
-        return None
-    return ResolvedRetentionPolicy.from_wire(_object(value, "station retention"))
 
 
 def _require_keys(

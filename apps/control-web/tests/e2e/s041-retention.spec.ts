@@ -44,39 +44,7 @@ test('S041 — browser shows resolved groups, saves a complete group and reports
           login_name: 'synthetic.operator',
           display_name: '合成操作员',
           expires_at: '2099-01-01T00:00:00Z',
-          permissions: ['device.station.view', 'retention.policy.view', 'retention.policy.edit'],
-        },
-      })
-    } else if (path === '/api/v1/stations') {
-      await route.fulfill({
-        json: {
-          items: [{ id: STATION_ID, code: 'A-01', name: '一号装配工位', status: 'active' }],
-          page: 1,
-          page_size: 50,
-          total: 1,
-        },
-      })
-    } else if (path === `/api/v1/templates/stations/${STATION_ID}/configuration`) {
-      const parameters = {
-        idle_timeout_seconds: 30,
-        step_deadline_seconds: 90,
-        disposition_policy: 'record',
-      }
-      await route.fulfill({
-        json: {
-          station_id: STATION_ID,
-          station_revision: 1,
-          runtime_parameters_revision: 0,
-          runtime_parameter_mode: 'follow_template',
-          template_defaults: parameters,
-          runtime_overrides: null,
-          effective_runtime_parameters: parameters,
-          desired: null,
-          version: null,
-          status: 'unbound',
-          status_detail: null,
-          topology_issues: [],
-          backends: [],
+          permissions: ['retention.policy.view', 'retention.policy.edit'],
         },
       })
     } else if (path === '/api/v1/retention/policy') {
@@ -114,8 +82,11 @@ test('S041 — browser shows resolved groups, saves a complete group and reports
 
   await page.goto('/devices')
   const panel = page.getByRole('region', { name: '保留策略', exact: true })
+  await expect(page.getByRole('link', { name: '工位与设备', exact: true })).toBeVisible()
+  await panel.getByRole('textbox', { name: '工位 ID', exact: true }).fill(STATION_ID)
+  await panel.getByRole('button', { name: '读取工位保留组', exact: true }).click()
   const defaults = panel.getByRole('region', { name: '全局默认组', exact: true })
-  const effective = panel.getByRole('region', { name: '工位 一号装配工位 的覆盖与生效组' })
+  const effective = panel.getByRole('region', { name: `工位 ${STATION_ID} 的覆盖与生效组` })
   await expect(defaults).toContainText('尚未设置')
   await expect(defaults.getByText('永久', { exact: true })).toHaveCount(2)
   await expect(effective).toContainText('整组等于全局默认组')

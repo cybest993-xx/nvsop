@@ -136,3 +136,18 @@ class RetentionPolicyContractTests(unittest.TestCase):
         ).hexdigest()
         with self.assertRaises(ValueError):
             configuration_from_wire(without_group)
+
+    def test_an_explicit_null_group_is_not_a_missing_historical_field(self) -> None:
+        for declared in (False, True):
+            wire = configuration_to_wire(bundle(station(), capability=False))
+            stations = cast("list[dict[str, object]]", wire["stations"])
+            stations[0]["retention"] = None
+            if declared:
+                wire["required_capabilities"] = [RETENTION_STATION_POLICY_CAPABILITY]
+            wire["sha256"] = hashlib.sha256(
+                canonical_json(
+                    {key: value for key, value in wire.items() if key != "sha256"}
+                ).encode("utf-8")
+            ).hexdigest()
+            with self.subTest(declared=declared), self.assertRaises(ValueError):
+                configuration_from_wire(wire)

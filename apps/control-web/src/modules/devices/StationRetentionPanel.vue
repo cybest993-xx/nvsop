@@ -43,6 +43,7 @@ const RULE_MODES: { value: RetentionMode; label: string }[] = [
 ]
 
 const selectedStationId = ref('')
+const knownStationId = ref('')
 const globalPolicy = ref<GlobalRetentionPolicy | null>(null)
 const stationRetention = ref<StationRetention | null>(null)
 const loading = ref(false)
@@ -57,7 +58,9 @@ const stationDraft = reactive(blankDraft())
 const stationMode = ref<RetentionPolicyMode>('follow_global')
 
 const stationName = computed(
-  () => props.stations.find((station) => station.id === selectedStationId.value)?.name ?? '',
+  () =>
+    props.stations.find((station) => station.id === selectedStationId.value)?.name ??
+    selectedStationId.value,
 )
 
 function blankRule(): RuleDraft {
@@ -145,6 +148,14 @@ function recordFailure(error: unknown): void {
 function fieldError(name: string): string {
   const error = fieldErrors.value.find(({ field }) => field === name || field.endsWith(`.${name}`))
   return error?.message ?? ''
+}
+
+function selectKnownStation(): void {
+  if (selectedStationId.value === knownStationId.value) {
+    void load()
+  } else {
+    selectedStationId.value = knownStationId.value
+  }
 }
 
 async function load(): Promise<void> {
@@ -249,6 +260,7 @@ onMounted(() => {
         </p>
       </div>
       <ElSelect
+        v-if="props.stations.length > 0"
         v-model="selectedStationId"
         aria-label="选择工位"
         placeholder="选择工位"
@@ -261,6 +273,13 @@ onMounted(() => {
           :value="station.id"
         />
       </ElSelect>
+      <ElForm v-else class="retention__station" @submit.prevent="selectKnownStation">
+        <ElFormItem label="已知工位 ID">
+          <ElInput v-model="knownStationId" aria-label="工位 ID" />
+        </ElFormItem>
+        <ElButton :loading="loading" @click="selectKnownStation">读取工位保留组</ElButton>
+        <p class="retention__note">没有工位列表权限时，可按已知 ID 操作；不会读取设备列表。</p>
+      </ElForm>
     </header>
 
     <p v-if="failure" class="retention__failure" role="alert">{{ failure }}</p>

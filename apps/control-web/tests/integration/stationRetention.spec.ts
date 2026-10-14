@@ -65,7 +65,7 @@ function stationView(mode: 'follow_global' | 'custom') {
   }
 }
 
-function mountPanel(permissions: string[]) {
+function mountPanel(permissions: string[], stations = STATIONS) {
   useSessionStore().current = {
     user_id: '018f-1',
     login_name: 'wang.li',
@@ -74,7 +74,7 @@ function mountPanel(permissions: string[]) {
     permissions,
   }
   return mount(StationRetentionPanel, {
-    props: { stations: STATIONS },
+    props: { stations },
     global: { plugins: [ElementPlus] },
   })
 }
@@ -101,6 +101,25 @@ beforeEach(() => {
 })
 
 describe('工位保留策略面板', () => {
+  it('reads and saves a known station without device list permissions', async () => {
+    api.updateStationRetention.mockResolvedValue({ ...stationView('follow_global'), revision: 1 })
+    const wrapper = mountPanel(['retention.policy.view', 'retention.policy.edit'], [])
+    await flushPromises()
+
+    expect(api.readStationRetention).not.toHaveBeenCalled()
+    await wrapper.get('input[aria-label="工位 ID"]').setValue('station-1')
+    await saveButton(wrapper, '读取工位保留组').trigger('click')
+    await flushPromises()
+    expect(api.readStationRetention).toHaveBeenCalledWith('station-1')
+    await saveButton(wrapper, '保存工位保留组').trigger('click')
+    await flushPromises()
+    expect(api.updateStationRetention).toHaveBeenCalledWith(
+      'station-1',
+      { mode: 'follow_global', overrides: null },
+      0,
+    )
+  })
+
   it('shows the global default, the effective group and the unset wording', async () => {
     const wrapper = mountPanel(['retention.policy.view'])
     await flushPromises()

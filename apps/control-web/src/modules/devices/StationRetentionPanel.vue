@@ -4,11 +4,14 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 
 import {
   ControlPlaneError,
+  estimateRetentionPolicyImpact,
+  estimateStationRetentionImpact,
   readRetentionPolicy,
   readStationRetention,
   updateRetentionPolicy,
   updateStationRetention,
   type GlobalRetentionPolicy,
+  type RetentionImpact,
   type RetentionMode,
   type RetentionPolicyMode,
   type RetentionPolicyView,
@@ -52,6 +55,10 @@ const saving = ref(false)
 const failure = ref('')
 const fieldErrors = ref<{ field: string; message: string }[]>([])
 const editingGlobal = ref(false)
+// 提交缩短前必须先展示影响估算：估算结果挂起等待操作员确认或取消。
+const globalEstimate = ref<RetentionImpact | null>(null)
+const stationEstimate = ref<RetentionImpact | null>(null)
+const estimating = ref(false)
 
 const globalDraft = reactive(blankDraft())
 const stationDraft = reactive(blankDraft())
@@ -164,6 +171,9 @@ async function load(): Promise<void> {
   const sequence = ++loadSequence.value
   loading.value = true
   stationRetention.value = null
+  // 重新读取即作废任何挂起的确认：旧估算不能再用于新基准。
+  globalEstimate.value = null
+  stationEstimate.value = null
   resetFailure()
   try {
     const [global, station] = await Promise.all([
@@ -183,28 +193,95 @@ async function load(): Promise<void> {
   }
 }
 
-async function saveGlobal(): Promise<void> {
+/** 逐字段展示 owner 口径，不把多个压缩/聚合窗口相加成删除总量。 */
+function fieldLabel(key: string): string {
+  return FIELDS.find((field) => field.key === key)!.label
+}
+
+function formatMoment(value: string | null): string {
+  return value === null
+    ? '无对象'
+    : new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+}
+
+function formatBytes(value: number | null): string {
+  if (value === null) return '不可度量'
+  if (value < 1024) return `${value} 字节`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`
+  return `${(value / 1024 / 1024).toFixed(1)} MiB`
+}
+
+async function requestGlobalEstimate(): Promise<void> {
   const current = globalPolicy.value
   if (current === null) return
   resetFailure()
+  estimating.value = true
+  try {
+    globalEstimate.value = await estimateRetentionPolicyImpact(readDraft(globalDraft))
+  } catch (error) {
+    recordFailure(error)
+  } finally {
+    estimating.value = false
+  }
+}
+
+function cancelGlobalEstimate(): void {
+  // 取消不改变任何策略或数据：只丢弃挂起的确认。
+  globalEstimate.value = null
+}
+
+async function confirmGlobalSave(): Promise<void> {
+  const current = globalPolicy.value
+  const estimate = globalEstimate.value
+  if (current === null || estimate === null || !estimate.complete) return
+  resetFailure()
   saving.value = true
   try {
-    const updated = await updateRetentionPolicy(readDraft(globalDraft), current.revision)
+    const updated = await updateRetentionPolicy(
+      readDraft(globalDraft),
+      current.revision,
+      estimate.estimate_token,
+    )
     globalPolicy.value = updated
     writeDraft(globalDraft, updated.policy)
     editingGlobal.value = false
+    globalEstimate.value = null
     ElMessage.success('全局默认保留组已保存')
     await load()
   } catch (error) {
     recordFailure(error)
+    globalEstimate.value = null
   } finally {
     saving.value = false
   }
 }
 
-async function saveStation(): Promise<void> {
+async function requestStationEstimate(): Promise<void> {
   const current = stationRetention.value
   if (current === null) return
+  resetFailure()
+  estimating.value = true
+  try {
+    stationEstimate.value = await estimateStationRetentionImpact(current.station_id, {
+      mode: stationMode.value,
+      overrides: stationMode.value === 'custom' ? readDraft(stationDraft) : null,
+    })
+  } catch (error) {
+    recordFailure(error)
+  } finally {
+    estimating.value = false
+  }
+}
+
+function cancelStationEstimate(): void {
+  // 取消不改变任何策略或数据：只丢弃挂起的确认。
+  stationEstimate.value = null
+}
+
+async function confirmStationSave(): Promise<void> {
+  const current = stationRetention.value
+  const estimate = stationEstimate.value
+  if (current === null || estimate === null || !estimate.complete) return
   resetFailure()
   saving.value = true
   try {
@@ -212,15 +289,21 @@ async function saveStation(): Promise<void> {
       mode: stationMode.value,
       overrides: stationMode.value === 'custom' ? readDraft(stationDraft) : null,
     }
-    const updated = await updateStationRetention(current.station_id, submitted, current.revision)
+    const updated = await updateStationRetention(
+      current.station_id,
+      submitted,
+      current.revision,
+      estimate.estimate_token,
+    )
     if (current.station_id !== selectedStationId.value) return
-
     stationRetention.value = updated
     stationMode.value = updated.mode
     writeDraft(stationDraft, updated.overrides ?? updated.default)
+    stationEstimate.value = null
     ElMessage.success('工位保留组已保存')
   } catch (error) {
     recordFailure(error)
+    stationEstimate.value = null
   } finally {
     saving.value = false
   }
@@ -333,7 +416,7 @@ onMounted(() => {
         label-position="top"
         class="retention__form"
         aria-label="保存保留组"
-        @submit.prevent="saveStation"
+        @submit.prevent="requestStationEstimate"
       >
         <ElFormItem label="工位保留来源">
           <ElSelect v-model="stationMode" aria-label="工位保留来源" class="retention__select">
@@ -371,7 +454,65 @@ onMounted(() => {
             </p>
           </ElFormItem>
         </div>
-        <ElButton type="primary" :loading="saving" @click="saveStation"> 保存工位保留组 </ElButton>
+        <div v-if="stationEstimate" class="retention__impact" aria-label="工位保留影响估算">
+          <h4>即将缩短的影响</h4>
+          <p class="retention__note">
+            确认只改变后续回收依据，不同步删除历史数据；估算失败不会按零影响放行。
+          </p>
+          <p class="retention__note">
+            参考时刻：{{ formatMoment(stationEstimate.reference_time) }}（北京时间）。
+          </p>
+          <p v-if="!stationEstimate.complete" class="retention__failure" role="alert">
+            估算不完整，不能确认：{{ stationEstimate.incomplete_reasons.join('、') }}。
+          </p>
+          <p v-if="stationEstimate.fields.length === 0" class="retention__note">没有缩短字段。</p>
+          <ul>
+            <li v-for="field in stationEstimate.fields" :key="`station-impact-${field.field}`">
+              <strong>{{ fieldLabel(field.field) }}</strong
+              >（{{ field.owner }}）：
+              <template v-if="field.exposed && field.protected">
+                {{ field.removes_objects ? '新暴露' : '处理范围' }}
+                {{ field.exposed.objects }} 个对象（{{ formatBytes(field.exposed.known_bytes) }}，
+                未知大小 {{ field.exposed.unknown_size_objects }} 个，最早
+                {{ formatMoment(field.exposed.earliest) }} ~ 最晚
+                {{ formatMoment(field.exposed.latest) }}）； 引用保护跳过
+                {{ field.protected.objects }} 个（{{
+                  formatBytes(field.protected.known_bytes)
+                }}，未知大小 {{ field.protected.unknown_size_objects }} 个， 最早
+                {{ formatMoment(field.protected.earliest) }} ~ 最晚
+                {{ formatMoment(field.protected.latest) }}）。
+              </template>
+              <span v-else>不可估算：{{ field.unavailable_reason }}（不是零影响）。</span>
+              <p v-if="field.savings_unknown" class="retention__note">
+                压缩/聚合节省未知，不代表删除对象或释放空间。
+              </p>
+              <p v-if="field.bytes_basis === 'serialized_rows'" class="retention__note">
+                逻辑序列化字节，不代表可回收磁盘空间，也不代表本机媒体可删除。
+              </p>
+              <p
+                v-for="source in field.source_configurations"
+                :key="source.host_id"
+                class="retention__note"
+              >
+                来源 {{ source.host_id }}，配置 revision
+                {{ source.configuration_revision ?? '未知' }}，摘要
+                {{ source.configuration_sha256 ?? '未知' }}。
+              </p>
+            </li>
+          </ul>
+          <ElButton
+            type="primary"
+            :loading="saving"
+            :disabled="!stationEstimate.complete"
+            @click="confirmStationSave"
+          >
+            确认保存工位保留组
+          </ElButton>
+          <ElButton @click="cancelStationEstimate">取消</ElButton>
+        </div>
+        <ElButton v-else type="primary" :loading="estimating" @click="requestStationEstimate">
+          查看影响估算
+        </ElButton>
       </ElForm>
 
       <ElForm
@@ -379,7 +520,7 @@ onMounted(() => {
         label-position="top"
         class="retention__form"
         aria-label="保存全局默认保留组"
-        @submit.prevent="saveGlobal"
+        @submit.prevent="requestGlobalEstimate"
       >
         <div class="retention__rules-form">
           <ElFormItem
@@ -409,8 +550,64 @@ onMounted(() => {
             </div>
           </ElFormItem>
         </div>
-        <ElButton type="primary" :loading="saving" @click="saveGlobal">
-          保存全局默认保留组（revision {{ globalPolicy.revision }}）
+        <div v-if="globalEstimate" class="retention__impact" aria-label="全局保留影响估算">
+          <h4>即将缩短的影响</h4>
+          <p class="retention__note">
+            确认只改变后续回收依据，不同步删除历史数据；估算失败不会按零影响放行。
+          </p>
+          <p class="retention__note">
+            参考时刻：{{ formatMoment(globalEstimate.reference_time) }}（北京时间）。
+          </p>
+          <p v-if="!globalEstimate.complete" class="retention__failure" role="alert">
+            估算不完整，不能确认：{{ globalEstimate.incomplete_reasons.join('、') }}。
+          </p>
+          <p v-if="globalEstimate.fields.length === 0" class="retention__note">没有缩短字段。</p>
+          <ul>
+            <li v-for="field in globalEstimate.fields" :key="`global-impact-${field.field}`">
+              <strong>{{ fieldLabel(field.field) }}</strong
+              >（{{ field.owner }}）：
+              <template v-if="field.exposed && field.protected">
+                {{ field.removes_objects ? '新暴露' : '处理范围' }}
+                {{ field.exposed.objects }} 个对象（{{ formatBytes(field.exposed.known_bytes) }}，
+                未知大小 {{ field.exposed.unknown_size_objects }} 个，最早
+                {{ formatMoment(field.exposed.earliest) }} ~ 最晚
+                {{ formatMoment(field.exposed.latest) }}）； 引用保护跳过
+                {{ field.protected.objects }} 个（{{
+                  formatBytes(field.protected.known_bytes)
+                }}，未知大小 {{ field.protected.unknown_size_objects }} 个， 最早
+                {{ formatMoment(field.protected.earliest) }} ~ 最晚
+                {{ formatMoment(field.protected.latest) }}）。
+              </template>
+              <span v-else>不可估算：{{ field.unavailable_reason }}（不是零影响）。</span>
+              <p v-if="field.savings_unknown" class="retention__note">
+                压缩/聚合节省未知，不代表删除对象或释放空间。
+              </p>
+              <p v-if="field.bytes_basis === 'serialized_rows'" class="retention__note">
+                逻辑序列化字节，不代表可回收磁盘空间，也不代表本机媒体可删除。
+              </p>
+              <p
+                v-for="source in field.source_configurations"
+                :key="source.host_id"
+                class="retention__note"
+              >
+                来源 {{ source.host_id }}，配置 revision
+                {{ source.configuration_revision ?? '未知' }}，摘要
+                {{ source.configuration_sha256 ?? '未知' }}。
+              </p>
+            </li>
+          </ul>
+          <ElButton
+            type="primary"
+            :loading="saving"
+            :disabled="!globalEstimate.complete"
+            @click="confirmGlobalSave"
+          >
+            确认保存全局默认保留组（revision {{ globalPolicy.revision }}）
+          </ElButton>
+          <ElButton @click="cancelGlobalEstimate">取消</ElButton>
+        </div>
+        <ElButton v-else type="primary" :loading="estimating" @click="requestGlobalEstimate">
+          查看影响估算（revision {{ globalPolicy.revision }}）
         </ElButton>
       </ElForm>
     </template>
@@ -484,5 +681,20 @@ onMounted(() => {
   .retention__rules-form {
     grid-template-columns: 1fr;
   }
+}
+.retention__impact {
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+}
+
+.retention__impact h4 {
+  margin: 0 0 0.35rem;
+}
+
+.retention__impact ul {
+  margin: 0.5rem 0;
+  padding-left: 1.2rem;
 }
 </style>

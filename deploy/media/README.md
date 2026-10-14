@@ -114,6 +114,8 @@ python3 -m edge_runtime.evidence_access \
 - `--web-origin` 必须是精确的单一 Web origin。浏览器媒体请求匿名（`crossOrigin=anonymous`、凭据省略），不向来源主机携带中心 Cookie/令牌；来源响应逐次 `no-store`，撤销后缓存不能继续供片。
 - 缺失、过期、撤权与中心不可达是不同错误，由来源 `X-Evidence-Error` 呈现，不把中心“缺对象”当作播放失败。
 
+同一服务可用 `--local-state /var/lib/nvsop/edge-state.sqlite` 启用本机已上报记录的只读保留影响统计；必须指向运行时实际状态，不创建数据库，不扫描证据目录。来源配置、中心有效期/超时与精确网关路径见[保留影响估算配置](../../docs/deployment/configuration.md#保留影响估算)。不提供此参数时统计明确不可用，不影响原证据回看；媒体票据不能授权统计。
+
 稳定软件验证入口是 [真实 Center/PG + Edge system 场景](../../tests/system/test_sys_35_evidence.py)（无需 Node，CI 运行）与 [真实浏览器场景](../../apps/control-web/tests/e2e/sys-35-evidence.spec.ts)。浏览器用例是显式 opt-in，本地需已具备 Docker、ffmpeg、Node/pnpm 与已安装的 Playwright Chromium（`pnpm exec playwright install chromium`，不自动安装），然后运行：
 
 ```sh

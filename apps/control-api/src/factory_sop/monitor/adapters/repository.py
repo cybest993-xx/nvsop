@@ -3,11 +3,27 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import cast
+from typing import Any, cast
+from uuid import UUID
 
-from sqlalchemy import Table, and_, func, select, text, update
+from sqlalchemy import (
+    ColumnElement,
+    Integer,
+    Table,
+    Text,
+    and_,
+    exists,
+    func,
+    literal,
+    select,
+    text,
+    tuple_,
+    update,
+)
+from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import InstrumentedAttribute
 
 from factory_sop.monitor.adapters.tables import (
     DecisionIdentityRow,
@@ -30,8 +46,14 @@ from factory_sop.monitor.model import (
     MirroredSopInstance,
     MirroredViolation,
 )
-from factory_sop.monitor.repository import MonitorRepository
+from factory_sop.monitor.repository import MonitorImpactRepository, MonitorRepository
 from factory_sop.monitor.usecases import latest_health_per_stream
+from factory_sop.retention.api import (
+    ImpactAggregate,
+    InstanceRetentionFact,
+    StationUsage,
+    empty_aggregate,
+)
 from nvsop_contracts import (
     ReportedDisposal,
     ReportedSopInstance,
@@ -596,4 +618,243 @@ def _ensure_instance_progression(opened: ReportedSopInstance, closed: ReportedSo
         raise MonitorRefusedError("instance provenance cannot remove or rewrite observed sources")
 
 
-__all__ = ["MONITOR_STREAM_CHANNEL", "PostgresMonitorRepository"]
+class PostgresMonitorImpactRepository(MonitorImpactRepository):
+    """保留影响估算的只读计数；只聚合 monitor 自己的镜像事实，不读 evidence/retention 表。"""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def instance_retention_facts(
+        self, *, instance_ids: tuple[tuple[UUID, UUID, int], ...]
+    ) -> tuple[InstanceRetentionFact, ...]:
+        """只查目标来源机/工位/实例，不能借用换机前后同编号实例的结案与类别。"""
+        wanted = {(str(host), str(station), instance) for host, station, instance in instance_ids}
+        if not wanted:
+            return ()
+        instances = self._session.scalars(
+            select(ReportedSopInstanceRow).where(
+                tuple_(
+                    ReportedSopInstanceRow.host_id,
+                    ReportedSopInstanceRow.station_id,
+                    ReportedSopInstanceRow.instance_id,
+                ).in_(wanted)
+            )
+        ).all()
+        closed: dict[tuple[str, str, int], bool] = {}
+        for instance_row in instances:
+            key = (instance_row.host_id, instance_row.station_id, instance_row.instance_id)
+            closed[key] = closed.get(key, True) and instance_row.closed_at is not None
+        latched = set(
+            self._session.execute(
+                select(
+                    ReportedViolationRow.host_id,
+                    ReportedViolationRow.station_id,
+                    ReportedViolationRow.instance_id,
+                ).where(
+                    tuple_(
+                        ReportedViolationRow.host_id,
+                        ReportedViolationRow.station_id,
+                        ReportedViolationRow.instance_id,
+                    ).in_(wanted)
+                )
+            )
+            .tuples()
+            .all()
+        )
+        decision_instance = cast(Any, ReportedDecisionRow.payload)["instance_id"].astext.cast(
+            Integer
+        )
+        rows = self._session.execute(
+            select(
+                ReportedDecisionRow.host_id,
+                ReportedDecisionRow.station_id,
+                decision_instance.label("instance_id"),
+                ReportedDecisionRow.payload,
+            )
+            .where(
+                tuple_(
+                    ReportedDecisionRow.host_id, ReportedDecisionRow.station_id, decision_instance
+                ).in_(wanted)
+            )
+            .order_by(ReportedDecisionRow.received_at.desc(), ReportedDecisionRow.event_id.desc())
+        ).all()
+        verdicts: dict[tuple[str, str, int], str] = {}
+        for row in rows:
+            payload = cast(dict[str, object], row.payload)
+            verdict = payload.get("verdict")
+            if isinstance(verdict, str):
+                verdicts.setdefault((row.host_id, row.station_id, row.instance_id), verdict)
+        return tuple(
+            InstanceRetentionFact(
+                host_id=UUID(host),
+                station_id=UUID(station),
+                instance_id=instance,
+                verdict=verdicts.get((host, station, instance)),
+                has_latched_violation=(host, station, instance) in latched,
+                closed=closed.get((host, station, instance), False),
+                # 尚无持久在审事实；复核结果或实例结案都不能代替它。
+                active_review=None,
+            )
+            for host, station, instance in sorted(wanted)
+        )
+
+    def record_impact(
+        self,
+        *,
+        station_id: str | None,
+        exposed_from: datetime | None,
+        exposed_to: datetime,
+    ) -> tuple[StationUsage, ...]:
+        """判定/健康/观测记录：实例已由真实 ``closed_at`` 结案才暴露，否则继续受保护。"""
+        per_station: dict[str | None, dict[bool, ImpactAggregate]] = {}
+        decision_instance = cast(Any, ReportedDecisionRow.payload)["instance_id"].astext.cast(
+            Integer
+        )
+        for table, station_expr, instance_expr in (
+            (ReportedDecisionRow, ReportedDecisionRow.station_id, decision_instance),
+            (
+                ReportedObservationRow,
+                ReportedObservationRow.station_id,
+                ReportedObservationRow.instance_id,
+            ),
+            (ReportedHealthRow, ReportedHealthRow.station_id, None),
+        ):
+            protection = (
+                literal(False)
+                if instance_expr is None
+                else ~_instance_closed(
+                    host_expr=table.host_id, station_expr=station_expr, instance_expr=instance_expr
+                )
+            )
+            self._accumulate(
+                per_station,
+                table=table,
+                station_expr=station_expr,
+                protection=protection,
+                station_id=station_id,
+                exposed_from=exposed_from,
+                exposed_to=exposed_to,
+            )
+        return _usages(per_station)
+
+    def disposal_impact(
+        self,
+        *,
+        station_id: str | None,
+        exposed_from: datetime | None,
+        exposed_to: datetime,
+    ) -> tuple[StationUsage, ...]:
+        """处置记录会回收；无明确结案事实的已锁存违规按 §5.19 继续受保护。"""
+        per_station: dict[str | None, dict[bool, ImpactAggregate]] = {}
+        disposal_station = cast(Any, ReportedDisposalRow.payload)["station_id"].astext
+        self._accumulate(
+            per_station,
+            table=ReportedDisposalRow,
+            station_expr=disposal_station,
+            protection=cast(Any, ReportedDisposalRow.payload)["violation_ref"].astext.is_not(None),
+            station_id=station_id,
+            exposed_from=exposed_from,
+            exposed_to=exposed_to,
+        )
+        self._accumulate(
+            per_station,
+            table=ReportedViolationRow,
+            station_expr=ReportedViolationRow.station_id,
+            protection=literal(True),
+            station_id=station_id,
+            exposed_from=exposed_from,
+            exposed_to=exposed_to,
+        )
+        return _usages(per_station)
+
+    def _accumulate(
+        self,
+        per_station: dict[str | None, dict[bool, ImpactAggregate]],
+        *,
+        table: type[Any],
+        station_expr: ColumnElement[Any] | InstrumentedAttribute[Any],
+        protection: ColumnElement[bool],
+        station_id: str | None,
+        exposed_from: datetime | None,
+        exposed_to: datetime,
+    ) -> None:
+        conditions: list[ColumnElement[bool]] = [table.received_at <= exposed_to]
+        if exposed_from is not None:
+            conditions.append(table.received_at > exposed_from)
+        if station_id is not None:
+            conditions.append(station_expr == station_id)
+        statement = (
+            select(
+                station_expr.label("station_id"),
+                protection.label("protected"),
+                func.count().label("objects"),
+                func.coalesce(func.sum(func.octet_length(sql_cast(table.payload, Text))), 0).label(
+                    "known_bytes"
+                ),
+                func.min(table.received_at).label("earliest"),
+                func.max(table.received_at).label("latest"),
+            )
+            .where(*conditions)
+            .group_by(station_expr, protection)
+        )
+        for row in self._session.execute(statement).all():
+            raw_station = row.station_id
+            key = None if raw_station is None else str(raw_station)
+            aggregate = ImpactAggregate(
+                objects=int(row.objects),
+                known_bytes=int(row.known_bytes),
+                unknown_size_objects=0,
+                earliest=cast("datetime | None", row.earliest),
+                latest=cast("datetime | None", row.latest),
+            )
+            split = per_station.setdefault(key, {})
+            bucket = bool(row.protected)
+            split[bucket] = aggregate if bucket not in split else split[bucket].plus(aggregate)
+
+
+def _instance_closed(
+    *,
+    host_expr: ColumnElement[Any] | InstrumentedAttribute[Any],
+    station_expr: ColumnElement[Any] | InstrumentedAttribute[Any],
+    instance_expr: ColumnElement[Any] | InstrumentedAttribute[Any],
+) -> ColumnElement[bool]:
+    """该记录所属实例是否已由真实 ``closed_at`` 结案；实例未知即未结案，继续受保护。"""
+    closed = (
+        select(
+            ReportedSopInstanceRow.host_id,
+            ReportedSopInstanceRow.station_id,
+            ReportedSopInstanceRow.instance_id,
+        )
+        .where(ReportedSopInstanceRow.closed_at.is_not(None))
+        .subquery()
+    )
+    return exists(
+        select(literal(1))
+        .select_from(closed)
+        .where(
+            and_(
+                closed.c.host_id == host_expr,
+                closed.c.station_id == station_expr,
+                closed.c.instance_id == instance_expr,
+            )
+        )
+    )
+
+
+def _usages(
+    per_station: dict[str | None, dict[bool, ImpactAggregate]],
+) -> tuple[StationUsage, ...]:
+    empty = empty_aggregate(measurable_bytes=True)
+    return tuple(
+        StationUsage(
+            station_id=None if station is None else UUID(station),
+            exposed=split.get(False, empty),
+            protected=split.get(True, empty),
+        )
+        for station, split in sorted(
+            per_station.items(), key=lambda item: (item[0] is None, item[0] or "")
+        )
+    )
+
+
+__all__ = ["MONITOR_STREAM_CHANNEL", "PostgresMonitorImpactRepository", "PostgresMonitorRepository"]

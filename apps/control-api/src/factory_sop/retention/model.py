@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from enum import StrEnum
+from hashlib import sha256
+from typing import cast
+from uuid import UUID
 
 
 class RetentionCategory(StrEnum):
@@ -199,9 +204,283 @@ DEFAULT_RETENTION_POLICY = RetentionPolicy(
 )
 
 
+class RetentionImpactField(StrEnum):
+    """一次保留变更影响估算逐字段覆盖的保留字段；八个字段各有一个拥有者口径。"""
+
+    EVIDENCE_PASS = "evidence_pass"
+    EVIDENCE_FAIL = "evidence_fail"
+    EVIDENCE_INDETERMINATE = "evidence_indeterminate"
+    RECORD_DETAIL = "record_detail"
+    RECORD_COMPRESSION_AGE = "record_compression_age"
+    RECORD_AGGREGATE_AGE = "record_aggregate_age"
+    DISPOSAL = "disposal"
+    LOCAL_REPORTED = "local_reported"
+
+
+class RetentionFactOwner(StrEnum):
+    """字段影响事实的拥有者；缺任一拥有者的当前事实即估算不完整。"""
+
+    EVIDENCE = "evidence"
+    MONITOR = "monitor"
+    EDGE = "edge"
+
+
+@dataclass(frozen=True, slots=True)
+class FieldImpactPolicy:
+    """单个保留字段的影响口径：由哪个拥有者计数、对应哪个保留类别、是否删除对象。"""
+
+    owner: RetentionFactOwner
+    category: RetentionCategory | None
+    removes_objects: bool
+
+
+FIELD_IMPACT: dict[RetentionImpactField, FieldImpactPolicy] = {
+    RetentionImpactField.EVIDENCE_PASS: FieldImpactPolicy(
+        RetentionFactOwner.EVIDENCE, RetentionCategory.PASS, True
+    ),
+    RetentionImpactField.EVIDENCE_FAIL: FieldImpactPolicy(
+        RetentionFactOwner.EVIDENCE, RetentionCategory.FAIL, True
+    ),
+    RetentionImpactField.EVIDENCE_INDETERMINATE: FieldImpactPolicy(
+        RetentionFactOwner.EVIDENCE, RetentionCategory.INDETERMINATE, True
+    ),
+    RetentionImpactField.RECORD_DETAIL: FieldImpactPolicy(RetentionFactOwner.MONITOR, None, True),
+    # 压缩/聚合不删除对象，但会让一批记录进入压缩/聚合范围：按真实对象/字节/时刻给出影响。
+    # 节省量不可预测，因此既不冒充零、也不伪造精确物理空间。
+    RetentionImpactField.RECORD_COMPRESSION_AGE: FieldImpactPolicy(
+        RetentionFactOwner.MONITOR, None, False
+    ),
+    RetentionImpactField.RECORD_AGGREGATE_AGE: FieldImpactPolicy(
+        RetentionFactOwner.MONITOR, None, False
+    ),
+    RetentionImpactField.DISPOSAL: FieldImpactPolicy(RetentionFactOwner.MONITOR, None, True),
+    # 推理机本地已上报数据归边缘执行；没有已接通的只读 Edge 统计通道时该字段明确不可估算。
+    RetentionImpactField.LOCAL_REPORTED: FieldImpactPolicy(RetentionFactOwner.EDGE, None, True),
+}
+
+
+def exposure_seconds(policy: RetentionPolicy, field: RetentionImpactField) -> int | None:
+    """字段在给定策略下的暴露阈值秒数；永久（或未设置）永不暴露，返回 ``None``。"""
+    rule = cast(RetentionRule, getattr(policy, field.value))
+    if rule.mode is RetentionMode.DURATION:
+        return rule.seconds
+    if rule.mode is RetentionMode.DISCARD:
+        return 0
+    return None
+
+
+def newly_exposed_window(
+    baseline: RetentionPolicy,
+    proposed: RetentionPolicy,
+    field: RetentionImpactField,
+    *,
+    now: datetime,
+) -> tuple[datetime | None, datetime] | None:
+    """返回该字段缩短后新进入暴露范围的时段 ``(from, to]``；未缩短时返回 ``None``。
+
+    逐字段比较基准与目标阈值：目标为永久则永不新增暴露；基准为永久则下界为空；两者都是有限时长
+    时只在目标更短时新增一个有限区间。这样只缩短某一类不会因别的类更长而被整类跳过。
+    """
+    target = exposure_seconds(proposed, field)
+    if target is None:
+        return None
+    baseline_seconds = exposure_seconds(baseline, field)
+    if baseline_seconds is not None and target >= baseline_seconds:
+        return None
+    below = None if baseline_seconds is None else now - timedelta(seconds=baseline_seconds)
+    return below, now - timedelta(seconds=target)
+
+
+@dataclass(frozen=True, slots=True)
+class ImpactAggregate:
+    """某个时段内一组对象的真实计数；字节只在拥有者可度量时给出。"""
+
+    objects: int
+    known_bytes: int | None
+    unknown_size_objects: int
+    earliest: datetime | None
+    latest: datetime | None
+
+    def __post_init__(self) -> None:
+        for name in ("objects", "unknown_size_objects"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"impact {name} must be a non-negative integer")
+        if self.known_bytes is not None and (
+            isinstance(self.known_bytes, bool)
+            or not isinstance(self.known_bytes, int)
+            or self.known_bytes < 0
+        ):
+            raise ValueError("impact known_bytes must be a non-negative integer or null")
+        if self.unknown_size_objects > self.objects:
+            raise ValueError("impact unknown-size objects must not exceed the object count")
+        if self.earliest is not None and self.latest is not None and self.latest < self.earliest:
+            raise ValueError("impact latest must not precede earliest")
+
+    def plus(self, other: ImpactAggregate) -> ImpactAggregate:
+        """合并两个时段的计数；任一侧字节不可度量时合并结果字节也不可度量。"""
+        if self.known_bytes is None or other.known_bytes is None:
+            known_bytes: int | None = None
+        else:
+            known_bytes = self.known_bytes + other.known_bytes
+        return ImpactAggregate(
+            objects=self.objects + other.objects,
+            known_bytes=known_bytes,
+            unknown_size_objects=self.unknown_size_objects + other.unknown_size_objects,
+            earliest=_min_moment(self.earliest, other.earliest),
+            latest=_max_moment(self.latest, other.latest),
+        )
+
+
+def empty_aggregate(*, measurable_bytes: bool) -> ImpactAggregate:
+    """空计数；``measurable_bytes`` 说明该拥有者能否度量字节。"""
+    return ImpactAggregate(
+        objects=0,
+        known_bytes=0 if measurable_bytes else None,
+        unknown_size_objects=0,
+        earliest=None,
+        latest=None,
+    )
+
+
+def _min_moment(left: datetime | None, right: datetime | None) -> datetime | None:
+    moments = [value for value in (left, right) if value is not None]
+    return min(moments) if moments else None
+
+
+def _max_moment(left: datetime | None, right: datetime | None) -> datetime | None:
+    moments = [value for value in (left, right) if value is not None]
+    return max(moments) if moments else None
+
+
+@dataclass(frozen=True, slots=True)
+class RetentionImpactBreakdown:
+    """同一时段内会进入回收范围的对象，与被引用保护而跳过的对象，分开计数。"""
+
+    exposed: ImpactAggregate
+    protected: ImpactAggregate
+
+
+@dataclass(frozen=True, slots=True)
+class EdgeImpactSource:
+    """device 提供的来源机最新已签发配置事实;缺失保持未知。"""
+
+    host_id: UUID
+    configuration_revision: int | None
+    configuration_sha256: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class RetentionFieldImpact:
+    """单个保留字段的影响：有真实计数，或明确不可估算的原因；两者恰有其一。"""
+
+    field: RetentionImpactField
+    owner: RetentionFactOwner
+    category: RetentionCategory | None
+    removes_objects: bool
+    exposed_from: datetime | None
+    exposed_to: datetime
+    breakdown: RetentionImpactBreakdown | None
+    unavailable_reason: str | None
+    savings_unknown: bool = False
+    bytes_basis: str | None = None
+    source_configurations: tuple[EdgeImpactSource, ...] = ()
+
+    def __post_init__(self) -> None:
+        if (self.breakdown is None) == (self.unavailable_reason is None):
+            raise ValueError(
+                "field impact must carry exactly one of counts or an unavailable reason"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class RetentionImpactEstimate:
+    """一次保留变更的逐字段影响估算；``complete`` 为假时不得用于确认。"""
+
+    baseline: RetentionPolicy
+    default_revision: int
+    selection_mode: RetentionPolicyMode | None
+    excluded_stations: tuple[UUID, ...]
+    baseline_revision: int
+    proposed: RetentionPolicy
+    station_id: UUID | None
+    fields: tuple[RetentionFieldImpact, ...]
+    reference_time: datetime
+    incomplete_reasons: tuple[str, ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        return not self.incomplete_reasons
+
+
+def impact_digest(estimate: RetentionImpactEstimate) -> str:
+    """估算摘要的稳定摘要：绑定基准版本、目标策略、范围、参考时刻与真实计数。
+
+    确认时必须原样带回本摘要；基准、目标、范围、真实计数或不完整原因任一变化都会改变摘要，
+    服务端重算后不一致即拒绝，使旧确认不能用于盲签。
+    """
+
+    def aggregate(value: ImpactAggregate) -> dict[str, object]:
+        return {
+            "objects": value.objects,
+            "known_bytes": value.known_bytes,
+            "unknown_size_objects": value.unknown_size_objects,
+            "earliest": None if value.earliest is None else value.earliest.isoformat(),
+            "latest": None if value.latest is None else value.latest.isoformat(),
+        }
+
+    def field_entry(value: RetentionFieldImpact) -> dict[str, object]:
+        return {
+            "field": value.field.value,
+            "owner": value.owner.value,
+            "category": None if value.category is None else value.category.value,
+            "removes_objects": value.removes_objects,
+            "exposed_from": None if value.exposed_from is None else value.exposed_from.isoformat(),
+            "exposed_to": value.exposed_to.isoformat(),
+            "exposed": None if value.breakdown is None else aggregate(value.breakdown.exposed),
+            "protected": None if value.breakdown is None else aggregate(value.breakdown.protected),
+            "unavailable_reason": value.unavailable_reason,
+            "savings_unknown": value.savings_unknown,
+            "bytes_basis": value.bytes_basis,
+            "source_configurations": [
+                {
+                    "host_id": str(source.host_id),
+                    "configuration_revision": source.configuration_revision,
+                    "configuration_sha256": source.configuration_sha256,
+                }
+                for source in value.source_configurations
+            ],
+        }
+
+    canonical = json.dumps(
+        {
+            "revision": estimate.baseline_revision,
+            "baseline": estimate.baseline.to_wire(),
+            "default_revision": estimate.default_revision,
+            "selection_mode": estimate.selection_mode,
+            "excluded_stations": [str(value) for value in estimate.excluded_stations],
+            "policy": estimate.proposed.to_wire(),
+            "station_id": None if estimate.station_id is None else str(estimate.station_id),
+            "reference_time": estimate.reference_time.isoformat(),
+            "incomplete_reasons": list(estimate.incomplete_reasons),
+            "fields": [field_entry(value) for value in estimate.fields],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return sha256(canonical.encode()).hexdigest()
+
+
 __all__ = [
     "DEFAULT_RETENTION_POLICY",
+    "FIELD_IMPACT",
+    "ImpactAggregate",
     "RetentionCategory",
+    "RetentionFactOwner",
+    "RetentionFieldImpact",
+    "RetentionImpactBreakdown",
+    "RetentionImpactEstimate",
+    "RetentionImpactField",
     "RetentionMode",
     "RetentionPolicy",
     "RetentionPolicyMode",
@@ -210,5 +489,9 @@ __all__ = [
     "category_for",
     "check_reslice_window",
     "check_retention_selection",
+    "empty_aggregate",
+    "exposure_seconds",
+    "impact_digest",
+    "newly_exposed_window",
     "resolve_retention_policy",
 ]

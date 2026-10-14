@@ -109,6 +109,9 @@ from factory_sop.problem import (
     problem_response,
 )
 from factory_sop.retention.adapters import dependencies as retention_dependencies
+from factory_sop.retention.adapters.impact_access_routes import (
+    router as retention_impact_access_router,
+)
 from factory_sop.retention.adapters.routes import router as retention_router
 from factory_sop.retention.errors import RetentionRefusedError
 from factory_sop.retention.errors import refusal_problem as retention_refusal_problem
@@ -256,6 +259,7 @@ def create_app(
     app.include_router(evidence_playback_router, prefix=API_PREFIX)
     app.include_router(execution_routes.router, prefix=API_PREFIX)
     app.include_router(retention_router, prefix=API_PREFIX)
+    app.include_router(retention_impact_access_router, prefix=API_PREFIX)
     app.include_router(overview_router, prefix=API_PREFIX)
     # 组合根把跨模块查询和任务依赖接到各自模块的真实适配器。
     app.dependency_overrides[configuration_dependencies.device_gateway] = (
@@ -303,6 +307,19 @@ def create_app(
     )
     app.dependency_overrides[retention_dependencies.station_facts] = (
         device_dependencies.station_retention_facts
+    )
+    app.dependency_overrides[retention_dependencies.edge_sources] = (
+        device_dependencies.retention_sources
+    )
+    app.dependency_overrides[retention_dependencies.host_authenticator] = (
+        device_dependencies.host_gateway
+    )
+    # 保留变更影响估算由 retention 用例编排,各数据面经 owner 只读 seam。
+    app.dependency_overrides[retention_dependencies.evidence_impact] = (
+        evidence_dependencies.retention_impact
+    )
+    app.dependency_overrides[retention_dependencies.monitor_impact] = (
+        monitor_dependencies.retention_impact
     )
 
     @app.exception_handler(EvidenceAccessRefusedError)
@@ -442,12 +459,13 @@ def create_app(
 
     @app.exception_handler(RetentionRefusedError)
     async def retention_refused(request: Request, error: RetentionRefusedError) -> Response:
-        """报告保留策略拒绝：状态与标题由拒绝码自己给出。"""
+        """报告保留策略拒绝：状态与标题由拒绝码自己给出，detail 只携带非秘密原因。"""
         status_code, title = retention_refusal_problem(error.code)
         return problem_response(
             status=status_code,
             title=title,
             error_code=ApiErrorCode(error.code.value),
+            detail=error.detail,
         )
 
     @app.exception_handler(RequestValidationError)

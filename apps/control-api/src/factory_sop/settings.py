@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     # 每进程独立 LISTEN 预算；上限为同步长流保留普通请求的线程余量。
     monitor_max_subscriptions: int = Field(default=16, gt=0, le=32)
 
+    # 影响确认时限由部署显式提供；缺失时只拒绝缩短，不阻断查看、延长或其他中心能力。
+    retention_estimate_ttl_seconds: int | None = Field(default=None, gt=0)
+    retention_impact_timeout_seconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+
     # How long a session survives, idle and in total (§六: sessions are server-side records,
     # so both are enforced here rather than encoded in a cookie). Minutes, because that is the
     # granularity an operator setting a shift-length timeout thinks in. `create_app` turns

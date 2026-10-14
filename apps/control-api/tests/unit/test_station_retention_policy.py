@@ -103,6 +103,9 @@ class FakeOverrides:
     def get(self, station_id: UUID) -> StationRetentionRecord | None:
         return self.records.get(station_id)
 
+    def list_all(self) -> tuple[StationRetentionRecord, ...]:
+        return tuple(self.records.values())
+
     def insert_if_absent(self, record: StationRetentionRecord) -> bool:
         self.writes += 1
         if record.station_id in self.records:

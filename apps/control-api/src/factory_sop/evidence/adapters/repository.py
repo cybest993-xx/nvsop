@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, Table, func, select, update
+from sqlalchemy import CursorResult, Table, case, func, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.orm import Session
 
@@ -22,10 +23,12 @@ from factory_sop.evidence.model import (
     ReclipRequestStatus,
 )
 from factory_sop.evidence.repository import (
+    EvidenceImpactRepository,
     EvidenceReclipRequestRepository,
     EvidenceRepository,
     EvidenceReviewRepository,
 )
+from factory_sop.retention.api import EvidenceInstanceUsage, ImpactAggregate, empty_aggregate
 
 
 class PostgresEvidenceRepository(EvidenceRepository):
@@ -295,7 +298,78 @@ class PostgresEvidenceReclipRequestRepository(EvidenceReclipRequestRepository):
         return tuple(row.to_domain() for row in rows)
 
 
+class PostgresEvidenceImpactRepository(EvidenceImpactRepository):
+    """保留影响估算的只读计数；按实例聚合引用行，不读取媒体字节（ADR-0012）。"""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def evidence_usage(
+        self,
+        *,
+        station_id: str | None,
+        exposed_from: datetime | None,
+        exposed_to: datetime,
+    ) -> tuple[EvidenceInstanceUsage, ...]:
+        table = cast(Table, EvidenceReferenceRow.__table__)
+        linked = table.c.violation_id.is_not(None)
+        conditions = [table.c.received_at <= exposed_to]
+        if exposed_from is not None:
+            conditions.append(table.c.received_at > exposed_from)
+        if station_id is not None:
+            conditions.append(table.c.station_id == station_id)
+        instance_id = table.c.instance_id
+        statement = (
+            select(
+                table.c.host_id.label("host_id"),
+                table.c.station_id.label("station_id"),
+                instance_id.label("instance_id"),
+                linked.label("linked"),
+                func.count().label("objects"),
+                func.coalesce(func.sum(table.c.size), 0).label("known_bytes"),
+                func.coalesce(func.sum(case((table.c.size.is_(None), 1), else_=0)), 0).label(
+                    "unknown_size_objects"
+                ),
+                func.min(table.c.received_at).label("earliest"),
+                func.max(table.c.received_at).label("latest"),
+            )
+            .where(*conditions)
+            .group_by(table.c.host_id, table.c.station_id, instance_id, linked)
+        )
+        grouped: dict[tuple[str, str, int], dict[bool, ImpactAggregate]] = {}
+        for row in self._session.execute(statement).all():
+            aggregate = ImpactAggregate(
+                objects=int(row.objects),
+                known_bytes=int(row.known_bytes),
+                unknown_size_objects=int(row.unknown_size_objects),
+                earliest=cast("datetime | None", row.earliest),
+                latest=cast("datetime | None", row.latest),
+            )
+            grouped.setdefault((str(row.host_id), str(row.station_id), int(row.instance_id)), {})[
+                bool(row.linked)
+            ] = aggregate
+        empty = empty_aggregate(measurable_bytes=True)
+        return tuple(
+            EvidenceInstanceUsage(
+                host_id=_as_uuid(host),
+                station_id=_as_uuid(station),
+                instance_id=instance,
+                unlinked=split.get(False, empty),
+                linked=split.get(True, empty),
+            )
+            for (host, station, instance), split in grouped.items()
+        )
+
+
+def _as_uuid(value: str) -> UUID:
+    try:
+        return UUID(value)
+    except ValueError as error:
+        raise ValueError("evidence reference host/station id is not a valid identity") from error
+
+
 __all__ = [
+    "PostgresEvidenceImpactRepository",
     "PostgresEvidenceReclipRequestRepository",
     "PostgresEvidenceRepository",
     "PostgresEvidenceReviewRepository",

@@ -576,16 +576,18 @@ class StationQueues:
             raise ValueError("pending observation report could not freeze its wire timestamp")
         return str(row["report_reported_at"])
 
-    def mark_observation_reported(self, queue_id: int, *, at: HostInstant) -> None:
+    def mark_observation_reported(
+        self, queue_id: int, *, at: HostInstant, acknowledged_at: str
+    ) -> None:
         """中心已确认该观测; 行继续保留以保持事件身份稳定。"""
         with self._lock:
             self._connection.execute(
                 """
                 UPDATE local_observation_queue
-                   SET sent_at = ?
-                 WHERE station_id = ? AND queue_id = ?
+                   SET sent_at = ?, acknowledged_at = ?
+                 WHERE station_id = ? AND queue_id = ? AND sent_at IS NULL
                 """,
-                (at.seconds, self._station_id, queue_id),
+                (at.seconds, acknowledged_at, self._station_id, queue_id),
             )
 
     def record_observation_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None:
@@ -625,12 +627,13 @@ class StationQueues:
             raise ValueError("pending health report could not freeze its wire timestamp")
         return str(row["report_reported_at"])
 
-    def mark_health_reported(self, queue_id: int, *, at: HostInstant) -> None:
+    def mark_health_reported(self, queue_id: int, *, at: HostInstant, acknowledged_at: str) -> None:
         """中心已确认该事实;行继续保留以保持事件身份稳定。"""
         with self._lock:
             self._connection.execute(
-                "UPDATE local_health_queue SET sent_at = ? WHERE station_id = ? AND queue_id = ?",
-                (at.seconds, self._station_id, queue_id),
+                "UPDATE local_health_queue SET sent_at = ?, acknowledged_at = ? "
+                "WHERE station_id = ? AND queue_id = ? AND sent_at IS NULL",
+                (at.seconds, acknowledged_at, self._station_id, queue_id),
             )
 
     def record_health_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None:
@@ -743,15 +746,16 @@ class StationQueues:
             raise ValueError("pending report could not freeze its wire timestamp")
         return str(row["report_reported_at"])
 
-    def mark_reported(self, queue_id: int, *, at: HostInstant) -> None:
+    def mark_reported(self, queue_id: int, *, at: HostInstant, acknowledged_at: str) -> None:
         """中心已确认该事件;它不再待发送,但继续保留记录。
 
         只标记不删除,以保持重试时的本地事件身份稳定,并让保留策略知道主机已经上报过什么。
         """
         with self._lock:
             self._connection.execute(
-                "UPDATE local_report_queue SET sent_at = ? WHERE station_id = ? AND queue_id = ?",
-                (at.seconds, self._station_id, queue_id),
+                "UPDATE local_report_queue SET sent_at = ?, acknowledged_at = ? "
+                "WHERE station_id = ? AND queue_id = ? AND sent_at IS NULL",
+                (at.seconds, acknowledged_at, self._station_id, queue_id),
             )
 
     def record_report_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None:

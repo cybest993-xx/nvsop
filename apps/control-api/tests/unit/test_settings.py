@@ -391,3 +391,29 @@ def test_keeps_the_secret_out_of_the_repr(tmp_path: Path) -> None:
     settings = Settings.from_environment(environment(tmp_path))
 
     assert "hunter2" not in repr(settings)
+
+
+def test_retention_estimate_ttl_is_optional_but_positive(tmp_path: Path) -> None:
+    assert Settings.from_environment(environment(tmp_path)).retention_estimate_ttl_seconds is None
+    configured = Settings.from_environment(
+        environment(tmp_path, SOP_RETENTION_ESTIMATE_TTL_SECONDS="60")
+    )
+    assert configured.retention_estimate_ttl_seconds == 60
+    for value in ("0", "-1"):
+        with pytest.raises(ConfigurationError, match="retention_estimate_ttl_seconds"):
+            Settings.from_environment(
+                environment(tmp_path, SOP_RETENTION_ESTIMATE_TTL_SECONDS=value)
+            )
+
+
+def test_retention_impact_timeout_is_optional_positive_and_finite(tmp_path: Path) -> None:
+    assert Settings.from_environment(environment(tmp_path)).retention_impact_timeout_seconds is None
+    configured = Settings.from_environment(
+        environment(tmp_path, SOP_RETENTION_IMPACT_TIMEOUT_SECONDS="0.5")
+    )
+    assert configured.retention_impact_timeout_seconds == 0.5
+    for value in ("0", "-1", "nan", "inf", "-inf"):
+        with pytest.raises(ConfigurationError, match="retention_impact_timeout_seconds"):
+            Settings.from_environment(
+                environment(tmp_path, SOP_RETENTION_IMPACT_TIMEOUT_SECONDS=value)
+            )

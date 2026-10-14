@@ -57,6 +57,16 @@ DDM 的 `DATASET_ROOT`/`RESULTS_ROOT` 与 worker 的对应 SOP 根目录必须�
 
 业务网关仅将 `/api/v1/evidence/registrations` 与 `/api/v1/evidence/access-check` 两条精确路径交给主机签名认证，清除 Cookie/Authorization/CSRF 而保留签名头；列表与签发仍走浏览器会话认证。中心不挂载、保存或代理证据目录。Edge 读取服务和 Web 播放入口另由各自部署步骤提供，只有授权协议不代表浏览器已可播放。
 
+### 保留影响估算
+
+缩短确认的有效期由中心环境 `SOP_RETENTION_ESTIMATE_TTL_SECONDS` 显式给出正整数秒，无业务默认值。缺失时中心仍可查看/延长，但拒绝缩短并返回 `RETENTION_ESTIMATE_TTL_UNCONFIGURED`；到期确认返回 `RETENTION_ESTIMATE_STALE`，需重新估算。不要借用命令租约作为有效期。
+
+本地已上报记录统计还须设置 `SOP_RETENTION_IMPACT_TIMEOUT_SECONDS`（正的有限秒数），并为全部来源机在 `SOP_EVIDENCE_HOST_ORIGINS` 中登记中心可达的服务 origin。缺超时/有效期不发送统计请求，缺 origin、未确认配置、未知历史确认时刻或来源不可达使估算不完整，不能确认相关缩短；不轮询、不缓存、不重试，不接受部分汇总。
+
+来源机按[独立证据服务](../../deploy/media/README.md#来源主机证据回看服务)增加 `--local-state <运行时实际使用的-SQLite-绝对路径>`，只读打开已由运行时迁移的状态；服务不创建、迁移或清理数据库。该机必须已经确认中心最新签发的配置。业务网关将精确 `POST /api/v1/retention/reported-impact/access-check` 与其他机器入口一样保留签名头、清除 Cookie/Authorization/CSRF；不能将整个 retention 路径豁免浏览器认证。票据只授权本次统计并逐次复核 `retention.policy.edit`，不授予媒体访问或删除权。
+
+升级运行时会在 SQLite V20 给四类上报账本追加可空 `acknowledged_at`，以后只在中心成功响应后冻结首次确认 UTC。历史发送行不回填，不得手工用发送单调时刻或接收时刻伪造确认。估算返回逻辑序列化字节，不能据此承诺磁盘空间或删除媒体。稳定整链路入口见[真实 PG/HTTPS/SQLite 系统场景](../../tests/system/test_sys_42_retention_impact.py)。
+
 ## Web 开发代理
 
 Vite 开发服务器把 `/api` 代理到：

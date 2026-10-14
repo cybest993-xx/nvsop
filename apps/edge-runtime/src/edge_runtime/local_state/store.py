@@ -193,7 +193,7 @@ class ReportStore(Protocol):
 
     def freeze_reported_at(self, queue_id: int, *, candidate: str) -> str: ...
 
-    def mark_reported(self, queue_id: int, *, at: HostInstant) -> None: ...
+    def mark_reported(self, queue_id: int, *, at: HostInstant, acknowledged_at: str) -> None: ...
 
     def record_report_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None: ...
 
@@ -203,7 +203,9 @@ class ReportStore(Protocol):
 
     def freeze_observation_reported_at(self, queue_id: int, *, candidate: str) -> str: ...
 
-    def mark_observation_reported(self, queue_id: int, *, at: HostInstant) -> None: ...
+    def mark_observation_reported(
+        self, queue_id: int, *, at: HostInstant, acknowledged_at: str
+    ) -> None: ...
 
     def record_observation_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None: ...
 
@@ -212,13 +214,17 @@ class ReportStore(Protocol):
     def pending_health_item(self, queue_id: int) -> PendingHealthReport: ...
 
     def freeze_health_reported_at(self, queue_id: int, *, candidate: str) -> str: ...
-    def mark_health_reported(self, queue_id: int, *, at: HostInstant) -> None: ...
+    def mark_health_reported(
+        self, queue_id: int, *, at: HostInstant, acknowledged_at: str
+    ) -> None: ...
 
     def record_health_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None: ...
 
     def pending_disposal_ids(self, *, limit: int | None = None) -> tuple[int, ...]: ...
     def disposal_report(self, disposal_id: int, *, reported_at: str) -> ReportedDisposal: ...
-    def mark_disposal_reported(self, disposal_id: int, *, at: HostInstant) -> None: ...
+    def mark_disposal_reported(
+        self, disposal_id: int, *, at: HostInstant, acknowledged_at: str
+    ) -> None: ...
     def record_disposal_failure(self, disposal_id: int, *, at: HostInstant, error: str) -> None: ...
 
 
@@ -958,8 +964,8 @@ class _HostReportStore:
     def freeze_reported_at(self, queue_id: int, *, candidate: str) -> str:
         return self._queue(queue_id).freeze_reported_at(queue_id, candidate=candidate)
 
-    def mark_reported(self, queue_id: int, *, at: HostInstant) -> None:
-        self._queue(queue_id).mark_reported(queue_id, at=at)
+    def mark_reported(self, queue_id: int, *, at: HostInstant, acknowledged_at: str) -> None:
+        self._queue(queue_id).mark_reported(queue_id, at=at, acknowledged_at=acknowledged_at)
 
     def record_report_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None:
         self._queue(queue_id).record_report_failure(queue_id, at=at, error=error)
@@ -1000,8 +1006,12 @@ class _HostReportStore:
             queue_id, candidate=candidate
         )
 
-    def mark_observation_reported(self, queue_id: int, *, at: HostInstant) -> None:
-        self._observation_queue(queue_id).mark_observation_reported(queue_id, at=at)
+    def mark_observation_reported(
+        self, queue_id: int, *, at: HostInstant, acknowledged_at: str
+    ) -> None:
+        self._observation_queue(queue_id).mark_observation_reported(
+            queue_id, at=at, acknowledged_at=acknowledged_at
+        )
 
     def record_observation_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None:
         self._observation_queue(queue_id).record_observation_failure(queue_id, at=at, error=error)
@@ -1022,8 +1032,10 @@ class _HostReportStore:
     def freeze_health_reported_at(self, queue_id: int, *, candidate: str) -> str:
         return self._health_queue(queue_id).freeze_health_reported_at(queue_id, candidate=candidate)
 
-    def mark_health_reported(self, queue_id: int, *, at: HostInstant) -> None:
-        self._health_queue(queue_id).mark_health_reported(queue_id, at=at)
+    def mark_health_reported(self, queue_id: int, *, at: HostInstant, acknowledged_at: str) -> None:
+        self._health_queue(queue_id).mark_health_reported(
+            queue_id, at=at, acknowledged_at=acknowledged_at
+        )
 
     def record_health_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None:
         self._health_queue(queue_id).record_health_failure(queue_id, at=at, error=error)
@@ -1046,8 +1058,12 @@ class _HostReportStore:
             disposal_id, reported_at=reported_at
         )
 
-    def mark_disposal_reported(self, disposal_id: int, *, at: HostInstant) -> None:
-        LocalDisposalLedger(self._connection, self._lock).mark_reported(disposal_id, at=at.seconds)
+    def mark_disposal_reported(
+        self, disposal_id: int, *, at: HostInstant, acknowledged_at: str
+    ) -> None:
+        LocalDisposalLedger(self._connection, self._lock).mark_reported(
+            disposal_id, at=at.seconds, acknowledged_at=acknowledged_at
+        )
 
     def record_disposal_failure(self, disposal_id: int, *, at: HostInstant, error: str) -> None:
         LocalDisposalLedger(self._connection, self._lock).record_report_failure(

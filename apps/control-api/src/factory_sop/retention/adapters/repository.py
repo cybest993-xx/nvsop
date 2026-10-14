@@ -76,6 +76,13 @@ class PostgresStationRetentionOverrideRepository(StationRetentionOverrideReposit
         )
         return None if row is None else row.to_domain()
 
+    def list_all(self) -> tuple[StationRetentionRecord, ...]:
+        """返回全部覆盖记录；全局变更据此排除带自定义整组的工位。"""
+        rows = self._session.scalars(
+            select(StationRetentionPolicyRow).order_by(StationRetentionPolicyRow.station_id)
+        ).all()
+        return tuple(row.to_domain() for row in rows)
+
     def insert_if_absent(self, record: StationRetentionRecord) -> bool:
         """expected_revision==0 的首次建立：唯一键冲突即表示并发下另一个请求已经建过。"""
         table = cast(Table, StationRetentionPolicyRow.__table__)

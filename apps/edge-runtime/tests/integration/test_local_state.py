@@ -1606,7 +1606,11 @@ class QueueRetryTest(unittest.TestCase):
         )
         self.assertEqual(len(self.station.pending_reports()), 1)
 
-        self.station.mark_reported(report.queue_id, at=HostInstant(ANCHOR + 2.0))
+        self.station.mark_reported(
+            report.queue_id,
+            at=HostInstant(ANCHOR + 2.0),
+            acknowledged_at="2026-10-14T00:00:00+00:00",
+        )
         self.assertEqual(self.station.pending_reports(), ())
 
     def test_evidence_cannot_be_marked_uploaded_without_naming_the_remote_copy(self) -> None:

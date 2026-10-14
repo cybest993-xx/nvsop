@@ -487,6 +487,14 @@ _V19 = (
     "ALTER TABLE local_reclip_request ADD COLUMN terminal_error_detail TEXT",
 )
 
+# S042：从中心确认成功的 UTC 起算本地已上报保留期；历史单调时钟不回填成 UTC。
+_V20 = (
+    "ALTER TABLE local_report_queue ADD COLUMN acknowledged_at TEXT",
+    "ALTER TABLE local_observation_queue ADD COLUMN acknowledged_at TEXT",
+    "ALTER TABLE local_health_queue ADD COLUMN acknowledged_at TEXT",
+    "ALTER TABLE local_disposal ADD COLUMN acknowledged_at TEXT",
+)
+
 MIGRATIONS: tuple[tuple[str, ...], ...] = (
     _V1,
     _V2,
@@ -507,6 +515,7 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
     _V17,
     _V18,
     _V19,
+    _V20,
 )
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 

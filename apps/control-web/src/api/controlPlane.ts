@@ -39,6 +39,8 @@ import {
   endSession as generatedEndSession,
   confirmVideoUpload as generatedConfirmVideoUpload,
   enqueueConnectorConnectionTest as generatedEnqueueConnectorConnectionTest,
+  estimateRetentionPolicyImpact as generatedEstimateRetentionPolicyImpact,
+  estimateStationRetentionImpact as generatedEstimateStationRetentionImpact,
   importTemplateDraft as generatedImportTemplateDraft,
   listAnnotations as generatedListAnnotations,
   listDatasetActionListVersions as generatedListDatasetActionListVersions,
@@ -202,6 +204,7 @@ import {
   type UploadRequestView,
   type UsageCheckAcceptedView,
   type GlobalRetentionPolicyView,
+  type RetentionImpactEstimateView,
   type RetentionPolicyMode,
   type RetentionPolicyView,
   type RetentionRuleView,
@@ -266,6 +269,7 @@ export type {
   GlobalRetentionPolicyView,
   RegisterVlmCandidateInput,
   RetentionMode,
+  RetentionImpactEstimateView,
   RetentionPolicyMode,
   RetentionPolicyView,
   RetentionRuleView,
@@ -1422,19 +1426,31 @@ export type RetentionPolicyModeInput = RetentionPolicyMode
 export type GlobalRetentionPolicy = GlobalRetentionPolicyView
 export type StationRetention = StationRetentionView
 export type StationRetentionInput = StationRetentionUpdate
+export type RetentionImpact = RetentionImpactEstimateView
 
 /** 读取全局默认保留组；尚未持久化时中心返回代码默认值与 revision 0。 */
 export function readRetentionPolicy(): Promise<GlobalRetentionPolicyView> {
   return execute(generatedReadRetentionPolicy())
 }
 
-/** 整组替换全局默认保留组；If-Match 冲突时后端返回 409。 */
+/** 按 owner 接口估算整组替换全局默认组会新暴露多少对象/空间与引用保护跳过；只读。 */
+export function estimateRetentionPolicyImpact(
+  policy: RetentionPolicyView,
+): Promise<RetentionImpactEstimateView> {
+  return execute(generatedEstimateRetentionPolicyImpact({ body: { policy } }))
+}
+
+/** 整组替换全局默认保留组；必须带回影响估算令牌，If-Match 冲突时后端返回 409。 */
 export function updateRetentionPolicy(
   policy: RetentionPolicyView,
   revision: number,
+  estimateToken: string,
 ): Promise<GlobalRetentionPolicyView> {
   return execute(
-    generatedUpdateRetentionPolicy({ headers: { 'If-Match': revision }, body: { policy } }),
+    generatedUpdateRetentionPolicy({
+      headers: { 'If-Match': revision, 'X-Retention-Estimate': estimateToken },
+      body: { policy },
+    }),
   )
 }
 
@@ -1443,16 +1459,27 @@ export function readStationRetention(stationId: string): Promise<StationRetentio
   return execute(generatedReadStationRetention({ path: { station_id: stationId } }))
 }
 
-/** 整组替换工位保留覆盖；If-Match 是该工位覆盖记录版本（0 表示首次建立），冲突时后端返回 409。 */
+/** 估算整组替换该工位覆盖会新暴露多少本工位对象/空间与引用保护跳过；只读。 */
+export function estimateStationRetentionImpact(
+  stationId: string,
+  submitted: StationRetentionUpdate,
+): Promise<RetentionImpactEstimateView> {
+  return execute(
+    generatedEstimateStationRetentionImpact({ path: { station_id: stationId }, body: submitted }),
+  )
+}
+
+/** 整组替换工位保留覆盖；必须带回影响估算令牌，If-Match 是覆盖记录版本（0 表示首次建立）。 */
 export function updateStationRetention(
   stationId: string,
   submitted: StationRetentionUpdate,
   revision: number,
+  estimateToken: string,
 ): Promise<StationRetentionView> {
   return execute(
     generatedUpdateStationRetention({
       path: { station_id: stationId },
-      headers: { 'If-Match': revision },
+      headers: { 'If-Match': revision, 'X-Retention-Estimate': estimateToken },
       body: submitted,
     }),
   )

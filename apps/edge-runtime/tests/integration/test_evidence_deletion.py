@@ -17,6 +17,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from time import time
+from unittest.mock import patch
 from uuid import uuid4
 
 from nvsop_contracts import (
@@ -230,6 +231,26 @@ class EvidenceDeletionTests(unittest.TestCase):
         self.assertEqual(claimed, {v.candidate.evidence_id for v in self.transport.verifies})
         self.assertEqual({r.outcome.value for r in self.transport.reports}, {"deleted"})
 
+    def test_bounded_drain_advances_to_the_next_file(self) -> None:
+        first = self.executor.drain(limit=1)
+        second = self.executor.drain(limit=1)
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)
+        self.assertNotEqual(first[0].evidence_id, second[0].evidence_id)
+        self.assertFalse(any(path.exists() for path in self.files))
+
+    def test_journal_recovery_obeys_the_same_work_budget(self) -> None:
+        self.transport.verify_unreachable = True
+        self.executor.drain()
+        self.assertEqual(len(self.state.deletion_journal()), 2)
+        self.transport.verify_unreachable = False
+        first = self.executor.drain(limit=1)
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(self.state.deletion_journal()), 1)
+        second = self.executor.drain(limit=1)
+        self.assertEqual(len(second), 1)
+        self.assertEqual(self.state.deletion_journal(), ())
+
     def test_local_protection_beats_a_stale_center_eligible_claim(self) -> None:
         # 中心镜像尚未看到本机新建的待办再切片: 本机在向中心校验前就拒绝删除。
         self.state.station(STATION).record_reclip_intent(
@@ -419,6 +440,61 @@ class EvidenceDeletionTests(unittest.TestCase):
             [("missing", "source_missing")] * 2,
         )
         self.assertEqual({r.outcome.value for r in self.transport.reports}, {"missing"})
+        self.assertEqual(self.state.deletion_journal(), ())
+
+    def test_duplicate_registered_material_is_claimed_only_once(self) -> None:
+        station = self.state.station(STATION)
+        (record,) = station.registered_evidence_media()
+        assert record.queue_id is not None
+        duplicated = json.dumps(json.loads(record.media_results) * 2)
+        station.record_evidence_slice(
+            record.queue_id,
+            at=HostInstant(130),
+            media_results=duplicated,
+            covered_from=95.0,
+            covered_to=105.0,
+        )
+        station.mark_evidence_registered(
+            record.queue_id,
+            at=HostInstant(140),
+            expected_media_results=duplicated,
+        )
+        results = self.executor.drain()
+        self.assertEqual(len(results), 2)
+        self.assertEqual(len(self._claim().candidates), 2)
+        self.assertEqual({row.outcome for row in results}, {"deleted"})
+        self.assertTrue(all(not path.exists() for path in self.files))
+
+    def test_sqlite_failure_after_unlink_preserves_unknown_intent_and_stops_batch(self) -> None:
+        with (
+            patch.object(
+                type(self.state),
+                "record_deletion_result",
+                side_effect=sqlite3.OperationalError("injected journal write failure"),
+            ),
+            self.assertRaises(sqlite3.OperationalError),
+        ):
+            self.executor.drain(limit=2)
+        self.assertFalse(self.files[0].exists())
+        self.assertTrue(self.files[1].exists())
+        self.assertEqual(self.transport.reports, [])
+        (intent,) = self.state.deletion_journal()
+        self.assertEqual(intent.stage, "claimed")
+        restarted = EvidenceDeletionExecutor(
+            state=self.state,
+            host_id=HOST,
+            evidence_directory=self.directory,
+            transport=self.transport,
+            clock=self.clock,
+        )
+        results = restarted.drain(limit=2)
+        self.assertEqual(
+            [(row.outcome, row.reason) for row in results],
+            [
+                ("missing", "source_missing"),
+                ("deleted", "retention_expired"),
+            ],
+        )
         self.assertEqual(self.state.deletion_journal(), ())
 
 

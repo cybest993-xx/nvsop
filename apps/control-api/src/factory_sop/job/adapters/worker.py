@@ -1669,6 +1669,17 @@ async def dispatch_pending_jobs(ctx: Mapping[str, Any]) -> None:
         _artifact_executor(ctx).cleanup_candidates()
 
 
+async def run_retention_sweep_cron(ctx: Mapping[str, Any]) -> None:
+    """复用既有 worker 的调度；同步数据库工作不占用事件循环。"""
+    runner = cast(Callable[[], None] | None, ctx.get("retention_sweep"))
+    if runner is not None:
+        lock = cast(asyncio.Lock, ctx["retention_sweep_lock"])
+        if lock.locked():
+            return
+        async with lock:
+            await asyncio.to_thread(runner)
+
+
 def build_worker(
     settings: Settings,
     *,
@@ -1680,6 +1691,7 @@ def build_worker(
     annotation_runtime: DatasetAnnotationRuntime,
     ddm_executor: DdmTrainingJobExecutor,
     current_caller_resolver: CurrentCallerResolver,
+    retention_sweep: Callable[[], None] | None = None,
 ) -> Worker:
     """构造带数据库、Redis 和显式数据集运行时的 worker。"""
     dispatcher = ArqJobDispatcher.from_settings(settings, session_factory=factory)
@@ -1698,8 +1710,21 @@ def build_worker(
                 second={0, 30},
                 run_at_startup=True,
                 max_tries=1,
-            )
-        ],
+            ),
+        ]
+        + (
+            [
+                cron(
+                    run_retention_sweep_cron,
+                    second=set(range(60)),
+                    run_at_startup=True,
+                    keep_result=0,
+                    max_tries=1,
+                )
+            ]
+            if retention_sweep is not None
+            else []
+        ),
         redis_settings=dispatcher.redis_settings,
         ctx={
             "settings": settings,
@@ -1712,6 +1737,8 @@ def build_worker(
             "annotation_runtime": annotation_runtime,
             "ddm_executor": ddm_executor,
             "current_caller_resolver": current_caller_resolver,
+            "retention_sweep": retention_sweep,
+            "retention_sweep_lock": asyncio.Lock(),
             "blocking_job_slots": asyncio.Semaphore(_BLOCKING_JOB_LIMIT),
         },
         max_jobs=_BLOCKING_JOB_LIMIT,
@@ -1776,6 +1803,8 @@ def run_worker(
     annotation_runtime_factory: Callable[[Settings], DatasetAnnotationRuntime],
     ddm_executor_factory: Callable[[Settings, sessionmaker[Session]], DdmTrainingJobExecutor],
     current_caller_resolver_factory: Callable[[sessionmaker[Session]], CurrentCallerResolver],
+    retention_sweep_factory: Callable[[Settings, sessionmaker[Session]], Callable[[], None]]
+    | None = None,
 ) -> None:
     """解析给定环境并运行 worker；真实运行时由组合根工厂显式装配。"""
     settings = Settings.from_environment(environment)
@@ -1788,6 +1817,9 @@ def run_worker(
     annotation_runtime = annotation_runtime_factory(settings)
     ddm_executor = ddm_executor_factory(settings, factory)
     current_caller_resolver = current_caller_resolver_factory(factory)
+    retention_sweep = (
+        None if retention_sweep_factory is None else retention_sweep_factory(settings, factory)
+    )
     worker = build_worker(
         settings,
         engine=engine,
@@ -1798,6 +1830,7 @@ def run_worker(
         annotation_runtime=annotation_runtime,
         ddm_executor=ddm_executor,
         current_caller_resolver=current_caller_resolver,
+        retention_sweep=retention_sweep,
     )
     try:
         worker.run()

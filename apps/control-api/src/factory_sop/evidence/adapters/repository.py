@@ -45,6 +45,28 @@ from nvsop_contracts import EvidenceDeletionClaimStatus
 EVIDENCE_DELETION_AUTHORITY_LOCK_KEY = 0x2064656C65
 
 
+class PostgresEvidenceRecordProtection:
+    """记录回收前按实例确认引用仍需保留；媒体终局删除前宁可多留明细。"""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def retained(self, host: str, station: str, instance: int) -> bool:
+        return (
+            self._session.scalar(
+                select(EvidenceReferenceRow.evidence_id)
+                .where(
+                    EvidenceReferenceRow.host_id == host,
+                    EvidenceReferenceRow.station_id == station,
+                    EvidenceReferenceRow.instance_id == instance,
+                    EvidenceReferenceRow.status != EvidenceStatus.DELETED.value,
+                )
+                .limit(1)
+            )
+            is not None
+        )
+
+
 class PostgresEvidenceRepository(EvidenceRepository):
     def __init__(self, session: Session) -> None:
         self._session = session

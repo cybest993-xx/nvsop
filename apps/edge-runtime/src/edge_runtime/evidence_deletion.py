@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from time import time
@@ -102,25 +102,44 @@ class EvidenceDeletionExecutor:
         self._transport = transport
         self._batch_size = batch_size
         self._clock = clock
+        self._candidate_iterator: Iterator[tuple[str, int, EvidenceDeletionCandidate]] | None = None
 
     def drain(self, *, limit: int | None = None) -> tuple[EvidenceDeletionExecution, ...]:
         """执行一轮本机删除资格; 没有已确认配置时不产生任何删除, 也不猜中心策略。"""
+        if limit is not None and limit <= 0:
+            raise ValueError("deletion work limit must be positive")
         bundle = self._state.configuration().confirmed()
         if bundle is None or bundle.host_id != self._host_id:
             return (EvidenceDeletionExecution("", "skipped", "configuration_unknown"),)
         revision = bundle.config_revision
         digest = bundle.effective_sha256
         # 先推进已有账本: 终局结果重放, 未完成的认领继续 verify/删除; 它们不再进入新 claim。
-        journal = self._state.deletion_journal()
+        journal = self._state.deletion_journal(limit=limit)
         results: list[EvidenceDeletionExecution] = []
         for entry in journal:
             results.append(self._resume(entry, revision=revision, digest=digest))
-        in_flight = {entry.evidence_id for entry in journal}
-        pending = [
-            item for item in self._local_candidates() if item[2].evidence_id not in in_flight
-        ]
-        if limit is not None:
-            pending = pending[:limit]
+        budget = None if limit is None else limit - len(journal)
+        pending: list[tuple[str, int, EvidenceDeletionCandidate]] = []
+        pending_ids: set[str] = set()
+        if budget is None:
+            candidates = self._local_candidates()
+        else:
+            if self._candidate_iterator is None:
+                self._candidate_iterator = self._local_candidates(limit=limit)
+            candidates = self._candidate_iterator
+        inspected = 0
+        while budget is None or inspected < budget:
+            item = next(candidates, None)
+            if item is None:
+                self._candidate_iterator = None
+                break
+            inspected += 1
+            evidence_id = item[2].evidence_id
+            if evidence_id not in pending_ids and not self._state.deletion_journal(
+                evidence_id=evidence_id, limit=1
+            ):
+                pending.append(item)
+                pending_ids.add(evidence_id)
         for offset in range(0, len(pending), self._batch_size):
             batch = pending[offset : offset + self._batch_size]
             request = EvidenceDeletionRequest(
@@ -187,7 +206,7 @@ class EvidenceDeletionExecutor:
                     reference=candidate.reference,
                     at=self._clock(),
                 )
-                intent = self._state.deletion_journal()
+                intent = self._state.deletion_journal(evidence_id=candidate.evidence_id, limit=1)
                 record = next(
                     (row for row in intent if row.evidence_id == candidate.evidence_id), None
                 )
@@ -321,6 +340,9 @@ class EvidenceDeletionExecutor:
     ) -> EvidenceDeletionExecution:
         """把终局结果反馈中心; 成功后清账本行, 失败保留供下一轮重放, 不制造删除。"""
         if not self._report(entry.claim_id, entry.evidence_id, outcome, reason):
+            self._state.record_deletion_failure(
+                entry.evidence_id, error="result_pending", at=self._clock()
+            )
             return EvidenceDeletionExecution(entry.evidence_id, "skipped", "result_pending")
         self._state.clear_deletion_intent(entry.evidence_id)
         return EvidenceDeletionExecution(
@@ -351,33 +373,32 @@ class EvidenceDeletionExecutor:
     def _local_protection(self, station_id: str, instance_id: int) -> str | None:
         return self._state.station(station_id).evidence_deletion_protection(instance_id=instance_id)
 
-    def _local_candidates(self) -> list[tuple[str, int, EvidenceDeletionCandidate]]:
-        """本机已登记且文件仍在的候选; 文件缺失或身份不可读时不构造候选。"""
-        values: list[tuple[str, int, EvidenceDeletionCandidate]] = []
-        seen: set[str] = set()
-        for station_id in self._state.registered_evidence_stations():
-            station = self._state.station(station_id)
-            for record in station.registered_evidence_media():
-                identity = (
-                    record.identity
-                    if record.identity is not None
-                    else (
-                        None
-                        if record.queue_id is None
-                        else evidence_media_identity(self._host_id, record.queue_id)
-                    )
-                )
-                if identity is None:
-                    continue
-                artifact = evidence_artifact_directory(
-                    identity, record.covered_from, record.covered_to
-                )
-                for candidate in _candidates_for(self._directory, artifact, record.media_results):
-                    if candidate.evidence_id in seen:
-                        continue
-                    seen.add(candidate.evidence_id)
-                    values.append((station_id, record.instance_id, candidate))
-        return values
+    def _local_candidates(
+        self,
+        *,
+        limit: int | None = None,
+    ) -> Iterator[tuple[str, int, EvidenceDeletionCandidate]]:
+        """只读本机产物索引; 周期入口有界分页并按需计算媒体身份, 不扫描整个目录。"""
+        records = (
+            self._state.registered_evidence_batch(limit=limit)
+            if limit is not None
+            else (
+                record
+                for station in self._state.registered_evidence_stations()
+                for record in self._state.station(station).registered_evidence_media()
+            )
+        )
+        for record in records:
+            identity = record.identity or (
+                None
+                if record.queue_id is None
+                else evidence_media_identity(self._host_id, record.queue_id)
+            )
+            if identity is None:
+                continue
+            artifact = evidence_artifact_directory(identity, record.covered_from, record.covered_to)
+            for candidate in _candidates_for(self._directory, artifact, record.media_results):
+                yield record.station_id, record.instance_id, candidate
 
 
 def _outcome_of(value: str | None) -> EvidenceDeletionOutcome | None:
@@ -391,15 +412,14 @@ def _outcome_of(value: str | None) -> EvidenceDeletionOutcome | None:
 
 def _candidates_for(
     directory: Path, artifact: str, media_results: str
-) -> tuple[EvidenceDeletionCandidate, ...]:
+) -> Iterator[EvidenceDeletionCandidate]:
     """从已定稿产物的 typed 元数据构造候选; 只返回磁盘上真实存在且身份可读的文件。"""
     try:
         media = json.loads(media_results)
     except (TypeError, json.JSONDecodeError):
-        return ()
+        return
     if not isinstance(media, list):
-        return ()
-    values: list[EvidenceDeletionCandidate] = []
+        return
     for item in media:
         if not isinstance(item, dict):
             continue
@@ -421,16 +441,13 @@ def _candidates_for(
             digest = _digest(path)
             if not digest:
                 continue
-            values.append(
-                EvidenceDeletionCandidate(
-                    evidence_id=reference,
-                    generation=generation,
-                    sha256=digest,
-                    size=size,
-                    reference=reference,
-                )
+            yield EvidenceDeletionCandidate(
+                evidence_id=reference,
+                generation=generation,
+                sha256=digest,
+                size=size,
+                reference=reference,
             )
-    return tuple(values)
 
 
 def _contained_path(base: Path, reference: str) -> Path | None:

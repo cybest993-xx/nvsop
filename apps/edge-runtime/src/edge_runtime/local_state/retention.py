@@ -111,6 +111,72 @@ _REPORTED_TABLES = (
 )
 
 
+def _instance_protection_conditions(
+    *, station_expression: str, instance_expression: str
+) -> tuple[tuple[str, str], ...]:
+    """#206 媒体删除与 #208 队列回收共用的实例保护条件; 规则只在这里定义一次。"""
+    return (
+        (
+            "latched_violation",
+            "EXISTS (SELECT 1 FROM local_violation v "
+            f"WHERE v.station_id={station_expression} AND v.instance_id={instance_expression})",
+        ),
+        (
+            "evidence_pending",
+            "EXISTS (SELECT 1 FROM local_evidence_queue e "
+            f"WHERE e.station_id={station_expression} AND e.instance_id={instance_expression} "
+            "AND e.registered_at IS NULL)",
+        ),
+    )
+
+
+def retention_protection_predicate(
+    *, instance_expression: str, station_expression: str = "q.station_id"
+) -> str:
+    """共享保留保护谓词: 未知/未结案实例、已锁存违规、未登记证据引用。
+
+    影响估算、已上报回收与 #206 媒体删除共用本谓词; 未知或失配状态按受保护处理。
+    """
+    conditions = " OR ".join(
+        condition
+        for _, condition in _instance_protection_conditions(
+            station_expression=station_expression, instance_expression=instance_expression
+        )
+    )
+    return (
+        "(NOT EXISTS (SELECT 1 FROM local_sop_instance i "
+        f"WHERE i.station_id={station_expression} AND i.instance_id={instance_expression} "
+        "AND i.closed_at IS NOT NULL) "
+        f"OR {conditions})"
+    )
+
+
+def instance_protection_reason(
+    connection: sqlite3.Connection, *, station_id: str, instance_id: int
+) -> str | None:
+    """按共享规则返回一条实例的保护原因; ``None`` 表示共享规则不保护它。
+
+    这是 #206 媒体删除与 #208 队列回收共用的唯一未结案/锁存违规/未登记证据判定。
+    """
+    instance = connection.execute(
+        "SELECT closed_at FROM local_sop_instance WHERE station_id = ? AND instance_id = ?",
+        (station_id, instance_id),
+    ).fetchone()
+    if instance is None:
+        return "instance_unknown"
+    if instance[0] is None:
+        return "instance_open"
+    for reason, condition in _instance_protection_conditions(
+        station_expression="?", instance_expression="?"
+    ):
+        found = connection.execute(
+            f"SELECT 1 WHERE {condition}", (station_id, instance_id)
+        ).fetchone()
+        if found is not None:
+            return reason
+    return None
+
+
 def _protection_expression(instance_expression: str | None, *, disposal: bool) -> str:
     """返回“仍受未结实例/已锁存违规/未登记证据引用保护”的 SQL 谓词。
 
@@ -119,16 +185,7 @@ def _protection_expression(instance_expression: str | None, *, disposal: bool) -
     if instance_expression is None:
         base = "0"
     else:
-        base = f"""(
-                NOT EXISTS (SELECT 1 FROM local_sop_instance i
-                    WHERE i.station_id=q.station_id AND i.instance_id={instance_expression}
-                    AND i.closed_at IS NOT NULL)
-                OR EXISTS (SELECT 1 FROM local_violation v
-                    WHERE v.station_id=q.station_id AND v.instance_id={instance_expression})
-                OR EXISTS (SELECT 1 FROM local_evidence_queue e
-                    WHERE e.station_id=q.station_id AND e.instance_id={instance_expression}
-                    AND e.registered_at IS NULL)
-            )"""
+        base = retention_protection_predicate(instance_expression=instance_expression)
     if disposal:
         return f"(q.violation_ref IS NOT NULL OR {base})"
     return base

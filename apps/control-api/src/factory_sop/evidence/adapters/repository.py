@@ -213,6 +213,39 @@ class PostgresEvidenceRepository(EvidenceRepository):
             is not None
         )
 
+    def mark_media_missing(self, evidence_id: str) -> bool:
+        """把一条仍为可用的引用标记为媒体不可用（源文件确证不存在）。
+
+        这用于来源机无法证明本次成功取消链接、但已确证本机不再持有源文件的终局：媒体按不可用
+        结案，不写成已删除；已删除的行保持已删除并视为不可用。
+        """
+        table = cast(Table, EvidenceReferenceRow.__table__)
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(table)
+                .where(
+                    table.c.evidence_id == evidence_id,
+                    table.c.status != EvidenceStatus.DELETED.value,
+                )
+                .values(
+                    status=EvidenceStatus.FAILED.value,
+                    failure_reason="source_missing",
+                )
+            ),
+        )
+        if result.rowcount == 1:
+            return True
+        return (
+            self._session.scalar(
+                select(EvidenceReferenceRow.evidence_id).where(
+                    EvidenceReferenceRow.evidence_id == evidence_id,
+                    EvidenceReferenceRow.status == EvidenceStatus.DELETED.value,
+                )
+            )
+            is not None
+        )
+
     def page(
         self,
         *,
@@ -547,6 +580,22 @@ class PostgresEvidenceDeletionClaimRepository(EvidenceDeletionClaimRepository):
                     table.c.status == EvidenceDeletionClaimStatus.PENDING.value,
                 )
                 .values(authorized_at=func.coalesce(table.c.authorized_at, at))
+            ),
+        )
+        return result.rowcount == 1
+
+    def refresh_deadline(self, claim_id: UUID, *, expires_at: datetime) -> bool:
+        """仅在仍为未结案时刷新票据截止；已结案/不存在返回 ``False``。"""
+        table = cast(Table, EvidenceDeletionClaimRow.__table__)
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(table)
+                .where(
+                    table.c.claim_id == claim_id,
+                    table.c.status == EvidenceDeletionClaimStatus.PENDING.value,
+                )
+                .values(expires_at=expires_at)
             ),
         )
         return result.rowcount == 1

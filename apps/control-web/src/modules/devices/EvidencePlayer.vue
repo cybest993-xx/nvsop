@@ -94,9 +94,13 @@ const failures: Record<string, string> = {
 }
 const failureText = (code: string) => failures[code] ?? `证据读取失败（${code || 'unknown'}）。`
 const kindLabel = (item: EvidenceReference) => (item.kind === 'clip' ? '证据片段' : '锚点关键帧')
-// 中心可能登记 pending/failed 的引用；它们不是“不存在”，要显式说明不可用原因。
-const referenceState = (item: EvidenceReference) =>
-  item.status === 'failed' ? '登记失败' : '尚未对账'
+// 删除反馈保留引用，媒体不可用与尚未对账必须分开展示。
+const referenceStates: Record<EvidenceReference['status'], string> = {
+  available: '可用',
+  pending: '尚未对账',
+  failed: '不可用',
+  deleted: '已由来源推理机删除',
+}
 const reviewTime = (value: string) =>
   new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
 const deadlineTime = (value: number) =>
@@ -118,7 +122,7 @@ function reclipState(
     return {
       text: '可再切片截止时刻：未知（引用不可用）',
       enabled: false,
-      reason: '该引用未登记成功或尚未对账，不能发起再切片。',
+      reason: '该引用当前不可用，不能发起再切片。',
     }
   }
   const deadline = item.reclip_deadline ?? null
@@ -323,6 +327,7 @@ async function enterReviewHold(item: EvidenceReference, guard: number): Promise<
   if (staleEvidence !== null && staleHold !== null) {
     await releaseReviewHold(staleEvidence, staleHold)
   }
+  if (token !== reviewHoldToken || guard !== revision) return
   const hold = crypto.randomUUID()
   reviewHoldEvidenceId = item.evidence_id
   reviewHoldId = hold
@@ -587,7 +592,7 @@ onUnmounted(() => {
           {{ kindLabel(item) }}（锚点 {{ item.anchor }}）
         </button>
         <span v-else class="muted">
-          {{ kindLabel(item) }}：引用{{ referenceState(item) }}，不可回看。
+          {{ kindLabel(item) }}：引用{{ referenceStates[item.status] }}，不可回看。
         </span>
         <span
           class="evidence__deadline"

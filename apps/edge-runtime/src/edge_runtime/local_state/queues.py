@@ -30,6 +30,7 @@ from edge_runtime.judgment.model import Decision, HostInstant, Lifecycle, Violat
 from edge_runtime.judgment.reasons import ReasonCode, Verdict
 from edge_runtime.local_state.codec import span
 from edge_runtime.local_state.codec import violation as decode_violation
+from edge_runtime.local_state.retention import instance_protection_reason
 
 # A new process cannot validate a previous process's monotonic report time.
 REPORT_RUN_ID = uuid4().hex
@@ -1226,43 +1227,15 @@ class StationQueues:
     def evidence_deletion_protection(self, *, instance_id: int) -> str | None:
         """删除前本机保护事实; ``None`` 表示本机没有仍成立的保护。
 
-        本机事实先于中心镜像: 判定/违规锁存、实例结案与待办证据在本机落地, 中心可能尚未收到。
-        未知实例同样不当作无人引用 (§5.19)。
+        未结案/未知实例、已锁存违规与未登记证据引用复用 #208 定义并测试过的共享保护规则
+        (``instance_protection_reason``); #206 只额外加盖“待办再切片引用”这一本票保护。
         """
         with self._lock:
-            instance = self._connection.execute(
-                """
-                SELECT closed_at FROM local_sop_instance
-                 WHERE station_id = ? AND instance_id = ?
-                """,
-                (self._station_id, instance_id),
-            ).fetchone()
-            if instance is None:
-                return "instance_unknown"
-            if instance["closed_at"] is None:
-                return "instance_open"
-            if (
-                self._connection.execute(
-                    """
-                    SELECT 1 FROM local_violation
-                     WHERE station_id = ? AND instance_id = ? LIMIT 1
-                    """,
-                    (self._station_id, instance_id),
-                ).fetchone()
-                is not None
-            ):
-                return "latched_violation"
-            if (
-                self._connection.execute(
-                    """
-                    SELECT 1 FROM local_evidence_queue
-                     WHERE station_id = ? AND instance_id = ? AND registered_at IS NULL LIMIT 1
-                    """,
-                    (self._station_id, instance_id),
-                ).fetchone()
-                is not None
-            ):
-                return "evidence_pending"
+            reason = instance_protection_reason(
+                self._connection, station_id=self._station_id, instance_id=instance_id
+            )
+            if reason is not None:
+                return reason
             if (
                 self._connection.execute(
                     """

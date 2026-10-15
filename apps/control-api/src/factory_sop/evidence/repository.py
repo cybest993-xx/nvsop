@@ -61,6 +61,13 @@ class EvidenceRepository(Protocol):
         """
         ...
 
+    def mark_media_missing(self, evidence_id: str) -> bool:
+        """把一条可用引用标记为“源文件确证不存在”；不是已证明的成功删除。
+
+        未知证据返回 ``False``；已删除的行保持已删除并按不可用处理。
+        """
+        ...
+
     def page(
         self,
         *,
@@ -179,6 +186,10 @@ class EvidenceDeletionClaimRepository(Protocol):
 
     def authorize(self, claim_id: UUID, *, at: datetime) -> bool:
         """把未结案认领推进到已授权阶段并保留首次时刻；已结案/不存在返回 ``False``。"""
+        ...
+
+    def refresh_deadline(self, claim_id: UUID, *, expires_at: datetime) -> bool:
+        """仅在仍为未结案时刷新认领票据截止；已结案/不存在返回 ``False``。"""
         ...
 
     def settle(

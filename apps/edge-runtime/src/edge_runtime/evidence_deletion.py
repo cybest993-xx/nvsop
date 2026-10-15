@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from time import time
@@ -47,6 +48,7 @@ _LOCAL_OUTCOME = {
     EvidenceDeletionOutcome.DELETED: "deleted",
     EvidenceDeletionOutcome.RETAINED: "skipped",
     EvidenceDeletionOutcome.CANCELLED: "cancelled",
+    EvidenceDeletionOutcome.MISSING: "missing",
 }
 
 
@@ -88,6 +90,7 @@ class EvidenceDeletionExecutor:
         evidence_directory: Path,
         transport: EvidenceDeletionTransport,
         batch_size: int = MAX_DELETION_CANDIDATES,
+        clock: Callable[[], float] = time,
     ) -> None:
         if not host_id:
             raise ValueError("evidence deletion host id must not be empty")
@@ -98,6 +101,7 @@ class EvidenceDeletionExecutor:
         self._directory = evidence_directory
         self._transport = transport
         self._batch_size = batch_size
+        self._clock = clock
 
     def drain(self, *, limit: int | None = None) -> tuple[EvidenceDeletionExecution, ...]:
         """执行一轮本机删除资格; 没有已确认配置时不产生任何删除, 也不猜中心策略。"""
@@ -157,6 +161,16 @@ class EvidenceDeletionExecutor:
                         )
                     )
                     continue
+                if claim_entry.expires_at is None or self._clock() >= (
+                    claim_entry.expires_at.timestamp()
+                ):
+                    # 票据不可用(缺失/已过期)不能产生删除意图: 不落账、不删除。
+                    results.append(
+                        EvidenceDeletionExecution(
+                            candidate.evidence_id, "skipped", "ticket_expired"
+                        )
+                    )
+                    continue
                 # 先落本机意图再 verify/删除: 中心认领已存在, 账本使重启后仍能收敛它。
                 self._state.record_deletion_intent(
                     evidence_id=candidate.evidence_id,
@@ -171,7 +185,7 @@ class EvidenceDeletionExecutor:
                     observed_sha256=candidate.sha256,
                     observed_size=candidate.size,
                     reference=candidate.reference,
-                    at=time(),
+                    at=self._clock(),
                 )
                 intent = self._state.deletion_journal()
                 record = next(
@@ -225,11 +239,19 @@ class EvidenceDeletionExecutor:
             )
         except EvidenceDeletionTransportError:
             self._state.record_deletion_failure(
-                entry.evidence_id, error="center_unreachable", at=time()
+                entry.evidence_id, error="center_unreachable", at=self._clock()
             )
             return EvidenceDeletionExecution(entry.evidence_id, "skipped", "center_unreachable")
+        # 不得从 bool 推断资格: 响应必须绑定本账本的同一条认领与证据。
+        if verified.claim_id != entry.claim_id or verified.evidence_id != entry.evidence_id:
+            return self._finish(entry, EvidenceDeletionOutcome.CANCELLED, "verify_binding_mismatch")
+        # 资格票据必须是可用的未来时刻(相对于认领创建), 而不是已过期的旧票;
+        # 当前时刻的新鲜复核在材料哈希之后、取消链接之前再做一次。
+        if verified.expires_at is None or verified.expires_at.timestamp() <= entry.created_at:
+            return self._finish(entry, EvidenceDeletionOutcome.CANCELLED, "ticket_expired")
         if verified.decision is not EvidenceDeletionDecision.ELIGIBLE:
             return self._finish(entry, EvidenceDeletionOutcome.RETAINED, verified.reason)
+        expires_at = verified.expires_at.timestamp()
         path = _contained_path(self._directory, candidate.reference)
         local_outcome: str | None = None
         with self._state.guard():
@@ -247,8 +269,15 @@ class EvidenceDeletionExecutor:
                     action, reason = EvidenceDeletionOutcome.RETAINED, protection
                 elif path is None:
                     action, reason = EvidenceDeletionOutcome.CANCELLED, "reference_out_of_scope"
+                elif not path.exists():
+                    # 无法证明本认领成功取消链接, 但源文件确证不存在: 按不可用结案, 不写成已删除。
+                    action, reason = EvidenceDeletionOutcome.MISSING, "source_missing"
+                    local_outcome = "missing"
                 elif not _material_matches(path, candidate.sha256, candidate.size):
                     action, reason = EvidenceDeletionOutcome.CANCELLED, "material_changed"
+                elif self._clock() >= expires_at:
+                    # 材料校验(哈希)之后、取消链接之前再验一次新鲜到期: 过期即拒绝。
+                    action, reason = EvidenceDeletionOutcome.CANCELLED, "ticket_expired"
                 else:
                     try:
                         path.unlink()
@@ -264,7 +293,7 @@ class EvidenceDeletionExecutor:
                 outcome=action.value,
                 reason_code=reason,
                 detail=None,
-                at=time(),
+                at=self._clock(),
             )
         return self._report_and_clear(entry, action, reason, local_outcome=local_outcome)
 
@@ -278,7 +307,7 @@ class EvidenceDeletionExecutor:
                 outcome=outcome.value,
                 reason_code=reason,
                 detail=None,
-                at=time(),
+                at=self._clock(),
             )
         return self._report_and_clear(entry, outcome, reason)
 

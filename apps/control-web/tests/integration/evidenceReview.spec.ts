@@ -210,6 +210,39 @@ describe('人工复核结论', () => {
     expect(wrapper.find('fieldset').attributes('disabled')).toBeDefined()
   })
 
+  it('releases the current hold when an older cancellation finishes after another selection', async () => {
+    signIn(REVIEW_PERMISSIONS)
+    const slowCancel = deferred<void>()
+    const second = { ...LISTING, evidence_id: 'host-1/second.mp4' }
+    const third = { ...LISTING, evidence_id: 'host-1/third.mp4' }
+    api.readEvidence.mockResolvedValue([LISTING, second, third])
+    const wrapper = mountPlayer()
+    await flushPromises()
+    const [firstButton, secondButton, thirdButton] = wrapper.findAll('.evidence__list button')
+    if (!firstButton || !secondButton || !thirdButton) {
+      throw new Error('expected three evidence rows')
+    }
+    await firstButton.trigger('click')
+    await flushPromises()
+
+    api.cancelEvidenceReview.mockReturnValueOnce(slowCancel.promise)
+    await secondButton.trigger('click')
+    await thirdButton.trigger('click')
+    await flushPromises()
+    const currentHold = api.beginEvidenceReview.mock.calls.find(
+      ([evidenceId]) => evidenceId === third.evidence_id,
+    )?.[1].review_id
+    expect(currentHold).toEqual(expect.any(String))
+
+    slowCancel.resolve(undefined)
+    await flushPromises()
+    wrapper.unmount()
+    await flushPromises()
+    expect(api.cancelEvidenceReview).toHaveBeenCalledWith(third.evidence_id, {
+      review_id: currentHold,
+    })
+  })
+
   it('cancels a stale begin when another evidence is selected first', async () => {
     signIn(REVIEW_PERMISSIONS)
     const slow = deferred<EvidenceReviewHold>()

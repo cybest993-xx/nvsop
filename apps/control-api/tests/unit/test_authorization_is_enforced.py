@@ -775,6 +775,9 @@ class StubRequestSession:
 class FakeDeletionAuthorityFence:
     """授权机械测试不建立真实删除认领；权威锁与检查是无操作。"""
 
+    def lock_authority(self) -> None:
+        return None
+
     def ensure_mutable(self) -> None:
         return None
 

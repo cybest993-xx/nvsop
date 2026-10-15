@@ -129,6 +129,8 @@ describe('证据回看', () => {
       { ...LISTING, evidence_id: 'host-2/clip.mp4', host_id: 'host-2' },
       { ...LISTING, evidence_id: 'host-1/upper.mp4', host_id: 'HOST-1' },
       { ...LISTING, evidence_id: 'host-1/pending.mp4', status: 'pending' as const },
+      { ...LISTING, evidence_id: 'host-1/deleted.mp4', status: 'deleted' as const },
+      { ...LISTING, evidence_id: 'host-1/failed.mp4', status: 'failed' as const },
     ])
     signIn()
     const wrapper = mountPlayer()
@@ -139,6 +141,8 @@ describe('证据回看', () => {
     expect(wrapper.findAll('button')).toHaveLength(2)
     expect(wrapper.text()).toContain('证据片段')
     expect(wrapper.text()).toContain('引用尚未对账，不可回看')
+    expect(wrapper.text()).toContain('引用已由来源推理机删除，不可回看')
+    expect(wrapper.text()).toContain('引用不可用，不可回看')
     expect(wrapper.text()).not.toContain('host-2')
   })
 

@@ -47,11 +47,16 @@ class EvidenceDeletionDecision(StrEnum):
 
 
 class EvidenceDeletionOutcome(StrEnum):
-    """来源机对一条已认领引用的终局反馈；``cancelled`` 表示放弃删除并释放认领。"""
+    """来源机对一条已认领引用的终局反馈；``cancelled`` 表示放弃删除并释放认领。
+
+    ``missing`` 表示来源机已证明该引用不再有本机源文件，但无法证明是本认领下的成功取消链接
+    （例如取消链接后、结果落账前崩溃）：媒体按不可用结案，**不得**当作已证明成功删除。
+    """
 
     DELETED = "deleted"
     RETAINED = "retained"
     CANCELLED = "cancelled"
+    MISSING = "missing"
 
 
 class EvidenceDeletionClaimStatus(StrEnum):
@@ -61,6 +66,7 @@ class EvidenceDeletionClaimStatus(StrEnum):
     DELETED = "deleted"
     RETAINED = "retained"
     CANCELLED = "cancelled"
+    MISSING = "missing"
 
 
 @dataclass(frozen=True, slots=True)

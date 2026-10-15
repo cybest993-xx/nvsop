@@ -53,6 +53,10 @@ class DeletionAuthorityFence(Protocol):
     内先取权威锁再查询，使“授权删除”与“改写保留策略/工位状态/签发配置”真正串行（§5.19）。
     """
 
+    def lock_authority(self) -> None:
+        """取本事务的权威互斥锁（不检查），供“先锁后判断是否真变更”的调用方使用。"""
+        ...
+
     def ensure_mutable(self) -> None:
         """取权威锁并断言没有已授权未结案删除；否则抛 :class:`DeletionAuthorityBusyError`。"""
         ...
@@ -326,6 +330,25 @@ class EvidenceDeletionGateway(Protocol):
 
         幂等：重复授权保留首次授权时刻，返回 ``True``。授权在事务提交后持久，直到来源机
         终局反馈；期间权威变更（策略、工位状态、配置签发）必须被 ``ensure_mutable`` 拒绝。
+        """
+        ...
+
+    def replay_pending(
+        self,
+        *,
+        evidence_id: str,
+        host_id: UUID,
+        config_revision: int,
+        effective_sha256: str,
+        default_revision: int,
+        station_revision: int,
+        expires_at: datetime,
+        now: datetime,
+    ) -> UUID | None:
+        """同一来源、同一绑定的本机未结案认领幂等重放：刷新票据截止并返回认领 ID。
+
+        用于中心已提交认领但来源机丢失 HTTP 响应的崩溃窗口：下一次 drain 不再新建认领，也
+        不抢占其他来源机的认领；绑定或保护事实不同则返回 ``None``，继续按既有受保护原因处理。
         """
         ...
 

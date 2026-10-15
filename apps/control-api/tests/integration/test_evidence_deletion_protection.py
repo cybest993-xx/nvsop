@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session as DatabaseSession
 from test_auth_http import settings
 from test_evidence_access import _post_as_host
 from test_retention_impact_postgres import _decision, _instance
-from test_runtime_observation_http import RuntimeTopology
+from test_runtime_observation_http import RuntimeTopology, _host_headers
 from test_runtime_observation_http import runtime_topology as runtime_topology
 
 from factory_sop.app import API_PREFIX, create_app
@@ -103,6 +103,7 @@ from nvsop_contracts import (
     EvidenceDeletionVerifyResponse,
     ReportEvidence,
     ReportViolation,
+    configuration_from_wire,
 )
 
 CLAIMS_PATH = f"{API_PREFIX}/retention/evidence-deletion-claims"
@@ -1332,3 +1333,151 @@ def test_malformed_deletion_candidates_are_rejected_as_422(
     with TestClient(app, base_url="https://testserver") as host:
         response = _post_as_host(host, topology, path=CLAIMS_PATH, body=body)
     assert response.status_code == 422, response.text
+
+
+def test_unchanged_configuration_pull_is_allowed_while_authorized_deletion_pending(
+    engine: Engine, runtime_topology: RuntimeTopology
+) -> None:
+    """未变的签名配置拉取/租约续期不被在途授权删除阻断；真正改变绑定的配置被原子拒绝。"""
+    topology = runtime_topology
+    host_id = str(topology.host.id)
+    instance_id = 81
+    evidence_id = f"{host_id}/unchanged-pull.mp4"
+    config_path = f"{API_PREFIX}/inference-hosts/{host_id}/configuration"
+    app = create_app(
+        settings().model_copy(update={"evidence_deletion_ticket_ttl_seconds": TTL_SECONDS}),
+        session_factory=session_factory(engine),
+    )
+    try:
+        with TestClient(app, base_url="https://testserver") as base:
+            pulled = base.get(
+                config_path, headers=_host_headers(topology, method="GET", path=config_path)
+            )
+            assert pulled.status_code == 200, pulled.text
+            bundle = configuration_from_wire(pulled.json())
+            _seed_instance(engine, topology, instance_id=instance_id)
+            _seed_evidence(engine, topology, evidence_id, instance_id=instance_id)
+            with DatabaseSession(engine) as session:
+                (claimed,) = _claim(
+                    _seams(session),
+                    topology,
+                    candidates=(_candidate(evidence_id),),
+                    config_revision=bundle.config_revision,
+                    digest=bundle.effective_sha256,
+                ).entries
+                assert claimed.decision is EvidenceDeletionDecision.ELIGIBLE
+                assert claimed.ticket is not None
+                verified = _verify(
+                    _seams(session),
+                    topology,
+                    ticket=claimed.ticket,
+                    evidence_id=evidence_id,
+                    config_revision=bundle.config_revision,
+                    digest=bundle.effective_sha256,
+                )
+                assert verified.decision is EvidenceDeletionDecision.ELIGIBLE
+                claim_id = UUID(claimed.claim_id or "")
+                session.commit()
+            # 有效配置未变（含仅租约续期的签名 GET）：不得被在途授权删除拒绝。
+            unchanged = base.get(
+                config_path, headers=_host_headers(topology, method="GET", path=config_path)
+            )
+            assert unchanged.status_code == 200, unchanged.text
+            unchanged_bundle = configuration_from_wire(unchanged.json())
+            assert (
+                unchanged_bundle.config_revision,
+                unchanged_bundle.effective_sha256,
+            ) == (bundle.config_revision, bundle.effective_sha256)
+            # 真正改变删除所依据的绑定配置：必须被原子拒绝。
+            with engine.begin() as connection:
+                connection.execute(
+                    text("UPDATE device_station SET revision = revision + 1 WHERE id = :id"),
+                    {"id": topology.station.id},
+                )
+            changed = base.get(
+                config_path, headers=_host_headers(topology, method="GET", path=config_path)
+            )
+            assert changed.status_code == 409, changed.text
+            assert changed.json()["error_code"] == "STATE_CONFLICT"
+            # 来源机终局反馈后权威释放，新配置可继续签发。
+            with DatabaseSession(engine) as session:
+                settle_evidence_deletion(
+                    host_id=topology.host.id,
+                    claim_id=claim_id,
+                    evidence_id=evidence_id,
+                    outcome=EvidenceDeletionOutcome.CANCELLED,
+                    reason_code="delete_cancelled",
+                    detail="release fence",
+                    evidence=_seams(session).evidence,
+                    now=NOW,
+                )
+                session.commit()
+            restored = base.get(
+                config_path, headers=_host_headers(topology, method="GET", path=config_path)
+            )
+            assert restored.status_code == 200, restored.text
+    finally:
+        _clear(engine, evidence_id)
+
+
+def test_claim_replay_is_idempotent_for_same_binding_and_refuses_changed_binding(
+    engine: Engine, runtime_topology: RuntimeTopology
+) -> None:
+    """崩溃丢失 HTTP 响应后，同一来源/同一绑定可幂等重放自己的未结案认领；绑定变化则不放行。"""
+    topology = runtime_topology
+    host_id = str(topology.host.id)
+    revision = _configure_current(topology, engine)
+    instance_id = 91
+    evidence_id = f"{host_id}/claim-replay.mp4"
+    _seed_instance(engine, topology, instance_id=instance_id)
+    _seed_evidence(engine, topology, evidence_id, instance_id=instance_id)
+    try:
+        with DatabaseSession(engine) as session:
+            first = _claim(
+                _seams(session),
+                topology,
+                candidates=(_candidate(evidence_id),),
+                config_revision=revision,
+            ).entries[0]
+            assert first.decision is EvidenceDeletionDecision.ELIGIBLE
+            assert first.ticket is not None
+            assert first.claim_id is not None
+            session.commit()
+        # 同一绑定重放：返回同一条认领与新的短期票据，不新建第二条认领。
+        with DatabaseSession(engine) as session:
+            replay = _claim(
+                _seams(session),
+                topology,
+                candidates=(_candidate(evidence_id),),
+                config_revision=revision,
+            ).entries[0]
+            assert replay.decision is EvidenceDeletionDecision.ELIGIBLE
+            assert replay.claim_id == first.claim_id
+            assert replay.ticket is not None
+            assert (
+                PostgresEvidenceDeletionClaimRepository(session).find_pending(evidence_id)
+                is not None
+            )
+            session.commit()
+        # 绑定配置变化后不得刷新旧认领：仍按未结案认领受保护。
+        next_revision = _configure_current(topology, engine, digest="e" * 64)
+        with DatabaseSession(engine) as session:
+            changed = _claim(
+                _seams(session),
+                topology,
+                candidates=(_candidate(evidence_id),),
+                config_revision=next_revision,
+                digest="e" * 64,
+            ).entries[0]
+            assert (changed.decision.value, changed.reason) == (
+                "protected",
+                "deletion_claim_pending",
+            )
+            assert changed.ticket is None
+            pending_after = PostgresEvidenceDeletionClaimRepository(session).find_pending(
+                evidence_id
+            )
+            assert pending_after is not None
+            assert pending_after.claim_id == UUID(first.claim_id)
+    finally:
+        _clear(engine, evidence_id)

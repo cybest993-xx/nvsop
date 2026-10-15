@@ -108,6 +108,9 @@ class RefusingInferenceHosts(FakeInferenceHosts):
 class _NoopDeletionAuthorityFence:
     """该路由测试不建立真实删除认领；权威锁与检查是无操作。"""
 
+    def lock_authority(self) -> None:
+        return None
+
     def ensure_mutable(self) -> None:
         return None
 

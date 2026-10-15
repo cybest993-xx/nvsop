@@ -63,6 +63,7 @@ _OUTCOME_STATUS: dict[EvidenceDeletionOutcome, EvidenceDeletionClaimStatus] = {
     EvidenceDeletionOutcome.DELETED: EvidenceDeletionClaimStatus.DELETED,
     EvidenceDeletionOutcome.RETAINED: EvidenceDeletionClaimStatus.RETAINED,
     EvidenceDeletionOutcome.CANCELLED: EvidenceDeletionClaimStatus.CANCELLED,
+    EvidenceDeletionOutcome.MISSING: EvidenceDeletionClaimStatus.MISSING,
 }
 
 
@@ -215,6 +216,39 @@ def claim_evidence_deletion(
             )
             continue
         policy, station_revision = scope.station_policy(reference.station_id)
+        if reference.pending_claim_id is not None:
+            # 本机可能在上次 drain 领到认领但丢失 HTTP 响应；同一来源/同一绑定/material 下幂等重放。
+            replay_decision, replay_reason = scope.decide_replay(
+                candidate, reference, policy=policy
+            )
+            if replay_decision is EvidenceDeletionDecision.ELIGIBLE:
+                replayed = evidence.replay_pending(
+                    evidence_id=candidate.evidence_id,
+                    host_id=host_id,
+                    config_revision=config_revision,
+                    effective_sha256=effective_sha256,
+                    default_revision=default_revision,
+                    station_revision=station_revision,
+                    expires_at=deadline,
+                    now=now,
+                )
+                if replayed is not None:
+                    entries[candidate.evidence_id] = scope.entry(
+                        candidate,
+                        reference,
+                        EvidenceDeletionDecision.ELIGIBLE,
+                        replay_reason,
+                        claim_id=replayed,
+                        ticket=issue_deletion_ticket(
+                            claim_id=replayed,
+                            evidence_id=candidate.evidence_id,
+                            host_id=host_id,
+                            secret=secret,
+                            expires_at=deadline,
+                        ),
+                        expires_at=deadline,
+                    )
+                    continue
         decision, reason = scope.decide(candidate, reference, policy=policy)
         if decision is not EvidenceDeletionDecision.ELIGIBLE:
             entries[candidate.evidence_id] = scope.entry(candidate, reference, decision, reason)
@@ -445,7 +479,11 @@ class _DeletionScope:
         return self._policies[station_id]
 
     def facts(
-        self, candidate: EvidenceDeletionCandidate, reference: EvidenceDeletionReference
+        self,
+        candidate: EvidenceDeletionCandidate,
+        reference: EvidenceDeletionReference,
+        *,
+        ignore_pending_claim: bool = False,
     ) -> EvidenceDeletionFacts:
         """按 owner 事实组装一条引用的资格事实；任何缺项都表达为未知。"""
         instance = self._instances.get(
@@ -482,6 +520,7 @@ class _DeletionScope:
             claim_pending=(
                 reference.pending_claim_id is not None
                 and reference.pending_claim_id != self._verifying_claim_id
+                and not ignore_pending_claim
             ),
             station_known=presence is not RetentionStationPresence.MISSING,
             station_active=presence is RetentionStationPresence.ACTIVE,
@@ -500,6 +539,19 @@ class _DeletionScope:
         policy: RetentionPolicy,
     ) -> tuple[EvidenceDeletionDecision, EvidenceDeletionReason]:
         facts = self.facts(candidate, reference)
+        return evidence_deletion_decision(
+            facts, rule=evidence_retention_rule(policy, facts.category)
+        )
+
+    def decide_replay(
+        self,
+        candidate: EvidenceDeletionCandidate,
+        reference: EvidenceDeletionReference,
+        *,
+        policy: RetentionPolicy,
+    ) -> tuple[EvidenceDeletionDecision, EvidenceDeletionReason]:
+        """忽略“存在未结案认领”这一项，判断本机是否可幂等重放自己已有的认领。"""
+        facts = self.facts(candidate, reference, ignore_pending_claim=True)
         return evidence_deletion_decision(
             facts, rule=evidence_retention_rule(policy, facts.category)
         )

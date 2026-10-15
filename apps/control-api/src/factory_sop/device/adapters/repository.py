@@ -138,6 +138,21 @@ class PostgresInferenceHostRepository:
         )
         return row is not None
 
+    def configuration_content_changed(self, *, host_id: UUID, content_sha256: str) -> bool:
+        """锁定主机行并返回给定有效配置是否与当前分配不同。
+
+        与 `next_configuration_revision` 同一 ``FOR UPDATE`` 锁：调用方在同一事务内据此决定是否
+        需要删除权威门禁，避免先读后写的 TOCTOU。
+        """
+        row = self._session.execute(
+            select(InferenceHostRow.configuration_sha256)
+            .where(InferenceHostRow.id == host_id)
+            .with_for_update()
+        ).one_or_none()
+        if row is None:
+            raise DeviceRefusedError(DeviceRefusalCode.INFERENCE_HOST_NOT_FOUND)
+        return str(row[0]) != content_sha256
+
     def next_configuration_revision(
         self,
         *,

@@ -40,6 +40,10 @@ class ConfigurationHostRepository(InferenceHostRepository, Protocol):
         self, *, host_id: UUID, content_sha256: str, minimum_revision: int = 0
     ) -> int: ...
 
+    def configuration_content_changed(self, *, host_id: UUID, content_sha256: str) -> bool:
+        """锁定主机行并判断该有效配置是否与当前分配不同（同一事务内的权威判断）。"""
+        ...
+
     def configuration_was_issued(
         self,
         *,
@@ -252,8 +256,15 @@ class RepositoryDeviceConfigurationGateway(DeviceConfigurationGateway):
     def finalize_configuration(
         self, candidate: ConfigurationBundle, *, minimum_revision: int
     ) -> ConfigurationBundle:
-        # 签发新配置会改写删除资格所依据的配置身份；已授权未结案删除期间拒绝推进修订。
+        # 先取权威锁（锁序：advisory → 主机行）。只有有效配置确实变化才拒绝：
+        # 同一有效配置下的签名 GET/租约续期不改写删除所依据的权威，不得被在途删除阻断。
         if self._fence is not None:
+            self._fence.lock_authority()
+        changed = self._hosts.configuration_content_changed(
+            host_id=UUID(candidate.host_id), content_sha256=candidate.effective_sha256
+        )
+        if changed and self._fence is not None:
+            # 主机行已在同一事务锁定，此检查与实际修订推进在同一临界区内完成，无 TOCTOU。
             self._fence.ensure_mutable()
         revision = self._hosts.next_configuration_revision(
             host_id=UUID(candidate.host_id),

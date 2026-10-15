@@ -135,6 +135,40 @@ class RepositoryEvidenceDeletionGateway(EvidenceDeletionGateway, DeletionAuthori
     def authorize(self, claim_id: UUID, *, at: datetime) -> bool:
         return self._claims.authorize(claim_id, at=at)
 
+    def replay_pending(
+        self,
+        *,
+        evidence_id: str,
+        host_id: UUID,
+        config_revision: int,
+        effective_sha256: str,
+        default_revision: int,
+        station_revision: int,
+        expires_at: datetime,
+        now: datetime,
+    ) -> UUID | None:
+        """同一来源、同一绑定的本机未结案认领幂等重放；守卫后再确认一次保护事实。"""
+        locked = self._evidence.lock(evidence_id)
+        reference = locked.reference
+        if reference is None:
+            return None
+        if self._protected(reference, now=now):
+            return None
+        pending = self._claims.find_pending(evidence_id)
+        if pending is None:
+            return None
+        if (
+            pending.host_id != host_id
+            or pending.config_revision != config_revision
+            or pending.effective_sha256.lower() != effective_sha256.lower()
+            or pending.default_revision != default_revision
+            or pending.station_revision != station_revision
+        ):
+            return None
+        if not self._claims.refresh_deadline(pending.claim_id, expires_at=expires_at):
+            return None
+        return pending.claim_id
+
     def ensure_mutable(self) -> None:
         """取权威锁并拒绝在已授权未结案删除期间改写策略/工位/签发事实。"""
         self._claims.lock_authority()
@@ -162,6 +196,11 @@ class RepositoryEvidenceDeletionGateway(EvidenceDeletionGateway, DeletionAuthori
         if status is EvidenceDeletionClaimStatus.DELETED and not self._evidence.mark_media_deleted(
             claim.evidence_id
         ):
+            return None
+        if status is EvidenceDeletionClaimStatus.MISSING and not self._evidence.mark_media_missing(
+            claim.evidence_id
+        ):
+            # 无法把媒体落为不可用（未知证据）：不得把认领结案成可播放的假象。
             return None
         if not self._claims.settle(
             claim_id,

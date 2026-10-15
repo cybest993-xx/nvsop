@@ -14,7 +14,9 @@ import tempfile
 import unittest
 from collections.abc import Callable
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
+from time import time
 from uuid import uuid4
 
 from nvsop_contracts import (
@@ -45,10 +47,23 @@ from edge_runtime.local_state.configuration import LocalConfigurationStore
 HOST = "host-a"
 
 
+class MutableClock:
+    """可推进的单调/墙钟两用时钟; 只用于在删前材料校验阶段模拟到期。"""
+
+    def __init__(self, value: float) -> None:
+        self.value = value
+
+    def __call__(self) -> float:
+        return self.value
+
+    def set(self, value: float) -> None:
+        self.value = value
+
+
 class FakeTransport:
     """内存中心: claim/verify 默认放行, 可注入不可达与删前变化; 记录反馈供断言。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, clock: Callable[[], float]) -> None:
         self.claims: list[EvidenceDeletionRequest] = []
         self.verifies: list[EvidenceDeletionVerifyRequest] = []
         self.reports: list[EvidenceDeletionResultRequest] = []
@@ -56,49 +71,58 @@ class FakeTransport:
         self.verify_unreachable = False
         self.report_unreachable = False
         self.on_verify: Callable[[], None] | None = None
+        self.ttl = 300.0
+        self.claim_ids: dict[str, str] = {}
+        self.verify_claim_id: str | None = None
+        self._clock = clock
 
     def claim(self, request: EvidenceDeletionRequest) -> EvidenceDeletionResponse:
         if self.claim_unreachable:
             raise EvidenceDeletionTransportError("unreachable")
         self.claims.append(request)
-        entries = tuple(
-            EvidenceDeletionEntry(
-                evidence_id=candidate.evidence_id,
-                station_id=None,
-                instance_id=None,
-                generation=candidate.generation,
-                decision=EvidenceDeletionDecision.ELIGIBLE,
-                reason="expired",
-                category="pass",
-                ticket=f"ticket:{candidate.evidence_id}",
-                claim_id=str(uuid4()),
-                expires_at=None,
-                received_at=None,
-                age_seconds=None,
-                threshold_seconds=None,
+        entries = []
+        for candidate in request.candidates:
+            ticket = f"ticket:{candidate.evidence_id}"
+            claim_id = str(uuid4())
+            self.claim_ids[ticket] = claim_id
+            entries.append(
+                EvidenceDeletionEntry(
+                    evidence_id=candidate.evidence_id,
+                    station_id=None,
+                    instance_id=None,
+                    generation=candidate.generation,
+                    decision=EvidenceDeletionDecision.ELIGIBLE,
+                    reason="expired",
+                    category="pass",
+                    ticket=ticket,
+                    claim_id=claim_id,
+                    expires_at=datetime.fromtimestamp(self._clock() + self.ttl, UTC),
+                    received_at=None,
+                    age_seconds=None,
+                    threshold_seconds=None,
+                )
             )
-            for candidate in request.candidates
-        )
         return EvidenceDeletionResponse(
             host_id=request.host_id,
             config_revision=request.config_revision,
             effective_sha256=request.effective_sha256,
             ticket_ttl_seconds=300,
-            entries=entries,
+            entries=tuple(entries),
         )
 
     def verify(self, request: EvidenceDeletionVerifyRequest) -> EvidenceDeletionVerifyResponse:
         if self.verify_unreachable:
             raise EvidenceDeletionTransportError("unreachable")
         self.verifies.append(request)
+        expires_at = datetime.fromtimestamp(self._clock() + self.ttl, UTC)
         if self.on_verify is not None:
             self.on_verify()
         return EvidenceDeletionVerifyResponse(
-            claim_id=str(uuid4()),
+            claim_id=self.verify_claim_id or self.claim_ids.get(request.ticket, "unknown-claim"),
             evidence_id=request.candidate.evidence_id,
             decision=EvidenceDeletionDecision.ELIGIBLE,
             reason="expired",
-            expires_at=None,
+            expires_at=expires_at,
         )
 
     def report(self, request: EvidenceDeletionResultRequest) -> EvidenceDeletionResultResponse:
@@ -122,12 +146,14 @@ class EvidenceDeletionTests(unittest.TestCase):
         self.bundle = _bundle()
         self.state = open_local_state(str(self.root / "state.sqlite"))
         self.state.configuration().confirm(self.bundle, confirmed_at=1.0)
-        self.transport = FakeTransport()
+        self.clock = MutableClock(time())
+        self.transport = FakeTransport(clock=self.clock)
         self.executor = EvidenceDeletionExecutor(
             state=self.state,
             host_id=HOST,
             evidence_directory=self.directory,
             transport=self.transport,
+            clock=self.clock,
         )
         self.files = self._seed_registered_evidence()
 
@@ -299,6 +325,7 @@ class EvidenceDeletionTests(unittest.TestCase):
             host_id=HOST,
             evidence_directory=self.directory,
             transport=self.transport,
+            clock=self.clock,
         )
         replayed = self.executor.drain()
         self.assertEqual(
@@ -351,6 +378,48 @@ class EvidenceDeletionTests(unittest.TestCase):
             )
         finally:
             connection.close()
+
+    def test_verify_binding_mismatch_refuses_without_deleting(self) -> None:
+        # 响应必须绑定本账本的认领; 不同认领 ID 不得据 bool 放行删除。
+        self.transport.verify_claim_id = "a-different-claim"
+        results = self.executor.drain()
+        self.assertEqual(
+            [(r.outcome, r.reason) for r in results],
+            [("cancelled", "verify_binding_mismatch")] * 2,
+        )
+        self.assertTrue(self.files[0].exists() and self.files[1].exists())
+        self.assertEqual({r.outcome.value for r in self.transport.reports}, {"cancelled"})
+
+    def test_ticket_expiring_during_material_check_refuses(self) -> None:
+        # 删前材料哈希期间票据到期: 新鲜复核必须在取消链接前再次拒绝。
+        self.transport.ttl = 10.0
+
+        def expire_after_verify() -> None:
+            self.clock.set(self.clock.value + 11)
+
+        self.transport.on_verify = expire_after_verify
+        results = self.executor.drain()
+        # 第一条在删前新鲜复核中被拒; 第二条在同一批中同样因过期而不放行。
+        self.assertEqual({r.reason for r in results}, {"ticket_expired"})
+        self.assertIn("cancelled", {r.outcome for r in results})
+        self.assertTrue(self.files[0].exists() and self.files[1].exists())
+        self.assertEqual({r.outcome.value for r in self.transport.reports}, {"cancelled"})
+
+    def test_crash_after_unlink_reports_missing_not_deleted(self) -> None:
+        # 取消链接后、结果落账前崩溃: 账本为 claimed、源文件缺席; 不得写成已证明删除。
+        self.transport.verify_unreachable = True
+        self.executor.drain()
+        self.assertEqual({row.stage for row in self.state.deletion_journal()}, {"claimed"})
+        self.files[0].unlink()
+        self.files[1].unlink()
+        self.transport.verify_unreachable = False
+        results = self.executor.drain()
+        self.assertEqual(
+            [(r.outcome, r.reason) for r in results],
+            [("missing", "source_missing")] * 2,
+        )
+        self.assertEqual({r.outcome.value for r in self.transport.reports}, {"missing"})
+        self.assertEqual(self.state.deletion_journal(), ())
 
 
 if __name__ == "__main__":

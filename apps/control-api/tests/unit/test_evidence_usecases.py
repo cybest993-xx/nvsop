@@ -71,6 +71,17 @@ class MemoryEvidence:
         self.rows[evidence_id] = replace(current, status=EvidenceStatus.DELETED)
         return True
 
+    def mark_media_missing(self, evidence_id: str) -> bool:
+        current = self.rows.get(evidence_id)
+        if current is None:
+            return False
+        if current.status is EvidenceStatus.DELETED:
+            return True
+        self.rows[evidence_id] = replace(
+            current, status=EvidenceStatus.FAILED, failure_reason="source_missing"
+        )
+        return True
+
     def page(
         self,
         *,

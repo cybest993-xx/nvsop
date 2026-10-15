@@ -443,7 +443,22 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
 
     with database_at_0023.connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0064"
+        # 列上无残留 server_default：默认值只用于历史回填，不留给后续插入。
+        column_default = connection.execute(
+            text(
+                "SELECT column_default FROM information_schema.columns "
+                "WHERE table_name = 'evidence_evidence' AND column_name = 'review_state_known'"
+            )
+        ).scalar_one()
+    # #206 的 0065：三张引用保护表与历史行的“复核状态未知”事实随 head 到位。
+    assert version == "0065"
+    assert {
+        "evidence_review_session",
+        "evidence_deletion_claim",
+        "evidence_playback_lease",
+    } <= _tables(database_at_0023)
+    assert {"review_state_known"} <= _columns(database_at_0023, "evidence_evidence")
+    assert column_default is None
     assert {
         "backend_target",
         "base_job_id",
@@ -493,6 +508,13 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
     assert "dataset.dataset.edit" in _permission_codes(database_at_0023)
 
     command.downgrade(configuration, "0025")
+    # 0065 的回滚必须同时移除三张引用保护表与历史回填列。
+    assert not {
+        "evidence_review_session",
+        "evidence_deletion_claim",
+        "evidence_playback_lease",
+    } & _tables(database_at_0023)
+    assert "review_state_known" not in _columns(database_at_0023, "evidence_evidence")
     assert "dataset_ddm_training_command" not in _tables(database_at_0023)
     assert "evidence.evidence.view" not in _permission_codes(database_at_0023)
     assert "evidence.review.edit" not in _permission_codes(database_at_0023)

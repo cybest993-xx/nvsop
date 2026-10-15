@@ -13,23 +13,34 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
-_STATIC_MEDIA_KEYS = frozenset(
+# 压缩相关键是本机可选配置：旧配置没有它们时不要求补齐（加载器给默认值），
+# 但它们必须参与合并，否则本机已设置的压缩策略会在下一次应用中心导出时被丢弃。
+_OPTIONAL_MEDIA_KEYS = frozenset(
     {
-        "media_config_path",
-        "recording_directory",
-        "mediamtx_binary",
-        "ffmpeg_binary",
-        "rtsp_bind_address",
-        "webrtc_bind_address",
-        "webrtc_udp_bind_address",
-        "playback_bind_address",
-        "allow_origins",
-        "record_segment_duration_seconds",
-        "preview_release_delay_seconds",
-        "startup_timeout_seconds",
-        "transcode_threads",
         "recording_compression_age_seconds",
+        "recording_compression_enabled",
+        "recording_compression_crf",
     }
+)
+_STATIC_MEDIA_KEYS = (
+    frozenset(
+        {
+            "media_config_path",
+            "recording_directory",
+            "mediamtx_binary",
+            "ffmpeg_binary",
+            "rtsp_bind_address",
+            "webrtc_bind_address",
+            "webrtc_udp_bind_address",
+            "playback_bind_address",
+            "allow_origins",
+            "record_segment_duration_seconds",
+            "preview_release_delay_seconds",
+            "startup_timeout_seconds",
+            "transcode_threads",
+        }
+    )
+    | _OPTIONAL_MEDIA_KEYS
 )
 _EXPORT_KEYS = frozenset(
     {
@@ -101,8 +112,7 @@ def apply_export(
     _require_keys(export, _EXPORT_KEYS, "center export")
     edge = _object(json.loads(edge_path.read_text(encoding="utf-8")), "edge configuration")
     local_media = _object(edge.get("media"), "edge media configuration")
-    # 原始素材窗口是本机可选配置；旧配置没有该键时不要求补齐，由边缘加载器给单处默认值。
-    missing = (_STATIC_MEDIA_KEYS - {"recording_compression_age_seconds"}) - local_media.keys()
+    missing = (_STATIC_MEDIA_KEYS - _OPTIONAL_MEDIA_KEYS) - local_media.keys()
     if missing:
         raise ValueError(f"edge media configuration is missing: {', '.join(sorted(missing))}")
 

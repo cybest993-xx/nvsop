@@ -450,8 +450,21 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
                 "WHERE table_name = 'evidence_evidence' AND column_name = 'review_state_known'"
             )
         ).scalar_one()
-    # #206 的 0065：三张引用保护表与历史行的“复核状态未知”事实随 head 到位。
-    assert version == "0065"
+    # #206/#207：引用保护与回收账本、聚合归档随 head 到位。
+    assert version == "0067"
+    assert {
+        "retention_sweep",
+        "monitor_record_archive",
+        "monitor_retention_cursor",
+    } <= _tables(database_at_0023)
+    for identity in (
+        "monitor_decision_identity",
+        "monitor_observation_identity",
+        "monitor_health_identity",
+    ):
+        assert {"retired_payload_sha256", "retention_archived"} <= _columns(
+            database_at_0023, identity
+        )
     assert {
         "evidence_review_session",
         "evidence_deletion_claim",
@@ -508,11 +521,14 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
     assert "dataset.dataset.edit" in _permission_codes(database_at_0023)
 
     command.downgrade(configuration, "0025")
-    # 0065 的回滚必须同时移除三张引用保护表与历史回填列。
+    # 0065-0067 的回滚须移除引用保护、回收账本与聚合归档。
     assert not {
         "evidence_review_session",
         "evidence_deletion_claim",
         "evidence_playback_lease",
+        "retention_sweep",
+        "monitor_record_archive",
+        "monitor_retention_cursor",
     } & _tables(database_at_0023)
     assert "review_state_known" not in _columns(database_at_0023, "evidence_evidence")
     assert "dataset_ddm_training_command" not in _tables(database_at_0023)

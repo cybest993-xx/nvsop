@@ -71,8 +71,11 @@ _SWEEP_TABLES = (
 
 @pytest.fixture
 def committed_session(engine: Engine) -> Iterator[Session]:
-    """种子与执行结果真实提交；用例结束后只清理本场景拥有的表。"""
+    """种子与结果真实提交；每例前后隔离回收场景的表，不继承前序测试的身份行。"""
     factory = make_session_factory(engine)
+    with engine.begin() as connection:
+        for table in _SWEEP_TABLES:
+            connection.execute(text(f"DELETE FROM {table}"))
     opened = factory()
     try:
         yield opened

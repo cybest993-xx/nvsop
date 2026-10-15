@@ -91,6 +91,8 @@ class ApplyMediaExportTest(unittest.TestCase):
                             "startup_timeout_seconds": 2,
                             "transcode_threads": 2,
                             "recording_compression_age_seconds": 3600,
+                            "recording_compression_enabled": True,
+                            "recording_compression_crf": 30,
                             "cameras": [{"camera_id": camera_id, "sop_execution": False}],
                         },
                     }
@@ -102,8 +104,10 @@ class ApplyMediaExportTest(unittest.TestCase):
 
             result = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(str(root / "recordings"), result["media"]["recording_directory"])
-            # 本机原始素材窗口在合并后保留，不被中心导出覆盖或丢弃。
+            # 本机压缩策略在合并后保留，不被中心导出覆盖或丢弃。
             self.assertEqual(3600, result["media"]["recording_compression_age_seconds"])
+            self.assertTrue(result["media"]["recording_compression_enabled"])
+            self.assertEqual(30, result["media"]["recording_compression_crf"])
             self.assertEqual(camera_id, result["media"]["cameras"][0]["camera_id"])
             self.assertFalse(result["media"]["cameras"][0]["sop_execution"])
             rendered = json.dumps(result)

@@ -15,6 +15,7 @@ from edge_runtime.connectors.runtime import ConnectorRuntimeSet
 from edge_runtime.local_state import DEFAULT_RECLAIM_LIMIT, ReclaimedQueue, ReportedReclamation
 from edge_runtime.local_state.store import LocalState, QueueCapacityError, QueueStatus
 from edge_runtime.media import MediaRuntime
+from edge_runtime.recording_compression import RecordingCompressionWorker
 from edge_runtime.reporting import HostReportReconciler
 from edge_runtime.runtime import (
     AutonomousRuntime,
@@ -249,6 +250,17 @@ class _FailingOnceSynchronizer:
 class _BrokenStoreSynchronizer(_Synchronizer):
     def reject_application(self, *, detail: str, observed_at: float) -> None:
         raise sqlite3.OperationalError("synthetic local configuration store failure")
+
+
+class _CompressionWorker:
+    """记录 run_forever 是否被调用的替身; 真实压缩行为由录像压缩集成测试覆盖。"""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
+        del should_stop
+        self.calls += 1
 
 
 class RuntimeConfigurationSwitchTest(unittest.TestCase):
@@ -551,6 +563,33 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.assertEqual(errors, [])
         self.assertTrue(state.closed)
+
+    def test_cycle_runner_drives_the_configured_recording_compression_worker(self) -> None:
+        worker = _CompressionWorker()
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            stations=(),
+            state=cast(LocalState, _State()),
+            compression=cast(RecordingCompressionWorker, worker),
+        )
+        runner = _RuntimeCycleRunner(
+            runtime=runtime, runtime_stop=Event(), should_stop=lambda: True
+        )
+
+        runner._run_compression()
+
+        self.assertEqual(1, worker.calls)
+        # 未配置压缩的运行时没有可驱动的 worker, 启动任务时安静返回。
+        bare = _RuntimeCycleRunner(
+            runtime=AutonomousRuntime(
+                command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+                stations=(),
+                state=cast(LocalState, _State()),
+            ),
+            runtime_stop=Event(),
+            should_stop=lambda: True,
+        )
+        bare._run_compression()
 
     def test_media_start_failure_is_logged_before_existing_retry(self) -> None:
         state = _State()

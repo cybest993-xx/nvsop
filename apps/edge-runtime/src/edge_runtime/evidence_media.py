@@ -300,7 +300,7 @@ def _slice_source(
         raise EvidenceMediaError("material_missing", f"recording directory absent for {source}")
     selected = _select_segments(_list_segments(directory, configuration), wall_from, wall_to)
     actual_from, actual_to = selected[0].start, selected[-1].end
-    generations = [_segment_generation(segment.path) for segment in selected]
+    generations = [recording_segment_generation(segment.path) for segment in selected]
     clip = work / f"{source}.mp4"
     timeout = configuration.slice_timeout_seconds
     inputs = ["-f", "concat", "-safe", "0", "-i", str(_segment_list(work, selected))]
@@ -324,13 +324,17 @@ def _slice_source(
         "segment_generations": {
             generation: generations.count(generation) for generation in sorted(set(generations))
         },
-        "sha256": _digest(clip),
+        "sha256": file_sha256(clip),
         "size_bytes": clip.stat().st_size,
     }
 
 
-def _segment_generation(path: Path) -> str:
-    """读取单个分段的真实素材代次; 缺失 sidecar 按原始素材, 非法/未知声明即拒绝。"""
+def recording_segment_generation(path: Path) -> str:
+    """读取单个分段的真实素材代次; 缺失 sidecar 按原始素材, 非法/未知声明即拒绝。
+
+    证据切片与录像压缩共用这份生产者契约 (S038/§5.20): 压缩不再重编码已归档的
+    ``compressed`` 分段, 也无法证明代次的声明一律拒绝而不是静默当成原始素材。
+    """
     sidecar = path.with_suffix(_MATERIAL_SIDECAR_SUFFIX)
     if not sidecar.exists():
         return MATERIAL_GENERATION_ORIGINAL
@@ -371,7 +375,7 @@ def _segment_list(work: Path, segments: list[_Segment]) -> Path:
 def _list_segments(directory: Path, configuration: EvidenceMediaConfiguration) -> list[_Segment]:
     segments: list[_Segment] = []
     for path in sorted(directory.glob("*.mp4")):
-        start = _segment_start(path.name, configuration.recording_timezone)
+        start = recording_segment_start(path.name, configuration.recording_timezone)
         duration = (
             None
             if start is None
@@ -492,7 +496,12 @@ def _probe_duration(ffprobe_binary: Path, path: Path, timeout: float) -> float |
     return duration if has_video and duration > 0 else None
 
 
-def _segment_start(name: str, recording_timezone: str | None) -> float | None:
+def recording_segment_start(name: str, recording_timezone: str | None) -> float | None:
+    """按 MediaMTX 分段文件名解析录像墙钟起点 (epoch 秒); 不可解析返回 None。
+
+    证据切片与录像压缩共用这份时间解释 (§5.19/§5.20): 名称不符合录像生产者契约的分段
+    不参与任何按时间的选择, 第二个实现不得自行猜测分段命名。
+    """
     stem = name[:-4] if name.endswith(".mp4") else name
     try:
         parsed = datetime.strptime(stem, _SEGMENT_TIME_FORMAT)
@@ -529,7 +538,8 @@ def evidence_artifact_directory(identity: str, covered_from: float, covered_to: 
     return _artifact_name(identity, covered_from, covered_to)
 
 
-def _digest(path: Path) -> str:
+def file_sha256(path: Path) -> str:
+    """本机媒体文件内容摘要; 证据定稿与压缩候选校验共用同一算法。"""
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -606,7 +616,7 @@ def evidence_registration_payloads(
                 raise ValueError("evidence metadata contains an invalid filename")
             file_path = directory / artifact / name
             size = file_path.stat().st_size
-            digest = _digest(file_path)
+            digest = file_sha256(file_path)
             if kind == "clip" and (digest != item["sha256"] or size != item["size_bytes"]):
                 raise ValueError("evidence media does not match its finalized digest")
             reference = f"{artifact}/{name}"

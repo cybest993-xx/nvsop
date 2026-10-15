@@ -33,6 +33,11 @@ from edge_runtime.local_state.queues import (
     RegisteredEvidenceMedia,
     ReportContext,
 )
+from edge_runtime.local_state.retention import (
+    DEFAULT_RECLAIM_LIMIT,
+    ReclaimedQueue,
+    ReportedReclamation,
+)
 from edge_runtime.local_state.store import (
     LocalState,
     QueueCapacityError,
@@ -45,6 +50,7 @@ from edge_runtime.local_state.store import (
 
 __all__ = [
     "DEFAULT_QUEUE_CAPACITY",
+    "DEFAULT_RECLAIM_LIMIT",
     "REPORT_RUN_ID",
     "BackendReportContext",
     "EvidenceDeletionJournal",
@@ -64,9 +70,11 @@ __all__ = [
     "QueueCapacityError",
     "QueueStatus",
     "ReactionStore",
+    "ReclaimedQueue",
     "RegisteredEvidenceMedia",
     "ReportContext",
     "ReportStore",
+    "ReportedReclamation",
     "StationStore",
     "open_local_state",
 ]

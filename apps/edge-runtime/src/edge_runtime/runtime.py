@@ -761,6 +761,28 @@ class _ReportLifecycleRunner:
                             status.last_failed_queue_id,
                             status.limit,
                         )
+                # 本地已上报裁剪属于本机保留生命周期: 不依赖中心成功, 离线仍按最后确认配置推进。
+                # SQLite 故障不被上报失败吞掉, 保持本地状态的致命语义。
+                reclamation = self._runtime._state.reclaim_reported(
+                    now=datetime.now(UTC), limit=_REPORT_WORK_BUDGET
+                )
+                if reclamation.deleted or reclamation.skipped:
+                    scopes = ",".join(
+                        f"{row.queue}:deleted={row.deleted}:skipped={row.skipped}:range="
+                        + (
+                            "none"
+                            if row.queue_id_range is None
+                            else f"{row.queue_id_range[0]}-{row.queue_id_range[1]}"
+                        )
+                        for row in reclamation.rows
+                    )
+                    _logger.info(
+                        "edge.local_reclamation.summary deleted=%s skipped=%s scopes=%s reasons=%s",
+                        reclamation.deleted,
+                        reclamation.skipped,
+                        scopes,
+                        ",".join(reclamation.skip_reasons),
+                    )
                 if self._stop_requested():
                     return
                 self._runtime._report_wake.wait(_REPORT_RETRY_INTERVAL_SECONDS)

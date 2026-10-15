@@ -905,6 +905,7 @@ class _RuntimeCycleRunner:
         if executor is None:
             return
         while not self._stop_requested():
+            started_at = datetime.now(UTC).isoformat()
             try:
                 results = executor.drain(limit=_REPORT_WORK_BUDGET)
             except Exception as error:
@@ -914,7 +915,11 @@ class _RuntimeCycleRunner:
                 )
             else:
                 _logger.info(
-                    "edge.evidence_deletion.sweep deleted=%s skipped=%s failed=%s reasons=%s",
+                    "edge.evidence_deletion.sweep started_at=%s finished_at=%s "
+                    "scope=%s deleted=%s skipped=%s failed=%s reasons=%s",
+                    started_at,
+                    datetime.now(UTC).isoformat(),
+                    tuple(item.evidence_id for item in results),
                     sum(item.outcome == "deleted" for item in results),
                     sum(item.outcome == "skipped" for item in results),
                     sum(item.outcome not in ("deleted", "skipped") for item in results),

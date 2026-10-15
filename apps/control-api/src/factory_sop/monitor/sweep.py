@@ -26,10 +26,13 @@ class RepositoryMonitorRetirement:
         self,
         *,
         cutoffs: RetentionCutoffs,
+        aggregate_cutoffs: RetentionCutoffs,
         limit: int,
         now: datetime,
     ) -> RecordRetirement:
-        return self._repository.retire_records(cutoffs=cutoffs, limit=limit, now=now)
+        return self._repository.retire_records(
+            cutoffs=cutoffs, aggregate_cutoffs=aggregate_cutoffs, limit=limit, now=now
+        )
 
     def retire_disposals(
         self,

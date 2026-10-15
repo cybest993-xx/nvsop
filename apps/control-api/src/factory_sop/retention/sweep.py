@@ -156,6 +156,7 @@ class RetentionSweepScope:
     """一次回收任务的执行范围：各字段截止、批次上限与依据的策略版本。"""
 
     record_cutoffs: RetentionCutoffs
+    aggregate_cutoffs: RetentionCutoffs
     disposal_cutoffs: RetentionCutoffs
     batch_limit: int
     default_revision: int
@@ -169,6 +170,13 @@ class RetentionSweepScope:
                     "moment": None if value.moment is None else value.moment.isoformat(),
                 }
                 for value in self.record_cutoffs.cutoffs
+            ],
+            "aggregate_cutoffs": [
+                {
+                    "station_id": value.station_id,
+                    "moment": None if value.moment is None else value.moment.isoformat(),
+                }
+                for value in self.aggregate_cutoffs.cutoffs
             ],
             "disposal_cutoffs": [
                 {

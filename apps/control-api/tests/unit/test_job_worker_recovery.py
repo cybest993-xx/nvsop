@@ -115,5 +115,10 @@ def test_worker_preserves_existing_uniform_timeout(
         "cron:run_retention_sweep_cron",
     }
     assert all(function.timeout_s is None for function in worker.functions.values())
+    sweep_cron = next(
+        job for job in worker.cron_jobs if job.name == "cron:run_retention_sweep_cron"
+    )
+    assert sweep_cron.second == set(range(60))
+    assert sweep_cron.job_id == "retention-sweep"
     assert worker.job_timeout_s == 330
     assert worker_module._stale_recovery_timeout_seconds(cast(Any, settings)) == 330

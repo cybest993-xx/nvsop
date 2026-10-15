@@ -404,7 +404,9 @@ def test_execution_failure_records_failure_and_next_cycle_reruns(
     committed_session.commit()
 
     class ExplodingRetirement(RepositoryMonitorRetirement):
-        def retire_records(self, *, cutoffs: object, limit: int, now: datetime) -> RecordRetirement:
+        def retire_records(
+            self, *, cutoffs: object, aggregate_cutoffs: object, limit: int, now: datetime
+        ) -> RecordRetirement:
             raise RuntimeError("injected failure")
 
     result = run_retention_sweep(
@@ -473,8 +475,8 @@ def test_bounded_cursor_advances_past_protected_oldest_records(
         default=DEFAULT_RETENTION_POLICY, overrides=(), now=NOW, field="record_detail"
     )
     executor = _executor(committed_session)
-    first = executor.retire_records(cutoffs=cutoffs, limit=1, now=NOW)
-    second = executor.retire_records(cutoffs=cutoffs, limit=1, now=NOW)
+    first = executor.retire_records(cutoffs=cutoffs, aggregate_cutoffs=cutoffs, limit=1, now=NOW)
+    second = executor.retire_records(cutoffs=cutoffs, aggregate_cutoffs=cutoffs, limit=1, now=NOW)
     assert first.deleted == 0
     assert first.skips[0].count == 2
     assert second.deleted == 2
@@ -548,3 +550,142 @@ def test_partial_failure_keeps_success_counts_and_rolls_back_failed_owner_phase(
     assert row.status == "failed"
     assert row.result["records"]["deleted"] == 2
     assert row.result["disposals"] is None
+
+
+def test_aggregate_age_precedes_detail_expiry_without_duplicate_counts(
+    committed_session: Session,
+    engine: Engine,
+) -> None:
+    from dataclasses import replace
+
+    station = _station_text()
+    _seed(committed_session, station, instance_id=61, received_at=NOW - timedelta(days=30))
+    policy = replace(
+        DEFAULT_RETENTION_POLICY,
+        record_aggregate_age=RetentionRule(RetentionMode.DURATION, 7 * _DAY),
+    )
+    PostgresStationRetentionOverrideRepository(committed_session).insert_if_absent(
+        StationRetentionRecord(UUID(station), RetentionPolicyMode.CUSTOM, policy, 1)
+    )
+    first = _run_sweep(committed_session, engine=engine)
+    assert first is not None
+    assert first.records is not None
+    assert first.completed
+    assert first.records.deleted == 0
+    assert first.records.archived_buckets == 2
+    committed_session.commit()
+    assert _counts(engine, "monitor_reported_decision") == 1
+    second = _run_sweep(
+        committed_session,
+        now=NOW + timedelta(seconds=SWEEP_INTERVAL + 1),
+        engine=engine,
+    )
+    assert second is not None
+    assert second.records is not None
+    assert second.records.archived_buckets == second.records.deleted == 0
+    third = _run_sweep(committed_session, now=NOW + timedelta(days=90), engine=engine)
+    assert third is not None
+    assert third.records is not None
+    assert third.completed
+    assert third.records.deleted == 2
+    assert third.records.archived_buckets == 0
+    committed_session.commit()
+    assert _counts(engine, "monitor_reported_decision") == 0
+    assert _counts(engine, "monitor_record_archive") == 2
+
+
+def test_legacy_host_health_without_station_uses_global_scope(
+    committed_session: Session,
+    engine: Engine,
+) -> None:
+    from factory_sop.monitor.model import MirroredHealth
+    from nvsop_contracts import ReportedHealth
+
+    station = _station_text()
+    PostgresStationRetentionOverrideRepository(committed_session).insert_if_absent(
+        StationRetentionRecord(
+            UUID(station), RetentionPolicyMode.CUSTOM, DEFAULT_RETENTION_POLICY, 1
+        )
+    )
+    health = ReportedHealth(
+        event_id="health/legacy-host",
+        trace_id="legacy",
+        host_id=HOST,
+        station_id=station,
+        stream_id=None,
+        status="healthy",
+        reason_code=None,
+        detail=None,
+        occurred_at=NOW.isoformat(),
+        source_anchor=None,
+        anchor_offset=None,
+        reported_at=NOW.isoformat(),
+    )
+    PostgresMonitorRepository(committed_session).upsert_health(
+        MirroredHealth(health, NOW - timedelta(days=200))
+    )
+    # 历史 health 的关系列允许 NULL；不把未知工位猜成任一自定义工位。
+    committed_session.execute(text("UPDATE monitor_reported_health SET station_id = NULL"))
+    result = _run_sweep(committed_session, engine=engine)
+    assert result is not None
+    assert result.records is not None
+    assert result.completed
+    assert result.records.deleted == 1
+    committed_session.commit()
+    assert _counts(engine, "monitor_reported_health") == 0
+    with engine.connect() as connection:
+        assert connection.execute(
+            text("SELECT station_id, health FROM monitor_record_archive")
+        ).one() == (None, 1)
+
+
+def test_snapshot_scan_revisits_released_protection_despite_new_candidates(
+    committed_session: Session,
+    engine: Engine,
+) -> None:
+    from dataclasses import replace
+
+    from factory_sop.retention.api import retention_cutoffs
+
+    station = _station_text()
+    oldest = NOW - timedelta(days=201)
+    _seed(committed_session, station, instance_id=71, received_at=oldest, closed=False)
+    _seed(committed_session, station, instance_id=72, received_at=NOW - timedelta(days=200))
+    cutoffs = retention_cutoffs(
+        default=DEFAULT_RETENTION_POLICY,
+        overrides=(),
+        now=NOW,
+        field="record_detail",
+    )
+    executor = _executor(committed_session)
+    first = executor.retire_records(cutoffs=cutoffs, aggregate_cutoffs=cutoffs, limit=1, now=NOW)
+    assert first.deleted == 0
+    _seed(committed_session, station, instance_id=73, received_at=NOW - timedelta(days=199))
+    second = executor.retire_records(cutoffs=cutoffs, aggregate_cutoffs=cutoffs, limit=1, now=NOW)
+    assert second.deleted == 2
+    _seed(committed_session, station, instance_id=74, received_at=NOW - timedelta(days=198))
+    end = executor.retire_records(cutoffs=cutoffs, aggregate_cutoffs=cutoffs, limit=1, now=NOW)
+    assert end.deleted == 0
+    closed = _instance(station, instance_id=71, received_at=NOW, closed=True)
+    PostgresMonitorRepository(committed_session).upsert_instance(
+        replace(closed, report=replace(closed.report, event_id="instance/71/closed"))
+    )
+    _seed(committed_session, station, instance_id=75, received_at=NOW - timedelta(days=197))
+    revisited = executor.retire_records(
+        cutoffs=cutoffs,
+        aggregate_cutoffs=cutoffs,
+        limit=1,
+        now=NOW,
+    )
+    assert revisited.deleted == 2
+    committed_session.commit()
+    with engine.connect() as connection:
+        assert (
+            connection.scalar(
+                text(
+                    "SELECT count(*) FROM monitor_reported_decision "
+                    "WHERE payload->>'instance_id' = '71'"
+                )
+            )
+            == 0
+        )

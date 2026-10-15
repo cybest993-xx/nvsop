@@ -933,6 +933,7 @@ class RetentionSweepExecutor(Protocol):
         self,
         *,
         cutoffs: RetentionCutoffs,
+        aggregate_cutoffs: RetentionCutoffs,
         limit: int,
         now: datetime,
     ) -> RecordRetirement:
@@ -981,6 +982,9 @@ def run_retention_sweep(
         now=now,
         field="record_detail",
     )
+    aggregate_cutoffs = retention_cutoffs(
+        default=default_policy, overrides=override_rows, now=now, field="record_aggregate_age"
+    )
     disposal_cutoffs = retention_cutoffs(
         default=default_policy,
         overrides=override_rows,
@@ -989,6 +993,7 @@ def run_retention_sweep(
     )
     scope = RetentionSweepScope(
         record_cutoffs=record_cutoffs,
+        aggregate_cutoffs=aggregate_cutoffs,
         disposal_cutoffs=disposal_cutoffs,
         batch_limit=batch_limit,
         default_revision=default_revision,
@@ -1010,7 +1015,10 @@ def run_retention_sweep(
     try:
         with ledger.phase():
             records_result = executor.retire_records(
-                cutoffs=record_cutoffs, limit=batch_limit, now=now
+                cutoffs=record_cutoffs,
+                aggregate_cutoffs=aggregate_cutoffs,
+                limit=batch_limit,
+                now=now,
             )
     except Exception as error:
         failures.append(f"records:{type(error).__name__}")

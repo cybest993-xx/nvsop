@@ -1709,7 +1709,16 @@ def build_worker(
             ),
         ]
         + (
-            [cron(run_retention_sweep_cron, second={0}, run_at_startup=True, max_tries=1)]
+            [
+                cron(
+                    run_retention_sweep_cron,
+                    second=set(range(60)),
+                    run_at_startup=True,
+                    job_id="retention-sweep",
+                    keep_result=0,
+                    max_tries=1,
+                )
+            ]
             if retention_sweep is not None
             else []
         ),

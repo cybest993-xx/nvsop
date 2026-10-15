@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -27,7 +28,7 @@ from factory_sop.retention.adapters.repository import (
     PostgresStationRetentionOverrideRepository,
 )
 from factory_sop.retention.adapters.sweep_repository import PostgresRetentionSweepRepository
-from factory_sop.retention.api import run_retention_sweep
+from factory_sop.retention.api import run_retention_sweep, sweep_cycle_id
 from factory_sop.settings import Settings
 
 
@@ -36,9 +37,16 @@ def retention_sweep_runner(
 ) -> Callable[[], None]:
     """一次 UoW 冻结权威、回收各 owner 的数据并结案账本；失败分段用 savepoint 隔离。"""
 
+    last_cycle: UUID | None = None
+
     def run() -> None:
+        nonlocal last_cycle
         interval = settings.retention_sweep_interval_seconds
         if interval is None:
+            return
+        now = datetime.now(UTC)
+        cycle = sweep_cycle_id(now, interval_seconds=interval)
+        if cycle == last_cycle:
             return
         with factory() as session:
             PostgresEvidenceDeletionClaimRepository(session).lock_authority()
@@ -50,11 +58,12 @@ def retention_sweep_runner(
                     session=session,
                     evidence_protected=PostgresEvidenceRecordProtection(session).retained,
                 ),
-                now=datetime.now(UTC),
+                now=now,
                 interval_seconds=interval,
                 batch_limit=settings.retention_sweep_batch_limit,
             )
             session.commit()
+        last_cycle = cycle
 
     return run
 

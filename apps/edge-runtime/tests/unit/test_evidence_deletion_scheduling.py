@@ -52,7 +52,7 @@ def _runner(executor: object, *, stop_after_waits: int) -> _RuntimeCycleRunner:
     runtime = cast(AutonomousRuntime, _RuntimeStub(executor))
     cycle_stop = _CycleStub(stop_after_waits=stop_after_waits)
     runner = _RuntimeCycleRunner.__new__(_RuntimeCycleRunner)
-    runner._runtime = runtime  # type: ignore[attr-defined]
+    runner._runtime = runtime
     runner._cycle_stop = cycle_stop  # type: ignore[assignment]
     runner._stop_requested = cycle_stop.is_set  # type: ignore[method-assign]
     return runner
@@ -61,8 +61,13 @@ def _runner(executor: object, *, stop_after_waits: int) -> _RuntimeCycleRunner:
 class EvidenceDeletionSchedulingTests(unittest.TestCase):
     def test_drain_results_are_recorded_each_cycle(self) -> None:
         executor = _DeletionStub(fail=False)
-        _runner(executor, stop_after_waits=2)._run_evidence_deletion()
+        with self.assertLogs("edge_runtime", level="INFO") as logs:
+            _runner(executor, stop_after_waits=2)._run_evidence_deletion()
         self.assertEqual(executor.calls, 2)
+        self.assertTrue(all("scope=('evidence/a',)" in line for line in logs.output))
+        self.assertTrue(
+            all("started_at=" in line and "finished_at=" in line for line in logs.output)
+        )
 
     def test_drain_failure_does_not_stop_the_cycle(self) -> None:
         executor = _DeletionStub(fail=True)

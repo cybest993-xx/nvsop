@@ -16,10 +16,14 @@ def upgrade() -> None:
         "monitor_health_identity",
     ):
         op.add_column(table, sa.Column("retired_payload_sha256", sa.String(64), nullable=True))
+        op.add_column(
+            table,
+            sa.Column("retention_archived", sa.Boolean(), nullable=False, server_default="false"),
+        )
     op.create_table(
         "monitor_record_archive",
         sa.Column("archive_id", sa.BigInteger(), sa.Identity(), primary_key=True),
-        sa.Column("station_id", sa.String(128), nullable=False),
+        sa.Column("station_id", sa.String(128), nullable=True),
         sa.Column("host_id", sa.String(128), nullable=False),
         sa.Column("instance_id", sa.BigInteger(), nullable=True),
         sa.Column("bucket_start", sa.DateTime(timezone=True), nullable=False),
@@ -34,6 +38,8 @@ def upgrade() -> None:
     op.create_table(
         "monitor_retention_cursor",
         sa.Column("kind", sa.String(32), primary_key=True),
+        sa.Column("until_received_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("until_event_id", sa.Text(), nullable=True),
         sa.Column("received_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("event_id", sa.Text(), nullable=True),
     )
@@ -47,4 +53,5 @@ def downgrade() -> None:
         "monitor_observation_identity",
         "monitor_health_identity",
     ):
+        op.drop_column(table, "retention_archived")
         op.drop_column(table, "retired_payload_sha256")

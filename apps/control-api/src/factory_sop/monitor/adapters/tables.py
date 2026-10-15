@@ -48,6 +48,7 @@ class DecisionIdentityRow(Table):
 
     __tablename__ = "monitor_decision_identity"
     retired_payload_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    retention_archived: Mapped[bool] = mapped_column(default=False, server_default="false")
     # 事实表复合外键指向这个唯一约束；PK(event_id) 与 UNIQUE(stream_sequence) 分别保证事件
     # 身份与流序号全局唯一。
     __table_args__ = (UniqueConstraint("event_id", "received_at", "stream_sequence"),)
@@ -148,6 +149,7 @@ class HealthIdentityRow(Table):
 
     __tablename__ = "monitor_health_identity"
     retired_payload_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    retention_archived: Mapped[bool] = mapped_column(default=False, server_default="false")
     __table_args__ = (UniqueConstraint("event_id", "received_at", "stream_sequence"),)
 
     event_id: Mapped[str] = mapped_column(String(255), primary_key=True)
@@ -252,6 +254,7 @@ class ObservationIdentityRow(Table):
 
     __tablename__ = "monitor_observation_identity"
     retired_payload_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    retention_archived: Mapped[bool] = mapped_column(default=False, server_default="false")
     __table_args__ = (UniqueConstraint("event_id", "received_at"),)
 
     event_id: Mapped[str] = mapped_column(String(255), primary_key=True)
@@ -367,7 +370,7 @@ class RetentionRecordArchiveRow(Table):
     __tablename__ = "monitor_record_archive"
 
     archive_id: Mapped[int] = mapped_column(BigInteger(), Identity(), primary_key=True)
-    station_id: Mapped[str] = mapped_column(String(128), index=True)
+    station_id: Mapped[str | None] = mapped_column(String(128), index=True)
     host_id: Mapped[str] = mapped_column(String(128), index=True)
     instance_id: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
     bucket_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -383,5 +386,7 @@ class RetentionCursorRow(Table):
 
     __tablename__ = "monitor_retention_cursor"
     kind: Mapped[str] = mapped_column(String(32), primary_key=True)
+    until_received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    until_event_id: Mapped[str | None] = mapped_column(Text())
     received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     event_id: Mapped[str | None] = mapped_column(Text(), nullable=True)

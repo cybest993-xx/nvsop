@@ -859,7 +859,9 @@ class PostgresMonitorRetirementRepository:
             if value.moment is None:
                 continue
             scope = (
-                station.not_in(custom) if value.station_id is None else station == value.station_id
+                or_(station.is_(None), station.not_in(custom))
+                if value.station_id is None
+                else station == value.station_id
             )
             scopes.append(and_(scope, table.received_at <= value.moment))
         if not scopes:
@@ -869,6 +871,21 @@ class PostgresMonitorRetirementRepository:
             cursor = RetentionCursorRow(kind=kind)
             self._session.add(cursor)
         conditions = [or_(*scopes)]
+        if cursor.until_received_at is None:
+            upper = self._session.execute(
+                select(table.received_at, table.event_id)
+                .where(*conditions)
+                .order_by(table.received_at.desc(), table.event_id.desc())
+                .limit(1)
+            ).first()
+            if upper is None:
+                return ()
+            cursor.until_received_at, cursor.until_event_id = upper
+        # 固定一遍扫描的尾界，新到期记录留给下一遍，旧保护行才必有复查机会。
+        conditions.append(
+            tuple_(table.received_at, table.event_id)
+            <= tuple_(literal(cursor.until_received_at), literal(cursor.until_event_id))
+        )
         if cursor.received_at is not None:
             conditions.append(
                 tuple_(table.received_at, table.event_id)
@@ -882,6 +899,8 @@ class PostgresMonitorRetirementRepository:
         ).all()
         cursor.received_at = rows[-1].received_at if len(rows) == limit else None
         cursor.event_id = rows[-1].event_id if len(rows) == limit else None
+        if len(rows) < limit:
+            cursor.until_received_at = cursor.until_event_id = None
         self._session.flush()
         return rows
 
@@ -912,12 +931,17 @@ class PostgresMonitorRetirementRepository:
         return None
 
     def retire_records(
-        self, *, cutoffs: RetentionCutoffs, limit: int, now: datetime
+        self,
+        *,
+        cutoffs: RetentionCutoffs,
+        aggregate_cutoffs: RetentionCutoffs,
+        limit: int,
+        now: datetime,
     ) -> RecordRetirement:
         del now
         self._lock_streams()
         deleted = archived = 0
-        buckets: Counter[tuple[str, str, int | None, datetime, str, str]] = Counter()
+        buckets: Counter[tuple[str | None, str, int | None, datetime, str, str]] = Counter()
         moments: list[datetime] = []
         skips: Counter[str] = Counter()
         for table, kind, identity in (
@@ -925,7 +949,8 @@ class PostgresMonitorRetirementRepository:
             (ReportedObservationRow, "observation", ObservationIdentityRow),
             (ReportedHealthRow, "health", HealthIdentityRow),
         ):
-            page = self._page(table, table.station_id, cutoffs, limit, kind)
+            scan = RetentionCutoffs(cutoffs.cutoffs + aggregate_cutoffs.cutoffs)
+            page = self._page(table, table.station_id, scan, limit, kind)
             for row in page:
                 moments.append(row.received_at)
                 instance = row.payload.get("instance_id")
@@ -937,16 +962,29 @@ class PostgresMonitorRetirementRepository:
                 if reason is not None:
                     skips[reason] += 1
                     continue
-                buckets[
-                    (
-                        row.station_id,
-                        row.host_id,
-                        instance,
-                        row.received_at.replace(minute=0, second=0, microsecond=0),
-                        row.payload.get("verdict", "unknown"),
-                        kind,
-                    )
-                ] += 1
+                identity_row = cast(
+                    DecisionIdentityRow | ObservationIdentityRow | HealthIdentityRow | None,
+                    self._session.get(identity, row.event_id),
+                )
+                if identity_row is None:
+                    raise RuntimeError("record mirror is missing its identity")
+                if not identity_row.retention_archived:
+                    buckets[
+                        (
+                            row.station_id,
+                            row.host_id,
+                            instance,
+                            row.received_at.replace(minute=0, second=0, microsecond=0),
+                            row.payload.get("verdict", "unknown"),
+                            kind,
+                        )
+                    ] += 1
+                    identity_row.retention_archived = True
+                # 聚合年龄可早于明细保留；明细仍可查，之后删除时不重复归档计数。
+                detail_cutoff = cutoffs.for_station(row.station_id)
+                if detail_cutoff is None or row.received_at > detail_cutoff:
+                    skips["detail_retention_active"] += 1
+                    continue
                 # 保留全局身份与载荷摘要，既拒绝冲突重放，也不让旧事件重新生成为明细。
                 self._session.execute(
                     update(identity)
@@ -992,7 +1030,9 @@ class PostgresMonitorRetirementRepository:
         for key in (_DECISION_STREAM_LOCK_KEY, _HEALTH_STREAM_LOCK_KEY):
             self._session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
 
-    def _archive(self, buckets: Counter[tuple[str, str, int | None, datetime, str, str]]) -> int:
+    def _archive(
+        self, buckets: Counter[tuple[str | None, str, int | None, datetime, str, str]]
+    ) -> int:
         for (station, host, instance, bucket, verdict, kind), count in buckets.items():
             self._session.add(
                 RetentionRecordArchiveRow(

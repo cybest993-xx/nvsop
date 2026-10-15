@@ -34,6 +34,9 @@ from typing import Any
 from urllib.parse import quote
 
 EXPECTED_SCHEMA_VERSION = 20
+# V21 只新增本机删除账本，既有表的采集字段与语义不变；本工具只接受已知 20/21 并按同版本
+# 互比，两个版本互比或未知版本仍不兼容。
+SUPPORTED_SCHEMA_VERSIONS = (20, 21)
 SNAPSHOT_SCHEMA = 1
 TOOL_VERSION = 1
 CANDIDATE_SHA = re.compile(r"[0-9a-f]{40}")
@@ -322,7 +325,7 @@ def _read_sqlite(path: Path) -> dict[str, Any]:
         connection.execute("BEGIN")
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
         rows_by_table: dict[str, list[dict[str, Any]]] = {}
-        if version == EXPECTED_SCHEMA_VERSION:
+        if version in SUPPORTED_SCHEMA_VERSIONS:
             for table, columns in SQLITE_TABLES:
                 cursor = connection.execute(
                     f"SELECT {', '.join(columns)} FROM {table} ORDER BY rowid"
@@ -332,7 +335,7 @@ def _read_sqlite(path: Path) -> dict[str, Any]:
     finally:
         connection.close()
     summary = _sqlite_summary(version, rows_by_table)
-    summary["compatible"] = version == EXPECTED_SCHEMA_VERSION
+    summary["compatible"] = version in SUPPORTED_SCHEMA_VERSIONS
     return summary
 
 
@@ -766,8 +769,8 @@ def compare_snapshots(
 
     checks: list[dict[str, str]] = []
     versions = {before["sqlite"]["schema_version"], after["sqlite"]["schema_version"]}
-    if versions == {EXPECTED_SCHEMA_VERSION}:
-        checks.append(_check("schema_version", "pass", f"schema {EXPECTED_SCHEMA_VERSION}"))
+    if len(versions) == 1 and versions <= set(SUPPORTED_SCHEMA_VERSIONS):
+        checks.append(_check("schema_version", "pass", f"schema {next(iter(versions))}"))
     else:
         checks.append(
             _check("schema_version", "fail", f"incompatible schema versions {sorted(versions)}")

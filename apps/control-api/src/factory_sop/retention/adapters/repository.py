@@ -41,6 +41,16 @@ class PostgresRetentionPolicyRepository(RetentionPolicyRepository):
         )
         return None if row is None else row.to_domain()
 
+    def lock_current(self) -> RetentionPolicyState | None:
+        """共享行锁读取当前策略；未持久化时为 ``None``，且没有可锁的行。"""
+        row = self._session.scalar(
+            select(RetentionPolicyRow)
+            .where(RetentionPolicyRow.singleton == 1)
+            .with_for_update(read=True)
+            .execution_options(populate_existing=True)
+        )
+        return None if row is None else row.to_domain()
+
     def replace_if_current(self, *, expected_revision: int, value: RetentionPolicyState) -> bool:
         """expected_revision==0 时仅首次插入；否则只在 revision 仍相等时更新。"""
         table = cast(Table, RetentionPolicyRow.__table__)
@@ -98,6 +108,16 @@ class PostgresStationRetentionOverrideRepository(StationRetentionOverrideReposit
             .returning(table.c.station_id)
         )
         return self._session.execute(insert_statement).scalar_one_or_none() is not None
+
+    def lock_current(self, station_id: UUID) -> StationRetentionRecord | None:
+        """共享行锁读取该工位覆盖记录；没有记录时为 ``None``。"""
+        row = self._session.scalar(
+            select(StationRetentionPolicyRow)
+            .where(StationRetentionPolicyRow.station_id == station_id)
+            .with_for_update(read=True)
+            .execution_options(populate_existing=True)
+        )
+        return None if row is None else row.to_domain()
 
     def replace_if_current(self, *, expected_revision: int, record: StationRetentionRecord) -> bool:
         table = cast(Table, StationRetentionPolicyRow.__table__)

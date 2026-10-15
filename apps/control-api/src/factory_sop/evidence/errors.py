@@ -11,6 +11,10 @@ class EvidenceRefusal(StrEnum):
     HOST_NOT_OWNER = "host_not_owner"
     ILLEGAL_REFERENCE = "illegal_reference"
     IDENTITY_CONFLICT = "identity_conflict"
+    # 该证据存在未结案删除认领：引用写入必须先解决认领，不能与删除并行产生新引用。
+    DELETION_CLAIM_PENDING = "deletion_claim_pending"
+    # 该证据媒体由来源机确认已删除：拒绝把它当作新引用重新登记（§5.19 不可复活）。
+    MEDIA_DELETED = "media_deleted"
 
 
 class EvidenceRefusedError(ValueError):

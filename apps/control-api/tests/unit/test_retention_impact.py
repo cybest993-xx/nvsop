@@ -23,6 +23,7 @@ from factory_sop.retention.api import (
     INSTANCE_CATEGORY_UNKNOWN,
     EdgeImpactResult,
     EvidenceInstanceUsage,
+    EvidenceReviewUsage,
     ImpactAggregate,
     InstanceRetentionFact,
     MonitorImpactGateway,
@@ -87,6 +88,9 @@ class FakePolicies:
     def get_global(self) -> RetentionPolicyState | None:
         return self.state
 
+    def lock_current(self) -> RetentionPolicyState | None:
+        return self.state
+
     def replace_if_current(self, *, expected_revision: int, value: RetentionPolicyState) -> bool:
         self.writes += 1
         current = 0 if self.state is None else self.state.revision
@@ -107,6 +111,9 @@ class FakeOverrides:
     def list_all(self) -> tuple[StationRetentionRecord, ...]:
         return tuple(self.records.values())
 
+    def lock_current(self, station_id: UUID) -> StationRetentionRecord | None:
+        return self.records.get(station_id)
+
     def insert_if_absent(self, record: StationRetentionRecord) -> bool:
         self.writes += 1
         if record.station_id in self.records:
@@ -124,17 +131,42 @@ class FakeOverrides:
 
 
 class FakeEvidenceImpact:
-    """按外部注入的逐实例用法回答；记录调用以便断言 owner 确实被查询。"""
+    """按外部注入的逐实例用法与复核状态回答；记录调用以便断言 owner 确实被查询。"""
 
-    def __init__(self, usage: tuple[EvidenceInstanceUsage, ...] = ()) -> None:
+    def __init__(
+        self,
+        usage: tuple[EvidenceInstanceUsage, ...] = (),
+        reviews: tuple[EvidenceReviewUsage, ...] | None = None,
+    ) -> None:
         self.calls: list[tuple[UUID | None, datetime | None, datetime]] = []
+        self.review_calls: list[tuple[UUID | None, datetime | None, datetime]] = []
         self._usage = usage
+        self._reviews = reviews
 
     def evidence_usage(
         self, *, station_id: UUID | None, exposed_from: datetime | None, exposed_to: datetime
     ) -> tuple[EvidenceInstanceUsage, ...]:
         self.calls.append((station_id, exposed_from, exposed_to))
         return self._usage
+
+    def review_usage(
+        self, *, station_id: UUID | None, exposed_from: datetime | None, exposed_to: datetime
+    ) -> tuple[EvidenceReviewUsage, ...]:
+        self.review_calls.append((station_id, exposed_from, exposed_to))
+        if self._reviews is not None:
+            return self._reviews
+        # 未显式注入时按已注入的用法回答「复核状态已知且无在审复核」：同一窗口内 evidence
+        # owner 的两个聚合回答的是同一批引用，因此逐实例保持一致。
+        return tuple(
+            EvidenceReviewUsage(
+                host_id=value.host_id,
+                station_id=value.station_id,
+                instance_id=value.instance_id,
+                known=True,
+                active=False,
+            )
+            for value in self._usage
+        )
 
 
 class FakeMonitorImpact(MonitorImpactGateway):
@@ -215,7 +247,6 @@ def fact(
     verdict: str | None,
     latched: bool = False,
     closed: bool = True,
-    active_review: bool | None = False,
 ) -> InstanceRetentionFact:
     return InstanceRetentionFact(
         host_id=HOST,
@@ -224,7 +255,13 @@ def fact(
         verdict=verdict,
         has_latched_violation=latched,
         closed=closed,
-        active_review=active_review,
+    )
+
+
+def review(station_id: UUID, instance_id: int, *, known: bool, active: bool) -> EvidenceReviewUsage:
+    """evidence owner 报告的一条在审复核聚合状态。"""
+    return EvidenceReviewUsage(
+        host_id=HOST, station_id=station_id, instance_id=instance_id, known=known, active=active
     )
 
 
@@ -756,7 +793,8 @@ def test_impact_aggregate_rejects_impossible_counts() -> None:
 def test_closed_instance_without_review_fact_is_not_assumed_unprotected() -> None:
     station = new_id()
     evidence = FakeEvidenceImpact(
-        (usage(station, 1, unlinked=aggregate(objects=1, known_bytes=10), linked=aggregate()),)
+        (usage(station, 1, unlinked=aggregate(objects=1, known_bytes=10), linked=aggregate()),),
+        reviews=(),
     )
     monitor = FakeMonitorImpact(
         facts=(
@@ -786,6 +824,40 @@ def test_closed_instance_without_review_fact_is_not_assumed_unprotected() -> Non
     )
     assert not estimate.complete
     assert estimate.incomplete_reasons == ("evidence_pass:evidence_review_state_unknown",)
+
+
+def test_known_review_state_protects_active_reviews_and_exposes_finished_ones() -> None:
+    """复核状态归 evidence 拥有：在审的未链接引用受保护，已结案的才进入暴露计数。"""
+    station = new_id()
+    proposed = replace(
+        DEFAULT_RETENTION_POLICY, evidence_pass=RetentionRule(RetentionMode.DURATION, 10 * _DAY)
+    )
+
+    def run(active: bool) -> tuple[int, int]:
+        evidence = FakeEvidenceImpact(
+            (usage(station, 1, unlinked=aggregate(objects=2, known_bytes=20), linked=aggregate()),),
+            reviews=(review(station, 1, known=True, active=active),),
+        )
+        estimate = estimate_global_policy_change(
+            edit(),
+            proposed,
+            expected_revision=0,
+            policies=FakePolicies(),
+            records=FakeOverrides(),
+            evidence_impact=evidence,
+            monitor_impact=FakeMonitorImpact(facts=(fact(station, 1, verdict="pass"),)),
+            now=NOW,
+            edge_impact=FakeEdgeImpact(),
+        )
+        assert evidence.review_calls, "the evidence owner must be asked for review state"
+        field = next(
+            value for value in estimate.fields if value.field is RetentionImpactField.EVIDENCE_PASS
+        )
+        assert field.breakdown is not None
+        return field.breakdown.exposed.objects, field.breakdown.protected.objects
+
+    assert run(active=True) == (0, 2)
+    assert run(active=False) == (2, 0)
 
 
 def test_empty_estimate_digest_still_binds_baseline_and_global_scope() -> None:

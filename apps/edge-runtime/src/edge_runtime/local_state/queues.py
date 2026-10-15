@@ -30,6 +30,7 @@ from edge_runtime.judgment.model import Decision, HostInstant, Lifecycle, Violat
 from edge_runtime.judgment.reasons import ReasonCode, Verdict
 from edge_runtime.local_state.codec import span
 from edge_runtime.local_state.codec import violation as decode_violation
+from edge_runtime.local_state.retention import instance_protection_reason
 
 # A new process cannot validate a previous process's monotonic report time.
 REPORT_RUN_ID = uuid4().hex
@@ -224,6 +225,52 @@ class PendingEvidence:
     # 同锚点判定/违规声明的核心必需跨度 (monotonic); 旧行或无可证来源时为 None。
     required_from: float | None = None
     required_to: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RegisteredEvidenceMedia:
+    """已登记证据的本机产物索引: 定稿覆盖窗口与每媒体 typed 元数据。
+
+    删除资格只对这些本机真实存在且已获中心登记确认的产物求值; ``identity`` 是再切片冻结的产物身份,
+    首次切片为 ``None``, 由调用方按 ``host_id``/``queue_id`` 求值后与切片写入同名。
+    """
+
+    station_id: str
+    instance_id: int
+    queue_id: int | None
+    identity: str | None
+    covered_from: float
+    covered_to: float
+    media_results: str
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceDeletionJournal:
+    """一条本机删除意图/结果账本行。
+
+    ``stage='claimed'`` 表示已从中心领到认领与票据但尚未删除, ``stage='result_pending'``
+    表示本机已得出终局 ``outcome`` 且必须重放到中心。两条状态都在取消链接前落账, 使重启/上报
+    失败可恢复而不从文件缺失推断成功。
+    """
+
+    evidence_id: str
+    station_id: str
+    instance_id: int
+    claim_id: str
+    ticket: str
+    claim_expires_at: float | None
+    stage: str
+    outcome: str | None
+    reason_code: str | None
+    detail: str | None
+    generation: str
+    observed_sha256: str
+    observed_size: int
+    reference: str
+    created_at: float
+    updated_at: float
+    attempts: int
+    last_error: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1123,3 +1170,82 @@ class StationQueues:
                 """,
                 (at.seconds, error, self._station_id, queue_id),
             )
+
+    def registered_evidence_media(self) -> tuple[RegisteredEvidenceMedia, ...]:
+        """本工位已登记且已定稿的证据产物索引; 未登记或没有产物的行不出现。
+
+        首次切片与再切片产物都返回: 首次按 ``queue_id`` 求值身份, 再切片用冻结的 ``identity``。
+        只读索引, 不扫描媒体目录, 也不读取当前时钟重解释历史。
+        """
+        with self._lock:
+            first = self._connection.execute(
+                """
+                SELECT instance_id, queue_id, covered_from, covered_to, media_results
+                  FROM local_evidence_queue
+                 WHERE station_id = ? AND registered_at IS NOT NULL
+                   AND media_results IS NOT NULL
+                   AND covered_from IS NOT NULL AND covered_to IS NOT NULL
+                 ORDER BY queue_id
+                """,
+                (self._station_id,),
+            ).fetchall()
+            reclips = self._connection.execute(
+                """
+                SELECT instance_id, identity, covered_from, covered_to, media_results
+                  FROM local_reclip_request
+                 WHERE station_id = ? AND registered_at IS NOT NULL
+                   AND media_results IS NOT NULL AND identity IS NOT NULL
+                   AND covered_from IS NOT NULL AND covered_to IS NOT NULL
+                 ORDER BY instance_id, anchor
+                """,
+                (self._station_id,),
+            ).fetchall()
+        return tuple(
+            RegisteredEvidenceMedia(
+                station_id=self._station_id,
+                instance_id=int(row["instance_id"]),
+                queue_id=int(row["queue_id"]),
+                identity=None,
+                covered_from=float(row["covered_from"]),
+                covered_to=float(row["covered_to"]),
+                media_results=str(row["media_results"]),
+            )
+            for row in first
+        ) + tuple(
+            RegisteredEvidenceMedia(
+                station_id=self._station_id,
+                instance_id=int(row["instance_id"]),
+                queue_id=None,
+                identity=str(row["identity"]),
+                covered_from=float(row["covered_from"]),
+                covered_to=float(row["covered_to"]),
+                media_results=str(row["media_results"]),
+            )
+            for row in reclips
+        )
+
+    def evidence_deletion_protection(self, *, instance_id: int) -> str | None:
+        """删除前本机保护事实; ``None`` 表示本机没有仍成立的保护。
+
+        未结案/未知实例、已锁存违规与未登记证据引用复用 #208 定义并测试过的共享保护规则
+        (``instance_protection_reason``); #206 只额外加盖“待办再切片引用”这一本票保护。
+        """
+        with self._lock:
+            reason = instance_protection_reason(
+                self._connection, station_id=self._station_id, instance_id=instance_id
+            )
+            if reason is not None:
+                return reason
+            if (
+                self._connection.execute(
+                    """
+                    SELECT 1 FROM local_reclip_request
+                     WHERE station_id = ? AND instance_id = ?
+                       AND registered_at IS NULL AND terminal_error_code IS NULL LIMIT 1
+                    """,
+                    (self._station_id, instance_id),
+                ).fetchone()
+                is not None
+            ):
+                return "reclip_pending"
+        return None

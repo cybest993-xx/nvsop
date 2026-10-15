@@ -85,6 +85,9 @@ class FakePolicies:
     def get_global(self) -> RetentionPolicyState | None:
         return self.state
 
+    def lock_current(self) -> RetentionPolicyState | None:
+        return self.state
+
     def replace_if_current(self, *, expected_revision: int, value: RetentionPolicyState) -> bool:
         current = 0 if self.state is None else self.state.revision
         if current != expected_revision:
@@ -105,6 +108,9 @@ class FakeOverrides:
 
     def list_all(self) -> tuple[StationRetentionRecord, ...]:
         return tuple(self.records.values())
+
+    def lock_current(self, station_id: UUID) -> StationRetentionRecord | None:
+        return self.records.get(station_id)
 
     def insert_if_absent(self, record: StationRetentionRecord) -> bool:
         self.writes += 1

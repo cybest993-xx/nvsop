@@ -111,10 +111,14 @@ from factory_sop.problem import (
     problem_response,
 )
 from factory_sop.retention.adapters import dependencies as retention_dependencies
+from factory_sop.retention.adapters.deletion_routes import (
+    router as retention_deletion_router,
+)
 from factory_sop.retention.adapters.impact_access_routes import (
     router as retention_impact_access_router,
 )
 from factory_sop.retention.adapters.routes import router as retention_router
+from factory_sop.retention.api import DeletionAuthorityBusyError
 from factory_sop.retention.errors import RetentionRefusedError
 from factory_sop.retention.errors import refusal_problem as retention_refusal_problem
 from factory_sop.settings import Settings
@@ -284,6 +288,8 @@ def create_app(
     app.include_router(execution_routes.router, prefix=API_PREFIX)
     app.include_router(retention_router, prefix=API_PREFIX)
     app.include_router(retention_impact_access_router, prefix=API_PREFIX)
+    # 证据删除资格是主机签名机器端点：claim/verify/result 三个动作同属一个 owner 面。
+    app.include_router(retention_deletion_router, prefix=API_PREFIX)
     app.include_router(overview_router, prefix=API_PREFIX)
     # 组合根把跨模块查询和任务依赖接到各自模块的真实适配器。
     app.dependency_overrides[configuration_dependencies.device_gateway] = (
@@ -345,6 +351,29 @@ def create_app(
     app.dependency_overrides[retention_dependencies.monitor_impact] = (
         monitor_dependencies.retention_impact
     )
+    app.dependency_overrides[retention_dependencies.evidence_deletion] = (
+        evidence_dependencies.deletion_gateway
+    )
+    # retention 策略写入与设备变更共用 evidence 拥有的删除认领权威锁。
+    app.dependency_overrides[retention_dependencies.deletion_authority_fence] = (
+        evidence_dependencies.deletion_gateway
+    )
+    # 设备工位停用/恢复与配置签发共用 evidence 拥有的删除认领权威锁。
+    app.dependency_overrides[device_dependencies.deletion_authority_fence] = (
+        evidence_dependencies.deletion_gateway
+    )
+
+    @app.exception_handler(DeletionAuthorityBusyError)
+    async def deletion_authority_busy(
+        request: Request, error: DeletionAuthorityBusyError
+    ) -> Response:
+        """已授权未结案删除期间拒绝权威变更：状态与错误码复用现有线格式，不新增枚举。"""
+        return problem_response(
+            status=409,
+            title="存在已授权未结案的证据删除，请等来源机终局反馈后再修改",
+            error_code=ApiErrorCode.STATE_CONFLICT,
+            detail=str(error),
+        )
 
     @app.exception_handler(EvidenceAccessRefusedError)
     async def evidence_access_refused(

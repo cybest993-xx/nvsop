@@ -48,6 +48,8 @@ from factory_sop.evidence.repository import (
 )
 from factory_sop.evidence.reviews import (
     EvidenceReviewRefusedError,
+    begin_review,
+    cancel_review,
     list_reviews,
     save_review,
 )
@@ -110,6 +112,32 @@ class EvidenceReviewRecord(BaseModel):
     reviewer_name: str
     reviewed_at: datetime
     conclusion: ReviewConclusion
+
+
+class EvidenceReviewHoldBody(BaseModel):
+    """开始一次在审复核：稳定幂等 ID 与证据代次；不接受其它扩展字段。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    review_id: UUID = Field(strict=False)
+    generation: str
+
+
+class EvidenceReviewCancelBody(BaseModel):
+    """取消本人在审占用；只认自己创建的 review_id。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    review_id: UUID = Field(strict=False)
+
+
+class EvidenceReviewHoldRecord(BaseModel):
+    review_id: UUID
+    evidence_id: str
+    generation: str
+    reviewer_id: UUID
+    started_at: datetime
+    ended_at: datetime | None = None
 
 
 class EvidenceReclipBody(BaseModel):
@@ -247,14 +275,78 @@ def register_review(
             reviews=reviews,
         )
     except EvidenceReviewRefusedError as error:
-        error_code, title = {
-            "evidence_unregistered": (ApiErrorCode.OBJECT_NOT_FOUND, "证据未登记"),
-            "evidence_generation_mismatch": (ApiErrorCode.RESOURCE_MISMATCH, "证据代次不匹配"),
-            "evidence_unavailable": (ApiErrorCode.STATE_CONFLICT, "证据当前不可用，无法复核"),
-            "review_conflict": (ApiErrorCode.IDEMPOTENCY_CONFLICT, "复核请求与既有结论冲突"),
-        }[error.code]
-        return problem_response(status=error.status, title=title, error_code=error_code)
+        return _review_refusal(error)
     return asdict(record)
+
+
+@router.post(
+    "/{evidence_id:path}/review-holds",
+    operation_id="beginEvidenceReview",
+    response_model=EvidenceReviewHoldRecord,
+    openapi_extra=needs(Permission.EVIDENCE_VIEW, Permission.EVIDENCE_REVIEW_EDIT),
+)
+def begin_review_hold(
+    evidence_id: str,
+    body: EvidenceReviewHoldBody,
+    caller: Authorized,
+    evidence: Repository,
+    reviews: ReviewRepository,
+) -> dict[str, object] | Response:
+    """进入在审保护：登记本人在该证据上的持久复核占用，删除认领在此之后被拒。"""
+    try:
+        hold = begin_review(
+            caller,
+            review_id=body.review_id,
+            evidence_id=evidence_id,
+            generation=body.generation,
+            now=datetime.now(UTC),
+            evidence=evidence,
+            reviews=reviews,
+        )
+    except EvidenceReviewRefusedError as error:
+        return _review_refusal(error)
+    return asdict(hold)
+
+
+@router.post(
+    "/{evidence_id:path}/review-holds/cancel",
+    operation_id="cancelEvidenceReview",
+    status_code=204,
+    openapi_extra=needs(Permission.EVIDENCE_VIEW, Permission.EVIDENCE_REVIEW_EDIT),
+)
+def cancel_review_hold(
+    evidence_id: str,
+    body: EvidenceReviewCancelBody,
+    caller: Authorized,
+    reviews: ReviewRepository,
+) -> Response:
+    """退出在审保护：只结束当前人自己的占用，其他人或已结案的占用不受影响。"""
+    del evidence_id
+    try:
+        cancel_review(caller, review_id=body.review_id, now=datetime.now(UTC), reviews=reviews)
+    except EvidenceReviewRefusedError as error:
+        return _review_refusal(error)
+    return Response(status_code=204)
+
+
+def _review_refusal(error: EvidenceReviewRefusedError) -> Response:
+    """把复核接缝的稳定原因码映射成问题响应；未知码保持 409 而不是静默成功。"""
+    error_code, title = {
+        "evidence_unregistered": (ApiErrorCode.OBJECT_NOT_FOUND, "证据未登记"),
+        "evidence_generation_mismatch": (ApiErrorCode.RESOURCE_MISMATCH, "证据代次不匹配"),
+        "evidence_unavailable": (ApiErrorCode.STATE_CONFLICT, "证据当前不可用，无法复核"),
+        "evidence_deletion_claimed": (
+            ApiErrorCode.STATE_CONFLICT,
+            "证据删除认领未结案，暂不可复核",
+        ),
+        "review_state_unknown": (ApiErrorCode.STATE_CONFLICT, "历史复核状态未知，暂不可开启复核"),
+        "review_conflict": (ApiErrorCode.IDEMPOTENCY_CONFLICT, "复核请求与既有结论冲突"),
+        "review_not_owned_or_closed": (
+            ApiErrorCode.STATE_CONFLICT,
+            "复核占用不存在、已结束或不属于当前用户",
+        ),
+    }.get(error.code, (ApiErrorCode.STATE_CONFLICT, "复核请求被拒绝"))
+    return problem_response(status=error.status, title=title, error_code=error_code)
 
 
 @router.post(

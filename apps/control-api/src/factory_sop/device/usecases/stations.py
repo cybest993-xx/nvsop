@@ -18,6 +18,7 @@ from factory_sop.device.repository import (
 from factory_sop.device.usecases._transitions import refuse, set_status
 from factory_sop.identifiers import new_id
 from factory_sop.observability import get_logger
+from factory_sop.retention.api import DeletionAuthorityFence
 
 _logger = get_logger("device")
 _REFUSAL_EVENT = "device.station.refused"
@@ -88,9 +89,15 @@ def set_station_status(
     caller: Caller,
     now: datetime,
     stations: StationRepository,
+    fence: DeletionAuthorityFence | None = None,
 ) -> Station:
-    """通过统一的授权用例接口应用可逆的工位状态。"""
+    """通过统一的授权用例接口应用可逆的工位状态。
+
+    存在已授权未结案删除时拒绝停用/恢复：工位启用状态是删除资格的输入，不能在删前被改写。
+    """
     authorize(caller, Permission.STATION_EDIT)
+    if fence is not None:
+        fence.ensure_mutable()
     station = _existing_station(station_id, stations)
     _require_revision(station, expected_revision)
     if station.status is requested_status:

@@ -692,8 +692,6 @@ class PostgresMonitorImpactRepository(MonitorImpactRepository):
                 verdict=verdicts.get((host, station, instance)),
                 has_latched_violation=(host, station, instance) in latched,
                 closed=closed.get((host, station, instance), False),
-                # 尚无持久在审事实；复核结果或实例结案都不能代替它。
-                active_review=None,
             )
             for host, station, instance in sorted(wanted)
         )

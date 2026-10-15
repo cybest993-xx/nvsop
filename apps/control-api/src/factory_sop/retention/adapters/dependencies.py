@@ -17,8 +17,10 @@ from factory_sop.retention.adapters.repository import (
     RepositoryStationRetentionProjectionGateway,
 )
 from factory_sop.retention.api import (
+    DeletionAuthorityFence,
     EdgeImpactGateway,
     EdgeImpactSourcesGateway,
+    EvidenceDeletionGateway,
     EvidenceImpactGateway,
     MonitorImpactGateway,
     RetentionPolicyRepository,
@@ -33,6 +35,22 @@ def estimate_ttl_seconds(request: Request) -> int | None:
     """读取中心部署显式提供的确认时限；None 表示缩短确认尚未配置。"""
     settings: Settings = request.app.state.settings
     return settings.retention_estimate_ttl_seconds
+
+
+def deletion_ttl_seconds(request: Request) -> int | None:
+    """读取中心部署显式提供的删除票据有效期；None 表示尚未配置，缺失即不提供删除资格。"""
+    settings: Settings = request.app.state.settings
+    return settings.evidence_deletion_ticket_ttl_seconds
+
+
+def evidence_deletion() -> EvidenceDeletionGateway:
+    """由组合根注入 `evidence` 的引用/保护事实、删除认领与来源机反馈 seam。"""
+    raise RuntimeError("retention evidence deletion dependency was not wired")
+
+
+def deletion_authority_fence() -> DeletionAuthorityFence:
+    """由组合根注入 `evidence` 拥有的删除认领权威锁；策略写入在锁内检查。"""
+    raise RuntimeError("retention deletion authority fence dependency was not wired")
 
 
 def policy_repository(session: RequestSession) -> RetentionPolicyRepository:
@@ -111,9 +129,12 @@ def configuration_gateway(session: RequestSession) -> StationRetentionProjection
 __all__ = [
     "RetentionHostAuthenticator",
     "configuration_gateway",
+    "deletion_authority_fence",
+    "deletion_ttl_seconds",
     "edge_impact",
     "edge_sources",
     "estimate_ttl_seconds",
+    "evidence_deletion",
     "evidence_impact",
     "host_authenticator",
     "monitor_impact",

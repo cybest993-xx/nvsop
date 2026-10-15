@@ -78,7 +78,7 @@ from factory_sop.device.model import (
 )
 from factory_sop.device.usecases.retention import RepositoryDeviceStationFacts
 from factory_sop.evidence.adapters import dependencies as evidence_dependencies
-from factory_sop.evidence.model import EvidenceReclipRequest, EvidenceReview
+from factory_sop.evidence.model import EvidenceReclipRequest, EvidenceReview, EvidenceReviewHold
 from factory_sop.execution.adapters import dependencies as execution_dependencies
 from factory_sop.execution.model import HANDOVER_RISK_STATEMENT, HandoverConfirmation
 from factory_sop.identifiers import new_id
@@ -547,6 +547,16 @@ ROUTES = [
     ),
     Target(
         "POST",
+        "/evidence/{evidence_id}/review-holds",
+        {"review_id": str(REVIEW_ID), "generation": "original"},
+    ),
+    Target(
+        "POST",
+        "/evidence/{evidence_id}/review-holds/cancel",
+        {"review_id": str(REVIEW_ID)},
+    ),
+    Target(
+        "POST",
         "/retention/policy/impact-estimate",
         {"policy": DEFAULT_RETENTION_POLICY.to_wire()},
     ),
@@ -593,6 +603,10 @@ EXEMPT = {
     ("POST", f"{API_PREFIX}/evidence/registrations"),
     # 来源机逐次回查要求主机签名，同时复核票据绑定的真实会话与权限。
     ("POST", f"{API_PREFIX}/evidence/access-check"),
+    # 证据删除资格的 claim/verify/result 同样只认主机签名，不接受浏览器会话或人类权限。
+    ("POST", f"{API_PREFIX}/retention/evidence-deletion-claims"),
+    ("POST", f"{API_PREFIX}/retention/evidence-deletion-claims/verify"),
+    ("POST", f"{API_PREFIX}/retention/evidence-deletion-claims/result"),
     ("POST", f"{API_PREFIX}/retention/reported-impact/access-check"),
 }
 
@@ -679,6 +693,12 @@ class FakeEvidenceImpact:
         del station_id, exposed_from, exposed_to
         return ()
 
+    def review_usage(
+        self, *, station_id: object, exposed_from: object, exposed_to: object
+    ) -> tuple[object, ...]:
+        del station_id, exposed_from, exposed_to
+        return ()
+
 
 class FakeMonitorImpact:
     """授权机械测试只需解析依赖；实例事实与记录/处置计数都返回零影响。"""
@@ -752,6 +772,16 @@ class StubRequestSession:
         return None
 
 
+class FakeDeletionAuthorityFence:
+    """授权机械测试不建立真实删除认领；权威锁与检查是无操作。"""
+
+    def lock_authority(self) -> None:
+        return None
+
+    def ensure_mutable(self) -> None:
+        return None
+
+
 class FakeHandoverAuthority:
     """授权机械测试的持有者集合，不触碰真实管理锁。"""
 
@@ -796,6 +826,23 @@ class FakeEvidenceReviews:
 
     def list_for_evidence(self, evidence_id: str) -> tuple[EvidenceReview, ...]:
         return tuple(row for row in self.records.values() if row.evidence_id == evidence_id)
+
+    def conclude_own(self, *, evidence_id: str, reviewer_id: UUID, at: datetime) -> int:
+        """授权机械测试不保留在审占用；结论提交只跑到真实成功分支。"""
+        del evidence_id, reviewer_id, at
+        return 0
+
+    def begin(self, value: EvidenceReviewHold) -> bool:
+        del value
+        return True
+
+    def cancel(self, *, review_id: UUID, reviewer_id: UUID, at: datetime) -> bool:
+        del review_id, reviewer_id, at
+        return True
+
+    def active_reviewers(self, *, evidence_id: str) -> frozenset[UUID]:
+        del evidence_id
+        return frozenset()
 
 
 class FakeEvidenceReclipRequests:
@@ -1018,6 +1065,12 @@ class Backend:
             self.monitor_impact
         )
         self.app.dependency_overrides[request_session] = StubRequestSession
+        self.app.dependency_overrides[device_dependencies.deletion_authority_fence] = lambda: (
+            FakeDeletionAuthorityFence()
+        )
+        self.app.dependency_overrides[retention_dependencies.deletion_authority_fence] = lambda: (
+            FakeDeletionAuthorityFence()
+        )
         self.client = TestClient(self.app, base_url="https://testserver")
         assert (
             self.client.post(

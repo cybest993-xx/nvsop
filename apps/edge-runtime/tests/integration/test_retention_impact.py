@@ -85,7 +85,7 @@ class RetentionAcknowledgementTests(unittest.TestCase):
             state = open_local_state(str(path))
             state.close()
             with sqlite3.connect(path) as connection:
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 20)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 21)
                 self.assertEqual(
                     connection.execute(
                         "SELECT sent_at, acknowledged_at FROM local_health_queue"

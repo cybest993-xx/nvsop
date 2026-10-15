@@ -528,6 +528,16 @@ def _artifact_name(evidence_id: str, covered_from: float, covered_to: float) -> 
     return f"{evidence_id}-{round(covered_from * 1000)}-{round(covered_to * 1000)}"
 
 
+def evidence_media_identity(host_id: str, queue_id: int) -> str:
+    """首次切片产物的稳定身份; 与切片/登记使用同一推导, 不 hash 浮点锚点新造身份。"""
+    return _evidence_id(host_id, queue_id)
+
+
+def evidence_artifact_directory(identity: str, covered_from: float, covered_to: float) -> str:
+    """已定稿产物目录名; 与切片写入使用同一命名, 删除方据此定位本机媒体。"""
+    return _artifact_name(identity, covered_from, covered_to)
+
+
 def file_sha256(path: Path) -> str:
     """本机媒体文件内容摘要; 证据定稿与压缩候选校验共用同一算法。"""
     digest = hashlib.sha256()

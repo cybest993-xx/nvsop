@@ -19,6 +19,7 @@ from factory_sop.auth.api import Authorized, Permission, needs
 from factory_sop.observability import get_logger
 from factory_sop.problem import problem_openapi_response
 from factory_sop.retention.adapters.dependencies import (
+    deletion_authority_fence,
     edge_impact,
     estimate_ttl_seconds,
     evidence_impact,
@@ -32,6 +33,7 @@ from factory_sop.retention.adapters.estimate_token import (
     encode_estimate_token,
 )
 from factory_sop.retention.api import (
+    DeletionAuthorityFence,
     EdgeImpactGateway,
     EvidenceImpactGateway,
     MonitorImpactGateway,
@@ -365,6 +367,7 @@ def update_the_retention_policy(
     evidence: Annotated[EvidenceImpactGateway, Depends(evidence_impact)],
     monitor: Annotated[MonitorImpactGateway, Depends(monitor_impact)],
     edge: Annotated[EdgeImpactGateway, Depends(edge_impact)],
+    fence: Annotated[DeletionAuthorityFence, Depends(deletion_authority_fence)],
     ttl_seconds: Annotated[int | None, Depends(estimate_ttl_seconds)],
     if_match: Annotated[int, Header(alias="If-Match", ge=0)],
     estimate_token: Annotated[str | None, Header(alias="X-Retention-Estimate")] = None,
@@ -395,7 +398,9 @@ def update_the_retention_policy(
         raise RetentionRefusedError(RetentionRefusalCode.POLICY_ESTIMATE_STALE)
     before = default_retention_policy(policies)
     try:
-        state = update_policy(caller, policy, expected_revision=if_match, repository=policies)
+        state = update_policy(
+            caller, policy, expected_revision=if_match, repository=policies, fence=fence
+        )
     except RetentionPolicyConflictError as error:
         raise RetentionRefusedError(RetentionRefusalCode.POLICY_CONFLICT) from error
     _logger.info(
@@ -482,6 +487,7 @@ def update_station_retention_policy(
     evidence: Annotated[EvidenceImpactGateway, Depends(evidence_impact)],
     monitor: Annotated[MonitorImpactGateway, Depends(monitor_impact)],
     edge: Annotated[EdgeImpactGateway, Depends(edge_impact)],
+    fence: Annotated[DeletionAuthorityFence, Depends(deletion_authority_fence)],
     ttl_seconds: Annotated[int | None, Depends(estimate_ttl_seconds)],
     if_match: Annotated[int, Header(alias="If-Match", ge=0)],
     estimate_token: Annotated[str | None, Header(alias="X-Retention-Estimate")] = None,
@@ -524,6 +530,7 @@ def update_station_retention_policy(
             policies=policies,
             records=records,
             stations=stations,
+            fence=fence,
         )
     except RetentionPolicyConflictError as error:
         raise RetentionRefusedError(RetentionRefusalCode.POLICY_CONFLICT) from error

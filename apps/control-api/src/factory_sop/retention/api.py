@@ -1,17 +1,31 @@
 """retention 的跨模块接缝：保留类别、策略值、纯规则、影响估算与用例（§5.19）。
 
 retention 拥有全局默认策略、每工位的整组覆盖记录与变更影响估算：本文件暴露工位事实 seam、
-覆盖记录 seam、配置组合使用的生效组投影、逐字段影响估算 seam 与估算摘要。其他模块只经此接缝
-访问，不读 retention 的表。#206 经 `category_for` 接入锁存违规事实与持久保护状态；#207 由数据
-owner 按本策略执行回收。
+覆盖记录 seam、配置组合使用的生效组投影、逐字段影响估算 seam 与估算摘要，以及逐证据删除资格
+判定与短期删除票据。其他模块只经此接缝访问，不读 retention 的表。#206 经 `category_for` 与
+`evidence_deletion_decision` 接入锁存违规事实与持久保护状态，保护事实仍由各 owner 提供；
+#207 由数据 owner 按本策略执行回收。
 """
 
 from __future__ import annotations
 
+from factory_sop.retention.deletion import (
+    EDGE_DELETION_TICKET_SCOPE,
+    DeletionTicket,
+    EvidenceDeletionRefusedError,
+    EvidenceDeletionResult,
+    claim_evidence_deletion,
+    read_deletion_ticket,
+    settle_evidence_deletion,
+    verify_evidence_deletion,
+)
 from factory_sop.retention.model import (
     DEFAULT_RETENTION_POLICY,
     FIELD_IMPACT,
     EdgeImpactSource,
+    EvidenceDeletionFacts,
+    EvidenceDeletionReason,
+    EvidenceMediaState,
     ImpactAggregate,
     RetentionCategory,
     RetentionFactOwner,
@@ -28,6 +42,8 @@ from factory_sop.retention.model import (
     check_reslice_window,
     check_retention_selection,
     empty_aggregate,
+    evidence_deletion_decision,
+    evidence_retention_rule,
     exposure_seconds,
     impact_digest,
     newly_exposed_window,
@@ -38,11 +54,17 @@ from factory_sop.retention.usecases import (
     EVIDENCE_BYTES_UNKNOWN,
     EVIDENCE_REVIEW_UNKNOWN,
     INSTANCE_CATEGORY_UNKNOWN,
+    DeletionAuthorityBusyError,
+    DeletionAuthorityFence,
     EdgeImpactGateway,
     EdgeImpactResult,
     EdgeImpactSourcesGateway,
+    EvidenceDeletionClaimState,
+    EvidenceDeletionGateway,
+    EvidenceDeletionReference,
     EvidenceImpactGateway,
     EvidenceInstanceUsage,
+    EvidenceReviewUsage,
     InstanceRetentionFact,
     MonitorImpactGateway,
     RetentionPolicyConflictError,
@@ -66,17 +88,30 @@ from factory_sop.retention.usecases import (
 
 __all__ = [
     "DEFAULT_RETENTION_POLICY",
+    "EDGE_DELETION_TICKET_SCOPE",
     "EDGE_LOCAL_USAGE_UNAVAILABLE",
     "EVIDENCE_BYTES_UNKNOWN",
     "EVIDENCE_REVIEW_UNKNOWN",
     "FIELD_IMPACT",
     "INSTANCE_CATEGORY_UNKNOWN",
+    "DeletionAuthorityBusyError",
+    "DeletionAuthorityFence",
+    "DeletionTicket",
     "EdgeImpactGateway",
     "EdgeImpactResult",
     "EdgeImpactSource",
     "EdgeImpactSourcesGateway",
+    "EvidenceDeletionClaimState",
+    "EvidenceDeletionFacts",
+    "EvidenceDeletionGateway",
+    "EvidenceDeletionReason",
+    "EvidenceDeletionReference",
+    "EvidenceDeletionRefusedError",
+    "EvidenceDeletionResult",
     "EvidenceImpactGateway",
     "EvidenceInstanceUsage",
+    "EvidenceMediaState",
+    "EvidenceReviewUsage",
     "ImpactAggregate",
     "InstanceRetentionFact",
     "MonitorImpactGateway",
@@ -104,16 +139,22 @@ __all__ = [
     "category_for",
     "check_reslice_window",
     "check_retention_selection",
+    "claim_evidence_deletion",
     "default_retention_policy",
     "empty_aggregate",
     "estimate_global_policy_change",
     "estimate_station_policy_change",
+    "evidence_deletion_decision",
+    "evidence_retention_rule",
     "exposure_seconds",
     "get_policy",
     "impact_digest",
     "newly_exposed_window",
+    "read_deletion_ticket",
     "read_station_retention",
     "resolve_retention_policy",
+    "settle_evidence_deletion",
     "update_policy",
     "update_station_retention",
+    "verify_evidence_deletion",
 ]

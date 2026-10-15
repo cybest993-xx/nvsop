@@ -34,11 +34,12 @@ from factory_sop.evidence.adapters.repository import (
 )
 from factory_sop.evidence.model import (
     EvidenceReference,
+    EvidenceReferenceLock,
     EvidenceReview,
     EvidenceStatus,
     ReviewConclusion,
 )
-from factory_sop.evidence.reviews import save_review
+from factory_sop.evidence.reviews import begin_review, cancel_review, save_review
 from factory_sop.evidence.usecases import register_evidence
 from factory_sop.identifiers import new_id
 from factory_sop.persistence import session_factory
@@ -115,6 +116,61 @@ def test_review_registration_is_authorized_idempotent_and_queryable(
             }
             reviewed_at = saved.json()["reviewed_at"]
 
+            # 在审保护的可用生产接缝：同一用户可进入/退出占用，未退出时重复提交会被结案。
+            holds = f"{API_PREFIX}/evidence/{evidence_id}/review-holds"
+            hold_id, second_hold = uuid4(), uuid4()
+            began = browser.post(
+                holds,
+                json={"review_id": str(hold_id), "generation": "original"},
+                headers=csrf,
+            )
+            assert began.status_code == 200, began.text
+            assert (began.json()["review_id"], began.json()["reviewer_id"]) == (
+                str(hold_id),
+                str(user.id),
+            )
+            # 同一 review_id 重放返回原 hold 与原时刻，不产生第二占用也未冲突。
+            replay_hold = browser.post(
+                holds,
+                json={"review_id": str(hold_id), "generation": "original"},
+                headers=csrf,
+            )
+            assert replay_hold.status_code == 200
+            assert replay_hold.json() == began.json()
+            # 代次不符与未登记证据同在锁定接缝上被拒绝，不产生残余占用。
+            assert (
+                browser.post(
+                    holds, json={"review_id": str(uuid4()), "generation": "reclip"}, headers=csrf
+                ).status_code
+                == 409
+            )
+            assert (
+                browser.post(
+                    f"{API_PREFIX}/evidence/{host_id}/missing.mp4/review-holds",
+                    json={"review_id": str(uuid4()), "generation": "original"},
+                    headers=csrf,
+                ).status_code
+                == 404
+            )
+            reopened = browser.post(
+                holds,
+                json={"review_id": str(second_hold), "generation": "original"},
+                headers=csrf,
+            )
+            assert reopened.status_code == 200
+            cancelled = browser.post(
+                holds + "/cancel", json={"review_id": str(second_hold)}, headers=csrf
+            )
+            assert cancelled.status_code == 204, cancelled.text
+            # 重复取消已结束的占用是解释性冲突，不是静默成功。
+            assert (
+                browser.post(
+                    holds + "/cancel", json={"review_id": str(second_hold)}, headers=csrf
+                ).status_code
+                == 409
+            )
+            # 提交新结论会结案本人仍持有的在审占用（见下方 appended 之后断言）。
+
             # 同 ID 同内容重放返回原记录与原时间；同 ID 不同结论 409 且不覆盖。
             replay = browser.post(base, json=submit, headers=csrf)
             assert replay.status_code == 200
@@ -142,6 +198,14 @@ def test_review_registration_is_authorized_idempotent_and_queryable(
             assert [row["conclusion"] for row in rows] == ["confirmed", "rejected"]
             assert rows[0]["reviewed_at"] == reviewed_at
             assert {row["reviewer_id"] for row in rows} == {str(user.id)}
+            # 提交结论结案了本人仍持有的在审占用；已取消的占用不复活。
+            with session_factory(engine)() as session:
+                assert (
+                    PostgresEvidenceReviewRepository(session).active_reviewers(
+                        evidence_id=evidence_id
+                    )
+                    == frozenset()
+                )
 
             # 另一作者的既有结论与机器证据行不被后续复核改写（owning 仓储 seam 全字段比较）。
             other_id = uuid4()
@@ -226,16 +290,20 @@ def test_review_registration_is_authorized_idempotent_and_queryable(
             )
 
 
-class _BarrierReviews(PostgresEvidenceReviewRepository):
-    """在插入前对齐两个真实事务，证明并发提交只有一个胜者。"""
+class _BarrierEvidence(PostgresEvidenceRepository):
+    """在取引用行锁之前对齐两个真实事务：并发提交由那把行锁串行化。
+
+    引用行锁（#206）使只有一个事务能进入写入段，另一个在锁后看到胜者并得到解释性冲突；
+    因此"同一意图只有一个胜者"不再依赖插入顺序的巧合。
+    """
 
     def __init__(self, session: DatabaseSession, barrier: Barrier) -> None:
         super().__init__(session)
         self._barrier = barrier
 
-    def insert(self, value: EvidenceReview) -> bool:
-        self._barrier.wait(timeout=5)
-        return super().insert(value)
+    def lock(self, evidence_id: str) -> EvidenceReferenceLock:
+        self._barrier.wait(timeout=10)
+        return super().lock(evidence_id)
 
 
 def _caller(reviewer_id: UUID) -> Caller:
@@ -274,8 +342,8 @@ def test_competing_review_intents_cannot_overwrite_the_winner(engine: Engine) ->
                         generation="original",
                         conclusion=conclusion,
                         reviewed_at=NOW,
-                        evidence=PostgresEvidenceRepository(session),
-                        reviews=_BarrierReviews(session, barrier),
+                        evidence=_BarrierEvidence(session, barrier),
+                        reviews=PostgresEvidenceReviewRepository(session),
                     )
                     session.commit()
                     return ("saved", record.conclusion.value)
@@ -297,4 +365,130 @@ def test_competing_review_intents_cannot_overwrite_the_winner(engine: Engine) ->
             connection.execute(
                 text("DELETE FROM evidence_evidence WHERE evidence_id = :id"),
                 {"id": EVIDENCE_ID},
+            )
+
+
+def test_active_review_is_owned_and_cancel_does_not_release_another_review(engine: Engine) -> None:
+    evidence_id = EVIDENCE_ID
+    reviewer, other = uuid4(), uuid4()
+    try:
+        with DatabaseSession(engine) as session:
+            register_evidence(
+                registration(sha256="b" * 64, reference="evidence/active-review.mp4"),
+                received_at=NOW,
+                evidence=PostgresEvidenceRepository(session),
+                host_gateway=Owner(),
+            )
+            session.commit()
+        with DatabaseSession(engine) as session:
+            evidence = PostgresEvidenceRepository(session)
+            reviews = PostgresEvidenceReviewRepository(session)
+            first = begin_review(
+                _caller(reviewer),
+                review_id=uuid4(),
+                evidence_id=evidence_id,
+                generation="original",
+                now=NOW,
+                evidence=evidence,
+                reviews=reviews,
+            )
+            second = begin_review(
+                _caller(other),
+                review_id=uuid4(),
+                evidence_id=evidence_id,
+                generation="original",
+                now=NOW,
+                evidence=evidence,
+                reviews=reviews,
+            )
+            assert first.review_id != second.review_id
+            assert reviews.active_reviewers(evidence_id=evidence_id) == frozenset({reviewer, other})
+            cancel_review(_caller(reviewer), review_id=first.review_id, now=NOW, reviews=reviews)
+            assert reviews.active_reviewers(evidence_id=evidence_id) == frozenset({other})
+            # 提交结论只结案提交者自己的在审占用；另一位 reviewer 的占用不受影响。
+            reopened = begin_review(
+                _caller(reviewer),
+                review_id=uuid4(),
+                evidence_id=evidence_id,
+                generation="original",
+                now=NOW,
+                evidence=evidence,
+                reviews=reviews,
+            )
+            assert reviews.active_reviewers(evidence_id=evidence_id) == frozenset({reviewer, other})
+            saved = save_review(
+                _caller(reviewer),
+                review_id=uuid4(),
+                evidence_id=evidence_id,
+                generation="original",
+                conclusion=ReviewConclusion.CONFIRMED,
+                reviewed_at=NOW,
+                evidence=evidence,
+                reviews=reviews,
+            )
+            assert reviews.active_reviewers(evidence_id=evidence_id) == frozenset({other})
+            concluded = reviews.list_for_evidence(evidence_id)
+            assert [row.review_id for row in concluded] == [saved.review_id]
+            assert reopened.review_id not in {row.review_id for row in concluded}
+            session.commit()
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM evidence_evidence WHERE evidence_id = :id"), {"id": evidence_id}
+            )
+
+
+def test_historical_unknown_review_state_still_allows_a_new_review(engine: Engine) -> None:
+    """历史行 review_state_known=false 只让删除资格保守未知，不阻止用户开启新复核或保存结论。"""
+    evidence_id = EVIDENCE_ID
+    reviewer = uuid4()
+    try:
+        with DatabaseSession(engine) as session:
+            register_evidence(
+                registration(sha256="e" * 64, reference="evidence/historical.mp4"),
+                received_at=NOW,
+                evidence=PostgresEvidenceRepository(session),
+                host_gateway=Owner(),
+            )
+            session.commit()
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE evidence_evidence SET review_state_known = false "
+                    "WHERE evidence_id = :id"
+                ),
+                {"id": evidence_id},
+            )
+        with DatabaseSession(engine) as session:
+            evidence = PostgresEvidenceRepository(session)
+            reviews = PostgresEvidenceReviewRepository(session)
+            # 未知历史状态不让 begin 失败；新占用仍被登记，复核继续可推进。
+            hold = begin_review(
+                _caller(reviewer),
+                review_id=uuid4(),
+                evidence_id=evidence_id,
+                generation="original",
+                now=NOW,
+                evidence=evidence,
+                reviews=reviews,
+            )
+            assert hold.evidence_id == evidence_id
+            # 未知仍表达为 None：删除资格继续保守，不能当作“无在审复核”。
+            assert reviews.active_reviewers(evidence_id=evidence_id) is None
+            saved = save_review(
+                _caller(reviewer),
+                review_id=uuid4(),
+                evidence_id=evidence_id,
+                generation="original",
+                conclusion=ReviewConclusion.CONFIRMED,
+                reviewed_at=NOW,
+                evidence=evidence,
+                reviews=reviews,
+            )
+            assert saved.evidence_id == evidence_id
+            session.commit()
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM evidence_evidence WHERE evidence_id = :id"), {"id": evidence_id}
             )

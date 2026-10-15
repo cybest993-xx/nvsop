@@ -18,11 +18,12 @@ import unittest
 from hashlib import sha256
 from pathlib import Path
 
-from edge_runtime.local_state.schema import migrate
+from edge_runtime.local_state.schema import MIGRATIONS, apply_migrations, migrate
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "validate_edge_restart.py"
-EXPECTED_SCHEMA_VERSION = 20
+# 权威迁移当前产出的版本（#206 新增 V21 本机删除账本表）。
+EXPECTED_SCHEMA_VERSION = 21
 CANDIDATE = "544e41a30c8c75bb1d8bd5fbf07f95b75d3ed34b"  # pragma: allowlist secret
 HOST = "018f0000-0000-7000-8000-0000000000aa"
 OTHER_HOST = "018f0000-0000-7000-8000-0000000000bb"
@@ -321,6 +322,54 @@ class ValidateEdgeRestartTest(unittest.TestCase):
 
         self.assertEqual(2, result.returncode)
         self.assertFalse(output.exists())
+
+    def test_snapshot_still_reads_a_v20_database(self) -> None:
+        # V20（#206 之前）没有删除账本表：仍按原样采集既有表并视为兼容。
+        v20 = self.root / "v20.sqlite3"
+        connection = sqlite3.connect(v20)
+        try:
+            apply_migrations(connection, MIGRATIONS[:20])
+            connection.execute(
+                "INSERT INTO local_sop_instance VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    STATION,
+                    10,
+                    100.0,
+                    110.0,
+                    "[]",
+                    0,
+                    "[]",
+                    "{}",
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        output = self.root / "v20.json"
+        result = self._snapshot(output, db=v20)
+        self.assertEqual(3, result.returncode, result.stderr)
+        document = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(20, document["sqlite"]["schema_version"])
+        self.assertTrue(document["sqlite"]["compatible"])
+        self.assertEqual(1, document["sqlite"]["table_counts"]["local_sop_instance"])
+
+    def test_snapshot_rejects_an_unknown_newer_schema_version(self) -> None:
+        # 比工具认识的更新（V22）同样明确拒绝，不猜未来 schema 的字段语义。
+        connection = sqlite3.connect(self.db)
+        try:
+            connection.execute("PRAGMA user_version = 22")
+            connection.commit()
+        finally:
+            connection.close()
+        output = self.root / "newer.json"
+        result = self._snapshot(output)
+        self.assertEqual(2, result.returncode, result.stderr)
+        self.assertFalse(json.loads(output.read_text(encoding="utf-8"))["sqlite"]["compatible"])
 
     def test_snapshot_rejects_an_incompatible_schema_version(self) -> None:
         connection = sqlite3.connect(self.db)

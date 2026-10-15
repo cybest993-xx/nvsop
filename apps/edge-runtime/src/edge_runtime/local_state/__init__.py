@@ -22,6 +22,7 @@ from edge_runtime.local_state.execution import (
 from edge_runtime.local_state.queues import (
     REPORT_RUN_ID,
     BackendReportContext,
+    EvidenceDeletionJournal,
     EvidenceSource,
     PendingEvidence,
     PendingHealthReport,
@@ -29,6 +30,7 @@ from edge_runtime.local_state.queues import (
     PendingReclip,
     PendingReport,
     PendingSopInstanceReport,
+    RegisteredEvidenceMedia,
     ReportContext,
 )
 from edge_runtime.local_state.retention import (
@@ -51,6 +53,7 @@ __all__ = [
     "DEFAULT_RECLAIM_LIMIT",
     "REPORT_RUN_ID",
     "BackendReportContext",
+    "EvidenceDeletionJournal",
     "EvidenceSource",
     "ExecutionAuthority",
     "ExecutionLeaseFact",
@@ -68,6 +71,7 @@ __all__ = [
     "QueueStatus",
     "ReactionStore",
     "ReclaimedQueue",
+    "RegisteredEvidenceMedia",
     "ReportContext",
     "ReportStore",
     "ReportedReclamation",

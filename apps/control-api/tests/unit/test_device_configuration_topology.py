@@ -28,6 +28,11 @@ class ConfigurationHosts(FakeInferenceHosts):
         assert host is not None
         return max(host.configuration_revision, minimum_revision) + 1
 
+    def configuration_content_changed(self, *, host_id: UUID, content_sha256: str) -> bool:
+        host = self.by_id(host_id)
+        assert host is not None
+        return host.configuration_sha256 != content_sha256
+
     def configuration_was_issued(
         self,
         *,

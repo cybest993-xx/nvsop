@@ -34,6 +34,9 @@ x-center-environment: &center-environment
   SOP_DDM_TRAINING_RESULTS_ROOT: /workspace/sop-ddm-ftms/assets/results
   SOP_DDM_TRAINING_CONFIG_PATH: /workspace/sop-ddm-ftms/assets/config/ddm_train_config.yaml
   SOP_WORKER_HEALTH_CHECK_INTERVAL_SECONDS: "5"
+  # 本地开发实例也运行回收任务：600s 周期、每表每轮 256 行；生产按部署覆写。
+  SOP_RETENTION_SWEEP_INTERVAL_SECONDS: "600"
+  SOP_RETENTION_SWEEP_BATCH_LIMIT: "256"
   SOP_LOG_LEVEL: info
   NO_PROXY: center-db,redis,annotation-backend,localhost,127.0.0.1
   no_proxy: center-db,redis,annotation-backend,localhost,127.0.0.1

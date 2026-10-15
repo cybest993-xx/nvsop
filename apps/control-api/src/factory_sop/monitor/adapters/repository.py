@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from collections import Counter
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
@@ -15,12 +19,16 @@ from sqlalchemy import (
     exists,
     func,
     literal,
+    or_,
     select,
     text,
     tuple_,
     update,
 )
 from sqlalchemy import cast as sql_cast
+from sqlalchemy import (
+    delete as sql_delete,
+)
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import InstrumentedAttribute
@@ -36,6 +44,8 @@ from factory_sop.monitor.adapters.tables import (
     ReportedObservationRow,
     ReportedSopInstanceRow,
     ReportedViolationRow,
+    RetentionCursorRow,
+    RetentionRecordArchiveRow,
 )
 from factory_sop.monitor.errors import MonitorRefusedError
 from factory_sop.monitor.model import (
@@ -49,8 +59,12 @@ from factory_sop.monitor.model import (
 from factory_sop.monitor.repository import MonitorImpactRepository, MonitorRepository
 from factory_sop.monitor.usecases import latest_health_per_stream
 from factory_sop.retention.api import (
+    DisposalRetirement,
     ImpactAggregate,
     InstanceRetentionFact,
+    RecordRetirement,
+    RetentionCutoffs,
+    RetentionSkip,
     StationUsage,
     empty_aggregate,
 )
@@ -105,7 +119,9 @@ class PostgresMonitorRepository(MonitorRepository):
             select(ReportedDecisionRow).where(ReportedDecisionRow.event_id == row.event_id)
         ).one_or_none()
         if existing is None:
-            raise RuntimeError("decision mirror conflicted without a visible row")
+            return _retired_replay(
+                self._session, DecisionIdentityRow, row.event_id, row.payload, "decision"
+            )
         _ensure_same(existing.payload, row.payload, "decision", row.event_id)
         return False
 
@@ -166,11 +182,14 @@ class PostgresMonitorRepository(MonitorRepository):
             select(ReportedHealthRow).where(ReportedHealthRow.event_id == row.event_id)
         ).one_or_none()
         if existing is None:
-            raise RuntimeError("health mirror conflicted without a visible row")
+            return _retired_replay(
+                self._session, HealthIdentityRow, row.event_id, row.payload, "health"
+            )
         _ensure_same(existing.payload, row.payload, "health", row.event_id)
         return False
 
     def upsert_instance(self, value: MirroredSopInstance) -> bool:
+        self._acquire_stream_lock(_DECISION_STREAM_LOCK_KEY)
         row = ReportedSopInstanceRow.from_domain(value)
         table = cast(Table, ReportedSopInstanceRow.__table__)
         statement = postgres_insert(table).values(
@@ -246,6 +265,7 @@ class PostgresMonitorRepository(MonitorRepository):
         return tuple(row.to_domain() for row in rows), int(total or 0)
 
     def upsert_violation(self, value: MirroredViolation) -> bool:
+        self._acquire_stream_lock(_DECISION_STREAM_LOCK_KEY)
         row = ReportedViolationRow.from_domain(value)
         table = cast(Table, ReportedViolationRow.__table__)
         statement = postgres_insert(table).values(
@@ -287,6 +307,7 @@ class PostgresMonitorRepository(MonitorRepository):
         return tuple(row.to_domain() for row in rows), int(total or 0)
 
     def upsert_disposal(self, report: ReportedDisposal, *, received_at: datetime) -> bool:
+        self._acquire_stream_lock(_DECISION_STREAM_LOCK_KEY)
         payload = report.to_wire()
         table = cast(Table, ReportedDisposalRow.__table__)
         result = self._session.execute(
@@ -323,6 +344,7 @@ class PostgresMonitorRepository(MonitorRepository):
         ), int(total or 0)
 
     def upsert_observation(self, value: MirroredObservation) -> bool:
+        self._acquire_stream_lock(_DECISION_STREAM_LOCK_KEY)
         row = ReportedObservationRow.from_domain(value)
         identity = cast(Table, ObservationIdentityRow.__table__)
         reserved = self._session.execute(
@@ -353,7 +375,9 @@ class PostgresMonitorRepository(MonitorRepository):
             select(ReportedObservationRow).where(ReportedObservationRow.event_id == row.event_id)
         ).one_or_none()
         if existing is None:
-            raise RuntimeError("observation mirror conflicted without a visible row")
+            return _retired_replay(
+                self._session, ObservationIdentityRow, row.event_id, row.payload, "observation"
+            )
         _ensure_same(existing.payload, row.payload, "observation", row.event_id)
         return False
 
@@ -463,14 +487,14 @@ class PostgresMonitorRepository(MonitorRepository):
 
     def decision_sequence_for_event(self, event_id: str) -> int | None:
         return self._session.scalar(
-            select(ReportedDecisionRow.stream_sequence).where(
-                ReportedDecisionRow.event_id == event_id
+            select(DecisionIdentityRow.stream_sequence).where(
+                DecisionIdentityRow.event_id == event_id
             )
         )
 
     def health_sequence_for_event(self, event_id: str) -> int | None:
         return self._session.scalar(
-            select(ReportedHealthRow.stream_sequence).where(ReportedHealthRow.event_id == event_id)
+            select(HealthIdentityRow.stream_sequence).where(HealthIdentityRow.event_id == event_id)
         )
 
     def runtime_projection(self) -> tuple[dict[str, object], ...]:
@@ -810,6 +834,204 @@ class PostgresMonitorImpactRepository(MonitorImpactRepository):
             split[bucket] = aggregate if bucket not in split else split[bucket].plus(aggregate)
 
 
+class PostgresMonitorRetirementRepository:
+    """每表最多检查 limit 条；游标推进包含保护跳过，避免旧保护对象饿死后续候选。"""
+
+    def __init__(
+        self,
+        session: Session,
+        evidence_protected: Callable[[str, str, int], bool],
+    ) -> None:
+        self._session = session
+        self._evidence_protected = evidence_protected
+
+    def _page(
+        self,
+        table: type[Any],
+        station: ColumnElement[Any] | InstrumentedAttribute[Any],
+        cutoffs: RetentionCutoffs,
+        limit: int,
+        kind: str,
+    ) -> Sequence[Any]:
+        custom = [value.station_id for value in cutoffs.cutoffs if value.station_id is not None]
+        scopes = []
+        for value in cutoffs.cutoffs:
+            if value.moment is None:
+                continue
+            scope = (
+                station.not_in(custom) if value.station_id is None else station == value.station_id
+            )
+            scopes.append(and_(scope, table.received_at <= value.moment))
+        if not scopes:
+            return ()
+        cursor = self._session.get(RetentionCursorRow, kind)
+        if cursor is None:
+            cursor = RetentionCursorRow(kind=kind)
+            self._session.add(cursor)
+        conditions = [or_(*scopes)]
+        if cursor.received_at is not None:
+            conditions.append(
+                tuple_(table.received_at, table.event_id)
+                > tuple_(literal(cursor.received_at), literal(cursor.event_id))
+            )
+        rows = self._session.scalars(
+            select(table)
+            .where(*conditions)
+            .order_by(table.received_at, table.event_id)
+            .limit(limit)
+        ).all()
+        cursor.received_at = rows[-1].received_at if len(rows) == limit else None
+        cursor.event_id = rows[-1].event_id if len(rows) == limit else None
+        self._session.flush()
+        return rows
+
+    def _protection(self, host: str, station: str, instance: int | None) -> str | None:
+        if instance is None or not self._session.scalar(
+            select(
+                _instance_closed(
+                    host_expr=literal(host),
+                    station_expr=literal(station),
+                    instance_expr=literal(instance),
+                )
+            )
+        ):
+            return "instance_open_or_unknown"
+        violation = self._session.scalar(
+            select(ReportedViolationRow.event_id)
+            .where(
+                ReportedViolationRow.host_id == host,
+                ReportedViolationRow.station_id == station,
+                ReportedViolationRow.instance_id == instance,
+            )
+            .limit(1)
+        )
+        if violation is not None:
+            return "violation_latched"
+        if self._evidence_protected(host, station, instance):
+            return "evidence_reference_retained"
+        return None
+
+    def retire_records(
+        self, *, cutoffs: RetentionCutoffs, limit: int, now: datetime
+    ) -> RecordRetirement:
+        del now
+        self._lock_streams()
+        deleted = archived = 0
+        buckets: Counter[tuple[str, str, int | None, datetime, str, str]] = Counter()
+        moments: list[datetime] = []
+        skips: Counter[str] = Counter()
+        for table, kind, identity in (
+            (ReportedDecisionRow, "decision", DecisionIdentityRow),
+            (ReportedObservationRow, "observation", ObservationIdentityRow),
+            (ReportedHealthRow, "health", HealthIdentityRow),
+        ):
+            page = self._page(table, table.station_id, cutoffs, limit, kind)
+            for row in page:
+                moments.append(row.received_at)
+                instance = row.payload.get("instance_id")
+                reason = (
+                    None
+                    if kind == "health"
+                    else self._protection(row.host_id, row.station_id, instance)
+                )
+                if reason is not None:
+                    skips[reason] += 1
+                    continue
+                buckets[
+                    (
+                        row.station_id,
+                        row.host_id,
+                        instance,
+                        row.received_at.replace(minute=0, second=0, microsecond=0),
+                        row.payload.get("verdict", "unknown"),
+                        kind,
+                    )
+                ] += 1
+                # 保留全局身份与载荷摘要，既拒绝冲突重放，也不让旧事件重新生成为明细。
+                self._session.execute(
+                    update(identity)
+                    .where(identity.event_id == row.event_id)
+                    .values(retired_payload_sha256=_payload_digest(row.payload))
+                )
+                self._session.execute(
+                    sql_delete(table).where(
+                        table.event_id == row.event_id, table.received_at == row.received_at
+                    )
+                )
+                deleted += 1
+        archived = self._archive(buckets)
+        return RecordRetirement(
+            deleted, archived, min(moments, default=None), max(moments, default=None), _skips(skips)
+        )
+
+    def retire_disposals(
+        self, *, cutoffs: RetentionCutoffs, limit: int, now: datetime
+    ) -> DisposalRetirement:
+        del now
+        self._lock_streams()
+        station = ReportedDisposalRow.payload["station_id"].astext
+        page = self._page(ReportedDisposalRow, station, cutoffs, limit, "disposal")
+        skips: Counter[str] = Counter()
+        deleted = 0
+        for row in page:
+            # 未知或违规关联处置继续保留；不从设备写入成功推断违规已结案。
+            instance = row.payload.get("instance_id")
+            source_station = row.payload.get("station_id")
+            reason: str | None = "instance_open_or_unknown"
+            if isinstance(instance, int) and isinstance(source_station, str):
+                reason = self._protection(row.host_id, source_station, instance)
+            # 当前处置契约必带 violation_ref，且没有违规结案权威；成功处置不解除保护。
+            skips[reason or "violation_closure_unknown"] += 1
+        moments = [row.received_at for row in page]
+        return DisposalRetirement(
+            deleted, 0, min(moments, default=None), max(moments, default=None), _skips(skips)
+        )
+
+    def _lock_streams(self) -> None:
+        # 与镜像写入共用提交顺序锁；保护判定、归档、删除和身份墓碑是同一临界区。
+        for key in (_DECISION_STREAM_LOCK_KEY, _HEALTH_STREAM_LOCK_KEY):
+            self._session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
+
+    def _archive(self, buckets: Counter[tuple[str, str, int | None, datetime, str, str]]) -> int:
+        for (station, host, instance, bucket, verdict, kind), count in buckets.items():
+            self._session.add(
+                RetentionRecordArchiveRow(
+                    station_id=station,
+                    host_id=host,
+                    instance_id=instance,
+                    bucket_start=bucket,
+                    verdict=verdict,
+                    decisions=count if kind == "decision" else 0,
+                    observations=count if kind == "observation" else 0,
+                    health=count if kind == "health" else 0,
+                    disposals=0,
+                )
+            )
+        self._session.flush()
+        return len(buckets)
+
+
+def _skips(counts: Counter[str]) -> tuple[RetentionSkip, ...]:
+    return tuple(RetentionSkip(reason, count) for reason, count in sorted(counts.items()))
+
+
+def _payload_digest(payload: dict[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
+
+
+def _retired_replay(
+    session: Session, identity: type[Any], event_id: str, payload: dict[str, Any], kind: str
+) -> bool:
+    retired = session.get(identity, event_id)
+    if retired is None or retired.retired_payload_sha256 is None:
+        raise RuntimeError(f"{kind} mirror conflicted without a visible row")
+    if retired.retired_payload_sha256 != _payload_digest(payload):
+        raise MonitorRefusedError(f"{kind} event {event_id} conflicts with retired payload")
+    return False
+
+
 def _instance_closed(
     *,
     host_expr: ColumnElement[Any] | InstrumentedAttribute[Any],
@@ -855,4 +1077,9 @@ def _usages(
     )
 
 
-__all__ = ["MONITOR_STREAM_CHANNEL", "PostgresMonitorImpactRepository", "PostgresMonitorRepository"]
+__all__ = [
+    "MONITOR_STREAM_CHANNEL",
+    "PostgresMonitorImpactRepository",
+    "PostgresMonitorRepository",
+    "PostgresMonitorRetirementRepository",
+]

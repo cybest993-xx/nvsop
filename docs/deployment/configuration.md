@@ -71,6 +71,10 @@ DDM 的 `DATASET_ROOT`/`RESULTS_ROOT` 与 worker 的对应 SOP 根目录必须�
 
 升级运行时会在 SQLite V20 给四类上报账本追加可空 `acknowledged_at`，以后只在中心成功响应后冻结首次确认 UTC。历史发送行不回填，不得手工用发送单调时刻或接收时刻伪造确认。估算返回逻辑序列化字节，不能据此承诺磁盘空间或删除媒体。稳定整链路入口见[真实 PG/HTTPS/SQLite 系统场景](../../tests/system/test_sys_42_retention_impact.py)。
 
+### 回收执行调度
+
+中心回收任务复用既有 worker 进程的 cron，不新增服务。调度周期由 `SOP_RETENTION_SWEEP_INTERVAL_SECONDS` 显式给出正整数秒；缺失时回收不运行，不提供业务默认值。每张候选表的单轮有界行数由 `SOP_RETENTION_SWEEP_BATCH_LIMIT` 配置（默认 256，上限 10000）。每个周期以确定性身份在 `retention_sweep` 账本登记一行：同周期并发只有一个任务执行，崩溃残留被同周期重跑覆盖，失败行不阻塞下一周期重跑。`monitor` 明细记录删除前把窗口事实按工位/实例/小时聚合并写入 `monitor_record_archive`；违规与处置归档默认永久，不因回收删除。来源机的证据媒体删除由 #206 的本机执行器周期推进（低频有界 drain），中心不删除媒体字节（ADR-0012）。
+
 ## Web 开发代理
 
 Vite 开发服务器把 `/api` 代理到：

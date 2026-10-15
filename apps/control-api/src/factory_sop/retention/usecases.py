@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Protocol, assert_never
 from uuid import UUID
@@ -31,6 +32,16 @@ from factory_sop.retention.model import (
     exposure_seconds,
     newly_exposed_window,
     resolve_retention_policy,
+)
+from factory_sop.retention.sweep import (
+    DEFAULT_SWEEP_BATCH_LIMIT,
+    DisposalRetirement,
+    RecordRetirement,
+    RetentionCutoffs,
+    RetentionSweepResult,
+    RetentionSweepScope,
+    retention_cutoffs,
+    sweep_cycle_id,
 )
 from nvsop_contracts import EvidenceDeletionClaimStatus, ResolvedRetentionPolicy
 
@@ -407,6 +418,38 @@ class InstanceRetentionFact:
     verdict: str | None
     has_latched_violation: bool
     closed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class RetentionSweepBegin:
+    """一次待登记的回收任务：周期身份、冻结范围与开始时刻。"""
+
+    cycle_id: UUID
+    scope: dict[str, object]
+    started_at: datetime
+
+
+class RetentionSweepLedger(Protocol):
+    """retention 拥有的回收执行账本；由 adapters 接到 PostgreSQL。"""
+
+    def phase(self) -> AbstractContextManager[object]:
+        """隔离一个数据面；数据库失败回滚该段，不污染已完成段和周期结果。"""
+        ...
+
+    def begin(self, value: RetentionSweepBegin) -> bool:
+        """登记一个周期任务；已有同周期任务时返回 ``False``，不重复执行。"""
+        ...
+
+    def finish(
+        self,
+        *,
+        cycle_id: UUID,
+        result: RetentionSweepResult,
+        finished_at: datetime,
+        failure_code: str | None,
+    ) -> None:
+        """以本轮真实结果结案；未完成必须保留 ``failure_code`` 可诊断。"""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -883,6 +926,116 @@ class _MonitorFacts:
         return RetentionImpactBreakdown(exposed=exposed, protected=protected), None
 
 
+class RetentionSweepExecutor(Protocol):
+    """由 job worker 装配的回收执行接缝：每个 owner 在自己的接缝里执行删除（§5.19）。"""
+
+    def retire_records(
+        self,
+        *,
+        cutoffs: RetentionCutoffs,
+        limit: int,
+        now: datetime,
+    ) -> RecordRetirement:
+        """monitor 明细记录的有界回收；只能删除已过截止且无引用保护的行。"""
+        ...
+
+    def retire_disposals(
+        self,
+        *,
+        cutoffs: RetentionCutoffs,
+        limit: int,
+        now: datetime,
+    ) -> DisposalRetirement:
+        """处置与违规归档的有界回收；默认永久策略下不产生删除。"""
+        ...
+
+
+def run_retention_sweep(
+    *,
+    policies: RetentionPolicyRepository,
+    records: StationRetentionOverrideRepository,
+    ledger: RetentionSweepLedger,
+    executor: RetentionSweepExecutor,
+    now: datetime,
+    interval_seconds: int,
+    batch_limit: int = DEFAULT_SWEEP_BATCH_LIMIT,
+) -> RetentionSweepResult | None:
+    """运行一轮有界回收：先登记周期，再让各 owner 经自己的接缝执行删除。
+
+    并发 worker 对同一周期只有一个能登记成功，其余直接返回 ``None``。任一数据面抛错即整轮
+    记为失败（部分成功已提交的删除保留，账本记失败原因，可安全重跑）；未知状态绝不推进
+    破坏性删除。本函数不提交事务：提交由 worker 的 Unit of Work 负责。
+    """
+    if interval_seconds <= 0:
+        raise ValueError("sweep interval must be a positive number of seconds")
+    if batch_limit <= 0:
+        raise ValueError("sweep batch limit must be a positive number of rows")
+    cycle_id = sweep_cycle_id(now, interval_seconds=interval_seconds)
+    state = policies.lock_current()
+    default_policy = DEFAULT_RETENTION_POLICY if state is None else state.policy
+    default_revision = 0 if state is None else state.revision
+    override_rows = records.list_all()
+    record_cutoffs = retention_cutoffs(
+        default=default_policy,
+        overrides=override_rows,
+        now=now,
+        field="record_detail",
+    )
+    disposal_cutoffs = retention_cutoffs(
+        default=default_policy,
+        overrides=override_rows,
+        now=now,
+        field="disposal",
+    )
+    scope = RetentionSweepScope(
+        record_cutoffs=record_cutoffs,
+        disposal_cutoffs=disposal_cutoffs,
+        batch_limit=batch_limit,
+        default_revision=default_revision,
+        station_revisions=tuple(
+            (str(value.station_id), value.revision)
+            for value in sorted(override_rows, key=lambda value: value.station_id)
+        ),
+    )
+    begin = RetentionSweepBegin(
+        cycle_id=cycle_id,
+        scope=scope.to_wire(),
+        started_at=now,
+    )
+    if not ledger.begin(begin):
+        return None
+    records_result = None
+    disposals_result = None
+    failures: list[str] = []
+    try:
+        with ledger.phase():
+            records_result = executor.retire_records(
+                cutoffs=record_cutoffs, limit=batch_limit, now=now
+            )
+    except Exception as error:
+        failures.append(f"records:{type(error).__name__}")
+    try:
+        with ledger.phase():
+            disposals_result = executor.retire_disposals(
+                cutoffs=disposal_cutoffs, limit=batch_limit, now=now
+            )
+    except Exception as error:
+        failures.append(f"disposals:{type(error).__name__}")
+    result = RetentionSweepResult(
+        scope=scope,
+        records=records_result,
+        disposals=disposals_result,
+        failure_code=",".join(failures) or None,
+    )
+    ledger.finish(
+        cycle_id=cycle_id,
+        result=result,
+        finished_at=datetime.now(UTC),
+        failure_code=result.failure_code,
+    )
+    return result
+
+
 def _resolve_category(fact: InstanceRetentionFact | None) -> RetentionCategory | None:
     """用 retention 自己的规则解析实例保留类别；事实不足时返回 ``None``（未知）。"""
     if fact is None:
@@ -965,6 +1118,9 @@ __all__ = [
     "RetentionPolicyConflictError",
     "RetentionPolicyRepository",
     "RetentionStationPresence",
+    "RetentionSweepBegin",
+    "RetentionSweepExecutor",
+    "RetentionSweepLedger",
     "StationFactsGateway",
     "StationRetentionConfiguration",
     "StationRetentionOverrideRepository",
@@ -977,6 +1133,7 @@ __all__ = [
     "estimate_station_policy_change",
     "get_policy",
     "read_station_retention",
+    "run_retention_sweep",
     "update_policy",
     "update_station_retention",
 ]

@@ -101,6 +101,7 @@ def test_worker_preserves_existing_uniform_timeout(
         annotation_runtime=cast(Any, object()),
         ddm_executor=cast(Any, object()),
         current_caller_resolver=cast(Any, object()),
+        retention_sweep=lambda: None,
     )
 
     assert set(worker.functions) == {
@@ -111,6 +112,7 @@ def test_worker_preserves_existing_uniform_timeout(
         "annotate_dataset_job",
         "dispatch_ddm_training_job",
         "cron:dispatch_pending_jobs",
+        "cron:run_retention_sweep_cron",
     }
     assert all(function.timeout_s is None for function in worker.functions.values())
     assert worker.job_timeout_s == 330

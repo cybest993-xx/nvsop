@@ -230,6 +230,26 @@ class EvidenceDeletionTests(unittest.TestCase):
         self.assertEqual(claimed, {v.candidate.evidence_id for v in self.transport.verifies})
         self.assertEqual({r.outcome.value for r in self.transport.reports}, {"deleted"})
 
+    def test_bounded_drain_advances_to_the_next_file(self) -> None:
+        first = self.executor.drain(limit=1)
+        second = self.executor.drain(limit=1)
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)
+        self.assertNotEqual(first[0].evidence_id, second[0].evidence_id)
+        self.assertFalse(any(path.exists() for path in self.files))
+
+    def test_journal_recovery_obeys_the_same_work_budget(self) -> None:
+        self.transport.verify_unreachable = True
+        self.executor.drain()
+        self.assertEqual(len(self.state.deletion_journal()), 2)
+        self.transport.verify_unreachable = False
+        first = self.executor.drain(limit=1)
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(self.state.deletion_journal()), 1)
+        second = self.executor.drain(limit=1)
+        self.assertEqual(len(second), 1)
+        self.assertEqual(self.state.deletion_journal(), ())
+
     def test_local_protection_beats_a_stale_center_eligible_claim(self) -> None:
         # 中心镜像尚未看到本机新建的待办再切片: 本机在向中心校验前就拒绝删除。
         self.state.station(STATION).record_reclip_intent(

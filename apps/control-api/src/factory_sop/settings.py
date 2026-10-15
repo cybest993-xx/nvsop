@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     retention_impact_timeout_seconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     # 证据删除票据有效期同样由部署显式提供；缺失即没有删除资格，中心不提供业务默认值（§5.19）。
     evidence_deletion_ticket_ttl_seconds: int | None = Field(default=None, gt=0)
+    # 回收任务的调度周期与批次上限：显式部署配置，不是保留时长；未配置周期则不运行回收。
+    retention_sweep_interval_seconds: int | None = Field(default=None, gt=0)
+    retention_sweep_batch_limit: int = Field(default=256, gt=0, le=10000)
 
     # How long a session survives, idle and in total (§六: sessions are server-side records,
     # so both are enforced here rather than encoded in a cookie). Minutes, because that is the

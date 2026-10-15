@@ -63,6 +63,7 @@ from edge_runtime.local_state.queues import (
     PendingObservationReport,
     PendingReport,
     PendingSopInstanceReport,
+    RegisteredEvidenceMedia,
     ReportContext,
     StationQueues,
 )
@@ -878,6 +879,7 @@ class LocalState:
         # 已上报队列的 keyset 扫描位置(每表最后检查的 queue_id); 不是保护/资格缓存,
         # 也不等义于任何持久化权威。进程重启后从各表最小 queue_id 重新开始。
         self._reclaim_positions: dict[str, int] = {}
+        self._evidence_scan_position: tuple[int, int] = (-1, 0)
 
     def station(
         self, station_id: str, *, report_context: ReportContext | None = None
@@ -998,14 +1000,60 @@ class LocalState:
                 ),
             )
 
-    def deletion_journal(self) -> tuple[EvidenceDeletionJournal, ...]:
-        """跨工位返回全部未完成的删除意图/结果, 按创建时刻升序。"""
+    def registered_evidence_batch(self, *, limit: int) -> tuple[RegisteredEvidenceMedia, ...]:
+        """跨工位有界遍历已登记产物; 位置只是扫描进度, 重启从头且不缓存删除资格。"""
         with self._lock:
             rows = self._connection.execute(
                 """
-                SELECT * FROM local_evidence_deletion
-                 ORDER BY created_at, evidence_id
-                """
+                SELECT * FROM (
+                    SELECT 0 AS source, rowid AS cursor_id, station_id, instance_id, queue_id,
+                           NULL AS identity, covered_from, covered_to, media_results
+                      FROM local_evidence_queue
+                     WHERE registered_at IS NOT NULL AND media_results IS NOT NULL
+                       AND covered_from IS NOT NULL AND covered_to IS NOT NULL
+                    UNION ALL
+                    SELECT 1 AS source, rowid AS cursor_id, station_id, instance_id,
+                           NULL AS queue_id, identity, covered_from, covered_to, media_results
+                      FROM local_reclip_request
+                     WHERE registered_at IS NOT NULL AND media_results IS NOT NULL
+                       AND identity IS NOT NULL AND covered_from IS NOT NULL
+                       AND covered_to IS NOT NULL
+                ) WHERE (source, cursor_id) > (?, ?)
+                  ORDER BY source, cursor_id LIMIT ?
+                """,
+                (*self._evidence_scan_position, limit),
+            ).fetchall()
+            self._evidence_scan_position = (
+                (int(rows[-1]["source"]), int(rows[-1]["cursor_id"]))
+                if len(rows) == limit
+                else (-1, 0)
+            )
+        return tuple(
+            RegisteredEvidenceMedia(
+                station_id=str(row["station_id"]),
+                instance_id=int(row["instance_id"]),
+                queue_id=None if row["queue_id"] is None else int(row["queue_id"]),
+                identity=None if row["identity"] is None else str(row["identity"]),
+                covered_from=float(row["covered_from"]),
+                covered_to=float(row["covered_to"]),
+                media_results=str(row["media_results"]),
+            )
+            for row in rows
+        )
+
+    def deletion_journal(
+        self,
+        *,
+        limit: int | None = None,
+        evidence_id: str | None = None,
+    ) -> tuple[EvidenceDeletionJournal, ...]:
+        """未完成意图按最近尝试时刻轮转; 可按对象查找或限制本轮恢复工作量。"""
+        with self._lock:
+            rows = self._connection.execute(
+                """SELECT * FROM local_evidence_deletion
+                   WHERE (? IS NULL OR evidence_id = ?)
+                   ORDER BY updated_at, evidence_id LIMIT ?""",
+                (evidence_id, evidence_id, -1 if limit is None else limit),
             ).fetchall()
         return tuple(_deletion_journal_entry(row) for row in rows)
 

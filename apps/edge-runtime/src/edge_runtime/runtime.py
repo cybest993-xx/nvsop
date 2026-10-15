@@ -9,6 +9,7 @@ import signal
 import sqlite3
 import ssl
 import threading
+from collections import Counter
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
@@ -898,6 +899,29 @@ class _RuntimeCycleRunner:
         if worker is not None:
             worker.run_forever(should_stop=self._stop_requested, limit=_REPORT_WORK_BUDGET)
 
+    def _run_evidence_deletion(self) -> None:
+        """驱动 #206 删除执行器的周期调度: 有界 drain, 失败只影响本轮。"""
+        executor = self._runtime._evidence_deletion
+        if executor is None:
+            return
+        while not self._stop_requested():
+            try:
+                results = executor.drain(limit=_REPORT_WORK_BUDGET)
+            except Exception as error:
+                _logger.warning(
+                    "edge.evidence_deletion.failed error_type=%s",
+                    type(error).__name__,
+                )
+            else:
+                _logger.info(
+                    "edge.evidence_deletion.sweep deleted=%s skipped=%s failed=%s reasons=%s",
+                    sum(item.outcome == "deleted" for item in results),
+                    sum(item.outcome == "skipped" for item in results),
+                    sum(item.outcome not in ("deleted", "skipped") for item in results),
+                    dict(Counter(item.reason for item in results)),
+                )
+            self._cycle_stop.wait(_EVIDENCE_DELETION_INTERVAL_SECONDS)
+
     def _run_reclip(self) -> None:
         loop = self._runtime._reclip_loop
         if loop is not None:
@@ -1032,6 +1056,22 @@ class _RuntimeCycleRunner:
                     )
                 ]
                 if runtime._evidence_registration is not None
+                else []
+            ),
+            *(
+                [
+                    threading.Thread(
+                        target=self._guard,
+                        args=(
+                            lambda: self._isolate_center_worker(
+                                "evidence_deletion", self._run_evidence_deletion
+                            ),
+                        ),
+                        name="edge-evidence-deletion",
+                        daemon=True,
+                    )
+                ]
+                if runtime._evidence_deletion is not None
                 else []
             ),
             *(
@@ -1321,6 +1361,8 @@ _CENTER_WORKER_RESTART_BASE_SECONDS = 0.5
 _CENTER_WORKER_RESTART_MAX_SECONDS = 30.0
 # 压缩是低优先级后台任务: 两轮之间至少等待这么久, 避免反复扫描整个录像目录。
 _RECORDING_COMPRESSION_INTERVAL_SECONDS = 30.0
+# 本机证据回收是低频后台任务: 两轮之间至少等待这么久, 批次大小由执行器自身契约限制。
+_EVIDENCE_DELETION_INTERVAL_SECONDS = 30.0
 
 
 def _log_write_attempt(event: WriteAttempted) -> None:

@@ -172,6 +172,9 @@ def gateway(
     origin: str, *, copies: int = 1, ttl: int | None = 60, timeout: float | None = 5
 ) -> HttpEdgeImpactGateway:
     class Sources:
+        def lock_configuration(self, *, host_id: UUID) -> bool:
+            return True
+
         def sources(self, *, station_id: UUID | None) -> tuple[EdgeImpactSource, ...]:
             return (EdgeImpactSource(HOST, 7, "a" * 64), EdgeImpactSource(OTHER, 7, "a" * 64))[
                 :copies

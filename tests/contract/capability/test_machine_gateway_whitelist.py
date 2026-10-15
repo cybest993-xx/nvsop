@@ -45,6 +45,10 @@ class MachineGatewayWhitelistTest(unittest.TestCase):
             "/api/v1/monitor/reported-decisions/enveloped",
             "/api/v1/monitor/reported-disposals",
             "/api/v1/retention/reported-impact/access-check",
+            # #206 的三个主机签名删除资格动作：claim / verify / result 都只经这一条白名单。
+            "/api/v1/retention/evidence-deletion-claims",
+            "/api/v1/retention/evidence-deletion-claims/verify",
+            "/api/v1/retention/evidence-deletion-claims/result",
         ):
             self.assertIsNotNone(re.search(rule, uri), uri)
         for uri in (
@@ -56,6 +60,9 @@ class MachineGatewayWhitelistTest(unittest.TestCase):
             "/api/v1/monitor/reported-decisions/arbitrary-extra",
             "/api/v1/monitor/reported-decisions/enveloped/extra",
             "/api/v1/monitor/reported-disposals/extra",
+            # 浏览器会用的证据/保留路由不能被这条机器白名单放宽。
+            "/api/v1/retention/evidence-deletion-claims/arbitrary-extra",
+            "/api/v1/retention/evidence-deletion-claims/verify/extra",
         ):
             self.assertIsNone(re.search(rule, uri), uri)
 

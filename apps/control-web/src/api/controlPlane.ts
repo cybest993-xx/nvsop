@@ -55,6 +55,8 @@ import {
   readEvidence as generatedReadEvidence,
   readEvidenceReviews as generatedReadEvidenceReviews,
   registerEvidenceReview as generatedRegisterEvidenceReview,
+  beginEvidenceReview as generatedBeginEvidenceReview,
+  cancelEvidenceReview as generatedCancelEvidenceReview,
   createEvidenceReclipRequest as generatedCreateEvidenceReclipRequest,
   readEvidenceReclipRequests as generatedReadEvidenceReclipRequests,
   createEvidenceAccessContext as generatedCreateEvidenceAccessContext,
@@ -152,6 +154,9 @@ import {
   type EvidenceReclipBody,
   type EvidenceReclipRecord,
   type EvidenceReviewBody,
+  type EvidenceReviewCancelBody,
+  type EvidenceReviewHoldBody,
+  type EvidenceReviewHoldRecord,
   type EvidenceReviewRecord,
   type DownloadTemplateVersionArtifactResponse,
   type EditRoleData,
@@ -498,6 +503,8 @@ export function createEvidenceAccessContext(evidenceId: string): Promise<Evidenc
 
 /** 一条人工复核结论；只追加，不改写机器判定、证据或他人记录。 */
 export type EvidenceReview = EvidenceReviewRecord
+/** 在审复核占用；进入即保护，只有提交结论或本人取消才释放。 */
+export type EvidenceReviewHold = EvidenceReviewHoldRecord
 
 /** 读取该证据的全部复核结论；查询复用查看权限，不隐含编辑。 */
 export function readEvidenceReviews(evidenceId: string): Promise<EvidenceReview[]> {
@@ -511,6 +518,26 @@ export function registerEvidenceReview(
 ): Promise<EvidenceReview> {
   return execute(
     generatedRegisterEvidenceReview({ path: { evidence_id: evidenceId }, body: submitted }),
+  )
+}
+
+/** 进入在审保护：登记本人在该证据上的持久占用；未退出前删除认领被拒。 */
+export function beginEvidenceReview(
+  evidenceId: string,
+  submitted: EvidenceReviewHoldBody,
+): Promise<EvidenceReviewHold> {
+  return execute(
+    generatedBeginEvidenceReview({ path: { evidence_id: evidenceId }, body: submitted }),
+  )
+}
+
+/** 退出在审保护：只结束本人占用；已结束或非本人占用由服务器按冲突拒绝。 */
+export function cancelEvidenceReview(
+  evidenceId: string,
+  submitted: EvidenceReviewCancelBody,
+): Promise<void> {
+  return execute(
+    generatedCancelEvidenceReview({ path: { evidence_id: evidenceId }, body: submitted }),
   )
 }
 

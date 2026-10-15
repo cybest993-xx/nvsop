@@ -7,12 +7,16 @@ import hashlib
 import hmac
 import json
 from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from uuid import UUID
 
 from factory_sop.auth.api import Caller, Permission, authorize
 from factory_sop.evidence.model import EvidenceReference, EvidenceStatus
 from factory_sop.evidence.repository import EvidenceRepository
 from factory_sop.evidence.usecases import find_evidence, is_controlled_reference, list_evidence
+
+# 一次读取上下文的寿命；播放占用与它同长，两者都在到期后自然失效。
+ACCESS_CONTEXT_SECONDS = 120
 
 
 class EvidenceAccessRefusedError(ValueError):
@@ -44,13 +48,26 @@ def issue_access_context(
     now: float,
 ) -> dict[str, object]:
     authorize(caller, Permission.EVIDENCE_VIEW)
-    registration = _available(evidence, evidence_id).registration
+    # 签发与播放占用在同一事务内完成：被认领删除的媒体不再签发新的读取上下文。
+    locked = evidence.lock_playback(
+        evidence_id, expires_at=datetime.fromtimestamp(now + ACCESS_CONTEXT_SECONDS, UTC)
+    )
+    if locked.pending_claim:
+        raise EvidenceAccessRefusedError(409, "media_deletion_pending")
+    reference = locked.reference
+    if reference is None:
+        raise EvidenceAccessRefusedError(404, "evidence_unregistered")
+    if reference.status is not EvidenceStatus.AVAILABLE:
+        raise EvidenceAccessRefusedError(410, "reference_unavailable")
+    if not is_controlled_reference(reference.registration.reference or ""):
+        raise EvidenceAccessRefusedError(410, "reference_expired")
+    registration = reference.registration
     if UUID(registration.host_id) not in registered_hosts:
         raise EvidenceAccessRefusedError(403, "source_host_unregistered")
     origin = origins.get(str(UUID(registration.host_id)))
     if origin is None:
         raise EvidenceAccessRefusedError(503, "source_host_unconfigured")
-    expires = int(now) + 120
+    expires = int(now) + ACCESS_CONTEXT_SECONDS
     payload = json.dumps(
         [evidence_id, str(UUID(registration.host_id)), fingerprint, expires]
     ).encode()

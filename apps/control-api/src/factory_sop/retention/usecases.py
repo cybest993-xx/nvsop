@@ -14,6 +14,7 @@ from factory_sop.retention.model import (
     DEFAULT_RETENTION_POLICY,
     FIELD_IMPACT,
     EdgeImpactSource,
+    EvidenceMediaState,
     ImpactAggregate,
     RetentionCategory,
     RetentionFactOwner,
@@ -31,7 +32,7 @@ from factory_sop.retention.model import (
     newly_exposed_window,
     resolve_retention_policy,
 )
-from nvsop_contracts import ResolvedRetentionPolicy
+from nvsop_contracts import EvidenceDeletionClaimStatus, ResolvedRetentionPolicy
 
 # 该字段的影响事实归推理机本地 SQLite 所有；没有已接通的只读 Edge 统计通道时明确不可估算，
 # 不能按零影响放行（#205 只补齐只读估算通道，不实现 #206 删除资格或 #207 回收）。
@@ -39,6 +40,22 @@ EDGE_LOCAL_USAGE_UNAVAILABLE = "edge_local_usage_channel_unavailable"
 INSTANCE_CATEGORY_UNKNOWN = "instance_retention_category_unknown"
 EVIDENCE_BYTES_UNKNOWN = "evidence_media_bytes_unknown"
 EVIDENCE_REVIEW_UNKNOWN = "evidence_review_state_unknown"
+
+
+class DeletionAuthorityBusyError(RuntimeError):
+    """存在已授权且未结案的删除：权威变更必须等来源机终局反馈，不能改写已放行的依据。"""
+
+
+class DeletionAuthorityFence(Protocol):
+    """权威变更前的互斥接缝；由 evidence 拥有删除认领的实现，retention/device 只经此调用。
+
+    取锁与检查必须原子：仅检查“当前有无已授权认领”不能防住并发的删除授权。实现方在同一事务
+    内先取权威锁再查询，使“授权删除”与“改写保留策略/工位状态/签发配置”真正串行（§5.19）。
+    """
+
+    def ensure_mutable(self) -> None:
+        """取权威锁并断言没有已授权未结案删除；否则抛 :class:`DeletionAuthorityBusyError`。"""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,12 +90,27 @@ class EdgeImpactSourcesGateway(Protocol):
 
     def sources(self, *, station_id: UUID | None) -> tuple[EdgeImpactSource, ...]: ...
 
+    def lock_configuration(self, *, host_id: UUID) -> bool:
+        """以共享行锁固定该来源主机的当前配置身份；主机不存在时返回 ``False``。
+
+        删除资格在登记认领前调用它，使 `device` 推进分配修订与认领登记真正互斥：判定所依据的
+        配置身份不会在认领登记之前被改写（§5.19 引用保护）。
+        """
+        ...
+
 
 class RetentionPolicyRepository(Protocol):
     """全局保留策略的读写 seam；方法都不提交事务。"""
 
     def get_global(self) -> RetentionPolicyState | None:
         """尚未持久化时返回 ``None``（由调用方回退代码默认值）。"""
+        ...
+
+    def lock_current(self) -> RetentionPolicyState | None:
+        """以共享行锁读取当前全局策略，使判定与认领登记之间不发生策略写入。
+
+        尚无策略行时返回 ``None``：此时没有可锁的行，首次插入仍由版本条件写保证唯一。
+        """
         ...
 
     def replace_if_current(self, *, expected_revision: int, value: RetentionPolicyState) -> bool:
@@ -120,6 +152,10 @@ class StationRetentionOverrideRepository(Protocol):
 
     def list_all(self) -> tuple[StationRetentionRecord, ...]:
         """返回全部覆盖记录；全局变更只影响没有自定义整组的工位，需要据此排除。"""
+        ...
+
+    def lock_current(self, station_id: UUID) -> StationRetentionRecord | None:
+        """以共享行锁读取该工位覆盖记录；没有记录时返回 ``None``。"""
         ...
 
     def insert_if_absent(self, record: StationRetentionRecord) -> bool:
@@ -191,6 +227,124 @@ class EvidenceInstanceUsage:
     linked: ImpactAggregate
 
 
+@dataclass(frozen=True, slots=True)
+class EvidenceReviewUsage:
+    """同一实例的引用在窗口内的复核状态聚合；``known`` 为假表示复核状态未知。
+
+    ``known`` 为假时不得按"没有在审复核"处理；``active`` 为真时该实例的未链接引用受保护。
+    """
+
+    host_id: UUID
+    station_id: UUID
+    instance_id: int
+    known: bool
+    active: bool
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceDeletionReference:
+    """evidence owner 对一条引用的当前事实与它拥有的保护状态。
+
+    未登记的证据不出现在结果中；``review_state_known`` 为假表示历史复核状态未知，不能当作
+    没有在审复核（§5.19）。
+    """
+
+    evidence_id: str
+    host_id: UUID
+    station_id: UUID
+    instance_id: int
+    generation: str | None
+    sha256: str | None
+    size: int | None
+    reference: str | None
+    media_state: EvidenceMediaState
+    received_at: datetime | None
+    review_state_known: bool
+    review_active: bool
+    reclip_pending: bool
+    playback_active: bool
+    pending_claim_id: UUID | None
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceDeletionClaimState:
+    """一条删除认领的当前状态与它绑定的引用事实。"""
+
+    claim_id: UUID
+    evidence_id: str
+    host_id: UUID
+    config_revision: int
+    effective_sha256: str
+    default_revision: int
+    station_revision: int
+    status: EvidenceDeletionClaimStatus
+    created_at: datetime
+    expires_at: datetime
+    settled_at: datetime | None
+    authorized_at: datetime | None
+    reason_code: str | None
+    reference: EvidenceDeletionReference
+
+
+class EvidenceDeletionGateway(Protocol):
+    """retention 读取与写入 evidence 删除保护事实所用的最小 owning seam。"""
+
+    def references(
+        self, *, evidence_ids: tuple[str, ...], now: datetime
+    ) -> tuple[EvidenceDeletionReference, ...]:
+        """按稳定 ID 返回引用与保护事实；未登记的 ID 不出现在结果中。"""
+        ...
+
+    def claim(
+        self,
+        *,
+        evidence_id: str,
+        host_id: UUID,
+        config_revision: int,
+        effective_sha256: str,
+        default_revision: int,
+        station_revision: int,
+        created_at: datetime,
+        expires_at: datetime,
+    ) -> UUID | None:
+        """锁定引用行后登记一条未结案删除认领，返回认领 ID。
+
+        引用不存在、已有未结案认领，或锁内发现新的 evidence 保护事实时返回 ``None``。
+        """
+        ...
+
+    def claim_state(self, claim_id: UUID, *, now: datetime) -> EvidenceDeletionClaimState | None:
+        """返回认领状态与它绑定的引用事实；未知认领返回 ``None``。"""
+        ...
+
+    def lock_authority(self) -> None:
+        """取本事务的权威互斥锁；与策略/工位/签发写入及 ``ensure_mutable`` 同一把锁。"""
+        ...
+
+    def authorize(self, claim_id: UUID, *, at: datetime) -> bool:
+        """在仍为未结案时把认领推进到已授权阶段；已结案或不存在返回 ``False``。
+
+        幂等：重复授权保留首次授权时刻，返回 ``True``。授权在事务提交后持久，直到来源机
+        终局反馈；期间权威变更（策略、工位状态、配置签发）必须被 ``ensure_mutable`` 拒绝。
+        """
+        ...
+
+    def settle(
+        self,
+        *,
+        claim_id: UUID,
+        status: EvidenceDeletionClaimStatus,
+        reason_code: str,
+        detail: str | None,
+        settled_at: datetime,
+    ) -> EvidenceDeletionClaimState | None:
+        """按来源机反馈终局结案；``deleted`` 在同一事务内把引用标记为媒体不可用。
+
+        未知或已非未结案的认领返回 ``None``，不覆盖既有终局。
+        """
+        ...
+
+
 class EvidenceImpactGateway(Protocol):
     """retention 读取 evidence owner 证据引用计数所用的最小只读 seam。"""
 
@@ -204,13 +358,24 @@ class EvidenceImpactGateway(Protocol):
         """按实例返回接收时刻落在 ``(exposed_from, exposed_to]`` 的证据引用计数。"""
         ...
 
+    def review_usage(
+        self,
+        *,
+        station_id: UUID | None,
+        exposed_from: datetime | None,
+        exposed_to: datetime,
+    ) -> tuple[EvidenceReviewUsage, ...]:
+        """按实例返回同窗口内引用的复核状态聚合；复核状态归 evidence 拥有。"""
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class InstanceRetentionFact:
     """monitor 拥有的实例保留分类事实：真实判定、锁存违规与真实结案。
 
     ``verdict`` 为 ``None`` 表示中心没有该实例的判定镜像（未知，不得当作通过）；
-    ``closed`` 只认真实 ``closed_at``，未结案或未知实例引用继续受保护。
+    ``closed`` 只认真实 ``closed_at``，未结案或未知实例引用继续受保护。复核状态不在这里：
+    在审复核归 evidence 拥有，经 ``EvidenceImpactGateway.review_usage`` 读取（#206）。
     """
 
     host_id: UUID
@@ -219,8 +384,6 @@ class InstanceRetentionFact:
     verdict: str | None
     has_latched_violation: bool
     closed: bool
-    # #206 尚无持久复核状态时返回 None，不能以结案或复核结果推断无人正在复核。
-    active_review: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,12 +448,17 @@ def update_policy(
     *,
     expected_revision: int,
     repository: RetentionPolicyRepository,
+    fence: DeletionAuthorityFence | None = None,
 ) -> RetentionPolicyState:
     """整组替换全局策略；乐观锁冲突拒绝，且只改变未来回收依据，不同步删除对象。
 
+    存在已授权未结案删除时拒绝写入并抛 :class:`DeletionAuthorityBusyError`：已放行的删除不得被
+    同时改写的策略改变依据。``fence`` 为 ``None`` 仅限不可能存在在途删除的调用方（测试）。
     本用例不提交事务：提交由请求作用域 Unit of Work（ADR-0002）或调用方负责。
     """
     authorize(caller, Permission.RETENTION_POLICY_EDIT)
+    if fence is not None:
+        fence.ensure_mutable()
     _require_expected_revision(expected_revision)
     value = RetentionPolicyState(policy=policy, revision=expected_revision + 1)
     if not repository.replace_if_current(expected_revision=expected_revision, value=value):
@@ -322,14 +490,18 @@ def update_station_retention(
     policies: RetentionPolicyRepository,
     records: StationRetentionOverrideRepository,
     stations: StationFactsGateway,
+    fence: DeletionAuthorityFence | None = None,
 ) -> StationRetentionConfiguration:
     """整组替换工位保留覆盖；不合规、工位不可用或版本冲突时拒绝，不删除任何数据。
 
     ``expected_revision`` 是该工位覆盖记录自身的版本：``0`` 表示首次建立，写入走真实 CAS
     （并发下只有一个请求能建立记录），其余情况是条件更新，丢弃更新请求会收到冲突。
+    存在已授权未结案删除时拒绝写入（:class:`DeletionAuthorityBusyError`）。
     本用例不提交事务：提交由请求作用域 Unit of Work（ADR-0002）或调用方负责。
     """
     authorize(caller, Permission.RETENTION_POLICY_EDIT)
+    if fence is not None:
+        fence.ensure_mutable()
     _require_expected_revision(expected_revision)
     # 先按纯规则拒绝不配对的选择，拒绝时不触碰任何记录。
     try:
@@ -560,6 +732,10 @@ class _EvidenceFacts:
             tuple[UUID | None, datetime | None, datetime], tuple[EvidenceInstanceUsage, ...]
         ] = {}
         self._facts: dict[tuple[UUID, UUID, int], InstanceRetentionFact] = {}
+        self._reviews: dict[
+            tuple[UUID | None, datetime | None, datetime],
+            dict[tuple[UUID, UUID, int], EvidenceReviewUsage],
+        ] = {}
 
     def field_breakdown(
         self,
@@ -578,6 +754,9 @@ class _EvidenceFacts:
             usage for usage in self._usage[key] if usage.station_id not in self._excluded
         )
         self._load_facts(usages)
+        reviews = self._load_reviews(
+            key, station_id=station_id, exposed_from=exposed_from, exposed_to=exposed_to
+        )
         exposed = empty_aggregate(measurable_bytes=True)
         protected = empty_aggregate(measurable_bytes=True)
         unknown_category = False
@@ -591,11 +770,13 @@ class _EvidenceFacts:
                 continue
             if resolved is not category:
                 continue
-            # 两组互斥：已证明受保护者不同时计入会回收的对象。
+            review = reviews.get((usage.host_id, usage.station_id, usage.instance_id))
+            # 两组互斥：已证明受保护者不同时计入会回收的对象。未结案与锁存违规事实归
+            # monitor，在审复核事实归 evidence；复核状态未知时不能按"无人复核"放行。
             protected = protected.plus(usage.linked)
-            if not fact.closed or fact.active_review is True:
+            if not fact.closed or (review is not None and review.active):
                 protected = protected.plus(usage.unlinked)
-            elif usage.unlinked.objects and fact.active_review is None:
+            elif usage.unlinked.objects and (review is None or not review.known):
                 unknown_review = True
             else:
                 exposed = exposed.plus(usage.unlinked)
@@ -608,6 +789,24 @@ class _EvidenceFacts:
         if unknown_review:
             return None, EVIDENCE_REVIEW_UNKNOWN
         return RetentionImpactBreakdown(exposed=exposed, protected=protected), None
+
+    def _load_reviews(
+        self,
+        key: tuple[UUID | None, datetime | None, datetime],
+        *,
+        station_id: UUID | None,
+        exposed_from: datetime | None,
+        exposed_to: datetime,
+    ) -> dict[tuple[UUID, UUID, int], EvidenceReviewUsage]:
+        """按实例缓存复核状态聚合；同一次估算的复核事实只读一次。"""
+        if key not in self._reviews:
+            self._reviews[key] = {
+                (value.host_id, value.station_id, value.instance_id): value
+                for value in self._impact.review_usage(
+                    station_id=station_id, exposed_from=exposed_from, exposed_to=exposed_to
+                )
+            }
+        return self._reviews[key]
 
     def _load_facts(self, usages: tuple[EvidenceInstanceUsage, ...]) -> None:
         """只为窗口内出现的实例取分类事实，不盘点整表。"""
@@ -732,8 +931,12 @@ __all__ = [
     "EdgeImpactGateway",
     "EdgeImpactResult",
     "EdgeImpactSourcesGateway",
+    "EvidenceDeletionClaimState",
+    "EvidenceDeletionGateway",
+    "EvidenceDeletionReference",
     "EvidenceImpactGateway",
     "EvidenceInstanceUsage",
+    "EvidenceReviewUsage",
     "InstanceRetentionFact",
     "MonitorImpactGateway",
     "RetentionPolicyConflictError",

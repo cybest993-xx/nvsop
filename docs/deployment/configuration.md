@@ -65,6 +65,10 @@ DDM 的 `DATASET_ROOT`/`RESULTS_ROOT` 与 worker 的对应 SOP 根目录必须�
 
 来源机按[独立证据服务](../../deploy/media/README.md#来源主机证据回看服务)增加 `--local-state <运行时实际使用的-SQLite-绝对路径>`，只读打开已由运行时迁移的状态；服务不创建、迁移或清理数据库。该机必须已经确认中心最新签发的配置。业务网关将精确 `POST /api/v1/retention/reported-impact/access-check` 与其他机器入口一样保留签名头、清除 Cookie/Authorization/CSRF；不能将整个 retention 路径豁免浏览器认证。票据只授权本次统计并逐次复核 `retention.policy.edit`，不授予媒体访问或删除权。
 
+### 证据删除资格
+
+删除票据有效期由中心环境 `SOP_EVIDENCE_DELETION_TICKET_TTL_SECONDS` 显式给出正整数秒，无业务默认值；缺失时 `claim` 与 `verify` 整批拒绝并返回 `ticket_ttl_unconfigured`，不产生新的删除授权，而 `result` 仍接受已持有认领的终局反馈以便完成已开头的清理。来源机在本机取消链接证据媒体前，经主机签名的 `POST /api/v1/retention/evidence-deletion-claims`（claim）、`.../verify`（删前复核并授权）与 `.../result`（终局反馈）领取/复核/结案一条删除认领。`verify` 放行即在同一权威锁下把认领推进到已授权阶段并持久：在来源机终局反馈前，修改保留策略、停用/恢复工位或签发绑定配置都会因权威锁被拒绝（`STATE_CONFLICT`），不能改写已放行的删除依据；未授权认领仍会因策略/配置变化返回既有 stale 原因。未结案认领等价于该引用继续在审保护，不因票据过期自动释放，只有来源机的终局反馈才结案。来源机在取消链接与结果落账之间使用真实 SQLite 写事务，先落本机删除意图，上报失败或重启后重放，不从文件缺失推断成功。业务网关只放行这三个精确路径并保留签名头、清除 Cookie/Authorization/CSRF；不豁免整个 retention 路径，也不授予浏览器任何删除能力。中心只回答删除资格，实际取消链接只发生在拥有文件的推理机（ADR-0012）。
+
 升级运行时会在 SQLite V20 给四类上报账本追加可空 `acknowledged_at`，以后只在中心成功响应后冻结首次确认 UTC。历史发送行不回填，不得手工用发送单调时刻或接收时刻伪造确认。估算返回逻辑序列化字节，不能据此承诺磁盘空间或删除媒体。稳定整链路入口见[真实 PG/HTTPS/SQLite 系统场景](../../tests/system/test_sys_42_retention_impact.py)。
 
 ## Web 开发代理

@@ -3,15 +3,24 @@
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client'
 import { client } from './client.gen'
 import type {
+  BeginEvidenceReviewData,
+  BeginEvidenceReviewErrors,
+  BeginEvidenceReviewResponses,
   BindTemplateVersionData,
   BindTemplateVersionErrors,
   BindTemplateVersionResponses,
+  CancelEvidenceReviewData,
+  CancelEvidenceReviewErrors,
+  CancelEvidenceReviewResponses,
   CheckEvidenceAccessData,
   CheckEvidenceAccessErrors,
   CheckEvidenceAccessResponses,
   CheckRetentionReportedImpactAccessData,
   CheckRetentionReportedImpactAccessErrors,
   CheckRetentionReportedImpactAccessResponses,
+  ClaimEvidenceDeletionData,
+  ClaimEvidenceDeletionErrors,
+  ClaimEvidenceDeletionResponses,
   ClaimNextDeviceCommandData,
   ClaimNextDeviceCommandErrors,
   ClaimNextDeviceCommandResponses,
@@ -354,6 +363,9 @@ import type {
   RegisterVlmCandidateData,
   RegisterVlmCandidateErrors,
   RegisterVlmCandidateResponses,
+  ReportEvidenceDeletionResultData,
+  ReportEvidenceDeletionResultErrors,
+  ReportEvidenceDeletionResultResponses,
   ReportMonitorDecisionData,
   ReportMonitorDecisionErrors,
   ReportMonitorDecisionResponses,
@@ -456,6 +468,9 @@ import type {
   ValidateTemplateBindingData,
   ValidateTemplateBindingErrors,
   ValidateTemplateBindingResponses,
+  VerifyEvidenceDeletionData,
+  VerifyEvidenceDeletionErrors,
+  VerifyEvidenceDeletionResponses,
 } from './types.gen'
 
 export type Options<
@@ -1163,6 +1178,48 @@ export const createEvidenceReclipRequest = <ThrowOnError extends boolean = false
     ThrowOnError
   >({
     url: '/api/v1/evidence/{evidence_id}/reclip-requests',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Begin Review Hold
+ *
+ * 进入在审保护：登记本人在该证据上的持久复核占用，删除认领在此之后被拒。
+ */
+export const beginEvidenceReview = <ThrowOnError extends boolean = false>(
+  options: Options<BeginEvidenceReviewData, ThrowOnError>,
+): RequestResult<BeginEvidenceReviewResponses, BeginEvidenceReviewErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    BeginEvidenceReviewResponses,
+    BeginEvidenceReviewErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/evidence/{evidence_id}/review-holds',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Cancel Review Hold
+ *
+ * 退出在审保护：只结束当前人自己的占用，其他人或已结案的占用不受影响。
+ */
+export const cancelEvidenceReview = <ThrowOnError extends boolean = false>(
+  options: Options<CancelEvidenceReviewData, ThrowOnError>,
+): RequestResult<CancelEvidenceReviewResponses, CancelEvidenceReviewErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    CancelEvidenceReviewResponses,
+    CancelEvidenceReviewErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/evidence/{evidence_id}/review-holds/cancel',
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -1963,6 +2020,73 @@ export const setPointStatus = <ThrowOnError extends boolean = false>(
 ): RequestResult<SetPointStatusResponses, SetPointStatusErrors, ThrowOnError> =>
   (options.client ?? client).put<SetPointStatusResponses, SetPointStatusErrors, ThrowOnError>({
     url: '/api/v1/points/{point_id}/status',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Claim Deletion Eligibility
+ *
+ * 为一批候选引用判定删除资格；``eligible`` 的条目附带短期票据。
+ */
+export const claimEvidenceDeletion = <ThrowOnError extends boolean = false>(
+  options: Options<ClaimEvidenceDeletionData, ThrowOnError>,
+): RequestResult<ClaimEvidenceDeletionResponses, ClaimEvidenceDeletionErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    ClaimEvidenceDeletionResponses,
+    ClaimEvidenceDeletionErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/retention/evidence-deletion-claims',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Report Deletion Result
+ *
+ * 把来源机的终局反馈结案为认领状态；重复同一反馈按同一状态幂等返回。
+ */
+export const reportEvidenceDeletionResult = <ThrowOnError extends boolean = false>(
+  options: Options<ReportEvidenceDeletionResultData, ThrowOnError>,
+): RequestResult<
+  ReportEvidenceDeletionResultResponses,
+  ReportEvidenceDeletionResultErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    ReportEvidenceDeletionResultResponses,
+    ReportEvidenceDeletionResultErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/retention/evidence-deletion-claims/result',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Verify Deletion Eligibility
+ *
+ * 删除前用票据重新校验同一条引用；只有仍为当前事实的认领才继续放行。
+ */
+export const verifyEvidenceDeletion = <ThrowOnError extends boolean = false>(
+  options: Options<VerifyEvidenceDeletionData, ThrowOnError>,
+): RequestResult<VerifyEvidenceDeletionResponses, VerifyEvidenceDeletionErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    VerifyEvidenceDeletionResponses,
+    VerifyEvidenceDeletionErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/retention/evidence-deletion-claims/verify',
     ...options,
     headers: {
       'Content-Type': 'application/json',

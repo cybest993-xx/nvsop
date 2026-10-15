@@ -364,10 +364,41 @@ def test_global_estimate_uses_real_categories_and_refuses_unknown_review_state(
     passing = by_field[RetentionImpactField.EVIDENCE_PASS]
     assert passing.exposed_from == BAND_FROM
     assert passing.exposed_to == BAND_TO
-    assert passing.unavailable_reason == "evidence_review_state_unknown"
-    assert passing.breakdown is None
-    assert not estimate.complete
-    assert estimate.incomplete_reasons == ("evidence_pass:evidence_review_state_unknown",)
+    # 复核状态由 evidence owner 提供且已知、无在审复核：通过类引用进入暴露计数。
+    assert passing.unavailable_reason is None
+    assert passing.breakdown is not None
+    assert passing.breakdown.exposed.objects == 1
+    assert passing.breakdown.protected.objects == 0
+    assert estimate.complete
+    # 升级前的历史引用把复核状态标记为未知：该字段不得估算，整次估算因此不完整。
+    session.execute(
+        text(
+            "UPDATE evidence_evidence SET review_state_known = false "
+            "WHERE station_id = :station AND instance_id = 1"
+        ),
+        {"station": station},
+    )
+    session.flush()
+    unknown = estimate_global_policy_change(
+        _caller(Permission.RETENTION_POLICY_EDIT),
+        proposed,
+        expected_revision=0,
+        policies=policies,
+        records=PostgresStationRetentionOverrideRepository(session),
+        evidence_impact=RepositoryEvidenceImpact(
+            repository=PostgresEvidenceImpactRepository(session)
+        ),
+        monitor_impact=RepositoryMonitorImpact(repository=PostgresMonitorImpactRepository(session)),
+        now=NOW,
+        edge_impact=FakeEdgeImpact(),
+    )
+    unknown_passing = {value.field: value for value in unknown.fields}[
+        RetentionImpactField.EVIDENCE_PASS
+    ]
+    assert unknown_passing.unavailable_reason == "evidence_review_state_unknown"
+    assert unknown_passing.breakdown is None
+    assert not unknown.complete
+    assert unknown.incomplete_reasons == ("evidence_pass:evidence_review_state_unknown",)
     assert policies.get_global() == before  # 只读估算不写策略、不删除任何对象
     raw = RepositoryEvidenceImpact(
         repository=PostgresEvidenceImpactRepository(session)
@@ -431,7 +462,6 @@ def test_another_host_closure_does_not_unprotect_or_reclassify_a_record(session:
     assert by_host[host_a].verdict == "fail"
     assert by_host[host_b].closed is False
     assert by_host[host_b].verdict == "pass"
-    assert all(value.active_review is None for value in facts)
 
 
 class FakeEdgeImpact:
@@ -475,6 +505,9 @@ def test_remote_impact_wait_releases_the_real_postgres_connection(
     with Session(engine) as session:
 
         class Sources:
+            def lock_configuration(self, *, host_id: UUID) -> bool:
+                return True
+
             def sources(self, *, station_id: UUID | None) -> tuple[EdgeImpactSource, ...]:
                 session.execute(text("SELECT 1"))
                 return (EdgeImpactSource(UUID(HOST), 7, "a" * 64),)

@@ -2170,6 +2170,64 @@ export type EvidenceReviewBody = {
 }
 
 /**
+ * EvidenceReviewCancelBody
+ *
+ * 取消本人在审占用；只认自己创建的 review_id。
+ */
+export type EvidenceReviewCancelBody = {
+  /**
+   * Review Id
+   */
+  review_id: string
+}
+
+/**
+ * EvidenceReviewHoldBody
+ *
+ * 开始一次在审复核：稳定幂等 ID 与证据代次；不接受其它扩展字段。
+ */
+export type EvidenceReviewHoldBody = {
+  /**
+   * Generation
+   */
+  generation: string
+  /**
+   * Review Id
+   */
+  review_id: string
+}
+
+/**
+ * EvidenceReviewHoldRecord
+ */
+export type EvidenceReviewHoldRecord = {
+  /**
+   * Ended At
+   */
+  ended_at?: string | null
+  /**
+   * Evidence Id
+   */
+  evidence_id: string
+  /**
+   * Generation
+   */
+  generation: string
+  /**
+   * Review Id
+   */
+  review_id: string
+  /**
+   * Reviewer Id
+   */
+  reviewer_id: string
+  /**
+   * Started At
+   */
+  started_at: string
+}
+
+/**
  * EvidenceReviewRecord
  */
 export type EvidenceReviewRecord = {
@@ -2205,7 +2263,7 @@ export type EvidenceReviewRecord = {
  *
  * 中心引用的登记状态；没有“媒体已上传中心”这一类状态（ADR-0012）。
  */
-export type EvidenceStatus = 'pending' | 'available' | 'failed'
+export type EvidenceStatus = 'pending' | 'available' | 'failed' | 'deleted'
 
 /**
  * ExportCameraMediaView
@@ -7199,6 +7257,76 @@ export type CreateEvidenceReclipRequestResponses = {
 export type CreateEvidenceReclipRequestResponse =
   CreateEvidenceReclipRequestResponses[keyof CreateEvidenceReclipRequestResponses]
 
+export type BeginEvidenceReviewData = {
+  body: EvidenceReviewHoldBody
+  path: {
+    /**
+     * Evidence Id
+     */
+    evidence_id: string
+  }
+  query?: never
+  url: '/api/v1/evidence/{evidence_id}/review-holds'
+}
+
+export type BeginEvidenceReviewErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type BeginEvidenceReviewError = BeginEvidenceReviewErrors[keyof BeginEvidenceReviewErrors]
+
+export type BeginEvidenceReviewResponses = {
+  /**
+   * Successful Response
+   */
+  200: EvidenceReviewHoldRecord
+}
+
+export type BeginEvidenceReviewResponse =
+  BeginEvidenceReviewResponses[keyof BeginEvidenceReviewResponses]
+
+export type CancelEvidenceReviewData = {
+  body: EvidenceReviewCancelBody
+  path: {
+    /**
+     * Evidence Id
+     */
+    evidence_id: string
+  }
+  query?: never
+  url: '/api/v1/evidence/{evidence_id}/review-holds/cancel'
+}
+
+export type CancelEvidenceReviewErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CancelEvidenceReviewError = CancelEvidenceReviewErrors[keyof CancelEvidenceReviewErrors]
+
+export type CancelEvidenceReviewResponses = {
+  /**
+   * Successful Response
+   */
+  204: void
+}
+
+export type CancelEvidenceReviewResponse =
+  CancelEvidenceReviewResponses[keyof CancelEvidenceReviewResponses]
+
 export type ReadEvidenceReviewsData = {
   body?: never
   path: {
@@ -9565,6 +9693,159 @@ export type SetPointStatusResponses = {
 }
 
 export type SetPointStatusResponse = SetPointStatusResponses[keyof SetPointStatusResponses]
+
+export type ClaimEvidenceDeletionData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  headers: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID': string
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/retention/evidence-deletion-claims'
+}
+
+export type ClaimEvidenceDeletionErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ClaimEvidenceDeletionError =
+  ClaimEvidenceDeletionErrors[keyof ClaimEvidenceDeletionErrors]
+
+export type ClaimEvidenceDeletionResponses = {
+  /**
+   * Successful Response
+   */
+  200: unknown
+}
+
+export type ReportEvidenceDeletionResultData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  headers: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID': string
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/retention/evidence-deletion-claims/result'
+}
+
+export type ReportEvidenceDeletionResultErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReportEvidenceDeletionResultError =
+  ReportEvidenceDeletionResultErrors[keyof ReportEvidenceDeletionResultErrors]
+
+export type ReportEvidenceDeletionResultResponses = {
+  /**
+   * Successful Response
+   */
+  200: unknown
+}
+
+export type VerifyEvidenceDeletionData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  headers: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID': string
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/retention/evidence-deletion-claims/verify'
+}
+
+export type VerifyEvidenceDeletionErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type VerifyEvidenceDeletionError =
+  VerifyEvidenceDeletionErrors[keyof VerifyEvidenceDeletionErrors]
+
+export type VerifyEvidenceDeletionResponses = {
+  /**
+   * Successful Response
+   */
+  200: unknown
+}
 
 export type ReadRetentionPolicyData = {
   body?: never

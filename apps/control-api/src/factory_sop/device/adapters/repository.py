@@ -126,6 +126,18 @@ class PostgresInferenceHostRepository:
         row = self._session.get(InferenceHostRow, host_id)
         return row.to_domain() if row is not None else None
 
+    def lock_configuration_identity(self, *, host_id: UUID) -> bool:
+        """共享行锁读取该主机的当前配置身份；主机不存在时返回 ``False``。
+
+        与 `next_configuration_revision` 的排他行锁互斥，使配置推进不会与删除认领登记交错。
+        """
+        row = self._session.scalar(
+            select(InferenceHostRow.id)
+            .where(InferenceHostRow.id == host_id)
+            .with_for_update(read=True)
+        )
+        return row is not None
+
     def next_configuration_revision(
         self,
         *,

@@ -10,6 +10,8 @@ const api = vi.hoisted(() => ({
   readEvidence: vi.fn(),
   createEvidenceAccessContext: vi.fn(),
   readEvidenceReviews: vi.fn(),
+  beginEvidenceReview: vi.fn(),
+  cancelEvidenceReview: vi.fn(),
   readEvidenceReclipRequests: vi.fn(),
   createEvidenceReclipRequest: vi.fn(),
 }))
@@ -98,6 +100,15 @@ beforeEach(() => {
   api.readEvidence.mockResolvedValue([LISTING])
   api.readEvidenceReclipRequests.mockResolvedValue([])
   api.readEvidenceReviews.mockResolvedValue([])
+  api.beginEvidenceReview.mockResolvedValue({
+    review_id: 'hold-1',
+    evidence_id: 'host-1/clip.mp4',
+    generation: 'original',
+    reviewer_id: 'viewer-1',
+    started_at: '2026-09-14T01:00:00Z',
+    ended_at: null,
+  })
+  api.cancelEvidenceReview.mockResolvedValue(undefined)
   api.createEvidenceAccessContext.mockResolvedValue({
     context: 'signed.ticket',
     origin: 'https://edge.internal:8765',

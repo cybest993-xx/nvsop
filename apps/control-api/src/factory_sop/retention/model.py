@@ -11,6 +11,8 @@ from hashlib import sha256
 from typing import cast
 from uuid import UUID
 
+from nvsop_contracts import EvidenceDeletionDecision
+
 
 class RetentionCategory(StrEnum):
     PASS = "pass"
@@ -471,9 +473,162 @@ def impact_digest(estimate: RetentionImpactEstimate) -> str:
     return sha256(canonical.encode()).hexdigest()
 
 
+class EvidenceMediaState(StrEnum):
+    """evidence owner 报告的媒体状态；``unknown`` 表示登记事实不可解读，绝不能当作可用。"""
+
+    AVAILABLE = "available"
+    PENDING = "pending"
+    FAILED = "failed"
+    DELETED = "deleted"
+    UNKNOWN = "unknown"
+
+
+class EvidenceDeletionReason(StrEnum):
+    """删除资格的机器原因码；``eligible``/``protected``/``unknown`` 三种判定都带一个解释。"""
+
+    EXPIRED = "expired"
+    RETENTION_DISCARD = "retention_discard"
+    RETENTION_PERMANENT = "retention_permanent"
+    NOT_EXPIRED = "not_expired"
+    INSTANCE_OPEN = "instance_open"
+    LATCHED_VIOLATION = "latched_violation"
+    REVIEW_IN_PROGRESS = "review_in_progress"
+    RECLIP_PENDING = "reclip_pending"
+    PLAYBACK_IN_PROGRESS = "playback_in_progress"
+    DELETION_CLAIM_PENDING = "deletion_claim_pending"
+    EVIDENCE_UNREGISTERED = "evidence_unregistered"
+    EVIDENCE_UNAVAILABLE = "evidence_unavailable"
+    EVIDENCE_MEDIA_DELETED = "evidence_media_deleted"
+    SOURCE_HOST_MISMATCH = "source_host_mismatch"
+    GENERATION_MISMATCH = "generation_mismatch"
+    MATERIAL_MISMATCH = "material_mismatch"
+    REVIEW_STATE_UNKNOWN = "review_state_unknown"
+    STATION_UNKNOWN = "station_unknown"
+    STATION_DEACTIVATED = "station_deactivated"
+    INSTANCE_UNKNOWN = "instance_unknown"
+    INSTANCE_CATEGORY_UNKNOWN = "instance_category_unknown"
+    RETENTION_POLICY_UNKNOWN = "retention_policy_unknown"
+    AGE_UNKNOWN = "age_unknown"
+    # 校验与反馈阶段的机器原因码：来源机按这些码记录跳过原因，不重试删除。
+    TICKET_INVALID = "ticket_invalid"
+    TICKET_EXPIRED = "ticket_expired"
+    TICKET_TTL_UNCONFIGURED = "ticket_ttl_unconfigured"
+    CONFIG_NOT_CURRENT = "config_not_current"
+    CONFIG_CHANGED = "config_changed"
+    POLICY_CHANGED = "policy_changed"
+    SOURCE_HOST_UNREGISTERED = "source_host_unregistered"
+    CLAIM_UNKNOWN = "claim_unknown"
+    CLAIM_HOST_MISMATCH = "claim_host_mismatch"
+    CLAIM_IDENTITY_MISMATCH = "claim_identity_mismatch"
+    CLAIM_SETTLED = "claim_settled"
+    CLAIM_ALREADY_SETTLED = "claim_already_settled"
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceDeletionFacts:
+    """一条引用的删除资格事实；任一项未知都必须保持不删（§5.19 引用保护）。"""
+
+    registered: bool
+    media_state: EvidenceMediaState
+    source_matches: bool
+    generation_matches: bool
+    material_matches: bool
+    review_state_known: bool
+    review_active: bool
+    reclip_pending: bool
+    playback_active: bool
+    claim_pending: bool
+    station_known: bool
+    station_active: bool
+    instance_known: bool
+    instance_closed: bool
+    latched_violation: bool
+    category: RetentionCategory | None
+    age_seconds: float | None
+
+
+_EVIDENCE_CATEGORY_FIELD: dict[RetentionCategory, str] = {
+    RetentionCategory.PASS: "evidence_pass",
+    RetentionCategory.FAIL: "evidence_fail",
+    RetentionCategory.INDETERMINATE: "evidence_indeterminate",
+}
+
+
+def evidence_retention_rule(
+    policy: RetentionPolicy, category: RetentionCategory | None
+) -> RetentionRule | None:
+    """该类别在生效策略下的证据保留规则；类别未知时返回 ``None``（未知即不删）。"""
+    if category is None:
+        return None
+    return cast(RetentionRule, getattr(policy, _EVIDENCE_CATEGORY_FIELD[category]))
+
+
+def evidence_deletion_decision(
+    facts: EvidenceDeletionFacts, *, rule: RetentionRule | None
+) -> tuple[EvidenceDeletionDecision, EvidenceDeletionReason]:
+    """纯删除资格规则：不可用、未知与仍成立的保护一律不删，只有确实不再保留且已过保留期才可删。
+
+    判定顺序是安全顺序：先证明引用身份与登记状态可用，再确认没有仍成立的保护，最后才比较保留
+    期。缺少任一事实都返回 ``unknown``（不删），绝不按"没有引用"放行；锁存违规与未结案实例
+    不因保留期到期而解除保护。
+    """
+    if not facts.registered:
+        return EvidenceDeletionDecision.UNKNOWN, EvidenceDeletionReason.EVIDENCE_UNREGISTERED
+    if facts.media_state is EvidenceMediaState.DELETED:
+        return EvidenceDeletionDecision.UNKNOWN, EvidenceDeletionReason.EVIDENCE_MEDIA_DELETED
+    if facts.media_state is not EvidenceMediaState.AVAILABLE:
+        return EvidenceDeletionDecision.UNKNOWN, EvidenceDeletionReason.EVIDENCE_UNAVAILABLE
+    if not facts.source_matches:
+        return EvidenceDeletionDecision.UNKNOWN, EvidenceDeletionReason.SOURCE_HOST_MISMATCH
+    if not facts.generation_matches:
+        return EvidenceDeletionDecision.UNKNOWN, EvidenceDeletionReason.GENERATION_MISMATCH
+    if not facts.material_matches:
+        return EvidenceDeletionDecision.UNKNOWN, EvidenceDeletionReason.MATERIAL_MISMATCH
+    if not facts.review_state_known:
+        return EvidenceDeletionDecision.UNKNOWN, EvidenceDeletionReason.REVIEW_STATE_UNKNOWN
+    if facts.claim_pending:
+        return EvidenceDeletionDecision.PROTECTED, EvidenceDeletionReason.DELETION_CLAIM_PENDING
+    if facts.review_active:
+        return EvidenceDeletionDecision.PROTECTED, EvidenceDeletionReason.REVIEW_IN_PROGRESS
+    if facts.reclip_pending:
+        return EvidenceDeletionDecision.PROTECTED, EvidenceDeletionReason.RECLIP_PENDING
+    if facts.playback_active:
+        return EvidenceDeletionDecision.PROTECTED, EvidenceDeletionReason.PLAYBACK_IN_PROGRESS
+    if not facts.station_known:
+        return EvidenceDeletionDecision.UNKNOWN, EvidenceDeletionReason.STATION_UNKNOWN
+    if not facts.station_active:
+        return EvidenceDeletionDecision.UNKNOWN, EvidenceDeletionReason.STATION_DEACTIVATED
+    if not facts.instance_known:
+        return EvidenceDeletionDecision.UNKNOWN, EvidenceDeletionReason.INSTANCE_UNKNOWN
+    if facts.latched_violation:
+        # 锁存违规是不可撤销的事实：其证据恒受保护，不因处置成功或类别时长而解除（§5.19）。
+        return EvidenceDeletionDecision.PROTECTED, EvidenceDeletionReason.LATCHED_VIOLATION
+    if not facts.instance_closed:
+        return EvidenceDeletionDecision.PROTECTED, EvidenceDeletionReason.INSTANCE_OPEN
+    if facts.category is None:
+        return EvidenceDeletionDecision.UNKNOWN, EvidenceDeletionReason.INSTANCE_CATEGORY_UNKNOWN
+    if rule is None or rule.mode is RetentionMode.UNSET:
+        return EvidenceDeletionDecision.UNKNOWN, EvidenceDeletionReason.RETENTION_POLICY_UNKNOWN
+    if rule.mode is RetentionMode.PERMANENT:
+        return EvidenceDeletionDecision.PROTECTED, EvidenceDeletionReason.RETENTION_PERMANENT
+    if rule.mode is RetentionMode.DISCARD:
+        return EvidenceDeletionDecision.ELIGIBLE, EvidenceDeletionReason.RETENTION_DISCARD
+    if facts.age_seconds is None:
+        return EvidenceDeletionDecision.UNKNOWN, EvidenceDeletionReason.AGE_UNKNOWN
+    seconds = rule.seconds
+    if seconds is None:
+        return EvidenceDeletionDecision.UNKNOWN, EvidenceDeletionReason.RETENTION_POLICY_UNKNOWN
+    if facts.age_seconds < seconds:
+        return EvidenceDeletionDecision.PROTECTED, EvidenceDeletionReason.NOT_EXPIRED
+    return EvidenceDeletionDecision.ELIGIBLE, EvidenceDeletionReason.EXPIRED
+
+
 __all__ = [
     "DEFAULT_RETENTION_POLICY",
     "FIELD_IMPACT",
+    "EvidenceDeletionFacts",
+    "EvidenceDeletionReason",
+    "EvidenceMediaState",
     "ImpactAggregate",
     "RetentionCategory",
     "RetentionFactOwner",
@@ -490,6 +645,8 @@ __all__ = [
     "check_reslice_window",
     "check_retention_selection",
     "empty_aggregate",
+    "evidence_deletion_decision",
+    "evidence_retention_rule",
     "exposure_seconds",
     "impact_digest",
     "newly_exposed_window",

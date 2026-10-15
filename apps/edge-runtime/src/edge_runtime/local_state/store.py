@@ -15,8 +15,8 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import AbstractContextManager
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from threading import RLock
 from typing import Protocol
@@ -56,6 +56,7 @@ from edge_runtime.local_state.execution import LocalExecutionLeaseStore
 from edge_runtime.local_state.queues import (
     REPORT_RUN_ID,
     BackendReportContext,
+    EvidenceDeletionJournal,
     EvidenceSource,
     PendingHealthReport,
     PendingObservationReport,
@@ -826,6 +827,32 @@ class StationStore(StationQueues):
         return 1 if highest is None else int(highest) + 1
 
 
+def _deletion_journal_entry(row: sqlite3.Row) -> EvidenceDeletionJournal:
+    """把本机删除账本行读成领域对象; 布局只在本模块维护。"""
+    return EvidenceDeletionJournal(
+        evidence_id=str(row["evidence_id"]),
+        station_id=str(row["station_id"]),
+        instance_id=int(row["instance_id"]),
+        claim_id=str(row["claim_id"]),
+        ticket=str(row["ticket"]),
+        claim_expires_at=(
+            None if row["claim_expires_at"] is None else float(row["claim_expires_at"])
+        ),
+        stage=str(row["stage"]),
+        outcome=None if row["outcome"] is None else str(row["outcome"]),
+        reason_code=None if row["reason_code"] is None else str(row["reason_code"]),
+        detail=None if row["detail"] is None else str(row["detail"]),
+        generation=str(row["generation"]),
+        observed_sha256=str(row["observed_sha256"]),
+        observed_size=int(row["observed_size"]),
+        reference=str(row["reference"]),
+        created_at=float(row["created_at"]),
+        updated_at=float(row["updated_at"]),
+        attempts=int(row["attempts"]),
+        last_error=None if row["last_error"] is None else str(row["last_error"]),
+    )
+
+
 class LocalState:
     """推理机的本地数据库; 多个工位共享一个 SQLite 文件。"""
 
@@ -885,6 +912,133 @@ class LocalState:
                 """
             ).fetchall()
         return tuple(str(row["station_id"]) for row in rows)
+
+    def registered_evidence_stations(self) -> tuple[str, ...]:
+        """跨工位返回已有已登记证据产物的工位; 工位已从当前配置移除也要返回 (§5.19)。"""
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT station_id FROM local_evidence_queue
+                 WHERE registered_at IS NOT NULL AND media_results IS NOT NULL
+                UNION
+                SELECT station_id FROM local_reclip_request
+                 WHERE registered_at IS NOT NULL AND media_results IS NOT NULL
+                ORDER BY station_id
+                """
+            ).fetchall()
+        return tuple(str(row["station_id"]) for row in rows)
+
+    @contextmanager
+    def guard(self) -> Iterator[None]:
+        """本机 SQLite 写事务临界区; 删前校验、取消链接与结果落账在同一事务边界内。
+
+        与仅进程内 ``RLock`` 不同, 这里真实取 ``BEGIN IMMEDIATE`` 的 RESERVED 锁: 另一个连接/进程
+        在同一证据目录上的配置确认或切片写入会被 SQLite 拒绝, 不会在删前校验与取消链接之间插入。
+        临界区内不得做网络等待; 取消链接后必须先把结果写入本事务再提交。
+        """
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                yield
+            except BaseException:
+                if self._connection.in_transaction:
+                    self._connection.execute("ROLLBACK")
+                raise
+            else:
+                self._connection.execute("COMMIT")
+
+    def record_deletion_intent(
+        self,
+        *,
+        evidence_id: str,
+        station_id: str,
+        instance_id: int,
+        claim_id: str,
+        ticket: str,
+        claim_expires_at: float | None,
+        generation: str,
+        observed_sha256: str,
+        observed_size: int,
+        reference: str,
+        at: float,
+    ) -> None:
+        """幂等登记一条已领到的删除意图; 已有同证据行时不覆盖既有进度。"""
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO local_evidence_deletion (
+                    evidence_id, station_id, instance_id, claim_id, ticket, claim_expires_at,
+                    stage, outcome, reason_code, detail, generation, observed_sha256,
+                    observed_size, reference, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'claimed', NULL, NULL, NULL, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (evidence_id) DO NOTHING
+                """,
+                (
+                    evidence_id,
+                    station_id,
+                    instance_id,
+                    claim_id,
+                    ticket,
+                    claim_expires_at,
+                    generation,
+                    observed_sha256,
+                    observed_size,
+                    reference,
+                    at,
+                    at,
+                ),
+            )
+
+    def deletion_journal(self) -> tuple[EvidenceDeletionJournal, ...]:
+        """跨工位返回全部未完成的删除意图/结果, 按创建时刻升序。"""
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT * FROM local_evidence_deletion
+                 ORDER BY created_at, evidence_id
+                """
+            ).fetchall()
+        return tuple(_deletion_journal_entry(row) for row in rows)
+
+    def record_deletion_result(
+        self,
+        evidence_id: str,
+        *,
+        outcome: str,
+        reason_code: str,
+        detail: str | None,
+        at: float,
+    ) -> None:
+        """在本事务内把本机终局结果落账; 取消链接成功时与文件删除同事务提交。"""
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_evidence_deletion
+                   SET stage = 'result_pending', outcome = ?, reason_code = ?, detail = ?,
+                       updated_at = ?
+                 WHERE evidence_id = ?
+                """,
+                (outcome, reason_code, detail, at, evidence_id),
+            )
+
+    def record_deletion_failure(self, evidence_id: str, *, error: str, at: float) -> None:
+        """记录一次可恢复失败(中心不可达/验证未完成); 保留同一意图等待下一轮。"""
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_evidence_deletion
+                   SET attempts = attempts + 1, last_error = ?, updated_at = ?
+                 WHERE evidence_id = ?
+                """,
+                (error[:255], at, evidence_id),
+            )
+
+    def clear_deletion_intent(self, evidence_id: str) -> None:
+        """终局结果已被中心确认后移除账本行。"""
+        with self._lock:
+            self._connection.execute(
+                "DELETE FROM local_evidence_deletion WHERE evidence_id = ?", (evidence_id,)
+            )
 
     def queue_status(self) -> tuple[QueueStatus, ...]:
         """跨工位查看未确认深度、最早待办、最近失败和配置的容量边界。"""

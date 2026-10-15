@@ -58,6 +58,8 @@ from edge_runtime.connectors.writes import (
     WriteAttempted,
     WriteRequest,
 )
+from edge_runtime.evidence_deletion import EvidenceDeletionExecutor
+from edge_runtime.evidence_deletion_transport import HttpEvidenceDeletionTransport
 from edge_runtime.evidence_media import EvidenceMediaConfiguration, EvidenceMediaWorker
 from edge_runtime.evidence_reporting import EvidenceReferenceReconciler
 from edge_runtime.judgment.model import HostInstant, HostLiveness
@@ -1060,6 +1062,7 @@ class AutonomousRuntime:
         media: MediaRuntime | None = None,
         evidence: EvidenceMediaWorker | None = None,
         evidence_registration: EvidenceReferenceReconciler | None = None,
+        evidence_deletion: EvidenceDeletionExecutor | None = None,
         reclip_loop: ReclipCommandLoop | None = None,
         report_reconciler: HostReportReconciler | None = None,
         report_wake: threading.Event | None = None,
@@ -1079,6 +1082,7 @@ class AutonomousRuntime:
         self._media = media
         self._evidence = evidence
         self._evidence_registration = evidence_registration
+        self._evidence_deletion = evidence_deletion
         self._reclip_loop = reclip_loop
         self._report_reconciler = report_reconciler
         self._report_wake = report_wake or threading.Event()
@@ -1106,6 +1110,11 @@ class AutonomousRuntime:
     def output_dispatchers(self) -> Mapping[str, OutputDispatcher]:
         with self._lock:
             return dict(self._output_dispatchers)
+
+    @property
+    def evidence_deletion(self) -> EvidenceDeletionExecutor | None:
+        """本机证据删除执行器; 调度归 #207, 本属性提供可调用的生产接缝。"""
+        return self._evidence_deletion
 
     @property
     def configuration(self) -> RuntimeConfiguration | None:
@@ -1849,6 +1858,18 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
                     interval=config.command_poll_interval,
                 )
                 if evidence_worker is not None and evidence_configuration is not None
+                else None
+            ),
+            evidence_deletion=(
+                EvidenceDeletionExecutor(
+                    state=state,
+                    host_id=config.host_id,
+                    evidence_directory=evidence_configuration.evidence_directory,
+                    transport=HttpEvidenceDeletionTransport(
+                        client=_center_client(config), host_id=config.host_id
+                    ),
+                )
+                if evidence_configuration is not None
                 else None
             ),
             reclip_loop=reclip_loop,

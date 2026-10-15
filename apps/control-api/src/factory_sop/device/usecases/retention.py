@@ -48,12 +48,18 @@ class RetentionSourceHosts(Protocol):
         template_sha256: str | None = None,
     ) -> bool: ...
 
+    def lock_configuration_identity(self, *, host_id: UUID) -> bool: ...
+
 
 class RepositoryDeviceRetentionSources(EdgeImpactSourcesGateway):
     """保留源包含历史来源机,不因当前换机/停用而把旧主机的数据视作零。"""
 
     def __init__(self, *, hosts: RetentionSourceHosts) -> None:
         self._hosts = hosts
+
+    def lock_configuration(self, *, host_id: UUID) -> bool:
+        """把来源主机行的共享锁接到 device 自己的仓储；不读也不写保留配置。"""
+        return self._hosts.lock_configuration_identity(host_id=host_id)
 
     def sources(self, *, station_id: UUID | None) -> tuple[EdgeImpactSource, ...]:
         values: list[EdgeImpactSource] = []

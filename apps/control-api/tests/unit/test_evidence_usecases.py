@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -12,6 +13,7 @@ from factory_sop.evidence.model import (
     EvidenceKind,
     EvidenceOrigin,
     EvidenceReference,
+    EvidenceReferenceLock,
     EvidenceRegistration,
     EvidenceStatus,
 )
@@ -49,6 +51,24 @@ class MemoryEvidence:
         if self.rows.get(value.evidence_id) != expected:
             return False
         self.rows[value.evidence_id] = value
+        return True
+
+    def lock(self, evidence_id: str) -> EvidenceReferenceLock:
+        return EvidenceReferenceLock(reference=self.rows.get(evidence_id), pending_claim=False)
+
+    def lock_playback(self, evidence_id: str, *, expires_at: datetime) -> EvidenceReferenceLock:
+        del expires_at
+        return self.lock(evidence_id)
+
+    def playback_active(self, evidence_id: str, *, now: datetime) -> bool:
+        del evidence_id, now
+        return False
+
+    def mark_media_deleted(self, evidence_id: str) -> bool:
+        current = self.rows.get(evidence_id)
+        if current is None:
+            return False
+        self.rows[evidence_id] = replace(current, status=EvidenceStatus.DELETED)
         return True
 
     def page(

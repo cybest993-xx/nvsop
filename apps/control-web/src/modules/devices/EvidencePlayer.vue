@@ -2,6 +2,8 @@
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import {
   ControlPlaneError,
+  beginEvidenceReview,
+  cancelEvidenceReview,
   createEvidenceAccessContext,
   createEvidenceReclipRequest,
   readEvidence,
@@ -36,6 +38,11 @@ const saving = ref(false)
 const saveError = ref('')
 const savedNotice = ref('')
 const savedRef = ref<HTMLElement | null>(null)
+// 在审保护：进入复核即登记本人在审占用，离开/切换/卸载即退出；提交结论由服务器结案本人占用。
+const reviewHoldError = ref('')
+const reviewHoldActive = ref(false)
+let reviewHoldId: string | null = null
+let reviewHoldEvidenceId: string | null = null
 const conclusionLabels: Record<ReviewConclusion, string> = {
   confirmed: '确认（同意原判定）',
   rejected: '否定（不同意原判定）',
@@ -278,6 +285,75 @@ function invalidateReview(): void {
   savedNotice.value = ''
 }
 
+let reviewHoldToken = 0
+
+/** 尽力取消一条在审占用；服务器是权威，失败不阻塞页面。 */
+async function releaseReviewHold(evidenceId: string, hold: string): Promise<void> {
+  try {
+    await cancelEvidenceReview(evidenceId, { review_id: hold })
+  } catch {
+    // 已结案（提交结论）或网络瞬时失败都按服务器事实处理，不在这里报错。
+  }
+}
+
+/** 退出在审占用：作废在途 begin，并尽力取消本人占用。 */
+async function exitReviewHold(): Promise<void> {
+  reviewHoldToken += 1
+  const evidenceId = reviewHoldEvidenceId
+  const hold = reviewHoldId
+  reviewHoldEvidenceId = null
+  reviewHoldId = null
+  reviewHoldActive.value = false
+  reviewHoldError.value = ''
+  if (evidenceId === null || hold === null) return
+  await releaseReviewHold(evidenceId, hold)
+}
+
+/** 进入在审保护：先退出上一条占用，再登记本条证据；失败禁用提交，过期 begin 主动补偿。 */
+async function enterReviewHold(item: EvidenceReference, guard: number): Promise<void> {
+  if (!mayReview.value) return
+  if (reviewHoldEvidenceId === item.evidence_id && reviewHoldId !== null) return
+  const token = ++reviewHoldToken
+  const staleEvidence = reviewHoldEvidenceId
+  const staleHold = reviewHoldId
+  reviewHoldEvidenceId = null
+  reviewHoldId = null
+  reviewHoldActive.value = false
+  reviewHoldError.value = ''
+  if (staleEvidence !== null && staleHold !== null) {
+    await releaseReviewHold(staleEvidence, staleHold)
+  }
+  const hold = crypto.randomUUID()
+  reviewHoldEvidenceId = item.evidence_id
+  reviewHoldId = hold
+  try {
+    await beginEvidenceReview(item.evidence_id, {
+      review_id: hold,
+      generation: item.generation,
+    })
+  } catch (error) {
+    if (token !== reviewHoldToken || reviewHoldEvidenceId !== item.evidence_id) return
+    reviewHoldId = null
+    reviewHoldEvidenceId = null
+    reviewHoldActive.value = false
+    reviewHoldError.value =
+      error instanceof ControlPlaneError && error.detail
+        ? error.detail
+        : '无法进入在审复核，删除保护未生效，暂不能提交结论。'
+    return
+  }
+  if (
+    token !== reviewHoldToken ||
+    guard !== revision ||
+    reviewHoldEvidenceId !== item.evidence_id
+  ) {
+    // 切换/卸载后才返回的 begin：主动取消，避免留下无人持有的永久占用。
+    await releaseReviewHold(item.evidence_id, hold)
+    return
+  }
+  reviewHoldActive.value = true
+}
+
 async function loadReviews(item: EvidenceReference, guard: number): Promise<void> {
   reviewsError.value = ''
   if (!mayView.value) return
@@ -332,6 +408,11 @@ async function submitReview(): Promise<void> {
     reviewId = null
     reviewIntent = ''
     savedNotice.value = `已保存复核结论：${conclusionLabels[record.conclusion]}（服务器时间 ${reviewTime(record.reviewed_at)}）。`
+    // 提交结论已在服务器结案本人占用；立即重新进入一次新占用，使用户可继续提交独立复核。
+    reviewHoldId = null
+    reviewHoldEvidenceId = null
+    reviewHoldActive.value = false
+    void enterReviewHold(item, revision)
     await nextTick()
     savedRef.value?.focus()
   } catch (error) {
@@ -358,6 +439,7 @@ async function load(): Promise<void> {
   const current = ++revision
   teardown()
   invalidateReview()
+  void exitReviewHold()
   invalidateReclip()
   reclips.value = []
   reclipsError.value = ''
@@ -397,6 +479,7 @@ async function play(item: EvidenceReference): Promise<void> {
   const current = ++revision
   // 复核编辑权限才自动读取历史；只查看权限经显式按钮查询。
   if (mayReview.value) void loadReviews(item, current)
+  void enterReviewHold(item, current)
   // 再切片请求查询只要求查看权限，因此总是读取真实等待/失败状态。
   void loadReclips(item, current)
   let context
@@ -486,6 +569,7 @@ onUnmounted(() => {
   clearInterval(deadlineClock)
   revision += 1
   invalidateReview()
+  void exitReviewHold()
   invalidateReclip()
   teardown()
 })
@@ -550,6 +634,7 @@ onUnmounted(() => {
       </p>
       <p v-if="reviewsLoading" class="muted">正在读取复核历史…</p>
       <p v-if="reviewsError" role="alert">{{ reviewsError }}</p>
+      <p v-if="reviewHoldError" role="alert">{{ reviewHoldError }}</p>
       <button
         v-if="!mayReview && !reviewsLoading && !reviewsError && !reviews.length"
         type="button"
@@ -571,7 +656,7 @@ onUnmounted(() => {
         </li>
       </ul>
       <form v-if="mayReview" class="evidence__form" @submit.prevent="submitReview">
-        <fieldset :disabled="saving">
+        <fieldset :disabled="saving || !reviewHoldActive">
           <legend>提交复核结论</legend>
           <label for="review-conclusion-confirmed">
             <input

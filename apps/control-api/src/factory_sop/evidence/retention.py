@@ -10,6 +10,7 @@ from factory_sop.evidence.repository import EvidenceImpactRepository
 from factory_sop.retention.api import (
     EvidenceImpactGateway,
     EvidenceInstanceUsage,
+    EvidenceReviewUsage,
     ImpactAggregate,
 )
 
@@ -36,6 +37,29 @@ class RepositoryEvidenceImpact(EvidenceImpactGateway):
                 linked=_aggregate(value.linked),
             )
             for value in self._repository.evidence_usage(
+                station_id=None if station_id is None else str(station_id),
+                exposed_from=exposed_from,
+                exposed_to=exposed_to,
+            )
+        )
+
+    def review_usage(
+        self,
+        *,
+        station_id: UUID | None,
+        exposed_from: datetime | None,
+        exposed_to: datetime,
+    ) -> tuple[EvidenceReviewUsage, ...]:
+        """把在审复核状态聚合接到 retention owner 定义的 seam；复核状态归 evidence 拥有。"""
+        return tuple(
+            EvidenceReviewUsage(
+                host_id=value.host_id,
+                station_id=value.station_id,
+                instance_id=value.instance_id,
+                known=value.known,
+                active=value.active,
+            )
+            for value in self._repository.review_usage(
                 station_id=None if station_id is None else str(station_id),
                 exposed_from=exposed_from,
                 exposed_to=exposed_to,

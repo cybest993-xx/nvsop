@@ -23,6 +23,7 @@ from factory_sop.device.repository import (
     StationRepository,
 )
 from factory_sop.device.usecases.commands import authenticate_command_host
+from factory_sop.retention.api import DeletionAuthorityFence
 from nvsop_contracts import (
     ConfigurationBundle,
     ConfiguredCamera,
@@ -62,6 +63,7 @@ class RepositoryDeviceConfigurationGateway(DeviceConfigurationGateway):
         cameras: CameraRepository,
         connectors: ConnectorRepository,
         points: PointRepository,
+        fence: DeletionAuthorityFence | None = None,
     ) -> None:
         self._hosts = hosts
         self._backends = backends
@@ -69,6 +71,7 @@ class RepositoryDeviceConfigurationGateway(DeviceConfigurationGateway):
         self._cameras = cameras
         self._connectors = connectors
         self._points = points
+        self._fence = fence
 
     def authenticate(self, *, host: InferenceHostIdentity, now: datetime) -> None:
         authenticate_command_host(host=host, now=now, hosts=self._hosts)
@@ -249,6 +252,9 @@ class RepositoryDeviceConfigurationGateway(DeviceConfigurationGateway):
     def finalize_configuration(
         self, candidate: ConfigurationBundle, *, minimum_revision: int
     ) -> ConfigurationBundle:
+        # 签发新配置会改写删除资格所依据的配置身份；已授权未结案删除期间拒绝推进修订。
+        if self._fence is not None:
+            self._fence.ensure_mutable()
         revision = self._hosts.next_configuration_revision(
             host_id=UUID(candidate.host_id),
             content_sha256=candidate.effective_sha256,

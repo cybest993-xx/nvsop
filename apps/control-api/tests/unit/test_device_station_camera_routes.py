@@ -105,6 +105,13 @@ class RefusingInferenceHosts(FakeInferenceHosts):
         raise DeviceRefusedError(self.refusal)
 
 
+class _NoopDeletionAuthorityFence:
+    """该路由测试不建立真实删除认领；权威锁与检查是无操作。"""
+
+    def ensure_mutable(self) -> None:
+        return None
+
+
 class Center:
     """已登录的应用；每个仓储都在其公开接口处被替换。"""
 
@@ -130,6 +137,9 @@ class Center:
         self.app.dependency_overrides[device_dependencies.cameras] = lambda: self.cameras
         self.app.dependency_overrides[device_dependencies.connectors] = lambda: self.connectors
         self.app.dependency_overrides[device_dependencies.points] = lambda: self.points
+        self.app.dependency_overrides[device_dependencies.deletion_authority_fence] = lambda: (
+            _NoopDeletionAuthorityFence()
+        )
         self.client = TestClient(self.app, base_url="https://testserver")
         self.users.register(login_name=CREDENTIALS["login_name"], password=CREDENTIALS["password"])
         assert self.client.post(f"{API_PREFIX}/auth/session", json=CREDENTIALS).status_code == 201

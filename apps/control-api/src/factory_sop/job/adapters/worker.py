@@ -1673,7 +1673,11 @@ async def run_retention_sweep_cron(ctx: Mapping[str, Any]) -> None:
     """复用既有 worker 的调度；同步数据库工作不占用事件循环。"""
     runner = cast(Callable[[], None] | None, ctx.get("retention_sweep"))
     if runner is not None:
-        await asyncio.to_thread(runner)
+        lock = cast(asyncio.Lock, ctx["retention_sweep_lock"])
+        if lock.locked():
+            return
+        async with lock:
+            await asyncio.to_thread(runner)
 
 
 def build_worker(
@@ -1714,7 +1718,6 @@ def build_worker(
                     run_retention_sweep_cron,
                     second=set(range(60)),
                     run_at_startup=True,
-                    job_id="retention-sweep",
                     keep_result=0,
                     max_tries=1,
                 )
@@ -1735,6 +1738,7 @@ def build_worker(
             "ddm_executor": ddm_executor,
             "current_caller_resolver": current_caller_resolver,
             "retention_sweep": retention_sweep,
+            "retention_sweep_lock": asyncio.Lock(),
             "blocking_job_slots": asyncio.Semaphore(_BLOCKING_JOB_LIMIT),
         },
         max_jobs=_BLOCKING_JOB_LIMIT,

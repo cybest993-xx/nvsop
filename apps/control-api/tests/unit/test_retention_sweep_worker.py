@@ -1,10 +1,13 @@
 """已有 ARQ worker 按秒级配置推进周期，提交后才记本进程已执行。"""
 
+import asyncio
+import threading
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from factory_sop.job.adapters.worker import run_retention_sweep_cron
 from factory_sop.settings import Settings
 from factory_sop.worker_entrypoint import retention_sweep_runner
 
@@ -52,3 +55,27 @@ def test_failed_commit_does_not_suppress_same_cycle_retry() -> None:
         runner()
     assert sweep.call_count == 2
     assert session.commit.call_count == 2
+
+
+def test_overlapping_cron_does_not_start_a_second_sweep() -> None:
+    started = threading.Event()
+    finish = threading.Event()
+    calls: list[int] = []
+
+    def busy() -> None:
+        calls.append(1)
+        started.set()
+        finish.wait(5)
+
+    async def exercise() -> None:
+        ctx = {"retention_sweep": busy, "retention_sweep_lock": asyncio.Lock()}
+        first = asyncio.create_task(run_retention_sweep_cron(ctx))
+        try:
+            assert await asyncio.to_thread(started.wait, 2)
+            await run_retention_sweep_cron(ctx)
+        finally:
+            finish.set()
+        await first
+
+    asyncio.run(exercise())
+    assert calls == [1]

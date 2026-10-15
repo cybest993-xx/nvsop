@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 import unittest
 from typing import cast
@@ -39,7 +40,7 @@ class _DeletionStub:
         assert 0 < limit <= 100
         self.calls += 1
         if self._fail:
-            raise RuntimeError("transient center fault")
+            raise sqlite3.OperationalError("injected state failure")
         return (EvidenceDeletionExecution("evidence/a", "deleted", "retention_expired"),)
 
 
@@ -69,11 +70,16 @@ class EvidenceDeletionSchedulingTests(unittest.TestCase):
             all("started_at=" in line and "finished_at=" in line for line in logs.output)
         )
 
-    def test_drain_failure_does_not_stop_the_cycle(self) -> None:
+    def test_unknown_state_stops_deletion_without_retrying(self) -> None:
         executor = _DeletionStub(fail=True)
-        _runner(executor, stop_after_waits=2)._run_evidence_deletion()
-        # 两次 drain 都发生: 异常只影响本轮, 循环按周期间隔继续。
-        self.assertEqual(executor.calls, 2)
+        with self.assertLogs("edge_runtime", level="ERROR") as logs:
+            _runner(executor, stop_after_waits=2)._run_evidence_deletion()
+        self.assertEqual(executor.calls, 1)
+        self.assertIn("status=stopped", logs.output[0])
+        self.assertIn("deleted=unknown", logs.output[0])
+        self.assertIn("scope=registered_evidence", logs.output[0])
+        self.assertIn("started_at=", logs.output[0])
+        self.assertIn("finished_at=", logs.output[0])
 
 
 if __name__ == "__main__":

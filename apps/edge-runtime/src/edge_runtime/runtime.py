@@ -900,7 +900,7 @@ class _RuntimeCycleRunner:
             worker.run_forever(should_stop=self._stop_requested, limit=_REPORT_WORK_BUDGET)
 
     def _run_evidence_deletion(self) -> None:
-        """驱动 #206 删除执行器的周期调度: 有界 drain, 失败只影响本轮。"""
+        """驱动 #206 删除执行器: 有界 drain, 未知执行状态停止删除而不影响判定。"""
         executor = self._runtime._evidence_deletion
         if executor is None:
             return
@@ -909,10 +909,17 @@ class _RuntimeCycleRunner:
             try:
                 results = executor.drain(limit=_REPORT_WORK_BUDGET)
             except Exception as error:
-                _logger.warning(
-                    "edge.evidence_deletion.failed error_type=%s",
+                _logger.exception(
+                    "edge.evidence_deletion.failed status=stopped started_at=%s "
+                    "finished_at=%s scope=registered_evidence deleted=unknown "
+                    "skipped=unknown failed=unknown reason=execution_state_unknown error_type=%s",
+                    started_at,
+                    datetime.now(UTC).isoformat(),
                     type(error).__name__,
                 )
+                # 中心不可达已由执行器返回跳过; 未处理异常可能是 unlink 后账本失败。
+                # 停止本周期的删除线程, 保留账本供修复后重启收敛, 不影响实时判定。
+                return
             else:
                 _logger.info(
                     "edge.evidence_deletion.sweep started_at=%s finished_at=%s "

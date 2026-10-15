@@ -10,6 +10,7 @@ from typing import Protocol, assert_never
 from uuid import UUID
 
 from factory_sop.auth.api import Caller, Permission, authorize
+from factory_sop.observability import get_logger
 from factory_sop.retention.errors import RetentionRefusalCode, RetentionRefusedError
 from factory_sop.retention.model import (
     DEFAULT_RETENTION_POLICY,
@@ -44,6 +45,8 @@ from factory_sop.retention.sweep import (
     sweep_cycle_id,
 )
 from nvsop_contracts import EvidenceDeletionClaimStatus, ResolvedRetentionPolicy
+
+_logger = get_logger(__name__)
 
 # 该字段的影响事实归推理机本地 SQLite 所有；没有已接通的只读 Edge 统计通道时明确不可估算，
 # 不能按零影响放行（#205 只补齐只读估算通道，不实现 #206 删除资格或 #207 回收）。
@@ -1021,6 +1024,12 @@ def run_retention_sweep(
                 now=now,
             )
     except Exception as error:
+        _logger.exception(
+            "retention.sweep.phase_failed",
+            cycle_id=str(cycle_id),
+            phase="records",
+            error_type=type(error).__name__,
+        )
         failures.append(f"records:{type(error).__name__}")
     try:
         with ledger.phase():
@@ -1028,6 +1037,12 @@ def run_retention_sweep(
                 cutoffs=disposal_cutoffs, limit=batch_limit, now=now
             )
     except Exception as error:
+        _logger.exception(
+            "retention.sweep.phase_failed",
+            cycle_id=str(cycle_id),
+            phase="disposals",
+            error_type=type(error).__name__,
+        )
         failures.append(f"disposals:{type(error).__name__}")
     result = RetentionSweepResult(
         scope=scope,

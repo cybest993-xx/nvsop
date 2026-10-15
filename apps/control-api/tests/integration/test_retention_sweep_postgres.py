@@ -530,14 +530,35 @@ def test_partial_failure_keeps_success_counts_and_rolls_back_failed_owner_phase(
             committed_session.execute(text("SELECT 1 / 0"))
             raise AssertionError("unreachable")
 
-    result = run_retention_sweep(
-        policies=PostgresRetentionPolicyRepository(committed_session),
-        records=PostgresStationRetentionOverrideRepository(committed_session),
-        ledger=PostgresRetentionSweepRepository(committed_session),
-        executor=FailingDisposals(session=committed_session, evidence_protected=lambda *_: False),
-        now=NOW,
-        interval_seconds=SWEEP_INTERVAL,
-    )
+    import json
+    from io import StringIO
+
+    import structlog
+
+    from factory_sop.observability import configure_logging
+
+    stream = StringIO()
+    previous_logging = structlog.get_config()
+    try:
+        configure_logging(log_level="info", stream=stream)
+        result = run_retention_sweep(
+            policies=PostgresRetentionPolicyRepository(committed_session),
+            records=PostgresStationRetentionOverrideRepository(committed_session),
+            ledger=PostgresRetentionSweepRepository(committed_session),
+            executor=FailingDisposals(
+                session=committed_session, evidence_protected=lambda *_: False
+            ),
+            now=NOW,
+            interval_seconds=SWEEP_INTERVAL,
+        )
+    finally:
+        structlog.configure(**previous_logging)
+    diagnostic = json.loads(stream.getvalue())
+    assert diagnostic["event"] == "retention.sweep.phase_failed"
+    assert diagnostic["phase"] == "disposals"
+    assert diagnostic["error_type"] == "DataError"
+    assert "division by zero" in diagnostic["exception"]
+    assert "SELECT 1 / 0" in diagnostic["exception"]
     assert result is not None
     assert not result.completed
     assert result.records is not None
@@ -546,7 +567,8 @@ def test_partial_failure_keeps_success_counts_and_rolls_back_failed_owner_phase(
     assert result.failure_code == "disposals:DataError"
     committed_session.commit()
     with engine.connect() as connection:
-        row = connection.execute(text("SELECT status, result FROM retention_sweep")).one()
+        row = connection.execute(text("SELECT cycle_id, status, result FROM retention_sweep")).one()
+    assert diagnostic["cycle_id"] == str(row.cycle_id)
     assert row.status == "failed"
     assert row.result["records"]["deleted"] == 2
     assert row.result["disposals"] is None

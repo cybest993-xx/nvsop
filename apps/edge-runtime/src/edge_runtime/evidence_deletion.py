@@ -120,6 +120,7 @@ class EvidenceDeletionExecutor:
             results.append(self._resume(entry, revision=revision, digest=digest))
         budget = None if limit is None else limit - len(journal)
         pending: list[tuple[str, int, EvidenceDeletionCandidate]] = []
+        pending_ids: set[str] = set()
         if budget is None:
             candidates = self._local_candidates()
         else:
@@ -133,8 +134,12 @@ class EvidenceDeletionExecutor:
                 self._candidate_iterator = None
                 break
             inspected += 1
-            if not self._state.deletion_journal(evidence_id=item[2].evidence_id, limit=1):
+            evidence_id = item[2].evidence_id
+            if evidence_id not in pending_ids and not self._state.deletion_journal(
+                evidence_id=evidence_id, limit=1
+            ):
                 pending.append(item)
+                pending_ids.add(evidence_id)
         for offset in range(0, len(pending), self._batch_size):
             batch = pending[offset : offset + self._batch_size]
             request = EvidenceDeletionRequest(

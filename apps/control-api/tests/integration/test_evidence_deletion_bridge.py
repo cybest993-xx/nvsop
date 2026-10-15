@@ -194,7 +194,7 @@ def _seed_local_and_register(
         latched_at="2026-10-09T00:00:00+00:00",
         latched_monotonic=HostInstant(1),
     )
-    (pending,) = station.pending_evidence()
+    (pending,) = (value for value in station.pending_evidence() if value.instance_id == instance_id)
     identity = evidence_media_identity(host_id, pending.queue_id)
     artifact = directory / evidence_artifact_directory(identity, 95.0, 105.0)
     artifact.mkdir(parents=True)
@@ -224,7 +224,9 @@ def _seed_local_and_register(
         covered_from=95.0,
         covered_to=105.0,
     )
-    (finalized,) = station.pending_evidence()
+    (finalized,) = (
+        value for value in station.pending_evidence() if value.instance_id == instance_id
+    )
     payloads = evidence_registration_payloads(
         finalized, host_id=host_id, station_id=station_id, directory=directory
     )

@@ -2,29 +2,17 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import replace
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from edge_runtime.evidence_deletion import EvidenceDeletionExecutor, EvidenceDeletionTransportError
-from edge_runtime.evidence_media import evidence_artifact_directory, evidence_media_identity
-from edge_runtime.judgment.evidence import EvidenceClip
-from edge_runtime.judgment.model import (
-    Decision,
-    EvidenceSpan,
-    HostInstant,
-    Instance,
-    JudgmentState,
-    Lifecycle,
-    Ordering,
-    RuntimeParameters,
-    Template,
+from edge_runtime.evidence_deletion import (  # type: ignore[import-untyped]
+    EvidenceDeletionExecutor,
+    EvidenceDeletionTransportError,
 )
-from edge_runtime.judgment.reasons import Verdict
-from edge_runtime.local_state import LocalState, open_local_state
+from edge_runtime.local_state import open_local_state  # type: ignore[import-untyped]
 from sqlalchemy import Engine, text
+from test_evidence_deletion_bridge import _seed_local_and_register
 from test_evidence_deletion_protection import (
     NOW,
     RECEIVED_AT,
@@ -43,13 +31,7 @@ from factory_sop.evidence.adapters.repository import (
     PostgresEvidenceRepository,
     PostgresEvidenceReviewRepository,
 )
-from factory_sop.evidence.model import (
-    EvidenceKind,
-    EvidenceOrigin,
-    EvidenceReference,
-    EvidenceRegistration,
-    EvidenceStatus,
-)
+from factory_sop.evidence.model import EvidenceStatus
 from factory_sop.evidence.reviews import begin_review
 from factory_sop.persistence import session_factory
 from factory_sop.retention.deletion import (
@@ -136,65 +118,13 @@ class _PostgresTransport:
             return EvidenceDeletionResultResponse.from_wire(result.to_wire())
 
 
-def _local_media(state: LocalState, root: Path, station_id: str, host_id: str) -> tuple[Path, Path]:
-    station = state.station(station_id)
-    moment = HostInstant(100)
-    station.commit(
-        state=JudgmentState(
-            template=Template(steps=("step",), ordering=Ordering.ORDERED, start_signal="step"),
-            parameters=RuntimeParameters(idle_timeout=300, step_deadline=60),
-        ),
-        decisions=(
-            Decision(
-                instance_id=1,
-                verdict=Verdict.PASS,
-                reasons=(),
-                violations=(),
-                lifecycle=Lifecycle.CLOSED_BY_COMPLETE_SET,
-                evidence=EvidenceSpan.at(moment),
-            ),
-        ),
-        evidence=(EvidenceClip(1, moment, HostInstant(95), HostInstant(105)),),
-        closed_instances=(Instance(1, moment, moment),),
-        report_provenance={},
-        latched_at="2026-01-05T00:00:00Z",
-        latched_monotonic=moment,
-    )
-    (pending,) = station.pending_evidence()
-    artifact = root / evidence_artifact_directory(
-        evidence_media_identity(host_id, pending.queue_id), 95, 105
-    )
-    artifact.mkdir(parents=True)
-    clip, still = artifact / "camera.mp4", artifact / "camera.jpg"
-    clip.write_bytes(b"synthetic evidence clip")
-    still.write_bytes(b"synthetic evidence keyframe")
-    media = json.dumps(
-        [
-            {
-                "media_path": "camera",
-                "clip_file": clip.name,
-                "keyframe_file": still.name,
-                "material_generation": "original",
-                "segment_generations": {"original": 1},
-            }
-        ]
-    )
-    station.record_evidence_slice(
-        pending.queue_id, at=HostInstant(110), media_results=media, covered_from=95, covered_to=105
-    )
-    station.mark_evidence_registered(
-        pending.queue_id, at=HostInstant(120), expected_media_results=media
-    )
-    return clip, still
-
-
 def test_real_owners_keep_review_media_and_replay_deleted_feedback(
     engine: Engine,
     runtime_topology: RuntimeTopology,
     tmp_path: Path,
 ) -> None:
     topology = runtime_topology
-    host, station = str(topology.host.id), str(topology.station.id)
+    host = str(topology.host.id)
     root = tmp_path / "media"
     state = open_local_state(str(tmp_path / "local.sqlite"))
     identifiers: list[str] = []
@@ -203,35 +133,12 @@ def test_real_owners_keep_review_media_and_replay_deleted_feedback(
         revision = _configure_current(topology, engine, digest=bundle.effective_sha256)
         bundle = replace(bundle, config_revision=revision)
         state.configuration().confirm(bundle, confirmed_at=1)
-        clip, still = _local_media(state, root, station, host)
+        clip, expired_id = _seed_local_and_register(engine, topology, state, root, instance_id=1)
+        still, protected_id = _seed_local_and_register(engine, topology, state, root, instance_id=2)
+        identifiers.extend((expired_id, protected_id))
         _seed_instance(engine, topology, instance_id=1)
+        _seed_instance(engine, topology, instance_id=2)
         with session_factory(engine)() as session:
-            for path in (clip, still):
-                reference = path.relative_to(root).as_posix()
-                identifiers.append(reference)
-                assert PostgresEvidenceRepository(session).insert(
-                    EvidenceReference(
-                        EvidenceRegistration(
-                            evidence_id=reference,
-                            host_id=host,
-                            station_id=station,
-                            instance_id=1,
-                            violation_id=None,
-                            kind=EvidenceKind.CLIP,
-                            origin=EvidenceOrigin.AUTOMATIC,
-                            anchor=100,
-                            window_start=95,
-                            window_end=105,
-                            generation="original",
-                            sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
-                            size=path.stat().st_size,
-                            reference=reference,
-                        ),
-                        EvidenceStatus.AVAILABLE,
-                        None,
-                        RECEIVED_AT,
-                    )
-                )
             begin_review(
                 _caller(),
                 review_id=uuid4(),

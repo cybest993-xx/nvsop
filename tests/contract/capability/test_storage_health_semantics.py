@@ -45,12 +45,12 @@ class HealthWireCollector:
     """
 
     def __init__(self) -> None:
-        self.health_reports: list[ReportedHealth] = []
+        self.health_reports: list[dict[str, object]] = []
 
     def send_health(
         self, report: ReportedHealth, *, configuration: ConfigurationBundle | None
     ) -> None:
-        self.health_reports.append(report)
+        self.health_reports.append(report.to_wire())
 
     def send_decision(
         self, report: ReportedDecision, *, configuration: ConfigurationBundle | None
@@ -119,12 +119,15 @@ class StorageHealthSemanticsContractTest(unittest.TestCase):
         # 受支持的 wire 语义里 ``delivering`` 是唯一的健康取值: 恢复必须以
         # delivering 表达, 失败必须以 storage_unavailable + 原因码表达, 任何
         # 其它取值都会被保守地按受损处理, 永远无法恢复。
-        self.assertEqual("storage_unavailable", failure.status)
-        self.assertEqual("STORAGE_UNAVAILABLE", failure.reason_code)
-        self.assertEqual("delivering", recovery.status)
-        self.assertIsNone(recovery.reason_code)
+        self.assertEqual("storage_unavailable", failure["status"])
+        self.assertEqual("STORAGE_UNAVAILABLE", failure["reason_code"])
+        self.assertEqual("delivering", recovery["status"])
+        self.assertIsNone(recovery["reason_code"])
 
-        detail = json.loads(failure.detail or "{}")
+        detail_wire = failure["detail"]
+        if not isinstance(detail_wire, str):
+            self.fail("storage health detail must be JSON text")
+        detail = json.loads(detail_wire)
         self.assertEqual("recording", detail["role"])
         self.assertEqual(90.0, detail["high_watermark_percent"])
         self.assertEqual(80.0, detail["recovery_watermark_percent"])

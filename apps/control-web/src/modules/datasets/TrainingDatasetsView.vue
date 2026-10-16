@@ -5,6 +5,7 @@ import { useRoute } from 'vue-router'
 
 import {
   ControlPlaneError,
+  cancelDdmTrainingCommand,
   createAnnotationContext,
   confirmVideoUpload,
   downloadDatasetArtifact,
@@ -147,6 +148,7 @@ const selectedDdmCommandId = ref('')
 const loadingDdmCommands = ref(false)
 const loadingDdmResult = ref(false)
 const ddmCommandsFailed = ref(false)
+const cancellingCommandId = ref<string | null>(null)
 const loadingUsage = ref(false)
 const candidateKind = ref<RegisterVlmCandidateInput['kind']>('gqa')
 const candidateActionListRevision = ref(1)
@@ -445,6 +447,8 @@ function ddmCommandStatusLabel(status: string): string {
       return '已完成并登记结果'
     case 'failed':
       return '已失败'
+    case 'cancelled':
+      return '已取消（未派发）'
     default:
       return `未知应用状态（${status}）`
   }
@@ -460,6 +464,8 @@ function ddmCommandStatusTag(status: string): 'success' | 'warning' | 'danger' |
     case 'result_unknown':
     case 'bound':
       return 'warning'
+    case 'cancelled':
+      return 'info'
     default:
       return 'info'
   }
@@ -634,6 +640,7 @@ function chooseDataset(): void {
   ddmResult.value = null
   selectedDdmCommandId.value = ''
   ddmCommandsFailed.value = false
+  cancellingCommandId.value = null
   // 切换数据集立即失效在途的结果读取，避免迟到响应填充新页面。
   ddmResultRequestGeneration += 1
   void loadMembers(1)
@@ -715,11 +722,13 @@ async function loadDdmCommands(): Promise<boolean> {
     ddmResult.value = null
     selectedDdmCommandId.value = ''
     ddmCommandsFailed.value = false
+    cancellingCommandId.value = null
     loadingDdmCommands.value = false
     return true
   }
   loadingDdmCommands.value = true
   ddmCommandsFailed.value = false
+  cancellingCommandId.value = null
   try {
     const commands = await loadAllPages((page, pageSize) =>
       listDdmTrainingCommands(datasetId, page, pageSize),
@@ -788,6 +797,36 @@ async function loadDdmResult(commandId: string): Promise<void> {
     }
   } finally {
     if (requestGeneration === ddmResultRequestGeneration) loadingDdmResult.value = false
+  }
+}
+
+async function cancelPendingDdmCommand(command: DdmTrainingCommand): Promise<void> {
+  const datasetId = selectedDatasetId.value
+  if (!mayEdit.value || !datasetId) return
+  if (command.status !== 'pending') return
+  if (cancellingCommandId.value !== null) return
+
+  resetFailure()
+  const requestGeneration = ddmRequestGeneration
+  cancellingCommandId.value = command.id
+  try {
+    const updated = await cancelDdmTrainingCommand(datasetId, command.id)
+    if (requestGeneration !== ddmRequestGeneration || selectedDatasetId.value !== datasetId) {
+      return
+    }
+    ddmCommands.value = ddmCommands.value.map((existing) =>
+      existing.id === updated.id ? updated : existing,
+    )
+    ElMessage.success('DDM 训练命令已取消')
+  } catch (error) {
+    if (requestGeneration !== ddmRequestGeneration || selectedDatasetId.value !== datasetId) {
+      return
+    }
+    recordFailure(error)
+  } finally {
+    if (cancellingCommandId.value === command.id) {
+      cancellingCommandId.value = null
+    }
   }
 }
 
@@ -1506,6 +1545,7 @@ onUnmounted(() => {
   usageRequestGeneration += 1
   ddmRequestGeneration += 1
   ddmResultRequestGeneration += 1
+  cancellingCommandId.value = null
   clearPolling()
   cancelAnnotationPreparation()
 })
@@ -1931,7 +1971,7 @@ onUnmounted(() => {
         <div>
           <h2 id="ddm-commands-heading">DDM 训练命令</h2>
           <p>
-            应用受理、基座原状态与结果登记是三个独立事实；未知状态按原值显示。本页只读，不启动或取消训练。
+            应用受理、基座原状态与结果登记是三个独立事实；未知状态按原值显示。仅支持取消未派发命令，不启动训练。
           </p>
         </div>
         <ElButton link type="primary" :disabled="loadingDdmCommands" @click="refreshDdmCommands">
@@ -1966,9 +2006,24 @@ onUnmounted(() => {
               <ElTag :type="ddmCommandStatusTag(command.status)" disable-transitions>
                 {{ ddmCommandStatusLabel(command.status) }}
               </ElTag>
+              <small v-if="command.cancelled_at">
+                取消时间：{{ formatTime(command.cancelled_at) }}
+              </small>
+              <small v-if="command.cancelled_by"> 取消人：{{ command.cancelled_by }} </small>
               <small v-if="command.failure_code" class="datasets__failure-code">
                 {{ command.failure_code }}：{{ command.failure_detail }}
               </small>
+              <div v-if="mayEdit && command.status === 'pending'" class="datasets__command-action">
+                <ElButton
+                  link
+                  type="danger"
+                  :disabled="cancellingCommandId !== null"
+                  :loading="cancellingCommandId === command.id"
+                  @click="cancelPendingDdmCommand(command)"
+                >
+                  取消命令
+                </ElButton>
+              </div>
             </td>
             <td>
               <small>基座状态：{{ ddmBaseStatusLabel(command.base_status) }}</small>
@@ -2726,6 +2781,10 @@ onUnmounted(() => {
 .datasets__ddm-table th,
 .datasets__ddm-table td {
   font-size: 0.9rem;
+}
+
+.datasets__command-action {
+  margin-top: 0.35rem;
 }
 
 .datasets__ddm-result {

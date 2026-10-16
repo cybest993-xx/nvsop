@@ -103,10 +103,9 @@ class ArtifactStatus(StrEnum):
 class DdmTrainingCommandStatus(StrEnum):
     """DDM 训练应用命令的持久化状态。
 
-    S073 把「发送前的持久派发意图」与「真实基座任务身份」落到命令行；S074 追加真实结果
-    登记与在途约束释放。``bound`` 与 ``result_unknown`` 都是仍在途的保护状态，``failed``
-    只表示可以证明基座未开始或基座已终止失败的确定终态；``completed`` 表示基座成功且结果
-    已登记，是唯一释放后端保护的发布终态。
+    ``bound`` 与 ``result_unknown`` 都是仍在途的保护状态；``failed`` 表示可以证明
+    基座未开始或已终止失败；``completed`` 表示基座成功且结果已登记。
+    ``cancelled`` 仅表示派发意图前取消，不证明已派发的基座任务停止。
     """
 
     PENDING = "pending"
@@ -114,6 +113,7 @@ class DdmTrainingCommandStatus(StrEnum):
     BOUND = "bound"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class DdmTrainingResultStatus(StrEnum):
@@ -252,6 +252,8 @@ class DdmTrainingCommand:
     base_observation: Mapping[str, Any] | None = None
     failure_code: str | None = None
     failure_detail: str | None = None
+    cancelled_by: UUID | None = None
+    cancelled_at: datetime | None = None
     # 最后一次成功读取基座原状态的时刻；查询失败不清空它，也不改写基座原状态。
     last_observed_at: datetime | None = None
     # 查询基座失败的独立诊断；与派发失败/结果失败分离，未知或不可达绝不表示完成。

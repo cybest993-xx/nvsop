@@ -1688,6 +1688,14 @@ export type DdmTrainingCommandView = {
    */
   base_total_steps: number | null
   /**
+   * Cancelled At
+   */
+  cancelled_at?: string | null
+  /**
+   * Cancelled By
+   */
+  cancelled_by?: string | null
+  /**
    * Created At
    */
   created_at: string | null
@@ -12433,6 +12441,66 @@ export type ReadDdmTrainingCommandResponses = {
 
 export type ReadDdmTrainingCommandResponse =
   ReadDdmTrainingCommandResponses[keyof ReadDdmTrainingCommandResponses]
+
+export type CancelDdmTrainingCommandData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands/{command_id}/cancel'
+}
+
+export type CancelDdmTrainingCommandErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type CancelDdmTrainingCommandError =
+  CancelDdmTrainingCommandErrors[keyof CancelDdmTrainingCommandErrors]
+
+export type CancelDdmTrainingCommandResponses = {
+  /**
+   * Successful Response
+   */
+  200: DdmTrainingCommandView
+}
+
+export type CancelDdmTrainingCommandResponse =
+  CancelDdmTrainingCommandResponses[keyof CancelDdmTrainingCommandResponses]
 
 export type ReadDdmTrainingResultData = {
   body?: never

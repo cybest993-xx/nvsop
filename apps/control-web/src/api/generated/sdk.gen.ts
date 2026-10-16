@@ -9,6 +9,9 @@ import type {
   BindTemplateVersionData,
   BindTemplateVersionErrors,
   BindTemplateVersionResponses,
+  CancelDdmTrainingCommandData,
+  CancelDdmTrainingCommandErrors,
+  CancelDdmTrainingCommandResponses,
   CancelEvidenceReviewData,
   CancelEvidenceReviewErrors,
   CancelEvidenceReviewResponses,
@@ -2883,6 +2886,23 @@ export const readDdmTrainingCommand = <ThrowOnError extends boolean = false>(
     ThrowOnError
   >({
     url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands/{command_id}',
+    ...options,
+  })
+
+/**
+ * Cancel A Ddm Training Command
+ *
+ * 仅取消尚未进入派发的命令；已派发时返回冲突，不宣称基座已停止。
+ */
+export const cancelDdmTrainingCommand = <ThrowOnError extends boolean = false>(
+  options: Options<CancelDdmTrainingCommandData, ThrowOnError>,
+): RequestResult<CancelDdmTrainingCommandResponses, CancelDdmTrainingCommandErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    CancelDdmTrainingCommandResponses,
+    CancelDdmTrainingCommandErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands/{command_id}/cancel',
     ...options,
   })
 

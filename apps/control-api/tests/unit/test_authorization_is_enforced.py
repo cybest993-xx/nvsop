@@ -517,6 +517,10 @@ ROUTES = [
     ),
     Target(
         "POST",
+        "/training-datasets/{dataset_id}/ddm-training-commands/{command_id}/cancel",
+    ),
+    Target(
+        "POST",
         "/execution/handovers",
         {
             "station_id": "{station_id}",
@@ -1183,6 +1187,7 @@ class Backend:
             "member_id": DATASET_MEMBER_ID,
             "attempt_id": DATASET_ATTEMPT_ID,
             "submission_id": DATASET_ATTEMPT_ID,
+            "command_id": DATASET_ATTEMPT_ID,
             "handover_id": UUID(int=2),
             "evidence_id": EVIDENCE_ID,
         }

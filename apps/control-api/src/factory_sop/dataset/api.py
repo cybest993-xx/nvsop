@@ -357,6 +357,7 @@ class DdmTrainingJobOutcome(StrEnum):
 
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
     PENDING = "pending"
     LEASE_LOST = "lease_lost"
 

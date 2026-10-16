@@ -498,3 +498,107 @@ def test_duplicate_result_is_idempotent_for_the_same_outcome(
     assert replayed.status_code == 200, replayed.text
     read_back = client.get(f"{NORMAL_HANDOVERS}/{record['handover_id']}", headers=csrf)
     assert read_back.json()["status"] == "confirmed"
+
+
+def test_unknown_target_host_is_a_structured_not_found(
+    client: TestClient, arrangement: dict[str, object]
+) -> None:
+    csrf = _login(client, str(arrangement["operator"]))
+    response = client.post(
+        NORMAL_HANDOVERS,
+        headers={**csrf, "Idempotency-Key": f"missing-host-{new_id().hex}"},
+        json={
+            "station_id": str(arrangement["station_id"]),
+            "from_host_id": str(arrangement["from_host_id"]),
+            "to_host_id": str(new_id()),
+        },
+    )
+    assert response.status_code == 404, response.text
+    assert response.json()["error_code"] == "HANDOVER_TARGET_NOT_FOUND"
+
+
+def test_claim_persists_timeout_without_a_browser_read(
+    client: TestClient, host_client: TestClient, engine: Engine, arrangement: dict[str, object]
+) -> None:
+    csrf = _login(client, str(arrangement["operator"]))
+    record = _create_normal_handover(client, arrangement, csrf)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE execution_normal_handover SET requested_at = now() - INTERVAL '10 minutes',"
+                " expires_at = now() - INTERVAL '5 minutes' WHERE handover_id = :hid"
+            ),
+            {"hid": record["handover_id"]},
+        )
+    claim = host_client.get(
+        CLAIM_PATH, headers=_host_headers(arrangement, method="GET", path=CLAIM_PATH)
+    )
+    assert claim.status_code == 204, claim.text
+    with engine.connect() as connection:
+        status, timed_out_at = connection.execute(
+            text(
+                "SELECT status, timed_out_at FROM execution_normal_handover"
+                " WHERE handover_id = :hid"
+            ),
+            {"hid": record["handover_id"]},
+        ).one()
+    assert status == "timed_out"
+    assert timed_out_at is not None
+
+
+def test_claim_is_the_irreversible_cancel_boundary(
+    client: TestClient, host_client: TestClient, arrangement: dict[str, object]
+) -> None:
+    csrf = _login(client, str(arrangement["operator"]))
+    record = _create_normal_handover(client, arrangement, csrf)
+    claim = host_client.get(
+        CLAIM_PATH, headers=_host_headers(arrangement, method="GET", path=CLAIM_PATH)
+    )
+    assert claim.status_code == 200, claim.text
+    cancelled = client.post(
+        f"{NORMAL_HANDOVERS}/{record['handover_id']}/cancellation", headers=csrf
+    )
+    assert cancelled.status_code == 409, cancelled.text
+    assert cancelled.json()["error_code"] == "NORMAL_HANDOVER_ALREADY_CLAIMED"
+    assert client.get(f"{NORMAL_HANDOVERS}/{record['handover_id']}").json()["status"] == "pending"
+
+
+def test_cancel_before_claim_never_delivers_a_stop_command(
+    client: TestClient, host_client: TestClient, arrangement: dict[str, object]
+) -> None:
+    csrf = _login(client, str(arrangement["operator"]))
+    record = _create_normal_handover(client, arrangement, csrf)
+    cancelled = client.post(
+        f"{NORMAL_HANDOVERS}/{record['handover_id']}/cancellation", headers=csrf
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["status"] == "cancelled"
+    claim = host_client.get(
+        CLAIM_PATH, headers=_host_headers(arrangement, method="GET", path=CLAIM_PATH)
+    )
+    assert claim.status_code == 204, claim.text
+
+
+def test_concurrent_requests_for_one_station_have_one_winner_not_a_server_error(
+    client: TestClient, arrangement: dict[str, object]
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    csrf = _login(client, str(arrangement["operator"]))
+
+    def create(key: str) -> int:
+        return client.post(
+            NORMAL_HANDOVERS,
+            headers={**csrf, "Idempotency-Key": key},
+            json={
+                "station_id": str(arrangement["station_id"]),
+                "from_host_id": str(arrangement["from_host_id"]),
+                "to_host_id": str(arrangement["to_host_id"]),
+            },
+        ).status_code
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        results = list(
+            workers.map(create, (f"concurrent-{new_id().hex}", f"concurrent-{new_id().hex}"))
+        )
+    assert sorted(results) == [201, 409]

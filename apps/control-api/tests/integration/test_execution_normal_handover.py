@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
-from sqlalchemy import TextClause
+from sqlalchemy import TextClause, text
 from sqlalchemy.orm import Session as DatabaseSession
 
 from factory_sop.auth.authorization import Caller
@@ -83,6 +83,11 @@ class RecordingCommandGateway:
     def claim(self, **kwargs: object) -> PendingCommand | None:
         del kwargs
         return None
+
+    def lock_claim(
+        self, *, command_id: UUID, now: datetime, host: InferenceHostIdentity | None = None
+    ) -> bool:
+        return False
 
     def complete(
         self,
@@ -274,7 +279,7 @@ def test_identity_mismatch_on_a_replayed_key_is_refused(
     commands = RecordingCommandGateway()
     _create(session, operator, station, from_host, to_host, commands)
 
-    # 冻结后租约被真实替换: 同一幂等键重放的身份与冻结记录不再一致。
+    # 后继租约不改变原键绑定; 同一键修改请求的目标机仍必须拒绝。
     session.execute(
         text_delete_grant(station.id),
     )
@@ -295,7 +300,7 @@ def test_identity_mismatch_on_a_replayed_key_is_refused(
             caller=_caller(operator),
             station_id=station.id,
             from_host_id=from_host.id,
-            to_host_id=to_host.id,
+            to_host_id=from_host.id,
             idempotency_key="handover-key-1",
             now=NOW + timedelta(seconds=2),
             handovers=PostgresNormalHandoverRepository(session),
@@ -338,6 +343,7 @@ def test_cancel_and_timeout_are_persisted_and_queryable(
         handover_id=record.handover_id,
         now=NOW + timedelta(seconds=10),
         handovers=PostgresNormalHandoverRepository(session),
+        commands=commands,
     )
     assert cancelled.status.value == "cancelled"
     stored = read_normal_handover(
@@ -452,6 +458,76 @@ def test_confirmation_after_grant_replacement_is_stale_and_request_stays_pending
     assert record_after is not None
     assert record_after.status.value == "pending"
     # 命令被结案为 rejected, 不留永久领取.
+    assert commands.completed[-1].outcome == "rejected"
+
+
+def test_expired_current_lease_does_not_break_an_idempotent_request_replay(
+    session: DatabaseSession, targets: tuple[User, Station, InferenceHost, InferenceHost]
+) -> None:
+    operator, station, from_host, to_host = targets
+    session.execute(
+        text(
+            "UPDATE execution_station_grant SET lease_expires_at = :expiry,"
+            " renewed_at = :renewed WHERE station_id = :sid"
+        ),
+        {
+            "expiry": NOW + timedelta(seconds=5),
+            "renewed": NOW - timedelta(days=7) + timedelta(seconds=5),
+            "sid": station.id,
+        },
+    )
+    commands = RecordingCommandGateway()
+    record = _create(session, operator, station, from_host, to_host, commands)
+    replayed = create_normal_handover(
+        caller=_caller(operator),
+        station_id=station.id,
+        from_host_id=from_host.id,
+        to_host_id=to_host.id,
+        idempotency_key=record.idempotency_key,
+        now=NOW + timedelta(seconds=10),
+        handovers=PostgresNormalHandoverRepository(session),
+        grants=PostgresExecutionGrantRepository(session),
+        commands=commands,
+    )
+    assert replayed == record
+    assert len(commands.enqueued) == 1
+
+
+def test_confirmation_with_an_expired_but_unreplaced_grant_is_not_accepted(
+    session: DatabaseSession, targets: tuple[User, Station, InferenceHost, InferenceHost]
+) -> None:
+    operator, station, from_host, to_host = targets
+    session.execute(
+        text(
+            "UPDATE execution_station_grant SET lease_expires_at = :expiry,"
+            " renewed_at = :renewed WHERE station_id = :sid"
+        ),
+        {
+            "expiry": NOW + timedelta(seconds=5),
+            "renewed": NOW - timedelta(days=7) + timedelta(seconds=5),
+            "sid": station.id,
+        },
+    )
+    commands = RecordingCommandGateway()
+    record = _create(session, operator, station, from_host, to_host, commands)
+    _, accepted = settle_normal_handover_command(
+        handover_id=record.handover_id,
+        command_id=record.command_id,
+        station_id=record.station_id,
+        from_host_id=record.from_host_id,
+        to_host_id=record.to_host_id,
+        grant_id=record.grant_id,
+        host=InferenceHostIdentity(host_id=record.from_host_id, request=None, signature=None),
+        claim_token="claim-1",
+        outcome="confirmed",
+        failure_code=None,
+        detail=None,
+        now=NOW + timedelta(seconds=10),
+        handovers=PostgresNormalHandoverRepository(session),
+        grants=PostgresExecutionGrantRepository(session),
+        commands=commands,
+    )
+    assert accepted is False
     assert commands.completed[-1].outcome == "rejected"
 
 

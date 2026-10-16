@@ -8,6 +8,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy.exc import IntegrityError
 
 from factory_sop.auth.api import Authorized, Permission, needs
 from factory_sop.device.api import (
@@ -21,6 +22,7 @@ from factory_sop.device.api import (
     host_identity_from_headers,
 )
 from factory_sop.execution.adapters import dependencies
+from factory_sop.execution.errors import ExecutionRefusalCode, ExecutionRefusedError
 from factory_sop.execution.model import NormalHandover, NormalHandoverStatus
 from factory_sop.execution.repository import (
     ExecutionGrantRepository,
@@ -29,6 +31,7 @@ from factory_sop.execution.repository import (
 from factory_sop.execution.usecases import (
     cancel_normal_handover,
     create_normal_handover,
+    read_claimed_normal_handover,
     read_normal_handover,
     settle_normal_handover_command,
 )
@@ -133,17 +136,22 @@ def create_normal(
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
 ) -> NormalHandoverView:
     """建立正常交权请求；中心收到请求不等于旧机已经停写。"""
-    record = create_normal_handover(
-        caller=caller,
-        station_id=submission.station_id,
-        from_host_id=submission.from_host_id,
-        to_host_id=submission.to_host_id,
-        idempotency_key=idempotency_key,
-        now=datetime.now(UTC),
-        handovers=handovers,
-        grants=grants,
-        commands=commands,
-    )
+    try:
+        record = create_normal_handover(
+            caller=caller,
+            station_id=submission.station_id,
+            from_host_id=submission.from_host_id,
+            to_host_id=submission.to_host_id,
+            idempotency_key=idempotency_key,
+            now=datetime.now(UTC),
+            handovers=handovers,
+            grants=grants,
+            commands=commands,
+        )
+    except IntegrityError as error:
+        if getattr(error.orig, "sqlstate", None) != "23503":
+            raise
+        raise ExecutionRefusedError(ExecutionRefusalCode.HANDOVER_TARGET_NOT_FOUND) from error
     return _view(record)
 
 
@@ -176,6 +184,9 @@ def cancel_normal(
     handover_id: UUID,
     caller: Authorized,
     handovers: Annotated[NormalHandoverRepository, Depends(dependencies.normal_handovers)],
+    commands: Annotated[
+        DeviceExecutionHandoverCommandGateway, Depends(dependencies.normal_handover_commands)
+    ],
 ) -> NormalHandoverView:
     return _view(
         cancel_normal_handover(
@@ -183,6 +194,7 @@ def cancel_normal(
             handover_id=handover_id,
             now=datetime.now(UTC),
             handovers=handovers,
+            commands=commands,
         )
     )
 
@@ -228,14 +240,14 @@ def claim_next_execution_handover(
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     if claimed.claim_token is None or claimed.lease_expires_at is None:
         raise RuntimeError("claimed execution handover command is missing its lease")
-    record = handovers.by_identifier(claimed.target_id)
-    if (
-        record is None
-        or record.status is not NormalHandoverStatus.PENDING
-        or record.from_host_id != host_id
-        or record.command_id != claimed.id
-        or record.expires_at <= now
-    ):
+    record = read_claimed_normal_handover(
+        handover_id=claimed.target_id,
+        command_id=claimed.id,
+        from_host_id=host_id,
+        now=now,
+        handovers=handovers,
+    )
+    if record is None:
         commands.complete(
             command_id=claimed.id,
             host=identity,

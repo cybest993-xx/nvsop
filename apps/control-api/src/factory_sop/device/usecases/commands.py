@@ -655,6 +655,20 @@ class RepositoryDeviceExecutionHandoverCommandGateway:
             commands=self._commands,
         )
 
+    def lock_claim(
+        self,
+        *,
+        command_id: UUID,
+        now: datetime,
+        host: InferenceHostIdentity | None = None,
+    ) -> bool:
+        if host is not None:
+            authenticate_command_host(host=host, now=now, hosts=self._hosts)
+        command = _existing_command_for_update(command_id, self._commands)
+        if command.command_type is not PendingCommandType.STOP_EXECUTION_HANDOVER:
+            refuse(_REFUSAL_EVENT, DeviceRefusalCode.COMMAND_NOT_FOUND, command_id=str(command_id))
+        return command.attempt > 0
+
     def complete(
         self,
         *,

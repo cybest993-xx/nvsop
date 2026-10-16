@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 import tempfile
+import threading
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -18,7 +19,11 @@ from nvsop_contracts import ExecutionLease
 from edge_runtime.connectors.port import Refused, WriteRefusal
 from edge_runtime.connectors.writes import WriteRequest
 from edge_runtime.judgment.model import HostInstant
-from edge_runtime.local_state.execution import LocalExecutionLeaseStore
+from edge_runtime.local_state.execution import (
+    ExecutionAuthority,
+    ExecutionLeaseFact,
+    LocalExecutionLeaseStore,
+)
 from edge_runtime.local_state.schema import migrate
 from edge_runtime.runtime import StationOutputWriteGate, StationWriteLifecycle
 
@@ -67,7 +72,9 @@ class ExecutionHandoverFenceTest(unittest.TestCase):
         self.lifecycle = StationWriteLifecycle()
 
     def _open(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(str(self.state_path), isolation_level=None)
+        connection = sqlite3.connect(
+            str(self.state_path), isolation_level=None, check_same_thread=False
+        )
         connection.row_factory = sqlite3.Row
         migrate(connection)
         self.addCleanup(connection.close)
@@ -137,6 +144,50 @@ class ExecutionHandoverFenceTest(unittest.TestCase):
         # lease 本身没有被销毁: 后继 grant 恢复语义需要原事实可查.
         assert authority.fact is not None
         self.assertEqual("grant-a", authority.fact.grant_id)
+
+    def test_status_does_not_mix_an_old_lease_with_a_new_grants_cleared_fence(self) -> None:
+        shared_lock = threading.RLock()
+        leases = LocalExecutionLeaseStore(self.connection, lock=shared_lock)
+        leases.apply([_lease("grant-a")], observed_at=1.0)
+        leases.stop_writes(STATION, grant_id="grant-a", stopped_at=2.0)
+        entered = threading.Event()
+        resume = threading.Event()
+        replaced = threading.Event()
+        results: list[ExecutionAuthority] = []
+
+        class PausingStore(LocalExecutionLeaseStore):
+            def fact(self, station_id: str) -> ExecutionLeaseFact | None:
+                fact = super().fact(station_id)
+                entered.set()
+                resume.wait(timeout=2)
+                return fact
+
+        reader = PausingStore(self.connection, lock=shared_lock)
+        sampling = threading.Thread(
+            target=lambda: results.append(
+                reader.status(STATION, now=_epoch("2030-01-01T00:00:00Z"))
+            )
+        )
+
+        def replace_grant() -> None:
+            leases.apply([_lease("grant-b")], observed_at=3.0)
+            replaced.set()
+
+        writer = threading.Thread(target=replace_grant)
+        sampling.start()
+        self.assertTrue(entered.wait(timeout=2))
+        writer.start()
+        try:
+            replaced.wait(timeout=0.1)
+        finally:
+            resume.set()
+            sampling.join(timeout=3)
+            writer.join(timeout=3)
+        self.assertFalse(sampling.is_alive())
+        self.assertFalse(writer.is_alive())
+        self.assertEqual(1, len(results))
+        self.assertTrue(results[0].write_stopped)
+        self.assertFalse(results[0].authorized)
 
     def test_stopping_twice_keeps_the_frozen_grant_identity(self) -> None:
         self.leases.apply([_lease("grant-a")], observed_at=1.0)

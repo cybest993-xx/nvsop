@@ -192,16 +192,17 @@ class LocalExecutionLeaseStore:
 
     def status(self, station_id: str, *, now: float) -> ExecutionAuthority:
         """按本机墙钟返回工位当前的执行权状态; 到期判断发生在每次调用, 不缓存。"""
-        fact = self.fact(station_id)
+        with self._lock:
+            fact = self.fact(station_id)
+            fence = self._connection.execute(
+                "SELECT grant_id FROM local_execution_write_fence WHERE station_id = ?",
+                (station_id,),
+            ).fetchone()
         if fact is None:
             return ExecutionAuthority(
                 state=ExecutionLeaseState.MISSING,
                 detail="本工位没有中心确认的物理执行权租约",
             )
-        fence = self._connection.execute(
-            "SELECT grant_id FROM local_execution_write_fence WHERE station_id = ?",
-            (station_id,),
-        ).fetchone()
         if fence is not None:
             return ExecutionAuthority(
                 state=ExecutionLeaseState.ACTIVE,

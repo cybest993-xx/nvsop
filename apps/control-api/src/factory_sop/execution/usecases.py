@@ -326,13 +326,23 @@ def create_normal_handover(
 ) -> NormalHandover:
     """建立正常交权请求并入队旧机停机命令，不创建新机执行权。"""
     authorize(caller, HANDOVER_PERMISSION)
+    current = grants.for_station(station_id)
+    existing = handovers.by_idempotency_key(idempotency_key)
+    if existing is not None:
+        _check_normal_identity(
+            existing,
+            station_id=station_id,
+            from_host_id=from_host_id,
+            to_host_id=to_host_id,
+            caller=caller,
+        )
+        return existing
     if from_host_id == to_host_id:
         _refuse_handover(
             ExecutionRefusalCode.HANDOVER_SAME_HOST,
             caller=caller,
             station_id=station_id,
         )
-    current = grants.for_station(station_id)
     if current is None:
         _refuse_handover(
             ExecutionRefusalCode.HANDOVER_TARGET_NOT_FOUND,
@@ -352,17 +362,6 @@ def create_normal_handover(
             caller=caller,
             station_id=station_id,
         )
-    existing = handovers.by_idempotency_key(idempotency_key)
-    if existing is not None:
-        _check_normal_identity(
-            existing,
-            station_id=station_id,
-            from_host_id=from_host_id,
-            to_host_id=to_host_id,
-            grant_id=current.grant_id,
-            caller=caller,
-        )
-        return existing
     pending = handovers.pending_for_station(station_id)
     if pending is not None:
         pending = _expire_normal_handover(pending, now=now, handovers=handovers)
@@ -392,7 +391,6 @@ def create_normal_handover(
             station_id=station_id,
             from_host_id=from_host_id,
             to_host_id=to_host_id,
-            grant_id=current.grant_id,
             caller=caller,
         )
         return stored
@@ -416,6 +414,22 @@ def create_normal_handover(
     return record
 
 
+def read_claimed_normal_handover(
+    *,
+    handover_id: UUID,
+    command_id: UUID,
+    from_host_id: UUID,
+    now: datetime,
+    handovers: NormalHandoverRepository,
+) -> NormalHandover | None:
+    """在已认证命令的行锁之后锁定请求；过期先持久落盘，取消与领取不能交错。"""
+    record = handovers.by_identifier_for_update(handover_id)
+    if record is None or record.command_id != command_id or record.from_host_id != from_host_id:
+        return None
+    record = _expire_normal_handover(record, now=now, handovers=handovers)
+    return record if record.status is NormalHandoverStatus.PENDING else None
+
+
 def read_normal_handover(
     *, caller: Caller, handover_id: UUID, now: datetime, handovers: NormalHandoverRepository
 ) -> NormalHandover:
@@ -428,18 +442,33 @@ def read_normal_handover(
 
 
 def cancel_normal_handover(
-    *, caller: Caller, handover_id: UUID, now: datetime, handovers: NormalHandoverRepository
+    *,
+    caller: Caller,
+    handover_id: UUID,
+    now: datetime,
+    handovers: NormalHandoverRepository,
+    commands: DeviceExecutionHandoverCommandGateway,
 ) -> NormalHandover:
-    """取消尚未得到旧机确认的请求；取消不恢复旧机写入，也不发新机租约。"""
+    """只取消从未领取的请求；领取后旧机可能已停写，不能再承诺取消。"""
     authorize(caller, HANDOVER_PERMISSION)
+    observed = handovers.by_identifier(handover_id)
+    if observed is None:
+        raise ExecutionRefusedError(ExecutionRefusalCode.NORMAL_HANDOVER_NOT_FOUND)
+    was_claimed = commands.lock_claim(command_id=observed.command_id, now=now)
     record = read_normal_handover(
         caller=caller, handover_id=handover_id, now=now, handovers=handovers
     )
     if record.status is NormalHandoverStatus.PENDING:
+        if was_claimed:
+            _refuse_handover(
+                ExecutionRefusalCode.NORMAL_HANDOVER_ALREADY_CLAIMED,
+                caller=caller,
+                handover_id=handover_id,
+            )
         return handovers.save(
             replace(record, status=NormalHandoverStatus.CANCELLED, cancelled_at=now)
         )
-    if record.status is NormalHandoverStatus.CANCELLED:
+    if record.status in {NormalHandoverStatus.CANCELLED, NormalHandoverStatus.TIMED_OUT}:
         return record
     _refuse_handover(
         ExecutionRefusalCode.NORMAL_HANDOVER_ALREADY_TERMINAL,
@@ -472,7 +501,9 @@ def settle_normal_handover_command(
     返回 ``accepted`` 表示旧机确认已被本请求接受；陈旧、取消或身份不符的回报只结案命令，
     不改变后继请求，也不制造执行权。
     """
-    # 与创建请求保持同一锁顺序: 当前租约 -> 交权请求 -> device 命令。
+    # 已入队命令统一按 command -> grant(如需) -> handover 加锁；创建只入队全新的命令。
+    commands.lock_claim(command_id=command_id, host=None if authenticated else host, now=now)
+    authenticated = True
     observed = handovers.by_identifier(handover_id)
     current = None if observed is None else grants.for_station(observed.station_id)
     record = handovers.by_identifier_for_update(handover_id)
@@ -546,6 +577,7 @@ def settle_normal_handover_command(
         current is None
         or current.grant_id != record.grant_id
         or current.holder_host_id != record.from_host_id
+        or current.lease_expires_at <= now
     ):
         commands.complete(
             command_id=command_id,
@@ -628,15 +660,13 @@ def _check_normal_identity(
     station_id: UUID,
     from_host_id: UUID,
     to_host_id: UUID,
-    grant_id: UUID,
     caller: Caller,
 ) -> None:
-    if (
-        record.station_id,
-        record.from_host_id,
-        record.to_host_id,
-        record.grant_id,
-    ) != (station_id, from_host_id, to_host_id, grant_id):
+    if (record.station_id, record.from_host_id, record.to_host_id) != (
+        station_id,
+        from_host_id,
+        to_host_id,
+    ):
         _refuse_handover(
             ExecutionRefusalCode.NORMAL_HANDOVER_IDENTITY_MISMATCH,
             caller=caller,
@@ -697,6 +727,7 @@ __all__ = [
     "confirm_handover",
     "create_handover",
     "create_normal_handover",
+    "read_claimed_normal_handover",
     "read_handover",
     "read_handover_risk",
     "read_normal_handover",

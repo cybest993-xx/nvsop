@@ -194,6 +194,16 @@ class DeviceExecutionHandoverCommandGateway(Protocol):
         """认证旧机后领取一条正常交权停机命令。"""
         ...
 
+    def lock_claim(
+        self,
+        *,
+        command_id: UUID,
+        now: datetime,
+        host: InferenceHostIdentity | None = None,
+    ) -> bool:
+        """锁定命令至事务结束并返回是否曾领取；提供主机时先认证，否则由调用方鉴权。"""
+        ...
+
     def complete(
         self,
         *,

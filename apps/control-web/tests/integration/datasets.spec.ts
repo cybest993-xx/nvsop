@@ -1774,9 +1774,81 @@ describe('训练数据集工作台', () => {
 
     expect(wrapper.text()).toContain('已取消（未派发）')
     expect(wrapper.text()).toContain('operator-editor')
-    expect(wrapper.text()).toContain('取消时间：')
+    expect(wrapper.text()).toContain('取消生效：')
     // 已取消的命令不再展示取消按钮
     expect(wrapper.findAll('button').some((button) => button.text().includes('取消命令'))).toBe(
+      false,
+    )
+    wrapper.unmount()
+  })
+
+  it('records a dispatched cancel request and shows the unverified stop without claiming cancellation', async () => {
+    grant('dataset.dataset.view', 'dataset.dataset.edit')
+    api.listDdmTrainingCommands.mockResolvedValue(ddmCommandPage([DDM_COMMAND_BOUND_UNKNOWN]))
+    api.cancelDdmTrainingCommand.mockResolvedValueOnce({
+      ...DDM_COMMAND_BOUND_UNKNOWN,
+      cancel_requested_by: 'operator-editor',
+      cancel_requested_at: '2026-09-08T01:07:00Z',
+      cancel_response_message: null,
+      cancel_detail: '取消后基座仍报告在运行的进程，停止状态待核实',
+      updated_at: '2026-09-08T01:07:00Z',
+    })
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+
+    const cancelButton = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('请求取消'))
+    expect(cancelButton).toBeDefined()
+    await cancelButton?.trigger('click')
+    expect(api.cancelDdmTrainingCommand).toHaveBeenCalledWith(
+      DATASET.id,
+      DDM_COMMAND_BOUND_UNKNOWN.id,
+    )
+    await flushPromises()
+
+    // 已派发取消未核实：明确显示未确认，不显示取消终态，并保留继续核实的入口。
+    expect(wrapper.text()).toContain('已绑定基座任务（取消未确认）')
+    expect(wrapper.text()).toContain('取消请求：')
+    expect(wrapper.text()).toContain('停止核实：取消后基座仍报告在运行的进程，停止状态待核实')
+    const statusTags = wrapper.findAll('.el-tag').map((tag) => tag.text())
+    expect(statusTags.some((text) => text.includes('已取消'))).toBe(false)
+    expect(wrapper.findAll('button').some((button) => button.text().includes('请求取消'))).toBe(
+      true,
+    )
+    wrapper.unmount()
+  })
+
+  it('shows verified cancellation only after the backend confirms the stop', async () => {
+    grant('dataset.dataset.view', 'dataset.dataset.edit')
+    api.listDdmTrainingCommands.mockResolvedValue(ddmCommandPage([DDM_COMMAND_BOUND_UNKNOWN]))
+    api.cancelDdmTrainingCommand.mockResolvedValueOnce({
+      ...DDM_COMMAND_BOUND_UNKNOWN,
+      status: 'cancelled',
+      cancelled_by: 'operator-editor',
+      cancelled_at: '2026-09-08T01:08:00Z',
+      cancel_requested_by: 'operator-editor',
+      cancel_requested_at: '2026-09-08T01:07:00Z',
+      cancel_response_message: 'Training job base-job-1 has been cancelled successfully',
+      cancel_detail: null,
+      updated_at: '2026-09-08T01:08:00Z',
+    })
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+    const cancelButton = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('请求取消'))
+    await cancelButton?.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已取消（已核实停止）')
+    expect(wrapper.text()).toContain(
+      '基座原取消响应：Training job base-job-1 has been cancelled successfully',
+    )
+    expect(wrapper.text()).toContain('取消生效：')
+    expect(wrapper.findAll('button').some((button) => button.text().includes('请求取消'))).toBe(
       false,
     )
     wrapper.unmount()

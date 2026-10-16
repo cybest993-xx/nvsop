@@ -20,6 +20,7 @@ from store_harness import ANCHOR, STATION, opening_state
 
 from edge_runtime.evidence_media import (
     EvidenceMediaConfiguration,
+    EvidenceMediaError,
     EvidenceMediaWorker,
     recording_segment_generation,
     slice_evidence,
@@ -204,6 +205,22 @@ class RecordingCompressionTest(unittest.TestCase):
         second = worker.drain()
         self.assertEqual((second.created, second.failed), (0, 0))
         self.assertEqual(digest(source), candidate.candidate_sha256)
+
+    def test_installed_material_requires_the_complete_validated_provenance(self) -> None:
+        directory = self.recording / CAMERA
+        segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
+        source = next(directory.glob("*.mp4"))
+        worker = RecordingCompressionWorker(configuration=self.configuration(), interval=1.0)
+        self.assertEqual(worker.drain().replaced, 1)
+        provenance = source.with_suffix(".compressed.json")
+        document = json.loads(provenance.read_text(encoding="utf-8"))
+        for field in ("crf", "candidate_frames", "candidate_mtime_ns"):
+            with self.subTest(field=field):
+                incomplete = {key: value for key, value in document.items() if key != field}
+                provenance.write_text(json.dumps(incomplete), encoding="utf-8")
+                with self.assertRaises(EvidenceMediaError) as caught:
+                    recording_segment_generation(source)
+                self.assertEqual(caught.exception.reason, "material_provenance_invalid")
 
     def test_replacement_waits_for_reslice_and_preserves_finalized_evidence(self) -> None:
         directory = self.recording / CAMERA

@@ -12,22 +12,13 @@ import os
 import subprocess
 import tempfile
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from math import ceil, isfinite
 from pathlib import Path
 from time import monotonic, sleep, time
 from typing import cast
 
-from edge_runtime.configuration_values import (
-    _crf_value,
-    _non_empty_string,
-    _non_negative_integer,
-    _object,
-    _positive_integer,
-    _positive_number,
-    _require_keys,
-)
 from edge_runtime.evidence_media import (
     MATERIAL_GENERATION_COMPRESSED,
     EvidenceMediaError,
@@ -35,6 +26,10 @@ from edge_runtime.evidence_media import (
     recording_material_access,
     recording_segment_generation,
     recording_segment_start,
+)
+from edge_runtime.recording_provenance import (
+    RecordingCompressionCandidate,
+    read_compression_provenance,
 )
 
 _logger = logging.getLogger("edge_runtime")
@@ -92,32 +87,6 @@ class RecordingCompressionConfiguration:
 
 
 @dataclass(frozen=True, slots=True)
-class RecordingCompressionCandidate:
-    """已通过真实校验的候选及其编码参数/代次留痕; S048 消费的同一产物。"""
-
-    source: str
-    candidate: str
-    source_sha256: str
-    candidate_sha256: str
-    source_size_bytes: int
-    candidate_size_bytes: int
-    source_duration_seconds: float
-    candidate_duration_seconds: float
-    source_frames: int
-    candidate_frames: int
-    candidate_mtime_ns: int
-    crf: int
-    encoder: str
-    preset: str
-    generation: str
-    encoded_at: str
-
-    def to_wire(self) -> dict[str, object]:
-        """转换为本机留痕文档; 文档字段名就是这里的字段名, 只在此处定义一次。"""
-        return asdict(self)
-
-
-@dataclass(frozen=True, slots=True)
 class CompressionSummary:
     """本轮候选生成与替换计数; 替换后的持久化失败也计入 failed 并告警。"""
 
@@ -134,9 +103,6 @@ class _Probe:
     duration: float
     codec: str
     frames: int
-
-
-_PROVENANCE_KEYS = frozenset(RecordingCompressionCandidate.__dataclass_fields__)
 
 
 def compress_aged_segments(
@@ -166,10 +132,14 @@ def _process_aged_segments(
     for segment in _aged_segments(configuration, cutoff=cutoff):
         try:
             with recording_material_access(segment.parent, exclusive=True):
+                # 未提交候选仍按 S047 清理/重做; 已安装留痕不能因候选缺失被清除。
+                current_candidate = _candidate_path(segment).exists() and _candidate_is_current(
+                    segment, configuration
+                )
                 if _already_archived(segment):
                     skipped += 1
                     continue
-                if _candidate_is_current(segment, configuration):
+                if current_candidate:
                     skipped += 1
                 else:
                     _compress_segment(segment, configuration, now=current)
@@ -197,7 +167,7 @@ def validated_candidate(segment: Path) -> RecordingCompressionCandidate | None:
     if not candidate.is_file() or not provenance.is_file():
         return None
     try:
-        document = _read_provenance(provenance)
+        document = read_compression_provenance(provenance)
     except (OSError, ValueError):
         return None
     if document.source != segment.name or document.candidate != candidate.name:
@@ -347,7 +317,7 @@ def _candidate_is_current(segment: Path, configuration: RecordingCompressionConf
     if not candidate.is_file() and not provenance.is_file():
         return False
     try:
-        document = _read_provenance(provenance)
+        document = read_compression_provenance(provenance)
         candidate_stat = candidate.stat()
         matches = (
             document.source == segment.name
@@ -571,47 +541,6 @@ def _write_provenance(path: Path, document: RecordingCompressionCandidate) -> No
         os.chmod(path, 0o600)
     finally:
         temporary.unlink(missing_ok=True)
-
-
-def _read_provenance(path: Path) -> RecordingCompressionCandidate:
-    """严格读取留痕; 字段集合或类型不符即拒绝, 不把无法证明的候选当已验证。"""
-    document = _object(json.loads(path.read_text(encoding="utf-8")), "compression provenance")
-    _require_keys(document, required=_PROVENANCE_KEYS)
-    generation = _non_empty_string(document["generation"], "provenance generation")
-    if generation != MATERIAL_GENERATION_COMPRESSED:
-        raise ValueError("compression provenance generation must be compressed")
-    return RecordingCompressionCandidate(
-        source=_non_empty_string(document["source"], "provenance source"),
-        candidate=_non_empty_string(document["candidate"], "provenance candidate"),
-        source_sha256=_non_empty_string(document["source_sha256"], "provenance source_sha256"),
-        candidate_sha256=_non_empty_string(
-            document["candidate_sha256"], "provenance candidate_sha256"
-        ),
-        source_size_bytes=_positive_integer(
-            document["source_size_bytes"], "provenance source_size_bytes"
-        ),
-        candidate_size_bytes=_positive_integer(
-            document["candidate_size_bytes"], "provenance candidate_size_bytes"
-        ),
-        candidate_mtime_ns=_non_negative_integer(
-            document["candidate_mtime_ns"], "provenance candidate_mtime_ns"
-        ),
-        source_duration_seconds=_positive_number(
-            document["source_duration_seconds"], "provenance source_duration_seconds"
-        ),
-        candidate_duration_seconds=_positive_number(
-            document["candidate_duration_seconds"], "provenance candidate_duration_seconds"
-        ),
-        source_frames=_positive_integer(document["source_frames"], "provenance source_frames"),
-        candidate_frames=_positive_integer(
-            document["candidate_frames"], "provenance candidate_frames"
-        ),
-        crf=_crf_value(document["crf"], "compression provenance crf"),
-        encoder=_non_empty_string(document["encoder"], "provenance encoder"),
-        preset=_non_empty_string(document["preset"], "provenance preset"),
-        generation=generation,
-        encoded_at=_non_empty_string(document["encoded_at"], "provenance encoded_at"),
-    )
 
 
 def _candidate_path(segment: Path) -> Path:

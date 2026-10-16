@@ -34,9 +34,14 @@ from edge_runtime.configuration_values import (
 )
 from edge_runtime.judgment.model import HostInstant
 from edge_runtime.local_state import LocalState, PendingEvidence, StationStore
+from edge_runtime.recording_provenance import (
+    MATERIAL_GENERATION_COMPRESSED as MATERIAL_GENERATION_COMPRESSED,
+)
+from edge_runtime.recording_provenance import (
+    read_compression_provenance,
+)
 
 MATERIAL_GENERATION_ORIGINAL = "original"
-MATERIAL_GENERATION_COMPRESSED = "compressed"
 MATERIAL_GENERATION_MIXED = "mixed"
 _KNOWN_MATERIAL_GENERATIONS = frozenset(
     {MATERIAL_GENERATION_ORIGINAL, MATERIAL_GENERATION_COMPRESSED}
@@ -365,18 +370,16 @@ def recording_segment_generation(path: Path) -> str:
     if provenance.exists():
         # S047 留痕先于分段 rename 持久化; 同一份留痕解释提交前后两种完整文件, 无半代次窗口。
         try:
-            document = json.loads(provenance.read_text(encoding="utf-8"))
+            provenance_document = read_compression_provenance(provenance)
             if (
-                not isinstance(document, dict)
-                or document.get("source") != path.name
-                or document.get("candidate") != path.with_suffix(".compressed.mp4").name
-                or document.get("generation") != MATERIAL_GENERATION_COMPRESSED
+                provenance_document.source != path.name
+                or provenance_document.candidate != path.with_suffix(".compressed.mp4").name
             ):
                 raise ValueError("compression identity mismatch")
             digest = file_sha256(path)
-            if digest == document.get("candidate_sha256"):
+            if digest == provenance_document.candidate_sha256:
                 return MATERIAL_GENERATION_COMPRESSED
-            if digest == document.get("source_sha256"):
+            if digest == provenance_document.source_sha256:
                 return MATERIAL_GENERATION_ORIGINAL
             raise ValueError("compression material changed")
         except (OSError, ValueError) as error:

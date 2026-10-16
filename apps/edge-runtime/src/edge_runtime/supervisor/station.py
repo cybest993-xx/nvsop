@@ -389,7 +389,7 @@ class StationSupervisor:
             ) != bool(storage_impairments)
             self._store.enqueue_health(
                 stream_id=f"storage:{event.role}",
-                status="storage_unavailable" if event.impaired else "storage_healthy",
+                status="storage_unavailable" if event.impaired else "delivering",
                 reason_code=ReasonCode.STORAGE_UNAVAILABLE.value if event.impaired else None,
                 detail=json.dumps(asdict(event), ensure_ascii=False),
                 occurred_at=datetime.now(UTC).isoformat(),

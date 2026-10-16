@@ -71,7 +71,7 @@ class StorageHealthIntegrationTest(unittest.TestCase):
         self.assertEqual(4, len(facts))
         self.assertEqual("STORAGE_UNAVAILABLE", facts[0].reason_code)
         self.assertEqual(90, json.loads(facts[0].detail or "{}")["high_watermark_percent"])
-        self.assertEqual("storage_healthy", facts[-1].status)
+        self.assertEqual("delivering", facts[-1].status)
 
     def test_runtime_stops_before_consuming_actions_when_sqlite_is_read_only(self) -> None:
         path = self.root / "state.sqlite"

@@ -145,7 +145,7 @@ describe('工位运行镜像的原因码', () => {
       health: [
         {
           ...fact,
-          status: 'storage_healthy',
+          status: 'delivering',
           reason_code: null,
           detail: JSON.stringify({
             path: '/var/lib/nvsop/evidence',

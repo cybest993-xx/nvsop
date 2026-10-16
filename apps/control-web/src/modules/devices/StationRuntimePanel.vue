@@ -411,8 +411,8 @@ onUnmounted(() => {
           >
             <div class="runtime__storage-heading">
               <strong>{{ storageLabels[fact.stream_id ?? ''] ?? fact.stream_id }}</strong>
-              <el-tag :type="fact.status === 'storage_healthy' ? 'success' : 'danger'" size="small">
-                {{ fact.status === 'storage_healthy' ? '存储可用' : '存储失效' }}
+              <el-tag :type="fact.status === 'delivering' ? 'success' : 'danger'" size="small">
+                {{ fact.status === 'delivering' ? '存储可用' : '存储失效' }}
               </el-tag>
             </div>
             <p v-if="typeof metrics.used_percent === 'number'">

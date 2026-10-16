@@ -131,6 +131,13 @@ class ApplyMediaExportTest(unittest.TestCase):
                 result["disk_health"],
             )
             local = json.loads(edge.read_text(encoding="utf-8"))
+            local["disk_health"] = None
+            edge.write_text(json.dumps(local), encoding="utf-8")
+            MODULE.apply_export(export, edge, output)
+            self.assertEqual(
+                result["disk_health"],
+                json.loads(output.read_text(encoding="utf-8"))["disk_health"],
+            )
             local["disk_health"] = {
                 "high_watermark_percent": 90,
                 "recovery_watermark_percent": 70,

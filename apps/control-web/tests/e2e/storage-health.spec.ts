@@ -15,7 +15,7 @@ function projection(recovered: boolean) {
     health: ['recording', 'evidence', 'local_state'].map((role, index) => ({
       event_id: `${role}-${recovered}`,
       stream_id: `storage:${role}`,
-      status: index === 0 && !recovered ? 'storage_unavailable' : 'storage_healthy',
+      status: index === 0 && !recovered ? 'storage_unavailable' : 'delivering',
       reason_code: index === 0 && !recovered ? 'STORAGE_UNAVAILABLE' : null,
       detail: JSON.stringify({
         path: `/var/lib/nvsop/${role}`,

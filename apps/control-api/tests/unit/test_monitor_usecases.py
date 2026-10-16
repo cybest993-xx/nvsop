@@ -1173,7 +1173,8 @@ def test_stream_health_view_keeps_latest_per_stream_and_classifies() -> None:
 @pytest.mark.parametrize(
     ("status", "validity"),
     [
-        ("storage_healthy", "healthy"),
+        ("delivering", "healthy"),
+        ("storage_healthy", "impaired"),
         ("storage_unavailable", "impaired"),
         ("future_storage", "impaired"),
     ],

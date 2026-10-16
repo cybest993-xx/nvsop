@@ -163,7 +163,7 @@ def apply_export(
             raise ValueError("disk_watermark_percent must be an integer within 1..99")
         previous = load_disk_health_configuration(edge.get("disk_health"))
         recovery = previous.recovery_watermark_percent
-        if "disk_health" not in edge:
+        if edge.get("disk_health") is None:
             defaults = DiskHealthConfiguration()
             recovery = high * defaults.recovery_watermark_percent / defaults.high_watermark_percent
         edge["disk_health"] = asdict(

@@ -96,6 +96,31 @@ class CleanLocalArtifactsTest(unittest.TestCase):
         self.assertTrue(link.is_symlink())
         self.assertEqual("keep", shared.read_text())
 
+    def test_nvsop_root_symlink_protects_shared_target_contents(self) -> None:
+        """沿父 symlink 访问已声明名称时不得删除共享目标内容。
+
+        clean 路径逐项拼 root/relative; 若 .nvsop 自身是 symlink 而 shared
+        目标里恰好有同名 cache/venv/artifacts, 逐项 remove_path 会沿链接
+        删掉共享内容。daily 与 purge 两种模式都必须保护。
+        """
+        self.write("shared/cache/wheel", "keep")
+        self.write("shared/venv/bin/python", "keep")
+        self.write("shared/artifacts/pytest/report.xml", "keep")
+        link = self.root / ".nvsop"
+        link.mkdir()
+        link.rmdir()
+        link.symlink_to(self.root / "shared", target_is_directory=True)
+
+        clean(self.root)
+        self.assertEqual("keep", (self.root / "shared/cache/wheel").read_text())
+        self.assertTrue(link.is_symlink())
+
+        clean(self.root, purge=True)
+        self.assertEqual("keep", (self.root / "shared/cache/wheel").read_text())
+        self.assertEqual("keep", (self.root / "shared/venv/bin/python").read_text())
+        self.assertEqual("keep", (self.root / "shared/artifacts/pytest/report.xml").read_text())
+        self.assertTrue(link.is_symlink())
+
     def test_purge_unlinks_legacy_cache_without_deleting_shared_content(self) -> None:
         shared = self.write("shared-cache/wheel", "keep")
         cache = self.root / ".nvsop/cache"

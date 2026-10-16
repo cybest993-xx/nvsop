@@ -13,6 +13,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from clean_local_artifacts import clean
+
 # 只识别已有旧任务的绑定以安全收尾；新任务不再创建绑定或恢复会话。
 BINDING_RELATIVE_PATH = Path(".nvsop/session-binding.json")
 
@@ -203,6 +205,8 @@ def check_task_worktree(
     branch: str,
     current_path: str,
     primary_path: str,
+    *,
+    check_ignored: bool = True,
 ) -> None:
     path = canonical_path(worktree.path)
     if path == primary_path:
@@ -220,20 +224,14 @@ def check_task_worktree(
     ).strip()
     if checked_tip != task_tip:
         raise CleanupTaskError("task worktree tip changed during verification")
-    status = git(
-        "-C",
-        worktree.path,
-        "status",
-        "--porcelain=v1",
-        "--untracked-files=all",
-        "--ignored=matching",
-    )
-    for line in output_text(status).splitlines():
-        if not line:
-            continue
-        if line[:2] != "!!" or line[3:] != f"{BINDING_RELATIVE_PATH.parent}/":
+    status_args = ["-C", worktree.path, "status", "--porcelain=v1", "--untracked-files=all"]
+    if check_ignored:
+        status_args.append("--ignored=matching")
+    for line in output_text(git(*status_args)).splitlines():
+        if not check_ignored or line[:2] != "!!" or line[3:] != f"{BINDING_RELATIVE_PATH.parent}/":
             raise CleanupTaskError("task worktree is not clean, including ignored files")
-    check_ignored_binding(worktree.path, branch)
+    if check_ignored:
+        check_ignored_binding(worktree.path, branch)
 
 
 def release_binding(worktree_path: str) -> None:
@@ -308,7 +306,7 @@ def verify_closed_pull_request(payload: dict[str, object], branch: str, candidat
         raise CleanupTaskError("closed pull request unexpectedly records a merge commit")
 
 
-def verify_local_target(branch: str) -> CleanupTarget:
+def verify_local_target(branch: str, *, check_ignored: bool = True) -> CleanupTarget:
     validate_branch(branch)
     current_path = current_worktree()
     worktrees = read_worktrees()
@@ -321,9 +319,26 @@ def verify_local_target(branch: str) -> CleanupTarget:
         raise CleanupTaskError("requested branch is registered in multiple worktrees")
     task_worktree = task_worktrees[0] if task_worktrees else None
     if task_worktree is not None:
-        check_task_worktree(task_worktree, task_ref, task_tip, branch, current_path, primary_path)
+        check_task_worktree(
+            task_worktree,
+            task_ref,
+            task_tip,
+            branch,
+            current_path,
+            primary_path,
+            check_ignored=check_ignored,
+        )
 
     return CleanupTarget(task_ref, task_tip, task_worktree, has_local_branch_config(branch))
+
+
+def purge_and_verify_task(target: CleanupTarget, branch: str) -> None:
+    if target.worktree is None:
+        return
+    # 合并/替代证据通过后才移除可再生状态；再次检查未知状态与分支身份。
+    clean(Path(target.worktree.path), purge=True)
+    if verify_local_target(branch) != target:
+        raise CleanupTaskError("task changed during purge")
 
 
 def sync_primary_main(accepted_main: str) -> None:
@@ -357,7 +372,7 @@ def remove_local_target(target: CleanupTarget) -> None:
 
 def cleanup_task(pr: int, branch: str, candidate: str) -> None:
     candidate = parse_object_id(candidate, "--candidate")
-    target = verify_local_target(branch)
+    target = verify_local_target(branch, check_ignored=False)
     if target.task_tip != candidate:
         raise CleanupTaskError("local branch tip does not match --candidate")
     merge_commit = verify_pull_request(pull_request(pr), branch, candidate)
@@ -368,6 +383,7 @@ def cleanup_task(pr: int, branch: str, candidate: str) -> None:
     )
     git("merge-base", "--is-ancestor", merge_commit, accepted_main)
 
+    purge_and_verify_task(target, branch)
     sync_primary_main(accepted_main)
     remove_local_target(target)
     print(f"synced main to {accepted_main}; cleaned {branch} at {target.task_tip}")
@@ -376,7 +392,7 @@ def cleanup_task(pr: int, branch: str, candidate: str) -> None:
 def cleanup_abandoned_task(pr: int | None, branch: str, candidate: str, replaced_by: str) -> None:
     candidate = parse_object_id(candidate, "--candidate")
     replaced_by = parse_object_id(replaced_by, "--replaced-by")
-    target = verify_local_target(branch)
+    target = verify_local_target(branch, check_ignored=False)
     if target.task_tip != candidate:
         raise CleanupTaskError("local branch tip does not match --candidate")
     if pr is not None:
@@ -390,6 +406,7 @@ def cleanup_abandoned_task(pr: int | None, branch: str, candidate: str, replaced
         raise CleanupTaskError("--replaced-by does not resolve to the exact requested commit")
     git("merge-base", "--is-ancestor", replaced_by, "origin/main")
 
+    purge_and_verify_task(target, branch)
     remove_local_target(target)
     print(f"abandoned {branch} at {target.task_tip}; replaced by {replaced_by}")
 

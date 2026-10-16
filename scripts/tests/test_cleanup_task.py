@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -76,6 +77,37 @@ class CleanupTaskTest(unittest.TestCase):
         if result.returncode != 0:
             self.fail(result.stderr or result.stdout)
         return result.stdout.strip()
+
+    def install_task_merge_entrypoint(self) -> None:
+        scripts = self.repo / "scripts"
+        scripts.mkdir()
+        shutil.copyfile(ROOT / "Makefile", self.repo / "Makefile")
+        for name in ("cleanup_task.py", "clean_local_artifacts.py"):
+            shutil.copyfile(ROOT / "scripts" / name, scripts / name)
+        self.git("add", "Makefile", "scripts")
+        self.git("commit", "--quiet", "-m", "merge entrypoint")
+        self.base = self.git("rev-parse", "HEAD")
+
+    def run_make_merge(
+        self, branch: str, candidate: str, merge_commit: str
+    ) -> subprocess.CompletedProcess[str]:
+        payload = {
+            "state": "MERGED",
+            "headRefName": branch,
+            "headRefOid": candidate,
+            "baseRefName": "main",
+            "mergeCommit": {"oid": merge_commit},
+        }
+        env = self.env.copy()
+        env.update({"GH_CALLS": str(self.gh_calls), "GH_PAYLOAD": json.dumps(payload)})
+        return subprocess.run(
+            ["make", "task-merge", "PR=311", f"BRANCH={branch}", f"CANDIDATE={candidate}"],
+            cwd=self.repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
     def make_merged_task(self, branch: str = "agent/a/demo") -> tuple[str, str, Path]:
         task = self.root / "task"
@@ -292,6 +324,91 @@ class CleanupTaskTest(unittest.TestCase):
         self.assert_branch_exists(unrelated)
         self.assert_gh_called_once()
 
+    def test_merged_cleanup_purges_generated_state_in_one_call(self) -> None:
+        branch = "agent/a/demo"
+        candidate, merge_commit, task = self.make_merged_task(branch)
+        (task / ".nvsop/cache/tool").mkdir(parents=True)
+        build = task / "apps/control-web/.nvsop/artifacts/web/dist/index.html"
+        build.parent.mkdir(parents=True)
+        build.write_text("generated", encoding="utf-8")
+
+        result = self.run_cli(branch, candidate, merge_commit)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assert_branch_absent(branch)
+        self.assertFalse(task.exists())
+        self.assert_gh_called_once()
+
+    def test_unverified_merge_does_not_purge_generated_state(self) -> None:
+        branch = "agent/a/demo"
+        candidate, merge_commit, task = self.make_merged_task(branch)
+        build = task / "apps/control-web/.nvsop/artifacts/web/dist/index.html"
+        build.parent.mkdir(parents=True)
+        build.write_text("keep", encoding="utf-8")
+
+        result = self.run_cli(branch, candidate, merge_commit, head_oid=self.base)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual("keep", build.read_text(encoding="utf-8"))
+        self.assert_branch_exists(branch)
+
+    def test_merged_cleanup_preserves_unknown_ignored_state(self) -> None:
+        branch = "agent/a/demo"
+        candidate, merge_commit, task = self.make_merged_task(branch)
+        generated = task / ".nvsop/cache/tool"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("cache", encoding="utf-8")
+        unknown = task / ".nvsop/unknown/data"
+        unknown.parent.mkdir(parents=True)
+        unknown.write_text("keep", encoding="utf-8")
+
+        result = self.run_cli(branch, candidate, merge_commit)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual("keep", unknown.read_text(encoding="utf-8"))
+        self.assert_branch_exists(branch)
+        self.assertTrue(task.exists())
+
+    def test_task_merge_runs_exact_post_merge_cleanup(self) -> None:
+        self.install_task_merge_entrypoint()
+        branch = "agent/a/demo"
+        candidate, merge_commit, task = self.make_merged_task(branch)
+        build = task / "apps/control-web/.nvsop/artifacts/web/dist/index.html"
+        build.parent.mkdir(parents=True)
+        build.write_text("generated", encoding="utf-8")
+
+        result = self.run_make_merge(branch, candidate, merge_commit)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assert_branch_absent(branch)
+        self.assertFalse(task.exists())
+        self.assertEqual("2\n", self.gh_calls.read_text(encoding="utf-8"))
+
+    def test_task_merge_does_not_cleanup_after_merge_failure(self) -> None:
+        self.install_task_merge_entrypoint()
+        branch = "agent/a/demo"
+        candidate, merge_commit, task = self.make_merged_task(branch)
+        (self.bin_dir / "gh").write_text("#!/bin/sh\nexit 7\n", encoding="utf-8")
+
+        result = self.run_make_merge(branch, candidate, merge_commit)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assert_branch_exists(branch)
+        self.assertTrue(task.exists())
+
+    def test_task_merge_rejects_dirty_primary_before_remote_call(self) -> None:
+        self.install_task_merge_entrypoint()
+        branch = "agent/a/demo"
+        candidate, merge_commit, task = self.make_merged_task(branch)
+        (self.repo / "local.txt").write_text("keep", encoding="utf-8")
+
+        result = self.run_make_merge(branch, candidate, merge_commit)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assert_branch_exists(branch)
+        self.assertTrue(task.exists())
+        self.assertFalse(self.gh_calls.exists())
+
     def test_merged_cleanup_fast_forwards_primary_main(self) -> None:
         branch = "agent/a/demo"
         candidate, merge_commit, task = self.make_merged_task(branch)
@@ -383,6 +500,19 @@ class CleanupTaskTest(unittest.TestCase):
         self.assert_branch_absent(branch)
         self.assertFalse(task.exists())
         self.assert_gh_called_once()
+
+    def test_abandon_purges_legacy_generated_state_after_replacement_proof(self) -> None:
+        branch = "agent/a/demo"
+        candidate, replaced_by, task = self.make_abandoned_task(branch)
+        generated = task / "apps/control-web/.nvsop/artifacts/web/dist/index.html"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("generated", encoding="utf-8")
+
+        result = self.run_abandon_cli(branch, candidate, replaced_by)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assert_branch_absent(branch)
+        self.assertFalse(task.exists())
 
     def test_abandon_without_pr_removes_exact_clean_task(self) -> None:
         branch = "agent/a/demo"
@@ -519,7 +649,7 @@ class CleanupTaskTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assert_branch_exists(branch)
         self.assertTrue((task / "ignored.txt").exists())
-        self.assertFalse(self.gh_calls.exists())
+        self.assert_gh_called_once()
 
     def test_symbolic_branch_ref_is_preserved(self) -> None:
         source = "agent/a/source"
@@ -679,7 +809,7 @@ class CleanupTaskTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assert_branch_exists(branch)
         self.assertTrue(task.exists())
-        self.assertFalse(self.gh_calls.exists())
+        self.assert_gh_called_once()
 
     def test_mismatched_binding_branch_is_preserved(self) -> None:
         branch = "agent/a/demo"
@@ -691,7 +821,7 @@ class CleanupTaskTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assert_branch_exists(branch)
         self.assertTrue(task.exists())
-        self.assertFalse(self.gh_calls.exists())
+        self.assert_gh_called_once()
 
     def test_mismatched_binding_worktree_is_preserved(self) -> None:
         branch = "agent/a/demo"
@@ -703,7 +833,7 @@ class CleanupTaskTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assert_branch_exists(branch)
         self.assertTrue(task.exists())
-        self.assertFalse(self.gh_calls.exists())
+        self.assert_gh_called_once()
 
     def test_binding_with_untracked_dirt_is_preserved(self) -> None:
         branch = "agent/a/demo"
@@ -730,7 +860,7 @@ class CleanupTaskTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assert_branch_exists(branch)
         self.assertTrue(task.exists())
-        self.assertFalse(self.gh_calls.exists())
+        self.assert_gh_called_once()
 
     def test_empty_unknown_ignored_directory_is_preserved(self) -> None:
         branch = "agent/a/demo"
@@ -743,19 +873,19 @@ class CleanupTaskTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assert_branch_exists(branch)
         self.assertTrue(task.exists())
-        self.assertFalse(self.gh_calls.exists())
+        self.assert_gh_called_once()
 
-    def test_empty_unknown_nvsop_root_is_preserved(self) -> None:
+    def test_empty_legacy_nvsop_root_is_removed_after_merge_proof(self) -> None:
         branch = "agent/a/demo"
         candidate, merge_commit, task = self.make_merged_task(branch)
         (task / ".nvsop").mkdir()
 
         result = self.run_cli(branch, candidate, merge_commit)
 
-        self.assertNotEqual(0, result.returncode)
-        self.assert_branch_exists(branch)
-        self.assertTrue(task.exists())
-        self.assertFalse(self.gh_calls.exists())
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assert_branch_absent(branch)
+        self.assertFalse(task.exists())
+        self.assert_gh_called_once()
 
 
 if __name__ == "__main__":

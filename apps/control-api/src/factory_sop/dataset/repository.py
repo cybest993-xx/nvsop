@@ -290,7 +290,12 @@ class DdmTrainingCommandRepository(UsageDatasetRepository, Protocol):
         ...
 
     def confirm_ddm_training_cancellation(
-        self, *, command_id: UUID, base_job_id: str, now: datetime
+        self,
+        *,
+        command_id: UUID,
+        base_job_id: str,
+        response: Mapping[str, object],
+        now: datetime,
     ) -> bool:
         """核实进程确已停止后，才把已派发命令推进到取消终态并释放在途保护。"""
         ...

@@ -32,6 +32,7 @@ from factory_sop.execution.repository import (
 from factory_sop.execution.usecases import (
     cancel_normal_handover,
     create_normal_handover,
+    grant_normal_handover,
     read_claimed_normal_handover,
     read_normal_handover,
     settle_normal_handover_command,
@@ -90,6 +91,9 @@ class NormalHandoverView(BaseModel):
     failed_at: datetime | None
     failure_code: str | None
     failure_detail: str | None
+    new_grant_id: UUID | None = None
+    granted_at: datetime | None = None
+    granted_by: UUID | None = None
 
 
 def _view(record: NormalHandover) -> NormalHandoverView:
@@ -111,6 +115,9 @@ def _view(record: NormalHandover) -> NormalHandoverView:
         failed_at=record.failed_at,
         failure_code=record.failure_code,
         failure_detail=record.failure_detail,
+        new_grant_id=record.new_grant_id,
+        granted_at=record.granted_at,
+        granted_by=record.granted_by,
     )
 
 
@@ -154,6 +161,30 @@ def create_normal(
             raise
         raise ExecutionRefusedError(ExecutionRefusalCode.HANDOVER_TARGET_NOT_FOUND) from error
     return _view(record)
+
+
+@router.post(
+    "/normal-handovers/{handover_id}/grant",
+    operation_id="grantNormalHandover",
+    openapi_extra=needs(Permission.HANDOVER_EDIT),
+    responses=_UNAUTHORIZED | _NOT_FOUND | _CONFLICT,
+)
+def grant_normal(
+    handover_id: UUID,
+    caller: Authorized,
+    handovers: Annotated[NormalHandoverRepository, Depends(dependencies.normal_handovers)],
+    grants: Annotated[ExecutionGrantRepository, Depends(dependencies.grants)],
+) -> NormalHandoverView:
+    """仅消费当前已确认停写请求；重复提交返回已冻结的新权身份。"""
+    return _view(
+        grant_normal_handover(
+            caller=caller,
+            handover_id=handover_id,
+            now=datetime.now(UTC),
+            handovers=handovers,
+            grants=grants,
+        )
+    )
 
 
 @router.get(

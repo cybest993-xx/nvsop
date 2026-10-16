@@ -2727,6 +2727,29 @@
             ],
             "title": "Base Total Steps"
           },
+          "cancelled_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancelled At"
+          },
+          "cancelled_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancelled By"
+          },
           "created_at": {
             "anyOf": [
               {
@@ -22026,6 +22049,121 @@
           "dataset"
         ],
         "x-required-permission": "dataset.dataset.view"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/ddm-training-commands/{command_id}/cancel": {
+      "post": {
+        "description": "仅取消尚未进入派发的命令；已派发时返回冲突，不宣称基座已停止。",
+        "operationId": "cancelDdmTrainingCommand",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Command Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DdmTrainingCommandView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练素材存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "Cancel A Ddm Training Command",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.edit"
       }
     },
     "/api/v1/training-datasets/{dataset_id}/ddm-training-commands/{command_id}/result": {

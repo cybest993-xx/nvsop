@@ -365,7 +365,22 @@ def create_normal_handover(
     pending = handovers.pending_for_station(station_id)
     if pending is not None:
         pending = _expire_normal_handover(pending, now=now, handovers=handovers)
-    if pending is not None and pending.status is NormalHandoverStatus.PENDING:
+        if pending.status is NormalHandoverStatus.CONFIRMED and (
+            pending.grant_id != current.grant_id or pending.from_host_id != current.holder_host_id
+        ):
+            pending = handovers.save(
+                replace(
+                    pending,
+                    status=NormalHandoverStatus.FAILED,
+                    failed_at=now,
+                    failure_code=ExecutionRefusalCode.NORMAL_HANDOVER_STALE_CONFIRMATION.value,
+                    failure_detail="the frozen execution grant is no longer current",
+                )
+            )
+    if pending is not None and pending.status in {
+        NormalHandoverStatus.PENDING,
+        NormalHandoverStatus.CONFIRMED,
+    }:
         _refuse_handover(
             ExecutionRefusalCode.NORMAL_HANDOVER_PENDING,
             caller=caller,
@@ -412,6 +427,90 @@ def create_normal_handover(
         requested_by=str(record.requested_by),
     )
     return record
+
+
+def grant_normal_handover(
+    *,
+    caller: Caller,
+    handover_id: UUID,
+    now: datetime,
+    handovers: NormalHandoverRepository,
+    grants: ExecutionGrantRepository,
+) -> NormalHandover:
+    """消费当前停写确认，在同一事务内替换旧权并冻结授予结果。"""
+    authorize(caller, HANDOVER_PERMISSION)
+    observed = handovers.by_identifier(handover_id)
+    if observed is None:
+        raise ExecutionRefusedError(ExecutionRefusalCode.NORMAL_HANDOVER_NOT_FOUND)
+    # 与命令结案保持 grant -> handover 锁序；并发授予只能消费一次确认。
+    current = grants.for_station(observed.station_id)
+    record = handovers.by_identifier_for_update(handover_id)
+    if record is None:
+        raise ExecutionRefusedError(ExecutionRefusalCode.NORMAL_HANDOVER_NOT_FOUND)
+    if record.new_grant_id is not None:
+        return record
+    active = handovers.pending_for_station(record.station_id)
+    if (
+        record.status is not NormalHandoverStatus.CONFIRMED
+        or record.confirmed_at is None
+        or active is None
+        or active.handover_id != handover_id
+    ):
+        _refuse_handover(
+            ExecutionRefusalCode.NORMAL_HANDOVER_NOT_CONFIRMED,
+            caller=caller,
+            handover_id=handover_id,
+        )
+    # 请求记时可能早于等待行锁期间提交的确认；授予及租约从已锁定的确认之后起算。
+    now = max(now, record.confirmed_at)
+    if (
+        current is None
+        or current.grant_id != record.grant_id
+        or current.holder_host_id != record.from_host_id
+        or current.lease_expires_at <= now
+    ):
+        _refuse_handover(
+            ExecutionRefusalCode.NORMAL_HANDOVER_STALE_CONFIRMATION,
+            caller=caller,
+            handover_id=handover_id,
+        )
+    granted = grants.transfer_if_current(
+        previous_grant_id=record.grant_id,
+        previous_holder_id=record.from_host_id,
+        value=StationGrant(
+            grant_id=new_id(),
+            station_id=record.station_id,
+            holder_host_id=record.to_host_id,
+            renewed_at=now,
+            lease_expires_at=now + LEASE_TTL,
+            request_id=record.handover_id,
+        ),
+    )
+    if granted is None:
+        _refuse_handover(
+            ExecutionRefusalCode.NORMAL_HANDOVER_STALE_CONFIRMATION,
+            caller=caller,
+            handover_id=handover_id,
+        )
+    result = handovers.save(
+        replace(
+            record,
+            new_grant_id=granted.grant_id,
+            granted_at=now,
+            granted_by=caller.user.id,
+        )
+    )
+    _logger.info(
+        "execution.normal_handover.granted",
+        handover_id=str(handover_id),
+        station_id=str(record.station_id),
+        from_host_id=str(record.from_host_id),
+        to_host_id=str(record.to_host_id),
+        old_grant_id=str(record.grant_id),
+        new_grant_id=str(granted.grant_id),
+        actor_id=str(caller.user.id),
+    )
+    return result
 
 
 def read_claimed_normal_handover(

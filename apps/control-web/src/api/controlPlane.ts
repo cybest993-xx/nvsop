@@ -26,6 +26,10 @@ import {
   createUser as generatedCreateUser,
   confirmHandover as generatedConfirmHandover,
   createHandover as generatedCreateHandover,
+  createNormalHandover as generatedCreateNormalHandover,
+  readNormalHandover as generatedReadNormalHandover,
+  cancelNormalHandover as generatedCancelNormalHandover,
+  grantNormalHandover as generatedGrantNormalHandover,
   deleteConnector as generatedDeleteConnector,
   downloadTemplateImport as generatedDownloadTemplateImport,
   downloadTemplateVersionArtifact as generatedDownloadTemplateVersionArtifact,
@@ -141,6 +145,8 @@ import {
   type HandoverCreation,
   type HandoverRiskView,
   type HandoverView,
+  type NormalHandoverView,
+  type NormalHandoverCreation,
   type CreateRoleData,
   type CreateTrainingDatasetData,
   type CreateUserData,
@@ -259,6 +265,8 @@ export type {
   HandoverCreation,
   HandoverRiskView,
   HandoverView,
+  NormalHandoverView,
+  NormalHandoverCreation,
   InferenceHostView,
   ItemPageCameraMediaView,
   ItemPageConnectorView,
@@ -1206,6 +1214,31 @@ export function readStations(): Promise<ItemPageStationView> {
 
 export function readHandoverRisk(): Promise<HandoverRiskView> {
   return execute(generatedReadHandoverRisk())
+}
+
+/** 按同一请求身份重放；停写确认与新机授予由服务器分别推进。 */
+export function createNormalHandover(
+  input: NormalHandoverCreation,
+  idempotencyKey: string,
+): Promise<NormalHandoverView> {
+  return execute(
+    generatedCreateNormalHandover({
+      body: input,
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }),
+  )
+}
+
+export function readNormalHandover(id: string): Promise<NormalHandoverView> {
+  return execute(generatedReadNormalHandover({ path: { handover_id: id } }))
+}
+
+export function cancelNormalHandover(id: string): Promise<NormalHandoverView> {
+  return execute(generatedCancelNormalHandover({ path: { handover_id: id } }))
+}
+
+export function grantNormalHandover(id: string): Promise<NormalHandoverView> {
+  return execute(generatedGrantNormalHandover({ path: { handover_id: id } }))
 }
 
 /** 建立强制改绑请求；操作者同时完成第一确认。内容建立后冻结，改内容必须新建。 */

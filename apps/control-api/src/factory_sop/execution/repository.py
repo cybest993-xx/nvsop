@@ -20,6 +20,12 @@ class ExecutionGrantRepository(Protocol):
         """仅续期仍有效且身份匹配的候选租约；失配或到期返回 None。"""
         ...
 
+    def transfer_if_current(
+        self, *, previous_grant_id: UUID, previous_holder_id: UUID, value: StationGrant
+    ) -> StationGrant | None:
+        """消费匹配的旧权身份，原子替换为新权；失配或到期拒绝。"""
+        ...
+
     def for_holder(self, host_id: UUID) -> tuple[StationGrant, ...]:
         """只返回该主机当前持有（含已过期）的租约，按工位排序。"""
         ...
@@ -72,7 +78,7 @@ class NormalHandoverRepository(Protocol):
         ...
 
     def pending_for_station(self, station_id: UUID) -> NormalHandover | None:
-        """返回工位当前唯一 pending 请求。"""
+        """返回当前 pending 或尚未消费的 confirmed 请求；历史迁移数据取最新一条。"""
         ...
 
     def save(self, value: NormalHandover) -> NormalHandover:

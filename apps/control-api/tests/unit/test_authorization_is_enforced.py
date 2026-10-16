@@ -550,6 +550,7 @@ ROUTES = [
         headers={"Idempotency-Key": "authz-normal-handover"},
     ),
     Target("POST", "/execution/normal-handovers/{handover_id}/cancellation", {}),
+    Target("POST", "/execution/normal-handovers/{handover_id}/grant", {}),
     Target(
         "POST",
         "/evidence/{evidence_id}/reviews",

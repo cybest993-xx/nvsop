@@ -77,6 +77,9 @@ class NormalHandover:
     failed_at: datetime | None = None
     failure_code: str | None = None
     failure_detail: str | None = None
+    new_grant_id: UUID | None = None
+    granted_at: datetime | None = None
+    granted_by: UUID | None = None
 
 
 __all__ = [

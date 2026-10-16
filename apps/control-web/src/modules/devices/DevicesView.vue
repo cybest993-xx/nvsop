@@ -38,6 +38,7 @@ import {
 import CameraMediaPanel from './CameraMediaPanel.vue'
 import ConnectionTestControl from './ConnectionTestControl.vue'
 import ForceHandoverPanel from './ForceHandoverPanel.vue'
+import NormalHandoverPanel from './NormalHandoverPanel.vue'
 import PointManagement from './PointManagement.vue'
 import StationRetentionPanel from './StationRetentionPanel.vue'
 import StationRuntimePanel from './StationRuntimePanel.vue'
@@ -397,6 +398,13 @@ onMounted(load)
     <StationRuntimePanel :stations="stations" />
 
     <StationRetentionPanel v-for="panel in retentionPanels" :key="panel" :stations="stations" />
+
+    <NormalHandoverPanel
+      v-for="panel in forceHandoverPanels"
+      :key="`normal-${panel}`"
+      :stations="stations"
+      :hosts="hosts"
+    />
 
     <ForceHandoverPanel
       v-for="panel in forceHandoverPanels"

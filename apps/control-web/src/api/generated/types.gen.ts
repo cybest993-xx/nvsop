@@ -544,6 +544,7 @@ export type ApiErrorCode =
   | 'NORMAL_HANDOVER_GRANT_EXPIRED'
   | 'NORMAL_HANDOVER_STALE_CONFIRMATION'
   | 'NORMAL_HANDOVER_IDENTITY_MISMATCH'
+  | 'NORMAL_HANDOVER_NOT_CONFIRMED'
   | 'RETENTION_POLICY_CONFLICT'
   | 'RETENTION_POLICY_INVALID'
   | 'RETENTION_ESTIMATE_REQUIRED'
@@ -3427,6 +3428,14 @@ export type NormalHandoverView = {
    */
   grant_id: string
   /**
+   * Granted At
+   */
+  granted_at?: string | null
+  /**
+   * Granted By
+   */
+  granted_by?: string | null
+  /**
    * Handover Id
    */
   handover_id: string
@@ -3434,6 +3443,10 @@ export type NormalHandoverView = {
    * Idempotency Key
    */
   idempotency_key: string
+  /**
+   * New Grant Id
+   */
+  new_grant_id?: string | null
   /**
    * Requested At
    */
@@ -7980,6 +7993,57 @@ export type CancelNormalHandoverResponses = {
 
 export type CancelNormalHandoverResponse =
   CancelNormalHandoverResponses[keyof CancelNormalHandoverResponses]
+
+export type GrantNormalHandoverData = {
+  body?: never
+  path: {
+    /**
+     * Handover Id
+     */
+    handover_id: string
+  }
+  query?: never
+  url: '/api/v1/execution/normal-handovers/{handover_id}/grant'
+}
+
+export type GrantNormalHandoverErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Execution record not found
+   */
+  404: ProblemDocument
+  /**
+   * Execution state conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type GrantNormalHandoverError = GrantNormalHandoverErrors[keyof GrantNormalHandoverErrors]
+
+export type GrantNormalHandoverResponses = {
+  /**
+   * Successful Response
+   */
+  200: NormalHandoverView
+}
+
+export type GrantNormalHandoverResponse =
+  GrantNormalHandoverResponses[keyof GrantNormalHandoverResponses]
 
 export type ListInferenceBackendsData = {
   body?: never

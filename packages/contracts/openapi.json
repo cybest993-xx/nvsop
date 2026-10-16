@@ -798,6 +798,7 @@
           "NORMAL_HANDOVER_GRANT_EXPIRED",
           "NORMAL_HANDOVER_STALE_CONFIRMATION",
           "NORMAL_HANDOVER_IDENTITY_MISMATCH",
+          "NORMAL_HANDOVER_NOT_CONFIRMED",
           "RETENTION_POLICY_CONFLICT",
           "RETENTION_POLICY_INVALID",
           "RETENTION_ESTIMATE_REQUIRED",
@@ -5693,6 +5694,30 @@
             "title": "Grant Id",
             "type": "string"
           },
+          "granted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Granted At"
+          },
+          "granted_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Granted By"
+          },
           "handover_id": {
             "format": "uuid",
             "title": "Handover Id",
@@ -5701,6 +5726,18 @@
           "idempotency_key": {
             "title": "Idempotency Key",
             "type": "string"
+          },
+          "new_grant_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Grant Id"
           },
           "requested_at": {
             "format": "date-time",
@@ -14209,6 +14246,101 @@
           }
         },
         "summary": "Cancel Normal",
+        "tags": [
+          "execution"
+        ],
+        "x-required-permission": "execution.handover.edit"
+      }
+    },
+    "/api/v1/execution/normal-handovers/{handover_id}/grant": {
+      "post": {
+        "description": "仅消费当前已确认停写请求；重复提交返回已冻结的新权身份。",
+        "operationId": "grantNormalHandover",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "handover_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Handover Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NormalHandoverView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Execution record not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Execution state conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Grant Normal",
         "tags": [
           "execution"
         ],

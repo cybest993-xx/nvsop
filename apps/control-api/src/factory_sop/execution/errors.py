@@ -30,6 +30,7 @@ class ExecutionRefusalCode(StrEnum):
     NORMAL_HANDOVER_STALE_CONFIRMATION = "NORMAL_HANDOVER_STALE_CONFIRMATION"
     NORMAL_HANDOVER_IDENTITY_MISMATCH = "NORMAL_HANDOVER_IDENTITY_MISMATCH"
     NORMAL_HANDOVER_COMMAND_FAILED = "NORMAL_HANDOVER_COMMAND_FAILED"
+    NORMAL_HANDOVER_NOT_CONFIRMED = "NORMAL_HANDOVER_NOT_CONFIRMED"
 
 
 class ExecutionRefusedError(Exception):
@@ -81,6 +82,8 @@ def refusal_problem(code: ExecutionRefusalCode) -> tuple[int, str]:
             return 409, "停机确认身份与冻结的正常交权请求不一致"
         case ExecutionRefusalCode.NORMAL_HANDOVER_COMMAND_FAILED:
             return 409, "旧机未能完成停机和点位释放"
+        case ExecutionRefusalCode.NORMAL_HANDOVER_NOT_CONFIRMED:
+            return 409, "当前正常交权尚未取得旧机停写确认"
 
 
 __all__ = ["ExecutionRefusalCode", "ExecutionRefusedError", "refusal_problem"]

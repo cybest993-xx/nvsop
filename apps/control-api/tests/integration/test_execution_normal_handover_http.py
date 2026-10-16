@@ -8,8 +8,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from threading import Barrier
 from typing import cast
+from uuid import UUID
 
 import pytest
 from fastapi import FastAPI
@@ -35,6 +38,7 @@ from factory_sop.settings import Settings
 from nvsop_contracts import (
     HostIdentityKeyPair,
     HostIdentityRequest,
+    configuration_from_wire,
     generate_host_identity_key_pair,
     sign_host_identity_request,
 )
@@ -255,6 +259,178 @@ def _create_normal_handover(
     )
     assert response.status_code == 201, response.text
     return cast(dict[str, object], response.json())
+
+
+def test_only_confirmed_handover_can_atomically_grant_the_new_host(
+    client: TestClient, host_client: TestClient, engine: Engine, arrangement: dict[str, object]
+) -> None:
+    csrf = _login(client, str(arrangement["operator"]))
+    record = _create_normal_handover(client, arrangement, csrf)
+    grant_path = f"{NORMAL_HANDOVERS}/{record['handover_id']}/grant"
+    refused = client.post(grant_path, headers=csrf)
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["error_code"] == "NORMAL_HANDOVER_NOT_CONFIRMED"
+    claim = host_client.get(
+        CLAIM_PATH, headers=_host_headers(arrangement, method="GET", path=CLAIM_PATH)
+    ).json()
+    result_path = f"{API_PREFIX}/device-commands/{record['command_id']}/execution-handover-result"
+    body = {
+        "handover_id": record["handover_id"],
+        "grant_id": record["grant_id"],
+        "outcome": "confirmed",
+        "detail": None,
+        "failure_code": None,
+    }
+    completed = host_client.post(
+        result_path,
+        json=body,
+        headers={
+            **_host_headers(arrangement, method="POST", path=result_path, body=body),
+            "X-Command-Claim-Token": claim["claim_token"],
+        },
+    )
+    assert completed.status_code == 200, completed.text
+    granted = client.post(grant_path, headers=csrf)
+    assert granted.status_code == 200, granted.text
+    value = granted.json()
+    assert value["new_grant_id"] != record["grant_id"]
+    assert value["granted_at"] is not None
+    assert client.post(grant_path, headers=csrf).json() == value
+    with session_factory(engine)() as session:
+        current = PostgresExecutionGrantRepository(session).for_station(
+            cast(UUID, arrangement["station_id"])
+        )
+        assert current is not None
+        assert str(current.grant_id) == value["new_grant_id"]
+        assert str(current.holder_host_id) == str(arrangement["to_host_id"])
+
+
+def _confirm_for_grant(
+    client: TestClient,
+    host_client: TestClient,
+    arrangement: dict[str, object],
+) -> tuple[dict[str, str], dict[str, object]]:
+    csrf = _login(client, str(arrangement["operator"]))
+    record = _create_normal_handover(client, arrangement, csrf)
+    claimed = host_client.get(
+        CLAIM_PATH, headers=_host_headers(arrangement, method="GET", path=CLAIM_PATH)
+    ).json()
+    path = f"{API_PREFIX}/device-commands/{record['command_id']}/execution-handover-result"
+    body = {
+        "handover_id": record["handover_id"],
+        "grant_id": record["grant_id"],
+        "outcome": "confirmed",
+        "detail": None,
+        "failure_code": None,
+    }
+    response = host_client.post(
+        path,
+        json=body,
+        headers={
+            **_host_headers(arrangement, method="POST", path=path, body=body),
+            "X-Command-Claim-Token": claimed["claim_token"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    return csrf, record
+
+
+def test_concurrent_grants_consume_one_confirmation_and_old_host_cannot_renew(
+    client: TestClient, host_client: TestClient, engine: Engine, arrangement: dict[str, object]
+) -> None:
+    csrf, record = _confirm_for_grant(client, host_client, arrangement)
+    path = f"{NORMAL_HANDOVERS}/{record['handover_id']}/grant"
+    barrier = Barrier(3)
+
+    def grant() -> dict[str, object]:
+        barrier.wait(timeout=10)
+        response = client.post(path, headers=csrf)
+        assert response.status_code == 200, response.text
+        return cast(dict[str, object], response.json())
+
+    def compete() -> None:
+        from factory_sop.execution.errors import ExecutionRefusedError
+        from factory_sop.execution.usecases import RepositoryExecutionLeaseGateway
+
+        barrier.wait(timeout=10)
+        with (
+            session_factory(engine)() as session,
+            pytest.raises(ExecutionRefusedError, match="ACTIVE_GRANT_EXISTS"),
+        ):
+            RepositoryExecutionLeaseGateway(PostgresExecutionGrantRepository(session)).acquire(
+                station_id=cast(UUID, arrangement["station_id"]),
+                holder_host_id=cast(UUID, arrangement["to_host_id"]),
+                request_id=new_id(),
+                now=datetime.now(UTC),
+            )
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        first = pool.submit(grant)
+        second = pool.submit(grant)
+        competition = pool.submit(compete)
+        assert first.result(timeout=20) == second.result(timeout=20)
+        competition.result(timeout=20)
+    old_path = f"{API_PREFIX}/inference-hosts/{arrangement['from_host_id']}/configuration"
+    old_configuration = host_client.get(
+        old_path,
+        headers=_host_headers(
+            arrangement,
+            method="GET",
+            path=old_path,
+        ),
+    )
+    assert old_configuration.status_code == 200, old_configuration.text
+    assert configuration_from_wire(old_configuration.json()).execution_grants == ()
+
+
+def test_grant_waiting_for_confirmation_uses_a_time_after_the_locked_confirmation(
+    client: TestClient, host_client: TestClient, arrangement: dict[str, object]
+) -> None:
+    from unittest.mock import patch
+
+    csrf, record = _confirm_for_grant(client, host_client, arrangement)
+    confirmed = client.get(f"{NORMAL_HANDOVERS}/{record['handover_id']}").json()
+    confirmed_at = datetime.fromisoformat(confirmed["confirmed_at"])
+    # 模拟请求先记时、随后等待另一个事务提交停写确认的合法锁顺序。
+    with patch("factory_sop.execution.adapters.normal_routes.datetime") as clock:
+        clock.now.return_value = confirmed_at - timedelta(seconds=1)
+        response = client.post(f"{NORMAL_HANDOVERS}/{record['handover_id']}/grant", headers=csrf)
+    assert response.status_code == 200, response.text
+    assert datetime.fromisoformat(response.json()["granted_at"]) >= confirmed_at
+
+
+@pytest.mark.parametrize("terminal", ["cancelled", "timed_out"])
+def test_terminal_handover_cannot_be_granted(
+    client: TestClient,
+    engine: Engine,
+    arrangement: dict[str, object],
+    terminal: str,
+) -> None:
+    csrf = _login(client, str(arrangement["operator"]))
+    record = _create_normal_handover(client, arrangement, csrf)
+    if terminal == "cancelled":
+        response = client.post(
+            f"{NORMAL_HANDOVERS}/{record['handover_id']}/cancellation", headers=csrf
+        )
+        assert response.status_code == 200
+    else:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE execution_normal_handover"
+                    " SET requested_at = now() - INTERVAL '10 minutes',"
+                    " expires_at = now() - INTERVAL '5 minutes' WHERE handover_id = :hid"
+                ),
+                {"hid": record["handover_id"]},
+            )
+        assert (
+            client.get(f"{NORMAL_HANDOVERS}/{record['handover_id']}").json()["status"] == terminal
+        )
+    response = client.post(f"{NORMAL_HANDOVERS}/{record['handover_id']}/grant", headers=csrf)
+    assert response.status_code == 409, response.text
+    unchanged = client.get(f"{NORMAL_HANDOVERS}/{record['handover_id']}").json()
+    assert unchanged["status"] == terminal
+    assert unchanged["new_grant_id"] is None
 
 
 def test_signed_claim_returns_the_frozen_command_and_default_next_does_not(
@@ -582,7 +758,8 @@ def test_claim_persists_timeout_without_a_browser_read(
     with engine.begin() as connection:
         connection.execute(
             text(
-                "UPDATE execution_normal_handover SET requested_at = now() - INTERVAL '10 minutes',"
+                "UPDATE execution_normal_handover"
+                " SET requested_at = now() - INTERVAL '10 minutes',"
                 " expires_at = now() - INTERVAL '5 minutes' WHERE handover_id = :hid"
             ),
             {"hid": record["handover_id"]},

@@ -1,12 +1,7 @@
-"""老化录像分段的候选重编码与真实校验: 只产出候选, 不替换、不删除原件 (S047, §5.19)。
+"""老化录像重编码、真实校验与同目录原子替换 (§5.19)。
 
-原始素材窗口 (默认 24h) 内的分段不压缩; 窗口外的分段由本机 ffmpeg 真实重编码为 H.264 候选,
-并按"时长一致、严格可解码、帧数在容差内"校验。通过后候选文件与 `<segment>.compressed.json`
-参数/代次留痕一起落盘; 失败则删除候选、保留原件并记录 `edge.recording_compression.failed` 告警。
-
-未校验候选不得被当作安全替代品: 生产者在发现留痕不匹配或校验失败时移除候选, 而消费边界
-`validated_candidate` 只把逐字节复核摘要通过的候选交给后续的原子替换 (S048)。证据媒体本身不重编码。
-标准库 + 本机 ffmpeg/ffprobe。
+候选生成入口保留 S047 契约; 后台 worker 消费同一校验留痕并替换分段。候选和留痕先持久化,
+再以一次 rename 提交文件, 代次由留痕与实际字节共同确定。证据媒体本身不重编码。
 """
 
 from __future__ import annotations
@@ -37,6 +32,7 @@ from edge_runtime.evidence_media import (
     MATERIAL_GENERATION_COMPRESSED,
     EvidenceMediaError,
     file_sha256,
+    recording_material_access,
     recording_segment_generation,
     recording_segment_start,
 )
@@ -123,11 +119,12 @@ class RecordingCompressionCandidate:
 
 @dataclass(frozen=True, slots=True)
 class CompressionSummary:
-    """本轮候选压缩的结果计数; failed 只表示本轮未产出候选, 不影响任何原件。"""
+    """本轮候选生成与替换计数; 替换后的持久化失败也计入 failed 并告警。"""
 
     created: int
     skipped: int
     failed: int
+    replaced: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,25 +143,39 @@ def compress_aged_segments(
     configuration: RecordingCompressionConfiguration,
     *,
     now: float | None = None,
+    install: bool = False,
 ) -> CompressionSummary:
-    """为已出原始素材窗口的分段生成候选压缩文件; 失败保留原件并告警, 从不删除原件。"""
+    """为老化分段生成候选; 显式 install 时在同一素材占用内安装, 默认保持原件。"""
     current = time() if now is None else now
     if not isfinite(current):
         raise ValueError("compression clock must be finite")
     cutoff = current - configuration.compression_age_seconds
-    created = skipped = failed = 0
+    created = skipped = failed = replaced = 0
     for segment in _aged_segments(configuration, cutoff=cutoff):
         try:
-            if _already_archived(segment) or _candidate_is_current(segment, configuration):
-                skipped += 1
-                continue
-            _compress_segment(segment, configuration, now=current)
+            with recording_material_access(segment.parent, exclusive=True):
+                if _already_archived(segment):
+                    skipped += 1
+                    continue
+                if _candidate_is_current(segment, configuration):
+                    skipped += 1
+                else:
+                    _compress_segment(segment, configuration, now=current)
+                    created += 1
+                if install:
+                    replaced += _install_validated_candidate(segment)
+        except BlockingIOError:
+            skipped += 1
+            continue
+        except OSError as error:
+            failed += 1
+            _log_failure(segment.name, "io_failed", str(error))
+            continue
         except (EvidenceMediaError, RecordingCompressionError) as error:
             failed += 1
             _log_failure(segment.name, error.reason, error.detail)
             continue
-        created += 1
-    return CompressionSummary(created=created, skipped=skipped, failed=failed)
+    return CompressionSummary(created=created, skipped=skipped, failed=failed, replaced=replaced)
 
 
 def validated_candidate(segment: Path) -> RecordingCompressionCandidate | None:
@@ -189,8 +200,53 @@ def validated_candidate(segment: Path) -> RecordingCompressionCandidate | None:
     return document if matches else None
 
 
+def replace_validated_candidate(segment: Path) -> bool:
+    """仅安装与 S047 校验留痕一致的候选; 原子 rename 前不删除原件。
+
+    文件与同目录留痕先 fsync, 再提交唯一一次替换。重启后无论 rename 是否落盘, 留痕都能
+    解释实际分段的代次; 不另建提交账本。返回 False 表示没有候选。
+    """
+    try:
+        with recording_material_access(segment.parent, exclusive=True):
+            if _already_archived(segment):
+                return False
+            return _install_validated_candidate(segment)
+    except BlockingIOError:
+        return False
+    except (OSError, EvidenceMediaError) as error:
+        raise RecordingCompressionError("replace_failed", str(error)) from error
+
+
+def _install_validated_candidate(segment: Path) -> bool:
+    """调用方持排他占用且已确认原始代次; 校验一次后完成持久化与替换。"""
+    candidate = _candidate_path(segment)
+    if not candidate.exists():
+        return False
+    if segment.is_symlink() or candidate.is_symlink():
+        raise RecordingCompressionError("candidate_invalid", "symbolic recording material")
+    document = validated_candidate(segment)
+    if document is None:
+        raise RecordingCompressionError(
+            "candidate_invalid", "candidate no longer matches validation"
+        )
+    try:
+        for path in (candidate, _provenance_path(segment)):
+            with path.open("rb") as stream:
+                os.fsync(stream.fileno())
+        descriptor = os.open(segment.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+            os.replace(candidate, segment)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except OSError as error:
+        raise RecordingCompressionError("replace_failed", str(error)) from error
+    return True
+
+
 class RecordingCompressionWorker:
-    """后台为老化分段生成候选: 不阻塞判定, 不依赖中心, 从不替换或删除原件 (S047)。"""
+    """后台生成并原子安装已验证候选, 不依赖中心或阻塞判定。"""
 
     def __init__(
         self,
@@ -207,15 +263,16 @@ class RecordingCompressionWorker:
 
     def drain(self) -> CompressionSummary:
         """处理一轮; 逐分段失败已在本轮内转为告警, 不中断后续分段。"""
-        summary = compress_aged_segments(self._configuration, now=self._clock())
-        if summary.created or summary.failed:
+        result = compress_aged_segments(self._configuration, now=self._clock(), install=True)
+        if result.created or result.replaced or result.failed:
             _logger.info(
-                "edge.recording_compression.summary created=%s skipped=%s failed=%s",
-                summary.created,
-                summary.skipped,
-                summary.failed,
+                "edge.recording_compression.summary created=%s replaced=%s skipped=%s failed=%s",
+                result.created,
+                result.replaced,
+                result.skipped,
+                result.failed,
             )
-        return summary
+        return result
 
     def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
         while not should_stop():
@@ -591,5 +648,6 @@ __all__ = [
     "RecordingCompressionError",
     "RecordingCompressionWorker",
     "compress_aged_segments",
+    "replace_validated_candidate",
     "validated_candidate",
 ]

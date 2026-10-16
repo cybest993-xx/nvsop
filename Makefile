@@ -1,4 +1,4 @@
-.PHONY: check check-suite check-docs docs-check check-integration media-system change-size task-check ci-plan ci-tools ci-lint pr-check issue-check hooks local-clean local-purge lockfile sync policy policy-test migrations contract-base \
+.PHONY: check check-suite check-docs docs-check check-integration media-system edge-bench change-size task-check ci-plan ci-tools ci-lint pr-check issue-check hooks local-clean local-purge lockfile sync policy policy-test migrations contract-base \
 	contract-capability \
 	contracts contracts-python-check contracts-python-format contracts-python-lint \
 	contracts-python-type contracts-python-unit openapi-export openapi-compat openapi-generate \
@@ -262,6 +262,13 @@ edge-unit:
 edge-integration:
 	cd $(EDGE) && PYTHONPATH="$(CURDIR)/$(CONTRACT_PY)/src:src" $(PYTHON) -m unittest \
 		discover -s tests/integration -t tests/integration -p 'test_*.py'
+
+# 手动运行的性能基线：不在 check-suite/CI 阻塞门禁中，不对应 500ms 现场验收。
+edge-bench: sync
+	mkdir -p "$(LOCAL_ARTIFACTS)/performance"
+	cd $(EDGE) && PYTHONPATH="$(CURDIR)/$(CONTRACT_PY)/src:src:tests/unit:tests/integration" \
+		$(PYTHON) tests/performance/benchmark_edge.py \
+		--output "$(LOCAL_ARTIFACTS)/performance/edge-baseline.json" $(PERF_ARGS)
 
 WEB := apps/control-web
 

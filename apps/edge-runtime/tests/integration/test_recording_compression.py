@@ -1,4 +1,4 @@
-"""录像压缩候选集成: 真实 ffmpeg/ffprobe、真实留痕、失败保留原件与再切片路径 (S047)。"""
+"""录像压缩集成: 真实编码、原子替换、进程退出恢复与再切片占用保护。"""
 
 from __future__ import annotations
 
@@ -6,17 +6,25 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from threading import Event, Thread
 from time import time
 from typing import cast
 from unittest.mock import patch
 
 from store_harness import ANCHOR, STATION, opening_state
 
-from edge_runtime.evidence_media import EvidenceMediaConfiguration, EvidenceMediaWorker
+from edge_runtime.evidence_media import (
+    EvidenceMediaConfiguration,
+    EvidenceMediaError,
+    EvidenceMediaWorker,
+    recording_segment_generation,
+    slice_evidence,
+)
 from edge_runtime.judgment.evidence import EvidenceClip
 from edge_runtime.judgment.model import Decision, EvidenceSpan, HostInstant, Instance, Lifecycle
 from edge_runtime.judgment.reasons import Verdict
@@ -24,7 +32,10 @@ from edge_runtime.local_state import EvidenceSource, LocalState, open_local_stat
 from edge_runtime.local_state.queues import PendingEvidence
 from edge_runtime.recording_compression import (
     RecordingCompressionConfiguration,
+    RecordingCompressionError,
+    RecordingCompressionWorker,
     compress_aged_segments,
+    replace_validated_candidate,
     validated_candidate,
 )
 
@@ -173,6 +184,225 @@ class RecordingCompressionTest(unittest.TestCase):
         self.assertEqual(document["generation"], "compressed")
         self.assertEqual(document["candidate_sha256"], candidate.candidate_sha256)
 
+    def test_worker_atomically_installs_the_verified_candidate_and_reuses_generation(self) -> None:
+        directory = self.recording / CAMERA
+        segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
+        source = next(directory.glob("*.mp4"))
+        original = digest(source)
+        compress_aged_segments(self.configuration())
+        candidate = validated_candidate(source)
+        assert candidate is not None
+        worker = RecordingCompressionWorker(configuration=self.configuration(), interval=1.0)
+
+        summary = worker.drain()
+
+        self.assertEqual(summary.failed, 0)
+        self.assertEqual(digest(source), candidate.candidate_sha256)
+        self.assertNotEqual(digest(source), original)
+        self.assertFalse(source.with_suffix(".compressed.mp4").exists())
+        self.assertEqual(recording_segment_generation(source), "compressed")
+        decode(source)
+        second = worker.drain()
+        self.assertEqual((second.created, second.failed), (0, 0))
+        self.assertEqual(digest(source), candidate.candidate_sha256)
+
+    def test_installed_material_requires_the_complete_validated_provenance(self) -> None:
+        directory = self.recording / CAMERA
+        segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
+        source = next(directory.glob("*.mp4"))
+        worker = RecordingCompressionWorker(configuration=self.configuration(), interval=1.0)
+        self.assertEqual(worker.drain().replaced, 1)
+        provenance = source.with_suffix(".compressed.json")
+        document = json.loads(provenance.read_text(encoding="utf-8"))
+        for field in ("crf", "candidate_frames", "candidate_mtime_ns"):
+            with self.subTest(field=field):
+                incomplete = {key: value for key, value in document.items() if key != field}
+                provenance.write_text(json.dumps(incomplete), encoding="utf-8")
+                with self.assertRaises(EvidenceMediaError) as caught:
+                    recording_segment_generation(source)
+                self.assertEqual(caught.exception.reason, "material_provenance_invalid")
+
+    def test_replacement_waits_for_reslice_and_preserves_finalized_evidence(self) -> None:
+        directory = self.recording / CAMERA
+        segments(directory, ANCHOR - 6, 7)
+        compress_aged_segments(self.configuration())
+        originals = {
+            path: digest(path)
+            for path in directory.glob("*.mp4")
+            if not path.name.endswith(".compressed.mp4")
+        }
+        state = self._state()
+        self.addCleanup(state.close)
+        self._enqueue(state)
+        (pending,) = state.station(STATION).pending_evidence()
+        configuration = EvidenceMediaConfiguration(self.root / "evidence", FFPROBE, 30.0, None)
+        reading, release = Event(), Event()
+        results: list[str | BaseException] = []
+        run = subprocess.run
+
+        def paused_run(*args: object, **kwargs: object) -> object:
+            argv = cast(list[str], args[0])
+            if "concat" in argv:
+                reading.set()
+                if not release.wait(10):
+                    raise TimeoutError("reader was not released")
+            return run(*args, **kwargs)  # type: ignore[call-overload]
+
+        def read() -> None:
+            try:
+                results.append(
+                    slice_evidence(
+                        pending,
+                        host_id="host-01",
+                        recording_directory=self.recording,
+                        ffmpeg_binary=FFMPEG,
+                        configuration=configuration,
+                    ).media_json
+                )
+            except BaseException as error:
+                results.append(error)
+
+        worker = RecordingCompressionWorker(configuration=self.configuration(), interval=1.0)
+        with patch.object(subprocess, "run", side_effect=paused_run):
+            reader = Thread(target=read)
+            reader.start()
+            try:
+                self.assertTrue(reading.wait(10), results)
+                summary = worker.drain()
+                self.assertEqual(summary.replaced, 0)
+                self.assertEqual({path: digest(path) for path in originals}, originals)
+            finally:
+                release.set()
+                reader.join(15)
+        self.assertFalse(reader.is_alive())
+        self.assertEqual(len(results), 1)
+        if isinstance(results[0], BaseException):
+            raise results[0]
+        (media,) = json.loads(results[0])
+        self.assertEqual(media["material_generation"], "original")
+        clip, keyframe = _files(configuration.evidence_directory, media)
+        evidence_hashes = (digest(clip), digest(keyframe))
+
+        summary = worker.drain()
+
+        self.assertEqual(summary.replaced, 7)
+        self.assertEqual((digest(clip), digest(keyframe)), evidence_hashes)
+        decode(clip)
+        self.assertEqual({recording_segment_generation(path) for path in originals}, {"compressed"})
+
+    def test_replace_failure_keeps_both_files_and_restart_consumes_the_same_candidate(self) -> None:
+        directory = self.recording / CAMERA
+        segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
+        source = next(directory.glob("*.mp4"))
+        original = digest(source)
+        compress_aged_segments(self.configuration())
+        candidate = validated_candidate(source)
+        assert candidate is not None
+        worker = RecordingCompressionWorker(configuration=self.configuration(), interval=1.0)
+        with (
+            patch.object(os, "replace", side_effect=OSError("replace denied")),
+            self.assertLogs("edge_runtime", level="ERROR") as logs,
+        ):
+            failed = worker.drain()
+        self.assertEqual((failed.replaced, failed.failed), (0, 1))
+        self.assertTrue(any("replace_failed" in line for line in logs.output))
+        self.assertEqual(digest(source), original)
+        self.assertEqual(validated_candidate(source), candidate)
+        # 旧旁车不能覆盖与当前字节绑定的 S047 原件事实。
+        source.with_suffix(".material.json").write_text(
+            json.dumps({"generation": "compressed"}), encoding="utf-8"
+        )
+        self.assertEqual(recording_segment_generation(source), "original")
+
+        restarted = RecordingCompressionWorker(configuration=self.configuration(), interval=1.0)
+        self.assertEqual(restarted.drain().replaced, 1)
+        self.assertEqual(digest(source), candidate.candidate_sha256)
+        self.assertEqual(recording_segment_generation(source), "compressed")
+
+    def test_sync_failure_leaves_a_complete_original_or_committed_candidate(self) -> None:
+        sync = os.fsync
+        for boundary in ("before", "after"):
+            with self.subTest(boundary=boundary):
+                directory = self.recording / boundary
+                segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
+                source = next(directory.glob("*.mp4"))
+                compress_aged_segments(self.configuration())
+                candidate = validated_candidate(source)
+                assert candidate is not None
+
+                def failed_sync(
+                    descriptor: int, *, material: Path = source, after: bool = boundary == "after"
+                ) -> None:
+                    committed = not material.with_suffix(".compressed.mp4").exists()
+                    if committed == after:
+                        raise OSError("sync failed")
+                    sync(descriptor)
+
+                with (
+                    patch.object(os, "fsync", side_effect=failed_sync),
+                    self.assertRaisesRegex(RecordingCompressionError, "replace_failed"),
+                ):
+                    replace_validated_candidate(source)
+                self.assertEqual(
+                    digest(source),
+                    candidate.source_sha256 if boundary == "before" else candidate.candidate_sha256,
+                )
+                self.assertEqual(
+                    recording_segment_generation(source),
+                    "original" if boundary == "before" else "compressed",
+                )
+                decode(source)
+                self.assertEqual(
+                    RecordingCompressionWorker(configuration=self.configuration(), interval=1.0)
+                    .drain()
+                    .failed,
+                    0,
+                )
+                self.assertEqual(digest(source), candidate.candidate_sha256)
+
+    def test_process_exit_on_either_side_of_rename_leaves_complete_identifiable_material(
+        self,
+    ) -> None:
+        for boundary in ("before", "after"):
+            with self.subTest(boundary=boundary):
+                directory = self.recording / boundary
+                segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
+                source = next(directory.glob("*.mp4"))
+                compress_aged_segments(self.configuration())
+                candidate = validated_candidate(source)
+                assert candidate is not None
+                script = (
+                    "import os, sys\n"
+                    "from pathlib import Path\n"
+                    "from edge_runtime.recording_compression import replace_validated_candidate\n"
+                    "rename = os.replace\n"
+                    "def interrupted(src, dst):\n"
+                    "    if sys.argv[2] == 'after':\n"
+                    "        rename(src, dst)\n"
+                    "    os._exit(73)\n"
+                    "os.replace = interrupted\n"
+                    "replace_validated_candidate(Path(sys.argv[1]))\n"
+                )
+                completed = subprocess.run(
+                    [sys.executable, "-c", script, str(source), boundary], check=False
+                )
+                self.assertEqual(completed.returncode, 73)
+                self.assertEqual(
+                    digest(source),
+                    candidate.source_sha256 if boundary == "before" else candidate.candidate_sha256,
+                )
+                self.assertEqual(
+                    recording_segment_generation(source),
+                    "original" if boundary == "before" else "compressed",
+                )
+                decode(source)
+                worker = RecordingCompressionWorker(
+                    configuration=self.configuration(), interval=1.0
+                )
+                self.assertEqual(worker.drain().failed, 0)
+                self.assertEqual(digest(source), candidate.candidate_sha256)
+                self.assertEqual(recording_segment_generation(source), "compressed")
+
     def test_encode_failure_keeps_original_and_records_alert(self) -> None:
         directory = self.recording / CAMERA
         segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
@@ -213,8 +443,12 @@ class RecordingCompressionTest(unittest.TestCase):
         segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
         source = next(directory.glob("*.mp4"))
         candidate = source.with_suffix(".compressed.mp4")
+        original = digest(source)
         candidate.write_bytes(b"not a video")
         self.assertIsNone(validated_candidate(source))
+        with self.assertRaises(RecordingCompressionError):
+            replace_validated_candidate(source)
+        self.assertEqual(digest(source), original)
 
         recovered = compress_aged_segments(self.configuration())
 
@@ -226,6 +460,9 @@ class RecordingCompressionTest(unittest.TestCase):
         length = candidate.stat().st_size
         candidate.write_bytes(b"\0" * length)
         self.assertIsNone(validated_candidate(source))
+        with self.assertRaises(RecordingCompressionError):
+            replace_validated_candidate(source)
+        self.assertEqual(digest(source), original)
         overwritten = compress_aged_segments(self.configuration())
         self.assertEqual((overwritten.created, overwritten.failed), (1, 0))
         repaired_candidate = validated_candidate(source)
@@ -303,16 +540,8 @@ class RecordingCompressionTest(unittest.TestCase):
         segments(camera, ANCHOR - 6, 7)
         summary = compress_aged_segments(self.configuration())
         self.assertEqual((summary.created, summary.failed), (7, 0))
-        # 模拟 S048 的原子替换: 候选成为分段并声明 compressed; 本票自身不替换任何原件。
-        originals = sorted(
-            path for path in camera.glob("*.mp4") if not path.name.endswith(".compressed.mp4")
-        )
-        self.assertEqual(len(originals), 7)
-        for segment in originals:
-            os.replace(segment.with_suffix(".compressed.mp4"), segment)
-            segment.with_suffix(".material.json").write_text(
-                json.dumps({"generation": "compressed"}), encoding="utf-8"
-            )
+        compression = RecordingCompressionWorker(configuration=self.configuration(), interval=1.0)
+        self.assertEqual(compression.drain().replaced, 7)
         state = self._state()
         self.addCleanup(state.close)
         self._enqueue(state)

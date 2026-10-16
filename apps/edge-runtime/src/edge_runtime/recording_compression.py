@@ -1,12 +1,7 @@
-"""老化录像分段的候选重编码与真实校验: 只产出候选, 不替换、不删除原件 (S047, §5.19)。
+"""老化录像重编码、真实校验与同目录原子替换 (§5.19)。
 
-原始素材窗口 (默认 24h) 内的分段不压缩; 窗口外的分段由本机 ffmpeg 真实重编码为 H.264 候选,
-并按"时长一致、严格可解码、帧数在容差内"校验。通过后候选文件与 `<segment>.compressed.json`
-参数/代次留痕一起落盘; 失败则删除候选、保留原件并记录 `edge.recording_compression.failed` 告警。
-
-未校验候选不得被当作安全替代品: 生产者在发现留痕不匹配或校验失败时移除候选, 而消费边界
-`validated_candidate` 只把逐字节复核摘要通过的候选交给后续的原子替换 (S048)。证据媒体本身不重编码。
-标准库 + 本机 ffmpeg/ffprobe。
+候选生成入口保留 S047 契约; 后台 worker 消费同一校验留痕并替换分段。候选和留痕先持久化,
+再以一次 rename 提交文件, 代次由留痕与实际字节共同确定。证据媒体本身不重编码。
 """
 
 from __future__ import annotations
@@ -17,28 +12,24 @@ import os
 import subprocess
 import tempfile
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from math import ceil, isfinite
 from pathlib import Path
 from time import monotonic, sleep, time
 from typing import cast
 
-from edge_runtime.configuration_values import (
-    _crf_value,
-    _non_empty_string,
-    _non_negative_integer,
-    _object,
-    _positive_integer,
-    _positive_number,
-    _require_keys,
-)
 from edge_runtime.evidence_media import (
     MATERIAL_GENERATION_COMPRESSED,
     EvidenceMediaError,
     file_sha256,
+    recording_material_access,
     recording_segment_generation,
     recording_segment_start,
+)
+from edge_runtime.recording_provenance import (
+    RecordingCompressionCandidate,
+    read_compression_provenance,
 )
 
 _logger = logging.getLogger("edge_runtime")
@@ -96,38 +87,13 @@ class RecordingCompressionConfiguration:
 
 
 @dataclass(frozen=True, slots=True)
-class RecordingCompressionCandidate:
-    """已通过真实校验的候选及其编码参数/代次留痕; S048 消费的同一产物。"""
-
-    source: str
-    candidate: str
-    source_sha256: str
-    candidate_sha256: str
-    source_size_bytes: int
-    candidate_size_bytes: int
-    source_duration_seconds: float
-    candidate_duration_seconds: float
-    source_frames: int
-    candidate_frames: int
-    candidate_mtime_ns: int
-    crf: int
-    encoder: str
-    preset: str
-    generation: str
-    encoded_at: str
-
-    def to_wire(self) -> dict[str, object]:
-        """转换为本机留痕文档; 文档字段名就是这里的字段名, 只在此处定义一次。"""
-        return asdict(self)
-
-
-@dataclass(frozen=True, slots=True)
 class CompressionSummary:
-    """本轮候选压缩的结果计数; failed 只表示本轮未产出候选, 不影响任何原件。"""
+    """本轮候选生成与替换计数; 替换后的持久化失败也计入 failed 并告警。"""
 
     created: int
     skipped: int
     failed: int
+    replaced: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,32 +105,59 @@ class _Probe:
     frames: int
 
 
-_PROVENANCE_KEYS = frozenset(RecordingCompressionCandidate.__dataclass_fields__)
-
-
 def compress_aged_segments(
     configuration: RecordingCompressionConfiguration,
     *,
     now: float | None = None,
 ) -> CompressionSummary:
-    """为已出原始素材窗口的分段生成候选压缩文件; 失败保留原件并告警, 从不删除原件。"""
+    """S047 候选生成入口; 保留原件, 不安装候选。"""
+    return _process_aged_segments(configuration, now=now, install=False)
+
+
+def archive_aged_segments(
+    configuration: RecordingCompressionConfiguration, *, now: float | None = None
+) -> CompressionSummary:
+    """后台归档入口: 生成候选并在同一素材占用内验证、原子安装。"""
+    return _process_aged_segments(configuration, now=now, install=True)
+
+
+def _process_aged_segments(
+    configuration: RecordingCompressionConfiguration, *, now: float | None, install: bool
+) -> CompressionSummary:
     current = time() if now is None else now
     if not isfinite(current):
         raise ValueError("compression clock must be finite")
     cutoff = current - configuration.compression_age_seconds
-    created = skipped = failed = 0
+    created = skipped = failed = replaced = 0
     for segment in _aged_segments(configuration, cutoff=cutoff):
         try:
-            if _already_archived(segment) or _candidate_is_current(segment, configuration):
-                skipped += 1
-                continue
-            _compress_segment(segment, configuration, now=current)
+            with recording_material_access(segment.parent, exclusive=True):
+                # 未提交候选仍按 S047 清理/重做; 已安装留痕不能因候选缺失被清除。
+                current_candidate = _candidate_path(segment).exists() and _candidate_is_current(
+                    segment, configuration
+                )
+                if _already_archived(segment):
+                    skipped += 1
+                    continue
+                if current_candidate:
+                    skipped += 1
+                else:
+                    _compress_segment(segment, configuration, now=current)
+                    created += 1
+                if install:
+                    replaced += _install_validated_candidate(segment)
+        except BlockingIOError:
+            skipped += 1
+            continue
+        except OSError as error:
+            failed += 1
+            _log_failure(segment.name, "io_failed", str(error))
+            continue
         except (EvidenceMediaError, RecordingCompressionError) as error:
             failed += 1
             _log_failure(segment.name, error.reason, error.detail)
             continue
-        created += 1
-    return CompressionSummary(created=created, skipped=skipped, failed=failed)
+    return CompressionSummary(created=created, skipped=skipped, failed=failed, replaced=replaced)
 
 
 def validated_candidate(segment: Path) -> RecordingCompressionCandidate | None:
@@ -174,7 +167,7 @@ def validated_candidate(segment: Path) -> RecordingCompressionCandidate | None:
     if not candidate.is_file() or not provenance.is_file():
         return None
     try:
-        document = _read_provenance(provenance)
+        document = read_compression_provenance(provenance)
     except (OSError, ValueError):
         return None
     if document.source != segment.name or document.candidate != candidate.name:
@@ -189,8 +182,53 @@ def validated_candidate(segment: Path) -> RecordingCompressionCandidate | None:
     return document if matches else None
 
 
+def replace_validated_candidate(segment: Path) -> bool:
+    """仅安装与 S047 校验留痕一致的候选; 原子 rename 前不删除原件。
+
+    文件与同目录留痕先 fsync, 再提交唯一一次替换。重启后无论 rename 是否落盘, 留痕都能
+    解释实际分段的代次; 不另建提交账本。返回 False 表示没有候选。
+    """
+    try:
+        with recording_material_access(segment.parent, exclusive=True):
+            if _already_archived(segment):
+                return False
+            return _install_validated_candidate(segment)
+    except BlockingIOError:
+        return False
+    except (OSError, EvidenceMediaError) as error:
+        raise RecordingCompressionError("replace_failed", str(error)) from error
+
+
+def _install_validated_candidate(segment: Path) -> bool:
+    """调用方持排他占用且已确认原始代次; 校验一次后完成持久化与替换。"""
+    candidate = _candidate_path(segment)
+    if not candidate.exists():
+        return False
+    if segment.is_symlink() or candidate.is_symlink():
+        raise RecordingCompressionError("candidate_invalid", "symbolic recording material")
+    document = validated_candidate(segment)
+    if document is None:
+        raise RecordingCompressionError(
+            "candidate_invalid", "candidate no longer matches validation"
+        )
+    try:
+        for path in (candidate, _provenance_path(segment)):
+            with path.open("rb") as stream:
+                os.fsync(stream.fileno())
+        descriptor = os.open(segment.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+            os.replace(candidate, segment)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except OSError as error:
+        raise RecordingCompressionError("replace_failed", str(error)) from error
+    return True
+
+
 class RecordingCompressionWorker:
-    """后台为老化分段生成候选: 不阻塞判定, 不依赖中心, 从不替换或删除原件 (S047)。"""
+    """后台生成并原子安装已验证候选, 不依赖中心或阻塞判定。"""
 
     def __init__(
         self,
@@ -207,15 +245,16 @@ class RecordingCompressionWorker:
 
     def drain(self) -> CompressionSummary:
         """处理一轮; 逐分段失败已在本轮内转为告警, 不中断后续分段。"""
-        summary = compress_aged_segments(self._configuration, now=self._clock())
-        if summary.created or summary.failed:
+        result = archive_aged_segments(self._configuration, now=self._clock())
+        if result.created or result.replaced or result.failed:
             _logger.info(
-                "edge.recording_compression.summary created=%s skipped=%s failed=%s",
-                summary.created,
-                summary.skipped,
-                summary.failed,
+                "edge.recording_compression.summary created=%s replaced=%s skipped=%s failed=%s",
+                result.created,
+                result.replaced,
+                result.skipped,
+                result.failed,
             )
-        return summary
+        return result
 
     def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
         while not should_stop():
@@ -278,7 +317,7 @@ def _candidate_is_current(segment: Path, configuration: RecordingCompressionConf
     if not candidate.is_file() and not provenance.is_file():
         return False
     try:
-        document = _read_provenance(provenance)
+        document = read_compression_provenance(provenance)
         candidate_stat = candidate.stat()
         matches = (
             document.source == segment.name
@@ -504,47 +543,6 @@ def _write_provenance(path: Path, document: RecordingCompressionCandidate) -> No
         temporary.unlink(missing_ok=True)
 
 
-def _read_provenance(path: Path) -> RecordingCompressionCandidate:
-    """严格读取留痕; 字段集合或类型不符即拒绝, 不把无法证明的候选当已验证。"""
-    document = _object(json.loads(path.read_text(encoding="utf-8")), "compression provenance")
-    _require_keys(document, required=_PROVENANCE_KEYS)
-    generation = _non_empty_string(document["generation"], "provenance generation")
-    if generation != MATERIAL_GENERATION_COMPRESSED:
-        raise ValueError("compression provenance generation must be compressed")
-    return RecordingCompressionCandidate(
-        source=_non_empty_string(document["source"], "provenance source"),
-        candidate=_non_empty_string(document["candidate"], "provenance candidate"),
-        source_sha256=_non_empty_string(document["source_sha256"], "provenance source_sha256"),
-        candidate_sha256=_non_empty_string(
-            document["candidate_sha256"], "provenance candidate_sha256"
-        ),
-        source_size_bytes=_positive_integer(
-            document["source_size_bytes"], "provenance source_size_bytes"
-        ),
-        candidate_size_bytes=_positive_integer(
-            document["candidate_size_bytes"], "provenance candidate_size_bytes"
-        ),
-        candidate_mtime_ns=_non_negative_integer(
-            document["candidate_mtime_ns"], "provenance candidate_mtime_ns"
-        ),
-        source_duration_seconds=_positive_number(
-            document["source_duration_seconds"], "provenance source_duration_seconds"
-        ),
-        candidate_duration_seconds=_positive_number(
-            document["candidate_duration_seconds"], "provenance candidate_duration_seconds"
-        ),
-        source_frames=_positive_integer(document["source_frames"], "provenance source_frames"),
-        candidate_frames=_positive_integer(
-            document["candidate_frames"], "provenance candidate_frames"
-        ),
-        crf=_crf_value(document["crf"], "compression provenance crf"),
-        encoder=_non_empty_string(document["encoder"], "provenance encoder"),
-        preset=_non_empty_string(document["preset"], "provenance preset"),
-        generation=generation,
-        encoded_at=_non_empty_string(document["encoded_at"], "provenance encoded_at"),
-    )
-
-
 def _candidate_path(segment: Path) -> Path:
     return segment.with_suffix(_CANDIDATE_SUFFIX)
 
@@ -590,6 +588,8 @@ __all__ = [
     "RecordingCompressionConfiguration",
     "RecordingCompressionError",
     "RecordingCompressionWorker",
+    "archive_aged_segments",
     "compress_aged_segments",
+    "replace_validated_candidate",
     "validated_candidate",
 ]

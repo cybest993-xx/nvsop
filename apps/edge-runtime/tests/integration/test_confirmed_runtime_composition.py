@@ -29,6 +29,7 @@ from nvsop_contracts import (
 from test_output_safety import TRIGGER_PATH, IsapiLoopbackServer
 
 # 合成录像分段夹具与压缩测试共用同一 recipe, 不在本文件再造第四份。
+from test_recording_compression import digest as recording_digest
 from test_recording_compression import segments as recording_segments
 
 from edge_runtime.configuration_sync import ConfigurationPullError
@@ -43,6 +44,7 @@ from edge_runtime.connectors.port import (
     Written,
 )
 from edge_runtime.connectors.writes import WriteRequest
+from edge_runtime.evidence_media import recording_segment_generation
 from edge_runtime.judgment.model import (
     Decision,
     EvidenceSpan,
@@ -500,15 +502,17 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
                 worker = runtime._compression
                 self.assertIsNotNone(worker)
                 assert worker is not None
-                # 生产装配的 worker 指向本机真实目录与二进制, 并真的产出候选。
+                # 生产装配真实编码并原子安装, 候选不再与原件并存。
                 summary = worker.drain()
-                self.assertEqual((summary.created, summary.failed), (1, 0))
-                self.assertTrue(source.with_suffix(".compressed.mp4").is_file())
+                self.assertEqual((summary.created, summary.replaced, summary.failed), (1, 1, 0))
+                self.assertFalse(source.with_suffix(".compressed.mp4").exists())
+                self.assertEqual(recording_segment_generation(source), "compressed")
                 # 本机配置的 CRF 必须真的进入候选留痕, 而不是回落到默认档。
                 document = json.loads(
                     source.with_suffix(".compressed.json").read_text(encoding="utf-8")
                 )
                 self.assertEqual(30, document["crf"])
+                self.assertEqual(recording_digest(source), document["candidate_sha256"])
             finally:
                 runtime.close()
 

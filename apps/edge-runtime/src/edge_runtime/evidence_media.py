@@ -8,6 +8,7 @@ typed 元数据先在临时目录写完再整体原子 rename, 之后才写 SQLi
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -15,7 +16,8 @@ import re
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from math import isfinite
@@ -32,9 +34,14 @@ from edge_runtime.configuration_values import (
 )
 from edge_runtime.judgment.model import HostInstant
 from edge_runtime.local_state import LocalState, PendingEvidence, StationStore
+from edge_runtime.recording_provenance import (
+    MATERIAL_GENERATION_COMPRESSED as MATERIAL_GENERATION_COMPRESSED,
+)
+from edge_runtime.recording_provenance import (
+    read_compression_provenance,
+)
 
 MATERIAL_GENERATION_ORIGINAL = "original"
-MATERIAL_GENERATION_COMPRESSED = "compressed"
 MATERIAL_GENERATION_MIXED = "mixed"
 _KNOWN_MATERIAL_GENERATIONS = frozenset(
     {MATERIAL_GENERATION_ORIGINAL, MATERIAL_GENERATION_COMPRESSED}
@@ -177,18 +184,26 @@ def slice_evidence(
         raise EvidenceMediaError("media_io_failed", str(error)) from error
     try:
         try:
-            media = [
-                _slice_source(
-                    source,
-                    pending=pending,
-                    configuration=configuration,
-                    recording_directory=recording_directory,
-                    ffmpeg_binary=ffmpeg_binary,
-                    work=work,
-                    wall_offset=wall_offset,
-                )
-                for source in pending.sources
-            ]
+            with ExitStack() as materials:
+                for source in sorted(pending.sources):
+                    directory = recording_directory / source
+                    if not directory.is_dir():
+                        raise EvidenceMediaError(
+                            "material_missing", f"recording directory absent for {source}"
+                        )
+                    materials.enter_context(recording_material_access(directory, exclusive=False))
+                media = [
+                    _slice_source(
+                        source,
+                        pending=pending,
+                        configuration=configuration,
+                        recording_directory=recording_directory,
+                        ffmpeg_binary=ffmpeg_binary,
+                        work=work,
+                        wall_offset=wall_offset,
+                    )
+                    for source in pending.sources
+                ]
         except OSError as error:
             raise EvidenceMediaError("media_io_failed", str(error)) from error
         covered_from = max(_number(item["actual_from"]) for item in media)
@@ -329,12 +344,48 @@ def _slice_source(
     }
 
 
+@contextmanager
+def recording_material_access(directory: Path, *, exclusive: bool) -> Iterator[None]:
+    """切片共享占用相机目录 inode, 压缩/替换排他且不等待; 进程退出自动释放。
+
+    从探测/代次读取直到 ffmpeg 完成都持有共享锁, 避免 concat 尚未打开的分段被换代。
+    直接锁目录而不创建锁文件, 不改变 MediaMTX 分段发现或正常滚动窗口回收契约。
+    """
+    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        operation = fcntl.LOCK_EX | fcntl.LOCK_NB if exclusive else fcntl.LOCK_SH
+        fcntl.flock(descriptor, operation)
+        yield
+    finally:
+        os.close(descriptor)
+
+
 def recording_segment_generation(path: Path) -> str:
     """读取单个分段的真实素材代次; 缺失 sidecar 按原始素材, 非法/未知声明即拒绝。
 
     证据切片与录像压缩共用这份生产者契约 (S038/§5.20): 压缩不再重编码已归档的
     ``compressed`` 分段, 也无法证明代次的声明一律拒绝而不是静默当成原始素材。
     """
+    provenance = path.with_suffix(".compressed.json")
+    if provenance.exists():
+        # S047 留痕先于分段 rename 持久化; 同一份留痕解释提交前后两种完整文件, 无半代次窗口。
+        try:
+            provenance_document = read_compression_provenance(provenance)
+            if (
+                provenance_document.source != path.name
+                or provenance_document.candidate != path.with_suffix(".compressed.mp4").name
+            ):
+                raise ValueError("compression identity mismatch")
+            digest = file_sha256(path)
+            if digest == provenance_document.candidate_sha256:
+                return MATERIAL_GENERATION_COMPRESSED
+            if digest == provenance_document.source_sha256:
+                return MATERIAL_GENERATION_ORIGINAL
+            raise ValueError("compression material changed")
+        except (OSError, ValueError) as error:
+            raise EvidenceMediaError(
+                "material_provenance_invalid", f"invalid compression material for {path.name}"
+            ) from error
     sidecar = path.with_suffix(_MATERIAL_SIDECAR_SUFFIX)
     if not sidecar.exists():
         return MATERIAL_GENERATION_ORIGINAL

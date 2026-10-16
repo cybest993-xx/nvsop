@@ -717,7 +717,7 @@ class DdmTrainingCommandRow(Table):
     __table_args__ = (
         UniqueConstraint("dataset_id", "idempotency_key"),
         UniqueConstraint("job_id"),
-        # 每个逻辑基座目标最多一条在途命令：pending/failed 不占保护，其余状态持有。
+        # 每个逻辑基座目标最多一条在途命令：仅 result_unknown/bound 持有保护。
         Index(
             "uq_dataset_ddm_training_command_backend_target_inflight",
             "backend_target",
@@ -745,6 +745,8 @@ class DdmTrainingCommandRow(Table):
     created_by: Mapped[UUID] = mapped_column(Uuid())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    cancelled_by: Mapped[UUID | None] = mapped_column(Uuid())
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     def to_domain(self) -> DdmTrainingCommand:
         return DdmTrainingCommand(
@@ -765,6 +767,8 @@ class DdmTrainingCommandRow(Table):
             base_observation=self.base_observation,
             failure_code=self.failure_code,
             failure_detail=self.failure_detail,
+            cancelled_by=self.cancelled_by,
+            cancelled_at=self.cancelled_at,
         )
 
     @classmethod
@@ -789,4 +793,6 @@ class DdmTrainingCommandRow(Table):
             created_by=value.created_by,
             created_at=value.created_at,
             updated_at=value.updated_at,
+            cancelled_by=value.cancelled_by,
+            cancelled_at=value.cancelled_at,
         )

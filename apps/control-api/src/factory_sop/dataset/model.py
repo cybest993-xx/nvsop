@@ -105,13 +105,14 @@ class DdmTrainingCommandStatus(StrEnum):
 
     S073 把「发送前的持久派发意图」与「真实基座任务身份」落到命令行；训练进度、结果发布
     与在途约束释放属于 S074。``bound`` 与 ``result_unknown`` 都是仍在途的保护状态，
-    ``failed`` 只表示可以证明基座未开始的确定失败。
+    ``failed`` 只表示可以证明基座未开始的确定失败；``cancelled`` 仅表示派发意图前取消。
     """
 
     PENDING = "pending"
     RESULT_UNKNOWN = "result_unknown"
     BOUND = "bound"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,6 +231,8 @@ class DdmTrainingCommand:
     base_observation: Mapping[str, Any] | None = None
     failure_code: str | None = None
     failure_detail: str | None = None
+    cancelled_by: UUID | None = None
+    cancelled_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

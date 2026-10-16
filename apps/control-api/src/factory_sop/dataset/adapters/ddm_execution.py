@@ -88,6 +88,7 @@ class DdmTrainingDispatchOutcome(StrEnum):
     RESULT_UNKNOWN = "result_unknown"
     BLOCKED = "blocked"
     FAILED = "failed"
+    CANCELLED = "cancelled"
     NOT_FOUND = "not_found"
 
 
@@ -116,7 +117,7 @@ class _AllocatedWorkcopies:
     """本次调用实际新建、可确证属于本命令的工作副本路径。
 
     ``root`` 只在材料化返回后记录，平铺目标只在每次成功 move 后记录；预存在的目标不进入
-    此集合。只有命令确证 FAILED 时才删除这些路径。
+    此集合。只有命令确证 FAILED 或确证已取消时才删除这些路径。
     """
 
     root: Path | None = None
@@ -180,6 +181,8 @@ class PostgresDdmTrainingExecutor:
                 return self._observe(command, now=now)
             case DdmTrainingCommandStatus.FAILED:
                 return self._failed(command)
+            case DdmTrainingCommandStatus.CANCELLED:
+                return self._cancelled(command)
             case _:
                 assert_never(command.status)
 
@@ -237,6 +240,9 @@ class PostgresDdmTrainingExecutor:
                 # 意图 CAS 落空且权威状态已 FAILED：本次新建的自身工作副本不再需要，必须清理。
                 self._discard_workcopies(command_id=current.id, owned=owned)
                 return self._failed(current)
+            if current.status is DdmTrainingCommandStatus.CANCELLED:
+                # 意图 CAS 落空且权威状态已取消：本次新建的自身工作副本不再需要，必须清理。
+                return self._cancelled(current, owned=owned)
             return self._advance(current, now=now, resolve_current_caller=resolve_current_caller)
         return self._send(begun, prepared=prepared, baseline_ids=baseline_ids, now=now)
 
@@ -260,7 +266,7 @@ class PostgresDdmTrainingExecutor:
             )
         except DatasetRefusedError as error:
             if error.code is DatasetRefusalCode.USAGE_STATE_CONFLICT:
-                return self._blocked_on_preparation(command, now=now)
+                return self._blocked_on_preparation(command, now=now, owned=owned)
             return self._fail(
                 command_id=command.id, now=now, code=error.code.value, detail=error.detail
             )
@@ -308,7 +314,7 @@ class PostgresDdmTrainingExecutor:
             )
         except DatasetRefusedError as error:
             if error.code is DatasetRefusalCode.USAGE_STATE_CONFLICT:
-                return self._blocked_on_preparation(command, now=now)
+                return self._blocked_on_preparation(command, now=now, owned=owned)
             return self._fail(
                 command_id=command.id,
                 now=now,
@@ -599,6 +605,9 @@ class PostgresDdmTrainingExecutor:
                 result="failed",
             )
             return self._failed(current)
+        if current.status is DdmTrainingCommandStatus.CANCELLED:
+            # 迟到失败不能覆盖先到的取消：只丢弃本次新建的自身副本，保留首次取消事实。
+            return self._cancelled(current, owned=owned)
         if current.status is DdmTrainingCommandStatus.BOUND:
             return self._observe(current, now=now)
         if current.status is DdmTrainingCommandStatus.RESULT_UNKNOWN:
@@ -622,6 +631,9 @@ class PostgresDdmTrainingExecutor:
         current = self._load(command_id)
         if current is None:
             return DdmTrainingDispatchResult(DdmTrainingDispatchOutcome.NOT_FOUND, None)
+        if current.status is DdmTrainingCommandStatus.CANCELLED:
+            # 迟到失败不能覆盖先到的取消：只丢弃本次新建的自身副本，保留首次取消事实。
+            return self._cancelled(current, owned=owned)
         if current.status is DdmTrainingCommandStatus.BOUND:
             return self._observe(current, now=now)
         if current.status is DdmTrainingCommandStatus.FAILED:
@@ -644,7 +656,7 @@ class PostgresDdmTrainingExecutor:
         )
 
     def _blocked_on_preparation(
-        self, command: DdmTrainingCommand, *, now: datetime
+        self, command: DdmTrainingCommand, *, now: datetime, owned: _AllocatedWorkcopies
     ) -> DdmTrainingDispatchResult:
         """准备目录冲突可能是并发准备而非确定失败：保留 pending，不误终止获胜派发。"""
         current = self._load(command.id)
@@ -657,6 +669,9 @@ class PostgresDdmTrainingExecutor:
                 "DISPATCH_PREPARATION_IN_FLIGHT",
                 "同一命令的准备已在其它执行者进行或存在未清理的工作副本",
             )
+        if current.status is DdmTrainingCommandStatus.CANCELLED:
+            # 准备期冲突在取消之后到达：返回首次取消事实并只丢弃本次新建的自身副本。
+            return self._cancelled(current, owned=owned)
         if current.status is DdmTrainingCommandStatus.BOUND:
             return self._observe(current, now=now)
         if current.status is DdmTrainingCommandStatus.RESULT_UNKNOWN:
@@ -709,6 +724,14 @@ class PostgresDdmTrainingExecutor:
             command.failure_detail,
         )
 
+    def _cancelled(
+        self, command: DdmTrainingCommand, *, owned: _AllocatedWorkcopies | None = None
+    ) -> DdmTrainingDispatchResult:
+        """已取消是终态：只丢弃本次调用新建的自身副本，保留首次取消人与时刻等其它事实。"""
+        if owned is not None:
+            self._discard_workcopies(command_id=command.id, owned=owned)
+        return DdmTrainingDispatchResult(DdmTrainingDispatchOutcome.CANCELLED, command)
+
     def _expose(
         self,
         *,
@@ -728,7 +751,7 @@ class PostgresDdmTrainingExecutor:
             owned.flat_targets.append(target)
 
     def _discard_workcopies(self, *, command_id: UUID, owned: _AllocatedWorkcopies) -> None:
-        """命令确证 FAILED 后只删除本次调用新建的工作副本。
+        """命令确证 FAILED 或已取消后只删除本次调用新建的工作副本。
 
         删除失败只记录，不重试、不声称已删除，也不改变返回的原始失败诊断。
         """

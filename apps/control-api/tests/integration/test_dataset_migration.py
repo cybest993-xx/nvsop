@@ -443,7 +443,7 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
 
     with database_at_0023.connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0062"
+    assert version == "0063"
     assert {
         "backend_target",
         "base_job_id",
@@ -452,6 +452,8 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
         "base_observation",
         "failure_code",
         "failure_detail",
+        "cancelled_by",
+        "cancelled_at",
     } <= _columns(database_at_0023, "dataset_ddm_training_command")
     with database_at_0023.connect() as connection:
         inflight_index = connection.execute(
@@ -513,10 +515,10 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
     assert "job_application_job" not in _tables(database_at_0023)
 
 
-def test_0062_ddm_dispatch_upgrade_preserves_pending_payload_and_inflight_index(
+def test_ddm_dispatch_and_cancel_migrations_preserve_payload_and_inflight_index(
     database_at_0023: Engine,
 ) -> None:
-    """0061 pending 命令升级 0062：负载与 job 身份不变，新列为空，在途唯一索引生效。"""
+    """0061→0063 保留冻结输入、job 与派发历史；新增取消列为空且可独立降级。"""
     configuration = Config(str(CONTROL_API / "alembic.ini"))
     configuration.set_main_option("script_location", str(CONTROL_API / "migrations"))
     configuration.set_main_option(
@@ -611,6 +613,46 @@ def test_0062_ddm_dispatch_upgrade_preserves_pending_payload_and_inflight_index(
             ),
             {"id": uuid4(), "dataset_id": dataset_id, "digest": "d" * 64, "actor": actor},
         )
+
+    # 构造已绑定的历史事实，取消元数据升级不能重建或丢弃它。
+    with database_at_0023.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE dataset_ddm_training_command SET status = 'bound', "
+                "backend_target = 'history', base_job_id = 'base-history', "
+                'dispatch_facts = \'{"training_dataset_id": "frozen-training"}\'::jsonb, '
+                'base_observation = \'{"status": "completed", "result": "historical"}\'::jsonb '
+                "WHERE id = :id"
+            ),
+            {"id": command_id},
+        )
+        original = (
+            connection.execute(text("SELECT * FROM dataset_ddm_training_command ORDER BY id"))
+            .mappings()
+            .all()
+        )
+    command.upgrade(configuration, "0063")
+    with database_at_0023.connect() as connection:
+        upgraded = (
+            connection.execute(text("SELECT * FROM dataset_ddm_training_command ORDER BY id"))
+            .mappings()
+            .all()
+        )
+    assert len(upgraded) == len(original)
+    for old, new in zip(original, upgraded, strict=True):
+        assert new["cancelled_by"] is None
+        assert new["cancelled_at"] is None
+        assert {key: value for key, value in new.items() if key in old} == dict(old)
+    command.downgrade(configuration, "0062")
+    assert "cancelled_by" not in _columns(database_at_0023, "dataset_ddm_training_command")
+    assert "cancelled_at" not in _columns(database_at_0023, "dataset_ddm_training_command")
+    with database_at_0023.connect() as connection:
+        restored = (
+            connection.execute(text("SELECT * FROM dataset_ddm_training_command ORDER BY id"))
+            .mappings()
+            .all()
+        )
+    assert restored == original
 
 
 def test_0050_handover_history_survives_device_deletion(database_at_0023: Engine) -> None:

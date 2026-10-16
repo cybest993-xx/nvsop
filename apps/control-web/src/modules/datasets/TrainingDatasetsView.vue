@@ -435,23 +435,32 @@ function artifactRecoveryLabel(code: string | null, action: string | null): stri
   }
 }
 
-function ddmCommandStatusLabel(status: string): string {
-  switch (status) {
+function ddmCommandStatusLabel(command: DdmTrainingCommand): string {
+  switch (command.status) {
     case 'pending':
       return '已受理，待派发'
     case 'result_unknown':
-      return '派发结果待核实'
+      return command.cancel_requested_at ? '派发结果待核实（已请求取消）' : '派发结果待核实'
     case 'bound':
-      return '已绑定基座任务'
+      return command.cancel_requested_at ? '已绑定基座任务（取消未确认）' : '已绑定基座任务'
     case 'completed':
       return '已完成并登记结果'
     case 'failed':
       return '已失败'
     case 'cancelled':
-      return '已取消（未派发）'
+      return command.cancel_requested_at ? '已取消（已核实停止）' : '已取消（未派发）'
     default:
-      return `未知应用状态（${status}）`
+      return `未知应用状态（${command.status}）`
   }
+}
+
+/** 已受理但未结束的命令可取消；已派发命令只请求取消，进程停止由训练执行器核实。 */
+function isDdmCancelable(command: DdmTrainingCommand): boolean {
+  return (
+    command.status === 'pending' ||
+    command.status === 'result_unknown' ||
+    command.status === 'bound'
+  )
 }
 
 function ddmCommandStatusTag(status: string): 'success' | 'warning' | 'danger' | 'info' {
@@ -800,14 +809,15 @@ async function loadDdmResult(commandId: string): Promise<void> {
   }
 }
 
-async function cancelPendingDdmCommand(command: DdmTrainingCommand): Promise<void> {
+async function cancelDdmCommand(command: DdmTrainingCommand): Promise<void> {
   const datasetId = selectedDatasetId.value
   if (!mayEdit.value || !datasetId) return
-  if (command.status !== 'pending') return
+  if (!isDdmCancelable(command)) return
   if (cancellingCommandId.value !== null) return
 
   resetFailure()
   const requestGeneration = ddmRequestGeneration
+  const dispatched = command.status !== 'pending'
   cancellingCommandId.value = command.id
   try {
     const updated = await cancelDdmTrainingCommand(datasetId, command.id)
@@ -817,7 +827,11 @@ async function cancelPendingDdmCommand(command: DdmTrainingCommand): Promise<voi
     ddmCommands.value = ddmCommands.value.map((existing) =>
       existing.id === updated.id ? updated : existing,
     )
-    ElMessage.success('DDM 训练命令已取消')
+    ElMessage.success(
+      dispatched
+        ? '已记录取消请求；进程停止由训练执行器核实，未核实前不会宣告已停止'
+        : 'DDM 训练命令已取消',
+    )
   } catch (error) {
     if (requestGeneration !== ddmRequestGeneration || selectedDatasetId.value !== datasetId) {
       return
@@ -1971,7 +1985,7 @@ onUnmounted(() => {
         <div>
           <h2 id="ddm-commands-heading">DDM 训练命令</h2>
           <p>
-            应用受理、基座原状态与结果登记是三个独立事实；未知状态按原值显示。仅支持取消未派发命令，不启动训练。
+            应用受理、基座原状态与结果登记是三个独立事实；未知状态按原值显示。可取消未派发命令；已派发命令只记录取消请求，进程停止核实后才会显示“已取消（已核实停止）”。
           </p>
         </div>
         <ElButton link type="primary" :disabled="loadingDdmCommands" @click="refreshDdmCommands">
@@ -2004,24 +2018,36 @@ onUnmounted(() => {
             </th>
             <td>
               <ElTag :type="ddmCommandStatusTag(command.status)" disable-transitions>
-                {{ ddmCommandStatusLabel(command.status) }}
+                {{ ddmCommandStatusLabel(command) }}
               </ElTag>
-              <small v-if="command.cancelled_at">
-                取消时间：{{ formatTime(command.cancelled_at) }}
+              <small v-if="command.status === 'cancelled' && command.cancelled_at">
+                取消生效：{{ formatTime(command.cancelled_at) }}
               </small>
-              <small v-if="command.cancelled_by"> 取消人：{{ command.cancelled_by }} </small>
+              <small v-if="command.cancel_requested_at">
+                取消请求：{{ formatTime(command.cancel_requested_at) }}
+              </small>
+              <small v-if="command.cancel_requested_by">
+                请求人：{{ command.cancel_requested_by }}
+              </small>
+              <small v-if="command.cancelled_by">取消人：{{ command.cancelled_by }}</small>
+              <small v-if="command.cancel_response_message">
+                基座原取消响应：{{ command.cancel_response_message }}
+              </small>
+              <small v-if="command.cancel_detail" class="datasets__failure-code">
+                停止核实：{{ command.cancel_detail }}
+              </small>
               <small v-if="command.failure_code" class="datasets__failure-code">
                 {{ command.failure_code }}：{{ command.failure_detail }}
               </small>
-              <div v-if="mayEdit && command.status === 'pending'" class="datasets__command-action">
+              <div v-if="mayEdit && isDdmCancelable(command)" class="datasets__command-action">
                 <ElButton
                   link
                   type="danger"
                   :disabled="cancellingCommandId !== null"
                   :loading="cancellingCommandId === command.id"
-                  @click="cancelPendingDdmCommand(command)"
+                  @click="cancelDdmCommand(command)"
                 >
-                  取消命令
+                  {{ command.status === 'pending' ? '取消命令' : '请求取消' }}
                 </ElButton>
               </div>
             </td>

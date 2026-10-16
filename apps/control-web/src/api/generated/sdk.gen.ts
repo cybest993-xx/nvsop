@@ -2909,7 +2909,7 @@ export const readDdmTrainingCommand = <ThrowOnError extends boolean = false>(
 /**
  * Cancel A Ddm Training Command
  *
- * 仅取消尚未进入派发的命令；已派发时返回冲突，不宣称基座已停止。
+ * 取消未派发命令；已派发命令只记录取消请求，停止由执行器核实，不在此宣称已停止。
  */
 export const cancelDdmTrainingCommand = <ThrowOnError extends boolean = false>(
   options: Options<CancelDdmTrainingCommandData, ThrowOnError>,

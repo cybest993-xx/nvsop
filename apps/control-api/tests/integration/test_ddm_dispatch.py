@@ -87,6 +87,9 @@ class _InterruptingBackend:
     def status(self, job_id: str) -> Mapping[str, Any]:
         return self._inner.status(job_id)
 
+    def cancel(self, job_id: str) -> Mapping[str, Any]:
+        return self._inner.cancel(job_id)
+
 
 class _IntentCommitUncertainSession(Session):
     """真实提交后再报错：模拟「意图提交结果在发送前不确定」的事务故障 seam。"""

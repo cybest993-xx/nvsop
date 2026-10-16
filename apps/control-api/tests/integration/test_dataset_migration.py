@@ -451,10 +451,11 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
             )
         ).scalar_one()
     # #215：正常交权授予结果与既有引用保护、回收账本随 head 到位。
-    assert version == "0072"
+    assert version == "0073"
     assert {"new_grant_id", "granted_at", "granted_by"} <= _columns(
         database_at_0023, "execution_normal_handover"
     )
+    # #206/#207：引用保护与回收账本、聚合归档随 head 到位。
     assert {
         "retention_sweep",
         "monitor_record_archive",
@@ -573,7 +574,7 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
 def test_ddm_dispatch_and_cancel_migrations_preserve_payload_and_inflight_index(
     database_at_0023: Engine,
 ) -> None:
-    """0061→0068 保留冻结输入、job 与派发历史；新增取消列为空且可独立降级。"""
+    """0061→0073 保留冻结输入、job 与派发历史；新增取消列为空且可独立降级。"""
     configuration = Config(str(CONTROL_API / "alembic.ini"))
     configuration.set_main_option("script_location", str(CONTROL_API / "migrations"))
     configuration.set_main_option(
@@ -689,6 +690,19 @@ def test_ddm_dispatch_and_cancel_migrations_preserve_payload_and_inflight_index(
         )
     command.upgrade(configuration, "0068")
     with database_at_0023.connect() as connection:
+        after_cancel = (
+            connection.execute(text("SELECT * FROM dataset_ddm_training_command ORDER BY id"))
+            .mappings()
+            .all()
+        )
+    assert len(after_cancel) == len(original)
+    for old, new in zip(original, after_cancel, strict=True):
+        assert new["cancelled_by"] is None
+        assert new["cancelled_at"] is None
+        assert {key: value for key, value in new.items() if key in old} == dict(old)
+    # 0073 只为已派发取消新增可空列，不重建已有命令行。
+    command.upgrade(configuration, "0073")
+    with database_at_0023.connect() as connection:
         upgraded = (
             connection.execute(text("SELECT * FROM dataset_ddm_training_command ORDER BY id"))
             .mappings()
@@ -696,9 +710,16 @@ def test_ddm_dispatch_and_cancel_migrations_preserve_payload_and_inflight_index(
         )
     assert len(upgraded) == len(original)
     for old, new in zip(original, upgraded, strict=True):
-        assert new["cancelled_by"] is None
-        assert new["cancelled_at"] is None
+        assert new["cancel_requested_by"] is None
+        assert new["cancel_requested_at"] is None
+        assert new["cancel_response"] is None
+        assert new["cancel_detail"] is None
         assert {key: value for key, value in new.items() if key in old} == dict(old)
+    command.downgrade(configuration, "0072")
+    assert "cancel_requested_by" not in _columns(database_at_0023, "dataset_ddm_training_command")
+    assert "cancel_detail" not in _columns(database_at_0023, "dataset_ddm_training_command")
+    # 0068 的取消列不随 0073 回退。
+    assert "cancelled_by" in _columns(database_at_0023, "dataset_ddm_training_command")
     command.downgrade(configuration, "0067")
     assert "cancelled_by" not in _columns(database_at_0023, "dataset_ddm_training_command")
     assert "cancelled_at" not in _columns(database_at_0023, "dataset_ddm_training_command")

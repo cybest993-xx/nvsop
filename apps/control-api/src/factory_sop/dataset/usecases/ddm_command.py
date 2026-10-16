@@ -157,10 +157,12 @@ def cancel_ddm_training_command(
     now: datetime,
     datasets: DdmTrainingCommandRepository,
 ) -> DdmTrainingCommand:
-    """取消尚未进入派发的命令；取消与 start 意图以同一数据库状态竞争。
+    """取消 DDM 训练命令：未派发直接取消，已派发只记录请求并等待停止核实。
 
-    调用者提交请求事务后取消才生效。只写命令的取消事实，保留冻结输入、历史结果与 outbox；
-    重复取消返回首次事实。意图已落库的命令即使尚未收到 start 响应，也不能伪称未执行。
+    取消与 start 意图以同一数据库状态竞争。``pending`` 命令条件更新为 ``cancelled``；
+    已进入派发意图（``result_unknown``/``bound``）的命令只持久化首次取消请求，保持原状态与
+    在途保护，由执行器调用原取消入口并用后续观测核实进程停止后才进入终态。已结束命令拒绝；
+    只写取消事实，保留冻结输入、历史结果与 outbox。
     """
     authorize(caller, Permission.DATASET_EDIT)
     changed = datasets.cancel_pending_ddm_training_command(
@@ -169,11 +171,6 @@ def cancel_ddm_training_command(
     command = datasets.ddm_training_command_by_id(command_id)
     if command is None or command.dataset_id != dataset_id:
         raise DatasetRefusedError(DatasetRefusalCode.DDM_TRAINING_COMMAND_NOT_FOUND)
-    if command.status is not DdmTrainingCommandStatus.CANCELLED:
-        raise DatasetRefusedError(
-            DatasetRefusalCode.USAGE_STATE_CONFLICT,
-            detail="命令已进入派发或已结束，不能按未派发任务取消；此操作不证明基座已停止",
-        )
     if changed:
         _logger.info(
             "dataset.ddm_training_command.cancelled",
@@ -182,7 +179,34 @@ def cancel_ddm_training_command(
             actor_id=str(caller.user.id),
             result=command.status.value,
         )
-    return command
+        return command
+    if command.status is DdmTrainingCommandStatus.CANCELLED:
+        # 重复取消返回首次取消事实，不改写请求者与时刻。
+        return command
+    if command.status in {
+        DdmTrainingCommandStatus.RESULT_UNKNOWN,
+        DdmTrainingCommandStatus.BOUND,
+    }:
+        # 意图已落库：只记录取消请求，不伪称已派发任务停止，也不释放在途保护。
+        requested = datasets.request_ddm_training_cancellation(
+            command_id=command_id, actor_id=caller.user.id, now=now
+        )
+        current = datasets.ddm_training_command_by_id(command_id)
+        if current is None or current.dataset_id != dataset_id:
+            raise DatasetRefusedError(DatasetRefusalCode.DDM_TRAINING_COMMAND_NOT_FOUND)
+        if requested:
+            _logger.info(
+                "dataset.ddm_training_command.cancellation_requested",
+                dataset_id=str(dataset_id),
+                command_id=str(command_id),
+                actor_id=str(caller.user.id),
+                result=current.status.value,
+            )
+        return current
+    raise DatasetRefusedError(
+        DatasetRefusalCode.USAGE_STATE_CONFLICT,
+        detail="命令已结束，不能再取消；历史事实保持不变",
+    )
 
 
 def _replay_command(

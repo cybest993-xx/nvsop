@@ -450,8 +450,11 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
                 "WHERE table_name = 'evidence_evidence' AND column_name = 'review_state_known'"
             )
         ).scalar_one()
-    # #206/#207：引用保护与回收账本、聚合归档随 head 到位。
-    assert version == "0071"
+    # #215：正常交权授予结果与既有引用保护、回收账本随 head 到位。
+    assert version == "0072"
+    assert {"new_grant_id", "granted_at", "granted_by"} <= _columns(
+        database_at_0023, "execution_normal_handover"
+    )
     assert {
         "retention_sweep",
         "monitor_record_archive",

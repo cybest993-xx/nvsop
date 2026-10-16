@@ -177,6 +177,9 @@ import type {
   GetMonitorStreamHealthData,
   GetMonitorStreamHealthErrors,
   GetMonitorStreamHealthResponses,
+  GrantNormalHandoverData,
+  GrantNormalHandoverErrors,
+  GrantNormalHandoverResponses,
   ImportTemplateDraftData,
   ImportTemplateDraftErrors,
   ImportTemplateDraftResponses,
@@ -1427,6 +1430,20 @@ export const cancelNormalHandover = <ThrowOnError extends boolean = false>(
     CancelNormalHandoverErrors,
     ThrowOnError
   >({ url: '/api/v1/execution/normal-handovers/{handover_id}/cancellation', ...options })
+
+/**
+ * Grant Normal
+ *
+ * 仅消费当前已确认停写请求；重复提交返回已冻结的新权身份。
+ */
+export const grantNormalHandover = <ThrowOnError extends boolean = false>(
+  options: Options<GrantNormalHandoverData, ThrowOnError>,
+): RequestResult<GrantNormalHandoverResponses, GrantNormalHandoverErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    GrantNormalHandoverResponses,
+    GrantNormalHandoverErrors,
+    ThrowOnError
+  >({ url: '/api/v1/execution/normal-handovers/{handover_id}/grant', ...options })
 
 /**
  * List The Backends

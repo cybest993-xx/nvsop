@@ -87,6 +87,9 @@ class NormalHandoverRow(Table):
     failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failure_code: Mapped[str | None] = mapped_column(String(64))
     failure_detail: Mapped[str | None] = mapped_column(String(255))
+    new_grant_id: Mapped[UUID | None] = mapped_column(Uuid())
+    granted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    granted_by: Mapped[UUID | None] = mapped_column(Uuid())
 
     def to_domain(self) -> NormalHandover:
         return NormalHandover(
@@ -107,6 +110,9 @@ class NormalHandoverRow(Table):
             failed_at=self.failed_at,
             failure_code=self.failure_code,
             failure_detail=self.failure_detail,
+            new_grant_id=self.new_grant_id,
+            granted_at=self.granted_at,
+            granted_by=self.granted_by,
         )
 
     @classmethod
@@ -129,6 +135,9 @@ class NormalHandoverRow(Table):
             failed_at=value.failed_at,
             failure_code=value.failure_code,
             failure_detail=value.failure_detail,
+            new_grant_id=value.new_grant_id,
+            granted_at=value.granted_at,
+            granted_by=value.granted_by,
         )
 
 

@@ -278,6 +278,30 @@ def test_cancel_checks_permissions_ownership_and_dispatch_state() -> None:
             assert response.json()["error_code"] == "DDM_TRAINING_COMMAND_NOT_FOUND"
 
 
+def test_cancel_refuses_terminal_commands_without_touching_history() -> None:
+    path = f"{API_PREFIX}/training-datasets/{DATASET_ID}/ddm-training-commands/{COMMAND_ID}/cancel"
+    for terminal in (DdmTrainingCommandStatus.COMPLETED, DdmTrainingCommandStatus.FAILED):
+        command = replace(
+            _command(result_registered=terminal is DdmTrainingCommandStatus.COMPLETED)
+        )
+        datasets = _DdmDatasets(replace(command, status=terminal))
+        with _client(
+            datasets, frozenset({Permission.DATASET_EDIT, Permission.DATASET_VIEW})
+        ) as client:
+            refused = client.post(path)
+            assert refused.status_code == 409, refused.text
+            assert refused.json()["error_code"] == "USAGE_STATE_CONFLICT"
+            assert "历史事实保持不变" in refused.json()["detail"]
+            # 已结束命令不被改写：不留下取消请求或取消事实。
+            after = client.get(
+                f"{API_PREFIX}/training-datasets/{DATASET_ID}/ddm-training-commands/{COMMAND_ID}"
+            ).json()
+            assert after["status"] == terminal.value
+            assert after["cancel_requested_at"] is None
+            assert after["cancelled_at"] is None
+            assert after["result_status"] == command.result_status.value
+
+
 def test_unregistered_result_has_no_access_url() -> None:
     datasets = _DdmDatasets(_command(result_registered=False))
     with _client(datasets, frozenset({Permission.DATASET_VIEW})) as client:

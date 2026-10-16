@@ -684,7 +684,7 @@ class PostgresDatasetRepository:
             )
             .values(
                 cancel_response=dict(response),
-                cancel_detail=detail[:512],
+                cancel_detail=detail,
                 updated_at=now,
             )
         )

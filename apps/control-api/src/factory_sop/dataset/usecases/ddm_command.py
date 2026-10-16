@@ -191,16 +191,18 @@ def cancel_ddm_training_command(
         requested = datasets.request_ddm_training_cancellation(
             command_id=command_id, actor_id=caller.user.id, now=now
         )
-        command = datasets.ddm_training_command_by_id(command_id) or command
+        current = datasets.ddm_training_command_by_id(command_id)
+        if current is None or current.dataset_id != dataset_id:
+            raise DatasetRefusedError(DatasetRefusalCode.DDM_TRAINING_COMMAND_NOT_FOUND)
         if requested:
             _logger.info(
                 "dataset.ddm_training_command.cancellation_requested",
                 dataset_id=str(dataset_id),
                 command_id=str(command_id),
                 actor_id=str(caller.user.id),
-                result=command.status.value,
+                result=current.status.value,
             )
-        return command
+        return current
     raise DatasetRefusedError(
         DatasetRefusalCode.USAGE_STATE_CONFLICT,
         detail="命令已结束，不能再取消；历史事实保持不变",

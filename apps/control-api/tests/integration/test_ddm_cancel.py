@@ -1,4 +1,4 @@
-"""未派发 DDM 取消：真实 PostgreSQL、既有执行器与基座 HTTP seam。"""
+"""DDM 取消：真实 PostgreSQL、既有执行器与基座 HTTP seam（未派发取消与已派发停止核实）。"""
 
 from __future__ import annotations
 
@@ -705,6 +705,49 @@ def test_dispatched_cancel_confirms_stop_and_releases_guard(
         released = run(executor(engine, tmp_path, server), second.command.id)
         assert released.outcome is DdmTrainingDispatchOutcome.BOUND
         assert len(server.starts) == 2
+
+
+def test_dispatched_cancel_entry_failure_stays_unconfirmed_and_recovers(
+    engine: Engine,
+    tmp_path: Path,
+    selections: tuple[DdmInputSelection, DdmInputSelection],
+) -> None:
+    """取消入口本身失败（HTTP 500）不构成停止证据：保持 bound、保留失败类别，随后仍可核实终结。"""
+    submitted = _submit(
+        engine,
+        idempotency_key="cancel-bound-entry-failed",
+        training=selections[0],
+        validation=selections[1],
+    )
+    with DdmHttpServer() as server:
+        bound = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert bound.command is not None
+        assert bound.command.base_job_id is not None
+        job_id = bound.command.base_job_id
+        server.jobs[job_id].status = "running"
+        server.jobs[job_id].process_pid = 606
+        server.cache_job(job_id, process_pid=606)
+        _request_dispatched_cancel(engine, submitted.command)
+        # 基座真实取消入口在终止失败时返回 HTTP 500：进程可能仍在运行，不能据此宣告停止。
+        server.terminate_succeeds = False
+        failed = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert failed.outcome is DdmTrainingDispatchOutcome.BOUND
+        stored = _reload(engine, submitted.command.id)
+        assert stored.status is DdmTrainingCommandStatus.BOUND
+        assert stored.cancelled_by is None
+        assert stored.cancel_response == {"outcome": "cancel_failed", "http_status": 500}
+        assert stored.cancel_detail is not None
+        assert "未成功返回" in stored.cancel_detail
+        # 取消入口确实被调用并尝试终止，但基座报告终止失败。
+        assert server.terminated == [606]
+        assert len(server.starts) == 1
+        # 未确认取消不阻止后续核实：下一次投递终止真实进程后进入取消终态。
+        server.terminate_succeeds = True
+        recovered = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert recovered.outcome is DdmTrainingDispatchOutcome.CANCELLED
+        assert _reload(engine, submitted.command.id).status is DdmTrainingCommandStatus.CANCELLED
+        assert server.terminated == [606, 606]
+        assert len(server.starts) == 1
 
 
 def test_dispatched_cancel_without_pid_stays_unconfirmed(

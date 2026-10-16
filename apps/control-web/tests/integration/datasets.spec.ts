@@ -1889,7 +1889,7 @@ describe('训练数据集工作台', () => {
         message: '训练数据集用途状态冲突',
         errorCode: 'USAGE_STATE_CONFLICT',
         status: 409,
-        detail: '命令已进入派发，不能按未派发取消；该结果不证明基座已停止',
+        detail: '命令已结束，不能再取消；历史事实保持不变',
       }),
     )
 
@@ -1904,13 +1904,13 @@ describe('训练数据集工作台', () => {
     await flushPromises()
 
     // 展示真实冲突说明与错误码
-    expect(wrapper.text()).toContain('命令已进入派发，不能按未派发取消；该结果不证明基座已停止')
+    expect(wrapper.text()).toContain('命令已结束，不能再取消；历史事实保持不变')
     expect(wrapper.text()).toContain('USAGE_STATE_CONFLICT')
 
     // 状态未被伪造为已取消，仍为待派发
     expect(wrapper.text()).toContain('已受理，待派发')
     expect(wrapper.text()).not.toContain('已取消（未派发）')
-    expect(wrapper.text()).not.toContain('取消时间：')
+    expect(wrapper.text()).not.toContain('取消生效：')
     wrapper.unmount()
   })
 

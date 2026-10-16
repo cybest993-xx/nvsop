@@ -1521,7 +1521,7 @@ def cancel_a_ddm_training_command(
     caller: Authorized,
     datasets: Annotated[DdmTrainingCommandRepository, Depends(dependencies.datasets)],
 ) -> DdmTrainingCommandView:
-    """仅取消尚未进入派发的命令；已派发时返回冲突，不宣称基座已停止。"""
+    """取消未派发命令；已派发命令只记录取消请求，停止由执行器核实，不在此宣称已停止。"""
     return _ddm_command_view(
         cancel_ddm_training_command(
             dataset_id=dataset_id,

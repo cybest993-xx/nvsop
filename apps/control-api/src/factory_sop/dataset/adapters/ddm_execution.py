@@ -13,6 +13,10 @@ S073 只处理「是否向不幂等的基座 start 发送、以及发送后能�
 auto 恢复，因为无法证明该副本不属于仍在进行的并发准备；本票保留这种安全阻塞，不做自动清理
 或重试，等待操作者用新的输入身份重新受理。
 
+已派发停止核实同样保留安全阻塞：只有真正写入取消终态才发布停止结论，因此通用 job 围栏在核实
+成功与提交之间失败时，命令保持在途、保存未确认说明、不重发 start；基座此时已清掉 PID，后续
+投递无法再凑齐「取消前有进程」的证据，需操作者按基座事实复核。不以丢弃围栏换取自动恢复。
+
 ``backend`` 与 ``dataset_root`` 由受信组合层注入：``backend`` 的 start/all_jobs/status 必须
 指向同一个逻辑训练微服务及其持久任务库，``dataset_root`` 必须是该服务 ``DATASET_ROOT`` 指向
 的共享挂载，且本执行器构造时传入的按角色 reader 参数就是服务当前实际使用的参数。HTTP 契约
@@ -670,13 +674,15 @@ class PostgresDdmTrainingExecutor:
         post = _base_job_facts(post_jobs.get(base_job_id))
         if pre.process_live and not post.process_live and post.status is DdmBaseStatus.CANCELLED:
             with self._factory() as session:
-                PostgresDatasetRepository(session).confirm_ddm_training_cancellation(
+                confirmed = PostgresDatasetRepository(session).confirm_ddm_training_cancellation(
                     command_id=command.id,
                     base_job_id=base_job_id,
                     response=_cancel_response_fact(response),
                     now=now,
                 )
-                self._commit(session, command.id)
+                # 只有真正写入取消终态才发布停止结论：租约已丢或命令已不再可核实时不宣称已停止。
+                if not (confirmed and self._commit(session, command.id)):
+                    return None
             current = self._load(command.id)
             if current is None:
                 return DdmTrainingDispatchResult(DdmTrainingDispatchOutcome.NOT_FOUND, None)
@@ -1441,7 +1447,7 @@ def _cancel_response_fact(document: Mapping[str, Any]) -> dict[str, object]:
 
 def _cancel_failure_fact(error: DdmTrainingBackendUnavailableError) -> dict[str, object]:
     """只保留取消调用的失败类别，不存响应体、URL 或原异常文本。"""
-    fact: dict[str, object] = {"outcome": "unreachable"}
+    fact: dict[str, object] = {"outcome": "cancel_failed"}
     if error.http_status is not None:
         fact["http_status"] = error.http_status
     if error.error_type is not None:

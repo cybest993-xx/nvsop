@@ -25,6 +25,7 @@ from edge_runtime.reporting import HostReportReconciler
 from edge_runtime.storage_health import StorageHealthEvent
 from edge_runtime.supervisor.inputs import StorageHealthObserved
 from edge_runtime.supervisor.station import StationSupervisor
+
 from factory_sop.monitor.usecases import mirror_health
 from nvsop_contracts import reported_health_from_wire
 
@@ -123,7 +124,7 @@ class StorageHealthSemanticsContractTest(unittest.TestCase):
         supervisor.receive(observed("recording", impaired=True))
         supervisor.receive(observed("recording", impaired=False))
 
-        (failure, recovery) = store.pending_health_reports()
+        self.assertEqual(2, len(store.pending_health_reports()))
         mirror = MonitorMirror()
         transport = MirrorTransport(mirror)
         attempts = HostReportReconciler(reports=state.reports(), transport=transport).flush(

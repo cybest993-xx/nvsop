@@ -6,11 +6,11 @@ from dataclasses import replace
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from edge_runtime.evidence_deletion import (  # type: ignore[import-untyped]
+from edge_runtime.evidence_deletion import (
     EvidenceDeletionExecutor,
     EvidenceDeletionTransportError,
 )
-from edge_runtime.local_state import open_local_state  # type: ignore[import-untyped]
+from edge_runtime.local_state import open_local_state
 from sqlalchemy import Engine, text
 from test_evidence_deletion_bridge import _seed_local_and_register
 from test_evidence_deletion_protection import (

@@ -18,22 +18,22 @@ from pathlib import Path
 from typing import cast
 
 import uvicorn
-from edge_runtime.center_client import CenterClient  # type: ignore[import-untyped]
-from edge_runtime.evidence_deletion import (  # type: ignore[import-untyped]
+from edge_runtime.center_client import CenterClient
+from edge_runtime.evidence_deletion import (
     EvidenceDeletionExecutor,
     EvidenceDeletionTransport,
     EvidenceDeletionTransportError,
 )
-from edge_runtime.evidence_deletion_transport import (  # type: ignore[import-untyped]
+from edge_runtime.evidence_deletion_transport import (
     HttpEvidenceDeletionTransport,
 )
-from edge_runtime.evidence_media import (  # type: ignore[import-untyped]
+from edge_runtime.evidence_media import (
     evidence_artifact_directory,
     evidence_media_identity,
     evidence_registration_payloads,
 )
-from edge_runtime.judgment.evidence import EvidenceClip  # type: ignore[import-untyped]
-from edge_runtime.judgment.model import (  # type: ignore[import-untyped]
+from edge_runtime.judgment.evidence import EvidenceClip
+from edge_runtime.judgment.model import (
     Decision,
     EvidenceSpan,
     HostInstant,
@@ -44,8 +44,8 @@ from edge_runtime.judgment.model import (  # type: ignore[import-untyped]
     RuntimeParameters,
     Template,
 )
-from edge_runtime.judgment.reasons import Verdict  # type: ignore[import-untyped]
-from edge_runtime.local_state import LocalState, open_local_state  # type: ignore[import-untyped]
+from edge_runtime.judgment.reasons import Verdict
+from edge_runtime.local_state import LocalState, open_local_state
 from fastapi import FastAPI
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session as DatabaseSession
@@ -121,16 +121,16 @@ class _FlakyReportTransport:
         self.failed = False
 
     def claim(self, request: EvidenceDeletionRequest) -> EvidenceDeletionResponse:
-        return cast(EvidenceDeletionResponse, self._inner.claim(request))
+        return self._inner.claim(request)
 
     def verify(self, request: EvidenceDeletionVerifyRequest) -> EvidenceDeletionVerifyResponse:
-        return cast(EvidenceDeletionVerifyResponse, self._inner.verify(request))
+        return self._inner.verify(request)
 
     def report(self, request: EvidenceDeletionResultRequest) -> EvidenceDeletionResultResponse:
         if not self.failed:
             self.failed = True
             raise EvidenceDeletionTransportError("simulated result delivery failure")
-        return cast(EvidenceDeletionResultResponse, self._inner.report(request))
+        return self._inner.report(request)
 
 
 class _RemovingVerifyTransport:
@@ -141,15 +141,15 @@ class _RemovingVerifyTransport:
         self._path = path
 
     def claim(self, request: EvidenceDeletionRequest) -> EvidenceDeletionResponse:
-        return cast(EvidenceDeletionResponse, self._inner.claim(request))
+        return self._inner.claim(request)
 
     def verify(self, request: EvidenceDeletionVerifyRequest) -> EvidenceDeletionVerifyResponse:
-        verified = cast(EvidenceDeletionVerifyResponse, self._inner.verify(request))
+        verified = self._inner.verify(request)
         self._path.unlink(missing_ok=True)
         return verified
 
     def report(self, request: EvidenceDeletionResultRequest) -> EvidenceDeletionResultResponse:
-        return cast(EvidenceDeletionResultResponse, self._inner.report(request))
+        return self._inner.report(request)
 
 
 def _empty_state() -> JudgmentState:

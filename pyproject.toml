@@ -107,6 +107,13 @@ allowed-confusables = ["，", "。", "：", "；", "！", "？", "（", "）", "
 [tool.mypy]
 python_version = "3.12"
 strict = true
+# 单文件诊断也使用当前 worktree 的解释器和源码根，不依赖启动目录。
+python_executable = "$MYPY_CONFIG_FILE_DIR/.nvsop/venv/bin/python"
+mypy_path = [
+    "$MYPY_CONFIG_FILE_DIR/apps/control-api/src",
+    "$MYPY_CONFIG_FILE_DIR/apps/edge-runtime/src",
+    "$MYPY_CONFIG_FILE_DIR/packages/contracts/src",
+]
 # `tests/` carries no `__init__.py`, so mypy needs the source root to derive module names
 # from the file paths instead of walking up looking for packages.
 explicit_package_bases = true

@@ -409,7 +409,7 @@ def test_stale_confirmation_settles_the_command_but_not_the_request(
     assert accepted[0].status.value == "confirmed"
 
 
-def test_confirmation_after_grant_replacement_is_stale_and_request_stays_pending(
+def test_confirmation_after_grant_replacement_fails_the_old_request(
     session: DatabaseSession,
     targets: tuple[User, Station, InferenceHost, InferenceHost],
 ) -> None:
@@ -456,8 +456,9 @@ def test_confirmation_after_grant_replacement_is_stale_and_request_stays_pending
     )
     assert accepted is False
     assert record_after is not None
-    assert record_after.status.value == "pending"
-    # 命令被结案为 rejected, 不留永久领取.
+    assert record_after.status.value == "failed"
+    assert record_after.failure_code == "NORMAL_HANDOVER_STALE_CONFIRMATION"
+    # 请求退出 pending, 命令结案为 rejected, 不阻塞后继交权.
     assert commands.completed[-1].outcome == "rejected"
 
 

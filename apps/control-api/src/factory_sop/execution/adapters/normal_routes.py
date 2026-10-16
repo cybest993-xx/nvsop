@@ -6,7 +6,8 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, Header, Request, Response, status
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.exc import IntegrityError
 
@@ -308,8 +309,12 @@ def complete_execution_handover(
     """认证旧机回报，在同一事务内更新请求与命令终态。"""
     try:
         result = execution_handover_result_from_wire(body)
+        handover_id = UUID(result.handover_id)
+        grant_id = UUID(result.grant_id)
     except ValueError as error:
-        raise HTTPException(status_code=422, detail="invalid execution handover result") from error
+        raise RequestValidationError(
+            [{"type": "value_error", "loc": ("body",), "msg": "invalid execution handover result"}]
+        ) from error
     identity = host_identity_from_headers(
         host_id=host_id,
         method=request.method,
@@ -320,14 +325,14 @@ def complete_execution_handover(
         signature=host_signature,
     )
     record, accepted = settle_normal_handover_command(
-        handover_id=UUID(result.handover_id),
+        handover_id=handover_id,
         command_id=command_id,
         # 工位/双方主机身份以冻结请求为准: 客户端只证明 handover_id/grant_id 与自己的主机身份,
         # 不自报 station_id/to_host_id 冒充另一台推理机的交权。
         station_id=None,
         from_host_id=host_id,
         to_host_id=None,
-        grant_id=UUID(result.grant_id),
+        grant_id=grant_id,
         host=identity,
         claim_token=claim_token,
         outcome=result.outcome.value,

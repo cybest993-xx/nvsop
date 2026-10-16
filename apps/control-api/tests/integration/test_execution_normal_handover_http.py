@@ -386,7 +386,23 @@ def test_stale_grant_confirmation_is_rejected_but_command_settled(
     assert payload["accepted"] is False
 
     read_back = client.get(f"{NORMAL_HANDOVERS}/{record['handover_id']}", headers=csrf)
-    assert read_back.json()["status"] == "pending"
+    assert read_back.json()["status"] == "failed"
+    assert read_back.json()["failure_code"] == "NORMAL_HANDOVER_STALE_CONFIRMATION"
+    successor = _create_normal_handover(client, arrangement, csrf)
+    assert successor["grant_id"] != record["grant_id"]
+    replayed = host_client.post(
+        result_path,
+        json=body,
+        headers={
+            **_host_headers(arrangement, method="POST", path=result_path, body=body),
+            "X-Command-Claim-Token": str(document["claim_token"]),
+        },
+    )
+    assert replayed.status_code == 200, replayed.text
+    assert replayed.json()["accepted"] is False
+    assert (
+        client.get(f"{NORMAL_HANDOVERS}/{successor['handover_id']}").json()["status"] == "pending"
+    )
 
 
 def test_cancel_is_rejected_for_callers_without_the_permission(
@@ -457,8 +473,17 @@ def test_removing_a_host_referenced_by_history_is_structurally_refused(
     assert removed.status_code != 500
 
 
+@pytest.mark.parametrize(
+    ("outcome", "failure_code", "detail"),
+    [("confirmed", None, None), ("failed", "STATION_STOP_FAILED", "reader failed to close")],
+)
 def test_duplicate_result_is_idempotent_for_the_same_outcome(
-    client: TestClient, host_client: TestClient, arrangement: dict[str, object]
+    client: TestClient,
+    host_client: TestClient,
+    arrangement: dict[str, object],
+    outcome: str,
+    failure_code: str | None,
+    detail: str | None,
 ) -> None:
     csrf = _login(client, str(arrangement["operator"]))
     record = _create_normal_handover(client, arrangement, csrf)
@@ -474,6 +499,7 @@ def test_duplicate_result_is_idempotent_for_the_same_outcome(
         "detail": None,
         "failure_code": None,
     }
+    body.update(outcome=outcome, failure_code=failure_code, detail=detail)
     first = host_client.post(
         result_path,
         json=body,
@@ -483,7 +509,7 @@ def test_duplicate_result_is_idempotent_for_the_same_outcome(
         },
     )
     assert first.status_code == 200
-    assert first.json()["accepted"] is True
+    assert first.json()["accepted"] is (outcome == "confirmed")
 
     # nonce 一次性: 重放用新签名, 但同一 claim token 与相同结果。
     replayed = host_client.post(
@@ -497,7 +523,38 @@ def test_duplicate_result_is_idempotent_for_the_same_outcome(
     # 相同结果的重复回报幂等, 不翻转状态也不制造新确认。
     assert replayed.status_code == 200, replayed.text
     read_back = client.get(f"{NORMAL_HANDOVERS}/{record['handover_id']}", headers=csrf)
-    assert read_back.json()["status"] == "confirmed"
+    assert read_back.json()["status"] == outcome
+
+
+@pytest.mark.parametrize("field", ["handover_id", "grant_id"])
+def test_non_uuid_result_identity_is_a_structured_validation_refusal(
+    client: TestClient, host_client: TestClient, arrangement: dict[str, object], field: str
+) -> None:
+    csrf = _login(client, str(arrangement["operator"]))
+    record = _create_normal_handover(client, arrangement, csrf)
+    claim = host_client.get(
+        CLAIM_PATH, headers=_host_headers(arrangement, method="GET", path=CLAIM_PATH)
+    )
+    result_path = f"{API_PREFIX}/device-commands/{record['command_id']}/execution-handover-result"
+    body = {
+        "handover_id": str(record["handover_id"]),
+        "grant_id": str(record["grant_id"]),
+        "outcome": "confirmed",
+        "detail": None,
+        "failure_code": None,
+    }
+    body[field] = "not-a-uuid"
+    response = host_client.post(
+        result_path,
+        json=body,
+        headers={
+            **_host_headers(arrangement, method="POST", path=result_path, body=body),
+            "X-Command-Claim-Token": str(claim.json()["claim_token"]),
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert client.get(f"{NORMAL_HANDOVERS}/{record['handover_id']}").json()["status"] == "pending"
 
 
 def test_unknown_target_host_is_a_structured_not_found(

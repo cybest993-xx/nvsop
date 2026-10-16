@@ -561,6 +561,23 @@ def settle_normal_handover_command(
         )
         return record, False
     record = _expire_normal_handover(record, now=now, handovers=handovers)
+    if (
+        record.status is NormalHandoverStatus.FAILED
+        and outcome == "failed"
+        and record.failure_code == failure_code
+        and record.failure_detail == detail
+    ):
+        commands.complete(
+            command_id=command_id,
+            host=host,
+            claim_token=claim_token,
+            now=now,
+            outcome=outcome,
+            failure_code=failure_code,
+            detail=detail,
+            authenticated=authenticated,
+        )
+        return record, False
     if record.status is not NormalHandoverStatus.PENDING:
         commands.complete(
             command_id=command_id,
@@ -569,7 +586,11 @@ def settle_normal_handover_command(
             now=now,
             outcome="rejected",
             failure_code="NORMAL_HANDOVER_STALE_CONFIRMATION",
-            detail="normal handover request is no longer pending",
+            detail=(
+                record.failure_detail
+                if record.failure_code == "NORMAL_HANDOVER_STALE_CONFIRMATION"
+                else "normal handover request is no longer pending"
+            ),
             authenticated=authenticated,
         )
         return record, False
@@ -579,6 +600,15 @@ def settle_normal_handover_command(
         or current.holder_host_id != record.from_host_id
         or current.lease_expires_at <= now
     ):
+        record = handovers.save(
+            replace(
+                record,
+                status=NormalHandoverStatus.FAILED,
+                failed_at=now,
+                failure_code="NORMAL_HANDOVER_STALE_CONFIRMATION",
+                failure_detail="the frozen execution grant is no longer current",
+            )
+        )
         commands.complete(
             command_id=command_id,
             host=host,

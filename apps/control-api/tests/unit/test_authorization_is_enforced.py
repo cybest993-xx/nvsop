@@ -838,6 +838,9 @@ class FakeNormalHandovers:
     def __init__(self) -> None:
         self.records: dict[UUID, NormalHandover] = {}
 
+    def by_identifier(self, handover_id: UUID) -> NormalHandover | None:
+        return self.records.get(handover_id)
+
     def by_identifier_for_update(self, handover_id: UUID) -> NormalHandover | None:
         return self.records.get(handover_id)
 
@@ -877,7 +880,11 @@ class FakeExecutionGrants:
 
 
 class FakeNormalHandoverCommands:
-    """正常交权命令队列 fake: 取消路由不命令队列。"""
+    """正常交权命令队列 fake: 无已领取命令。"""
+
+    def lock_claim(self, **kwargs: object) -> bool:
+        del kwargs
+        return False
 
     def enqueue(self, **kwargs: object) -> None:
         del kwargs

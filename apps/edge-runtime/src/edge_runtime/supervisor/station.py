@@ -7,10 +7,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from collections.abc import Callable, Iterable
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from threading import RLock
 from time import monotonic
@@ -56,6 +57,7 @@ from edge_runtime.supervisor.inputs import (
     ActionRecognized,
     ExternalSignal,
     Normalizer,
+    StorageHealthObserved,
     StreamHealthObserved,
     SupervisorInput,
     Validity,
@@ -251,6 +253,7 @@ class StationSupervisor:
         self._resume_after: float | None = None
         self._normalizers: dict[str | None, Normalizer] = {None: Normalizer()}
         self._deadline: HostInstant | None = None
+        self._storage_impairments: set[str] = set()
         self._report_provenance: dict[int, dict[str, BackendReportContext] | None] = {}
         self._active_impaired_backend_provenance: dict[str, BackendReportContext] = {}
         self._active_impaired_stream_provenance: dict[str, BackendReportContext] = {}
@@ -336,7 +339,9 @@ class StationSupervisor:
         with self._control_lock:
             if self._paused:
                 # 健康和有效性事实继续更新, 观测/计时器仍不进入判定。
-                if isinstance(arriving, (StreamHealthObserved, ValidityChanged)):
+                if isinstance(
+                    arriving, (StreamHealthObserved, StorageHealthObserved, ValidityChanged)
+                ):
                     return self._receive(arriving, report_provenance=report_provenance)
                 return Reaction(decisions=(), wake_at=None)
             cutoff = self._resume_after
@@ -372,6 +377,36 @@ class StationSupervisor:
             else:
                 active_impaired_backend_provenance.pop(report_provenance.backend_id, None)
             aggregate_transition = was_impaired != bool(active_impaired_backend_provenance)
+        storage_impairments = set(self._storage_impairments)
+        if isinstance(arriving, StorageHealthObserved):
+            event = arriving.event
+            if event.impaired:
+                storage_impairments.add(event.role)
+            else:
+                storage_impairments.discard(event.role)
+            aggregate_transition = (
+                ReasonCode.STORAGE_UNAVAILABLE in self._state.active_impairments
+            ) != bool(storage_impairments)
+            self._store.enqueue_health(
+                stream_id=f"storage:{event.role}",
+                status="storage_unavailable" if event.impaired else "delivering",
+                reason_code=ReasonCode.STORAGE_UNAVAILABLE.value if event.impaired else None,
+                detail=json.dumps(asdict(event), ensure_ascii=False),
+                occurred_at=datetime.now(UTC).isoformat(),
+                source_anchor=None,
+                anchor_offset=None,
+            )
+            _logger.log(
+                logging.WARNING if event.impaired else logging.INFO,
+                "edge.storage.health role=%s impaired=%s used_percent=%s "
+                "high=%s recovery=%s error=%s",
+                event.role,
+                event.impaired,
+                event.used_percent,
+                event.high_watermark_percent,
+                event.recovery_watermark_percent,
+                event.error,
+            )
         events = normalizer.events_for(arriving) if aggregate_transition else ()
         if isinstance(arriving, StreamHealthObserved):
             self._report_stream_health(arriving.event)
@@ -393,6 +428,7 @@ class StationSupervisor:
             self._record_observation(arriving, report_provenance=report_provenance)
         reaction = self._advance(events, report_provenance=report_provenance)
         self._normalizers = normalizers
+        self._storage_impairments = storage_impairments
         self._active_impaired_backend_provenance = active_impaired_backend_provenance
         self._active_impaired_stream_provenance = active_impaired_stream_provenance
         return reaction

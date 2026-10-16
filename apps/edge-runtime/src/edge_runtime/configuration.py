@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import ssl
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -38,6 +38,7 @@ from edge_runtime.station_runtime import (
     StationRuntimeConfiguration,
     station_configuration,
 )
+from edge_runtime.storage_health import DiskHealthConfiguration, load_disk_health_configuration
 
 _SUPPORTED_CONNECTOR_TYPES = frozenset({"hikvision_isapi"})
 
@@ -78,6 +79,7 @@ class EdgeRuntimeConfiguration:
     media: MediaRuntimeConfiguration | None = None
     evidence: EvidenceMediaConfiguration | None = None
     queue_capacity: QueueCapacity = DEFAULT_QUEUE_CAPACITY
+    disk_health: DiskHealthConfiguration = field(default_factory=DiskHealthConfiguration)
 
 
 _CONFIG_KEYS = frozenset(
@@ -126,7 +128,7 @@ def load_configuration(
     _require_keys(
         config,
         required=required,
-        optional={"center_ca_file", "media", "evidence", "queue_capacity"},
+        optional={"center_ca_file", "media", "evidence", "queue_capacity", "disk_health"},
     )
     connectors_value = _array(config["connectors"], "connectors")
     connectors = tuple(_local_connector(item) for item in connectors_value)
@@ -182,6 +184,7 @@ def load_configuration(
         media=media,
         evidence=evidence,
         queue_capacity=limits,
+        disk_health=load_disk_health_configuration(config.get("disk_health")),
     )
 
 

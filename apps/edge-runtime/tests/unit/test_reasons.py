@@ -51,6 +51,7 @@ class ReasonCodeClassificationTest(unittest.TestCase):
                 ReasonCode.ACTION_ID_UNKNOWN,
                 ReasonCode.INFERENCE_HOST_DOWN,
                 ReasonCode.RUN_INTERRUPTED,
+                ReasonCode.STORAGE_UNAVAILABLE,
                 ReasonCode.IO_SIGNAL_LOST,
                 ReasonCode.IO_TIME_UNALIGNED,
             },

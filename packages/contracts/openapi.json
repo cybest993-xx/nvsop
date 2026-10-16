@@ -4279,6 +4279,17 @@
             "title": "Cameras",
             "type": "array"
           },
+          "disk_watermark_percent": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disk Watermark Percent"
+          },
           "host_id": {
             "format": "uuid",
             "title": "Host Id",
@@ -5986,6 +5997,7 @@
           "ACTION_ID_UNKNOWN",
           "INFERENCE_HOST_DOWN",
           "RUN_INTERRUPTED",
+          "STORAGE_UNAVAILABLE",
           "IO_SIGNAL_LOST",
           "IO_TIME_UNALIGNED",
           "MISSED_STEP",
@@ -6006,6 +6018,7 @@
           "MISSED_STEP": "缺少必做步骤",
           "OUT_OF_ORDER": "步骤顺序错误",
           "RUN_INTERRUPTED": "运行被中断。配置切换、进程重启、本地暂停或显式终止。",
+          "STORAGE_UNAVAILABLE": "边缘存储不可用或超过安全水位",
           "STREAM_LOST": "观测流中断",
           "TIMESTAMP_DISCONTINUITY": "时间轴不连续",
           "WRONG_STEP": "出现了错误步骤"

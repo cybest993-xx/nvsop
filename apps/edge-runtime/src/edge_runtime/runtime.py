@@ -108,6 +108,7 @@ from edge_runtime.station_runtime import (
     StationInputSource,
     StationRuntimeConfiguration,
 )
+from edge_runtime.storage_health import DiskHealthWatch
 from edge_runtime.stream_health import StreamFact, StreamHealthEvent
 from edge_runtime.supervisor.delegated_commands import (
     ConnectionTestCommandRunner,
@@ -121,7 +122,7 @@ from edge_runtime.supervisor.delegated_transport import (
     HttpCommandTransport,
     HttpReclipCommandTransport,
 )
-from edge_runtime.supervisor.inputs import StreamHealthObserved
+from edge_runtime.supervisor.inputs import StorageHealthObserved, StreamHealthObserved
 from edge_runtime.supervisor.reclip import (
     ReclipCommandRunner,
     ReclipEvidenceExecutor,
@@ -448,6 +449,7 @@ class AutonomousStation:
         output_disposal_targets: Mapping[str, tuple[str, OutputPoint]] | None = None,
         output_report_host_id: str | None = None,
         output_write_timeout: float | None = None,
+        disk_health: DiskHealthWatch | None = None,
     ) -> None:
         self._supervisor = supervisor
         self._source = source
@@ -460,6 +462,7 @@ class AutonomousStation:
         self._output_disposal_targets = dict(output_disposal_targets or {})
         self._output_report_host_id = output_report_host_id
         self._output_write_timeout = output_write_timeout
+        self._disk_health = disk_health
 
     @property
     def station_id(self) -> str | None:
@@ -592,6 +595,7 @@ class AutonomousStation:
                 supervisor = self._supervisor
                 source = self._source
                 connector_runtimes = self._connector_runtimes
+                self._poll_storage_health(supervisor)
                 self._poll_due(
                     supervisor=supervisor,
                     connector_runtimes=connector_runtimes,
@@ -600,8 +604,10 @@ class AutonomousStation:
                     timeout=self._next_input_timeout(
                         supervisor=supervisor,
                         connector_runtimes=connector_runtimes,
+                        disk_health=self._disk_health,
                     )
                 )
+                self._poll_storage_health(supervisor)
                 if should_stop():
                     break
                 if isinstance(arriving, InputWaitExpired):
@@ -631,17 +637,31 @@ class AutonomousStation:
                     connector_runtimes=connector_runtimes,
                 )
             self._execute_output_disposals(self._supervisor.interrupt())
+        except sqlite3.Error:
+            _logger.exception(
+                "edge.storage.write_failed station=%s; judgment stopped", self._station_id
+            )
+            raise
         finally:
             self.close()
+
+    def _poll_storage_health(self, supervisor: StationSupervisor) -> None:
+        if self._disk_health is not None:
+            for event in self._disk_health.poll(now=monotonic()):
+                self._execute_output_disposals(supervisor.receive(StorageHealthObserved(event)))
 
     @staticmethod
     def _next_input_timeout(
         *,
         supervisor: StationSupervisor,
         connector_runtimes: tuple[ConnectorRuntime, ...],
+        disk_health: DiskHealthWatch | None = None,
     ) -> float | None:
         timeout = supervisor.timeout()
         now = monotonic()
+        if disk_health is not None:
+            disk_timeout = disk_health.timeout(now=now)
+            timeout = disk_timeout if timeout is None else min(timeout, disk_timeout)
         for runtime in connector_runtimes:
             due = runtime.next_due(now=now)
             if due is None:
@@ -1636,6 +1656,17 @@ def _build_runtime_composition(
                 )
             if sound_light_target is not None:
                 output_disposal_targets[SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL] = sound_light_target
+            storage_paths: dict[str, Path] = {}
+            if config.local_state_path is not None:
+                storage_paths["local_state"] = config.local_state_path.parent
+            if config.media is not None and any(
+                camera.station_id == station_config.station_id
+                and camera.recording_mode is RecordingMode.CONTINUOUS
+                for camera in config.media.cameras
+            ):
+                storage_paths["recording"] = config.media.recording_directory
+            if config.evidence is not None:
+                storage_paths["evidence"] = config.evidence.evidence_directory
             stations.append(
                 AutonomousStation(
                     station_id=station_config.station_id,
@@ -1663,6 +1694,12 @@ def _build_runtime_composition(
                     output_disposal_targets=output_disposal_targets,
                     output_report_host_id=config.host_id,
                     output_write_timeout=config.command_timeout,
+                    disk_health=DiskHealthWatch(
+                        paths=storage_paths,
+                        configuration=config.disk_health,
+                        # 重启/配置切换不能解除滞回区间内的既有失效。
+                        initially_impaired=True,
+                    ),
                 )
             )
     except Exception:

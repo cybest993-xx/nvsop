@@ -33,6 +33,7 @@ from edge_runtime.judgment.model import (
     ValidityRestored,
 )
 from edge_runtime.judgment.reasons import INDETERMINATE_REASONS, ReasonCode
+from edge_runtime.storage_health import StorageHealthEvent
 from edge_runtime.stream_health import StreamFact, StreamHealthEvent
 
 
@@ -101,6 +102,13 @@ class StreamHealthObserved:
     event: StreamHealthEvent
 
 
+@dataclass(frozen=True, slots=True)
+class StorageHealthObserved:
+    """本机一个真实写入路径的容量/可写性事实, 与流恢复独立。"""
+
+    event: StorageHealthEvent
+
+
 class Validity(Enum):
     """Which way an impairment the caller holds first-hand has just moved."""
 
@@ -129,7 +137,13 @@ class ValidityChanged:
             )
 
 
-SupervisorInput = ActionRecognized | ExternalSignal | StreamHealthObserved | ValidityChanged
+SupervisorInput = (
+    ActionRecognized
+    | ExternalSignal
+    | StreamHealthObserved
+    | StorageHealthObserved
+    | ValidityChanged
+)
 """What reaches the supervisor from outside itself. Its own timer and its own run
 interruption are not here: those the supervisor raises, and they carry an instant it reads
 from the clock rather than one that arrived with them."""
@@ -191,6 +205,10 @@ class Normalizer:
                     *self._momentary(self._reanchoring(arriving.event.source_anchor)),
                     *self._health(arriving.event),
                 )
+            case StorageHealthObserved():
+                if arriving.event.impaired:
+                    return (ValidityImpaired(reason=ReasonCode.STORAGE_UNAVAILABLE),)
+                return (ValidityRestored(reason=ReasonCode.STORAGE_UNAVAILABLE),)
             case ValidityChanged():
                 if arriving.now is Validity.IMPAIRED:
                     return (ValidityImpaired(reason=arriving.reason),)

@@ -2563,6 +2563,10 @@ export type HostMediaConfigurationView = {
    */
   cameras: Array<ExportCameraMediaView>
   /**
+   * Disk Watermark Percent
+   */
+  disk_watermark_percent?: number | null
+  /**
    * Host Id
    */
   host_id: string
@@ -3597,6 +3601,7 @@ export type ReasonCode =
   | 'ACTION_ID_UNKNOWN'
   | 'INFERENCE_HOST_DOWN'
   | 'RUN_INTERRUPTED'
+  | 'STORAGE_UNAVAILABLE'
   | 'IO_SIGNAL_LOST'
   | 'IO_TIME_UNALIGNED'
   | 'MISSED_STEP'

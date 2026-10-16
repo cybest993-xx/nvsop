@@ -409,6 +409,27 @@ class CleanupTaskTest(unittest.TestCase):
         self.assertTrue(task.exists())
         self.assertFalse(self.gh_calls.exists())
 
+    def test_task_merge_rejects_failed_primary_status_read(self) -> None:
+        self.install_task_merge_entrypoint()
+        branch = "agent/a/demo"
+        candidate, merge_commit, task = self.make_merged_task(branch)
+        system_git = shutil.which("git")
+        assert system_git is not None
+        wrapper = self.bin_dir / "git"
+        wrapper.write_text(
+            f'#!/bin/sh\nif [ "$1" = status ]; then exit 128; fi\nexec "{system_git}" "$@"\n',
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+
+        result = self.run_make_merge(branch, candidate, merge_commit)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("cannot verify primary status", result.stderr)
+        self.assert_branch_exists(branch)
+        self.assertTrue(task.exists())
+        self.assertFalse(self.gh_calls.exists())
+
     def test_merged_cleanup_fast_forwards_primary_main(self) -> None:
         branch = "agent/a/demo"
         candidate, merge_commit, task = self.make_merged_task(branch)

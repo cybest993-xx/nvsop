@@ -8,12 +8,14 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
 from _integration_support import RedisServer, settings_for
 from redis import Redis
 from sqlalchemy import Engine
+from sqlalchemy.orm import Session
 from test_ddm_dispatch import DdmHttpServer, _reload, executor, run
 from test_ddm_dispatch import selections as selections
 from test_ddm_training_command import NOW, _caller, _submit
@@ -26,6 +28,7 @@ from factory_sop.dataset.adapters.ddm_execution import (
     HttpDdmTrainingBackend,
 )
 from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
+from factory_sop.dataset.api import DdmTrainingJobOutcome, DdmTrainingJobResult
 from factory_sop.dataset.errors import DatasetRefusalCode, DatasetRefusedError
 from factory_sop.dataset.model import DdmTrainingCommand, DdmTrainingCommandStatus
 from factory_sop.dataset.usecases.ddm_command import (
@@ -705,6 +708,70 @@ def test_dispatched_cancel_confirms_stop_and_releases_guard(
         released = run(executor(engine, tmp_path, server), second.command.id)
         assert released.outcome is DdmTrainingDispatchOutcome.BOUND
         assert len(server.starts) == 2
+
+
+def test_dispatched_cancel_lost_job_fence_does_not_publish_cancellation(
+    engine: Engine,
+    tmp_path: Path,
+    selections: tuple[DdmInputSelection, DdmInputSelection],
+) -> None:
+    """已核实停止但通用 job 围栏提交失败：不发布取消终态、不伪称已释放，保留在途保护。"""
+    submitted = _submit(
+        engine,
+        idempotency_key="cancel-bound-fence-lost",
+        training=selections[0],
+        validation=selections[1],
+    )
+    with DdmHttpServer() as server:
+        bound = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert bound.command is not None
+        assert bound.command.base_job_id is not None
+        job_id = bound.command.base_job_id
+        server.jobs[job_id].status = "running"
+        server.jobs[job_id].process_pid = 707
+        server.cache_job(job_id, process_pid=707)
+        actor = _caller(Permission.DATASET_EDIT)
+        _request_dispatched_cancel(engine, submitted.command, actor=actor)
+
+        def finish_lost_fence(session: object, result: DdmTrainingJobResult) -> bool:
+            del session, result
+            return False
+
+        def commit_transaction(session: object) -> bool:
+            cast(Session, session).commit()
+            return True
+
+        # 基座进程已终止且报告 cancelled，但本次提交拿不到通用 job 围栏。
+        lost = executor(engine, tmp_path, server).execute_job(
+            command_id=submitted.command.id,
+            now=NOW + timedelta(seconds=2),
+            resolve_current_caller=lambda _: _caller(Permission.DATASET_EDIT),
+            finish_job=finish_lost_fence,
+            commit_transaction=commit_transaction,
+        )
+        assert lost.outcome is DdmTrainingJobOutcome.LEASE_LOST
+        stored = _reload(engine, submitted.command.id)
+        # 未提交的取消终态不得外泄：命令仍在途、取消人未写、原响应未发布。
+        assert stored.status is DdmTrainingCommandStatus.BOUND
+        assert stored.cancelled_by is None
+        assert stored.cancelled_at is None
+        assert stored.cancel_requested_by == actor.user.id
+        assert stored.cancel_requested_at is not None
+        assert stored.cancel_response is None
+        # 未发布的停止结论仍要给操作者可复核的未确认诊断。
+        assert stored.observation_failure_code == "BASE_CANCELLATION_UNVERIFIED"
+        assert stored.observation_failure_detail is not None
+        # 未确认取消不释放派发约束，也不重发 start。
+        second = _submit(
+            engine,
+            idempotency_key="cancel-bound-fence-lost-second",
+            training=selections[0],
+            validation=selections[1],
+        )
+        blocked = run(executor(engine, tmp_path, server), second.command.id)
+        assert blocked.outcome is DdmTrainingDispatchOutcome.BLOCKED
+        assert blocked.failure_code == "DISPATCH_IN_FLIGHT"
+        assert len(server.starts) == 1
 
 
 def test_dispatched_cancel_entry_failure_stays_unconfirmed_and_recovers(

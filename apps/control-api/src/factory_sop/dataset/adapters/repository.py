@@ -582,7 +582,7 @@ class PostgresDatasetRepository:
         return row.to_domain() if row is not None else None
 
     def ddm_training_command_by_id(self, command_id: UUID) -> DdmTrainingCommand | None:
-        row = self._session.get(DdmTrainingCommandRow, command_id)
+        row = self._session.get(DdmTrainingCommandRow, command_id, populate_existing=True)
         return row.to_domain() if row is not None else None
 
     def list_ddm_training_commands(self, dataset_id: UUID) -> Sequence[DdmTrainingCommand]:
@@ -597,7 +597,7 @@ class PostgresDatasetRepository:
     def save_ddm_training_command(
         self, value: DdmTrainingCommand, *, expected_updated_at: datetime
     ) -> bool:
-        """只在租约仍匹配时绑定命令的 job 身份；S072 不存在运行时状态跃迁。"""
+        """只在受理租约仍匹配时绑定 job 身份，不改写取消或派发状态。"""
         result = cast(
             "CursorResult[Any]",
             self._session.execute(
@@ -609,6 +609,29 @@ class PostgresDatasetRepository:
                 .values(
                     job_id=value.job_id,
                     updated_at=value.updated_at,
+                )
+            ),
+        )
+        return result.rowcount == 1
+
+    def cancel_pending_ddm_training_command(
+        self, *, dataset_id: UUID, command_id: UUID, actor_id: UUID, now: datetime
+    ) -> bool:
+        """同一行的状态条件更新裁决取消与派发；等待竞争事务后 PostgreSQL 会重查条件。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(DdmTrainingCommandRow)
+                .where(
+                    DdmTrainingCommandRow.id == command_id,
+                    DdmTrainingCommandRow.dataset_id == dataset_id,
+                    DdmTrainingCommandRow.status == DdmTrainingCommandStatus.PENDING.value,
+                )
+                .values(
+                    status=DdmTrainingCommandStatus.CANCELLED.value,
+                    cancelled_by=actor_id,
+                    cancelled_at=now,
+                    updated_at=now,
                 )
             ),
         )

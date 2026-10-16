@@ -807,13 +807,16 @@ def _dispatch_ddm_training_job(ctx: Mapping[str, Any], job_id: str, fence: _Exec
     def finish_job(session: object, result: DdmTrainingJobResult) -> bool:
         if fence.cancelled:
             return False
-        if result.outcome not in {DdmTrainingJobOutcome.COMPLETED, DdmTrainingJobOutcome.FAILED}:
+        terminal_status = {
+            DdmTrainingJobOutcome.COMPLETED: JobStatus.SUCCEEDED,
+            DdmTrainingJobOutcome.FAILED: JobStatus.FAILED,
+            DdmTrainingJobOutcome.CANCELLED: JobStatus.SUPERSEDED,
+        }.get(result.outcome)
+        if terminal_status is None:
             raise RuntimeError("DDM executor requested a non-terminal job finish")
         return PostgresJobRepository(cast(Session, session)).finish(
             job_id=running.id,
-            status=JobStatus.SUCCEEDED.value
-            if result.outcome is DdmTrainingJobOutcome.COMPLETED
-            else JobStatus.FAILED.value,
+            status=terminal_status.value,
             failure_code=result.failure_code,
             now=datetime.now(UTC),
             expected_updated_at=running.updated_at,

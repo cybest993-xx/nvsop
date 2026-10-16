@@ -9,6 +9,7 @@
 import { client } from '@/api/generated/client.gen'
 import {
   bindTemplateVersion as generatedBindTemplateVersion,
+  cancelDdmTrainingCommand as generatedCancelDdmTrainingCommand,
   createAnnotationContext as generatedCreateAnnotationContext,
   downloadDatasetArtifact as generatedDownloadDatasetArtifact,
   createConnector as generatedCreateConnector,
@@ -1007,6 +1008,18 @@ export function listDdmTrainingCommands(
     generatedListDdmTrainingCommands({
       path: { dataset_id: datasetId },
       query: { page, page_size: pageSize },
+    }),
+  )
+}
+
+/** 取消一条尚未派发的 DDM 训练命令。仅取消 pending 状态的本地命令，已派发返回 409 冲突。 */
+export function cancelDdmTrainingCommand(
+  datasetId: string,
+  commandId: string,
+): Promise<DdmTrainingCommand> {
+  return execute(
+    generatedCancelDdmTrainingCommand({
+      path: { dataset_id: datasetId, command_id: commandId },
     }),
   )
 }

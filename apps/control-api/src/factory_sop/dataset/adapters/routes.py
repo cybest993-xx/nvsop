@@ -50,6 +50,7 @@ from factory_sop.dataset.usecases import (
 )
 from factory_sop.dataset.usecases.ddm_command import (
     authorize_ddm_result_access,
+    cancel_ddm_training_command,
     list_ddm_training_commands,
     read_ddm_training_command,
     request_ddm_training_command,
@@ -478,8 +479,12 @@ class DdmTrainingCommandView(BaseModel):
     created_by: UUID
     created_at: datetime
     updated_at: datetime
+    cancelled_by: UUID | None = None
+    cancelled_at: datetime | None = None
 
-    @field_serializer("last_observed_at", "result_registered_at", "created_at", "updated_at")
+    @field_serializer(
+        "last_observed_at", "result_registered_at", "created_at", "updated_at", "cancelled_at"
+    )
     def serialize_datetime(self, value: datetime | None) -> str | None:
         return _utc(value) if value is not None else None
 
@@ -1273,6 +1278,8 @@ def _ddm_command_view(value: model.DdmTrainingCommand) -> DdmTrainingCommandView
         result_failure_code=value.result_failure_code,
         result_failure_detail=value.result_failure_detail,
         result_registered_at=value.result_registered_at,
+        cancelled_by=value.cancelled_by,
+        cancelled_at=value.cancelled_at,
         created_by=value.created_by,
         created_at=value.created_at,
         updated_at=value.updated_at,
@@ -1475,6 +1482,31 @@ def read_a_ddm_training_command(
             dataset_id=dataset_id,
             command_id=command_id,
             caller=caller,
+            datasets=datasets,
+        )
+    )
+
+
+@router.post(
+    "/{dataset_id}/ddm-training-commands/{command_id}/cancel",
+    response_model=DdmTrainingCommandView,
+    operation_id="cancelDdmTrainingCommand",
+    openapi_extra=needs(Permission.DATASET_EDIT),
+    responses=ProblemResponses,
+)
+def cancel_a_ddm_training_command(
+    dataset_id: UUID,
+    command_id: UUID,
+    caller: Authorized,
+    datasets: Annotated[DdmTrainingCommandRepository, Depends(dependencies.datasets)],
+) -> DdmTrainingCommandView:
+    """仅取消尚未进入派发的命令；已派发时返回冲突，不宣称基座已停止。"""
+    return _ddm_command_view(
+        cancel_ddm_training_command(
+            dataset_id=dataset_id,
+            command_id=command_id,
+            caller=caller,
+            now=datetime.now(UTC),
             datasets=datasets,
         )
     )

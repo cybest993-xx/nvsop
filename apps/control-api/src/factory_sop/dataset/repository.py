@@ -239,7 +239,7 @@ class UsageDatasetRepository(DatasetRepository, Protocol):
 
 
 class DdmTrainingCommandRepository(UsageDatasetRepository, Protocol):
-    """DDM 训练命令受理额外依赖的仓储方法，不扩张既有用途/制品测试 seam。"""
+    """DDM 训练命令受理、查询与未派发取消的仓储契约，不扩张用途/制品 seam。"""
 
     def add_ddm_training_command(self, value: DdmTrainingCommand) -> bool:
         """按数据集范围的幂等键条件追加 DDM 训练命令；键已被并发占用时返回 ``False``。"""
@@ -263,4 +263,10 @@ class DdmTrainingCommandRepository(UsageDatasetRepository, Protocol):
         self, value: DdmTrainingCommand, *, expected_updated_at: datetime
     ) -> bool:
         """只在租约仍匹配时绑定命令的 job 身份，防止过期写入覆盖获胜结果。"""
+        ...
+
+    def cancel_pending_ddm_training_command(
+        self, *, dataset_id: UUID, command_id: UUID, actor_id: UUID, now: datetime
+    ) -> bool:
+        """与派发意图竞争同一 pending 状态；只写取消事实，不提交事务或改写输入。"""
         ...

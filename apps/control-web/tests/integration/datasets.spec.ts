@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 
-import { ControlPlaneError } from '@/api/controlPlane'
+import { ControlPlaneError, type DdmTrainingCommand } from '@/api/controlPlane'
 import TrainingDatasetsView from '@/modules/datasets/TrainingDatasetsView.vue'
 import { useSessionStore } from '@/session/store'
 
@@ -15,6 +15,7 @@ const api = vi.hoisted(() => ({
   listDatasetArtifacts: vi.fn(),
   listDatasetUsageChecks: vi.fn(),
   listDdmTrainingCommands: vi.fn(),
+  cancelDdmTrainingCommand: vi.fn(),
   listVlmCandidates: vi.fn(),
   readDdmTrainingResult: vi.fn(),
   registerDatasetActionList: vi.fn(),
@@ -241,6 +242,30 @@ const DDM_COMMAND_BOUND_UNKNOWN = {
   last_observed_at: '2026-09-08T01:04:00Z',
 }
 
+const DDM_COMMAND_PENDING: DdmTrainingCommand = {
+  ...DDM_COMMAND_REGISTERED,
+  id: 'ddm-command-pending',
+  status: 'pending',
+  base_job_id: null,
+  base_status: null,
+  base_progress: null,
+  base_current_step: null,
+  base_total_steps: null,
+  last_observed_at: null,
+  observation_failure_code: null,
+  observation_failure_detail: null,
+  failure_code: null,
+  failure_detail: null,
+  result_status: 'not_registered',
+  result_registered_at: null,
+  result_config_sha256: null,
+  result_config_size: null,
+  result_checkpoint_sha256: null,
+  result_checkpoint_size: null,
+  cancelled_by: null,
+  cancelled_at: null,
+}
+
 const DDM_RESULT_REGISTERED = {
   command_id: DDM_COMMAND_REGISTERED.id,
   dataset_id: DATASET.id,
@@ -316,6 +341,12 @@ beforeEach(() => {
   api.listVlmCandidates.mockResolvedValue({ items: [], page: 1, page_size: 50, total: 0 })
   api.listDatasetArtifacts.mockResolvedValue({ items: [], page: 1, page_size: 50, total: 0 })
   api.listDdmTrainingCommands.mockResolvedValue(ddmCommandPage())
+  api.cancelDdmTrainingCommand.mockResolvedValue({
+    ...DDM_COMMAND_REGISTERED,
+    status: 'cancelled',
+    cancelled_by: 'operator-1',
+    cancelled_at: '2026-09-08T01:05:00Z',
+  })
   api.readDdmTrainingResult.mockResolvedValue({
     command_id: 'ddm-command-1',
     dataset_id: DATASET.id,
@@ -1702,6 +1733,162 @@ describe('训练数据集工作台', () => {
 
     expect(wrapper.text()).toContain('尚未成功观测')
     expect(wrapper.text()).not.toContain('最近一次查询成功')
+    wrapper.unmount()
+  })
+
+  it('allows an authorized editor to cancel a pending command, updates authoritative metadata and disables duplicate submission', async () => {
+    grant('dataset.dataset.view', 'dataset.dataset.edit')
+    api.listDdmTrainingCommands.mockResolvedValue(ddmCommandPage([DDM_COMMAND_PENDING]))
+    const pendingCancel = deferred<typeof DDM_COMMAND_PENDING>()
+    api.cancelDdmTrainingCommand.mockReturnValueOnce(pendingCancel.promise)
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已受理，待派发')
+    const cancelButton = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('取消命令'))
+    expect(cancelButton).toBeDefined()
+    expect(cancelButton?.attributes('disabled')).toBeUndefined()
+
+    // 点击取消触发请求并进入 loading/防重复提交状态
+    await cancelButton?.trigger('click')
+    expect(api.cancelDdmTrainingCommand).toHaveBeenCalledWith(DATASET.id, DDM_COMMAND_PENDING.id)
+    expect(cancelButton?.attributes('disabled')).toBeDefined()
+
+    // 重复点击在进行中被阻止
+    await cancelButton?.trigger('click')
+    expect(api.cancelDdmTrainingCommand).toHaveBeenCalledTimes(1)
+
+    // 权威响应返回持久化取消事实
+    const cancelledCommand = {
+      ...DDM_COMMAND_PENDING,
+      status: 'cancelled',
+      cancelled_by: 'operator-editor',
+      cancelled_at: '2026-09-08T01:05:00Z',
+      updated_at: '2026-09-08T01:05:00Z',
+    }
+    pendingCancel.resolve(cancelledCommand)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已取消（未派发）')
+    expect(wrapper.text()).toContain('operator-editor')
+    expect(wrapper.text()).toContain('取消时间：')
+    // 已取消的命令不再展示取消按钮
+    expect(wrapper.findAll('button').some((button) => button.text().includes('取消命令'))).toBe(
+      false,
+    )
+    wrapper.unmount()
+  })
+
+  it('does not expose cancel operation to users with only view or import permissions', async () => {
+    // 仅具有 view 权限
+    grant('dataset.dataset.view')
+    api.listDdmTrainingCommands.mockResolvedValue(ddmCommandPage([DDM_COMMAND_PENDING]))
+
+    const viewOnly = await mountDatasets()
+    await flushPromises()
+
+    expect(viewOnly.wrapper.text()).toContain('已受理，待派发')
+    expect(
+      viewOnly.wrapper.findAll('button').some((button) => button.text().includes('取消命令')),
+    ).toBe(false)
+    viewOnly.wrapper.unmount()
+    await flushPromises()
+
+    // 具有 view + import 权限，依然没有 edit 权限
+    grant('dataset.dataset.view', 'dataset.dataset.import')
+    const viewImport = await mountDatasets()
+    await flushPromises()
+
+    expect(viewImport.wrapper.text()).toContain('已受理，待派发')
+    expect(
+      viewImport.wrapper.findAll('button').some((button) => button.text().includes('取消命令')),
+    ).toBe(false)
+    viewImport.wrapper.unmount()
+  })
+
+  it('displays honest conflict detail on 409 USAGE_STATE_CONFLICT and does not fabricate cancelled state', async () => {
+    grant('dataset.dataset.view', 'dataset.dataset.edit')
+    api.listDdmTrainingCommands.mockResolvedValue(ddmCommandPage([DDM_COMMAND_PENDING]))
+    api.cancelDdmTrainingCommand.mockRejectedValueOnce(
+      new ControlPlaneError({
+        message: '训练数据集用途状态冲突',
+        errorCode: 'USAGE_STATE_CONFLICT',
+        status: 409,
+        detail: '命令已进入派发，不能按未派发取消；该结果不证明基座已停止',
+      }),
+    )
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+
+    const cancelButton = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('取消命令'))
+    expect(cancelButton).toBeDefined()
+    await cancelButton?.trigger('click')
+    await flushPromises()
+
+    // 展示真实冲突说明与错误码
+    expect(wrapper.text()).toContain('命令已进入派发，不能按未派发取消；该结果不证明基座已停止')
+    expect(wrapper.text()).toContain('USAGE_STATE_CONFLICT')
+
+    // 状态未被伪造为已取消，仍为待派发
+    expect(wrapper.text()).toContain('已受理，待派发')
+    expect(wrapper.text()).not.toContain('已取消（未派发）')
+    expect(wrapper.text()).not.toContain('取消时间：')
+    wrapper.unmount()
+  })
+
+  it('drops a stale cancel response when the dataset changes before it resolves', async () => {
+    grant('dataset.dataset.view', 'dataset.dataset.edit')
+    const secondDataset = { ...DATASET, id: 'dataset-2', name: '第二数据集' }
+    api.readTrainingDatasets.mockResolvedValue({
+      items: [DATASET, secondDataset],
+      page: 1,
+      page_size: 50,
+      total: 2,
+    })
+    api.listDdmTrainingCommands.mockImplementation((datasetId: string) =>
+      Promise.resolve(
+        ddmCommandPage([
+          datasetId === DATASET.id
+            ? DDM_COMMAND_PENDING
+            : { ...DDM_COMMAND_PENDING, id: 'ddm-command-dataset-2', dataset_id: secondDataset.id },
+        ]),
+      ),
+    )
+    const pendingCancel = deferred<typeof DDM_COMMAND_PENDING>()
+    api.cancelDdmTrainingCommand.mockReturnValueOnce(pendingCancel.promise)
+
+    const { wrapper } = await mountDatasets()
+    await flushPromises()
+
+    const cancelButton = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('取消命令'))
+    expect(cancelButton).toBeDefined()
+    await cancelButton?.trigger('click')
+
+    // 取消请求在途时切换数据集
+    const switchButton = wrapper.findAll('button').find((button) => button.text() === '查看成员')
+    expect(switchButton).toBeDefined()
+    await switchButton?.trigger('click')
+    await flushPromises()
+
+    // 迟到的取消响应解析
+    pendingCancel.resolve({
+      ...DDM_COMMAND_PENDING,
+      status: 'cancelled',
+      cancelled_by: 'operator-1',
+      cancelled_at: '2026-09-08T01:05:00Z',
+    })
+    await flushPromises()
+
+    // 第二数据集页面不应被迟到的第一数据集取消结果覆盖
+    expect(wrapper.text()).not.toContain('已取消（未派发）')
     wrapper.unmount()
   })
 })

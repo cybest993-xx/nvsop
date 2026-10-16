@@ -27,6 +27,7 @@ from factory_sop.dataset.model import (
     DatasetArtifact,
     DatasetMember,
     DdmTrainingCommand,
+    DdmTrainingCommandStatus,
     MemberStatus,
     ObjectStat,
     RetryMode,
@@ -312,6 +313,25 @@ class FakeDatasets:
     ) -> bool:
         del expected_updated_at
         self.ddm_commands[value.id] = value
+        return True
+
+    def cancel_pending_ddm_training_command(
+        self, *, dataset_id: UUID, command_id: UUID, actor_id: UUID, now: datetime
+    ) -> bool:
+        command = self.ddm_commands.get(command_id)
+        if (
+            command is None
+            or command.dataset_id != dataset_id
+            or command.status is not DdmTrainingCommandStatus.PENDING
+        ):
+            return False
+        self.ddm_commands[command_id] = replace(
+            command,
+            status=DdmTrainingCommandStatus.CANCELLED,
+            cancelled_by=actor_id,
+            cancelled_at=now,
+            updated_at=now,
+        )
         return True
 
     def artifact_by_input(self, *, dataset_id: UUID, input_digest: str) -> DatasetArtifact | None:

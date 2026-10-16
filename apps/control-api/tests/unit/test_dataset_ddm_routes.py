@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import cast
 from uuid import UUID
@@ -78,6 +79,24 @@ class _DdmDatasets:
 
     def ddm_training_command_by_id(self, command_id: UUID) -> DdmTrainingCommand | None:
         return self._command if command_id == self._command.id else None
+
+    def cancel_pending_ddm_training_command(
+        self, *, dataset_id: UUID, command_id: UUID, actor_id: UUID, now: datetime
+    ) -> bool:
+        if (
+            self._command.dataset_id != dataset_id
+            or self._command.id != command_id
+            or self._command.status is not DdmTrainingCommandStatus.PENDING
+        ):
+            return False
+        self._command = replace(
+            self._command,
+            status=DdmTrainingCommandStatus.CANCELLED,
+            cancelled_by=actor_id,
+            cancelled_at=now,
+            updated_at=now,
+        )
+        return True
 
 
 def _caller(permissions: frozenset[Permission]) -> RestoredSession:
@@ -185,6 +204,54 @@ def test_list_and_read_expose_observation_and_result_without_payload() -> None:
         assert body["status"] == "registered"
         assert body["access"]["checkpoint_url"].endswith(f"/ddm-results/{COMMAND_ID}/checkpoint")
         assert body["config"]["size"] == 10
+
+
+def test_cancel_pending_replays_first_fact_and_exposes_it_on_read() -> None:
+    pending = replace(
+        _command(result_registered=False),
+        status=DdmTrainingCommandStatus.PENDING,
+        base_job_id=None,
+        base_observation=None,
+    )
+    datasets = _DdmDatasets(pending)
+    path = f"{API_PREFIX}/training-datasets/{DATASET_ID}/ddm-training-commands/{COMMAND_ID}"
+    with _client(datasets, frozenset({Permission.DATASET_EDIT, Permission.DATASET_VIEW})) as client:
+        first = client.post(f"{path}/cancel")
+        assert first.status_code == 200, first.text
+        fact = first.json()
+        assert fact["status"] == "cancelled"
+        assert fact["cancelled_by"] == str(ACTOR_ID)
+        assert fact["cancelled_at"].endswith("Z")
+        assert fact["base_job_id"] is None
+        assert "payload" not in fact
+        assert client.post(f"{path}/cancel").json() == fact
+        assert client.get(path).json() == fact
+        listed = client.get(f"{API_PREFIX}/training-datasets/{DATASET_ID}/ddm-training-commands")
+        assert listed.json()["items"] == [fact]
+
+
+def test_cancel_checks_permissions_ownership_and_dispatch_state() -> None:
+    datasets = _DdmDatasets(_command(result_registered=False))
+    path = f"{API_PREFIX}/training-datasets/{DATASET_ID}/ddm-training-commands/{COMMAND_ID}/cancel"
+    for permissions in (
+        frozenset(),
+        frozenset({Permission.DATASET_VIEW}),
+        frozenset({Permission.DATASET_IMPORT}),
+        frozenset({Permission.DATASET_VIEW, Permission.DATASET_IMPORT}),
+    ):
+        with _client(datasets, permissions) as client:
+            denied = client.post(path)
+            assert denied.status_code == 403, denied.text
+    with _client(datasets, frozenset({Permission.DATASET_EDIT})) as client:
+        dispatched = client.post(path)
+        assert dispatched.status_code == 409
+        assert dispatched.json()["error_code"] == "USAGE_STATE_CONFLICT"
+        assert "不证明基座已停止" in dispatched.json()["detail"]
+        missing = client.post(path.replace(str(COMMAND_ID), str(ACTOR_ID)))
+        mismatch = client.post(path.replace(str(DATASET_ID), str(ACTOR_ID)))
+        for response in (missing, mismatch):
+            assert response.status_code == 404
+            assert response.json()["error_code"] == "DDM_TRAINING_COMMAND_NOT_FOUND"
 
 
 def test_unregistered_result_has_no_access_url() -> None:

@@ -524,6 +524,19 @@ _V21 = (
     """,
 )
 
+# #214 正常交权停写 fence: 确认前本机先持久禁写, 后停机. 重启/崩溃不得复活物理写入;
+# 同一 grant 的续期/配置重报不清 fence, 只有后继新 grant (#215) 才恢复. 冻结 grant 身份
+# 供后继请求区分旧 grant 重放与真恢复, 不记录时间倒计时.
+_V22 = (
+    """
+    CREATE TABLE local_execution_write_fence (
+        station_id  TEXT PRIMARY KEY,
+        grant_id    TEXT NOT NULL,
+        stopped_at  REAL NOT NULL
+    )
+    """,
+)
+
 MIGRATIONS: tuple[tuple[str, ...], ...] = (
     _V1,
     _V2,
@@ -546,6 +559,7 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
     _V19,
     _V20,
     _V21,
+    _V22,
 )
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 

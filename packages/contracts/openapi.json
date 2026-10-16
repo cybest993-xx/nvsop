@@ -791,6 +791,12 @@
           "HANDOVER_TARGET_NOT_FOUND",
           "HANDOVER_SOURCE_MISMATCH",
           "HANDOVER_SAME_HOST",
+          "NORMAL_HANDOVER_NOT_FOUND",
+          "NORMAL_HANDOVER_PENDING",
+          "NORMAL_HANDOVER_ALREADY_TERMINAL",
+          "NORMAL_HANDOVER_GRANT_EXPIRED",
+          "NORMAL_HANDOVER_STALE_CONFIRMATION",
+          "NORMAL_HANDOVER_IDENTITY_MISMATCH",
           "RETENTION_POLICY_CONFLICT",
           "RETENTION_POLICY_INVALID",
           "RETENTION_ESTIMATE_REQUIRED",
@@ -5542,6 +5548,194 @@
         "title": "NewUser",
         "type": "object"
       },
+      "NormalHandoverCreation": {
+        "additionalProperties": false,
+        "description": "正常交权请求冻结的工位与双方主机身份。",
+        "properties": {
+          "from_host_id": {
+            "format": "uuid",
+            "title": "From Host Id",
+            "type": "string"
+          },
+          "station_id": {
+            "format": "uuid",
+            "title": "Station Id",
+            "type": "string"
+          },
+          "to_host_id": {
+            "format": "uuid",
+            "title": "To Host Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "station_id",
+          "from_host_id",
+          "to_host_id"
+        ],
+        "title": "NormalHandoverCreation",
+        "type": "object"
+      },
+      "NormalHandoverStatus": {
+        "description": "正常交权请求的持久状态；确认只表示旧机已安全停写。",
+        "enum": [
+          "pending",
+          "confirmed",
+          "cancelled",
+          "timed_out",
+          "failed"
+        ],
+        "title": "NormalHandoverStatus",
+        "type": "string"
+      },
+      "NormalHandoverView": {
+        "description": "正常交权状态及其冻结租约/命令身份。",
+        "properties": {
+          "cancelled_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancelled At"
+          },
+          "command_id": {
+            "format": "uuid",
+            "title": "Command Id",
+            "type": "string"
+          },
+          "confirmed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed At"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "failed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed At"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "failure_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Detail"
+          },
+          "from_host_id": {
+            "format": "uuid",
+            "title": "From Host Id",
+            "type": "string"
+          },
+          "grant_id": {
+            "format": "uuid",
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "handover_id": {
+            "format": "uuid",
+            "title": "Handover Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "requested_at": {
+            "format": "date-time",
+            "title": "Requested At",
+            "type": "string"
+          },
+          "requested_by": {
+            "format": "uuid",
+            "title": "Requested By",
+            "type": "string"
+          },
+          "station_id": {
+            "format": "uuid",
+            "title": "Station Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/NormalHandoverStatus"
+          },
+          "timed_out_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timed Out At"
+          },
+          "to_host_id": {
+            "format": "uuid",
+            "title": "To Host Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "handover_id",
+          "station_id",
+          "from_host_id",
+          "to_host_id",
+          "grant_id",
+          "command_id",
+          "idempotency_key",
+          "requested_by",
+          "requested_at",
+          "expires_at",
+          "status",
+          "confirmed_at",
+          "cancelled_at",
+          "timed_out_at",
+          "failed_at",
+          "failure_code",
+          "failure_detail"
+        ],
+        "title": "NormalHandoverView",
+        "type": "object"
+      },
       "OrderingMode": {
         "description": "模板是否要求动作严格按步骤顺序出现。",
         "enum": [
@@ -5591,7 +5785,8 @@
         "description": "推理机从中心领取的设备命令类型。",
         "enum": [
           "test_connector_connection",
-          "reclip_evidence"
+          "reclip_evidence",
+          "stop_execution_handover"
         ],
         "title": "PendingCommandType",
         "type": "string"
@@ -11783,6 +11978,135 @@
         "x-required-permission": "device.connector.edit"
       }
     },
+    "/api/v1/device-commands/execution-handover/next": {
+      "get": {
+        "description": "只允许旧机按明确 command type 领取正常交权停机命令。",
+        "operationId": "claimNextExecutionHandoverCommand",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Inference-Host-ID",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "X-Inference-Host-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Timestamp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Timestamp"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Nonce",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Nonce"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "204": {
+            "description": "No normal handover command is pending"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Inference host authentication failed"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Execution handover state conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Claim Next Execution Handover",
+        "tags": [
+          "execution"
+        ]
+      }
+    },
     "/api/v1/device-commands/next": {
       "get": {
         "description": "按已验证的主机身份领取一条命令；无命令返回 204。",
@@ -12149,6 +12473,169 @@
           "device"
         ],
         "x-required-permission": "device.connector.view"
+      }
+    },
+    "/api/v1/device-commands/{command_id}/execution-handover-result": {
+      "post": {
+        "description": "认证旧机回报，在同一事务内更新请求与命令终态。",
+        "operationId": "completeExecutionHandoverCommand",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Command Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-ID",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "X-Inference-Host-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Command-Claim-Token",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "X-Command-Claim-Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Timestamp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Timestamp"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Nonce",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Nonce"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Signature"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Completeexecutionhandovercommand",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Inference host authentication failed"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Execution handover state conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Complete Execution Handover",
+        "tags": [
+          "execution"
+        ]
       }
     },
     "/api/v1/device-commands/{command_id}/reclip-result": {
@@ -13413,6 +13900,291 @@
           }
         },
         "summary": "Confirm",
+        "tags": [
+          "execution"
+        ],
+        "x-required-permission": "execution.handover.edit"
+      }
+    },
+    "/api/v1/execution/normal-handovers": {
+      "post": {
+        "description": "建立正常交权请求；中心收到请求不等于旧机已经停写。",
+        "operationId": "createNormalHandover",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NormalHandoverCreation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NormalHandoverView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Execution record not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Execution state conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Request invalid"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Create Normal",
+        "tags": [
+          "execution"
+        ],
+        "x-required-permission": "execution.handover.edit"
+      }
+    },
+    "/api/v1/execution/normal-handovers/{handover_id}": {
+      "get": {
+        "description": "读取并在需要时持久记录超时状态。",
+        "operationId": "readNormalHandover",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "handover_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Handover Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NormalHandoverView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Execution record not found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Read Normal",
+        "tags": [
+          "execution"
+        ],
+        "x-required-permission": "execution.handover.edit"
+      }
+    },
+    "/api/v1/execution/normal-handovers/{handover_id}/cancellation": {
+      "post": {
+        "operationId": "cancelNormalHandover",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "handover_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Handover Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NormalHandoverView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Execution record not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Execution state conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Cancel Normal",
         "tags": [
           "execution"
         ],

@@ -585,6 +585,161 @@ def _existing_connector(connector_id: UUID, connectors: ConnectorRepository) -> 
     return connector
 
 
+class RepositoryDeviceExecutionHandoverCommandGateway:
+    """execution 使用的正常交权命令 owner；不把命令队列复制到 execution。"""
+
+    def __init__(
+        self,
+        *,
+        hosts: InferenceHostRepository,
+        commands: PendingCommandRepository,
+    ) -> None:
+        self._hosts = hosts
+        self._commands = commands
+
+    def enqueue(
+        self,
+        *,
+        command_id: UUID,
+        handover_id: UUID,
+        host_id: UUID,
+        requested_by: UUID,
+        now: datetime,
+    ) -> None:
+        command = PendingCommand(
+            id=command_id,
+            host_id=host_id,
+            command_type=PendingCommandType.STOP_EXECUTION_HANDOVER,
+            target_id=handover_id,
+            target_revision=1,
+            idempotency_key=f"execution-handover:{handover_id}",
+            status=PendingCommandStatus.PENDING,
+            attempt=0,
+            claim_token=None,
+            claimed_at=None,
+            lease_expires_at=None,
+            result=None,
+            result_detail=None,
+            failure_code=None,
+            completed_at=None,
+            created_by=requested_by,
+            created_at=now,
+            updated_at=now,
+        )
+        stored = self._commands.add_or_get(command)
+        if (
+            stored.command_type is not PendingCommandType.STOP_EXECUTION_HANDOVER
+            or stored.target_id != handover_id
+            or stored.host_id != host_id
+        ):
+            refuse(
+                _REFUSAL_EVENT,
+                DeviceRefusalCode.COMMAND_IDEMPOTENCY_CONFLICT,
+                idempotency_key=command.idempotency_key,
+                actor_id=str(requested_by),
+            )
+
+    def claim(
+        self,
+        *,
+        host: InferenceHostIdentity,
+        now: datetime,
+        lease_duration: timedelta,
+    ) -> PendingCommand | None:
+        return claim_next_command(
+            host=host,
+            command_type=PendingCommandType.STOP_EXECUTION_HANDOVER,
+            now=now,
+            lease_duration=lease_duration,
+            hosts=self._hosts,
+            commands=self._commands,
+        )
+
+    def complete(
+        self,
+        *,
+        command_id: UUID,
+        host: InferenceHostIdentity,
+        claim_token: str,
+        now: datetime,
+        outcome: str,
+        failure_code: str | None = None,
+        detail: str | None = None,
+        authenticated: bool = False,
+    ) -> PendingCommand:
+        if not authenticated:
+            authenticate_command_host(host=host, now=now, hosts=self._hosts)
+        status_by_outcome = {
+            "confirmed": PendingCommandStatus.SUCCEEDED,
+            "failed": PendingCommandStatus.FAILED,
+            "rejected": PendingCommandStatus.REJECTED,
+        }
+        status = status_by_outcome.get(outcome)
+        if status is None:
+            raise ValueError("execution handover outcome is unsupported")
+        command = _existing_command_for_update(command_id, self._commands)
+        if command.command_type is not PendingCommandType.STOP_EXECUTION_HANDOVER:
+            refuse(_REFUSAL_EVENT, DeviceRefusalCode.COMMAND_NOT_FOUND, command_id=str(command_id))
+        if command.host_id != host.host_id:
+            refuse(
+                _REFUSAL_EVENT,
+                DeviceRefusalCode.COMMAND_HOST_MISMATCH,
+                command_id=str(command_id),
+                host_id=str(host.host_id),
+            )
+        if command.status in {
+            PendingCommandStatus.SUCCEEDED,
+            PendingCommandStatus.FAILED,
+            PendingCommandStatus.REJECTED,
+        }:
+            if (
+                command.claim_token == claim_token
+                and command.status is status
+                and command.failure_code == failure_code
+                and command.result_detail == detail
+            ):
+                return command
+            refuse(
+                _REFUSAL_EVENT,
+                DeviceRefusalCode.COMMAND_ALREADY_COMPLETED,
+                command_id=str(command_id),
+                host_id=str(host.host_id),
+            )
+        if command.status is not PendingCommandStatus.CLAIMED:
+            refuse(
+                _REFUSAL_EVENT,
+                DeviceRefusalCode.COMMAND_CLAIM_REQUIRED,
+                command_id=str(command_id),
+                host_id=str(host.host_id),
+            )
+        if command.claim_token != claim_token:
+            refuse(
+                _REFUSAL_EVENT,
+                DeviceRefusalCode.COMMAND_CLAIM_TOKEN_INVALID,
+                command_id=str(command_id),
+                host_id=str(host.host_id),
+            )
+        if command.lease_expires_at is None or now >= command.lease_expires_at:
+            refuse(
+                _REFUSAL_EVENT,
+                DeviceRefusalCode.COMMAND_CLAIM_EXPIRED,
+                command_id=str(command_id),
+                host_id=str(host.host_id),
+            )
+        return self._commands.complete(
+            PendingCommandCompletion(
+                command_id=command.id,
+                host_id=host.host_id,
+                claim_token=claim_token,
+                status=status,
+                result=None,
+                result_detail=detail,
+                failure_code=failure_code,
+                completed_at=now,
+            )
+        )
+
+
 class RepositoryDeviceEvidenceGateway:
     """`evidence` 再切片请求所需的 device 最小事实：来源主机滚动窗口与委托命令登记。
 

@@ -552,6 +552,8 @@ class PendingCommandType(StrEnum):
     TEST_CONNECTOR_CONNECTION = "test_connector_connection"
     # 再切片委托：请求由 evidence 拥有，命令入同一队列；领取只走专用签名端点。
     RECLIP_EVIDENCE = "reclip_evidence"
+    # 正常交权只允许专用主机端点领取，旧 Edge 默认命令端点不会取到。
+    STOP_EXECUTION_HANDOVER = "stop_execution_handover"
 
 
 class PendingCommandStatus(StrEnum):

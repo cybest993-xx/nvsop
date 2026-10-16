@@ -22,8 +22,8 @@ from edge_runtime.local_state.schema import MIGRATIONS, apply_migrations, migrat
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "validate_edge_restart.py"
-# 权威迁移当前产出的版本（#206 新增 V21 本机删除账本表）。
-EXPECTED_SCHEMA_VERSION = 21
+# 权威迁移当前产出的版本（#214 新增 V22 正常交权停写 fence）。
+EXPECTED_SCHEMA_VERSION = 22
 CANDIDATE = "544e41a30c8c75bb1d8bd5fbf07f95b75d3ed34b"  # pragma: allowlist secret
 HOST = "018f0000-0000-7000-8000-0000000000aa"
 OTHER_HOST = "018f0000-0000-7000-8000-0000000000bb"
@@ -359,10 +359,10 @@ class ValidateEdgeRestartTest(unittest.TestCase):
         self.assertEqual(1, document["sqlite"]["table_counts"]["local_sop_instance"])
 
     def test_snapshot_rejects_an_unknown_newer_schema_version(self) -> None:
-        # 比工具认识的更新（V22）同样明确拒绝，不猜未来 schema 的字段语义。
+        # 比工具认识的版本更新时明确拒绝，不猜未来 schema 的字段语义。
         connection = sqlite3.connect(self.db)
         try:
-            connection.execute("PRAGMA user_version = 22")
+            connection.execute(f"PRAGMA user_version = {EXPECTED_SCHEMA_VERSION + 1}")
             connection.commit()
         finally:
             connection.close()

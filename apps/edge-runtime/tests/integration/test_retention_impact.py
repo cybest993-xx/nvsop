@@ -85,7 +85,8 @@ class RetentionAcknowledgementTests(unittest.TestCase):
             state = open_local_state(str(path))
             state.close()
             with sqlite3.connect(path) as connection:
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 21)
+                # V22 (#214) 追加后, 打开即完成全部迁移; 本测试只关心 acknowledged_at 不被猜测。
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 22)
                 self.assertEqual(
                     connection.execute(
                         "SELECT sent_at, acknowledged_at FROM local_health_queue"

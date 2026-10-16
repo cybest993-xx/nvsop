@@ -4,11 +4,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from uuid import UUID
 
 # 强制改绑通道的固定风险原文。服务器权威：确认输入必须与它一致，客户端不能自拟一段
 # 说明冒充已读；两侧确认各自记录“警示已展示”事实。
 HANDOVER_RISK_STATEMENT = "若旧机仍在运行将造成重复物理写入"
+NORMAL_HANDOVER_TIMEOUT_SECONDS = 300
+
+
+class NormalHandoverStatus(StrEnum):
+    """正常交权请求的持久状态；确认只表示旧机已安全停写。"""
+
+    PENDING = "pending"
+    CONFIRMED = "confirmed"
+    CANCELLED = "cancelled"
+    TIMED_OUT = "timed_out"
+    FAILED = "failed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,4 +56,34 @@ class HandoverConfirmation:
     second_risk_shown: bool | None = None
 
 
-__all__ = ["HANDOVER_RISK_STATEMENT", "HandoverConfirmation", "StationGrant"]
+@dataclass(frozen=True, slots=True)
+class NormalHandover:
+    """一次正常交权请求，冻结工位、双方主机与旧租约身份。"""
+
+    handover_id: UUID
+    station_id: UUID
+    from_host_id: UUID
+    to_host_id: UUID
+    grant_id: UUID
+    command_id: UUID
+    idempotency_key: str
+    requested_by: UUID
+    requested_at: datetime
+    expires_at: datetime
+    status: NormalHandoverStatus
+    confirmed_at: datetime | None = None
+    cancelled_at: datetime | None = None
+    timed_out_at: datetime | None = None
+    failed_at: datetime | None = None
+    failure_code: str | None = None
+    failure_detail: str | None = None
+
+
+__all__ = [
+    "HANDOVER_RISK_STATEMENT",
+    "NORMAL_HANDOVER_TIMEOUT_SECONDS",
+    "HandoverConfirmation",
+    "NormalHandover",
+    "NormalHandoverStatus",
+    "StationGrant",
+]

@@ -537,6 +537,12 @@ export type ApiErrorCode =
   | 'HANDOVER_TARGET_NOT_FOUND'
   | 'HANDOVER_SOURCE_MISMATCH'
   | 'HANDOVER_SAME_HOST'
+  | 'NORMAL_HANDOVER_NOT_FOUND'
+  | 'NORMAL_HANDOVER_PENDING'
+  | 'NORMAL_HANDOVER_ALREADY_TERMINAL'
+  | 'NORMAL_HANDOVER_GRANT_EXPIRED'
+  | 'NORMAL_HANDOVER_STALE_CONFIRMATION'
+  | 'NORMAL_HANDOVER_IDENTITY_MISMATCH'
   | 'RETENTION_POLICY_CONFLICT'
   | 'RETENTION_POLICY_INVALID'
   | 'RETENTION_ESTIMATE_REQUIRED'
@@ -3343,6 +3349,106 @@ export type NewUser = {
 }
 
 /**
+ * NormalHandoverCreation
+ *
+ * 正常交权请求冻结的工位与双方主机身份。
+ */
+export type NormalHandoverCreation = {
+  /**
+   * From Host Id
+   */
+  from_host_id: string
+  /**
+   * Station Id
+   */
+  station_id: string
+  /**
+   * To Host Id
+   */
+  to_host_id: string
+}
+
+/**
+ * NormalHandoverStatus
+ *
+ * 正常交权请求的持久状态；确认只表示旧机已安全停写。
+ */
+export type NormalHandoverStatus = 'pending' | 'confirmed' | 'cancelled' | 'timed_out' | 'failed'
+
+/**
+ * NormalHandoverView
+ *
+ * 正常交权状态及其冻结租约/命令身份。
+ */
+export type NormalHandoverView = {
+  /**
+   * Cancelled At
+   */
+  cancelled_at: string | null
+  /**
+   * Command Id
+   */
+  command_id: string
+  /**
+   * Confirmed At
+   */
+  confirmed_at: string | null
+  /**
+   * Expires At
+   */
+  expires_at: string
+  /**
+   * Failed At
+   */
+  failed_at: string | null
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  /**
+   * Failure Detail
+   */
+  failure_detail: string | null
+  /**
+   * From Host Id
+   */
+  from_host_id: string
+  /**
+   * Grant Id
+   */
+  grant_id: string
+  /**
+   * Handover Id
+   */
+  handover_id: string
+  /**
+   * Idempotency Key
+   */
+  idempotency_key: string
+  /**
+   * Requested At
+   */
+  requested_at: string
+  /**
+   * Requested By
+   */
+  requested_by: string
+  /**
+   * Station Id
+   */
+  station_id: string
+  status: NormalHandoverStatus
+  /**
+   * Timed Out At
+   */
+  timed_out_at: string | null
+  /**
+   * To Host Id
+   */
+  to_host_id: string
+}
+
+/**
  * OrderingMode
  *
  * 模板是否要求动作严格按步骤顺序出现。
@@ -3371,7 +3477,8 @@ export type PendingCommandStatus = 'pending' | 'claimed' | 'succeeded' | 'failed
  *
  * 推理机从中心领取的设备命令类型。
  */
-export type PendingCommandType = 'test_connector_connection' | 'reclip_evidence'
+export type PendingCommandType =
+  'test_connector_connection' | 'reclip_evidence' | 'stop_execution_handover'
 
 /**
  * PendingCommandView
@@ -6735,6 +6842,67 @@ export type SetConnectorStatusResponses = {
 export type SetConnectorStatusResponse =
   SetConnectorStatusResponses[keyof SetConnectorStatusResponses]
 
+export type ClaimNextExecutionHandoverCommandData = {
+  body?: never
+  headers: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID': string
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/device-commands/execution-handover/next'
+}
+
+export type ClaimNextExecutionHandoverCommandErrors = {
+  /**
+   * Inference host authentication failed
+   */
+  401: ProblemDocument
+  /**
+   * Execution handover state conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ClaimNextExecutionHandoverCommandError =
+  ClaimNextExecutionHandoverCommandErrors[keyof ClaimNextExecutionHandoverCommandErrors]
+
+export type ClaimNextExecutionHandoverCommandResponses = {
+  /**
+   * Successful Response
+   */
+  200: unknown
+  /**
+   * No normal handover command is pending
+   */
+  204: void
+}
+
+export type ClaimNextExecutionHandoverCommandResponse =
+  ClaimNextExecutionHandoverCommandResponses[keyof ClaimNextExecutionHandoverCommandResponses]
+
 export type ClaimNextDeviceCommandData = {
   body?: never
   headers: {
@@ -6903,6 +7071,81 @@ export type ReadDeviceCommandResponses = {
 }
 
 export type ReadDeviceCommandResponse = ReadDeviceCommandResponses[keyof ReadDeviceCommandResponses]
+
+export type CompleteExecutionHandoverCommandData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  headers: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID': string
+    /**
+     * X-Command-Claim-Token
+     */
+    'X-Command-Claim-Token': string
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path: {
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/device-commands/{command_id}/execution-handover-result'
+}
+
+export type CompleteExecutionHandoverCommandErrors = {
+  /**
+   * Inference host authentication failed
+   */
+  401: ProblemDocument
+  /**
+   * Execution handover state conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CompleteExecutionHandoverCommandError =
+  CompleteExecutionHandoverCommandErrors[keyof CompleteExecutionHandoverCommandErrors]
+
+export type CompleteExecutionHandoverCommandResponses = {
+  /**
+   * Response Completeexecutionhandovercommand
+   *
+   * Successful Response
+   */
+  200: {
+    [key: string]: unknown
+  }
+}
+
+export type CompleteExecutionHandoverCommandResponse =
+  CompleteExecutionHandoverCommandResponses[keyof CompleteExecutionHandoverCommandResponses]
 
 export type CompleteReclipCommandData = {
   /**
@@ -7578,6 +7821,156 @@ export type ConfirmHandoverResponses = {
 }
 
 export type ConfirmHandoverResponse = ConfirmHandoverResponses[keyof ConfirmHandoverResponses]
+
+export type CreateNormalHandoverData = {
+  body: NormalHandoverCreation
+  headers: {
+    /**
+     * Idempotency-Key
+     */
+    'Idempotency-Key': string
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/execution/normal-handovers'
+}
+
+export type CreateNormalHandoverErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Execution record not found
+   */
+  404: ProblemDocument
+  /**
+   * Execution state conflict
+   */
+  409: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CreateNormalHandoverError = CreateNormalHandoverErrors[keyof CreateNormalHandoverErrors]
+
+export type CreateNormalHandoverResponses = {
+  /**
+   * Successful Response
+   */
+  201: NormalHandoverView
+}
+
+export type CreateNormalHandoverResponse =
+  CreateNormalHandoverResponses[keyof CreateNormalHandoverResponses]
+
+export type ReadNormalHandoverData = {
+  body?: never
+  path: {
+    /**
+     * Handover Id
+     */
+    handover_id: string
+  }
+  query?: never
+  url: '/api/v1/execution/normal-handovers/{handover_id}'
+}
+
+export type ReadNormalHandoverErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Execution record not found
+   */
+  404: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadNormalHandoverError = ReadNormalHandoverErrors[keyof ReadNormalHandoverErrors]
+
+export type ReadNormalHandoverResponses = {
+  /**
+   * Successful Response
+   */
+  200: NormalHandoverView
+}
+
+export type ReadNormalHandoverResponse =
+  ReadNormalHandoverResponses[keyof ReadNormalHandoverResponses]
+
+export type CancelNormalHandoverData = {
+  body?: never
+  path: {
+    /**
+     * Handover Id
+     */
+    handover_id: string
+  }
+  query?: never
+  url: '/api/v1/execution/normal-handovers/{handover_id}/cancellation'
+}
+
+export type CancelNormalHandoverErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Execution record not found
+   */
+  404: ProblemDocument
+  /**
+   * Execution state conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CancelNormalHandoverError = CancelNormalHandoverErrors[keyof CancelNormalHandoverErrors]
+
+export type CancelNormalHandoverResponses = {
+  /**
+   * Successful Response
+   */
+  200: NormalHandoverView
+}
+
+export type CancelNormalHandoverResponse =
+  CancelNormalHandoverResponses[keyof CancelNormalHandoverResponses]
 
 export type ListInferenceBackendsData = {
   body?: never

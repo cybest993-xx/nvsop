@@ -80,7 +80,12 @@ from factory_sop.device.usecases.retention import RepositoryDeviceStationFacts
 from factory_sop.evidence.adapters import dependencies as evidence_dependencies
 from factory_sop.evidence.model import EvidenceReclipRequest, EvidenceReview, EvidenceReviewHold
 from factory_sop.execution.adapters import dependencies as execution_dependencies
-from factory_sop.execution.model import HANDOVER_RISK_STATEMENT, HandoverConfirmation
+from factory_sop.execution.model import (
+    HANDOVER_RISK_STATEMENT,
+    HandoverConfirmation,
+    NormalHandover,
+    NormalHandoverStatus,
+)
 from factory_sop.identifiers import new_id
 from factory_sop.persistence import request_session
 from factory_sop.retention.adapters import dependencies as retention_dependencies
@@ -532,6 +537,17 @@ ROUTES = [
     ),
     Target(
         "POST",
+        "/execution/normal-handovers",
+        {
+            "station_id": "{station_id}",
+            "from_host_id": "{host_id}",
+            "to_host_id": "{host_id}",
+        },
+        headers={"Idempotency-Key": "authz-normal-handover"},
+    ),
+    Target("POST", "/execution/normal-handovers/{handover_id}/cancellation", {}),
+    Target(
+        "POST",
         "/evidence/{evidence_id}/reviews",
         {"review_id": str(REVIEW_ID), "generation": "original", "conclusion": "confirmed"},
     ),
@@ -608,6 +624,9 @@ EXEMPT = {
     ("POST", f"{API_PREFIX}/retention/evidence-deletion-claims/verify"),
     ("POST", f"{API_PREFIX}/retention/evidence-deletion-claims/result"),
     ("POST", f"{API_PREFIX}/retention/reported-impact/access-check"),
+    # 正常交权停机命令的领取与回报同样只认主机签名 (#214)。
+    ("GET", f"{API_PREFIX}/device-commands/execution-handover/next"),
+    ("POST", f"{API_PREFIX}/device-commands/{{command_id}}/execution-handover-result"),
 }
 
 
@@ -809,6 +828,63 @@ class FakeHandovers:
         return None
 
 
+class FakeNormalHandovers:
+    """正常交权状态机的内存 fake: 取消路由只需读取/保存到真实拒绝或幂等分支。"""
+
+    def __init__(self) -> None:
+        self.records: dict[UUID, NormalHandover] = {}
+
+    def by_identifier_for_update(self, handover_id: UUID) -> NormalHandover | None:
+        return self.records.get(handover_id)
+
+    def by_idempotency_key(self, key: str) -> NormalHandover | None:
+        return next((r for r in self.records.values() if r.idempotency_key == key), None)
+
+    def pending_for_station(self, station_id: UUID) -> NormalHandover | None:
+        return next(
+            (
+                r
+                for r in self.records.values()
+                if r.station_id == station_id and r.status is NormalHandoverStatus.PENDING
+            ),
+            None,
+        )
+
+    def add_or_get(self, value: NormalHandover) -> tuple[NormalHandover, bool]:
+        self.records[value.handover_id] = value
+        return value, True
+
+    def save(self, value: NormalHandover) -> NormalHandover:
+        self.records[value.handover_id] = value
+        return value
+
+
+class FakeExecutionGrants:
+    """机械授权测试没有真实租约: 交权取消/读取路径不读取执行权。"""
+
+    def for_station(self, station_id: UUID) -> None:
+        return None
+
+    def for_stations(self, station_ids: tuple[UUID, ...]) -> tuple[object, ...]:
+        return ()
+
+    def for_holder(self, host_id: UUID) -> tuple[object, ...]:
+        return ()
+
+
+class FakeNormalHandoverCommands:
+    """正常交权命令队列 fake: 取消路由不命令队列。"""
+
+    def enqueue(self, **kwargs: object) -> None:
+        del kwargs
+
+    def claim(self, **kwargs: object) -> None:
+        return None
+
+    def complete(self, **kwargs: object) -> None:
+        return None
+
+
 class FakeEvidenceReviews:
     """内存只追加复核仓储，足够让授权用例跑到真实拒绝/成功分支。"""
 
@@ -995,6 +1071,9 @@ class Backend:
         self.dataset_jobs = DatasetFakeJobs()
         self.handover_authority = FakeHandoverAuthority(frozenset({self.actor.id}))
         self.handovers = FakeHandovers()
+        self.normal_handovers = FakeNormalHandovers()
+        self.execution_grants = FakeExecutionGrants()
+        self.normal_handover_commands = FakeNormalHandoverCommands()
         # 复用 evidence 用例测试的完整 Protocol fake 及其登记 helper，不再另造只读替身。
         self.evidence = MemoryEvidence()
         register_evidence_reference(self.evidence, evidence_registration(evidence_id=EVIDENCE_ID))
@@ -1032,6 +1111,14 @@ class Backend:
         )
         self.app.dependency_overrides[dataset_dependencies.usage_jobs] = lambda: self.dataset_jobs
         self.app.dependency_overrides[execution_dependencies.handovers] = lambda: self.handovers
+        # 正常交权: 状态机 fake 与 grants/命令 fake, 让取消路由跑到真实拒绝/幂等分支。
+        self.app.dependency_overrides[execution_dependencies.normal_handovers] = lambda: (
+            self.normal_handovers
+        )
+        self.app.dependency_overrides[execution_dependencies.grants] = lambda: self.execution_grants
+        self.app.dependency_overrides[execution_dependencies.normal_handover_commands] = lambda: (
+            self.normal_handover_commands
+        )
         self.app.dependency_overrides[evidence_dependencies.evidence] = lambda: self.evidence
         self.app.dependency_overrides[evidence_dependencies.reviews] = lambda: self.evidence_reviews
         self.app.dependency_overrides[evidence_dependencies.reclip_requests] = lambda: (

@@ -11,9 +11,22 @@ from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.orm import Session
 
-from factory_sop.execution.adapters.tables import HandoverRow, StationGrantRow
-from factory_sop.execution.model import HandoverConfirmation, StationGrant
-from factory_sop.execution.repository import ExecutionGrantRepository, HandoverRepository
+from factory_sop.execution.adapters.tables import (
+    HandoverRow,
+    NormalHandoverRow,
+    StationGrantRow,
+)
+from factory_sop.execution.model import (
+    HandoverConfirmation,
+    NormalHandover,
+    NormalHandoverStatus,
+    StationGrant,
+)
+from factory_sop.execution.repository import (
+    ExecutionGrantRepository,
+    HandoverRepository,
+    NormalHandoverRepository,
+)
 
 
 class PostgresExecutionGrantRepository(ExecutionGrantRepository):
@@ -130,6 +143,90 @@ def _from_mapping(value: RowMapping) -> StationGrant:
     )
 
 
+class PostgresNormalHandoverRepository(NormalHandoverRepository):
+    """正常交权请求的 PostgreSQL 持久化；状态转移由 execution 用例裁决。"""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add_or_get(self, value: NormalHandover) -> tuple[NormalHandover, bool]:
+        table = cast(Table, NormalHandoverRow.__table__)
+        self._session.execute(
+            postgres_insert(table).values(**_normal_handover_values(value)).on_conflict_do_nothing()
+        )
+        row = self._session.scalar(
+            select(NormalHandoverRow).where(
+                NormalHandoverRow.idempotency_key == value.idempotency_key
+            )
+        )
+        if row is None:
+            raise RuntimeError("normal handover insert was not readable")
+        return row.to_domain(), row.handover_id == value.handover_id
+
+    def by_identifier(self, handover_id: UUID) -> NormalHandover | None:
+        row = self._session.get(NormalHandoverRow, handover_id)
+        return row.to_domain() if row is not None else None
+
+    def by_identifier_for_update(self, handover_id: UUID) -> NormalHandover | None:
+        row = self._session.scalar(
+            select(NormalHandoverRow)
+            .where(NormalHandoverRow.handover_id == handover_id)
+            .with_for_update()
+        )
+        return row.to_domain() if row is not None else None
+
+    def by_idempotency_key(self, key: str) -> NormalHandover | None:
+        row = self._session.scalar(
+            select(NormalHandoverRow).where(NormalHandoverRow.idempotency_key == key)
+        )
+        return row.to_domain() if row is not None else None
+
+    def pending_for_station(self, station_id: UUID) -> NormalHandover | None:
+        row = self._session.scalar(
+            select(NormalHandoverRow).where(
+                NormalHandoverRow.station_id == station_id,
+                NormalHandoverRow.status == NormalHandoverStatus.PENDING.value,
+            )
+        )
+        return row.to_domain() if row is not None else None
+
+    def save(self, value: NormalHandover) -> NormalHandover:
+        row = self._session.get(NormalHandoverRow, value.handover_id)
+        if row is None:
+            raise RuntimeError("normal handover disappeared")
+        row.status = value.status.value
+        row.confirmed_at = value.confirmed_at
+        row.cancelled_at = value.cancelled_at
+        row.timed_out_at = value.timed_out_at
+        row.failed_at = value.failed_at
+        row.failure_code = value.failure_code
+        row.failure_detail = value.failure_detail
+        self._session.flush()
+        return row.to_domain()
+
+
+def _normal_handover_values(value: NormalHandover) -> dict[str, object]:
+    return {
+        "handover_id": value.handover_id,
+        "station_id": value.station_id,
+        "from_host_id": value.from_host_id,
+        "to_host_id": value.to_host_id,
+        "grant_id": value.grant_id,
+        "command_id": value.command_id,
+        "idempotency_key": value.idempotency_key,
+        "requested_by": value.requested_by,
+        "requested_at": value.requested_at,
+        "expires_at": value.expires_at,
+        "status": value.status.value,
+        "confirmed_at": value.confirmed_at,
+        "cancelled_at": value.cancelled_at,
+        "timed_out_at": value.timed_out_at,
+        "failed_at": value.failed_at,
+        "failure_code": value.failure_code,
+        "failure_detail": value.failure_detail,
+    }
+
+
 class PostgresHandoverRepository(HandoverRepository):
     """用条件更新原子记录第二人确认，内容不符或已确认时不写入。"""
 
@@ -197,4 +294,8 @@ def _handover_from_mapping(value: RowMapping) -> HandoverConfirmation:
     )
 
 
-__all__ = ["PostgresExecutionGrantRepository", "PostgresHandoverRepository"]
+__all__ = [
+    "PostgresExecutionGrantRepository",
+    "PostgresHandoverRepository",
+    "PostgresNormalHandoverRepository",
+]

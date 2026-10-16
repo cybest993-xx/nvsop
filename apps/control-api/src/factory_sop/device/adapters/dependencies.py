@@ -24,6 +24,7 @@ from factory_sop.device.adapters.repository import (
 from factory_sop.device.api import (
     DeviceConfigurationGateway,
     DeviceEvidenceGateway,
+    DeviceExecutionHandoverCommandGateway,
     DeviceHistoricalAssignmentGateway,
     DeviceHostGateway,
     DeviceMonitorGateway,
@@ -39,7 +40,10 @@ from factory_sop.device.repository import (
     PointRepository,
     StationRepository,
 )
-from factory_sop.device.usecases.commands import RepositoryDeviceEvidenceGateway
+from factory_sop.device.usecases.commands import (
+    RepositoryDeviceEvidenceGateway,
+    RepositoryDeviceExecutionHandoverCommandGateway,
+)
 from factory_sop.device.usecases.configuration import RepositoryDeviceConfigurationGateway
 from factory_sop.device.usecases.retention import (
     RepositoryDeviceRetentionSources,
@@ -162,6 +166,16 @@ def historical_assignments(session: RequestSession) -> DeviceHistoricalAssignmen
 def host_gateway(session: RequestSession) -> DeviceHostGateway:
     """模板上报使用的主机认证与归属 seam。"""
     return cast(DeviceHostGateway, template_binding(session))
+
+
+def execution_handover_commands(
+    session: RequestSession,
+) -> DeviceExecutionHandoverCommandGateway:
+    """execution 正常交权使用的 device 命令 owner seam。"""
+    return RepositoryDeviceExecutionHandoverCommandGateway(
+        hosts=PostgresInferenceHostRepository(session),
+        commands=PostgresPendingCommandRepository(session),
+    )
 
 
 def evidence_gateway(session: RequestSession) -> DeviceEvidenceGateway:

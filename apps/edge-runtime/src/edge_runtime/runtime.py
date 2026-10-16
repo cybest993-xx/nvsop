@@ -26,6 +26,8 @@ from nvsop_contracts import (
     STOP_OUTPUT_SEMANTIC_LABEL,
     ConfigurationBundle,
     ConnectionTestOutcome,
+    ExecutionHandoverCommand,
+    ExecutionHandoverResult,
     ReportedExecutionAuthority,
     configuration_to_wire,
 )
@@ -121,6 +123,14 @@ from edge_runtime.supervisor.delegated_transport import (
     CommandTransportError,
     HttpCommandTransport,
     HttpReclipCommandTransport,
+)
+from edge_runtime.supervisor.execution_handover import (
+    AutonomousStationStopper,
+    ExecutionHandoverCommandRunner,
+)
+from edge_runtime.supervisor.execution_handover_transport import (
+    ExecutionHandoverCommandLoop,
+    HttpExecutionHandoverTransport,
 )
 from edge_runtime.supervisor.inputs import StorageHealthObserved, StreamHealthObserved
 from edge_runtime.supervisor.reclip import (
@@ -302,6 +312,12 @@ class StationOutputWriteGate:
                 ),
             )
         authority = self._leases.status(self._station_id, now=self._clock())
+        if authority.write_stopped:
+            # 正常交权确认前置: fence 是持久事实, 优先于租约剩余期限。
+            return Refused(
+                reason=WriteRefusal.WRITE_STOPPED,
+                detail=authority.detail or f"工位 {self._station_id} 已停止写入",
+            )
         if authority.authorized:
             return None
         reason = (
@@ -445,6 +461,7 @@ class AutonomousStation:
         output_dispatchers: Mapping[str, OutputDispatcher] | None = None,
         output_points: Mapping[str, tuple[OutputPoint, ...]] | None = None,
         write_lifecycle: StationWriteLifecycle | None = None,
+        write_fenced: Callable[[], bool] | None = None,
         diagnostics: Callable[[WriteAttempted], None] | None = None,
         output_disposal_targets: Mapping[str, tuple[str, OutputPoint]] | None = None,
         output_report_host_id: str | None = None,
@@ -458,6 +475,10 @@ class AutonomousStation:
         self._output_dispatchers = dict(output_dispatchers or {})
         self._output_points = dict(output_points or {})
         self._write_lifecycle = write_lifecycle or StationWriteLifecycle()
+        self._write_fenced = write_fenced
+        self._run_state_lock = threading.RLock()
+        self._run_finished = threading.Event()
+        self._run_finished.set()
         self._diagnostics = diagnostics
         self._output_disposal_targets = dict(output_disposal_targets or {})
         self._output_report_host_id = output_report_host_id
@@ -588,10 +609,26 @@ class AutonomousStation:
         self._write_lifecycle.stop()
         self._source.close()
 
+    def stop_for_handover(self) -> None:
+        """停止新判定/写入并等待当前运行流和在途物理写入全部结束。"""
+        with self._run_state_lock:
+            self._write_lifecycle.stop()
+        self.close()
+        for dispatcher in self._output_dispatchers.values():
+            dispatcher.wait_for_idle()
+        self._run_finished.wait()
+
     def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
         """消费输入、按能力声明轮询连接器, 并在切换或停机时结束当前实例。"""
+        with self._run_state_lock:
+            if self._write_lifecycle.stopped or (
+                self._write_fenced is not None and self._write_fenced()
+            ):
+                self.close()
+                return
+            self._run_finished.clear()
         try:
-            while not should_stop():
+            while not should_stop() and not self._write_lifecycle.stopped:
                 supervisor = self._supervisor
                 source = self._source
                 connector_runtimes = self._connector_runtimes
@@ -608,7 +645,7 @@ class AutonomousStation:
                     )
                 )
                 self._poll_storage_health(supervisor)
-                if should_stop():
+                if should_stop() or self._write_lifecycle.stopped:
                     break
                 if isinstance(arriving, InputWaitExpired):
                     self._execute_output_disposals(supervisor.wake(host=HostLiveness.ALIVE))
@@ -643,7 +680,10 @@ class AutonomousStation:
             )
             raise
         finally:
-            self.close()
+            try:
+                self.close()
+            finally:
+                self._run_finished.set()
 
     def _poll_storage_health(self, supervisor: StationSupervisor) -> None:
         if self._disk_health is not None:
@@ -959,6 +999,11 @@ class _RuntimeCycleRunner:
         if loop is not None:
             loop.run_forever(should_stop=self._stop_requested)
 
+    def _run_execution_handover(self) -> None:
+        loop = self._runtime._execution_handover_loop
+        if loop is not None:
+            loop.run_forever(should_stop=self._stop_requested)
+
     def _run_configuration(self) -> None:
         runtime = self._runtime
         synchronizer = runtime._configuration_sync
@@ -1118,6 +1163,22 @@ class _RuntimeCycleRunner:
                 if runtime._reclip_loop is not None
                 else []
             ),
+            *(
+                [
+                    threading.Thread(
+                        target=self._guard,
+                        args=(
+                            lambda: self._isolate_center_worker(
+                                "execution_handover", self._run_execution_handover
+                            ),
+                        ),
+                        name="edge-execution-handover",
+                        daemon=True,
+                    )
+                ]
+                if runtime._execution_handover_loop is not None
+                else []
+            ),
             threading.Thread(
                 target=self._guard,
                 args=(lambda: self._isolate_center_worker("command", self._run_command),),
@@ -1181,6 +1242,7 @@ class AutonomousRuntime:
         evidence_registration: EvidenceReferenceReconciler | None = None,
         evidence_deletion: EvidenceDeletionExecutor | None = None,
         reclip_loop: ReclipCommandLoop | None = None,
+        execution_handover_loop: ExecutionHandoverCommandLoop | None = None,
         report_reconciler: HostReportReconciler | None = None,
         report_wake: threading.Event | None = None,
         configuration_sync: ConfigurationSynchronizer | None = None,
@@ -1202,6 +1264,7 @@ class AutonomousRuntime:
         self._evidence_registration = evidence_registration
         self._evidence_deletion = evidence_deletion
         self._reclip_loop = reclip_loop
+        self._execution_handover_loop = execution_handover_loop
         self._report_reconciler = report_reconciler
         self._report_wake = report_wake or threading.Event()
         self._configuration_sync = configuration_sync
@@ -1536,6 +1599,11 @@ def _build_runtime_composition(
                 write_state = "stopped"
                 reason_code = "write_stopped"
                 detail = f"工位 {station_id} 已停止写入"
+            elif authority.write_stopped:
+                # 正常交权确认前的持久停写: 不同于生命周期停止, 重启后仍然成立。
+                write_state = "stopped"
+                reason_code = "execution_handover_write_fence"
+                detail = authority.detail
             elif authority.state is ExecutionLeaseState.ACTIVE:
                 write_state = "enabled"
                 reason_code = None
@@ -1667,6 +1735,10 @@ def _build_runtime_composition(
                 storage_paths["recording"] = config.media.recording_directory
             if config.evidence is not None:
                 storage_paths["evidence"] = config.evidence.evidence_directory
+
+            def write_fenced(station_id: str = station_config.station_id) -> bool:
+                return leases.status(station_id, now=time()).write_stopped
+
             stations.append(
                 AutonomousStation(
                     station_id=station_config.station_id,
@@ -1690,6 +1762,7 @@ def _build_runtime_composition(
                         for connector_id in station_binding.connector_ids
                     },
                     write_lifecycle=write_lifecycles[station_config.station_id],
+                    write_fenced=write_fenced,
                     diagnostics=_log_write_attempt,
                     output_disposal_targets=output_disposal_targets,
                     output_report_host_id=config.host_id,
@@ -1853,6 +1926,51 @@ def build_reclip_loop(
     )
 
 
+def build_execution_handover_loop(
+    *,
+    center_url: str,
+    host_id: str,
+    host_private_key: str,
+    command_timeout: float,
+    command_poll_interval: float,
+    state: LocalState,
+    stations: Callable[[], tuple[AutonomousStation, ...]],
+    ssl_context: ssl.SSLContext | None = None,
+    sleep_fn: Callable[[float], None] = sleep,
+) -> ExecutionHandoverCommandLoop:
+    """装配生产正常交权停机循环: 专用签名传输 + 真实工位停机执行器。
+
+    stopper 按当前活动工位解析: 每次领取后实时读取, 配置切换后的工位对象即时生效。
+    """
+
+    def execute(command: ExecutionHandoverCommand) -> ExecutionHandoverResult:
+        leases = state.execution_leases()
+        runner = ExecutionHandoverCommandRunner(
+            stopper=AutonomousStationStopper(
+                {station.station_id or "": station for station in stations()},
+                leases,
+            ),
+            leases=leases,
+            clock=time,
+        )
+        return runner.execute(command)
+
+    return ExecutionHandoverCommandLoop(
+        transport=HttpExecutionHandoverTransport(
+            client=CenterClient(
+                center_url=center_url,
+                host_id=host_id,
+                host_private_key=host_private_key,
+                timeout=command_timeout,
+                ssl_context=ssl_context,
+            )
+        ),
+        executor=execute,
+        poll_interval=command_poll_interval,
+        sleep_fn=sleep_fn,
+    )
+
+
 def _evidence_source_factory(
     media: MediaRuntimeConfiguration | None,
 ) -> Callable[[str], EvidenceSource | None] | None:
@@ -2002,6 +2120,16 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
             if media_configuration is not None and evidence_configuration is not None
             else None
         )
+        execution_handover_loop = build_execution_handover_loop(
+            center_url=config.center_url,
+            host_id=config.host_id,
+            host_private_key=config.host_private_key,
+            command_timeout=config.command_timeout,
+            command_poll_interval=config.command_poll_interval,
+            state=state,
+            stations=lambda: runtime.stations,
+            ssl_context=config.ssl_context,
+        )
         runtime = AutonomousRuntime(
             command_loop=composition.command_loop,
             stations=composition.stations,
@@ -2033,6 +2161,7 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
                 else None
             ),
             reclip_loop=reclip_loop,
+            execution_handover_loop=execution_handover_loop,
             report_reconciler=composition.report_reconciler,
             report_wake=report_wake,
             configuration_sync=configuration_sync,

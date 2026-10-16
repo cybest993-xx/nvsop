@@ -763,6 +763,10 @@ class DdmTrainingCommandRow(Table):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     cancelled_by: Mapped[UUID | None] = mapped_column(Uuid())
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancel_requested_by: Mapped[UUID | None] = mapped_column(Uuid())
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancel_response: Mapped[dict[str, Any] | None] = mapped_column(JSONB())
+    cancel_detail: Mapped[str | None] = mapped_column(String(512))
 
     def to_domain(self) -> DdmTrainingCommand:
         return DdmTrainingCommand(
@@ -785,6 +789,12 @@ class DdmTrainingCommandRow(Table):
             failure_detail=self.failure_detail,
             cancelled_by=self.cancelled_by,
             cancelled_at=self.cancelled_at,
+            cancel_requested_by=self.cancel_requested_by,
+            cancel_requested_at=self.cancel_requested_at,
+            cancel_response=(
+                dict(self.cancel_response) if self.cancel_response is not None else None
+            ),
+            cancel_detail=self.cancel_detail,
             last_observed_at=self.last_observed_at,
             observation_failure_code=self.observation_failure_code,
             observation_failure_detail=self.observation_failure_detail,
@@ -839,4 +849,10 @@ class DdmTrainingCommandRow(Table):
             updated_at=value.updated_at,
             cancelled_by=value.cancelled_by,
             cancelled_at=value.cancelled_at,
+            cancel_requested_by=value.cancel_requested_by,
+            cancel_requested_at=value.cancel_requested_at,
+            cancel_response=dict(value.cancel_response)
+            if value.cancel_response is not None
+            else None,
+            cancel_detail=value.cancel_detail,
         )

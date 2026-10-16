@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import logging
+import os
 import socket
 import threading
 import time
@@ -32,8 +33,21 @@ def _load(path: Path) -> ModuleType:
     return module
 
 
+class _JobCache:
+    """真实 handler 的最小内存缓存替身：命中有无 PID 由测试显式控制。"""
+
+    def __init__(self, values: dict[str, dict[str, Any]]) -> None:
+        self._values = values
+
+    def get(self, job_id: str) -> dict[str, Any] | None:
+        return self._values.get(job_id)
+
+    def update(self, job_id: str, **fields: object) -> None:
+        self._values.setdefault(job_id, {}).update(fields)
+
+
 class DdmHttpServer:
-    """start 是故障注入边界；all_jobs/status 运行未经改写的原 handler。"""
+    """start 是故障注入边界；all_jobs/status/cancel 运行未经改写的原 handler。"""
 
     def __init__(self) -> None:
         self.jobs: dict[str, Any] = {}
@@ -44,20 +58,30 @@ class DdmHttpServer:
         self.accept = True
         self.query_error = False
         self.before_response: Callable[[], None] = lambda: None
+        # 取消入口的可控协作者：缓存决定是否存在 PID，terminate 决定进程能否终止。
+        self.cache: dict[str, dict[str, Any]] = {}
+        self.terminated: list[int] = []
+        self.terminate_succeeds = True
         self._model = _load(BASE / "validation/postgres_validation.py").TrainingJob
         schema = _load(BASE / "validation/request_validation.py")
+        const = _load(BASE / "utils/constant.py")
         app = FastAPI()
         namespace = {
             "postgres_db": self,
-            "training_jobs_cache": SimpleNamespace(get=lambda _id: None),
+            "training_jobs_cache": _JobCache(self.cache),
             "TrainingStatus": schema.TrainingStatus,
+            "const": const,
+            "datetime": datetime,
+            "os": os,
+            "terminate_process_tree": self._terminate_process_tree,
             "HTTPException": HTTPException,
             "logger": logging.getLogger("ddm-fixture"),
         }
         tree = ast.parse((BASE / "app.py").read_text())
-        for name, route in (
-            ("get_all_jobs", "/api/v1/fine-tuning/all_jobs"),
-            ("get_training_status", "/api/v1/fine-tuning/status/{job_id}"),
+        for name, verb, route in (
+            ("get_all_jobs", "get", "/api/v1/fine-tuning/all_jobs"),
+            ("get_training_status", "get", "/api/v1/fine-tuning/status/{job_id}"),
+            ("cancel_fine_tuning", "post", "/api/v1/fine-tuning/cancel/{job_id}"),
         ):
             node = next(
                 n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == name
@@ -67,7 +91,7 @@ class DdmHttpServer:
                 compile(ast.Module(body=[node], type_ignores=[]), str(BASE / "app.py"), "exec"),
                 namespace,
             )
-            app.get(route)(namespace[name])
+            getattr(app, verb)(route)(namespace[name])
 
         @app.post("/api/v1/fine-tuning/start")
         def start(dataset_id: str, validation_dataset_id: str) -> dict[str, str]:
@@ -103,6 +127,27 @@ class DdmHttpServer:
             updated_at=datetime.now(UTC),
         )
         return job_id
+
+    def cache_job(self, job_id: str, *, process_pid: int | None = None) -> None:
+        """按基座真实缓存形状放入内存缓存，让取消走有/无 PID 分支。"""
+        document = self.jobs[job_id].to_dict()
+        document["process_pid"] = process_pid
+        document["log_file_path"] = None
+        self.cache[job_id] = document
+
+    def _terminate_process_tree(self, process_pid: int, timeout: int = 30) -> bool:
+        del timeout
+        self.terminated.append(process_pid)
+        return self.terminate_succeeds
+
+    async def update_training_job(self, job_id: str, **fields: object) -> None:
+        """镜像基座 DB 更新：只写入模型已有字段，未知字段忽略。"""
+        job = self.jobs.get(job_id)
+        if job is None:
+            return
+        for key, value in fields.items():
+            if hasattr(job, key):
+                setattr(job, key, value)
 
     def add_malformed_job(self, *, aug_dataset_id: str) -> None:
         """注入一个键与任务体身份不一致的非法条目，用于验证 malformed 结果不被绑定。"""

@@ -98,6 +98,24 @@ class _DdmDatasets:
         )
         return True
 
+    def request_ddm_training_cancellation(
+        self, *, command_id: UUID, actor_id: UUID, now: datetime
+    ) -> bool:
+        if (
+            self._command.id != command_id
+            or self._command.status
+            not in {DdmTrainingCommandStatus.BOUND, DdmTrainingCommandStatus.RESULT_UNKNOWN}
+            or self._command.cancel_requested_at is not None
+        ):
+            return False
+        self._command = replace(
+            self._command,
+            cancel_requested_by=actor_id,
+            cancel_requested_at=now,
+            updated_at=now,
+        )
+        return True
+
 
 def _caller(permissions: frozenset[Permission]) -> RestoredSession:
     return RestoredSession(
@@ -244,9 +262,15 @@ def test_cancel_checks_permissions_ownership_and_dispatch_state() -> None:
             assert denied.status_code == 403, denied.text
     with _client(datasets, frozenset({Permission.DATASET_EDIT})) as client:
         dispatched = client.post(path)
-        assert dispatched.status_code == 409
-        assert dispatched.json()["error_code"] == "USAGE_STATE_CONFLICT"
-        assert "不证明基座已停止" in dispatched.json()["detail"]
+        assert dispatched.status_code == 200, dispatched.text
+        requested = dispatched.json()
+        assert requested["status"] == "bound"
+        assert requested["cancel_requested_by"] == str(ACTOR_ID)
+        assert requested["cancel_requested_at"].endswith("Z")
+        assert requested["cancelled_by"] is None
+        assert "payload" not in requested
+        # 重复请求幂等：保留首次请求者与时刻。
+        assert client.post(path).json() == requested
         missing = client.post(path.replace(str(COMMAND_ID), str(ACTOR_ID)))
         mismatch = client.post(path.replace(str(DATASET_ID), str(ACTOR_ID)))
         for response in (missing, mismatch):

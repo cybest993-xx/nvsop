@@ -105,7 +105,8 @@ class DdmTrainingCommandStatus(StrEnum):
 
     ``bound`` 与 ``result_unknown`` 都是仍在途的保护状态；``failed`` 表示可以证明
     基座未开始或已终止失败；``completed`` 表示基座成功且结果已登记。
-    ``cancelled`` 仅表示派发意图前取消，不证明已派发的基座任务停止。
+    ``cancelled`` 表示派发意图前取消，或已派发命令经核实基座进程已停止；仅有取消
+    请求而未核实停止时仍保持 ``bound``，不进入此终态。
     """
 
     PENDING = "pending"
@@ -254,6 +255,12 @@ class DdmTrainingCommand:
     failure_detail: str | None = None
     cancelled_by: UUID | None = None
     cancelled_at: datetime | None = None
+    # 已派发命令的取消请求事实：请求持久化不释放派发保护，只有核实进程停止后才进入
+    # ``cancelled``；``cancel_response`` 保存基座原取消响应，``cancel_detail`` 是本次核实结论。
+    cancel_requested_by: UUID | None = None
+    cancel_requested_at: datetime | None = None
+    cancel_response: Mapping[str, Any] | None = None
+    cancel_detail: str | None = None
     # 最后一次成功读取基座原状态的时刻；查询失败不清空它，也不改写基座原状态。
     last_observed_at: datetime | None = None
     # 查询基座失败的独立诊断；与派发失败/结果失败分离，未知或不可达绝不表示完成。

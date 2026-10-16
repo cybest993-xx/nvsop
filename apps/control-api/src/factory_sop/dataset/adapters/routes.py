@@ -481,9 +481,18 @@ class DdmTrainingCommandView(BaseModel):
     updated_at: datetime
     cancelled_by: UUID | None = None
     cancelled_at: datetime | None = None
+    cancel_requested_by: UUID | None = None
+    cancel_requested_at: datetime | None = None
+    cancel_response_message: str | None = None
+    cancel_detail: str | None = None
 
     @field_serializer(
-        "last_observed_at", "result_registered_at", "created_at", "updated_at", "cancelled_at"
+        "last_observed_at",
+        "result_registered_at",
+        "created_at",
+        "updated_at",
+        "cancelled_at",
+        "cancel_requested_at",
     )
     def serialize_datetime(self, value: datetime | None) -> str | None:
         return _utc(value) if value is not None else None
@@ -1280,10 +1289,22 @@ def _ddm_command_view(value: model.DdmTrainingCommand) -> DdmTrainingCommandView
         result_registered_at=value.result_registered_at,
         cancelled_by=value.cancelled_by,
         cancelled_at=value.cancelled_at,
+        cancel_requested_by=value.cancel_requested_by,
+        cancel_requested_at=value.cancel_requested_at,
+        cancel_response_message=_cancel_response_message(value.cancel_response),
+        cancel_detail=value.cancel_detail,
         created_by=value.created_by,
         created_at=value.created_at,
         updated_at=value.updated_at,
     )
+
+
+def _cancel_response_message(response: Mapping[str, Any] | None) -> str | None:
+    """只公开基座原取消响应的文案；失败类别不冒充响应文案。"""
+    if response is None:
+        return None
+    message = response.get("message")
+    return message if isinstance(message, str) else None
 
 
 def _ddm_result_view(

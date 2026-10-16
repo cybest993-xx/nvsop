@@ -291,6 +291,10 @@ class RecordingCompressionTest(unittest.TestCase):
         self.assertTrue(any("replace_failed" in line for line in logs.output))
         self.assertEqual(digest(source), original)
         self.assertEqual(validated_candidate(source), candidate)
+        # 旧旁车不能覆盖与当前字节绑定的 S047 原件事实。
+        source.with_suffix(".material.json").write_text(
+            json.dumps({"generation": "compressed"}), encoding="utf-8"
+        )
         self.assertEqual(recording_segment_generation(source), "original")
 
         restarted = RecordingCompressionWorker(configuration=self.configuration(), interval=1.0)

@@ -376,8 +376,9 @@ def recording_segment_generation(path: Path) -> str:
             digest = file_sha256(path)
             if digest == document.get("candidate_sha256"):
                 return MATERIAL_GENERATION_COMPRESSED
-            if digest != document.get("source_sha256"):
-                raise ValueError("compression material changed")
+            if digest == document.get("source_sha256"):
+                return MATERIAL_GENERATION_ORIGINAL
+            raise ValueError("compression material changed")
         except (OSError, ValueError) as error:
             raise EvidenceMediaError(
                 "material_provenance_invalid", f"invalid compression material for {path.name}"

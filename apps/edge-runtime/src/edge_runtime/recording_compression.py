@@ -143,9 +143,21 @@ def compress_aged_segments(
     configuration: RecordingCompressionConfiguration,
     *,
     now: float | None = None,
-    install: bool = False,
 ) -> CompressionSummary:
-    """为老化分段生成候选; 显式 install 时在同一素材占用内安装, 默认保持原件。"""
+    """S047 候选生成入口; 保留原件, 不安装候选。"""
+    return _process_aged_segments(configuration, now=now, install=False)
+
+
+def archive_aged_segments(
+    configuration: RecordingCompressionConfiguration, *, now: float | None = None
+) -> CompressionSummary:
+    """后台归档入口: 生成候选并在同一素材占用内验证、原子安装。"""
+    return _process_aged_segments(configuration, now=now, install=True)
+
+
+def _process_aged_segments(
+    configuration: RecordingCompressionConfiguration, *, now: float | None, install: bool
+) -> CompressionSummary:
     current = time() if now is None else now
     if not isfinite(current):
         raise ValueError("compression clock must be finite")
@@ -263,7 +275,7 @@ class RecordingCompressionWorker:
 
     def drain(self) -> CompressionSummary:
         """处理一轮; 逐分段失败已在本轮内转为告警, 不中断后续分段。"""
-        result = compress_aged_segments(self._configuration, now=self._clock(), install=True)
+        result = archive_aged_segments(self._configuration, now=self._clock())
         if result.created or result.replaced or result.failed:
             _logger.info(
                 "edge.recording_compression.summary created=%s replaced=%s skipped=%s failed=%s",
@@ -647,6 +659,7 @@ __all__ = [
     "RecordingCompressionConfiguration",
     "RecordingCompressionError",
     "RecordingCompressionWorker",
+    "archive_aged_segments",
     "compress_aged_segments",
     "replace_validated_candidate",
     "validated_candidate",

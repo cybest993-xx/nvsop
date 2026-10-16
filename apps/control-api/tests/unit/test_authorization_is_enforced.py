@@ -76,12 +76,23 @@ from factory_sop.device.model import (
     PendingCommandType,
     PointDirection,
 )
+from factory_sop.device.usecases.retention import RepositoryDeviceStationFacts
 from factory_sop.evidence.adapters import dependencies as evidence_dependencies
-from factory_sop.evidence.model import EvidenceReclipRequest, EvidenceReview
+from factory_sop.evidence.model import EvidenceReclipRequest, EvidenceReview, EvidenceReviewHold
 from factory_sop.execution.adapters import dependencies as execution_dependencies
 from factory_sop.execution.model import HANDOVER_RISK_STATEMENT, HandoverConfirmation
 from factory_sop.identifiers import new_id
 from factory_sop.persistence import request_session
+from factory_sop.retention.adapters import dependencies as retention_dependencies
+from factory_sop.retention.api import (
+    DEFAULT_RETENTION_POLICY,
+    EvidenceInstanceUsage,
+    ImpactAggregate,
+    InstanceRetentionFact,
+    RetentionPolicyState,
+    StationRetentionRecord,
+    StationUsage,
+)
 from factory_sop.settings import Settings
 from factory_sop.template.adapters import dependencies as template_dependencies
 from factory_sop.template.model import TemplateImport
@@ -109,6 +120,7 @@ def settings() -> Settings:
         session_cookie_transport="require_https",
         csrf_secret=SecretStr("csrf-secret"),
         redis_url=SecretStr("redis://127.0.0.1:1/0"),
+        retention_estimate_ttl_seconds=60,
     )
 
 
@@ -483,6 +495,23 @@ ROUTES = [
     ),
     Target(
         "POST",
+        "/training-datasets/{dataset_id}/ddm-training-commands",
+        {
+            "training": {
+                "dataset_id": "019937d8-0d10-7b31-8d2d-4e60c8f4f101",
+                "usage_check_id": "019937d8-0d10-7b31-8d2d-4e60c8f4f302",
+                "artifact_id": "019937d8-0d10-7b31-8d2d-4e60c8f4f303",
+            },
+            "validation": {
+                "dataset_id": "019937d8-0d10-7b31-8d2d-4e60c8f4f304",
+                "usage_check_id": "019937d8-0d10-7b31-8d2d-4e60c8f4f305",
+                "artifact_id": "019937d8-0d10-7b31-8d2d-4e60c8f4f306",
+            },
+        },
+        headers={"Idempotency-Key": "authz-ddm"},
+    ),
+    Target(
+        "POST",
         "/execution/handovers",
         {
             "station_id": "{station_id}",
@@ -516,7 +545,40 @@ ROUTES = [
             "after_seconds": 1.0,
         },
     ),
+    Target(
+        "POST",
+        "/evidence/{evidence_id}/review-holds",
+        {"review_id": str(REVIEW_ID), "generation": "original"},
+    ),
+    Target(
+        "POST",
+        "/evidence/{evidence_id}/review-holds/cancel",
+        {"review_id": str(REVIEW_ID)},
+    ),
+    Target(
+        "POST",
+        "/retention/policy/impact-estimate",
+        {"policy": DEFAULT_RETENTION_POLICY.to_wire()},
+    ),
+    Target(
+        "POST",
+        "/retention/stations/{station_id}/impact-estimate",
+        {"mode": "custom", "overrides": DEFAULT_RETENTION_POLICY.to_wire()},
+    ),
+    Target(
+        "PUT",
+        "/retention/policy",
+        {"policy": DEFAULT_RETENTION_POLICY.to_wire()},
+        headers={"If-Match": "0", "X-Retention-Estimate": "not-a-token"},
+    ),
+    Target(
+        "PUT",
+        "/retention/stations/{station_id}",
+        {"mode": "custom", "overrides": DEFAULT_RETENTION_POLICY.to_wire()},
+        headers={"If-Match": "0", "X-Retention-Estimate": "not-a-token"},
+    ),
 ]
+
 
 # The session resource: no permission, by design, and therefore not part of the check above.
 EXEMPT = {
@@ -541,6 +603,11 @@ EXEMPT = {
     ("POST", f"{API_PREFIX}/evidence/registrations"),
     # 来源机逐次回查要求主机签名，同时复核票据绑定的真实会话与权限。
     ("POST", f"{API_PREFIX}/evidence/access-check"),
+    # 证据删除资格的 claim/verify/result 同样只认主机签名，不接受浏览器会话或人类权限。
+    ("POST", f"{API_PREFIX}/retention/evidence-deletion-claims"),
+    ("POST", f"{API_PREFIX}/retention/evidence-deletion-claims/verify"),
+    ("POST", f"{API_PREFIX}/retention/evidence-deletion-claims/result"),
+    ("POST", f"{API_PREFIX}/retention/reported-impact/access-check"),
 }
 
 
@@ -562,6 +629,104 @@ class AuthorizationPendingCommands(FakePendingCommands):
     def complete(self, completion: PendingCommandCompletion) -> PendingCommand:
         del completion
         raise AssertionError("authorization route test does not complete a command")
+
+
+class FakeRetentionPolicies:
+    """授权机械测试只需保存一次全局策略写入，不触碰数据库。"""
+
+    def __init__(self) -> None:
+        self.state: RetentionPolicyState | None = None
+
+    def get_global(self) -> RetentionPolicyState | None:
+        return self.state
+
+    def replace_if_current(self, *, expected_revision: int, value: RetentionPolicyState) -> bool:
+        current = 0 if self.state is None else self.state.revision
+        if current != expected_revision:
+            return False
+        self.state = value
+        return True
+
+
+class FakeStationRetentionOverrides:
+    """内存工位覆盖记录，让两条写路由走到真实用例而不是只解析依赖。"""
+
+    def __init__(self) -> None:
+        self.records: dict[UUID, StationRetentionRecord] = {}
+
+    def get(self, station_id: UUID) -> StationRetentionRecord | None:
+        return self.records.get(station_id)
+
+    def list_all(self) -> tuple[StationRetentionRecord, ...]:
+        return tuple(self.records.values())
+
+    def insert_if_absent(self, record: StationRetentionRecord) -> bool:
+        if record.station_id in self.records:
+            return False
+        self.records[record.station_id] = record
+        return True
+
+    def replace_if_current(self, *, expected_revision: int, record: StationRetentionRecord) -> bool:
+        current = self.records.get(record.station_id)
+        if current is None or current.revision != expected_revision:
+            return False
+        self.records[record.station_id] = record
+        return True
+
+
+def _empty_aggregate(*, bytes_measurable: bool) -> ImpactAggregate:
+    return ImpactAggregate(
+        objects=0,
+        known_bytes=0 if bytes_measurable else None,
+        unknown_size_objects=0,
+        earliest=None,
+        latest=None,
+    )
+
+
+class FakeEvidenceImpact:
+    """授权机械测试只需解析依赖；估算返回零影响，不触碰真实证据。"""
+
+    def evidence_usage(
+        self, *, station_id: object, exposed_from: object, exposed_to: object
+    ) -> tuple[EvidenceInstanceUsage, ...]:
+        del station_id, exposed_from, exposed_to
+        return ()
+
+    def review_usage(
+        self, *, station_id: object, exposed_from: object, exposed_to: object
+    ) -> tuple[object, ...]:
+        del station_id, exposed_from, exposed_to
+        return ()
+
+
+class FakeMonitorImpact:
+    """授权机械测试只需解析依赖；实例事实与记录/处置计数都返回零影响。"""
+
+    def instance_facts(
+        self, *, instance_ids: tuple[tuple[UUID, UUID, int], ...]
+    ) -> tuple[InstanceRetentionFact, ...]:
+        del instance_ids
+        return ()
+
+    def record_usage(
+        self, *, station_id: object, exposed_from: object, exposed_to: object
+    ) -> tuple[StationUsage, ...]:
+        del station_id, exposed_from, exposed_to
+        station = new_id()
+        return (
+            StationUsage(
+                station_id=station,
+                exposed=_empty_aggregate(bytes_measurable=True),
+                protected=_empty_aggregate(bytes_measurable=True),
+            ),
+        )
+
+    def disposal_usage(
+        self, *, station_id: object, exposed_from: object, exposed_to: object
+    ) -> tuple[StationUsage, ...]:
+        del station_id, exposed_from, exposed_to
+        return ()
 
 
 class TemplateStore:
@@ -604,6 +769,16 @@ class StubRequestSession:
     """流式上传路由在读取请求体前结束事务；授权套件不需要真实数据库连接。"""
 
     def rollback(self) -> None:
+        return None
+
+
+class FakeDeletionAuthorityFence:
+    """授权机械测试不建立真实删除认领；权威锁与检查是无操作。"""
+
+    def lock_authority(self) -> None:
+        return None
+
+    def ensure_mutable(self) -> None:
         return None
 
 
@@ -651,6 +826,23 @@ class FakeEvidenceReviews:
 
     def list_for_evidence(self, evidence_id: str) -> tuple[EvidenceReview, ...]:
         return tuple(row for row in self.records.values() if row.evidence_id == evidence_id)
+
+    def conclude_own(self, *, evidence_id: str, reviewer_id: UUID, at: datetime) -> int:
+        """授权机械测试不保留在审占用；结论提交只跑到真实成功分支。"""
+        del evidence_id, reviewer_id, at
+        return 0
+
+    def begin(self, value: EvidenceReviewHold) -> bool:
+        del value
+        return True
+
+    def cancel(self, *, review_id: UUID, reviewer_id: UUID, at: datetime) -> bool:
+        del review_id, reviewer_id, at
+        return True
+
+    def active_reviewers(self, *, evidence_id: str) -> frozenset[UUID]:
+        del evidence_id
+        return frozenset()
 
 
 class FakeEvidenceReclipRequests:
@@ -814,7 +1006,10 @@ class Backend:
         self.app.dependency_overrides[dependencies.sessions] = lambda: self.sessions
         self.app.dependency_overrides[dependencies.roles] = lambda: self.roles
         self.app.dependency_overrides[dependencies.granted_permissions] = lambda: self.granted
+        self.retention_policies = FakeRetentionPolicies()
+        self.retention_overrides = FakeStationRetentionOverrides()
         self.app.dependency_overrides[device_dependencies.hosts] = lambda: self.hosts
+
         self.app.dependency_overrides[device_dependencies.backends] = lambda: self.backends_store
         self.app.dependency_overrides[device_dependencies.probe] = lambda: self.probe
         self.app.dependency_overrides[device_dependencies.stations] = lambda: self.stations
@@ -846,7 +1041,36 @@ class Backend:
             self.evidence_reclip_gateway
         )
         self.app.dependency_overrides[auth_handover_authority] = lambda: self.handover_authority
+        self.app.dependency_overrides[retention_dependencies.policy_repository] = lambda: (
+            self.retention_policies
+        )
+        self.app.dependency_overrides[retention_dependencies.station_overrides] = lambda: (
+            self.retention_overrides
+        )
+        # 组合根把工位存在/启用事实 seam 接到 device owner；这里把它接到内存工位存储。
+        self.app.dependency_overrides[retention_dependencies.station_facts] = lambda: (
+            RepositoryDeviceStationFacts(stations=self.stations)
+        )
+        # 影响估算的 owner 计数 seam 同样在测试里接到内存替身。
+        self.evidence_impact = FakeEvidenceImpact()
+        self.monitor_impact = FakeMonitorImpact()
+        from test_retention_impact import FakeEdgeImpact
+
+        self.edge_impact = FakeEdgeImpact()
+        self.app.dependency_overrides[retention_dependencies.edge_impact] = lambda: self.edge_impact
+        self.app.dependency_overrides[retention_dependencies.evidence_impact] = lambda: (
+            self.evidence_impact
+        )
+        self.app.dependency_overrides[retention_dependencies.monitor_impact] = lambda: (
+            self.monitor_impact
+        )
         self.app.dependency_overrides[request_session] = StubRequestSession
+        self.app.dependency_overrides[device_dependencies.deletion_authority_fence] = lambda: (
+            FakeDeletionAuthorityFence()
+        )
+        self.app.dependency_overrides[retention_dependencies.deletion_authority_fence] = lambda: (
+            FakeDeletionAuthorityFence()
+        )
         self.client = TestClient(self.app, base_url="https://testserver")
         assert (
             self.client.post(

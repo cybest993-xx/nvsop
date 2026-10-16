@@ -52,6 +52,7 @@ class DatasetRefusalCode(StrEnum):
     ARTIFACT_UNAVAILABLE = "ARTIFACT_UNAVAILABLE"
     ARTIFACT_INTEGRITY_FAILURE = "ARTIFACT_INTEGRITY_FAILURE"
     DDM_TRAINING_COMMAND_NOT_FOUND = "DDM_TRAINING_COMMAND_NOT_FOUND"
+    DDM_TRAINING_RESULT_NOT_FOUND = "DDM_TRAINING_RESULT_NOT_FOUND"
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,9 +147,13 @@ def refusal_problem(code: DatasetRefusalCode) -> tuple[int, str]:
             DatasetRefusalCode.VLM_CANDIDATE_NOT_FOUND
             | DatasetRefusalCode.USAGE_CHECK_NOT_FOUND
             | DatasetRefusalCode.ARTIFACT_NOT_FOUND
-            | DatasetRefusalCode.DDM_TRAINING_COMMAND_NOT_FOUND
         ):
             return 404, "训练数据用途记录不存在"
+        case (
+            DatasetRefusalCode.DDM_TRAINING_COMMAND_NOT_FOUND
+            | DatasetRefusalCode.DDM_TRAINING_RESULT_NOT_FOUND
+        ):
+            return 404, "DDM 训练命令或结果不存在"
         case DatasetRefusalCode.VLM_CANDIDATE_INVALID:
             return 422, "VLM 候选输入不符合要求"
         case DatasetRefusalCode.USAGE_STATE_CONFLICT | DatasetRefusalCode.ARTIFACT_UNAVAILABLE:

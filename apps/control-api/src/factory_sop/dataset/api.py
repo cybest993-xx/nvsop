@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
@@ -351,6 +352,46 @@ class DatasetValidationRuntime(Protocol):
         ...
 
 
+class DdmTrainingJobOutcome(StrEnum):
+    """DDM 训练命令在通用 job 视角下的终态。"""
+
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    PENDING = "pending"
+    LEASE_LOST = "lease_lost"
+
+
+@dataclass(frozen=True, slots=True)
+class DdmTrainingJobResult:
+    """DDM 执行器返回给 job owner 的窄结果事实。"""
+
+    outcome: DdmTrainingJobOutcome
+    failure_code: str | None = None
+
+
+class DdmTrainingJobFinisher(Protocol):
+    """job owner 在 dataset 的发布事务内核对租约并写通用终态。"""
+
+    def __call__(self, session: object, result: DdmTrainingJobResult) -> bool: ...
+
+
+class DdmTrainingJobExecutor(Protocol):
+    """供 `job` worker 调用的 DDM 训练命令执行 seam。"""
+
+    def execute_job(
+        self,
+        *,
+        command_id: UUID,
+        now: datetime,
+        resolve_current_caller: CurrentCallerResolver,
+        finish_job: DdmTrainingJobFinisher,
+        commit_transaction: ArtifactTransactionCommitter,
+    ) -> DdmTrainingJobResult:
+        """推进一条 DDM 训练命令；完成/失败时才返回终态，否则返回进行中。"""
+        ...
+
+
 __all__ = [
     "AnnotationBackend",
     "AnnotationBackendExecutionError",
@@ -377,6 +418,9 @@ __all__ = [
     "DdmInputConsumption",
     "DdmInputSelection",
     "DdmReader",
+    "DdmTrainingJobExecutor",
+    "DdmTrainingJobOutcome",
+    "DdmTrainingJobResult",
     "FrozenDdmInput",
     "FrozenDdmInputSet",
     "FrozenDdmMemberInput",

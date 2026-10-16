@@ -1,7 +1,7 @@
 """dataset：未派发 DDM 命令的首次取消操作者与时刻。
 
-Revision ID: 0063
-Revises: 0062
+Revision ID: 0068
+Revises: 0067
 """
 
 from __future__ import annotations
@@ -9,8 +9,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0063"
-down_revision: str | None = "0062"
+revision: str = "0068"
+down_revision: str | None = "0067"
 
 
 def upgrade() -> None:

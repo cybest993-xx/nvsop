@@ -24,9 +24,10 @@ def register_evidence(
     evidence: EvidenceRepository,
     host_gateway: HostOwnershipGateway,
 ) -> EvidenceReference:
-    """登记一条本机证据引用；按稳定证据 ID 幂等，拒绝归属、身份或摘要冲突。
+    """登记一条本机证据引用；按稳定证据 ID 幂等，拒绝归属、身份、摘要或认领冲突。
 
-    主机不属于该工位时拒绝；受控引用非法时登记 ``FAILED`` 且不存非法串；冲突不覆盖原引用。
+    主机不属于该工位时拒绝；受控引用非法时登记 ``FAILED`` 且不存非法串；冲突不覆盖原引用；
+    该引用存在未结案删除认领、或其媒体已被确认删除时拒绝重新登记。
     """
     host_id = _uuid(registration.host_id, "evidence host_id")
     station_id = _uuid(registration.station_id, "evidence station_id")
@@ -36,7 +37,14 @@ def register_evidence(
             "evidence reference is outside the authenticated host topology",
         )
     incoming = _classify(registration, received_at=received_at)
-    existing = evidence.find(registration.evidence_id)
+    # 重新登记与元数据变更也是引用写入：先锁行，存在未结案删除认领时拒绝冲突写入。
+    locked = evidence.lock(registration.evidence_id)
+    if locked.pending_claim:
+        raise EvidenceRefusedError(
+            EvidenceRefusal.DELETION_CLAIM_PENDING,
+            "evidence deletion claim is pending for this reference",
+        )
+    existing = locked.reference
     if existing is None and not evidence.insert(incoming):
         existing = evidence.find(registration.evidence_id)
         if existing is None:
@@ -101,6 +109,12 @@ def _reconcile(
         raise EvidenceRefusedError(
             EvidenceRefusal.IDENTITY_CONFLICT,
             "evidence identity conflicts with the registered reference",
+        )
+    if existing.status is EvidenceStatus.DELETED:
+        # 来源机已确认删除的媒体不因重新登记复活：引用身份与复核历史保留，媒体仍然不存在。
+        raise EvidenceRefusedError(
+            EvidenceRefusal.MEDIA_DELETED,
+            "deleted evidence media cannot be re-registered as a live reference",
         )
     if existing.status is EvidenceStatus.AVAILABLE:
         if (

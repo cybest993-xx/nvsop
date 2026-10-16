@@ -319,10 +319,12 @@ class LocalDisposalLedger:
             reported_at=str(row["report_reported_at"]),
         )
 
-    def mark_reported(self, disposal_id: int, *, at: float) -> None:
+    def mark_reported(self, disposal_id: int, *, at: float, acknowledged_at: str) -> None:
         with self._write_transaction():
             self._connection.execute(
-                "UPDATE local_disposal SET sent_at=? WHERE disposal_id=?", (at, disposal_id)
+                "UPDATE local_disposal SET sent_at=?, acknowledged_at=? "
+                "WHERE disposal_id=? AND sent_at IS NULL",
+                (at, acknowledged_at, disposal_id),
             )
 
     def record_report_failure(self, disposal_id: int, *, at: float, error: str) -> None:

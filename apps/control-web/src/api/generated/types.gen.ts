@@ -522,6 +522,8 @@ export type ApiErrorCode =
   | 'USAGE_STATE_CONFLICT'
   | 'ARTIFACT_NOT_FOUND'
   | 'ARTIFACT_UNAVAILABLE'
+  | 'DDM_TRAINING_COMMAND_NOT_FOUND'
+  | 'DDM_TRAINING_RESULT_NOT_FOUND'
   | 'JOB_NOT_FOUND'
   | 'JOB_RESOURCE_NOT_FOUND'
   | 'ACTIVE_GRANT_EXISTS'
@@ -535,6 +537,12 @@ export type ApiErrorCode =
   | 'HANDOVER_TARGET_NOT_FOUND'
   | 'HANDOVER_SOURCE_MISMATCH'
   | 'HANDOVER_SAME_HOST'
+  | 'RETENTION_POLICY_CONFLICT'
+  | 'RETENTION_POLICY_INVALID'
+  | 'RETENTION_ESTIMATE_REQUIRED'
+  | 'RETENTION_ESTIMATE_STALE'
+  | 'RETENTION_ESTIMATE_INCOMPLETE'
+  | 'RETENTION_ESTIMATE_TTL_UNCONFIGURED'
 
 /**
  * ArtifactAcceptedView
@@ -1587,6 +1595,212 @@ export type DatasetView = {
 }
 
 /**
+ * DdmInputSelectionInput
+ *
+ * 一次 DDM 训练选择的一套已通过输入来源。
+ */
+export type DdmInputSelectionInput = {
+  /**
+   * Artifact Id
+   */
+  artifact_id: string
+  /**
+   * Dataset Id
+   */
+  dataset_id: string
+  /**
+   * Usage Check Id
+   */
+  usage_check_id: string
+}
+
+/**
+ * DdmResultAccessView
+ *
+ * 已授权数据通道的访问地址；控制面从不中转大体积字节。
+ */
+export type DdmResultAccessView = {
+  /**
+   * Checkpoint Url
+   */
+  checkpoint_url: string
+  /**
+   * Config Url
+   */
+  config_url: string
+}
+
+/**
+ * DdmResultFileView
+ */
+export type DdmResultFileView = {
+  /**
+   * Sha256
+   */
+  sha256: string
+  /**
+   * Size
+   */
+  size: number
+}
+
+/**
+ * DdmTrainingCommandAcceptedView
+ */
+export type DdmTrainingCommandAcceptedView = {
+  command: DdmTrainingCommandView
+  job: UsageJobView
+}
+
+/**
+ * DdmTrainingCommandView
+ *
+ * DDM 训练命令的公开事实。
+ *
+ * 只暴露应用状态、基座原状态/观测时刻/查询诊断与结果登记事实；冻结负载、内部路径、
+ * 媒体身份与消费摘要不进入公开响应。
+ */
+export type DdmTrainingCommandView = {
+  /**
+   * Base Current Step
+   */
+  base_current_step: number | null
+  /**
+   * Base Job Id
+   */
+  base_job_id: string | null
+  /**
+   * Base Progress
+   */
+  base_progress: number | null
+  /**
+   * Base Status
+   */
+  base_status: string | null
+  /**
+   * Base Total Steps
+   */
+  base_total_steps: number | null
+  /**
+   * Created At
+   */
+  created_at: string | null
+  /**
+   * Created By
+   */
+  created_by: string
+  /**
+   * Dataset Id
+   */
+  dataset_id: string
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  /**
+   * Failure Detail
+   */
+  failure_detail: string | null
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Last Observed At
+   */
+  last_observed_at: string | null
+  /**
+   * Observation Failure Code
+   */
+  observation_failure_code: string | null
+  /**
+   * Observation Failure Detail
+   */
+  observation_failure_detail: string | null
+  /**
+   * Request Digest
+   */
+  request_digest: string
+  /**
+   * Result Checkpoint Sha256
+   */
+  result_checkpoint_sha256: string | null
+  /**
+   * Result Checkpoint Size
+   */
+  result_checkpoint_size: number | null
+  /**
+   * Result Config Sha256
+   */
+  result_config_sha256: string | null
+  /**
+   * Result Config Size
+   */
+  result_config_size: number | null
+  /**
+   * Result Failure Code
+   */
+  result_failure_code: string | null
+  /**
+   * Result Failure Detail
+   */
+  result_failure_detail: string | null
+  /**
+   * Result Generation
+   */
+  result_generation: number
+  /**
+   * Result Registered At
+   */
+  result_registered_at: string | null
+  /**
+   * Result Status
+   */
+  result_status: string
+  /**
+   * Status
+   */
+  status: string
+  /**
+   * Updated At
+   */
+  updated_at: string | null
+}
+
+/**
+ * DdmTrainingResultView
+ */
+export type DdmTrainingResultView = {
+  access: DdmResultAccessView | null
+  checkpoint: DdmResultFileView | null
+  /**
+   * Command Id
+   */
+  command_id: string
+  config: DdmResultFileView | null
+  /**
+   * Dataset Id
+   */
+  dataset_id: string
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  /**
+   * Failure Detail
+   */
+  failure_detail: string | null
+  /**
+   * Registered At
+   */
+  registered_at: string | null
+  /**
+   * Status
+   */
+  status: string
+}
+
+/**
  * DesiredTemplateBindingView
  */
 export type DesiredTemplateBindingView = {
@@ -1663,6 +1877,24 @@ export type DeviceSummaryData = {
   inference_hosts?: ResourceSummary | null
   points?: ResourceSummary | null
   stations?: ResourceSummary | null
+}
+
+/**
+ * EdgeImpactSourceView
+ */
+export type EdgeImpactSourceView = {
+  /**
+   * Configuration Revision
+   */
+  configuration_revision: number | null
+  /**
+   * Configuration Sha256
+   */
+  configuration_sha256: string | null
+  /**
+   * Host Id
+   */
+  host_id: string
 }
 
 /**
@@ -1938,6 +2170,64 @@ export type EvidenceReviewBody = {
 }
 
 /**
+ * EvidenceReviewCancelBody
+ *
+ * 取消本人在审占用；只认自己创建的 review_id。
+ */
+export type EvidenceReviewCancelBody = {
+  /**
+   * Review Id
+   */
+  review_id: string
+}
+
+/**
+ * EvidenceReviewHoldBody
+ *
+ * 开始一次在审复核：稳定幂等 ID 与证据代次；不接受其它扩展字段。
+ */
+export type EvidenceReviewHoldBody = {
+  /**
+   * Generation
+   */
+  generation: string
+  /**
+   * Review Id
+   */
+  review_id: string
+}
+
+/**
+ * EvidenceReviewHoldRecord
+ */
+export type EvidenceReviewHoldRecord = {
+  /**
+   * Ended At
+   */
+  ended_at?: string | null
+  /**
+   * Evidence Id
+   */
+  evidence_id: string
+  /**
+   * Generation
+   */
+  generation: string
+  /**
+   * Review Id
+   */
+  review_id: string
+  /**
+   * Reviewer Id
+   */
+  reviewer_id: string
+  /**
+   * Started At
+   */
+  started_at: string
+}
+
+/**
  * EvidenceReviewRecord
  */
 export type EvidenceReviewRecord = {
@@ -1973,7 +2263,7 @@ export type EvidenceReviewRecord = {
  *
  * 中心引用的登记状态；没有“媒体已上传中心”这一类状态（ADR-0012）。
  */
-export type EvidenceStatus = 'pending' | 'available' | 'failed'
+export type EvidenceStatus = 'pending' | 'available' | 'failed' | 'deleted'
 
 /**
  * ExportCameraMediaView
@@ -2083,6 +2373,24 @@ export type FieldError = {
    * Message
    */
   message: string
+}
+
+/**
+ * GlobalRetentionPolicyUpdate
+ */
+export type GlobalRetentionPolicyUpdate = {
+  policy: RetentionPolicyView
+}
+
+/**
+ * GlobalRetentionPolicyView
+ */
+export type GlobalRetentionPolicyView = {
+  policy: RetentionPolicyView
+  /**
+   * Revision
+   */
+  revision: number
 }
 
 /**
@@ -2255,6 +2563,10 @@ export type HostMediaConfigurationView = {
    */
   cameras: Array<ExportCameraMediaView>
   /**
+   * Disk Watermark Percent
+   */
+  disk_watermark_percent?: number | null
+  /**
    * Host Id
    */
   host_id: string
@@ -2288,6 +2600,44 @@ export type HostMediaConfigurationView = {
  */
 export type HostStatus = {
   status: DeviceStatus
+}
+
+/**
+ * ImpactAccessRequest
+ */
+export type ImpactAccessRequest = {
+  /**
+   * Context
+   */
+  context: string
+}
+
+/**
+ * ImpactAggregateView
+ *
+ * 一个时段内一组对象的真实计数；`known_bytes` 为空表示该拥有者无法度量字节。
+ */
+export type ImpactAggregateView = {
+  /**
+   * Earliest
+   */
+  earliest: string | null
+  /**
+   * Known Bytes
+   */
+  known_bytes: number | null
+  /**
+   * Latest
+   */
+  latest: string | null
+  /**
+   * Objects
+   */
+  objects: number
+  /**
+   * Unknown Size Objects
+   */
+  unknown_size_objects: number
 }
 
 /**
@@ -2546,6 +2896,28 @@ export type ItemPageDatasetView = {
    * Items
    */
   items: Array<DatasetView>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
+ * ItemPage[DdmTrainingCommandView]
+ */
+export type ItemPageDdmTrainingCommandView = {
+  /**
+   * Items
+   */
+  items: Array<DdmTrainingCommandView>
   /**
    * Page
    */
@@ -3229,6 +3601,7 @@ export type ReasonCode =
   | 'ACTION_ID_UNKNOWN'
   | 'INFERENCE_HOST_DOWN'
   | 'RUN_INTERRUPTED'
+  | 'STORAGE_UNAVAILABLE'
   | 'IO_SIGNAL_LOST'
   | 'IO_TIME_UNALIGNED'
   | 'MISSED_STEP'
@@ -3271,6 +3644,16 @@ export type RegisterVlmCandidateInput = {
   records: Array<{
     [key: string]: unknown
   }>
+}
+
+/**
+ * RequestDdmTrainingCommandInput
+ *
+ * 受理一条 DDM 训练命令所需的独立训练/验证来源。
+ */
+export type RequestDdmTrainingCommandInput = {
+  training: DdmInputSelectionInput
+  validation: DdmInputSelectionInput
 }
 
 /**
@@ -3340,6 +3723,152 @@ export type ResourceSummary = {
    * Unknown
    */
   unknown: number
+}
+
+/**
+ * RetentionCategory
+ */
+export type RetentionCategory = 'pass' | 'fail' | 'indeterminate'
+
+/**
+ * RetentionFactOwner
+ *
+ * 字段影响事实的拥有者；缺任一拥有者的当前事实即估算不完整。
+ */
+export type RetentionFactOwner = 'evidence' | 'monitor' | 'edge'
+
+/**
+ * RetentionFieldImpactView
+ *
+ * 单个保留字段的影响：有真实计数，或明确不可估算的原因；两者恰有其一。
+ */
+export type RetentionFieldImpactView = {
+  /**
+   * Bytes Basis
+   */
+  bytes_basis: string | null
+  category: RetentionCategory | null
+  exposed: ImpactAggregateView | null
+  /**
+   * Exposed From
+   */
+  exposed_from: string | null
+  /**
+   * Exposed To
+   */
+  exposed_to: string
+  field: RetentionImpactField
+  owner: RetentionFactOwner
+  protected: ImpactAggregateView | null
+  /**
+   * Removes Objects
+   */
+  removes_objects: boolean
+  /**
+   * Savings Unknown
+   */
+  savings_unknown: boolean
+  /**
+   * Source Configurations
+   */
+  source_configurations: Array<EdgeImpactSourceView>
+  /**
+   * Unavailable Reason
+   */
+  unavailable_reason: string | null
+}
+
+/**
+ * RetentionImpactEstimateView
+ *
+ * 一次保留变更的逐字段影响估算；`complete` 为假时不得确认。
+ */
+export type RetentionImpactEstimateView = {
+  /**
+   * Baseline Revision
+   */
+  baseline_revision: number
+  /**
+   * Complete
+   */
+  complete: boolean
+  /**
+   * Estimate Token
+   */
+  estimate_token: string
+  /**
+   * Fields
+   */
+  fields: Array<RetentionFieldImpactView>
+  /**
+   * Incomplete Reasons
+   */
+  incomplete_reasons: Array<string>
+  proposed: RetentionPolicyView
+  /**
+   * Reference Time
+   */
+  reference_time: string
+  /**
+   * Station Id
+   */
+  station_id: string | null
+}
+
+/**
+ * RetentionImpactField
+ *
+ * 一次保留变更影响估算逐字段覆盖的保留字段；八个字段各有一个拥有者口径。
+ */
+export type RetentionImpactField =
+  | 'evidence_pass'
+  | 'evidence_fail'
+  | 'evidence_indeterminate'
+  | 'record_detail'
+  | 'record_compression_age'
+  | 'record_aggregate_age'
+  | 'disposal'
+  | 'local_reported'
+
+/**
+ * RetentionMode
+ */
+export type RetentionMode = 'unset' | 'duration' | 'permanent' | 'discard'
+
+/**
+ * RetentionPolicyMode
+ *
+ * 工位保留组的整组来源；与运行参数同一覆盖模式（§5.19）。
+ */
+export type RetentionPolicyMode = 'follow_global' | 'custom'
+
+/**
+ * RetentionPolicyView
+ *
+ * 完整一组保留参数；缺字段或不合法的一律拒绝。
+ */
+export type RetentionPolicyView = {
+  disposal: RetentionRuleView
+  evidence_fail: RetentionRuleView
+  evidence_indeterminate: RetentionRuleView
+  evidence_pass: RetentionRuleView
+  local_reported: RetentionRuleView
+  record_aggregate_age: RetentionRuleView
+  record_compression_age: RetentionRuleView
+  record_detail: RetentionRuleView
+}
+
+/**
+ * RetentionRuleView
+ *
+ * 一条保留规则的 wire 形状；生效组不出现 `unset`。
+ */
+export type RetentionRuleView = {
+  mode: RetentionMode
+  /**
+   * Seconds
+   */
+  seconds?: number | null
 }
 
 /**
@@ -3515,6 +4044,34 @@ export type StationConfiguration = {
    * Tags
    */
   tags?: Array<string>
+}
+
+/**
+ * StationRetentionUpdate
+ */
+export type StationRetentionUpdate = {
+  mode: RetentionPolicyMode
+  overrides?: RetentionPolicyView | null
+}
+
+/**
+ * StationRetentionView
+ *
+ * 工位保留的默认组、覆盖组与唯一生效组；不逐字段混合。
+ */
+export type StationRetentionView = {
+  default: RetentionPolicyView
+  effective: RetentionPolicyView
+  mode: RetentionPolicyMode
+  overrides: RetentionPolicyView | null
+  /**
+   * Revision
+   */
+  revision: number
+  /**
+   * Station Id
+   */
+  station_id: string
 }
 
 /**
@@ -6705,6 +7262,76 @@ export type CreateEvidenceReclipRequestResponses = {
 export type CreateEvidenceReclipRequestResponse =
   CreateEvidenceReclipRequestResponses[keyof CreateEvidenceReclipRequestResponses]
 
+export type BeginEvidenceReviewData = {
+  body: EvidenceReviewHoldBody
+  path: {
+    /**
+     * Evidence Id
+     */
+    evidence_id: string
+  }
+  query?: never
+  url: '/api/v1/evidence/{evidence_id}/review-holds'
+}
+
+export type BeginEvidenceReviewErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type BeginEvidenceReviewError = BeginEvidenceReviewErrors[keyof BeginEvidenceReviewErrors]
+
+export type BeginEvidenceReviewResponses = {
+  /**
+   * Successful Response
+   */
+  200: EvidenceReviewHoldRecord
+}
+
+export type BeginEvidenceReviewResponse =
+  BeginEvidenceReviewResponses[keyof BeginEvidenceReviewResponses]
+
+export type CancelEvidenceReviewData = {
+  body: EvidenceReviewCancelBody
+  path: {
+    /**
+     * Evidence Id
+     */
+    evidence_id: string
+  }
+  query?: never
+  url: '/api/v1/evidence/{evidence_id}/review-holds/cancel'
+}
+
+export type CancelEvidenceReviewErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CancelEvidenceReviewError = CancelEvidenceReviewErrors[keyof CancelEvidenceReviewErrors]
+
+export type CancelEvidenceReviewResponses = {
+  /**
+   * Successful Response
+   */
+  204: void
+}
+
+export type CancelEvidenceReviewResponse =
+  CancelEvidenceReviewResponses[keyof CancelEvidenceReviewResponses]
+
 export type ReadEvidenceReviewsData = {
   body?: never
   path: {
@@ -9072,6 +9699,478 @@ export type SetPointStatusResponses = {
 
 export type SetPointStatusResponse = SetPointStatusResponses[keyof SetPointStatusResponses]
 
+export type ClaimEvidenceDeletionData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  headers: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID': string
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/retention/evidence-deletion-claims'
+}
+
+export type ClaimEvidenceDeletionErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ClaimEvidenceDeletionError =
+  ClaimEvidenceDeletionErrors[keyof ClaimEvidenceDeletionErrors]
+
+export type ClaimEvidenceDeletionResponses = {
+  /**
+   * Successful Response
+   */
+  200: unknown
+}
+
+export type ReportEvidenceDeletionResultData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  headers: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID': string
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/retention/evidence-deletion-claims/result'
+}
+
+export type ReportEvidenceDeletionResultErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReportEvidenceDeletionResultError =
+  ReportEvidenceDeletionResultErrors[keyof ReportEvidenceDeletionResultErrors]
+
+export type ReportEvidenceDeletionResultResponses = {
+  /**
+   * Successful Response
+   */
+  200: unknown
+}
+
+export type VerifyEvidenceDeletionData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  headers: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID': string
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/retention/evidence-deletion-claims/verify'
+}
+
+export type VerifyEvidenceDeletionErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type VerifyEvidenceDeletionError =
+  VerifyEvidenceDeletionErrors[keyof VerifyEvidenceDeletionErrors]
+
+export type VerifyEvidenceDeletionResponses = {
+  /**
+   * Successful Response
+   */
+  200: unknown
+}
+
+export type ReadRetentionPolicyData = {
+  body?: never
+  path?: never
+  query?: never
+  url: '/api/v1/retention/policy'
+}
+
+export type ReadRetentionPolicyErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadRetentionPolicyError = ReadRetentionPolicyErrors[keyof ReadRetentionPolicyErrors]
+
+export type ReadRetentionPolicyResponses = {
+  /**
+   * Successful Response
+   */
+  200: GlobalRetentionPolicyView
+}
+
+export type ReadRetentionPolicyResponse =
+  ReadRetentionPolicyResponses[keyof ReadRetentionPolicyResponses]
+
+export type UpdateRetentionPolicyData = {
+  body: GlobalRetentionPolicyUpdate
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+    /**
+     * X-Retention-Estimate
+     */
+    'X-Retention-Estimate'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/retention/policy'
+}
+
+export type UpdateRetentionPolicyErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Station not found
+   */
+  404: ProblemDocument
+  /**
+   * Retention policy conflict, stale estimate or incomplete estimate
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type UpdateRetentionPolicyError =
+  UpdateRetentionPolicyErrors[keyof UpdateRetentionPolicyErrors]
+
+export type UpdateRetentionPolicyResponses = {
+  /**
+   * Successful Response
+   */
+  200: GlobalRetentionPolicyView
+}
+
+export type UpdateRetentionPolicyResponse =
+  UpdateRetentionPolicyResponses[keyof UpdateRetentionPolicyResponses]
+
+export type EstimateRetentionPolicyImpactData = {
+  body: GlobalRetentionPolicyUpdate
+  path?: never
+  query?: never
+  url: '/api/v1/retention/policy/impact-estimate'
+}
+
+export type EstimateRetentionPolicyImpactErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Station not found
+   */
+  404: ProblemDocument
+  /**
+   * Retention policy group is invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type EstimateRetentionPolicyImpactError =
+  EstimateRetentionPolicyImpactErrors[keyof EstimateRetentionPolicyImpactErrors]
+
+export type EstimateRetentionPolicyImpactResponses = {
+  /**
+   * Successful Response
+   */
+  200: RetentionImpactEstimateView
+}
+
+export type EstimateRetentionPolicyImpactResponse =
+  EstimateRetentionPolicyImpactResponses[keyof EstimateRetentionPolicyImpactResponses]
+
+export type CheckRetentionReportedImpactAccessData = {
+  body: ImpactAccessRequest
+  path?: never
+  query?: never
+  url: '/api/v1/retention/reported-impact/access-check'
+}
+
+export type CheckRetentionReportedImpactAccessErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CheckRetentionReportedImpactAccessError =
+  CheckRetentionReportedImpactAccessErrors[keyof CheckRetentionReportedImpactAccessErrors]
+
+export type CheckRetentionReportedImpactAccessResponses = {
+  /**
+   * Successful Response
+   */
+  200: unknown
+}
+
+export type ReadStationRetentionData = {
+  body?: never
+  path: {
+    /**
+     * Station Id
+     */
+    station_id: string
+  }
+  query?: never
+  url: '/api/v1/retention/stations/{station_id}'
+}
+
+export type ReadStationRetentionErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Station not found
+   */
+  404: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadStationRetentionError = ReadStationRetentionErrors[keyof ReadStationRetentionErrors]
+
+export type ReadStationRetentionResponses = {
+  /**
+   * Successful Response
+   */
+  200: StationRetentionView
+}
+
+export type ReadStationRetentionResponse =
+  ReadStationRetentionResponses[keyof ReadStationRetentionResponses]
+
+export type UpdateStationRetentionData = {
+  body: StationRetentionUpdate
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+    /**
+     * X-Retention-Estimate
+     */
+    'X-Retention-Estimate'?: string | null
+  }
+  path: {
+    /**
+     * Station Id
+     */
+    station_id: string
+  }
+  query?: never
+  url: '/api/v1/retention/stations/{station_id}'
+}
+
+export type UpdateStationRetentionErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Station not found
+   */
+  404: ProblemDocument
+  /**
+   * Retention policy conflict, stale estimate or incomplete estimate
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type UpdateStationRetentionError =
+  UpdateStationRetentionErrors[keyof UpdateStationRetentionErrors]
+
+export type UpdateStationRetentionResponses = {
+  /**
+   * Successful Response
+   */
+  200: StationRetentionView
+}
+
+export type UpdateStationRetentionResponse =
+  UpdateStationRetentionResponses[keyof UpdateStationRetentionResponses]
+
+export type EstimateStationRetentionImpactData = {
+  body: StationRetentionUpdate
+  path: {
+    /**
+     * Station Id
+     */
+    station_id: string
+  }
+  query?: never
+  url: '/api/v1/retention/stations/{station_id}/impact-estimate'
+}
+
+export type EstimateStationRetentionImpactErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Station not found
+   */
+  404: ProblemDocument
+  /**
+   * Retention policy group is invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type EstimateStationRetentionImpactError =
+  EstimateStationRetentionImpactErrors[keyof EstimateStationRetentionImpactErrors]
+
+export type EstimateStationRetentionImpactResponses = {
+  /**
+   * Successful Response
+   */
+  200: RetentionImpactEstimateView
+}
+
+export type EstimateStationRetentionImpactResponse =
+  EstimateStationRetentionImpactResponses[keyof EstimateStationRetentionImpactResponses]
+
 export type ListStationsData = {
   body?: never
   path?: never
@@ -10754,6 +11853,253 @@ export type DownloadDatasetArtifactResponses = {
 
 export type DownloadDatasetArtifactResponse =
   DownloadDatasetArtifactResponses[keyof DownloadDatasetArtifactResponses]
+
+export type ListDdmTrainingCommandsData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands'
+}
+
+export type ListDdmTrainingCommandsErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ListDdmTrainingCommandsError =
+  ListDdmTrainingCommandsErrors[keyof ListDdmTrainingCommandsErrors]
+
+export type ListDdmTrainingCommandsResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageDdmTrainingCommandView
+}
+
+export type ListDdmTrainingCommandsResponse =
+  ListDdmTrainingCommandsResponses[keyof ListDdmTrainingCommandsResponses]
+
+export type RequestDdmTrainingCommandData = {
+  body: RequestDdmTrainingCommandInput
+  headers: {
+    /**
+     * Idempotency-Key
+     */
+    'Idempotency-Key': string
+  }
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands'
+}
+
+export type RequestDdmTrainingCommandErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type RequestDdmTrainingCommandError =
+  RequestDdmTrainingCommandErrors[keyof RequestDdmTrainingCommandErrors]
+
+export type RequestDdmTrainingCommandResponses = {
+  /**
+   * Successful Response
+   */
+  202: DdmTrainingCommandAcceptedView
+}
+
+export type RequestDdmTrainingCommandResponse =
+  RequestDdmTrainingCommandResponses[keyof RequestDdmTrainingCommandResponses]
+
+export type ReadDdmTrainingCommandData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands/{command_id}'
+}
+
+export type ReadDdmTrainingCommandErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ReadDdmTrainingCommandError =
+  ReadDdmTrainingCommandErrors[keyof ReadDdmTrainingCommandErrors]
+
+export type ReadDdmTrainingCommandResponses = {
+  /**
+   * Successful Response
+   */
+  200: DdmTrainingCommandView
+}
+
+export type ReadDdmTrainingCommandResponse =
+  ReadDdmTrainingCommandResponses[keyof ReadDdmTrainingCommandResponses]
+
+export type ReadDdmTrainingResultData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands/{command_id}/result'
+}
+
+export type ReadDdmTrainingResultErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ReadDdmTrainingResultError =
+  ReadDdmTrainingResultErrors[keyof ReadDdmTrainingResultErrors]
+
+export type ReadDdmTrainingResultResponses = {
+  /**
+   * Successful Response
+   */
+  200: DdmTrainingResultView
+}
+
+export type ReadDdmTrainingResultResponse =
+  ReadDdmTrainingResultResponses[keyof ReadDdmTrainingResultResponses]
 
 export type ListDatasetMembersData = {
   body?: never

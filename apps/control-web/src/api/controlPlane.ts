@@ -9,6 +9,7 @@
 import { client } from '@/api/generated/client.gen'
 import {
   bindTemplateVersion as generatedBindTemplateVersion,
+  cancelDdmTrainingCommand as generatedCancelDdmTrainingCommand,
   createAnnotationContext as generatedCreateAnnotationContext,
   downloadDatasetArtifact as generatedDownloadDatasetArtifact,
   createConnector as generatedCreateConnector,
@@ -39,11 +40,14 @@ import {
   endSession as generatedEndSession,
   confirmVideoUpload as generatedConfirmVideoUpload,
   enqueueConnectorConnectionTest as generatedEnqueueConnectorConnectionTest,
+  estimateRetentionPolicyImpact as generatedEstimateRetentionPolicyImpact,
+  estimateStationRetentionImpact as generatedEstimateStationRetentionImpact,
   importTemplateDraft as generatedImportTemplateDraft,
   listAnnotations as generatedListAnnotations,
   listDatasetActionListVersions as generatedListDatasetActionListVersions,
   listDatasetArtifacts as generatedListDatasetArtifacts,
   listDatasetUsageChecks as generatedListDatasetUsageChecks,
+  listDdmTrainingCommands as generatedListDdmTrainingCommands,
   listVlmCandidates as generatedListVlmCandidates,
   listConnectors as generatedListConnectors,
   listDatasetMembers as generatedListDatasetMembers,
@@ -52,6 +56,8 @@ import {
   readEvidence as generatedReadEvidence,
   readEvidenceReviews as generatedReadEvidenceReviews,
   registerEvidenceReview as generatedRegisterEvidenceReview,
+  beginEvidenceReview as generatedBeginEvidenceReview,
+  cancelEvidenceReview as generatedCancelEvidenceReview,
   createEvidenceReclipRequest as generatedCreateEvidenceReclipRequest,
   readEvidenceReclipRequests as generatedReadEvidenceReclipRequests,
   createEvidenceAccessContext as generatedCreateEvidenceAccessContext,
@@ -74,10 +80,14 @@ import {
   readJob as generatedReadJob,
   readPoint as generatedReadPoint,
   readSession as generatedReadSession,
+  readRetentionPolicy as generatedReadRetentionPolicy,
+  readStationRetention as generatedReadStationRetention,
   readStationTemplateConfiguration as generatedReadStationTemplateConfiguration,
   readTrainingDataset as generatedReadTrainingDataset,
   readDatasetArtifact as generatedReadDatasetArtifact,
   readDatasetUsageCheck as generatedReadDatasetUsageCheck,
+  readDdmTrainingCommand as generatedReadDdmTrainingCommand,
+  readDdmTrainingResult as generatedReadDdmTrainingResult,
   readTemplateDraft as generatedReadTemplateDraft,
   readVlmCandidate as generatedReadVlmCandidate,
   readTemplateImport as generatedReadTemplateImport,
@@ -96,6 +106,8 @@ import {
   setUserStatus as generatedSetUserStatus,
   submitAnnotation as generatedSubmitAnnotation,
   updateConnectorCapability as generatedUpdateConnectorCapability,
+  updateRetentionPolicy as generatedUpdateRetentionPolicy,
+  updateStationRetention as generatedUpdateStationRetention,
   updateStationRuntimeParameters as generatedUpdateStationRuntimeParameters,
   validatePointBinding as generatedValidatePointBinding,
   validateTemplateBinding as generatedValidateTemplateBinding,
@@ -134,6 +146,8 @@ import {
   type CreateUserData,
   type DatasetMemberView,
   type DatasetView,
+  type DdmTrainingCommandView,
+  type DdmTrainingResultView,
   type DeviceStatus,
   type DownloadTemplateImportResponse,
   type EvidenceAccessContext,
@@ -141,6 +155,9 @@ import {
   type EvidenceReclipBody,
   type EvidenceReclipRecord,
   type EvidenceReviewBody,
+  type EvidenceReviewCancelBody,
+  type EvidenceReviewHoldBody,
+  type EvidenceReviewHoldRecord,
   type EvidenceReviewRecord,
   type DownloadTemplateVersionArtifactResponse,
   type EditRoleData,
@@ -151,6 +168,7 @@ import {
   type ItemPageConnectorView,
   type ItemPageDatasetMemberView,
   type ItemPageDatasetView,
+  type ItemPageDdmTrainingCommandView,
   type ItemPageInferenceHostView,
   type ItemPagePointView,
   type ItemPageUsageCheckView,
@@ -191,6 +209,13 @@ import {
   type UploadInstructionsView,
   type UploadRequestView,
   type UsageCheckAcceptedView,
+  type GlobalRetentionPolicyView,
+  type RetentionImpactEstimateView,
+  type RetentionPolicyMode,
+  type RetentionPolicyView,
+  type RetentionRuleView,
+  type StationRetentionUpdate,
+  type StationRetentionView,
   type UsageCheckInput,
   type UsageCheckView,
   type VlmCandidateView,
@@ -226,6 +251,8 @@ export type {
   DatasetView,
   DeviceStatus,
   DownloadTemplateVersionArtifactResponse,
+  DdmTrainingCommandView,
+  DdmTrainingResultView,
   EvidenceReviewRecord,
   ReviewConclusion,
   HandoverConfirmationInput,
@@ -237,16 +264,26 @@ export type {
   ItemPageConnectorView,
   ItemPageDatasetMemberView,
   ItemPageDatasetView,
+  ItemPageDdmTrainingCommandView,
   ItemPageInferenceHostView,
   ItemPagePointView,
   ItemPageStationView,
   PendingCommandView,
   PointConfiguration,
   PointView,
+  GlobalRetentionPolicyUpdate,
+  GlobalRetentionPolicyView,
   RegisterVlmCandidateInput,
+  RetentionMode,
+  RetentionImpactEstimateView,
+  RetentionPolicyMode,
+  RetentionPolicyView,
+  RetentionRuleView,
   RetryMode,
   RetryView,
   RoleView,
+  StationRetentionUpdate,
+  StationRetentionView,
   RuntimeParameterMode,
   RuntimeParametersInput,
   RuntimeParametersUpdateInput,
@@ -467,6 +504,8 @@ export function createEvidenceAccessContext(evidenceId: string): Promise<Evidenc
 
 /** 一条人工复核结论；只追加，不改写机器判定、证据或他人记录。 */
 export type EvidenceReview = EvidenceReviewRecord
+/** 在审复核占用；进入即保护，只有提交结论或本人取消才释放。 */
+export type EvidenceReviewHold = EvidenceReviewHoldRecord
 
 /** 读取该证据的全部复核结论；查询复用查看权限，不隐含编辑。 */
 export function readEvidenceReviews(evidenceId: string): Promise<EvidenceReview[]> {
@@ -480,6 +519,26 @@ export function registerEvidenceReview(
 ): Promise<EvidenceReview> {
   return execute(
     generatedRegisterEvidenceReview({ path: { evidence_id: evidenceId }, body: submitted }),
+  )
+}
+
+/** 进入在审保护：登记本人在该证据上的持久占用；未退出前删除认领被拒。 */
+export function beginEvidenceReview(
+  evidenceId: string,
+  submitted: EvidenceReviewHoldBody,
+): Promise<EvidenceReviewHold> {
+  return execute(
+    generatedBeginEvidenceReview({ path: { evidence_id: evidenceId }, body: submitted }),
+  )
+}
+
+/** 退出在审保护：只结束本人占用；已结束或非本人占用由服务器按冲突拒绝。 */
+export function cancelEvidenceReview(
+  evidenceId: string,
+  submitted: EvidenceReviewCancelBody,
+): Promise<void> {
+  return execute(
+    generatedCancelEvidenceReview({ path: { evidence_id: evidenceId }, body: submitted }),
   )
 }
 
@@ -936,6 +995,59 @@ export function readDatasetArtifact(
   )
 }
 
+export type DdmTrainingCommand = DdmTrainingCommandView
+export type DdmTrainingResult = DdmTrainingResultView
+
+/** 按数据集读取持久 DDM 训练命令；重开页面恢复原命令，不依赖页面内缓存，也不启动训练。 */
+export function listDdmTrainingCommands(
+  datasetId: string,
+  page = 1,
+  pageSize = 50,
+): Promise<ItemPageDdmTrainingCommandView> {
+  return execute(
+    generatedListDdmTrainingCommands({
+      path: { dataset_id: datasetId },
+      query: { page, page_size: pageSize },
+    }),
+  )
+}
+
+/** 取消一条尚未派发的 DDM 训练命令。仅取消 pending 状态的本地命令，已派发返回 409 冲突。 */
+export function cancelDdmTrainingCommand(
+  datasetId: string,
+  commandId: string,
+): Promise<DdmTrainingCommand> {
+  return execute(
+    generatedCancelDdmTrainingCommand({
+      path: { dataset_id: datasetId, command_id: commandId },
+    }),
+  )
+}
+
+/** 读取一条命令的应用接受/基座原状态/结果登记事实；未知状态按原值返回，不映射为完成。 */
+export function readDdmTrainingCommand(
+  datasetId: string,
+  commandId: string,
+): Promise<DdmTrainingCommand> {
+  return execute(
+    generatedReadDdmTrainingCommand({
+      path: { dataset_id: datasetId, command_id: commandId },
+    }),
+  )
+}
+
+/** 读取结果登记事实与已授权数据通道地址；结果字节不经控制面中转。 */
+export function readDdmTrainingResult(
+  datasetId: string,
+  commandId: string,
+): Promise<DdmTrainingResult> {
+  return execute(
+    generatedReadDdmTrainingResult({
+      path: { dataset_id: datasetId, command_id: commandId },
+    }),
+  )
+}
+
 export function downloadDatasetArtifact(datasetId: string, artifactId: string): Promise<Blob> {
   return execute(
     generatedDownloadDatasetArtifact({
@@ -1344,4 +1456,71 @@ export function editRole(roleId: string, submitted: EditRoleData['body']): Promi
 
 export function deleteRole(roleId: string): Promise<void> {
   return execute(generatedDeleteRole({ path: { role_id: roleId } }))
+}
+
+// ——— 保留策略：全局默认与工位整组覆盖都走生成客户端。 ———
+
+export type RetentionRuleInput = RetentionRuleView
+export type RetentionPolicyInput = RetentionPolicyView
+export type RetentionPolicyModeInput = RetentionPolicyMode
+export type GlobalRetentionPolicy = GlobalRetentionPolicyView
+export type StationRetention = StationRetentionView
+export type StationRetentionInput = StationRetentionUpdate
+export type RetentionImpact = RetentionImpactEstimateView
+
+/** 读取全局默认保留组；尚未持久化时中心返回代码默认值与 revision 0。 */
+export function readRetentionPolicy(): Promise<GlobalRetentionPolicyView> {
+  return execute(generatedReadRetentionPolicy())
+}
+
+/** 按 owner 接口估算整组替换全局默认组会新暴露多少对象/空间与引用保护跳过；只读。 */
+export function estimateRetentionPolicyImpact(
+  policy: RetentionPolicyView,
+): Promise<RetentionImpactEstimateView> {
+  return execute(generatedEstimateRetentionPolicyImpact({ body: { policy } }))
+}
+
+/** 整组替换全局默认保留组；必须带回影响估算令牌，If-Match 冲突时后端返回 409。 */
+export function updateRetentionPolicy(
+  policy: RetentionPolicyView,
+  revision: number,
+  estimateToken: string,
+): Promise<GlobalRetentionPolicyView> {
+  return execute(
+    generatedUpdateRetentionPolicy({
+      headers: { 'If-Match': revision, 'X-Retention-Estimate': estimateToken },
+      body: { policy },
+    }),
+  )
+}
+
+/** 读取某工位的默认组、覆盖组与唯一生效组。 */
+export function readStationRetention(stationId: string): Promise<StationRetentionView> {
+  return execute(generatedReadStationRetention({ path: { station_id: stationId } }))
+}
+
+/** 估算整组替换该工位覆盖会新暴露多少本工位对象/空间与引用保护跳过；只读。 */
+export function estimateStationRetentionImpact(
+  stationId: string,
+  submitted: StationRetentionUpdate,
+): Promise<RetentionImpactEstimateView> {
+  return execute(
+    generatedEstimateStationRetentionImpact({ path: { station_id: stationId }, body: submitted }),
+  )
+}
+
+/** 整组替换工位保留覆盖；必须带回影响估算令牌，If-Match 是覆盖记录版本（0 表示首次建立）。 */
+export function updateStationRetention(
+  stationId: string,
+  submitted: StationRetentionUpdate,
+  revision: number,
+  estimateToken: string,
+): Promise<StationRetentionView> {
+  return execute(
+    generatedUpdateStationRetention({
+      path: { station_id: stationId },
+      headers: { 'If-Match': revision, 'X-Retention-Estimate': estimateToken },
+      body: submitted,
+    }),
+  )
 }

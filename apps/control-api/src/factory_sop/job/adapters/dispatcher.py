@@ -32,9 +32,11 @@ class ArqJobDispatcher:
         settings: RedisSettings,
         *,
         session_factory: sessionmaker[Session] | None = None,
+        ddm_training_configured: bool = False,
     ) -> None:
         self._settings = settings
         self._session_factory = session_factory
+        self._ddm_training_configured = ddm_training_configured
 
     @classmethod
     def from_settings(
@@ -61,7 +63,16 @@ class ArqJobDispatcher:
                 ssl=connection.ssl,
             ),
             session_factory=session_factory,
+            ddm_training_configured=(
+                settings.ddm_training_backend_url is not None
+                and settings.ddm_training_config_path is not None
+            ),
         )
+
+    @property
+    def ddm_training_configured(self) -> bool:
+        """训练配置有明确部署绑定时，扫描器才放行该类型（不在启动时读取文件）。"""
+        return self._ddm_training_configured
 
     @property
     def redis_settings(self) -> RedisSettings:
@@ -128,9 +139,11 @@ class ArqJobDispatcher:
         if job is None:
             raise ValueError(f"任务不存在：{job_id}")
         if job.job_type is JobType.DATASET_DDM_TRAINING:
-            # S073/S074 安全派发与结果登记就绪前，DDM 训练命令只保留 outbox 事实，
-            # 不注册、不投递可实际 start 的函数；命令仍为 pending 可被现有扫描器接管。
-            return None
+            # 未配置 DDM 基座时命令只保留 outbox 事实（held），不注册、不投递可 start 的
+            # 函数；配置后才在既有 ARQ 进程内执行查询/登记，不新增进程。
+            if not self._ddm_training_configured:
+                return None
+            return "dispatch_ddm_training_job", job.updated_at
         if job.job_type is JobType.DATASET_ANNOTATION_PREPARATION:
             return "prepare_annotation_context_job", job.updated_at
         if job.job_type is JobType.DATASET_ANNOTATION:

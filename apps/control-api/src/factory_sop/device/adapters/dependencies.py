@@ -7,7 +7,9 @@ use-case-layer decision, not a route dependency (§5.15).
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Annotated, cast
+
+from fastapi import Depends
 
 from factory_sop.device.adapters.command_repository import PostgresPendingCommandRepository
 from factory_sop.device.adapters.probe import UrllibConnectionProbe
@@ -39,8 +41,17 @@ from factory_sop.device.repository import (
 )
 from factory_sop.device.usecases.commands import RepositoryDeviceEvidenceGateway
 from factory_sop.device.usecases.configuration import RepositoryDeviceConfigurationGateway
+from factory_sop.device.usecases.retention import (
+    RepositoryDeviceRetentionSources,
+    RepositoryDeviceStationFacts,
+)
 from factory_sop.device.usecases.template_binding import RepositoryDeviceTemplateBindingGateway
 from factory_sop.persistence import RequestSession
+from factory_sop.retention.api import (
+    DeletionAuthorityFence,
+    EdgeImpactSourcesGateway,
+    StationFactsGateway,
+)
 
 
 def hosts(session: RequestSession) -> InferenceHostRepository:
@@ -107,7 +118,25 @@ def template_binding(session: RequestSession) -> DeviceTemplateBindingGateway:
     )
 
 
-def configuration_gateway(session: RequestSession) -> DeviceConfigurationGateway:
+def station_retention_facts(session: RequestSession) -> StationFactsGateway:
+    """retention 模块使用的工位存在/启用 seam；只读，不触碰保留记录。"""
+    return RepositoryDeviceStationFacts(stations=PostgresStationRepository(session))
+
+
+def retention_sources(session: RequestSession) -> EdgeImpactSourcesGateway:
+    """retention 只读统计的来源配置事实,保留历史来源机。"""
+    return RepositoryDeviceRetentionSources(hosts=PostgresInferenceHostRepository(session))
+
+
+def deletion_authority_fence() -> DeletionAuthorityFence:
+    """由组合根注入 `evidence` 拥有的删除认领权威锁；设备变更与删前授权共用同一把锁。"""
+    raise RuntimeError("device deletion authority fence dependency was not wired")
+
+
+def configuration_gateway(
+    session: RequestSession,
+    fence: Annotated[DeletionAuthorityFence, Depends(deletion_authority_fence)],
+) -> DeviceConfigurationGateway:
     """机器配置 transport 使用的 device owner seam。"""
     return RepositoryDeviceConfigurationGateway(
         hosts=PostgresInferenceHostRepository(session),
@@ -116,6 +145,7 @@ def configuration_gateway(session: RequestSession) -> DeviceConfigurationGateway
         cameras=PostgresCameraRepository(session),
         connectors=PostgresConnectorRepository(session),
         points=PostgresPointRepository(session),
+        fence=fence,
     )
 
 

@@ -66,6 +66,7 @@ const navigation: NavigationItem[] = [
       'device.station.edit',
       'monitor.report.view',
       'execution.handover.edit',
+      'retention.policy.view',
     ],
   },
   {

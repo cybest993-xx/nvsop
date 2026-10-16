@@ -24,6 +24,7 @@ directly, so the one permitted cross-owner import target stays `auth.api`.
 
 `CurrentSessionFingerprint` 供 evidence HTTP 适配器绑定上下文；指纹不是登录凭据。
 `SessionFingerprintRecheck` 供该适配器逐次复核当前会话与权限，不续期。
+`SessionRefresh` 供 retention 外部统计等待后在原请求 Session 重新验证、续期，不提交事务。
 """
 
 from factory_sop.auth.adapters.dependencies import (
@@ -31,6 +32,7 @@ from factory_sop.auth.adapters.dependencies import (
     CurrentSessionFingerprint,
     SessionFingerprintRecheck,
     SessionRecheck,
+    SessionRefresh,
     handover_authority,
     needs,
     needs_any,
@@ -55,6 +57,7 @@ __all__ = [
     "Permission",
     "SessionFingerprintRecheck",
     "SessionRecheck",
+    "SessionRefresh",
     "authorize",
     "handover_authority",
     "needs",

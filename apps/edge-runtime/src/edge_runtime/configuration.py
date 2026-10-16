@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import ssl
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -30,6 +30,7 @@ from edge_runtime.connectors.hikvision import IsapiProfile
 from edge_runtime.connectors.port import PointState
 from edge_runtime.evidence_media import (
     EvidenceMediaConfiguration,
+    ensure_storage_separation,
     load_evidence_media_configuration,
 )
 from edge_runtime.media import MediaRuntimeConfiguration, load_media_runtime_configuration
@@ -37,6 +38,7 @@ from edge_runtime.station_runtime import (
     StationRuntimeConfiguration,
     station_configuration,
 )
+from edge_runtime.storage_health import DiskHealthConfiguration, load_disk_health_configuration
 
 _SUPPORTED_CONNECTOR_TYPES = frozenset({"hikvision_isapi"})
 
@@ -77,6 +79,7 @@ class EdgeRuntimeConfiguration:
     media: MediaRuntimeConfiguration | None = None
     evidence: EvidenceMediaConfiguration | None = None
     queue_capacity: QueueCapacity = DEFAULT_QUEUE_CAPACITY
+    disk_health: DiskHealthConfiguration = field(default_factory=DiskHealthConfiguration)
 
 
 _CONFIG_KEYS = frozenset(
@@ -125,7 +128,7 @@ def load_configuration(
     _require_keys(
         config,
         required=required,
-        optional={"center_ca_file", "media", "evidence", "queue_capacity"},
+        optional={"center_ca_file", "media", "evidence", "queue_capacity", "disk_health"},
     )
     connectors_value = _array(config["connectors"], "connectors")
     connectors = tuple(_local_connector(item) for item in connectors_value)
@@ -151,6 +154,14 @@ def load_configuration(
     )
     if evidence is not None and media is None:
         raise ValueError("evidence media configuration requires the local media configuration")
+    if media is not None:
+        # 单一目录安全 owner 校验: 在启动任何媒体写入者之前拒绝录像/证据/SQLite 重叠与别名。
+        # evidence 可省略(仅媒体配置), 但录像目录不得包含权威 SQLite 的边界仍然成立。
+        ensure_storage_separation(
+            recording_directory=media.recording_directory,
+            evidence_directory=None if evidence is None else evidence.evidence_directory,
+            local_state_path=local_state_path,
+        )
     limits = (
         DEFAULT_QUEUE_CAPACITY
         if "queue_capacity" not in config
@@ -173,6 +184,7 @@ def load_configuration(
         media=media,
         evidence=evidence,
         queue_capacity=limits,
+        disk_health=load_disk_health_configuration(config.get("disk_health")),
     )
 
 

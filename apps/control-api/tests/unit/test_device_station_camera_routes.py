@@ -105,6 +105,16 @@ class RefusingInferenceHosts(FakeInferenceHosts):
         raise DeviceRefusedError(self.refusal)
 
 
+class _NoopDeletionAuthorityFence:
+    """该路由测试不建立真实删除认领；权威锁与检查是无操作。"""
+
+    def lock_authority(self) -> None:
+        return None
+
+    def ensure_mutable(self) -> None:
+        return None
+
+
 class Center:
     """已登录的应用；每个仓储都在其公开接口处被替换。"""
 
@@ -130,6 +140,9 @@ class Center:
         self.app.dependency_overrides[device_dependencies.cameras] = lambda: self.cameras
         self.app.dependency_overrides[device_dependencies.connectors] = lambda: self.connectors
         self.app.dependency_overrides[device_dependencies.points] = lambda: self.points
+        self.app.dependency_overrides[device_dependencies.deletion_authority_fence] = lambda: (
+            _NoopDeletionAuthorityFence()
+        )
         self.client = TestClient(self.app, base_url="https://testserver")
         self.users.register(login_name=CREDENTIALS["login_name"], password=CREDENTIALS["password"])
         assert self.client.post(f"{API_PREFIX}/auth/session", json=CREDENTIALS).status_code == 201
@@ -270,6 +283,7 @@ def test_camera_media_query_and_host_export_are_non_secret_and_direct(
         "host_name": "推理机-1",
         "host_revision": 1,
         "host_status": "active",
+        "disk_watermark_percent": center.hosts.rows[UUID(host_id)].disk_watermark_percent,
         "mediamtx_address": "https://media.example.test:8889",
         "mediamtx_playback_address": "https://media.example.test:9996",
         "recording_window_seconds": 604800,

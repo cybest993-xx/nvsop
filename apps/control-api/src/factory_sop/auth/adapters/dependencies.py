@@ -222,3 +222,22 @@ def fingerprint_recheck(request: Request) -> Callable[[str], Caller | None]:
 
 CurrentSessionFingerprint = Annotated[str, Depends(current_session_fingerprint)]
 SessionFingerprintRecheck = Annotated[Callable[[str], Caller | None], Depends(fingerprint_recheck)]
+
+
+def session_refresh(
+    request: Request,
+    users: Annotated[UserRepository, Depends(users)],
+    sessions: Annotated[SessionRepository, Depends(sessions)],
+    roles: Annotated[RoleRepository, Depends(roles)],
+    policy: Annotated[SessionPolicy, Depends(session_policy)],
+) -> Callable[[], Caller]:
+    """外部 I/O 释放请求连接后，在原请求 Session 重新验证并续期，不提交事务。"""
+
+    def refresh() -> Caller:
+        restored = authenticated_caller(request, users, sessions, policy)
+        return authorized_caller(restored, roles.permissions_of(restored.user.id))
+
+    return refresh
+
+
+SessionRefresh = Annotated[Callable[[], Caller], Depends(session_refresh)]

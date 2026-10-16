@@ -120,6 +120,7 @@ class HostMediaConfigurationView(BaseModel):
     mediamtx_address: str | None
     mediamtx_playback_address: str | None
     recording_window_seconds: int
+    disk_watermark_percent: int | None = None
     cameras: list[ExportCameraMediaView]
 
 
@@ -239,6 +240,7 @@ def export_a_host_media_configuration(
         mediamtx_address=exported.host.mediamtx_address,
         mediamtx_playback_address=exported.host.mediamtx_playback_address,
         recording_window_seconds=exported.host.recording_window_seconds,
+        disk_watermark_percent=exported.host.disk_watermark_percent,
         cameras=[export_camera_media_view(item) for item in exported.cameras],
     )
 

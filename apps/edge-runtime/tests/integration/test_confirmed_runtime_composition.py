@@ -7,6 +7,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from random import Random
+from time import time
 from unittest.mock import patch
 
 from nvsop_contracts import (
@@ -26,6 +27,9 @@ from nvsop_contracts import (
 # The real loopback ISAPI fixture is shared with test_output_safety.py, so the composed adapter is
 # exercised over real HTTP rather than a mocked concrete write.
 from test_output_safety import TRIGGER_PATH, IsapiLoopbackServer
+
+# 合成录像分段夹具与压缩测试共用同一 recipe, 不在本文件再造第四份。
+from test_recording_compression import segments as recording_segments
 
 from edge_runtime.configuration_sync import ConfigurationPullError
 from edge_runtime.connectors.hikvision import CANDIDATE_PROFILE
@@ -467,6 +471,67 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
             finally:
                 restarted.close()
 
+    def test_recording_compression_worker_follows_local_media_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            identity = _fixture_host_identity(51)
+            private_key_file = directory / "host-private-key"
+            private_key_file.write_text(identity.private_key, encoding="utf-8")
+            camera = directory / "recordings" / "camera-a"
+            camera.mkdir(parents=True)
+            recording_segments(camera, time() - 3 * 3600, 1)
+            source = next(camera.glob("*.mp4"))
+
+            enabled = _local_config(directory, private_key_file)
+            enabled["media"] = _local_media(directory, enabled=True)
+            enabled["evidence"] = {
+                "evidence_directory": str(directory / "evidence"),
+                "ffprobe_binary": "/usr/bin/ffprobe",
+                "slice_timeout_seconds": 30.0,
+            }
+            enabled_path = directory / "edge-enabled.json"
+            enabled_path.write_text(json.dumps(enabled), encoding="utf-8")
+            with patch(
+                "edge_runtime.runtime.HttpConfigurationPuller.pull",
+                side_effect=ConfigurationPullError("center_unreachable", "center unavailable"),
+            ):
+                runtime = build_autonomous_runtime_from_file(enabled_path)
+            try:
+                worker = runtime._compression
+                self.assertIsNotNone(worker)
+                assert worker is not None
+                # 生产装配的 worker 指向本机真实目录与二进制, 并真的产出候选。
+                summary = worker.drain()
+                self.assertEqual((summary.created, summary.failed), (1, 0))
+                self.assertTrue(source.with_suffix(".compressed.mp4").is_file())
+                # 本机配置的 CRF 必须真的进入候选留痕, 而不是回落到默认档。
+                document = json.loads(
+                    source.with_suffix(".compressed.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(30, document["crf"])
+            finally:
+                runtime.close()
+
+            disabled = _local_config(directory, private_key_file)
+            disabled["local_state_path"] = str(directory / "disabled.sqlite")
+            disabled["media"] = _local_media(directory, enabled=False)
+            disabled["evidence"] = {
+                "evidence_directory": str(directory / "evidence-disabled"),
+                "ffprobe_binary": "/usr/bin/ffprobe",
+                "slice_timeout_seconds": 30.0,
+            }
+            disabled_path = directory / "edge-disabled.json"
+            disabled_path.write_text(json.dumps(disabled), encoding="utf-8")
+            with patch(
+                "edge_runtime.runtime.HttpConfigurationPuller.pull",
+                side_effect=ConfigurationPullError("center_unreachable", "center unavailable"),
+            ):
+                off = build_autonomous_runtime_from_file(disabled_path)
+            try:
+                self.assertIsNone(off._compression)
+            finally:
+                off.close()
+
     def test_expired_execution_lease_refuses_the_physical_write(self) -> None:
         loopback = self._loopback()
         bundle = replace(
@@ -606,6 +671,34 @@ def _command_runtime(directory: Path) -> tuple[AutonomousRuntime, _PendingConfig
         runtime._configuration_resolver(candidate),
         3.0,
     )
+
+
+def _local_media(directory: Path, *, enabled: bool) -> dict[str, object]:
+    """本机媒体策略; 相机为空, 因此不依赖中心确认拓扑即可装配。"""
+    return {
+        "host_id": "host-a",
+        "host_status": "active",
+        "mediamtx_address": None,
+        "mediamtx_playback_address": None,
+        "recording_window_seconds": 3600,
+        "media_config_path": str(directory / "mediamtx.yml"),
+        "recording_directory": str(directory / "recordings"),
+        "mediamtx_binary": "/usr/local/bin/mediamtx",
+        "ffmpeg_binary": "/usr/bin/ffmpeg",
+        "rtsp_bind_address": ":8554",
+        "webrtc_bind_address": ":8889",
+        "webrtc_udp_bind_address": ":8189",
+        "playback_bind_address": ":9996",
+        "allow_origins": ["https://control.example.test"],
+        "record_segment_duration_seconds": 2,
+        "preview_release_delay_seconds": 5,
+        "startup_timeout_seconds": 2,
+        "transcode_threads": 2,
+        "recording_compression_age_seconds": 3600,
+        "recording_compression_enabled": enabled,
+        "recording_compression_crf": 30,
+        "cameras": [],
+    }
 
 
 def _local_config(

@@ -443,7 +443,35 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
 
     with database_at_0023.connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0063"
+        # 列上无残留 server_default：默认值只用于历史回填，不留给后续插入。
+        column_default = connection.execute(
+            text(
+                "SELECT column_default FROM information_schema.columns "
+                "WHERE table_name = 'evidence_evidence' AND column_name = 'review_state_known'"
+            )
+        ).scalar_one()
+    # #206/#207：引用保护与回收账本、聚合归档随 head 到位。
+    assert version == "0068"
+    assert {
+        "retention_sweep",
+        "monitor_record_archive",
+        "monitor_retention_cursor",
+    } <= _tables(database_at_0023)
+    for identity in (
+        "monitor_decision_identity",
+        "monitor_observation_identity",
+        "monitor_health_identity",
+    ):
+        assert {"retired_payload_sha256", "retention_archived"} <= _columns(
+            database_at_0023, identity
+        )
+    assert {
+        "evidence_review_session",
+        "evidence_deletion_claim",
+        "evidence_playback_lease",
+    } <= _tables(database_at_0023)
+    assert {"review_state_known"} <= _columns(database_at_0023, "evidence_evidence")
+    assert column_default is None
     assert {
         "backend_target",
         "base_job_id",
@@ -454,6 +482,20 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
         "failure_detail",
         "cancelled_by",
         "cancelled_at",
+        "last_observed_at",
+        "observation_failure_code",
+        "observation_failure_detail",
+        "result_status",
+        "result_generation",
+        "result_config_object_key",
+        "result_config_sha256",
+        "result_config_size",
+        "result_checkpoint_object_key",
+        "result_checkpoint_sha256",
+        "result_checkpoint_size",
+        "result_failure_code",
+        "result_failure_detail",
+        "result_registered_at",
     } <= _columns(database_at_0023, "dataset_ddm_training_command")
     with database_at_0023.connect() as connection:
         inflight_index = connection.execute(
@@ -481,6 +523,16 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
     assert "dataset.dataset.edit" in _permission_codes(database_at_0023)
 
     command.downgrade(configuration, "0025")
+    # 0065-0067 的回滚须移除引用保护、回收账本与聚合归档。
+    assert not {
+        "evidence_review_session",
+        "evidence_deletion_claim",
+        "evidence_playback_lease",
+        "retention_sweep",
+        "monitor_record_archive",
+        "monitor_retention_cursor",
+    } & _tables(database_at_0023)
+    assert "review_state_known" not in _columns(database_at_0023, "evidence_evidence")
     assert "dataset_ddm_training_command" not in _tables(database_at_0023)
     assert "evidence.evidence.view" not in _permission_codes(database_at_0023)
     assert "evidence.review.edit" not in _permission_codes(database_at_0023)
@@ -518,7 +570,7 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
 def test_ddm_dispatch_and_cancel_migrations_preserve_payload_and_inflight_index(
     database_at_0023: Engine,
 ) -> None:
-    """0061→0063 保留冻结输入、job 与派发历史；新增取消列为空且可独立降级。"""
+    """0061→0068 保留冻结输入、job 与派发历史；新增取消列为空且可独立降级。"""
     configuration = Config(str(CONTROL_API / "alembic.ini"))
     configuration.set_main_option("script_location", str(CONTROL_API / "migrations"))
     configuration.set_main_option(
@@ -614,6 +666,7 @@ def test_ddm_dispatch_and_cancel_migrations_preserve_payload_and_inflight_index(
             {"id": uuid4(), "dataset_id": dataset_id, "digest": "d" * 64, "actor": actor},
         )
 
+    command.upgrade(configuration, "0067")
     # 构造已绑定的历史事实，取消元数据升级不能重建或丢弃它。
     with database_at_0023.begin() as connection:
         connection.execute(
@@ -631,7 +684,7 @@ def test_ddm_dispatch_and_cancel_migrations_preserve_payload_and_inflight_index(
             .mappings()
             .all()
         )
-    command.upgrade(configuration, "0063")
+    command.upgrade(configuration, "0068")
     with database_at_0023.connect() as connection:
         upgraded = (
             connection.execute(text("SELECT * FROM dataset_ddm_training_command ORDER BY id"))
@@ -643,7 +696,7 @@ def test_ddm_dispatch_and_cancel_migrations_preserve_payload_and_inflight_index(
         assert new["cancelled_by"] is None
         assert new["cancelled_at"] is None
         assert {key: value for key, value in new.items() if key in old} == dict(old)
-    command.downgrade(configuration, "0062")
+    command.downgrade(configuration, "0067")
     assert "cancelled_by" not in _columns(database_at_0023, "dataset_ddm_training_command")
     assert "cancelled_at" not in _columns(database_at_0023, "dataset_ddm_training_command")
     with database_at_0023.connect() as connection:

@@ -10,6 +10,8 @@ const api = vi.hoisted(() => ({
   readEvidence: vi.fn(),
   createEvidenceAccessContext: vi.fn(),
   readEvidenceReviews: vi.fn(),
+  beginEvidenceReview: vi.fn(),
+  cancelEvidenceReview: vi.fn(),
   readEvidenceReclipRequests: vi.fn(),
   createEvidenceReclipRequest: vi.fn(),
 }))
@@ -98,6 +100,15 @@ beforeEach(() => {
   api.readEvidence.mockResolvedValue([LISTING])
   api.readEvidenceReclipRequests.mockResolvedValue([])
   api.readEvidenceReviews.mockResolvedValue([])
+  api.beginEvidenceReview.mockResolvedValue({
+    review_id: 'hold-1',
+    evidence_id: 'host-1/clip.mp4',
+    generation: 'original',
+    reviewer_id: 'viewer-1',
+    started_at: '2026-09-14T01:00:00Z',
+    ended_at: null,
+  })
+  api.cancelEvidenceReview.mockResolvedValue(undefined)
   api.createEvidenceAccessContext.mockResolvedValue({
     context: 'signed.ticket',
     origin: 'https://edge.internal:8765',
@@ -118,6 +129,8 @@ describe('证据回看', () => {
       { ...LISTING, evidence_id: 'host-2/clip.mp4', host_id: 'host-2' },
       { ...LISTING, evidence_id: 'host-1/upper.mp4', host_id: 'HOST-1' },
       { ...LISTING, evidence_id: 'host-1/pending.mp4', status: 'pending' as const },
+      { ...LISTING, evidence_id: 'host-1/deleted.mp4', status: 'deleted' as const },
+      { ...LISTING, evidence_id: 'host-1/failed.mp4', status: 'failed' as const },
     ])
     signIn()
     const wrapper = mountPlayer()
@@ -128,6 +141,8 @@ describe('证据回看', () => {
     expect(wrapper.findAll('button')).toHaveLength(2)
     expect(wrapper.text()).toContain('证据片段')
     expect(wrapper.text()).toContain('引用尚未对账，不可回看')
+    expect(wrapper.text()).toContain('引用已由来源推理机删除，不可回看')
+    expect(wrapper.text()).toContain('引用不可用，不可回看')
     expect(wrapper.text()).not.toContain('host-2')
   })
 

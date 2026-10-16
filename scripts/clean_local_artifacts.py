@@ -39,6 +39,7 @@ ENVIRONMENT_PATHS = (
     Path(".tmp/tools"),
     Path(".husky/_"),
     Path("--version/_"),
+    Path("apps/control-api/.mypy_cache"),
     Path("apps/control-api/.pytest_cache"),
     Path("apps/edge-runtime/.mypy_cache"),
     Path("apps/edge-runtime/.pytest_cache"),
@@ -77,7 +78,13 @@ def clean(root: Path = REPOSITORY_ROOT, *, purge: bool = False) -> list[Path]:
     removed: list[Path] = []
 
     paths = ARTIFACT_PATHS + ENVIRONMENT_PATHS if purge else ARTIFACT_PATHS
+    # .nvsop 自身是 symlink 时, 它下面的已声明名称可能是共享目标里的真实内容,
+    # 沿链接删除会吞掉不属于本仓库的状态; 跳过它们, 只保留自身 cache 子
+    # symlink 的 unlink 语义留给非链接根。
+    skip_nvsop_children = (root / ".nvsop").is_symlink()
     for relative in paths:
+        if skip_nvsop_children and relative.parts[0] == ".nvsop":
+            continue
         path = root / relative
         if (
             not purge
@@ -97,6 +104,13 @@ def clean(root: Path = REPOSITORY_ROOT, *, purge: bool = False) -> list[Path]:
 
     if not purge:
         return removed
+
+    # purge 后只剩空的自有 .nvsop 根时把它一并移除, 否则 task-cleanup 仍会
+    # 被这个空目录阻碍。未知残留、绑定/dev-main 状态或符号链接都保留不动。
+    nvsop = root / ".nvsop"
+    if nvsop.is_dir() and not nvsop.is_symlink() and not any(nvsop.iterdir()):
+        nvsop.rmdir()
+        removed.append(Path(".nvsop"))
 
     generated: list[Path] = []
     for relative in GENERATED_METADATA_ROOTS:

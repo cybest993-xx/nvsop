@@ -60,7 +60,11 @@ class OfflineQueueCapacityTests(unittest.TestCase):
                 )
                 self.assertEqual(original_violations, owner.latched_violations(instance_id=1))
 
-                owner.mark_reported(report.queue_id, at=HostInstant(ANCHOR + 2.0))
+                owner.mark_reported(
+                    report.queue_id,
+                    at=HostInstant(ANCHOR + 2.0),
+                    acknowledged_at="2026-10-14T00:00:00+00:00",
+                )
                 self.assertEqual(0, {x.name: x for x in database.queue_status()}["report"].depth)
                 ended = driver.terminate_instance()
                 self.assertEqual(1, len(ended.decisions))
@@ -194,8 +198,14 @@ class OfflineQueueCapacityTests(unittest.TestCase):
                 statuses["health"].last_failure,
             ),
         )
-        owner.mark_observation_reported(observation.queue_id, at=HostInstant(ANCHOR + 2))
-        owner.mark_health_reported(health.queue_id, at=HostInstant(ANCHOR + 2))
+        owner.mark_observation_reported(
+            observation.queue_id,
+            at=HostInstant(ANCHOR + 2),
+            acknowledged_at="2026-10-14T00:00:00+00:00",
+        )
+        owner.mark_health_reported(
+            health.queue_id, at=HostInstant(ANCHOR + 2), acknowledged_at="2026-10-14T00:00:00+00:00"
+        )
         self.assertEqual(
             (0, 0),
             tuple(

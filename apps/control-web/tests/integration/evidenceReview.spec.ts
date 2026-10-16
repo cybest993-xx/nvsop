@@ -2,7 +2,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
-import { ControlPlaneError, type EvidenceReview } from '@/api/controlPlane'
+import { ControlPlaneError, type EvidenceReview, type EvidenceReviewHold } from '@/api/controlPlane'
 import EvidencePlayer from '@/modules/devices/EvidencePlayer.vue'
 import { useSessionStore } from '@/session/store'
 
@@ -11,6 +11,8 @@ const api = vi.hoisted(() => ({
   createEvidenceAccessContext: vi.fn(),
   readEvidenceReviews: vi.fn(),
   registerEvidenceReview: vi.fn(),
+  beginEvidenceReview: vi.fn(),
+  cancelEvidenceReview: vi.fn(),
   readEvidenceReclipRequests: vi.fn(),
 }))
 
@@ -80,6 +82,15 @@ beforeEach(() => {
   api.readEvidence.mockResolvedValue([LISTING])
   api.readEvidenceReviews.mockResolvedValue([])
   api.readEvidenceReclipRequests.mockResolvedValue([])
+  api.beginEvidenceReview.mockResolvedValue({
+    review_id: 'hold-1',
+    evidence_id: 'host-1/first.mp4',
+    generation: 'original',
+    reviewer_id: 'viewer-1',
+    started_at: '2026-09-14T01:00:00Z',
+    ended_at: null,
+  })
+  api.cancelEvidenceReview.mockResolvedValue(undefined)
   api.createEvidenceAccessContext.mockResolvedValue({
     context: 'signed.ticket',
     origin: 'https://edge.internal:8765',
@@ -167,5 +178,101 @@ describe('人工复核结论', () => {
     expect(api.readEvidenceReviews).toHaveBeenCalledWith('host-1/first.mp4')
     expect(wrapper.text()).toContain('复核员甲')
     expect(wrapper.find('form.evidence__form').exists()).toBe(false)
+  })
+
+  it('re-enters a fresh hold after saving so another review stays possible', async () => {
+    signIn(REVIEW_PERMISSIONS)
+    api.registerEvidenceReview.mockResolvedValue(RECORD)
+    const wrapper = mountPlayer()
+    await flushPromises()
+    await wrapper.find('.evidence__list button').trigger('click')
+    await flushPromises()
+    await wrapper.find('form.evidence__form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已保存复核结论')
+    // 初次进入 + 保存后重新进入 = 两次 begin；表单仍可再次提交独立复核。
+    expect(api.beginEvidenceReview).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('fieldset').attributes('disabled')).toBeUndefined()
+  })
+
+  it('disables submission and explains when the hold cannot be entered', async () => {
+    signIn(REVIEW_PERMISSIONS)
+    api.beginEvidenceReview.mockRejectedValue(
+      new ControlPlaneError({ message: '不可用', errorCode: 'STATE_CONFLICT', status: 410 }),
+    )
+    const wrapper = mountPlayer()
+    await flushPromises()
+    await wrapper.find('.evidence__list button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('删除保护未生效')
+    expect(wrapper.find('fieldset').attributes('disabled')).toBeDefined()
+  })
+
+  it('releases the current hold when an older cancellation finishes after another selection', async () => {
+    signIn(REVIEW_PERMISSIONS)
+    const slowCancel = deferred<void>()
+    const second = { ...LISTING, evidence_id: 'host-1/second.mp4' }
+    const third = { ...LISTING, evidence_id: 'host-1/third.mp4' }
+    api.readEvidence.mockResolvedValue([LISTING, second, third])
+    const wrapper = mountPlayer()
+    await flushPromises()
+    const [firstButton, secondButton, thirdButton] = wrapper.findAll('.evidence__list button')
+    if (!firstButton || !secondButton || !thirdButton) {
+      throw new Error('expected three evidence rows')
+    }
+    await firstButton.trigger('click')
+    await flushPromises()
+
+    api.cancelEvidenceReview.mockReturnValueOnce(slowCancel.promise)
+    await secondButton.trigger('click')
+    await thirdButton.trigger('click')
+    await flushPromises()
+    const currentHold = api.beginEvidenceReview.mock.calls.find(
+      ([evidenceId]) => evidenceId === third.evidence_id,
+    )?.[1].review_id
+    expect(currentHold).toEqual(expect.any(String))
+
+    slowCancel.resolve(undefined)
+    await flushPromises()
+    wrapper.unmount()
+    await flushPromises()
+    expect(api.cancelEvidenceReview).toHaveBeenCalledWith(third.evidence_id, {
+      review_id: currentHold,
+    })
+  })
+
+  it('cancels a stale begin when another evidence is selected first', async () => {
+    signIn(REVIEW_PERMISSIONS)
+    const slow = deferred<EvidenceReviewHold>()
+    api.beginEvidenceReview.mockReturnValueOnce(slow.promise)
+    const second = { ...LISTING, evidence_id: 'host-1/second.mp4' }
+    api.readEvidence.mockResolvedValue([LISTING, second])
+    const wrapper = mountPlayer()
+    await flushPromises()
+    const items = wrapper.findAll('.evidence__list button')
+    const firstItem = items[0]
+    const secondItem = items[1]
+    if (firstItem === undefined || secondItem === undefined) {
+      throw new Error('expected two evidence rows')
+    }
+    await firstItem.trigger('click')
+    await secondItem.trigger('click')
+    await flushPromises()
+    slow.resolve({
+      review_id: 'stale-hold',
+      evidence_id: 'host-1/first.mp4',
+      generation: 'original',
+      reviewer_id: 'viewer-1',
+      started_at: '2026-09-14T01:00:00Z',
+      ended_at: null,
+    })
+    await flushPromises()
+
+    // 过期 begin 成功后必须主动取消，不能留下无人持有的占用。
+    expect(api.cancelEvidenceReview).toHaveBeenCalledWith('host-1/first.mp4', {
+      review_id: expect.any(String),
+    })
   })
 })

@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
-from collections.abc import Mapping
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from types import MappingProxyType
@@ -19,7 +20,11 @@ from uuid import UUID
 
 from factory_sop.auth.api import Caller, Permission, authorize
 from factory_sop.dataset.errors import DatasetRefusalCode, DatasetRefusedError
-from factory_sop.dataset.model import DdmTrainingCommand, DdmTrainingCommandStatus
+from factory_sop.dataset.model import (
+    DdmTrainingCommand,
+    DdmTrainingCommandStatus,
+    DdmTrainingResultStatus,
+)
 from factory_sop.dataset.repository import DdmTrainingCommandRepository
 from factory_sop.dataset.usage import canonical_json
 from factory_sop.dataset.usecases.usage import (
@@ -142,17 +147,6 @@ def request_ddm_training_command(
         result=command.status.value,
     )
     return DdmTrainingCommandResult(command=command, job=job)
-
-
-def get_ddm_training_command(
-    *, dataset_id: UUID, command_id: UUID, caller: Caller, datasets: DdmTrainingCommandRepository
-) -> DdmTrainingCommand:
-    """按当前读取权限和数据集归属查询命令，包括首次取消操作者与时刻。"""
-    authorize(caller, Permission.DATASET_VIEW)
-    command = datasets.ddm_training_command_by_id(command_id)
-    if command is None or command.dataset_id != dataset_id:
-        raise DatasetRefusedError(DatasetRefusalCode.DDM_TRAINING_COMMAND_NOT_FOUND)
-    return command
 
 
 def cancel_ddm_training_command(
@@ -356,3 +350,68 @@ def _encode_set(value: FrozenDdmInputSet) -> dict[str, Any]:
             for member in value.members
         ],
     }
+
+
+def list_ddm_training_commands(
+    *,
+    dataset_id: UUID,
+    caller: Caller,
+    datasets: DdmTrainingCommandRepository,
+) -> Sequence[DdmTrainingCommand]:
+    """按数据集列出已受理的 DDM 训练命令，供重新打开页面后恢复原命令。
+
+    授权在用例边界强制，路由上的声明只是元数据；命令负载、内部路径与媒体身份不进入
+    任何公开返回，调用者只拿命令身份与观测/结果事实。
+    """
+    authorize(caller, Permission.DATASET_VIEW)
+    if datasets.dataset_by_id(dataset_id) is None:
+        raise DatasetRefusedError(DatasetRefusalCode.DATASET_NOT_FOUND)
+    return datasets.list_ddm_training_commands(dataset_id)
+
+
+def read_ddm_training_command(
+    *,
+    dataset_id: UUID,
+    command_id: UUID,
+    caller: Caller,
+    datasets: DdmTrainingCommandRepository,
+) -> DdmTrainingCommand:
+    """读取一条属于该数据集的 DDM 训练命令；不匹配按不存在处理。"""
+    authorize(caller, Permission.DATASET_VIEW)
+    command = datasets.ddm_training_command_by_id(command_id)
+    if command is None or command.dataset_id != dataset_id:
+        raise DatasetRefusedError(DatasetRefusalCode.DDM_TRAINING_COMMAND_NOT_FOUND)
+    return command
+
+
+def authorize_ddm_result_access(
+    *,
+    command_id: UUID,
+    caller: Caller,
+    datasets: DdmTrainingCommandRepository,
+) -> DdmTrainingCommand:
+    """授权读取已发布 DDM 训练结果的最小用例。
+
+    调用方是 Nginx auth_request 子请求；只有当前登录用户具备 DATASET_VIEW、命令存在且
+    结果已真实登记时放行。内部对象键、源路径与原始负载不在此返回，数据由数据通道直接读取。
+    """
+    authorize(caller, Permission.DATASET_VIEW)
+    command = datasets.ddm_training_command_by_id(command_id)
+    if (
+        command is None
+        or command.status is not DdmTrainingCommandStatus.COMPLETED
+        or command.result_status is not DdmTrainingResultStatus.REGISTERED
+        or command.result_config_object_key is None
+        or command.result_checkpoint_object_key is None
+    ):
+        raise DatasetRefusedError(DatasetRefusalCode.DDM_TRAINING_RESULT_NOT_FOUND)
+    binding = re.fullmatch(
+        rf"ddm-results/{command.id}/([0-9a-f]{{32}})/config\.yaml", command.result_config_object_key
+    )
+    if (
+        binding is None
+        or command.result_checkpoint_object_key
+        != f"ddm-results/{command.id}/{binding.group(1)}/checkpoint.ckpt"
+    ):
+        raise DatasetRefusedError(DatasetRefusalCode.DDM_TRAINING_RESULT_NOT_FOUND)
+    return command

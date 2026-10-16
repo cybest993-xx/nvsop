@@ -63,6 +63,15 @@ class Settings(BaseSettings):
     # 每进程独立 LISTEN 预算；上限为同步长流保留普通请求的线程余量。
     monitor_max_subscriptions: int = Field(default=16, gt=0, le=32)
 
+    # 影响确认时限由部署显式提供；缺失时只拒绝缩短，不阻断查看、延长或其他中心能力。
+    retention_estimate_ttl_seconds: int | None = Field(default=None, gt=0)
+    retention_impact_timeout_seconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    # 证据删除票据有效期同样由部署显式提供；缺失即没有删除资格，中心不提供业务默认值（§5.19）。
+    evidence_deletion_ticket_ttl_seconds: int | None = Field(default=None, gt=0)
+    # 回收任务的调度周期与批次上限：显式部署配置，不是保留时长；未配置周期则不运行回收。
+    retention_sweep_interval_seconds: int | None = Field(default=None, gt=0)
+    retention_sweep_batch_limit: int = Field(default=256, gt=0, le=10000)
+
     # How long a session survives, idle and in total (§六: sessions are server-side records,
     # so both are enforced here rather than encoded in a cookie). Minutes, because that is the
     # granularity an operator setting a shift-length timeout thinks in. `create_app` turns
@@ -91,6 +100,13 @@ class Settings(BaseSettings):
     annotation_data_root: str | None = None
     annotation_http_timeout_seconds: int = Field(default=120, gt=0, le=3600)
     annotation_context_ttl_seconds: int = Field(default=3600, gt=0, le=86400)
+    # DDM 训练基座：URL、超时与基座/worker 共享的输入、结果挂载。未配置时命令保持 held，
+    # 不注册可实际 start 的公开操作；配置但训练服务不可达一律记诊断，不伪装成功。
+    ddm_training_backend_url: str | None = None
+    ddm_training_http_timeout_seconds: int = Field(default=120, gt=0, le=3600)
+    ddm_training_dataset_root: str | None = None
+    ddm_training_results_root: str | None = None
+    ddm_training_config_path: str | None = None
     # 已登记来源主机 UUID 到直读服务 origin；部署配置，不接受浏览器 URL。
     evidence_host_origins: dict[str, str] = Field(default_factory=dict)
     # ARQ 默认值保持 1 小时；开发环境通过环境变量缩短为 5 秒，让 worker 健康事实及时过期。
@@ -154,6 +170,45 @@ class Settings(BaseSettings):
                     "annotation_backend_url must be an HTTP(S) URL without userinfo, "
                     "query, or fragment"
                 )
+        if (self.ddm_training_backend_url is None) != (self.ddm_training_dataset_root is None) or (
+            self.ddm_training_backend_url is None
+        ) != (self.ddm_training_results_root is None):
+            raise ValueError(
+                "ddm_training_backend_url, ddm_training_dataset_root and "
+                "ddm_training_results_root must be configured together"
+            )
+        if self.ddm_training_backend_url is not None:
+            ddm_url = urlsplit(self.ddm_training_backend_url)
+            try:
+                ddm_port = ddm_url.port
+            except ValueError as error:
+                raise ValueError("ddm_training_backend_url has an invalid port") from error
+            if (
+                ddm_url.scheme not in {"http", "https"}
+                or not ddm_url.hostname
+                or ddm_url.username is not None
+                or ddm_url.password is not None
+                or ddm_url.query
+                or ddm_url.fragment
+                or (ddm_port is not None and not 1 <= ddm_port <= 65535)
+            ):
+                raise ValueError(
+                    "ddm_training_backend_url must be an HTTP(S) URL without userinfo, "
+                    "query, or fragment"
+                )
+            for name, value in (
+                ("ddm_training_dataset_root", self.ddm_training_dataset_root),
+                ("ddm_training_results_root", self.ddm_training_results_root),
+            ):
+                if value is None or not value.strip():
+                    raise ValueError(f"{name} must not be empty")
+                if not Path(value).is_absolute():
+                    raise ValueError(f"{name} must be an absolute path")
+        if (
+            self.ddm_training_config_path is not None
+            and not Path(self.ddm_training_config_path).is_absolute()
+        ):
+            raise ValueError("ddm_training_config_path must be an absolute path")
         if self.annotation_media_origin is not None:
             media_origin = urlsplit(self.annotation_media_origin)
             try:

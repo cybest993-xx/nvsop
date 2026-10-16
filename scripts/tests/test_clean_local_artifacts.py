@@ -60,6 +60,42 @@ class CleanLocalArtifactsTest(unittest.TestCase):
         clean(self.root, purge=True)
         self.assertTrue(all(not path.exists() for path in landing))
 
+    def test_purge_removes_precise_tool_caches_and_empties_owned_nvsop_root(self) -> None:
+        # ENVIRONMENT_PATHS 曾经遗漏 apps/control-api/.mypy_cache, purge 后仍然残留。
+        mypy_cache = self.write("apps/control-api/.mypy_cache/plugin.json")
+        # purge 清空已声明的任务本地状态后, 空的自有 .nvsop 根仍阻碍 task-cleanup。
+        (self.root / ".nvsop/cache").mkdir(parents=True)
+        removed = clean(self.root, purge=True)
+
+        self.assertFalse(mypy_cache.exists())
+        self.assertIn(Path("apps/control-api/.mypy_cache"), removed)
+        self.assertFalse((self.root / ".nvsop/cache").exists())
+        self.assertFalse((self.root / ".nvsop").exists())
+
+    def test_purge_keeps_nonempty_or_foreign_or_linked_nvsop_root(self) -> None:
+        # 未知文件仍然保留: purge 不能吞掉未声明的任务状态。
+        unknown = self.write(".nvsop/unknown-state/data.bin", "keep")
+        clean(self.root, purge=True)
+        self.assertEqual("keep", unknown.read_text())
+        self.assertTrue((self.root / ".nvsop").exists())
+
+        # 合法绑定状态不因 purge 消失, 空目录判断不会越过它。
+        binding = self.write(".nvsop/session-binding.json", '{"version": 1}')
+        clean(self.root, purge=True)
+        self.assertTrue(binding.exists())
+        unknown.unlink()
+        binding.unlink()
+
+        # 指向共享目标的 .nvsop symlink 即使为空也不能 rmdir。
+        shared = self.write("shared/state", "keep")
+        link = self.root / ".nvsop"
+        (link / "unknown-state").rmdir()
+        link.rmdir()
+        link.symlink_to(shared.parent, target_is_directory=True)
+        clean(self.root, purge=True)
+        self.assertTrue(link.is_symlink())
+        self.assertEqual("keep", shared.read_text())
+
     def test_purge_unlinks_legacy_cache_without_deleting_shared_content(self) -> None:
         shared = self.write("shared-cache/wheel", "keep")
         cache = self.root / ".nvsop/cache"

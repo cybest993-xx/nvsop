@@ -451,7 +451,7 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
             )
         ).scalar_one()
     # #206/#207：引用保护与回收账本、聚合归档随 head 到位。
-    assert version == "0068"
+    assert version == "0071"
     assert {
         "retention_sweep",
         "monitor_record_archive",

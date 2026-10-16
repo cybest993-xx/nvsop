@@ -61,10 +61,12 @@ class ExecutionAuthority:
     state: ExecutionLeaseState
     detail: str
     fact: ExecutionLeaseFact | None = None
+    write_stopped: bool = False
+    """正常交权停写 fence: 确认前本机已持久禁写, 与租约到期相互独立。"""
 
     @property
     def authorized(self) -> bool:
-        return self.state is ExecutionLeaseState.ACTIVE
+        return self.state is ExecutionLeaseState.ACTIVE and not self.write_stopped
 
 
 _DEFAULT_LOCK = RLock()
@@ -141,6 +143,31 @@ class LocalExecutionLeaseStore:
                     observed_at,
                 ),
             )
+            # 停写 fence 只被后继新 grant 解除; 同一 grant 的续期/配置重报不清 fence,
+            # 旧 grant 重放也不能清除新 grant 之后的语义 (fence 已被新 grant 删除)。
+            self._connection.execute(
+                "DELETE FROM local_execution_write_fence WHERE station_id = ? AND grant_id <> ?",
+                (lease.station_id, lease.grant_id),
+            )
+
+    def stop_writes(self, station_id: str, *, grant_id: str, stopped_at: float) -> None:
+        """持久禁写一个工位的物理输出, 冻结当前 grant 身份 (正常交权确认前置)。
+
+        首次停写记录 grant 与时刻, 重复停写不改写已冻结身份; 只能被同一请求事务内的
+        配置确认或后继新 grant 的 ``apply`` 解除。进程崩溃后重启仍然禁写。
+        """
+        with self._transaction():
+            fact = self.fact(station_id)
+            if fact is None or fact.grant_id != grant_id:
+                raise ValueError(f"station {station_id} does not hold execution grant {grant_id}")
+            self._connection.execute(
+                """
+                INSERT INTO local_execution_write_fence (station_id, grant_id, stopped_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT (station_id) DO NOTHING
+                """,
+                (station_id, grant_id, stopped_at),
+            )
 
     def fact(self, station_id: str) -> ExecutionLeaseFact | None:
         """返回工位当前的持久租约事实; 无中心确认租约时返回 None。"""
@@ -165,11 +192,23 @@ class LocalExecutionLeaseStore:
 
     def status(self, station_id: str, *, now: float) -> ExecutionAuthority:
         """按本机墙钟返回工位当前的执行权状态; 到期判断发生在每次调用, 不缓存。"""
-        fact = self.fact(station_id)
+        with self._lock:
+            fact = self.fact(station_id)
+            fence = self._connection.execute(
+                "SELECT grant_id FROM local_execution_write_fence WHERE station_id = ?",
+                (station_id,),
+            ).fetchone()
         if fact is None:
             return ExecutionAuthority(
                 state=ExecutionLeaseState.MISSING,
                 detail="本工位没有中心确认的物理执行权租约",
+            )
+        if fence is not None:
+            return ExecutionAuthority(
+                state=ExecutionLeaseState.ACTIVE,
+                detail="正常交权确认前本机已持久停写",
+                fact=fact,
+                write_stopped=True,
             )
         if now >= fact.lease_expires_at:
             return ExecutionAuthority(

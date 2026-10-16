@@ -34,9 +34,10 @@ from typing import Any
 from urllib.parse import quote
 
 EXPECTED_SCHEMA_VERSION = 20
-# V21 只新增本机删除账本，既有表的采集字段与语义不变；本工具只接受已知 20/21 并按同版本
-# 互比，两个版本互比或未知版本仍不兼容。
-SUPPORTED_SCHEMA_VERSIONS = (20, 21)
+# V21 只新增本机删除账本，既有表的采集字段与语义不变；V22 (#214) 只新增停写 fence 表，
+# 同样不改变既有表的采集字段与语义。本工具只接受已知 20/21/22 并按同版本互比，跨版本或
+# 未知版本仍不兼容。
+SUPPORTED_SCHEMA_VERSIONS = (20, 21, 22)
 SNAPSHOT_SCHEMA = 1
 TOOL_VERSION = 1
 CANDIDATE_SHA = re.compile(r"[0-9a-f]{40}")

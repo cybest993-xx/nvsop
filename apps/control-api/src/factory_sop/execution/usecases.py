@@ -2,19 +2,28 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import NoReturn
 from uuid import UUID
 
 from factory_sop.auth.api import Caller, HandoverAuthority, Permission, authorize
+from factory_sop.device.api import DeviceExecutionHandoverCommandGateway, InferenceHostIdentity
 from factory_sop.execution.api import ExecutionGrantState, ExecutionGrantView
 from factory_sop.execution.errors import ExecutionRefusalCode, ExecutionRefusedError
 from factory_sop.execution.model import (
     HANDOVER_RISK_STATEMENT,
     HandoverConfirmation,
+    NormalHandover,
+    NormalHandoverStatus,
     StationGrant,
 )
-from factory_sop.execution.repository import ExecutionGrantRepository, HandoverRepository
+from factory_sop.execution.repository import (
+    ExecutionGrantRepository,
+    HandoverRepository,
+    NormalHandoverCommandGateway,
+    NormalHandoverRepository,
+)
 from factory_sop.identifiers import new_id
 from factory_sop.observability import get_logger
 
@@ -303,6 +312,398 @@ def confirm_handover(
     return confirmed
 
 
+def create_normal_handover(
+    *,
+    caller: Caller,
+    station_id: UUID,
+    from_host_id: UUID,
+    to_host_id: UUID,
+    idempotency_key: str,
+    now: datetime,
+    handovers: NormalHandoverRepository,
+    grants: ExecutionGrantRepository,
+    commands: NormalHandoverCommandGateway,
+) -> NormalHandover:
+    """建立正常交权请求并入队旧机停机命令，不创建新机执行权。"""
+    authorize(caller, HANDOVER_PERMISSION)
+    current = grants.for_station(station_id)
+    existing = handovers.by_idempotency_key(idempotency_key)
+    if existing is not None:
+        _check_normal_identity(
+            existing,
+            station_id=station_id,
+            from_host_id=from_host_id,
+            to_host_id=to_host_id,
+            caller=caller,
+        )
+        return existing
+    if from_host_id == to_host_id:
+        _refuse_handover(
+            ExecutionRefusalCode.HANDOVER_SAME_HOST,
+            caller=caller,
+            station_id=station_id,
+        )
+    if current is None:
+        _refuse_handover(
+            ExecutionRefusalCode.HANDOVER_TARGET_NOT_FOUND,
+            caller=caller,
+            station_id=station_id,
+        )
+    if current.holder_host_id != from_host_id:
+        _refuse_handover(
+            ExecutionRefusalCode.HANDOVER_SOURCE_MISMATCH,
+            caller=caller,
+            station_id=station_id,
+            from_host_id=from_host_id,
+        )
+    if current.lease_expires_at <= now:
+        _refuse_handover(
+            ExecutionRefusalCode.NORMAL_HANDOVER_GRANT_EXPIRED,
+            caller=caller,
+            station_id=station_id,
+        )
+    pending = handovers.pending_for_station(station_id)
+    if pending is not None:
+        pending = _expire_normal_handover(pending, now=now, handovers=handovers)
+    if pending is not None and pending.status is NormalHandoverStatus.PENDING:
+        _refuse_handover(
+            ExecutionRefusalCode.NORMAL_HANDOVER_PENDING,
+            caller=caller,
+            station_id=station_id,
+        )
+    record = NormalHandover(
+        handover_id=new_id(),
+        station_id=station_id,
+        from_host_id=from_host_id,
+        to_host_id=to_host_id,
+        grant_id=current.grant_id,
+        command_id=new_id(),
+        idempotency_key=idempotency_key,
+        requested_by=caller.user.id,
+        requested_at=now,
+        expires_at=now + timedelta(seconds=300),
+        status=NormalHandoverStatus.PENDING,
+    )
+    stored, created = handovers.add_or_get(record)
+    if not created:
+        _check_normal_identity(
+            stored,
+            station_id=station_id,
+            from_host_id=from_host_id,
+            to_host_id=to_host_id,
+            caller=caller,
+        )
+        return stored
+    commands.enqueue(
+        command_id=record.command_id,
+        handover_id=record.handover_id,
+        host_id=record.from_host_id,
+        requested_by=record.requested_by,
+        now=now,
+    )
+    _logger.info(
+        "execution.normal_handover.created",
+        handover_id=str(record.handover_id),
+        command_id=str(record.command_id),
+        station_id=str(record.station_id),
+        from_host_id=str(record.from_host_id),
+        to_host_id=str(record.to_host_id),
+        grant_id=str(record.grant_id),
+        requested_by=str(record.requested_by),
+    )
+    return record
+
+
+def read_claimed_normal_handover(
+    *,
+    handover_id: UUID,
+    command_id: UUID,
+    from_host_id: UUID,
+    now: datetime,
+    handovers: NormalHandoverRepository,
+) -> NormalHandover | None:
+    """在已认证命令的行锁之后锁定请求；过期先持久落盘，取消与领取不能交错。"""
+    record = handovers.by_identifier_for_update(handover_id)
+    if record is None or record.command_id != command_id or record.from_host_id != from_host_id:
+        return None
+    record = _expire_normal_handover(record, now=now, handovers=handovers)
+    return record if record.status is NormalHandoverStatus.PENDING else None
+
+
+def read_normal_handover(
+    *, caller: Caller, handover_id: UUID, now: datetime, handovers: NormalHandoverRepository
+) -> NormalHandover:
+    """读取请求并在观察到截止时刻后持久记录超时。"""
+    authorize(caller, HANDOVER_PERMISSION)
+    record = handovers.by_identifier_for_update(handover_id)
+    if record is None:
+        raise ExecutionRefusedError(ExecutionRefusalCode.NORMAL_HANDOVER_NOT_FOUND)
+    return _expire_normal_handover(record, now=now, handovers=handovers)
+
+
+def cancel_normal_handover(
+    *,
+    caller: Caller,
+    handover_id: UUID,
+    now: datetime,
+    handovers: NormalHandoverRepository,
+    commands: DeviceExecutionHandoverCommandGateway,
+) -> NormalHandover:
+    """只取消从未领取的请求；领取后旧机可能已停写，不能再承诺取消。"""
+    authorize(caller, HANDOVER_PERMISSION)
+    observed = handovers.by_identifier(handover_id)
+    if observed is None:
+        raise ExecutionRefusedError(ExecutionRefusalCode.NORMAL_HANDOVER_NOT_FOUND)
+    was_claimed = commands.lock_claim(command_id=observed.command_id, now=now)
+    record = read_normal_handover(
+        caller=caller, handover_id=handover_id, now=now, handovers=handovers
+    )
+    if record.status is NormalHandoverStatus.PENDING:
+        if was_claimed:
+            _refuse_handover(
+                ExecutionRefusalCode.NORMAL_HANDOVER_ALREADY_CLAIMED,
+                caller=caller,
+                handover_id=handover_id,
+            )
+        return handovers.save(
+            replace(record, status=NormalHandoverStatus.CANCELLED, cancelled_at=now)
+        )
+    if record.status in {NormalHandoverStatus.CANCELLED, NormalHandoverStatus.TIMED_OUT}:
+        return record
+    _refuse_handover(
+        ExecutionRefusalCode.NORMAL_HANDOVER_ALREADY_TERMINAL,
+        caller=caller,
+        handover_id=handover_id,
+    )
+
+
+def settle_normal_handover_command(
+    *,
+    handover_id: UUID,
+    command_id: UUID,
+    station_id: UUID | None,
+    from_host_id: UUID,
+    to_host_id: UUID | None,
+    grant_id: UUID,
+    host: InferenceHostIdentity,
+    claim_token: str,
+    outcome: str,
+    failure_code: str | None,
+    detail: str | None,
+    now: datetime,
+    handovers: NormalHandoverRepository,
+    grants: ExecutionGrantRepository,
+    commands: DeviceExecutionHandoverCommandGateway,
+    authenticated: bool = False,
+) -> tuple[NormalHandover | None, bool]:
+    """在同一事务中复核冻结请求/租约、写状态并结案命令。
+
+    返回 ``accepted`` 表示旧机确认已被本请求接受；陈旧、取消或身份不符的回报只结案命令，
+    不改变后继请求，也不制造执行权。
+    """
+    # 已入队命令统一按 command -> grant(如需) -> handover 加锁；创建只入队全新的命令。
+    commands.lock_claim(command_id=command_id, host=None if authenticated else host, now=now)
+    authenticated = True
+    observed = handovers.by_identifier(handover_id)
+    current = None if observed is None else grants.for_station(observed.station_id)
+    record = handovers.by_identifier_for_update(handover_id)
+    if record is None:
+        commands.complete(
+            command_id=command_id,
+            host=host,
+            claim_token=claim_token,
+            now=now,
+            outcome="rejected",
+            failure_code="NORMAL_HANDOVER_NOT_FOUND",
+            detail="normal handover request no longer exists",
+            authenticated=authenticated,
+        )
+        return None, False
+    # 已被同一结果结案的重复回报直接幂等接受: 不重入陈旧拒绝, 也不改写已冻结终态。
+    already_confirmed = (
+        record.status is NormalHandoverStatus.CONFIRMED
+        and outcome == "confirmed"
+        and record.command_id == command_id
+        and record.grant_id == grant_id
+        and record.from_host_id == from_host_id
+        and host.host_id == from_host_id
+    )
+    if already_confirmed:
+        commands.complete(
+            command_id=command_id,
+            host=host,
+            claim_token=claim_token,
+            now=now,
+            outcome="confirmed",
+            authenticated=authenticated,
+        )
+        return record, False
+    identity_matches = (
+        record.handover_id == handover_id
+        and record.command_id == command_id
+        # station_id/to_host_id 为 None 表示由冻结请求提供, 不信任客户端自报身份。
+        and (station_id is None or record.station_id == station_id)
+        and record.from_host_id == from_host_id
+        and (to_host_id is None or record.to_host_id == to_host_id)
+        and record.grant_id == grant_id
+        and host.host_id == from_host_id
+    )
+    if not identity_matches:
+        commands.complete(
+            command_id=command_id,
+            host=host,
+            claim_token=claim_token,
+            now=now,
+            outcome="rejected",
+            failure_code="NORMAL_HANDOVER_IDENTITY_MISMATCH",
+            detail="command result does not match the frozen request",
+            authenticated=authenticated,
+        )
+        return record, False
+    record = _expire_normal_handover(record, now=now, handovers=handovers)
+    if (
+        record.status is NormalHandoverStatus.FAILED
+        and outcome == "failed"
+        and record.failure_code == failure_code
+        and record.failure_detail == detail
+    ):
+        commands.complete(
+            command_id=command_id,
+            host=host,
+            claim_token=claim_token,
+            now=now,
+            outcome=outcome,
+            failure_code=failure_code,
+            detail=detail,
+            authenticated=authenticated,
+        )
+        return record, False
+    if record.status is not NormalHandoverStatus.PENDING:
+        commands.complete(
+            command_id=command_id,
+            host=host,
+            claim_token=claim_token,
+            now=now,
+            outcome="rejected",
+            failure_code="NORMAL_HANDOVER_STALE_CONFIRMATION",
+            detail=(
+                record.failure_detail
+                if record.failure_code == "NORMAL_HANDOVER_STALE_CONFIRMATION"
+                else "normal handover request is no longer pending"
+            ),
+            authenticated=authenticated,
+        )
+        return record, False
+    if (
+        current is None
+        or current.grant_id != record.grant_id
+        or current.holder_host_id != record.from_host_id
+        or current.lease_expires_at <= now
+    ):
+        record = handovers.save(
+            replace(
+                record,
+                status=NormalHandoverStatus.FAILED,
+                failed_at=now,
+                failure_code="NORMAL_HANDOVER_STALE_CONFIRMATION",
+                failure_detail="the frozen execution grant is no longer current",
+            )
+        )
+        commands.complete(
+            command_id=command_id,
+            host=host,
+            claim_token=claim_token,
+            now=now,
+            outcome="rejected",
+            failure_code="NORMAL_HANDOVER_STALE_CONFIRMATION",
+            detail="the frozen execution grant is no longer current",
+            authenticated=authenticated,
+        )
+        return record, False
+    if outcome == "confirmed":
+        if failure_code is not None or detail is not None:
+            raise ValueError("a confirmed handover result cannot carry a failure")
+        confirmed = handovers.save(
+            replace(record, status=NormalHandoverStatus.CONFIRMED, confirmed_at=now)
+        )
+        commands.complete(
+            command_id=command_id,
+            host=host,
+            claim_token=claim_token,
+            now=now,
+            outcome="confirmed",
+            authenticated=authenticated,
+        )
+        _logger.info(
+            "execution.normal_handover.confirmed",
+            handover_id=str(handover_id),
+            station_id=str(station_id),
+            from_host_id=str(from_host_id),
+            to_host_id=str(to_host_id),
+            grant_id=str(grant_id),
+        )
+        return confirmed, True
+    if outcome != "failed" or not failure_code:
+        raise ValueError("a failed handover result must carry a failure code")
+    failed = handovers.save(
+        replace(
+            record,
+            status=NormalHandoverStatus.FAILED,
+            failed_at=now,
+            failure_code=failure_code,
+            failure_detail=detail,
+        )
+    )
+    commands.complete(
+        command_id=command_id,
+        host=host,
+        claim_token=claim_token,
+        now=now,
+        outcome="failed",
+        failure_code=failure_code,
+        detail=detail,
+        authenticated=authenticated,
+    )
+    _logger.info(
+        "execution.normal_handover.failed",
+        handover_id=str(handover_id),
+        station_id=str(station_id),
+        failure_code=failure_code,
+    )
+    return failed, False
+
+
+def _expire_normal_handover(
+    record: NormalHandover,
+    *,
+    now: datetime,
+    handovers: NormalHandoverRepository,
+) -> NormalHandover:
+    if record.status is not NormalHandoverStatus.PENDING or now < record.expires_at:
+        return record
+    return handovers.save(replace(record, status=NormalHandoverStatus.TIMED_OUT, timed_out_at=now))
+
+
+def _check_normal_identity(
+    record: NormalHandover,
+    *,
+    station_id: UUID,
+    from_host_id: UUID,
+    to_host_id: UUID,
+    caller: Caller,
+) -> None:
+    if (record.station_id, record.from_host_id, record.to_host_id) != (
+        station_id,
+        from_host_id,
+        to_host_id,
+    ):
+        _refuse_handover(
+            ExecutionRefusalCode.NORMAL_HANDOVER_IDENTITY_MISMATCH,
+            caller=caller,
+            handover_id=record.handover_id,
+        )
+
+
 def _require_current_holder(
     *,
     caller: Caller,
@@ -352,8 +753,13 @@ def _refuse_handover(code: ExecutionRefusalCode, *, caller: Caller, **target: UU
 __all__ = [
     "LEASE_TTL",
     "RepositoryExecutionLeaseGateway",
+    "cancel_normal_handover",
     "confirm_handover",
     "create_handover",
+    "create_normal_handover",
+    "read_claimed_normal_handover",
     "read_handover",
     "read_handover_risk",
+    "read_normal_handover",
+    "settle_normal_handover_command",
 ]

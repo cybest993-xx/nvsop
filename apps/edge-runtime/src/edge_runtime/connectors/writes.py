@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from threading import Condition
 from typing import Protocol
 
 from nvsop_contracts import PointRole, Unfitness, unfit_for
@@ -160,8 +161,26 @@ class OutputDispatcher:
         self._ledger = ledger
         self._diagnostics = diagnostics
         self._gate = gate
+        self._activity = Condition()
+        self._active_writes = 0
+
+    def wait_for_idle(self) -> None:
+        """停写门禁已关闭后, 等待所有已进入的写入及其结果落账结束。"""
+        with self._activity:
+            self._activity.wait_for(lambda: self._active_writes == 0)
 
     def write(self, request: WriteRequest) -> WriteOutcome:
+        """追踪整个输出尝试, 供工位停写确认等待在途物理请求收敛。"""
+        with self._activity:
+            self._active_writes += 1
+        try:
+            return self._write(request)
+        finally:
+            with self._activity:
+                self._active_writes -= 1
+                self._activity.notify_all()
+
+    def _write(self, request: WriteRequest) -> WriteOutcome:
         """驱动点位,或返回拒绝原因;结果本身就是回答,不用异常表示物理结果。
 
         结果采用结构化值,因为调用方需要持久化它;异常越过事务边界会丢失实际尝试记录。

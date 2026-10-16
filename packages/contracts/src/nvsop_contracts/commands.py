@@ -17,6 +17,199 @@ class ConnectionTestOutcome(StrEnum):
     REJECTED = "rejected"
 
 
+class ExecutionHandoverOutcome(StrEnum):
+    """旧推理机对正常交权停机命令的终局回报。"""
+
+    CONFIRMED = "confirmed"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionHandoverCommand:
+    """要求指定旧推理机停止一个冻结交权身份的命令。"""
+
+    command_id: str
+    handover_id: str
+    station_id: str
+    from_host_id: str
+    to_host_id: str
+    grant_id: str
+
+    def __post_init__(self) -> None:
+        if not all(
+            isinstance(value, str) and value
+            for value in (
+                self.command_id,
+                self.handover_id,
+                self.station_id,
+                self.from_host_id,
+                self.to_host_id,
+                self.grant_id,
+            )
+        ):
+            raise ValueError("execution handover command identities must not be empty")
+        if self.from_host_id == self.to_host_id:
+            raise ValueError("execution handover command hosts must differ")
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionHandoverClaim:
+    """旧推理机领取正常交权停机命令后的信封。"""
+
+    command: ExecutionHandoverCommand
+    claim_token: str
+    lease_expires_at: str
+
+    def __post_init__(self) -> None:
+        if not self.claim_token or not self.lease_expires_at:
+            raise ValueError("execution handover claim lease fields must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionHandoverResult:
+    """旧推理机确认停机完成或报告清理失败的严格结果。"""
+
+    handover_id: str
+    grant_id: str
+    outcome: ExecutionHandoverOutcome
+    detail: str | None = None
+    failure_code: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.handover_id or not self.grant_id:
+            raise ValueError("execution handover result identities must not be empty")
+        if self.outcome is ExecutionHandoverOutcome.CONFIRMED:
+            if self.detail is not None or self.failure_code is not None:
+                raise ValueError("a confirmed handover result must not carry a failure")
+        elif not self.failure_code:
+            raise ValueError("a failed handover result must carry a failure code")
+
+
+def execution_handover_command_to_wire(
+    command: ExecutionHandoverCommand,
+) -> dict[str, object]:
+    """把正常交权停机命令编码为严格的跨进程对象。"""
+    return {
+        "command_type": "stop_execution_handover",
+        "command_id": command.command_id,
+        "handover_id": command.handover_id,
+        "station_id": command.station_id,
+        "from_host_id": command.from_host_id,
+        "to_host_id": command.to_host_id,
+        "grant_id": command.grant_id,
+    }
+
+
+def execution_handover_command_from_wire(
+    value: Mapping[str, object],
+) -> ExecutionHandoverCommand:
+    """解析正常交权停机命令，不接受旧 Edge 不认识的附加字段。"""
+    required = {
+        "command_type",
+        "command_id",
+        "handover_id",
+        "station_id",
+        "from_host_id",
+        "to_host_id",
+        "grant_id",
+    }
+    if set(value) != required or value.get("command_type") != "stop_execution_handover":
+        raise ValueError("execution handover command has unsupported fields")
+    raw = {name: value[name] for name in required - {"command_type"}}
+    if not all(isinstance(item, str) and item for item in raw.values()):
+        raise ValueError("execution handover command has invalid identity")
+    return ExecutionHandoverCommand(
+        command_id=cast(str, raw["command_id"]),
+        handover_id=cast(str, raw["handover_id"]),
+        station_id=cast(str, raw["station_id"]),
+        from_host_id=cast(str, raw["from_host_id"]),
+        to_host_id=cast(str, raw["to_host_id"]),
+        grant_id=cast(str, raw["grant_id"]),
+    )
+
+
+def execution_handover_claim_to_wire(
+    claim: ExecutionHandoverClaim,
+) -> dict[str, object]:
+    """把正常交权停机领取信封编码为严格对象。"""
+    return {
+        "command": execution_handover_command_to_wire(claim.command),
+        "claim_token": claim.claim_token,
+        "lease_expires_at": claim.lease_expires_at,
+    }
+
+
+def execution_handover_claim_from_wire(
+    value: Mapping[str, object],
+) -> ExecutionHandoverClaim:
+    """解析正常交权领取信封。"""
+    required = {"command", "claim_token", "lease_expires_at"}
+    if set(value) != required:
+        raise ValueError("execution handover claim has unsupported fields")
+    command = value["command"]
+    claim_token = value["claim_token"]
+    lease_expires_at = value["lease_expires_at"]
+    if not isinstance(command, Mapping):
+        raise ValueError("execution handover claim has an invalid command")
+    if not isinstance(claim_token, str) or not claim_token:
+        raise ValueError("execution handover claim has an invalid claim token")
+    if not isinstance(lease_expires_at, str) or not lease_expires_at:
+        raise ValueError("execution handover claim has an invalid lease expiry")
+    return ExecutionHandoverClaim(
+        command=execution_handover_command_from_wire(command),
+        claim_token=claim_token,
+        lease_expires_at=lease_expires_at,
+    )
+
+
+def execution_handover_result_to_wire(
+    result: ExecutionHandoverResult,
+) -> dict[str, object]:
+    """把旧机停机结果编码为严格对象。"""
+    return {
+        "handover_id": result.handover_id,
+        "grant_id": result.grant_id,
+        "outcome": result.outcome.value,
+        "detail": result.detail,
+        "failure_code": result.failure_code,
+    }
+
+
+def execution_handover_result_from_wire(
+    value: Mapping[str, object],
+) -> ExecutionHandoverResult:
+    """解析旧机停机结果，不把缺少失败原因的回报猜成成功。"""
+    required = {"handover_id", "grant_id", "outcome", "detail", "failure_code"}
+    if set(value) != required:
+        raise ValueError("execution handover result has unsupported fields")
+    handover_id = value["handover_id"]
+    grant_id = value["grant_id"]
+    raw_outcome = value["outcome"]
+    detail = value["detail"]
+    failure_code = value["failure_code"]
+    if not isinstance(handover_id, str) or not handover_id:
+        raise ValueError("execution handover result has an invalid handover id")
+    if not isinstance(grant_id, str) or not grant_id:
+        raise ValueError("execution handover result has an invalid grant id")
+    if not isinstance(raw_outcome, str):
+        raise ValueError("execution handover result has an invalid outcome")
+    try:
+        outcome = ExecutionHandoverOutcome(raw_outcome)
+    except ValueError as error:
+        raise ValueError("execution handover result has an invalid outcome") from error
+    if detail is not None and not isinstance(detail, str):
+        raise ValueError("execution handover result has an invalid detail")
+    if failure_code is not None and not isinstance(failure_code, str):
+        raise ValueError("execution handover result has an invalid failure code")
+    return ExecutionHandoverResult(
+        handover_id=handover_id,
+        grant_id=grant_id,
+        outcome=outcome,
+        detail=detail,
+        failure_code=failure_code,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ConnectionTestCommand:
     """推理机可执行的命令; 只携带非秘密配置和配置修订号。"""

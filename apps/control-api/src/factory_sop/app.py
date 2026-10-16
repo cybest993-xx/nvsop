@@ -82,6 +82,7 @@ from factory_sop.evidence.adapters.reclip_routes import router as evidence_recli
 from factory_sop.evidence.adapters.routes import router as evidence_router
 from factory_sop.evidence.playback import EvidenceAccessRefusedError
 from factory_sop.execution.adapters import dependencies as execution_dependencies
+from factory_sop.execution.adapters import normal_routes as execution_normal_routes
 from factory_sop.execution.adapters import routes as execution_routes
 from factory_sop.execution.errors import ExecutionRefusedError
 from factory_sop.execution.errors import refusal_problem as execution_refusal_problem
@@ -286,6 +287,8 @@ def create_app(
     app.include_router(evidence_router, prefix=API_PREFIX)
     app.include_router(evidence_playback_router, prefix=API_PREFIX)
     app.include_router(execution_routes.router, prefix=API_PREFIX)
+    app.include_router(execution_normal_routes.router, prefix=API_PREFIX)
+    app.include_router(execution_normal_routes.command_router, prefix=API_PREFIX)
     app.include_router(retention_router, prefix=API_PREFIX)
     app.include_router(retention_impact_access_router, prefix=API_PREFIX)
     # 证据删除资格是主机签名机器端点：claim/verify/result 三个动作同属一个 owner 面。
@@ -325,6 +328,10 @@ def create_app(
     )
     app.dependency_overrides[job_dependencies.dataset_resource] = (
         dataset_dependencies.dataset_resource
+    )
+    # 正常交权命令队列归 device，execution 经同一请求事务的 device owner seam 访问。
+    app.dependency_overrides[execution_dependencies.normal_handover_commands] = (
+        device_dependencies.execution_handover_commands
     )
     app.dependency_overrides[dataset_dependencies.jobs] = job_dependencies.validation_jobs
     app.dependency_overrides[dataset_dependencies.annotation_jobs] = (

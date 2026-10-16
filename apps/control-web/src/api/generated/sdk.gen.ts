@@ -15,6 +15,9 @@ import type {
   CancelEvidenceReviewData,
   CancelEvidenceReviewErrors,
   CancelEvidenceReviewResponses,
+  CancelNormalHandoverData,
+  CancelNormalHandoverErrors,
+  CancelNormalHandoverResponses,
   CheckEvidenceAccessData,
   CheckEvidenceAccessErrors,
   CheckEvidenceAccessResponses,
@@ -27,12 +30,18 @@ import type {
   ClaimNextDeviceCommandData,
   ClaimNextDeviceCommandErrors,
   ClaimNextDeviceCommandResponses,
+  ClaimNextExecutionHandoverCommandData,
+  ClaimNextExecutionHandoverCommandErrors,
+  ClaimNextExecutionHandoverCommandResponses,
   ClaimNextReclipCommandData,
   ClaimNextReclipCommandErrors,
   ClaimNextReclipCommandResponses,
   CompleteDeviceCommandData,
   CompleteDeviceCommandErrors,
   CompleteDeviceCommandResponses,
+  CompleteExecutionHandoverCommandData,
+  CompleteExecutionHandoverCommandErrors,
+  CompleteExecutionHandoverCommandResponses,
   CompleteReclipCommandData,
   CompleteReclipCommandErrors,
   CompleteReclipCommandResponses,
@@ -69,6 +78,9 @@ import type {
   CreateInferenceHostData,
   CreateInferenceHostErrors,
   CreateInferenceHostResponses,
+  CreateNormalHandoverData,
+  CreateNormalHandoverErrors,
+  CreateNormalHandoverResponses,
   CreatePointData,
   CreatePointErrors,
   CreatePointResponses,
@@ -315,6 +327,9 @@ import type {
   ReadLivenessData,
   ReadLivenessErrors,
   ReadLivenessResponses,
+  ReadNormalHandoverData,
+  ReadNormalHandoverErrors,
+  ReadNormalHandoverResponses,
   ReadOverviewData,
   ReadOverviewErrors,
   ReadOverviewResponses,
@@ -995,6 +1010,24 @@ export const setConnectorStatus = <ThrowOnError extends boolean = false>(
   })
 
 /**
+ * Claim Next Execution Handover
+ *
+ * 只允许旧机按明确 command type 领取正常交权停机命令。
+ */
+export const claimNextExecutionHandoverCommand = <ThrowOnError extends boolean = false>(
+  options: Options<ClaimNextExecutionHandoverCommandData, ThrowOnError>,
+): RequestResult<
+  ClaimNextExecutionHandoverCommandResponses,
+  ClaimNextExecutionHandoverCommandErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).get<
+    ClaimNextExecutionHandoverCommandResponses,
+    ClaimNextExecutionHandoverCommandErrors,
+    ThrowOnError
+  >({ url: '/api/v1/device-commands/execution-handover/next', ...options })
+
+/**
  * Claim Next Device Command
  *
  * 按已验证的主机身份领取一条命令；无命令返回 204。
@@ -1033,6 +1066,31 @@ export const readDeviceCommand = <ThrowOnError extends boolean = false>(
   (options.client ?? client).get<ReadDeviceCommandResponses, ReadDeviceCommandErrors, ThrowOnError>(
     { url: '/api/v1/device-commands/{command_id}', ...options },
   )
+
+/**
+ * Complete Execution Handover
+ *
+ * 认证旧机回报，在同一事务内更新请求与命令终态。
+ */
+export const completeExecutionHandoverCommand = <ThrowOnError extends boolean = false>(
+  options: Options<CompleteExecutionHandoverCommandData, ThrowOnError>,
+): RequestResult<
+  CompleteExecutionHandoverCommandResponses,
+  CompleteExecutionHandoverCommandErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    CompleteExecutionHandoverCommandResponses,
+    CompleteExecutionHandoverCommandErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/device-commands/{command_id}/execution-handover-result',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
 
 /**
  * Complete Reclip Command
@@ -1322,6 +1380,53 @@ export const confirmHandover = <ThrowOnError extends boolean = false>(
       ...options.headers,
     },
   })
+
+/**
+ * Create Normal
+ *
+ * 建立正常交权请求；中心收到请求不等于旧机已经停写。
+ */
+export const createNormalHandover = <ThrowOnError extends boolean = false>(
+  options: Options<CreateNormalHandoverData, ThrowOnError>,
+): RequestResult<CreateNormalHandoverResponses, CreateNormalHandoverErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    CreateNormalHandoverResponses,
+    CreateNormalHandoverErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/execution/normal-handovers',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read Normal
+ *
+ * 读取并在需要时持久记录超时状态。
+ */
+export const readNormalHandover = <ThrowOnError extends boolean = false>(
+  options: Options<ReadNormalHandoverData, ThrowOnError>,
+): RequestResult<ReadNormalHandoverResponses, ReadNormalHandoverErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadNormalHandoverResponses,
+    ReadNormalHandoverErrors,
+    ThrowOnError
+  >({ url: '/api/v1/execution/normal-handovers/{handover_id}', ...options })
+
+/**
+ * Cancel Normal
+ */
+export const cancelNormalHandover = <ThrowOnError extends boolean = false>(
+  options: Options<CancelNormalHandoverData, ThrowOnError>,
+): RequestResult<CancelNormalHandoverResponses, CancelNormalHandoverErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    CancelNormalHandoverResponses,
+    CancelNormalHandoverErrors,
+    ThrowOnError
+  >({ url: '/api/v1/execution/normal-handovers/{handover_id}/cancellation', ...options })
 
 /**
  * List The Backends

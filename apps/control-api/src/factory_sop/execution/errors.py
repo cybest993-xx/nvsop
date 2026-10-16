@@ -22,6 +22,14 @@ class ExecutionRefusalCode(StrEnum):
     HANDOVER_SOURCE_MISMATCH = "HANDOVER_SOURCE_MISMATCH"
     # 旧机与目标机不能是同一台推理机。
     HANDOVER_SAME_HOST = "HANDOVER_SAME_HOST"
+    NORMAL_HANDOVER_NOT_FOUND = "NORMAL_HANDOVER_NOT_FOUND"
+    NORMAL_HANDOVER_PENDING = "NORMAL_HANDOVER_PENDING"
+    NORMAL_HANDOVER_ALREADY_TERMINAL = "NORMAL_HANDOVER_ALREADY_TERMINAL"
+    NORMAL_HANDOVER_ALREADY_CLAIMED = "NORMAL_HANDOVER_ALREADY_CLAIMED"
+    NORMAL_HANDOVER_GRANT_EXPIRED = "NORMAL_HANDOVER_GRANT_EXPIRED"
+    NORMAL_HANDOVER_STALE_CONFIRMATION = "NORMAL_HANDOVER_STALE_CONFIRMATION"
+    NORMAL_HANDOVER_IDENTITY_MISMATCH = "NORMAL_HANDOVER_IDENTITY_MISMATCH"
+    NORMAL_HANDOVER_COMMAND_FAILED = "NORMAL_HANDOVER_COMMAND_FAILED"
 
 
 class ExecutionRefusedError(Exception):
@@ -57,6 +65,22 @@ def refusal_problem(code: ExecutionRefusalCode) -> tuple[int, str]:
             return 409, "请求的旧机不是该工位当前的物理执行权持有者"
         case ExecutionRefusalCode.HANDOVER_SAME_HOST:
             return 422, "旧机与目标机不能是同一台推理机"
+        case ExecutionRefusalCode.NORMAL_HANDOVER_NOT_FOUND:
+            return 404, "正常交权请求不存在"
+        case ExecutionRefusalCode.NORMAL_HANDOVER_PENDING:
+            return 409, "该工位已有待确认的正常交权请求"
+        case ExecutionRefusalCode.NORMAL_HANDOVER_ALREADY_TERMINAL:
+            return 409, "正常交权请求已经进入终态"
+        case ExecutionRefusalCode.NORMAL_HANDOVER_ALREADY_CLAIMED:
+            return 409, "旧机已经领取停机命令，不能再取消正常交权"
+        case ExecutionRefusalCode.NORMAL_HANDOVER_GRANT_EXPIRED:
+            return 409, "当前物理执行权租约已过期，不能发起正常交权"
+        case ExecutionRefusalCode.NORMAL_HANDOVER_STALE_CONFIRMATION:
+            return 409, "停机确认对应的租约或请求已过期，不能影响后继交权"
+        case ExecutionRefusalCode.NORMAL_HANDOVER_IDENTITY_MISMATCH:
+            return 409, "停机确认身份与冻结的正常交权请求不一致"
+        case ExecutionRefusalCode.NORMAL_HANDOVER_COMMAND_FAILED:
+            return 409, "旧机未能完成停机和点位释放"
 
 
 __all__ = ["ExecutionRefusalCode", "ExecutionRefusedError", "refusal_problem"]

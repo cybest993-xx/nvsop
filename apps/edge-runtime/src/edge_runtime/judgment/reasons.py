@@ -68,6 +68,11 @@ class ReasonCode(Enum):
         Verdict.INDETERMINATE,
         "运行被中断。配置切换、进程重启、本地暂停或显式终止。",
     )
+    STORAGE_UNAVAILABLE = (
+        "STORAGE_UNAVAILABLE",
+        Verdict.INDETERMINATE,
+        "边缘存储不可用或超过安全水位",
+    )
     IO_SIGNAL_LOST = ("IO_SIGNAL_LOST", Verdict.INDETERMINATE, "外部信号不可达")
     IO_TIME_UNALIGNED = ("IO_TIME_UNALIGNED", Verdict.INDETERMINATE, "外部信号时间未对齐")
 

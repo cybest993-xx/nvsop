@@ -9,6 +9,7 @@ import os
 import sys
 import tempfile
 from collections.abc import Callable
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
@@ -109,7 +110,9 @@ def apply_export(
     operator: str | None = None,
 ) -> dict[str, object] | None:
     export = _object(json.loads(export_path.read_text(encoding="utf-8")), "center export")
-    _require_keys(export, _EXPORT_KEYS, "center export")
+    _require_keys(
+        export, _EXPORT_KEYS, "center export", optional=frozenset({"disk_watermark_percent"})
+    )
     edge = _object(json.loads(edge_path.read_text(encoding="utf-8")), "edge configuration")
     local_media = _object(edge.get("media"), "edge media configuration")
     missing = (_STATIC_MEDIA_KEYS - _OPTIONAL_MEDIA_KEYS) - local_media.keys()
@@ -148,6 +151,24 @@ def apply_export(
     ):
         media["recording_window_confirmation"] = local_media["recording_window_confirmation"]
     _validate_media(media)
+    if "disk_watermark_percent" in export:
+        # media 校验已建立 edge 源码导入路径; 新工具仍可消费没有水位字段的旧导出。
+        from edge_runtime.storage_health import (
+            DiskHealthConfiguration,
+            load_disk_health_configuration,
+        )
+
+        high = export["disk_watermark_percent"]
+        if isinstance(high, bool) or not isinstance(high, int) or not 1 <= high <= 99:
+            raise ValueError("disk_watermark_percent must be an integer within 1..99")
+        previous = load_disk_health_configuration(edge.get("disk_health"))
+        recovery = previous.recovery_watermark_percent
+        if "disk_health" not in edge:
+            defaults = DiskHealthConfiguration()
+            recovery = high * defaults.recovery_watermark_percent / defaults.high_watermark_percent
+        edge["disk_health"] = asdict(
+            replace(previous, high_watermark_percent=high, recovery_watermark_percent=recovery)
+        )
     impact: dict[str, object] | None = None
     if confirm_retention:
         if operator is None or not operator.strip():
@@ -246,9 +267,15 @@ def _validate_media(value: dict[str, object]) -> None:
     _load_media(value)
 
 
-def _require_keys(value: dict[str, Any], required: frozenset[str], name: str) -> None:
+def _require_keys(
+    value: dict[str, Any],
+    required: frozenset[str],
+    name: str,
+    *,
+    optional: frozenset[str] = frozenset(),
+) -> None:
     missing = required - value.keys()
-    unknown = value.keys() - required
+    unknown = value.keys() - required - optional
     if missing:
         raise ValueError(f"{name} is missing: {', '.join(sorted(missing))}")
     if unknown:

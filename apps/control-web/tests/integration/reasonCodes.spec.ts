@@ -47,13 +47,16 @@ function installFetch(routes: Record<string, unknown>): void {
   })
 }
 
-function installEventSource(frames: { type: string; data: string }[]): void {
+function installEventSource(frames: { type: string; data: string }[]): (data: unknown) => void {
+  let send: (data: unknown) => void = () => undefined
   class FakeEventSource extends EventTarget {
     onopen: ((event: Event) => void) | null = null
     onerror: ((event: Event) => void) | null = null
 
     constructor(_url: string) {
       super()
+      send = (data) =>
+        this.dispatchEvent(new MessageEvent('runtime', { data: JSON.stringify(data) }))
       queueMicrotask(() => {
         this.onopen?.(new Event('open'))
         for (const frame of frames) {
@@ -65,6 +68,7 @@ function installEventSource(frames: { type: string; data: string }[]): void {
     close(): void {}
   }
   vi.stubGlobal('EventSource', FakeEventSource)
+  return (data) => send(data)
 }
 
 function signIn(permissions: string[]): void {
@@ -102,6 +106,66 @@ const STATION_PROJECTION = {
 }
 
 describe('工位运行镜像的原因码', () => {
+  it('shows measured storage watermarks and a recovery without hiding locked violations', async () => {
+    signIn(['monitor.report.view'])
+    installFetch({ '/api/v1/monitor/violations': { items: [], page: 1, page_size: 50, total: 0 } })
+    const fact = {
+      event_id: 'disk-1',
+      host_id: 'host-1',
+      station_id: 'station-c16',
+      stream_id: 'storage:evidence',
+      status: 'storage_unavailable',
+      reason_code: 'STORAGE_UNAVAILABLE',
+      reported_at: '2026-09-14T08:00:02Z',
+      occurred_at: '2026-09-14T08:00:02Z',
+      source_anchor: null,
+      anchor_offset: null,
+      detail: JSON.stringify({
+        path: '/var/lib/nvsop/evidence',
+        used_percent: 91,
+        high_watermark_percent: 90,
+        recovery_watermark_percent: 80,
+      }),
+    }
+    const snapshot = { ...STATION_PROJECTION, health: [fact] }
+    const send = installEventSource([{ type: 'runtime', data: JSON.stringify(snapshot) }])
+    const wrapper = mount(StationRuntimePanel, {
+      props: { stations: [] },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('证据目录')
+    expect(wrapper.text()).toContain('91%')
+    expect(wrapper.text()).toContain('高水位 ≥ 90%')
+    expect(wrapper.text()).toContain('恢复 ≤ 80%')
+    expect(wrapper.text()).toContain('/var/lib/nvsop/evidence')
+    expect(wrapper.text()).toContain('存储失效')
+    send({
+      ...snapshot,
+      health: [
+        {
+          ...fact,
+          status: 'storage_healthy',
+          reason_code: null,
+          detail: JSON.stringify({
+            path: '/var/lib/nvsop/evidence',
+            used_percent: 80,
+            high_watermark_percent: 90,
+            recovery_watermark_percent: 80,
+          }),
+        },
+      ],
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('存储可用')
+    // 恢复后的当前健康不能洗白历史判定。
+    expect(wrapper.text()).toContain('WRONG_STEP — 出现了错误步骤')
+    send({ ...snapshot, health: [{ ...fact, detail: '{invalid' }] })
+    await flushPromises()
+    expect(wrapper.text()).toContain('暂无容量测量')
+    wrapper.unmount()
+  })
+
   it('known codes show the core hint, unknown codes the raw code plus generic advice', async () => {
     signIn(['monitor.report.view'])
     installFetch({

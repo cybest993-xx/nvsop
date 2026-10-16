@@ -405,8 +405,8 @@ def _health_occurred_at(report: ReportedHealth) -> float:
 
 
 def _health_is_healthy(status: str) -> bool:
-    """只有明确的"正在投递"算健康；未知状态保守地按受损处理 (§5.21)。"""
-    return status == "delivering"
+    """只接受明确的流/存储恢复事实; 未知状态仍保守地按受损处理。"""
+    return status in {"delivering", "storage_healthy"}
 
 
 HOST_SILENCE_THRESHOLD_SECONDS = 300.0

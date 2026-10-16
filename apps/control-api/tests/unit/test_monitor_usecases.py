@@ -1170,6 +1170,32 @@ def test_stream_health_view_keeps_latest_per_stream_and_classifies() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("status", "validity"),
+    [
+        ("storage_healthy", "healthy"),
+        ("storage_unavailable", "impaired"),
+        ("future_storage", "impaired"),
+    ],
+)
+def test_storage_health_classification(status: str, validity: str) -> None:
+    monitor = MemoryMonitor()
+    monitor.upsert_health(
+        health(
+            "storage",
+            stream_id="storage:evidence",
+            status=status,
+            received_at=datetime(2026, 9, 13, tzinfo=UTC),
+        )
+    )
+    assert (
+        stream_health_view(
+            monitor, caller=caller(Permission.MONITOR_VIEW), station_id=str(STATION_ID)
+        ).validity
+        == validity
+    )
+
+
 def test_stream_health_view_ignores_delayed_retry_of_older_event_time() -> None:
     monitor = MemoryMonitor()
     monitor.upsert_health(

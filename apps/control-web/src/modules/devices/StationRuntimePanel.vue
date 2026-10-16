@@ -86,6 +86,32 @@ const models = (sources: unknown) =>
   ((sources ?? []) as { backend_id: string; model_ids: string[] }[])
     .map((source) => `${source.backend_id}：${source.model_ids.join('、') || '无模型标识'}`)
     .join('；') || '未提供'
+type HealthFact = NonNullable<RuntimeStationProjection['health']>[number]
+const isStorage = (value: HealthFact) => value.stream_id?.startsWith('storage:') ?? false
+const storageLabels: Record<string, string> = {
+  'storage:recording': '连续录像',
+  'storage:evidence': '证据目录',
+  'storage:local_state': 'SQLite / 本地待办',
+}
+const percent = (value: unknown) =>
+  typeof value === 'number' && Number.isFinite(value) ? `${Number(value.toFixed(1))}%` : '未知'
+function storageMetrics(detail: string | null): Record<string, unknown> {
+  try {
+    const value: unknown = JSON.parse(detail ?? 'null')
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {}
+  } catch {
+    return {}
+  }
+}
+const storageRows = (value: RuntimeStationProjection) =>
+  (value.health ?? [])
+    .filter(isStorage)
+    .map((fact) => ({ fact, metrics: storageMetrics(fact.detail) }))
+const streamRows = (value: RuntimeStationProjection) =>
+  (value.health ?? []).filter((fact) => !isStorage(fact))
+
 function update(value: RuntimeStationProjection): void {
   const current = projections.value.get(value.station_id)
   if (current && JSON.stringify(current) === JSON.stringify(value)) return
@@ -363,7 +389,7 @@ onUnmounted(() => {
         </section>
         <section aria-label="各路观测健康">
           <h4>各路观测健康</h4>
-          <article v-for="v in p.health ?? []" :key="v.event_id">
+          <article v-for="v in streamRows(p)" :key="v.event_id">
             <strong>{{ v.stream_id ?? '未标识流' }}：{{ v.status }}</strong>
             <p>
               原因 / 说明：{{ v.reason_code ? reasonLabel(v.reason_code) : '未提供' }} /
@@ -374,7 +400,34 @@ onUnmounted(() => {
               {{ time(v.anchor_offset) }}
             </p>
           </article>
-          <p v-if="!p.health?.length" class="muted">尚无流健康事实；不推断为健康。</p>
+          <p v-if="!streamRows(p).length" class="muted">尚无流健康事实；不推断为健康。</p>
+        </section>
+        <section aria-label="边缘存储健康">
+          <h4>边缘存储健康</h4>
+          <article
+            v-for="{ fact, metrics } in storageRows(p)"
+            :key="fact.event_id"
+            class="runtime__storage"
+          >
+            <div class="runtime__storage-heading">
+              <strong>{{ storageLabels[fact.stream_id ?? ''] ?? fact.stream_id }}</strong>
+              <el-tag :type="fact.status === 'storage_healthy' ? 'success' : 'danger'" size="small">
+                {{ fact.status === 'storage_healthy' ? '存储可用' : '存储失效' }}
+              </el-tag>
+            </div>
+            <p v-if="typeof metrics.used_percent === 'number'">
+              使用 {{ percent(metrics.used_percent) }}
+            </p>
+            <p v-else>暂无容量测量</p>
+            <p class="muted">
+              高水位 ≥ {{ percent(metrics.high_watermark_percent) }} · 恢复 ≤
+              {{ percent(metrics.recovery_watermark_percent) }}
+            </p>
+            <p v-if="typeof metrics.path === 'string'" class="muted">{{ metrics.path }}</p>
+            <p v-if="typeof metrics.error === 'string'" role="alert">{{ metrics.error }}</p>
+            <p class="muted">最近上报 {{ time(fact.occurred_at) }}</p>
+          </article>
+          <p v-if="!storageRows(p).length" class="muted">尚无存储健康事实。</p>
         </section>
       </div>
     </article>
@@ -418,6 +471,19 @@ onUnmounted(() => {
 .runtime__grid section {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+.runtime__storage {
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.runtime__storage-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.runtime__storage p {
+  margin: 0.4rem 0 0;
 }
 .runtime dl {
   display: grid;

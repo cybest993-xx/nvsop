@@ -131,7 +131,7 @@ RestartSec=2
 - `local_state_path`
 - `stations`（非空）
 
-可选：`center_ca_file`、`media`、`evidence`、`queue_capacity`。
+可选：`center_ca_file`、`media`、`evidence`、`queue_capacity`、`disk_health`。
 
 `queue_capacity` 可选，未填写时四类待办分别默认最多 `10000` 条。显式设置时必须完整指定正整数 `reports`、`evidence`、`observations`、`health`。这些限制仅约束本机尚未确认的 SQLite 行数，不代表磁盘字节配额；部署仍须监控本机磁盘水位。处置写入账本不属于可丢弃队列。
 
@@ -147,6 +147,24 @@ RestartSec=2
 `LocalState.queue_status()` 在本机提供四类待办的深度、最早 `queue_id`、最近待办失败与容量边界；上报循环周期性记录 `edge.local_queue.status`，不输出可能含秘密的原始失败信息。达到容量时，新增待办拒绝并记录 `edge.local_queue.capacity_exhausted`，判定反应事务整体回滚；运行时另发 `edge.station.judgment_unavailable` 告警并按现有本地致命错误路径退出，由守护进程重启，不制造额外 `INDETERMINATE`/正常判定，不能对外声称已锁存或已完成判定。不得丢弃未确认的唯一副本，需修复积压并取得中心确认后恢复容量。磁盘自身写入失败同样不能被归类为单纯中心传输失败。
 
 主机私钥从文件读取并校验；连接器凭据同样留在本机 secret 文件。**当前生产入口以这份本地 JSON 作为 bootstrap/本机部署配置**。设计上的权威分工是中心拥有拓扑、模板、版本和期望运行参数，本机文件拥有本机连接信息、adapter profile 和设备秘密；不要把本机 secret 反向写入中心配置或 Git。
+
+### 磁盘水位与不可写告警
+
+`disk_health` 对 SQLite 所在目录、参与该工位连续录像的目录和已配置的证据目录分别采样，不假设它们共用文件系统。它使用当前进程可用块统计，并在目标目录创建、写入、`fsync` 后移除自己的小型探测文件。显式配置必须完整，例如：
+
+```json
+"disk_health": {
+  "high_watermark_percent": 90,
+  "recovery_watermark_percent": 80,
+  "check_interval_seconds": 5
+}
+```
+
+使用率 **≥ 高水位**、采样失败或探测不可写时，该路径进入失效；只有探测成功且使用率 **≤ 恢复边界**才恢复，中间区间保持失效。任一路径失效都通过 `STORAGE_UNAVAILABLE` 使该工位不可判定；其他路径或推理流恢复不能解除它。首次启动及重启按失效起步，所有路径确认低于或等于恢复边界后才解除，避免重启洗掉滞回状态。缺省参数由 [`storage_health.py`](../../apps/edge-runtime/src/edge_runtime/storage_health.py) 拥有；显式值必须有限、满足 `0 ≤ recovery < high < 100` 且采样间隔为正。
+
+中心设备页的运行镜像显示各路径最近上报的使用率、生效高水位/恢复边界和告警。事实沿既有健康队列积压及补报，不依赖中心在线；仅首次及状态、整百分点或错误变化时入队。`edge.storage.health` 记录本机变化；SQLite 本身只读、满额或 I/O 失败时无法保证把告警持久化，运行循环记录 `edge.storage.write_failed` 并停止判定，由既有守护重启，不能继续发布通过。恢复只解除存储失效，不撤销锁存违规；探测不删除录像、在审证据或任何未确认的唯一副本。
+
+中心主机高水位通过[媒体导出应用步骤](../../deploy/media/README.md#应用中心导出的媒体配置)进入本机 `disk_health`；改中心字段后必须重新应用并重启，本机生效值与尚未应用的中心期望值不是同一事实。该可选导出字段不改变配置束 v2、健康上报形状或 SQLite schema。
 
 ### 工位配置形状
 

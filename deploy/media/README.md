@@ -61,7 +61,7 @@ mv edge.next.json edge.json
 NVSOP_EDGE_COMMAND_CONFIG_FILE=edge.json python3 -m edge_runtime
 ```
 
-脚本保留本机媒体策略，仅更新导出的主机/相机拓扑。新相机按参与 SOP 执行处理，既有明确的调试相机 `sop_execution: false` 保留；输出原子写入并使用 `0600`。相机 path 稳定取 `camera-<uuid hex>`，不从显示名或任意文件路径生成。
+脚本保留本机媒体策略，更新导出的主机/相机拓扑，并将中心 `disk_watermark_percent` 应用为本机 `disk_health.high_watermark_percent`。首次应用时恢复边界设为该高水位的 90%，采样周期取运行时默认；已有显式恢复边界和周期保持不变，若降低高水位使恢复边界不再小于它，脚本拒绝写出，需先调整本机恢复边界。磁盘告警语义与手工配置见[运行配置](../../docs/deployment/configuration.md#磁盘水位与不可写告警)。新版脚本接受没有水位字段的旧导出并保留本机设置；旧版脚本拒绝新字段，应用新导出前须先更新脚本。新相机按参与 SOP 执行处理，既有明确的调试相机 `sop_execution: false` 保留；输出原子写入并使用 `0600`。相机 path 稳定取 `camera-<uuid hex>`，不从显示名或任意文件路径生成。
 
 **完成条件：** 已配置媒体在本机实际运行，重复应用不产生重复 path/进程；失败和窗口确认取消不冒充生效，密码不进入中心、浏览器或日志。本机媒体导出应用不另造自动拉取循环；中心拥有的完整运行配置同步由现有配置束协议负责。
 

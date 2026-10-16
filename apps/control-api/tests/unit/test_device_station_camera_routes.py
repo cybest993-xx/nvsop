@@ -283,6 +283,7 @@ def test_camera_media_query_and_host_export_are_non_secret_and_direct(
         "host_name": "推理机-1",
         "host_revision": 1,
         "host_status": "active",
+        "disk_watermark_percent": center.hosts.rows[UUID(host_id)].disk_watermark_percent,
         "mediamtx_address": "https://media.example.test:8889",
         "mediamtx_playback_address": "https://media.example.test:9996",
         "recording_window_seconds": 604800,

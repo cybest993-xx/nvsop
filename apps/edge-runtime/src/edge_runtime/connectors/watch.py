@@ -26,6 +26,8 @@ from edge_runtime.connectors.port import (
 )
 from edge_runtime.judgment.reasons import ReasonCode
 from edge_runtime.supervisor.inputs import (
+    ClockEvidence,
+    ClockStatusObserved,
     ExternalSignal,
     SupervisorInput,
     Validity,
@@ -49,6 +51,7 @@ class PointWatch:
         Cleared on a gap rather than kept: 断线 means we stopped seeing, and holding the
         pre-gap level would let the runtime answer questions about a window it was blind for.
         """
+        self._clock: ClockEvidence | None = None
         self._reachable = True
         """Starts true so a runtime that never fails reports nothing. The first failed read
         is the transition that reports the impairment."""
@@ -59,7 +62,7 @@ class PointWatch:
             case Unreachable():
                 return self._lost()
             case Reading():
-                return (*self._regained(), *self._edge(result))
+                return (*self._regained(), *self._clock_fact(result), *self._edge(result))
 
     def _lost(self) -> tuple[SupervisorInput, ...]:
         """The point stopped answering. Reported once, and it lasts until a read succeeds.
@@ -68,10 +71,24 @@ class PointWatch:
         core's impairment record is a set — the repeats would add nothing but volume.
         """
         self._state = None
+        previous_clock, self._clock = self._clock, None
         if not self._reachable:
             return ()
         self._reachable = False
-        return (ValidityChanged(reason=ReasonCode.IO_SIGNAL_LOST, now=Validity.IMPAIRED),)
+        facts: tuple[SupervisorInput, ...] = (
+            ValidityChanged(reason=ReasonCode.IO_SIGNAL_LOST, now=Validity.IMPAIRED),
+        )
+        # 失联时没有新的接收时刻; 明确撤销已对齐/已测偏移, 不伪造一个时间戳。
+        if previous_clock is not None and (
+            previous_clock.status != "unverified" or previous_clock.offset_seconds is not None
+        ):
+            facts = (
+                *facts,
+                ClockStatusObserved(
+                    self._point.label, None, ClockEvidence.unverified(previous_clock.source)
+                ),
+            )
+        return facts
 
     def _regained(self) -> tuple[SupervisorInput, ...]:
         """A read succeeded after a gap.
@@ -85,6 +102,14 @@ class PointWatch:
             return ()
         self._reachable = True
         return (ValidityChanged(reason=ReasonCode.IO_SIGNAL_LOST, now=Validity.RESTORED),)
+
+    def _clock_fact(self, reading: Reading) -> tuple[SupervisorInput, ...]:
+        """首次或变化时记录时间证据; 稳定的未知值不产生重复待办。"""
+        evidence = reading.clock
+        if evidence is None or evidence == self._clock:
+            return ()
+        self._clock = evidence
+        return (ClockStatusObserved(self._point.label, reading.at, evidence),)
 
     def _edge(self, reading: Reading) -> tuple[SupervisorInput, ...]:
         """The observation, when this reading is a change to active.

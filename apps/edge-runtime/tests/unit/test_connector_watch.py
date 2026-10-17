@@ -14,6 +14,7 @@ copy of that rule on this path is what harness §1 calls a defect.
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 
 from harness import EXTERNAL_END, EXTERNAL_START, FakeClock, MemoryReactionStore, opening_state
 
@@ -24,6 +25,8 @@ from edge_runtime.judgment.model import HostInstant, Ordering
 from edge_runtime.judgment.reasons import ReasonCode
 from edge_runtime.supervisor.inputs import (
     ActionRecognized,
+    ClockEvidence,
+    ClockStatusObserved,
     ExternalSignal,
     TimeAlignment,
     Validity,
@@ -261,6 +264,168 @@ class OneConnectorsPointsArePolledTogetherTest(unittest.TestCase):
         poller = ConnectorPoller(connector=connector, points=(POINT,), timeout=1.0)
 
         self.assertEqual((), poller.poll())
+
+
+class ClockOffsetEvidenceTest(unittest.TestCase):
+    """偏移必须来自同一时源的设备事件 UTC、主机接收 UTC 与实测投递延迟界。"""
+
+    def test_measured_interval_wholly_inside_tolerance_is_verified(self) -> None:
+        sample = ClockEvidence.from_device_timestamps(
+            device_event_utc=100.004,
+            host_receipt_utc=100.010,
+            max_delivery_delay_seconds=0.004,
+            tolerance_seconds=0.010,
+        )
+        self.assertEqual("verified", sample.status)
+        self.assertAlmostEqual(-0.004, sample.offset_seconds or 0.0, places=6)
+        self.assertAlmostEqual(0.002, sample.uncertainty_seconds or 0.0)
+        self.assertEqual(TimeAlignment.ALIGNED, sample.alignment)
+
+    def test_measured_interval_wholly_beyond_tolerance_is_unaligned(self) -> None:
+        sample = ClockEvidence.from_device_timestamps(
+            device_event_utc=100.2,
+            host_receipt_utc=100.0,
+            max_delivery_delay_seconds=0.01,
+            tolerance_seconds=0.05,
+        )
+        self.assertEqual("out_of_tolerance", sample.status)
+        self.assertAlmostEqual(0.205, sample.offset_seconds or 0.0)
+        self.assertEqual(TimeAlignment.UNALIGNED, sample.alignment)
+
+    def test_interval_crossing_tolerance_cannot_claim_alignment(self) -> None:
+        sample = ClockEvidence.from_device_timestamps(
+            device_event_utc=99.992,
+            host_receipt_utc=100.0,
+            max_delivery_delay_seconds=0.012,
+            tolerance_seconds=0.005,
+        )
+        self.assertEqual("unverified", sample.status)
+        self.assertEqual(TimeAlignment.UNALIGNED, sample.alignment)
+
+    def test_verified_label_must_be_recomputable_from_source_and_tolerance(self) -> None:
+        valid = ClockEvidence.from_device_timestamps(
+            device_event_utc=100.004,
+            host_receipt_utc=100.010,
+            max_delivery_delay_seconds=0.004,
+            tolerance_seconds=0.010,
+        )
+        self.assertEqual(0.010, valid.tolerance_seconds)
+        measured_outside = ClockEvidence.from_device_timestamps(
+            device_event_utc=100.2,
+            host_receipt_utc=100.0,
+            max_delivery_delay_seconds=0.01,
+            tolerance_seconds=0.05,
+        )
+        with self.assertRaisesRegex(ValueError, "verification must match"):
+            replace(measured_outside, status="verified")
+        with self.assertRaisesRegex(ValueError, "offset must match"):
+            ClockEvidence(
+                source="device_clock",
+                status="verified",
+                offset_seconds=0,
+                uncertainty_seconds=0.002,
+                device_event_utc=100.004,
+                host_receipt_utc=100.010,
+                max_delivery_delay_seconds=0.004,
+                tolerance_seconds=0.010,
+            )
+
+    def test_absent_device_timestamp_has_no_fake_zero_offset(self) -> None:
+        missing = ClockEvidence.unverified("device_clock")
+        self.assertIsNone(missing.offset_seconds)
+        self.assertIsNone(missing.uncertainty_seconds)
+        self.assertEqual(TimeAlignment.UNALIGNED, missing.alignment)
+        with self.assertRaisesRegex(ValueError, "contradicts clock evidence"):
+            Reading(
+                state=PointState.ACTIVE,
+                at=HostInstant(10.0),
+                alignment=TimeAlignment.ALIGNED,
+                clock=missing,
+            )
+
+    def test_unknown_measured_bound_and_nonfinite_timestamp_are_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "positive"):
+            ClockEvidence.from_device_timestamps(
+                device_event_utc=100.0,
+                host_receipt_utc=100.0,
+                max_delivery_delay_seconds=0.0,
+                tolerance_seconds=0.05,
+            )
+        with self.assertRaisesRegex(ValueError, "finite"):
+            ClockEvidence.from_device_timestamps(
+                device_event_utc=float("nan"),
+                host_receipt_utc=100.0,
+                max_delivery_delay_seconds=0.01,
+                tolerance_seconds=0.05,
+            )
+
+
+class ClockFactsReportWithoutAnActiveEdgeTest(unittest.TestCase):
+    def test_missing_offset_and_loss_are_mirrored_without_fabricated_time(self) -> None:
+        watch = PointWatch(point=POINT)
+        unknown = ClockEvidence.unverified("device_clock")
+        first = Reading(
+            state=PointState.INACTIVE,
+            at=HostInstant(10.0),
+            alignment=TimeAlignment.UNALIGNED,
+            clock=unknown,
+        )
+        self.assertEqual(
+            (ClockStatusObserved(POINT.label, HostInstant(10.0), unknown),),
+            watch.inputs_for(first),
+        )
+        self.assertEqual((), watch.inputs_for(first), "stable unknown should not flood reports")
+        self.assertEqual((lost(Validity.IMPAIRED),), watch.inputs_for(Unreachable("lost")))
+        self.assertEqual(
+            (
+                lost(Validity.RESTORED),
+                ClockStatusObserved(POINT.label, HostInstant(11.0), unknown),
+                signal(at=11.0, alignment=TimeAlignment.UNALIGNED),
+            ),
+            watch.inputs_for(
+                Reading(
+                    state=PointState.ACTIVE,
+                    at=HostInstant(11.0),
+                    alignment=TimeAlignment.UNALIGNED,
+                    clock=unknown,
+                )
+            ),
+        )
+
+    def test_uncertain_numeric_offset_is_also_revoked_when_connection_is_lost(self) -> None:
+        watch = PointWatch(point=POINT)
+        ambiguous = ClockEvidence.from_device_timestamps(
+            device_event_utc=99.992,
+            host_receipt_utc=100.0,
+            max_delivery_delay_seconds=0.012,
+            tolerance_seconds=0.005,
+        )
+        self.assertEqual("unverified", ambiguous.status)
+        self.assertIsNotNone(ambiguous.offset_seconds)
+        watch.inputs_for(
+            Reading(PointState.INACTIVE, HostInstant(10.0), TimeAlignment.UNALIGNED, ambiguous)
+        )
+        self.assertEqual(
+            (
+                lost(Validity.IMPAIRED),
+                ClockStatusObserved(POINT.label, None, ClockEvidence.unverified("device_clock")),
+            ),
+            watch.inputs_for(Unreachable("lost")),
+        )
+
+    def test_last_verified_offset_is_revoked_when_connection_is_lost(self) -> None:
+        watch = PointWatch(point=POINT)
+        clock = ClockEvidence.host_receipt()
+        watch.inputs_for(
+            Reading(PointState.INACTIVE, HostInstant(10.0), TimeAlignment.ALIGNED, clock)
+        )
+        self.assertEqual(
+            (
+                lost(Validity.IMPAIRED),
+                ClockStatusObserved(POINT.label, None, ClockEvidence.unverified("host_receipt")),
+            ),
+            watch.inputs_for(Unreachable("lost")),
+        )
 
 
 class AConnectorSignalRunsTheSameJudgmentCodeAnActionNumberDoesTest(unittest.TestCase):

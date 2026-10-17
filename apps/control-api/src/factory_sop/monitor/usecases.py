@@ -360,7 +360,13 @@ def stream_health_view(
     """
     authorize(caller, Permission.MONITOR_VIEW)
     reports = monitor.health_for_station(station_id=station_id)
-    latest = latest_health_per_stream(reports)
+    # 连接器时钟状态独立于视频流健康。它只影响携带该事实的外部信号，
+    # 不得把最新一次时钟未验证状态锁存成整路流的持续失效。
+    latest = tuple(
+        item
+        for item in latest_health_per_stream(reports)
+        if not (item.report.stream_id or "").startswith("clock:")
+    )
     if not latest:
         return StreamHealthView(station_id=station_id, validity="no_data", streams=())
     validity = (

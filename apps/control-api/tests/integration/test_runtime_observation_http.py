@@ -1463,6 +1463,106 @@ def test_reported_decision_is_idempotent_and_dashboard_sse_is_a_real_projection(
     assert "FUTURE_HEALTH_REASON" in stream.text
 
 
+def test_clock_offset_health_survives_authenticated_pg_mirror_without_false_stream_impairment(
+    engine: Engine, runtime_topology: RuntimeTopology, dataset_storage_root: Path
+) -> None:
+    settings = settings_for(engine, storage_root=dataset_storage_root)
+    path = f"{API_PREFIX}/monitor/health"
+    source = {
+        "timestamp_source": "device_clock",
+        "verification": "unverified",
+        "offset_seconds": None,
+        "uncertainty_seconds": None,
+        "device_event_utc": None,
+        "host_receipt_utc": None,
+        "max_delivery_delay_seconds": None,
+        "host_receipt_monotonic": 42.0,
+    }
+    unknown = ReportedHealth(
+        event_id=f"{runtime_topology.host.id}:health-clock-1",
+        trace_id="trace-clock-1",
+        host_id=str(runtime_topology.host.id),
+        station_id=str(runtime_topology.station.id),
+        stream_id="clock:工件到位",
+        status="clock_unverified",
+        reason_code="IO_TIME_UNALIGNED",
+        detail=json.dumps(source),
+        occurred_at="2026-10-17T08:00:00Z",
+        source_anchor=None,
+        anchor_offset=None,
+        reported_at="2026-10-17T08:00:00Z",
+    )
+    body = reported_health_to_wire(unknown)
+    with client_for(engine, settings, permissions=frozenset({Permission.MONITOR_VIEW})) as client:
+        first = client.post(
+            path,
+            json=body,
+            headers=_host_headers(runtime_topology, method="POST", path=path, body=body),
+        )
+        duplicate = client.post(
+            path,
+            json=body,
+            headers=_host_headers(runtime_topology, method="POST", path=path, body=body),
+        )
+        mirrored = client.get(f"{API_PREFIX}/monitor/stream", params={"once": "true"})
+        stream_health = client.get(
+            f"{API_PREFIX}/monitor/stream-health",
+            params={"station_id": str(runtime_topology.station.id)},
+        )
+        observed = replace(
+            unknown,
+            event_id=f"{runtime_topology.host.id}:health-clock-2",
+            trace_id="trace-clock-2",
+            status="clock_out_of_tolerance",
+            detail=json.dumps(
+                {
+                    **source,
+                    "verification": "out_of_tolerance",
+                    "offset_seconds": 0.205,
+                    "uncertainty_seconds": 0.005,
+                    "device_event_utc": 100.2,
+                    "host_receipt_utc": 100.0,
+                    "max_delivery_delay_seconds": 0.01,
+                }
+            ),
+            occurred_at="2026-10-17T08:01:00Z",
+            reported_at="2026-10-17T08:01:00Z",
+        )
+        second_body = reported_health_to_wire(observed)
+        second = client.post(
+            path,
+            json=second_body,
+            headers=_host_headers(runtime_topology, method="POST", path=path, body=second_body),
+        )
+        latest = client.get(f"{API_PREFIX}/monitor/stream", params={"once": "true"})
+    assert first.status_code == 200
+    assert first.json()["duplicate"] is False
+    assert duplicate.status_code == 200
+    assert duplicate.json()["duplicate"] is True
+    assert second.status_code == 200
+    assert mirrored.status_code == 200
+    first_runtime = next(
+        json.loads(fragment.split("data: ", 1)[1])
+        for fragment in mirrored.text.split("\n\n")
+        if fragment.startswith("event: runtime\n")
+    )
+    assert first_runtime["health"][0]["stream_id"] == "clock:工件到位"
+    assert json.loads(first_runtime["health"][0]["detail"])["offset_seconds"] is None
+    assert stream_health.status_code == 200
+    assert stream_health.json()["validity"] == "no_data"
+    assert stream_health.json()["streams"] == []
+    newest_runtime = next(
+        json.loads(fragment.split("data: ", 1)[1])
+        for fragment in latest.text.split("\n\n")
+        if fragment.startswith("event: runtime\n")
+    )
+    newest = newest_runtime["health"][0]
+    assert newest["status"] == "clock_out_of_tolerance"
+    assert json.loads(newest["detail"])["offset_seconds"] == 0.205
+    assert newest["source_anchor"] is None
+    assert newest["anchor_offset"] is None
+
+
 def test_reported_violation_is_archived_idempotently_and_queryable(
     engine: Engine, runtime_topology: RuntimeTopology, dataset_storage_root: Path
 ) -> None:

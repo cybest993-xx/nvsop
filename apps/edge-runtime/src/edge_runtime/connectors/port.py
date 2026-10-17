@@ -23,7 +23,7 @@ from typing import Protocol
 from nvsop_contracts import Capability
 
 from edge_runtime.judgment.model import HostInstant
-from edge_runtime.supervisor.inputs import TimeAlignment
+from edge_runtime.supervisor.inputs import ClockEvidence, TimeAlignment
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +81,13 @@ class Reading:
     construction within the declared delivery delay, while a device-clock timestamp is
     aligned only while the offset is known and inside the tolerance.
     """
+
+    clock: ClockEvidence | None = None
+    """当次实测来源与偏移区间; 旧适配器不得凭空声称已有偏移。"""
+
+    def __post_init__(self) -> None:
+        if self.clock is not None and self.alignment is not self.clock.alignment:
+            raise ValueError("connector alignment contradicts clock evidence")
 
 
 @dataclass(frozen=True, slots=True)

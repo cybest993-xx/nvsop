@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import unittest
 from unittest.mock import patch
 
@@ -37,6 +38,8 @@ from edge_runtime.local_state import BackendReportContext
 from edge_runtime.stream_health import StreamFact, StreamHealthEvent
 from edge_runtime.supervisor.inputs import (
     ActionRecognized,
+    ClockEvidence,
+    ClockStatusObserved,
     ExternalSignal,
     StreamHealthObserved,
     TimeAlignment,
@@ -72,6 +75,63 @@ def action(signal: str, at: float, *, anchor: float = ANCHOR) -> ActionRecognize
 
 def backend(name: str) -> BackendReportContext:
     return BackendReportContext(name, (f"model-{name}",))
+
+
+class AClockMirrorDoesNotChangeJudgmentTest(unittest.TestCase):
+    def test_missing_device_offset_is_stored_but_not_assumed_on_video_anchor(self) -> None:
+        store = MemoryReactionStore()
+        supervisor = StationSupervisor(
+            store=store,
+            state=opening_state(Ordering.UNORDERED),
+            margins=MARGINS,
+            clock=FakeClock(now=100.0),
+        )
+        result = supervisor.receive(
+            ClockStatusObserved(
+                EXTERNAL_START,
+                HostInstant(50.0),
+                ClockEvidence.unverified("device_clock"),
+            )
+        )
+        self.assertEqual((), result.decisions)
+        self.assertEqual(1, len(store.health))
+        fact = store.health[0]
+        self.assertEqual(f"clock:{EXTERNAL_START}", fact["stream_id"])
+        self.assertEqual("clock_unverified", fact["status"])
+        self.assertEqual(ReasonCode.IO_TIME_UNALIGNED.value, fact["reason_code"])
+        self.assertIsNone(fact["source_anchor"])
+        self.assertIsNone(fact["anchor_offset"])
+        detail = json.loads(str(fact["detail"]))
+        self.assertIsNone(detail["offset_seconds"])
+        self.assertEqual(50.0, detail["host_receipt_monotonic"])
+        self.assertEqual("device_clock", detail["timestamp_source"])
+
+    def test_measured_out_of_tolerance_is_reported_without_reusing_old_time_axis(self) -> None:
+        store = MemoryReactionStore()
+        supervisor = StationSupervisor(
+            store=store,
+            state=opening_state(Ordering.UNORDERED),
+            margins=MARGINS,
+            clock=FakeClock(),
+        )
+        measured = ClockEvidence.from_device_timestamps(
+            device_event_utc=100.2,
+            host_receipt_utc=100.0,
+            max_delivery_delay_seconds=0.01,
+            tolerance_seconds=0.05,
+        )
+        supervisor.receive(ClockStatusObserved(EXTERNAL_START, HostInstant(42.0), measured))
+        fact = store.health[0]
+        self.assertEqual("clock_out_of_tolerance", fact["status"])
+        evidence = json.loads(str(fact["detail"]))
+        self.assertAlmostEqual(0.205, evidence["offset_seconds"])
+        self.assertAlmostEqual(0.005, evidence["uncertainty_seconds"])
+        self.assertAlmostEqual(0.05, evidence["tolerance_seconds"])
+        self.assertEqual(42.0, evidence["host_receipt_monotonic"])
+        supervisor.receive(
+            ClockStatusObserved(EXTERNAL_START, None, ClockEvidence.unverified("device_clock"))
+        )
+        self.assertIsNone(json.loads(str(store.health[-1]["detail"]))["offset_seconds"])
 
 
 class EveryInputReachesTheCoreAndCommitsDecisionsTest(unittest.TestCase):

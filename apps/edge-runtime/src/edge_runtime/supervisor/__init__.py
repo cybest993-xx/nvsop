@@ -2,6 +2,8 @@
 
 from edge_runtime.supervisor.inputs import (
     ActionRecognized,
+    ClockEvidence,
+    ClockStatusObserved,
     ExternalSignal,
     StreamHealthObserved,
     SupervisorInput,
@@ -13,6 +15,8 @@ from edge_runtime.supervisor.station import Reaction, StationSupervisor
 
 __all__ = [
     "ActionRecognized",
+    "ClockEvidence",
+    "ClockStatusObserved",
     "ExternalSignal",
     "Reaction",
     "StationSupervisor",

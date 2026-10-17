@@ -1132,6 +1132,38 @@ def test_stream_health_view_reports_no_runtime_data_without_facts() -> None:
     assert view.streams == ()
 
 
+def test_connector_clock_mirror_is_not_a_latched_video_stream_impairment() -> None:
+    monitor = MemoryMonitor()
+    monitor.upsert_health(
+        health(
+            "clock-unverified",
+            stream_id="clock:工件到位",
+            status="clock_unverified",
+            received_at=datetime(2026, 9, 13, 0, 1, tzinfo=UTC),
+        )
+    )
+    no_stream = stream_health_view(
+        monitor, caller=caller(Permission.MONITOR_VIEW), station_id=str(STATION_ID)
+    )
+    assert no_stream.validity == "no_data"
+    assert no_stream.streams == ()
+    monitor.upsert_health(
+        health(
+            "video-delivering",
+            stream_id="cam-a",
+            status="delivering",
+            received_at=datetime(2026, 9, 13, 0, 2, tzinfo=UTC),
+        )
+    )
+    view = stream_health_view(
+        monitor, caller=caller(Permission.MONITOR_VIEW), station_id=str(STATION_ID)
+    )
+    assert view.validity == "healthy"
+    assert [item.report.stream_id for item in view.streams] == ["cam-a"]
+    # 时钟未验证只影响当前外部信号的判定路径；镜像仍保留独立来源状态。
+    assert monitor.health["clock-unverified"].report.status == "clock_unverified"
+
+
 def test_stream_health_view_keeps_latest_per_stream_and_classifies() -> None:
     monitor = MemoryMonitor()
     monitor.upsert_health(

@@ -55,11 +55,13 @@ from edge_runtime.stream_health import StreamFact, StreamHealthEvent
 from edge_runtime.supervisor.evidence import clips_for
 from edge_runtime.supervisor.inputs import (
     ActionRecognized,
+    ClockStatusObserved,
     ExternalSignal,
     Normalizer,
     StorageHealthObserved,
     StreamHealthObserved,
     SupervisorInput,
+    TimeAlignment,
     Validity,
     ValidityChanged,
 )
@@ -340,7 +342,13 @@ class StationSupervisor:
             if self._paused:
                 # 健康和有效性事实继续更新, 观测/计时器仍不进入判定。
                 if isinstance(
-                    arriving, (StreamHealthObserved, StorageHealthObserved, ValidityChanged)
+                    arriving,
+                    (
+                        StreamHealthObserved,
+                        StorageHealthObserved,
+                        ClockStatusObserved,
+                        ValidityChanged,
+                    ),
                 ):
                     return self._receive(arriving, report_provenance=report_provenance)
                 return Reaction(decisions=(), wake_at=None)
@@ -408,6 +416,8 @@ class StationSupervisor:
                 event.error,
             )
         events = normalizer.events_for(arriving) if aggregate_transition else ()
+        if isinstance(arriving, ClockStatusObserved):
+            self._report_clock_health(arriving)
         if isinstance(arriving, StreamHealthObserved):
             self._report_stream_health(arriving.event)
             before = _stream_impairments(self._normalizers.values())
@@ -467,6 +477,36 @@ class StationSupervisor:
             source_anchor=source_anchor,
             observed_at=arriving.at.seconds,
             backend=report_provenance,
+        )
+
+    def _report_clock_health(self, event: ClockStatusObserved) -> None:
+        """偏移来源单独进入现有健康镜像, 不冒充视频源锚也不触发判定。"""
+        evidence = event.evidence
+        self._store.enqueue_health(
+            stream_id=f"clock:{event.signal}",
+            status=f"clock_{evidence.status}",
+            reason_code=(
+                None
+                if evidence.alignment is TimeAlignment.ALIGNED
+                else ReasonCode.IO_TIME_UNALIGNED.value
+            ),
+            detail=json.dumps(
+                {
+                    "timestamp_source": evidence.source,
+                    "verification": evidence.status,
+                    "offset_seconds": evidence.offset_seconds,
+                    "uncertainty_seconds": evidence.uncertainty_seconds,
+                    "device_event_utc": evidence.device_event_utc,
+                    "host_receipt_utc": evidence.host_receipt_utc,
+                    "max_delivery_delay_seconds": evidence.max_delivery_delay_seconds,
+                    "tolerance_seconds": evidence.tolerance_seconds,
+                    "host_receipt_monotonic": None if event.at is None else event.at.seconds,
+                },
+                ensure_ascii=False,
+            ),
+            occurred_at=datetime.now(UTC).isoformat(),
+            source_anchor=None,
+            anchor_offset=None,
         )
 
     def _report_stream_health(self, event: StreamHealthEvent) -> None:

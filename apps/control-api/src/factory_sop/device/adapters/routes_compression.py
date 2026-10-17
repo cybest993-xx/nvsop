@@ -181,6 +181,10 @@ def claim(
     )
     if command is None:
         return Response(status_code=204)
+    if command.compression_action is None:
+        # 降级再升级留下的无动作行不可解释: 对来源机就当它不存在, 不执行也不报 500; 它已经
+        # 带租约离开待领取集合, 后继可执行命令不会被它挡住。
+        return Response(status_code=204)
     assert command.claim_token is not None
     assert command.lease_expires_at is not None
     return CompressionClaimView(

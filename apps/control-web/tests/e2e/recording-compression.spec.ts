@@ -71,6 +71,7 @@ for (const editable of [true, false]) {
       // 控制入队需要编辑权限: 只读会话只看到状态文本, 不向推理机派发任何请求。
       await expect(panel.getByRole('button', { name: '刷新实际状态' })).toHaveCount(0)
       await expect(panel.getByRole('button', { name: '暂停压缩' })).toHaveCount(0)
+      await expect(panel.getByRole('button', { name: '恢复压缩' })).toHaveCount(0)
       await expect(panel.getByRole('button', { name: '中止压缩' })).toHaveCount(0)
       expect(keys).toEqual([])
       await page.screenshot({

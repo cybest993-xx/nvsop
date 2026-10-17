@@ -170,3 +170,22 @@ def test_command_without_action_is_not_operable_after_a_schema_downgrade() -> No
     read = center.client.get(f"{HOSTS}/{host.id}/recording-compression/commands/{command.id}")
     assert read.status_code == 404, read.text
     assert read.json()["error_code"] == "COMMAND_NOT_FOUND"
+    # 来源机领不到不可解释的行, 也不因此收到 500; 它不挡住后继可执行命令。
+    assert (
+        center.edge.get(
+            f"{EDGE}/next", headers=center.edge_headers(host.id, method="GET", path=f"{EDGE}/next")
+        ).status_code
+        == 204
+    )
+    center.granted = frozenset({Permission.INFERENCE_HOST_VIEW, Permission.INFERENCE_HOST_EDIT})
+    queued = center.client.post(
+        f"{HOSTS}/{host.id}/recording-compression/commands",
+        json={"action": "pause"},
+        headers=center.operator_headers(**{"Idempotency-Key": "after-legacy"}),
+    )
+    assert queued.status_code == 202, queued.text
+    claim = center.edge.get(
+        f"{EDGE}/next", headers=center.edge_headers(host.id, method="GET", path=f"{EDGE}/next")
+    )
+    assert claim.status_code == 200, claim.text
+    assert claim.json()["action"] == "pause"

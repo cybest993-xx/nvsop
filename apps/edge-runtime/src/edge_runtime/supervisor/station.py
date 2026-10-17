@@ -488,7 +488,11 @@ class StationSupervisor:
             reason_code=(
                 None
                 if evidence.alignment is TimeAlignment.ALIGNED
-                else ReasonCode.IO_TIME_UNALIGNED.value
+                else (
+                    ReasonCode.IO_SIGNAL_LOST.value
+                    if event.at is None
+                    else ReasonCode.IO_TIME_UNALIGNED.value
+                )
             ),
             detail=json.dumps(
                 {

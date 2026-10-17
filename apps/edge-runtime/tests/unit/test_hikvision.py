@@ -48,7 +48,7 @@ from edge_runtime.connectors.port import (
     Written,
 )
 from edge_runtime.judgment.model import HostInstant
-from edge_runtime.supervisor.inputs import ClockEvidence, TimeAlignment
+from edge_runtime.supervisor.inputs import ClockEvidence
 
 ARRIVAL = InputPoint(label="工件到位", address="1")
 INTERLOCK = OutputPoint(label="停线联锁", address="1")
@@ -151,7 +151,6 @@ class ReadingAnInputPointTest(unittest.TestCase):
             Reading(
                 state=PointState.ACTIVE,
                 at=HostInstant(NOW),
-                alignment=TimeAlignment.ALIGNED,
                 clock=ClockEvidence.host_receipt(),
             ),
             connector(transport).read(ARRIVAL, timeout=TIMEOUT),
@@ -167,7 +166,6 @@ class ReadingAnInputPointTest(unittest.TestCase):
             Reading(
                 state=PointState.INACTIVE,
                 at=HostInstant(NOW),
-                alignment=TimeAlignment.ALIGNED,
                 clock=ClockEvidence.host_receipt(),
             ),
             connector(transport).read(ARRIVAL, timeout=TIMEOUT),
@@ -193,7 +191,6 @@ class OnlyAHostReceiptReadingCanBePlacedOnTheTimelineTest(unittest.TestCase):
             Reading(
                 state=PointState.ACTIVE,
                 at=HostInstant(NOW),
-                alignment=TimeAlignment.UNALIGNED,
                 clock=ClockEvidence.unverified("device_clock"),
             ),
             connector(
@@ -212,7 +209,6 @@ class OnlyAHostReceiptReadingCanBePlacedOnTheTimelineTest(unittest.TestCase):
             Reading(
                 state=PointState.ACTIVE,
                 at=HostInstant(NOW),
-                alignment=TimeAlignment.UNALIGNED,
                 clock=ClockEvidence.unverified("unknown"),
             ),
             connector(transport, capability=Unverified()).read(ARRIVAL, timeout=TIMEOUT),
@@ -407,7 +403,6 @@ class TheAdapterHoldsNoWireShapeOfItsOwnTest(unittest.TestCase):
             Reading(
                 state=PointState.ACTIVE,
                 at=HostInstant(NOW),
-                alignment=TimeAlignment.ALIGNED,
                 clock=ClockEvidence.host_receipt(),
             ),
             result,

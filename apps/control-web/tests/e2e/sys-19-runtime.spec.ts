@@ -430,6 +430,7 @@ test('S063 — 运行镜像区分未验证偏移、已超阈值偏移与视频�
         verification: 'out_of_tolerance',
         offset_seconds: 0.205,
         uncertainty_seconds: 0.005,
+        tolerance_seconds: 0.05,
         host_receipt_monotonic: 43,
       }),
       occurred_at: '2026-10-17T08:01:00Z',
@@ -448,6 +449,7 @@ test('S063 — 运行镜像区分未验证偏移、已超阈值偏移与视频�
   await expect(clock).toContainText('偏移区间超阈值')
   await expect(clock).toContainText('0.205 s')
   await expect(clock).toContainText('0.005 s')
+  await expect(clock).toContainText('容差：0.050 s')
   await expect(clock).toContainText('外部信号时间未对齐')
   const streams = page.getByRole('region', { name: '各路观测健康' })
   await expect(streams).toContainText('camera-19')

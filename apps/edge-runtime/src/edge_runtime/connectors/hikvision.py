@@ -333,7 +333,6 @@ class IsapiConnector:
         return Reading(
             state=state,
             at=HostInstant(self._clock()),
-            alignment=evidence.alignment,
             clock=evidence,
         )
 

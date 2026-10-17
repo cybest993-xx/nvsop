@@ -74,6 +74,17 @@ class TimeAlignment(Enum):
     UNALIGNED = "unaligned"
 
 
+def _classify_clock_offset(
+    lower: float, upper: float, tolerance: float
+) -> Literal["verified", "out_of_tolerance", "unverified"]:
+    """设备事件时钟偏移的完整可能区间, 越界/跨界时均不可用于判定。"""
+    if lower >= -tolerance and upper <= tolerance:
+        return "verified"
+    if lower > tolerance or upper < -tolerance:
+        return "out_of_tolerance"
+    return "unverified"
+
+
 @dataclass(frozen=True, slots=True)
 class ClockEvidence:
     """连接器本次读数的来源与偏移证据;不跨宿主比较 monotonic。
@@ -127,13 +138,7 @@ class ClockEvidence:
                 raise ValueError("clock offset must match the actual device/host timestamps")
             if self.uncertainty_seconds != self.max_delivery_delay_seconds / 2:
                 raise ValueError("clock uncertainty must match the measured delivery bound")
-            if lower >= -self.tolerance_seconds and upper <= self.tolerance_seconds:
-                expected = "verified"
-            elif lower > self.tolerance_seconds or upper < -self.tolerance_seconds:
-                expected = "out_of_tolerance"
-            else:
-                expected = "unverified"
-            if self.status != expected:
+            if self.status != _classify_clock_offset(lower, upper, self.tolerance_seconds):
                 raise ValueError("clock verification must match the measured offset interval")
         elif self.status in ("verified", "out_of_tolerance"):
             raise ValueError("verified or out-of-tolerance status requires measured evidence")
@@ -171,12 +176,7 @@ class ClockEvidence:
             raise ValueError("clock delivery bound and tolerance must be positive")
         lower = device_event_utc - host_receipt_utc
         upper = lower + max_delivery_delay_seconds
-        if lower >= -tolerance_seconds and upper <= tolerance_seconds:
-            status: Literal["verified", "out_of_tolerance", "unverified"] = "verified"
-        elif lower > tolerance_seconds or upper < -tolerance_seconds:
-            status = "out_of_tolerance"
-        else:
-            status = "unverified"
+        status = _classify_clock_offset(lower, upper, tolerance_seconds)
         return cls(
             source="device_clock",
             status=status,

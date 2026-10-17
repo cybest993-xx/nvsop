@@ -1124,6 +1124,34 @@ def health(
     )
 
 
+def test_clock_mirror_uses_center_ingestion_order_if_edge_wall_clock_moves_back() -> None:
+    monitor = MemoryMonitor()
+    monitor.upsert_health(
+        health(
+            "clock-before-rollback",
+            stream_id="clock:工件到位",
+            status="clock_verified",
+            received_at=datetime(2026, 9, 13, 0, 1, tzinfo=UTC),
+            occurred_at="2026-09-13T10:00:00Z",
+        )
+    )
+    monitor.upsert_health(
+        health(
+            "clock-after-rollback",
+            stream_id="clock:工件到位",
+            status="clock_unverified",
+            received_at=datetime(2026, 9, 13, 0, 2, tzinfo=UTC),
+            occurred_at="2026-09-13T08:00:00Z",
+        )
+    )
+    from factory_sop.monitor.usecases import latest_health_per_stream
+
+    latest = latest_health_per_stream(tuple(monitor.health.values()))
+    assert len(latest) == 1
+    assert latest[0].report.event_id == "clock-after-rollback"
+    assert latest[0].report.status == "clock_unverified"
+
+
 def test_stream_health_view_reports_no_runtime_data_without_facts() -> None:
     view = stream_health_view(
         MemoryMonitor(), caller=caller(Permission.MONITOR_VIEW), station_id=str(STATION_ID)

@@ -65,29 +65,19 @@ class PointState(Enum):
 
 @dataclass(frozen=True, slots=True)
 class Reading:
-    """One point's level at one instant, already on the host's monotonic clock.
+    """一条带可核查时钟来源的点位读数, 以本机单调时刻进入判定。
 
-    The adapter converts: it holds the device's timestamp and whatever offset it has, and its
-    capability declaration says how well it can (§5.8). What crosses this seam is the clock
-    judgment measures on, plus whether that conversion was trustworthy.
+    即使没有设备事件时间也必须显式携带未验证证据;
+    不能凭空传入独立的 ALIGNED, 因为对齐唯一由来源及容差证据决定。
     """
 
     state: PointState
     at: HostInstant
-    alignment: TimeAlignment
-    """Whether this reading could be placed on the video timeline (§5.8).
+    clock: ClockEvidence
 
-    The adapter's answer, not the runtime's: a host-receipt timestamp is aligned by
-    construction within the declared delivery delay, while a device-clock timestamp is
-    aligned only while the offset is known and inside the tolerance.
-    """
-
-    clock: ClockEvidence | None = None
-    """当次实测来源与偏移区间; 旧适配器不得凭空声称已有偏移。"""
-
-    def __post_init__(self) -> None:
-        if self.clock is not None and self.alignment is not self.clock.alignment:
-            raise ValueError("connector alignment contradicts clock evidence")
+    @property
+    def alignment(self) -> TimeAlignment:
+        return self.clock.alignment
 
 
 @dataclass(frozen=True, slots=True)

@@ -379,9 +379,10 @@ def stream_health_view(
 
 
 def latest_health_per_stream(reports: tuple[MirroredHealth, ...]) -> tuple[MirroredHealth, ...]:
-    """每路流按 edge 事件时间保留最新事实；Center ingestion sequence 只服务 SSE。
+    """视频源用冻结源时序, 时钟状态用 Center 已提交的接收序号。
 
-    monitor owner 唯一的健康业务分类：SSE 投影与工位视图都复用它，不另造排序。
+    设备或宿主墙钟发生阶跃时不许旧 clock_verified 遮盖新 clock_unverified;
+    中心序号只用于时钟镜像, 不能代替视频/判定原始发生时刻。
     """
     latest: dict[str | None, MirroredHealth] = {}
     for report in reports:
@@ -393,7 +394,9 @@ def latest_health_per_stream(reports: tuple[MirroredHealth, ...]) -> tuple[Mirro
 
 
 def _health_event_order(value: MirroredHealth) -> tuple[float, str]:
-    """使用冻结的事件时间锚排序；event_id 仅为相同时刻提供稳定次序。"""
+    """视频源用冻结事件时间, 时钟镜像不信任可能回拨的 Edge 墙钟。"""
+    if (value.report.stream_id or "").startswith("clock:"):
+        return float(value.stream_sequence or 0), value.report.event_id
     return _health_occurred_at(value.report), value.report.event_id
 
 

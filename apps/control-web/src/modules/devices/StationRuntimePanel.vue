@@ -107,7 +107,7 @@ const storageLabels: Record<string, string> = {
 }
 const percent = (value: unknown) =>
   typeof value === 'number' && Number.isFinite(value) ? `${Number(value.toFixed(1))}%` : '未知'
-function storageMetrics(detail: string | null): Record<string, unknown> {
+function detailFields(detail: string | null): Record<string, unknown> {
   try {
     const value: unknown = JSON.parse(detail ?? 'null')
     return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -120,11 +120,11 @@ function storageMetrics(detail: string | null): Record<string, unknown> {
 const storageRows = (value: RuntimeStationProjection) =>
   (value.health ?? [])
     .filter(isStorage)
-    .map((fact) => ({ fact, metrics: storageMetrics(fact.detail) }))
+    .map((fact) => ({ fact, metrics: detailFields(fact.detail) }))
 const clockRows = (value: RuntimeStationProjection) =>
   (value.health ?? [])
     .filter(isClock)
-    .map((fact) => ({ fact, evidence: storageMetrics(fact.detail) }))
+    .map((fact) => ({ fact, evidence: detailFields(fact.detail) }))
 const streamRows = (value: RuntimeStationProjection) =>
   (value.health ?? []).filter((fact) => !isStorage(fact) && !isClock(fact))
 const offsetSeconds = (value: unknown) =>
@@ -433,11 +433,11 @@ onUnmounted(() => {
             <p v-if="offsetSeconds(evidence.offset_seconds)">
               设备－主机偏移：{{ offsetSeconds(evidence.offset_seconds) }}； 测量误差上界：{{
                 offsetSeconds(evidence.uncertainty_seconds) ?? '未提供'
-              }}
+              }}；容差：{{ offsetSeconds(evidence.tolerance_seconds) ?? '未提供' }}
             </p>
             <p v-else>设备－主机偏移：未测得，不以零偏移代替。</p>
             <p v-if="fact.reason_code">判定安全原因：{{ reasonLabel(fact.reason_code) }}</p>
-            <p class="muted">最近上报：{{ time(fact.occurred_at) }}</p>
+            <p class="muted">最近状态变更上报：{{ time(fact.occurred_at) }}</p>
             <p v-if="hasConnected && !connected" role="status">
               连接已中断；这里只是最后已知镜像，不表示当前已验证。
             </p>

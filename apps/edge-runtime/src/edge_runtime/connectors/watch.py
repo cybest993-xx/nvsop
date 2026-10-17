@@ -3,13 +3,12 @@
 The adapter answers with a level; judgment needs an event. That conversion is this module,
 and it is the whole of what stands between a connector and the judgment path — deliberately,
 because §5.8 forbids judgment branching on whether a connector is configured. What leaves here
-is `ExternalSignal` and `ValidityChanged`, both of which the supervisor already normalizes for
-the SSE side (`supervisor/inputs.py`); a station with three connectors and one with none reach
-the core through the same two types.
+is `ExternalSignal`, `ValidityChanged` and `ClockStatusObserved`: time evidence is a
+separate durable health fact and never a judgment event. A station with three connectors and
+one with none still use the same judgment path.
 
-Nothing here judges. The two facts it reports are ones the connector holds first-hand and
-nobody else can: the point could not be read, and — carried through from the adapter — the
-reading could not be placed on the video timeline.
+Nothing here judges. The connector reports the observed point level, read failures and
+the time evidence it actually holds, including unknown or out-of-tolerance source clocks.
 
 Standard library only (edge-autonomy.md §5.11).
 """
@@ -78,17 +77,12 @@ class PointWatch:
         facts: tuple[SupervisorInput, ...] = (
             ValidityChanged(reason=ReasonCode.IO_SIGNAL_LOST, now=Validity.IMPAIRED),
         )
-        # 失联时没有新的接收时刻; 明确撤销已对齐/已测偏移, 不伪造一个时间戳。
-        if previous_clock is not None and (
-            previous_clock.status != "unverified" or previous_clock.offset_seconds is not None
-        ):
-            facts = (
-                *facts,
-                ClockStatusObserved(
-                    self._point.label, None, ClockEvidence.unverified(previous_clock.source)
-                ),
-            )
-        return facts
+        # 首次读取即失联也要覆盖旧进程的已验证镜像; 不能声称知道新主机的偏移。
+        source = "unknown" if previous_clock is None else previous_clock.source
+        return (
+            *facts,
+            ClockStatusObserved(self._point.label, None, ClockEvidence.unverified(source)),
+        )
 
     def _regained(self) -> tuple[SupervisorInput, ...]:
         """A read succeeded after a gap.
@@ -104,9 +98,13 @@ class PointWatch:
         return (ValidityChanged(reason=ReasonCode.IO_SIGNAL_LOST, now=Validity.RESTORED),)
 
     def _clock_fact(self, reading: Reading) -> tuple[SupervisorInput, ...]:
-        """首次或变化时记录时间证据; 稳定的未知值不产生重复待办。"""
+        """只记录时间来源/分类的转换, 不因原始 UTC 样本连续变化挤满本机待办。"""
         evidence = reading.clock
-        if evidence is None or evidence == self._clock:
+        previous = self._clock
+        if previous is not None and (previous.source, previous.status) == (
+            evidence.source,
+            evidence.status,
+        ):
             return ()
         self._clock = evidence
         return (ClockStatusObserved(self._point.label, reading.at, evidence),)

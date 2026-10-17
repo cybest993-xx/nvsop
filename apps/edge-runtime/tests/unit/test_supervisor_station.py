@@ -132,6 +132,7 @@ class AClockMirrorDoesNotChangeJudgmentTest(unittest.TestCase):
             ClockStatusObserved(EXTERNAL_START, None, ClockEvidence.unverified("device_clock"))
         )
         self.assertIsNone(json.loads(str(store.health[-1]["detail"]))["offset_seconds"])
+        self.assertEqual(ReasonCode.IO_SIGNAL_LOST.value, store.health[-1]["reason_code"])
 
 
 class EveryInputReachesTheCoreAndCommitsDecisionsTest(unittest.TestCase):

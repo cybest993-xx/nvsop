@@ -1525,8 +1525,9 @@ def test_clock_offset_health_survives_authenticated_pg_mirror_without_false_stre
                     "max_delivery_delay_seconds": 0.01,
                 }
             ),
-            occurred_at="2026-10-17T08:01:00Z",
-            reported_at="2026-10-17T08:01:00Z",
+            # Edge 墙钟在两条上报间回拨, Center 不可把旧 verified/unverified 续用。
+            occurred_at="2026-10-17T07:59:00Z",
+            reported_at="2026-10-17T07:59:00Z",
         )
         second_body = reported_health_to_wire(observed)
         second = client.post(

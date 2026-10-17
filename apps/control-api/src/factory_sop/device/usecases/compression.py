@@ -44,9 +44,8 @@ def enqueue_compression(
     hosts: InferenceHostRepository,
     commands: PendingCommandRepository,
 ) -> PendingCommand:
-    authorize(caller, Permission.INFERENCE_HOST_VIEW)
-    if action != "inspect":
-        authorize(caller, Permission.INFERENCE_HOST_EDIT)
+    # 入队即控制: 所有动作(含 inspect)都要求编辑权限, 与 OpenAPI 声明的权限一致。
+    authorize(caller, Permission.INFERENCE_HOST_EDIT)
     context = {"host_id": str(host_id), "actor_id": str(caller.user.id), "action": action}
     existing = commands.by_idempotency_key(idempotency_key)
     if existing is None:
@@ -111,6 +110,15 @@ def read_compression_command(
             command_id=str(command_id),
             actor_id=str(caller.user.id),
         )
+    # 回退到压缩控制之前的 schema 后重新升级: 历史行没有可解释的动作, 不可解释即不可操作。
+    if command.compression_action is None:
+        refuse(
+            _EVENT,
+            DeviceRefusalCode.COMMAND_NOT_FOUND,
+            host_id=str(host_id),
+            command_id=str(command_id),
+            actor_id=str(caller.user.id),
+        )
     return command
 
 
@@ -135,11 +143,12 @@ def complete_compression(
         refuse(_EVENT, DeviceRefusalCode.COMMAND_HOST_MISMATCH, **context)
     if command.command_type is not PendingCommandType.CONTROL_RECORDING_COMPRESSION:
         refuse(_EVENT, DeviceRefusalCode.COMMAND_NOT_FOUND, **context)
-    assert command.compression_action is not None
+    if command.compression_action is None:
+        refuse(_EVENT, DeviceRefusalCode.COMMAND_NOT_FOUND, **context)
     if result.failure_code is None and not compression_action_confirmed(
         cast(CompressionAction, command.compression_action), result.state
     ):
-        refuse(_EVENT, DeviceRefusalCode.COMMAND_CLAIM_REQUIRED, **context)
+        refuse(_EVENT, DeviceRefusalCode.COMMAND_OBSERVATION_UNCONFIRMED, **context)
     try:
         completed = commands.complete(
             PendingCommandCompletion(

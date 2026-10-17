@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from contextlib import suppress
-from time import sleep, time
-from typing import assert_never
+from time import monotonic, sleep
+from typing import Protocol, assert_never
 
 from nvsop_contracts.compression import (
     CompressionClaim,
@@ -16,10 +17,31 @@ from nvsop_contracts.compression import (
 )
 
 from edge_runtime.center_client import CenterClient, CenterUnreachableError
-from edge_runtime.recording_compression import RecordingCompressionError, RecordingCompressionWorker
+from edge_runtime.recording_compression import (
+    CompressionStatus,
+    RecordingCompressionError,
+)
 from edge_runtime.supervisor.delegated_transport import CommandTransportError
 
 _PATH = "/api/v1/device-commands/compression"
+# 控制动作只改变本机进程状态; 确认等待用本机单调时钟, 不与中心 epoch 取差值。
+_CONTROL_CONFIRM_SECONDS = 30.0
+_logger = logging.getLogger("edge_runtime")
+
+
+class CompressionControl(Protocol):
+    """控制轮需要的最小本机面; 不要求它拥有编码任务或素材。"""
+
+    @property
+    def readrate(self) -> float | None: ...
+
+    def status(self) -> CompressionStatus: ...
+
+    def pause(self) -> CompressionStatus: ...
+
+    def resume(self) -> CompressionStatus: ...
+
+    def abort(self) -> CompressionStatus: ...
 
 
 class CompressionCommandLoop:
@@ -29,7 +51,7 @@ class CompressionCommandLoop:
         self,
         *,
         client: CenterClient,
-        worker: RecordingCompressionWorker | None,
+        worker: CompressionControl | None,
         interval: float,
     ) -> None:
         self._client = client
@@ -49,21 +71,26 @@ class CompressionCommandLoop:
                     claim = compression_claim_from_wire(json.loads(response.body))
                 except (ValueError, TypeError) as error:
                     raise CommandTransportError("压缩命令契约非法") from error
-                if time() >= claim.lease_expires_at or should_stop():
+                if should_stop():
                     return False
                 result = self._execute(claim, should_stop)
                 self._pending = claim, result
             claim, result = self._pending
-            if time() >= claim.lease_expires_at:
-                # 领取已过期, 由中心按同一队列重新认领; 不把陈旧结果写成当前观测。
-                self._pending = None
-                return False
             response = self._client.post(
                 f"{_PATH}/{claim.command_id}/result",
                 result.to_wire(),
                 headers={"X-Command-Claim-Token": claim.claim_token},
             )
             if response.status != 200:
+                if response.status < 500:
+                    # 中心是租约权威: 4xx 说明这次领取或观测已不适用, 交回队列重新领取,
+                    # 不用本机时钟另判过期, 也不把陈旧结果写成当前观测。
+                    self._pending = None
+                    _logger.info(
+                        "edge.recording_compression.report_rejected command_id=%s status=%s",
+                        claim.command_id,
+                        response.status,
+                    )
                 raise CommandTransportError("压缩结果回报失败", status=response.status)
             self._pending = None
             return True
@@ -96,8 +123,9 @@ class CompressionCommandLoop:
                     pass
                 case _:
                     assert_never(claim.action)
+            deadline = monotonic() + _CONTROL_CONFIRM_SECONDS
             while worker.status().state in {"pausing", "resuming", "aborting"}:
-                if should_stop() or time() >= claim.lease_expires_at:
+                if should_stop() or monotonic() >= deadline:
                     return self._snapshot("control_unconfirmed", "进程状态尚未确认, 请重新刷新")
                 sleep(0.05)
             if not compression_action_confirmed(claim.action, worker.status().state):
@@ -125,6 +153,6 @@ class CompressionCommandLoop:
         while not should_stop():
             with suppress(CommandTransportError):
                 self.run_once(should_stop=should_stop)
-            deadline = time() + self._interval
-            while not should_stop() and time() < deadline:
+            deadline = monotonic() + self._interval
+            while not should_stop() and monotonic() < deadline:
                 sleep(0.05)

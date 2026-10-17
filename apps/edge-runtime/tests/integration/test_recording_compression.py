@@ -355,6 +355,30 @@ thread.join()
         decode(candidate)
         decode(partial)
 
+    def test_corrupt_candidate_with_matching_stats_is_redone_from_the_original(self) -> None:
+        """便宜判定认为候选未变、逐字节复核不成立时丢弃候选, 下一轮从原件重做。"""
+        directory = self.recording / CAMERA
+        segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
+        source = next(directory.glob("*.mp4"))
+        original = digest(source)
+        self.assertEqual(compress_aged_segments(self.configuration()).created, 1)
+        candidate = source.with_suffix(".compressed.mp4")
+        damaged = bytearray(candidate.read_bytes())
+        damaged[-1] ^= 0xFF
+        stat = candidate.stat()
+        # 同一尺寸/写入时刻的坏字节: 不逐字节复核就永远不会重做该分段。
+        candidate.write_bytes(bytes(damaged))
+        os.utime(candidate, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        worker = RecordingCompressionWorker(configuration=self.configuration(), interval=1.0)
+        refused = worker.drain()
+        self.assertEqual((refused.replaced, refused.failed), (0, 1))
+        self.assertEqual(digest(source), original)
+        self.assertFalse(candidate.exists())
+        redone = worker.drain()
+        self.assertEqual(redone.replaced, 1)
+        self.assertEqual(recording_segment_generation(source), "compressed")
+        decode(source)
+
     def test_shutdown_while_paused_reaps_process_and_preserves_pause_on_restart(self) -> None:
         directory = self.recording / CAMERA
         segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)

@@ -719,6 +719,7 @@
           "COMMAND_CLAIM_EXPIRED",
           "COMMAND_CLAIM_TOKEN_INVALID",
           "COMMAND_ALREADY_COMPLETED",
+          "COMMAND_OBSERVATION_UNCONFIRMED",
           "COMMAND_IDEMPOTENCY_CONFLICT",
           "COMMAND_CONFIGURATION_CHANGED",
           "COMMAND_TARGET_NOT_FOUND",
@@ -16704,7 +16705,7 @@
         "tags": [
           "device"
         ],
-        "x-required-permission": "device.inference_host.view"
+        "x-required-permission": "device.inference_host.edit"
       }
     },
     "/api/v1/inference-hosts/{host_id}/recording-compression/commands/{command_id}": {

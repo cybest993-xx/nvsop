@@ -376,7 +376,7 @@ def test_every_host_route_declares_the_permission_its_use_case_enforces(center: 
         "GET /inference-hosts": Permission.INFERENCE_HOST_VIEW,
         "GET /inference-hosts/{host_id}": Permission.INFERENCE_HOST_VIEW,
         "POST /inference-hosts/{host_id}/recording-compression/commands": (
-            Permission.INFERENCE_HOST_VIEW
+            Permission.INFERENCE_HOST_EDIT
         ),
         "GET /inference-hosts/{host_id}/recording-compression/commands/{command_id}": (
             Permission.INFERENCE_HOST_VIEW

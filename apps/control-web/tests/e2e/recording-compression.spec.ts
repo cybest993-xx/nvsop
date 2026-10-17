@@ -68,27 +68,32 @@ for (const editable of [true, false]) {
     await expect(panel).toBeVisible()
     await expect(panel).toContainText('尚未取得实际状态')
     if (!editable) {
+      // 控制入队需要编辑权限: 只读会话只看到状态文本, 不向推理机派发任何请求。
+      await expect(panel.getByRole('button', { name: '刷新实际状态' })).toHaveCount(0)
       await expect(panel.getByRole('button', { name: '暂停压缩' })).toHaveCount(0)
-      await panel.getByRole('button', { name: '刷新实际状态' }).click()
-    } else {
-      await panel.getByRole('button', { name: '暂停压缩' }).click()
+      await expect(panel.getByRole('button', { name: '中止压缩' })).toHaveCount(0)
+      expect(keys).toEqual([])
+      await page.screenshot({
+        path: testInfo.outputPath('recording-compression.png'),
+        fullPage: true,
+      })
+      return
     }
+    await panel.getByRole('button', { name: '暂停压缩' }).click()
     await expect(panel).toContainText('请求已入队，等待推理机领取')
     await expect(panel).not.toContainText('已暂停')
     complete = true
     await panel.getByRole('button', { name: '查询命令结果' }).click()
-    await expect(panel).toContainText(editable ? '已暂停' : '正在压缩')
+    await expect(panel).toContainText('已暂停')
     await expect(panel).toContainText('0.5 倍实时速率')
-    if (editable) {
-      for (const [name, label] of [
-        ['恢复压缩', '正在压缩'],
-        ['中止压缩', '已中止'],
-      ] as const) {
-        await panel.getByRole('button', { name }).click()
-        complete = true
-        await panel.getByRole('button', { name: '查询命令结果' }).click()
-        await expect(panel).toContainText(label)
-      }
+    for (const [name, label] of [
+      ['恢复压缩', '正在压缩'],
+      ['中止压缩', '已中止'],
+    ] as const) {
+      await panel.getByRole('button', { name }).click()
+      complete = true
+      await panel.getByRole('button', { name: '查询命令结果' }).click()
+      await expect(panel).toContainText(label)
     }
     expect(keys.every(Boolean)).toBe(true)
     await page.screenshot({

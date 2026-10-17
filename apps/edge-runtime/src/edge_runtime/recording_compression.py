@@ -133,13 +133,6 @@ def compress_aged_segments(
     return _process_aged_segments(configuration, now=now, install=False)
 
 
-def archive_aged_segments(
-    configuration: RecordingCompressionConfiguration, *, now: float | None = None
-) -> CompressionSummary:
-    """后台归档入口: 生成候选并在同一素材占用内验证、原子安装。"""
-    return _process_aged_segments(configuration, now=now, install=True)
-
-
 def _process_aged_segments(
     configuration: RecordingCompressionConfiguration,
     *,
@@ -176,7 +169,15 @@ def _process_aged_segments(
                 if control is not None and not control._ready():
                     break
                 if install:
-                    replaced += _install_validated_candidate(segment)
+                    try:
+                        replaced += _install_validated_candidate(segment)
+                    except RecordingCompressionError as error:
+                        if error.reason != "candidate_invalid":
+                            raise
+                        # 便宜判定认为候选未变而逐字节复核不成立: 丢弃不可验证的候选,
+                        # 让下一轮从原件重做, 而不是每个周期重复同一失败。
+                        _discard_candidate(segment)
+                        raise
                     # 只有完整素材已验证并安装后才回收崩溃拥有者留下的临时产物。
                     _discard_abandoned_outputs(segment)
         except _CompressionInterruptedError:
@@ -512,7 +513,9 @@ class RecordingCompressionWorker:
 
     @staticmethod
     def _signal(process: subprocess.Popen[bytes], sig: signal.Signals) -> None:
-        # 进程刚退出时仍由同一拥有者收割实际结果。
+        # 已收割的 pid 可能已被复用: 只在子进程仍存活时按进程组发信号。
+        if process.poll() is not None:
+            return
         with suppress(ProcessLookupError):
             os.killpg(process.pid, sig)
 
@@ -568,6 +571,12 @@ def _discard_abandoned_outputs(segment: Path) -> None:
     """仅在调用方已确认完整归档素材后回收旧拥有者的临时输出。"""
     for partial in segment.parent.glob(f".{segment.name}.*.candidate.mp4"):
         _discard(partial)
+
+
+def _discard_candidate(segment: Path) -> None:
+    """候选无法通过消费边界复核时丢弃候选与留痕, 原件保持不动。"""
+    _discard(_candidate_path(segment))
+    _discard(_provenance_path(segment))
 
 
 def _already_archived(segment: Path) -> bool:
@@ -909,7 +918,6 @@ __all__ = [
     "RecordingCompressionConfiguration",
     "RecordingCompressionError",
     "RecordingCompressionWorker",
-    "archive_aged_segments",
     "compress_aged_segments",
     "replace_validated_candidate",
     "validated_candidate",

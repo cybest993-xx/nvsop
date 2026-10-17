@@ -98,7 +98,8 @@ def _view(command: PendingCommand) -> CompressionCommandView:
     "/inference-hosts/{host_id}/recording-compression/commands",
     status_code=202,
     operation_id="enqueueRecordingCompression",
-    openapi_extra=needs(Permission.INFERENCE_HOST_VIEW),
+    # 入队即控制: 声明与用例执行同一个编辑权限, 声明弱于执行会让 UI 发出注定拒绝的请求。
+    openapi_extra=needs(Permission.INFERENCE_HOST_EDIT),
     responses=_OPERATOR_RESPONSES,
 )
 def enqueue(

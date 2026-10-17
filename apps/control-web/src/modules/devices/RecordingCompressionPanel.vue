@@ -67,8 +67,7 @@ watch(
 )
 
 async function submit(action: 'inspect' | 'pause' | 'resume' | 'abort') {
-  if (!mayView.value || (action !== 'inspect' && !mayEdit.value) || !hostId.value || pending.value)
-    return
+  if (!mayEdit.value || !hostId.value || pending.value) return
   const current = ++generation
   loading.value = true
   failure.value = ''
@@ -138,16 +137,14 @@ async function query() {
         }}（本机配置）
       </p>
       <p v-if="observed?.detail">{{ observed.detail }}</p>
-      <p v-if="command?.failure_code">
-        操作失败：{{ command.failure_code }}，请刷新实际状态后处理。
-      </p>
+      <p v-if="command?.failure_code">操作失败：{{ command.failure_code }}。</p>
     </div>
     <div class="compression__actions">
-      <ElButton :disabled="loading || pending || !hostId" @click="submit('inspect')"
-        >刷新实际状态</ElButton
-      >
       <ElButton v-if="pending" :disabled="loading" @click="query">查询命令结果</ElButton>
       <template v-if="mayEdit">
+        <ElButton :disabled="loading || pending || !hostId" @click="submit('inspect')"
+          >刷新实际状态</ElButton
+        >
         <ElButton :disabled="loading || pending || !hostId" @click="submit('pause')"
           >暂停压缩</ElButton
         >

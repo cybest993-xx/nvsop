@@ -242,6 +242,8 @@ RestartSec=2
 | `recording_compression_age_seconds` | `86400` | 原始素材窗口；整段录像时间都在窗口外的分段才可压缩 |
 | `recording_compression_crf` | `28`（占位） | H.264 质量档，取值 0–51。默认档须由目标子码流实测扫档确定（§5.19 约束 5），照抄占位值不是实测结论 |
 | `recording_compression_readrate` | 未限制 | 可选有限正数，传给 FFmpeg `-readrate`，单位为每墙钟秒读取的媒体秒数；例如 `0.5` 为半倍实时读取速率。省略时保留既有速度，修改在重新装配本机运行时后生效 |
+| `recording_compression_backlog_threshold` | `10` | 判定积压自动让路阈值；当判定观测或报告队列未确认行数达到此值时自动暂停压缩任务 |
+| `recording_compression_backlog_recovery_threshold` | 阈值之半 | 可选非负整数（默认 `max(0, threshold // 2)`），判定积压恢复阈值；回落到该值及以下时恢复压缩 |
 
 默认关闭，开启前须评估编码时原件与候选并存的空间、CRF 和资源争用。后台任务以本机 ffmpeg 生成 H.264 候选、真实校验并原子替换；提交顺序、素材占用与恢复契约见[录像压缩机制](../design/mechanisms/evidence-and-retention.md#压缩录像重编码归档证据不动记录使用-timescale-原生压缩)。通过 `edge.recording_compression.summary` 的 `created` / `replaced` / `skipped` / `failed` 观察候选生成、替换、跳过和失败；`edge.recording_compression.failed` 给出分段及失败原因。编码/校验失败且原件未变时仅移除本次临时产物，原件消失或变化时保留产物并告警，替换失败保留原件与有效候选；进程退出后复用留痕和实际文件继续处理。
 
@@ -249,7 +251,7 @@ RestartSec=2
 
 在 Web 的“工位与设备 → 录像压缩归档”选择推理机，使用“刷新实际状态”向来源机请求新观测；入队即控制，刷新、暂停、恢复、中止都需要 `device.inference_host.edit`（声明与执行同一个权限）。只读会话只看到状态文本和“查询命令结果”，不向推理机派发请求；`device.inference_host.view` 仅用于读取已回报的命令观测。请求入队后用“查询命令结果”读取确认；页面区分等待领取、等待来源机确认与实际观测，并显示 Asia/Shanghai 观测时间。查询失败可重试；请求未确认时同一操作复用幂等键。已展示的观测带时间，不表示持续在线；中心断网时本机任务继续按最后意图运行。
 
-本机管理集成可使用运行时已有 `runtime.compression` 的 `pause()` / `resume()` / `abort()` / `status()`，不另建执行者。`pausing` / `resuming` / `aborting` 是请求态，须继续查询到内核确认的 `paused` / `running` 或任务空闲、`aborted`；暂停不消耗命令执行超时，中止会收割包括暂停中的进程。暂停与中止意图以 `0600` 原子文件 `<recording_directory>/.compression-control.json` 持久保存，正常退出不删除原件或已验证候选。重启后保留暂停/中止，显式恢复后复核现有素材：复用已验证候选，未完成编码在取得独占后重做，完整产物验证并安装后才清理旧临时文件。`busy` 表示其他执行者或遗留子进程仍占用，不能启动重复压缩；运维须先确认旧任务归属并停止旧进程，再恢复。不要单独删除该目录或占用中的素材以解除占用。控制意图文件损坏时归档显示不可用并给出诊断，自治判定继续；检查素材后显式恢复会重写有效意图。
+本机管理集成可使用运行时已有 `runtime.compression` 的 `pause()` / `resume()` / `abort()` / `status()`，不另建执行者。`pausing` / `resuming` / `aborting` 是请求态，须继续查询到内核确认的 `paused` / `running` 或任务空闲、`aborted`；暂停不消耗命令执行超时，中止会收割包括暂停中的进程。当判定观测或报告队列积压触及既定阈值（默认 `recording_compression_backlog_threshold: 10`）时，后台压缩自动让路并向 FFmpeg 进程发送 `SIGSTOP`，释放 GPU 编解码单元与显存带宽；意图保持为 `run`，状态显示为 `paused`，`detail` 记录 `auto-yield: judgment backlog in <queue> (depth <depth> >= threshold <threshold>)`，同时记录结构化日志 `edge.recording_compression.yielded`。积压回落至恢复阈值（`recording_compression_backlog_recovery_threshold`）以下后，自动发送 `SIGCONT` 恢复编码并记录 `edge.recording_compression.resumed`。让路不反压判定，不丢弃观测；操作者显式暂停或中止拥有最高优先级，不因积压消除而自动恢复。软件证据只证明让路行为；NVENC 与推理不争用的结论必须等目标实测（S113 / #262），不预先宣称。暂停与中止意图以 `0600` 原子文件 `<recording_directory>/.compression-control.json` 持久保存，正常退出不删除原件或已验证候选。重启后保留暂停/中止，显式恢复后复核现有素材：复用已验证候选，未完成编码在取得独占后重做，完整产物验证并安装后才清理旧临时文件。`busy` 表示其他执行者或遗留子进程仍占用，不能启动重复压缩；运维须先确认旧任务归属并停止旧进程，再恢复。不要单独删除该目录或占用中的素材以解除占用。控制意图文件损坏时归档显示不可用并给出诊断，自治判定继续；检查素材后显式恢复会重写有效意图。
 
 ### 本机存储分离与已上报队列裁剪
 

@@ -15,6 +15,7 @@ from uuid import UUID
 
 from edge_runtime.media import (
     DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS,
+    DEFAULT_RECORDING_COMPRESSION_BACKLOG_THRESHOLD,
     DEFAULT_RECORDING_COMPRESSION_CRF,
     LocalMediaCamera,
     MediaPathMode,
@@ -238,6 +239,73 @@ class MediaConfigurationTest(MediaFixture):
                         recording_compression_enabled=cast(bool, enabled),
                     )
                 )
+
+    def test_recording_compression_backlog_thresholds_default_and_validate(self) -> None:
+        self.assertEqual(
+            DEFAULT_RECORDING_COMPRESSION_BACKLOG_THRESHOLD,
+            self.configuration.recording_compression_backlog_threshold,
+        )
+        self.assertIsNone(self.configuration.recording_compression_backlog_recovery_threshold)
+        parsed = load_media_runtime_configuration(
+            {
+                "host_id": HOST_ID,
+                "host_status": "active",
+                "mediamtx_address": None,
+                "mediamtx_playback_address": None,
+                "recording_window_seconds": 3600,
+                "media_config_path": "/etc/nvsop/mediamtx.yml",
+                "recording_directory": "/var/lib/nvsop/recordings",
+                "mediamtx_binary": "/usr/local/bin/mediamtx",
+                "ffmpeg_binary": "/usr/bin/ffmpeg",
+                "rtsp_bind_address": ":8554",
+                "webrtc_bind_address": ":8889",
+                "webrtc_udp_bind_address": ":8189",
+                "playback_bind_address": ":9996",
+                "allow_origins": ["https://control.example.test"],
+                "record_segment_duration_seconds": 60,
+                "preview_release_delay_seconds": 5,
+                "startup_timeout_seconds": 2,
+                "transcode_threads": 2,
+                "recording_compression_enabled": True,
+                "recording_compression_backlog_threshold": 20,
+                "recording_compression_backlog_recovery_threshold": 5,
+                "cameras": [],
+            }
+        )
+        self.assertEqual(20, parsed.recording_compression_backlog_threshold)
+        self.assertEqual(5, parsed.recording_compression_backlog_recovery_threshold)
+        for threshold in (0, -1, True, 1.5, "20"):
+            with self.assertRaises(ValueError):
+                MediaRuntime(
+                    replace(
+                        self.configuration,
+                        recording_compression_backlog_threshold=cast(int, threshold),
+                    )
+                )
+        for recovery in (-1, True, 1.5, "5"):
+            with self.assertRaises(ValueError):
+                MediaRuntime(
+                    replace(
+                        self.configuration,
+                        recording_compression_backlog_recovery_threshold=cast(int, recovery),
+                    )
+                )
+        with self.assertRaises(ValueError):
+            MediaRuntime(
+                replace(
+                    self.configuration,
+                    recording_compression_backlog_threshold=10,
+                    recording_compression_backlog_recovery_threshold=10,
+                )
+            )
+        with self.assertRaises(ValueError):
+            MediaRuntime(
+                replace(
+                    self.configuration,
+                    recording_compression_backlog_threshold=10,
+                    recording_compression_backlog_recovery_threshold=15,
+                )
+            )
 
     def test_render_uses_one_stable_path_for_passthrough_and_transcode_modes(self) -> None:
         transcoded = replace(

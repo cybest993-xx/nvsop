@@ -60,6 +60,7 @@ task-merge:
 	@test -n "$(PR)" && test -n "$(BRANCH)" && test -n "$(CANDIDATE)" || (echo "usage: make task-merge PR=<number> BRANCH=agent/<owner>/<task> CANDIDATE=<sha>" >&2; exit 2)
 	@branch="$$(git symbolic-ref --quiet HEAD)" || { echo "task-merge cannot verify primary HEAD" >&2; exit 2; }; test "$$branch" = "refs/heads/main" || { echo "task-merge requires primary main" >&2; exit 2; }
 	@status="$$(git status --porcelain=v1 --untracked-files=all)" || { echo "task-merge cannot verify primary status" >&2; exit 2; }; test -z "$$status" || { echo "task-merge requires a clean primary main checkout" >&2; exit 2; }
+	python3 scripts/cleanup_task.py --preflight-merge --pr "$(PR)" --branch "$(BRANCH)" --candidate "$(CANDIDATE)"
 	gh pr merge "$(PR)" --squash --match-head-commit "$(CANDIDATE)"
 	$(MAKE) task-cleanup PR="$(PR)" BRANCH="$(BRANCH)" CANDIDATE="$(CANDIDATE)"
 

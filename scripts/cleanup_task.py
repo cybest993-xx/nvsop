@@ -278,15 +278,19 @@ def pull_request(pr: int) -> dict[str, object]:
     return payload
 
 
-def verify_pull_request(payload: dict[str, object], branch: str, candidate: str) -> str:
-    if payload.get("state") != "MERGED":
-        raise CleanupTaskError("pull request is not merged")
+def verify_pr_identity(payload: dict[str, object], branch: str, candidate: str) -> None:
     if payload.get("baseRefName") != "main":
         raise CleanupTaskError("pull request base is not main")
     if payload.get("headRefName") != branch:
         raise CleanupTaskError("pull request head branch does not match --branch")
     if payload.get("headRefOid") != candidate:
         raise CleanupTaskError("pull request head does not match --candidate")
+
+
+def verify_pull_request(payload: dict[str, object], branch: str, candidate: str) -> str:
+    if payload.get("state") != "MERGED":
+        raise CleanupTaskError("pull request is not merged")
+    verify_pr_identity(payload, branch, candidate)
     merge_commit = payload.get("mergeCommit")
     if not isinstance(merge_commit, dict):
         raise CleanupTaskError("pull request has no recorded merge commit")
@@ -296,12 +300,7 @@ def verify_pull_request(payload: dict[str, object], branch: str, candidate: str)
 def verify_closed_pull_request(payload: dict[str, object], branch: str, candidate: str) -> None:
     if payload.get("state") != "CLOSED":
         raise CleanupTaskError("pull request is not closed without merge")
-    if payload.get("baseRefName") != "main":
-        raise CleanupTaskError("pull request base is not main")
-    if payload.get("headRefName") != branch:
-        raise CleanupTaskError("pull request head branch does not match --branch")
-    if payload.get("headRefOid") != candidate:
-        raise CleanupTaskError("pull request head does not match --candidate")
+    verify_pr_identity(payload, branch, candidate)
     if payload.get("mergeCommit") is not None:
         raise CleanupTaskError("closed pull request unexpectedly records a merge commit")
 
@@ -370,6 +369,18 @@ def remove_local_target(target: CleanupTarget) -> None:
         git("config", "--local", "--remove-section", f"branch.{branch}")
 
 
+def preflight_task_merge(pr: int, branch: str, candidate: str) -> None:
+    candidate = parse_object_id(candidate, "--candidate")
+    target = verify_local_target(branch, check_ignored=False)
+    if target.task_tip != candidate:
+        raise CleanupTaskError("local branch tip does not match --candidate")
+    payload = pull_request(pr)
+    if payload.get("state") != "OPEN":
+        raise CleanupTaskError("pull request is not open")
+    verify_pr_identity(payload, branch, candidate)
+    print(f"verified pre-merge task {branch} at {candidate} for PR #{pr}")
+
+
 def cleanup_task(pr: int, branch: str, candidate: str) -> None:
     candidate = parse_object_id(candidate, "--candidate")
     target = verify_local_target(branch, check_ignored=False)
@@ -429,13 +440,18 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--branch", required=True)
     result.add_argument("--candidate", required=True)
     result.add_argument("--replaced-by")
+    result.add_argument("--preflight-merge", action="store_true")
     return result
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser().parse_args(argv)
     try:
-        if arguments.replaced_by is None:
+        if arguments.preflight_merge:
+            if arguments.pr is None or arguments.replaced_by is not None:
+                raise CleanupTaskError("--preflight-merge requires --pr without --replaced-by")
+            preflight_task_merge(arguments.pr, arguments.branch, arguments.candidate)
+        elif arguments.replaced_by is None:
             if arguments.pr is None:
                 raise CleanupTaskError("--pr is required for merged task cleanup")
             cleanup_task(arguments.pr, arguments.branch, arguments.candidate)

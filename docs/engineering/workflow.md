@@ -59,6 +59,7 @@ Inspect [Makefile](../../Makefile) for prerequisites and constituent checks; it 
 | `make contracts` | Canonical compatibility/export/Web generation; [maintenance](maintenance.md#generated-contracts) owns the procedure |
 | `make pr-check PR=<number>` | Optional read-only classification of candidate, CI/protection and review obligations |
 | `make local-clean` / `make local-purge` | Declared outputs / task-local reproducible state, not secrets or unknown ignored files |
+| `make task-merge` | Verify local task and open PR identity before exact-head squash merge, then clean that single task |
 | `make task-cleanup` / `make task-abandon` | Exact single-task cleanup after verified merge / explicit supersession proof |
 
 **Done:** every acceptance criterion and required check has actual results or an explicit gap. Stop optional tests/refactors when sufficient evidence is complete.
@@ -99,7 +100,7 @@ The server rules must require PRs, successful strict/latest-base `CI required` b
 
 ## 5. Merge and complete the authorized task
 
-Immediately re-read PR state, current head/base, required checks and review/conversation state. Stop on changed/unverified facts. For an authorized, current candidate, run `make task-merge PR=<number> BRANCH=<branch> CANDIDATE=<sha>` from the clean primary `main` checkout. This invokes native `gh pr merge <number> --squash --match-head-commit <sha>` without `--admin` and immediately runs the exact-task cleanup upon success. On a verified already-merged PR or after a cleanup failure, resume with `make task-cleanup` for that exact task; never re-merge it. `gh pr checks <number> --required` is a read-only check, not authorization. An explicitly authorized base update uses the [native REST endpoint](https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request-branch) via `gh api --method PUT repos/{owner}/{repo}/pulls/<number>/update-branch -f expected_head_sha=<sha>`; a head mismatch is rejected. Its successor needs fresh affected evidence and exact-head CI.
+Immediately re-read PR state, current head/base, required checks and review/conversation state. Stop on changed/unverified facts. For an authorized, current candidate, run `make task-merge PR=<number> BRANCH=<branch> CANDIDATE=<sha>` from the clean primary `main` checkout. This first checks the exact local task branch/tip/worktree and the open PR head/base identity without changing state, then invokes native `gh pr merge <number> --squash --match-head-commit <sha>` without `--admin` and immediately runs the exact-task cleanup upon success. On a verified already-merged PR or after a cleanup failure, resume with `make task-cleanup` for that exact task; never re-merge it. `gh pr checks <number> --required` is a read-only check, not authorization. An explicitly authorized base update uses the [native REST endpoint](https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request-branch) via `gh api --method PUT repos/{owner}/{repo}/pulls/<number>/update-branch -f expected_head_sha=<sha>`; a head mismatch is rejected. Its successor needs fresh affected evidence and exact-head CI.
 
 ### 5.1 Confirm the exact squash merge
 

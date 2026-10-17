@@ -23,6 +23,7 @@ class CleanupTaskTest(unittest.TestCase):
         self.bin_dir = self.root / "bin"
         self.bin_dir.mkdir()
         self.gh_calls = self.root / "gh-calls"
+        self.merged_marker = self.root / "gh-merged"
         self.env = os.environ.copy()
         self.env.update(
             {
@@ -52,7 +53,16 @@ class CleanupTaskTest(unittest.TestCase):
             "count=0\n"
             'if test -f "$GH_CALLS"; then count=$(cat "$GH_CALLS"); fi\n'
             "printf '%s\\n' $((count + 1)) > \"$GH_CALLS\"\n"
-            "printf '%s\\n' \"$GH_PAYLOAD\"\n",
+            'if [ "$1" = "pr" ] && [ "$2" = "merge" ]; then\n'
+            '  if [ "$GH_MERGE_FAIL" = "1" ]; then exit 7; fi\n'
+            '  if [ -n "$GH_MERGED_MARKER" ]; then : > "$GH_MERGED_MARKER"; fi\n'
+            "  exit 0\n"
+            "fi\n"
+            'if [ -n "$GH_MERGED_MARKER" ] && [ ! -e "$GH_MERGED_MARKER" ]; then\n'
+            '  printf "%s\\n" "$GH_OPEN_PAYLOAD"\n'
+            "else\n"
+            '  printf "%s\\n" "$GH_PAYLOAD"\n'
+            "fi\n",
             encoding="utf-8",
         )
         fake_gh.chmod(0o755)
@@ -89,17 +99,32 @@ class CleanupTaskTest(unittest.TestCase):
         self.base = self.git("rev-parse", "HEAD")
 
     def run_make_merge(
-        self, branch: str, candidate: str, merge_commit: str
+        self,
+        branch: str,
+        candidate: str,
+        merge_commit: str,
+        *,
+        pr_branch: str | None = None,
+        merge_fails: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         payload = {
             "state": "MERGED",
-            "headRefName": branch,
+            "headRefName": pr_branch or branch,
             "headRefOid": candidate,
             "baseRefName": "main",
             "mergeCommit": {"oid": merge_commit},
         }
+        open_payload = {**payload, "state": "OPEN", "mergeCommit": None}
         env = self.env.copy()
-        env.update({"GH_CALLS": str(self.gh_calls), "GH_PAYLOAD": json.dumps(payload)})
+        env.update(
+            {
+                "GH_CALLS": str(self.gh_calls),
+                "GH_PAYLOAD": json.dumps(payload),
+                "GH_OPEN_PAYLOAD": json.dumps(open_payload),
+                "GH_MERGED_MARKER": str(self.merged_marker),
+                "GH_MERGE_FAIL": "1" if merge_fails else "0",
+            }
+        )
         return subprocess.run(
             ["make", "task-merge", "PR=311", f"BRANCH={branch}", f"CANDIDATE={candidate}"],
             cwd=self.repo,
@@ -382,17 +407,45 @@ class CleanupTaskTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assert_branch_absent(branch)
         self.assertFalse(task.exists())
-        self.assertEqual("2\n", self.gh_calls.read_text(encoding="utf-8"))
+        self.assertTrue(self.merged_marker.exists())
+        self.assertEqual("3\n", self.gh_calls.read_text(encoding="utf-8"))
+
+    def test_task_merge_rejects_pr_branch_mismatch_before_remote_merge(self) -> None:
+        self.install_task_merge_entrypoint()
+        real_branch = "agent/a/demo"
+        candidate, merge_commit, task = self.make_merged_task(real_branch)
+        wrong_branch = "agent/a/other"
+        self.git("branch", wrong_branch, candidate)
+
+        result = self.run_make_merge(wrong_branch, candidate, merge_commit, pr_branch=real_branch)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse(self.merged_marker.exists(), result.stderr)
+        self.assert_branch_exists(real_branch)
+        self.assert_branch_exists(wrong_branch)
+        self.assertTrue(task.exists())
+
+    def test_task_merge_rejects_dirty_task_before_remote_merge(self) -> None:
+        self.install_task_merge_entrypoint()
+        branch = "agent/a/demo"
+        candidate, merge_commit, task = self.make_merged_task(branch)
+        (task / "local-edit.txt").write_text("keep", encoding="utf-8")
+
+        result = self.run_make_merge(branch, candidate, merge_commit)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse(self.merged_marker.exists(), result.stderr)
+        self.assert_branch_exists(branch)
+        self.assertTrue(task.exists())
 
     def test_task_merge_does_not_cleanup_after_merge_failure(self) -> None:
         self.install_task_merge_entrypoint()
         branch = "agent/a/demo"
         candidate, merge_commit, task = self.make_merged_task(branch)
-        (self.bin_dir / "gh").write_text("#!/bin/sh\nexit 7\n", encoding="utf-8")
-
-        result = self.run_make_merge(branch, candidate, merge_commit)
+        result = self.run_make_merge(branch, candidate, merge_commit, merge_fails=True)
 
         self.assertNotEqual(0, result.returncode)
+        self.assertFalse(self.merged_marker.exists())
         self.assert_branch_exists(branch)
         self.assertTrue(task.exists())
 

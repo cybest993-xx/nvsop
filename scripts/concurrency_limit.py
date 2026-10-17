@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""把请求的并发度解析为不超过硬上限的整数，供 Makefile 防止误设的并行压死主机。"""
+"""把请求的并发度解析为不超过硬上限的整数，供 Makefile 防止误设的并行压死主机。
+
+0 表示进程内串行，只对 pytest 的 -n 成立；make 的 --jobs=0 表示不限并发，因此 Makefile
+对 CHECK_JOBS 的 0 先行映射为 1（见 Makefile 的 CHECK_JOBS_EFFECTIVE）。
+"""
 
 from __future__ import annotations
 
@@ -9,7 +13,7 @@ import sys
 
 
 def resolve(name: str, raw: str, cap: int) -> int:
-    """把 raw 解析为 [0, cap] 内的实际并发数；0 表示进程内串行，原样保留。"""
+    """把 raw 解析为 [0, cap] 内的实际并发数；0 表示进程内串行（仅 pytest -n 的语义）。"""
     if raw == "0":
         return 0
     cpus = os.cpu_count() or 1

@@ -22,13 +22,15 @@ export PYTHONDONTWRITEBYTECODE := 1
 export RUFF_CACHE_DIR := $(LOCAL_CACHE)/ruff
 CHECK_JOBS ?= 2
 # 并发硬上限：无论调用方把 CHECK_JOBS/PYTEST_WORKERS 设成多大，实际并发都不超过上限，
-# 避免误设的并行把主机压死；需要更大并发时显式提高对应的 *_MAX。
+# 避免误设的并行把主机压死；整机并发上界为两者上限之积（默认 2×4，误设最多 4×4）。
+# 需要更大并发时显式提高对应的 *_MAX。
 CHECK_JOBS_MAX ?= 4
 PYTEST_WORKERS_MAX ?= 4
 # pytest 并行：默认按核数分发 worker；容器/网关套件按文件分组（--dist loadfile），
 # 让同一文件的固定端口与模块级夹具留在同一 worker。0 表示进程内串行。
 PYTEST_WORKERS ?= auto
-CHECK_JOBS_EFFECTIVE = $(shell python3 scripts/concurrency_limit.py CHECK_JOBS "$(CHECK_JOBS)" "$(CHECK_JOBS_MAX)")
+# CHECK_JOBS 的 0 映射为 1：make --jobs=0 表示不限并发，与 pytest 的 -n 0 语义相反。
+CHECK_JOBS_EFFECTIVE = $(shell python3 scripts/concurrency_limit.py CHECK_JOBS "$(if $(filter 0,$(CHECK_JOBS)),1,$(CHECK_JOBS))" "$(CHECK_JOBS_MAX)")
 PYTEST_WORKERS_EFFECTIVE = $(shell python3 scripts/concurrency_limit.py PYTEST_WORKERS "$(PYTEST_WORKERS)" "$(PYTEST_WORKERS_MAX)")
 
 # 安装与生成先完成，再由同一个 Make jobserver 限制检查并发。

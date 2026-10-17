@@ -1020,7 +1020,7 @@ export function listDdmTrainingCommands(
   )
 }
 
-/** 取消一条尚未派发的 DDM 训练命令。仅取消 pending 状态的本地命令，已派发返回 409 冲突。 */
+/** 取消一条 DDM 训练命令。未派发命令直接取消；已派发命令只记录取消请求，停止核实由执行器完成。 */
 export function cancelDdmTrainingCommand(
   datasetId: string,
   commandId: string,

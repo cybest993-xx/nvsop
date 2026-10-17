@@ -13,6 +13,11 @@ S073 只处理「是否向不幂等的基座 start 发送、以及发送后能�
 auto 恢复，因为无法证明该副本不属于仍在进行的并发准备；本票保留这种安全阻塞，不做自动清理
 或重试，等待操作者用新的输入身份重新受理。
 
+已派发停止核实同样保留安全阻塞：只有真正写入取消终态才发布停止结论，因此通用 job 围栏在核实
+成功与提交之间失败时，命令保持在途、按后续观测记下 BASE_CANCELLATION_UNVERIFIED 诊断、
+不重发 start；基座此时已清掉 PID，后续投递无法再凑齐「取消前有进程」的证据，需操作者按基座
+事实复核。不以丢弃围栏换取自动恢复。
+
 ``backend`` 与 ``dataset_root`` 由受信组合层注入：``backend`` 的 start/all_jobs/status 必须
 指向同一个逻辑训练微服务及其持久任务库，``dataset_root`` 必须是该服务 ``DATASET_ROOT`` 指向
 的共享挂载，且本执行器构造时传入的按角色 reader 参数就是服务当前实际使用的参数。HTTP 契约
@@ -77,6 +82,7 @@ _logger = get_logger("dataset")
 
 _FAILURE_CODE_LENGTH = 64
 _FAILURE_DETAIL_LENGTH = 1024
+_CANCEL_DETAIL_LENGTH = 512
 _RESULT_COPY_CHUNK_BYTES = 1024 * 1024
 _JOB_TERMINAL_OUTCOMES = {
     DdmTrainingCommandStatus.COMPLETED: DdmTrainingJobOutcome.COMPLETED,
@@ -117,6 +123,10 @@ class DdmTrainingBackend(Protocol):
 
     def status(self, job_id: str) -> Mapping[str, Any]:
         """查询原任务的状态。"""
+        ...
+
+    def cancel(self, job_id: str) -> Mapping[str, Any]:
+        """调用基座原取消入口并返回其原始响应；不可达时抛出。"""
         ...
 
 
@@ -537,6 +547,12 @@ class PostgresDdmTrainingExecutor:
         base_job_id = command.base_job_id
         if base_job_id is None:
             return DdmTrainingDispatchResult(DdmTrainingDispatchOutcome.BOUND, command)
+        if command.cancel_requested_at is not None:
+            cancelled = self._verify_dispatched_cancellation(
+                command, base_job_id=base_job_id, now=now
+            )
+            if cancelled is not None:
+                return cancelled
         try:
             observation = self._backend.status(base_job_id)
         except DdmTrainingBackendUnavailableError as error:
@@ -612,6 +628,107 @@ class PostgresDdmTrainingExecutor:
             )
             return DdmTrainingDispatchResult(DdmTrainingDispatchOutcome.BOUND, command)
         return self._register_result(command, base_job_id=base_job_id, now=now)
+
+    def _verify_dispatched_cancellation(
+        self, command: DdmTrainingCommand, *, base_job_id: str, now: datetime
+    ) -> DdmTrainingDispatchResult | None:
+        """已派发取消：只调用原取消入口，并用发送前后进程事实核实停止。
+
+        HTTP 200、成功文案与 ``cancelled`` 元数据都不是停止证据。只有取消前观测到在运行的
+        进程、取消后该进程不再出现且基座报告已取消，才进入取消终态；任何不可达或无法证明
+        的情况都只记未核实结论并保持在途保护，不重发 start。
+        """
+        try:
+            pre_jobs = self._backend.all_jobs()
+        except DdmTrainingBackendUnavailableError:
+            self._record_cancellation(
+                command_id=command.id,
+                base_job_id=base_job_id,
+                response={"outcome": "unreachable", "stage": "pre_observation"},
+                detail="无法在取消前查询基座任务集合，不能证明进程已停止",
+                now=now,
+            )
+            return None
+        pre = _base_job_facts(pre_jobs.get(base_job_id))
+        try:
+            response = self._backend.cancel(job_id=base_job_id)
+        except DdmTrainingBackendUnavailableError as error:
+            self._record_cancellation(
+                command_id=command.id,
+                base_job_id=base_job_id,
+                response=_cancel_failure_fact(error),
+                detail="基座取消入口未成功返回，不能证明进程已停止" + error.safe_fact,
+                now=now,
+            )
+            return None
+        try:
+            post_jobs = self._backend.all_jobs()
+        except DdmTrainingBackendUnavailableError:
+            self._record_cancellation(
+                command_id=command.id,
+                base_job_id=base_job_id,
+                response=_cancel_response_fact(response),
+                detail="取消响应已保存，但无法确认基座当前状态，不能证明进程已停止",
+                now=now,
+            )
+            return None
+        post = _base_job_facts(post_jobs.get(base_job_id))
+        if pre.process_live and not post.process_live and post.status is DdmBaseStatus.CANCELLED:
+            with self._factory() as session:
+                confirmed = PostgresDatasetRepository(session).confirm_ddm_training_cancellation(
+                    command_id=command.id,
+                    base_job_id=base_job_id,
+                    response=_cancel_response_fact(response),
+                    now=now,
+                )
+                # 只有真正写入取消终态才发布停止结论：租约已丢或命令已不再可核实时不宣称已停止。
+                if not (confirmed and self._commit(session, command.id)):
+                    return None
+            current = self._load(command.id)
+            if current is None:
+                return DdmTrainingDispatchResult(DdmTrainingDispatchOutcome.NOT_FOUND, None)
+            _logger.info(
+                "dataset.ddm_training_dispatch.cancellation_confirmed",
+                command_id=str(command.id),
+                base_job_id=base_job_id,
+                result="cancelled",
+            )
+            return DdmTrainingDispatchResult(DdmTrainingDispatchOutcome.CANCELLED, current)
+        self._record_cancellation(
+            command_id=command.id,
+            base_job_id=base_job_id,
+            response=_cancel_response_fact(response),
+            detail=_cancellation_unverified_detail(pre, post),
+            now=now,
+        )
+        return None
+
+    def _record_cancellation(
+        self,
+        *,
+        command_id: UUID,
+        base_job_id: str,
+        response: Mapping[str, object],
+        detail: str,
+        now: datetime,
+    ) -> None:
+        """只保存基座原响应与本次核实结论；命令保持在途，绝不在此释放保护。"""
+        try:
+            with self._factory() as session:
+                PostgresDatasetRepository(session).record_ddm_training_cancellation(
+                    command_id=command_id,
+                    base_job_id=base_job_id,
+                    response=response,
+                    detail=_truncate(detail, _CANCEL_DETAIL_LENGTH),
+                    now=now,
+                )
+                session.commit()
+        except Exception as error:
+            _logger.error(
+                "dataset.ddm_training_dispatch.cancellation_record_failed",
+                command_id=str(command_id),
+                error_type=type(error).__name__,
+            )
 
     def _register_result(
         self,
@@ -1263,6 +1380,14 @@ class HttpDdmTrainingBackend:
             )
         )
 
+    def cancel(self, job_id: str) -> Mapping[str, Any]:
+        """只调用基座实际存在的取消入口；HTTP 状态与文案都不是进程停止的证据。"""
+        return _json_document(
+            self._request(
+                method="POST", path=f"{self._base_path}/api/v1/fine-tuning/cancel/{job_id}"
+            )
+        )
+
     def _request(self, *, method: str, path: str) -> bytes:
         connection = self._connection()
         try:
@@ -1292,6 +1417,54 @@ class HttpDdmTrainingBackend:
         if self._scheme == "https":
             return http.client.HTTPSConnection(self._host, self._port, timeout=self._timeout)
         return http.client.HTTPConnection(self._host, self._port, timeout=self._timeout)
+
+
+@dataclass(frozen=True, slots=True)
+class _BaseJobFacts:
+    """基座任务集合中本命令任务的窄事实：原状态与是否仍在运行进程。"""
+
+    status: DdmBaseStatus | None = None
+    process_live: bool = False
+
+
+def _base_job_facts(job: Mapping[str, Any] | None) -> _BaseJobFacts:
+    """只读基座任务集合里的公开状态与进程存在性；缺失/未知一律保守处理。"""
+    if job is None:
+        return _BaseJobFacts()
+    return _BaseJobFacts(
+        status=_base_status(job.get("status")),
+        process_live=bool(job.get("process_pid")),
+    )
+
+
+def _cancel_response_fact(document: Mapping[str, Any]) -> dict[str, object]:
+    """只保留原取消响应的公开文案，不存响应体以外的内部字段。"""
+    fact: dict[str, object] = {"outcome": "responded"}
+    message = document.get("message")
+    if isinstance(message, str):
+        fact["message"] = _truncate(message, _CANCEL_DETAIL_LENGTH)
+    return fact
+
+
+def _cancel_failure_fact(error: DdmTrainingBackendUnavailableError) -> dict[str, object]:
+    """只保留取消调用的失败类别，不存响应体、URL 或原异常文本。"""
+    fact: dict[str, object] = {"outcome": "cancel_failed"}
+    if error.http_status is not None:
+        fact["http_status"] = error.http_status
+    if error.error_type is not None:
+        fact["error_type"] = error.error_type
+    return fact
+
+
+def _cancellation_unverified_detail(pre: _BaseJobFacts, post: _BaseJobFacts) -> str:
+    """把未核实的停止状态归因到可复核的进程/状态事实，供操作者继续确认。"""
+    if post.process_live:
+        return "取消后基座仍报告在运行的进程，停止状态待核实"
+    if not pre.process_live:
+        return "取消前基座未报告在运行的进程，不能证明进程已停止"
+    if post.status is None:
+        return "基座任务集合缺少可核对的原状态，不能证明进程已停止"
+    return "基座状态未达到可核实停止的已取消终态，停止状态待核实"
 
 
 def _base_status(value: object) -> DdmBaseStatus | None:

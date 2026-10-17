@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
@@ -631,6 +631,89 @@ class PostgresDatasetRepository:
                     status=DdmTrainingCommandStatus.CANCELLED.value,
                     cancelled_by=actor_id,
                     cancelled_at=now,
+                    updated_at=now,
+                )
+            ),
+        )
+        return result.rowcount == 1
+
+    def request_ddm_training_cancellation(
+        self, *, command_id: UUID, actor_id: UUID, now: datetime
+    ) -> bool:
+        """派发意图后只记录首次取消请求；状态与在途保护保持，等待停止核实。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(DdmTrainingCommandRow)
+                .where(
+                    DdmTrainingCommandRow.id == command_id,
+                    DdmTrainingCommandRow.status.in_(
+                        (
+                            DdmTrainingCommandStatus.RESULT_UNKNOWN.value,
+                            DdmTrainingCommandStatus.BOUND.value,
+                        )
+                    ),
+                    DdmTrainingCommandRow.cancel_requested_at.is_(None),
+                )
+                .values(
+                    cancel_requested_by=actor_id,
+                    cancel_requested_at=now,
+                    updated_at=now,
+                )
+            ),
+        )
+        return result.rowcount == 1
+
+    def record_ddm_training_cancellation(
+        self,
+        *,
+        command_id: UUID,
+        base_job_id: str,
+        response: Mapping[str, object],
+        detail: str,
+        now: datetime,
+    ) -> None:
+        """保存基座原取消响应与核实结论；命令仍在途，绝不在此释放保护。"""
+        self._session.execute(
+            update(DdmTrainingCommandRow)
+            .where(
+                DdmTrainingCommandRow.id == command_id,
+                DdmTrainingCommandRow.status == DdmTrainingCommandStatus.BOUND.value,
+                DdmTrainingCommandRow.base_job_id == base_job_id,
+                DdmTrainingCommandRow.cancel_requested_at.is_not(None),
+            )
+            .values(
+                cancel_response=dict(response),
+                cancel_detail=detail,
+                updated_at=now,
+            )
+        )
+
+    def confirm_ddm_training_cancellation(
+        self,
+        *,
+        command_id: UUID,
+        base_job_id: str,
+        response: Mapping[str, object],
+        now: datetime,
+    ) -> bool:
+        """停止已核实：原响应与终态一次写入，并保留首次请求者作为取消者。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(DdmTrainingCommandRow)
+                .where(
+                    DdmTrainingCommandRow.id == command_id,
+                    DdmTrainingCommandRow.status == DdmTrainingCommandStatus.BOUND.value,
+                    DdmTrainingCommandRow.base_job_id == base_job_id,
+                    DdmTrainingCommandRow.cancel_requested_at.is_not(None),
+                )
+                .values(
+                    status=DdmTrainingCommandStatus.CANCELLED.value,
+                    cancelled_by=DdmTrainingCommandRow.cancel_requested_by,
+                    cancelled_at=now,
+                    cancel_response=dict(response),
+                    cancel_detail=None,
                     updated_at=now,
                 )
             ),

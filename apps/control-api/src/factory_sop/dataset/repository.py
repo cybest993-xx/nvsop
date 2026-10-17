@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Protocol
 from uuid import UUID
@@ -239,7 +239,7 @@ class UsageDatasetRepository(DatasetRepository, Protocol):
 
 
 class DdmTrainingCommandRepository(UsageDatasetRepository, Protocol):
-    """DDM 训练命令受理、查询与未派发取消的仓储契约，不扩张用途/制品 seam。"""
+    """DDM 训练命令受理、查询、未派发取消与已派发停止核实的仓储契约。"""
 
     def add_ddm_training_command(self, value: DdmTrainingCommand) -> bool:
         """按数据集范围的幂等键条件追加 DDM 训练命令；键已被并发占用时返回 ``False``。"""
@@ -269,4 +269,33 @@ class DdmTrainingCommandRepository(UsageDatasetRepository, Protocol):
         self, *, dataset_id: UUID, command_id: UUID, actor_id: UUID, now: datetime
     ) -> bool:
         """与派发意图竞争同一 pending 状态；只写取消事实，不提交事务或改写输入。"""
+        ...
+
+    def request_ddm_training_cancellation(
+        self, *, command_id: UUID, actor_id: UUID, now: datetime
+    ) -> bool:
+        """为已派发命令记录首次取消请求；不改写状态、不删除历史，也不释放在途保护。"""
+        ...
+
+    def record_ddm_training_cancellation(
+        self,
+        *,
+        command_id: UUID,
+        base_job_id: str,
+        response: Mapping[str, object],
+        detail: str,
+        now: datetime,
+    ) -> None:
+        """保存基座原取消响应与本次停止核实结论；只写诊断，不推进命令终态。"""
+        ...
+
+    def confirm_ddm_training_cancellation(
+        self,
+        *,
+        command_id: UUID,
+        base_job_id: str,
+        response: Mapping[str, object],
+        now: datetime,
+    ) -> bool:
+        """核实进程确已停止后，才把已派发命令推进到取消终态并释放在途保护。"""
         ...

@@ -649,12 +649,12 @@ class PostgresTrainingCommandExecutor:
         """只在一次性意图落库后调用不幂等的 start；任何后续失败都不释放保护。"""
         try:
             base_job_id = prepared.start()
-        except TrainingBackendUnavailableError:
+        except TrainingBackendUnavailableError as error:
             return self._unknown(
                 command_id=begun.id,
                 now=now,
                 code="BASE_RESULT_UNKNOWN",
-                detail="基座启动响应丢失或不可达，不能证明未执行",
+                detail="基座启动响应丢失或不可达，不能证明未执行" + error.safe_fact,
             )
         if not valid_base_job_id(base_job_id) or base_job_id in baseline_ids:
             return self._unknown(
@@ -671,12 +671,12 @@ class PostgresTrainingCommandExecutor:
             return self._target_mismatch(command)
         try:
             jobs = self._adapter.all_jobs()
-        except TrainingBackendUnavailableError:
+        except TrainingBackendUnavailableError as error:
             return self._unknown(
                 command_id=command.id,
                 now=now,
                 code="BASE_UNREACHABLE",
-                detail="无法查询基座确认任务身份，保留在途保护",
+                detail="无法查询基座确认任务身份，保留在途保护" + error.safe_fact,
             )
         identity = self._adapter.input_identity(command_id=command.id)
         baseline = set(command.baseline_job_ids)
@@ -722,8 +722,11 @@ class PostgresTrainingCommandExecutor:
                 )
                 if cancelled is not None:
                     return cancelled
-            elif command.cancel_response is None:
-                # VLM 原基座尚无进程停止证明，只请求一次、保留在途事实。
+            elif (
+                command.cancel_response is None or command.cancel_response.get("outcome") != "http"
+            ):
+                # VLM 仅在基座明确受理取消后停止重复请求；无 PID、连接失败等仍需继续核实。
+                # 其 all_jobs 未给出 PID/停止事实，即使响应成功也不得释放在途约束。
                 self._request_dispatched_cancellation(command, base_job_id=base_job_id, now=now)
         try:
             observation = self._adapter.status(base_job_id)
@@ -853,11 +856,16 @@ class PostgresTrainingCommandExecutor:
                 now=now,
             )
             return
+        accepted = response.get("outcome") == "http"
         self._record_cancellation(
             command_id=command.id,
             base_job_id=base_job_id,
             response=_cancel_response_fact(response),
-            detail="已调用基座真实取消入口；该基座不提供进程停止证明，保留未核实状态",
+            detail=(
+                "已调用基座真实取消入口；该基座不提供进程停止证明，保留未核实状态"
+                if accepted
+                else "基座未确认受理取消，下一轮重试原取消入口；停止状态待核实"
+            ),
             now=now,
         )
 

@@ -131,7 +131,7 @@ class HttpVlmTrainingBackend:
             method="POST",
             path=f"{self._base_path}/api/v1/fine-tuning/cancel/{job_id}",
         )
-        fact: dict[str, Any] = {"outcome": "http", "http_status": status}
+        fact: dict[str, Any] = {"outcome": "retryable", "http_status": status}
         try:
             document = json_document(body, service_label=_SERVICE_LABEL)
         except TrainingBackendUnavailableError:
@@ -140,6 +140,13 @@ class HttpVlmTrainingBackend:
         if isinstance(message, str):
             fact["message_sha256"] = sha256(message.encode("utf-8")).hexdigest()
             fact["message_length"] = len(message)
+            # cr-training-ms/app.py: not assigned / failed 文案都要求后续重试；
+            # 只有原接口明确受理取消才停止重复 POST，且仍不证明进程已停。
+            if (
+                status == 200
+                and message == f"Training job {job_id} has been cancelled successfully"
+            ):
+                fact["outcome"] = "http"
         return fact
 
     def _request(self, *, method: str, path: str) -> bytes:

@@ -10,7 +10,7 @@ import asyncio
 import hashlib
 import importlib.util
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -34,6 +34,7 @@ from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
 from factory_sop.dataset.adapters.storage import LocalFileObjectStorage
 from factory_sop.dataset.adapters.training_execution import (
     PostgresTrainingCommandExecutor,
+    TrainingBackendUnavailableError,
     TrainingDispatchOutcome,
     TrainingDispatchResult,
 )
@@ -478,6 +479,8 @@ def test_vlm_lost_start_response_recovers_by_unique_identity_without_resend(
         assert unknown.status is TrainingCommandStatus.RESULT_UNKNOWN
         assert unknown.base_job_id is None
         assert unknown.failure_code == "BASE_RESULT_UNKNOWN"
+        assert unknown.failure_detail is not None
+        assert "HTTP 502" in unknown.failure_detail
 
         # 恢复只查询：唯一新任务恰好属于本命令时才绑定，start 不再调用。
         server.start_error = None
@@ -520,7 +523,11 @@ def test_vlm_ambiguous_recovery_keeps_inflight_protection(
 
 
 def test_vlm_consumption_mismatch_refuses_dispatch_before_start(
-    engine: Engine, tmp_path: Path, dataset_storage_root: Path, vlm_dataset: tuple[UUID, UUID]
+    engine: Engine,
+    tmp_path: Path,
+    dataset_storage_root: Path,
+    vlm_dataset: tuple[UUID, UUID],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """基座会发现训练目录里的全部 JSON：多出的文件必须拒绝派发，且不调用 start。"""
     dataset_id, check_id = vlm_dataset
@@ -529,12 +536,15 @@ def test_vlm_consumption_mismatch_refuses_dispatch_before_start(
         idempotency_key="vlm-extra-json",
         selection=VlmInputSelection(dataset_id=dataset_id, usage_check_id=check_id),
     )
-    identity = f"vlm-{submitted.command.id}"
-    dataset_root = tmp_path / "vlm-inputs"
+    # 注入发生在材料化/合法暴露之后的真实基座发现入口，避免提前占用目标目录。
+    discover = NvidiaVlmJsonDiscovery.discover
+
+    def injected_discovery(self: NvidiaVlmJsonDiscovery, directory: Path) -> list[str]:
+        (directory / "extra_manifest.json").write_text("{}", encoding="utf-8")
+        return list(discover(self, directory))
+
+    monkeypatch.setattr(NvidiaVlmJsonDiscovery, "discover", injected_discovery)
     with VlmHttpServer() as server:
-        injected = dataset_root / identity
-        injected.mkdir(parents=True)
-        (injected / "extra_manifest.json").write_text("{}", encoding="utf-8")
         settings = _settings(
             engine,
             tmp_path=tmp_path,
@@ -543,10 +553,10 @@ def test_vlm_consumption_mismatch_refuses_dispatch_before_start(
         )
         worker = _executor(engine, settings)
         result = _run(worker, submitted.command.id)
-        assert result.outcome is TrainingDispatchOutcome.BLOCKED
-        assert result.failure_code == "DISPATCH_PREPARATION_IN_FLIGHT"
+        assert result.outcome is TrainingDispatchOutcome.FAILED
+        assert result.failure_code == "USAGE_STATE_CONFLICT"
         assert server.starts == []
-        assert _load(engine, submitted.command.id).status is TrainingCommandStatus.PENDING
+        assert _load(engine, submitted.command.id).status is TrainingCommandStatus.FAILED
 
 
 def _write_result_tree(
@@ -566,7 +576,8 @@ def _write_result_tree(
         f"[train]\n"
         f'output_dir = "{job_directory}"\n'
         f"[train.train_policy.dataset]\n"
-        f'name = ["{dataset_root / identity / VLM_RECORDS_FILENAME}"]\n'
+        # 基座 run_fine_tuning 将路径数组 str(json_paths) 写入 TOML 字符串，而不是数组。
+        f"name = {json.dumps(str([str(dataset_root / identity / VLM_RECORDS_FILENAME)]))}\n"
         f'split = ["vlm_candidate_records"]\n'
         f"[logging]\n"
         f'experiment_name = "{base_job_id}"\n'
@@ -738,9 +749,140 @@ def test_vlm_cancel_request_calls_the_real_endpoint_without_claiming_stop(
         assert cancelled.cancel_response["message_sha256"]
         assert "已停止" not in (cancelled.cancel_detail or "")
 
-        # 取消请求只核实一次：重复观测不再调用基座取消入口。
+        # 原基座查询只有缓存中的 PID，DB all_jobs 无 PID；无法核实停止时持续保留
+        # VLM 服务的在途约束，避免仅凭 HTTP 200 再启动另一条训练。
+        second = _submit(
+            engine,
+            idempotency_key="vlm-cancel-guard",
+            selection=VlmInputSelection(dataset_id=dataset_id, usage_check_id=check_id),
+        )
+        blocked = _run(worker, second.command.id)
+        assert blocked.outcome is TrainingDispatchOutcome.BLOCKED
+        assert blocked.failure_code == "DISPATCH_IN_FLIGHT"
+        assert server.starts == [f"vlm-{submitted.command.id}"]
+
+        # 原基座已明确受理取消后重复观测不再调用取消入口。
         assert _run(worker, submitted.command.id).outcome is TrainingDispatchOutcome.BOUND
         assert cancelled.cancel_response == _load(engine, submitted.command.id).cancel_response
+
+
+def test_vlm_cancel_queued_job_retries_real_endpoint_after_pid_appears(
+    engine: Engine, tmp_path: Path, dataset_storage_root: Path, vlm_dataset: tuple[UUID, UUID]
+) -> None:
+    """基座排队无 PID 的 HTTP 200 要求重试，不能作为已接受取消的闩锁。"""
+    dataset_id, check_id = vlm_dataset
+    submitted = _submit(
+        engine,
+        idempotency_key="vlm-cancel-queued",
+        selection=VlmInputSelection(dataset_id=dataset_id, usage_check_id=check_id),
+    )
+    with VlmHttpServer() as server:
+        worker = _executor(
+            engine,
+            _settings(
+                engine,
+                tmp_path=tmp_path,
+                dataset_storage_root=dataset_storage_root,
+                server=server,
+            ),
+        )
+        assert _run(worker, submitted.command.id).outcome is TrainingDispatchOutcome.BOUND
+        bound = _load(engine, submitted.command.id)
+        assert bound.base_job_id is not None
+        server.cache.set(bound.base_job_id, None)
+        with session_factory(engine)() as session:
+            cancel_training_command(
+                service=TrainingService.VLM,
+                dataset_id=dataset_id,
+                command_id=submitted.command.id,
+                caller=_caller(Permission.DATASET_EDIT),
+                now=NOW,
+                datasets=PostgresDatasetRepository(session),
+            )
+            session.commit()
+        assert _run(worker, submitted.command.id).outcome is TrainingDispatchOutcome.BOUND
+        queued = _load(engine, submitted.command.id)
+        assert queued.cancel_response is not None
+        assert queued.cancel_response["http_status"] == 200
+        assert queued.cancel_response["outcome"] == "retryable"
+        assert server.terminated == []
+
+        server.run_job(bound.base_job_id, process_pid=6060)
+        assert _run(worker, submitted.command.id).outcome is TrainingDispatchOutcome.BOUND
+        accepted = _load(engine, submitted.command.id)
+        assert accepted.cancel_response is not None
+        assert accepted.cancel_response["outcome"] == "http"
+        assert server.terminated == [6060]
+        assert _run(worker, submitted.command.id).outcome is TrainingDispatchOutcome.BOUND
+        assert server.terminated == [6060]
+        assert len(server.starts) == 1
+
+
+def test_vlm_cancel_transient_transport_failure_retries_original_endpoint(
+    engine: Engine,
+    tmp_path: Path,
+    dataset_storage_root: Path,
+    vlm_dataset: tuple[UUID, UUID],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """一次取消通信失败只持久化未确认事实；下一轮使用原基座入口重新核实。"""
+    dataset_id, check_id = vlm_dataset
+    submitted = _submit(
+        engine,
+        idempotency_key="vlm-cancel-transport",
+        selection=VlmInputSelection(dataset_id=dataset_id, usage_check_id=check_id),
+    )
+    with VlmHttpServer() as server:
+        worker = _executor(
+            engine,
+            _settings(
+                engine,
+                tmp_path=tmp_path,
+                dataset_storage_root=dataset_storage_root,
+                server=server,
+            ),
+        )
+        assert _run(worker, submitted.command.id).outcome is TrainingDispatchOutcome.BOUND
+        bound = _load(engine, submitted.command.id)
+        assert bound.base_job_id is not None
+        server.run_job(bound.base_job_id, process_pid=7070)
+        with session_factory(engine)() as session:
+            cancel_training_command(
+                service=TrainingService.VLM,
+                dataset_id=dataset_id,
+                command_id=submitted.command.id,
+                caller=_caller(Permission.DATASET_EDIT),
+                now=NOW,
+                datasets=PostgresDatasetRepository(session),
+            )
+            session.commit()
+
+        real_cancel = HttpVlmTrainingBackend.cancel
+        called = 0
+
+        def flaky_cancel(self: HttpVlmTrainingBackend, *, job_id: str) -> Mapping[str, Any]:
+            nonlocal called
+            called += 1
+            if called == 1:
+                raise TrainingBackendUnavailableError("取消传输失败", error_type="TimeoutError")
+            return real_cancel(self, job_id=job_id)
+
+        monkeypatch.setattr(HttpVlmTrainingBackend, "cancel", flaky_cancel)
+        assert _run(worker, submitted.command.id).outcome is TrainingDispatchOutcome.BOUND
+        unavailable = _load(engine, submitted.command.id)
+        assert unavailable.cancel_response is not None
+        assert unavailable.cancel_response["outcome"] == "unreachable"
+        assert unavailable.cancel_detail is not None
+        assert "TimeoutError" in unavailable.cancel_detail
+        assert server.terminated == []
+
+        assert _run(worker, submitted.command.id).outcome is TrainingDispatchOutcome.BOUND
+        accepted = _load(engine, submitted.command.id)
+        assert accepted.cancel_response is not None
+        assert accepted.cancel_response["outcome"] == "http"
+        assert server.terminated == [7070]
+        assert called == 2
+        assert len(server.starts) == 1
 
 
 def test_vlm_cancel_before_dispatch_is_terminal_without_calling_the_backend(

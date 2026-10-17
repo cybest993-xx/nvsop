@@ -364,7 +364,7 @@ class TrainingJobOutcome(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class TrainingJobResult:
-    """DDM 执行器返回给 job owner 的窄结果事实。"""
+    """DDM/VLM 训练执行器返回给 job owner 的窄结果事实。"""
 
     outcome: TrainingJobOutcome
     failure_code: str | None = None
@@ -377,7 +377,7 @@ class TrainingJobFinisher(Protocol):
 
 
 class TrainingJobExecutor(Protocol):
-    """供 `job` worker 调用的 DDM 训练命令执行 seam。"""
+    """供 `job` worker 调用的 DDM/VLM 训练命令执行 seam。"""
 
     def execute_job(
         self,

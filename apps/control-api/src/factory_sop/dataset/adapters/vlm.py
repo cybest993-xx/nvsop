@@ -252,7 +252,9 @@ def _verify_merged_config(
     dataset_section = train_policy.get("dataset") if isinstance(train_policy, Mapping) else None
     if not isinstance(dataset_section, Mapping):
         raise TrainingResultInvalidError("基座合并配置缺少数据集小节")
-    if dataset_section.get("name") != [str(expected_records_path)] or dataset_section.get(
+    # NVIDIA cr-training-ms/app.py 用 str(json_paths) 写入 TOML，真实 name 是字符串，
+    # 不是 CosmosSFTDataset 接口使用的数组。核对基座真实落盘值，不接受理想化格式。
+    if dataset_section.get("name") != str([str(expected_records_path)]) or dataset_section.get(
         "split"
     ) != [Path(VLM_RECORDS_FILENAME).stem]:
         raise TrainingResultInvalidError("基座实际消费的输入与本命令冻结输入不一致")
@@ -265,7 +267,7 @@ def _verify_merged_config(
 def _latest_step_directory(results_root: Path, job_directory: Path) -> tuple[Path, int]:
     found: dict[int, Path] = {}
     for candidate in sorted(job_directory.rglob(f"{_STEP_PREFIX}*")):
-        if not candidate.is_dir():
+        if not is_directory(candidate):
             continue
         suffix = candidate.name[len(_STEP_PREFIX) :]
         if not suffix.isdigit():
@@ -283,7 +285,7 @@ def _checkpoint_files(results_root: Path, directory: Path) -> tuple[Path, ...]:
     """列出步目录下真实非空文件；目录只有空文件或尚未写入时按未就绪处理。"""
     files: list[Path] = []
     for candidate in sorted(directory.rglob("*")):
-        if not candidate.is_file():
+        if not is_regular_file(candidate):
             continue
         ensure_within_root(results_root, candidate)
         if candidate.stat().st_size <= 0:

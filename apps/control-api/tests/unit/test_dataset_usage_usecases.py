@@ -352,7 +352,9 @@ class FakeUsageDatasets:
 
     def add_training_command(self, value: TrainingCommand) -> bool:
         if any(
-            item.dataset_id == value.dataset_id and item.idempotency_key == value.idempotency_key
+            item.service is value.service
+            and item.dataset_id == value.dataset_id
+            and item.idempotency_key == value.idempotency_key
             for item in self.ddm_commands.values()
         ):
             return False

@@ -28,6 +28,7 @@ from factory_sop.auth.adapters.current_caller import current_caller_resolver
 from factory_sop.dataset.adapters.dependencies import ddm_executor
 from factory_sop.dataset.adapters.storage import LocalFileObjectStorage
 from factory_sop.job.adapters.worker import dispatch_ddm_training_job
+from factory_sop.job.api import JobType
 from factory_sop.persistence import session_factory
 from factory_sop.settings import Settings
 
@@ -188,7 +189,9 @@ def test_sys_74_persistent_command_and_registered_result_access(
         factory = session_factory(engine)
         ctx = {
             "session_factory": factory,
-            "ddm_executor": ddm_executor(settings, factory),
+            "training_executors": {
+                JobType.DATASET_DDM_TRAINING: ddm_executor(settings, factory),
+            },
             "current_caller_resolver": current_caller_resolver(factory),
             "blocking_job_slots": asyncio.Semaphore(1),
         }

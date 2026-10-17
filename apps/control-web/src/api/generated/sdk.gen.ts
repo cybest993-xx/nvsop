@@ -18,6 +18,9 @@ import type {
   CancelNormalHandoverData,
   CancelNormalHandoverErrors,
   CancelNormalHandoverResponses,
+  CancelVlmTrainingCommandData,
+  CancelVlmTrainingCommandErrors,
+  CancelVlmTrainingCommandResponses,
   CheckEvidenceAccessData,
   CheckEvidenceAccessErrors,
   CheckEvidenceAccessResponses,
@@ -258,6 +261,9 @@ import type {
   ListVlmCandidatesData,
   ListVlmCandidatesErrors,
   ListVlmCandidatesResponses,
+  ListVlmTrainingCommandsData,
+  ListVlmTrainingCommandsErrors,
+  ListVlmTrainingCommandsResponses,
   OpenSessionData,
   OpenSessionErrors,
   OpenSessionResponses,
@@ -369,6 +375,12 @@ import type {
   ReadVlmCandidateData,
   ReadVlmCandidateErrors,
   ReadVlmCandidateResponses,
+  ReadVlmTrainingCommandData,
+  ReadVlmTrainingCommandErrors,
+  ReadVlmTrainingCommandResponses,
+  ReadVlmTrainingResultData,
+  ReadVlmTrainingResultErrors,
+  ReadVlmTrainingResultResponses,
   RegisterDatasetActionListData,
   RegisterDatasetActionListErrors,
   RegisterDatasetActionListResponses,
@@ -423,6 +435,9 @@ import type {
   RequestVideoUploadData,
   RequestVideoUploadErrors,
   RequestVideoUploadResponses,
+  RequestVlmTrainingCommandData,
+  RequestVlmTrainingCommandErrors,
+  RequestVlmTrainingCommandResponses,
   ResetUserPasswordData,
   ResetUserPasswordErrors,
   ResetUserPasswordResponses,
@@ -2909,7 +2924,7 @@ export const readDdmTrainingCommand = <ThrowOnError extends boolean = false>(
 /**
  * Cancel A Ddm Training Command
  *
- * 取消未派发命令；已派发命令只记录取消请求，停止由执行器核实，不在此宣称已停止。
+ * 仅取消尚未进入派发的命令；已派发时返回冲突，不宣称基座已停止。
  */
 export const cancelDdmTrainingCommand = <ThrowOnError extends boolean = false>(
   options: Options<CancelDdmTrainingCommandData, ThrowOnError>,
@@ -3184,5 +3199,93 @@ export const readVlmCandidate = <ThrowOnError extends boolean = false>(
 ): RequestResult<ReadVlmCandidateResponses, ReadVlmCandidateErrors, ThrowOnError> =>
   (options.client ?? client).get<ReadVlmCandidateResponses, ReadVlmCandidateErrors, ThrowOnError>({
     url: '/api/v1/training-datasets/{dataset_id}/vlm-candidates/{candidate_id}',
+    ...options,
+  })
+
+/**
+ * List The Vlm Training Commands
+ *
+ * 重新打开页面后按数据集恢复原 VLM 命令，不依赖页面内缓存。
+ */
+export const listVlmTrainingCommands = <ThrowOnError extends boolean = false>(
+  options: Options<ListVlmTrainingCommandsData, ThrowOnError>,
+): RequestResult<ListVlmTrainingCommandsResponses, ListVlmTrainingCommandsErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ListVlmTrainingCommandsResponses,
+    ListVlmTrainingCommandsErrors,
+    ThrowOnError
+  >({ url: '/api/v1/training-datasets/{dataset_id}/vlm-training-commands', ...options })
+
+/**
+ * Request A Vlm Training Command
+ *
+ * 受理一条 VLM 训练命令；返回 ``pending`` 只表示已受理，绝不表示训练已开始。
+ */
+export const requestVlmTrainingCommand = <ThrowOnError extends boolean = false>(
+  options: Options<RequestVlmTrainingCommandData, ThrowOnError>,
+): RequestResult<
+  RequestVlmTrainingCommandResponses,
+  RequestVlmTrainingCommandErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    RequestVlmTrainingCommandResponses,
+    RequestVlmTrainingCommandErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/vlm-training-commands',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read A Vlm Training Command
+ */
+export const readVlmTrainingCommand = <ThrowOnError extends boolean = false>(
+  options: Options<ReadVlmTrainingCommandData, ThrowOnError>,
+): RequestResult<ReadVlmTrainingCommandResponses, ReadVlmTrainingCommandErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadVlmTrainingCommandResponses,
+    ReadVlmTrainingCommandErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/vlm-training-commands/{command_id}',
+    ...options,
+  })
+
+/**
+ * Cancel A Vlm Training Command
+ *
+ * 未派发命令直接取消；已派发只记录取消请求，响应文案不证明进程已停止。
+ */
+export const cancelVlmTrainingCommand = <ThrowOnError extends boolean = false>(
+  options: Options<CancelVlmTrainingCommandData, ThrowOnError>,
+): RequestResult<CancelVlmTrainingCommandResponses, CancelVlmTrainingCommandErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    CancelVlmTrainingCommandResponses,
+    CancelVlmTrainingCommandErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/vlm-training-commands/{command_id}/cancel',
+    ...options,
+  })
+
+/**
+ * Read A Vlm Training Result
+ *
+ * 返回 VLM 结果登记事实与已授权数据通道地址；不在此中转大体积字节。
+ */
+export const readVlmTrainingResult = <ThrowOnError extends boolean = false>(
+  options: Options<ReadVlmTrainingResultData, ThrowOnError>,
+): RequestResult<ReadVlmTrainingResultResponses, ReadVlmTrainingResultErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadVlmTrainingResultResponses,
+    ReadVlmTrainingResultErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/vlm-training-commands/{command_id}/result',
     ...options,
   })

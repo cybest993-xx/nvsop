@@ -18,6 +18,14 @@ class JobType(StrEnum):
     DATASET_USAGE_CHECK = "dataset_usage_check"
     DATASET_ARTIFACT = "dataset_artifact"
     DATASET_DDM_TRAINING = "dataset_ddm_training"
+    DATASET_VLM_TRAINING = "dataset_vlm_training"
+
+
+# 训练命令的已知任务类型：未配置对应基座时在 outbox 中 held，不投递可实际 start 的函数。
+TRAINING_JOB_TYPES: tuple[JobType, ...] = (
+    JobType.DATASET_DDM_TRAINING,
+    JobType.DATASET_VLM_TRAINING,
+)
 
 
 class JobStatus(StrEnum):
@@ -88,13 +96,18 @@ class UsageJobQueue(Protocol):
         ...
 
 
-class DdmTrainingJobQueue(Protocol):
-    """`dataset` 受理 DDM 训练命令时使用的待派发任务创建接口。"""
+class TrainingJobQueue(Protocol):
+    """`dataset` 受理训练命令时使用的待派发任务创建接口。"""
 
-    def get_or_create_ddm_training(
-        self, *, dataset_id: UUID, command_id: UUID, now: datetime
+    def get_or_create_training(
+        self,
+        *,
+        job_type: JobType,
+        dataset_id: UUID,
+        command_id: UUID,
+        now: datetime,
     ) -> ApplicationJob:
-        """为一条 DDM 训练命令创建或复用待派发任务。"""
+        """为一条训练命令创建或复用待派发任务；任务类型由调用方按服务给出。"""
         ...
 
 

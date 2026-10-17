@@ -524,6 +524,8 @@ export type ApiErrorCode =
   | 'ARTIFACT_UNAVAILABLE'
   | 'DDM_TRAINING_COMMAND_NOT_FOUND'
   | 'DDM_TRAINING_RESULT_NOT_FOUND'
+  | 'VLM_TRAINING_COMMAND_NOT_FOUND'
+  | 'VLM_TRAINING_RESULT_NOT_FOUND'
   | 'JOB_NOT_FOUND'
   | 'JOB_RESOURCE_NOT_FOUND'
   | 'ACTIVE_GRANT_EXISTS'
@@ -1663,7 +1665,9 @@ export type DdmTrainingCommandAcceptedView = {
 /**
  * DdmTrainingCommandView
  *
- * DDM 训练命令的公开事实。
+ * 一条训练命令的公开事实（DDM 与 VLM 共用同一形状）。
+ *
+ * schema 名由已发布契约冻结（ADR-0003）：这里是同一份 wire 事实，不是 DDM 专属字段。
  *
  * 只暴露应用状态、基座原状态/观测时刻/查询诊断与结果登记事实；冻结负载、内部路径、
  * 媒体身份与消费摘要不进入公开响应。
@@ -3826,6 +3830,18 @@ export type RequestVideoUploadInput = {
    * Source
    */
   source: string
+}
+
+/**
+ * RequestVlmTrainingCommandInput
+ *
+ * 受理一条 VLM 训练命令所需的已通过用途检查。
+ */
+export type RequestVlmTrainingCommandInput = {
+  /**
+   * Usage Check Id
+   */
+  usage_check_id: string
 }
 
 /**
@@ -13692,3 +13708,310 @@ export type ReadVlmCandidateResponses = {
 }
 
 export type ReadVlmCandidateResponse = ReadVlmCandidateResponses[keyof ReadVlmCandidateResponses]
+
+export type ListVlmTrainingCommandsData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/training-datasets/{dataset_id}/vlm-training-commands'
+}
+
+export type ListVlmTrainingCommandsErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ListVlmTrainingCommandsError =
+  ListVlmTrainingCommandsErrors[keyof ListVlmTrainingCommandsErrors]
+
+export type ListVlmTrainingCommandsResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageDdmTrainingCommandView
+}
+
+export type ListVlmTrainingCommandsResponse =
+  ListVlmTrainingCommandsResponses[keyof ListVlmTrainingCommandsResponses]
+
+export type RequestVlmTrainingCommandData = {
+  body: RequestVlmTrainingCommandInput
+  headers: {
+    /**
+     * Idempotency-Key
+     */
+    'Idempotency-Key': string
+  }
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/vlm-training-commands'
+}
+
+export type RequestVlmTrainingCommandErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type RequestVlmTrainingCommandError =
+  RequestVlmTrainingCommandErrors[keyof RequestVlmTrainingCommandErrors]
+
+export type RequestVlmTrainingCommandResponses = {
+  /**
+   * Successful Response
+   */
+  202: DdmTrainingCommandAcceptedView
+}
+
+export type RequestVlmTrainingCommandResponse =
+  RequestVlmTrainingCommandResponses[keyof RequestVlmTrainingCommandResponses]
+
+export type ReadVlmTrainingCommandData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/vlm-training-commands/{command_id}'
+}
+
+export type ReadVlmTrainingCommandErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ReadVlmTrainingCommandError =
+  ReadVlmTrainingCommandErrors[keyof ReadVlmTrainingCommandErrors]
+
+export type ReadVlmTrainingCommandResponses = {
+  /**
+   * Successful Response
+   */
+  200: DdmTrainingCommandView
+}
+
+export type ReadVlmTrainingCommandResponse =
+  ReadVlmTrainingCommandResponses[keyof ReadVlmTrainingCommandResponses]
+
+export type CancelVlmTrainingCommandData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/vlm-training-commands/{command_id}/cancel'
+}
+
+export type CancelVlmTrainingCommandErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type CancelVlmTrainingCommandError =
+  CancelVlmTrainingCommandErrors[keyof CancelVlmTrainingCommandErrors]
+
+export type CancelVlmTrainingCommandResponses = {
+  /**
+   * Successful Response
+   */
+  200: DdmTrainingCommandView
+}
+
+export type CancelVlmTrainingCommandResponse =
+  CancelVlmTrainingCommandResponses[keyof CancelVlmTrainingCommandResponses]
+
+export type ReadVlmTrainingResultData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/vlm-training-commands/{command_id}/result'
+}
+
+export type ReadVlmTrainingResultErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ReadVlmTrainingResultError =
+  ReadVlmTrainingResultErrors[keyof ReadVlmTrainingResultErrors]
+
+export type ReadVlmTrainingResultResponses = {
+  /**
+   * Successful Response
+   */
+  200: DdmTrainingResultView
+}
+
+export type ReadVlmTrainingResultResponse =
+  ReadVlmTrainingResultResponses[keyof ReadVlmTrainingResultResponses]

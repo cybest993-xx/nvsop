@@ -426,7 +426,7 @@ def validate_vlm_input(
         "revision": candidate.revision,
         "kind": candidate.kind.value,
         "action_list_revision": candidate.action_list_revision,
-        "records": [_json_value(record) for record in candidate.records],
+        "records": [json_safe_value(record) for record in candidate.records],
         "media": [
             {
                 "key": media.key,
@@ -460,7 +460,7 @@ def validate_vlm_input(
 def canonical_json(value: object) -> bytes:
     """返回跨运行稳定的 UTF-8 JSON 字节。"""
     return json.dumps(
-        _json_value(value),
+        json_safe_value(value),
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -700,11 +700,15 @@ def _validate_sampling_field(
         )
 
 
-def _json_value(value: object) -> object:
+def json_safe_value(value: object) -> object:
+    """把冻结值规范化为可持久化 JSON：映射、序列与 StrEnum 都还原为纯数据。
+
+    命令负载以 JSONB 落库，冻结时的 ``MappingProxyType``/元组不能直接进入 JSON 编码。
+    """
     if isinstance(value, Mapping):
-        return {str(key): _json_value(item) for key, item in value.items()}
+        return {str(key): json_safe_value(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
-        return [_json_value(item) for item in value]
+        return [json_safe_value(item) for item in value]
     if hasattr(value, "value") and isinstance(value.value, str):
         return value.value
     return value

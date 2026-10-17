@@ -19,7 +19,7 @@ from factory_sop.dataset.adapters.tables import (
     AnnotationSubmissionRow,
     DatasetArtifactRow,
     DatasetMemberRow,
-    DdmTrainingCommandRow,
+    TrainingCommandRow,
     TrainingDatasetRow,
     UploadAttemptRow,
     UsageCheckRow,
@@ -32,10 +32,11 @@ from factory_sop.dataset.model import (
     AnnotationSubmission,
     DatasetArtifact,
     DatasetMember,
-    DdmTrainingCommand,
-    DdmTrainingCommandStatus,
-    DdmTrainingResultStatus,
+    TrainingCommand,
+    TrainingCommandStatus,
     TrainingDataset,
+    TrainingResultStatus,
+    TrainingService,
     UploadAttempt,
     UsageCheck,
     UsageKind,
@@ -544,13 +545,14 @@ class PostgresDatasetRepository:
         )
         return result.rowcount == 1
 
-    def add_ddm_training_command(self, value: DdmTrainingCommand) -> bool:
-        """按数据集幂等键追加 DDM 训练命令；并发占用同一键时不覆盖已存在命令。"""
+    def add_training_command(self, value: TrainingCommand) -> bool:
+        """按数据集与服务范围的幂等键追加训练命令；并发占用同一键时不覆盖已存在命令。"""
         statement = (
-            postgres_insert(DdmTrainingCommandRow)
+            postgres_insert(TrainingCommandRow)
             .values(
                 id=value.id,
                 dataset_id=value.dataset_id,
+                service=value.service.value,
                 status=value.status.value,
                 idempotency_key=value.idempotency_key,
                 request_digest=value.request_digest,
@@ -562,49 +564,56 @@ class PostgresDatasetRepository:
             )
             .on_conflict_do_nothing(
                 index_elements=[
-                    DdmTrainingCommandRow.dataset_id,
-                    DdmTrainingCommandRow.idempotency_key,
+                    TrainingCommandRow.dataset_id,
+                    TrainingCommandRow.service,
+                    TrainingCommandRow.idempotency_key,
                 ]
             )
-            .returning(DdmTrainingCommandRow.id)
+            .returning(TrainingCommandRow.id)
         )
         return self._session.execute(statement).scalar_one_or_none() is not None
 
-    def ddm_training_command_by_idempotency(
-        self, *, dataset_id: UUID, idempotency_key: str
-    ) -> DdmTrainingCommand | None:
+    def training_command_by_idempotency(
+        self, *, service: TrainingService, dataset_id: UUID, idempotency_key: str
+    ) -> TrainingCommand | None:
         row = self._session.scalar(
-            select(DdmTrainingCommandRow).where(
-                DdmTrainingCommandRow.dataset_id == dataset_id,
-                DdmTrainingCommandRow.idempotency_key == idempotency_key,
+            select(TrainingCommandRow).where(
+                TrainingCommandRow.dataset_id == dataset_id,
+                TrainingCommandRow.service == service.value,
+                TrainingCommandRow.idempotency_key == idempotency_key,
             )
         )
         return row.to_domain() if row is not None else None
 
-    def ddm_training_command_by_id(self, command_id: UUID) -> DdmTrainingCommand | None:
-        row = self._session.get(DdmTrainingCommandRow, command_id, populate_existing=True)
+    def training_command_by_id(self, command_id: UUID) -> TrainingCommand | None:
+        row = self._session.get(TrainingCommandRow, command_id, populate_existing=True)
         return row.to_domain() if row is not None else None
 
-    def list_ddm_training_commands(self, dataset_id: UUID) -> Sequence[DdmTrainingCommand]:
-        """按创建时间读取数据集全部 DDM 训练命令，供重新打开页面后恢复。"""
+    def list_training_commands(
+        self, *, service: TrainingService, dataset_id: UUID
+    ) -> Sequence[TrainingCommand]:
+        """按创建时间读取归该服务的全部训练命令，供重新打开页面后恢复。"""
         rows = self._session.scalars(
-            select(DdmTrainingCommandRow)
-            .where(DdmTrainingCommandRow.dataset_id == dataset_id)
-            .order_by(DdmTrainingCommandRow.created_at.asc(), DdmTrainingCommandRow.id.asc())
+            select(TrainingCommandRow)
+            .where(
+                TrainingCommandRow.dataset_id == dataset_id,
+                TrainingCommandRow.service == service.value,
+            )
+            .order_by(TrainingCommandRow.created_at.asc(), TrainingCommandRow.id.asc())
         ).all()
         return [row.to_domain() for row in rows]
 
-    def save_ddm_training_command(
-        self, value: DdmTrainingCommand, *, expected_updated_at: datetime
+    def save_training_command(
+        self, value: TrainingCommand, *, expected_updated_at: datetime
     ) -> bool:
         """只在受理租约仍匹配时绑定 job 身份，不改写取消或派发状态。"""
         result = cast(
             "CursorResult[Any]",
             self._session.execute(
-                update(DdmTrainingCommandRow)
+                update(TrainingCommandRow)
                 .where(
-                    DdmTrainingCommandRow.id == value.id,
-                    DdmTrainingCommandRow.updated_at == expected_updated_at,
+                    TrainingCommandRow.id == value.id,
+                    TrainingCommandRow.updated_at == expected_updated_at,
                 )
                 .values(
                     job_id=value.job_id,
@@ -614,21 +623,21 @@ class PostgresDatasetRepository:
         )
         return result.rowcount == 1
 
-    def cancel_pending_ddm_training_command(
+    def cancel_pending_training_command(
         self, *, dataset_id: UUID, command_id: UUID, actor_id: UUID, now: datetime
     ) -> bool:
         """同一行的状态条件更新裁决取消与派发；等待竞争事务后 PostgreSQL 会重查条件。"""
         result = cast(
             "CursorResult[Any]",
             self._session.execute(
-                update(DdmTrainingCommandRow)
+                update(TrainingCommandRow)
                 .where(
-                    DdmTrainingCommandRow.id == command_id,
-                    DdmTrainingCommandRow.dataset_id == dataset_id,
-                    DdmTrainingCommandRow.status == DdmTrainingCommandStatus.PENDING.value,
+                    TrainingCommandRow.id == command_id,
+                    TrainingCommandRow.dataset_id == dataset_id,
+                    TrainingCommandRow.status == TrainingCommandStatus.PENDING.value,
                 )
                 .values(
-                    status=DdmTrainingCommandStatus.CANCELLED.value,
+                    status=TrainingCommandStatus.CANCELLED.value,
                     cancelled_by=actor_id,
                     cancelled_at=now,
                     updated_at=now,
@@ -637,23 +646,23 @@ class PostgresDatasetRepository:
         )
         return result.rowcount == 1
 
-    def request_ddm_training_cancellation(
+    def request_training_cancellation(
         self, *, command_id: UUID, actor_id: UUID, now: datetime
     ) -> bool:
-        """派发意图后只记录首次取消请求；状态与在途保护保持，等待停止核实。"""
+        """派发意图后只记录首次取消请求；状态与在途保护保持，等待服务 adapter 的停止核实。"""
         result = cast(
             "CursorResult[Any]",
             self._session.execute(
-                update(DdmTrainingCommandRow)
+                update(TrainingCommandRow)
                 .where(
-                    DdmTrainingCommandRow.id == command_id,
-                    DdmTrainingCommandRow.status.in_(
+                    TrainingCommandRow.id == command_id,
+                    TrainingCommandRow.status.in_(
                         (
-                            DdmTrainingCommandStatus.RESULT_UNKNOWN.value,
-                            DdmTrainingCommandStatus.BOUND.value,
+                            TrainingCommandStatus.RESULT_UNKNOWN.value,
+                            TrainingCommandStatus.BOUND.value,
                         )
                     ),
-                    DdmTrainingCommandRow.cancel_requested_at.is_(None),
+                    TrainingCommandRow.cancel_requested_at.is_(None),
                 )
                 .values(
                     cancel_requested_by=actor_id,
@@ -664,53 +673,49 @@ class PostgresDatasetRepository:
         )
         return result.rowcount == 1
 
-    def record_ddm_training_cancellation(
+    def record_training_cancellation(
         self,
         *,
         command_id: UUID,
         base_job_id: str,
-        response: Mapping[str, object],
+        response: dict[str, Any],
         detail: str,
         now: datetime,
     ) -> None:
         """保存基座原取消响应与核实结论；命令仍在途，绝不在此释放保护。"""
         self._session.execute(
-            update(DdmTrainingCommandRow)
+            update(TrainingCommandRow)
             .where(
-                DdmTrainingCommandRow.id == command_id,
-                DdmTrainingCommandRow.status == DdmTrainingCommandStatus.BOUND.value,
-                DdmTrainingCommandRow.base_job_id == base_job_id,
-                DdmTrainingCommandRow.cancel_requested_at.is_not(None),
+                TrainingCommandRow.id == command_id,
+                TrainingCommandRow.status == TrainingCommandStatus.BOUND.value,
+                TrainingCommandRow.base_job_id == base_job_id,
+                TrainingCommandRow.cancel_requested_at.is_not(None),
             )
             .values(
                 cancel_response=dict(response),
-                cancel_detail=detail,
+                cancel_detail=detail[:512],
                 updated_at=now,
             )
         )
 
-    def confirm_ddm_training_cancellation(
-        self,
-        *,
-        command_id: UUID,
-        base_job_id: str,
-        response: Mapping[str, object],
-        now: datetime,
+    def confirm_training_cancellation(
+        self, *, command_id: UUID, base_job_id: str, response: Mapping[str, object], now: datetime
     ) -> bool:
-        """停止已核实：原响应与终态一次写入，并保留首次请求者作为取消者。"""
+        """停止核实成功后，在同一事务中取消命令、记录响应并释放在途约束。"""
         result = cast(
             "CursorResult[Any]",
             self._session.execute(
-                update(DdmTrainingCommandRow)
+                update(TrainingCommandRow)
                 .where(
-                    DdmTrainingCommandRow.id == command_id,
-                    DdmTrainingCommandRow.status == DdmTrainingCommandStatus.BOUND.value,
-                    DdmTrainingCommandRow.base_job_id == base_job_id,
-                    DdmTrainingCommandRow.cancel_requested_at.is_not(None),
+                    TrainingCommandRow.id == command_id,
+                    TrainingCommandRow.status == TrainingCommandStatus.BOUND.value,
+                    TrainingCommandRow.base_job_id == base_job_id,
+                    TrainingCommandRow.cancel_requested_at.is_not(None),
+                    TrainingCommandRow.service == TrainingService.DDM.value,
                 )
                 .values(
-                    status=DdmTrainingCommandStatus.CANCELLED.value,
-                    cancelled_by=DdmTrainingCommandRow.cancel_requested_by,
+                    status=TrainingCommandStatus.CANCELLED.value,
+                    cancelled_by=TrainingCommandRow.cancel_requested_by,
                     cancelled_at=now,
                     cancel_response=dict(response),
                     cancel_detail=None,
@@ -720,7 +725,7 @@ class PostgresDatasetRepository:
         )
         return result.rowcount == 1
 
-    def begin_ddm_training_dispatch(
+    def begin_training_dispatch(
         self,
         *,
         command_id: UUID,
@@ -728,20 +733,20 @@ class PostgresDatasetRepository:
         baseline_job_ids: Sequence[str],
         dispatch_facts: dict[str, Any],
         now: datetime,
-    ) -> DdmTrainingCommand | None:
+    ) -> TrainingCommand | None:
         """完整意图一次冻结；唯一状态转换获胜者才可发送，时间戳不作执行权。"""
         try:
             with self._session.begin_nested():
                 result = cast(
                     "CursorResult[Any]",
                     self._session.execute(
-                        update(DdmTrainingCommandRow)
+                        update(TrainingCommandRow)
                         .where(
-                            DdmTrainingCommandRow.id == command_id,
-                            DdmTrainingCommandRow.status == DdmTrainingCommandStatus.PENDING.value,
+                            TrainingCommandRow.id == command_id,
+                            TrainingCommandRow.status == TrainingCommandStatus.PENDING.value,
                         )
                         .values(
-                            status=DdmTrainingCommandStatus.RESULT_UNKNOWN.value,
+                            status=TrainingCommandStatus.RESULT_UNKNOWN.value,
                             backend_target=backend_target,
                             baseline_job_ids=list(baseline_job_ids),
                             dispatch_facts=dispatch_facts,
@@ -753,9 +758,9 @@ class PostgresDatasetRepository:
                 )
         except IntegrityError:
             return None
-        return self.ddm_training_command_by_id(command_id) if result.rowcount == 1 else None
+        return self.training_command_by_id(command_id) if result.rowcount == 1 else None
 
-    def bind_ddm_training_base_job(
+    def bind_training_base_job(
         self,
         *,
         command_id: UUID,
@@ -764,14 +769,14 @@ class PostgresDatasetRepository:
     ) -> None:
         """未知结果只能绑定一次；迟到 worker 不得替换获胜身份。"""
         self._session.execute(
-            update(DdmTrainingCommandRow)
+            update(TrainingCommandRow)
             .where(
-                DdmTrainingCommandRow.id == command_id,
-                DdmTrainingCommandRow.status == DdmTrainingCommandStatus.RESULT_UNKNOWN.value,
-                DdmTrainingCommandRow.base_job_id.is_(None),
+                TrainingCommandRow.id == command_id,
+                TrainingCommandRow.status == TrainingCommandStatus.RESULT_UNKNOWN.value,
+                TrainingCommandRow.base_job_id.is_(None),
             )
             .values(
-                status=DdmTrainingCommandStatus.BOUND.value,
+                status=TrainingCommandStatus.BOUND.value,
                 base_job_id=base_job_id,
                 failure_code=None,
                 failure_detail=None,
@@ -779,31 +784,31 @@ class PostgresDatasetRepository:
             )
         )
 
-    def record_ddm_training_failure(
+    def record_training_failure(
         self,
         *,
         command_id: UUID,
-        expected_status: DdmTrainingCommandStatus,
+        expected_status: TrainingCommandStatus,
         failure_code: str,
         failure_detail: str,
         now: datetime,
     ) -> None:
         """只有意图前的 pending 可失败；未知结果仅更新诊断，绝不释放保护。"""
         if expected_status not in {
-            DdmTrainingCommandStatus.PENDING,
-            DdmTrainingCommandStatus.RESULT_UNKNOWN,
+            TrainingCommandStatus.PENDING,
+            TrainingCommandStatus.RESULT_UNKNOWN,
         }:
             raise ValueError("不能覆盖已绑定的派发事实")
         self._session.execute(
-            update(DdmTrainingCommandRow)
+            update(TrainingCommandRow)
             .where(
-                DdmTrainingCommandRow.id == command_id,
-                DdmTrainingCommandRow.status == expected_status.value,
+                TrainingCommandRow.id == command_id,
+                TrainingCommandRow.status == expected_status.value,
             )
             .values(
                 status=(
-                    DdmTrainingCommandStatus.FAILED.value
-                    if expected_status is DdmTrainingCommandStatus.PENDING
+                    TrainingCommandStatus.FAILED.value
+                    if expected_status is TrainingCommandStatus.PENDING
                     else expected_status.value
                 ),
                 failure_code=failure_code,
@@ -812,7 +817,7 @@ class PostgresDatasetRepository:
             )
         )
 
-    def observe_ddm_training_base_job(
+    def observe_training_base_job(
         self,
         *,
         command_id: UUID,
@@ -822,14 +827,14 @@ class PostgresDatasetRepository:
     ) -> None:
         """窄状态观察不发布结果；成功观察单独记录时刻并清除旧查询失败诊断。"""
         self._session.execute(
-            update(DdmTrainingCommandRow)
+            update(TrainingCommandRow)
             .where(
-                DdmTrainingCommandRow.id == command_id,
-                DdmTrainingCommandRow.status == DdmTrainingCommandStatus.BOUND.value,
-                DdmTrainingCommandRow.base_job_id == base_job_id,
+                TrainingCommandRow.id == command_id,
+                TrainingCommandRow.status == TrainingCommandStatus.BOUND.value,
+                TrainingCommandRow.base_job_id == base_job_id,
                 or_(
-                    DdmTrainingCommandRow.observation_attempted_at.is_(None),
-                    DdmTrainingCommandRow.observation_attempted_at <= now,
+                    TrainingCommandRow.observation_attempted_at.is_(None),
+                    TrainingCommandRow.observation_attempted_at <= now,
                 ),
             )
             .values(
@@ -842,7 +847,7 @@ class PostgresDatasetRepository:
             )
         )
 
-    def record_ddm_training_observation_failure(
+    def record_training_observation_failure(
         self,
         *,
         command_id: UUID,
@@ -853,14 +858,14 @@ class PostgresDatasetRepository:
     ) -> None:
         """记录查询失败诊断；绝不改写基座原状态或最后成功观测时刻，也不释放保护。"""
         self._session.execute(
-            update(DdmTrainingCommandRow)
+            update(TrainingCommandRow)
             .where(
-                DdmTrainingCommandRow.id == command_id,
-                DdmTrainingCommandRow.status == DdmTrainingCommandStatus.BOUND.value,
-                DdmTrainingCommandRow.base_job_id == base_job_id,
+                TrainingCommandRow.id == command_id,
+                TrainingCommandRow.status == TrainingCommandStatus.BOUND.value,
+                TrainingCommandRow.base_job_id == base_job_id,
                 or_(
-                    DdmTrainingCommandRow.observation_attempted_at.is_(None),
-                    DdmTrainingCommandRow.observation_attempted_at <= now,
+                    TrainingCommandRow.observation_attempted_at.is_(None),
+                    TrainingCommandRow.observation_attempted_at <= now,
                 ),
             )
             .values(
@@ -871,7 +876,7 @@ class PostgresDatasetRepository:
             )
         )
 
-    def register_ddm_training_result(
+    def register_training_result(
         self,
         *,
         command_id: UUID,
@@ -888,21 +893,20 @@ class PostgresDatasetRepository:
         result = cast(
             "CursorResult[Any]",
             self._session.execute(
-                update(DdmTrainingCommandRow)
+                update(TrainingCommandRow)
                 .where(
-                    DdmTrainingCommandRow.id == command_id,
-                    DdmTrainingCommandRow.status == DdmTrainingCommandStatus.BOUND.value,
-                    DdmTrainingCommandRow.base_job_id == base_job_id,
-                    DdmTrainingCommandRow.result_status
-                    == DdmTrainingResultStatus.NOT_REGISTERED.value,
+                    TrainingCommandRow.id == command_id,
+                    TrainingCommandRow.status == TrainingCommandStatus.BOUND.value,
+                    TrainingCommandRow.base_job_id == base_job_id,
+                    TrainingCommandRow.result_status == TrainingResultStatus.NOT_REGISTERED.value,
                     or_(
-                        DdmTrainingCommandRow.observation_attempted_at.is_(None),
-                        DdmTrainingCommandRow.observation_attempted_at <= now,
+                        TrainingCommandRow.observation_attempted_at.is_(None),
+                        TrainingCommandRow.observation_attempted_at <= now,
                     ),
                 )
                 .values(
-                    result_status=DdmTrainingResultStatus.REGISTERED.value,
-                    result_generation=DdmTrainingCommandRow.result_generation + 1,
+                    result_status=TrainingResultStatus.REGISTERED.value,
+                    result_generation=TrainingCommandRow.result_generation + 1,
                     result_config_object_key=config_object_key,
                     result_config_sha256=config_sha256,
                     result_config_size=config_size,
@@ -918,7 +922,7 @@ class PostgresDatasetRepository:
         )
         return result.rowcount == 1
 
-    def record_ddm_training_result_failure(
+    def record_training_result_failure(
         self,
         *,
         command_id: UUID,
@@ -929,15 +933,15 @@ class PostgresDatasetRepository:
     ) -> None:
         """结果不可读/登记失败按可恢复诊断记录，绝不释放保护或重发训练。"""
         self._session.execute(
-            update(DdmTrainingCommandRow)
+            update(TrainingCommandRow)
             .where(
-                DdmTrainingCommandRow.id == command_id,
-                DdmTrainingCommandRow.status == DdmTrainingCommandStatus.BOUND.value,
-                DdmTrainingCommandRow.base_job_id == base_job_id,
-                DdmTrainingCommandRow.result_status == DdmTrainingResultStatus.NOT_REGISTERED.value,
+                TrainingCommandRow.id == command_id,
+                TrainingCommandRow.status == TrainingCommandStatus.BOUND.value,
+                TrainingCommandRow.base_job_id == base_job_id,
+                TrainingCommandRow.result_status == TrainingResultStatus.NOT_REGISTERED.value,
                 or_(
-                    DdmTrainingCommandRow.observation_attempted_at.is_(None),
-                    DdmTrainingCommandRow.observation_attempted_at <= now,
+                    TrainingCommandRow.observation_attempted_at.is_(None),
+                    TrainingCommandRow.observation_attempted_at <= now,
                 ),
             )
             .values(
@@ -947,7 +951,7 @@ class PostgresDatasetRepository:
             )
         )
 
-    def complete_ddm_training_command(
+    def complete_training_command(
         self,
         *,
         command_id: UUID,
@@ -958,22 +962,22 @@ class PostgresDatasetRepository:
         result = cast(
             "CursorResult[Any]",
             self._session.execute(
-                update(DdmTrainingCommandRow)
+                update(TrainingCommandRow)
                 .where(
-                    DdmTrainingCommandRow.id == command_id,
-                    DdmTrainingCommandRow.status == DdmTrainingCommandStatus.BOUND.value,
-                    DdmTrainingCommandRow.base_job_id == base_job_id,
-                    DdmTrainingCommandRow.result_status == DdmTrainingResultStatus.REGISTERED.value,
+                    TrainingCommandRow.id == command_id,
+                    TrainingCommandRow.status == TrainingCommandStatus.BOUND.value,
+                    TrainingCommandRow.base_job_id == base_job_id,
+                    TrainingCommandRow.result_status == TrainingResultStatus.REGISTERED.value,
                 )
                 .values(
-                    status=DdmTrainingCommandStatus.COMPLETED.value,
+                    status=TrainingCommandStatus.COMPLETED.value,
                     updated_at=now,
                 )
             ),
         )
         return result.rowcount == 1
 
-    def fail_ddm_training_command(
+    def fail_training_command(
         self,
         *,
         command_id: UUID,
@@ -986,18 +990,18 @@ class PostgresDatasetRepository:
         result = cast(
             "CursorResult[Any]",
             self._session.execute(
-                update(DdmTrainingCommandRow)
+                update(TrainingCommandRow)
                 .where(
-                    DdmTrainingCommandRow.id == command_id,
-                    DdmTrainingCommandRow.status == DdmTrainingCommandStatus.BOUND.value,
-                    DdmTrainingCommandRow.base_job_id == base_job_id,
+                    TrainingCommandRow.id == command_id,
+                    TrainingCommandRow.status == TrainingCommandStatus.BOUND.value,
+                    TrainingCommandRow.base_job_id == base_job_id,
                     or_(
-                        DdmTrainingCommandRow.observation_attempted_at.is_(None),
-                        DdmTrainingCommandRow.observation_attempted_at <= now,
+                        TrainingCommandRow.observation_attempted_at.is_(None),
+                        TrainingCommandRow.observation_attempted_at <= now,
                     ),
                 )
                 .values(
-                    status=DdmTrainingCommandStatus.FAILED.value,
+                    status=TrainingCommandStatus.FAILED.value,
                     failure_code=failure_code,
                     failure_detail=failure_detail,
                     updated_at=now,

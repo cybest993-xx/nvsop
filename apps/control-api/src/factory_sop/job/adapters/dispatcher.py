@@ -32,11 +32,11 @@ class ArqJobDispatcher:
         settings: RedisSettings,
         *,
         session_factory: sessionmaker[Session] | None = None,
-        ddm_training_configured: bool = False,
+        configured_training_types: frozenset[JobType] = frozenset(),
     ) -> None:
         self._settings = settings
         self._session_factory = session_factory
-        self._ddm_training_configured = ddm_training_configured
+        self._configured_training_types = configured_training_types
 
     @classmethod
     def from_settings(
@@ -63,16 +63,27 @@ class ArqJobDispatcher:
                 ssl=connection.ssl,
             ),
             session_factory=session_factory,
-            ddm_training_configured=(
-                settings.ddm_training_backend_url is not None
-                and settings.ddm_training_config_path is not None
+            configured_training_types=frozenset(
+                job_type
+                for job_type, configured in (
+                    (
+                        JobType.DATASET_DDM_TRAINING,
+                        settings.ddm_training_backend_url is not None
+                        and settings.ddm_training_config_path is not None,
+                    ),
+                    (
+                        JobType.DATASET_VLM_TRAINING,
+                        settings.vlm_training_backend_url is not None,
+                    ),
+                )
+                if configured
             ),
         )
 
     @property
-    def ddm_training_configured(self) -> bool:
-        """训练配置有明确部署绑定时，扫描器才放行该类型（不在启动时读取文件）。"""
-        return self._ddm_training_configured
+    def configured_training_types(self) -> frozenset[JobType]:
+        """训练配置有明确部署绑定时，扫描器才放行对应类型（不在启动时读取文件）。"""
+        return self._configured_training_types
 
     @property
     def redis_settings(self) -> RedisSettings:
@@ -88,7 +99,7 @@ class ArqJobDispatcher:
         try:
             target = self._worker_target(job_id)
             if target is None:
-                # 已知延后类型（DDM 训练命令）：S073 安全派发就绪前不向 ARQ 投递，
+                # 已知延后类型（训练命令）：安全派发就绪前不向 ARQ 投递，
                 # 也不把它误报为投递失败。
                 return
             function, expected_updated_at = target
@@ -139,11 +150,15 @@ class ArqJobDispatcher:
         if job is None:
             raise ValueError(f"任务不存在：{job_id}")
         if job.job_type is JobType.DATASET_DDM_TRAINING:
-            # 未配置 DDM 基座时命令只保留 outbox 事实（held），不注册、不投递可 start 的
+            # 未配置对应基座时命令只保留 outbox 事实（held），不注册、不投递可 start 的
             # 函数；配置后才在既有 ARQ 进程内执行查询/登记，不新增进程。
-            if not self._ddm_training_configured:
+            if JobType.DATASET_DDM_TRAINING not in self._configured_training_types:
                 return None
             return "dispatch_ddm_training_job", job.updated_at
+        if job.job_type is JobType.DATASET_VLM_TRAINING:
+            if JobType.DATASET_VLM_TRAINING not in self._configured_training_types:
+                return None
+            return "dispatch_vlm_training_job", job.updated_at
         if job.job_type is JobType.DATASET_ANNOTATION_PREPARATION:
             return "prepare_annotation_context_job", job.updated_at
         if job.job_type is JobType.DATASET_ANNOTATION:

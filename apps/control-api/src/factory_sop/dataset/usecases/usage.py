@@ -265,6 +265,27 @@ class DdmInputConsumption:
 
 
 @dataclass(frozen=True, slots=True)
+class ConsumedVlmFile:
+    """实际会被基座发现并消费的一个 VLM 输入文件及其冻结来源。"""
+
+    role: str
+    filename: str
+    source_object_key: str | None
+    source_sha256: str
+    size: int
+
+
+@dataclass(frozen=True, slots=True)
+class VlmInputConsumption:
+    """按基座自己的发现函数核对后的 VLM 真实消费事实。"""
+
+    input_id: UUID
+    records_filename: str
+    records_sha256: str
+    consumed_files: tuple[ConsumedVlmFile, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class VlmInputSelection:
     """一个要材料化的已检查 VLM 来源。"""
 
@@ -4392,3 +4413,88 @@ def _vlm_manifest_bytes(frozen: FrozenVlmInput) -> bytes:
         ],
     }
     return canonical_json(document)
+
+
+def verify_vlm_input_consumption(
+    *,
+    frozen: FrozenVlmInput,
+    directory: Path,
+    discover: Callable[[Path], Sequence[str]],
+) -> VlmInputConsumption:
+    """用基座自己的 JSON 发现函数核对实际会被消费的文件集合与冻结事实一致。
+
+    基座对 ``DATASET_ROOT/<dataset_id>`` 递归消费全部 ``*.json`` 并按文件名取 split 名：
+    多一个管理清单或其他 JSON 都会静默进入训练。这里按同一发现函数枚举真实文件，并核对
+    每个文件的大小与摘要；任何多余/缺失文件或摘要不符都拒绝派发。
+    """
+    try:
+        discovered = sorted(Path(item).resolve() for item in discover(directory))
+    except (OSError, ValueError) as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.STORAGE_UNAVAILABLE,
+            detail="VLM 输入目录暂时不可读取",
+        ) from error
+    records_path = directory / VLM_RECORDS_FILENAME
+    if discovered != [records_path.resolve()]:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="基座 JSON 发现结果与冻结候选记录不一致",
+        )
+    _verify_frozen_file(
+        records_path,
+        expected_size=len(frozen.records_bytes),
+        expected_sha256=frozen.records_sha256,
+        detail="候选记录与冻结字节不一致",
+    )
+    try:
+        listed = {item.resolve() for item in directory.iterdir() if item.is_file()}
+    except OSError as error:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.STORAGE_UNAVAILABLE,
+            detail="VLM 输入目录暂时不可读取",
+        ) from error
+    media_paths = {directory / PurePosixPath(item.key).name for item in frozen.media}
+    if listed != media_paths | {records_path}:
+        raise DatasetRefusedError(
+            DatasetRefusalCode.USAGE_STATE_CONFLICT,
+            detail="训练目录文件集合与冻结媒体清单不一致",
+        )
+    consumed: list[ConsumedVlmFile] = []
+    for media in frozen.media:
+        path = directory / PurePosixPath(media.key).name
+        expected_sha256 = (
+            media.derived_video_sha256 if media.is_annotation_clip else media.source_sha256
+        )
+        expected_size = media.derived_video_size if media.is_annotation_clip else media.actual_size
+        assert expected_sha256 is not None
+        assert expected_size is not None
+        _verify_frozen_file(
+            path,
+            expected_size=expected_size,
+            expected_sha256=expected_sha256,
+            detail="训练媒体与冻结事实不一致",
+        )
+        consumed.append(
+            ConsumedVlmFile(
+                role="media",
+                filename=path.name,
+                source_object_key=media.object_key,
+                source_sha256=expected_sha256,
+                size=expected_size,
+            )
+        )
+    consumed.append(
+        ConsumedVlmFile(
+            role="records",
+            filename=VLM_RECORDS_FILENAME,
+            source_object_key=None,
+            source_sha256=frozen.records_sha256,
+            size=len(frozen.records_bytes),
+        )
+    )
+    return VlmInputConsumption(
+        input_id=frozen.input_id,
+        records_filename=VLM_RECORDS_FILENAME,
+        records_sha256=frozen.records_sha256,
+        consumed_files=tuple(consumed),
+    )

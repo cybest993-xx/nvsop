@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol
 from uuid import UUID
@@ -14,8 +14,9 @@ from factory_sop.dataset.model import (
     AnnotationSubmission,
     DatasetArtifact,
     DatasetMember,
-    DdmTrainingCommand,
+    TrainingCommand,
     TrainingDataset,
+    TrainingService,
     UploadAttempt,
     UsageCheck,
     UsageKind,
@@ -238,64 +239,46 @@ class UsageDatasetRepository(DatasetRepository, Protocol):
         ...
 
 
-class DdmTrainingCommandRepository(UsageDatasetRepository, Protocol):
-    """DDM 训练命令受理、查询、未派发取消与已派发停止核实的仓储契约。"""
+class TrainingCommandRepository(UsageDatasetRepository, Protocol):
+    """训练命令受理、查询与取消的仓储契约，不扩张用途/制品 seam。
 
-    def add_ddm_training_command(self, value: DdmTrainingCommand) -> bool:
-        """按数据集范围的幂等键条件追加 DDM 训练命令；键已被并发占用时返回 ``False``。"""
+    同一种表按 ``service`` 区分训练服务；每个服务自己的 adapter 决定输入、恢复身份与结果。
+    """
+
+    def add_training_command(self, value: TrainingCommand) -> bool:
+        """按数据集与服务范围的幂等键条件追加训练命令；键已被并发占用时返回 ``False``。"""
         ...
 
-    def ddm_training_command_by_idempotency(
-        self, *, dataset_id: UUID, idempotency_key: str
-    ) -> DdmTrainingCommand | None:
-        """按数据集范围的幂等键读取 DDM 训练命令。"""
+    def training_command_by_idempotency(
+        self, *, service: TrainingService, dataset_id: UUID, idempotency_key: str
+    ) -> TrainingCommand | None:
+        """按数据集与服务范围的幂等键读取训练命令。"""
         ...
 
-    def ddm_training_command_by_id(self, command_id: UUID) -> DdmTrainingCommand | None:
-        """按命令身份读取 DDM 训练命令。"""
+    def training_command_by_id(self, command_id: UUID) -> TrainingCommand | None:
+        """按命令身份读取训练命令，不看服务归属。"""
         ...
 
-    def list_ddm_training_commands(self, dataset_id: UUID) -> Sequence[DdmTrainingCommand]:
-        """按创建顺序读取数据集全部 DDM 训练命令。"""
+    def list_training_commands(
+        self, *, service: TrainingService, dataset_id: UUID
+    ) -> Sequence[TrainingCommand]:
+        """按创建顺序读取归该服务的全部训练命令。"""
         ...
 
-    def save_ddm_training_command(
-        self, value: DdmTrainingCommand, *, expected_updated_at: datetime
+    def save_training_command(
+        self, value: TrainingCommand, *, expected_updated_at: datetime
     ) -> bool:
         """只在租约仍匹配时绑定命令的 job 身份，防止过期写入覆盖获胜结果。"""
         ...
 
-    def cancel_pending_ddm_training_command(
+    def cancel_pending_training_command(
         self, *, dataset_id: UUID, command_id: UUID, actor_id: UUID, now: datetime
     ) -> bool:
         """与派发意图竞争同一 pending 状态；只写取消事实，不提交事务或改写输入。"""
         ...
 
-    def request_ddm_training_cancellation(
+    def request_training_cancellation(
         self, *, command_id: UUID, actor_id: UUID, now: datetime
     ) -> bool:
-        """为已派发命令记录首次取消请求；不改写状态、不删除历史，也不释放在途保护。"""
-        ...
-
-    def record_ddm_training_cancellation(
-        self,
-        *,
-        command_id: UUID,
-        base_job_id: str,
-        response: Mapping[str, object],
-        detail: str,
-        now: datetime,
-    ) -> None:
-        """保存基座原取消响应与本次停止核实结论；只写诊断，不推进命令终态。"""
-        ...
-
-    def confirm_ddm_training_cancellation(
-        self,
-        *,
-        command_id: UUID,
-        base_job_id: str,
-        response: Mapping[str, object],
-        now: datetime,
-    ) -> bool:
-        """核实进程确已停止后，才把已派发命令推进到取消终态并释放在途保护。"""
+        """派发意图后只记录首次取消请求；状态与在途保护保持，不提交事务。"""
         ...

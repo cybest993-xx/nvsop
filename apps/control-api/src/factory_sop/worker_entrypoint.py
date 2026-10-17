@@ -16,6 +16,7 @@ from factory_sop.dataset.adapters.dependencies import (
     ddm_executor,
     usage_runtime,
     validation_runtime,
+    vlm_executor,
 )
 from factory_sop.evidence.adapters.repository import (
     PostgresEvidenceDeletionClaimRepository,
@@ -77,6 +78,7 @@ def run_worker(environment: Mapping[str, str]) -> None:
         usage_runtime_factory=usage_runtime,
         annotation_runtime_factory=annotation_runtime,
         ddm_executor_factory=ddm_executor,
+        vlm_executor_factory=vlm_executor,
         current_caller_resolver_factory=current_caller_resolver,
         retention_sweep_factory=retention_sweep_runner,
     )

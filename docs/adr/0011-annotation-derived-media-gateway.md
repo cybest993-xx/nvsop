@@ -19,12 +19,12 @@
 - `annotation-backend` 不发布宿主机端口，Nginx 清空 Cookie、Authorization 和其他中心身份头；
 - 标注入口只包含标注视频、切片和归档，不承载运行态 MediaMTX 视频，也不承载源视频上传。
 
-### 已登记 DDM 训练结果的有限补充
+### 已登记训练结果的有限补充（DDM 与 VLM 各一个命名空间）
 
-`dataset` 保存可追溯的训练结果摘要与不可变配置/checkpoint 对象；大型 checkpoint 读取不应成为控制 API 的字节负担。复用同一 8444 数据监听器，但只允许 `/ddm-results/{command_id}/config|checkpoint`：
+`dataset` 保存可追溯的训练结果摘要与不可变配置/checkpoint 对象；大型 checkpoint 读取不应成为控制 API 的字节负担。复用同一 8444 数据监听器，只允许两种训练服务各自的结果路由：`/ddm-results/{command_id}/config|checkpoint` 与 `/vlm-results/{command_id}/config|checkpoint`（VLM 的 checkpoint 是步目录清单对象，不含权重字节）：
 
 - 中心每次按当前会话、`dataset.dataset.view`、命令归属及已登记结果授权，返回该命令实际登记的 `X-DDM-Result-Object`；客户端不能选择对象键、文件路径或上游。
-- Nginx 只读挂载 `dataset` 文件卷，键须匹配命令下执行独占的候选目录及两种固定文件名；禁止目录浏览、符号链接及其他路径。响应 `Cache-Control: no-store`，支持 Range；失效会话和撤权仍为 401/403。
+- Nginx 只读挂载 `dataset` 文件卷，键须匹配本服务命名空间下命令唯一的候选目录及该服务的固定文件名（DDM：`config.yaml`/`checkpoint.ckpt`；VLM：`config.toml`/`checkpoint.manifest.json`）；授权子请求只回传对应命名空间的 `X-DDM-Result-Object` 或 `X-VLM-Result-Object`，客户端不能自行选择。禁止目录浏览、符号链接及其他路径。响应 `Cache-Control: no-store`，支持 Range；失效会话和撤权仍为 401/403。
 - 配置/checkpoint 的候选文件先完整写入，登记、命令完成与通用 job 终态在同一租约围栏事务发布。迟到执行不能覆盖获胜对象；提交不确定时先核对精确登记键再清理自己的未发布候选。
 - 控制 API 只返回状态、摘要和授权访问 URL，不转发这些结果字节；不新增任意下载代理或通用对象存储生命周期。标注、源训练视频以及推理机运行态/证据媒体的原边界不变。
 

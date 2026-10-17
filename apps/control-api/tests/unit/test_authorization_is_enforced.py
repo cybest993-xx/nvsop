@@ -527,6 +527,16 @@ ROUTES = [
     ),
     Target(
         "POST",
+        "/training-datasets/{dataset_id}/vlm-training-commands",
+        {"usage_check_id": "019937d8-0d10-7b31-8d2d-4e60c8f4f307"},
+        headers={"Idempotency-Key": "authz-vlm"},
+    ),
+    Target(
+        "POST",
+        "/training-datasets/{dataset_id}/vlm-training-commands/{command_id}/cancel",
+    ),
+    Target(
+        "POST",
         "/execution/handovers",
         {
             "station_id": "{station_id}",

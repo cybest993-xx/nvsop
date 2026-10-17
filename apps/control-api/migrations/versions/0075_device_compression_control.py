@@ -4,8 +4,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0074"
-down_revision = "0073"
+revision = "0075"
+down_revision = "0074"
 branch_labels = None
 depends_on = None
 RAW_SQL_TABLES = frozenset({"device_pending_command"})

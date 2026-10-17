@@ -126,6 +126,8 @@ Compose 把 `ddm-dataset` 和 `ddm-results` 以相同绝对路径挂入 DDM 与 
 
 网页从中心读回命令和结果摘要，再通过独立 8444 `/ddm-results/{command_id}/config|checkpoint` 读取已登记对象；网关只读挂载 `dataset-files`、核对当前会话和数据集查看权限，不开放原始目录或任意对象键。现有标注视频/切片/归档路由不变。
 
+同一 profile 里的 `vlm-training` 是同一个可选部署的另一套基座：`vlm-dataset`/`vlm-results` 同样以相同绝对路径挂入基座与 worker（worker 只读结果卷），基座的 `CONFIG_PATH`/`TOOL_PATH` 由 vendor `cr-training-ms/assets/config` 与 `assets/tools` 只读挂入。中心侧只有 `SOP_VLM_TRAINING_BACKEND_URL` 与两个根目录；未配置时 VLM 命令保持待派发。结果走独立的 8444 `/vlm-results/{command_id}/config|checkpoint`：后者是基座步目录的清单对象，不是权重字节。两条结果路由使用同一套网关授权，只是对象键命名空间不同。
+
 ## 常见排障
 
 ### 当前分支不是 `main`
